@@ -1,0 +1,303 @@
+.workspace-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg);
+}
+
+
+
+.workspace-slug {
+  font-size: 12px;
+  color: var(--fg-dim);
+  font-family: ui-monospace, monospace;
+}
+
+.workspace-spacer {
+  flex: 1;
+}
+
+.workspace-body {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+}
+
+.workspace-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 100%;
+  min-height: 320px;
+  padding: 32px;
+}
+.workspace-empty p {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: 13.5px;
+}
+.workspace-empty .btn {
+  padding: 8px 16px;
+  font-size: 14px;
+}
+
+/* Subtle text-button below the primary CTA. Less prominent than the
+   "+ New pane" button so it reads as the alternate (destructive) path. */
+.workspace-empty-close {
+  background: transparent;
+  border: none;
+  color: var(--fg-faint);
+  font-size: 13px;
+  padding: 4px 8px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--fg-faint);
+  text-underline-offset: 3px;
+}
+.workspace-empty-close:hover {
+  color: var(--danger);
+  text-decoration-color: var(--danger);
+}
+
+.workspace-loading {
+  padding: 32px;
+  color: var(--fg-dim);
+}
+
+.workspace-error {
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-start;
+  color: var(--fg);
+}
+
+/* react-mosaic theme overrides — strip the default Blueprint chrome */
+
+.workspace-body .mosaic,
+.workspace-body .mosaic-blueprint-theme {
+  background: var(--bg);
+}
+
+/* Default mosaic-root inset is `top:3px; right:3px; bottom:3px; left:3px`,
+   which shows the parent through a 3px gutter on every edge — looks like a
+   grey border. Zero it out. */
+.workspace-body .mosaic-root {
+  position: absolute;
+  inset: 0;
+}
+
+.workspace-body .mosaic-tile {
+  margin: 0;
+}
+
+.workspace-body .mosaic-window {
+  background: var(--bg);
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
+  overflow: hidden;
+}
+
+/* Sibling tiles get a 1px separator from the parent bg showing through */
+.workspace-body .mosaic-tile + .mosaic-tile {
+  /* react-mosaic uses absolute positioning per tile; nothing to set here */
+}
+
+.workspace-body .mosaic-window-toolbar {
+  background: var(--bg-chrome) !important;
+  color: var(--fg) !important;
+  border-bottom: 1px solid var(--border) !important;
+  height: 34px !important;
+  min-height: 34px !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  transition: background 100ms ease, border-bottom-color 100ms ease;
+}
+
+/* Focused pane: subtly tint the toolbar with the accent so the user can see
+   at a glance which pane is receiving keyboard input. Kept lighter than
+   the active workspace tab so the visual hierarchy stays correct (tab >
+   pane). No accent-colored border — that's the tab's signature. */
+.workspace-body .mosaic-window[data-focused='true'] .mosaic-window-toolbar {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-chrome)) !important;
+}
+
+.workspace-body .mosaic-window-body {
+  background: var(--xterm-bg);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Splitter: wide enough to grab easily, with hover accent. */
+.workspace-body .mosaic-split {
+  background: var(--border);
+  z-index: 5;
+  transition: background 80ms ease;
+}
+.workspace-body .mosaic-split:hover {
+  background: var(--accent);
+}
+.workspace-body .mosaic-split.-row {
+  width: 6px;
+}
+.workspace-body .mosaic-split.-column {
+  height: 6px;
+}
+
+/* Hide react-mosaic's default toolbar bits we don't use */
+.workspace-body .mosaic-window-title,
+.workspace-body .mosaic-default-controls,
+.workspace-body .mosaic-window-controls {
+  display: none;
+}
+
+/* Drop-target overlays during drag — make them subtle, not bright blue blocks */
+.workspace-body .drop-target-container .drop-target {
+  background: var(--accent);
+  opacity: 0.18;
+  border: 1px solid var(--accent);
+}
+
+/* Mobile single-pane view */
+
+.mobile-tab-strip {
+  display: flex;
+  align-items: center;
+  background: var(--bg-tabbar);
+  border-bottom: 1px solid var(--border);
+  height: 40px;
+  flex: 0 0 auto;
+}
+
+.mobile-tab-strip-scroll {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.mobile-tab-strip-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.mobile-tab {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg-dim);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color 80ms ease,
+    background 80ms ease,
+    border-color 80ms ease;
+}
+.mobile-tab:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+.mobile-tab[data-active='true'] {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+
+.mobile-tab-add {
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px 12px;
+  font-weight: 600;
+}
+
+.mobile-tab-close {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--border);
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition: color 80ms ease;
+}
+.mobile-tab-close:hover {
+  color: var(--danger);
+}
+
+.workspace-body-mobile {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Pane chrome */
+
+.pane-chrome {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 34px;
+  padding: 0 6px 0 12px;
+  gap: 2px;
+  user-select: none;
+  cursor: move;
+}
+
+.pane-chrome-title {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--fg-dim);
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 70%;
+}
+
+.pane-chrome-spacer {
+  flex: 1;
+}
+
+.pane-chrome-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition:
+    color 80ms ease,
+    background 80ms ease;
+}
+.pane-chrome-btn:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+.pane-chrome-btn:focus-visible {
+  outline: none;
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.pane-chrome-close:hover {
+  color: var(--danger);
+}

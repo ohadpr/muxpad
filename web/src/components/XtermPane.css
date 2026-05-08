@@ -1,0 +1,58 @@
+.xterm-pane-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--xterm-bg);
+}
+
+.xterm-pane {
+  width: 100%;
+  height: 100%;
+  background: var(--xterm-bg);
+  outline: none;
+}
+.xterm-pane .xterm {
+  padding: 6px 8px;
+  height: 100%;
+}
+.xterm-pane .xterm-viewport,
+.xterm-pane .xterm-screen {
+  background: transparent !important;
+}
+
+/* Custom overlay scrollbar — drawn on top of xterm so it doesn't take any
+   width and doesn't visually occlude cells the way the native overlay
+   scrollbar does (which is wider than CSS can control on macOS Chrome). */
+.xterm-pane-scrollbar {
+  position: absolute;
+  top: 4px;
+  right: 2px;
+  bottom: 4px;
+  width: 6px;
+  pointer-events: none;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.xterm-pane-scrollbar[data-visible='true'] {
+  opacity: 0.4;
+}
+.xterm-pane-wrapper:hover .xterm-pane-scrollbar[data-visible='true'],
+.xterm-pane-scrollbar[data-visible='true']:hover {
+  opacity: 1;
+}
+.xterm-pane-scrollbar[data-visible='false'] {
+  opacity: 0;
+}
+
+.xterm-pane-scrollbar-thumb {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: var(--fg-faint);
+  border-radius: 3px;
+  min-height: 24px;
+}
+.xterm-pane-scrollbar:hover .xterm-pane-scrollbar-thumb {
+  background: var(--fg-dim);
+}

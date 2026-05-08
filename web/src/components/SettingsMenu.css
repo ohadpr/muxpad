@@ -1,0 +1,129 @@
+.settings-wrap {
+  position: relative;
+}
+
+.icon-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 6px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition:
+    color 80ms ease,
+    background 80ms ease,
+    border-color 80ms ease;
+}
+.icon-btn:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+.icon-btn:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.settings-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  width: 280px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-row label {
+  font-size: 13px;
+  color: var(--fg-dim);
+}
+
+.settings-segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.settings-segmented button {
+  background: transparent;
+  border: none;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+.settings-segmented button[data-active='true'] {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.settings-segmented button:hover:not([data-active='true']) {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.settings-stepper {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.settings-stepper button {
+  background: transparent;
+  border: none;
+  width: 24px;
+  height: 24px;
+  font-size: 14px;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+.settings-stepper button:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.settings-stepper input {
+  width: 38px;
+  text-align: center;
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  color: var(--fg);
+  font-size: 12px;
+  padding: 0;
+  height: 24px;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+.settings-stepper input::-webkit-outer-spin-button,
+.settings-stepper input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.settings-popover select {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 12px;
+  flex: 1;
+  max-width: 180px;
+}
