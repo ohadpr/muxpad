@@ -1,0 +1,304 @@
+.ws-tabbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  background: var(--bg-tabbar);
+  border-bottom: 1px solid var(--border);
+  height: 44px;
+  flex: 0 0 auto;
+}
+
+.ws-tabbar > .brand {
+  flex: 0 0 auto;
+}
+
+.ws-tabbar-divider {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+}
+
+.ws-tabbar-spacer {
+  flex: 1;
+}
+
+/* Wrap around the tabs nav + collapsed-state dropdown. Takes all the
+   remaining horizontal space; the nav inside it lays out the tabs in
+   the normal case and the dropdown overlays in the collapsed case. */
+.ws-tabbar-tabs-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+}
+
+.ws-tabbar-tabs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.ws-tabbar-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/* Collapsed: keep the nav in layout (visibility:hidden) so its
+   scrollWidth still tells the resize observer "tabs would still
+   overflow if you tried to render us." Without this we'd flip-flop
+   the moment we hide the tabs. */
+.ws-tabbar-tabs[data-collapsed='true'] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Dropdown: overlays the hidden tabs, anchored left. */
+.ws-tabbar-dropdown {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+}
+
+.ws-tabbar-dropdown-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 12px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.ws-tabbar-dropdown-trigger:hover {
+  background: var(--bg-hover);
+}
+.ws-tabbar-dropdown-trigger svg {
+  flex: 0 0 auto;
+  color: var(--fg-dim);
+}
+.ws-tabbar-dropdown-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ws-tabbar-dropdown-trigger[data-attention='true']::after {
+  content: '';
+  position: absolute;
+  top: 8px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg-tabbar);
+}
+
+.ws-tabbar-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  min-width: 220px;
+  max-width: 320px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 4px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-tabbar-dropdown-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 13px;
+  text-align: left;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ws-tabbar-dropdown-item:hover {
+  background: var(--bg-hover);
+}
+.ws-tabbar-dropdown-item[data-active='true'] {
+  font-weight: 600;
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+.ws-tabbar-dropdown-item-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ws-tabbar-dropdown-item[data-attention='true']::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-left: 8px;
+  flex: 0 0 auto;
+}
+
+/* The + button when it's been moved out of the tabs nav (collapsed mode). */
+.ws-tab-add-floating {
+  margin-left: 0;
+}
+
+/* Reserve the pencil-icon slot on every tab so the layout doesn't shift
+   when a tab becomes active. The icon itself is invisible until active. */
+.ws-tab {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 12px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 13px;
+  text-decoration: none;
+  white-space: nowrap;
+  max-width: 240px;
+  cursor: pointer;
+  transition:
+    color 80ms ease,
+    background 80ms ease,
+    border-color 80ms ease;
+}
+
+/* Attention dot: a 6px circle pinned to the top-right of the tab. Position
+   absolute so it adds zero layout width — tabs don't reflow when it
+   appears or disappears. Hidden on the active tab (the user is already
+   here) and cleared server-side on workspace open, so it only reappears
+   if a fresh BEL fires after that. */
+.ws-tab[data-attention='true']::after {
+  content: '';
+  position: absolute;
+  top: 8px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg-tabbar);
+  pointer-events: none;
+}
+.ws-tab:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+  text-decoration: none;
+}
+
+.ws-tab[data-active='true'] {
+  color: var(--fg);
+  font-weight: 600;
+  background: var(--bg);
+  border-bottom-color: var(--accent);
+}
+.ws-tab[data-active='true']:hover {
+  background: var(--bg);
+}
+
+/* Drop indicators — left edge for 'insert before', right edge for 'after'. */
+.ws-tab[data-drop='before'] {
+  box-shadow: inset 2px 0 0 0 var(--accent);
+}
+.ws-tab[data-drop='after'] {
+  box-shadow: inset -2px 0 0 0 var(--accent);
+}
+
+.ws-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-tab-editing {
+  background: var(--bg);
+  cursor: text;
+  padding: 0 8px 0 12px;
+}
+.ws-tab-input {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 2px 6px;
+  height: 24px;
+  min-width: 80px;
+}
+
+/* '+' button. Match the tabs' bottom-border so its content aligns vertically
+   with tab text (otherwise it sits 2px lower because tabs reserve a 2px
+   bottom border for the active indicator). */
+.ws-tab-add {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--fg-dim);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  margin-left: 4px;
+}
+.ws-tab-add:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+.ws-tab-add:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+@media (max-width: 720px) {
+  .ws-tabbar {
+    padding: 0 10px;
+    gap: 8px;
+  }
+  .ws-tab {
+    max-width: 160px;
+  }
+}

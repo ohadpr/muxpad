@@ -1,0 +1,31 @@
+{
+  "name": "@muxpad/server",
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "MUXPAD_HOST=0.0.0.0 tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "biome check ."
+  },
+  "dependencies": {
+    "@muxpad/shared": "workspace:*",
+    "@hono/node-server": "^1.13.7",
+    "better-sqlite3": "^11.5.0",
+    "hono": "^4.6.10",
+    "node-pty": "^1.0.0",
+    "ulid": "^2.3.0",
+    "ws": "^8.18.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.9.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  }
+}
