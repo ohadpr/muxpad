@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# muxpad — minimal background daemon control for a personal install.
+#
+#   muxpad start      build (if needed) and run the daemon in the background
+#   muxpad stop       SIGTERM the daemon
+#   muxpad restart    stop + start
+#   muxpad status     show running state, URL, log path
+#   muxpad logs       tail the log
+#
+# Survives terminal close. Does NOT auto-restart on crash or auto-start on
+# reboot — for that, install the launchd plist in the README.
+#
+# Tailscale IP is auto-detected. Override with MUXPAD_HOST.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DATA_DIR="${MUXPAD_DATA_DIR:-$HOME/.muxpad}"
+PID_FILE="$DATA_DIR/server.pid"
+LOG_FILE="$DATA_DIR/server.log"
+
+mkdir -p "$DATA_DIR"
+
+is_running() {
+  [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+}
+
+resolve_host() {
+  if [ -n "${MUXPAD_HOST:-}" ]; then
+    echo "$MUXPAD_HOST"
+    return
+  fi
+  if command -v tailscale >/dev/null 2>&1; then
+    local ip
+    ip="$(tailscale ip -4 2>/dev/null | head -1 || true)"
+    if [ -n "$ip" ]; then
+      echo "$ip"
+      return
+    fi
+  fi
+  echo "0.0.0.0"
+}
+
+cmd_start() {
+  if is_running; then
+    echo "already running (PID $(cat "$PID_FILE"))"
+    cmd_status
+    return
+  fi
+
+  if [ ! -f "$ROOT/server/dist/index.js" ] || [ ! -f "$ROOT/web/dist/index.html" ]; then
+    echo "building..."
+    (cd "$ROOT" && pnpm build) > /dev/null
+  fi
+
+  local host port
+  host="$(resolve_host)"
+  port="${MUXPAD_PORT:-7777}"
+
+  # When MUXPAD_TAILSCALE_SERVE=1, force the daemon to bind localhost so
+  # the only public face is via tailscale serve (port 443 with cert).
+  # Otherwise bind whatever resolve_host picked.
+  if [ "${MUXPAD_TAILSCALE_SERVE:-0}" = "1" ]; then
+    host="127.0.0.1"
+  fi
+
+  echo "starting on http://$host:$port"
+  MUXPAD_HOST="$host" \
+  MUXPAD_PORT="$port" \
+  MUXPAD_DATA_DIR="$DATA_DIR" \
+    nohup node "$ROOT/server/dist/index.js" \
+    >> "$LOG_FILE" 2>&1 &
+  echo $! > "$PID_FILE"
+  disown $! 2>/dev/null || true
+  sleep 0.4
+
+  if [ "${MUXPAD_TAILSCALE_SERVE:-0}" = "1" ]; then
+    setup_tailscale_serve "$port"
+  fi
+
+  cmd_status
+}
+
+setup_tailscale_serve() {
+  local port="$1"
+  if ! command -v tailscale >/dev/null 2>&1; then
+    echo "warning: MUXPAD_TAILSCALE_SERVE=1 but tailscale CLI not found; skipping"
+    return
+  fi
+  echo "configuring tailscale serve → localhost:$port"
+  if ! tailscale serve --bg "https://localhost:$port" >/dev/null; then
+    echo "warning: tailscale serve setup failed"
+    return
+  fi
+  # Print the resulting public URL so the user sees it next to the local one.
+  local fqdn
+  fqdn="$(tailscale status --json 2>/dev/null | grep -oE '"DNSName":[[:space:]]*"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)\.?"/\1/' | sed 's/\.$//')"
+  if [ -n "$fqdn" ]; then
+    echo "  public: https://$fqdn/"
+  fi
+}
+
+teardown_tailscale_serve() {
+  if ! command -v tailscale >/dev/null 2>&1; then return; fi
+  # Only tear down if our mapping is present, to avoid clobbering other
+  # services the user may have mapped via tailscale serve.
+  local port="${MUXPAD_PORT:-7777}"
+  if tailscale serve status 2>/dev/null | grep -q "localhost:$port"; then
+    echo "removing tailscale serve mapping"
+    tailscale serve --bg --https=443 off >/dev/null 2>&1 || true
+  fi
+}
+
+cmd_stop() {
+  teardown_tailscale_serve
+  if ! is_running; then
+    echo "not running"
+    rm -f "$PID_FILE"
+    return
+  fi
+  local pid
+  pid="$(cat "$PID_FILE")"
+  echo "stopping PID $pid..."
+  kill -TERM "$pid" 2>/dev/null || true
+  for _ in $(seq 1 20); do
+    if ! kill -0 "$pid" 2>/dev/null; then break; fi
+    sleep 0.1
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "still alive, sending SIGKILL"
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  rm -f "$PID_FILE"
+  echo "stopped"
+}
+
+cmd_restart() {
+  cmd_stop || true
+  sleep 0.3
+  cmd_start
+}
+
+cmd_status() {
+  if is_running; then
+    local pid url
+    pid="$(cat "$PID_FILE")"
+    url="$(grep -oE 'http://[^[:space:]]+' "$LOG_FILE" 2>/dev/null | tail -1 || true)"
+    echo "running (PID $pid)"
+    [ -n "$url" ] && echo "  url:  $url"
+    echo "  log:  $LOG_FILE"
+    echo "  data: $DATA_DIR"
+  else
+    echo "not running"
+  fi
+}
+
+cmd_logs() {
+  if [ ! -f "$LOG_FILE" ]; then
+    echo "no log yet at $LOG_FILE"
+    exit 1
+  fi
+  exec tail -f "$LOG_FILE"
+}
+
+case "${1:-}" in
+  start) cmd_start ;;
+  stop) cmd_stop ;;
+  restart) cmd_restart ;;
+  status) cmd_status ;;
+  logs) cmd_logs ;;
+  *)
+    echo "usage: $(basename "$0") {start|stop|restart|status|logs}" >&2
+    exit 1
+    ;;
+esac

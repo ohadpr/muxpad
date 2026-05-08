@@ -1,0 +1,330 @@
+/* Self-hosted MesloLGS NF (the canonical Powerlevel10k Nerd Font). Chrome on
+   macOS often can't access user-installed fonts under ~/Library/Fonts/, so
+   we ship our own copy to make Nerd Font glyphs (powerline arrows, git icons,
+   etc.) reliably available. */
+@font-face {
+  font-family: 'MesloLGS NF';
+  src: url('/fonts/MesloLGS-NF-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'MesloLGS NF';
+  src: url('/fonts/MesloLGS-NF-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'MesloLGS NF';
+  src: url('/fonts/MesloLGS-NF-Italic.ttf') format('truetype');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'MesloLGS NF';
+  src: url('/fonts/MesloLGS-NF-Bold-Italic.ttf') format('truetype');
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+
+/* Default fallback values (also overridden per theme below). */
+:root {
+  --accent: #7aa2f7;
+  --accent-fg: #1a1b26;
+  --bg-tabbar: #16161e;
+}
+
+/* Tokyo Night — saturated deep navy with a vivid blue accent. */
+[data-theme='tokyo-night'] {
+  --bg: #1a1b26;
+  --bg-elev: #1f2335;
+  --bg-hover: #292e42;
+  --bg-chrome: #16161e;
+  --bg-tabbar: #060611;
+  --fg: #c0caf5;
+  --fg-dim: #a9b1d6;
+  --fg-faint: #565f89;
+  --border: #292e42;
+  --border-strong: #3b4261;
+  --xterm-bg: #1a1b26;
+  --xterm-fg: #c0caf5;
+  --danger: #f7768e;
+  --accent: #7aa2f7;
+  --accent-fg: #1a1b26;
+}
+
+/* Dracula — grey-purple base with vivid purple/pink accents. The standout
+   colorful dark. Different both in bg tint and accent hue. */
+[data-theme='dracula'] {
+  --bg: #282a36;
+  --bg-elev: #21222c;
+  --bg-hover: #44475a;
+  --bg-chrome: #21222c;
+  --bg-tabbar: #0e0f16;
+  --fg: #f8f8f2;
+  --fg-dim: #b8b8b0;
+  --fg-faint: #6272a4;
+  --border: #44475a;
+  --border-strong: #6272a4;
+  --xterm-bg: #282a36;
+  --xterm-fg: #f8f8f2;
+  --danger: #ff5555;
+  --accent: #bd93f9;
+  --accent-fg: #282a36;
+}
+
+/* GitHub Light — crisp pure white. The "well-lit room" theme. */
+[data-theme='github-light'] {
+  --bg: #ffffff;
+  --bg-elev: #ffffff;
+  --bg-hover: #eaeef2;
+  --bg-chrome: #f6f8fa;
+  --bg-tabbar: #e2e6ec;
+  --fg: #1f2328;
+  --fg-dim: #59636e;
+  --fg-faint: #818b98;
+  --border: #d1d9e0;
+  --border-strong: #afb8c1;
+  --xterm-bg: #ffffff;
+  --xterm-fg: #1f2328;
+  --danger: #cf222e;
+  --accent: #0969da;
+  --accent-fg: #ffffff;
+}
+
+/* Acme — warm cream paper with a vivid violet brand accent. Inspired by
+   acme.ai: buttery off-white surfaces, near-black ink, saturated purple
+   for primaries with a soft lavender tint for hovers and selections. */
+[data-theme='acme'] {
+  --bg: #fdf6ea;
+  --bg-elev: #fffdf6;
+  --bg-hover: #f6ecd8;
+  --bg-chrome: #f9f0e0;
+  --bg-tabbar: #f0e9f6;
+  --fg: #0d0d12;
+  --fg-dim: #4a4654;
+  --fg-faint: #8e8898;
+  --border: #efe4cf;
+  --border-strong: #ddceae;
+  --xterm-bg: #fdf6ea;
+  --xterm-fg: #0d0d12;
+  --danger: #d83a5b;
+  --accent: #6f55ff;
+  --accent-fg: #ffffff;
+}
+
+/* Acme Dark — calm dark surfaces with a hint of violet, brand-violet
+   accent, soft cream foreground. The "night-time Acme" pairing rather
+   than the inverted-light version. */
+[data-theme='acme-dark'] {
+  --bg: #221547;
+  --bg-elev: #2c1d5b;
+  --bg-hover: #382670;
+  --bg-chrome: #170c34;
+  --bg-tabbar: #0a051e;
+  --fg: #ebe5d2;
+  --fg-dim: #a09a87;
+  --fg-faint: #6c6856;
+  --border: #382670;
+  --border-strong: #4d3490;
+  --xterm-bg: #221547;
+  --xterm-fg: #ebe5d2;
+  --danger: #ff7a99;
+  --accent: #9d85f5;
+  --accent-fg: #221547;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    'Inter',
+    sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+/* Thin themed scrollbars. scrollbar-width / scrollbar-color INHERIT in CSS,
+   so applying them to html/body cascades to every descendant — including
+   xterm.js's .xterm-viewport. xterm reserves a scrollbar's worth of width
+   regardless of overlay-mode, so getting forced into a non-overlay mode
+   shrinks the rendered cell grid. We explicitly opt xterm back out of the
+   inheritance below. */
+
+html,
+body {
+  scrollbar-width: thin;
+  scrollbar-color: var(--fg-faint) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--fg-faint);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--fg-dim);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Hide xterm's native scrollbar entirely — even when overlay (zero-width
+   in flow), Chrome/macOS draws a chunky overlay that visually occludes
+   the rightmost cells. We render our own thin overlay (XtermPane.css) on
+   top instead. Mouse wheel still scrolls; Shift+PageUp/Down navigates
+   scrollback. */
+.xterm,
+.xterm *,
+.xterm-viewport {
+  scrollbar-width: none;
+}
+.xterm::-webkit-scrollbar,
+.xterm *::-webkit-scrollbar,
+.xterm-viewport::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+input,
+select {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: var(--fg);
+  outline: none;
+  transition: border-color 80ms ease;
+}
+input:focus,
+select:focus {
+  border-color: var(--accent);
+}
+
+.btn {
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    background 80ms ease,
+    border-color 80ms ease;
+}
+.btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+.btn-primary:hover {
+  filter: brightness(0.95);
+}
+.btn-danger {
+  color: var(--danger);
+}
+.btn-danger:hover {
+  background: var(--bg-hover);
+}
+
+/* App layout — persistent tab bar above an outlet that fills the rest. */
+
+.app-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+.app-layout > .ws-tabbar {
+  flex: 0 0 auto;
+}
+.app-layout > .workspace-root,
+.app-layout > .dashboard-root {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Brand (logo + wordmark) — used in the dashboard and workspace headers. */
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: var(--fg);
+  font-weight: 600;
+  font-size: 13.5px;
+  letter-spacing: -0.005em;
+  text-decoration: none;
+  transition: background 80ms ease;
+}
+.brand:hover {
+  background: var(--bg-hover);
+  text-decoration: none;
+}
+.brand-static {
+  cursor: default;
+}
+.brand-static:hover {
+  background: transparent;
+}
+
+.brand-mark {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 720px) {
+  .brand-text-responsive {
+    display: none;
+  }
+}
