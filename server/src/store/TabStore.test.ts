@@ -1,15 +1,15 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from './migrations.js';
-import { WorkspaceStore } from './WorkspaceStore.js';
+import { TabStore } from './TabStore.js';
 
-describe('WorkspaceStore', () => {
-  let store: WorkspaceStore;
+describe('TabStore', () => {
+  let store: TabStore;
 
   beforeEach(() => {
     const db = new Database(':memory:');
     runMigrations(db);
-    store = new WorkspaceStore(db);
+    store = new TabStore(db);
   });
 
   it('creates and retrieves a workspace', () => {

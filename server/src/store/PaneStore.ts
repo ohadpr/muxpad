@@ -6,7 +6,7 @@ const ulid = monotonicFactory();
 
 interface PaneRow {
   id: string;
-  workspace_id: string;
+  tab_id: string;
   shell: string;
   startup_cmd: string | null;
   cwd: string;
@@ -18,7 +18,7 @@ export class PaneStore {
   constructor(private readonly db: Database.Database) {}
 
   create(input: {
-    workspace_id: string;
+    tab_id: string;
     shell: string;
     cwd: string;
     startup_cmd?: string | null;
@@ -30,11 +30,11 @@ export class PaneStore {
     const env = input.env ?? null;
     this.db
       .prepare(
-        'INSERT INTO panes (id, workspace_id, shell, startup_cmd, cwd, env, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO panes (id, tab_id, shell, startup_cmd, cwd, env, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         id,
-        input.workspace_id,
+        input.tab_id,
         input.shell,
         startup_cmd,
         input.cwd,
@@ -43,7 +43,7 @@ export class PaneStore {
       );
     return {
       id,
-      workspace_id: input.workspace_id,
+      tab_id: input.tab_id,
       shell: input.shell,
       startup_cmd,
       cwd: input.cwd,
@@ -56,10 +56,10 @@ export class PaneStore {
     return this.row(this.db.prepare('SELECT * FROM panes WHERE id = ?').get(id));
   }
 
-  listByWorkspace(workspaceId: string): PaneSpec[] {
+  listByTab(tabId: string): PaneSpec[] {
     const rows = this.db
-      .prepare('SELECT * FROM panes WHERE workspace_id = ? ORDER BY created_at')
-      .all(workspaceId) as PaneRow[];
+      .prepare('SELECT * FROM panes WHERE tab_id = ? ORDER BY created_at')
+      .all(tabId) as PaneRow[];
     return rows.map((r) => this.row(r) as PaneSpec);
   }
 
@@ -82,7 +82,7 @@ export class PaneStore {
     const x = r as PaneRow;
     return {
       id: x.id,
-      workspace_id: x.workspace_id,
+      tab_id: x.tab_id,
       shell: x.shell,
       startup_cmd: x.startup_cmd,
       cwd: x.cwd,

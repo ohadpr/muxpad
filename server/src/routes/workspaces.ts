@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type Database from 'better-sqlite3';
 import { LayoutNodeSchema } from '@muxpad/shared';
-import { WorkspaceStore } from '../store/WorkspaceStore.js';
+import { TabStore } from '../store/TabStore.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { pruneDeadPanes } from '../store/migrations.js';
 import type { PaneManager } from '../runtime/PaneManager.js';
@@ -13,7 +13,7 @@ export function workspacesRoutes(deps: {
   paneManager: PaneManager;
 }): Hono {
   const app = new Hono();
-  const workspaces = new WorkspaceStore(deps.db);
+  const workspaces = new TabStore(deps.db);
   const panes = new PaneStore(deps.db);
 
   app.post('/', async (c) => {
@@ -35,7 +35,7 @@ export function workspacesRoutes(deps: {
     // BEL since the user last interacted with it. Panes whose runtime
     // isn't running (lazy-spawn, no client connected) contribute false.
     const decorated = list.map((w) => {
-      const wsPanes = panes.listByWorkspace(w.id);
+      const wsPanes = panes.listByTab(w.id);
       const attention = wsPanes.some((p) => deps.paneManager.get(p.id)?.getNeedsAttention() ?? false);
       return { ...w, attention };
     });
@@ -47,7 +47,7 @@ export function workspacesRoutes(deps: {
   // so the tab indicator doesn't reappear if they leave without typing.
   app.post('/:id/seen', (c) => {
     const id = c.req.param('id');
-    for (const p of panes.listByWorkspace(id)) {
+    for (const p of panes.listByTab(id)) {
       deps.paneManager.get(p.id)?.markSeen();
     }
     return c.body(null, 204);
@@ -63,7 +63,7 @@ export function workspacesRoutes(deps: {
     const w = workspaces.getById(c.req.param('id'));
     if (!w)
       return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
-    const livePanes = panes.listByWorkspace(w.id);
+    const livePanes = panes.listByTab(w.id);
     const valid = new Set(livePanes.map((p) => p.id));
     const cleaned = pruneDeadPanes(w.layout, valid);
     if (JSON.stringify(cleaned) !== JSON.stringify(w.layout)) {
@@ -102,7 +102,7 @@ export function workspacesRoutes(deps: {
     const ws = workspaces.getById(id);
     if (!ws)
       return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
-    for (const p of panes.listByWorkspace(id)) {
+    for (const p of panes.listByTab(id)) {
       await deps.paneManager.kill(p.id);
     }
     workspaces.delete(id);

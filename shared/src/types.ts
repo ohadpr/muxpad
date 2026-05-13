@@ -23,7 +23,7 @@ export const LayoutNodeSchema: z.ZodType<LayoutNode> = z.lazy(() =>
 
 export const PaneSpecSchema = z.object({
   id: z.string(),
-  workspace_id: z.string(),
+  tab_id: z.string(),
   shell: z.string(),
   startup_cmd: z.string().nullable().default(null),
   cwd: z.string(),
