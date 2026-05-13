@@ -1,8 +1,8 @@
 .ws-tabbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 16px;
+  gap: 6px;
+  padding: 0 12px;
   background: var(--bg-tabbar);
   border-bottom: 1px solid var(--border);
   height: 44px;
