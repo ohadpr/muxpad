@@ -4,7 +4,7 @@ import {
   createRouter,
   Outlet,
 } from '@tanstack/react-router';
-import { WorkspacePicker } from './pages/WorkspacePicker';
+import { RootRedirect } from './pages/RootRedirect';
 import { TabView } from './pages/TabView';
 import { TabPopout } from './pages/TabPopout';
 import { PopoutView } from './pages/PopoutView';
@@ -23,11 +23,11 @@ const appLayoutRoute = createRoute({
   component: AppLayout,
 });
 
-// Root → workspace picker.
-const pickerRoute = createRoute({
+// Root: just redirects (to first workspace, or auto-creates one).
+const rootRedirectRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: '/',
-  component: WorkspacePicker,
+  component: RootRedirect,
 });
 
 // /w/$wsSlug — workspace layout. Loads workspace, redirects to first tab
@@ -60,7 +60,7 @@ const popoutTabRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   appLayoutRoute.addChildren([
-    pickerRoute,
+    rootRedirectRoute,
     workspaceLayoutRoute.addChildren([tabRoute]),
   ]),
   popoutPaneRoute,
