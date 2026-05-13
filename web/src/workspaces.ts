@@ -16,17 +16,18 @@ let cache: Workspace[] = [];
 const listeners = new Set<(w: Workspace[]) => void>();
 let version = 0;
 
-export async function refreshWorkspaces(): Promise<void> {
+export async function refreshWorkspaces(): Promise<Workspace[]> {
   const myVersion = ++version;
   const next = await api.listWorkspaces();
-  if (myVersion < version) return;
+  if (myVersion < version) return next;
   cache = next;
   for (const fn of listeners) fn(cache);
+  return next;
 }
 
 export function useWorkspaces(): {
   workspaces: Workspace[];
-  refresh: () => Promise<void>;
+  refresh: () => Promise<Workspace[]>;
 } {
   const [state, setState] = useState<Workspace[]>(cache);
   useEffect(() => {
