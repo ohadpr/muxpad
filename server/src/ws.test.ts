@@ -8,6 +8,7 @@ import { encodeInput, decodeServerMessage } from '@muxpad/shared';
 import type { AddressInfo } from 'node:net';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
+import { WorkspaceStore } from './store/WorkspaceStore.js';
 
 let cleanup: (() => Promise<void>) | null = null;
 
@@ -19,10 +20,12 @@ afterEach(async () => {
 async function bootServer() {
   const db = openDb(':memory:');
   const paneManager = new PaneManager();
-  const workspaces = new TabStore(db);
+  const workspaces = new WorkspaceStore(db);
+  const tabs = new TabStore(db);
   const panes = new PaneStore(db);
-  const ws = workspaces.create({ name: 'W', layout: 'p1' });
-  const pane = panes.create({ tab_id: ws.id, shell: '/bin/cat', cwd: '/tmp' });
+  const ws = workspaces.create({ name: 'W' });
+  const tab = tabs.create({ name: 'T', layout: 'p1', workspace_id: ws.id });
+  const pane = panes.create({ tab_id: tab.id, shell: '/bin/cat', cwd: '/tmp' });
   const http = createServer();
   attachWsServer({ http, db, paneManager });
   await new Promise<void>((r) => http.listen(0, r));

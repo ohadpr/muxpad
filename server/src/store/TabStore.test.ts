@@ -2,18 +2,22 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from './migrations.js';
 import { TabStore } from './TabStore.js';
+import { WorkspaceStore } from './WorkspaceStore.js';
 
 describe('TabStore', () => {
   let store: TabStore;
+  let workspaceId: string;
 
   beforeEach(() => {
     const db = new Database(':memory:');
     runMigrations(db);
     store = new TabStore(db);
+    const workspaces = new WorkspaceStore(db);
+    workspaceId = workspaces.create({ name: 'W' }).id;
   });
 
   it('creates and retrieves a workspace', () => {
-    const w = store.create({ name: 'Dev', layout: 'pane-1' });
+    const w = store.create({ name: 'Dev', layout: 'pane-1', workspace_id: workspaceId });
     expect(w.slug).toMatch(/^[A-Za-z2-9]{8}$/);
     expect(store.getById(w.id)).toEqual(w);
     expect(store.getBySlug(w.slug)).toEqual(w);
@@ -22,30 +26,30 @@ describe('TabStore', () => {
   it('generates unique slugs across many workspaces', () => {
     const slugs = new Set<string>();
     for (let i = 0; i < 50; i++) {
-      const w = store.create({ name: `n${i}`, layout: 'p' });
+      const w = store.create({ name: `n${i}`, layout: 'p', workspace_id: workspaceId });
       slugs.add(w.slug);
     }
     expect(slugs.size).toBe(50);
   });
 
   it('lists workspaces sorted by position', () => {
-    const a = store.create({ name: 'A', layout: 'pa' });
-    const b = store.create({ name: 'B', layout: 'pb' });
+    const a = store.create({ name: 'A', layout: 'pa', workspace_id: workspaceId });
+    const b = store.create({ name: 'B', layout: 'pb', workspace_id: workspaceId });
     const list = store.list();
     // Insertion order = position order (a got 0, b got 1).
     expect(list.map((w) => w.id)).toEqual([a.id, b.id]);
   });
 
   it('reorders workspaces', () => {
-    const a = store.create({ name: 'A', layout: 'pa' });
-    const b = store.create({ name: 'B', layout: 'pb' });
-    const c = store.create({ name: 'C', layout: 'pc' });
+    const a = store.create({ name: 'A', layout: 'pa', workspace_id: workspaceId });
+    const b = store.create({ name: 'B', layout: 'pb', workspace_id: workspaceId });
+    const c = store.create({ name: 'C', layout: 'pc', workspace_id: workspaceId });
     store.reorder([c.id, a.id, b.id]);
     expect(store.list().map((w) => w.id)).toEqual([c.id, a.id, b.id]);
   });
 
   it('updates layout and bumps updated_at', async () => {
-    const w = store.create({ name: 'Dev', layout: 'pane-1' });
+    const w = store.create({ name: 'Dev', layout: 'pane-1', workspace_id: workspaceId });
     await new Promise((r) => setTimeout(r, 5));
     const updated = store.update(w.id, {
       layout: { direction: 'row', first: 'a', second: 'b' },
@@ -59,7 +63,7 @@ describe('TabStore', () => {
   });
 
   it('deletes a workspace', () => {
-    const w = store.create({ name: 'Dev', layout: 'pane-1' });
+    const w = store.create({ name: 'Dev', layout: 'pane-1', workspace_id: workspaceId });
     store.delete(w.id);
     expect(store.getById(w.id)).toBeNull();
   });
@@ -71,7 +75,7 @@ describe('TabStore', () => {
       first: { direction: 'column' as const, first: 'a', second: 'b' },
       second: 'c',
     };
-    const w = store.create({ name: 'X', layout });
+    const w = store.create({ name: 'X', layout, workspace_id: workspaceId });
     expect(store.getById(w.id)?.layout).toEqual(layout);
   });
 });
