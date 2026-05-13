@@ -74,9 +74,18 @@ export function WorkspaceSwitcher({ activeWorkspaceSlug }: WorkspaceSwitcherProp
     setCreating(true);
     setOpen(false);
     try {
+      // Bootstrap a workspace + first tab + first pane in one go so the
+      // user lands somewhere usable. Without the tab, WorkspaceLayout's
+      // auto-close-empty would immediately delete the new workspace.
       const w = await api.createWorkspace();
+      const t = await api.createTab(w.id);
+      const pane = await api.createPane(t.id, {});
+      await api.patchTab(t.id, { layout: pane.id });
       await refreshWorkspaces();
-      void navigate({ to: '/w/$wsSlug', params: { wsSlug: w.slug } });
+      void navigate({
+        to: '/w/$wsSlug/t/$tabSlug',
+        params: { wsSlug: w.slug, tabSlug: t.slug },
+      });
     } finally {
       setCreating(false);
     }

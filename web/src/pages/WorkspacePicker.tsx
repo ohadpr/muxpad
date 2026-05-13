@@ -19,9 +19,18 @@ export function WorkspacePicker() {
     if (creating) return;
     setCreating(true);
     try {
+      // Bootstrap a workspace + first tab + first pane so the user lands
+      // somewhere usable. Otherwise WorkspaceLayout's auto-close-empty
+      // would immediately delete the new workspace.
       const w = await api.createWorkspace();
+      const t = await api.createTab(w.id);
+      const pane = await api.createPane(t.id, {});
+      await api.patchTab(t.id, { layout: pane.id });
       await refreshWorkspaces();
-      void navigate({ to: '/w/$wsSlug', params: { wsSlug: w.slug } });
+      void navigate({
+        to: '/w/$wsSlug/t/$tabSlug',
+        params: { wsSlug: w.slug, tabSlug: t.slug },
+      });
     } finally {
       setCreating(false);
     }
