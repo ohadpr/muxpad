@@ -8,19 +8,22 @@ import type { PaneManager } from '../runtime/PaneManager.js';
 
 const defaultShell = process.env.SHELL ?? '/bin/zsh';
 
-export function panesWorkspaceScopedRoutes(deps: {
+/**
+ * Panes are spawned under a specific tab — `POST /api/tabs/:id/panes`.
+ */
+export function panesTabScopedRoutes(deps: {
   db: Database.Database;
   paneManager: PaneManager;
 }): Hono {
   const app = new Hono();
   const panes = new PaneStore(deps.db);
-  const workspaces = new TabStore(deps.db);
+  const tabs = new TabStore(deps.db);
 
   app.post('/:id/panes', async (c) => {
-    const wsId = c.req.param('id');
-    const ws = workspaces.getById(wsId);
-    if (!ws)
-      return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
+    const tabId = c.req.param('id');
+    const t = tabs.getById(tabId);
+    if (!t)
+      return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
     const body = z
       .object({
         shell: z.string().optional(),
@@ -37,14 +40,14 @@ export function panesWorkspaceScopedRoutes(deps: {
     let cwd = body.cwd;
     if (!cwd && body.inherit_cwd_from) {
       const source = panes.getById(body.inherit_cwd_from);
-      if (source && source.tab_id === wsId) {
+      if (source && source.tab_id === tabId) {
         const live = deps.paneManager.get(source.id)?.getCurrentCwd();
         cwd = live ?? source.cwd;
       }
     }
 
     const pane = panes.create({
-      tab_id: wsId,
+      tab_id: tabId,
       shell: body.shell ?? defaultShell,
       cwd: cwd ?? homedir(),
       startup_cmd: body.startup_cmd ?? null,

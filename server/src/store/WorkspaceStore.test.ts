@@ -10,10 +10,6 @@ describe('WorkspaceStore', () => {
   beforeEach(() => {
     db = new Database(':memory:');
     runMigrations(db);
-    // The v5 migration auto-creates a "Default" workspace from any
-    // pre-existing tabs. On a fresh in-memory DB there are no tabs,
-    // so the table is empty here.
-    db.prepare('DELETE FROM workspaces').run();
     store = new WorkspaceStore(db);
   });
 
