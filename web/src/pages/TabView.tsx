@@ -14,7 +14,7 @@ import { api, type TabWithPanes } from '../api';
 import { useDocumentTitle } from '../use-document-title';
 import { useMediaQuery } from '../use-media-query';
 import { refreshTabs, useTabs } from '../tabs';
-import { useWorkspaces } from '../workspaces';
+import { refreshWorkspaces, useWorkspaces } from '../workspaces';
 import './tab.css';
 
 type Layout = MosaicNode<string> | null;
@@ -241,29 +241,41 @@ export function TabView() {
   /**
    * Delete the current tab. Used both by the explicit "close this tab"
    * link and by removePaneFromLayout when the last pane is gone (full
-   * cascade close-pane → close-tab → close-workspace).
+   * cascade: close-pane → close-tab → close-workspace).
+   *
+   * If this was the last tab in the workspace, also delete the workspace
+   * and navigate home. (WorkspaceLayout has its own auto-close-empty
+   * effect as a safety net for cross-device mutations, but doing the
+   * cascade explicitly here avoids relying on stale useWorkspaces state
+   * to fire it.)
    */
   const closeTab = useCallback(async () => {
     if (!tab || !workspace) return;
+    const isLastTab = allTabs.filter((t) => t.id !== tab.id).length === 0;
     try {
       await api.deleteTab(tab.id);
     } catch (err) {
       console.error('close tab failed', err);
       return;
     }
-    await refreshTabs(workspace.id);
-    // Pick another tab to navigate to, if any.
-    const remaining = allTabs.filter((t) => t.id !== tab.id);
-    if (remaining.length > 0) {
-      const next = remaining[0]!;
-      void navigate({
-        to: '/w/$wsSlug/t/$tabSlug',
-        params: { wsSlug, tabSlug: next.slug },
-      });
-    } else {
-      // WorkspaceLayout will auto-delete the empty workspace and route home.
-      void navigate({ to: '/w/$wsSlug', params: { wsSlug } });
+    if (isLastTab) {
+      try {
+        await api.deleteWorkspace(workspace.id);
+      } catch (err) {
+        console.error('delete workspace failed', err);
+      }
+      await refreshWorkspaces();
+      void navigate({ to: '/' });
+      return;
     }
+    await refreshTabs(workspace.id);
+    await refreshWorkspaces(); // keep tab_count fresh on the workspaces list
+    const remaining = allTabs.filter((t) => t.id !== tab.id);
+    const next = remaining[0]!;
+    void navigate({
+      to: '/w/$wsSlug/t/$tabSlug',
+      params: { wsSlug, tabSlug: next.slug },
+    });
   }, [tab, workspace, allTabs, navigate, wsSlug]);
 
   const removePaneFromLayout = useCallback(
