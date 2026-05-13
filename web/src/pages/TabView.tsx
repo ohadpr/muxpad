@@ -238,6 +238,34 @@ export function TabView() {
     [tab, persistLayout, notifyLayoutChanged],
   );
 
+  /**
+   * Delete the current tab. Used both by the explicit "close this tab"
+   * link and by removePaneFromLayout when the last pane is gone (full
+   * cascade close-pane → close-tab → close-workspace).
+   */
+  const closeTab = useCallback(async () => {
+    if (!tab || !workspace) return;
+    try {
+      await api.deleteTab(tab.id);
+    } catch (err) {
+      console.error('close tab failed', err);
+      return;
+    }
+    await refreshTabs(workspace.id);
+    // Pick another tab to navigate to, if any.
+    const remaining = allTabs.filter((t) => t.id !== tab.id);
+    if (remaining.length > 0) {
+      const next = remaining[0]!;
+      void navigate({
+        to: '/w/$wsSlug/t/$tabSlug',
+        params: { wsSlug, tabSlug: next.slug },
+      });
+    } else {
+      // WorkspaceLayout will auto-delete the empty workspace and route home.
+      void navigate({ to: '/w/$wsSlug', params: { wsSlug } });
+    }
+  }, [tab, workspace, allTabs, navigate, wsSlug]);
+
   const removePaneFromLayout = useCallback(
     async (paneId: string) => {
       const newLayout = removePane(layoutRef.current, paneId);
@@ -266,43 +294,20 @@ export function TabView() {
             new CustomEvent('muxpad:focus-pane', { detail: { paneId: next } }),
           );
         }, 0);
+      } else {
+        // Last pane in this tab is gone → cascade-close the tab.
+        // WorkspaceLayout in turn auto-closes the workspace if this
+        // was the workspace's last tab.
+        void closeTab();
       }
     },
-    [persistLayout, notifyLayoutChanged],
+    [persistLayout, notifyLayoutChanged, closeTab],
   );
 
   const killPane = useCallback(
     (paneId: string) => removePaneFromLayout(paneId),
     [removePaneFromLayout],
   );
-
-  /**
-   * "Close this tab" link in the empty-tab state. Deletes the tab.
-   * Workspace auto-close (in WorkspaceLayout) handles the case where
-   * this was the last tab in the workspace.
-   */
-  const closeTab = useCallback(async () => {
-    if (!tab || !workspace) return;
-    try {
-      await api.deleteTab(tab.id);
-    } catch (err) {
-      console.error('close tab failed', err);
-      return;
-    }
-    await refreshTabs(workspace.id);
-    // Pick another tab to navigate to, if any.
-    const remaining = allTabs.filter((t) => t.id !== tab.id);
-    if (remaining.length > 0) {
-      const next = remaining[0]!;
-      void navigate({
-        to: '/w/$wsSlug/t/$tabSlug',
-        params: { wsSlug, tabSlug: next.slug },
-      });
-    } else {
-      // WorkspaceLayout will auto-delete the empty workspace and route home.
-      void navigate({ to: '/w/$wsSlug', params: { wsSlug } });
-    }
-  }, [tab, workspace, allTabs, navigate, wsSlug]);
 
   const onPaneExited = useCallback(
     (paneId: string) => {
