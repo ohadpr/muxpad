@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { ulid } from 'ulid';
 import { generateShortId } from './WorkspaceStore.js';
 
 interface Migration {
@@ -127,6 +128,51 @@ const MIGRATIONS: Migration[] = [
         .all() as { id: string }[];
       const update = db.prepare('UPDATE workspaces SET position = ? WHERE id = ?');
       rows.forEach((row, idx) => update.run(idx, row.id));
+    },
+  },
+  {
+    // Multi-workspaces. The previous "workspaces" table modeled what is
+    // now called a "tab" (one row per tab in the bar). Rename it to
+    // `tabs`, rename the pane FK column accordingly, and add a new
+    // `workspaces` table for the new parent concept. Every existing
+    // tab is folded into a single "Default" workspace so the user's
+    // data carries over visibly unchanged.
+    // (See docs/plans/2026-05-08-multi-workspaces-design.md.)
+    version: 5,
+    apply: (db) => {
+      db.exec(`
+        ALTER TABLE workspaces RENAME TO tabs;
+        ALTER TABLE panes RENAME COLUMN workspace_id TO tab_id;
+        CREATE TABLE workspaces (
+          id          TEXT PRIMARY KEY,
+          slug        TEXT UNIQUE NOT NULL,
+          name        TEXT NOT NULL,
+          position    INTEGER NOT NULL DEFAULT 0,
+          created_at  INTEGER NOT NULL,
+          updated_at  INTEGER NOT NULL
+        );
+        ALTER TABLE tabs ADD COLUMN workspace_id TEXT NOT NULL DEFAULT '';
+        CREATE INDEX tabs_workspace_id ON tabs(workspace_id);
+      `);
+
+      const wsId = ulid();
+      let slug: string | null = null;
+      for (let attempts = 0; attempts < 100; attempts++) {
+        const candidate = generateShortId();
+        const collision = db
+          .prepare('SELECT 1 FROM workspaces WHERE slug = ?')
+          .get(candidate);
+        if (!collision) {
+          slug = candidate;
+          break;
+        }
+      }
+      if (!slug) throw new Error('unable to allocate slug for default workspace');
+      const now = Date.now();
+      db.prepare(
+        'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ).run(wsId, slug, 'Default', 0, now, now);
+      db.prepare('UPDATE tabs SET workspace_id = ?').run(wsId);
     },
   },
 ];
