@@ -330,6 +330,26 @@ select:focus {
   flex: 0 0 auto;
 }
 
+/* Cross-workspace attention dot — overlaid on the brand mark when any
+   workspace (other than the one currently being viewed) has a pane
+   needing attention. Pseudo-element on the link (not the SVG, which
+   can't host ::after). */
+.brand {
+  position: relative;
+}
+.brand-attention::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 22px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 0 2px var(--bg-tabbar);
+  pointer-events: none;
+}
+
 @media (max-width: 720px) {
   .brand-text-responsive {
     display: none;

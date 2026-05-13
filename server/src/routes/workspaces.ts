@@ -2,16 +2,38 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type Database from 'better-sqlite3';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
+import { TabStore } from '../store/TabStore.js';
+import { PaneStore } from '../store/PaneStore.js';
+import type { PaneManager } from '../runtime/PaneManager.js';
 
 /**
  * CRUD for the top-level workspace concept. Workspaces own tabs; tabs
  * own panes. Lives at /api/workspaces; tab routes live at /api/tabs.
  */
-export function workspacesRoutes(deps: { db: Database.Database }): Hono {
+export function workspacesRoutes(deps: {
+  db: Database.Database;
+  paneManager: PaneManager;
+}): Hono {
   const app = new Hono();
   const workspaces = new WorkspaceStore(deps.db);
+  const tabs = new TabStore(deps.db);
+  const panes = new PaneStore(deps.db);
 
-  app.get('/', (c) => c.json(workspaces.list()));
+  /** Returns true iff any pane in any tab in `workspaceId` flags attention. */
+  const workspaceAttention = (workspaceId: string): boolean => {
+    for (const t of tabs.listByWorkspace(workspaceId)) {
+      for (const p of panes.listByTab(t.id)) {
+        if (deps.paneManager.get(p.id)?.getNeedsAttention()) return true;
+      }
+    }
+    return false;
+  };
+
+  app.get('/', (c) => {
+    const list = workspaces.list();
+    const decorated = list.map((w) => ({ ...w, attention: workspaceAttention(w.id) }));
+    return c.json(decorated);
+  });
 
   app.post('/', async (c) => {
     const body = z
@@ -28,7 +50,7 @@ export function workspacesRoutes(deps: { db: Database.Database }): Hono {
         { error: { code: 'not_found', message: 'workspace not found' } },
         404,
       );
-    return c.json(w);
+    return c.json({ ...w, attention: workspaceAttention(w.id) });
   });
 
   app.patch('/:id', async (c) => {

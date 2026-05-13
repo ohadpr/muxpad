@@ -25,6 +25,10 @@ export function WorkspaceSwitcher({ activeWorkspaceSlug }: WorkspaceSwitcherProp
   const navigate = useNavigate();
 
   const active = workspaces.find((w) => w.slug === activeWorkspaceSlug);
+  // Dot on the trigger when any *other* workspace has attention.
+  const anyOtherAttention = workspaces.some(
+    (w) => w.attention && w.slug !== activeWorkspaceSlug,
+  );
 
   useEffect(() => {
     if (editing) {
@@ -120,6 +124,7 @@ export function WorkspaceSwitcher({ activeWorkspaceSlug }: WorkspaceSwitcherProp
       <button
         type="button"
         className="ws-switcher-trigger"
+        data-attention={anyOtherAttention ? 'true' : undefined}
         onClick={() => setOpen((v) => !v)}
         onDoubleClick={startEdit}
         title={active ? 'Double-click to rename' : 'Switch workspace'}
@@ -146,6 +151,7 @@ export function WorkspaceSwitcher({ activeWorkspaceSlug }: WorkspaceSwitcherProp
                 type="button"
                 className="ws-switcher-item"
                 data-active={isActive ? 'true' : undefined}
+                data-attention={!isActive && w.attention ? 'true' : undefined}
                 onClick={() => {
                   setOpen(false);
                   if (!isActive) {
