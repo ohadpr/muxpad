@@ -29,7 +29,7 @@ describe('domain schemas', () => {
   it('parses a pane spec with defaults', () => {
     const p = PaneSpecSchema.parse({
       id: 'p1',
-      workspace_id: 'w1',
+      tab_id: 't1',
       shell: '/bin/zsh',
       cwd: '/tmp',
       created_at: 0,

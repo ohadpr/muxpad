@@ -24,7 +24,7 @@ export function attachmentsRoutes(deps: {
       return c.json({ error: { code: 'bad_request', message: 'file is required' } }, 400);
 
     const ext = extname(file.name) || mimeExt(file.type);
-    const dir = join(deps.dataDir, 'attachments', pane.workspace_id);
+    const dir = join(deps.dataDir, 'attachments', pane.tab_id);
     mkdirSync(dir, { recursive: true });
     const path = join(dir, `${ulid()}${ext}`);
     writeFileSync(path, Buffer.from(await file.arrayBuffer()));

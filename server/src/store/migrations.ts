@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import { ulid } from 'ulid';
-import { generateShortId } from './WorkspaceStore.js';
+import { generateShortId } from './TabStore.js';
 
 interface Migration {
   version: number;
