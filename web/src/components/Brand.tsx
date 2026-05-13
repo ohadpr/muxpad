@@ -24,14 +24,15 @@ export function Brand({ asLink = true, responsive = true, markOnly = false }: Br
       )}
     </>
   );
+  const className = `brand${markOnly ? ' brand-mark-only' : ''}`;
   if (asLink) {
     return (
-      <Link to="/" className="brand" title="Workspaces">
+      <Link to="/" className={className} title="Muxpad">
         {inner}
       </Link>
     );
   }
-  return <span className="brand brand-static">{inner}</span>;
+  return <span className={`${className} brand-static`}>{inner}</span>;
 }
 
 function BrandMark() {

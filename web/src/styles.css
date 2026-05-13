@@ -319,6 +319,13 @@ select:focus {
   background: transparent;
 }
 
+/* Mark-only mode (icon, no wordmark): used inside a workspace where the
+   workspace switcher takes the wordmark's slot. Tighter padding so the
+   icon visually pairs with the switcher next to it. */
+.brand-mark-only {
+  padding: 4px 6px;
+}
+
 .brand-mark {
   flex: 0 0 auto;
 }
