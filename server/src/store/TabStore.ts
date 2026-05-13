@@ -1,13 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import { monotonicFactory } from 'ulid';
-import type { LayoutNode, Workspace } from '@muxpad/shared';
-
-// `Workspace` (shared type) currently models what is now a tab —
-// it'll be renamed to `Tab` in a later task. Aliasing here so the
-// rest of the file reads naturally with the new vocabulary without
-// blocking on the shared-types migration.
-type Tab = Workspace;
+import type { LayoutNode, Tab } from '@muxpad/shared';
 
 const ulid = monotonicFactory();
 
