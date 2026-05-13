@@ -262,7 +262,14 @@ export function TabView() {
   const closeTab = useCallback(async () => {
     if (!tab || !workspace) return;
     setClosingTab(true);
-    const isLastTab = allTabs.filter((t) => t.id !== tab.id).length === 0;
+    // Snapshot allTabs BEFORE the delete so neighbor selection is
+    // deterministic — otherwise a background poll could refresh the
+    // cache mid-flight and remove our row, leaving findIndex === -1
+    // and jumping the user to the leftmost tab instead of the
+    // closed tab's neighbor.
+    const beforeTabs = allTabs;
+    const myIdx = beforeTabs.findIndex((t) => t.id === tab.id);
+    const isLastTab = beforeTabs.length <= 1;
     try {
       await api.deleteTab(tab.id);
     } catch (err) {
@@ -282,8 +289,7 @@ export function TabView() {
     }
     // Pick the neighbor: right if there is one, else left. Matches
     // the convention browsers use when closing the active tab.
-    const myIdx = allTabs.findIndex((t) => t.id === tab.id);
-    const next = allTabs[myIdx + 1] ?? allTabs[myIdx - 1];
+    const next = beforeTabs[myIdx + 1] ?? beforeTabs[myIdx - 1];
     await refreshTabs(workspace.id);
     await refreshWorkspaces();
     if (!next) {

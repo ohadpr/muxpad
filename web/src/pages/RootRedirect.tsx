@@ -1,8 +1,13 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { api } from '../api';
 import { refreshWorkspaces } from '../workspaces';
 import { useDocumentTitle } from '../use-document-title';
+
+// Module-level so two RootRedirect mounts (StrictMode double-invoke,
+// route remounts, etc.) don't both fire workspace-bootstrap and create
+// duplicate Workspace 1/Workspace 2 rows.
+let bootstrapInFlight: Promise<void> | null = null;
 
 /**
  * The root route `/` doesn't render its own page — it just figures out
@@ -20,10 +25,14 @@ import { useDocumentTitle } from '../use-document-title';
 export function RootRedirect() {
   useDocumentTitle('muxpad');
   const navigate = useNavigate();
+  const startedRef = useRef(false);
 
   useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+
     let cancelled = false;
-    (async () => {
+    const run = async () => {
       const workspaces = await refreshWorkspaces();
       if (cancelled) return;
       if (workspaces.length > 0) {
@@ -53,7 +62,16 @@ export function RootRedirect() {
       } catch (err) {
         console.error('failed to bootstrap initial workspace', err);
       }
-    })();
+    };
+
+    // Module-level promise gate so two concurrent mounts share one run,
+    // even if React unmounts and remounts the component mid-flight.
+    if (!bootstrapInFlight) {
+      bootstrapInFlight = run().finally(() => {
+        bootstrapInFlight = null;
+      });
+    }
+
     return () => {
       cancelled = true;
     };

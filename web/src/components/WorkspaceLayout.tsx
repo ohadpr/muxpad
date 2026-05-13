@@ -37,8 +37,13 @@ export function WorkspaceLayout() {
   }, [workspace, tabs, isExactWorkspacePath, wsSlug, navigate]);
 
   // Auto-close the workspace when its last tab is closed. Guard with a
-  // ref so this only fires once per delete cycle.
+  // ref so this only fires once per delete cycle; reset on wsSlug change
+  // so navigating between workspaces doesn't carry a stale "already
+  // closed this one" flag across component-instance reuse.
   const autoClosingRef = useRef(false);
+  useEffect(() => {
+    autoClosingRef.current = false;
+  }, [wsSlug]);
   useEffect(() => {
     if (!workspace) return;
     if (autoClosingRef.current) return;
@@ -59,17 +64,14 @@ export function WorkspaceLayout() {
     })();
   }, [workspace, tabs, navigate]);
 
+  // While `workspace` is undefined we render the same loading
+  // placeholder regardless of whether the slug genuinely doesn't exist
+  // or whether the workspaces list just hasn't loaded yet. Avoids a
+  // visible "Workspace not found." flash during cascade-close /
+  // navigation, where the workspace momentarily disappears from the
+  // refreshed list before the route changes.
   if (!workspace) {
-    // Either still loading or genuinely missing. If workspaces have
-    // loaded and the slug isn't found, render a not-found message.
-    if (workspaces.length === 0) {
-      return <div className="workspace-loading">loading…</div>;
-    }
-    return (
-      <div className="workspace-error">
-        <p>Workspace not found.</p>
-      </div>
-    );
+    return <div className="workspace-loading">loading…</div>;
   }
 
   return <Outlet />;

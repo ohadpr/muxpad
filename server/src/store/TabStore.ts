@@ -35,22 +35,18 @@ export class TabStore {
   create(input: {
     name: string;
     layout: LayoutNode;
-    workspace_id?: string;
+    workspace_id: string;
   }): Tab {
     const id = ulid();
     const slug = this.uniqueSlug();
     const now = Date.now();
-    // Default to '' during the multi-workspaces transition so existing
-    // call sites compile. Once the route layer is workspace-aware (later
-    // task), this becomes required.
-    const workspace_id = input.workspace_id ?? '';
     const maxPos =
       (
         this.db
           .prepare(
             'SELECT COALESCE(MAX(position), -1) AS m FROM tabs WHERE workspace_id = ?',
           )
-          .get(workspace_id) as { m: number } | undefined
+          .get(input.workspace_id) as { m: number } | undefined
       )?.m ?? -1;
     this.db
       .prepare(
@@ -61,7 +57,7 @@ export class TabStore {
         slug,
         input.name,
         JSON.stringify(input.layout),
-        workspace_id,
+        input.workspace_id,
         now,
         now,
         maxPos + 1,

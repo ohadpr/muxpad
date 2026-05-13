@@ -6,7 +6,6 @@ import {
 } from '@tanstack/react-router';
 import { RootRedirect } from './pages/RootRedirect';
 import { TabView } from './pages/TabView';
-import { TabPopout } from './pages/TabPopout';
 import { PopoutView } from './pages/PopoutView';
 import { AppLayout } from './components/AppLayout';
 import { WorkspaceLayout } from './components/WorkspaceLayout';
@@ -45,17 +44,11 @@ const tabRoute = createRoute({
   component: TabView,
 });
 
-// Popout routes — outside the app layout, so they render chromeless.
+// Pane popout — outside the app layout, renders chromeless.
 const popoutPaneRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/p/$paneId',
   component: PopoutView,
-});
-
-const popoutTabRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/popout/t/$tabSlug',
-  component: TabPopout,
 });
 
 const routeTree = rootRoute.addChildren([
@@ -64,7 +57,6 @@ const routeTree = rootRoute.addChildren([
     workspaceLayoutRoute.addChildren([tabRoute]),
   ]),
   popoutPaneRoute,
-  popoutTabRoute,
 ]);
 
 export const router = createRouter({ routeTree });
