@@ -40,7 +40,11 @@ export function AppLayout() {
         {activeWorkspace && (
           <>
             <WorkspaceSwitcher activeWorkspaceSlug={activeWorkspace.slug} />
+            {/* `key` forces a remount when the workspace changes so the
+                tab list never momentarily shows stale entries from the
+                previous workspace. */}
             <TabBar
+              key={activeWorkspace.id}
               workspaceId={activeWorkspace.id}
               workspaceSlug={activeWorkspace.slug}
             />
