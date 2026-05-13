@@ -122,6 +122,10 @@ export function TabView() {
   // labels (OSC titles, fg commands) refresh in the background.
   useEffect(() => {
     if (!workspace) return;
+    // Navigated to a new tab — reset the cascade-close placeholder so
+    // the new tab renders normally instead of stuck on "loading…".
+    setClosingTab(false);
+    setTab(null);
     let viewedTabId: string | null = null;
     let cancelled = false;
     let pollTimer: number | null = null;
@@ -276,10 +280,18 @@ export function TabView() {
       void navigate({ to: '/' });
       return;
     }
+    // Pick the neighbor: right if there is one, else left. Matches
+    // the convention browsers use when closing the active tab.
+    const myIdx = allTabs.findIndex((t) => t.id === tab.id);
+    const next = allTabs[myIdx + 1] ?? allTabs[myIdx - 1];
     await refreshTabs(workspace.id);
-    await refreshWorkspaces(); // keep tab_count fresh on the workspaces list
-    const remaining = allTabs.filter((t) => t.id !== tab.id);
-    const next = remaining[0]!;
+    await refreshWorkspaces();
+    if (!next) {
+      // Shouldn't happen (we already handled isLastTab above), but be
+      // defensive: if there's no neighbor, fall back to workspace root.
+      void navigate({ to: '/w/$wsSlug', params: { wsSlug } });
+      return;
+    }
     void navigate({
       to: '/w/$wsSlug/t/$tabSlug',
       params: { wsSlug, tabSlug: next.slug },
