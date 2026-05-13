@@ -1,6 +1,4 @@
 import type Database from 'better-sqlite3';
-import { ulid } from 'ulid';
-import { generateShortId } from './TabStore.js';
 
 interface Migration {
   version: number;
@@ -32,6 +30,12 @@ export function pruneDeadPanes(layout: LayoutValue, valid: Set<string>): LayoutV
   return { ...layout, first, second };
 }
 
+/**
+ * Schema baseline. The earlier per-step v1-v5 history (initial schema,
+ * slug randomization, dead-pane pruning, tab position, multi-workspaces)
+ * was collapsed into a single v1 once the only deployed DB had finished
+ * migrating. New installs land directly on this schema.
+ */
 const MIGRATIONS: Migration[] = [
   {
     version: 1,
@@ -40,20 +44,31 @@ const MIGRATIONS: Migration[] = [
         id          TEXT PRIMARY KEY,
         slug        TEXT UNIQUE NOT NULL,
         name        TEXT NOT NULL,
-        layout      TEXT NOT NULL,
+        position    INTEGER NOT NULL DEFAULT 0,
         created_at  INTEGER NOT NULL,
         updated_at  INTEGER NOT NULL
       );
-      CREATE TABLE panes (
+      CREATE TABLE tabs (
         id            TEXT PRIMARY KEY,
+        slug          TEXT UNIQUE NOT NULL,
+        name          TEXT NOT NULL,
+        layout        TEXT NOT NULL,
         workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-        shell         TEXT NOT NULL,
-        startup_cmd   TEXT,
-        cwd           TEXT NOT NULL,
-        env           TEXT,
-        created_at    INTEGER NOT NULL
+        position      INTEGER NOT NULL DEFAULT 0,
+        created_at    INTEGER NOT NULL,
+        updated_at    INTEGER NOT NULL
       );
-      CREATE INDEX panes_workspace_id ON panes(workspace_id);
+      CREATE INDEX tabs_workspace_id ON tabs(workspace_id);
+      CREATE TABLE panes (
+        id           TEXT PRIMARY KEY,
+        tab_id       TEXT NOT NULL REFERENCES tabs(id) ON DELETE CASCADE,
+        shell        TEXT NOT NULL,
+        startup_cmd  TEXT,
+        cwd          TEXT NOT NULL,
+        env          TEXT,
+        created_at   INTEGER NOT NULL
+      );
+      CREATE INDEX panes_tab_id ON panes(tab_id);
       CREATE TABLE attachments (
         id          TEXT PRIMARY KEY,
         pane_id     TEXT NOT NULL REFERENCES panes(id) ON DELETE CASCADE,
@@ -62,126 +77,6 @@ const MIGRATIONS: Migration[] = [
         created_at  INTEGER NOT NULL
       );
     `,
-  },
-  {
-    // Slugs used to be derived from workspace names. Re-randomize every
-    // existing slug to a short opaque ID; from now on slugs are pure URL keys.
-    version: 2,
-    apply: (db) => {
-      const rows = db.prepare('SELECT id FROM workspaces').all() as { id: string }[];
-      const taken = new Set<string>();
-      const update = db.prepare('UPDATE workspaces SET slug = ? WHERE id = ?');
-      for (const row of rows) {
-        let slug: string | null = null;
-        for (let attempts = 0; attempts < 100; attempts++) {
-          const candidate = generateShortId();
-          if (taken.has(candidate)) continue;
-          const collision = db
-            .prepare('SELECT 1 FROM workspaces WHERE slug = ? AND id != ?')
-            .get(candidate, row.id);
-          if (collision) continue;
-          slug = candidate;
-          break;
-        }
-        if (!slug) throw new Error(`unable to allocate slug for workspace ${row.id}`);
-        taken.add(slug);
-        update.run(slug, row.id);
-      }
-    },
-  },
-  {
-    // Earlier daemon-shutdown bug deleted pane rows but left workspace.layout
-    // referring to them. Walk every layout and drop dead refs so workspaces
-    // can recover into the empty 'Create first pane' state.
-    version: 3,
-    apply: (db) => {
-      const rows = db.prepare('SELECT id, layout FROM workspaces').all() as {
-        id: string;
-        layout: string;
-      }[];
-      const update = db.prepare('UPDATE workspaces SET layout = ? WHERE id = ?');
-      for (const ws of rows) {
-        const valid = new Set(
-          (
-            db.prepare('SELECT id FROM panes WHERE workspace_id = ?').all(ws.id) as {
-              id: string;
-            }[]
-          ).map((p) => p.id),
-        );
-        const layout = JSON.parse(ws.layout) as LayoutValue;
-        const cleaned = pruneDeadPanes(layout, valid);
-        const cleanedJson = JSON.stringify(cleaned);
-        if (cleanedJson !== ws.layout) {
-          update.run(cleanedJson, ws.id);
-        }
-      }
-    },
-  },
-  {
-    // User-controlled workspace ordering for the tab bar. Initialize from
-    // current creation order so existing tabs don't visibly shuffle.
-    version: 4,
-    sql: 'ALTER TABLE workspaces ADD COLUMN position INTEGER NOT NULL DEFAULT 0;',
-    apply: (db) => {
-      const rows = db
-        .prepare('SELECT id FROM workspaces ORDER BY created_at, id')
-        .all() as { id: string }[];
-      const update = db.prepare('UPDATE workspaces SET position = ? WHERE id = ?');
-      rows.forEach((row, idx) => update.run(idx, row.id));
-    },
-  },
-  {
-    // Multi-workspaces. The previous "workspaces" table modeled what is
-    // now called a "tab" (one row per tab in the bar). Rename it to
-    // `tabs`, rename the pane FK column accordingly, and add a new
-    // `workspaces` table for the new parent concept. Every existing
-    // tab is folded into a single "Default" workspace so the user's
-    // data carries over visibly unchanged.
-    // (See docs/plans/2026-05-08-multi-workspaces-design.md.)
-    version: 5,
-    apply: (db) => {
-      db.exec(`
-        ALTER TABLE workspaces RENAME TO tabs;
-        ALTER TABLE panes RENAME COLUMN workspace_id TO tab_id;
-        CREATE TABLE workspaces (
-          id          TEXT PRIMARY KEY,
-          slug        TEXT UNIQUE NOT NULL,
-          name        TEXT NOT NULL,
-          position    INTEGER NOT NULL DEFAULT 0,
-          created_at  INTEGER NOT NULL,
-          updated_at  INTEGER NOT NULL
-        );
-        ALTER TABLE tabs ADD COLUMN workspace_id TEXT NOT NULL DEFAULT '';
-        CREATE INDEX tabs_workspace_id ON tabs(workspace_id);
-      `);
-
-      // Only create a Default workspace if there are existing tabs to
-      // migrate. On a fresh install (e.g. unit-test DB), skip this so
-      // tests start from a truly empty state.
-      const tabCount = (db.prepare('SELECT COUNT(*) as n FROM tabs').get() as {
-        n: number;
-      }).n;
-      if (tabCount > 0) {
-        const wsId = ulid();
-        let slug: string | null = null;
-        for (let attempts = 0; attempts < 100; attempts++) {
-          const candidate = generateShortId();
-          const collision = db
-            .prepare('SELECT 1 FROM workspaces WHERE slug = ?')
-            .get(candidate);
-          if (!collision) {
-            slug = candidate;
-            break;
-          }
-        }
-        if (!slug) throw new Error('unable to allocate slug for default workspace');
-        const now = Date.now();
-        db.prepare(
-          'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-        ).run(wsId, slug, 'Default', 0, now, now);
-        db.prepare('UPDATE tabs SET workspace_id = ?').run(wsId);
-      }
-    },
   },
 ];
 
