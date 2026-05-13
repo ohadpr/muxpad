@@ -5,20 +5,28 @@ interface BrandProps {
   asLink?: boolean;
   /** Hide the wordmark on narrow viewports (default true). */
   responsive?: boolean;
+  /**
+   * Show only the brand mark (logo) without the "muxpad" wordmark.
+   * Used inside a workspace, where the workspace switcher takes the
+   * wordmark's slot.
+   */
+  markOnly?: boolean;
 }
 
-export function Brand({ asLink = true, responsive = true }: BrandProps) {
+export function Brand({ asLink = true, responsive = true, markOnly = false }: BrandProps) {
   const inner = (
     <>
       <BrandMark />
-      <span className={`brand-text${responsive ? ' brand-text-responsive' : ''}`}>
-        muxpad
-      </span>
+      {!markOnly && (
+        <span className={`brand-text${responsive ? ' brand-text-responsive' : ''}`}>
+          muxpad
+        </span>
+      )}
     </>
   );
   if (asLink) {
     return (
-      <Link to="/" className="brand" title="Dashboard">
+      <Link to="/" className="brand" title="Workspaces">
         {inner}
       </Link>
     );
