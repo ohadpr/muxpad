@@ -23,8 +23,15 @@ describe('attachments', () => {
         body: JSON.stringify({ name: 'W' }),
       })
     ).json()) as { id: string };
+    const t = (await (
+      await app.request('/api/tabs', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'T', workspace_id: w.id }),
+      })
+    ).json()) as { id: string };
     const p = (await (
-      await app.request(`/api/workspaces/${w.id}/panes`, {
+      await app.request(`/api/tabs/${t.id}/panes`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: '{}',

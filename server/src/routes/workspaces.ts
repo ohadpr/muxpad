@@ -1,111 +1,82 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type Database from 'better-sqlite3';
-import { LayoutNodeSchema } from '@muxpad/shared';
-import { TabStore } from '../store/TabStore.js';
-import { PaneStore } from '../store/PaneStore.js';
-import { pruneDeadPanes } from '../store/migrations.js';
-import type { PaneManager } from '../runtime/PaneManager.js';
+import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { randomWorkspaceName } from '../random-name.js';
 
-export function workspacesRoutes(deps: {
-  db: Database.Database;
-  paneManager: PaneManager;
-}): Hono {
+/**
+ * CRUD for the top-level workspace concept. Workspaces own tabs; tabs
+ * own panes. Lives at /api/workspaces; tab routes live at /api/tabs.
+ */
+export function workspacesRoutes(deps: { db: Database.Database }): Hono {
   const app = new Hono();
-  const workspaces = new TabStore(deps.db);
-  const panes = new PaneStore(deps.db);
+  const workspaces = new WorkspaceStore(deps.db);
+
+  app.get('/', (c) => c.json(workspaces.list()));
 
   app.post('/', async (c) => {
     const body = z
-      .object({
-        name: z.string().optional(),
-        layout: LayoutNodeSchema.optional(),
-      })
+      .object({ name: z.string().optional() })
       .parse(await c.req.json().catch(() => ({})));
     const name = body.name?.trim() || randomWorkspaceName();
-    const w = workspaces.create({ name, layout: body.layout ?? '' });
-    return c.json(w, 201);
+    return c.json(workspaces.create({ name }), 201);
   });
 
-  app.get('/', (c) => {
-    const list = workspaces.list();
-    // Fold in per-workspace attention flag from the live PaneManager. A
-    // workspace flags as needing attention if any of its panes has rung
-    // BEL since the user last interacted with it. Panes whose runtime
-    // isn't running (lazy-spawn, no client connected) contribute false.
-    const decorated = list.map((w) => {
-      const wsPanes = panes.listByTab(w.id);
-      const attention = wsPanes.some((p) => deps.paneManager.get(p.id)?.getNeedsAttention() ?? false);
-      return { ...w, attention };
-    });
-    return c.json(decorated);
+  app.get('/:id', (c) => {
+    const w = workspaces.getById(c.req.param('id'));
+    if (!w)
+      return c.json(
+        { error: { code: 'not_found', message: 'workspace not found' } },
+        404,
+      );
+    return c.json(w);
   });
 
-  // Mark every pane in a workspace as "seen". Called by the web client
-  // when the user navigates to a workspace tab — counts as an interaction
-  // so the tab indicator doesn't reappear if they leave without typing.
-  app.post('/:id/seen', (c) => {
-    const id = c.req.param('id');
-    for (const p of panes.listByTab(id)) {
-      deps.paneManager.get(p.id)?.markSeen();
+  app.patch('/:id', async (c) => {
+    const body = z
+      .object({ name: z.string().optional(), slug: z.string().optional() })
+      .parse(await c.req.json());
+    try {
+      return c.json(workspaces.update(c.req.param('id'), body));
+    } catch {
+      return c.json(
+        { error: { code: 'not_found', message: 'workspace not found' } },
+        404,
+      );
     }
+  });
+
+  /**
+   * Refuses to delete a workspace that still has tabs. The empty-tabs
+   * case is the only legitimate path to deletion (mirrors the existing
+   * "you can only close an empty tab" UX pattern).
+   */
+  app.delete('/:id', (c) => {
+    const id = c.req.param('id');
+    const w = workspaces.getById(id);
+    if (!w)
+      return c.json(
+        { error: { code: 'not_found', message: 'workspace not found' } },
+        404,
+      );
+    if (w.tab_count > 0) {
+      return c.json(
+        {
+          error: {
+            code: 'workspace_not_empty',
+            message: `workspace still has ${w.tab_count} tab(s)`,
+          },
+        },
+        409,
+      );
+    }
+    workspaces.delete(id);
     return c.body(null, 204);
   });
 
   app.post('/reorder', async (c) => {
     const body = z.object({ ids: z.array(z.string()) }).parse(await c.req.json());
     workspaces.reorder(body.ids);
-    return c.body(null, 204);
-  });
-
-  app.get('/:id', (c) => {
-    const w = workspaces.getById(c.req.param('id'));
-    if (!w)
-      return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
-    const livePanes = panes.listByTab(w.id);
-    const valid = new Set(livePanes.map((p) => p.id));
-    const cleaned = pruneDeadPanes(w.layout, valid);
-    if (JSON.stringify(cleaned) !== JSON.stringify(w.layout)) {
-      workspaces.update(w.id, { layout: cleaned });
-      w.layout = cleaned;
-    }
-    // Decorate each pane with runtime-only fields used to label it in the
-    // UI: the latest OSC title (real-time, set by the running program)
-    // and the cached foreground command (polled every 10s as a fallback).
-    const decorated = livePanes.map((p) => ({
-      ...p,
-      title: deps.paneManager.get(p.id)?.getCurrentTitle() ?? null,
-      foreground_cmd: deps.paneManager.getForegroundCommand(p.id),
-    }));
-    return c.json({ ...w, panes: decorated });
-  });
-
-  app.patch('/:id', async (c) => {
-    const body = z
-      .object({
-        name: z.string().optional(),
-        slug: z.string().optional(),
-        layout: LayoutNodeSchema.optional(),
-      })
-      .parse(await c.req.json());
-    try {
-      const w = workspaces.update(c.req.param('id'), body);
-      return c.json(w);
-    } catch {
-      return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
-    }
-  });
-
-  app.delete('/:id', async (c) => {
-    const id = c.req.param('id');
-    const ws = workspaces.getById(id);
-    if (!ws)
-      return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
-    for (const p of panes.listByTab(id)) {
-      await deps.paneManager.kill(p.id);
-    }
-    workspaces.delete(id);
     return c.body(null, 204);
   });
 

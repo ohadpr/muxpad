@@ -155,24 +155,32 @@ const MIGRATIONS: Migration[] = [
         CREATE INDEX tabs_workspace_id ON tabs(workspace_id);
       `);
 
-      const wsId = ulid();
-      let slug: string | null = null;
-      for (let attempts = 0; attempts < 100; attempts++) {
-        const candidate = generateShortId();
-        const collision = db
-          .prepare('SELECT 1 FROM workspaces WHERE slug = ?')
-          .get(candidate);
-        if (!collision) {
-          slug = candidate;
-          break;
+      // Only create a Default workspace if there are existing tabs to
+      // migrate. On a fresh install (e.g. unit-test DB), skip this so
+      // tests start from a truly empty state.
+      const tabCount = (db.prepare('SELECT COUNT(*) as n FROM tabs').get() as {
+        n: number;
+      }).n;
+      if (tabCount > 0) {
+        const wsId = ulid();
+        let slug: string | null = null;
+        for (let attempts = 0; attempts < 100; attempts++) {
+          const candidate = generateShortId();
+          const collision = db
+            .prepare('SELECT 1 FROM workspaces WHERE slug = ?')
+            .get(candidate);
+          if (!collision) {
+            slug = candidate;
+            break;
+          }
         }
+        if (!slug) throw new Error('unable to allocate slug for default workspace');
+        const now = Date.now();
+        db.prepare(
+          'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+        ).run(wsId, slug, 'Default', 0, now, now);
+        db.prepare('UPDATE tabs SET workspace_id = ?').run(wsId);
       }
-      if (!slug) throw new Error('unable to allocate slug for default workspace');
-      const now = Date.now();
-      db.prepare(
-        'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-      ).run(wsId, slug, 'Default', 0, now, now);
-      db.prepare('UPDATE tabs SET workspace_id = ?').run(wsId);
     },
   },
 ];
