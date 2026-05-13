@@ -24,10 +24,9 @@ export function AppLayout() {
   return (
     <div className="app-layout">
       <header className="ws-tabbar">
-        <Brand asLink={true} responsive={true} />
+        <Brand asLink={true} responsive={true} markOnly={!!activeWorkspace} />
         {activeWorkspace && (
           <>
-            <span className="ws-tabbar-divider" aria-hidden />
             <WorkspaceSwitcher activeWorkspaceSlug={activeWorkspace.slug} />
             <span className="ws-tabbar-divider" aria-hidden />
             <TabBar
