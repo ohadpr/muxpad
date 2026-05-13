@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { homedir } from 'node:os';
 import type Database from 'better-sqlite3';
 import { PaneStore } from '../store/PaneStore.js';
-import { WorkspaceStore } from '../store/WorkspaceStore.js';
+import { TabStore } from '../store/TabStore.js';
 import type { PaneManager } from '../runtime/PaneManager.js';
 
 const defaultShell = process.env.SHELL ?? '/bin/zsh';
@@ -14,7 +14,7 @@ export function panesWorkspaceScopedRoutes(deps: {
 }): Hono {
   const app = new Hono();
   const panes = new PaneStore(deps.db);
-  const workspaces = new WorkspaceStore(deps.db);
+  const workspaces = new TabStore(deps.db);
 
   app.post('/:id/panes', async (c) => {
     const wsId = c.req.param('id');
@@ -37,14 +37,14 @@ export function panesWorkspaceScopedRoutes(deps: {
     let cwd = body.cwd;
     if (!cwd && body.inherit_cwd_from) {
       const source = panes.getById(body.inherit_cwd_from);
-      if (source && source.workspace_id === wsId) {
+      if (source && source.tab_id === wsId) {
         const live = deps.paneManager.get(source.id)?.getCurrentCwd();
         cwd = live ?? source.cwd;
       }
     }
 
     const pane = panes.create({
-      workspace_id: wsId,
+      tab_id: wsId,
       shell: body.shell ?? defaultShell,
       cwd: cwd ?? homedir(),
       startup_cmd: body.startup_cmd ?? null,
