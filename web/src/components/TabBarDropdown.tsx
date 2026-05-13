@@ -1,23 +1,28 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import type { Workspace } from '@muxpad/shared';
+import type { Tab } from '@muxpad/shared';
 
-interface WorkspaceDropdownProps {
-  workspaces: Workspace[];
+interface TabBarDropdownProps {
+  tabs: Tab[];
   activeSlug: string | null;
+  workspaceSlug: string;
 }
 
-export function WorkspaceDropdown({ workspaces, activeSlug }: WorkspaceDropdownProps) {
+/**
+ * Collapsed-state dropdown shown when the tab bar runs out of room.
+ * Mirrors the inline tab UI: lists all tabs, click any to switch.
+ */
+export function TabBarDropdown({ tabs, activeSlug, workspaceSlug }: TabBarDropdownProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   const navigate = useNavigate();
 
-  const active = workspaces.find((w) => w.slug === activeSlug);
-  // True iff any non-active workspace is flagging attention. The dropdown
-  // trigger gets a small dot in that case so the user knows there's
-  // something pending behind the collapsed list.
-  const anyOtherAttention = workspaces.some(
-    (w) => w.attention && w.slug !== activeSlug,
+  const active = tabs.find((t) => t.slug === activeSlug);
+  // True iff any non-active tab is flagging attention. The dropdown trigger
+  // gets a small dot in that case so the user knows there's something
+  // pending behind the collapsed list.
+  const anyOtherAttention = tabs.some(
+    (t) => t.attention && t.slug !== activeSlug,
   );
 
   useEffect(() => {
@@ -43,30 +48,35 @@ export function WorkspaceDropdown({ workspaces, activeSlug }: WorkspaceDropdownP
         className="ws-tabbar-dropdown-trigger"
         data-attention={anyOtherAttention ? 'true' : undefined}
         onClick={() => setOpen((v) => !v)}
-        title="Switch workspace"
+        title="Switch tab"
       >
-        <span className="ws-tabbar-dropdown-label">{active?.name ?? 'Workspaces'}</span>
+        <span className="ws-tabbar-dropdown-label">{active?.name ?? 'Tabs'}</span>
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
           <path d="M2 4 L5 7 L8 4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
       {open && (
         <div className="ws-tabbar-dropdown-menu" role="menu">
-          {workspaces.map((w) => {
-            const isActive = w.slug === activeSlug;
+          {tabs.map((t) => {
+            const isActive = t.slug === activeSlug;
             return (
               <button
-                key={w.id}
+                key={t.id}
                 type="button"
                 className="ws-tabbar-dropdown-item"
                 data-active={isActive ? 'true' : undefined}
-                data-attention={!isActive && w.attention ? 'true' : undefined}
+                data-attention={!isActive && t.attention ? 'true' : undefined}
                 onClick={() => {
                   setOpen(false);
-                  if (!isActive) void navigate({ to: '/w/$slug', params: { slug: w.slug } });
+                  if (!isActive) {
+                    void navigate({
+                      to: '/w/$wsSlug/t/$tabSlug',
+                      params: { wsSlug: workspaceSlug, tabSlug: t.slug },
+                    });
+                  }
                 }}
               >
-                <span className="ws-tabbar-dropdown-item-label">{w.name}</span>
+                <span className="ws-tabbar-dropdown-item-label">{t.name}</span>
               </button>
             );
           })}

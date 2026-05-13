@@ -1,4 +1,4 @@
-import type { Workspace, PaneSpec, LayoutNode } from '@muxpad/shared';
+import type { Workspace, Tab, PaneSpec, LayoutNode } from '@muxpad/shared';
 
 async function req<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   const res = await fetch(input, {
@@ -13,11 +13,13 @@ async function req<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-export interface WorkspaceWithPanes extends Workspace {
+export interface TabWithPanes extends Tab {
   panes: PaneSpec[];
 }
 
 export const api = {
+  // ── Workspaces (the new top-level concept) ─────────────────────────────
+
   listWorkspaces: () => req<Workspace[]>('/api/workspaces'),
 
   createWorkspace: (name?: string) =>
@@ -26,12 +28,9 @@ export const api = {
       body: JSON.stringify(name ? { name } : {}),
     }),
 
-  getWorkspace: (id: string) => req<WorkspaceWithPanes>(`/api/workspaces/${id}`),
+  getWorkspace: (id: string) => req<Workspace>(`/api/workspaces/${id}`),
 
-  patchWorkspace: (
-    id: string,
-    patch: { name?: string; slug?: string; layout?: LayoutNode },
-  ) =>
+  patchWorkspace: (id: string, patch: { name?: string; slug?: string }) =>
     req<Workspace>(`/api/workspaces/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
@@ -40,17 +39,52 @@ export const api = {
   deleteWorkspace: (id: string) =>
     req<void>(`/api/workspaces/${id}`, { method: 'DELETE' }),
 
-  markWorkspaceSeen: (id: string) =>
-    req<void>(`/api/workspaces/${id}/seen`, { method: 'POST' }),
-
   reorderWorkspaces: (ids: string[]) =>
     req<void>('/api/workspaces/reorder', {
       method: 'POST',
       body: JSON.stringify({ ids }),
     }),
 
-  createPane: (
+  // ── Tabs (per-workspace, what was historically called "workspaces") ───
+
+  listTabs: (workspaceId: string) =>
+    req<Tab[]>(`/api/tabs?workspaceId=${encodeURIComponent(workspaceId)}`),
+
+  createTab: (
     workspaceId: string,
+    body: { name?: string; layout?: LayoutNode } = {},
+  ) =>
+    req<Tab>('/api/tabs', {
+      method: 'POST',
+      body: JSON.stringify({ workspace_id: workspaceId, ...body }),
+    }),
+
+  getTab: (id: string) => req<TabWithPanes>(`/api/tabs/${id}`),
+
+  patchTab: (
+    id: string,
+    patch: { name?: string; slug?: string; layout?: LayoutNode },
+  ) =>
+    req<Tab>(`/api/tabs/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+
+  deleteTab: (id: string) => req<void>(`/api/tabs/${id}`, { method: 'DELETE' }),
+
+  markTabSeen: (id: string) =>
+    req<void>(`/api/tabs/${id}/seen`, { method: 'POST' }),
+
+  reorderTabs: (ids: string[]) =>
+    req<void>('/api/tabs/reorder', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    }),
+
+  // ── Panes ──────────────────────────────────────────────────────────────
+
+  createPane: (
+    tabId: string,
     body: {
       shell?: string;
       startup_cmd?: string | null;
@@ -59,7 +93,7 @@ export const api = {
       inherit_cwd_from?: string;
     } = {},
   ) =>
-    req<PaneSpec>(`/api/workspaces/${workspaceId}/panes`, {
+    req<PaneSpec>(`/api/tabs/${tabId}/panes`, {
       method: 'POST',
       body: JSON.stringify(body),
     }),

@@ -2,20 +2,27 @@ import { useEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent } from 'react';
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 import { api } from '../api';
-import { Brand } from './Brand';
-import { SettingsMenu } from './SettingsMenu';
-import { GitHubLink } from './GitHubLink';
-import { refreshWorkspaces, useWorkspaces } from '../workspaces';
+import { refreshTabs, useTabs } from '../tabs';
 import { useWindowAttention } from '../use-window-attention';
 import { useHorizontalOverflow } from '../use-overflow';
-import { WorkspaceDropdown } from './WorkspaceDropdown';
-import './WorkspaceTabBar.css';
+import { TabBarDropdown } from './TabBarDropdown';
+import './TabBar.css';
 
-const DRAG_MIME = 'application/x-muxpad-workspace-id';
+const DRAG_MIME = 'application/x-muxpad-tab-id';
 
-export function WorkspaceTabBar() {
-  const { workspaces } = useWorkspaces();
-  useWindowAttention(workspaces);
+interface TabBarProps {
+  workspaceId: string;
+  workspaceSlug: string;
+}
+
+/**
+ * The horizontal bar of tabs for a single workspace. Renders the list,
+ * supports inline rename (double-click active), drag-to-reorder, and
+ * collapses to a single dropdown when too narrow.
+ */
+export function TabBar({ workspaceId, workspaceSlug }: TabBarProps) {
+  const { tabs } = useTabs(workspaceId);
+  useWindowAttention(tabs);
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -26,16 +33,10 @@ export function WorkspaceTabBar() {
   const [dropSide, setDropSide] = useState<'before' | 'after'>('before');
 
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const activeSlug = matchActiveSlug(pathname);
-  const isHome = pathname === '/';
+  const activeSlug = matchActiveTabSlug(pathname);
 
-  // Tabs collapse to a dropdown when the bar is too narrow to show them
-  // all. The nav element is always rendered for measurement; we hide it
-  // (visibility, not display) when overflowing so the next measurement
-  // still has something to compare against. See use-overflow.ts.
   const { ref: tabsRef, overflowing } = useHorizontalOverflow<HTMLElement>([
-    workspaces.length,
-    isHome,
+    tabs.length,
   ]);
 
   useEffect(() => {
@@ -45,9 +46,9 @@ export function WorkspaceTabBar() {
     }
   }, [editingId]);
 
-  const startEdit = (w: { id: string; name: string }) => {
-    setEditingId(w.id);
-    setDraft(w.name);
+  const startEdit = (t: { id: string; name: string }) => {
+    setEditingId(t.id);
+    setDraft(t.name);
   };
 
   const commitRename = async () => {
@@ -56,14 +57,14 @@ export function WorkspaceTabBar() {
     const trimmed = draft.trim();
     setEditingId(null);
     if (!trimmed) return;
-    const target = workspaces.find((w) => w.id === id);
+    const target = tabs.find((t) => t.id === id);
     if (!target || trimmed === target.name) return;
     try {
-      await api.patchWorkspace(id, { name: trimmed });
+      await api.patchTab(id, { name: trimmed });
     } catch (err) {
       console.error('rename failed', err);
     }
-    await refreshWorkspaces();
+    await refreshTabs(workspaceId);
   };
 
   const cancelRename = () => setEditingId(null);
@@ -72,17 +73,20 @@ export function WorkspaceTabBar() {
     if (creating) return;
     setCreating(true);
     try {
-      const w = await api.createWorkspace();
-      const pane = await api.createPane(w.id, {});
-      await api.patchWorkspace(w.id, { layout: pane.id });
-      await refreshWorkspaces();
-      void navigate({ to: '/w/$slug', params: { slug: w.slug } });
+      const t = await api.createTab(workspaceId);
+      const pane = await api.createPane(t.id, {});
+      await api.patchTab(t.id, { layout: pane.id });
+      await refreshTabs(workspaceId);
+      void navigate({
+        to: '/w/$wsSlug/t/$tabSlug',
+        params: { wsSlug: workspaceSlug, tabSlug: t.slug },
+      });
     } finally {
       setCreating(false);
     }
   };
 
-  // ── Drag-to-reorder ────────────────────────────────────────────────────
+  // ── Drag-to-reorder ──────────────────────────────────────────────────
 
   const onDragStart = (e: ReactDragEvent<HTMLAnchorElement>, id: string) => {
     e.dataTransfer.setData(DRAG_MIME, id);
@@ -116,7 +120,7 @@ export function WorkspaceTabBar() {
     setDragId(null);
     setDropTargetId(null);
     if (!sourceId || sourceId === targetId) return;
-    const ids = workspaces.map((w) => w.id);
+    const ids = tabs.map((t) => t.id);
     const sourceIdx = ids.indexOf(sourceId);
     if (sourceIdx === -1) return;
     ids.splice(sourceIdx, 1);
@@ -125,31 +129,26 @@ export function WorkspaceTabBar() {
     if (side === 'after') insertAt += 1;
     ids.splice(insertAt, 0, sourceId);
     try {
-      await api.reorderWorkspaces(ids);
+      await api.reorderTabs(ids);
     } catch (err) {
       console.error('reorder failed', err);
     }
-    await refreshWorkspaces();
+    await refreshTabs(workspaceId);
   };
 
   return (
-    <header className="ws-tabbar">
-      <Brand asLink={true} responsive={true} />
-      {!isHome && <span className="ws-tabbar-divider" aria-hidden />}
-
-      {!isHome && (
-      <div className="ws-tabbar-tabs-wrap">
+    <div className="ws-tabbar-tabs-wrap">
       <nav
         className="ws-tabbar-tabs"
-        aria-label="Workspaces"
+        aria-label="Tabs"
         data-collapsed={overflowing ? 'true' : undefined}
         ref={tabsRef as React.RefObject<HTMLElement>}
       >
-        {workspaces.map((w) => {
-          const isActive = w.slug === activeSlug;
-          if (isActive && editingId === w.id) {
+        {tabs.map((t) => {
+          const isActive = t.slug === activeSlug;
+          if (isActive && editingId === t.id) {
             return (
-              <div key={w.id} className="ws-tab ws-tab-editing" data-active="true">
+              <div key={t.id} className="ws-tab ws-tab-editing" data-active="true">
                 <input
                   ref={editInputRef}
                   className="ws-tab-input"
@@ -172,28 +171,28 @@ export function WorkspaceTabBar() {
           }
           return (
             <Link
-              key={w.id}
-              to="/w/$slug"
-              params={{ slug: w.slug }}
+              key={t.id}
+              to="/w/$wsSlug/t/$tabSlug"
+              params={{ wsSlug: workspaceSlug, tabSlug: t.slug }}
               className="ws-tab"
               data-active={isActive}
-              data-attention={!isActive && w.attention ? 'true' : undefined}
-              data-drop={dropTargetId === w.id ? dropSide : undefined}
+              data-attention={!isActive && t.attention ? 'true' : undefined}
+              data-drop={dropTargetId === t.id ? dropSide : undefined}
               draggable
-              onDragStart={(e) => onDragStart(e, w.id)}
-              onDragOver={(e) => onDragOver(e, w.id)}
+              onDragStart={(e) => onDragStart(e, t.id)}
+              onDragOver={(e) => onDragOver(e, t.id)}
               onDragEnd={onDragEnd}
-              onDrop={(e) => void onDrop(e, w.id)}
-              onDoubleClick={isActive ? () => startEdit(w) : undefined}
+              onDrop={(e) => void onDrop(e, t.id)}
+              onDoubleClick={isActive ? () => startEdit(t) : undefined}
               title={
-                w.attention && !isActive
-                  ? `${w.name}: needs attention`
+                t.attention && !isActive
+                  ? `${t.name}: needs attention`
                   : isActive
                   ? 'Double-click to rename'
-                  : w.name
+                  : t.name
               }
             >
-              <span className="ws-tab-label">{w.name}</span>
+              <span className="ws-tab-label">{t.name}</span>
             </Link>
           );
         })}
@@ -202,43 +201,32 @@ export function WorkspaceTabBar() {
           className="ws-tab-add"
           onClick={() => void create()}
           disabled={creating}
-          title="New workspace"
-          aria-label="New workspace"
+          title="New tab"
+          aria-label="New tab"
         >
           {creating ? '…' : '+'}
         </button>
       </nav>
       {overflowing && (
-        <WorkspaceDropdown workspaces={workspaces} activeSlug={activeSlug} />
+        <TabBarDropdown tabs={tabs} activeSlug={activeSlug} workspaceSlug={workspaceSlug} />
       )}
-      </div>
-      )}
-
-      {/* When tabs are present, they take flex:1 and push the action
-          buttons to the right. The spacer is only needed on the home
-          page (no tabs). */}
-      {isHome && <span className="ws-tabbar-spacer" />}
-      {/* When the dropdown is in collapsed mode, expose a + button next
-          to it so creating a new workspace is still one click. */}
-      {!isHome && overflowing && (
+      {overflowing && (
         <button
           type="button"
           className="ws-tab-add ws-tab-add-floating"
           onClick={() => void create()}
           disabled={creating}
-          title="New workspace"
-          aria-label="New workspace"
+          title="New tab"
+          aria-label="New tab"
         >
           {creating ? '…' : '+'}
         </button>
       )}
-      <GitHubLink />
-      <SettingsMenu />
-    </header>
+    </div>
   );
 }
 
-function matchActiveSlug(pathname: string): string | null {
-  const m = pathname.match(/^\/w\/([^/]+)/);
+function matchActiveTabSlug(pathname: string): string | null {
+  const m = pathname.match(/^\/w\/[^/]+\/t\/([^/]+)/);
   return m?.[1] ? decodeURIComponent(m[1]) : null;
 }

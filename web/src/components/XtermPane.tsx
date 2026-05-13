@@ -328,7 +328,7 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     const onWindowResize = () => refitBurst();
     window.addEventListener('resize', onWindowResize);
 
-    // Targeted-focus event: WorkspaceView dispatches this after deleting
+    // Targeted-focus event: TabView dispatches this after deleting
     // a pane so the next remaining pane picks up focus without a click.
     const onFocusPane = (e: Event) => {
       const detail = (e as CustomEvent<{ paneId?: string }>).detail;
