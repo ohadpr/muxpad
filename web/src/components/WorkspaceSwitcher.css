@@ -3,24 +3,31 @@
   flex: 0 0 auto;
 }
 
+/* Pill shape: makes the workspace switcher visually distinct from the
+   flat tabs to its right. The workspace is a different kind of thing
+   (long-lived container) — different shape signals that. */
 .ws-switcher-trigger {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 32px;
-  padding: 0 10px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
+  height: 28px;
+  padding: 0 12px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 999px;
   color: var(--fg);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   max-width: 240px;
   white-space: nowrap;
+  transition:
+    background 80ms ease,
+    border-color 80ms ease;
 }
 .ws-switcher-trigger:hover {
   background: var(--bg-hover);
+  border-color: var(--border-strong);
 }
 .ws-switcher-trigger svg {
   color: var(--fg-dim);

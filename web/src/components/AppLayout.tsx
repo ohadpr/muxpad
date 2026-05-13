@@ -28,7 +28,6 @@ export function AppLayout() {
         {activeWorkspace && (
           <>
             <WorkspaceSwitcher activeWorkspaceSlug={activeWorkspace.slug} />
-            <span className="ws-tabbar-divider" aria-hidden />
             <TabBar
               workspaceId={activeWorkspace.id}
               workspaceSlug={activeWorkspace.slug}
