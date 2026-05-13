@@ -94,6 +94,12 @@ export function TabView() {
 
   const [tab, setTab] = useState<TabWithPanes | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // True from the moment we know the tab is about to disappear (cascade
+  // close, explicit close-tab CTA, …) until we actually navigate away.
+  // Used to suppress the empty-tab state flicker that would otherwise
+  // render for a frame between "last pane removed locally" and
+  // "navigate to next route".
+  const [closingTab, setClosingTab] = useState(false);
   const [mobileActiveId, setMobileActiveId] = useState<string | null>(null);
   const layoutRef = useRef<Layout>(null);
   const isMobile = useMediaQuery('(max-width: 720px)');
@@ -251,11 +257,13 @@ export function TabView() {
    */
   const closeTab = useCallback(async () => {
     if (!tab || !workspace) return;
+    setClosingTab(true);
     const isLastTab = allTabs.filter((t) => t.id !== tab.id).length === 0;
     try {
       await api.deleteTab(tab.id);
     } catch (err) {
       console.error('close tab failed', err);
+      setClosingTab(false);
       return;
     }
     if (isLastTab) {
@@ -281,6 +289,12 @@ export function TabView() {
   const removePaneFromLayout = useCallback(
     async (paneId: string) => {
       const newLayout = removePane(layoutRef.current, paneId);
+      // If this was the last pane, mark the tab as closing BEFORE we
+      // setTab() so the next render doesn't briefly show the empty-tab
+      // CTA before closeTab navigates away.
+      if (newLayout == null || newLayout === '') {
+        setClosingTab(true);
+      }
       layoutRef.current = newLayout;
       setTab((prev) =>
         prev
@@ -335,6 +349,10 @@ export function TabView() {
       </div>
     );
   if (!tab) return <div className="workspace-loading">loading…</div>;
+  // While the cascade-close is in flight, render nothing instead of the
+  // empty-tab CTA. The closeTab nav fires shortly after; this avoids a
+  // brief flicker between "last pane gone" and "route changes".
+  if (closingTab) return <div className="workspace-loading">loading…</div>;
 
   const layout = layoutRef.current;
   const isEmpty = layout == null || layout === '';
