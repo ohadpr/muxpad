@@ -1,18 +1,17 @@
 import { useEffect } from 'react';
-import type { Workspace } from '@muxpad/shared';
+import type { Tab } from '@muxpad/shared';
 
 const FAVICON = '/favicon.svg';
 const FAVICON_ATTENTION = '/favicon-attention.svg';
 
 /**
- * Surface "any workspace needs attention" at the browser-tab level by
- * swapping the favicon to an alert-colored variant. Reverts when nothing
- * is flagged. (We intentionally don't touch document.title — the page
- * title shows the workspace name, and a prefix there fights with the
- * per-page useDocumentTitle hooks.)
+ * Surface "any tab needs attention" at the browser-tab level by swapping
+ * the favicon to an alert-colored variant. Reverts when nothing is
+ * flagged. Doesn't touch document.title to avoid fighting per-page title
+ * hooks.
  */
-export function useWindowAttention(workspaces: Workspace[]): void {
-  const anyAttention = workspaces.some((w) => w.attention);
+export function useWindowAttention(tabs: Tab[]): void {
+  const anyAttention = tabs.some((t) => t.attention);
 
   useEffect(() => {
     const link = document.querySelector('link[rel="icon"]') as HTMLLinkElement | null;
