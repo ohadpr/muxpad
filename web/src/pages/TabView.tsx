@@ -483,7 +483,29 @@ export function TabView() {
                   title=""
                   renderToolbar={() => (
                     <div className="pane-chrome">
-                      <span className="pane-chrome-title">{label}</span>
+                      {/* Title is an anchor to the pane's popout URL.
+                          Plain click does nothing special (preventDefault
+                          so it doesn't navigate the whole window);
+                          Cmd/Ctrl/middle-click falls through to the
+                          browser's native "open in new tab" behavior. */}
+                      <a
+                        href={`/p/${paneId}`}
+                        className="pane-chrome-title-link"
+                        onClick={(e) => {
+                          if (
+                            e.metaKey ||
+                            e.ctrlKey ||
+                            e.shiftKey ||
+                            e.altKey ||
+                            e.button !== 0
+                          )
+                            return;
+                          e.preventDefault();
+                        }}
+                        title="Cmd/Ctrl-click to open in new tab"
+                      >
+                        <span className="pane-chrome-title">{label}</span>
+                      </a>
                       <span className="pane-chrome-spacer" />
                       <button
                         className="pane-chrome-btn"
@@ -500,14 +522,6 @@ export function TabView() {
                         onClick={() => void splitFromPane(paneId, 'column')}
                       >
                         <SvgSplitDown />
-                      </button>
-                      <button
-                        className="pane-chrome-btn"
-                        title="Open in new tab"
-                        aria-label="Open in new tab"
-                        onClick={() => window.open(`/p/${paneId}`, '_blank')}
-                      >
-                        <SvgPopout />
                       </button>
                       <button
                         className="pane-chrome-btn pane-chrome-close"
@@ -552,19 +566,6 @@ function SvgSplitDown() {
   );
 }
 
-function SvgPopout() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 14 14" aria-hidden="true">
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinecap="round"
-        d="M5 2H2v10h10V9 M9 2h3v3 M12 2 7 7"
-      />
-    </svg>
-  );
-}
 
 function SvgClose() {
   return (
