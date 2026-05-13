@@ -3,45 +3,56 @@ import type { Tab } from '@muxpad/shared';
 import { api } from './api';
 
 /**
- * Per-workspace tabs hook. Holds the active workspace's tab list in a
- * module-level cache so the TabBar and TabView render in sync. When
- * `workspaceId` changes (user switches workspaces), the cache is replaced
- * and listeners refire.
+ * Per-workspace tabs hook. Each workspace has its own cache slot, so
+ * navigating from workspace A → B never shows A's tabs in B's bar:
+ * useTabs(B) reads B's slot (empty until refreshed, not A's stale list).
  *
  * Auto-refreshes on visibilitychange/focus and polls every 5s while
- * visible. The poll is what surfaces per-tab attention flags (server-side
- * bell detection) on tabs the user isn't actively looking at.
+ * visible. The poll is what surfaces per-tab attention flags on tabs
+ * the user isn't actively looking at.
  */
 const VISIBLE_POLL_MS = 5000;
 
-let cachedWorkspaceId: string | null = null;
-let cache: Tab[] = [];
-const listeners = new Set<(t: Tab[]) => void>();
-let version = 0;
+const caches = new Map<string, Tab[]>();
+const listenersByWs = new Map<string, Set<(t: Tab[]) => void>>();
+const versions = new Map<string, number>();
 
 export async function refreshTabs(workspaceId: string): Promise<void> {
-  const myVersion = ++version;
+  if (!workspaceId) return;
+  const myVersion = (versions.get(workspaceId) ?? 0) + 1;
+  versions.set(workspaceId, myVersion);
   const next = await api.listTabs(workspaceId);
-  if (myVersion < version) return; // a newer call superseded us
-  if (cachedWorkspaceId !== workspaceId) cachedWorkspaceId = workspaceId;
-  cache = next;
-  for (const fn of listeners) fn(cache);
+  if ((versions.get(workspaceId) ?? 0) > myVersion) return; // a newer call superseded us
+  caches.set(workspaceId, next);
+  const subs = listenersByWs.get(workspaceId);
+  if (subs) for (const fn of subs) fn(next);
 }
 
 export function useTabs(workspaceId: string): {
   tabs: Tab[];
   refresh: () => Promise<void>;
 } {
-  const [state, setState] = useState<Tab[]>(
-    cachedWorkspaceId === workspaceId ? cache : [],
-  );
+  const [state, setState] = useState<Tab[]>(() => caches.get(workspaceId) ?? []);
+  // If workspaceId changed since last render and our state hasn't caught
+  // up yet, sync state to the new workspace's cache slot synchronously
+  // during render. Avoids a flash of the previous workspace's tabs when
+  // TabBar / WorkspaceLayout re-render with a different workspaceId.
+  const [prevWs, setPrevWs] = useState(workspaceId);
+  if (prevWs !== workspaceId) {
+    setPrevWs(workspaceId);
+    setState(caches.get(workspaceId) ?? []);
+  }
+
   useEffect(() => {
-    listeners.add(setState);
-    if (cachedWorkspaceId !== workspaceId) {
-      cache = [];
-      setState(cache);
+    if (!workspaceId) return;
+    let subs = listenersByWs.get(workspaceId);
+    if (!subs) {
+      subs = new Set();
+      listenersByWs.set(workspaceId, subs);
     }
+    subs.add(setState);
     void refreshTabs(workspaceId);
+
     let timer: number | null = null;
     const startPolling = () => {
       if (timer !== null) return;
@@ -67,11 +78,12 @@ export function useTabs(workspaceId: string): {
       startPolling();
     }
     return () => {
-      listeners.delete(setState);
+      subs!.delete(setState);
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('focus', onFocus);
       stopPolling();
     };
   }, [workspaceId]);
+
   return { tabs: state, refresh: () => refreshTabs(workspaceId) };
 }
