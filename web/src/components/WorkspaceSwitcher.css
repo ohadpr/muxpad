@@ -102,9 +102,13 @@
   cursor: pointer;
   white-space: nowrap;
   gap: 12px;
+  /* These items are <Link> anchors (so cmd-click works) but visually
+     they're menu items, not links — kill the global anchor underline. */
+  text-decoration: none;
 }
 .ws-switcher-item:hover {
   background: var(--bg-hover);
+  text-decoration: none;
 }
 .ws-switcher-item[data-active='true'] {
   background: var(--bg-hover);

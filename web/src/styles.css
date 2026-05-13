@@ -287,13 +287,12 @@ select:focus {
 .app-layout > .ws-tabbar {
   flex: 0 0 auto;
 }
-.app-layout > .workspace-root,
-.app-layout > .dashboard-root {
+.app-layout > .workspace-root {
   flex: 1;
   min-height: 0;
 }
 
-/* Brand (logo + wordmark) — used in the dashboard and workspace headers. */
+/* Brand (logo + wordmark) — used in the chrome header. */
 
 .brand {
   display: inline-flex;
