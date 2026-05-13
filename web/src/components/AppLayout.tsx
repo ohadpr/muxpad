@@ -20,11 +20,23 @@ export function AppLayout() {
   const activeWorkspace = wsSlug
     ? workspaces.find((w) => w.slug === wsSlug)
     : null;
+  // Show the cross-workspace attention dot on the brand mark when ANY
+  // workspace other than the one we're currently viewing has a pane
+  // flagging attention. The current workspace's own tabs surface via
+  // the tab bar's per-tab dots and the switcher trigger.
+  const otherWorkspaceAttention = workspaces.some(
+    (w) => w.attention && w.id !== activeWorkspace?.id,
+  );
 
   return (
     <div className="app-layout">
       <header className="ws-tabbar">
-        <Brand asLink={true} responsive={true} markOnly={!!activeWorkspace} />
+        <Brand
+          asLink={true}
+          responsive={true}
+          markOnly={!!activeWorkspace}
+          attention={otherWorkspaceAttention}
+        />
         {activeWorkspace && (
           <>
             <WorkspaceSwitcher activeWorkspaceSlug={activeWorkspace.slug} />

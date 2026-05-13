@@ -70,5 +70,9 @@ export const WorkspaceSchema = z.object({
   updated_at: z.number(),
   // Derived at read time; not stored in the DB.
   tab_count: z.number().int().nonnegative(),
+  // Runtime-only flag. True iff any pane in any tab in this workspace
+  // has rung BEL since the user last interacted with it. The list
+  // endpoint folds this in from PaneManager state.
+  attention: z.boolean().optional(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;

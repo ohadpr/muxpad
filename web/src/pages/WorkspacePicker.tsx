@@ -75,6 +75,7 @@ export function WorkspacePicker() {
                 to="/w/$wsSlug"
                 params={{ wsSlug: w.slug }}
                 className="picker-card"
+                data-attention={w.attention ? 'true' : undefined}
               >
                 <span className="picker-card-name">{w.name}</span>
                 <span className="picker-card-meta">
