@@ -39,16 +39,36 @@ export const PaneSpecSchema = z.object({
 });
 export type PaneSpec = z.infer<typeof PaneSpecSchema>;
 
-export const WorkspaceSchema = z.object({
+/**
+ * A tab in the bar — what was historically called "workspace". Owns a
+ * layout (binary tree of pane ids) and N panes. Belongs to a parent
+ * workspace via tab_id (server-side field on tab rows).
+ */
+export const TabSchema = z.object({
   id: z.string(),
   slug: z.string(),
   name: z.string(),
   layout: LayoutNodeSchema,
   created_at: z.number(),
   updated_at: z.number(),
-  // Runtime-only flag. True iff at least one pane in this workspace has
-  // received a BEL (\x07) since the user last interacted with it. The list
-  // endpoint folds this in from PaneManager state; the DB doesn't store it.
+  // Runtime-only flag. True iff at least one pane in this tab has
+  // received a BEL (\x07) since the user last interacted with it.
   attention: z.boolean().optional(),
+});
+export type Tab = z.infer<typeof TabSchema>;
+
+/**
+ * The new top-level concept. A workspace contains tabs. The picker at `/`
+ * lists workspaces; clicking one navigates into its tab bar.
+ */
+export const WorkspaceSchema = z.object({
+  id: z.string(),
+  slug: z.string(),
+  name: z.string(),
+  position: z.number().int(),
+  created_at: z.number(),
+  updated_at: z.number(),
+  // Derived at read time; not stored in the DB.
+  tab_count: z.number().int().nonnegative(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
