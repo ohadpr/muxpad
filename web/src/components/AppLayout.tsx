@@ -3,6 +3,7 @@ import { Brand } from './Brand';
 import { GitHubLink } from './GitHubLink';
 import { SettingsMenu } from './SettingsMenu';
 import { TabBar } from './TabBar';
+import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import { useWorkspaces } from '../workspaces';
 
 /**
@@ -24,15 +25,18 @@ export function AppLayout() {
     <div className="app-layout">
       <header className="ws-tabbar">
         <Brand asLink={true} responsive={true} />
-        {activeWorkspace && <span className="ws-tabbar-divider" aria-hidden />}
-        {activeWorkspace ? (
-          <TabBar
-            workspaceId={activeWorkspace.id}
-            workspaceSlug={activeWorkspace.slug}
-          />
-        ) : (
-          <span className="ws-tabbar-spacer" />
+        {activeWorkspace && (
+          <>
+            <span className="ws-tabbar-divider" aria-hidden />
+            <WorkspaceSwitcher activeWorkspaceSlug={activeWorkspace.slug} />
+            <span className="ws-tabbar-divider" aria-hidden />
+            <TabBar
+              workspaceId={activeWorkspace.id}
+              workspaceSlug={activeWorkspace.slug}
+            />
+          </>
         )}
+        {!activeWorkspace && <span className="ws-tabbar-spacer" />}
         <GitHubLink />
         <SettingsMenu />
       </header>
