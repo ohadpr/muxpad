@@ -37,11 +37,22 @@ describe('workspaces routes', () => {
     expect(body.tab_count).toBe(0);
   });
 
-  it('uses a generated name when none is provided', async () => {
-    const res = await post('/api/workspaces', {});
-    expect(res.status).toBe(201);
-    const body = (await res.json()) as { name: string };
-    expect(body.name.length).toBeGreaterThan(0);
+  it('uses a sequential default name when none is provided', async () => {
+    const a = (await (await post('/api/workspaces', {})).json()) as { name: string };
+    const b = (await (await post('/api/workspaces', {})).json()) as { name: string };
+    const c2 = (await (await post('/api/workspaces', {})).json()) as { name: string };
+    expect(a.name).toBe('Workspace 1');
+    expect(b.name).toBe('Workspace 2');
+    expect(c2.name).toBe('Workspace 3');
+  });
+
+  it('default name skips past existing Workspace N rather than reusing', async () => {
+    // Mimic a real scenario: user renamed some, deleted some. The next
+    // default should be max+1 across whatever's left, never colliding.
+    await post('/api/workspaces', { name: 'Workspace 5' });
+    await post('/api/workspaces', { name: 'My project' });
+    const next = (await (await post('/api/workspaces', {})).json()) as { name: string };
+    expect(next.name).toBe('Workspace 6');
   });
 
   it('lists workspaces', async () => {

@@ -2,7 +2,6 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type Database from 'better-sqlite3';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
-import { randomWorkspaceName } from '../random-name.js';
 
 /**
  * CRUD for the top-level workspace concept. Workspaces own tabs; tabs
@@ -18,7 +17,7 @@ export function workspacesRoutes(deps: { db: Database.Database }): Hono {
     const body = z
       .object({ name: z.string().optional() })
       .parse(await c.req.json().catch(() => ({})));
-    const name = body.name?.trim() || randomWorkspaceName();
+    const name = body.name?.trim() || nextDefaultName(workspaces.list());
     return c.json(workspaces.create({ name }), 201);
   });
 
@@ -81,4 +80,21 @@ export function workspacesRoutes(deps: { db: Database.Database }): Hono {
   });
 
   return app;
+}
+
+/**
+ * Pick the next default workspace name. Looks for the highest integer N
+ * across existing names matching "Workspace N" and returns "Workspace N+1".
+ * Returns "Workspace 1" when no such name exists. Numbers are not reused
+ * when a workspace is deleted — predictability beats density.
+ */
+function nextDefaultName(existing: { name: string }[]): string {
+  let max = 0;
+  for (const w of existing) {
+    const m = /^Workspace (\d+)$/.exec(w.name);
+    if (!m) continue;
+    const n = Number(m[1]);
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return `Workspace ${max + 1}`;
 }
