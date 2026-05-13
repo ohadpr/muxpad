@@ -888,32 +888,29 @@ git commit -m "feat(web): workspace switcher dropdown next to brand"
 
 ---
 
-### Task F.2: Empty-workspace state ("no tabs")
+### Task F.2: Auto-close empty workspaces
+
+**Decision:** We do NOT render an "empty workspace" state with CTAs. Instead, when the last tab in a workspace is closed, the workspace is auto-deleted and the user is navigated to `/` (the picker). Rationale: an empty workspace is a transient state with no useful affordances of its own; cascade-deleting it keeps the user's mental model simple (a workspace is the set of its tabs).
+
+The existing "empty tab" state (when the last pane in a tab closes) stays — users still get the "+ New pane" / "or close this tab" CTAs at the tab level.
 
 **Files:**
-- Modify: `web/src/components/WorkspaceLayout.tsx` (or wherever the workspace-no-tabs branch lives)
+- Modify: `web/src/components/WorkspaceLayout.tsx`
+- Modify: `web/src/pages/TabView.tsx` (the close-tab flow)
 
-**Step 1: When workspace.tab_count === 0, render:**
+**Step 1: In `WorkspaceLayout.tsx`,** after loading the workspace + tabs, if `tabs.length === 0`, fire-and-forget `api.deleteWorkspace(workspaceId)` and `navigate({ to: '/' })`. Guard with a ref so it only fires once.
 
-```tsx
-<div className="workspace-empty">
-  <p>This workspace has no tabs.</p>
-  <button className="btn btn-primary" onClick={createFirstTab}>+ New tab</button>
-  <button className="workspace-empty-close" onClick={closeWorkspace}>or close this workspace</button>
-</div>
-```
+**Step 2: In the tab-close flow** (wherever today's `closeWorkspace`-equivalent lives, which becomes `closeTab`): after deletion, if the workspace's `tab_count` drops to 0, the WorkspaceLayout's auto-close effect handles it on the next render — no special-casing needed in the close handler.
 
-**Step 2:** `closeWorkspace` calls `api.deleteWorkspace(id)`. On success, navigate to `/`. On 409 (still has tabs — shouldn't happen here but be defensive), refetch and re-render.
+**Step 3: Defensive: `api.deleteWorkspace` returns 409 if `tab_count > 0`.** Since the auto-close only fires when `tabs.length === 0`, this should never happen, but log and ignore the 409 just in case.
 
-**Step 3: Re-use `.workspace-empty` and `.workspace-empty-close` CSS** that already exists in tab.css from the old "empty workspace" pattern, only with copy adjusted from "workspace" → "workspace" (semantics changed — same words still work).
-
-**Step 4: Manually verify** by opening a workspace, deleting all its tabs, and seeing the empty state with both CTAs.
+**Step 4: Manually verify** by closing the last tab in a workspace — the user should land at `/` and the workspace should be gone from the picker.
 
 **Step 5: Commit.**
 
 ```bash
 git add -A
-git commit -m "feat(web): empty-workspace state with new-tab + close-workspace CTAs"
+git commit -m "feat(web): auto-close workspace when its last tab is closed"
 ```
 
 ---
