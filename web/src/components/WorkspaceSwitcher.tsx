@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { api } from '../api';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
 import './WorkspaceSwitcher.css';
@@ -146,24 +146,33 @@ export function WorkspaceSwitcher({ activeWorkspaceSlug }: WorkspaceSwitcherProp
           {workspaces.map((w) => {
             const isActive = w.slug === activeWorkspaceSlug;
             return (
-              <button
+              <Link
                 key={w.id}
-                type="button"
+                to="/w/$wsSlug"
+                params={{ wsSlug: w.slug }}
                 className="ws-switcher-item"
                 data-active={isActive ? 'true' : undefined}
                 data-attention={!isActive && w.attention ? 'true' : undefined}
-                onClick={() => {
+                onClick={(e) => {
+                  // Let cmd/ctrl-click + middle-click fall through to the
+                  // browser's "open in new tab" behavior. Only intercept
+                  // the plain-click case to close the menu.
+                  if (
+                    e.metaKey ||
+                    e.ctrlKey ||
+                    e.shiftKey ||
+                    e.altKey ||
+                    e.button !== 0
+                  )
+                    return;
                   setOpen(false);
-                  if (!isActive) {
-                    void navigate({ to: '/w/$wsSlug', params: { wsSlug: w.slug } });
-                  }
                 }}
               >
                 <span className="ws-switcher-item-label">{w.name}</span>
                 <span className="ws-switcher-item-meta">
                   {w.tab_count} {w.tab_count === 1 ? 'tab' : 'tabs'}
                 </span>
-              </button>
+              </Link>
             );
           })}
           <div className="ws-switcher-divider" />

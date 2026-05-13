@@ -257,6 +257,21 @@
   cursor: move;
 }
 
+.pane-chrome-title-link {
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+  color: inherit;
+  min-width: 0;
+  max-width: 70%;
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.pane-chrome-title-link:hover {
+  background: var(--bg-hover);
+  text-decoration: none;
+}
+
 .pane-chrome-title {
   font-family: ui-monospace, monospace;
   font-size: 12px;
@@ -266,7 +281,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
-  max-width: 70%;
 }
 
 .pane-chrome-spacer {
