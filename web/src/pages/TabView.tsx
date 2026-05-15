@@ -107,7 +107,12 @@ export function TabView() {
   // Title pulls the live name from the shared tabs list so renames in
   // the tab bar update the document title without a refetch here.
   const liveName = allTabs.find((t) => t.slug === tabSlug)?.name ?? tab?.name;
-  useDocumentTitle(liveName ? `muxpad — ${liveName}` : 'muxpad');
+  const liveWorkspaceName = workspace?.name;
+  useDocumentTitle(
+    liveWorkspaceName && liveName
+      ? `${liveWorkspaceName} ⋅ ${liveName}`
+      : liveName ?? liveWorkspaceName ?? 'muxpad',
+  );
 
   // Keep local tab.name in sync with the shared list.
   useEffect(() => {

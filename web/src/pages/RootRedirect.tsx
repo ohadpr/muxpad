@@ -31,6 +31,13 @@ export function RootRedirect() {
     if (startedRef.current) return;
     startedRef.current = true;
 
+    // Preserve the current URL's search params (e.g. ?debug=1) across
+    // the redirect chain — without this, devtools tooling that relies on
+    // query flags would silently lose state on every visit to /.
+    const search = Object.fromEntries(
+      new URLSearchParams(window.location.search).entries(),
+    );
+
     let cancelled = false;
     const run = async () => {
       const workspaces = await refreshWorkspaces();
@@ -40,6 +47,7 @@ export function RootRedirect() {
         void navigate({
           to: '/w/$wsSlug',
           params: { wsSlug: first.slug },
+          search,
           replace: true,
         });
         return;
@@ -57,6 +65,7 @@ export function RootRedirect() {
         void navigate({
           to: '/w/$wsSlug/t/$tabSlug',
           params: { wsSlug: w.slug, tabSlug: t.slug },
+          search,
           replace: true,
         });
       } catch (err) {

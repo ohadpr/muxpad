@@ -23,15 +23,21 @@ export function WorkspaceLayout() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const isExactWorkspacePath = pathname === `/w/${wsSlug}`;
 
-  // Redirect to the first tab when the URL has no tab segment.
+  // Redirect to the first tab when the URL has no tab segment. Preserve
+  // search params (e.g. ?debug=1) — otherwise visiting /w/foo from /
+  // would drop them on the way to /w/foo/t/bar.
   useEffect(() => {
     if (!workspace) return;
     if (!isExactWorkspacePath) return;
     if (tabs.length === 0) return;
     const first = tabs[0]!;
+    const search = Object.fromEntries(
+      new URLSearchParams(window.location.search).entries(),
+    );
     void navigate({
       to: '/w/$wsSlug/t/$tabSlug',
       params: { wsSlug, tabSlug: first.slug },
+      search,
       replace: true,
     });
   }, [workspace, tabs, isExactWorkspacePath, wsSlug, navigate]);

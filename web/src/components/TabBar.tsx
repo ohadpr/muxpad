@@ -1,10 +1,12 @@
+import type { Tab } from '@muxpad/shared';
+import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent } from 'react';
-import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 import { api } from '../api';
 import { refreshTabs, useTabs } from '../tabs';
-import { useWindowAttention } from '../use-window-attention';
+import { openInNewTab, useLongPress } from '../use-long-press';
 import { useHorizontalOverflow } from '../use-overflow';
+import { useWindowAttention } from '../use-window-attention';
 import { TabBarDropdown } from './TabBarDropdown';
 import './TabBar.css';
 
@@ -35,9 +37,7 @@ export function TabBar({ workspaceId, workspaceSlug }: TabBarProps) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const activeSlug = matchActiveTabSlug(pathname);
 
-  const { ref: tabsRef, overflowing } = useHorizontalOverflow<HTMLElement>([
-    tabs.length,
-  ]);
+  const { ref: tabsRef, overflowing } = useHorizontalOverflow<HTMLElement>([tabs.length]);
 
   useEffect(() => {
     if (editingId) {
@@ -99,8 +99,7 @@ export function TabBar({ workspaceId, workspaceSlug }: TabBarProps) {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     const rect = e.currentTarget.getBoundingClientRect();
-    const side: 'before' | 'after' =
-      e.clientX < rect.left + rect.width / 2 ? 'before' : 'after';
+    const side: 'before' | 'after' = e.clientX < rect.left + rect.width / 2 ? 'before' : 'after';
     setDropTargetId(id);
     setDropSide(side);
   };
@@ -110,10 +109,7 @@ export function TabBar({ workspaceId, workspaceSlug }: TabBarProps) {
     setDropTargetId(null);
   };
 
-  const onDrop = async (
-    e: ReactDragEvent<HTMLAnchorElement>,
-    targetId: string,
-  ) => {
+  const onDrop = async (e: ReactDragEvent<HTMLAnchorElement>, targetId: string) => {
     e.preventDefault();
     const sourceId = e.dataTransfer.getData(DRAG_MIME) || dragId;
     const side = dropSide;
@@ -170,30 +166,18 @@ export function TabBar({ workspaceId, workspaceSlug }: TabBarProps) {
             );
           }
           return (
-            <Link
+            <TabItem
               key={t.id}
-              to="/w/$wsSlug/t/$tabSlug"
-              params={{ wsSlug: workspaceSlug, tabSlug: t.slug }}
-              className="ws-tab"
-              data-active={isActive}
-              data-attention={!isActive && t.attention ? 'true' : undefined}
-              data-drop={dropTargetId === t.id ? dropSide : undefined}
-              draggable
+              tab={t}
+              workspaceSlug={workspaceSlug}
+              isActive={isActive}
+              dropSide={dropTargetId === t.id ? dropSide : undefined}
               onDragStart={(e) => onDragStart(e, t.id)}
               onDragOver={(e) => onDragOver(e, t.id)}
               onDragEnd={onDragEnd}
               onDrop={(e) => void onDrop(e, t.id)}
-              onDoubleClick={isActive ? () => startEdit(t) : undefined}
-              title={
-                t.attention && !isActive
-                  ? `${t.name}: needs attention`
-                  : isActive
-                  ? 'Double-click to rename'
-                  : t.name
-              }
-            >
-              <span className="ws-tab-label">{t.name}</span>
-            </Link>
+              onStartEdit={() => startEdit(t)}
+            />
           );
         })}
         <button
@@ -229,4 +213,60 @@ export function TabBar({ workspaceId, workspaceSlug }: TabBarProps) {
 function matchActiveTabSlug(pathname: string): string | null {
   const m = pathname.match(/^\/w\/[^/]+\/t\/([^/]+)/);
   return m?.[1] ? decodeURIComponent(m[1]) : null;
+}
+
+interface TabItemProps {
+  tab: Tab;
+  workspaceSlug: string;
+  isActive: boolean;
+  dropSide: 'before' | 'after' | undefined;
+  onDragStart: (e: ReactDragEvent<HTMLAnchorElement>) => void;
+  onDragOver: (e: ReactDragEvent<HTMLAnchorElement>) => void;
+  onDragEnd: () => void;
+  onDrop: (e: ReactDragEvent<HTMLAnchorElement>) => void;
+  onStartEdit: () => void;
+}
+
+function TabItem({
+  tab,
+  workspaceSlug,
+  isActive,
+  dropSide,
+  onDragStart,
+  onDragOver,
+  onDragEnd,
+  onDrop,
+  onStartEdit,
+}: TabItemProps) {
+  const { pressing, handlers } = useLongPress({
+    onLongPress: () =>
+      openInNewTab(`/w/${encodeURIComponent(workspaceSlug)}/t/${encodeURIComponent(tab.slug)}`),
+  });
+  return (
+    <Link
+      to="/w/$wsSlug/t/$tabSlug"
+      params={{ wsSlug: workspaceSlug, tabSlug: tab.slug }}
+      className="ws-tab"
+      data-active={isActive}
+      data-attention={!isActive && tab.attention ? 'true' : undefined}
+      data-drop={dropSide}
+      data-pressing={pressing ? 'true' : undefined}
+      draggable
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragEnd={onDragEnd}
+      onDrop={onDrop}
+      onDoubleClick={isActive ? onStartEdit : undefined}
+      {...handlers}
+      title={
+        tab.attention && !isActive
+          ? `${tab.name}: needs attention`
+          : isActive
+            ? 'Double-click to rename'
+            : tab.name
+      }
+    >
+      <span className="ws-tab-label">{tab.name}</span>
+    </Link>
+  );
 }

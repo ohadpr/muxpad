@@ -111,23 +111,29 @@ describe('PaneRuntime', () => {
     expect(runtime.snapshot()).not.toContain('should-not-run');
   });
 
-  it('resizes PTY to MIN(cols,rows) across all attached clients', async () => {
-    const runtime = new PaneRuntime({ id: 'p-min', shell: '/bin/sh', cwd: '/tmp' });
+  it('resizes the PTY last-writer-wins across clients', async () => {
+    const runtime = new PaneRuntime({ id: 'p-size', shell: '/bin/sh', cwd: '/tmp' });
     runtime.start();
     runtime.setClientSize('a', 200, 50);
     expect(runtime.cols).toBe(200);
     expect(runtime.rows).toBe(50);
+    expect(runtime.clientCount()).toBe(1);
+    // A second client's resize wins outright — no MIN arbitration.
     runtime.setClientSize('b', 80, 24);
-    // PTY now sized to the smaller of the two.
     expect(runtime.cols).toBe(80);
     expect(runtime.rows).toBe(24);
-    runtime.removeClient('b');
-    // With only the wider client left, PTY resizes back up.
+    expect(runtime.clientCount()).toBe(2);
+    // The first client re-asserting (e.g. on tab-visibility) reclaims size.
+    runtime.setClientSize('a', 200, 50);
     expect(runtime.cols).toBe(200);
     expect(runtime.rows).toBe(50);
+    // Disconnecting a client never recomputes — the PTY keeps its last size.
     runtime.removeClient('a');
-    // No clients: keep last known size (don't fall back to 80x24 defaults).
     expect(runtime.cols).toBe(200);
+    expect(runtime.clientCount()).toBe(1);
+    runtime.removeClient('b');
+    expect(runtime.cols).toBe(200);
+    expect(runtime.clientCount()).toBe(0);
     runtime.kill();
     await new Promise<void>((resolve) => runtime.on('exit', () => resolve()));
   });

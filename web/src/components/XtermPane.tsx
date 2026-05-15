@@ -1,13 +1,26 @@
 import { useEffect, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
-import { encodeInput, encodeResize, decodeServerMessage } from '@muxpad/shared';
+import { encodeInput, encodeResize, decodeServerMessage, encodePing } from '@muxpad/shared';
 import { api } from '../api';
-import { useSettings, type Theme } from '../settings';
+import { getCellDimensions, setScrollBarWidthZero } from '../lib/xterm-internals';
+import { splitClipboard } from '../lib/clipboard-detect';
+import { createSafeClipboardAddon } from '../lib/safe-clipboard-provider';
+import { writeClipboard } from '../lib/clipboard-write';
+import { ChunkedWriter, SyncBlockExtractor } from '../lib/write-coalescer';
+import { getSettings, useSettings, type Theme } from '../settings';
 import './XtermPane.css';
+
+// Debug logging: enable via URL flag (?debug=1) OR localStorage
+// (muxpad.debug=1). localStorage survives the / → /w/:slug → /w/:slug/t/:slug
+// redirect chain that strips unknown query params.
+const DEBUG =
+  typeof window !== 'undefined' &&
+  (new URLSearchParams(window.location.search).get('debug') === '1' ||
+    window.localStorage?.getItem('muxpad.debug') === '1');
+const dbg = (...args: unknown[]) => { if (DEBUG) console.log('[XtermPane]', ...args); };
 
 export interface XtermPaneProps {
   paneId: string;
@@ -65,27 +78,47 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
   onExitRef.current = onExit;
   const settings = useSettings();
   const wsRef = useRef<WebSocket | null>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
 
-  // Recreate the entire terminal on paneId or settings change. xterm.js's
-  // live option-update path (term.options.fontFamily = …) doesn't reliably
-  // re-measure or re-render across renderer internals; teardown + rebuild
-  // is the only deterministic path. The server replays the ring buffer on
-  // reconnect, so visual state is preserved (you lose selection + scroll).
+  // The terminal is created once per paneId. Font/theme changes are applied
+  // in place by the live-update effect below (mutating term.options), so this
+  // effect deliberately does NOT depend on `settings` — recreating the
+  // Terminal would drop scrollback and re-establish the WS attach. Initial
+  // font/theme is read from getSettings() at mount for the same reason.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
+    const { fontFamily, fontSize, theme } = getSettings();
     const term = new Terminal({
-      fontFamily: settings.fontFamily,
-      fontSize: settings.fontSize,
+      fontFamily,
+      fontSize,
       cursorBlink: true,
-      theme: themeFor(settings.theme),
+      theme: themeFor(theme),
       allowProposedApi: true,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    term.loadAddon(new ClipboardAddon());
+    // Custom clipboard provider: the stock one throws inside term.write()'s
+    // OSC 52 handler when navigator.clipboard is undefined (non-secure
+    // context — Tailscale serve, LAN IP), which truncates the terminal frame.
+    term.loadAddon(createSafeClipboardAddon());
     term.loadAddon(new WebLinksAddon());
+    termRef.current = term;
+    fitRef.current = fit;
+
+    const chunker = new ChunkedWriter((s) => term.write(s), {
+      chunkSize: 48 * 1024,
+      raf: requestAnimationFrame.bind(window),
+    });
+    const extractor = new SyncBlockExtractor((s) => chunker.push(s), {
+      raf: requestAnimationFrame.bind(window),
+      maxHoldMs: 50,
+    });
+    // Force-flush any sync block held longer than maxHoldMs so a stuck
+    // half-frame can't freeze output.
+    const staleTimer = window.setInterval(() => extractor.flushStale(Date.now()), 25);
 
     // Tag the surrounding mosaic tile when this pane has keyboard focus, so
     // CSS can highlight the active pane. Walks to the nearest .mosaic-window
@@ -124,7 +157,7 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     // first, xterm caches fallback metrics and never updates them.
     let opened = false;
     void document.fonts
-      .load(`${settings.fontSize}px ${settings.fontFamily}`)
+      .load(`${fontSize}px ${fontFamily}`)
       .catch(() => {
         // ignore — open anyway
       })
@@ -145,14 +178,7 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
         // gutter. Zeroing the cached value keeps cells flush regardless.
         // Private API — try/catch falls back to the previous behavior if
         // a future xterm version moves this field.
-        try {
-          const core = (
-            term as unknown as { _core?: { viewport?: { scrollBarWidth?: number } } }
-          )._core;
-          if (core?.viewport) core.viewport.scrollBarWidth = 0;
-        } catch {
-          // ignore
-        }
+        setScrollBarWidthZero(term);
 
         // xterm measures cell.width asynchronously after the first render —
         // calling fit() *immediately* after open() runs while cell.width is
@@ -164,6 +190,8 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
             fit.fit();
             const ws = wsRef.current;
             if (ws && ws.readyState === WebSocket.OPEN) {
+              lastSentCols = term.cols;
+              lastSentRows = term.rows;
               ws.send(encodeResize(term.cols, term.rows));
             }
           } catch {
@@ -183,9 +211,18 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     let retries = 0;
     let retryTimer: number | null = null;
 
-    const safeSend = (frame: Uint8Array) => {
+    // Returns true iff the frame was actually written to an open socket.
+    // Callers that cache "last sent" state (the resize dedup) MUST gate that
+    // cache on this return value — otherwise a frame dropped here (WS not yet
+    // open) still poisons the cache, and the dedup then suppresses every
+    // future retry of that size, leaving the PTY stuck.
+    const safeSend = (frame: Uint8Array): boolean => {
       const ws = wsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN) ws.send(frame);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(frame);
+        return true;
+      }
+      return false;
     };
 
     const connect = () => {
@@ -193,7 +230,38 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
       ws.binaryType = 'arraybuffer';
       wsRef.current = ws;
 
+      // After HEARTBEAT_IDLE_MS of silence, ping; if no pong within
+      // HEARTBEAT_PONG_MS, force-close so the reconnect path can run. Lets
+      // the client notice a dead connection fast instead of waiting on a
+      // TCP timeout — matters most on flaky mobile networks.
+      const HEARTBEAT_IDLE_MS = 15_000;
+      const HEARTBEAT_PONG_MS = 5_000;
+      let lastActivityAt = Date.now();
+      let pongWaitTimer: number | null = null;
+      let idleTimer: number | null = null;
+      const armIdle = () => {
+        if (idleTimer !== null) window.clearTimeout(idleTimer);
+        const elapsed = Date.now() - lastActivityAt;
+        idleTimer = window.setTimeout(() => {
+          dbg('heartbeat ping');
+          safeSend(encodePing());
+          pongWaitTimer = window.setTimeout(() => {
+            dbg('heartbeat pong timeout — force-closing');
+            try { ws.close(); } catch { /* ignore */ }
+          }, HEARTBEAT_PONG_MS);
+        }, Math.max(0, HEARTBEAT_IDLE_MS - elapsed));
+      };
+      const observeActivity = () => {
+        lastActivityAt = Date.now();
+        if (pongWaitTimer !== null) {
+          window.clearTimeout(pongWaitTimer);
+          pongWaitTimer = null;
+        }
+        armIdle();
+      };
+
       ws.addEventListener('open', () => {
+        dbg('ws open', { paneId, retries });
         if (retries > 0) term.writeln('\r\n[reconnected]');
         retries = 0;
         try {
@@ -201,14 +269,21 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
         } catch {
           // ignore
         }
-        safeSend(encodeResize(term.cols, term.rows));
+        // Always re-announce size on (re)connect. Cache on confirmed send
+        // so a race where the socket flips closed doesn't poison the dedup.
+        if (safeSend(encodeResize(term.cols, term.rows))) {
+          lastSentCols = term.cols;
+          lastSentRows = term.rows;
+        }
+        armIdle();
       });
 
       ws.addEventListener('message', (e) => {
+        observeActivity();
         const buf = new Uint8Array(e.data as ArrayBuffer);
         const msg = decodeServerMessage(buf);
         if (msg.kind === 'output') {
-          term.write(msg.data);
+          extractor.push(msg.data);
         } else if (msg.kind === 'exit') {
           paneExited = true;
           term.writeln(`\r\n[process exited ${msg.code}]`);
@@ -222,10 +297,15 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
           }
         } else if (msg.kind === 'error') {
           term.writeln(`\r\n[server error: ${msg.message}]`);
+        } else if (msg.kind === 'pong') {
+          // observeActivity already cleared pongWaitTimer; nothing else to do.
         }
       });
 
       ws.addEventListener('close', () => {
+        if (idleTimer !== null) window.clearTimeout(idleTimer);
+        if (pongWaitTimer !== null) window.clearTimeout(pongWaitTimer);
+        dbg('ws close', { paneId, intentionallyClosed, paneExited, retries });
         if (wsRef.current === ws) wsRef.current = null;
         if (intentionallyClosed || paneExited) return;
         const delay = Math.min(200 * 2 ** retries, 5000);
@@ -262,12 +342,69 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
       thumb.style.top = `${topPct}%`;
       thumb.style.height = `${heightPct}%`;
     };
-    const scrollSub = term.onScroll(() => updateScrollbar());
-    const lineFeedSub = term.onLineFeed(() => updateScrollbar());
-    const termResizeSub = term.onResize(() => updateScrollbar());
+    let scrollbarRaf: number | null = null;
+    const scheduleScrollbarUpdate = () => {
+      if (scrollbarRaf !== null) return;
+      scrollbarRaf = requestAnimationFrame(() => {
+        scrollbarRaf = null;
+        updateScrollbar();
+      });
+    };
+    const scrollSub = term.onScroll(scheduleScrollbarUpdate);
+    const lineFeedSub = term.onLineFeed(scheduleScrollbarUpdate);
+    const termResizeSub = term.onResize(scheduleScrollbarUpdate);
+    const writeParsedSub = term.onWriteParsed(scheduleScrollbarUpdate);
     // Initial state in case the buffer arrives before the first event.
     requestAnimationFrame(updateScrollbar);
 
+    // Make the overlay scrollbar interactive — press the track or drag to
+    // scroll. This is the ONLY way to reach scrollback when the inner app
+    // (Claude Code) has mouse reporting on and swallows wheel/touch events,
+    // and it gives mobile a reliable scroll affordance. Pointer events cover
+    // mouse + touch + pen uniformly; setPointerCapture keeps the drag alive
+    // when the pointer slides off the 14px-wide hit strip.
+    const sbEl = scrollbarRef.current;
+    let sbDragging = false;
+    const scrollToPointer = (clientY: number) => {
+      if (!sbEl) return;
+      const rect = sbEl.getBoundingClientRect();
+      if (rect.height <= 0) return;
+      const frac = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height));
+      const maxScroll = Math.max(0, term.buffer.active.length - term.rows);
+      term.scrollToLine(Math.round(frac * maxScroll));
+    };
+    const onSbPointerDown = (e: PointerEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      sbDragging = true;
+      try {
+        sbEl?.setPointerCapture(e.pointerId);
+      } catch {
+        // ignore — capture is best-effort
+      }
+      scrollToPointer(e.clientY);
+    };
+    const onSbPointerMove = (e: PointerEvent) => {
+      if (!sbDragging) return;
+      scrollToPointer(e.clientY);
+    };
+    const onSbPointerUp = (e: PointerEvent) => {
+      sbDragging = false;
+      try {
+        sbEl?.releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+    };
+    sbEl?.addEventListener('pointerdown', onSbPointerDown);
+    sbEl?.addEventListener('pointermove', onSbPointerMove);
+    sbEl?.addEventListener('pointerup', onSbPointerUp);
+    sbEl?.addEventListener('pointercancel', onSbPointerUp);
+
+    const MIN_COLS = 40;
+    const MIN_ROWS = 10;
+    let lastSentCols = 0;
+    let lastSentRows = 0;
     const refit = () => {
       try {
         // Skip when the pane element is in a transient sub-pixel state
@@ -278,7 +415,24 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
         // Code visibly relocates its input bar when this happens.
         if (container.clientWidth < 60 || container.clientHeight < 40) return;
         fit.fit();
-        safeSend(encodeResize(term.cols, term.rows));
+        const cols = term.cols;
+        const rows = term.rows;
+        if (cols < MIN_COLS || rows < MIN_ROWS) {
+          dbg('refit skipped: below floor', { cols, rows });
+          return;
+        }
+        if (cols === lastSentCols && rows === lastSentRows) {
+          dbg('refit skipped: dedup', { cols, rows });
+          return;
+        }
+        dbg('refit', { cols, rows, w: container.clientWidth, h: container.clientHeight });
+        // Cache only on a confirmed send. If the socket isn't open yet the
+        // frame is dropped; leaving the cache unchanged means the next
+        // refit (or the WS 'open' handler) retries instead of dedup'ing.
+        if (safeSend(encodeResize(cols, rows))) {
+          lastSentCols = cols;
+          lastSentRows = rows;
+        }
       } catch {
         // ignore; the next ResizeObserver / layout-changed tick will retry.
       }
@@ -292,12 +446,7 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     // wrapped so a future xterm rename falls back to a no-op (the
     // belt-and-suspenders rAF/setTimeout initialFit above will still run).
     const fitWhenCellReady = (attemptsLeft = 30) => {
-      const cell = (
-        term as unknown as {
-          _core?: { _renderService?: { dimensions?: { css?: { cell?: { width: number; height: number } } } } };
-        }
-      )._core?._renderService?.dimensions?.css?.cell;
-      if (cell && cell.width > 0 && cell.height > 0) {
+      if (getCellDimensions(term)) {
         refit();
         return;
       }
@@ -306,27 +455,69 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
       }
     };
     fitWhenCellReady();
-    const resizeObs = new ResizeObserver(refit);
-    resizeObs.observe(container);
     // react-mosaic re-parenting can change a pane's available width without
     // firing ResizeObserver — fit to the new size on every layout-changed
-    // notification. Spam refits across the mosaic transition window
-    // (≈300ms) so we catch the final settled size regardless of timing.
-    const refitBurst = () => {
-      // First fit immediately for the common case (cell metrics already
-      // measured), then a couple delayed retries to catch the *settled*
-      // container size once the mosaic transition completes. The readiness
-      // check guards against fit-addon's silent bail when cell.width is 0.
-      fitWhenCellReady();
-      window.setTimeout(() => fitWhenCellReady(), 240);
-      window.setTimeout(() => fitWhenCellReady(), 600);
+    // notification. A single trailing-edge debounce coalesces overlapping
+    // resize signals from RO, the layout-changed event, and window resize.
+    let refitTimer: number | null = null;
+    let hasSettledFirstResize = false;
+    const scheduleRefit = () => {
+      if (refitTimer !== null) window.clearTimeout(refitTimer);
+      const delay = hasSettledFirstResize ? 50 : 250;
+      refitTimer = window.setTimeout(() => {
+        refitTimer = null;
+        fitWhenCellReady();
+        hasSettledFirstResize = true;
+      }, delay);
     };
-    window.addEventListener('muxpad:layout-changed', refitBurst);
+    const resizeObs = new ResizeObserver(scheduleRefit);
+    resizeObs.observe(container);
+    window.addEventListener('muxpad:layout-changed', scheduleRefit);
     // Backup for cases where ResizeObserver doesn't fire — e.g. browser
     // window resize that reflows mosaic via flex without changing the
     // pane element's CSS dimensions in a way RO notices.
-    const onWindowResize = () => refitBurst();
+    const onWindowResize = () => scheduleRefit();
     window.addEventListener('resize', onWindowResize);
+
+    // Catch device rotation via the screen.orientation API — it doesn't
+    // reliably fire window.resize. Optional-chained for older browsers.
+    //
+    // NOTE: we deliberately do NOT listen to visualViewport 'resize'. On
+    // mobile, the address bar showing/hiding during a scroll fires that
+    // event continuously, and the resulting refit → fit() → term.resize()
+    // churn disrupts the in-progress touch-scroll gesture. The container
+    // ResizeObserver + window 'resize' already cover keyboard show/hide
+    // adequately; the draggable overlay scrollbar covers the rest.
+    const onOrientation = () => scheduleRefit();
+    window.screen.orientation?.addEventListener('change', onOrientation);
+
+    // Re-assert our terminal size to the PTY whenever this tab becomes the
+    // active one (visibilitychange) or the window regains focus. The server
+    // is last-writer-wins, so returning to a tab that sat idle while another
+    // device drove the same pane immediately reclaims the PTY size for THIS
+    // view — no manual resize nudge needed. Bypasses the dedup cache (the
+    // PTY may have changed under us) but still respects the dim floor and
+    // confirmed-send caching.
+    const reassertSize = () => {
+      try {
+        fit.fit();
+        const cols = term.cols;
+        const rows = term.rows;
+        if (cols < MIN_COLS || rows < MIN_ROWS) return;
+        dbg('reassert size', { cols, rows });
+        if (safeSend(encodeResize(cols, rows))) {
+          lastSentCols = cols;
+          lastSentRows = rows;
+        }
+      } catch {
+        // ignore — the ResizeObserver / next refit will retry
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') reassertSize();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', reassertSize);
 
     // Targeted-focus event: TabView dispatches this after deleting
     // a pane so the next remaining pane picks up focus without a click.
@@ -342,7 +533,10 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
       if ((e.metaKey || e.ctrlKey) && (e.key === 'c' || e.key === 'C')) {
         const sel = term.getSelection();
         if (sel) {
-          void navigator.clipboard.writeText(sel);
+          // writeClipboard falls back to execCommand('copy') so this works
+          // in non-secure contexts (Tailscale serve, LAN IP) where
+          // navigator.clipboard is undefined.
+          void writeClipboard(sel);
           e.preventDefault();
           e.stopPropagation();
         }
@@ -369,12 +563,18 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     const onPaste = async (e: ClipboardEvent) => {
       const data = e.clipboardData;
       if (!data) return;
-      const images = Array.from(data.items).filter((i) => i.type.startsWith('image/'));
-      if (images.length === 0) return;
-      e.preventDefault();
-      e.stopPropagation();
+      // Guarded so the Array.from(...) isn't built on every paste when
+      // DEBUG is off (dbg's own check happens after arg evaluation).
+      if (DEBUG) {
+        dbg('paste', {
+          types: Array.from(data.types),
+          items: Array.from(data.items).map((i) => `${i.kind}:${i.type}`),
+        });
+      }
+      const { imageOnly, imageItems } = splitClipboard(data);
+      if (imageItems.length === 0) return; // plain text — let xterm's bracketed-paste path handle it
       const paths: string[] = [];
-      for (const item of images) {
+      for (const item of imageItems) {
         const blob = item.getAsFile();
         if (!blob) continue;
         const ext = blob.type.split('/')[1] ?? 'png';
@@ -385,7 +585,23 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
           term.writeln(`\r\n[upload failed: ${String(err)}]`);
         }
       }
+      // Always swallow the paste event — we'll re-inject any text portion
+      // manually so the wire order is deterministic: path(s) first, then
+      // text. Without this, xterm's synchronous bracketed-paste path sends
+      // text BEFORE our awaited upload completes, putting the path at the
+      // end of the prompt.
+      //
+      // Trade-off: the text portion is no longer wrapped in
+      // \x1b[200~ .. \x1b[201~ bracketed-paste markers. Claude Code does
+      // not require them; if a future inner program (e.g. a shell with
+      // bracketed-paste support) needs them, wrap `text` here.
+      e.preventDefault();
+      e.stopPropagation();
       if (paths.length) safeSend(encodeInput(`${paths.join(' ')} `));
+      if (!imageOnly) {
+        const text = data.getData('text/plain');
+        if (text) safeSend(encodeInput(text));
+      }
     };
     container.addEventListener('paste', onPaste, true);
 
@@ -394,8 +610,12 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
       opened = true; // skip the deferred open if it fires after unmount
       if (retryTimer !== null) window.clearTimeout(retryTimer);
       resizeObs.disconnect();
-      window.removeEventListener('muxpad:layout-changed', refitBurst);
+      window.removeEventListener('muxpad:layout-changed', scheduleRefit);
       window.removeEventListener('resize', onWindowResize);
+      window.screen.orientation?.removeEventListener('change', onOrientation);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', reassertSize);
+      if (refitTimer !== null) window.clearTimeout(refitTimer);
       window.removeEventListener('muxpad:focus-pane', onFocusPane);
       container.removeEventListener('keydown', onKeyDown, true);
       container.removeEventListener('paste', onPaste, true);
@@ -403,14 +623,65 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
       scrollSub.dispose();
       lineFeedSub.dispose();
       termResizeSub.dispose();
+      writeParsedSub.dispose();
+      sbEl?.removeEventListener('pointerdown', onSbPointerDown);
+      sbEl?.removeEventListener('pointermove', onSbPointerMove);
+      sbEl?.removeEventListener('pointerup', onSbPointerUp);
+      sbEl?.removeEventListener('pointercancel', onSbPointerUp);
+      if (scrollbarRaf !== null) cancelAnimationFrame(scrollbarRaf);
       container.removeEventListener('focusin', onFocusIn);
       container.removeEventListener('focusout', onFocusOut);
       toolbarEl?.removeEventListener('click', onToolbarClick);
       wsRef.current?.close();
       wsRef.current = null;
+      window.clearInterval(staleTimer);
+      extractor.dispose();
+      chunker.dispose();
+      if (termRef.current === term) termRef.current = null;
+      if (fitRef.current === fit) fitRef.current = null;
       term.dispose();
     };
-  }, [paneId, settings.fontFamily, settings.fontSize, settings.theme]);
+  }, [paneId]);
+
+  // Live font/theme update: mutate term.options in place instead of
+  // recreating the Terminal, so scrollback and the WS attach survive a font
+  // or theme change. The multi-step refit handles xterm's async cell-metric
+  // remeasurement after a font swap.
+  useEffect(() => {
+    const term = termRef.current;
+    const fit = fitRef.current;
+    if (!term || !fit) return;
+    term.options.fontFamily = settings.fontFamily;
+    term.options.fontSize = settings.fontSize;
+    term.options.theme = themeFor(settings.theme);
+    const timerIds: number[] = [];
+    let disposed = false;
+    void document.fonts.load(`${settings.fontSize}px ${settings.fontFamily}`).finally(() => {
+      if (disposed) return;
+      const t = termRef.current;
+      if (!t) return;
+      t.refresh(0, t.rows - 1);
+      // Multi-step refit handles xterm's async cell-metric remeasurement
+      // after a font swap — the metrics settle a beat after document.fonts
+      // resolves, so one nudge isn't enough.
+      const steps = [0, 100, 250];
+      steps.forEach((delay) => {
+        const id = window.setTimeout(() => {
+          // Route through muxpad:layout-changed rather than calling fit()
+          // directly: the main effect's refit() both fits AND sends the new
+          // size to the server. A bare fit() resizes xterm's view but never
+          // SIGWINCHes the PTY, so a TUI like Claude Code keeps rendering at
+          // the old row count and doesn't fill the pane.
+          window.dispatchEvent(new Event('muxpad:layout-changed'));
+        }, delay);
+        timerIds.push(id);
+      });
+    });
+    return () => {
+      disposed = true;
+      for (const id of timerIds) window.clearTimeout(id);
+    };
+  }, [settings.fontFamily, settings.fontSize, settings.theme]);
 
   return (
     <div className="xterm-pane-wrapper">

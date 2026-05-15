@@ -5,6 +5,8 @@ import {
   encodeOutput,
   encodeExit,
   encodeError,
+  encodePing,
+  encodePong,
   decodeServerMessage,
   decodeClientMessage,
 } from './ws-protocol';
@@ -54,5 +56,16 @@ describe('ws-protocol', () => {
   it('rejects unknown server opcode', () => {
     const buf = new Uint8Array([0xff, 1, 2, 3]);
     expect(() => decodeServerMessage(buf)).toThrow();
+  });
+});
+
+describe('ping/pong', () => {
+  it('roundtrips a client ping', () => {
+    const buf = encodePing();
+    expect(decodeClientMessage(buf)).toEqual({ kind: 'ping' });
+  });
+  it('roundtrips a server pong', () => {
+    const buf = encodePong();
+    expect(decodeServerMessage(buf)).toEqual({ kind: 'pong' });
   });
 });

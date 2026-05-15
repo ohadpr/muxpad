@@ -108,24 +108,56 @@
   /* react-mosaic uses absolute positioning per tile; nothing to set here */
 }
 
+/* Pane header — the same plate language as the top chrome, one level down.
+   Shorter (28px), darker shelf (--bg-chrome), but identical state idiom:
+     bottom rail = focused (keyboard input is here)
+     left rail   = attention (BEL since last seen — wiring TBD)  */
 .workspace-body .mosaic-window-toolbar {
+  position: relative;
   background: var(--bg-chrome) !important;
-  color: var(--fg) !important;
+  color: var(--fg-dim) !important;
   border-bottom: 1px solid var(--border) !important;
-  height: 34px !important;
-  min-height: 34px !important;
+  height: var(--chrome-pane-h) !important;
+  min-height: var(--chrome-pane-h) !important;
   padding: 0 !important;
   box-shadow: none !important;
   border-radius: 0 !important;
-  transition: background 100ms ease, border-bottom-color 100ms ease;
+  font-family: var(--chrome-font);
+  transition: background 100ms ease, color 100ms ease;
 }
 
-/* Focused pane: subtly tint the toolbar with the accent so the user can see
-   at a glance which pane is receiving keyboard input. Kept lighter than
-   the active workspace tab so the visual hierarchy stays correct (tab >
-   pane). No accent-colored border — that's the tab's signature. */
+/* Focused pane — bottom-edge accent rail, exactly mirroring the active-tab
+   signal one level up. Title text lifts to --fg. No bg tint (the rail is
+   the signal; tinting fights the recursive language). The rail uses an
+   absolutely-positioned ::after on the toolbar (the !important borders
+   prevent border-bottom-color tricks). */
 .workspace-body .mosaic-window[data-focused='true'] .mosaic-window-toolbar {
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg-chrome)) !important;
+  color: var(--fg) !important;
+}
+.workspace-body .mosaic-window[data-focused='true'] .mosaic-window-toolbar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: var(--chrome-rail);
+  background: var(--accent);
+  pointer-events: none;
+}
+
+/* Attention rail — left edge. Surfaces "this pane rang BEL since you last
+   saw it" without a floating dot. Hidden on the focused pane (you're here,
+   you've seen it). The data attribute is set by the host component; until
+   we wire per-pane attention to the web, this rule is dormant. */
+.workspace-body .mosaic-window[data-attention='true']:not([data-focused='true']) .mosaic-window-toolbar::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--chrome-rail);
+  background: var(--accent);
+  pointer-events: none;
 }
 
 .workspace-body .mosaic-window-body {
@@ -244,39 +276,44 @@
   min-height: 0;
 }
 
-/* Pane chrome */
+/* Pane chrome interior — fills the 28px toolbar plate. Mono throughout to
+   match the rest of the chrome, tighter padding than the top bar since
+   panes are nested one level deeper. */
 
 .pane-chrome {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   width: 100%;
-  height: 34px;
-  padding: 0 6px 0 12px;
-  gap: 2px;
+  height: 100%;
+  padding: 0 4px 0 12px;
+  gap: 0;
+  font-family: var(--chrome-font);
   user-select: none;
   cursor: move;
 }
 
 .pane-chrome-title-link {
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  height: 100%;
   text-decoration: none;
   color: inherit;
   min-width: 0;
   max-width: 70%;
-  border-radius: 4px;
-  padding: 0 4px;
+  padding: 0 6px;
+  transition: background 80ms ease, color 80ms ease;
 }
 .pane-chrome-title-link:hover {
   background: var(--bg-hover);
+  color: var(--fg);
   text-decoration: none;
 }
 
 .pane-chrome-title {
-  font-family: ui-monospace, monospace;
-  font-size: 12px;
-  color: var(--fg-dim);
-  letter-spacing: 0.02em;
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size-sm);
+  color: inherit;
+  letter-spacing: 0.01em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -291,16 +328,13 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 100%;
   background: transparent;
   border: none;
-  border-radius: 5px;
-  color: var(--fg-dim);
+  color: var(--fg-faint);
   cursor: pointer;
-  transition:
-    color 80ms ease,
-    background 80ms ease;
+  transition: color 80ms ease, background 80ms ease;
 }
 .pane-chrome-btn:hover {
   color: var(--fg);

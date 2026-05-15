@@ -36,6 +36,20 @@
   --accent: #7aa2f7;
   --accent-fg: #1a1b26;
   --bg-tabbar: #16161e;
+
+  /* Chrome is monospace across every level (header, tabs, switcher,
+     dropdown rows, pane headers). Separate from the terminal font (which
+     remains user-configurable) so the chrome reads as a unified machined
+     surface regardless of what's running inside the panes. */
+  --chrome-font: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+  --chrome-size: 13px;
+  --chrome-size-sm: 12px;
+
+  /* The header-bar height — referenced from multiple places so it's one
+     knob. 36px desktop / 40px mobile (set via media query at the bottom). */
+  --chrome-h: 36px;
+  --chrome-pane-h: 28px;
+  --chrome-rail: 2px;
 }
 
 /* Tokyo Night — saturated deep navy with a vivid blue accent. */
@@ -292,18 +306,23 @@ select:focus {
   min-height: 0;
 }
 
-/* Brand (logo + wordmark) — used in the chrome header. */
+/* Brand (logo + wordmark) — a plate on the chrome board. Same height as
+   every other top-bar element; right-edge hairline separates it from the
+   workspace switcher beside it. Wordmark is mono (chrome-font) to tie
+   the brand to the terminal nature of the tool. */
 
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  border-radius: 6px;
+  gap: 10px;
+  height: var(--chrome-h);
+  padding: 0 14px;
   color: var(--fg);
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size);
   font-weight: 600;
-  font-size: 13.5px;
-  letter-spacing: -0.005em;
+  letter-spacing: -0.01em;
+  border-right: 1px solid var(--border);
   text-decoration: none;
   transition: background 80ms ease;
 }
@@ -319,38 +338,57 @@ select:focus {
 }
 
 /* Mark-only mode (icon, no wordmark): used inside a workspace where the
-   workspace switcher takes the wordmark's slot. Tighter padding so the
-   icon visually pairs with the switcher next to it. */
+   workspace switcher takes the wordmark's slot. Tighter horizontal
+   padding so the mark visually anchors the left edge of the board. */
 .brand-mark-only {
-  padding: 4px 6px;
+  padding: 0 10px;
 }
 
 .brand-mark {
   flex: 0 0 auto;
 }
 
-/* Cross-workspace attention dot — overlaid on the brand mark when any
-   workspace (other than the one currently being viewed) has a pane
-   needing attention. Pseudo-element on the link (not the SVG, which
-   can't host ::after). */
-.brand {
-  position: relative;
+/* Quiet "muxpad <build>" wordmark pinned to the right of the chrome,
+   next to the GitHub link. Visible when inside a workspace (where the
+   left-side wordmark is replaced by the workspace switcher) so the brand
+   still appears somewhere in the UI. Hidden on narrow viewports where
+   the right side is already crowded by the GitHub + Settings buttons.
+   Links to the GitHub repo on click. */
+.brand-text-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--chrome-h);
+  padding: 0 14px;
+  border-left: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size-sm);
+  font-weight: 500;
+  user-select: none;
+  text-decoration: none;
+  transition: background 80ms ease, color 80ms ease;
 }
-.brand-attention::after {
-  content: '';
-  position: absolute;
-  top: 2px;
-  left: 22px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--danger);
-  box-shadow: 0 0 0 2px var(--bg-tabbar);
-  pointer-events: none;
+.brand-text-side:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+  text-decoration: none;
+}
+.brand-text-side-version {
+  font-family: var(--chrome-font);
+  font-size: 11px;
+  color: var(--fg-dim);
+  opacity: 0.75;
 }
 
 @media (max-width: 720px) {
-  .brand-text-responsive {
+  /* A hair taller on touch so plate tap-targets feel right. The whole
+     chrome scales because every plate uses height:100% or var(--chrome-h). */
+  :root {
+    --chrome-h: 40px;
+  }
+  .brand-text-responsive,
+  .brand-text-side {
     display: none;
   }
 }
