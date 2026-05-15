@@ -82,11 +82,14 @@ export class PaneRuntime extends EventEmitter {
    * disambiguation between user-typed-exit and daemon-shutdown.
    */
   private exitCause: 'natural' | 'killed' = 'natural';
-  // The PTY only has one size, but the pane can be mirrored across multiple
-  // clients of different sizes. We track each client's reported size and
-  // resize the PTY to the MIN across them so the smaller view never has to
-  // wrap output meant for a wider terminal (which is what causes garbling).
-  private clientSizes = new Map<string, { cols: number; rows: number }>();
+  // PTY size is last-writer-wins: any client's resize is authoritative and
+  // the PTY immediately adopts it. muxpad is single-user (one person, maybe
+  // across devices) — NOT multiple people co-editing one PTY — so there is
+  // nothing to arbitrate. A stale tab on another device can never pin the
+  // size, and when the user returns to it, that tab re-asserts its size on
+  // tab-visibility (see XtermPane's visibilitychange handler). We keep only
+  // the set of connected client ids, for clientCount() / liveness.
+  private connectedClients = new Set<string>();
   cols = 80;
   rows = 24;
   // True iff this pane has emitted a "real" BEL (\x07) since the user
@@ -214,27 +217,15 @@ export class PaneRuntime extends EventEmitter {
   }
 
 
-  /** Report a client's terminal size; PTY uses the min across all clients. */
+  /**
+   * Report a client's terminal size. Last-writer-wins: the PTY adopts this
+   * size immediately, no arbitration across clients (see the connectedClients
+   * comment above for why). Also registers the client id so clientCount()
+   * reflects it even if this is its first message.
+   */
   setClientSize(clientId: string, cols: number, rows: number): void {
+    this.connectedClients.add(clientId);
     if (cols < 1 || rows < 1) return;
-    this.clientSizes.set(clientId, { cols, rows });
-    this.recomputeSize();
-  }
-
-  /** Drop a client's size contribution (call on disconnect). */
-  removeClient(clientId: string): void {
-    if (!this.clientSizes.delete(clientId)) return;
-    this.recomputeSize();
-  }
-
-  private recomputeSize(): void {
-    if (this.clientSizes.size === 0) return; // keep last known size
-    let cols = Number.POSITIVE_INFINITY;
-    let rows = Number.POSITIVE_INFINITY;
-    for (const s of this.clientSizes.values()) {
-      if (s.cols < cols) cols = s.cols;
-      if (s.rows < rows) rows = s.rows;
-    }
     if (cols === this.cols && rows === this.rows) return;
     this.cols = cols;
     this.rows = rows;
@@ -245,6 +236,20 @@ export class PaneRuntime extends EventEmitter {
         // PTY may have exited mid-resize; ignore.
       }
     }
+  }
+
+  /**
+   * Drop a client from the connected set (call on disconnect). The PTY keeps
+   * its last size — there is no recompute. The next resize from any remaining
+   * client (or its visibility re-assert) updates it.
+   */
+  removeClient(clientId: string): void {
+    this.connectedClients.delete(clientId);
+  }
+
+  /** Number of clients currently connected to this pane. */
+  clientCount(): number {
+    return this.connectedClients.size;
   }
 
   kill(signal: NodeJS.Signals = 'SIGHUP'): void {

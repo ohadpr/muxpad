@@ -1,16 +1,22 @@
 import { Outlet, useRouterState } from '@tanstack/react-router';
 import { Brand } from './Brand';
-import { GitHubLink } from './GitHubLink';
 import { SettingsMenu } from './SettingsMenu';
 import { TabBar } from './TabBar';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import { useWorkspaces } from '../workspaces';
 
+// Cross-workspace attention is surfaced exclusively on the WorkspaceSwitcher
+// trigger. The brand mark used to carry a duplicate dot on the same
+// condition, which read as two separate signals — removed to keep one
+// canonical place to look.
+
+const REPO_URL = 'https://github.com/ohadpr/muxpad';
+
 /**
  * Persistent application chrome. Renders the top bar with the brand,
- * the active workspace's tab list (when inside one), and the action
- * buttons (GitHub + Settings). Popout routes are mounted outside this
- * layout and have no chrome.
+ * the active workspace's tab list (when inside one), and the Settings
+ * menu. The right-side "muxpad <build>" wordmark doubles as the GitHub
+ * repo link. Popout routes are mounted outside this layout.
  */
 export function AppLayout() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -20,13 +26,6 @@ export function AppLayout() {
   const activeWorkspace = wsSlug
     ? workspaces.find((w) => w.slug === wsSlug)
     : null;
-  // Show the cross-workspace attention dot on the brand mark when ANY
-  // workspace other than the one we're currently viewing has a pane
-  // flagging attention. The current workspace's own tabs surface via
-  // the tab bar's per-tab dots and the switcher trigger.
-  const otherWorkspaceAttention = workspaces.some(
-    (w) => w.attention && w.id !== activeWorkspace?.id,
-  );
 
   return (
     <div className="app-layout">
@@ -35,7 +34,6 @@ export function AppLayout() {
           asLink={true}
           responsive={true}
           markOnly={!!activeWorkspace}
-          attention={otherWorkspaceAttention}
         />
         {activeWorkspace && (
           <>
@@ -51,7 +49,15 @@ export function AppLayout() {
           </>
         )}
         {!activeWorkspace && <span className="ws-tabbar-spacer" />}
-        <GitHubLink />
+        <a
+          className="brand-text-side"
+          href={REPO_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={`muxpad — build ${__MUXPAD_VERSION__}`}
+        >
+          muxpad <span className="brand-text-side-version">{__MUXPAD_VERSION__}</span>
+        </a>
         <SettingsMenu />
       </header>
       <Outlet />

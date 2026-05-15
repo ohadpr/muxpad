@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from '@tanstack/react-router';
 import type { Tab } from '@muxpad/shared';
+import { useNavigate } from '@tanstack/react-router';
+import { useEffect, useRef, useState } from 'react';
+import { openInNewTab, useLongPress } from '../use-long-press';
 
 interface TabBarDropdownProps {
   tabs: Tab[];
@@ -21,9 +22,7 @@ export function TabBarDropdown({ tabs, activeSlug, workspaceSlug }: TabBarDropdo
   // True iff any non-active tab is flagging attention. The dropdown trigger
   // gets a small dot in that case so the user knows there's something
   // pending behind the collapsed list.
-  const anyOtherAttention = tabs.some(
-    (t) => t.attention && t.slug !== activeSlug,
-  );
+  const anyOtherAttention = tabs.some((t) => t.attention && t.slug !== activeSlug);
 
   useEffect(() => {
     if (!open) return;
@@ -52,36 +51,68 @@ export function TabBarDropdown({ tabs, activeSlug, workspaceSlug }: TabBarDropdo
       >
         <span className="ws-tabbar-dropdown-label">{active?.name ?? 'Tabs'}</span>
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-          <path d="M2 4 L5 7 L8 4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          <path
+            d="M2 4 L5 7 L8 4"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            fill="none"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
         </svg>
       </button>
       {open && (
         <div className="ws-tabbar-dropdown-menu" role="menu">
-          {tabs.map((t) => {
-            const isActive = t.slug === activeSlug;
-            return (
-              <button
-                key={t.id}
-                type="button"
-                className="ws-tabbar-dropdown-item"
-                data-active={isActive ? 'true' : undefined}
-                data-attention={!isActive && t.attention ? 'true' : undefined}
-                onClick={() => {
-                  setOpen(false);
-                  if (!isActive) {
-                    void navigate({
-                      to: '/w/$wsSlug/t/$tabSlug',
-                      params: { wsSlug: workspaceSlug, tabSlug: t.slug },
-                    });
-                  }
-                }}
-              >
-                <span className="ws-tabbar-dropdown-item-label">{t.name}</span>
-              </button>
-            );
-          })}
+          {tabs.map((t) => (
+            <TabDropdownItem
+              key={t.id}
+              tab={t}
+              isActive={t.slug === activeSlug}
+              workspaceSlug={workspaceSlug}
+              onSelect={() => {
+                setOpen(false);
+                if (t.slug !== activeSlug) {
+                  void navigate({
+                    to: '/w/$wsSlug/t/$tabSlug',
+                    params: { wsSlug: workspaceSlug, tabSlug: t.slug },
+                  });
+                }
+              }}
+            />
+          ))}
         </div>
       )}
     </div>
+  );
+}
+
+interface TabDropdownItemProps {
+  tab: Tab;
+  isActive: boolean;
+  workspaceSlug: string;
+  onSelect: () => void;
+}
+
+function TabDropdownItem({ tab, isActive, workspaceSlug, onSelect }: TabDropdownItemProps) {
+  const { pressing, handlers } = useLongPress({
+    onLongPress: () =>
+      openInNewTab(`/w/${encodeURIComponent(workspaceSlug)}/t/${encodeURIComponent(tab.slug)}`),
+  });
+  return (
+    <button
+      type="button"
+      className="ws-tabbar-dropdown-item"
+      data-active={isActive ? 'true' : undefined}
+      data-attention={!isActive && tab.attention ? 'true' : undefined}
+      data-pressing={pressing ? 'true' : undefined}
+      {...handlers}
+      onClick={(e) => {
+        handlers.onClick(e);
+        if (e.defaultPrevented) return;
+        onSelect();
+      }}
+    >
+      <span className="ws-tabbar-dropdown-item-label">{tab.name}</span>
+    </button>
   );
 }

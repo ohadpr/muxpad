@@ -11,19 +11,12 @@ interface BrandProps {
    * wordmark's slot.
    */
   markOnly?: boolean;
-  /**
-   * Show an attention dot overlaid on the brand mark. True when any
-   * workspace (other than the one currently being viewed) has a pane
-   * flagging attention.
-   */
-  attention?: boolean;
 }
 
 export function Brand({
   asLink = true,
   responsive = true,
   markOnly = false,
-  attention = false,
 }: BrandProps) {
   const inner = (
     <>
@@ -35,7 +28,7 @@ export function Brand({
       )}
     </>
   );
-  const className = `brand${markOnly ? ' brand-mark-only' : ''}${attention ? ' brand-attention' : ''}`;
+  const className = `brand${markOnly ? ' brand-mark-only' : ''}`;
   if (asLink) {
     return (
       <Link to="/" className={className} title="Muxpad">

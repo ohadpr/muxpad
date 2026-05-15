@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from '@tanstack/react-router';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
+import { openInNewTab, useLongPress } from '../use-long-press';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
 import './WorkspaceSwitcher.css';
 
@@ -26,9 +27,7 @@ export function WorkspaceSwitcher({ activeWorkspaceSlug }: WorkspaceSwitcherProp
 
   const active = workspaces.find((w) => w.slug === activeWorkspaceSlug);
   // Dot on the trigger when any *other* workspace has attention.
-  const anyOtherAttention = workspaces.some(
-    (w) => w.attention && w.slug !== activeWorkspaceSlug,
-  );
+  const anyOtherAttention = workspaces.some((w) => w.attention && w.slug !== activeWorkspaceSlug);
 
   useEffect(() => {
     if (editing) {
@@ -125,6 +124,8 @@ export function WorkspaceSwitcher({ activeWorkspaceSlug }: WorkspaceSwitcherProp
         type="button"
         className="ws-switcher-trigger"
         data-attention={anyOtherAttention ? 'true' : undefined}
+        data-open={open ? 'true' : undefined}
+        aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         onDoubleClick={startEdit}
         title={active ? 'Double-click to rename' : 'Switch workspace'}
@@ -143,38 +144,17 @@ export function WorkspaceSwitcher({ activeWorkspaceSlug }: WorkspaceSwitcherProp
       </button>
       {open && (
         <div className="ws-switcher-menu" role="menu">
-          {workspaces.map((w) => {
-            const isActive = w.slug === activeWorkspaceSlug;
-            return (
-              <Link
-                key={w.id}
-                to="/w/$wsSlug"
-                params={{ wsSlug: w.slug }}
-                className="ws-switcher-item"
-                data-active={isActive ? 'true' : undefined}
-                data-attention={!isActive && w.attention ? 'true' : undefined}
-                onClick={(e) => {
-                  // Let cmd/ctrl-click + middle-click fall through to the
-                  // browser's "open in new tab" behavior. Only intercept
-                  // the plain-click case to close the menu.
-                  if (
-                    e.metaKey ||
-                    e.ctrlKey ||
-                    e.shiftKey ||
-                    e.altKey ||
-                    e.button !== 0
-                  )
-                    return;
-                  setOpen(false);
-                }}
-              >
-                <span className="ws-switcher-item-label">{w.name}</span>
-                <span className="ws-switcher-item-meta">
-                  {w.tab_count} {w.tab_count === 1 ? 'tab' : 'tabs'}
-                </span>
-              </Link>
-            );
-          })}
+          {workspaces.map((w) => (
+            <WorkspaceItem
+              key={w.id}
+              slug={w.slug}
+              name={w.name}
+              tabCount={w.tab_count}
+              isActive={w.slug === activeWorkspaceSlug}
+              attention={Boolean(w.attention)}
+              onPlainClick={() => setOpen(false)}
+            />
+          ))}
           <div className="ws-switcher-divider" />
           <button
             type="button"
@@ -187,5 +167,52 @@ export function WorkspaceSwitcher({ activeWorkspaceSlug }: WorkspaceSwitcherProp
         </div>
       )}
     </div>
+  );
+}
+
+interface WorkspaceItemProps {
+  slug: string;
+  name: string;
+  tabCount: number;
+  isActive: boolean;
+  attention: boolean;
+  onPlainClick: () => void;
+}
+
+function WorkspaceItem({
+  slug,
+  name,
+  tabCount,
+  isActive,
+  attention,
+  onPlainClick,
+}: WorkspaceItemProps) {
+  const { pressing, handlers } = useLongPress({
+    onLongPress: () => openInNewTab(`/w/${slug}`),
+  });
+  return (
+    <Link
+      to="/w/$wsSlug"
+      params={{ wsSlug: slug }}
+      className="ws-switcher-item"
+      data-active={isActive ? 'true' : undefined}
+      data-attention={!isActive && attention ? 'true' : undefined}
+      data-pressing={pressing ? 'true' : undefined}
+      {...handlers}
+      onClick={(e) => {
+        handlers.onClick(e);
+        if (e.defaultPrevented) return;
+        // Let cmd/ctrl-click + middle-click fall through to the browser's
+        // "open in new tab" behavior. Only intercept plain click to close
+        // the menu.
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+        onPlainClick();
+      }}
+    >
+      <span className="ws-switcher-item-label">{name}</span>
+      <span className="ws-switcher-item-meta">
+        {tabCount} {tabCount === 1 ? 'tab' : 'tabs'}
+      </span>
+    </Link>
   );
 }

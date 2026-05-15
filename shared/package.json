@@ -13,6 +13,7 @@
   },
   "scripts": {
     "build": "tsc -b",
+    "dev": "tsc -b --watch --preserveWatchOutput",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "biome check ."
