@@ -22,20 +22,27 @@
 
 /* Custom overlay scrollbar — drawn on top of xterm so it doesn't take any
    width and doesn't visually occlude cells the way the native overlay
-   scrollbar does (which is wider than CSS can control on macOS Chrome). */
+   scrollbar does (which is wider than CSS can control on macOS Chrome).
+   The element is a 14px-wide invisible hit strip for easy mouse/touch
+   grabbing; the visible thumb inside it stays slim (6px). */
 .xterm-pane-scrollbar {
   position: absolute;
   top: 4px;
-  right: 2px;
+  right: 0;
   bottom: 4px;
-  width: 6px;
+  width: 14px;
+  /* Interactive only while visible; otherwise it must not eat clicks meant
+     for the terminal in its edge strip. touch-action:none so a touch-drag
+     on the bar scrolls the terminal instead of panning the page. */
   pointer-events: none;
+  touch-action: none;
   z-index: 5;
   opacity: 0;
   transition: opacity 120ms ease;
 }
 .xterm-pane-scrollbar[data-visible='true'] {
   opacity: 0.4;
+  pointer-events: auto;
 }
 .xterm-pane-wrapper:hover .xterm-pane-scrollbar[data-visible='true'],
 .xterm-pane-scrollbar[data-visible='true']:hover {
@@ -43,12 +50,14 @@
 }
 .xterm-pane-scrollbar[data-visible='false'] {
   opacity: 0;
+  pointer-events: none;
 }
 
 .xterm-pane-scrollbar-thumb {
   position: absolute;
-  left: 0;
-  right: 0;
+  /* slim visible thumb, centred in the 14px hit strip */
+  left: 4px;
+  right: 4px;
   background: var(--fg-faint);
   border-radius: 3px;
   min-height: 24px;

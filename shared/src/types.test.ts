@@ -43,9 +43,10 @@ describe('domain schemas', () => {
       id: 'w1',
       slug: 'dev',
       name: 'Dev',
-      layout: 'pane-1',
+      position: 0,
       created_at: 0,
       updated_at: 0,
+      tab_count: 0,
     });
     expect(w.slug).toBe('dev');
   });

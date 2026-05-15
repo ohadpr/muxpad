@@ -3,7 +3,8 @@ const dec = new TextDecoder();
 
 export type ClientMessage =
   | { kind: 'input'; data: string }
-  | { kind: 'resize'; cols: number; rows: number };
+  | { kind: 'resize'; cols: number; rows: number }
+  | { kind: 'ping' };
 
 /**
  * Why a PTY exited. The client uses this to decide whether to clean up the
@@ -15,13 +16,20 @@ export type ExitCause = 'natural' | 'killed';
 export type ServerMessage =
   | { kind: 'output'; data: string }
   | { kind: 'exit'; code: number; cause: ExitCause }
-  | { kind: 'error'; message: string };
+  | { kind: 'error'; message: string }
+  | { kind: 'pong' };
 
-export const OP_INPUT = 0x01;
-export const OP_RESIZE = 0x02;
-export const OP_OUTPUT = 0x01;
-export const OP_EXIT = 0x03;
-export const OP_ERROR = 0x04;
+// Opcodes live in two separate namespaces — client→server and server→client
+// — decoded by decodeClientMessage and decodeServerMessage respectively. That
+// is why values repeat across direction (OP_INPUT/OP_OUTPUT both 0x01,
+// OP_PING/OP_PONG both 0x05). They must stay unique only *within* a direction.
+export const OP_INPUT = 0x01; // client→server
+export const OP_RESIZE = 0x02; // client→server
+export const OP_PING = 0x05; // client→server
+export const OP_OUTPUT = 0x01; // server→client
+export const OP_EXIT = 0x03; // server→client
+export const OP_ERROR = 0x04; // server→client
+export const OP_PONG = 0x05; // server→client
 
 export function encodeInput(data: string): Uint8Array {
   const body = enc.encode(data);
@@ -66,6 +74,14 @@ export function encodeError(message: string): Uint8Array {
   return out;
 }
 
+export function encodePing(): Uint8Array {
+  return new Uint8Array([OP_PING]);
+}
+
+export function encodePong(): Uint8Array {
+  return new Uint8Array([OP_PONG]);
+}
+
 export function decodeClientMessage(buf: Uint8Array): ClientMessage {
   const op = buf[0];
   if (op === OP_INPUT) return { kind: 'input', data: dec.decode(buf.subarray(1)) };
@@ -73,6 +89,7 @@ export function decodeClientMessage(buf: Uint8Array): ClientMessage {
     const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
     return { kind: 'resize', cols: view.getUint16(1), rows: view.getUint16(3) };
   }
+  if (op === OP_PING) return { kind: 'ping' };
   throw new Error(`unknown client opcode: ${op}`);
 }
 
@@ -85,5 +102,6 @@ export function decodeServerMessage(buf: Uint8Array): ServerMessage {
     return { kind: 'exit', code: view.getInt32(2), cause };
   }
   if (op === OP_ERROR) return { kind: 'error', message: dec.decode(buf.subarray(1)) };
+  if (op === OP_PONG) return { kind: 'pong' };
   throw new Error(`unknown server opcode: ${op}`);
 }

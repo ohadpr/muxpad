@@ -1,21 +1,24 @@
 .settings-wrap {
   position: relative;
+  height: 100%;
+  display: inline-flex;
 }
 
+/* Gear plate — fills the bar's height, hairline divider on its leading
+   edge so it joins the right-side stack of plates (build wordmark, etc).
+   No border-radius, no padding-box; it's a plate, not a floating button. */
 .icon-btn {
   background: transparent;
-  border: 1px solid transparent;
-  padding: 6px;
-  border-radius: 6px;
+  border: none;
+  border-left: 1px solid var(--border);
+  width: 36px;
+  height: 100%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--fg-dim);
+  color: var(--fg-faint);
   cursor: pointer;
-  transition:
-    color 80ms ease,
-    background 80ms ease,
-    border-color 80ms ease;
+  transition: color 80ms ease, background 80ms ease;
 }
 .icon-btn:hover {
   color: var(--fg);
@@ -23,23 +26,29 @@
 }
 .icon-btn:focus-visible {
   outline: none;
-  border-color: var(--accent);
+  background: var(--bg-hover);
+  color: var(--fg);
 }
 
+/* Settings popover — drops from the bar's bottom hairline, anchored right.
+   Same mono-font interior and corner treatment as the workspace dropdown,
+   mirrored so the sharp top-RIGHT corner aligns with the gear plate above. */
 .settings-popover {
   position: absolute;
-  top: calc(100% + 6px);
+  top: 100%;
   right: 0;
   background: var(--bg-elev);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px;
+  border-top: none;
+  border-radius: 6px 0 6px 6px;
+  padding: 14px;
   width: 280px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
   z-index: 1000;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  font-family: var(--chrome-font);
 }
 
 .settings-row {
@@ -50,7 +59,7 @@
 }
 
 .settings-row label {
-  font-size: 13px;
+  font-size: var(--chrome-size);
   color: var(--fg-dim);
 }
 
@@ -121,9 +130,18 @@
   background: var(--bg);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   padding: 4px 6px;
-  font-size: 12px;
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size-sm);
   flex: 1;
   max-width: 180px;
+}
+
+/* Form controls inside the popover inherit chrome-font from the popover
+   itself wouldn't reach <button>/<input>/<select> — those use UA defaults
+   without explicit family. Force the cascade where it matters. */
+.settings-popover button,
+.settings-popover input {
+  font-family: var(--chrome-font);
 }
