@@ -112,3 +112,4 @@ describe('PtyScanner — title extraction', () => {
     expect(out.title!.length).toBeLessThanOrEqual(2048);
   });
 });
+

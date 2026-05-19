@@ -6,7 +6,6 @@ import { api } from '../api';
 import { refreshTabs, useTabs } from '../tabs';
 import { openInNewTab, useLongPress } from '../use-long-press';
 import { useHorizontalOverflow } from '../use-overflow';
-import { useWindowAttention } from '../use-window-attention';
 import { TabBarDropdown } from './TabBarDropdown';
 import './TabBar.css';
 
@@ -24,7 +23,6 @@ interface TabBarProps {
  */
 export function TabBar({ workspaceId, workspaceSlug }: TabBarProps) {
   const { tabs } = useTabs(workspaceId);
-  useWindowAttention(tabs);
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -248,7 +246,6 @@ function TabItem({
       params={{ wsSlug: workspaceSlug, tabSlug: tab.slug }}
       className="ws-tab"
       data-active={isActive}
-      data-attention={!isActive && tab.attention ? 'true' : undefined}
       data-drop={dropSide}
       data-pressing={pressing ? 'true' : undefined}
       draggable
@@ -267,6 +264,9 @@ function TabItem({
       }
     >
       <span className="ws-tab-label">{tab.name}</span>
+      {!isActive && tab.attention && (
+        <span className="badge-dot" aria-label="needs attention" />
+      )}
     </Link>
   );
 }

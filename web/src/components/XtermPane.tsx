@@ -302,12 +302,16 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
         }
       });
 
-      ws.addEventListener('close', () => {
+      ws.addEventListener('close', (e) => {
         if (idleTimer !== null) window.clearTimeout(idleTimer);
         if (pongWaitTimer !== null) window.clearTimeout(pongWaitTimer);
-        dbg('ws close', { paneId, intentionallyClosed, paneExited, retries });
+        dbg('ws close', { paneId, intentionallyClosed, paneExited, retries, code: e.code });
         if (wsRef.current === ws) wsRef.current = null;
         if (intentionallyClosed || paneExited) return;
+        // Server-side kind flip (PATCH /api/panes/:id) closes attached
+        // WSes with code 4001. Don't reconnect — TabView will unmount
+        // this component as soon as the optimistic state update lands.
+        if (e.code === 4001) return;
         const delay = Math.min(200 * 2 ** retries, 5000);
         if (retries === 0) term.writeln(`\r\n[connection lost, reconnecting…]`);
         retries++;
@@ -495,22 +499,36 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     // active one (visibilitychange) or the window regains focus. The server
     // is last-writer-wins, so returning to a tab that sat idle while another
     // device drove the same pane immediately reclaims the PTY size for THIS
-    // view — no manual resize nudge needed. Bypasses the dedup cache (the
-    // PTY may have changed under us) but still respects the dim floor and
-    // confirmed-send caching.
+    // view — no manual resize nudge needed. We zero the dedup cache (rather
+    // than skip the dedup check) so the refit chain below re-announces the
+    // size even if our local cols/rows match what we last sent; the dim
+    // floor and confirmed-send caching still apply inside refit().
+    //
+    // Multi-step: a single synchronous fit() on the first frame after the
+    // page becomes visible sometimes runs against stale cell metrics (xterm
+    // measures glyphs asynchronously; the renderer hasn't repainted yet),
+    // producing a too-small cols/rows that visibly shrinks the terminal
+    // until the next layout-changed tick corrects it seconds later. Force a
+    // refresh and route through refit() at 0/100/250/500ms so the metrics
+    // have time to settle — same pattern the font/theme change effect uses.
+    const reassertSizeTimerIds: number[] = [];
     const reassertSize = () => {
       try {
-        fit.fit();
-        const cols = term.cols;
-        const rows = term.rows;
-        if (cols < MIN_COLS || rows < MIN_ROWS) return;
-        dbg('reassert size', { cols, rows });
-        if (safeSend(encodeResize(cols, rows))) {
-          lastSentCols = cols;
-          lastSentRows = rows;
-        }
+        term.refresh(0, term.rows - 1);
       } catch {
-        // ignore — the ResizeObserver / next refit will retry
+        // ignore
+      }
+      // Clear the dedup cache: another device may have resized the PTY
+      // while this tab was hidden, so we must re-announce our size even if
+      // our local cols/rows haven't changed. (refit() will set the cache
+      // back on a confirmed send.)
+      lastSentCols = 0;
+      lastSentRows = 0;
+      for (const id of reassertSizeTimerIds) window.clearTimeout(id);
+      reassertSizeTimerIds.length = 0;
+      for (const delay of [0, 100, 250, 500]) {
+        const id = window.setTimeout(() => fitWhenCellReady(), delay);
+        reassertSizeTimerIds.push(id);
       }
     };
     const onVisibility = () => {
@@ -518,6 +536,20 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     };
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('focus', reassertSize);
+
+    // Mount-time multi-step recovery. The single fitWhenCellReady() at line
+    // 457 runs once; if the surrounding mosaic tile is mid-transition (which
+    // happens whenever this pane mounted as part of a workspace/tab nav,
+    // not a user-driven split or resize), that single fit can lock in an
+    // intermediate cols/rows. ResizeObserver doesn't always fire on
+    // react-mosaic reparenting (see comment near scheduleRefit), and
+    // notifyLayoutChanged in TabView only fires on mosaic onChange — never
+    // on route mounts. Running the same reassertion chain we use on
+    // visibilitychange covers that gap: by the time the 0/100/250/500ms
+    // schedule completes, the tile has finished its CSS transition and we'll
+    // have refit to the final size. Cheap on the steady-state path (4 fits
+    // converging to the same cols/rows; dedup suppresses redundant sends).
+    reassertSize();
 
     // Targeted-focus event: TabView dispatches this after deleting
     // a pane so the next remaining pane picks up focus without a click.
@@ -615,6 +647,7 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
       window.screen.orientation?.removeEventListener('change', onOrientation);
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('focus', reassertSize);
+      for (const id of reassertSizeTimerIds) window.clearTimeout(id);
       if (refitTimer !== null) window.clearTimeout(refitTimer);
       window.removeEventListener('muxpad:focus-pane', onFocusPane);
       container.removeEventListener('keydown', onKeyDown, true);

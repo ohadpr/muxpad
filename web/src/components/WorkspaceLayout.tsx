@@ -1,16 +1,17 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { Outlet, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
-import { useTabs } from '../tabs';
+import { refreshTabs, useTabs } from '../tabs';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
 import { api } from '../api';
 
 /**
- * Parent route for `/w/$wsSlug`. Loads the workspace, owns two behaviors:
+ * Parent route for `/w/$wsSlug`. Two behaviors:
  *
  *   1. When the URL is just `/w/$wsSlug` (no tab), redirect to the first
  *      tab in the workspace.
- *   2. When the workspace's tab_count drops to 0 (last tab closed),
- *      auto-delete the workspace and navigate home.
+ *   2. When the workspace has no tabs, render an empty-state UI with
+ *      "+ New tab" / "or close this workspace" — workspaces never
+ *      disappear implicitly anymore; the user closes them explicitly.
  *
  * The Outlet renders the active tab's TabView.
  */
@@ -26,10 +27,18 @@ export function WorkspaceLayout() {
   // Redirect to the first tab when the URL has no tab segment. Preserve
   // search params (e.g. ?debug=1) — otherwise visiting /w/foo from /
   // would drop them on the way to /w/foo/t/bar.
+  //
+  // Defensive: only redirect when the tabs cache and workspaces cache
+  // agree on the count. Otherwise we may be mid-mutation (e.g. just
+  // deleted the last tab and `tabs` is stale from a not-yet-flushed
+  // setState) and would bounce the user right back to the tab they're
+  // trying to leave. Both caches refresh on tab.added/tab.removed
+  // events, so this guard resolves within one round trip.
   useEffect(() => {
     if (!workspace) return;
     if (!isExactWorkspacePath) return;
     if (tabs.length === 0) return;
+    if (tabs.length !== workspace.tab_count) return;
     const first = tabs[0]!;
     const search = Object.fromEntries(
       new URLSearchParams(window.location.search).entries(),
@@ -42,34 +51,6 @@ export function WorkspaceLayout() {
     });
   }, [workspace, tabs, isExactWorkspacePath, wsSlug, navigate]);
 
-  // Auto-close the workspace when its last tab is closed. Guard with a
-  // ref so this only fires once per delete cycle; reset on wsSlug change
-  // so navigating between workspaces doesn't carry a stale "already
-  // closed this one" flag across component-instance reuse.
-  const autoClosingRef = useRef(false);
-  useEffect(() => {
-    autoClosingRef.current = false;
-  }, [wsSlug]);
-  useEffect(() => {
-    if (!workspace) return;
-    if (autoClosingRef.current) return;
-    if (tabs.length > 0) return;
-    // Only act after we've actually loaded the tabs (not the empty
-    // initial state). Workspace tab_count being 0 confirms.
-    if (workspace.tab_count > 0) return;
-    autoClosingRef.current = true;
-    (async () => {
-      try {
-        await api.deleteWorkspace(workspace.id);
-      } catch {
-        // ignore — workspace may already be gone, or 409 (shouldn't
-        // happen since we checked tab_count, but be defensive)
-      }
-      await refreshWorkspaces();
-      void navigate({ to: '/' });
-    })();
-  }, [workspace, tabs, navigate]);
-
   // While `workspace` is undefined we render the same loading
   // placeholder regardless of whether the slug genuinely doesn't exist
   // or whether the workspaces list just hasn't loaded yet. Avoids a
@@ -78,6 +59,58 @@ export function WorkspaceLayout() {
   // refreshed list before the route changes.
   if (!workspace) {
     return <div className="workspace-loading">loading…</div>;
+  }
+
+  // Empty workspace at /w/$wsSlug — either freshly created (CLI / UI)
+  // or just drained (last tab closed → TabView navigates here). Either
+  // way the user gets the same affordance: populate or close. We never
+  // auto-delete workspaces anymore.
+  //
+  // The tab_count guard prevents the empty UI from flickering during
+  // initial load when useTabs() hasn't fetched yet but the workspace
+  // actually has tabs. The 'tab.added'/'tab.removed' event handlers in
+  // main.tsx call refreshWorkspaces() so tab_count stays current after
+  // any tab mutation.
+  if (isExactWorkspacePath && tabs.length === 0 && workspace.tab_count === 0) {
+    return (
+      <div className="workspace-empty">
+        <p>{workspace.name} has no tabs yet.</p>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={async () => {
+            try {
+              const t = await api.createTab(workspace.id);
+              await refreshTabs(workspace.id);
+              void navigate({
+                to: '/w/$wsSlug/t/$tabSlug',
+                params: { wsSlug, tabSlug: t.slug },
+                replace: true,
+              });
+            } catch (err) {
+              console.error('createTab failed', err);
+            }
+          }}
+        >
+          + New tab
+        </button>
+        <button
+          type="button"
+          className="workspace-empty-close"
+          onClick={async () => {
+            try {
+              await api.deleteWorkspace(workspace.id);
+            } catch (err) {
+              console.error('deleteWorkspace failed', err);
+            }
+            await refreshWorkspaces();
+            void navigate({ to: '/' });
+          }}
+        >
+          or close this workspace
+        </button>
+      </div>
+    );
   }
 
   return <Outlet />;

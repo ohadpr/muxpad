@@ -291,6 +291,38 @@ select:focus {
   background: var(--bg-hover);
 }
 
+/* ─── Notification dot ───────────────────────────────────────────────────
+   iOS-style red dot. Two modes:
+
+   .badge-dot          — absolutely positioned top-right of its parent;
+                         parent must be position:relative. Use this on
+                         pinned plates (tabs, switcher trigger, pane title)
+                         where the dot rides the corner like an app icon.
+   .badge-dot.-inline  — flow-laid out, drop into a row next to text
+                         (dropdown rows next to the workspace/tab name).
+
+   Single signal across the app: "this wants you." Selection rails
+   (var(--accent), bottom-edge) are a *different* channel — they say
+   "you are here." The two never share a surface. */
+.badge-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 0 1.5px var(--bg-tabbar);
+  pointer-events: none;
+}
+.badge-dot.-inline {
+  position: static;
+  display: inline-block;
+  flex: 0 0 auto;
+  vertical-align: middle;
+  box-shadow: 0 0 0 1.5px var(--bg-elev);
+}
+
 /* App layout — persistent tab bar above an outlet that fills the rest. */
 
 .app-layout {

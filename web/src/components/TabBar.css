@@ -106,15 +106,18 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Attention on the collapsed trigger: left-edge rail (same idiom). */
-.ws-tabbar-dropdown-trigger[data-attention='true']::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: var(--chrome-rail);
-  background: var(--accent);
+/* Attention on the collapsed trigger: notification dot anchored to the
+   chevron (not the plate) so it doesn't float in negative space. */
+.ws-tabbar-dropdown-chevron {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding-top: 1px;
+}
+.ws-tabbar-dropdown-chevron .badge-dot {
+  top: -3px;
+  right: -4px;
 }
 
 .ws-tabbar-dropdown-menu {
@@ -178,18 +181,17 @@
   opacity: 0.6;
 }
 .ws-tabbar-dropdown-item-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
 }
-.ws-tabbar-dropdown-item[data-attention='true']::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: var(--chrome-rail);
-  background: var(--accent);
+.ws-tabbar-dropdown-item-label-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* The + button when it's been moved out of the tabs nav (collapsed mode). */
@@ -199,10 +201,9 @@
 
 /* ─── Tabs ───────────────────────────────────────────────────────────────
    Each tab is a plate: same height as the bar, 14px horizontal padding,
-   1px right-edge hairline divider. Two state rails (same idiom as the
-   workspace switcher and the focused pane below):
-     bottom rail = active   (you are on this tab)
-     left rail   = attention (BEL since last seen) */
+   1px right-edge hairline divider. Two channels:
+     bottom rail (accent) = active   — "you are on this tab"
+     top-right dot (red)  = attention — "this tab wants you" (iOS-style) */
 .ws-tab {
   position: relative;
   flex: 0 0 auto;
@@ -258,19 +259,10 @@
   background: var(--bg);
 }
 
-/* Attention — left-edge accent rail. Painted into the leading 2px of the
-   plate; takes zero layout width (the label never shifts when attention
-   toggles). Hidden on the active tab (you're already there). */
-.ws-tab[data-attention='true']:not([data-active='true'])::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: var(--chrome-rail);
-  background: var(--accent);
-  pointer-events: none;
-}
+/* Attention is rendered inline as a .badge-dot at the tab's top-right.
+   See TabBar.tsx. No left-edge rail — that channel is reserved for
+   selection (the active tab's bottom rail), so attention can't collide
+   with it visually. */
 
 /* Drag-drop indicators — heavier inset rails on the leading/trailing edge,
    in the same accent so they read as "this is where the tab will land". */

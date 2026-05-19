@@ -93,6 +93,20 @@ export class TabStore {
     return this.row(this.db.prepare('SELECT * FROM tabs WHERE id = ?').get(id));
   }
 
+  /**
+   * Return the parent workspace_id for a tab. The shared `Tab` shape
+   * doesn't surface workspace_id (it's a server-internal foreign key),
+   * but route handlers + the WS upgrade path need it to inject
+   * MUXPAD_WORKSPACE_ID into spawned shells and to scope tab-removed
+   * events. Returns undefined for an unknown id.
+   */
+  getWorkspaceId(id: string): string | undefined {
+    const row = this.db
+      .prepare('SELECT workspace_id FROM tabs WHERE id = ?')
+      .get(id) as { workspace_id: string } | undefined;
+    return row?.workspace_id;
+  }
+
   getBySlug(slug: string): Tab | null {
     return this.row(this.db.prepare('SELECT * FROM tabs WHERE slug = ?').get(slug));
   }

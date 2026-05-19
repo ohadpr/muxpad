@@ -2,28 +2,27 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createApp } from '../server.js';
 import { openDb } from '../store/db.js';
-import { PaneManager } from '../runtime/PaneManager.js';
+import { EventBus } from '../events.js';
+import type { MuxpadEvent } from '@muxpad/shared';
+import { createTestApp, type TestApp } from '../test-helpers/createTestApp.js';
 
 describe('workspaces routes', () => {
-  let app: ReturnType<typeof createApp>;
+  let test: TestApp;
   let tmp: string;
-  let mgr: PaneManager;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     tmp = mkdtempSync(join(tmpdir(), 'muxpad-ws-'));
-    mgr = new PaneManager();
-    app = createApp({ db: openDb(':memory:'), paneManager: mgr, dataDir: tmp });
+    test = await createTestApp({ db: openDb(':memory:'), dataDir: tmp });
   });
 
   afterEach(async () => {
-    await mgr.killAll();
+    await test.cleanup();
     rmSync(tmp, { recursive: true, force: true });
   });
 
   const post = (path: string, body: unknown) =>
-    app.request(path, {
+    test.app.request(path, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -58,14 +57,14 @@ describe('workspaces routes', () => {
   it('lists workspaces', async () => {
     await post('/api/workspaces', { name: 'A' });
     await post('/api/workspaces', { name: 'B' });
-    const res = await app.request('/api/workspaces');
+    const res = await test.app.request('/api/workspaces');
     const list = (await res.json()) as Array<{ name: string; tab_count: number }>;
     expect(list.map((w) => w.name).sort()).toEqual(['A', 'B']);
     expect(list.every((w) => w.tab_count === 0)).toBe(true);
   });
 
   it('returns 404 for missing workspace', async () => {
-    const res = await app.request('/api/workspaces/does-not-exist');
+    const res = await test.app.request('/api/workspaces/does-not-exist');
     expect(res.status).toBe(404);
   });
 
@@ -73,7 +72,7 @@ describe('workspaces routes', () => {
     const w = (await (await post('/api/workspaces', { name: 'A' })).json()) as {
       id: string;
     };
-    const res = await app.request(`/api/workspaces/${w.id}`, {
+    const res = await test.app.request(`/api/workspaces/${w.id}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'A renamed' }),
@@ -87,7 +86,7 @@ describe('workspaces routes', () => {
     const w = (await (await post('/api/workspaces', { name: 'A' })).json()) as {
       id: string;
     };
-    const res = await app.request(`/api/workspaces/${w.id}`, { method: 'DELETE' });
+    const res = await test.app.request(`/api/workspaces/${w.id}`, { method: 'DELETE' });
     expect(res.status).toBe(204);
   });
 
@@ -96,10 +95,43 @@ describe('workspaces routes', () => {
       id: string;
     };
     await post('/api/tabs', { workspace_id: w.id, name: 'T' });
-    const res = await app.request(`/api/workspaces/${w.id}`, { method: 'DELETE' });
+    const res = await test.app.request(`/api/workspaces/${w.id}`, { method: 'DELETE' });
     expect(res.status).toBe(409);
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe('workspace_not_empty');
+  });
+
+  it('workspace POST/PATCH/DELETE all emit on the event bus', async () => {
+    const events = new EventBus();
+    const local = await createTestApp({ db: openDb(':memory:'), dataDir: tmp, events });
+    try {
+      const received: MuxpadEvent[] = [];
+      events.subscribe((e) => received.push(e));
+
+      const created = (await (
+        await local.app.request('/api/workspaces', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'Alpha' }),
+        })
+      ).json()) as { id: string };
+      await local.app.request(`/api/workspaces/${created.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Beta' }),
+      });
+      await local.app.request(`/api/workspaces/${created.id}`, { method: 'DELETE' });
+
+      expect(received.find((e) => e.type === 'workspace.added')).toBeDefined();
+      expect(received.find((e) => e.type === 'workspace.updated')).toBeDefined();
+      const removed = received.find((e) => e.type === 'workspace.removed');
+      expect(removed).toBeDefined();
+      if (removed?.type === 'workspace.removed') {
+        expect(removed.workspace_id).toBe(created.id);
+      }
+    } finally {
+      await local.cleanup();
+    }
   });
 
   it('reorders workspaces', async () => {
@@ -112,13 +144,13 @@ describe('workspaces routes', () => {
     const c = (await (await post('/api/workspaces', { name: 'C' })).json()) as {
       id: string;
     };
-    const res = await app.request('/api/workspaces/reorder', {
+    const res = await test.app.request('/api/workspaces/reorder', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ ids: [c.id, a.id, b.id] }),
     });
     expect(res.status).toBe(204);
-    const list = (await (await app.request('/api/workspaces')).json()) as Array<{
+    const list = (await (await test.app.request('/api/workspaces')).json()) as Array<{
       id: string;
     }>;
     expect(list.map((w) => w.id)).toEqual([c.id, a.id, b.id]);

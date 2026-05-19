@@ -1,24 +1,51 @@
 import { Hono } from 'hono';
 import type Database from 'better-sqlite3';
-import type { PaneManager } from './runtime/PaneManager.js';
+import type { PtydClient } from './ptyd-client/PtydClient.js';
+import type { PtydCache } from './ptyd-cache.js';
 import { workspacesRoutes } from './routes/workspaces.js';
 import { tabsRoutes } from './routes/tabs.js';
 import { panesTabScopedRoutes, panesScopedRoutes } from './routes/panes.js';
 import { attachmentsRoutes } from './routes/attachments.js';
+import { openRoutes } from './routes/open.js';
+import { EventBus } from './events.js';
 
 export interface AppDeps {
   db: Database.Database;
-  paneManager: PaneManager;
+  /**
+   * Connected ptyd control client. The route layer issues control RPCs
+   * (ensurePane, killPane, markSeen, closePtyClients) against this — no
+   * PaneRuntime lives on the main server anymore.
+   */
+  ptyd: PtydClient;
+  /**
+   * Per-pane decoration cache populated from ptyd push events. The HTTP
+   * handlers read this synchronously (workspace lists, tab GET, cwd-
+   * inherit-from-sibling) instead of round-tripping to ptyd per request.
+   */
+  cache: PtydCache;
   dataDir: string;
+  /**
+   * In-process pub/sub for structural state-change events. Routes emit
+   * here after a successful mutation; the /ws/events upgrade arm
+   * (server/src/ws.ts) fans the events out to subscribed browsers.
+   * Optional in `AppDeps` so tests that don't care about events can omit
+   * it — `createApp` materialises a bus locally in that case.
+   */
+  events?: EventBus;
 }
 
 export function createApp(deps: AppDeps): Hono {
   const app = new Hono();
+  // Default to a bus that has zero subscribers; emissions become no-ops.
+  // Keeps the route-level emit() calls type-clean without forcing every
+  // test harness (or the WS-less HTTP smoke tests) to construct one.
+  const resolved = { ...deps, events: deps.events ?? new EventBus() };
   app.get('/api/health', (c) => c.json({ ok: true }));
-  app.route('/api/workspaces', workspacesRoutes(deps));
-  app.route('/api/tabs', tabsRoutes(deps));
-  app.route('/api/tabs', panesTabScopedRoutes(deps));
-  app.route('/api/panes', panesScopedRoutes(deps));
-  app.route('/api/panes', attachmentsRoutes(deps));
+  app.route('/api/workspaces', workspacesRoutes(resolved));
+  app.route('/api/tabs', tabsRoutes(resolved));
+  app.route('/api/tabs', panesTabScopedRoutes(resolved));
+  app.route('/api/panes', panesScopedRoutes(resolved));
+  app.route('/api/panes', attachmentsRoutes(resolved));
+  app.route('/api/open', openRoutes(resolved));
   return app;
 }

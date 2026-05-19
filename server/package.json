@@ -4,8 +4,10 @@
   "type": "module",
   "scripts": {
     "build": "tsc -b",
-    "dev": "MUXPAD_HOST=0.0.0.0 tsx watch --include='../shared/dist' src/index.ts",
+    "dev": "node scripts/dev.mjs",
+    "dev:ptyd": "tsx src/ptyd/index.ts",
     "start": "node dist/index.js",
+    "start:ptyd": "node dist/ptyd/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "biome check ."
