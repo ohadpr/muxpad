@@ -18,11 +18,48 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA_DIR="${MUXPAD_DATA_DIR:-$HOME/.muxpad}"
 PID_FILE="$DATA_DIR/server.pid"
 LOG_FILE="$DATA_DIR/server.log"
+PID_FILE_PTYD="$DATA_DIR/ptyd.pid"
+LOG_FILE_PTYD="$DATA_DIR/ptyd.log"
+# Socket path must match server/src/config.ts default so the main server
+# and ptyd agree without us having to pass MUXPAD_PTYD_SOCKET to the server.
+PTYD_SOCKET="${MUXPAD_PTYD_SOCKET:-$DATA_DIR/ptyd.sock}"
 
 mkdir -p "$DATA_DIR"
 
 is_running() {
   [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+}
+
+is_ptyd_running() {
+  [ -f "$PID_FILE_PTYD" ] && kill -0 "$(cat "$PID_FILE_PTYD")" 2>/dev/null
+}
+
+# Send SIGTERM, wait, escalate to SIGKILL. Removes the pid file at the end.
+stop_pid_file() {
+  local label="$1" pid_file="$2"
+  if [ ! -f "$pid_file" ]; then
+    echo "$label: not running"
+    return
+  fi
+  local pid
+  pid="$(cat "$pid_file")"
+  if ! kill -0 "$pid" 2>/dev/null; then
+    echo "$label: not running (stale pid file)"
+    rm -f "$pid_file"
+    return
+  fi
+  echo "$label: stopping PID $pid..."
+  kill -TERM "$pid" 2>/dev/null || true
+  for _ in $(seq 1 20); do
+    if ! kill -0 "$pid" 2>/dev/null; then break; fi
+    sleep 0.1
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "$label: still alive, sending SIGKILL"
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  rm -f "$pid_file"
+  echo "$label: stopped"
 }
 
 resolve_host() {
@@ -48,9 +85,20 @@ cmd_start() {
     return
   fi
 
-  if [ ! -f "$ROOT/server/dist/index.js" ] || [ ! -f "$ROOT/web/dist/index.html" ]; then
+  if [ ! -f "$ROOT/server/dist/index.js" ] \
+    || [ ! -f "$ROOT/server/dist/ptyd/index.js" ] \
+    || [ ! -f "$ROOT/web/dist/index.html" ]; then
     echo "building..."
     (cd "$ROOT" && pnpm build) > /dev/null
+  fi
+
+  # Start ptyd first (if not already up). The main server connects to its
+  # socket on startup, so we must wait for the socket to appear before
+  # spawning the server.
+  if ! is_ptyd_running; then
+    start_ptyd
+  else
+    echo "ptyd: already running (PID $(cat "$PID_FILE_PTYD"))"
   fi
 
   local host port
@@ -68,6 +116,7 @@ cmd_start() {
   MUXPAD_HOST="$host" \
   MUXPAD_PORT="$port" \
   MUXPAD_DATA_DIR="$DATA_DIR" \
+  MUXPAD_PTYD_SOCKET="$PTYD_SOCKET" \
     nohup node "$ROOT/server/dist/index.js" \
     >> "$LOG_FILE" 2>&1 &
   echo $! > "$PID_FILE"
@@ -79,6 +128,36 @@ cmd_start() {
   fi
 
   cmd_status
+}
+
+start_ptyd() {
+  mkdir -p "$(dirname "$PTYD_SOCKET")"
+  # Stale socket file from a crashed previous run will block bind().
+  # Remove it only when we know no ptyd is currently using it.
+  [ -S "$PTYD_SOCKET" ] && rm -f "$PTYD_SOCKET"
+  echo "starting ptyd (socket: $PTYD_SOCKET)"
+  MUXPAD_DATA_DIR="$DATA_DIR" \
+  MUXPAD_PTYD_SOCKET="$PTYD_SOCKET" \
+    nohup node "$ROOT/server/dist/ptyd/index.js" \
+    >> "$LOG_FILE_PTYD" 2>&1 &
+  echo $! > "$PID_FILE_PTYD"
+  disown $! 2>/dev/null || true
+  # Wait for the socket to appear (up to ~5s).
+  local i
+  for i in $(seq 1 50); do
+    if [ -S "$PTYD_SOCKET" ]; then
+      return 0
+    fi
+    # If ptyd died on us mid-wait, bail early with a clear message.
+    if ! is_ptyd_running; then
+      echo "ptyd: exited before socket appeared — see $LOG_FILE_PTYD" >&2
+      rm -f "$PID_FILE_PTYD"
+      exit 1
+    fi
+    sleep 0.1
+  done
+  echo "ptyd: timed out waiting for socket at $PTYD_SOCKET" >&2
+  exit 1
 }
 
 setup_tailscale_serve() {
@@ -112,64 +191,806 @@ teardown_tailscale_serve() {
 }
 
 cmd_stop() {
-  teardown_tailscale_serve
-  if ! is_running; then
-    echo "not running"
-    rm -f "$PID_FILE"
-    return
-  fi
-  local pid
-  pid="$(cat "$PID_FILE")"
-  echo "stopping PID $pid..."
-  kill -TERM "$pid" 2>/dev/null || true
-  for _ in $(seq 1 20); do
-    if ! kill -0 "$pid" 2>/dev/null; then break; fi
-    sleep 0.1
+  # The first arg may be --all (passed by the dispatcher). Anything else
+  # is unknown.
+  local stop_all=0
+  for a in "$@"; do
+    case "$a" in
+      --all) stop_all=1 ;;
+      *) echo "muxpad stop: unknown flag '$a'" >&2; exit 1 ;;
+    esac
   done
-  if kill -0 "$pid" 2>/dev/null; then
-    echo "still alive, sending SIGKILL"
-    kill -KILL "$pid" 2>/dev/null || true
+
+  # Only teardown tailscale on a full stop. A plain `muxpad stop` (and
+  # therefore the default `muxpad restart`) leaves the public mapping in
+  # place so tailnet users don't see a 4xx blip during routine restarts.
+  # When the user really means it (`--all`), the mapping comes down with
+  # the daemons.
+  if [ "$stop_all" = "1" ]; then
+    teardown_tailscale_serve
   fi
-  rm -f "$PID_FILE"
-  echo "stopped"
+  stop_pid_file "muxpad" "$PID_FILE"
+
+  if [ "$stop_all" = "1" ]; then
+    stop_pid_file "ptyd" "$PID_FILE_PTYD"
+    # Clean up the socket file once nobody is using it.
+    [ -S "$PTYD_SOCKET" ] && rm -f "$PTYD_SOCKET"
+  else
+    if is_ptyd_running; then
+      echo "ptyd: still running (PID $(cat "$PID_FILE_PTYD")) — use 'muxpad stop --all' to stop it too"
+    fi
+  fi
 }
 
 cmd_restart() {
-  cmd_stop || true
+  local restart_all=0
+  for a in "$@"; do
+    case "$a" in
+      --all) restart_all=1 ;;
+      *) echo "muxpad restart: unknown flag '$a'" >&2; exit 1 ;;
+    esac
+  done
+
+  if [ "$restart_all" = "1" ]; then
+    cmd_stop --all || true
+  else
+    cmd_stop || true
+  fi
   sleep 0.3
   cmd_start
 }
 
 cmd_status() {
+  # muxpad
   if is_running; then
     local pid url
     pid="$(cat "$PID_FILE")"
     url="$(grep -oE 'http://[^[:space:]]+' "$LOG_FILE" 2>/dev/null | tail -1 || true)"
-    echo "running (PID $pid)"
+    echo "muxpad:"
+    echo "  running (PID $pid)"
     [ -n "$url" ] && echo "  url:  $url"
     echo "  log:  $LOG_FILE"
     echo "  data: $DATA_DIR"
   else
-    echo "not running"
+    echo "muxpad: not running"
+  fi
+
+  # ptyd
+  if is_ptyd_running; then
+    local pid
+    pid="$(cat "$PID_FILE_PTYD")"
+    echo "ptyd:"
+    echo "  running (PID $pid)"
+    echo "  socket: $PTYD_SOCKET"
+    echo "  log:    $LOG_FILE_PTYD"
+  else
+    echo "ptyd: not running"
   fi
 }
 
 cmd_logs() {
-  if [ ! -f "$LOG_FILE" ]; then
-    echo "no log yet at $LOG_FILE"
-    exit 1
-  fi
-  exec tail -f "$LOG_FILE"
+  local target="server"
+  for a in "$@"; do
+    case "$a" in
+      --ptyd) target="ptyd" ;;
+      --all) target="all" ;;
+      *) echo "muxpad logs: unknown flag '$a'" >&2; exit 1 ;;
+    esac
+  done
+
+  case "$target" in
+    server)
+      if [ ! -f "$LOG_FILE" ]; then
+        echo "no log yet at $LOG_FILE"
+        exit 1
+      fi
+      exec tail -f "$LOG_FILE"
+      ;;
+    ptyd)
+      if [ ! -f "$LOG_FILE_PTYD" ]; then
+        echo "no log yet at $LOG_FILE_PTYD"
+        exit 1
+      fi
+      exec tail -f "$LOG_FILE_PTYD"
+      ;;
+    all)
+      # tail -f labels each stream with its filename on macOS, so the
+      # streams stay legible when interleaved.
+      local files=()
+      [ -f "$LOG_FILE" ] && files+=("$LOG_FILE")
+      [ -f "$LOG_FILE_PTYD" ] && files+=("$LOG_FILE_PTYD")
+      if [ "${#files[@]}" = "0" ]; then
+        echo "no logs yet"
+        exit 1
+      fi
+      exec tail -f "${files[@]}"
+      ;;
+  esac
 }
 
-case "${1:-}" in
+# ─── In-pane CLI verbs (HTTP) ────────────────────────────────────────────────
+# These speak HTTP to the daemon. Inside a muxpad pane, the daemon is
+# already running and these env vars are injected by PaneRuntime:
+#   MUXPAD_API_URL          http://localhost:<port>
+#   MUXPAD_PANE_ID          current pane id
+#   MUXPAD_TAB_ID           current tab id
+#   MUXPAD_WORKSPACE_ID     current workspace id
+# Outside a pane, set MUXPAD_API_URL manually (e.g. via the daemon's
+# config); --tab / --workspace flags then become required for ops that
+# would otherwise default to the in-pane context.
+
+# Top-level --json flag — set by parse_global_flags. When 1, all output
+# helpers dump raw server JSON instead of pretty-formatting.
+JSON_OUTPUT=0
+
+# ANSI colors, only when stdout is a TTY. Plumbing-friendly otherwise.
+if [ -t 1 ]; then
+  C_GREEN=$'\033[32m'
+  C_RED=$'\033[31m'
+  C_DIM=$'\033[2m'
+  C_BOLD=$'\033[1m'
+  C_RESET=$'\033[0m'
+else
+  C_GREEN=''
+  C_RED=''
+  C_DIM=''
+  C_BOLD=''
+  C_RESET=''
+fi
+
+require_jq() {
+  command -v jq >/dev/null 2>&1 || {
+    echo "muxpad: jq is required (brew install jq)" >&2
+    exit 1
+  }
+}
+
+require_api_url() {
+  if [ -z "${MUXPAD_API_URL:-}" ]; then
+    echo "muxpad: MUXPAD_API_URL not set (are you inside a muxpad pane?)" >&2
+    exit 1
+  fi
+}
+
+# Run a curl request against the daemon. Args:
+#   $1 method (GET/POST/DELETE)
+#   $2 path (e.g. /api/workspaces)
+#   $3 optional JSON body (only for POST)
+# Captures the response body and HTTP status. On non-2xx, prints the
+# server's error JSON (or raw body) to stderr and exits non-zero.
+http_request() {
+  require_api_url
+  local method="$1"
+  local path="$2"
+  local body="${3:-}"
+  local url="${MUXPAD_API_URL%/}$path"
+  local tmp
+  tmp="$(mktemp)"
+  local status
+  if [ -n "$body" ]; then
+    status="$(curl -sS -o "$tmp" -w '%{http_code}' \
+      -X "$method" \
+      -H 'content-type: application/json' \
+      --data "$body" \
+      "$url")"
+  else
+    status="$(curl -sS -o "$tmp" -w '%{http_code}' \
+      -X "$method" \
+      "$url")"
+  fi
+  if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+    {
+      printf '%smuxpad: %s %s → HTTP %s%s\n' "$C_RED" "$method" "$path" "$status" "$C_RESET"
+      if [ -s "$tmp" ]; then
+        # Try to surface the server's error.message; fall back to raw body.
+        if jq -e '.error.message' "$tmp" >/dev/null 2>&1; then
+          printf '  %s\n' "$(jq -r '.error.message' "$tmp")"
+        else
+          cat "$tmp"
+          printf '\n'
+        fi
+      fi
+    } >&2
+    rm -f "$tmp"
+    exit 1
+  fi
+  cat "$tmp"
+  rm -f "$tmp"
+}
+
+# Pretty-print a freshly created resource. $1 = type label, $2 = JSON.
+# Honors JSON_OUTPUT. The "extra" lines (id, name, tab, etc.) are
+# selected per resource type — kept inline-cased for clarity over DRY.
+print_created() {
+  local label="$1"
+  local json="$2"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$json"
+    return
+  fi
+  printf '%s✓%s %s created\n' "$C_GREEN" "$C_RESET" "$label"
+  case "$label" in
+    workspace)
+      printf '  %sid:%s   %s\n' "$C_DIM" "$C_RESET" "$(printf '%s' "$json" | jq -r '.id')"
+      printf '  %sname:%s %s\n' "$C_DIM" "$C_RESET" "$(printf '%s' "$json" | jq -r '.name')"
+      ;;
+    tab)
+      printf '  %sid:%s        %s\n' "$C_DIM" "$C_RESET" "$(printf '%s' "$json" | jq -r '.id')"
+      printf '  %sname:%s      %s\n' "$C_DIM" "$C_RESET" "$(printf '%s' "$json" | jq -r '.name')"
+      ;;
+    pane)
+      local kind url tab
+      kind="$(printf '%s' "$json" | jq -r '.kind')"
+      url="$(printf '%s' "$json" | jq -r '.url // empty')"
+      tab="$(printf '%s' "$json" | jq -r '.tab_id')"
+      printf '  %sid:%s   %s\n' "$C_DIM" "$C_RESET" "$(printf '%s' "$json" | jq -r '.id')"
+      printf '  %skind:%s %s\n' "$C_DIM" "$C_RESET" "$kind"
+      [ -n "$url" ] && printf '  %surl:%s  %s\n' "$C_DIM" "$C_RESET" "$url"
+      printf '  %stab:%s  %s\n' "$C_DIM" "$C_RESET" "$tab"
+      ;;
+  esac
+}
+
+# Print a JSON array as a table. $1 = JSON array, remaining = column
+# specs of the form "HEADER:jq-expr". Columns are space-padded to the
+# widest cell. Honors JSON_OUTPUT (dumps the raw array).
+print_table() {
+  local json="$1"; shift
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$json"
+    return
+  fi
+  if [ "$(printf '%s' "$json" | jq 'length')" = "0" ]; then
+    printf '%s(none)%s\n' "$C_DIM" "$C_RESET"
+    return
+  fi
+  # Build a row-per-line representation via jq. Each column is rendered
+  # by its jq expr, joined with a tab. Headers go first.
+  local header_line=''
+  local exprs=()
+  for col in "$@"; do
+    local h="${col%%:*}"
+    local e="${col#*:}"
+    [ -n "$header_line" ] && header_line+=$'\t'
+    header_line+="$h"
+    exprs+=("$e")
+  done
+  # Compose a jq filter: [ (.[0] | [(<expr1>), (<expr2>), …] | @tsv), … ]
+  local jq_parts=''
+  for e in "${exprs[@]}"; do
+    [ -n "$jq_parts" ] && jq_parts+=','
+    jq_parts+="($e)"
+  done
+  local rows
+  rows="$(printf '%s' "$json" | jq -r ".[] | [$jq_parts] | @tsv")"
+  # Pad columns using awk so headers + rows line up.
+  {
+    printf '%s\n' "$header_line"
+    printf '%s\n' "$rows"
+  } | awk -F '\t' -v bold="$C_BOLD" -v reset="$C_RESET" '
+    {
+      for (i = 1; i <= NF; i++) {
+        if (length($i) > w[i]) w[i] = length($i);
+        cell[NR, i] = $i;
+      }
+      ncols = NF;
+      nrows = NR;
+    }
+    END {
+      for (r = 1; r <= nrows; r++) {
+        line = "";
+        for (i = 1; i <= ncols; i++) {
+          v = cell[r, i];
+          pad = w[i] - length(v);
+          if (pad < 0) pad = 0;
+          line = line v sprintf("%*s", pad, "");
+          if (i < ncols) line = line "  ";
+        }
+        if (r == 1) printf "%s%s%s\n", bold, line, reset;
+        else printf "%s\n", line;
+      }
+    }
+  '
+}
+
+# Parse argv looking for the top-level --json flag. Sets JSON_OUTPUT
+# directly (no subshell — must run in the current shell to mutate the
+# global) and populates the global ARGS array with the remaining args.
+# Called as: strip_global_flags "$@".
+strip_global_flags() {
+  ARGS=()
+  for a in "$@"; do
+    case "$a" in
+      --json) JSON_OUTPUT=1 ;;
+      *) ARGS+=("$a") ;;
+    esac
+  done
+}
+
+# Parse --key=value / --key value pairs from positional args. macOS's
+# bash 3.2 has no associative arrays, so we set plain scalar globals
+# named FLAG_<key> for each allowed flag. Callers `unset` them before
+# the call to start clean. Usage:
+#   reset_flags name workspace tab cmd cwd
+#   parse_flags name workspace tab cmd cwd -- "$@"
+#   # now $FLAG_name, $FLAG_workspace, … (empty if not provided)
+#   # and POSITIONAL=(non-flag args in order)
+# Unknown flags error out.
+reset_flags() {
+  for f in "$@"; do
+    unset "FLAG_$f"
+    eval "FLAG_$f=''"
+  done
+  POSITIONAL=()
+}
+
+parse_flags() {
+  local allowed=()
+  while [ $# -gt 0 ] && [ "$1" != '--' ]; do
+    allowed+=("$1")
+    shift
+  done
+  shift  # drop the --
+  while [ $# -gt 0 ]; do
+    local a="$1"
+    case "$a" in
+      --*=*)
+        local k="${a%%=*}"; k="${k#--}"
+        local v="${a#*=}"
+        local ok=0
+        for x in "${allowed[@]:-}"; do [ "$x" = "$k" ] && ok=1; done
+        if [ $ok = 0 ]; then
+          echo "muxpad: unknown flag --$k" >&2
+          exit 1
+        fi
+        # eval is safe here: $k is gated by the allow-list above, $v is
+        # quoted via printf %q to neutralise any metacharacters in the
+        # user-supplied value.
+        eval "FLAG_$k=$(printf '%q' "$v")"
+        shift
+        ;;
+      --*)
+        local k="${a#--}"
+        local ok=0
+        for x in "${allowed[@]:-}"; do [ "$x" = "$k" ] && ok=1; done
+        if [ $ok = 0 ]; then
+          echo "muxpad: unknown flag --$k" >&2
+          exit 1
+        fi
+        if [ $# -lt 2 ]; then
+          echo "muxpad: --$k requires a value" >&2
+          exit 1
+        fi
+        eval "FLAG_$k=$(printf '%q' "$2")"
+        shift 2
+        ;;
+      *)
+        POSITIONAL+=("$a")
+        shift
+        ;;
+    esac
+  done
+}
+
+# JSON-escape a string for embedding in a request body. Uses jq -Rs so
+# all the quoting edge cases (quotes, backslashes, newlines) are right.
+json_string() {
+  printf '%s' "$1" | jq -Rs .
+}
+
+# ─── workspace ─────────────────────────────────────────────────────────────
+
+cmd_workspace_new() {
+  reset_flags name
+  parse_flags name -- "$@"
+  local body='{}'
+  if [ -n "${FLAG_name:-}" ]; then
+    body="{\"name\":$(json_string "$FLAG_name")}"
+  fi
+  local res
+  res="$(http_request POST /api/workspaces "$body")"
+  print_created workspace "$res"
+}
+
+cmd_workspace_list() {
+  local res
+  res="$(http_request GET /api/workspaces)"
+  print_table "$res" \
+    'ID:.id' \
+    'NAME:.name' \
+    'TABS:.tab_count'
+}
+
+cmd_workspace_delete() {
+  reset_flags
+  parse_flags -- "$@"
+  if [ "${#POSITIONAL[@]}" -lt 1 ]; then
+    echo "usage: muxpad workspace delete <id>" >&2
+    exit 1
+  fi
+  local id="${POSITIONAL[0]}"
+  http_request DELETE "/api/workspaces/$id" >/dev/null
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '{"deleted":"%s"}\n' "$id"
+  else
+    printf '%s✓%s workspace deleted (%s)\n' "$C_GREEN" "$C_RESET" "$id"
+  fi
+}
+
+cmd_workspace() {
+  local verb="${1:-}"
+  if [ -z "$verb" ]; then
+    echo "usage: muxpad workspace {new|list|delete}" >&2
+    exit 1
+  fi
+  shift
+  case "$verb" in
+    new) cmd_workspace_new "$@" ;;
+    list) cmd_workspace_list "$@" ;;
+    delete) cmd_workspace_delete "$@" ;;
+    *)
+      echo "muxpad: unknown workspace verb '$verb'" >&2
+      echo "usage: muxpad workspace {new|list|delete}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+# ─── tab ────────────────────────────────────────────────────────────────────
+
+cmd_tab_new() {
+  reset_flags workspace name
+  parse_flags workspace name -- "$@"
+  local workspace_id="${FLAG_workspace:-${MUXPAD_WORKSPACE_ID:-}}"
+  if [ -z "$workspace_id" ]; then
+    echo "muxpad: --workspace=<id> required (no MUXPAD_WORKSPACE_ID in env)" >&2
+    exit 1
+  fi
+  local body
+  if [ -n "${FLAG_name:-}" ]; then
+    body="{\"workspace_id\":$(json_string "$workspace_id"),\"name\":$(json_string "$FLAG_name")}"
+  else
+    body="{\"workspace_id\":$(json_string "$workspace_id")}"
+  fi
+  local res
+  res="$(http_request POST /api/tabs "$body")"
+  print_created tab "$res"
+}
+
+cmd_tab_list() {
+  reset_flags workspace
+  parse_flags workspace -- "$@"
+  local workspace_id="${FLAG_workspace:-${MUXPAD_WORKSPACE_ID:-}}"
+  if [ -z "$workspace_id" ]; then
+    echo "muxpad: --workspace=<id> required (no MUXPAD_WORKSPACE_ID in env)" >&2
+    exit 1
+  fi
+  local res
+  res="$(http_request GET "/api/tabs?workspaceId=$workspace_id")"
+  print_table "$res" \
+    'ID:.id' \
+    'NAME:.name'
+}
+
+cmd_tab_delete() {
+  reset_flags
+  parse_flags -- "$@"
+  if [ "${#POSITIONAL[@]}" -lt 1 ]; then
+    echo "usage: muxpad tab delete <id>" >&2
+    exit 1
+  fi
+  local id="${POSITIONAL[0]}"
+  http_request DELETE "/api/tabs/$id" >/dev/null
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '{"deleted":"%s"}\n' "$id"
+  else
+    printf '%s✓%s tab deleted (%s)\n' "$C_GREEN" "$C_RESET" "$id"
+  fi
+}
+
+cmd_tab() {
+  local verb="${1:-}"
+  if [ -z "$verb" ]; then
+    echo "usage: muxpad tab {new|list|delete}" >&2
+    exit 1
+  fi
+  shift
+  case "$verb" in
+    new) cmd_tab_new "$@" ;;
+    list) cmd_tab_list "$@" ;;
+    delete) cmd_tab_delete "$@" ;;
+    *)
+      echo "muxpad: unknown tab verb '$verb'" >&2
+      echo "usage: muxpad tab {new|list|delete}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+# ─── pane ───────────────────────────────────────────────────────────────────
+
+cmd_pane_new() {
+  reset_flags tab cmd cwd direction target
+  parse_flags tab cmd cwd direction target -- "$@"
+  local tab_id="${FLAG_tab:-${MUXPAD_TAB_ID:-}}"
+  if [ -z "$tab_id" ]; then
+    echo "muxpad: --tab=<id> required (no MUXPAD_TAB_ID in env)" >&2
+    exit 1
+  fi
+  # Map the spatial direction to the server's (direction, position) wire
+  # format. Server thinks in (row/column axis, before/after target);
+  # users/agents think in screen geometry, so the CLI does the translation.
+  local axis position
+  case "${FLAG_direction:-right}" in
+    right) axis='row'    ; position='after'  ;;
+    left)  axis='row'    ; position='before' ;;
+    below) axis='column' ; position='after'  ;;
+    above) axis='column' ; position='before' ;;
+    *)
+      echo "muxpad: --direction must be one of: right, left, above, below (got '${FLAG_direction}')" >&2
+      exit 1 ;;
+  esac
+  # --target=<id> wins over MUXPAD_PANE_ID. Outside a pane with no
+  # --target, the body's split_from is omitted entirely and the server
+  # appends at the root.
+  local split_from="${FLAG_target:-${MUXPAD_PANE_ID:-}}"
+  local body='{"append_to_layout":true'
+  if [ -n "$split_from" ]; then
+    body+=",\"split_from\":$(json_string "$split_from")"
+  fi
+  body+=",\"direction\":$(json_string "$axis")"
+  body+=",\"position\":$(json_string "$position")"
+  if [ -n "${FLAG_cmd:-}" ]; then
+    body+=",\"startup_cmd\":$(json_string "$FLAG_cmd")"
+  fi
+  if [ -n "${FLAG_cwd:-}" ]; then
+    body+=",\"cwd\":$(json_string "$FLAG_cwd")"
+  fi
+  body+='}'
+  local res
+  res="$(http_request POST "/api/tabs/$tab_id/panes" "$body")"
+  print_created pane "$res"
+}
+
+cmd_pane_list() {
+  reset_flags tab
+  parse_flags tab -- "$@"
+  local tab_id="${FLAG_tab:-${MUXPAD_TAB_ID:-}}"
+  if [ -z "$tab_id" ]; then
+    echo "muxpad: --tab=<id> required (no MUXPAD_TAB_ID in env)" >&2
+    exit 1
+  fi
+  # GET /api/tabs/:id returns the tab with a `panes` array.
+  local res
+  res="$(http_request GET "/api/tabs/$tab_id")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s' "$res" | jq '.panes'
+    return
+  fi
+  local panes
+  panes="$(printf '%s' "$res" | jq '.panes')"
+  print_table "$panes" \
+    'ID:.id' \
+    'KIND:.kind' \
+    'TITLE:(.title // .foreground_cmd // .url // "")'
+}
+
+cmd_pane_delete() {
+  reset_flags
+  parse_flags -- "$@"
+  if [ "${#POSITIONAL[@]}" -lt 1 ]; then
+    echo "usage: muxpad pane delete <id>" >&2
+    exit 1
+  fi
+  local id="${POSITIONAL[0]}"
+  http_request DELETE "/api/panes/$id" >/dev/null
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '{"deleted":"%s"}\n' "$id"
+  else
+    printf '%s✓%s pane deleted (%s)\n' "$C_GREEN" "$C_RESET" "$id"
+  fi
+}
+
+cmd_pane_open() {
+  reset_flags tab direction target
+  parse_flags tab direction target -- "$@"
+  if [ "${#POSITIONAL[@]}" -lt 1 ]; then
+    echo "usage: muxpad pane open [--tab=<id>] [--direction=right|left|above|below] [--target=<id>] <url>" >&2
+    exit 1
+  fi
+  local url="${POSITIONAL[0]}"
+  local tab_id="${FLAG_tab:-${MUXPAD_TAB_ID:-}}"
+  if [ -z "$tab_id" ]; then
+    echo "muxpad: --tab=<id> required (no MUXPAD_TAB_ID in env)" >&2
+    exit 1
+  fi
+  # Same direction → (axis, position) translation as cmd_pane_new.
+  local axis position
+  case "${FLAG_direction:-right}" in
+    right) axis='row'    ; position='after'  ;;
+    left)  axis='row'    ; position='before' ;;
+    below) axis='column' ; position='after'  ;;
+    above) axis='column' ; position='before' ;;
+    *)
+      echo "muxpad: --direction must be one of: right, left, above, below (got '${FLAG_direction}')" >&2
+      exit 1 ;;
+  esac
+  local split_from="${FLAG_target:-${MUXPAD_PANE_ID:-}}"
+  local body="{\"kind\":\"url\",\"url\":$(json_string "$url"),\"append_to_layout\":true"
+  if [ -n "$split_from" ]; then
+    body+=",\"split_from\":$(json_string "$split_from")"
+  fi
+  body+=",\"direction\":$(json_string "$axis")"
+  body+=",\"position\":$(json_string "$position")"
+  body+='}'
+  local res
+  res="$(http_request POST "/api/tabs/$tab_id/panes" "$body")"
+  print_created pane "$res"
+}
+
+cmd_pane() {
+  local verb="${1:-}"
+  if [ -z "$verb" ]; then
+    echo "usage: muxpad pane {new|list|delete|open}" >&2
+    exit 1
+  fi
+  shift
+  case "$verb" in
+    new) cmd_pane_new "$@" ;;
+    list) cmd_pane_list "$@" ;;
+    delete) cmd_pane_delete "$@" ;;
+    open) cmd_pane_open "$@" ;;
+    *)
+      echo "muxpad: unknown pane verb '$verb'" >&2
+      echo "usage: muxpad pane {new|list|delete|open}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+# `muxpad open <url>` opens a URL in a real browser tab (window.open),
+# NOT as an iframe pane inside the muxpad mosaic. Mirrors macOS's `open`
+# and Linux's `xdg-open`. For the in-mosaic iframe version, use
+# `muxpad pane open <url>`.
+#
+# The server fans the request out as an `external_url.open` event on the
+# /ws/events stream; the web UI surfaces it as a click-to-open toast so
+# the actual window.open() call lands inside a user-gesture handler
+# (popup-blocker safe). When called inside a muxpad pane:
+#   - MUXPAD_TAB_ID scopes the toast to the muxpad tab the call came from
+#     (other muxpad tabs in the browser stay quiet).
+#   - MUXPAD_PANE_ID lets the server label the toast with the pane's
+#     title / foreground command so the user knows who asked.
+cmd_open() {
+  reset_flags
+  parse_flags -- "$@"
+  if [ "${#POSITIONAL[@]}" -lt 1 ]; then
+    echo "usage: muxpad open <url>" >&2
+    exit 1
+  fi
+  local url="${POSITIONAL[0]}"
+  local body="{\"url\":$(json_string "$url")"
+  if [ -n "${MUXPAD_TAB_ID:-}" ]; then
+    body+=",\"tab_id\":$(json_string "$MUXPAD_TAB_ID")"
+  fi
+  if [ -n "${MUXPAD_PANE_ID:-}" ]; then
+    body+=",\"pane_id\":$(json_string "$MUXPAD_PANE_ID")"
+  fi
+  body+='}'
+  http_request POST /api/open/external "$body" >/dev/null
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '{"requested":%s}\n' "$(json_string "$url")"
+  else
+    printf '%s✓%s requested external open: %s\n' "$C_GREEN" "$C_RESET" "$url"
+  fi
+}
+
+usage() {
+  cat <<'USAGE' >&2
+muxpad — a personal multi-workspace terminal-and-browser mosaic.
+
+structure:
+  workspace   top-level container, has many tabs
+  tab         single mosaic, has many panes laid out as splits
+  pane        a shell PTY (kind=shell) or an iframe URL (kind=url)
+
+env (set automatically inside a muxpad pane):
+  MUXPAD_BIN              path to this CLI — its presence means you're in a pane
+  MUXPAD_API_URL          daemon base URL (HTTP)
+  MUXPAD_PANE_ID          current pane id
+  MUXPAD_TAB_ID           current tab id          (default for --tab)
+  MUXPAD_WORKSPACE_ID     current workspace id    (default for --workspace)
+
+All `new` commands print the created resource on stdout; chain by reading
+the printed `id` (or use `--json | jq -r .id`).
+
+daemon control:
+  start                              build (if needed) and start ptyd + main server
+  stop [--all]                       stop main server (and ptyd with --all)
+  restart [--all]                    restart main server (and ptyd with --all)
+  status                             show running state of both processes
+  logs [--ptyd|--all]                tail server log (or ptyd / both)
+
+HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
+  workspace new [--name=<name>]
+  workspace list
+  workspace delete <id>
+
+  tab new       [--workspace=<id>] [--name=<name>]
+  tab list      [--workspace=<id>]
+  tab delete    <id>
+
+  pane new      [--tab=<id>] [--cmd=<cmd>] [--cwd=<cwd>]
+                [--direction=right|left|above|below] [--target=<id>]
+                                              shell pane. Placement is
+                                              spatial: direction defaults to
+                                              `right`; target defaults to
+                                              the calling pane (MUXPAD_PANE_ID)
+                                              or — outside a pane — appends
+                                              at the root.
+  pane open     [--tab=<id>] [--direction=…] [--target=<id>] <url>
+                                              iframe pane, same placement rules
+  pane list     [--tab=<id>]
+  pane delete   <id>
+
+  open <url>                         open <url> in a new real browser tab
+                                     (like macOS `open` / Linux `xdg-open`).
+                                     The web UI surfaces a click-to-open toast
+                                     so the popup isn't blocked. For an iframe
+                                     pane in the mosaic, use `pane open` above.
+
+global flags:
+  --json                             emit raw JSON instead of pretty output
+                                     (place BEFORE the subcommand)
+
+examples:
+  muxpad pane new --cmd='pnpm dev'                       # sibling to the right
+  muxpad pane new --direction=below --cmd='tail -f log'  # below this pane
+  muxpad pane open https://grafana.local                 # iframe to the right
+  muxpad open https://grafana.local                      # real new browser tab
+  muxpad --json workspace list | jq -r '.[].id'
+  ws=$(muxpad --json workspace new --name=foo | jq -r .id) \
+    && tab=$(muxpad --json tab new --workspace="$ws" | jq -r .id) \
+    && p1=$(muxpad --json pane new --tab="$tab" --cmd='pnpm dev' | jq -r .id) \
+    && muxpad pane new --tab="$tab" --target="$p1" --direction=below \
+         --cmd='tail -f log'
+USAGE
+}
+
+# Verbs that talk HTTP need jq and may need MUXPAD_API_URL. The daemon-
+# control verbs (start/stop/…) don't, so we only enforce when routing
+# into the HTTP branch.
+needs_http() {
+  case "$1" in
+    workspace|tab|pane|open) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Strip --json (top-level) before dispatching. Per-verb flags are
+# parsed inside the verb handler. Populates the global ARGS array.
+strip_global_flags "$@"
+
+VERB="${ARGS[0]:-}"
+
+if [ -n "$VERB" ] && needs_http "$VERB"; then
+  require_jq
+fi
+
+case "$VERB" in
   start) cmd_start ;;
-  stop) cmd_stop ;;
-  restart) cmd_restart ;;
+  stop) cmd_stop "${ARGS[@]:1}" ;;
+  restart) cmd_restart "${ARGS[@]:1}" ;;
   status) cmd_status ;;
-  logs) cmd_logs ;;
+  logs) cmd_logs "${ARGS[@]:1}" ;;
+  workspace) cmd_workspace "${ARGS[@]:1}" ;;
+  tab) cmd_tab "${ARGS[@]:1}" ;;
+  pane) cmd_pane "${ARGS[@]:1}" ;;
+  open) cmd_open "${ARGS[@]:1}" ;;
+  ''|help|-h|--help) usage; [ "$VERB" = '' ] && exit 1 || exit 0 ;;
   *)
-    echo "usage: $(basename "$0") {start|stop|restart|status|logs}" >&2
+    echo "muxpad: unknown command '$VERB'" >&2
+    usage
     exit 1
     ;;
 esac

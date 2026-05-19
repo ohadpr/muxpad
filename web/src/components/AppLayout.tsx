@@ -1,9 +1,10 @@
 import { Outlet, useRouterState } from '@tanstack/react-router';
+import { useWindowAttention } from '../use-window-attention';
+import { useWorkspaces } from '../workspaces';
 import { Brand } from './Brand';
 import { SettingsMenu } from './SettingsMenu';
 import { TabBar } from './TabBar';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
-import { useWorkspaces } from '../workspaces';
 
 // Cross-workspace attention is surfaced exclusively on the WorkspaceSwitcher
 // trigger. The brand mark used to carry a duplicate dot on the same
@@ -23,6 +24,10 @@ export function AppLayout() {
   const wsSlugMatch = pathname.match(/^\/w\/([^/]+)/);
   const wsSlug = wsSlugMatch?.[1] ?? null;
   const { workspaces } = useWorkspaces();
+  // Favicon is driven by the cross-workspace rollup, not by the current
+  // workspace's tab list, so a browser tab parked on Workspace A still
+  // shows the bell when Workspace B has activity.
+  useWindowAttention(workspaces);
   const activeWorkspace = wsSlug
     ? workspaces.find((w) => w.slug === wsSlug)
     : null;

@@ -100,7 +100,9 @@ export class PtyScanner {
       }
     }
 
-    return title !== undefined ? { bel, title } : { bel };
+    const result: ScanEvents = { bel };
+    if (title !== undefined) result.title = title;
+    return result;
   }
 }
 

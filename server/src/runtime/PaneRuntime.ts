@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as pty from 'node-pty';
 import { RingBuffer } from './RingBuffer.js';
 import { PtyScanner } from './pty-scanner.js';
@@ -10,15 +12,22 @@ const execFileAsync = promisify(execFile);
 const RING_CAPACITY = 2 * 1024 * 1024; // 2MB
 
 /**
- * Strip env vars that signal "we're running inside an npm/pnpm script". If the
- * daemon was launched via `pnpm dev`, pnpm sets these on its child (this
- * process) and they would otherwise leak into every spawned shell, causing
- * subsequent npm/pnpm invocations inside the shell to behave as nested-script
- * runs (capturing stdio, breaking TUIs that need a real TTY, etc.).
- *
- * We keep PNPM_HOME and similar user-level config vars since those are
- * permanent settings, not script-run indicators.
+ * Absolute path to the repo's `scripts/` directory. Resolved relative to
+ * this file rather than `process.cwd()` because in `pnpm dev` the daemon's
+ * cwd is `server/`, not the repo root. The directory layout (file at
+ * `server/src/runtime/PaneRuntime.ts` for source, `server/dist/runtime/…`
+ * after build) is `../../../scripts` either way — three levels up to the
+ * repo root, then `scripts/`.
  */
+const SCRIPTS_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  '..',
+  'scripts',
+);
+const MUXPAD_BIN_PATH = path.join(SCRIPTS_DIR, 'muxpad');
+
 /**
  * Make a `ps args=` line readable as a pane label. Strips the leading
  * absolute path from argv[0] (so /usr/local/bin/pnpm dev:tui → pnpm
@@ -40,6 +49,16 @@ function basename(p: string): string {
   return slash >= 0 ? p.slice(slash + 1) : p;
 }
 
+/**
+ * Strip env vars that signal "we're running inside an npm/pnpm script". If the
+ * daemon was launched via `pnpm dev`, pnpm sets these on its child (this
+ * process) and they would otherwise leak into every spawned shell, causing
+ * subsequent npm/pnpm invocations inside the shell to behave as nested-script
+ * runs (capturing stdio, breaking TUIs that need a real TTY, etc.).
+ *
+ * We keep PNPM_HOME and similar user-level config vars since those are
+ * permanent settings, not script-run indicators.
+ */
 function sanitizeEnv(parent: NodeJS.ProcessEnv): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(parent)) {
@@ -64,6 +83,17 @@ export interface PaneRuntimeSpec {
   startup_cmd?: string | null | undefined;
   cwd: string;
   env?: Record<string, string> | null | undefined;
+  /**
+   * Parent tab id. Optional because some unit tests construct runtimes
+   * without a real DB. When present, exposed to the spawned shell as
+   * `MUXPAD_TAB_ID` so the in-pane CLI wrapper can default `--tab` to it.
+   */
+  tab_id?: string | undefined;
+  /**
+   * Parent workspace id (the tab's workspace_id). Optional for the same
+   * reason as `tab_id`. Exposed as `MUXPAD_WORKSPACE_ID`.
+   */
+  workspace_id?: string | undefined;
 }
 
 type Listener<T extends unknown[]> = (...args: T) => void;
@@ -113,10 +143,29 @@ export class PaneRuntime extends EventEmitter {
 
   start(): void {
     if (this.process) return;
+    // The daemon may bind a non-localhost interface (Tailscale IP,
+    // 0.0.0.0) via MUXPAD_HOST, but the spawned shell is always on the
+    // same machine — hit localhost regardless of bind host. Port comes
+    // from MUXPAD_PORT (same env var the daemon reads at startup).
+    const apiPort = process.env.MUXPAD_PORT ?? '7777';
     const env: Record<string, string> = {
       ...sanitizeEnv(process.env),
       ...(this.spec.env ?? {}),
       TERM: 'xterm-256color',
+      // Expose the muxpad wrapper script so spawned shells can find it
+      // on PATH and reference the absolute path via $MUXPAD_BIN. The
+      // wrapper script also uses MUXPAD_BIN being set to detect "we're
+      // inside a muxpad pane" and refuse otherwise.
+      MUXPAD_BIN: MUXPAD_BIN_PATH,
+      PATH: `${SCRIPTS_DIR}:${process.env.PATH ?? ''}`,
+      // Identity + endpoint for the in-pane CLI wrapper. The wrapper
+      // reads these so `muxpad pane new` (no flags) creates a sibling
+      // in the current tab; `muxpad tab new` (no flags) creates a tab
+      // in the current workspace; etc.
+      MUXPAD_API_URL: `http://localhost:${apiPort}`,
+      MUXPAD_PANE_ID: this.spec.id,
+      MUXPAD_TAB_ID: this.spec.tab_id ?? '',
+      MUXPAD_WORKSPACE_ID: this.spec.workspace_id ?? '',
     };
     // Always spawn the shell interactively (no `-c`). When startup_cmd is set,
     // it's auto-typed into the shell so that when it exits the user is left
@@ -130,7 +179,14 @@ export class PaneRuntime extends EventEmitter {
     });
     this.process.onData((data) => {
       const ev = this.scanner.feed(data);
-      if (ev.bel && !this.needsAttention) this.needsAttention = true;
+      if (ev.bel && !this.needsAttention) {
+        this.needsAttention = true;
+        // Emit only on the false→true transition so the manager can
+        // eagerly broadcast a pane.updated without waiting for the next
+        // cmd-poll tick. Each subsequent BEL within the same "unseen"
+        // window is intentionally suppressed.
+        this.emit('attention-changed', true);
+      }
       if (ev.title !== undefined) this.currentTitle = ev.title;
       this.buffer.push(data);
       this.emit('output', data);
@@ -308,12 +364,14 @@ export class PaneRuntime extends EventEmitter {
 
   override on(event: 'output', listener: Listener<[string]>): this;
   override on(event: 'exit', listener: Listener<[number]>): this;
+  override on(event: 'attention-changed', listener: Listener<[boolean]>): this;
   override on(event: string, listener: (...args: any[]) => void): this {
     return super.on(event, listener);
   }
 
   override off(event: 'output', listener: Listener<[string]>): this;
   override off(event: 'exit', listener: Listener<[number]>): this;
+  override off(event: 'attention-changed', listener: Listener<[boolean]>): this;
   override off(event: string, listener: (...args: any[]) => void): this {
     return super.off(event, listener);
   }

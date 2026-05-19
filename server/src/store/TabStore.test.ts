@@ -68,6 +68,15 @@ describe('TabStore', () => {
     expect(store.getById(w.id)).toBeNull();
   });
 
+  it('returns workspace_id for a known tab', () => {
+    const w = store.create({ name: 'X', layout: 'p', workspace_id: workspaceId });
+    expect(store.getWorkspaceId(w.id)).toBe(workspaceId);
+  });
+
+  it('returns undefined for an unknown tab id', () => {
+    expect(store.getWorkspaceId('does-not-exist')).toBeUndefined();
+  });
+
   it('round-trips deeply nested layout JSON', () => {
     const layout = {
       direction: 'row' as const,

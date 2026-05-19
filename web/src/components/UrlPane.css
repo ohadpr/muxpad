@@ -1,0 +1,25 @@
+.url-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--pane-bg, #111);
+}
+
+/* Pane was just type-switched from shell; no URL yet. The body stays blank
+   while UrlPaneTitle auto-enters edit mode waiting for the user's input. */
+.url-pane-blank {
+  flex: 1;
+  background: var(--pane-bg, #0a0a0a);
+}
+
+.url-pane iframe {
+  flex: 1;
+  border: 0;
+  width: 100%;
+}
+
+/* While a mosaic splitter is being dragged, prevent the iframe from
+   capturing mousemove/mouseup — otherwise the splitter sticks. */
+body.mosaic-dragging .url-pane iframe {
+  pointer-events: none;
+}

@@ -45,21 +45,25 @@ export function TabBarDropdown({ tabs, activeSlug, workspaceSlug }: TabBarDropdo
       <button
         type="button"
         className="ws-tabbar-dropdown-trigger"
-        data-attention={anyOtherAttention ? 'true' : undefined}
         onClick={() => setOpen((v) => !v)}
-        title="Switch tab"
+        title={anyOtherAttention ? 'Another tab needs attention' : 'Switch tab'}
       >
         <span className="ws-tabbar-dropdown-label">{active?.name ?? 'Tabs'}</span>
-        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-          <path
-            d="M2 4 L5 7 L8 4"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            fill="none"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
+        <span className="ws-tabbar-dropdown-chevron">
+          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+            <path
+              d="M2 4 L5 7 L8 4"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          {anyOtherAttention && (
+            <span className="badge-dot" aria-label="another tab needs attention" />
+          )}
+        </span>
       </button>
       {open && (
         <div className="ws-tabbar-dropdown-menu" role="menu">
@@ -103,7 +107,6 @@ function TabDropdownItem({ tab, isActive, workspaceSlug, onSelect }: TabDropdown
       type="button"
       className="ws-tabbar-dropdown-item"
       data-active={isActive ? 'true' : undefined}
-      data-attention={!isActive && tab.attention ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
       {...handlers}
       onClick={(e) => {
@@ -112,7 +115,12 @@ function TabDropdownItem({ tab, isActive, workspaceSlug, onSelect }: TabDropdown
         onSelect();
       }}
     >
-      <span className="ws-tabbar-dropdown-item-label">{tab.name}</span>
+      <span className="ws-tabbar-dropdown-item-label">
+        <span className="ws-tabbar-dropdown-item-label-text">{tab.name}</span>
+        {!isActive && tab.attention && (
+          <span className="badge-dot -inline" aria-label="needs attention" />
+        )}
+      </span>
     </button>
   );
 }

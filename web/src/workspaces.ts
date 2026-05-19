@@ -5,16 +5,19 @@ import { api } from './api';
 /**
  * Hook returning the list of top-level workspaces. Backed by a module-
  * level cache so the picker, the chrome switcher, and any other consumers
- * all see the same data. Refreshes on mount, visibility, focus, and on a
- * BroadcastChannel ping from another same-browser tab.
+ * all see the same data. Refreshes on mount, visibility, focus, on a
+ * BroadcastChannel ping from another same-browser tab, and on a 5s poll
+ * while the tab is visible.
  *
- * No HTTP polling — the workspace list changes slowly compared to per-tab
- * attention state. Same-browser tabs stay in sync via BroadcastChannel
- * (covers the common case of having muxpad open in two tabs on one
- * machine). Cross-device sync still requires an extra trip; deferred.
+ * The poll is what surfaces per-workspace attention rollups (used by the
+ * favicon and the switcher trigger badge) when a background workspace
+ * fires BEL — without it, a browser tab parked on Workspace A wouldn't
+ * learn that Workspace B has activity until A loses/regains focus.
+ * Cross-device sync still piggybacks on the same channel.
  * Components that mutate workspaces should call refreshWorkspaces()
  * directly after the mutation succeeds.
  */
+const VISIBLE_POLL_MS = 5000;
 let cache: Workspace[] = [];
 const listeners = new Set<(w: Workspace[]) => void>();
 let version = 0;
@@ -48,8 +51,24 @@ export function useWorkspaces(): {
   useEffect(() => {
     listeners.add(setState);
     void refreshWorkspaces();
+
+    let timer: number | null = null;
+    const startPolling = () => {
+      if (timer !== null) return;
+      timer = window.setInterval(() => void refreshWorkspaces(), VISIBLE_POLL_MS);
+    };
+    const stopPolling = () => {
+      if (timer === null) return;
+      window.clearInterval(timer);
+      timer = null;
+    };
     const onVisible = () => {
-      if (document.visibilityState === 'visible') void refreshWorkspaces();
+      if (document.visibilityState === 'visible') {
+        void refreshWorkspaces();
+        startPolling();
+      } else {
+        stopPolling();
+      }
     };
     const onFocus = () => void refreshWorkspaces();
     const onChannel = (e: MessageEvent) => {
@@ -59,11 +78,15 @@ export function useWorkspaces(): {
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('focus', onFocus);
     channel?.addEventListener('message', onChannel);
+    if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+      startPolling();
+    }
     return () => {
       listeners.delete(setState);
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('focus', onFocus);
       channel?.removeEventListener('message', onChannel);
+      stopPolling();
     };
   }, []);
   return { workspaces: state, refresh: refreshWorkspaces };

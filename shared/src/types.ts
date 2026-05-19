@@ -24,16 +24,15 @@ export const LayoutNodeSchema: z.ZodType<LayoutNode> = z.lazy(() =>
 export const PaneSpecSchema = z.object({
   id: z.string(),
   tab_id: z.string(),
-  shell: z.string(),
+  kind: z.enum(['shell', 'url']).default('shell'),
+  url: z.string().nullable().default(null),
+  // shell/cwd are required for kind='shell', null for kind='url'.
+  shell: z.string().nullable().default(null),
   startup_cmd: z.string().nullable().default(null),
-  cwd: z.string(),
+  cwd: z.string().nullable().default(null),
   env: z.record(z.string()).nullable().default(null),
   created_at: z.number(),
-  // Runtime-only fields, folded in by the route layer from PaneManager
-  // state (not stored in the DB). Used to label the pane in the UI.
-  // title is the latest OSC 0/1/2 set by the program in the pane;
-  // foreground_cmd is the basename of the foreground process (e.g.
-  // 'claude', 'vim', 'zsh'). Either or both can be missing.
+  // Runtime-only fields decorated by the route layer.
   title: z.string().nullable().optional(),
   foreground_cmd: z.string().nullable().optional(),
 });
@@ -76,3 +75,79 @@ export const WorkspaceSchema = z.object({
   attention: z.boolean().optional(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
+
+// ── Event protocol ──────────────────────────────────────────────────────
+// Pushed over /ws/events whenever structural state changes (panes/tabs/
+// workspaces add/remove/update). PTY data still flows on the per-pane WS.
+
+export const PaneAddedEventSchema = z.object({
+  type: z.literal('pane.added'),
+  tab_id: z.string(),
+  pane: PaneSpecSchema,
+});
+export const PaneRemovedEventSchema = z.object({
+  type: z.literal('pane.removed'),
+  tab_id: z.string(),
+  pane_id: z.string(),
+});
+export const PaneUpdatedEventSchema = z.object({
+  type: z.literal('pane.updated'),
+  tab_id: z.string(),
+  pane: PaneSpecSchema,
+});
+export const TabAddedEventSchema = z.object({
+  type: z.literal('tab.added'),
+  workspace_id: z.string(),
+  tab: TabSchema,
+});
+export const TabUpdatedEventSchema = z.object({
+  type: z.literal('tab.updated'),
+  tab: TabSchema,
+});
+export const TabRemovedEventSchema = z.object({
+  type: z.literal('tab.removed'),
+  workspace_id: z.string(),
+  tab_id: z.string(),
+});
+export const WorkspaceAddedEventSchema = z.object({
+  type: z.literal('workspace.added'),
+  workspace: WorkspaceSchema,
+});
+export const WorkspaceUpdatedEventSchema = z.object({
+  type: z.literal('workspace.updated'),
+  workspace: WorkspaceSchema,
+});
+export const WorkspaceRemovedEventSchema = z.object({
+  type: z.literal('workspace.removed'),
+  workspace_id: z.string(),
+});
+
+// Request to open a URL in a new real browser tab (window.open), not as
+// an iframe pane. The web client surfaces this as a clickable toast so
+// the actual window.open() call lands inside a user-gesture handler and
+// bypasses popup blockers. `tab_id` scopes the toast to browser clients
+// currently viewing that muxpad tab (so you don't get duplicate prompts
+// across other tabs / multiple open browser windows). `pane_id` is
+// passed through verbatim; the web client resolves it to a display
+// label using the same logic as the pane chrome, so the toast and the
+// tile header always agree.
+export const ExternalUrlOpenEventSchema = z.object({
+  type: z.literal('external_url.open'),
+  url: z.string().min(1),
+  tab_id: z.string().optional(),
+  pane_id: z.string().optional(),
+});
+
+export const MuxpadEventSchema = z.discriminatedUnion('type', [
+  PaneAddedEventSchema,
+  PaneRemovedEventSchema,
+  PaneUpdatedEventSchema,
+  TabAddedEventSchema,
+  TabUpdatedEventSchema,
+  TabRemovedEventSchema,
+  WorkspaceAddedEventSchema,
+  WorkspaceUpdatedEventSchema,
+  WorkspaceRemovedEventSchema,
+  ExternalUrlOpenEventSchema,
+]);
+export type MuxpadEvent = z.infer<typeof MuxpadEventSchema>;
