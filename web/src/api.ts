@@ -86,6 +86,8 @@ export const api = {
   createPane: (
     tabId: string,
     body: {
+      kind?: 'shell' | 'url';
+      url?: string;
       shell?: string;
       startup_cmd?: string | null;
       cwd?: string;
@@ -99,6 +101,15 @@ export const api = {
     }),
 
   deletePane: (id: string) => req<void>(`/api/panes/${id}`, { method: 'DELETE' }),
+
+  patchPane: (
+    id: string,
+    patch: { kind?: 'shell' | 'url'; url?: string | null },
+  ) =>
+    req<PaneSpec>(`/api/panes/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
 
   respawnPane: (id: string) =>
     req<void>(`/api/panes/${id}/respawn`, { method: 'POST' }),

@@ -2,6 +2,15 @@
 
 Known follow-up work from the v1 code review. The Critical items have been fixed (commit `9d783b4`). What remains is the Important and Minor list, plus design-spec items that v1 explicitly deferred.
 
+## Two-process architecture
+
+muxpad runs as two processes: `ptyd` owns terminals and stays up across
+restarts; the main `muxpad` server owns HTTP, the web bundle, structural
+state, and the event stream, and proxies PTY I/O to ptyd over a unix socket.
+Restarting the main server (HMR in dev, `launchctl kickstart -k gui/$UID/dev.muxpad`
+for installed builds, or `./scripts/muxpad restart` for the bash CLI) does
+NOT affect your running terminals. Restarting ptyd does.
+
 ## From the v1 review (deferred)
 
 ### Important

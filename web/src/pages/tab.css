@@ -109,9 +109,12 @@
 }
 
 /* Pane header — the same plate language as the top chrome, one level down.
-   Shorter (28px), darker shelf (--bg-chrome), but identical state idiom:
-     bottom rail = focused (keyboard input is here)
-     left rail   = attention (BEL since last seen — wiring TBD)  */
+   Shorter (28px), darker shelf (--bg-chrome). Same two-channel idiom:
+     bottom rail (accent) = focused — "keyboard input is here"
+     top-right dot (red)  = attention — "BEL since last seen" (server emits
+                            via PaneManager diff-emit; client rendering of
+                            the per-pane dot is not wired yet — the tab-bar
+                            already shows the tab-level rollup) */
 .workspace-body .mosaic-window-toolbar {
   position: relative;
   background: var(--bg-chrome) !important;
@@ -145,20 +148,11 @@
   pointer-events: none;
 }
 
-/* Attention rail — left edge. Surfaces "this pane rang BEL since you last
-   saw it" without a floating dot. Hidden on the focused pane (you're here,
-   you've seen it). The data attribute is set by the host component; until
-   we wire per-pane attention to the web, this rule is dormant. */
-.workspace-body .mosaic-window[data-attention='true']:not([data-focused='true']) .mosaic-window-toolbar::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: var(--chrome-rail);
-  background: var(--accent);
-  pointer-events: none;
-}
+/* Per-pane attention slot: a future .badge-dot would render here, in
+   the top-right of the pane chrome. No left-edge rail — that channel
+   is reserved for the focused-pane selection rail above. The server
+   emits the signal (PaneManager diff-emit); the client doesn't paint
+   it yet. The tab-bar one level up already shows the tab-level rollup. */
 
 .workspace-body .mosaic-window-body {
   background: var(--xterm-bg);
@@ -320,6 +314,143 @@
   min-width: 0;
 }
 
+/* Wraps the type-switch button + its dropdown menu so the menu can be
+   absolutely positioned relative to the button. */
+.pane-chrome-typeswitch-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  height: 100%;
+}
+
+/* Dropdown menu shown when the type-switch button is clicked. Anchored
+   below the button via the .pane-chrome-typeswitch-wrap parent. Above
+   the splitter (z-index 5) and any pane bodies. */
+.pane-chrome-typeswitch-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+  padding: 4px;
+  background: var(--bg-chrome);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.pane-chrome-typeswitch-menu-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size-sm);
+  text-align: left;
+}
+.pane-chrome-typeswitch-menu-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.pane-chrome-typeswitch-menu-item:disabled {
+  color: var(--accent, #4a9eff);
+  cursor: default;
+  opacity: 0.85;
+}
+.pane-chrome-typeswitch-menu-item svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* Leftmost type-switch button — the chrome's "what kind of pane is this".
+   For URL panes it shows a globe (and overlays a rotating ring while the
+   iframe is loading); for shell panes a terminal icon. Click opens a
+   menu with the available pane types. Sized to match .pane-chrome-btn-inline
+   so it sits flush with the title without inflating the chrome row height. */
+.pane-chrome-typeswitch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  flex-shrink: 0;
+  width: 22px;
+  height: 100%;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--fg-faint);
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 80ms ease, color 80ms ease;
+}
+.pane-chrome-typeswitch:hover {
+  opacity: 1;
+  color: var(--fg);
+}
+.pane-chrome-typeswitch:focus-visible {
+  outline: none;
+  opacity: 1;
+  color: var(--fg);
+}
+.pane-chrome-typeswitch svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Loading state: a rotating ring overlays the globe icon. Sized slightly
+   larger than the icon so it reads as "around" the globe rather than
+   covering it. */
+.pane-chrome-typeswitch-spinner {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--accent, #4a9eff);
+  border-top-color: transparent;
+  border-radius: 50%;
+  pointer-events: none;
+  animation: url-pane-spin 700ms linear infinite;
+}
+
+@keyframes url-pane-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* In-place editing of a URL pane's title. Box geometry matches
+   .pane-chrome-title-link + .pane-chrome-title exactly so the text
+   doesn't jump on swap: same height, same padding, same font.
+   Focus ring uses outline-offset: -1px so it sits INSIDE the box
+   without nudging surrounding layout. */
+.pane-chrome-title-input {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  /* Match the link's max-width and let the input grow to fill it
+     (default input flex shrinks to intrinsic width — tiny). */
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 70%;
+  padding: 0 6px;
+  margin: 0;
+  /* Strong contrast in edit mode: bright fg + subtle bg tint vs the
+     chrome-fg-faint that the idle title link uses. */
+  background: var(--bg-active, rgba(0, 0, 0, 0.35));
+  border: 0;
+  color: var(--fg);
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size-sm);
+  letter-spacing: 0.01em;
+  outline: 1px solid var(--accent, #4a9eff);
+  outline-offset: -1px;
+}
+
 .pane-chrome-spacer {
   flex: 1;
 }
@@ -328,13 +459,17 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
+  width: 30px;
   height: 100%;
   background: transparent;
   border: none;
   color: var(--fg-faint);
   cursor: pointer;
   transition: color 80ms ease, background 80ms ease;
+}
+.pane-chrome-btn svg {
+  width: 18px;
+  height: 18px;
 }
 .pane-chrome-btn:hover {
   color: var(--fg);
@@ -348,4 +483,23 @@
 
 .pane-chrome-close:hover {
   color: var(--danger);
+}
+
+/* Inline variant — sits adjacent to text (e.g. URL pane reload),
+   not in the right-side button group. Tight width, low-key idle
+   opacity, no hover-bg block so it feels like part of the title
+   rather than a primary control. */
+.pane-chrome-btn-inline {
+  width: auto;
+  padding: 0 4px;
+  margin-left: -2px;
+  opacity: 0.55;
+}
+.pane-chrome-btn-inline:hover {
+  background: transparent;
+  opacity: 1;
+}
+.pane-chrome-btn-inline svg {
+  width: 14px;
+  height: 14px;
 }

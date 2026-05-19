@@ -1,16 +1,11 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'node:http';
 import type Database from 'better-sqlite3';
-import { ulid } from 'ulid';
-import {
-  decodeClientMessage,
-  encodeOutput,
-  encodeExit,
-  encodeError,
-  encodePong,
-} from '@muxpad/shared';
-import type { PaneManager } from './runtime/PaneManager.js';
+import type { PtydClient } from './ptyd-client/PtydClient.js';
+import { proxyAttach } from './ptyd-client/proxyAttach.js';
 import { PaneStore } from './store/PaneStore.js';
+import { TabStore } from './store/TabStore.js';
+import type { EventBus } from './events.js';
 
 export interface WsServerHandle {
   close(): Promise<void>;
@@ -19,23 +14,29 @@ export interface WsServerHandle {
 export function attachWsServer(deps: {
   http: Server;
   db: Database.Database;
-  paneManager: PaneManager;
+  ptyd: PtydClient;
+  events: EventBus;
   /** Liveness ping interval in ms. Defaults to 15s; tests pass a small value. */
   heartbeatMs?: number;
 }): WsServerHandle {
   const wss = new WebSocketServer({ noServer: true });
   const panes = new PaneStore(deps.db);
+  const tabs = new TabStore(deps.db);
 
   // Server-side liveness detection. A WebSocket severed abruptly (browser
   // hard-reload, crashed tab, network blip) does NOT fire 'close' until the
-  // OS TCP timeout — minutes later. Until then the dead client lingers in
-  // PaneRuntime.clientSizes, and the MIN-across-clients sizing logic pins
-  // every live client to the ghost's stale terminal size.
+  // OS TCP timeout — minutes later. Until then the dead client stays on
+  // ptyd's side, and a pane.kind flip can't clean up its bucket until the
+  // 'close' eventually fires.
   //
   // Standard ws fix: ping every client on an interval; browsers answer
   // protocol-level pings with a pong automatically (the page never sees it).
   // Any client that missed the previous round gets terminated, which fires
-  // 'close' → removeClient → recomputeSize.
+  // 'close' → proxyAttach teardown.
+  //
+  // Note: ptyd runs its OWN heartbeat against its `/control` and `/pty/:id`
+  // sockets. This heartbeat is independent — it's the main server detecting
+  // browser-side ghosts on the WSes IT terminates.
   const HEARTBEAT_MS = deps.heartbeatMs ?? 15_000;
   const heartbeat = setInterval(() => {
     for (const client of wss.clients) {
@@ -55,6 +56,27 @@ export function attachWsServer(deps: {
 
   deps.http.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://x');
+    // App-level event stream. One socket per browser; receives JSON-encoded
+    // MuxpadEvent frames for structural state changes (panes/tabs/workspaces).
+    // PTY I/O still goes through /ws/pane/:id below.
+    if (url.pathname === '/ws/events') {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        // Heartbeat participation: the sweep above pings every wss client.
+        // Mark this socket alive on attach + pong so it doesn't get
+        // terminated as a ghost on the next round.
+        const live = ws as WebSocket & { isAlive?: boolean };
+        live.isAlive = true;
+        ws.on('pong', () => {
+          live.isAlive = true;
+        });
+        const unsub = deps.events.subscribe((e) => {
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(e));
+        });
+        ws.on('close', unsub);
+        ws.on('error', unsub);
+      });
+      return;
+    }
     const match = url.pathname.match(/^\/ws\/pane\/([^/]+)$/);
     if (!match) {
       socket.destroy();
@@ -66,16 +88,13 @@ export function attachWsServer(deps: {
       socket.destroy();
       return;
     }
+    // URL panes have no PTY; reject upgrade before reaching ptyd
+    // (ensurePane on a null shell would crash node-pty inside ptyd).
+    if (pane.kind === 'url') {
+      socket.destroy();
+      return;
+    }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      const runtime = deps.paneManager.getOrCreate({
-        id: pane.id,
-        shell: pane.shell,
-        startup_cmd: pane.startup_cmd,
-        cwd: pane.cwd,
-        env: pane.env,
-      });
-      const clientId = ulid();
-
       // Liveness: mark alive on connect and on every pong. The heartbeat
       // sweep above flips this to false before each ping; a client that
       // doesn't pong before the next sweep is terminated as a ghost.
@@ -85,44 +104,40 @@ export function attachWsServer(deps: {
         live.isAlive = true;
       });
 
-      const send = (frame: Uint8Array) => {
-        if (ws.readyState === WebSocket.OPEN) ws.send(frame);
-      };
+      // pane.shell / pane.cwd are nullable on PaneSpec (URL panes), but
+      // we've already rejected kind === 'url' upgrades above; fall back
+      // defensively if a row is malformed.
+      // Look up the tab's workspace_id so the spawned shell gets the
+      // full identity env (MUXPAD_WORKSPACE_ID).
+      const workspaceId = tabs.getWorkspaceId(pane.tab_id);
 
-      // Replay ring buffer.
-      const snapshot = runtime.snapshot();
-      if (snapshot.length) send(encodeOutput(snapshot));
-
-      const onOutput = (data: string) => send(encodeOutput(data));
-      const onExit = (code: number) => {
-        send(encodeExit(code, runtime.getExitCause()));
-        // Closing the WS lets the client decide: explicit exit (kill via UI,
-        // shell exit) → don't reconnect; transient close → reconnect.
-        try {
-          ws.close(1000, 'pty exited');
-        } catch {
-          // Already closing; ignore.
-        }
-      };
-      runtime.on('output', onOutput);
-      runtime.on('exit', onExit);
-
-      ws.on('message', (data: Buffer) => {
-        try {
-          const msg = decodeClientMessage(new Uint8Array(data));
-          if (msg.kind === 'input') runtime.write(msg.data);
-          else if (msg.kind === 'resize') runtime.setClientSize(clientId, msg.cols, msg.rows);
-          else if (msg.kind === 'ping') send(encodePong());
-        } catch (err) {
-          send(encodeError(String(err)));
-        }
-      });
-
-      ws.on('close', () => {
-        runtime.off('output', onOutput);
-        runtime.off('exit', onExit);
-        runtime.removeClient(clientId);
-      });
+      // Issue ensurePane against ptyd before bridging. If ptyd is
+      // disconnected, ensurePane rejects and we close the browser WS so
+      // the client knows to retry. ensurePane is idempotent on ptyd's
+      // side — repeated calls for the same id are no-ops.
+      deps.ptyd
+        .ensurePane({
+          id: pane.id,
+          shell: pane.shell ?? process.env.SHELL ?? '/bin/zsh',
+          startup_cmd: pane.startup_cmd,
+          cwd: pane.cwd ?? process.env.HOME ?? '/',
+          env: pane.env,
+          tab_id: pane.tab_id,
+          ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
+        })
+        .then(() => {
+          // Race: the client may have already closed (e.g. tab nav)
+          // while ensurePane was inflight. Skip the bridge in that case.
+          if (ws.readyState !== WebSocket.OPEN) return;
+          proxyAttach({ socketPath: deps.ptyd.socketPath, paneId: pane.id, browser: ws });
+        })
+        .catch(() => {
+          try {
+            ws.close(1011, 'ptyd unavailable');
+          } catch {
+            // already closing
+          }
+        });
     });
   });
 

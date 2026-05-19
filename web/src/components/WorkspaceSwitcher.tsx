@@ -123,27 +123,38 @@ export function WorkspaceSwitcher({ activeWorkspaceSlug }: WorkspaceSwitcherProp
       <button
         type="button"
         className="ws-switcher-trigger"
-        data-attention={anyOtherAttention ? 'true' : undefined}
         data-open={open ? 'true' : undefined}
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         onDoubleClick={startEdit}
-        title={active ? 'Double-click to rename' : 'Switch workspace'}
+        title={
+          anyOtherAttention
+            ? 'Another workspace needs attention'
+            : active
+              ? 'Double-click to rename'
+              : 'Switch workspace'
+        }
       >
         <span className="ws-switcher-label">{active?.name ?? 'Workspaces'}</span>
-        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-          <path
-            d="M2 4 L5 7 L8 4"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            fill="none"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
+        <span className="ws-switcher-chevron">
+          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+            <path
+              d="M2 4 L5 7 L8 4"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          {anyOtherAttention && (
+            <span className="badge-dot" aria-label="another workspace needs attention" />
+          )}
+        </span>
       </button>
       {open && (
         <div className="ws-switcher-menu" role="menu">
+          <div className="ws-switcher-section-label">Workspaces</div>
           {workspaces.map((w) => (
             <WorkspaceItem
               key={w.id}
@@ -196,7 +207,6 @@ function WorkspaceItem({
       params={{ wsSlug: slug }}
       className="ws-switcher-item"
       data-active={isActive ? 'true' : undefined}
-      data-attention={!isActive && attention ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
       {...handlers}
       onClick={(e) => {
@@ -209,7 +219,12 @@ function WorkspaceItem({
         onPlainClick();
       }}
     >
-      <span className="ws-switcher-item-label">{name}</span>
+      <span className="ws-switcher-item-label">
+        <span className="ws-switcher-item-label-text">{name}</span>
+        {!isActive && attention && (
+          <span className="badge-dot -inline" aria-label="needs attention" />
+        )}
+      </span>
       <span className="ws-switcher-item-meta">
         {tabCount} {tabCount === 1 ? 'tab' : 'tabs'}
       </span>

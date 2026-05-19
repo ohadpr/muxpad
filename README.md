@@ -56,7 +56,9 @@ pnpm serve:stop       # SIGTERM the daemon
 pnpm serve:restart    # stop + start (e.g. after pulling)
 ```
 
-Logs go to `~/.muxpad/server.log`. The daemon does **not** auto-start on reboot. To set that up on macOS via launchd, see [docs/launchd.md](docs/launchd.md).
+Logs go to `~/.muxpad/server.log` (and `~/.muxpad/ptyd.log`). The daemon does **not** auto-start on reboot. To set that up on macOS via launchd, see [docs/launchd.md](docs/launchd.md).
+
+Under the hood muxpad runs as two processes: `ptyd` owns the terminals and the `muxpad` server owns HTTP + web. Restarting the main server (HMR in dev, `launchctl kickstart -k gui/$UID/dev.muxpad`, or `./scripts/muxpad restart`) leaves your running shells untouched.
 
 ## Configuration
 
@@ -87,13 +89,15 @@ For dev (`pnpm --parallel dev`), the vite config already permits `*.ts.net` host
 
 ```
 shared/   zod-validated domain types, WS binary protocol codecs
-server/   Hono HTTP, WebSocket bridge, PTY runtime, SQLite
+server/   Hono HTTP, WebSocket bridge, SQLite, and ptyd (the PTY-owning daemon)
 web/      React SPA: dashboard, workspace, popout, XtermPane
 ```
 
+The `server/` package builds two binaries: `muxpad` (HTTP + web + SQLite + WS proxy) and `ptyd` (node-pty + ring buffers, exposed over a unix socket). They talk over `~/.muxpad/ptyd.sock`. See [docs/punch-list.md](docs/punch-list.md#two-process-architecture).
+
 ## Stack
 
-Node 22 + TypeScript monorepo on pnpm. Server is Hono + ws + node-pty + better-sqlite3. Web is React + Vite + TanStack Router + xterm.js + react-mosaic-component.
+Node 22 + TypeScript monorepo on pnpm. Server is Hono + ws + better-sqlite3 (main) and node-pty (ptyd). Web is React + Vite + TanStack Router + xterm.js + react-mosaic-component.
 
 ## Status
 

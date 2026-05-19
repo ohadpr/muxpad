@@ -67,3 +67,51 @@ describe('migrations', () => {
     expect(remaining.c).toBe(0);
   });
 });
+
+describe('migrations v6 — url panes', () => {
+  it('adds kind defaulting to shell and a nullable url column', () => {
+    const db = new Database(':memory:');
+    // better-sqlite3 enables FKs by default; disable so we can test the
+    // pane row in isolation without inserting prereq workspace/tab rows.
+    db.pragma('foreign_keys = OFF');
+    runMigrations(db);
+    // Insert a row using the legacy shape (no kind/url). The default
+    // should fill kind=shell.
+    db.prepare(
+      `INSERT INTO panes (id, tab_id, shell, startup_cmd, cwd, env, created_at)
+       VALUES ('p1', 't1', '/bin/zsh', null, '/tmp', null, 0)`,
+    ).run();
+    const row = db
+      .prepare('SELECT kind, url FROM panes WHERE id = ?')
+      .get('p1') as { kind: string; url: string | null };
+    expect(row.kind).toBe('shell');
+    expect(row.url).toBeNull();
+  });
+
+  it('allows kind=url with a url and null shell/cwd', () => {
+    const db = new Database(':memory:');
+    runMigrations(db);
+    // Required: tabs row first because of FK; same for workspace.
+    db.prepare(
+      `INSERT INTO workspaces (id, slug, name, position, created_at, updated_at)
+       VALUES ('w1', 'w', 'w', 0, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at)
+       VALUES ('t1', 't', 't', '', 'w1', 0, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO panes (id, tab_id, kind, url, shell, cwd, created_at)
+       VALUES ('p2', 't1', 'url', 'https://example.com', null, null, 0)`,
+    ).run();
+    const row = db
+      .prepare('SELECT kind, url, shell, cwd FROM panes WHERE id = ?')
+      .get('p2') as { kind: string; url: string; shell: string | null; cwd: string | null };
+    expect(row).toEqual({
+      kind: 'url',
+      url: 'https://example.com',
+      shell: null,
+      cwd: null,
+    });
+  });
+});

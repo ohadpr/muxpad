@@ -4,7 +4,9 @@ import type Database from 'better-sqlite3';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { PaneStore } from '../store/PaneStore.js';
-import type { PaneManager } from '../runtime/PaneManager.js';
+import type { PtydClient } from '../ptyd-client/PtydClient.js';
+import type { PtydCache } from '../ptyd-cache.js';
+import type { EventBus } from '../events.js';
 
 /**
  * CRUD for the top-level workspace concept. Workspaces own tabs; tabs
@@ -12,7 +14,9 @@ import type { PaneManager } from '../runtime/PaneManager.js';
  */
 export function workspacesRoutes(deps: {
   db: Database.Database;
-  paneManager: PaneManager;
+  ptyd: PtydClient;
+  cache: PtydCache;
+  events: EventBus;
 }): Hono {
   const app = new Hono();
   const workspaces = new WorkspaceStore(deps.db);
@@ -23,7 +27,7 @@ export function workspacesRoutes(deps: {
   const workspaceAttention = (workspaceId: string): boolean => {
     for (const t of tabs.listByWorkspace(workspaceId)) {
       for (const p of panes.listByTab(t.id)) {
-        if (deps.paneManager.get(p.id)?.getNeedsAttention()) return true;
+        if (deps.cache.getAttention(p.id)) return true;
       }
     }
     return false;
@@ -40,7 +44,9 @@ export function workspacesRoutes(deps: {
       .object({ name: z.string().optional() })
       .parse(await c.req.json().catch(() => ({})));
     const name = body.name?.trim() || nextDefaultName(workspaces.list());
-    return c.json(workspaces.create({ name }), 201);
+    const created = workspaces.create({ name });
+    deps.events.emit({ type: 'workspace.added', workspace: created });
+    return c.json(created, 201);
   });
 
   app.get('/:id', (c) => {
@@ -58,7 +64,9 @@ export function workspacesRoutes(deps: {
       .object({ name: z.string().optional(), slug: z.string().optional() })
       .parse(await c.req.json());
     try {
-      return c.json(workspaces.update(c.req.param('id'), body));
+      const updated = workspaces.update(c.req.param('id'), body);
+      deps.events.emit({ type: 'workspace.updated', workspace: updated });
+      return c.json(updated);
     } catch {
       return c.json(
         { error: { code: 'not_found', message: 'workspace not found' } },
@@ -68,9 +76,11 @@ export function workspacesRoutes(deps: {
   });
 
   /**
-   * Refuses to delete a workspace that still has tabs. The empty-tabs
-   * case is the only legitimate path to deletion (mirrors the existing
-   * "you can only close an empty tab" UX pattern).
+   * Refuses to delete a workspace that still has tabs. Clients are
+   * expected to drain the workspace first (close tabs in the UI, or
+   * `muxpad tab delete` per tab, etc.) — the WorkspaceLayout empty-
+   * state UI's "Close workspace" button only renders when the count
+   * has already reached zero.
    */
   app.delete('/:id', (c) => {
     const id = c.req.param('id');
@@ -92,6 +102,7 @@ export function workspacesRoutes(deps: {
       );
     }
     workspaces.delete(id);
+    deps.events.emit({ type: 'workspace.removed', workspace_id: id });
     return c.body(null, 204);
   });
 

@@ -6,6 +6,13 @@ export interface Config {
   host: string;
   port: number;
   dataDir: string;
+  /**
+   * Unix-domain socket path where ptyd listens. The main server connects to
+   * this via PtydClient; ptyd binds it on startup. Defaults to
+   * `<dataDir>/ptyd.sock` so a custom data dir keeps the socket alongside
+   * the database. Override via MUXPAD_PTYD_SOCKET for split deployments.
+   */
+  ptydSocketPath: string;
 }
 
 export function loadConfig(): Config {
@@ -30,12 +37,14 @@ export function loadConfig(): Config {
     }
   }
 
+  const dataDir = process.env.MUXPAD_DATA_DIR ?? newDir;
   return {
     // Default to localhost. Tailscale users should set MUXPAD_HOST to their
     // tailnet IP (e.g. `tailscale ip -4`); Tailscale-only is the v1 access
     // boundary and there is no auth. NEVER default to 0.0.0.0.
     host: process.env.MUXPAD_HOST ?? '127.0.0.1',
     port: Number(process.env.MUXPAD_PORT ?? 7777),
-    dataDir: process.env.MUXPAD_DATA_DIR ?? newDir,
+    dataDir,
+    ptydSocketPath: process.env.MUXPAD_PTYD_SOCKET ?? join(dataDir, 'ptyd.sock'),
   };
 }

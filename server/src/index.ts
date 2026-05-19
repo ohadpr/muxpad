@@ -7,21 +7,64 @@ import type { Server } from 'node:http';
 import { loadConfig } from './config.js';
 import { createApp } from './server.js';
 import { openDb } from './store/db.js';
-import { PaneManager } from './runtime/PaneManager.js';
 import { PaneStore } from './store/PaneStore.js';
+import { PtydClient } from './ptyd-client/PtydClient.js';
+import { PtydCache } from './ptyd-cache.js';
 import { attachWsServer } from './ws.js';
+import { EventBus } from './events.js';
 
 const config = loadConfig();
 mkdirSync(config.dataDir, { recursive: true });
 const db = openDb(join(config.dataDir, 'db.sqlite'));
 const paneStore = new PaneStore(db);
-// Periodically snapshot each running pane's actual cwd so that on daemon
-// restart the shell respawns where the user actually was, not the directory
-// the pane was created in.
-const paneManager = new PaneManager({
-  onCwdChange: (paneId, cwd) => paneStore.updateCwd(paneId, cwd),
+// EventBus is shared by the route layer (HTTP-driven mutations) and the
+// /ws/events upgrade arm (server/src/ws.ts) which fans events out to
+// subscribed browsers.
+const events = new EventBus();
+
+// Connect to the (separately-managed) ptyd daemon. The main server no
+// longer owns PTYs — it issues control RPCs and bridges WSes through
+// proxyAttach. ptyd lifecycle (start/restart/launchd) is independent.
+const ptyd = new PtydClient({ socketPath: config.ptydSocketPath });
+const cache = new PtydCache();
+cache.attach(ptyd);
+// Prime the cache with last-known cwds from SQLite so handlers that read
+// cache.getCwd() during the window between HTTP-start and ptyd's first
+// `connected → flushCwds()` reply don't see null. A real event from ptyd
+// supersedes the seed (seedCwds skips already-present ids).
+cache.seedCwds(paneStore.listCwds());
+
+// Persist cwds as ptyd reports them, so respawning a pane after a daemon
+// restart lands in the shell's actual cwd instead of the spawn cwd.
+ptyd.on('paneCwd', (e: { id: string; cwd: string }) => {
+  paneStore.updateCwd(e.id, e.cwd);
 });
-const app = createApp({ db, paneManager, dataDir: config.dataDir });
+
+// Whenever any of (title, fg, attention) changes for a pane, push a
+// decorated `pane.updated` event on the EventBus so /ws/events
+// subscribers see the diff. The cache emits a single 'paneChange' per
+// field-mutation; we rebuild the full decorated row from the cache + db.
+cache.on('paneChange', (paneId: string) => {
+  const pane = paneStore.getById(paneId);
+  if (!pane) return;
+  events.emit({
+    type: 'pane.updated',
+    tab_id: pane.tab_id,
+    pane: {
+      ...pane,
+      title: cache.getTitle(paneId),
+      foreground_cmd: cache.getFg(paneId),
+    },
+  });
+});
+
+const app = createApp({
+  db,
+  ptyd,
+  cache,
+  dataDir: config.dataDir,
+  events,
+});
 
 // Static asset serving (CSS, JS, images, etc.) from the built web bundle.
 const here = dirname(fileURLToPath(import.meta.url));
@@ -56,25 +99,28 @@ const server = serve(
 );
 
 const httpServer = server as unknown as Server;
-const wsServer = attachWsServer({ http: httpServer, db, paneManager });
+const wsServer = attachWsServer({ http: httpServer, db, ptyd, events });
 
 let shuttingDown = false;
 const shutdown = async () => {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log('shutting down…');
-  // CRITICAL ORDERING: close WSs first so the bridge's 'close' handler
-  // detaches runtime listeners *before* we kill the PTYs. Otherwise killAll
-  // makes each runtime emit 'exit', the bridge dispatches an exit frame to
-  // every connected client, and clients interpret that as "the shell exited
-  // naturally" → delete the pane row. Net effect of the wrong order: a
-  // daemon restart wipes panes from every open workspace.
-  // Snapshot current cwds before tearing PTYs down, so a graceful shutdown
-  // captures the very latest directory every pane was in (not just the last
-  // periodic poll, which could be up to 30s stale).
-  paneManager.flushCwds();
+  // Close browser-facing WSes first so they don't see ptyd's `close` (which
+  // is going to follow as we disconnect the control channel) as a PTY-exit.
+  //
+  // IMPORTANT: `wsServer.close()` uses `terminate()` (not `ws.close(1000)`)
+  // on remaining clients, which surfaces as a 1006 abnormal close on the
+  // browser. The client treats 1006 as transient (its reconnect path
+  // re-attaches when the server comes back) rather than as a natural shell
+  // exit. Do NOT "clean this up" to `close(1000)` — the client would
+  // interpret 1000 as the shell having exited and DELETE the pane from the
+  // layout. The asymmetry is load-bearing.
   await wsServer.close();
-  await paneManager.killAll();
+  // Disconnect from ptyd. CRITICALLY we do NOT call killAll — that is
+  // precisely the point of the split. ptyd outlives the main server and
+  // keeps PTYs warm across main-server restarts.
+  await ptyd.close();
   // Force keep-alive HTTP sockets to drop so server.close()'s callback fires.
   httpServer.closeAllConnections();
   httpServer.close(() => process.exit(0));
