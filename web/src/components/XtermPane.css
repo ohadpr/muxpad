@@ -3,6 +3,11 @@
   width: 100%;
   height: 100%;
   background: var(--xterm-bg);
+  /* Contain bounce/overscroll inside the pane — when xterm hits the top or
+     bottom of its scrollback, the touch event must NOT bubble up and rubber-
+     band the whole document. iOS Safari was making the page draggable
+     out from under the user before this. */
+  overscroll-behavior: contain;
 }
 
 .xterm-pane {
@@ -40,15 +45,15 @@
   opacity: 0;
   transition: opacity 120ms ease;
 }
-.xterm-pane-scrollbar[data-visible='true'] {
+.xterm-pane-scrollbar[data-visible="true"] {
   opacity: 0.4;
   pointer-events: auto;
 }
-.xterm-pane-wrapper:hover .xterm-pane-scrollbar[data-visible='true'],
-.xterm-pane-scrollbar[data-visible='true']:hover {
+.xterm-pane-wrapper:hover .xterm-pane-scrollbar[data-visible="true"],
+.xterm-pane-scrollbar[data-visible="true"]:hover {
   opacity: 1;
 }
-.xterm-pane-scrollbar[data-visible='false'] {
+.xterm-pane-scrollbar[data-visible="false"] {
   opacity: 0;
   pointer-events: none;
 }
@@ -64,4 +69,29 @@
 }
 .xterm-pane-scrollbar:hover .xterm-pane-scrollbar-thumb {
   background: var(--fg-dim);
+}
+
+/* Mobile: widen the hit strip to ~32px so it's grabbable with a thumb,
+   and make the visible thumb a little chunkier. The hit strip stays
+   transparent so it doesn't visually intrude — only the centred 8px
+   thumb is drawn. Touch is the only way to reach scrollback in a pane
+   running a TUI with mouse reporting on (xterm's own touch handler
+   short-circuits when mouse reporting is active). Plus the visible-thumb
+   minimum size grows so the target is easier to hit. */
+@media (max-width: 720px) {
+  .xterm-pane-scrollbar {
+    width: 32px;
+  }
+  .xterm-pane-scrollbar-thumb {
+    left: 12px;
+    right: 12px;
+    min-height: 44px;
+    /* Make the thumb more visible on mobile so the user can find it. */
+    background: var(--fg-dim);
+  }
+  /* On touch devices there's no hover, so the bar otherwise stays at
+     the dim 0.4 opacity. Bump it up so it's actually findable. */
+  .xterm-pane-scrollbar[data-visible="true"] {
+    opacity: 0.7;
+  }
 }

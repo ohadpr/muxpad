@@ -3,29 +3,29 @@
    we ship our own copy to make Nerd Font glyphs (powerline arrows, git icons,
    etc.) reliably available. */
 @font-face {
-  font-family: 'MesloLGS NF';
-  src: url('/fonts/MesloLGS-NF-Regular.ttf') format('truetype');
+  font-family: "MesloLGS NF";
+  src: url("/fonts/MesloLGS-NF-Regular.ttf") format("truetype");
   font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
-  font-family: 'MesloLGS NF';
-  src: url('/fonts/MesloLGS-NF-Bold.ttf') format('truetype');
+  font-family: "MesloLGS NF";
+  src: url("/fonts/MesloLGS-NF-Bold.ttf") format("truetype");
   font-weight: 700;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
-  font-family: 'MesloLGS NF';
-  src: url('/fonts/MesloLGS-NF-Italic.ttf') format('truetype');
+  font-family: "MesloLGS NF";
+  src: url("/fonts/MesloLGS-NF-Italic.ttf") format("truetype");
   font-weight: 400;
   font-style: italic;
   font-display: swap;
 }
 @font-face {
-  font-family: 'MesloLGS NF';
-  src: url('/fonts/MesloLGS-NF-Bold-Italic.ttf') format('truetype');
+  font-family: "MesloLGS NF";
+  src: url("/fonts/MesloLGS-NF-Bold-Italic.ttf") format("truetype");
   font-weight: 700;
   font-style: italic;
   font-display: swap;
@@ -53,7 +53,7 @@
 }
 
 /* Tokyo Night — saturated deep navy with a vivid blue accent. */
-[data-theme='tokyo-night'] {
+[data-theme="tokyo-night"] {
   --bg: #1a1b26;
   --bg-elev: #1f2335;
   --bg-hover: #292e42;
@@ -73,7 +73,7 @@
 
 /* Dracula — grey-purple base with vivid purple/pink accents. The standout
    colorful dark. Different both in bg tint and accent hue. */
-[data-theme='dracula'] {
+[data-theme="dracula"] {
   --bg: #282a36;
   --bg-elev: #21222c;
   --bg-hover: #44475a;
@@ -92,7 +92,7 @@
 }
 
 /* GitHub Light — crisp pure white. The "well-lit room" theme. */
-[data-theme='github-light'] {
+[data-theme="github-light"] {
   --bg: #ffffff;
   --bg-elev: #ffffff;
   --bg-hover: #eaeef2;
@@ -113,7 +113,7 @@
 /* Trayo — warm cream paper with a vivid violet brand accent. Inspired by
    trayo.ai: buttery off-white surfaces, near-black ink, saturated purple
    for primaries with a soft lavender tint for hovers and selections. */
-[data-theme='trayo'] {
+[data-theme="trayo"] {
   --bg: #fdf6ea;
   --bg-elev: #fffdf6;
   --bg-hover: #f6ecd8;
@@ -134,7 +134,7 @@
 /* Trayo Dark — calm dark surfaces with a hint of violet, brand-violet
    accent, soft cream foreground. The "night-time Trayo" pairing rather
    than the inverted-light version. */
-[data-theme='trayo-dark'] {
+[data-theme="trayo-dark"] {
   --bg: #221547;
   --bg-elev: #2c1d5b;
   --bg-hover: #382670;
@@ -161,18 +161,30 @@ body,
 #root {
   margin: 0;
   padding: 0;
-  height: 100%;
+  /* Body height = the truly-visible area. main.tsx sets `--app-height`
+     to window.visualViewport.height on resize / orientationchange /
+     URL-bar collapse, which is the only signal that reliably matches
+     what the user can see on iOS Safari (vh/dvh/svh all report wrong
+     in some URL-bar overlay states). Falls back to 100svh (smallest
+     viewport with browser UI expanded) for the very first paint and
+     for environments without visualViewport. overflow:hidden +
+     overscroll-behavior:none lock the page so a rubber-band drag
+     inside a pane can't leak into the document. */
+  height: var(--app-height, 100svh);
   background: var(--bg);
   color: var(--fg);
-  font-family:
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    'Inter',
-    sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif;
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+#root {
+  /* manipulation disables double-tap zoom (a real footgun in a terminal
+     UI where every tap should register as a tap) but still allows
+     pan/pinch inside elements that opt in. */
+  touch-action: manipulation;
 }
 
 a {
@@ -268,9 +280,7 @@ select:focus {
   border-radius: 6px;
   font-size: 13px;
   cursor: pointer;
-  transition:
-    background 80ms ease,
-    border-color 80ms ease;
+  transition: background 80ms ease, border-color 80ms ease;
 }
 .btn:hover {
   background: var(--bg-hover);
@@ -328,7 +338,13 @@ select:focus {
 .app-layout {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  /* Must match the html/body/#root chain so the workspace doesn't
+     overflow past the truly-visible area on iOS Safari. 100vh would
+     be the *large* viewport (URL bar collapsed) and would extend
+     behind the URL bar, leaving the workspace's bottom (and the
+     xterm pane inside it) overlapped by the fixed MobileInputBar. */
+  height: var(--app-height, 100svh);
+  overflow: hidden;
 }
 .app-layout > .ws-tabbar {
   flex: 0 0 auto;

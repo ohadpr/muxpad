@@ -1,24 +1,25 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
-import { useParams, useNavigate } from '@tanstack/react-router';
+import { useNavigate, useParams } from '@tanstack/react-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Mosaic,
-  MosaicWindow,
-  type MosaicNode,
   type MosaicDirection,
+  type MosaicNode,
+  MosaicWindow,
 } from 'react-mosaic-component';
 import 'react-mosaic-component/react-mosaic-component.css';
-import { XtermPane } from '../components/XtermPane';
-import { UrlPane } from '../components/UrlPane';
-import { PaneSelector } from '../components/PaneSelector';
-import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
 import type { LayoutNode, PaneSpec } from '@muxpad/shared';
 import { spliceLayoutAtTarget } from '@muxpad/shared';
-import { api, type TabWithPanes } from '../api';
+import { type TabWithPanes, api } from '../api';
+import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
+import { MobileInputBar } from '../components/MobileInputBar';
+import { PaneSelector } from '../components/PaneSelector';
+import { UrlPane } from '../components/UrlPane';
+import { XtermPane } from '../components/XtermPane';
+import { subscribe, subscribeReconnect } from '../events';
+import { refreshTabs, useTabs } from '../tabs';
 import { useDocumentTitle } from '../use-document-title';
 import { useMediaQuery } from '../use-media-query';
-import { refreshTabs, useTabs } from '../tabs';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
-import { subscribe, subscribeReconnect } from '../events';
 import './tab.css';
 
 type Layout = MosaicNode<string> | null;
@@ -41,9 +42,7 @@ function fromMosaic(layout: Layout): LayoutNode {
   if (typeof layout === 'string') return layout;
   return {
     direction: layout.direction === 'row' ? 'row' : 'column',
-    ...(layout.splitPercentage !== undefined
-      ? { splitPercentage: layout.splitPercentage }
-      : {}),
+    ...(layout.splitPercentage !== undefined ? { splitPercentage: layout.splitPercentage } : {}),
     first: fromMosaic(layout.first),
     second: fromMosaic(layout.second),
   };
@@ -88,10 +87,7 @@ function removePane(layout: Layout, paneId: string): Layout {
 function collectPaneIds(layout: Layout): string[] {
   if (layout == null) return [];
   if (typeof layout === 'string') return [layout];
-  return [
-    ...collectPaneIds(layout.first as Layout),
-    ...collectPaneIds(layout.second as Layout),
-  ];
+  return [...collectPaneIds(layout.first as Layout), ...collectPaneIds(layout.second as Layout)];
 }
 
 export function TabView() {
@@ -120,7 +116,7 @@ export function TabView() {
   useDocumentTitle(
     liveWorkspaceName && liveName
       ? `${liveWorkspaceName} ⋅ ${liveName}`
-      : liveName ?? liveWorkspaceName ?? 'muxpad',
+      : (liveName ?? liveWorkspaceName ?? 'muxpad'),
   );
 
   // Keep local tab.name in sync with the shared list.
@@ -348,9 +344,7 @@ export function TabView() {
       if (remaining.length > 0) {
         const next = remaining[0]!;
         window.setTimeout(() => {
-          window.dispatchEvent(
-            new CustomEvent('muxpad:focus-pane', { detail: { paneId: next } }),
-          );
+          window.dispatchEvent(new CustomEvent('muxpad:focus-pane', { detail: { paneId: next } }));
         }, 0);
       } else {
         // Last pane in this tab is gone → cascade-close the tab.
@@ -425,9 +419,7 @@ export function TabView() {
         );
       } else if (e.type === 'pane.removed' && e.tab_id === tabId) {
         setTab((prev) =>
-          prev
-            ? { ...prev, panes: prev.panes.filter((p) => p.id !== e.pane_id) }
-            : prev,
+          prev ? { ...prev, panes: prev.panes.filter((p) => p.id !== e.pane_id) } : prev,
         );
       } else if (e.type === 'pane.updated' && e.tab_id === tabId) {
         setTab((prev) =>
@@ -439,8 +431,7 @@ export function TabView() {
                   return {
                     ...e.pane,
                     title: e.pane.title ?? p.title ?? null,
-                    foreground_cmd:
-                      e.pane.foreground_cmd ?? p.foreground_cmd ?? null,
+                    foreground_cmd: e.pane.foreground_cmd ?? p.foreground_cmd ?? null,
                   };
                 }),
               }
@@ -482,14 +473,17 @@ export function TabView() {
     if (!tab) return;
     const tabId = tab.id;
     return subscribeReconnect(() => {
-      void api.getTab(tabId).then((detail) => {
-        setTab((prev) => (prev && prev.id === tabId ? { ...prev, ...detail } : prev));
-        layoutRef.current = toMosaic(detail.layout);
-      }).catch(() => {
-        // Tab may have been deleted during the disconnect window — the
-        // subscribe() effect's tab.removed handler is the safety net for
-        // that path. Swallow here.
-      });
+      void api
+        .getTab(tabId)
+        .then((detail) => {
+          setTab((prev) => (prev && prev.id === tabId ? { ...prev, ...detail } : prev));
+          layoutRef.current = toMosaic(detail.layout);
+        })
+        .catch(() => {
+          // Tab may have been deleted during the disconnect window — the
+          // subscribe() effect's tab.removed handler is the safety net for
+          // that path. Swallow here.
+        });
     });
   }, [tab?.id]);
 
@@ -514,7 +508,11 @@ export function TabView() {
   const paneLabel = (paneId: string): string => {
     const p = tab.panes.find((x) => x.id === paneId);
     if (p?.kind === 'url' && p.url) {
-      try { return new URL(p.url).hostname; } catch { return p.url; }
+      try {
+        return new URL(p.url).hostname;
+      } catch {
+        return p.url;
+      }
     }
     const title = p?.title?.trim();
     if (title) return title;
@@ -526,17 +524,12 @@ export function TabView() {
   if (isMobile && !isEmpty) {
     const paneIds = collectPaneIds(layout);
     const activeId =
-      mobileActiveId && paneIds.includes(mobileActiveId)
-        ? mobileActiveId
-        : (paneIds[0] ?? null);
+      mobileActiveId && paneIds.includes(mobileActiveId) ? mobileActiveId : (paneIds[0] ?? null);
 
     const addPane = async () => {
       if (!tab) return;
       const target = activeId ?? paneIds[paneIds.length - 1];
-      const created = await api.createPane(
-        tab.id,
-        target ? { inherit_cwd_from: target } : {},
-      );
+      const created = await api.createPane(tab.id, target ? { inherit_cwd_from: target } : {});
       const newLayout: Layout = target
         ? splitAtPane(layoutRef.current, target, created.id, 'column')
         : created.id;
@@ -590,15 +583,13 @@ export function TabView() {
             (() => {
               const pane = tab.panes.find((p) => p.id === activeId);
               if (!pane) return null;
-              return (
-                <PaneBody
-                  key={activeId}
-                  pane={pane}
-                  onExit={() => onPaneExited(activeId)}
-                />
-              );
+              return <PaneBody key={activeId} pane={pane} onExit={() => onPaneExited(activeId)} />;
             })()}
         </main>
+        <MobileInputBar
+          paneId={activeId}
+          paneKind={tab.panes.find((p) => p.id === activeId)?.kind ?? null}
+        />
       </div>
     );
   }
@@ -612,11 +603,7 @@ export function TabView() {
             <button className="btn btn-primary" onClick={() => void splitFromPane(null, 'row')}>
               + New pane
             </button>
-            <button
-              type="button"
-              className="workspace-empty-close"
-              onClick={() => void closeTab()}
-            >
+            <button type="button" className="workspace-empty-close" onClick={() => void closeTab()}>
               or close this tab
             </button>
           </div>
@@ -689,9 +676,7 @@ export function TabView() {
                     </div>
                   )}
                 >
-                  {tilePane && (
-                    <PaneBody pane={tilePane} onExit={() => onPaneExited(paneId)} />
-                  )}
+                  {tilePane && <PaneBody pane={tilePane} onExit={() => onPaneExited(paneId)} />}
                 </MosaicWindow>
               );
             }}
@@ -707,9 +692,7 @@ export function TabView() {
         // toast can show the generic "A pane requested..." fallback
         // instead of paneLabel's "Pane 1" position-based fallback (which
         // would be misleading for an unknown id).
-        paneLabel={(id) =>
-          tab.panes.some((p) => p.id === id) ? paneLabel(id) : null
-        }
+        paneLabel={(id) => (tab.panes.some((p) => p.id === id) ? paneLabel(id) : null)}
       />
     </div>
   );
@@ -1023,7 +1006,16 @@ function SvgReload() {
 function SvgSplitRight() {
   return (
     <svg width="18" height="18" viewBox="0 0 14 14" aria-hidden="true">
-      <rect x="1" y="2" width="5" height="10" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <rect
+        x="1"
+        y="2"
+        width="5"
+        height="10"
+        rx="1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
       <rect x="8" y="2" width="5" height="10" rx="1" fill="currentColor" opacity="0.4" />
     </svg>
   );
@@ -1032,26 +1024,27 @@ function SvgSplitRight() {
 function SvgSplitDown() {
   return (
     <svg width="18" height="18" viewBox="0 0 14 14" aria-hidden="true">
-      <rect x="2" y="1" width="10" height="5" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <rect
+        x="2"
+        y="1"
+        width="10"
+        height="5"
+        rx="1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
       <rect x="2" y="8" width="10" height="5" rx="1" fill="currentColor" opacity="0.4" />
     </svg>
   );
 }
-
 
 function SvgGlobe() {
   // Simple globe: outline circle + a vertical meridian + horizontal equator.
   // Stays legible at 16px in the chrome row.
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-      <circle
-        cx="7"
-        cy="7"
-        r="5.2"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.2"
-      />
+      <circle cx="7" cy="7" r="5.2" fill="none" stroke="currentColor" strokeWidth="1.2" />
       <ellipse
         cx="7"
         cy="7"
@@ -1061,14 +1054,7 @@ function SvgGlobe() {
         stroke="currentColor"
         strokeWidth="1.0"
       />
-      <line
-        x1="1.8"
-        y1="7"
-        x2="12.2"
-        y2="7"
-        stroke="currentColor"
-        strokeWidth="1.0"
-      />
+      <line x1="1.8" y1="7" x2="12.2" y2="7" stroke="currentColor" strokeWidth="1.0" />
     </svg>
   );
 }
@@ -1111,12 +1097,7 @@ function SvgTerminal() {
 function SvgClose() {
   return (
     <svg width="16" height="16" viewBox="0 0 12 12" aria-hidden="true">
-      <path
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        d="M3 3l6 6M9 3l-6 6"
-      />
+      <path stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" d="M3 3l6 6M9 3l-6 6" />
     </svg>
   );
 }

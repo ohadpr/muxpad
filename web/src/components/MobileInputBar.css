@@ -1,0 +1,130 @@
+.mobile-input-bar {
+  /* Pinned to the bottom of the viewport rather than living in the
+     flex flow. iOS Safari's bottom URL bar is an overlay that floats
+     on top of page content without being reliably subtracted from
+     any CSS viewport unit (vh/dvh/svh/lvh) OR from visualViewport.
+     Fixed-positioned elements at bottom:0 are special-cased by iOS
+     Safari to render *above* the URL bar — which is exactly what we
+     want here, and the only path I found that consistently works
+     across iOS versions. The parent .workspace-mobile leaves room
+     via padding-bottom = var(--mobile-input-bar-height), which
+     MobileInputBar.tsx sets imperatively from a ResizeObserver. */
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg-tabbar);
+  border-top: 1px solid var(--border);
+  padding: 6px 8px;
+  /* Respect the iPhone home-indicator safe area so the Send button isn't
+     under it. env() falls back to 0 on browsers without notch insets. */
+  padding-bottom: max(6px, env(safe-area-inset-bottom));
+  /* Above any document-level overscroll bounce and any pane content. */
+  z-index: 50;
+}
+
+/* Special-keys row — horizontally scrollable if the row overflows the
+   viewport (gives room to add Ctrl-D, Ctrl-Z, etc. later without
+   redesigning). */
+.mobile-input-keys {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  /* Don't let a horizontal swipe on the keys row bubble out and pan
+     the page (which is now overflow:hidden anyway, but defensive). */
+  overscroll-behavior-x: contain;
+}
+.mobile-input-keys::-webkit-scrollbar {
+  display: none;
+}
+
+.mobile-input-key {
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 32px;
+  padding: 4px 10px;
+  background: var(--bg-elev);
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--chrome-font);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  /* Avoid the long-press magnifier / context menu eating the tap. */
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.mobile-input-key:active {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.mobile-input-key-danger {
+  color: var(--danger);
+  border-color: var(--danger);
+  opacity: 0.85;
+}
+
+.mobile-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.mobile-input-textarea {
+  flex: 1;
+  min-height: 36px;
+  /* height is set imperatively by autoResize() so it grows with content;
+     this is just the floor / initial value. */
+  height: 36px;
+  max-height: 100px;
+  resize: none;
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  /* Stay >=16px so iOS doesn't auto-zoom the page when the input gets
+     focus — anything smaller and Safari "helps" by zooming in. */
+  font-size: 16px;
+  line-height: 1.4;
+  font-family: var(--chrome-font);
+  outline: none;
+  /* Word-wrap behavior: standard wrap, no overflow scroll-x. */
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-y: auto;
+}
+.mobile-input-textarea:focus {
+  border-color: var(--accent);
+}
+.mobile-input-textarea::placeholder {
+  color: var(--fg-faint);
+}
+
+.mobile-input-send {
+  flex: 0 0 auto;
+  min-width: 56px;
+  height: 36px;
+  padding: 0 12px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: none;
+  border-radius: 8px;
+  font-family: var(--chrome-font);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.mobile-input-send:active {
+  filter: brightness(0.9);
+}

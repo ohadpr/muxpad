@@ -587,6 +587,59 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     sbEl?.addEventListener('pointerup', onSbPointerUp);
     sbEl?.addEventListener('pointercancel', onSbPointerUp);
 
+    // Two-finger swipe to scroll. xterm's built-in touch handler
+    // short-circuits when mouse reporting is on (Claude Code always has
+    // it on, vim/htop/etc. when their mouse modes are active) — which
+    // leaves a single-finger swipe in the middle of the pane doing
+    // nothing useful. Intercepting any 2-finger gesture on the container
+    // and driving term.scrollToLine() directly gives the user a reliable
+    // mobile scroll path everywhere on the pane, not just at the right-
+    // edge scrollbar.
+    //
+    // Critically, we only act on 2-finger gestures. Single-finger touches
+    // still reach xterm → the running TUI's mouse reporting, so
+    // interactive use (clicking buttons in Claude Code, dragging
+    // selections, etc.) is preserved. Using targetTouches (touches
+    // started on this element) scopes us out of conflicts with the
+    // overlay scrollbar handler — a finger that started on the scrollbar
+    // is on a different element and won't count here.
+    let twoFingerStartY = 0;
+    let twoFingerStartLine = 0;
+    let twoFingerActive = false;
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.targetTouches.length !== 2) {
+        twoFingerActive = false;
+        return;
+      }
+      twoFingerActive = true;
+      twoFingerStartY = (e.targetTouches[0]!.clientY + e.targetTouches[1]!.clientY) / 2;
+      twoFingerStartLine = term.buffer.active.viewportY;
+      // preventDefault suppresses pinch-zoom on iOS for two-finger
+      // gestures inside the pane.
+      e.preventDefault();
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (!twoFingerActive || e.targetTouches.length !== 2) return;
+      const cell = getCellDimensions(term);
+      if (!cell || cell.height <= 0) return;
+      const midY = (e.targetTouches[0]!.clientY + e.targetTouches[1]!.clientY) / 2;
+      const deltaPx = midY - twoFingerStartY;
+      // Dragging fingers DOWN reveals older lines (scroll back). Same
+      // direction as a "drag the page down to see what's above" gesture.
+      const linesDelta = -Math.round(deltaPx / cell.height);
+      const maxScroll = Math.max(0, term.buffer.active.length - term.rows);
+      const target = Math.max(0, Math.min(maxScroll, twoFingerStartLine + linesDelta));
+      term.scrollToLine(target);
+      e.preventDefault();
+    };
+    const onTouchEndOrCancel = () => {
+      twoFingerActive = false;
+    };
+    container.addEventListener('touchstart', onTouchStart, { passive: false });
+    container.addEventListener('touchmove', onTouchMove, { passive: false });
+    container.addEventListener('touchend', onTouchEndOrCancel);
+    container.addEventListener('touchcancel', onTouchEndOrCancel);
+
     const MIN_COLS = 40;
     const MIN_ROWS = 10;
     let lastSentCols = 0;
@@ -797,6 +850,16 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     };
     window.addEventListener('muxpad:focus-pane', onFocusPane);
 
+    // Mobile composer (MobileInputBar) dispatches this for the active
+    // pane. Forward the raw bytes to the PTY as if they came from the
+    // hidden xterm textarea — same path as user keypresses.
+    const onSendInput = (e: Event) => {
+      const detail = (e as CustomEvent<{ paneId?: string; data?: string }>).detail;
+      if (detail?.paneId !== paneId || typeof detail.data !== 'string') return;
+      safeSend(encodeInput(detail.data));
+    };
+    window.addEventListener('muxpad:send-input', onSendInput);
+
     const onKeyDown = (e: KeyboardEvent) => {
       // Cmd/Ctrl+C: copy selection if any (else fall through so xterm sends
       // SIGINT to the PTY).
@@ -890,6 +953,7 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
       for (const id of reassertSizeTimerIds) window.clearTimeout(id);
       if (refitTimer !== null) window.clearTimeout(refitTimer);
       window.removeEventListener('muxpad:focus-pane', onFocusPane);
+      window.removeEventListener('muxpad:send-input', onSendInput);
       container.removeEventListener('keydown', onKeyDown, true);
       container.removeEventListener('paste', onPaste, true);
       onData.dispose();
@@ -901,6 +965,10 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
       sbEl?.removeEventListener('pointermove', onSbPointerMove);
       sbEl?.removeEventListener('pointerup', onSbPointerUp);
       sbEl?.removeEventListener('pointercancel', onSbPointerUp);
+      container.removeEventListener('touchstart', onTouchStart);
+      container.removeEventListener('touchmove', onTouchMove);
+      container.removeEventListener('touchend', onTouchEndOrCancel);
+      container.removeEventListener('touchcancel', onTouchEndOrCancel);
       if (scrollbarRaf !== null) cancelAnimationFrame(scrollbarRaf);
       container.removeEventListener('focusin', onFocusIn);
       container.removeEventListener('focusout', onFocusOut);
