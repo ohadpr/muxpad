@@ -1,10 +1,10 @@
-import { createRoot } from 'react-dom/client';
 import { RouterProvider } from '@tanstack/react-router';
-import { router } from './router';
+import { createRoot } from 'react-dom/client';
 import { startEvents, subscribe, subscribeReconnect } from './events';
-import { refreshWorkspaces } from './workspaces';
-import { refreshTabs } from './tabs';
 import { pushOpen } from './lib/external-open-store';
+import { router } from './router';
+import { refreshTabs } from './tabs';
+import { refreshWorkspaces } from './workspaces';
 import './styles.css';
 
 // Open the app-level event stream as soon as the bundle boots. On every
@@ -58,6 +58,31 @@ subscribe((e) => {
       return;
   }
 });
+
+// iOS Safari's bottom URL bar is an overlay in some states: the bar
+// floats on top of the layout area without being subtracted from the
+// CSS viewport units (vh/dvh/svh all report the wrong height). The
+// only signal that reliably matches the *truly visible* area is
+// visualViewport.height, which we mirror to a CSS variable that the
+// stylesheet uses as the body height. Falls back to 100svh on browsers
+// without visualViewport (none in practice for this app, but cheap).
+//
+// We also poll the height on visualViewport's resize event — fires on
+// URL-bar collapse/expand, software-keyboard show/hide, orientation
+// change — and on plain window resize for desktop.
+if (typeof window !== 'undefined' && window.visualViewport) {
+  const sync = () => {
+    document.documentElement.style.setProperty(
+      '--app-height',
+      `${window.visualViewport!.height}px`,
+    );
+  };
+  window.visualViewport.addEventListener('resize', sync);
+  window.visualViewport.addEventListener('scroll', sync);
+  window.addEventListener('resize', sync);
+  window.addEventListener('orientationchange', sync);
+  sync();
+}
 
 const root = createRoot(document.getElementById('root') as HTMLElement);
 root.render(<RouterProvider router={router} />);
