@@ -183,7 +183,13 @@ export function TabView() {
         setTab(detail);
         layoutRef.current = toMosaic(detail.layout);
         viewedTabId = found.id;
-        api.markTabSeen(found.id).then(() => refreshTabs(workspace.id)).catch(() => {});
+        // refreshWorkspaces too so the favicon and workspace-switcher dot
+        // (both derived from the workspace-level attention rollup) update
+        // without waiting for the next 5s workspace poll.
+        api
+          .markTabSeen(found.id)
+          .then(() => Promise.all([refreshTabs(workspace.id), refreshWorkspaces()]))
+          .catch(() => {});
       } catch (e) {
         setError(String(e));
       }
@@ -193,7 +199,7 @@ export function TabView() {
       if (viewedTabId) {
         api
           .markTabSeen(viewedTabId)
-          .then(() => refreshTabs(workspace.id))
+          .then(() => Promise.all([refreshTabs(workspace.id), refreshWorkspaces()]))
           .catch(() => {});
       }
     };
@@ -448,7 +454,12 @@ export function TabView() {
                 name: e.tab.name,
                 slug: e.tab.slug,
                 layout: e.tab.layout,
-                attention: e.tab.attention,
+                // tab.updated is emitted from PATCH /tabs and from pane
+                // append/remove paths; the server-side Tab row doesn't
+                // carry the runtime-only `attention` field, so e.tab.attention
+                // is undefined here. Coalesce to prev so we don't clobber
+                // the locally-tracked dot.
+                attention: e.tab.attention ?? prev.attention,
                 updated_at: e.tab.updated_at,
               }
             : prev,
