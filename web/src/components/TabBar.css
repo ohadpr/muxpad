@@ -239,12 +239,14 @@
   background: var(--bg-hover);
 }
 
-/* Active — bottom-edge accent rail. Background lifts to var(--bg) (lighter
-   than the bar) so the active tab reads as "pressed forward" toward the
-   pane content beneath. No font-weight change (mono grid stays stable). */
+/* Active — bottom-edge accent rail plus a faint accent wash on the
+   background. The wash is the load-bearing "you are here" signal; the
+   rail underlines it. Both stay subtle enough to read at a glance
+   without dominating the chrome plate. No font-weight change so the
+   mono grid stays stable. */
 .ws-tab[data-active='true'] {
   color: var(--fg);
-  background: var(--bg);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
 }
 .ws-tab[data-active='true']::after {
   content: '';
@@ -256,7 +258,7 @@
   background: var(--accent);
 }
 .ws-tab[data-active='true']:hover {
-  background: var(--bg);
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg));
 }
 
 /* Attention is rendered inline as a .badge-dot at the tab's top-right.
