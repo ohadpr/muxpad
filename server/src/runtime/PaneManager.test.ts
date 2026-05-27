@@ -150,6 +150,76 @@ describe('PaneManager → raw change callbacks (no PaneStore)', () => {
     }
   });
 
+  it('fires onPaneChange with attention:false when markSeen clears the flag', async () => {
+    // Regression: PaneRuntime used to clear needsAttention silently in
+    // markSeen()/write(), so the cleared state had to wait for the next
+    // cmd-poll tick (default 10s) to reach the cache. Both clear paths
+    // must now emit attention-changed, so the manager broadcasts the
+    // clear synchronously via emitDecorations.
+    type Change = { id: string; kind: string; attention?: boolean };
+    const changes: Change[] = [];
+    const mgr = new PaneManager({
+      // Large cmd-poll so we know any 'attention:false' we observe came
+      // from the eager attention-changed listener, not the periodic tick.
+      cmdPollInterval: 60_000,
+      onPaneChange: (id, change) => {
+        if (change.kind === 'attention') {
+          changes.push({ id, kind: change.kind, attention: change.attention });
+        }
+      },
+    });
+    const runtime = mgr.getOrCreate({
+      id: 'clr1',
+      shell: '/bin/sh',
+      startup_cmd: `printf '\\007'; sleep 5`,
+      cwd: '/tmp',
+    });
+    try {
+      // Wait for the BEL to land and the false→true emit to fire.
+      await new Promise((r) => setTimeout(r, 300));
+      expect(runtime.getNeedsAttention()).toBe(true);
+      expect(changes.some((c) => c.attention === true)).toBe(true);
+
+      runtime.markSeen();
+      // The clear emit is synchronous; no need to wait.
+      expect(runtime.getNeedsAttention()).toBe(false);
+      const clearEvents = changes.filter((c) => c.id === 'clr1' && c.attention === false);
+      expect(clearEvents).toHaveLength(1);
+    } finally {
+      await mgr.killAll();
+    }
+  });
+
+  it('fires onPaneChange with attention:false when write clears the flag', async () => {
+    type Change = { id: string; kind: string; attention?: boolean };
+    const changes: Change[] = [];
+    const mgr = new PaneManager({
+      cmdPollInterval: 60_000,
+      onPaneChange: (id, change) => {
+        if (change.kind === 'attention') {
+          changes.push({ id, kind: change.kind, attention: change.attention });
+        }
+      },
+    });
+    const runtime = mgr.getOrCreate({
+      id: 'clr2',
+      shell: '/bin/sh',
+      startup_cmd: `printf '\\007'; sleep 5`,
+      cwd: '/tmp',
+    });
+    try {
+      await new Promise((r) => setTimeout(r, 300));
+      expect(runtime.getNeedsAttention()).toBe(true);
+
+      runtime.write('\n');
+      expect(runtime.getNeedsAttention()).toBe(false);
+      const clearEvents = changes.filter((c) => c.id === 'clr2' && c.attention === false);
+      expect(clearEvents).toHaveLength(1);
+    } finally {
+      await mgr.killAll();
+    }
+  });
+
   it('does not re-fire onPaneChange when the value is unchanged across ticks', async () => {
     // Regression for the diff-emit invariant: the manager's lastTitle /
     // lastFg / lastAttention maps must suppress redundant callbacks across

@@ -74,18 +74,26 @@ app.use('/*', serveStatic({ root: webRoot }));
 // Anything that fell through both API routes and static files lands here.
 // API/WS paths return JSON 404 so the client can parse them; everything else
 // is treated as a client-side SPA route and gets index.html.
-let cachedIndexHtml: string | null = null;
-const readIndex = (): string => {
-  if (!cachedIndexHtml) cachedIndexHtml = readFileSync(join(webRoot, 'index.html'), 'utf-8');
-  return cachedIndexHtml;
-};
+//
+// Read index.html fresh on each fallback request — caching it in memory means
+// a rebuild that produces a new hashed bundle name still serves the old HTML,
+// which then 404s on its asset references. The file is ~1KB and the SPA
+// fallback is rare relative to static-asset hits, so the cost is negligible.
+//
+// Asset paths (/assets/*) and any path with a file extension must NEVER fall
+// back to index.html — serving HTML with a JS or CSS Content-Type triggers
+// the browser's MIME-type sniffing and breaks module loading. Those return
+// a real 404 instead.
 app.notFound((c) => {
   const path = c.req.path;
   if (path.startsWith('/api/') || path.startsWith('/ws/')) {
     return c.json({ error: { code: 'not_found', message: 'route not found' } }, 404);
   }
+  if (path.startsWith('/assets/') || /\.[a-zA-Z0-9]+$/.test(path)) {
+    return c.text('not found', 404);
+  }
   try {
-    return c.html(readIndex());
+    return c.html(readFileSync(join(webRoot, 'index.html'), 'utf-8'));
   } catch {
     return c.text('not found', 404);
   }
