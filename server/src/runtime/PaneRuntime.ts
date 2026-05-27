@@ -1,8 +1,8 @@
-import { EventEmitter } from 'node:events';
 import { execFile, execFileSync } from 'node:child_process';
-import { promisify } from 'node:util';
+import { EventEmitter } from 'node:events';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import * as pty from 'node-pty';
 import { RingBuffer } from './RingBuffer.js';
 import { PtyScanner } from './pty-scanner.js';
@@ -112,13 +112,14 @@ export class PaneRuntime extends EventEmitter {
    * disambiguation between user-typed-exit and daemon-shutdown.
    */
   private exitCause: 'natural' | 'killed' = 'natural';
-  // PTY size is last-writer-wins: any client's resize is authoritative and
-  // the PTY immediately adopts it. muxpad is single-user (one person, maybe
-  // across devices) — NOT multiple people co-editing one PTY — so there is
-  // nothing to arbitrate. A stale tab on another device can never pin the
-  // size, and when the user returns to it, that tab re-asserts its size on
-  // tab-visibility (see XtermPane's visibilitychange handler). We keep only
-  // the set of connected client ids, for clientCount() / liveness.
+  // PTY size is last-writer-wins: any client's resize is applied
+  // immediately. The correctness guarantee lives on the CLIENT: only a
+  // visible browser tab sends resize frames (see `mayDriveResize` in
+  // web/src/components/XtermPane.tsx). A hidden/backgrounded/bfcache'd tab
+  // — the phantom that previously shrank the PTY out from under the active
+  // viewer — stays silent, so last-writer-wins only ever arbitrates among
+  // tabs the user is actually looking at. We keep just the set of connected
+  // client ids for clientCount() / liveness.
   private connectedClients = new Set<string>();
   cols = 80;
   rows = 24;
@@ -214,7 +215,14 @@ export class PaneRuntime extends EventEmitter {
   }
 
   write(data: string): void {
-    if (this.needsAttention) this.needsAttention = false;
+    if (this.needsAttention) {
+      this.needsAttention = false;
+      // Emit on the true→false transition so the manager broadcasts the
+      // clear immediately. Symmetric with the false→true emit in onData;
+      // without this the cleared state would wait for the next cmd-poll
+      // tick (~10s) to reach the cache and the UI dot would linger.
+      this.emit('attention-changed', false);
+    }
     this.process?.write(data);
   }
 
@@ -225,7 +233,12 @@ export class PaneRuntime extends EventEmitter {
 
   /** Clear the attention flag without writing input (e.g. user opened the tab). */
   markSeen(): void {
-    this.needsAttention = false;
+    if (this.needsAttention) {
+      this.needsAttention = false;
+      // See write() — emit so the clear broadcasts eagerly, not on the
+      // next 10s cmd-poll tick.
+      this.emit('attention-changed', false);
+    }
   }
 
   /** Latest terminal title emitted via OSC 0/1/2, or null if no title set yet. */
@@ -259,11 +272,10 @@ export class PaneRuntime extends EventEmitter {
       if (!Number.isFinite(tpgid) || tpgid <= 0) return null;
       // Prefer `args=` (full command line) over `comm=` (basename only)
       // so we can show "pnpm dev:tui" instead of just "pnpm" or "node".
-      const argsResult = await execFileAsync(
-        'ps',
-        ['-p', String(tpgid), '-o', 'args='],
-        { timeout: 1500, encoding: 'utf-8' },
-      );
+      const argsResult = await execFileAsync('ps', ['-p', String(tpgid), '-o', 'args='], {
+        timeout: 1500,
+        encoding: 'utf-8',
+      });
       const args = argsResult.stdout.trim();
       if (!args) return null;
       return prettifyCommand(args);
@@ -272,32 +284,58 @@ export class PaneRuntime extends EventEmitter {
     }
   }
 
-
   /**
    * Report a client's terminal size. Last-writer-wins: the PTY adopts this
-   * size immediately, no arbitration across clients (see the connectedClients
-   * comment above for why). Also registers the client id so clientCount()
-   * reflects it even if this is its first message.
+   * size immediately. Correctness against phantom/stale viewers is enforced
+   * client-side — only a visible tab sends resizes (see the connectedClients
+   * comment near the field declaration). Also registers the client id so
+   * clientCount() reflects it even if this is its first message.
    */
   setClientSize(clientId: string, cols: number, rows: number): void {
     this.connectedClients.add(clientId);
-    if (cols < 1 || rows < 1) return;
-    if (cols === this.cols && rows === this.rows) return;
+    if (cols < 1 || rows < 1) {
+      console.log(
+        `[size] pane=${this.spec.id} client=${clientId.slice(-6)} REJECTED cols=${cols} rows=${rows}`,
+      );
+      return;
+    }
+    if (cols === this.cols && rows === this.rows) {
+      console.log(
+        `[size] pane=${this.spec.id} client=${clientId.slice(-6)} dedup cols=${cols} rows=${rows}`,
+      );
+      return;
+    }
+    const prevCols = this.cols;
+    const prevRows = this.rows;
     this.cols = cols;
     this.rows = rows;
     if (this.process) {
       try {
         this.process.resize(cols, rows);
-      } catch {
-        // PTY may have exited mid-resize; ignore.
+        console.log(
+          `[size] pane=${this.spec.id} client=${clientId.slice(-6)} OK ${prevCols}x${prevRows} → ${cols}x${rows} pid=${this.process.pid}`,
+        );
+      } catch (err) {
+        // PTY may have exited mid-resize. Roll back our local tracker so the
+        // next resize call won't dedup against state we never applied.
+        this.cols = prevCols;
+        this.rows = prevRows;
+        const stack = err instanceof Error && err.stack ? err.stack : undefined;
+        console.error(
+          `[size] pane=${this.spec.id} client=${clientId.slice(-6)} FAILED ${prevCols}x${prevRows} → ${cols}x${rows} err=${String(err)}${stack ? `\n${stack}` : ''}`,
+        );
       }
+    } else {
+      console.log(
+        `[size] pane=${this.spec.id} client=${clientId.slice(-6)} NO-PROCESS cols=${cols} rows=${rows}`,
+      );
     }
   }
 
   /**
    * Drop a client from the connected set (call on disconnect). The PTY keeps
    * its last size — there is no recompute. The next resize from any remaining
-   * client (or its visibility re-assert) updates it.
+   * (visible) client updates it.
    */
   removeClient(clientId: string): void {
     this.connectedClients.delete(clientId);

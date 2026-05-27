@@ -1,16 +1,16 @@
-import { useEffect, useRef } from 'react';
-import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { Terminal } from '@xterm/xterm';
+import { useEffect, useRef } from 'react';
 import '@xterm/xterm/css/xterm.css';
-import { encodeInput, encodeResize, decodeServerMessage, encodePing } from '@muxpad/shared';
+import { decodeServerMessage, encodeInput, encodePing, encodeResize } from '@muxpad/shared';
 import { api } from '../api';
-import { getCellDimensions, setScrollBarWidthZero } from '../lib/xterm-internals';
 import { splitClipboard } from '../lib/clipboard-detect';
-import { createSafeClipboardAddon } from '../lib/safe-clipboard-provider';
 import { writeClipboard } from '../lib/clipboard-write';
+import { createSafeClipboardAddon } from '../lib/safe-clipboard-provider';
 import { ChunkedWriter, SyncBlockExtractor } from '../lib/write-coalescer';
-import { getSettings, useSettings, type Theme } from '../settings';
+import { getCellDimensions, setScrollBarWidthZero } from '../lib/xterm-internals';
+import { type Theme, getSettings, useSettings } from '../settings';
 import './XtermPane.css';
 
 // Debug logging: enable via URL flag (?debug=1) OR localStorage
@@ -20,7 +20,9 @@ const DEBUG =
   typeof window !== 'undefined' &&
   (new URLSearchParams(window.location.search).get('debug') === '1' ||
     window.localStorage?.getItem('muxpad.debug') === '1');
-const dbg = (...args: unknown[]) => { if (DEBUG) console.log('[XtermPane]', ...args); };
+const dbg = (...args: unknown[]) => {
+  if (DEBUG) console.log('[XtermPane]', ...args);
+};
 
 export interface XtermPaneProps {
   paneId: string;
@@ -28,12 +30,15 @@ export interface XtermPaneProps {
   onExit?: ((code: number) => void) | undefined;
 }
 
-const XTERM_THEMES: Record<Theme, {
-  background: string;
-  foreground: string;
-  cursor: string;
-  selectionBackground: string;
-}> = {
+const XTERM_THEMES: Record<
+  Theme,
+  {
+    background: string;
+    foreground: string;
+    cursor: string;
+    selectionBackground: string;
+  }
+> = {
   'tokyo-night': {
     background: '#1a1b26',
     foreground: '#c0caf5',
@@ -104,9 +109,147 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     // OSC 52 handler when navigator.clipboard is undefined (non-secure
     // context — Tailscale serve, LAN IP), which truncates the terminal frame.
     term.loadAddon(createSafeClipboardAddon());
-    term.loadAddon(new WebLinksAddon());
+    // Open clicked links directly — no confirm. The xterm default activator
+    // prompts via window.confirm(), which Chrome amplifies with a generic
+    // "WARNING: dangerous" line that adds no information (the URL is already
+    // visible in the terminal). noopener,noreferrer keeps the destination
+    // from reading window.opener or seeing the muxpad referer.
+    term.loadAddon(
+      new WebLinksAddon((_event, uri) => {
+        window.open(uri, '_blank', 'noopener,noreferrer');
+      }),
+    );
     termRef.current = term;
     fitRef.current = fit;
+
+    // Only a *visible* tab may resize the shared PTY. A hidden tab
+    // (backgrounded, bfcache-restored, Chrome-discarded-then-restored)
+    // measures its xterm against a stale/throttled viewport — its fit()
+    // output is not trustworthy, and pushing it to the PTY shrinks the
+    // terminal out from under whichever tab the user is actually looking
+    // at. This was the root cause of the recurring "pane renders at 60%"
+    // bug: an invisible phantom tab kept sending a small resize.
+    //
+    // When a hidden tab becomes visible again, the visibilitychange
+    // handler's reassertSize() chain zeroes the dedup cache and
+    // re-announces the now-correct size — so nothing is lost by staying
+    // silent while hidden.
+    const mayDriveResize = () => document.visibilityState === 'visible';
+
+    // Diagnostic snapshot: captures everything that could explain a sudden
+    // "renderer shrinks while no React event fires" state. snap() is the
+    // single place to gather it so all events use a consistent shape.
+    // Cheap when DEBUG is off (gated immediately).
+    const shortId = paneId.slice(-6);
+    const snap = (event: string, extra?: Record<string, unknown>): void => {
+      if (!DEBUG) return;
+      const cell = getCellDimensions(term);
+      const screenEl = term.element?.querySelector('.xterm-screen') as HTMLElement | null;
+      const rowsEl = term.element?.querySelector('.xterm-rows') as HTMLElement | null;
+      const viewportEl = term.element?.querySelector('.xterm-viewport') as HTMLElement | null;
+      const screen = screenEl?.getBoundingClientRect();
+      const rowsRect = rowsEl?.getBoundingClientRect();
+      const vpRect = viewportEl?.getBoundingClientRect();
+      const expectedW = cell ? cell.width * term.cols : null;
+      const expectedH = cell ? cell.height * term.rows : null;
+      const ratio = screen && expectedW ? screen.width / expectedW : null;
+      // Emit as a single string so Chrome's object-truncation can't hide
+      // tail fields. Tagged "key=value" pairs stay grep-able.
+      const fmt = (n: number | undefined): string =>
+        n === undefined ? '?' : Math.round(n).toString();
+      const cellStr = cell ? `${cell.width.toFixed(2)}x${cell.height.toFixed(2)}` : 'null';
+      const screenStr = screen ? `${fmt(screen.width)}x${fmt(screen.height)}` : 'null';
+      const rowsStr = rowsRect ? `${fmt(rowsRect.width)}x${fmt(rowsRect.height)}` : 'null';
+      const vpStr = vpRect ? `${fmt(vpRect.width)}x${fmt(vpRect.height)}` : 'null';
+      const expectedStr = expectedW && expectedH ? `${fmt(expectedW)}x${fmt(expectedH)}` : 'null';
+      const ratioStr = ratio !== null ? ratio.toFixed(3) : 'null';
+      const line =
+        `[${event}] pane=${shortId} grid=${term.cols}x${term.rows} cell=${cellStr} ` +
+        `cont=${container.clientWidth}x${container.clientHeight} ` +
+        `screen=${screenStr} rows=${rowsStr} viewport=${vpStr} ` +
+        `expected=${expectedStr} ratio=${ratioStr} dpr=${window.devicePixelRatio} ` +
+        `vis=${document.visibilityState} foc=${document.hasFocus()} ` +
+        `win=${window.innerWidth}x${window.innerHeight} zoom=${(window.visualViewport?.scale ?? 1).toFixed(3)}`;
+      if (extra) dbg(line, extra);
+      else dbg(line);
+    };
+
+    // Anomaly detector. Two distinct anomalies we look for:
+    //
+    //  1. Renderer shrink — `.xterm-screen` bounding rect is materially
+    //     narrower than `cell.width × cols`. Means xterm's own renderer is
+    //     painting smaller than the buffer claims. (Originally suspected,
+    //     never actually observed in practice.)
+    //
+    //  2. PTY desync — DOM is at full size, but the LAST N non-empty rows
+    //     only have content in the first K columns where K is materially
+    //     less than `term.cols`. This means the running TUI thinks the
+    //     terminal is K-wide, while xterm has allocated `cols`-wide cells.
+    //     Cause: ptyd's `process.resize()` ioctl silently failed at some
+    //     point (likely a race on transient PTY state) and our last-sent
+    //     dedup cache locked us out of retrying. Fix: send a "wiggle" —
+    //     resize to (cols-1, rows) then back — to bypass dedup at both
+    //     ends and re-fire SIGWINCH to the TUI.
+    let lastAnomalyLogged = 0;
+    let lastWiggleAt = 0;
+    // Returns the max content width (trailing-whitespace-trimmed length) of
+    // the last N non-empty rendered rows. Looks at DOM (xterm-rows) rather
+    // than xterm's buffer because the buffer is always trimmed to cols even
+    // when the TUI is only painting a subset; the DOM rendering reflects
+    // what actually got drawn.
+    const measureMaxContent = (lookback = 12): number => {
+      const rowsEl = term.element?.querySelector('.xterm-rows') as HTMLElement | null;
+      if (!rowsEl) return 0;
+      const children = rowsEl.children;
+      let max = 0;
+      let nonEmptySeen = 0;
+      // Walk from bottom up — most-recent rows reflect the TUI's actual
+      // current rendering, not stale history that pre-dated a resize.
+      for (let i = children.length - 1; i >= 0 && nonEmptySeen < lookback; i--) {
+        const text = (children[i] as HTMLElement).textContent ?? '';
+        const trimmed = text.replace(/\s+$/, '');
+        if (trimmed.length === 0) continue;
+        nonEmptySeen++;
+        if (trimmed.length > max) max = trimmed.length;
+      }
+      return max;
+    };
+    const checkAnomaly = (event: string): void => {
+      const cell = getCellDimensions(term);
+      const screenEl = term.element?.querySelector('.xterm-screen') as HTMLElement | null;
+      if (!cell || !screenEl) return;
+      const screen = screenEl.getBoundingClientRect();
+      const cols = term.cols;
+      const rows = term.rows;
+      const expectedW = cell.width * cols;
+      if (expectedW <= 0 || screen.width <= 0 || cols < 40) return;
+      const renderRatio = screen.width / expectedW;
+      const maxContent = measureMaxContent();
+      const contentRatio = maxContent > 0 ? maxContent / cols : 1;
+
+      // Renderer-shrink case — log only, no auto-fix (we've never actually
+      // seen this fire; keeping it for completeness).
+      if (renderRatio < 0.85 && Date.now() - lastAnomalyLogged > 5000) {
+        lastAnomalyLogged = Date.now();
+        if (DEBUG) snap(`ANOMALY render-shrink (${event}) ratio=${renderRatio.toFixed(3)}`);
+        console.warn(
+          `[XtermPane] render-shrink pane=${shortId}: screen=${screen.width.toFixed(0)} expected=${expectedW.toFixed(0)} ratio=${renderRatio.toFixed(3)}`,
+        );
+      }
+
+      // PTY-desync case — observed but not yet root-caused. DETECT ONLY,
+      // no auto-fix. Logging the condition lets us correlate against future
+      // server-side logging to confirm the hypothesis (a process.resize
+      // throw that left this.cols ahead of the actual PTY ioctl state).
+      if (maxContent >= 20 && contentRatio < 0.75 && Date.now() - lastWiggleAt > 30_000) {
+        lastWiggleAt = Date.now();
+        console.warn(
+          `[XtermPane] PTY-desync pane=${shortId}: cols=${cols} rows=${rows} maxContent=${maxContent} contentRatio=${contentRatio.toFixed(3)} — content fills only ${(contentRatio * 100).toFixed(0)}% of available cols`,
+        );
+        if (DEBUG)
+          snap(`PTY-desync (${event}) maxContent=${maxContent} ratio=${contentRatio.toFixed(3)}`);
+      }
+    };
 
     const chunker = new ChunkedWriter((s) => term.write(s), {
       chunkSize: 48 * 1024,
@@ -119,6 +262,36 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     // Force-flush any sync block held longer than maxHoldMs so a stuck
     // half-frame can't freeze output.
     const staleTimer = window.setInterval(() => extractor.flushStale(Date.now()), 25);
+
+    // Activity-independent diagnostic timer. The WS-heartbeat path only fires
+    // when the connection is idle for HEARTBEAT_IDLE_MS — panes streaming
+    // constant output (Vite HMR, dev TUIs) never go idle, so the heartbeat
+    // never fires and we get zero diagnostic data on the panes most likely to
+    // see the renderer-shrink bug. This interval ticks every 5s regardless of
+    // activity, snapping current state and checking the screen-vs-expected
+    // ratio. Single setInterval per pane, no work when DEBUG is off.
+    const diagTimer = DEBUG
+      ? window.setInterval(() => {
+          snap('diag tick');
+          checkAnomaly('diag');
+        }, 5000)
+      : null;
+
+    // Console-accessible dump hook. Each mounted pane registers its snap()
+    // here; `window.__muxpad_dump()` calls them all so the user can grab
+    // current state of every pane the moment they see the bug.
+    type DumpRegistry = { panes: Map<string, () => void> };
+    const w = window as unknown as { __muxpad?: DumpRegistry };
+    if (!w.__muxpad) {
+      w.__muxpad = { panes: new Map() };
+      (window as unknown as { __muxpad_dump: () => void }).__muxpad_dump = () => {
+        const reg = (window as unknown as { __muxpad?: DumpRegistry }).__muxpad;
+        if (!reg) return;
+        console.log(`[muxpad_dump] ${reg.panes.size} pane(s)`);
+        for (const dump of reg.panes.values()) dump();
+      };
+    }
+    w.__muxpad.panes.set(paneId, () => snap('manual dump'));
 
     // Tag the surrounding mosaic tile when this pane has keyboard focus, so
     // CSS can highlight the active pane. Walks to the nearest .mosaic-window
@@ -189,7 +362,7 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
           try {
             fit.fit();
             const ws = wsRef.current;
-            if (ws && ws.readyState === WebSocket.OPEN) {
+            if (ws && ws.readyState === WebSocket.OPEN && mayDriveResize()) {
               lastSentCols = term.cols;
               lastSentRows = term.rows;
               ws.send(encodeResize(term.cols, term.rows));
@@ -242,14 +415,22 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
       const armIdle = () => {
         if (idleTimer !== null) window.clearTimeout(idleTimer);
         const elapsed = Date.now() - lastActivityAt;
-        idleTimer = window.setTimeout(() => {
-          dbg('heartbeat ping');
-          safeSend(encodePing());
-          pongWaitTimer = window.setTimeout(() => {
-            dbg('heartbeat pong timeout — force-closing');
-            try { ws.close(); } catch { /* ignore */ }
-          }, HEARTBEAT_PONG_MS);
-        }, Math.max(0, HEARTBEAT_IDLE_MS - elapsed));
+        idleTimer = window.setTimeout(
+          () => {
+            snap('heartbeat ping');
+            checkAnomaly('heartbeat');
+            safeSend(encodePing());
+            pongWaitTimer = window.setTimeout(() => {
+              dbg('heartbeat pong timeout — force-closing');
+              try {
+                ws.close();
+              } catch {
+                /* ignore */
+              }
+            }, HEARTBEAT_PONG_MS);
+          },
+          Math.max(0, HEARTBEAT_IDLE_MS - elapsed),
+        );
       };
       const observeActivity = () => {
         lastActivityAt = Date.now();
@@ -269,9 +450,10 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
         } catch {
           // ignore
         }
-        // Always re-announce size on (re)connect. Cache on confirmed send
-        // so a race where the socket flips closed doesn't poison the dedup.
-        if (safeSend(encodeResize(term.cols, term.rows))) {
+        // Re-announce size on (re)connect — but only if this tab is
+        // visible. A hidden tab reconnecting must not push its (stale)
+        // size; reassertSize() on the next visibilitychange handles it.
+        if (mayDriveResize() && safeSend(encodeResize(term.cols, term.rows))) {
           lastSentCols = term.cols;
           lastSentRows = term.rows;
         }
@@ -411,6 +593,14 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     let lastSentRows = 0;
     const refit = () => {
       try {
+        // A hidden tab must not drive the shared PTY size (see
+        // mayDriveResize above). Bail before fit() so we don't even
+        // measure a stale viewport. The visibilitychange→visible path
+        // re-runs the full refit chain when the tab is looked at again.
+        if (!mayDriveResize()) {
+          dbg('refit skipped: tab hidden');
+          return;
+        }
         // Skip when the pane element is in a transient sub-pixel state
         // during mosaic re-layout (clientWidth=0, etc.). Pushing those
         // values through fit() and on to the PTY causes the running TUI
@@ -429,7 +619,7 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
           dbg('refit skipped: dedup', { cols, rows });
           return;
         }
-        dbg('refit', { cols, rows, w: container.clientWidth, h: container.clientHeight });
+        snap('refit', { newCols: cols, newRows: rows });
         // Cache only on a confirmed send. If the socket isn't open yet the
         // frame is dropped; leaving the cache unchanged means the next
         // refit (or the WS 'open' handler) retries instead of dedup'ing.
@@ -531,11 +721,59 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
         reassertSizeTimerIds.push(id);
       }
     };
+    // Wrap reassertSize so we log every entry with the trigger source —
+    // helps disambiguate which lifecycle event woke us up.
+    const reassertSizeFromEvent = (source: string) => {
+      snap(`reassertSize triggered by ${source}`);
+      checkAnomaly(`pre-reassert/${source}`);
+      reassertSize();
+    };
     const onVisibility = () => {
-      if (document.visibilityState === 'visible') reassertSize();
+      snap(`visibilitychange → ${document.visibilityState}`);
+      if (document.visibilityState === 'visible') reassertSizeFromEvent('visibilitychange');
     };
     document.addEventListener('visibilitychange', onVisibility);
-    window.addEventListener('focus', reassertSize);
+    const onWinFocus = () => reassertSizeFromEvent('window.focus');
+    const onWinBlur = () => snap('window.blur');
+    window.addEventListener('focus', onWinFocus);
+    window.addEventListener('blur', onWinBlur);
+
+    // Page Lifecycle API — fires on Chrome tab discard/restore and
+    // process freeze/resume, which standard visibilitychange misses on
+    // macOS when the OS suspends the renderer for a backgrounded display.
+    const onPageShow = (e: PageTransitionEvent) => {
+      snap(`pageshow persisted=${e.persisted}`);
+      reassertSizeFromEvent('pageshow');
+    };
+    const onPageHide = (e: PageTransitionEvent) => {
+      snap(`pagehide persisted=${e.persisted}`);
+    };
+    const onFreeze = () => snap('freeze');
+    const onResume = () => {
+      snap('resume');
+      reassertSizeFromEvent('resume');
+    };
+    window.addEventListener('pageshow', onPageShow);
+    window.addEventListener('pagehide', onPageHide);
+    document.addEventListener('freeze', onFreeze);
+    document.addEventListener('resume', onResume);
+
+    // devicePixelRatio change (monitor swap, OS zoom, browser zoom) —
+    // matchMedia is the canonical way to observe these. The query has
+    // to be re-armed each time it fires; otherwise we only catch one.
+    let dprMql: MediaQueryList | null = null;
+    const armDprListener = () => {
+      const current = window.devicePixelRatio;
+      dprMql = window.matchMedia(`(resolution: ${current}dppx)`);
+      const onDprChange = () => {
+        snap(`DPR change ${current} → ${window.devicePixelRatio}`);
+        reassertSizeFromEvent('dpr');
+        dprMql?.removeEventListener('change', onDprChange);
+        armDprListener();
+      };
+      dprMql.addEventListener('change', onDprChange);
+    };
+    armDprListener();
 
     // Mount-time multi-step recovery. The single fitWhenCellReady() at line
     // 457 runs once; if the surrounding mosaic tile is mid-transition (which
@@ -578,13 +816,7 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
       // Claude Code and other TUI input editors interpret that as "insert
       // newline into the current input" — same as Option+Enter on Mac.
       // Default Shift+Enter would just be \r (submit).
-      if (
-        e.key === 'Enter' &&
-        e.shiftKey &&
-        !e.metaKey &&
-        !e.ctrlKey &&
-        !e.altKey
-      ) {
+      if (e.key === 'Enter' && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
         safeSend(encodeInput('\x1b\r'));
         e.preventDefault();
         e.stopPropagation();
@@ -646,7 +878,15 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
       window.removeEventListener('resize', onWindowResize);
       window.screen.orientation?.removeEventListener('change', onOrientation);
       document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('focus', reassertSize);
+      window.removeEventListener('focus', onWinFocus);
+      window.removeEventListener('blur', onWinBlur);
+      window.removeEventListener('pageshow', onPageShow);
+      window.removeEventListener('pagehide', onPageHide);
+      document.removeEventListener('freeze', onFreeze);
+      document.removeEventListener('resume', onResume);
+      // dprMql's per-instance change listener is owned by armDprListener's
+      // closure; on unmount we drop the reference so the GC can reap it.
+      dprMql = null;
       for (const id of reassertSizeTimerIds) window.clearTimeout(id);
       if (refitTimer !== null) window.clearTimeout(refitTimer);
       window.removeEventListener('muxpad:focus-pane', onFocusPane);
@@ -668,6 +908,9 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
       wsRef.current?.close();
       wsRef.current = null;
       window.clearInterval(staleTimer);
+      if (diagTimer !== null) window.clearInterval(diagTimer);
+      const reg = (window as unknown as { __muxpad?: { panes: Map<string, () => void> } }).__muxpad;
+      reg?.panes.delete(paneId);
       extractor.dispose();
       chunker.dispose();
       if (termRef.current === term) termRef.current = null;

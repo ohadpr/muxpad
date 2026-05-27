@@ -118,12 +118,14 @@ describe('PaneRuntime', () => {
     expect(runtime.cols).toBe(200);
     expect(runtime.rows).toBe(50);
     expect(runtime.clientCount()).toBe(1);
-    // A second client's resize wins outright — no MIN arbitration.
+    // Last writer wins outright — no MAX/MIN arbitration. Correctness
+    // against stale viewers is enforced client-side (only a visible tab
+    // sends resizes), so the server can stay simple here.
     runtime.setClientSize('b', 80, 24);
     expect(runtime.cols).toBe(80);
     expect(runtime.rows).toBe(24);
     expect(runtime.clientCount()).toBe(2);
-    // The first client re-asserting (e.g. on tab-visibility) reclaims size.
+    // Any client re-asserting reclaims the size.
     runtime.setClientSize('a', 200, 50);
     expect(runtime.cols).toBe(200);
     expect(runtime.rows).toBe(50);
