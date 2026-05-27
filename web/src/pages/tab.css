@@ -127,13 +127,15 @@
   transition: background 100ms ease, color 100ms ease;
 }
 
-/* Focused pane — bottom-edge accent rail, exactly mirroring the active-tab
-   signal one level up. Title text lifts to --fg. No bg tint (the rail is
-   the signal; tinting fights the recursive language). The rail uses an
-   absolutely-positioned ::after on the toolbar (the !important borders
-   prevent border-bottom-color tricks). */
+/* Focused pane — bottom-edge accent rail plus a faint accent wash on
+   the toolbar plate. Mirrors the active-tab signal one level up: the
+   wash carries "this is where your keys go", the rail underlines it.
+   Title text lifts to --fg. The rail uses an absolutely-positioned
+   ::after on the toolbar (the !important borders prevent
+   border-bottom-color tricks). */
 .workspace-body .mosaic-window[data-focused="true"] .mosaic-window-toolbar {
   color: var(--fg) !important;
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-chrome)) !important;
 }
 .workspace-body .mosaic-window[data-focused="true"] .mosaic-window-toolbar::after {
   content: "";

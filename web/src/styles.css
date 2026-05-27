@@ -49,7 +49,10 @@
      knob. 36px desktop / 40px mobile (set via media query at the bottom). */
   --chrome-h: 36px;
   --chrome-pane-h: 28px;
-  --chrome-rail: 2px;
+  /* Thickness of the accent rail that signals "this is the active tab"
+     and "this pane has keyboard focus". 3px reads decisively at a
+     glance without dominating the chrome plate. */
+  --chrome-rail: 3px;
 }
 
 /* Tokyo Night — saturated deep navy with a vivid blue accent. */
