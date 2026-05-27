@@ -6,8 +6,6 @@
   background: var(--bg);
 }
 
-
-
 .workspace-slug {
   font-size: 12px;
   color: var(--fg-dim);
@@ -134,11 +132,11 @@
    the signal; tinting fights the recursive language). The rail uses an
    absolutely-positioned ::after on the toolbar (the !important borders
    prevent border-bottom-color tricks). */
-.workspace-body .mosaic-window[data-focused='true'] .mosaic-window-toolbar {
+.workspace-body .mosaic-window[data-focused="true"] .mosaic-window-toolbar {
   color: var(--fg) !important;
 }
-.workspace-body .mosaic-window[data-focused='true'] .mosaic-window-toolbar::after {
-  content: '';
+.workspace-body .mosaic-window[data-focused="true"] .mosaic-window-toolbar::after {
+  content: "";
   position: absolute;
   left: 0;
   right: 0;
@@ -225,16 +223,13 @@
   font-size: 13px;
   white-space: nowrap;
   cursor: pointer;
-  transition:
-    color 80ms ease,
-    background 80ms ease,
-    border-color 80ms ease;
+  transition: color 80ms ease, background 80ms ease, border-color 80ms ease;
 }
 .mobile-tab:hover {
   color: var(--fg);
   background: var(--bg-hover);
 }
-.mobile-tab[data-active='true'] {
+.mobile-tab[data-active="true"] {
   background: var(--accent);
   color: var(--accent-fg);
   border-color: var(--accent);
@@ -268,6 +263,15 @@
 .workspace-body-mobile {
   flex: 1;
   min-height: 0;
+}
+
+/* The MobileInputBar is position:fixed (so iOS Safari floats it above
+   the bottom URL bar), so it doesn't reserve space in the flow. Pad
+   the workspace's bottom by the bar's measured height (set imperatively
+   by MobileInputBar.tsx via ResizeObserver). Falls back to 0 on screens
+   where the bar isn't mounted (desktop, or active URL pane). */
+.workspace-root.workspace-mobile {
+  padding-bottom: var(--mobile-input-bar-height, 0px);
 }
 
 /* Pane chrome interior — fills the 28px toolbar plate. Mono throughout to
@@ -420,7 +424,9 @@
 }
 
 @keyframes url-pane-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* In-place editing of a URL pane's title. Box geometry matches
