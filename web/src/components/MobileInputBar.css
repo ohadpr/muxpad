@@ -60,6 +60,9 @@
   -webkit-touch-callout: none;
   user-select: none;
   -webkit-user-select: none;
+  /* Same reason as Send: drop iOS's double-tap-zoom delay so rapid
+     double-taps (e.g. arrow-down twice to scroll history) register. */
+  touch-action: manipulation;
 }
 .mobile-input-key:active {
   background: var(--bg-hover);
@@ -124,6 +127,10 @@
   -webkit-touch-callout: none;
   user-select: none;
   -webkit-user-select: none;
+  /* Disable iOS's 300ms double-tap-zoom delay on this button — without
+     this, a fast tap can be misclassified as the start of a double-tap
+     and the click silently dropped. */
+  touch-action: manipulation;
 }
 .mobile-input-send:active {
   filter: brightness(0.9);

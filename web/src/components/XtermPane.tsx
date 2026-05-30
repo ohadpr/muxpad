@@ -77,8 +77,6 @@ function themeFor(theme: Theme) {
 
 export function XtermPane({ paneId, onExit }: XtermPaneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const scrollbarRef = useRef<HTMLDivElement | null>(null);
-  const thumbRef = useRef<HTMLDivElement | null>(null);
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
   const settings = useSettings();
@@ -343,14 +341,11 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
         // also refocus, which matches "I just navigated here" expectation.
         term.focus();
 
-        // Belt-and-suspenders: force xterm's cached scrollBarWidth to 0.
-        // We hide the native viewport scrollbar via CSS and render our own
-        // overlay below. On systems with overlay scrollbars (most macOS)
-        // xterm already measures 0; on always-show systems it measures
-        // ~14px and fit-addon would reserve that space, leaving an empty
-        // gutter. Zeroing the cached value keeps cells flush regardless.
-        // Private API — try/catch falls back to the previous behavior if
-        // a future xterm version moves this field.
+        // Force xterm's cached scrollBarWidth to 0 — we hide the native
+        // viewport scrollbar via CSS, and on always-show-scrollbar systems
+        // xterm would otherwise measure ~14px and have fit-addon reserve
+        // that as an empty gutter. Private API — try/catch keeps us
+        // safe if a future xterm version moves this field.
         setScrollBarWidthZero(term);
 
         // xterm measures cell.width asynchronously after the first render —
@@ -505,140 +500,161 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
 
     const onData = term.onData((d) => safeSend(encodeInput(d)));
 
-    // Custom overlay scrollbar — drawn on top of the xterm content so it
-    // doesn't take any width away from the cell grid AND doesn't visually
-    // occlude the rightmost cells (it's only 6px wide vs the native ~14px
-    // overlay). Hooked to xterm's scroll state to keep the thumb in sync.
-    const updateScrollbar = () => {
-      const sb = scrollbarRef.current;
-      const thumb = thumbRef.current;
-      if (!sb || !thumb) return;
-      const buf = term.buffer.active;
-      const totalRows = buf.length;
-      const visibleRows = term.rows;
-      if (totalRows <= visibleRows) {
-        sb.dataset.visible = 'false';
-        return;
-      }
-      sb.dataset.visible = 'true';
-      const heightPct = Math.max(8, (visibleRows / totalRows) * 100);
-      const maxScroll = totalRows - visibleRows;
-      const progress = maxScroll > 0 ? buf.viewportY / maxScroll : 0;
-      const topPct = progress * (100 - heightPct);
-      thumb.style.top = `${topPct}%`;
-      thumb.style.height = `${heightPct}%`;
+    // Touch handler: scroll the running TUI's own UI by sending SGR
+    // mouse escapes straight to the PTY (the same bytes xterm would
+    // emit for desktop wheel/click events in a mouse-reporting TUI with
+    // DEC 1006 enabled — Claude Code, htop, vim, less, etc.). This
+    // bypasses xterm's scrollback path, which renders garbled when the
+    // pane was previously a different cols size.
+    //
+    // Caveat: at a plain shell prompt (no mouse mode enabled), these
+    // escapes appear as literal text like `<0;5;3M` on the command
+    // line. We accept that — mobile users rarely sit at a bare shell;
+    // the dominant case is a running TUI with mouse reporting on.
+    //
+    // We use POINTER EVENTS with setPointerCapture, NOT touch events.
+    // Pointer capture explicitly tells the browser "this pointer
+    // belongs to this element until I release it" — iOS Safari's
+    // gesture recognizer can't steal the gesture mid-drag the way it
+    // can with raw touchmove events.
+    //
+    // Single-finger: tap-vs-swipe detection. Move past TAP_THRESHOLD_PX
+    // → swipe-to-scroll. No movement before release → synthesize a
+    // mouse click at the down position (SGR press + release at the
+    // tap's col/row), so Claude still sees tap-to-click. Two-finger
+    // swipe uses the midpoint and always scrolls (no tap-vs-swipe;
+    // a two-finger tap is rare and confusing).
+    //
+    // Desktop mouse (pointerType='mouse') is filtered out — xterm's
+    // own mouse handling continues to drive it.
+    const WHEEL_STEP_PX = 30;
+    const TAP_THRESHOLD_PX = 8;
+    type Pt = { x: number; y: number; startX: number; startY: number; moved: boolean };
+    const pointers = new Map<number, Pt>();
+    let lastRefY = 0;
+    let accumY = 0;
+    // True if this gesture ever had >1 finger simultaneously. Used to
+    // suppress the synthetic click on release: a 2-finger tap (both
+    // still, then lifted in sequence) would otherwise reach the
+    // `!p.moved && pointers.size === 0` gate on the second release and
+    // fire a phantom click.
+    let multiFingerGesture = false;
+    // Compute the (col, row) inside the terminal for a client-coords
+    // point. Returns null if the cell dimensions aren't known yet.
+    const cellAt = (clientX: number, clientY: number) => {
+      const screenEl = term.element?.querySelector('.xterm-screen') as HTMLElement | null;
+      const cell = getCellDimensions(term);
+      if (!screenEl || !cell || cell.width <= 0 || cell.height <= 0) return null;
+      const rect = screenEl.getBoundingClientRect();
+      const col = Math.max(
+        1,
+        Math.min(term.cols, Math.floor((clientX - rect.left) / cell.width) + 1),
+      );
+      const row = Math.max(
+        1,
+        Math.min(term.rows, Math.floor((clientY - rect.top) / cell.height) + 1),
+      );
+      return { col, row };
     };
-    let scrollbarRaf: number | null = null;
-    const scheduleScrollbarUpdate = () => {
-      if (scrollbarRaf !== null) return;
-      scrollbarRaf = requestAnimationFrame(() => {
-        scrollbarRaf = null;
-        updateScrollbar();
-      });
+    // Re-seed the reference Y from currently active pointers and reset
+    // the wheel accumulator. Called when the pointer set changes so a
+    // newly-added or removed finger doesn't cause a phantom jump.
+    const reseed = () => {
+      if (pointers.size === 0) return;
+      const ys = [...pointers.values()].map((p) => p.y);
+      lastRefY = ys.reduce((a, b) => a + b, 0) / ys.length;
+      accumY = 0;
     };
-    const scrollSub = term.onScroll(scheduleScrollbarUpdate);
-    const lineFeedSub = term.onLineFeed(scheduleScrollbarUpdate);
-    const termResizeSub = term.onResize(scheduleScrollbarUpdate);
-    const writeParsedSub = term.onWriteParsed(scheduleScrollbarUpdate);
-    // Initial state in case the buffer arrives before the first event.
-    requestAnimationFrame(updateScrollbar);
 
-    // Make the overlay scrollbar interactive — press the track or drag to
-    // scroll. This is the ONLY way to reach scrollback when the inner app
-    // (Claude Code) has mouse reporting on and swallows wheel/touch events,
-    // and it gives mobile a reliable scroll affordance. Pointer events cover
-    // mouse + touch + pen uniformly; setPointerCapture keeps the drag alive
-    // when the pointer slides off the 14px-wide hit strip.
-    const sbEl = scrollbarRef.current;
-    let sbDragging = false;
-    const scrollToPointer = (clientY: number) => {
-      if (!sbEl) return;
-      const rect = sbEl.getBoundingClientRect();
-      if (rect.height <= 0) return;
-      const frac = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height));
-      const maxScroll = Math.max(0, term.buffer.active.length - term.rows);
-      term.scrollToLine(Math.round(frac * maxScroll));
-    };
-    const onSbPointerDown = (e: PointerEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      sbDragging = true;
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.pointerType !== 'touch') return;
+      pointers.set(e.pointerId, {
+        x: e.clientX,
+        y: e.clientY,
+        startX: e.clientX,
+        startY: e.clientY,
+        moved: false,
+      });
       try {
-        sbEl?.setPointerCapture(e.pointerId);
+        container.setPointerCapture(e.pointerId);
       } catch {
-        // ignore — capture is best-effort
+        // capture is best-effort
       }
-      scrollToPointer(e.clientY);
+      if (pointers.size > 1) multiFingerGesture = true;
+      reseed();
+      e.preventDefault();
     };
-    const onSbPointerMove = (e: PointerEvent) => {
-      if (!sbDragging) return;
-      scrollToPointer(e.clientY);
+    const onPointerMove = (e: PointerEvent) => {
+      if (e.pointerType !== 'touch') return;
+      const p = pointers.get(e.pointerId);
+      if (!p) return;
+      p.x = e.clientX;
+      p.y = e.clientY;
+      const dx = e.clientX - p.startX;
+      const dy = e.clientY - p.startY;
+      if (!p.moved && Math.hypot(dx, dy) > TAP_THRESHOLD_PX) p.moved = true;
+
+      // Single finger that hasn't crossed the tap threshold yet: don't
+      // accumulate wheel motion. Otherwise tiny jitter under a finger
+      // resting on the screen would fire phantom scroll steps.
+      if (pointers.size === 1 && !p.moved) return;
+
+      const ps = [...pointers.values()];
+      const refY = ps.reduce((s, q) => s + q.y, 0) / ps.length;
+      const refX = ps.reduce((s, q) => s + q.x, 0) / ps.length;
+      const dY = refY - lastRefY;
+      lastRefY = refY;
+      // Fingers DOWN reveals older content → wheel UP (negative).
+      accumY += -dY;
+      const steps = Math.trunc(accumY / WHEEL_STEP_PX);
+      if (steps !== 0) {
+        accumY -= steps * WHEEL_STEP_PX;
+        const pos = cellAt(refX, refY);
+        if (pos) {
+          // SGR mouse wheel: 64 = up (older), 65 = down (newer).
+          const button = steps > 0 ? 65 : 64;
+          let seq = '';
+          for (let i = 0; i < Math.abs(steps); i++) {
+            seq += `\x1b[<${button};${pos.col};${pos.row}M`;
+          }
+          if (seq) safeSend(encodeInput(seq));
+        }
+      }
+      e.preventDefault();
     };
-    const onSbPointerUp = (e: PointerEvent) => {
-      sbDragging = false;
+    const onPointerUpOrCancel = (e: PointerEvent) => {
+      if (e.pointerType !== 'touch') return;
+      const p = pointers.get(e.pointerId);
+      if (!p) return;
+      pointers.delete(e.pointerId);
       try {
-        sbEl?.releasePointerCapture(e.pointerId);
+        container.releasePointerCapture(e.pointerId);
       } catch {
         // ignore
       }
-    };
-    sbEl?.addEventListener('pointerdown', onSbPointerDown);
-    sbEl?.addEventListener('pointermove', onSbPointerMove);
-    sbEl?.addEventListener('pointerup', onSbPointerUp);
-    sbEl?.addEventListener('pointercancel', onSbPointerUp);
-
-    // Two-finger swipe to scroll. xterm's built-in touch handler
-    // short-circuits when mouse reporting is on (Claude Code always has
-    // it on, vim/htop/etc. when their mouse modes are active) — which
-    // leaves a single-finger swipe in the middle of the pane doing
-    // nothing useful. Intercepting any 2-finger gesture on the container
-    // and driving term.scrollToLine() directly gives the user a reliable
-    // mobile scroll path everywhere on the pane, not just at the right-
-    // edge scrollbar.
-    //
-    // Critically, we only act on 2-finger gestures. Single-finger touches
-    // still reach xterm → the running TUI's mouse reporting, so
-    // interactive use (clicking buttons in Claude Code, dragging
-    // selections, etc.) is preserved. Using targetTouches (touches
-    // started on this element) scopes us out of conflicts with the
-    // overlay scrollbar handler — a finger that started on the scrollbar
-    // is on a different element and won't count here.
-    let twoFingerStartY = 0;
-    let twoFingerStartLine = 0;
-    let twoFingerActive = false;
-    const onTouchStart = (e: TouchEvent) => {
-      if (e.targetTouches.length !== 2) {
-        twoFingerActive = false;
-        return;
+      // Tap: single finger that never moved past threshold and no other
+      // fingers are still down. Synthesize a left-button click at the
+      // down position so the running TUI sees the tap. SGR encoding:
+      // press = "<0;col;row;M", release = "<0;col;row;m".
+      // Suppress when this gesture ever had >1 finger — otherwise a
+      // motionless 2-finger tap fires a phantom click when the second
+      // finger lifts (pointers.size === 0, !p.moved, both true).
+      if (!p.moved && pointers.size === 0 && !multiFingerGesture) {
+        const pos = cellAt(p.startX, p.startY);
+        if (pos) {
+          const seq = `\x1b[<0;${pos.col};${pos.row}M\x1b[<0;${pos.col};${pos.row}m`;
+          safeSend(encodeInput(seq));
+        }
       }
-      twoFingerActive = true;
-      twoFingerStartY = (e.targetTouches[0]!.clientY + e.targetTouches[1]!.clientY) / 2;
-      twoFingerStartLine = term.buffer.active.viewportY;
-      // preventDefault suppresses pinch-zoom on iOS for two-finger
-      // gestures inside the pane.
-      e.preventDefault();
+      if (pointers.size === 0) multiFingerGesture = false;
+      // Re-seed for any remaining pointers so the next move doesn't
+      // see a delta computed against the lifted finger's Y.
+      reseed();
     };
-    const onTouchMove = (e: TouchEvent) => {
-      if (!twoFingerActive || e.targetTouches.length !== 2) return;
-      const cell = getCellDimensions(term);
-      if (!cell || cell.height <= 0) return;
-      const midY = (e.targetTouches[0]!.clientY + e.targetTouches[1]!.clientY) / 2;
-      const deltaPx = midY - twoFingerStartY;
-      // Dragging fingers DOWN reveals older lines (scroll back). Same
-      // direction as a "drag the page down to see what's above" gesture.
-      const linesDelta = -Math.round(deltaPx / cell.height);
-      const maxScroll = Math.max(0, term.buffer.active.length - term.rows);
-      const target = Math.max(0, Math.min(maxScroll, twoFingerStartLine + linesDelta));
-      term.scrollToLine(target);
-      e.preventDefault();
-    };
-    const onTouchEndOrCancel = () => {
-      twoFingerActive = false;
-    };
-    container.addEventListener('touchstart', onTouchStart, { passive: false });
-    container.addEventListener('touchmove', onTouchMove, { passive: false });
-    container.addEventListener('touchend', onTouchEndOrCancel);
-    container.addEventListener('touchcancel', onTouchEndOrCancel);
+    container.addEventListener('pointerdown', onPointerDown);
+    container.addEventListener('pointermove', onPointerMove);
+    container.addEventListener('pointerup', onPointerUpOrCancel);
+    container.addEventListener('pointercancel', onPointerUpOrCancel);
 
     const MIN_COLS = 40;
     const MIN_ROWS = 10;
@@ -732,9 +748,9 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     // NOTE: we deliberately do NOT listen to visualViewport 'resize'. On
     // mobile, the address bar showing/hiding during a scroll fires that
     // event continuously, and the resulting refit → fit() → term.resize()
-    // churn disrupts the in-progress touch-scroll gesture. The container
-    // ResizeObserver + window 'resize' already cover keyboard show/hide
-    // adequately; the draggable overlay scrollbar covers the rest.
+    // churn would garble TUI scrollback (cells positioned at old cols).
+    // The container ResizeObserver + window 'resize' cover real layout
+    // changes; viewport-only chrome movement is intentionally ignored.
     const onOrientation = () => scheduleRefit();
     window.screen.orientation?.addEventListener('change', onOrientation);
 
@@ -957,19 +973,10 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
       container.removeEventListener('keydown', onKeyDown, true);
       container.removeEventListener('paste', onPaste, true);
       onData.dispose();
-      scrollSub.dispose();
-      lineFeedSub.dispose();
-      termResizeSub.dispose();
-      writeParsedSub.dispose();
-      sbEl?.removeEventListener('pointerdown', onSbPointerDown);
-      sbEl?.removeEventListener('pointermove', onSbPointerMove);
-      sbEl?.removeEventListener('pointerup', onSbPointerUp);
-      sbEl?.removeEventListener('pointercancel', onSbPointerUp);
-      container.removeEventListener('touchstart', onTouchStart);
-      container.removeEventListener('touchmove', onTouchMove);
-      container.removeEventListener('touchend', onTouchEndOrCancel);
-      container.removeEventListener('touchcancel', onTouchEndOrCancel);
-      if (scrollbarRaf !== null) cancelAnimationFrame(scrollbarRaf);
+      container.removeEventListener('pointerdown', onPointerDown);
+      container.removeEventListener('pointermove', onPointerMove);
+      container.removeEventListener('pointerup', onPointerUpOrCancel);
+      container.removeEventListener('pointercancel', onPointerUpOrCancel);
       container.removeEventListener('focusin', onFocusIn);
       container.removeEventListener('focusout', onFocusOut);
       toolbarEl?.removeEventListener('click', onToolbarClick);
@@ -1030,14 +1037,6 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
   return (
     <div className="xterm-pane-wrapper">
       <div className="xterm-pane" ref={containerRef} tabIndex={0} />
-      <div
-        className="xterm-pane-scrollbar"
-        ref={scrollbarRef}
-        data-visible="false"
-        aria-hidden="true"
-      >
-        <div className="xterm-pane-scrollbar-thumb" ref={thumbRef} />
-      </div>
     </div>
   );
 }

@@ -87,16 +87,21 @@ export function MobileInputBar({ paneId, paneKind }: MobileInputBarProps) {
   };
 
   const submit = () => {
-    // Empty submit = bare CR (a blank Enter at the prompt, sometimes
-    // useful to refresh a prompt or break a TUI out of input mode).
-    if (value.length === 0) {
-      send('\r');
-      return;
-    }
-    send(`${value}\r`);
+    // Read straight from the DOM, not React state: iOS predictive text and
+    // composition events can land a final keystroke between the last
+    // onChange and our click handler, leaving `value` one tick behind the
+    // textarea's true contents.
+    const current = textareaRef.current?.value ?? value;
+    // Send text and CR as two separate events. Empirically the CR was
+    // sometimes "missing" when appended to text on iOS — text would land
+    // at the prompt but Claude wouldn't submit. Splitting them guarantees
+    // the CR gets its own dispatch / WS frame and can't get lost in the
+    // same iOS keyboard-dismiss tick as the text.
+    if (current.length > 0) send(current);
+    // Always end with a bare CR — empty submit = blank Enter at the prompt,
+    // useful to refresh a prompt or kick a TUI out of input mode.
+    send('\r');
     setValue('');
-    // value→effect resets height, but the effect fires next tick — for
-    // smoother UX shrink immediately as well.
     requestAnimationFrame(() => {
       if (textareaRef.current) textareaRef.current.style.height = 'auto';
     });
@@ -126,6 +131,22 @@ export function MobileInputBar({ paneId, paneKind }: MobileInputBarProps) {
           aria-label="Down"
         >
           ↓
+        </button>
+        <button
+          type="button"
+          className="mobile-input-key"
+          onClick={() => {
+            // Wheel events get coalesced by most TUIs into one scroll-
+            // increment-per-render-frame, so a burst of wheels only
+            // scrolls one page max. Page-Down is the keystroke
+            // equivalent — each is processed independently and jumps a
+            // whole screen. 50 is enough to clear any reasonable
+            // session's scroll buffer.
+            send('\x1b[6~'.repeat(50));
+          }}
+          aria-label="Jump to bottom"
+        >
+          End
         </button>
         <button
           type="button"

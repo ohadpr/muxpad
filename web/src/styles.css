@@ -164,16 +164,15 @@ body,
 #root {
   margin: 0;
   padding: 0;
-  /* Body height = the truly-visible area. main.tsx sets `--app-height`
-     to window.visualViewport.height on resize / orientationchange /
-     URL-bar collapse, which is the only signal that reliably matches
-     what the user can see on iOS Safari (vh/dvh/svh all report wrong
-     in some URL-bar overlay states). Falls back to 100svh (smallest
-     viewport with browser UI expanded) for the very first paint and
-     for environments without visualViewport. overflow:hidden +
-     overscroll-behavior:none lock the page so a rubber-band drag
-     inside a pane can't leak into the document. */
-  height: var(--app-height, 100svh);
+  /* Body height = 100svh — the *small* viewport (browser chrome
+     expanded), which on iOS Safari stays stable across URL-bar
+     collapse and keyboard show/hide. We deliberately avoid 100vh
+     (changes with URL bar → triggers PTY resize cascades that
+     garble TUI scrollback) and visualViewport-driven JS sizing for
+     the same reason. overflow:hidden + overscroll-behavior:none
+     lock the page so a rubber-band drag inside a pane can't leak
+     into the document. */
+  height: 100svh;
   background: var(--bg);
   color: var(--fg);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif;
@@ -341,12 +340,9 @@ select:focus {
 .app-layout {
   display: flex;
   flex-direction: column;
-  /* Must match the html/body/#root chain so the workspace doesn't
-     overflow past the truly-visible area on iOS Safari. 100vh would
-     be the *large* viewport (URL bar collapsed) and would extend
-     behind the URL bar, leaving the workspace's bottom (and the
-     xterm pane inside it) overlapped by the fixed MobileInputBar. */
-  height: var(--app-height, 100svh);
+  /* Must match the html/body/#root chain (100svh, stable across iOS
+     URL-bar/keyboard transitions) so the workspace doesn't overflow. */
+  height: 100svh;
   overflow: hidden;
 }
 .app-layout > .ws-tabbar {
