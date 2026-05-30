@@ -293,41 +293,23 @@ export class PaneRuntime extends EventEmitter {
    */
   setClientSize(clientId: string, cols: number, rows: number): void {
     this.connectedClients.add(clientId);
-    if (cols < 1 || rows < 1) {
-      console.log(
-        `[size] pane=${this.spec.id} client=${clientId.slice(-6)} REJECTED cols=${cols} rows=${rows}`,
-      );
-      return;
-    }
-    if (cols === this.cols && rows === this.rows) {
-      console.log(
-        `[size] pane=${this.spec.id} client=${clientId.slice(-6)} dedup cols=${cols} rows=${rows}`,
-      );
-      return;
-    }
+    if (cols < 1 || rows < 1) return;
+    if (cols === this.cols && rows === this.rows) return;
     const prevCols = this.cols;
     const prevRows = this.rows;
     this.cols = cols;
     this.rows = rows;
-    if (this.process) {
-      try {
-        this.process.resize(cols, rows);
-        console.log(
-          `[size] pane=${this.spec.id} client=${clientId.slice(-6)} OK ${prevCols}x${prevRows} → ${cols}x${rows} pid=${this.process.pid}`,
-        );
-      } catch (err) {
-        // PTY may have exited mid-resize. Roll back our local tracker so the
-        // next resize call won't dedup against state we never applied.
-        this.cols = prevCols;
-        this.rows = prevRows;
-        const stack = err instanceof Error && err.stack ? err.stack : undefined;
-        console.error(
-          `[size] pane=${this.spec.id} client=${clientId.slice(-6)} FAILED ${prevCols}x${prevRows} → ${cols}x${rows} err=${String(err)}${stack ? `\n${stack}` : ''}`,
-        );
-      }
-    } else {
-      console.log(
-        `[size] pane=${this.spec.id} client=${clientId.slice(-6)} NO-PROCESS cols=${cols} rows=${rows}`,
+    if (!this.process) return;
+    try {
+      this.process.resize(cols, rows);
+    } catch (err) {
+      // PTY may have exited mid-resize. Roll back our local tracker so the
+      // next resize call won't dedup against state we never applied.
+      this.cols = prevCols;
+      this.rows = prevRows;
+      const stack = err instanceof Error && err.stack ? err.stack : undefined;
+      console.error(
+        `[size] pane=${this.spec.id} client=${clientId.slice(-6)} FAILED ${prevCols}x${prevRows} → ${cols}x${rows} err=${String(err)}${stack ? `\n${stack}` : ''}`,
       );
     }
   }

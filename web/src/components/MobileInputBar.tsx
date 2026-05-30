@@ -102,9 +102,7 @@ export function MobileInputBar({ paneId, paneKind }: MobileInputBarProps) {
     // useful to refresh a prompt or kick a TUI out of input mode.
     send('\r');
     setValue('');
-    requestAnimationFrame(() => {
-      if (textareaRef.current) textareaRef.current.style.height = 'auto';
-    });
+    // useEffect on [value] resets the textarea height on next tick.
   };
 
   return (

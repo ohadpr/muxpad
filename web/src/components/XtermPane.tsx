@@ -172,83 +172,6 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
       else dbg(line);
     };
 
-    // Anomaly detector. Two distinct anomalies we look for:
-    //
-    //  1. Renderer shrink — `.xterm-screen` bounding rect is materially
-    //     narrower than `cell.width × cols`. Means xterm's own renderer is
-    //     painting smaller than the buffer claims. (Originally suspected,
-    //     never actually observed in practice.)
-    //
-    //  2. PTY desync — DOM is at full size, but the LAST N non-empty rows
-    //     only have content in the first K columns where K is materially
-    //     less than `term.cols`. This means the running TUI thinks the
-    //     terminal is K-wide, while xterm has allocated `cols`-wide cells.
-    //     Cause: ptyd's `process.resize()` ioctl silently failed at some
-    //     point (likely a race on transient PTY state) and our last-sent
-    //     dedup cache locked us out of retrying. Fix: send a "wiggle" —
-    //     resize to (cols-1, rows) then back — to bypass dedup at both
-    //     ends and re-fire SIGWINCH to the TUI.
-    let lastAnomalyLogged = 0;
-    let lastWiggleAt = 0;
-    // Returns the max content width (trailing-whitespace-trimmed length) of
-    // the last N non-empty rendered rows. Looks at DOM (xterm-rows) rather
-    // than xterm's buffer because the buffer is always trimmed to cols even
-    // when the TUI is only painting a subset; the DOM rendering reflects
-    // what actually got drawn.
-    const measureMaxContent = (lookback = 12): number => {
-      const rowsEl = term.element?.querySelector('.xterm-rows') as HTMLElement | null;
-      if (!rowsEl) return 0;
-      const children = rowsEl.children;
-      let max = 0;
-      let nonEmptySeen = 0;
-      // Walk from bottom up — most-recent rows reflect the TUI's actual
-      // current rendering, not stale history that pre-dated a resize.
-      for (let i = children.length - 1; i >= 0 && nonEmptySeen < lookback; i--) {
-        const text = (children[i] as HTMLElement).textContent ?? '';
-        const trimmed = text.replace(/\s+$/, '');
-        if (trimmed.length === 0) continue;
-        nonEmptySeen++;
-        if (trimmed.length > max) max = trimmed.length;
-      }
-      return max;
-    };
-    const checkAnomaly = (event: string): void => {
-      const cell = getCellDimensions(term);
-      const screenEl = term.element?.querySelector('.xterm-screen') as HTMLElement | null;
-      if (!cell || !screenEl) return;
-      const screen = screenEl.getBoundingClientRect();
-      const cols = term.cols;
-      const rows = term.rows;
-      const expectedW = cell.width * cols;
-      if (expectedW <= 0 || screen.width <= 0 || cols < 40) return;
-      const renderRatio = screen.width / expectedW;
-      const maxContent = measureMaxContent();
-      const contentRatio = maxContent > 0 ? maxContent / cols : 1;
-
-      // Renderer-shrink case — log only, no auto-fix (we've never actually
-      // seen this fire; keeping it for completeness).
-      if (renderRatio < 0.85 && Date.now() - lastAnomalyLogged > 5000) {
-        lastAnomalyLogged = Date.now();
-        if (DEBUG) snap(`ANOMALY render-shrink (${event}) ratio=${renderRatio.toFixed(3)}`);
-        console.warn(
-          `[XtermPane] render-shrink pane=${shortId}: screen=${screen.width.toFixed(0)} expected=${expectedW.toFixed(0)} ratio=${renderRatio.toFixed(3)}`,
-        );
-      }
-
-      // PTY-desync case — observed but not yet root-caused. DETECT ONLY,
-      // no auto-fix. Logging the condition lets us correlate against future
-      // server-side logging to confirm the hypothesis (a process.resize
-      // throw that left this.cols ahead of the actual PTY ioctl state).
-      if (maxContent >= 20 && contentRatio < 0.75 && Date.now() - lastWiggleAt > 30_000) {
-        lastWiggleAt = Date.now();
-        console.warn(
-          `[XtermPane] PTY-desync pane=${shortId}: cols=${cols} rows=${rows} maxContent=${maxContent} contentRatio=${contentRatio.toFixed(3)} — content fills only ${(contentRatio * 100).toFixed(0)}% of available cols`,
-        );
-        if (DEBUG)
-          snap(`PTY-desync (${event}) maxContent=${maxContent} ratio=${contentRatio.toFixed(3)}`);
-      }
-    };
-
     const chunker = new ChunkedWriter((s) => term.write(s), {
       chunkSize: 48 * 1024,
       raf: requestAnimationFrame.bind(window),
@@ -268,28 +191,25 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     // see the renderer-shrink bug. This interval ticks every 5s regardless of
     // activity, snapping current state and checking the screen-vs-expected
     // ratio. Single setInterval per pane, no work when DEBUG is off.
-    const diagTimer = DEBUG
-      ? window.setInterval(() => {
-          snap('diag tick');
-          checkAnomaly('diag');
-        }, 5000)
-      : null;
+    const diagTimer = DEBUG ? window.setInterval(() => snap('diag tick'), 5000) : null;
 
-    // Console-accessible dump hook. Each mounted pane registers its snap()
-    // here; `window.__muxpad_dump()` calls them all so the user can grab
-    // current state of every pane the moment they see the bug.
+    // Console-accessible dump hook (DEBUG only). Each mounted pane
+    // registers its snap() here; `window.__muxpad_dump()` calls them
+    // all so the user can grab current state the moment they see a bug.
     type DumpRegistry = { panes: Map<string, () => void> };
-    const w = window as unknown as { __muxpad?: DumpRegistry };
-    if (!w.__muxpad) {
-      w.__muxpad = { panes: new Map() };
-      (window as unknown as { __muxpad_dump: () => void }).__muxpad_dump = () => {
-        const reg = (window as unknown as { __muxpad?: DumpRegistry }).__muxpad;
-        if (!reg) return;
-        console.log(`[muxpad_dump] ${reg.panes.size} pane(s)`);
-        for (const dump of reg.panes.values()) dump();
-      };
+    if (DEBUG) {
+      const w = window as unknown as { __muxpad?: DumpRegistry };
+      if (!w.__muxpad) {
+        w.__muxpad = { panes: new Map() };
+        (window as unknown as { __muxpad_dump: () => void }).__muxpad_dump = () => {
+          const reg = (window as unknown as { __muxpad?: DumpRegistry }).__muxpad;
+          if (!reg) return;
+          console.log(`[muxpad_dump] ${reg.panes.size} pane(s)`);
+          for (const dump of reg.panes.values()) dump();
+        };
+      }
+      w.__muxpad.panes.set(paneId, () => snap('manual dump'));
     }
-    w.__muxpad.panes.set(paneId, () => snap('manual dump'));
 
     // Tag the surrounding mosaic tile when this pane has keyboard focus, so
     // CSS can highlight the active pane. Walks to the nearest .mosaic-window
@@ -366,10 +286,10 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
             // container may not yet be sized; resize observer will retry.
           }
         };
+        // If cell measurement is still pending after one frame, the
+        // fitWhenCellReady poll (every 50ms × 30) and the reassertSize
+        // chain below cover the retry — no extra timer needed here.
         requestAnimationFrame(initialFit);
-        // Belt-and-suspenders: if cell measurement is still pending after
-        // one frame (some renderers need a beat longer), retry once more.
-        setTimeout(initialFit, 100);
       });
 
     const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/pane/${paneId}`;
@@ -413,7 +333,6 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
         idleTimer = window.setTimeout(
           () => {
             snap('heartbeat ping');
-            checkAnomaly('heartbeat');
             safeSend(encodePing());
             pongWaitTimer = window.setTimeout(() => {
               dbg('heartbeat pong timeout — force-closing');
@@ -706,8 +625,9 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     // undefined and silently bails — the terminal sticks at its default
     // 80 cols regardless of container size. Poll the renderer's css.cell
     // dimensions until they're populated, then fit. Private field access
-    // wrapped so a future xterm rename falls back to a no-op (the
-    // belt-and-suspenders rAF/setTimeout initialFit above will still run).
+    // wrapped so a future xterm rename falls back to a no-op (the rAF
+    // initialFit above runs immediately and the reassertSize chain
+    // re-attempts later, so a single missed fit isn't fatal).
     const fitWhenCellReady = (attemptsLeft = 30) => {
       if (getCellDimensions(term)) {
         refit();
@@ -794,7 +714,6 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     // helps disambiguate which lifecycle event woke us up.
     const reassertSizeFromEvent = (source: string) => {
       snap(`reassertSize triggered by ${source}`);
-      checkAnomaly(`pre-reassert/${source}`);
       reassertSize();
     };
     const onVisibility = () => {
@@ -844,8 +763,8 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     };
     armDprListener();
 
-    // Mount-time multi-step recovery. The single fitWhenCellReady() at line
-    // 457 runs once; if the surrounding mosaic tile is mid-transition (which
+    // Mount-time multi-step recovery. The single fitWhenCellReady()
+    // earlier runs once; if the surrounding mosaic tile is mid-transition (which
     // happens whenever this pane mounted as part of a workspace/tab nav,
     // not a user-driven split or resize), that single fit can lock in an
     // intermediate cols/rows. ResizeObserver doesn't always fire on
