@@ -232,9 +232,8 @@ body {
 
 /* Hide xterm's native scrollbar entirely — even when overlay (zero-width
    in flow), Chrome/macOS draws a chunky overlay that visually occludes
-   the rightmost cells. We render our own thin overlay (XtermPane.css) on
-   top instead. Mouse wheel still scrolls; Shift+PageUp/Down navigates
-   scrollback. */
+   the rightmost cells. Mouse wheel still scrolls; Shift+PageUp/Down
+   navigates scrollback. */
 .xterm,
 .xterm *,
 .xterm-viewport {
