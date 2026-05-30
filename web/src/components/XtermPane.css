@@ -8,6 +8,21 @@
      band the whole document. iOS Safari was making the page draggable
      out from under the user before this. */
   overscroll-behavior: contain;
+  /* touch-action: none tells iOS Safari "JS handles ALL touch gestures
+     here" — without this, two-finger swipes get claimed by the OS as
+     pinch-zoom/page-pan and our touchmove handler never fires (touchstart
+     does, but the gesture is then locked away from JS). Single-finger
+     events still fire normally, so xterm's mouse-reporting forwarding
+     for Claude tap-clicks is unaffected. */
+  touch-action: none;
+}
+/* touch-action isn't inherited; xterm's inner divs default to auto and
+   iOS would still hijack multi-finger gestures landing inside them.
+   Block default touch handling everywhere under the wrapper. If you
+   add a scrollable child UI inside the pane later (search panel etc.),
+   scope this rule so it can opt back in. */
+.xterm-pane-wrapper * {
+  touch-action: none;
 }
 
 .xterm-pane {
@@ -25,73 +40,3 @@
   background: transparent !important;
 }
 
-/* Custom overlay scrollbar — drawn on top of xterm so it doesn't take any
-   width and doesn't visually occlude cells the way the native overlay
-   scrollbar does (which is wider than CSS can control on macOS Chrome).
-   The element is a 14px-wide invisible hit strip for easy mouse/touch
-   grabbing; the visible thumb inside it stays slim (6px). */
-.xterm-pane-scrollbar {
-  position: absolute;
-  top: 4px;
-  right: 0;
-  bottom: 4px;
-  width: 14px;
-  /* Interactive only while visible; otherwise it must not eat clicks meant
-     for the terminal in its edge strip. touch-action:none so a touch-drag
-     on the bar scrolls the terminal instead of panning the page. */
-  pointer-events: none;
-  touch-action: none;
-  z-index: 5;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-.xterm-pane-scrollbar[data-visible="true"] {
-  opacity: 0.4;
-  pointer-events: auto;
-}
-.xterm-pane-wrapper:hover .xterm-pane-scrollbar[data-visible="true"],
-.xterm-pane-scrollbar[data-visible="true"]:hover {
-  opacity: 1;
-}
-.xterm-pane-scrollbar[data-visible="false"] {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.xterm-pane-scrollbar-thumb {
-  position: absolute;
-  /* slim visible thumb, centred in the 14px hit strip */
-  left: 4px;
-  right: 4px;
-  background: var(--fg-faint);
-  border-radius: 3px;
-  min-height: 24px;
-}
-.xterm-pane-scrollbar:hover .xterm-pane-scrollbar-thumb {
-  background: var(--fg-dim);
-}
-
-/* Mobile: widen the hit strip to ~32px so it's grabbable with a thumb,
-   and make the visible thumb a little chunkier. The hit strip stays
-   transparent so it doesn't visually intrude — only the centred 8px
-   thumb is drawn. Touch is the only way to reach scrollback in a pane
-   running a TUI with mouse reporting on (xterm's own touch handler
-   short-circuits when mouse reporting is active). Plus the visible-thumb
-   minimum size grows so the target is easier to hit. */
-@media (max-width: 720px) {
-  .xterm-pane-scrollbar {
-    width: 32px;
-  }
-  .xterm-pane-scrollbar-thumb {
-    left: 12px;
-    right: 12px;
-    min-height: 44px;
-    /* Make the thumb more visible on mobile so the user can find it. */
-    background: var(--fg-dim);
-  }
-  /* On touch devices there's no hover, so the bar otherwise stays at
-     the dim 0.4 opacity. Bump it up so it's actually findable. */
-  .xterm-pane-scrollbar[data-visible="true"] {
-    opacity: 0.7;
-  }
-}

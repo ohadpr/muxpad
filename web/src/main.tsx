@@ -59,30 +59,14 @@ subscribe((e) => {
   }
 });
 
-// iOS Safari's bottom URL bar is an overlay in some states: the bar
-// floats on top of the layout area without being subtracted from the
-// CSS viewport units (vh/dvh/svh all report the wrong height). The
-// only signal that reliably matches the *truly visible* area is
-// visualViewport.height, which we mirror to a CSS variable that the
-// stylesheet uses as the body height. Falls back to 100svh on browsers
-// without visualViewport (none in practice for this app, but cheap).
-//
-// We also poll the height on visualViewport's resize event — fires on
-// URL-bar collapse/expand, software-keyboard show/hide, orientation
-// change — and on plain window resize for desktop.
-if (typeof window !== 'undefined' && window.visualViewport) {
-  const sync = () => {
-    document.documentElement.style.setProperty(
-      '--app-height',
-      `${window.visualViewport!.height}px`,
-    );
-  };
-  window.visualViewport.addEventListener('resize', sync);
-  window.visualViewport.addEventListener('scroll', sync);
-  window.addEventListener('resize', sync);
-  window.addEventListener('orientationchange', sync);
-  sync();
-}
+// No JS height tracking — the CSS fallback `100svh` (small viewport
+// height, stable across iOS URL-bar collapse/expand AND keyboard
+// open/close) handles sizing. We used to mirror visualViewport.height
+// here, but every URL-bar twitch during scroll triggered a resize
+// cascade (--app-height → .app-layout → pane → fit → PTY resize) that
+// garbled Ink-rendered TUI scrollback (Claude Code). A static
+// stylesheet-only height keeps the pane CSS box constant, so XtermPane's
+// own resize listener short-circuits at the dedup check.
 
 const root = createRoot(document.getElementById('root') as HTMLElement);
 root.render(<RouterProvider router={router} />);
