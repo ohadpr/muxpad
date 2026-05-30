@@ -503,7 +503,7 @@ export function TabView() {
   const isEmpty = layout == null || layout === '';
 
   const paneNumber = (paneId: string): number =>
-    Math.max(1, tab.panes.findIndex((p) => p.id === paneId) + 1);
+    tab.panes.findIndex((p) => p.id === paneId) + 1;
 
   const paneLabel = (paneId: string): string => {
     const p = tab.panes.find((x) => x.id === paneId);
