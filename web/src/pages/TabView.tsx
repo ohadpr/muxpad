@@ -11,6 +11,7 @@ import type { LayoutNode, PaneSpec } from '@muxpad/shared';
 import { spliceLayoutAtTarget } from '@muxpad/shared';
 import { type TabWithPanes, api } from '../api';
 import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
+import { SvgClose } from '../components/icons';
 import { MobileInputBar } from '../components/MobileInputBar';
 import { PaneSelector } from '../components/PaneSelector';
 import { UrlPane } from '../components/UrlPane';
@@ -109,6 +110,11 @@ export function TabView() {
   const [mobileActiveId, setMobileActiveId] = useState<string | null>(null);
   const layoutRef = useRef<Layout>(null);
   const isMobile = useMediaQuery('(max-width: 720px)');
+  // Holds the latest `addPane` function from the mobile render branch so
+  // the top-level event listener below can reach it. The mobile chrome's
+  // "+" button dispatches muxpad:add-pane (it lives in TabBar, outside
+  // TabView's tree, so we can't pass an onAdd callback down directly).
+  const addPaneRef = useRef<(() => void) | null>(null);
 
   // Remember which tab we're on so the next visit to /w/$wsSlug
   // restores it (see WorkspaceLayout).
@@ -122,6 +128,15 @@ export function TabView() {
     if (!isMobile || !tab || !mobileActiveId) return;
     setLastPaneId(tab.id, mobileActiveId);
   }, [isMobile, tab, mobileActiveId]);
+
+  // Forward the "+" tap from the chrome bar's TabBar (which lives in
+  // AppLayout and can't reach into this component tree) to whatever
+  // addPane the mobile branch most recently rendered.
+  useEffect(() => {
+    const onAddPane = () => addPaneRef.current?.();
+    window.addEventListener('muxpad:add-pane', onAddPane);
+    return () => window.removeEventListener('muxpad:add-pane', onAddPane);
+  }, []);
 
   // Title pulls the live name from the shared tabs list so renames in
   // the tab bar update the document title without a refetch here.
@@ -569,6 +584,7 @@ export function TabView() {
       await persistLayout(newLayout);
       notifyLayoutChanged();
     };
+    addPaneRef.current = () => void addPane();
 
     const closeActivePane = () => {
       if (!activeId) return;
@@ -580,26 +596,33 @@ export function TabView() {
 
     return (
       <div className="workspace-root workspace-mobile">
-        <nav className="mobile-tab-strip" aria-label="Panes">
-          <PaneSelector
-            paneIds={paneIds}
-            activeId={activeId}
-            paneLabel={paneLabel}
-            onSelect={setMobileActiveId}
-            onAdd={() => void addPane()}
-          />
-          {activeId && (
-            <button
-              type="button"
-              className="mobile-tab-close"
-              onClick={closeActivePane}
-              title="Close active pane"
-              aria-label="Close active pane"
-            >
-              <SvgClose />
-            </button>
-          )}
-        </nav>
+        {/* Pane row only renders when there's more than one pane to
+            choose between. Single-pane case (the dominant one) gets a
+            single chrome row total: the new-pane "+" lives on the tab
+            bar above us (TabBar dispatches muxpad:add-pane on mobile),
+            and the tab dropdown's menu has "+ New tab" as a footer
+            item. */}
+        {paneIds.length > 1 && (
+          <nav className="mobile-tab-strip" aria-label="Panes">
+            <PaneSelector
+              paneIds={paneIds}
+              activeId={activeId}
+              paneLabel={paneLabel}
+              onSelect={setMobileActiveId}
+            />
+            {activeId && (
+              <button
+                type="button"
+                className="mobile-tab-close"
+                onClick={closeActivePane}
+                title="Close active pane"
+                aria-label="Close active pane"
+              >
+                <SvgClose size={12} />
+              </button>
+            )}
+          </nav>
+        )}
         <main className="workspace-body workspace-body-mobile">
           {activeId &&
             (() => {
@@ -693,7 +716,7 @@ export function TabView() {
                         aria-label="Close pane"
                         onClick={() => void killPane(paneId)}
                       >
-                        <SvgClose />
+                        <SvgClose size={12} />
                       </button>
                     </div>
                   )}
@@ -1116,10 +1139,3 @@ function SvgTerminal() {
   );
 }
 
-function SvgClose() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 12 12" aria-hidden="true">
-      <path stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" d="M3 3l6 6M9 3l-6 6" />
-    </svg>
-  );
-}

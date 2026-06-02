@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { openInNewTab, useLongPress } from '../use-long-press';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
+import { SvgClose } from './icons';
 import './WorkspaceSwitcher.css';
 
 interface WorkspaceSwitcherProps {
@@ -158,6 +159,7 @@ export function WorkspaceSwitcher({ activeWorkspaceSlug }: WorkspaceSwitcherProp
           {workspaces.map((w) => (
             <WorkspaceItem
               key={w.id}
+              id={w.id}
               slug={w.slug}
               name={w.name}
               tabCount={w.tab_count}
@@ -182,6 +184,7 @@ export function WorkspaceSwitcher({ activeWorkspaceSlug }: WorkspaceSwitcherProp
 }
 
 interface WorkspaceItemProps {
+  id: string;
   slug: string;
   name: string;
   tabCount: number;
@@ -191,6 +194,7 @@ interface WorkspaceItemProps {
 }
 
 function WorkspaceItem({
+  id,
   slug,
   name,
   tabCount,
@@ -201,6 +205,26 @@ function WorkspaceItem({
   const { pressing, handlers } = useLongPress({
     onLongPress: () => openInNewTab(`/w/${slug}`),
   });
+  const onClose = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    // Confirm — closing a workspace cascade-kills every tab and pane in
+    // it. Cheap window.confirm fits the personal/single-user model.
+    if (
+      !window.confirm(
+        `Close workspace "${name}"? All ${tabCount} ${
+          tabCount === 1 ? 'tab' : 'tabs'
+        } and their panes will be killed.`,
+      )
+    )
+      return;
+    try {
+      await api.deleteWorkspace(id);
+      await refreshWorkspaces();
+    } catch (err) {
+      console.error('deleteWorkspace failed', err);
+    }
+  };
   return (
     <Link
       to="/w/$wsSlug"
@@ -227,6 +251,19 @@ function WorkspaceItem({
       </span>
       <span className="ws-switcher-item-meta">
         {tabCount} {tabCount === 1 ? 'tab' : 'tabs'}
+      </span>
+      <span
+        role="button"
+        tabIndex={0}
+        className="ws-switcher-item-close"
+        onClick={onClose}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') void onClose(e as unknown as React.MouseEvent);
+        }}
+        title="Close workspace"
+        aria-label={`Close workspace ${name}`}
+      >
+        <SvgClose />
       </span>
     </Link>
   );

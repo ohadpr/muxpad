@@ -183,17 +183,23 @@
    current-file indicator does (VS Code, Linear). */
 .ws-switcher-item[data-active='true'] {
   color: var(--fg);
+  /* Bold weight stays here (and only here in the dropdowns) — workspace
+     is the hierarchy anchor, so the active-workspace label gets the
+     stronger weight everywhere it appears. Tab/pane menus stay regular. */
   font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-elev));
 }
+/* Flush-left rail matching .ws-tabbar-dropdown-item — same shared
+   pattern across both dropdowns: tinted bg + left edge rail. */
 .ws-switcher-item[data-active='true']::after {
   content: '';
   position: absolute;
-  left: 4px;
-  top: 6px;
-  bottom: 6px;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
   width: 3px;
-  border-radius: 2px;
   background: var(--accent);
+  border-radius: 0 2px 2px 0;
 }
 .ws-switcher-item-label {
   display: inline-flex;
@@ -244,6 +250,26 @@
 .ws-switcher-item-add:disabled {
   opacity: 0.6;
   cursor: progress;
+}
+.ws-switcher-item-close {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--fg-faint);
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+.ws-switcher-item-close:hover {
+  background: var(--border-strong);
+  color: var(--fg);
 }
 
 @media (max-width: 720px) {

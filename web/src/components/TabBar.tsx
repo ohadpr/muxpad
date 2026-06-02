@@ -6,6 +6,7 @@ import { api } from '../api';
 import { refreshTabs, useTabs } from '../tabs';
 import { openInNewTab, useLongPress } from '../use-long-press';
 import { useHorizontalOverflow } from '../use-overflow';
+import { useMediaQuery } from '../use-media-query';
 import { TabBarDropdown } from './TabBarDropdown';
 import './TabBar.css';
 
@@ -36,6 +37,13 @@ export function TabBar({ workspaceId, workspaceSlug }: TabBarProps) {
   const activeSlug = matchActiveTabSlug(pathname);
 
   const { ref: tabsRef, overflowing } = useHorizontalOverflow<HTMLElement>([tabs.length]);
+  const isMobile = useMediaQuery('(max-width: 720px)');
+  // Mobile + collapsed: the floating "+" is repurposed to create a
+  // *pane* in the current tab (mobile's dominant add action). New-tab
+  // moves into the tab dropdown menu as a footer item — see
+  // TabBarDropdown's onAddTab handling. Desktop's overflow case is left
+  // unchanged: "+" still creates a tab.
+  const collapsedMobile = overflowing && isMobile;
 
   useEffect(() => {
     if (editingId) {
@@ -190,18 +198,32 @@ export function TabBar({ workspaceId, workspaceSlug }: TabBarProps) {
         </button>
       </nav>
       {overflowing && (
-        <TabBarDropdown tabs={tabs} activeSlug={activeSlug} workspaceSlug={workspaceSlug} />
+        <TabBarDropdown
+          tabs={tabs}
+          activeSlug={activeSlug}
+          workspaceId={workspaceId}
+          workspaceSlug={workspaceSlug}
+          {...(collapsedMobile ? { onAddTab: () => void create() } : {})}
+        />
       )}
       {overflowing && (
         <button
           type="button"
           className="ws-tab-add ws-tab-add-floating"
-          onClick={() => void create()}
-          disabled={creating}
-          title="New tab"
-          aria-label="New tab"
+          onClick={() => {
+            if (collapsedMobile) {
+              // Mobile: ask the active TabView (in a sibling subtree) to
+              // create a new pane in its current tab.
+              window.dispatchEvent(new CustomEvent('muxpad:add-pane'));
+            } else {
+              void create();
+            }
+          }}
+          disabled={collapsedMobile ? false : creating}
+          title={collapsedMobile ? 'New pane' : 'New tab'}
+          aria-label={collapsedMobile ? 'New pane' : 'New tab'}
         >
-          {creating ? '…' : '+'}
+          {collapsedMobile ? '+' : creating ? '…' : '+'}
         </button>
       )}
     </div>

@@ -179,17 +179,48 @@
 }
 .ws-tabbar-dropdown-item[data-active='true'] {
   color: var(--fg);
-  background: var(--bg-hover);
+  /* Tinted accent bg (visually distinct from hover so you can tell
+     "currently selected" from "pointer is over this"). */
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-elev));
 }
-.ws-tabbar-dropdown-item[data-active='true']::after {
+/* Left-edge vertical rail — full row height, doesn't fight the close
+   button at the right edge the way a bottom rail did. Matches the
+   sidebar-active pattern used by Slack/Linear/etc. */
+.ws-tabbar-dropdown-item[data-active='true']::before {
   content: '';
   position: absolute;
-  left: 14px;
-  right: 14px;
+  left: 0;
+  top: 4px;
   bottom: 4px;
-  height: var(--chrome-rail);
+  width: 3px;
   background: var(--accent);
-  opacity: 0.6;
+  border-radius: 0 2px 2px 0;
+}
+.ws-tabbar-dropdown-item-add {
+  color: var(--fg-dim);
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 8px;
+}
+.ws-tabbar-dropdown-item-close {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--fg-faint);
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+.ws-tabbar-dropdown-item-close:hover {
+  background: var(--border-strong);
+  color: var(--fg);
 }
 .ws-tabbar-dropdown-item-label {
   display: inline-flex;
