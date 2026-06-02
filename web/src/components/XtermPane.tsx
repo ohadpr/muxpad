@@ -184,6 +184,27 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     // half-frame can't freeze output.
     const staleTimer = window.setInterval(() => extractor.flushStale(Date.now()), 25);
 
+    // Debounced post-write repaint. xterm's DOM renderer occasionally
+    // leaves a few top rows showing a stale frame after Claude finishes
+    // a redraw — we've seen the bug repeatedly with no easy repro,
+    // visible workaround was always to switch panes or reload. After
+    // each parsed write we schedule a refresh; while the stream is
+    // active the timer keeps resetting and never fires, but the moment
+    // output settles the refresh fires once and clears any stuck rows.
+    // Sub-millisecond cost per fire (~30×80 cells of DOM update).
+    let postWriteRefreshTimer: number | null = null;
+    const writeParsedSub = term.onWriteParsed(() => {
+      if (postWriteRefreshTimer !== null) window.clearTimeout(postWriteRefreshTimer);
+      postWriteRefreshTimer = window.setTimeout(() => {
+        postWriteRefreshTimer = null;
+        try {
+          term.refresh(0, term.rows - 1);
+        } catch {
+          // ignore — term may be disposed
+        }
+      }, 500);
+    });
+
     // Activity-independent diagnostic timer. The WS-heartbeat path only fires
     // when the connection is idle for HEARTBEAT_IDLE_MS — panes streaming
     // constant output (Vite HMR, dev TUIs) never go idle, so the heartbeat
@@ -565,7 +586,20 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
           safeSend(encodeInput(seq));
         }
       }
-      if (pointers.size === 0) multiFingerGesture = false;
+      if (pointers.size === 0) {
+        multiFingerGesture = false;
+        // Rapid SGR-wheel sequences can leave the TUI mid-redraw — Claude
+        // gets the next scroll event before it finished painting from the
+        // previous one, and we end up with stale rows at the top of the
+        // viewport that don't reflect the current scroll position. Once
+        // the gesture is fully done, ask xterm to repaint all visible
+        // rows from its buffer so any straggler rows refresh. Cheap.
+        try {
+          term.refresh(0, term.rows - 1);
+        } catch {
+          // ignore — term may be disposed mid-cleanup
+        }
+      }
       // Re-seed for any remaining pointers so the next move doesn't
       // see a delta computed against the lifted finger's Y.
       reseed();
@@ -715,6 +749,56 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     const reassertSizeFromEvent = (source: string) => {
       snap(`reassertSize triggered by ${source}`);
       reassertSize();
+      // After the resize chain has had time to settle (the chain itself
+      // schedules at 0/100/250/500ms), force xterm to repaint all visible
+      // rows from its buffer. iOS Safari/PWA can suspend the renderer
+      // while the app is backgrounded and leave xterm's DOM in a stale
+      // state on resume — the buffer is fine but the painted rows look
+      // garbled until something triggers a redraw (refresh, pane switch).
+      // term.refresh is a cheap, non-destructive repaint.
+      window.setTimeout(() => {
+        try {
+          term.refresh(0, term.rows - 1);
+        } catch {
+          // ignore — term may be disposed
+        }
+      }, 600);
+      // On lifecycle RESUME (not plain focus changes), follow up with a
+      // wiggle resize — temporarily ±1 cols, then back. Forces the
+      // running TUI to redraw its entire visible area via SIGWINCH,
+      // which clears xterm-buffer corruption from iOS PWA suspending
+      // the JS context mid-write or mid-escape-sequence parse. We've
+      // seen this manifest as severely garbled rows where multiple
+      // streams of content overlap; term.refresh alone can't fix it
+      // because the cells themselves are wrong. window.focus is too
+      // chatty (fires on every tab refocus), so we scope this to the
+      // events that actually correlate with a real app/page resume.
+      const isResume =
+        source === 'visibilitychange' || source === 'pageshow' || source === 'resume';
+      if (isResume) {
+        window.setTimeout(() => {
+          const ws = wsRef.current;
+          if (!ws || ws.readyState !== WebSocket.OPEN) return;
+          const cols = term.cols;
+          const rows = term.rows;
+          if (cols < 2 || rows < 1) return;
+          try {
+            ws.send(encodeResize(cols - 1, rows));
+            window.setTimeout(() => {
+              if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+              try {
+                wsRef.current.send(encodeResize(cols, rows));
+                lastSentCols = cols;
+                lastSentRows = rows;
+              } catch {
+                // ignore
+              }
+            }, 80);
+          } catch {
+            // ignore — socket may have closed mid-flight
+          }
+        }, 800);
+      }
     };
     const onVisibility = () => {
       snap(`visibilitychange → ${document.visibilityState}`);
@@ -892,6 +976,8 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
       container.removeEventListener('keydown', onKeyDown, true);
       container.removeEventListener('paste', onPaste, true);
       onData.dispose();
+      writeParsedSub.dispose();
+      if (postWriteRefreshTimer !== null) window.clearTimeout(postWriteRefreshTimer);
       container.removeEventListener('pointerdown', onPointerDown);
       container.removeEventListener('pointermove', onPointerMove);
       container.removeEventListener('pointerup', onPointerUpOrCancel);

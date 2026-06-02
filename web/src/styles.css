@@ -171,7 +171,11 @@ body,
      garble TUI scrollback) and visualViewport-driven JS sizing for
      the same reason. overflow:hidden + overscroll-behavior:none
      lock the page so a rubber-band drag inside a pane can't leak
-     into the document. */
+     into the document. PWA standalone override below uses 100lvh
+     so the body fills the full physical screen (including the
+     home-indicator safe area) — otherwise position:fixed bottom:0
+     elements like the mobile composer end up above the home
+     indicator with a gap below them. */
   height: 100svh;
   background: var(--bg);
   color: var(--fg);
@@ -187,6 +191,18 @@ body,
      UI where every tap should register as a tap) but still allows
      pan/pinch inside elements that opt in. */
   touch-action: manipulation;
+}
+
+/* PWA standalone: fill the full physical screen including all safe
+   areas, so the mobile composer (position:fixed bottom:0) actually
+   sits at the screen bottom instead of above the home indicator.
+   No browser chrome to fluctuate, so 100lvh is stable here. */
+@media (display-mode: standalone) {
+  html,
+  body,
+  #root {
+    height: 100lvh;
+  }
 }
 
 a {
@@ -340,9 +356,20 @@ select:focus {
   display: flex;
   flex-direction: column;
   /* Must match the html/body/#root chain (100svh, stable across iOS
-     URL-bar/keyboard transitions) so the workspace doesn't overflow. */
+     URL-bar/keyboard transitions) so the workspace doesn't overflow.
+     padding-top reserves space for the iPhone status bar / Dynamic
+     Island in PWA standalone mode (viewport-fit=cover); without it
+     the chrome tab bar would slide under them. env() returns 0 on
+     non-notched devices. */
   height: 100svh;
+  padding-top: env(safe-area-inset-top);
   overflow: hidden;
+}
+/* PWA standalone match for the height swap above. */
+@media (display-mode: standalone) {
+  .app-layout {
+    height: 100lvh;
+  }
 }
 .app-layout > .ws-tabbar {
   flex: 0 0 auto;
@@ -428,11 +455,6 @@ select:focus {
 }
 
 @media (max-width: 720px) {
-  /* A hair taller on touch so plate tap-targets feel right. The whole
-     chrome scales because every plate uses height:100% or var(--chrome-h). */
-  :root {
-    --chrome-h: 40px;
-  }
   .brand-text-responsive,
   .brand-text-side {
     display: none;

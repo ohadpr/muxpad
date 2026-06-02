@@ -73,6 +73,13 @@
   inset: 0;
   display: flex;
   align-items: stretch;
+  /* Let taps on empty area (right of the trigger) fall through to the
+     floating + button sitting under us in the same wrap. Children
+     re-enable pointer-events so the trigger and menu stay clickable. */
+  pointer-events: none;
+}
+.ws-tabbar-dropdown > * {
+  pointer-events: auto;
 }
 
 .ws-tabbar-dropdown-trigger {
@@ -88,7 +95,11 @@
   color: var(--fg);
   font-family: var(--chrome-font);
   font-size: var(--chrome-size);
-  font-weight: 600;
+  /* The workspace switcher is the bold anchor; the tab dropdown stays
+     in regular weight to read as secondary chrome and keep visual
+     hierarchy clear. */
+  font-weight: 400;
+  color: var(--fg);
   cursor: pointer;
   max-width: 100%;
   white-space: nowrap;
@@ -194,9 +205,15 @@
   text-overflow: ellipsis;
 }
 
-/* The + button when it's been moved out of the tabs nav (collapsed mode). */
+/* The + button when it's been moved out of the tabs nav (collapsed mode).
+   The sibling TabBarDropdown uses `position: absolute; inset: 0` over the
+   same wrap and would otherwise sit on top of this static button and eat
+   its taps. position:relative + z-index brings the button into the
+   positioning context and above the dropdown. */
 .ws-tab-add-floating {
   margin-left: 0;
+  position: relative;
+  z-index: 2;
 }
 
 /* ─── Tabs ───────────────────────────────────────────────────────────────
