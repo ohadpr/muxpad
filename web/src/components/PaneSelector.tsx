@@ -7,18 +7,16 @@ export interface PaneSelectorProps {
   /** User-visible label for the pane (OSC title / fg command / "Pane N"). */
   paneLabel: (paneId: string) => string;
   onSelect: (paneId: string) => void;
-  onAdd: () => void;
 }
 
 /**
  * Pane chooser for the single-pane (mobile / narrow) workspace view.
- * Always renders as a single dropdown trigger — the previous "pills
- * when they fit, dropdown when they overflow" mode was visually noisy
- * with two rows of chrome already at the top of the mobile UI. A
- * dropdown is consistent with the tab-bar collapsed mode and keeps the
- * pane row compact regardless of pane count.
+ * Only rendered when there's >1 pane in the active tab — the single-pane
+ * case has no pane row at all, and new-pane creation lives on the tab
+ * bar's "+" via a `muxpad:add-pane` event. So this component is purely
+ * a switcher: dropdown trigger + menu of panes.
  */
-export function PaneSelector({ paneIds, activeId, paneLabel, onSelect, onAdd }: PaneSelectorProps) {
+export function PaneSelector({ paneIds, activeId, paneLabel, onSelect }: PaneSelectorProps) {
   const [open, setOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 
@@ -80,19 +78,6 @@ export function PaneSelector({ paneIds, activeId, paneLabel, onSelect, onAdd }: 
           </div>
         )}
       </div>
-      {/* "+" outside the dropdown trigger so it visually + behaviourally
-          mirrors the tab bar's new-tab button — single tap creates a
-          pane without opening the menu. Uses the same .ws-tab-add class
-          to share styling and stay in sync. */}
-      <button
-        type="button"
-        className="ws-tab-add"
-        onClick={onAdd}
-        title="New pane"
-        aria-label="New pane"
-      >
-        +
-      </button>
     </div>
   );
 }
