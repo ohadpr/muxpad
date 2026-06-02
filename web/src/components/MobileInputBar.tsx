@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { api } from '../api';
+import { splitClipboard } from '../lib/clipboard-detect';
 import './MobileInputBar.css';
 
 /**
@@ -54,24 +56,87 @@ export function MobileInputBar({ paneId, paneKind }: MobileInputBarProps) {
     autoResize();
   }, [value]);
 
-  // Mirror the bar's height (which changes as the textarea grows) into
-  // a CSS variable so the workspace-body above can leave room. The bar
-  // is position:fixed (see MobileInputBar.css for why), so it doesn't
-  // reserve space in the flex flow — the body has to compensate.
+  // Anchor the bar's bottom edge to the visual viewport bottom (= top
+  // of the on-screen keyboard when open). We position by `top`, not by
+  // `bottom:0`, because iOS Safari's keyboard-aware handling of
+  // bottom:0 fixed elements is inconsistent — sometimes it floats them
+  // above the keyboard with a visible gap. Positioning by an
+  // explicitly-computed top kills the ambiguity.
+  //
+  // Also mirrors the bar's height into a CSS variable so the workspace
+  // above can leave matching padding-bottom (the bar is position:fixed
+  // and doesn't reserve flow space).
   useEffect(() => {
     const el = barRef.current;
     if (!el) return;
-    const ro = new ResizeObserver((entries) => {
-      const h = entries[0]?.contentRect.height ?? 0;
-      // Include the safe-area-inset padding the CSS adds (the
-      // ResizeObserver reports content-rect height, not the full
-      // border-box). offsetHeight covers border + padding.
-      const full = el.offsetHeight || h;
-      document.documentElement.style.setProperty('--mobile-input-bar-height', `${full}px`);
+    // In standalone PWA mode (home-screen install) iOS has no URL bar
+    // or form-accessory bar to fight, and its native handling of
+    // `position: fixed; bottom: 0` correctly anchors to the visual
+    // viewport (= keyboard top) on its own. Our JS-positioning hack is
+    // only needed for the in-browser case where iOS chrome would leave
+    // a gap. So in standalone: keep CSS bottom:0 and skip the JS.
+    const isStandalone =
+      // iOS-specific legacy property
+      (navigator as Navigator & { standalone?: boolean }).standalone === true ||
+      window.matchMedia('(display-mode: standalone)').matches;
+
+    let barHeight = el.offsetHeight;
+    const ro = new ResizeObserver(() => {
+      barHeight = el.offsetHeight;
+      document.documentElement.style.setProperty('--mobile-input-bar-height', `${barHeight}px`);
+      reposition();
     });
     ro.observe(el);
+
+    let reposition = () => {};
+    let cleanup = () => {};
+    if (isStandalone) {
+      el.style.bottom = '0';
+      el.style.top = 'auto';
+    } else {
+      const vv = window.visualViewport;
+      reposition = () => {
+        const vH = vv ? vv.height : window.innerHeight;
+        const vTop = vv ? vv.offsetTop : 0;
+        el.style.top = `${vTop + vH - barHeight}px`;
+        el.style.bottom = 'auto';
+      };
+      vv?.addEventListener('resize', reposition);
+      vv?.addEventListener('scroll', reposition);
+      // iOS Safari can fire visualViewport 'resize' only at the END of
+      // its keyboard animation — run a short rAF loop on focus to track
+      // through the slide.
+      let trackingFrame: number | null = null;
+      const trackUntil = (deadline: number) => {
+        reposition();
+        if (Date.now() < deadline) {
+          trackingFrame = requestAnimationFrame(() => trackUntil(deadline));
+        } else {
+          trackingFrame = null;
+        }
+      };
+      const onFocusIn = () => {
+        if (trackingFrame !== null) cancelAnimationFrame(trackingFrame);
+        trackUntil(Date.now() + 600);
+      };
+      const onFocusOut = () => {
+        if (trackingFrame !== null) cancelAnimationFrame(trackingFrame);
+        trackUntil(Date.now() + 600);
+      };
+      el.addEventListener('focusin', onFocusIn);
+      el.addEventListener('focusout', onFocusOut);
+      reposition();
+      cleanup = () => {
+        vv?.removeEventListener('resize', reposition);
+        vv?.removeEventListener('scroll', reposition);
+        el.removeEventListener('focusin', onFocusIn);
+        el.removeEventListener('focusout', onFocusOut);
+        if (trackingFrame !== null) cancelAnimationFrame(trackingFrame);
+      };
+    }
     return () => {
       ro.disconnect();
+      cleanup();
       document.documentElement.style.removeProperty('--mobile-input-bar-height');
     };
   }, []);
@@ -84,6 +149,41 @@ export function MobileInputBar({ paneId, paneKind }: MobileInputBarProps) {
         detail: { paneId, data },
       }),
     );
+  };
+
+  // Image paste: textareas don't natively accept image clipboard data —
+  // we have to intercept paste, upload the blob to muxpad's attachments
+  // endpoint, and splice the returned path into the textarea so the
+  // user can add context before sending. Mirrors the XtermPane paste
+  // handler so behavior matches between desktop xterm and mobile composer.
+  const onPaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!paneId) return;
+    const { imageOnly, imageItems } = splitClipboard(e.clipboardData);
+    if (imageItems.length === 0) return; // plain text → textarea handles it
+    e.preventDefault();
+    const paths: string[] = [];
+    for (const item of imageItems) {
+      const blob = item.getAsFile();
+      if (!blob) continue;
+      const ext = blob.type.split('/')[1] ?? 'png';
+      try {
+        const { path } = await api.uploadAttachment(paneId, blob, `pasted.${ext}`);
+        paths.push(path);
+      } catch {
+        // ignore — drop this image; other items in the same paste still get a chance
+      }
+    }
+    if (paths.length === 0) return;
+    // Splice paths into the textarea content at the caret. Preserve any
+    // text portion of the paste (clipboard can carry both) after the path.
+    const ta = textareaRef.current;
+    const start = ta?.selectionStart ?? value.length;
+    const end = ta?.selectionEnd ?? value.length;
+    const pasted = paths.join(' ') + ' ';
+    const tail = imageOnly ? '' : e.clipboardData.getData('text/plain');
+    const before = value.slice(0, start);
+    const after = value.slice(end);
+    setValue(`${before}${pasted}${tail}${after}`);
   };
 
   const submit = () => {
@@ -161,12 +261,14 @@ export function MobileInputBar({ paneId, paneKind }: MobileInputBarProps) {
           className="mobile-input-textarea"
           value={value}
           onChange={(e) => setValue(e.target.value)}
+          onPaste={onPaste}
           placeholder="Send to pane…"
           rows={1}
-          autoCapitalize="off"
-          autoCorrect="off"
+          // Keep iOS autocorrect / autocapitalize / spellcheck ON — the
+          // composer is for natural-language input to Claude (and any
+          // TUI that accepts prose). autoComplete stays off since this
+          // isn't a form field that should suggest from history.
           autoComplete="off"
-          spellCheck={false}
           // iOS won't show a submit affordance on a textarea's Return key;
           // Return inserts a newline, which is what we want for paste /
           // multi-line composition. Send button is the only submitter.

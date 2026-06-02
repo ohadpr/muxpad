@@ -167,6 +167,11 @@ export class PaneRuntime extends EventEmitter {
       MUXPAD_PANE_ID: this.spec.id,
       MUXPAD_TAB_ID: this.spec.tab_id ?? '',
       MUXPAD_WORKSPACE_ID: this.spec.workspace_id ?? '',
+      // Suppress oh-my-zsh's "Would you like to check for updates? [Y/n]"
+      // prompt. Without this it fires on the first pane of the day and
+      // eats the first character of any startup_cmd as its answer.
+      DISABLE_AUTO_UPDATE: 'true',
+      DISABLE_UPDATE_PROMPT: 'true',
     };
     // Always spawn the shell interactively (no `-c`). When startup_cmd is set,
     // it's auto-typed into the shell so that when it exits the user is left

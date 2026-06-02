@@ -19,6 +19,7 @@ import { subscribe, subscribeReconnect } from '../events';
 import { refreshTabs, useTabs } from '../tabs';
 import { useDocumentTitle } from '../use-document-title';
 import { useMediaQuery } from '../use-media-query';
+import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
 import './tab.css';
 
@@ -108,6 +109,19 @@ export function TabView() {
   const [mobileActiveId, setMobileActiveId] = useState<string | null>(null);
   const layoutRef = useRef<Layout>(null);
   const isMobile = useMediaQuery('(max-width: 720px)');
+
+  // Remember which tab we're on so the next visit to /w/$wsSlug
+  // restores it (see WorkspaceLayout).
+  useEffect(() => {
+    setLastTabSlug(wsSlug, tabSlug);
+  }, [wsSlug, tabSlug]);
+
+  // Persist the active pane per tab whenever it changes (mobile only —
+  // desktop shows all panes via mosaic, no "active" concept).
+  useEffect(() => {
+    if (!isMobile || !tab || !mobileActiveId) return;
+    setLastPaneId(tab.id, mobileActiveId);
+  }, [isMobile, tab, mobileActiveId]);
 
   // Title pulls the live name from the shared tabs list so renames in
   // the tab bar update the document title without a refetch here.
@@ -523,8 +537,16 @@ export function TabView() {
 
   if (isMobile && !isEmpty) {
     const paneIds = collectPaneIds(layout);
+    // Fallback chain: in-memory state → persisted last pane for this
+    // tab → first pane. Lets a workspace/tab switch land back on the
+    // pane the user was last looking at, not always paneIds[0].
+    const stored = tab ? getLastPaneId(tab.id) : undefined;
     const activeId =
-      mobileActiveId && paneIds.includes(mobileActiveId) ? mobileActiveId : (paneIds[0] ?? null);
+      mobileActiveId && paneIds.includes(mobileActiveId)
+        ? mobileActiveId
+        : stored && paneIds.includes(stored)
+          ? stored
+          : (paneIds[0] ?? null);
 
     const addPane = async () => {
       if (!tab) return;

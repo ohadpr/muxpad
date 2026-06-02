@@ -19,7 +19,9 @@
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  background: var(--bg-elev);
+  /* Use the chrome-bar bg — --bg-elev was too close to --xterm-bg and
+     made the toast vanish into the pane behind it. */
+  background: var(--bg-tabbar);
   color: var(--fg);
   border: 1px solid var(--border-strong);
   border-radius: 8px;
