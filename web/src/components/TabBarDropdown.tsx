@@ -1,19 +1,35 @@
 import type { Tab } from '@muxpad/shared';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
+import { api } from '../api';
+import { refreshTabs } from '../tabs';
 import { openInNewTab, useLongPress } from '../use-long-press';
+import { SvgClose } from './icons';
 
 interface TabBarDropdownProps {
   tabs: Tab[];
   activeSlug: string | null;
+  workspaceId: string;
   workspaceSlug: string;
+  /**
+   * Optional "+ New tab" footer item. Provided on mobile, where the
+   * external floating "+" is repurposed to create panes (the dominant
+   * mobile action) and new-tab creation has to live somewhere reachable.
+   */
+  onAddTab?: () => void;
 }
 
 /**
  * Collapsed-state dropdown shown when the tab bar runs out of room.
  * Mirrors the inline tab UI: lists all tabs, click any to switch.
  */
-export function TabBarDropdown({ tabs, activeSlug, workspaceSlug }: TabBarDropdownProps) {
+export function TabBarDropdown({
+  tabs,
+  activeSlug,
+  workspaceId,
+  workspaceSlug,
+  onAddTab,
+}: TabBarDropdownProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   const navigate = useNavigate();
@@ -72,6 +88,7 @@ export function TabBarDropdown({ tabs, activeSlug, workspaceSlug }: TabBarDropdo
               key={t.id}
               tab={t}
               isActive={t.slug === activeSlug}
+              workspaceId={workspaceId}
               workspaceSlug={workspaceSlug}
               onSelect={() => {
                 setOpen(false);
@@ -84,6 +101,18 @@ export function TabBarDropdown({ tabs, activeSlug, workspaceSlug }: TabBarDropdo
               }}
             />
           ))}
+          {onAddTab && (
+            <button
+              type="button"
+              className="ws-tabbar-dropdown-item ws-tabbar-dropdown-item-add"
+              onClick={() => {
+                setOpen(false);
+                onAddTab();
+              }}
+            >
+              + New tab
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -93,15 +122,36 @@ export function TabBarDropdown({ tabs, activeSlug, workspaceSlug }: TabBarDropdo
 interface TabDropdownItemProps {
   tab: Tab;
   isActive: boolean;
+  workspaceId: string;
   workspaceSlug: string;
   onSelect: () => void;
 }
 
-function TabDropdownItem({ tab, isActive, workspaceSlug, onSelect }: TabDropdownItemProps) {
+function TabDropdownItem({
+  tab,
+  isActive,
+  workspaceId,
+  workspaceSlug,
+  onSelect,
+}: TabDropdownItemProps) {
   const { pressing, handlers } = useLongPress({
     onLongPress: () =>
       openInNewTab(`/w/${encodeURIComponent(workspaceSlug)}/t/${encodeURIComponent(tab.slug)}`),
   });
+  const onClose = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    // Confirm because closing a tab kills its running panes and any
+    // unsaved work in them. cheap window.confirm is enough — personal
+    // tool, single user.
+    if (!window.confirm(`Close tab "${tab.name}"? Any running panes will be killed.`)) return;
+    try {
+      await api.deleteTab(tab.id);
+      await refreshTabs(workspaceId);
+    } catch (err) {
+      console.error('deleteTab failed', err);
+    }
+  };
   return (
     <button
       type="button"
@@ -120,6 +170,22 @@ function TabDropdownItem({ tab, isActive, workspaceSlug, onSelect }: TabDropdown
         {!isActive && tab.attention && (
           <span className="badge-dot -inline" aria-label="needs attention" />
         )}
+      </span>
+      {/* The close affordance is rendered as a sibling visual (a <span>
+          with click) to avoid nested-button HTML. stopPropagation in
+          onClose keeps the row's onClick from also firing. */}
+      <span
+        role="button"
+        tabIndex={0}
+        className="ws-tabbar-dropdown-item-close"
+        onClick={onClose}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') void onClose(e as unknown as React.MouseEvent);
+        }}
+        title="Close tab"
+        aria-label={`Close tab ${tab.name}`}
+      >
+        <SvgClose />
       </span>
     </button>
   );
