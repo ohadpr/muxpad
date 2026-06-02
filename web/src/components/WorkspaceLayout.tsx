@@ -3,6 +3,7 @@ import { Outlet, useNavigate, useParams, useRouterState } from '@tanstack/react-
 import { refreshTabs, useTabs } from '../tabs';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
 import { api } from '../api';
+import { getLastTabSlug } from '../lib/last-visited';
 
 /**
  * Parent route for `/w/$wsSlug`. Two behaviors:
@@ -39,13 +40,17 @@ export function WorkspaceLayout() {
     if (!isExactWorkspacePath) return;
     if (tabs.length === 0) return;
     if (tabs.length !== workspace.tab_count) return;
-    const first = tabs[0]!;
+    // Prefer the last tab the user was on in this workspace; fall back to
+    // the first tab. The stored slug is only used if the tab still exists
+    // (workspace may have shrunk since the last visit).
+    const storedSlug = getLastTabSlug(wsSlug);
+    const target = (storedSlug && tabs.find((t) => t.slug === storedSlug)) || tabs[0]!;
     const search = Object.fromEntries(
       new URLSearchParams(window.location.search).entries(),
     );
     void navigate({
       to: '/w/$wsSlug/t/$tabSlug',
-      params: { wsSlug, tabSlug: first.slug },
+      params: { wsSlug, tabSlug: target.slug },
       search,
       replace: true,
     });
