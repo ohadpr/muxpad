@@ -82,7 +82,7 @@ export function workspacesRoutes(deps: {
    * state UI's "Close workspace" button only renders when the count
    * has already reached zero.
    */
-  app.delete('/:id', (c) => {
+  app.delete('/:id', async (c) => {
     const id = c.req.param('id');
     const w = workspaces.getById(id);
     if (!w)
@@ -90,16 +90,24 @@ export function workspacesRoutes(deps: {
         { error: { code: 'not_found', message: 'workspace not found' } },
         404,
       );
-    if (w.tab_count > 0) {
-      return c.json(
-        {
-          error: {
-            code: 'workspace_not_empty',
-            message: `workspace still has ${w.tab_count} tab(s)`,
-          },
-        },
-        409,
-      );
+    // Cascade: kill panes, then drop tabs, then drop the workspace.
+    // Was a 409 "drain first" before — fine for the desktop UX where
+    // tabs close one by one, but mobile's merged switcher expects a
+    // "delete folder" semantic and there's no clean way to drain from
+    // there. Doing the cascade here removes the race window the client
+    // hit when issuing parallel tab-deletes before the workspace-delete.
+    for (const t of tabs.listByWorkspace(id)) {
+      for (const p of panes.listByTab(t.id)) {
+        try {
+          await deps.ptyd.killPane(p.id);
+        } catch {
+          // ptyd disconnected; the DB cascade proceeds regardless. ptyd
+          // has no persistent state.
+        }
+        deps.cache.forget(p.id);
+      }
+      tabs.delete(t.id);
+      deps.events.emit({ type: 'tab.removed', workspace_id: id, tab_id: t.id });
     }
     workspaces.delete(id);
     deps.events.emit({ type: 'workspace.removed', workspace_id: id });

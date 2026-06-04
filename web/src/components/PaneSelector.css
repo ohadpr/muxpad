@@ -34,6 +34,35 @@
   color: var(--fg-dim);
   flex: 0 0 auto;
 }
+/* Attention on the collapsed trigger: notification count anchored to the
+   chevron (not the trigger label) so it reads as "more inside" instead of
+   "the active pane has news." Mirrors TabBarDropdown / WorkspaceSwitcher. */
+.pane-selector-chevron {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  color: var(--fg-dim);
+}
+.pane-selector-chevron[data-attention='true'] {
+  color: var(--accent);
+}
+.pane-selector-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent-fg);
+  background: var(--accent);
+  border-radius: 8px;
+  font-variant-numeric: tabular-nums;
+}
 .pane-selector-trigger-label {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -71,6 +100,18 @@
   border-radius: 4px;
   cursor: pointer;
   white-space: nowrap;
+}
+.pane-selector-item-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.pane-selector-item-label-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 .pane-selector-item:hover {
   background: var(--bg-hover);

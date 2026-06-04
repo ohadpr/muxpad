@@ -94,12 +94,30 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     if (!container) return;
 
     const { fontFamily, fontSize, theme } = getSettings();
+    // Open a clicked link directly, no confirm. A terminal surfaces URLs two
+    // independent ways and each needs its own opener:
+    //   1. Plain-text URLs the WebLinksAddon detects by regex (below).
+    //   2. OSC 8 hyperlinks, which xterm *core* renders via its own
+    //      OscLinkProvider — the addon never sees these. With no `linkHandler`
+    //      set, core falls back to a window.confirm() activator that Chrome
+    //      amplifies into a generic "WARNING: dangerous" line, then does its
+    //      own window.open(). Programs that emit terminal hyperlinks (Claude
+    //      Code, gh, ls --hyperlink, …) hit that path, which is why the prompt
+    //      kept showing up despite the addon's custom handler.
+    // Routing both through one opener makes behavior identical regardless of
+    // how the URL was emitted, and means a link is never opened more than once
+    // per click. noopener,noreferrer keeps the destination from reading
+    // window.opener or seeing the muxpad referer.
+    const openUri = (uri: string): void => {
+      window.open(uri, '_blank', 'noopener,noreferrer');
+    };
     const term = new Terminal({
       fontFamily,
       fontSize,
       cursorBlink: true,
       theme: themeFor(theme),
       allowProposedApi: true,
+      linkHandler: { activate: (_event, uri) => openUri(uri) },
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -107,16 +125,7 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     // OSC 52 handler when navigator.clipboard is undefined (non-secure
     // context — Tailscale serve, LAN IP), which truncates the terminal frame.
     term.loadAddon(createSafeClipboardAddon());
-    // Open clicked links directly — no confirm. The xterm default activator
-    // prompts via window.confirm(), which Chrome amplifies with a generic
-    // "WARNING: dangerous" line that adds no information (the URL is already
-    // visible in the terminal). noopener,noreferrer keeps the destination
-    // from reading window.opener or seeing the muxpad referer.
-    term.loadAddon(
-      new WebLinksAddon((_event, uri) => {
-        window.open(uri, '_blank', 'noopener,noreferrer');
-      }),
-    );
+    term.loadAddon(new WebLinksAddon((_event, uri) => openUri(uri)));
     termRef.current = term;
     fitRef.current = fit;
 
@@ -378,7 +387,8 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
 
       ws.addEventListener('open', () => {
         dbg('ws open', { paneId, retries });
-        if (retries > 0) term.writeln('\r\n[reconnected]');
+        const wasReconnect = retries > 0;
+        if (wasReconnect) term.writeln('\r\n[reconnected]');
         retries = 0;
         try {
           fit.fit();
@@ -391,6 +401,39 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
         if (mayDriveResize() && safeSend(encodeResize(term.cols, term.rows))) {
           lastSentCols = term.cols;
           lastSentRows = term.rows;
+        }
+        // On a real RECONNECT (not initial open): the PTY size is
+        // probably already what we just sent, so process.resize is a
+        // no-op and no SIGWINCH fires. But if the disconnect interrupted
+        // a write mid-escape-sequence, the buffer's top rows can stay
+        // visibly garbled until something forces a TUI redraw. Wiggle
+        // by ±1 col 200ms after the open settles — two SIGWINCHs, the
+        // TUI redraws its visible area, the garble clears. Skip on
+        // initial open (fresh xterm, no corruption to recover from).
+        if (wasReconnect) {
+          window.setTimeout(() => {
+            const sock = wsRef.current;
+            if (!sock || sock.readyState !== WebSocket.OPEN) return;
+            const cols = term.cols;
+            const rows = term.rows;
+            if (cols < 2 || rows < 1) return;
+            try {
+              sock.send(encodeResize(cols - 1, rows));
+              window.setTimeout(() => {
+                const s = wsRef.current;
+                if (!s || s.readyState !== WebSocket.OPEN) return;
+                try {
+                  s.send(encodeResize(cols, rows));
+                  lastSentCols = cols;
+                  lastSentRows = rows;
+                } catch {
+                  // ignore
+                }
+              }, 80);
+            } catch {
+              // ignore
+            }
+          }, 200);
         }
         armIdle();
       });

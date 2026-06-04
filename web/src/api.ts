@@ -75,6 +75,12 @@ export const api = {
   markTabSeen: (id: string) =>
     req<void>(`/api/tabs/${id}/seen`, { method: 'POST' }),
 
+  // Surgical "I'm looking at this one pane right now" used by mobile.
+  // Keeps other panes' attention flags alive so the pane dropdown can
+  // surface them.
+  markPaneSeen: (id: string) =>
+    req<void>(`/api/panes/${id}/seen`, { method: 'POST' }),
+
   reorderTabs: (ids: string[]) =>
     req<void>('/api/tabs/reorder', {
       method: 'POST',

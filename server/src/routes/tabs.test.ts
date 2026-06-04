@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { EventEmitter } from 'node:events';
 import { openDb } from '../store/db.js';
 import { EventBus } from '../events.js';
 import type { MuxpadEvent } from '@muxpad/shared';
@@ -68,6 +69,41 @@ describe('tabs routes', () => {
     const res = await test.app.request(`/api/tabs/${t.id}`);
     const body = (await res.json()) as { panes: unknown[] };
     expect(body.panes).toHaveLength(1);
+  });
+
+  it('GET /tabs/:id decorates each pane with its current attention flag', async () => {
+    // Locks in the route → cache wiring for per-pane attention. We forge
+    // a paneAttention event onto the underlying PtydClient (mirroring
+    // ptyd's normal push path; see ptyd-cache.test.ts) and confirm the
+    // GET endpoint surfaces the flag on the matching pane row.
+    const t = (await (await postTab({ name: 'A' })).json()) as { id: string };
+    const p1 = (await (
+      await test.app.request(`/api/tabs/${t.id}/panes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+    ).json()) as { id: string };
+    const p2 = (await (
+      await test.app.request(`/api/tabs/${t.id}/panes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+    ).json()) as { id: string };
+
+    (test.ptyd.client as unknown as EventEmitter).emit('paneAttention', {
+      id: p1.id,
+      attention: true,
+    });
+
+    const detail = (await (await test.app.request(`/api/tabs/${t.id}`)).json()) as {
+      panes: Array<{ id: string; attention?: boolean }>;
+    };
+    const got1 = detail.panes.find((p) => p.id === p1.id);
+    const got2 = detail.panes.find((p) => p.id === p2.id);
+    expect(got1?.attention).toBe(true);
+    expect(got2?.attention).toBe(false);
   });
 
   it('updates a tab layout', async () => {

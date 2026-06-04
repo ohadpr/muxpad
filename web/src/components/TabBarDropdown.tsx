@@ -11,34 +11,34 @@ interface TabBarDropdownProps {
   activeSlug: string | null;
   workspaceId: string;
   workspaceSlug: string;
-  /**
-   * Optional "+ New tab" footer item. Provided on mobile, where the
-   * external floating "+" is repurposed to create panes (the dominant
-   * mobile action) and new-tab creation has to live somewhere reachable.
-   */
-  onAddTab?: () => void;
 }
 
 /**
  * Collapsed-state dropdown shown when the tab bar runs out of room.
  * Mirrors the inline tab UI: lists all tabs, click any to switch.
+ * Desktop-only — mobile uses MobileNavSwitcher.
  */
 export function TabBarDropdown({
   tabs,
   activeSlug,
   workspaceId,
   workspaceSlug,
-  onAddTab,
 }: TabBarDropdownProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   const navigate = useNavigate();
 
   const active = tabs.find((t) => t.slug === activeSlug);
-  // True iff any non-active tab is flagging attention. The dropdown trigger
-  // gets a small dot in that case so the user knows there's something
-  // pending behind the collapsed list.
-  const anyOtherAttention = tabs.some((t) => t.attention && t.slug !== activeSlug);
+  // How many *other* tabs are flagging attention. Surfaced on the
+  // dropdown chevron (which is the only part of the trigger whose
+  // semantics are "more inside, not this label") — colored accent to
+  // signal "look here," and a small count to say how many. Sticking the
+  // signal on the chevron and not on the trigger label avoids the
+  // "looks like the active tab needs attention" misread.
+  const otherAttentionCount = tabs.reduce(
+    (n, t) => (t.attention && t.slug !== activeSlug ? n + 1 : n),
+    0,
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -62,10 +62,17 @@ export function TabBarDropdown({
         type="button"
         className="ws-tabbar-dropdown-trigger"
         onClick={() => setOpen((v) => !v)}
-        title={anyOtherAttention ? 'Another tab needs attention' : 'Switch tab'}
+        title={
+          otherAttentionCount > 0
+            ? `${otherAttentionCount} other ${otherAttentionCount === 1 ? 'tab needs' : 'tabs need'} attention`
+            : 'Switch tab'
+        }
       >
         <span className="ws-tabbar-dropdown-label">{active?.name ?? 'Tabs'}</span>
-        <span className="ws-tabbar-dropdown-chevron">
+        <span
+          className="ws-tabbar-dropdown-chevron"
+          data-attention={otherAttentionCount > 0 ? 'true' : undefined}
+        >
           <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
             <path
               d="M2 4 L5 7 L8 4"
@@ -76,8 +83,13 @@ export function TabBarDropdown({
               strokeLinejoin="round"
             />
           </svg>
-          {anyOtherAttention && (
-            <span className="badge-dot" aria-label="another tab needs attention" />
+          {otherAttentionCount > 0 && (
+            <span
+              className="ws-tabbar-dropdown-count"
+              aria-label={`${otherAttentionCount} other ${otherAttentionCount === 1 ? 'tab needs' : 'tabs need'} attention`}
+            >
+              {otherAttentionCount}
+            </span>
           )}
         </span>
       </button>
@@ -101,18 +113,6 @@ export function TabBarDropdown({
               }}
             />
           ))}
-          {onAddTab && (
-            <button
-              type="button"
-              className="ws-tabbar-dropdown-item ws-tabbar-dropdown-item-add"
-              onClick={() => {
-                setOpen(false);
-                onAddTab();
-              }}
-            >
-              + New tab
-            </button>
-          )}
         </div>
       )}
     </div>
@@ -167,7 +167,10 @@ function TabDropdownItem({
     >
       <span className="ws-tabbar-dropdown-item-label">
         <span className="ws-tabbar-dropdown-item-label-text">{tab.name}</span>
-        {!isActive && tab.attention && (
+        {tab.attention && (
+          // Render on the active row too — visiting a tab doesn't auto-
+          // clear pane-level attention, so the active row's own dot is
+          // a real signal that something inside still wants you.
           <span className="badge-dot -inline" aria-label="needs attention" />
         )}
       </span>

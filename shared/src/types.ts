@@ -35,6 +35,10 @@ export const PaneSpecSchema = z.object({
   // Runtime-only fields decorated by the route layer.
   title: z.string().nullable().optional(),
   foreground_cmd: z.string().nullable().optional(),
+  // Runtime-only flag. True iff this pane has received a BEL (\x07) since
+  // the user last interacted with it. Decorated at the route layer from
+  // the ptyd cache (same source as Tab.attention / Workspace.attention).
+  attention: z.boolean().optional(),
 });
 export type PaneSpec = z.infer<typeof PaneSpecSchema>;
 

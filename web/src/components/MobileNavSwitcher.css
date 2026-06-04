@@ -1,0 +1,338 @@
+/* ──────────────────────────────────────────────────────────────────────
+   MobileNavSwitcher
+
+   Tree of equally-navigable nodes (workspaces contain tabs; both can be
+   clicked to navigate). Both levels use muxpad's chrome body text —
+   --chrome-size at --chrome-font — and hierarchy is carried by
+   STRUCTURE (disclosure chevron + indent) and STATE (active rail),
+   NOT by type-size escalation. Mirrors Notion / Linear / Finder for
+   the same problem.
+   ────────────────────────────────────────────────────────────────────── */
+
+.mns {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+/* ─── Trigger ─────────────────────────────────────────────────────────── */
+
+.mns-trigger {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  height: 100%;
+  background: transparent;
+  color: var(--fg);
+  border: none;
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size);
+  cursor: pointer;
+  text-align: left;
+}
+.mns-trigger:hover {
+  background: var(--bg-hover);
+}
+.mns-trigger-label {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.mns-trigger-ws {
+  font-weight: 600;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mns-trigger-sep {
+  color: var(--fg-faint);
+  flex: 0 0 auto;
+}
+.mns-trigger-tab {
+  color: var(--fg-dim);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mns-trigger-chevron {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  color: var(--fg-faint);
+}
+.mns-trigger[data-attention='true'] .mns-trigger-chevron {
+  color: var(--accent);
+}
+
+/* ─── Menu surface ───────────────────────────────────────────────────── */
+
+.mns-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  /* Cap width — without this the menu stretches to the full chrome-bar
+     width, leaving giant empty space between short labels and the close
+     icons. 280px fits comfortably on any mobile portrait viewport while
+     still letting longer tab names breathe (truncation handles overflow). */
+  width: 280px;
+  max-width: calc(100vw - 16px);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.08),
+    0 12px 32px rgba(0, 0, 0, 0.24);
+  padding: 6px 0;
+  z-index: 1000;
+  max-height: 70vh;
+  overflow-y: auto;
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size);
+}
+
+/* ─── Workspace group ────────────────────────────────────────────────── */
+
+.mns-ws-group {
+  display: block;
+}
+/* Whitespace is the chunking signal between groups — not borders, not
+   bg fills. Matches muxpad's overall "structure via space, not stroke"
+   chrome aesthetic. */
+.mns-ws-group + .mns-ws-group {
+  margin-top: 8px;
+}
+
+/* Workspace row. Chevron + name sit FLUSH at the menu's left edge so
+   they read as "tree root level," with tabs visibly indented past
+   them. The row gets the prominent accent-tinted bg when active. */
+.mns-ws-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 8px 0 0;
+  color: var(--fg);
+  font-weight: 500;
+}
+.mns-ws-row:hover {
+  background: var(--bg-hover);
+}
+.mns-ws-row[data-active='true'] {
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-elev));
+}
+.mns-ws-row[data-active='true']::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  background: var(--accent);
+  border-radius: 0 2px 2px 0;
+}
+
+/* Disclosure column — 18px wide, flush at the left edge so the
+   workspace name sits as far left as possible. Tabs are indented
+   meaningfully past this column (see .mns-tab-row). */
+.mns-disclosure {
+  flex: 0 0 18px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--fg-faint);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: transform 120ms ease;
+}
+.mns-disclosure:hover {
+  color: var(--fg);
+}
+.mns-disclosure[data-expanded='true'] svg {
+  transform: rotate(90deg);
+  transition: transform 120ms ease;
+}
+.mns-disclosure-empty {
+  display: inline-block;
+}
+
+.mns-ws-name {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 2px;
+  color: inherit;
+  text-decoration: none;
+}
+.mns-ws-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* ─── Tabs ───────────────────────────────────────────────────────────── */
+
+.mns-tab-list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Tab row — outer flex container. Inside: a <Link> for navigation and
+   a <button> for close, as siblings (close was moved out of the Link
+   so it actually receives taps on mobile — nesting clickable spans in
+   an anchor lets the anchor swallow the tap). Indent at col 40 keeps
+   the tree-style 20px step from the workspace name column. */
+.mns-tab-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 8px 0 40px;
+  color: var(--fg-dim);
+  font-weight: 400;
+}
+.mns-tab-link {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  color: inherit;
+  text-decoration: none;
+}
+.mns-tab-row:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+/* Active TAB uses a neutral hover-style bg — not an accent tint. The
+   active WORKSPACE owns the accent tint; using a different color
+   family for the active tab makes them instantly distinguishable
+   (was: both purple-tinted, only saturation differed → looked alike). */
+.mns-tab-row[data-active='true'] {
+  color: var(--fg);
+  font-weight: 600;
+  background: var(--bg-hover);
+}
+.mns-tab-row[data-active='true']::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  background: var(--accent);
+  border-radius: 0 2px 2px 0;
+}
+.mns-tab-name {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+.mns-tab-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* ─── Close affordance (per-row) ─────────────────────────────────────── */
+
+.mns-close {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-faint);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  opacity: 0.3;
+  transition: opacity 80ms ease;
+  /* Kill iOS's double-tap zoom delay so taps register instantly. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.mns-ws-row:hover .mns-close,
+.mns-ws-row:focus-within .mns-close,
+.mns-tab-row:hover .mns-close,
+.mns-tab-row:focus-within .mns-close,
+.mns-close:hover,
+.mns-close:focus-visible {
+  opacity: 1;
+}
+.mns-close:hover {
+  background: var(--border-strong);
+  color: var(--fg);
+}
+
+/* ─── Footers ────────────────────────────────────────────────────────── */
+
+/* "+ New tab" — visually distinct from tab rows so it reads as an
+   ACTION, not another tab option. Outdented to col 12, smaller font,
+   meaningful margin-top so it floats below the tab list rather than
+   chained to the last tab. */
+.mns-new-tab {
+  margin: 6px 8px 2px 12px;
+  padding: 4px 8px;
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  text-align: left;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.mns-new-tab:hover {
+  opacity: 1;
+  background: var(--bg-hover);
+}
+
+.mns-new-workspace {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 14px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: var(--chrome-size);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.mns-new-workspace:hover {
+  background: var(--bg-hover);
+}
