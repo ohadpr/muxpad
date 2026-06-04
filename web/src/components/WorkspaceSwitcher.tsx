@@ -27,8 +27,13 @@ export function WorkspaceSwitcher({ activeWorkspaceSlug }: WorkspaceSwitcherProp
   const navigate = useNavigate();
 
   const active = workspaces.find((w) => w.slug === activeWorkspaceSlug);
-  // Dot on the trigger when any *other* workspace has attention.
-  const anyOtherAttention = workspaces.some((w) => w.attention && w.slug !== activeWorkspaceSlug);
+  // How many *other* workspaces are flagging attention. Rendered on the
+  // chevron (accent color + count) — see TabBarDropdown for the rationale
+  // about why a dot on the trigger reads as "the active item has news."
+  const otherAttentionCount = workspaces.reduce(
+    (n, w) => (w.attention && w.slug !== activeWorkspaceSlug ? n + 1 : n),
+    0,
+  );
 
   useEffect(() => {
     if (editing) {
@@ -129,15 +134,18 @@ export function WorkspaceSwitcher({ activeWorkspaceSlug }: WorkspaceSwitcherProp
         onClick={() => setOpen((v) => !v)}
         onDoubleClick={startEdit}
         title={
-          anyOtherAttention
-            ? 'Another workspace needs attention'
+          otherAttentionCount > 0
+            ? `${otherAttentionCount} other ${otherAttentionCount === 1 ? 'workspace needs' : 'workspaces need'} attention`
             : active
               ? 'Double-click to rename'
               : 'Switch workspace'
         }
       >
         <span className="ws-switcher-label">{active?.name ?? 'Workspaces'}</span>
-        <span className="ws-switcher-chevron">
+        <span
+          className="ws-switcher-chevron"
+          data-attention={otherAttentionCount > 0 ? 'true' : undefined}
+        >
           <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
             <path
               d="M2 4 L5 7 L8 4"
@@ -148,8 +156,13 @@ export function WorkspaceSwitcher({ activeWorkspaceSlug }: WorkspaceSwitcherProp
               strokeLinejoin="round"
             />
           </svg>
-          {anyOtherAttention && (
-            <span className="badge-dot" aria-label="another workspace needs attention" />
+          {otherAttentionCount > 0 && (
+            <span
+              className="ws-switcher-count"
+              aria-label={`${otherAttentionCount} other ${otherAttentionCount === 1 ? 'workspace needs' : 'workspaces need'} attention`}
+            >
+              {otherAttentionCount}
+            </span>
           )}
         </span>
       </button>
@@ -245,7 +258,12 @@ function WorkspaceItem({
     >
       <span className="ws-switcher-item-label">
         <span className="ws-switcher-item-label-text">{name}</span>
-        {!isActive && attention && (
+        {attention && (
+          // Render on the active row too — `markSeen` only clears
+          // attention when the user touches the pane that BEL'd, not
+          // just by visiting the parent workspace. So the active row's
+          // own dot is a real signal: "your current workspace still has
+          // a pane asking for you."
           <span className="badge-dot -inline" aria-label="needs attention" />
         )}
       </span>

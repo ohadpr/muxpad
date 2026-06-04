@@ -44,8 +44,8 @@
 .mobile-input-key {
   flex: 0 0 auto;
   min-width: 44px;
-  min-height: 32px;
-  padding: 4px 10px;
+  min-height: 28px;
+  padding: 2px 10px;
   background: var(--bg-elev);
   color: var(--fg-dim);
   border: 1px solid var(--border);
@@ -80,17 +80,17 @@
 
 .mobile-input-textarea {
   flex: 1;
-  min-height: 36px;
+  min-height: 32px;
   /* height is set imperatively by autoResize() so it grows with content;
      this is just the floor / initial value. */
-  height: 36px;
+  height: 32px;
   max-height: 100px;
   resize: none;
   background: var(--bg-elev);
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 5px 10px;
   /* Stay >=16px so iOS doesn't auto-zoom the page when the input gets
      focus — anything smaller and Safari "helps" by zooming in. */
   font-size: 16px;
@@ -112,7 +112,7 @@
 .mobile-input-send {
   flex: 0 0 auto;
   min-width: 56px;
-  height: 36px;
+  height: 32px;
   padding: 0 12px;
   background: var(--accent);
   color: var(--accent-fg);

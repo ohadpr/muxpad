@@ -111,7 +111,9 @@
 }
 .ws-tabbar-dropdown-trigger svg {
   flex: 0 0 auto;
-  color: var(--fg-faint);
+  /* Inherit from the chevron span so the accent swap on data-attention
+     colors both the SVG and the count consistently. */
+  color: inherit;
 }
 .ws-tabbar-dropdown-label {
   overflow: hidden;
@@ -123,12 +125,34 @@
   position: relative;
   display: inline-flex;
   align-items: center;
+  gap: 4px;
   flex: 0 0 auto;
   padding-top: 1px;
+  color: var(--fg-faint);
 }
-.ws-tabbar-dropdown-chevron .badge-dot {
-  top: -3px;
-  right: -4px;
+/* When other tabs need attention, chevron + count both go accent. The
+   pair lives on the chevron span (not next to the label) so the signal
+   reads as "more inside" instead of "the active tab has news." */
+.ws-tabbar-dropdown-chevron[data-attention='true'] {
+  color: var(--accent);
+}
+/* Count pill — text-on-accent so it's clearly visible even when the
+   chevron color shift alone is subtle (e.g. Trayo cream theme where
+   --fg-faint and --accent don't differ much in luminance). */
+.ws-tabbar-dropdown-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent-fg);
+  background: var(--accent);
+  border-radius: 8px;
+  font-variant-numeric: tabular-nums;
 }
 
 .ws-tabbar-dropdown-menu {
@@ -246,7 +270,6 @@
   position: relative;
   z-index: 2;
 }
-
 /* ─── Tabs ───────────────────────────────────────────────────────────────
    Each tab is a plate: same height as the bar, 14px horizontal padding,
    1px right-edge hairline divider. Two channels:
@@ -386,5 +409,12 @@
   .ws-tab {
     padding: 0 12px;
     max-width: 160px;
+  }
+  /* Beefier touch targets in the dropdown — at 32px each, sequential
+     items are hard to disambiguate by thumb. 40px gives a comfortable
+     hit area without making the menu feel sparse. The close button
+     stays at 22px (sufficient on its own with proper padding). */
+  .ws-tabbar-dropdown-item {
+    height: 40px;
   }
 }

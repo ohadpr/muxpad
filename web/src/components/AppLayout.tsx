@@ -1,7 +1,9 @@
 import { Outlet, useRouterState } from '@tanstack/react-router';
+import { useMediaQuery } from '../use-media-query';
 import { useWindowAttention } from '../use-window-attention';
 import { useWorkspaces } from '../workspaces';
 import { Brand } from './Brand';
+import { MobileNavSwitcher } from './MobileNavSwitcher';
 import { SettingsMenu } from './SettingsMenu';
 import { TabBar } from './TabBar';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
@@ -31,6 +33,7 @@ export function AppLayout() {
   const activeWorkspace = wsSlug
     ? workspaces.find((w) => w.slug === wsSlug)
     : null;
+  const isMobile = useMediaQuery('(max-width: 720px)');
 
   return (
     <div className="app-layout">
@@ -40,7 +43,13 @@ export function AppLayout() {
           responsive={true}
           markOnly={!!activeWorkspace}
         />
-        {activeWorkspace && (
+        {activeWorkspace && isMobile && (
+          // Single merged trigger on mobile: workspace + tab in a tree
+          // dropdown. Replaces WorkspaceSwitcher + TabBar for thumb-
+          // economy reasons (4-tap cross-workspace switches → 2).
+          <MobileNavSwitcher activeWorkspaceSlug={activeWorkspace.slug} />
+        )}
+        {activeWorkspace && !isMobile && (
           <>
             <WorkspaceSwitcher activeWorkspaceSlug={activeWorkspace.slug} />
             {/* `key` forces a remount when the workspace changes so the

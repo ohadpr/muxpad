@@ -90,15 +90,18 @@ describe('workspaces routes', () => {
     expect(res.status).toBe(204);
   });
 
-  it('refuses to delete a workspace with tabs (409)', async () => {
+  it('cascades tab + pane deletion when deleting a non-empty workspace', async () => {
     const w = (await (await post('/api/workspaces', { name: 'A' })).json()) as {
       id: string;
     };
-    await post('/api/tabs', { workspace_id: w.id, name: 'T' });
+    const t = (await (await post('/api/tabs', { workspace_id: w.id, name: 'T' })).json()) as {
+      id: string;
+    };
+    // Workspace delete should succeed (204) and the tab should be gone.
     const res = await test.app.request(`/api/workspaces/${w.id}`, { method: 'DELETE' });
-    expect(res.status).toBe(409);
-    const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe('workspace_not_empty');
+    expect(res.status).toBe(204);
+    const tabAfter = await test.app.request(`/api/tabs/${t.id}`);
+    expect(tabAfter.status).toBe(404);
   });
 
   it('workspace POST/PATCH/DELETE all emit on the event bus', async () => {

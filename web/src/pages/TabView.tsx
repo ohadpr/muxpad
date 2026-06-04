@@ -131,12 +131,38 @@ export function TabView() {
 
   // Forward the "+" tap from the chrome bar's TabBar (which lives in
   // AppLayout and can't reach into this component tree) to whatever
-  // addPane the mobile branch most recently rendered.
+  // addPane the mobile branch most recently rendered. The same event
+  // is also dispatched by the row-2 "+" rendered next to PaneSelector
+  // — one listener, two emitters.
   useEffect(() => {
     const onAddPane = () => addPaneRef.current?.();
     window.addEventListener('muxpad:add-pane', onAddPane);
     return () => window.removeEventListener('muxpad:add-pane', onAddPane);
   }, []);
+
+  // Surgical mark-seen. Mobile: only the active pane (so other panes
+  // can keep flagging in the dropdown). Desktop: bulk-seen because the
+  // mosaic shows every pane at once — every pane is "seen" by virtue of
+  // the tab being open. Fires on tab mount and on any pane switch.
+  // Refreshes workspaces/tabs so the favicon + chrome dots update
+  // without waiting for the 5s poll.
+  useEffect(() => {
+    if (!tab || !workspace) return;
+    const refresh = () =>
+      Promise.all([refreshTabs(workspace.id), refreshWorkspaces()]).catch(() => {});
+    if (isMobile) {
+      if (!mobileActiveId) return;
+      api
+        .markPaneSeen(mobileActiveId)
+        .then(refresh)
+        .catch(() => {});
+    } else {
+      api
+        .markTabSeen(tab.id)
+        .then(refresh)
+        .catch(() => {});
+    }
+  }, [tab?.id, mobileActiveId, isMobile, workspace?.id]);
 
   // Title pulls the live name from the shared tabs list so renames in
   // the tab bar update the document title without a refetch here.
@@ -208,13 +234,12 @@ export function TabView() {
         setTab(detail);
         layoutRef.current = toMosaic(detail.layout);
         viewedTabId = found.id;
-        // refreshWorkspaces too so the favicon and workspace-switcher dot
-        // (both derived from the workspace-level attention rollup) update
-        // without waiting for the next 5s workspace poll.
-        api
-          .markTabSeen(found.id)
-          .then(() => Promise.all([refreshTabs(workspace.id), refreshWorkspaces()]))
-          .catch(() => {});
+        // Mark-seen on mount is deliberately NOT done here anymore — a
+        // bulk tab-seen on mount would clear every pane's attention
+        // before the user could see which pane was BELing in the
+        // PaneSelector dropdown. The per-pane / per-mode seen happens
+        // in the dedicated effect below; the bulk seen on unmount still
+        // runs (tab-level dot still clears when you actually leave).
       } catch (e) {
         setError(String(e));
       }
@@ -461,6 +486,10 @@ export function TabView() {
                     ...e.pane,
                     title: e.pane.title ?? p.title ?? null,
                     foreground_cmd: e.pane.foreground_cmd ?? p.foreground_cmd ?? null,
+                    // Like title/fg above: PATCH-route events may omit the
+                    // runtime-only attention flag. Preserve prior so we
+                    // don't clobber a true value with undefined.
+                    attention: e.pane.attention ?? p.attention,
                   };
                 }),
               }
@@ -597,19 +626,27 @@ export function TabView() {
     return (
       <div className="workspace-root workspace-mobile">
         {/* Pane row only renders when there's more than one pane to
-            choose between. Single-pane case (the dominant one) gets a
-            single chrome row total: the new-pane "+" lives on the tab
-            bar above us (TabBar dispatches muxpad:add-pane on mobile),
-            and the tab dropdown's menu has "+ New tab" as a footer
-            item. */}
+            choose between. The "+" inside it dispatches muxpad:add-pane;
+            TabView listens at the window level and forwards to the
+            mobile branch's addPane closure. */}
         {paneIds.length > 1 && (
           <nav className="mobile-tab-strip" aria-label="Panes">
             <PaneSelector
               paneIds={paneIds}
               activeId={activeId}
               paneLabel={paneLabel}
+              paneAttention={(id) => tab.panes.find((p) => p.id === id)?.attention ?? false}
               onSelect={setMobileActiveId}
             />
+            <button
+              type="button"
+              className="ws-tab-add"
+              onClick={() => window.dispatchEvent(new CustomEvent('muxpad:add-pane'))}
+              title="New pane"
+              aria-label="New pane"
+            >
+              +
+            </button>
             {activeId && (
               <button
                 type="button"
