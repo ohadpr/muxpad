@@ -64,18 +64,36 @@
   position: relative;
   display: inline-flex;
   align-items: center;
+  gap: 4px;
   flex: 0 0 auto;
-  /* Reserve a little headroom for the dot so it doesn't visually clip
-     against the plate's top edge. */
   padding-top: 1px;
+  color: var(--fg-faint);
 }
-.ws-switcher-chevron .badge-dot {
-  top: -3px;
-  right: -4px;
+/* Other-workspace attention → chevron + count both go accent. See
+   TabBar.css for the rationale (badge on label was ambiguous). */
+.ws-switcher-chevron[data-attention='true'] {
+  color: var(--accent);
+}
+.ws-switcher-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent-fg);
+  background: var(--accent);
+  border-radius: 8px;
+  font-variant-numeric: tabular-nums;
 }
 
 .ws-switcher-trigger svg {
-  color: var(--fg-faint);
+  /* Inherit currentColor from the chevron span so the attention-accent
+     swap colors the SVG along with the count. */
+  color: inherit;
   transition: color 80ms ease, transform 140ms ease;
 }
 .ws-switcher-trigger:hover svg,
@@ -277,7 +295,10 @@
     padding: 0 12px;
     gap: 6px;
   }
+  /* Match the tab dropdown's beefier mobile touch targets (32 → 40px).
+     Easier to disambiguate by thumb without making the menu feel sparse. */
   .ws-switcher-item {
     padding: 0 12px;
+    height: 40px;
   }
 }

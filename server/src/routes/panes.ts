@@ -261,7 +261,9 @@ export function panesScopedRoutes(deps: {
     }
     const refreshed = panes.getById(id);
     if (refreshed) {
-      deps.events.emit({ type: 'pane.updated', tab_id: refreshed.tab_id, pane: refreshed });
+      const decorated = { ...refreshed, attention: deps.cache.getAttention(refreshed.id) };
+      deps.events.emit({ type: 'pane.updated', tab_id: refreshed.tab_id, pane: decorated });
+      return c.json(decorated);
     }
     return c.json(refreshed);
   });
@@ -339,6 +341,22 @@ export function panesScopedRoutes(deps: {
         },
         503,
       );
+    }
+    return c.body(null, 204);
+  });
+
+  // Mark a single pane as "seen". Counterpart to /tabs/:id/seen but
+  // surgical — mobile uses it on tab mount / pane switch to clear
+  // attention for just the pane the user is actually looking at, so
+  // other panes in the same tab can keep flagging in the pane dropdown.
+  // Desktop continues to use the bulk tab-seen since the mosaic shows
+  // every pane simultaneously and "seen" applies to all of them.
+  app.post('/:id/seen', async (c) => {
+    const id = c.req.param('id');
+    try {
+      await deps.ptyd.markSeen(id);
+    } catch {
+      // best-effort — same swallow as the tab-level seen
     }
     return c.body(null, 204);
   });
