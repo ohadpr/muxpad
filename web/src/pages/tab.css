@@ -93,17 +93,16 @@
   margin: 0;
 }
 
+/* No outer border on the pane — the 8px splitter between adjacent
+   panes handles separation. Adding a border here put a 1px line right
+   at the toolbar's top edge which looked like it was eating into the
+   header chrome. */
 .workspace-body .mosaic-window {
   background: var(--bg);
   border-radius: 0;
   border: none;
   box-shadow: none;
   overflow: hidden;
-}
-
-/* Sibling tiles get a 1px separator from the parent bg showing through */
-.workspace-body .mosaic-tile + .mosaic-tile {
-  /* react-mosaic uses absolute positioning per tile; nothing to set here */
 }
 
 /* Pane header — the same plate language as the top chrome, one level down.
@@ -127,25 +126,48 @@
   transition: background 100ms ease, color 100ms ease;
 }
 
-/* Focused pane — bottom-edge accent rail plus a faint accent wash on
-   the toolbar plate. Mirrors the active-tab signal one level up: the
-   wash carries "this is where your keys go", the rail underlines it.
-   Title text lifts to --fg. The rail uses an absolutely-positioned
-   ::after on the toolbar (the !important borders prevent
-   border-bottom-color tricks). */
+/* Focused pane = vibrant toolbar + a real accent wash over the content.
+   The wash sits ON TOP of xterm via ::after on .mosaic-window-body
+   (setting `background:` on the body itself doesn't work — xterm paints
+   its own theme bg on top of it). Kept at 5% so terminal text contrast
+   stays readable. Combined with the toolbar treatment this is now a
+   genuinely "different surface," not a frame on top of one. */
 .workspace-body .mosaic-window[data-focused="true"] .mosaic-window-toolbar {
   color: var(--fg) !important;
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg-chrome)) !important;
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-chrome)) !important;
+  border-bottom-color: var(--accent) !important;
 }
 .workspace-body .mosaic-window[data-focused="true"] .mosaic-window-toolbar::after {
-  content: "";
+  content: '';
   position: absolute;
   left: 0;
   right: 0;
   bottom: -1px;
-  height: var(--chrome-rail);
+  height: 2px;
   background: var(--accent);
   pointer-events: none;
+}
+.workspace-body .mosaic-window[data-focused="true"] .mosaic-window-body::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  pointer-events: none;
+  z-index: 4;
+}
+
+/* Unfocused panes recede via the toolbar treatment only — toolbar
+   neutralises to --bg, controls fade to 0.6 opacity. No content overlay
+   here: with the focused pane wearing the accent wash, the absence
+   of a wash IS the unfocused signal. */
+.workspace-body .mosaic-window:not([data-focused="true"]) .mosaic-window-toolbar {
+  background: var(--bg) !important;
+  color: var(--fg-faint) !important;
+}
+.workspace-body .mosaic-window:not([data-focused="true"]) .pane-chrome-typeswitch-wrap,
+.workspace-body .mosaic-window:not([data-focused="true"]) .pane-chrome-btn,
+.workspace-body .mosaic-window:not([data-focused="true"]) .pane-chrome-btn-inline {
+  opacity: 0.6;
 }
 
 /* Per-pane attention slot: a future .badge-dot would render here, in
@@ -160,20 +182,49 @@
   overflow: hidden;
 }
 
-/* Splitter: wide enough to grab easily, with hover accent. */
+/* Splitter — 8px hit area for grabbing, but the VISIBLE line is a
+   center-weighted gradient that fades to transparent at the edges
+   instead of a solid bar. Reads as a soft gutter / spine between
+   panes rather than a hard slab. On hover, the same gradient swaps
+   to accent for the grab affordance. */
 .workspace-body .mosaic-split {
-  background: var(--border);
+  background: transparent;
   z-index: 5;
   transition: background 80ms ease;
 }
-.workspace-body .mosaic-split:hover {
-  background: var(--accent);
-}
 .workspace-body .mosaic-split.-row {
-  width: 6px;
+  width: 8px;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    var(--border-strong) 50%,
+    transparent 100%
+  );
 }
 .workspace-body .mosaic-split.-column {
-  height: 6px;
+  height: 8px;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    var(--border-strong) 50%,
+    transparent 100%
+  );
+}
+.workspace-body .mosaic-split.-row:hover {
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    var(--accent) 50%,
+    transparent 100%
+  );
+}
+.workspace-body .mosaic-split.-column:hover {
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    var(--accent) 50%,
+    transparent 100%
+  );
 }
 
 /* Hide react-mosaic's default toolbar bits we don't use */
