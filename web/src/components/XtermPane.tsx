@@ -28,6 +28,13 @@ export interface XtermPaneProps {
   paneId: string;
   /** Called when the server tells us the underlying PTY exited. */
   onExit?: ((code: number) => void) | undefined;
+  /**
+   * Focus the terminal on mount. Default true (a freshly-opened pane
+   * should be ready for input). The desktop multi-pane case sets this
+   * false on every pane except the persisted-last-focused one, so a
+   * refresh restores focus instead of letting last-to-mount win.
+   */
+  autoFocus?: boolean | undefined;
 }
 
 const XTERM_THEMES: Record<
@@ -75,7 +82,7 @@ function themeFor(theme: Theme) {
   return XTERM_THEMES[theme] ?? XTERM_THEMES.trayo;
 }
 
-export function XtermPane({ paneId, onExit }: XtermPaneProps) {
+export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
@@ -250,8 +257,17 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
     const setFocusedAttr = (focused: boolean) => {
       const win = container.closest('.mosaic-window');
       if (!win) return;
-      if (focused) win.setAttribute('data-focused', 'true');
-      else win.removeAttribute('data-focused');
+      if (focused) {
+        win.setAttribute('data-focused', 'true');
+        // Broadcast so TabView can persist the active pane per tab —
+        // enables refresh-restore of focus on the desktop multi-pane
+        // layout, where there's no other notion of "last-active pane".
+        window.dispatchEvent(
+          new CustomEvent('muxpad:pane-focused', { detail: { paneId } }),
+        );
+      } else {
+        win.removeAttribute('data-focused');
+      }
     };
     const onFocusIn = () => setFocusedAttr(true);
     const onFocusOut = () => setFocusedAttr(false);
@@ -289,7 +305,11 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
         // Focus on mount so a freshly-created workspace/pane is ready for
         // typing without an extra click. Re-mounts (font/theme change)
         // also refocus, which matches "I just navigated here" expectation.
-        term.focus();
+        // autoFocus is false in the multi-pane desktop case for every
+        // pane except the persisted-last-focused one — without that gate,
+        // every pane racing through its mount sequence calls term.focus()
+        // and whichever opens last steals input on every refresh.
+        if (autoFocus) term.focus();
 
         // Force xterm's cached scrollBarWidth to 0 — we hide the native
         // viewport scrollbar via CSS, and on always-show-scrollbar systems
@@ -410,10 +430,13 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
         // by ±1 col 200ms after the open settles — two SIGWINCHs, the
         // TUI redraws its visible area, the garble clears. Skip on
         // initial open (fresh xterm, no corruption to recover from).
-        if (wasReconnect) {
+        // Gated on mayDriveResize() so a hidden tab can't shrink the
+        // shared PTY out from under the visible tab.
+        if (wasReconnect && mayDriveResize()) {
           window.setTimeout(() => {
             const sock = wsRef.current;
             if (!sock || sock.readyState !== WebSocket.OPEN) return;
+            if (!mayDriveResize()) return;
             const cols = term.cols;
             const rows = term.rows;
             if (cols < 2 || rows < 1) return;
@@ -816,8 +839,16 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
       // because the cells themselves are wrong. window.focus is too
       // chatty (fires on every tab refocus), so we scope this to the
       // events that actually correlate with a real app/page resume.
+      // pageshow and resume always correlate with a real lifecycle resume
+      // (the browser only fires them after a freeze/discard). visibilitychange
+      // fires on every refocus though, including quick pulls-down on iOS;
+      // gate it on a real hidden-duration so we don't wiggle on every flip.
+      const HIDDEN_RESUME_MS = 2000;
+      const hiddenFor = hiddenSince ? Date.now() - hiddenSince : 0;
       const isResume =
-        source === 'visibilitychange' || source === 'pageshow' || source === 'resume';
+        source === 'pageshow' ||
+        source === 'resume' ||
+        (source === 'visibilitychange' && hiddenFor >= HIDDEN_RESUME_MS);
       if (isResume) {
         window.setTimeout(() => {
           const ws = wsRef.current;
@@ -843,9 +874,18 @@ export function XtermPane({ paneId, onExit }: XtermPaneProps) {
         }, 800);
       }
     };
+    // Tracks the wall-clock time the page went hidden; used to gate the
+    // wiggle inside reassertSizeFromEvent so quick refocuses don't trigger
+    // the full SIGWINCH round-trip.
+    let hiddenSince: number | null = document.visibilityState === 'hidden' ? Date.now() : null;
     const onVisibility = () => {
       snap(`visibilitychange → ${document.visibilityState}`);
-      if (document.visibilityState === 'visible') reassertSizeFromEvent('visibilitychange');
+      if (document.visibilityState === 'visible') {
+        reassertSizeFromEvent('visibilitychange');
+        hiddenSince = null;
+      } else {
+        hiddenSince = Date.now();
+      }
     };
     document.addEventListener('visibilitychange', onVisibility);
     const onWinFocus = () => reassertSizeFromEvent('window.focus');

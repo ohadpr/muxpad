@@ -106,12 +106,10 @@
 }
 
 /* Pane header — the same plate language as the top chrome, one level down.
-   Shorter (28px), darker shelf (--bg-chrome). Same two-channel idiom:
-     bottom rail (accent) = focused — "keyboard input is here"
-     top-right dot (red)  = attention — "BEL since last seen" (server emits
-                            via PaneManager diff-emit; client rendering of
-                            the per-pane dot is not wired yet — the tab-bar
-                            already shows the tab-level rollup) */
+   Shorter (28px), darker shelf (--bg-chrome). The bottom-rail accent
+   marks the focused pane ("keyboard input is here"). Per-pane attention
+   surfaces in the mobile PaneSelector and tab-level rollups; the pane
+   header itself doesn't paint a dot. */
 .workspace-body .mosaic-window-toolbar {
   position: relative;
   background: var(--bg-chrome) !important;
@@ -135,7 +133,9 @@
 .workspace-body .mosaic-window[data-focused="true"] .mosaic-window-toolbar {
   color: var(--fg) !important;
   background: color-mix(in srgb, var(--accent) 18%, var(--bg-chrome)) !important;
-  border-bottom-color: var(--accent) !important;
+  /* The accent rail is the ::after below — don't double up by also
+     tinting the border-bottom, which produces a slightly thicker
+     two-tone edge against the rail. */
 }
 .workspace-body .mosaic-window[data-focused="true"] .mosaic-window-toolbar::after {
   content: '';
@@ -170,61 +170,38 @@
   opacity: 0.6;
 }
 
-/* Per-pane attention slot: a future .badge-dot would render here, in
-   the top-right of the pane chrome. No left-edge rail — that channel
-   is reserved for the focused-pane selection rail above. The server
-   emits the signal (PaneManager diff-emit); the client doesn't paint
-   it yet. The tab-bar one level up already shows the tab-level rollup. */
-
 .workspace-body .mosaic-window-body {
   background: var(--xterm-bg);
   position: relative;
   overflow: hidden;
 }
 
-/* Splitter — 8px hit area for grabbing, but the VISIBLE line is a
-   center-weighted gradient that fades to transparent at the edges
-   instead of a solid bar. Reads as a soft gutter / spine between
-   panes rather than a hard slab. On hover, the same gradient swaps
-   to accent for the grab affordance. */
+/* Splitter — visible solid bar between panes, --border for softness.
+   Two blueprint-theme defenses: (a) blueprint sets the outer hover bg
+   to `none` at specificity 0,3,0, so we match it to win; (b) it adds
+   a blue box-shadow on the inner .mosaic-split-line at hover, which
+   reads as a second blue line on top of ours — same trick suppresses
+   that. The non-blueprint hover path is unreachable today (TabView
+   hard-codes blueprintNamespace="bp4") but kept for safety. */
 .workspace-body .mosaic-split {
-  background: transparent;
+  background: var(--border);
   z-index: 5;
   transition: background 80ms ease;
 }
+.workspace-body .mosaic-split:hover {
+  background: var(--accent);
+}
+.workspace-body .mosaic.mosaic-blueprint-theme .mosaic-split:hover {
+  background: var(--accent);
+}
+.workspace-body .mosaic.mosaic-blueprint-theme .mosaic-split:hover .mosaic-split-line {
+  box-shadow: none;
+}
 .workspace-body .mosaic-split.-row {
-  width: 8px;
-  background: linear-gradient(
-    to right,
-    transparent 0%,
-    var(--border-strong) 50%,
-    transparent 100%
-  );
+  width: 7px;
 }
 .workspace-body .mosaic-split.-column {
-  height: 8px;
-  background: linear-gradient(
-    to bottom,
-    transparent 0%,
-    var(--border-strong) 50%,
-    transparent 100%
-  );
-}
-.workspace-body .mosaic-split.-row:hover {
-  background: linear-gradient(
-    to right,
-    transparent 0%,
-    var(--accent) 50%,
-    transparent 100%
-  );
-}
-.workspace-body .mosaic-split.-column:hover {
-  background: linear-gradient(
-    to bottom,
-    transparent 0%,
-    var(--accent) 50%,
-    transparent 100%
-  );
+  height: 7px;
 }
 
 /* Hide react-mosaic's default toolbar bits we don't use */
