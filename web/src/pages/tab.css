@@ -1,3 +1,21 @@
+/* WorkspaceLayout keeps one TabView per tab mounted; only the active
+   slot is visible so xterm state survives tab switches. */
+.workspace-tabs-host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.workspace-tab-slot {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.workspace-tab-slot[hidden] {
+  display: none;
+}
+
 .workspace-root {
   display: flex;
   flex-direction: column;
@@ -293,6 +311,21 @@
 .workspace-body-mobile {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Keep every mobile pane mounted but show only the active one so xterm
+   state survives pane switches (WS stays open — no replay dance). */
+.mobile-pane-slot {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.mobile-pane-slot[hidden] {
+  display: none;
 }
 
 /* The MobileInputBar is position:fixed (so iOS Safari floats it above

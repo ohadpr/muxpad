@@ -1,15 +1,36 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import '@xterm/xterm/css/xterm.css';
 import { decodeServerMessage, encodeInput, encodePing, encodeResize } from '@muxpad/shared';
 import { api } from '../api';
-import { splitClipboard } from '../lib/clipboard-detect';
+import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
+import { isMobileLayout } from '../lib/mobile-layout';
+import { installMobileViewportSync, mobileTerminalHeightPx } from '../lib/mobile-viewport';
+import { CursorScrollSession } from '../lib/cursor-scroll-session';
 import { writeClipboard } from '../lib/clipboard-write';
 import { createSafeClipboardAddon } from '../lib/safe-clipboard-provider';
 import { ChunkedWriter, SyncBlockExtractor } from '../lib/write-coalescer';
-import { getCellDimensions, setScrollBarWidthZero } from '../lib/xterm-internals';
+import {
+  bufferHasScrollback,
+  getCellDimensions,
+  isCursorAgentCmd,
+  isInkForegroundCmd,
+  linesAboveBottom,
+  linesAboveFromRatio,
+  scrollRatioFromTerm,
+  restoreLinesAboveBottom,
+  scrollBufferByLines,
+  scrollBufferWheel,
+  refreshVisibleRows,
+  shouldTouchScrollBuffer,
+  setScrollBarWidthZero,
+  shouldForwardWheelToPty,
+  shouldScrollXtermBuffer,
+  triggerWheelMouseEvent,
+  wheelInputForPty,
+} from '../lib/xterm-internals';
 import { type Theme, getSettings, useSettings } from '../settings';
 import './XtermPane.css';
 
@@ -35,6 +56,12 @@ export interface XtermPaneProps {
    * refresh restores focus instead of letting last-to-mount win.
    */
   autoFocus?: boolean | undefined;
+  /** Best-effort foreground command from ptyd (cursor-agent, claude, …). */
+  foregroundCmd?: string | null | undefined;
+  /** False when the parent tab/pane slot is hidden (display:none). */
+  paneActive?: boolean | undefined;
+  /** Expose scroll metrics on window.__muxpad_e2e for Playwright. */
+  e2eHarness?: boolean | undefined;
 }
 
 const XTERM_THEMES: Record<
@@ -82,14 +109,37 @@ function themeFor(theme: Theme) {
   return XTERM_THEMES[theme] ?? XTERM_THEMES.trayo;
 }
 
-export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) {
+type PasteToast = { previewUrl: string; path: string };
+
+export function XtermPane({
+  paneId,
+  onExit,
+  autoFocus = true,
+  foregroundCmd = null,
+  paneActive = true,
+  e2eHarness = false,
+}: XtermPaneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const foregroundCmdRef = useRef(foregroundCmd);
+  foregroundCmdRef.current = foregroundCmd;
+  const paneActiveRef = useRef(paneActive);
+  paneActiveRef.current = paneActive;
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
   const settings = useSettings();
   const wsRef = useRef<WebSocket | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const [pasteToast, setPasteToast] = useState<PasteToast | null>(null);
+  const pasteToastTimerRef = useRef<number | null>(null);
+  const pasteToastPreviewUrlRef = useRef<string | null>(null);
+  // Hide during ring-buffer replay so Cursor output does not visibly scrub.
+  const [replayRestoring, setReplayRestoring] = useState(true);
+  const setReplayRestoringRef = useRef(setReplayRestoring);
+  setReplayRestoringRef.current = setReplayRestoring;
+  const tryOpenTermRef = useRef<(() => void) | null>(null);
+  const e2eHarnessRef = useRef(e2eHarness);
+  e2eHarnessRef.current = e2eHarness;
 
   // The terminal is created once per paneId. Font/theme changes are applied
   // in place by the live-update effect below (mutating term.options), so this
@@ -148,7 +198,8 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
     // handler's reassertSize() chain zeroes the dedup cache and
     // re-announces the now-correct size — so nothing is lost by staying
     // silent while hidden.
-    const mayDriveResize = () => document.visibilityState === 'visible';
+    const mayDriveResize = () =>
+      document.visibilityState === 'visible' && paneActiveRef.current;
 
     // Diagnostic snapshot: captures everything that could explain a sudden
     // "renderer shrinks while no React event fires" state. snap() is the
@@ -209,16 +260,26 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
     // output settles the refresh fires once and clears any stuck rows.
     // Sub-millisecond cost per fire (~30×80 cells of DOM update).
     let postWriteRefreshTimer: number | null = null;
+    const cursorScroll = new CursorScrollSession({
+      paneId,
+      getForegroundCmd: () => foregroundCmdRef.current,
+      revealAfterReplay: () => {
+        setReplayRestoringRef.current(false);
+      },
+    });
     const writeParsedSub = term.onWriteParsed(() => {
+      cursorScroll.onTerminalWriteParsed(term);
+      // Desktop Cursor: skip post-write refresh (flicker). Mobile needs it
+      // so buffer scroll / refit repaints on iOS Safari.
+      if (isCursorAgentCmd(foregroundCmdRef.current) && !isMobileLayout()) return;
       if (postWriteRefreshTimer !== null) window.clearTimeout(postWriteRefreshTimer);
       postWriteRefreshTimer = window.setTimeout(() => {
         postWriteRefreshTimer = null;
-        try {
-          term.refresh(0, term.rows - 1);
-        } catch {
-          // ignore — term may be disposed
-        }
-      }, 500);
+        refreshVisibleRows(term);
+      }, isMobileLayout() ? 300 : 500);
+    });
+    const scrollSub = term.onScroll(() => {
+      cursorScroll.onUserScroll(term);
     });
 
     // Activity-independent diagnostic timer. The WS-heartbeat path only fires
@@ -293,61 +354,46 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
     // measures with the correct glyph metrics from the start. If we open
     // first, xterm caches fallback metrics and never updates them.
     let opened = false;
+    const openTerm = () => {
+      if (opened) return;
+      // Mobile hidden slots stay mounted but display:none — opening xterm
+      // at 0×0 corrupts layout; defer until the pane slot is shown.
+      if (isMobileLayout() && !paneActiveRef.current) return;
+      term.open(container);
+      opened = true;
+      if (autoFocus) term.focus();
+      setScrollBarWidthZero(term);
+      const initialFit = () => {
+        try {
+          fit.fit();
+          const ws = wsRef.current;
+          if (ws && ws.readyState === WebSocket.OPEN && mayDriveResize()) {
+            lastSentCols = term.cols;
+            lastSentRows = term.rows;
+            ws.send(encodeResize(term.cols, term.rows));
+          }
+        } catch {
+          // container may not yet be sized; resize observer will retry.
+        }
+        tryInitialConnect();
+      };
+      requestAnimationFrame(initialFit);
+    };
+    tryOpenTermRef.current = openTerm;
     void document.fonts
       .load(`${fontSize}px ${fontFamily}`)
       .catch(() => {
         // ignore — open anyway
       })
       .finally(() => {
-        if (opened) return;
-        term.open(container);
-        opened = true;
-        // Focus on mount so a freshly-created workspace/pane is ready for
-        // typing without an extra click. Re-mounts (font/theme change)
-        // also refocus, which matches "I just navigated here" expectation.
-        // autoFocus is false in the multi-pane desktop case for every
-        // pane except the persisted-last-focused one — without that gate,
-        // every pane racing through its mount sequence calls term.focus()
-        // and whichever opens last steals input on every refresh.
-        if (autoFocus) term.focus();
-
-        // Force xterm's cached scrollBarWidth to 0 — we hide the native
-        // viewport scrollbar via CSS, and on always-show-scrollbar systems
-        // xterm would otherwise measure ~14px and have fit-addon reserve
-        // that as an empty gutter. Private API — try/catch keeps us
-        // safe if a future xterm version moves this field.
-        setScrollBarWidthZero(term);
-
-        // xterm measures cell.width asynchronously after the first render —
-        // calling fit() *immediately* after open() runs while cell.width is
-        // still 0, fit-addon bails early, and the terminal sticks at its
-        // default 80 cols. Defer to the next animation frame so the renderer
-        // has had a chance to size cells, then fit and tell the server.
-        const initialFit = () => {
-          try {
-            fit.fit();
-            const ws = wsRef.current;
-            if (ws && ws.readyState === WebSocket.OPEN && mayDriveResize()) {
-              lastSentCols = term.cols;
-              lastSentRows = term.rows;
-              ws.send(encodeResize(term.cols, term.rows));
-            }
-          } catch {
-            // container may not yet be sized; resize observer will retry.
-          }
-        };
-        // If cell measurement is still pending after one frame, the
-        // fitWhenCellReady poll (every 50ms × 30) and the reassertSize
-        // chain below cover the retry — no extra timer needed here.
-        requestAnimationFrame(initialFit);
+        openTerm();
       });
-
-    const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/pane/${paneId}`;
 
     let intentionallyClosed = false;
     let paneExited = false;
     let retries = 0;
     let retryTimer: number | null = null;
+    let initialConnectDone = false;
 
     // Returns true iff the frame was actually written to an open socket.
     // Callers that cache "last sent" state (the resize dedup) MUST gate that
@@ -364,6 +410,16 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
     };
 
     const connect = () => {
+      // Fresh mounts need the ring-buffer replay so a new xterm shows the
+      // live session. Reconnects keep the existing xterm — replaying would
+      // repaint the whole Ink session and jump scroll to the bottom.
+      if (retries > 0) {
+        cursorScroll.skipReplay();
+      } else {
+        cursorScroll.armReplayFallback(term);
+      }
+      const replayQ = retries > 0 ? '?replay=0' : '';
+      const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/pane/${paneId}${replayQ}`;
       const ws = new WebSocket(wsUrl);
       ws.binaryType = 'arraybuffer';
       wsRef.current = ws;
@@ -410,54 +466,31 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
         const wasReconnect = retries > 0;
         if (wasReconnect) term.writeln('\r\n[reconnected]');
         retries = 0;
-        try {
-          fit.fit();
-        } catch {
-          // ignore
+        const announceSize = () => {
+          try {
+            fit.fit();
+          } catch {
+            // ignore
+          }
+          // Re-announce size on (re)connect — but only if this tab is
+          // visible. A hidden tab reconnecting must not push its (stale)
+          // size; reassertSize() on the next visibilitychange handles it.
+          if (mayDriveResize() && safeSend(encodeResize(term.cols, term.rows))) {
+            lastSentCols = term.cols;
+            lastSentRows = term.rows;
+          }
+        };
+        // Mobile panes often open while display:none; defer fit until the
+        // slot has real dimensions so we do not SIGWINCH a ghost size.
+        if (isMobileLayout()) {
+          requestAnimationFrame(() => requestAnimationFrame(announceSize));
+        } else {
+          announceSize();
         }
-        // Re-announce size on (re)connect — but only if this tab is
-        // visible. A hidden tab reconnecting must not push its (stale)
-        // size; reassertSize() on the next visibilitychange handles it.
-        if (mayDriveResize() && safeSend(encodeResize(term.cols, term.rows))) {
-          lastSentCols = term.cols;
-          lastSentRows = term.rows;
-        }
-        // On a real RECONNECT (not initial open): the PTY size is
-        // probably already what we just sent, so process.resize is a
-        // no-op and no SIGWINCH fires. But if the disconnect interrupted
-        // a write mid-escape-sequence, the buffer's top rows can stay
-        // visibly garbled until something forces a TUI redraw. Wiggle
-        // by ±1 col 200ms after the open settles — two SIGWINCHs, the
-        // TUI redraws its visible area, the garble clears. Skip on
-        // initial open (fresh xterm, no corruption to recover from).
-        // Gated on mayDriveResize() so a hidden tab can't shrink the
-        // shared PTY out from under the visible tab.
-        if (wasReconnect && mayDriveResize()) {
-          window.setTimeout(() => {
-            const sock = wsRef.current;
-            if (!sock || sock.readyState !== WebSocket.OPEN) return;
-            if (!mayDriveResize()) return;
-            const cols = term.cols;
-            const rows = term.rows;
-            if (cols < 2 || rows < 1) return;
-            try {
-              sock.send(encodeResize(cols - 1, rows));
-              window.setTimeout(() => {
-                const s = wsRef.current;
-                if (!s || s.readyState !== WebSocket.OPEN) return;
-                try {
-                  s.send(encodeResize(cols, rows));
-                  lastSentCols = cols;
-                  lastSentRows = rows;
-                } catch {
-                  // ignore
-                }
-              }, 80);
-            } catch {
-              // ignore
-            }
-          }, 200);
-        }
+        // Deliberately no wiggle-resize on reconnect: the xterm buffer is
+        // intact (we skipped ring-buffer replay via ?replay=0) and a
+        // SIGWINCH round-trip would force Ink TUIs to redraw and reset
+        // their internal scroll position.
         armIdle();
       });
 
@@ -502,7 +535,17 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
       });
     };
 
-    connect();
+    const tryInitialConnect = () => {
+      if (initialConnectDone || intentionallyClosed) return;
+      if (!opened) return;
+      // Mobile keeps inactive pane slots mounted but hidden — defer WS
+      // attach + ring-buffer replay until the pane is actually shown.
+      if (!paneActiveRef.current) return;
+      if (container.clientWidth < 60 || container.clientHeight < 40) return;
+      if (term.cols < 40 || term.rows < 10) return;
+      initialConnectDone = true;
+      connect();
+    };
 
     const onData = term.onData((d) => safeSend(encodeInput(d)));
 
@@ -574,6 +617,7 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
 
     const onPointerDown = (e: PointerEvent) => {
       if (e.pointerType !== 'touch') return;
+      if (cursorScroll.replayActive) return;
       pointers.set(e.pointerId, {
         x: e.clientX,
         y: e.clientY,
@@ -592,6 +636,7 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
     };
     const onPointerMove = (e: PointerEvent) => {
       if (e.pointerType !== 'touch') return;
+      if (cursorScroll.replayActive) return;
       const p = pointers.get(e.pointerId);
       if (!p) return;
       p.x = e.clientX;
@@ -615,19 +660,47 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
       const steps = Math.trunc(accumY / WHEEL_STEP_PX);
       if (steps !== 0) {
         accumY -= steps * WHEEL_STEP_PX;
-        const pos = cellAt(refX, refY);
-        if (pos) {
-          // SGR mouse wheel: 64 = up (older), 65 = down (newer).
-          const button = steps > 0 ? 65 : 64;
-          let seq = '';
-          for (let i = 0; i < Math.abs(steps); i++) {
-            seq += `\x1b[<${button};${pos.col};${pos.row}M`;
+        const fg = foregroundCmdRef.current;
+        const mobile = isMobileLayout();
+        // Cursor CLI runs on xterm's normal buffer without mouse reporting.
+        // SGR wheel bytes would appear as literal input ( [<64;…M ).
+        // Touch: invert step sign so finger-up reveals older scrollback
+        // (natural mobile direction); PTY/SGR keeps the Claude convention.
+        if (shouldTouchScrollBuffer(term, fg, mobile)) {
+          scrollBufferByLines(term, -steps, mobile);
+        } else {
+          const pos = cellAt(refX, refY);
+          if (pos) {
+            // SGR mouse wheel: 64 = up (older), 65 = down (newer).
+            const button = steps > 0 ? 65 : 64;
+            let seq = '';
+            for (let i = 0; i < Math.abs(steps); i++) {
+              seq += `\x1b[<${button};${pos.col};${pos.row}M`;
+            }
+            if (seq) safeSend(encodeInput(seq));
           }
-          if (seq) safeSend(encodeInput(seq));
         }
       }
       e.preventDefault();
     };
+
+    const mobileScrollRecover = () => {
+      if (!isMobileLayout()) return;
+      try {
+        if (isCursorAgentCmd(foregroundCmdRef.current)) {
+          const above = linesAboveBottom(term);
+          const active = term.buffer.active;
+          // Stale absolute offset — clamp to live prompt.
+          if (above > active.baseY) {
+            term.scrollToBottom();
+          }
+        }
+        refreshVisibleRows(term);
+      } catch {
+        // ignore
+      }
+    };
+
     const onPointerUpOrCancel = (e: PointerEvent) => {
       if (e.pointerType !== 'touch') return;
       const p = pointers.get(e.pointerId);
@@ -646,6 +719,8 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
       // motionless 2-finger tap fires a phantom click when the second
       // finger lifts (pointers.size === 0, !p.moved, both true).
       if (!p.moved && pointers.size === 0 && !multiFingerGesture) {
+        // Same as wheel: Cursor has no mouse mode — SGR clicks become text.
+        if (shouldTouchScrollBuffer(term, foregroundCmdRef.current, isMobileLayout())) return;
         const pos = cellAt(p.startX, p.startY);
         if (pos) {
           const seq = `\x1b[<0;${pos.col};${pos.row}M\x1b[<0;${pos.col};${pos.row}m`;
@@ -660,11 +735,7 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
         // viewport that don't reflect the current scroll position. Once
         // the gesture is fully done, ask xterm to repaint all visible
         // rows from its buffer so any straggler rows refresh. Cheap.
-        try {
-          term.refresh(0, term.rows - 1);
-        } catch {
-          // ignore — term may be disposed mid-cleanup
-        }
+        mobileScrollRecover();
       }
       // Re-seed for any remaining pointers so the next move doesn't
       // see a delta computed against the lifted finger's Y.
@@ -675,10 +746,108 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
     container.addEventListener('pointerup', onPointerUpOrCancel);
     container.addEventListener('pointercancel', onPointerUpOrCancel);
 
+    // Capture-phase wheel on the pane container — must run before xterm's
+    // bubble listener on term.element, which otherwise sends ↑/↓ to the
+    // input composer when the TUI has no xterm scrollback.
+    const sendWheelToPty = (e: WheelEvent): boolean => {
+      const fg = foregroundCmdRef.current;
+      const forward = shouldForwardWheelToPty(term, fg);
+      const active = term.buffer.active;
+      const ink = isInkForegroundCmd(fg);
+      dbg('wheel', {
+        forward,
+        bufferScroll: shouldScrollXtermBuffer(term, fg),
+        fg,
+        type: active.type,
+        hasScrollback: active.length > term.rows,
+        mouse: term.element?.classList.contains('enable-mouse-events') ?? false,
+        deltaY: e.deltaY,
+      });
+      if (!forward) return false;
+      const hit = cellAt(e.clientX, e.clientY);
+      // Aim at the transcript band (upper third), not the input row.
+      const col = hit?.col ?? Math.max(1, Math.floor(term.cols / 2));
+      const row = hit?.row ?? Math.max(1, Math.floor(term.rows / 4));
+      const transcriptRow = Math.min(row, Math.max(1, Math.floor(term.rows / 3)));
+      const sent =
+        triggerWheelMouseEvent(term, col, transcriptRow, e.deltaY, WHEEL_STEP_PX) ||
+        safeSend(
+          encodeInput(
+            wheelInputForPty(term, col, transcriptRow, e.deltaY, WHEEL_STEP_PX, ink),
+          ),
+        );
+      if (!sent) {
+        dbg('wheel dropped: ws not open');
+        return false;
+      }
+      dbg('wheel→pty', { col, row: transcriptRow, deltaY: e.deltaY });
+      return true;
+    };
+    const onWheelCapture = (e: WheelEvent) => {
+      if (cursorScroll.replayActive) return;
+      const t = e.target;
+      if (!(t instanceof Node) || !container.contains(t)) return;
+      const fg = foregroundCmdRef.current;
+      if (shouldScrollXtermBuffer(term, fg)) {
+        if (scrollBufferWheel(term, e)) {
+          const active = term.buffer.active;
+          dbg('wheel→buffer', {
+            viewportY: active.viewportY,
+            baseY: active.baseY,
+            deltaY: e.deltaY,
+          });
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+        return;
+      }
+      if (!sendWheelToPty(e)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    };
+    // Document capture: mosaic/splitter chrome can swallow wheel before it
+    // reaches the pane div; filter to this pane's container subtree.
+    document.addEventListener('wheel', onWheelCapture, { capture: true, passive: false });
+    // Belt-and-suspenders: xterm's fallback wheel path still runs when the
+    // mouse protocol lacks the wheel bit; return false to block ↑/↓ there.
+    term.attachCustomWheelEventHandler((e) => {
+      if (cursorScroll.replayActive) return false;
+      return !sendWheelToPty(e);
+    });
+
     const MIN_COLS = 40;
     const MIN_ROWS = 10;
     let lastSentCols = 0;
     let lastSentRows = 0;
+    /** When set, overrides flex height so fit() matches the visual viewport. */
+    let mobileHeightOverride: number | null = null;
+
+    const applyMobileHeightOverride = (): boolean => {
+      if (!isMobileLayout() || !opened) return false;
+      const top = container.getBoundingClientRect().top;
+      const h = mobileTerminalHeightPx(top);
+      if (h === null) {
+        if (mobileHeightOverride !== null) {
+          container.style.height = '';
+          container.style.flex = '';
+          mobileHeightOverride = null;
+        }
+        return false;
+      }
+      if (mobileHeightOverride === h) return true;
+      mobileHeightOverride = h;
+      container.style.height = `${h}px`;
+      container.style.flex = '0 0 auto';
+      return true;
+    };
+
+    const clearMobileHeightOverride = () => {
+      if (mobileHeightOverride === null) return;
+      mobileHeightOverride = null;
+      container.style.height = '';
+      container.style.flex = '';
+    };
+
     const refit = () => {
       try {
         // A hidden tab must not drive the shared PTY size (see
@@ -689,6 +858,8 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
           dbg('refit skipped: tab hidden');
           return;
         }
+        if (isMobileLayout()) applyMobileHeightOverride();
+        else clearMobileHeightOverride();
         // Skip when the pane element is in a transient sub-pixel state
         // during mosaic re-layout (clientWidth=0, etc.). Pushing those
         // values through fit() and on to the PTY causes the running TUI
@@ -696,6 +867,9 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
         // ghost size before we send the real one a tick later — Claude
         // Code visibly relocates its input bar when this happens.
         if (container.clientWidth < 60 || container.clientHeight < 40) return;
+        const preserveScroll =
+          isCursorAgentCmd(foregroundCmdRef.current) && linesAboveBottom(term) > 0;
+        const scrollRatio = preserveScroll ? scrollRatioFromTerm(term) : 0;
         fit.fit();
         const cols = term.cols;
         const rows = term.rows;
@@ -715,6 +889,13 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
           lastSentCols = cols;
           lastSentRows = rows;
         }
+        if (preserveScroll && scrollRatio > 0.001) {
+          restoreLinesAboveBottom(term, linesAboveFromRatio(term, scrollRatio));
+        }
+        if (isMobileLayout() && isCursorAgentCmd(foregroundCmdRef.current)) {
+          refreshVisibleRows(term);
+        }
+        tryInitialConnect();
       } catch {
         // ignore; the next ResizeObserver / layout-changed tick will retry.
       }
@@ -738,15 +919,42 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
       }
     };
     fitWhenCellReady();
+    // Mobile: refit when the visual viewport shrinks (keyboard). Sync CSS vars
+    // always; only refit on significant height drops so address-bar jitter
+    // doesn't fight cursor scroll during live output.
+    let initialVvH = window.visualViewport?.height ?? window.innerHeight;
+    const teardownMobileVv = installMobileViewportSync(() => {
+      if (!opened || !isMobileLayout()) return;
+      const h = window.visualViewport?.height ?? window.innerHeight;
+      if (h >= initialVvH - 40) return;
+      initialVvH = h;
+      scheduleRefit();
+    });
     // react-mosaic re-parenting can change a pane's available width without
     // firing ResizeObserver — fit to the new size on every layout-changed
     // notification. A single trailing-edge debounce coalesces overlapping
     // resize signals from RO, the layout-changed event, and window resize.
     let refitTimer: number | null = null;
     let hasSettledFirstResize = false;
+    let lastRefitW = container.clientWidth;
+    let lastRefitH = container.clientHeight;
     const scheduleRefit = () => {
+      if (isCursorAgentCmd(foregroundCmdRef.current)) {
+        const w = container.clientWidth;
+        const h = container.clientHeight;
+        if (Math.abs(w - lastRefitW) < 2 && Math.abs(h - lastRefitH) < 2) return;
+        lastRefitW = w;
+        lastRefitH = h;
+      }
       if (refitTimer !== null) window.clearTimeout(refitTimer);
-      const delay = hasSettledFirstResize ? 50 : 250;
+      const cursor = isCursorAgentCmd(foregroundCmdRef.current);
+      const delay = cursor
+        ? hasSettledFirstResize
+          ? 150
+          : 300
+        : hasSettledFirstResize
+          ? 50
+          : 250;
       refitTimer = window.setTimeout(() => {
         refitTimer = null;
         fitWhenCellReady();
@@ -814,6 +1022,20 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
     // helps disambiguate which lifecycle event woke us up.
     const reassertSizeFromEvent = (source: string) => {
       snap(`reassertSize triggered by ${source}`);
+      // Cursor: replay + refit + scroll-restore on lifecycle events fought
+      // each other (reload dance, jump to top mid-session). Repaint only;
+      // sizing goes through ResizeObserver / layout-changed; scroll stays
+      // put unless the user moves it or replay finishes once on mount.
+      if (isCursorAgentCmd(foregroundCmdRef.current)) {
+        if (cursorScroll.replayActive) return;
+        if (source === 'window.focus') return;
+        try {
+          term.refresh(0, term.rows - 1);
+        } catch {
+          // ignore
+        }
+        return;
+      }
       reassertSize();
       // After the resize chain has had time to settle (the chain itself
       // schedules at 0/100/250/500ms), force xterm to repaint all visible
@@ -849,7 +1071,9 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
         source === 'pageshow' ||
         source === 'resume' ||
         (source === 'visibilitychange' && hiddenFor >= HIDDEN_RESUME_MS);
-      if (isResume) {
+      // Cursor CLI redraws its whole transcript on SIGWINCH; the wiggle
+      // round-trip looks like a fast scroll through session history.
+      if (isResume && !isCursorAgentCmd(foregroundCmdRef.current)) {
         window.setTimeout(() => {
           const ws = wsRef.current;
           if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -880,11 +1104,12 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
     let hiddenSince: number | null = document.visibilityState === 'hidden' ? Date.now() : null;
     const onVisibility = () => {
       snap(`visibilitychange → ${document.visibilityState}`);
-      if (document.visibilityState === 'visible') {
+      if (document.visibilityState === 'hidden') {
+        cursorScroll.onTabHidden(term);
+        hiddenSince = Date.now();
+      } else {
         reassertSizeFromEvent('visibilitychange');
         hiddenSince = null;
-      } else {
-        hiddenSince = Date.now();
       }
     };
     document.addEventListener('visibilitychange', onVisibility);
@@ -898,10 +1123,12 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
     // macOS when the OS suspends the renderer for a backgrounded display.
     const onPageShow = (e: PageTransitionEvent) => {
       snap(`pageshow persisted=${e.persisted}`);
+      if (isCursorAgentCmd(foregroundCmdRef.current) && !e.persisted) return;
       reassertSizeFromEvent('pageshow');
     };
     const onPageHide = (e: PageTransitionEvent) => {
       snap(`pagehide persisted=${e.persisted}`);
+      cursorScroll.onPageHide(term);
     };
     const onFreeze = () => snap('freeze');
     const onResume = () => {
@@ -930,19 +1157,12 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
     };
     armDprListener();
 
-    // Mount-time multi-step recovery. The single fitWhenCellReady()
-    // earlier runs once; if the surrounding mosaic tile is mid-transition (which
-    // happens whenever this pane mounted as part of a workspace/tab nav,
-    // not a user-driven split or resize), that single fit can lock in an
-    // intermediate cols/rows. ResizeObserver doesn't always fire on
-    // react-mosaic reparenting (see comment near scheduleRefit), and
-    // notifyLayoutChanged in TabView only fires on mosaic onChange — never
-    // on route mounts. Running the same reassertion chain we use on
-    // visibilitychange covers that gap: by the time the 0/100/250/500ms
-    // schedule completes, the tile has finished its CSS transition and we'll
-    // have refit to the final size. Cheap on the steady-state path (4 fits
-    // converging to the same cols/rows; dedup suppresses redundant sends).
-    reassertSize();
+    // Mount sizing is handled by fitWhenCellReady() + ResizeObserver +
+    // scheduleRefit above. We intentionally do NOT call reassertSize()
+    // here — that 0/100/250/500ms chain (and optional wiggle SIGWINCH on
+    // resume) forces Ink TUIs to redraw on every tab/pane mount and resets
+    // their scroll position. Lifecycle resume still uses reassertSize via
+    // visibilitychange / pageshow / resume below.
 
     // Targeted-focus event: TabView dispatches this after deleting
     // a pane so the next remaining pane picks up focus without a click.
@@ -961,6 +1181,29 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
       safeSend(encodeInput(detail.data));
     };
     window.addEventListener('muxpad:send-input', onSendInput);
+
+    const onScrollBuffer = (e: Event) => {
+      const detail = (e as CustomEvent<{
+        paneId?: string;
+        lines?: number;
+        toBottom?: boolean;
+      }>).detail;
+      if (detail?.paneId !== paneId) return;
+      try {
+        if (detail.toBottom) {
+          term.scrollToBottom();
+          refreshVisibleRows(term);
+          return;
+        }
+        if (typeof detail.lines === 'number') {
+          scrollBufferByLines(term, detail.lines, isMobileLayout());
+          mobileScrollRecover();
+        }
+      } catch {
+        // ignore — term may be disposed
+      }
+    };
+    window.addEventListener('muxpad:scroll-buffer', onScrollBuffer);
 
     const onKeyDown = (e: KeyboardEvent) => {
       // Cmd/Ctrl+C: copy selection if any (else fall through so xterm sends
@@ -989,6 +1232,32 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
     };
     container.addEventListener('keydown', onKeyDown, true);
 
+    const dismissPasteToast = () => {
+      if (pasteToastTimerRef.current !== null) {
+        window.clearTimeout(pasteToastTimerRef.current);
+        pasteToastTimerRef.current = null;
+      }
+      if (pasteToastPreviewUrlRef.current) {
+        URL.revokeObjectURL(pasteToastPreviewUrlRef.current);
+        pasteToastPreviewUrlRef.current = null;
+      }
+      setPasteToast(null);
+    };
+    const showPasteToast = (blob: Blob, path: string) => {
+      dismissPasteToast();
+      const previewUrl = URL.createObjectURL(blob);
+      pasteToastPreviewUrlRef.current = previewUrl;
+      setPasteToast({ previewUrl, path });
+      pasteToastTimerRef.current = window.setTimeout(() => {
+        pasteToastTimerRef.current = null;
+        if (pasteToastPreviewUrlRef.current) {
+          URL.revokeObjectURL(pasteToastPreviewUrlRef.current);
+          pasteToastPreviewUrlRef.current = null;
+        }
+        setPasteToast(null);
+      }, 3000);
+    };
+
     const onPaste = async (e: ClipboardEvent) => {
       const data = e.clipboardData;
       if (!data) return;
@@ -1003,9 +1272,11 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
       const { imageOnly, imageItems } = splitClipboard(data);
       if (imageItems.length === 0) return; // plain text — let xterm's bracketed-paste path handle it
       const paths: string[] = [];
+      let previewBlob: Blob | null = null;
       for (const item of imageItems) {
         const blob = item.getAsFile();
         if (!blob) continue;
+        if (!previewBlob) previewBlob = blob;
         const ext = blob.type.split('/')[1] ?? 'png';
         try {
           const { path } = await api.uploadAttachment(paneId, blob, `pasted.${ext}`);
@@ -1026,13 +1297,51 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
       // bracketed-paste support) needs them, wrap `text` here.
       e.preventDefault();
       e.stopPropagation();
-      if (paths.length) safeSend(encodeInput(`${paths.join(' ')} `));
+      if (paths.length) {
+        safeSend(encodeInput(`${paths.join(' ')} `));
+        dbg('paste paths', paths);
+        // Cursor agent renders attachments as a [image] chip; show a muxpad
+        // preview so the user can confirm what was pasted.
+        if (previewBlob) showPasteToast(previewBlob, paths.join(' '));
+      }
       if (!imageOnly) {
-        const text = data.getData('text/plain');
+        const text = companionTextForImagePaste(data.getData('text/plain'));
         if (text) safeSend(encodeInput(text));
       }
     };
     container.addEventListener('paste', onPaste, true);
+
+    if (e2eHarnessRef.current) {
+      (window as unknown as {
+        __muxpad_e2e?: {
+          linesAboveBottom: () => number;
+          scrollRatio: () => number;
+          wheelUp: (ticks?: number) => void;
+          wheelDown: (ticks?: number) => void;
+          lifecycleStorm: (rounds?: number) => void;
+          flushScrollSave: () => void;
+        };
+      }).__muxpad_e2e = {
+        linesAboveBottom: () => linesAboveBottom(term),
+        scrollRatio: () => scrollRatioFromTerm(term),
+        wheelUp: (ticks = 5) => {
+          scrollBufferByLines(term, -ticks);
+        },
+        wheelDown: (ticks = 5) => {
+          scrollBufferByLines(term, ticks);
+        },
+        lifecycleStorm: (rounds = 3) => {
+          for (let i = 0; i < rounds; i++) {
+            window.dispatchEvent(new Event('muxpad:layout-changed'));
+            document.dispatchEvent(new Event('visibilitychange'));
+            window.dispatchEvent(new Event('focus'));
+          }
+        },
+        flushScrollSave: () => {
+          cursorScroll.onPageHide(term);
+        },
+      };
+    }
 
     return () => {
       intentionallyClosed = true;
@@ -1056,15 +1365,22 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
       if (refitTimer !== null) window.clearTimeout(refitTimer);
       window.removeEventListener('muxpad:focus-pane', onFocusPane);
       window.removeEventListener('muxpad:send-input', onSendInput);
+      window.removeEventListener('muxpad:scroll-buffer', onScrollBuffer);
       container.removeEventListener('keydown', onKeyDown, true);
       container.removeEventListener('paste', onPaste, true);
       onData.dispose();
       writeParsedSub.dispose();
+      scrollSub.dispose();
+      cursorScroll.dispose();
+      teardownMobileVv();
+      clearMobileHeightOverride();
       if (postWriteRefreshTimer !== null) window.clearTimeout(postWriteRefreshTimer);
       container.removeEventListener('pointerdown', onPointerDown);
       container.removeEventListener('pointermove', onPointerMove);
       container.removeEventListener('pointerup', onPointerUpOrCancel);
       container.removeEventListener('pointercancel', onPointerUpOrCancel);
+      document.removeEventListener('wheel', onWheelCapture, { capture: true });
+      term.attachCustomWheelEventHandler(() => true);
       container.removeEventListener('focusin', onFocusIn);
       container.removeEventListener('focusout', onFocusOut);
       toolbarEl?.removeEventListener('click', onToolbarClick);
@@ -1078,9 +1394,43 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
       chunker.dispose();
       if (termRef.current === term) termRef.current = null;
       if (fitRef.current === fit) fitRef.current = null;
+      tryOpenTermRef.current = null;
+      if (e2eHarnessRef.current) {
+        delete (window as unknown as { __muxpad_e2e?: unknown }).__muxpad_e2e;
+      }
+      dismissPasteToast();
       term.dispose();
     };
   }, [paneId]);
+
+  // Refit when a hidden tab/pane slot becomes visible again. xterm keeps
+  // its viewport while mounted — no scroll restore (that caused regressions).
+  const wasPaneActiveRef = useRef(paneActive);
+  useEffect(() => {
+    const wasActive = wasPaneActiveRef.current;
+
+    if (!wasActive && paneActive) {
+      tryOpenTermRef.current?.();
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          window.dispatchEvent(new Event('muxpad:layout-changed'));
+          if (isMobileLayout()) {
+            const term = termRef.current;
+            if (term && isCursorAgentCmd(foregroundCmdRef.current)) {
+              try {
+                term.scrollToBottom();
+                refreshVisibleRows(term);
+              } catch {
+                // ignore
+              }
+            }
+          }
+        });
+      });
+    }
+
+    wasPaneActiveRef.current = paneActive;
+  }, [paneActive]);
 
   // Live font/theme update: mutate term.options in place instead of
   // recreating the Terminal, so scrollback and the WS attach survive a font
@@ -1123,8 +1473,20 @@ export function XtermPane({ paneId, onExit, autoFocus = true }: XtermPaneProps) 
   }, [settings.fontFamily, settings.fontSize, settings.theme]);
 
   return (
-    <div className="xterm-pane-wrapper">
+    <div
+      className={`xterm-pane-wrapper${replayRestoring ? ' replay-restoring' : ''}`}
+    >
       <div className="xterm-pane" ref={containerRef} tabIndex={0} />
+      {pasteToast ? (
+        <div className="xterm-paste-toast" title={pasteToast.path}>
+          <img
+            className="xterm-paste-toast-preview"
+            src={pasteToast.previewUrl}
+            alt="Pasted screenshot"
+          />
+          <span className="xterm-paste-toast-path">{pasteToast.path}</span>
+        </div>
+      ) : null}
     </div>
   );
 }

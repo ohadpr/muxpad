@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { splitClipboard } from './clipboard-detect';
+import { companionTextForImagePaste, splitClipboard } from './clipboard-detect';
 
 function makeItem(kind: 'string' | 'file', type: string): DataTransferItem {
   return { kind, type } as unknown as DataTransferItem;
@@ -36,5 +36,15 @@ describe('splitClipboard', () => {
   it('treats file (non-image) + image as mixed', () => {
     const r = splitClipboard(makeData([makeItem('file', 'image/png'), makeItem('file', 'application/pdf')]));
     expect(r.imageOnly).toBe(false);
+  });
+});
+
+describe('companionTextForImagePaste', () => {
+  it('drops a macOS screenshot file:// URL', () => {
+    expect(companionTextForImagePaste('file:///var/folders/xx/T/Screen%20Shot.png')).toBe('');
+  });
+
+  it('keeps real caption text', () => {
+    expect(companionTextForImagePaste('see attached screenshot')).toBe('see attached screenshot');
   });
 });

@@ -18,7 +18,6 @@ import { UrlPane } from '../components/UrlPane';
 import { XtermPane } from '../components/XtermPane';
 import { subscribe, subscribeReconnect } from '../events';
 import { refreshTabs, useTabs } from '../tabs';
-import { useDocumentTitle } from '../use-document-title';
 import { useMediaQuery } from '../use-media-query';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
@@ -92,8 +91,15 @@ function collectPaneIds(layout: Layout): string[] {
   return [...collectPaneIds(layout.first as Layout), ...collectPaneIds(layout.second as Layout)];
 }
 
-export function TabView() {
-  const { wsSlug, tabSlug } = useParams({ from: '/_app/w/$wsSlug/t/$tabSlug' });
+export interface TabViewProps {
+  /** Stable slug for this instance — one TabView per tab in WorkspaceLayout. */
+  tabSlug: string;
+  /** False while the tab is mounted but hidden during a tab switch. */
+  isActive: boolean;
+}
+
+export function TabView({ tabSlug, isActive }: TabViewProps) {
+  const { wsSlug } = useParams({ from: '/_app/w/$wsSlug' });
   const navigate = useNavigate();
   const { workspaces } = useWorkspaces();
   const workspace = workspaces.find((w) => w.slug === wsSlug);
@@ -119,8 +125,9 @@ export function TabView() {
   // Remember which tab we're on so the next visit to /w/$wsSlug
   // restores it (see WorkspaceLayout).
   useEffect(() => {
+    if (!isActive) return;
     setLastTabSlug(wsSlug, tabSlug);
-  }, [wsSlug, tabSlug]);
+  }, [isActive, wsSlug, tabSlug]);
 
   // Persist the active pane per tab whenever it changes (mobile only —
   // desktop shows all panes via mosaic, no "active" concept).
@@ -128,6 +135,22 @@ export function TabView() {
     if (!isMobile || !tab || !mobileActiveId) return;
     setLastPaneId(tab.id, mobileActiveId);
   }, [isMobile, tab, mobileActiveId]);
+
+  // Mobile pane slots stay mounted when hidden (scroll position preserved).
+  // Focus the newly-selected pane's terminal when the active id changes.
+  useEffect(() => {
+    if (!isMobile || !tab || !isActive) return;
+    const paneIds = collectPaneIds(toMosaic(tab.layout));
+    const stored = getLastPaneId(tab.id);
+    const activeId =
+      mobileActiveId && paneIds.includes(mobileActiveId)
+        ? mobileActiveId
+        : stored && paneIds.includes(stored)
+          ? stored
+          : (paneIds[0] ?? null);
+    if (!activeId) return;
+    window.dispatchEvent(new CustomEvent('muxpad:focus-pane', { detail: { paneId: activeId } }));
+  }, [isMobile, tab, mobileActiveId, isActive]);
 
   // Forward the "+" tap from the chrome bar's TabBar (which lives in
   // AppLayout and can't reach into this component tree) to whatever
@@ -179,7 +202,7 @@ export function TabView() {
     return ids[0] ?? null;
   })();
   useEffect(() => {
-    if (!tab || !workspace) return;
+    if (!tab || !workspace || !isActive) return;
     const refresh = () =>
       Promise.all([refreshTabs(workspace.id), refreshWorkspaces()]).catch(() => {});
     if (isMobile) {
@@ -194,17 +217,24 @@ export function TabView() {
         .then(refresh)
         .catch(() => {});
     }
-  }, [tab?.id, mobileActiveResolved, isMobile, workspace?.id]);
+  }, [tab?.id, mobileActiveResolved, isMobile, workspace?.id, isActive]);
 
   // Title pulls the live name from the shared tabs list so renames in
   // the tab bar update the document title without a refetch here.
   const liveName = allTabs.find((t) => t.slug === tabSlug)?.name ?? tab?.name;
   const liveWorkspaceName = workspace?.name;
-  useDocumentTitle(
+  const documentTitle =
     liveWorkspaceName && liveName
       ? `${liveWorkspaceName} ⋅ ${liveName}`
-      : (liveName ?? liveWorkspaceName ?? 'muxpad'),
-  );
+      : (liveName ?? liveWorkspaceName ?? 'muxpad');
+  useEffect(() => {
+    if (!isActive) return;
+    const previous = document.title;
+    document.title = documentTitle;
+    return () => {
+      document.title = previous;
+    };
+  }, [isActive, documentTitle]);
 
   // Keep local tab.name in sync with the shared list.
   useEffect(() => {
@@ -241,16 +271,13 @@ export function TabView() {
     };
   }, []);
 
-  // Load the tab by slug once on mount/tab-change. Title / fg / attention
-  // and structural changes (pane add/remove, layout updates, kind flips)
-  // arrive via /ws/events — see the subscribe() effect below and the
-  // app-level handlers in main.tsx. There is no 5s poll anymore.
+  // Load this tab once when the TabView instance mounts. Each workspace
+  // tab gets its own instance (kept alive while hidden) so switching
+  // tabs does not tear down xterm panes. Title / fg / attention and
+  // structural changes arrive via /ws/events after the initial load.
   useEffect(() => {
     if (!workspace) return;
-    // Navigated to a new tab — reset the cascade-close placeholder so
-    // the new tab renders normally instead of stuck on "loading…".
     setClosingTab(false);
-    setTab(null);
     let viewedTabId: string | null = null;
     let cancelled = false;
     (async () => {
@@ -582,17 +609,17 @@ export function TabView() {
     });
   }, [tab?.id]);
 
-  if (error)
+  if (error && isActive)
     return (
       <div className="workspace-error">
         <p>{error}</p>
       </div>
     );
-  if (!tab) return <div className="workspace-loading">loading…</div>;
+  if (!tab) return isActive ? <div className="workspace-loading">loading…</div> : null;
   // While the cascade-close is in flight, render nothing instead of the
   // empty-tab CTA. The closeTab nav fires shortly after; this avoids a
   // brief flicker between "last pane gone" and "route changes".
-  if (closingTab) return <div className="workspace-loading">loading…</div>;
+  if (closingTab) return isActive ? <div className="workspace-loading">loading…</div> : null;
 
   const layout = layoutRef.current;
   const isEmpty = layout == null || layout === '';
@@ -662,7 +689,7 @@ export function TabView() {
       await persistLayout(newLayout);
       notifyLayoutChanged();
     };
-    addPaneRef.current = () => void addPane();
+    addPaneRef.current = isActive ? () => void addPane() : null;
 
     const closeActivePane = () => {
       if (!activeId) return;
@@ -710,16 +737,31 @@ export function TabView() {
           </nav>
         )}
         <main className="workspace-body workspace-body-mobile">
-          {activeId &&
-            (() => {
-              const pane = tab.panes.find((p) => p.id === activeId);
-              if (!pane) return null;
-              return <PaneBody key={activeId} pane={pane} onExit={() => onPaneExited(activeId)} />;
-            })()}
+          {paneIds.map((paneId) => {
+            const pane = tab.panes.find((p) => p.id === paneId);
+            if (!pane) return null;
+            const paneIsActive = paneId === activeId;
+            return (
+              <div
+                key={paneId}
+                className="mobile-pane-slot"
+                hidden={!paneIsActive}
+                aria-hidden={!paneIsActive}
+              >
+                <PaneBody
+                  pane={pane}
+                  onExit={() => onPaneExited(paneId)}
+                  autoFocus={paneIsActive}
+                  paneActive={isActive && paneIsActive}
+                />
+              </div>
+            );
+          })}
         </main>
         <MobileInputBar
           paneId={activeId}
           paneKind={tab.panes.find((p) => p.id === activeId)?.kind ?? null}
+          foregroundCmd={tab.panes.find((p) => p.id === activeId)?.foreground_cmd ?? null}
         />
       </div>
     );
@@ -812,6 +854,7 @@ export function TabView() {
                       pane={tilePane}
                       onExit={() => onPaneExited(paneId)}
                       autoFocus={paneId === desktopFocusTarget}
+                      paneActive={isActive}
                     />
                   )}
                 </MosaicWindow>
@@ -845,15 +888,25 @@ function PaneBody({
   pane,
   onExit,
   autoFocus,
+  paneActive = true,
 }: {
   pane: PaneSpec;
   onExit: () => void;
   autoFocus?: boolean;
+  paneActive?: boolean;
 }) {
   if (pane.kind === 'url') {
     return <UrlPane paneId={pane.id} url={pane.url} />;
   }
-  return <XtermPane paneId={pane.id} onExit={onExit} autoFocus={autoFocus} />;
+  return (
+    <XtermPane
+      paneId={pane.id}
+      onExit={onExit}
+      autoFocus={autoFocus}
+      foregroundCmd={pane.foreground_cmd ?? null}
+      paneActive={paneActive}
+    />
+  );
 }
 
 /**

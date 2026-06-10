@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Outlet, useRouterState } from '@tanstack/react-router';
 import { useMediaQuery } from '../use-media-query';
 import { useWindowAttention } from '../use-window-attention';
@@ -6,6 +7,7 @@ import { Brand } from './Brand';
 import { MobileNavSwitcher } from './MobileNavSwitcher';
 import { SettingsMenu } from './SettingsMenu';
 import { TabBar } from './TabBar';
+import { WorkspaceShell } from './WorkspaceLayout';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 
 // Cross-workspace attention is surfaced exclusively on the WorkspaceSwitcher
@@ -34,6 +36,16 @@ export function AppLayout() {
     ? workspaces.find((w) => w.slug === wsSlug)
     : null;
   const isMobile = useMediaQuery('(max-width: 720px)');
+  const [visitedWsSlugs, setVisitedWsSlugs] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    if (!wsSlug) return;
+    setVisitedWsSlugs((prev) => {
+      if (prev.has(wsSlug)) return prev;
+      const next = new Set(prev);
+      next.add(wsSlug);
+      return next;
+    });
+  }, [wsSlug]);
 
   return (
     <div className="app-layout">
@@ -74,7 +86,22 @@ export function AppLayout() {
         </a>
         <SettingsMenu />
       </header>
-      <Outlet />
+      {wsSlug ? (
+        <div className="workspace-hosts">
+          {[...visitedWsSlugs].map((slug) => (
+            <div
+              key={slug}
+              className="workspace-host-slot"
+              hidden={slug !== wsSlug}
+              aria-hidden={slug !== wsSlug}
+            >
+              <WorkspaceShell wsSlug={slug} isActive={slug === wsSlug} />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <Outlet />
+      )}
     </div>
   );
 }

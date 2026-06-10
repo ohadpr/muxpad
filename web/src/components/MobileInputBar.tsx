@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
-import { splitClipboard } from '../lib/clipboard-detect';
+import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
+import { isCursorAgentCmd } from '../lib/xterm-internals';
 import './MobileInputBar.css';
 
 /**
@@ -28,6 +29,8 @@ import './MobileInputBar.css';
 export interface MobileInputBarProps {
   paneId: string | null;
   paneKind: 'shell' | 'url' | null;
+  /** Best-effort foreground command — drives ↑/↓/End behavior. */
+  foregroundCmd?: string | null | undefined;
 }
 
 /** Cap auto-grow at ~5 lines of text before the textarea scrolls internally. */
@@ -35,7 +38,8 @@ const MAX_VISIBLE_LINES = 5;
 /** Px per line at the composer's font-size (14px / line-height ~1.4). */
 const LINE_HEIGHT_PX = 20;
 
-export function MobileInputBar({ paneId, paneKind }: MobileInputBarProps) {
+export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: MobileInputBarProps) {
+  const cursorBufferScroll = isCursorAgentCmd(foregroundCmd);
   const [value, setValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
@@ -151,6 +155,20 @@ export function MobileInputBar({ paneId, paneKind }: MobileInputBarProps) {
     );
   };
 
+  const scrollBuffer = (lines: number) => {
+    if (!paneId) return;
+    window.dispatchEvent(
+      new CustomEvent('muxpad:scroll-buffer', { detail: { paneId, lines } }),
+    );
+  };
+
+  const scrollBufferBottom = () => {
+    if (!paneId) return;
+    window.dispatchEvent(
+      new CustomEvent('muxpad:scroll-buffer', { detail: { paneId, toBottom: true } }),
+    );
+  };
+
   // Image paste: textareas don't natively accept image clipboard data —
   // we have to intercept paste, upload the blob to muxpad's attachments
   // endpoint, and splice the returned path into the textarea so the
@@ -180,7 +198,7 @@ export function MobileInputBar({ paneId, paneKind }: MobileInputBarProps) {
     const start = ta?.selectionStart ?? value.length;
     const end = ta?.selectionEnd ?? value.length;
     const pasted = paths.join(' ') + ' ';
-    const tail = imageOnly ? '' : e.clipboardData.getData('text/plain');
+    const tail = imageOnly ? '' : companionTextForImagePaste(e.clipboardData.getData('text/plain'));
     const before = value.slice(0, start);
     const after = value.slice(end);
     setValue(`${before}${pasted}${tail}${after}`);
@@ -192,15 +210,10 @@ export function MobileInputBar({ paneId, paneKind }: MobileInputBarProps) {
     // onChange and our click handler, leaving `value` one tick behind the
     // textarea's true contents.
     const current = textareaRef.current?.value ?? value;
-    // Send text and CR as two separate events. Empirically the CR was
-    // sometimes "missing" when appended to text on iOS — text would land
-    // at the prompt but Claude wouldn't submit. Splitting them guarantees
-    // the CR gets its own dispatch / WS frame and can't get lost in the
-    // same iOS keyboard-dismiss tick as the text.
-    if (current.length > 0) send(current);
-    // Always end with a bare CR — empty submit = blank Enter at the prompt,
-    // useful to refresh a prompt or kick a TUI out of input mode.
-    send('\r');
+    // One WS frame for text+CR avoids an intermediate TUI render between
+    // "text at prompt" and "submitted" that can jerk Ink scroll position.
+    // Empty submit = bare CR (blank Enter at the prompt).
+    send(current.length > 0 ? `${current}\r` : '\r');
     setValue('');
     // useEffect on [value] resets the textarea height on next tick.
   };
@@ -217,31 +230,31 @@ export function MobileInputBar({ paneId, paneKind }: MobileInputBarProps) {
         <button
           type="button"
           className="mobile-input-key"
-          onClick={() => send('\x1b[A')}
-          aria-label="Up"
+          onClick={() =>
+            cursorBufferScroll ? scrollBuffer(-8) : send('\x1b[A')
+          }
+          aria-label={cursorBufferScroll ? 'Scroll up' : 'Up'}
         >
           ↑
         </button>
         <button
           type="button"
           className="mobile-input-key"
-          onClick={() => send('\x1b[B')}
-          aria-label="Down"
+          onClick={() =>
+            cursorBufferScroll ? scrollBuffer(8) : send('\x1b[B')
+          }
+          aria-label={cursorBufferScroll ? 'Scroll down' : 'Down'}
         >
           ↓
         </button>
         <button
           type="button"
           className="mobile-input-key"
-          onClick={() => {
-            // Wheel events get coalesced by most TUIs into one scroll-
-            // increment-per-render-frame, so a burst of wheels only
-            // scrolls one page max. Page-Down is the keystroke
-            // equivalent — each is processed independently and jumps a
-            // whole screen. 50 is enough to clear any reasonable
-            // session's scroll buffer.
-            send('\x1b[6~'.repeat(50));
-          }}
+          onClick={() =>
+            cursorBufferScroll
+              ? scrollBufferBottom()
+              : send('\x1b[6~'.repeat(50))
+          }
           aria-label="Jump to bottom"
         >
           End
