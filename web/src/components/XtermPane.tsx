@@ -275,7 +275,7 @@ export function XtermPane({
       .closest('.mosaic-window')
       ?.querySelector<HTMLElement>('.mosaic-window-toolbar');
     const onToolbarClick = () => {
-      term.focus();
+      if (!isMobileLayout()) term.focus();
     };
     toolbarEl?.addEventListener('click', onToolbarClick);
 
@@ -290,7 +290,19 @@ export function XtermPane({
       if (isMobileLayout() && !paneActiveRef.current) return;
       term.open(container);
       opened = true;
-      if (autoFocus) term.focus();
+      // Mobile: the terminal is a view/scroll/tap surface, not a typing
+      // target. The MobileInputBar is the input method (it forwards text +
+      // Esc/Tab/arrows/Ctrl-C via muxpad:send-input). Tell mobile browsers
+      // not to raise the soft keyboard for xterm's helper textarea — that
+      // keyboard is what drove the visualViewport churn (half-pane stick,
+      // reflow-on-focus). inputMode='none' keeps the textarea focusable, so
+      // a hardware/Bluetooth keyboard and tap-to-click still work; only the
+      // on-screen keyboard is suppressed. Desktop is unaffected.
+      if (isMobileLayout()) {
+        if (term.textarea) term.textarea.inputMode = 'none';
+      } else if (autoFocus) {
+        term.focus();
+      }
       setScrollBarWidthZero(term);
       const initialFit = () => {
         try {
