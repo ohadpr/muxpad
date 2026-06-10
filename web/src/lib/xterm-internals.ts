@@ -34,7 +34,7 @@ export function getCellDimensions(term: Terminal): { width: number; height: numb
 export function isCursorAgentCmd(cmd: string | null | undefined): boolean {
   if (!cmd) return false;
   const c = cmd.toLowerCase();
-  return /cursor-agent|cursor agent/.test(c) || (/\bagent\b/.test(c) && /cursor-agent/.test(c));
+  return /cursor-agent|cursor agent/.test(c);
 }
 
 /** True for Cursor CLI, Claude Code, and similar Ink foreground processes. */
