@@ -299,7 +299,16 @@ export function XtermPane({
       // a hardware/Bluetooth keyboard and tap-to-click still work; only the
       // on-screen keyboard is suppressed. Desktop is unaffected.
       if (isMobileLayout()) {
-        if (term.textarea) term.textarea.inputMode = 'none';
+        if (term.textarea) {
+          term.textarea.inputMode = 'none';
+          // Drop xterm's helper textarea out of iOS's form-field navigation
+          // so the keyboard accessory bar's prev/next field chevrons don't
+          // appear while typing in the MobileInputBar (otherwise iOS sees two
+          // fields — the composer and this textarea — and offers to jump
+          // between them). It stays click/programmatically focusable, so a
+          // hardware keyboard and tap-to-click are unaffected.
+          term.textarea.tabIndex = -1;
+        }
       } else if (autoFocus) {
         term.focus();
       }
