@@ -9,7 +9,7 @@ import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-det
 import { writeClipboard } from '../lib/clipboard-write';
 import { CursorScrollSession } from '../lib/cursor-scroll-session';
 import { isMobileLayout } from '../lib/mobile-layout';
-import { installMobileViewportSync, mobileTerminalHeightPx } from '../lib/mobile-viewport';
+import { mobileTerminalHeightPx } from '../lib/mobile-viewport';
 import { createSafeClipboardAddon } from '../lib/safe-clipboard-provider';
 import { ChunkedWriter, SyncBlockExtractor } from '../lib/write-coalescer';
 import {
@@ -917,17 +917,14 @@ export function XtermPane({
       }
     };
     fitWhenCellReady();
-    // Mobile: refit when the visual viewport shrinks (keyboard). Sync CSS vars
-    // always; only refit on significant height drops so address-bar jitter
-    // doesn't fight cursor scroll during live output.
-    let initialVvH = window.visualViewport?.height ?? window.innerHeight;
-    const teardownMobileVv = installMobileViewportSync(() => {
-      if (!opened || !isMobileLayout()) return;
-      const h = window.visualViewport?.height ?? window.innerHeight;
-      if (h >= initialVvH - 40) return;
-      initialVvH = h;
-      scheduleRefit();
-    });
+    // NOTE: we deliberately do NOT refit when the mobile soft keyboard shows
+    // or hides. The on-screen keyboard shrinks visualViewport, but refitting
+    // to the smaller above-keyboard height would SIGWINCH the PTY and force a
+    // running TUI (Claude Code, Ink) to reflow and reset its layout on every
+    // composer focus. The terminal keeps its rows; the keyboard simply
+    // overlays the bottom, and MobileInputBar floats itself above the
+    // keyboard via its own visualViewport listener. (An earlier
+    // installMobileViewportSync hook drove exactly that bad refit — removed.)
     // react-mosaic re-parenting can change a pane's available width without
     // firing ResizeObserver — fit to the new size on every layout-changed
     // notification. A single trailing-edge debounce coalesces overlapping
@@ -1368,7 +1365,6 @@ export function XtermPane({
       writeParsedSub.dispose();
       scrollSub.dispose();
       cursorScroll.dispose();
-      teardownMobileVv();
       clearMobileHeightOverride();
       if (postWriteRefreshTimer !== null) window.clearTimeout(postWriteRefreshTimer);
       container.removeEventListener('pointerdown', onPointerDown);
