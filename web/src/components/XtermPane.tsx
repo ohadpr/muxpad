@@ -9,7 +9,6 @@ import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-det
 import { writeClipboard } from '../lib/clipboard-write';
 import { CursorScrollSession } from '../lib/cursor-scroll-session';
 import { isMobileLayout } from '../lib/mobile-layout';
-import { mobileTerminalHeightPx } from '../lib/mobile-viewport';
 import { createSafeClipboardAddon } from '../lib/safe-clipboard-provider';
 import { ChunkedWriter, SyncBlockExtractor } from '../lib/write-coalescer';
 import {
@@ -746,34 +745,6 @@ export function XtermPane({
     const MIN_ROWS = 10;
     let lastSentCols = 0;
     let lastSentRows = 0;
-    /** When set, overrides flex height so fit() matches the visual viewport. */
-    let mobileHeightOverride: number | null = null;
-
-    const applyMobileHeightOverride = (): boolean => {
-      if (!isMobileLayout() || !opened) return false;
-      const top = container.getBoundingClientRect().top;
-      const h = mobileTerminalHeightPx(top);
-      if (h === null) {
-        if (mobileHeightOverride !== null) {
-          container.style.height = '';
-          container.style.flex = '';
-          mobileHeightOverride = null;
-        }
-        return false;
-      }
-      if (mobileHeightOverride === h) return true;
-      mobileHeightOverride = h;
-      container.style.height = `${h}px`;
-      container.style.flex = '0 0 auto';
-      return true;
-    };
-
-    const clearMobileHeightOverride = () => {
-      if (mobileHeightOverride === null) return;
-      mobileHeightOverride = null;
-      container.style.height = '';
-      container.style.flex = '';
-    };
 
     const refit = () => {
       try {
@@ -785,8 +756,6 @@ export function XtermPane({
           dbg('refit skipped: tab hidden');
           return;
         }
-        if (isMobileLayout()) applyMobileHeightOverride();
-        else clearMobileHeightOverride();
         // Skip when the pane element is in a transient sub-pixel state
         // during mosaic re-layout (clientWidth=0, etc.). Pushing those
         // values through fit() and on to the PTY causes the running TUI
@@ -1241,7 +1210,6 @@ export function XtermPane({
       writeParsedSub.dispose();
       scrollSub.dispose();
       cursorScroll.dispose();
-      clearMobileHeightOverride();
       if (postWriteRefreshTimer !== null) window.clearTimeout(postWriteRefreshTimer);
       container.removeEventListener('pointerdown', onPointerDown);
       container.removeEventListener('pointermove', onPointerMove);
