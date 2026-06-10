@@ -30,7 +30,12 @@ export class CursorScrollSession {
   constructor(private readonly opts: CursorScrollSessionOpts) {}
 
   get replayActive(): boolean {
-    return this.replayPending;
+    // Only cursor-agent hides the pane and freezes input during replay — its
+    // normal-buffer output visibly scrubs as the ring buffer repaints. Other
+    // foregrounds (Claude Code, plain shells) paint immediately and stay
+    // interactive; gating them blanked the pane (opacity:0 / pointer-events:
+    // none) for up to 3s and swallowed touch input on mobile.
+    return this.replayPending && isCursorAgentCmd(this.opts.getForegroundCmd());
   }
 
   /** Call when WS connect starts replay (fresh mount). */

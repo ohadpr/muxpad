@@ -6,10 +6,10 @@ import '@xterm/xterm/css/xterm.css';
 import { decodeServerMessage, encodeInput, encodePing, encodeResize } from '@muxpad/shared';
 import { api } from '../api';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
+import { writeClipboard } from '../lib/clipboard-write';
+import { CursorScrollSession } from '../lib/cursor-scroll-session';
 import { isMobileLayout } from '../lib/mobile-layout';
 import { installMobileViewportSync, mobileTerminalHeightPx } from '../lib/mobile-viewport';
-import { CursorScrollSession } from '../lib/cursor-scroll-session';
-import { writeClipboard } from '../lib/clipboard-write';
 import { createSafeClipboardAddon } from '../lib/safe-clipboard-provider';
 import { ChunkedWriter, SyncBlockExtractor } from '../lib/write-coalescer';
 import {
@@ -19,15 +19,15 @@ import {
   isInkForegroundCmd,
   linesAboveBottom,
   linesAboveFromRatio,
-  scrollRatioFromTerm,
+  refreshVisibleRows,
   restoreLinesAboveBottom,
   scrollBufferByLines,
   scrollBufferWheel,
-  refreshVisibleRows,
-  shouldTouchScrollBuffer,
+  scrollRatioFromTerm,
   setScrollBarWidthZero,
   shouldForwardWheelToPty,
   shouldScrollXtermBuffer,
+  shouldTouchScrollBuffer,
   triggerWheelMouseEvent,
   wheelInputForPty,
 } from '../lib/xterm-internals';
@@ -198,8 +198,7 @@ export function XtermPane({
     // handler's reassertSize() chain zeroes the dedup cache and
     // re-announces the now-correct size — so nothing is lost by staying
     // silent while hidden.
-    const mayDriveResize = () =>
-      document.visibilityState === 'visible' && paneActiveRef.current;
+    const mayDriveResize = () => document.visibilityState === 'visible' && paneActiveRef.current;
 
     // Diagnostic snapshot: captures everything that could explain a sudden
     // "renderer shrinks while no React event fires" state. snap() is the
@@ -273,10 +272,13 @@ export function XtermPane({
       // so buffer scroll / refit repaints on iOS Safari.
       if (isCursorAgentCmd(foregroundCmdRef.current) && !isMobileLayout()) return;
       if (postWriteRefreshTimer !== null) window.clearTimeout(postWriteRefreshTimer);
-      postWriteRefreshTimer = window.setTimeout(() => {
-        postWriteRefreshTimer = null;
-        refreshVisibleRows(term);
-      }, isMobileLayout() ? 300 : 500);
+      postWriteRefreshTimer = window.setTimeout(
+        () => {
+          postWriteRefreshTimer = null;
+          refreshVisibleRows(term);
+        },
+        isMobileLayout() ? 300 : 500,
+      );
     });
     const scrollSub = term.onScroll(() => {
       cursorScroll.onUserScroll(term);
@@ -323,9 +325,7 @@ export function XtermPane({
         // Broadcast so TabView can persist the active pane per tab —
         // enables refresh-restore of focus on the desktop multi-pane
         // layout, where there's no other notion of "last-active pane".
-        window.dispatchEvent(
-          new CustomEvent('muxpad:pane-focused', { detail: { paneId } }),
-        );
+        window.dispatchEvent(new CustomEvent('muxpad:pane-focused', { detail: { paneId } }));
       } else {
         win.removeAttribute('data-focused');
       }
@@ -772,9 +772,7 @@ export function XtermPane({
       const sent =
         triggerWheelMouseEvent(term, col, transcriptRow, e.deltaY, WHEEL_STEP_PX) ||
         safeSend(
-          encodeInput(
-            wheelInputForPty(term, col, transcriptRow, e.deltaY, WHEEL_STEP_PX, ink),
-          ),
+          encodeInput(wheelInputForPty(term, col, transcriptRow, e.deltaY, WHEEL_STEP_PX, ink)),
         );
       if (!sent) {
         dbg('wheel dropped: ws not open');
@@ -948,13 +946,7 @@ export function XtermPane({
       }
       if (refitTimer !== null) window.clearTimeout(refitTimer);
       const cursor = isCursorAgentCmd(foregroundCmdRef.current);
-      const delay = cursor
-        ? hasSettledFirstResize
-          ? 150
-          : 300
-        : hasSettledFirstResize
-          ? 50
-          : 250;
+      const delay = cursor ? (hasSettledFirstResize ? 150 : 300) : hasSettledFirstResize ? 50 : 250;
       refitTimer = window.setTimeout(() => {
         refitTimer = null;
         fitWhenCellReady();
@@ -1183,11 +1175,13 @@ export function XtermPane({
     window.addEventListener('muxpad:send-input', onSendInput);
 
     const onScrollBuffer = (e: Event) => {
-      const detail = (e as CustomEvent<{
-        paneId?: string;
-        lines?: number;
-        toBottom?: boolean;
-      }>).detail;
+      const detail = (
+        e as CustomEvent<{
+          paneId?: string;
+          lines?: number;
+          toBottom?: boolean;
+        }>
+      ).detail;
       if (detail?.paneId !== paneId) return;
       try {
         if (detail.toBottom) {
@@ -1312,16 +1306,18 @@ export function XtermPane({
     container.addEventListener('paste', onPaste, true);
 
     if (e2eHarnessRef.current) {
-      (window as unknown as {
-        __muxpad_e2e?: {
-          linesAboveBottom: () => number;
-          scrollRatio: () => number;
-          wheelUp: (ticks?: number) => void;
-          wheelDown: (ticks?: number) => void;
-          lifecycleStorm: (rounds?: number) => void;
-          flushScrollSave: () => void;
-        };
-      }).__muxpad_e2e = {
+      (
+        window as unknown as {
+          __muxpad_e2e?: {
+            linesAboveBottom: () => number;
+            scrollRatio: () => number;
+            wheelUp: (ticks?: number) => void;
+            wheelDown: (ticks?: number) => void;
+            lifecycleStorm: (rounds?: number) => void;
+            flushScrollSave: () => void;
+          };
+        }
+      ).__muxpad_e2e = {
         linesAboveBottom: () => linesAboveBottom(term),
         scrollRatio: () => scrollRatioFromTerm(term),
         wheelUp: (ticks = 5) => {
@@ -1474,7 +1470,9 @@ export function XtermPane({
 
   return (
     <div
-      className={`xterm-pane-wrapper${replayRestoring ? ' replay-restoring' : ''}`}
+      className={`xterm-pane-wrapper${
+        replayRestoring && isCursorAgentCmd(foregroundCmd) ? ' replay-restoring' : ''
+      }`}
     >
       <div className="xterm-pane" ref={containerRef} tabIndex={0} />
       {pasteToast ? (

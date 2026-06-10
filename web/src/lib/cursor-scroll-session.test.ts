@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CursorScrollSession } from './cursor-scroll-session';
 
 describe('CursorScrollSession', () => {
@@ -58,6 +58,29 @@ describe('CursorScrollSession', () => {
     expect(reveal).toHaveBeenCalledOnce();
     expect(scrollToBottom).not.toHaveBeenCalled();
     expect(scrollToLine).not.toHaveBeenCalled();
+  });
+
+  it('replayActive is false for non-cursor-agent panes (Claude is never gated)', () => {
+    // replayPending starts true, but Claude/shells must not be hidden or have
+    // touch input swallowed during replay — only cursor-agent's scrubbing
+    // normal-buffer output warrants the gate.
+    const session = new CursorScrollSession({
+      paneId: 'p1',
+      getForegroundCmd: () => 'node claude-code',
+      revealAfterReplay: vi.fn(),
+    });
+    expect(session.replayActive).toBe(false);
+  });
+
+  it('replayActive is true for a fresh cursor-agent pane until reveal', () => {
+    const session = new CursorScrollSession({
+      paneId: 'p1',
+      getForegroundCmd: () => 'cursor-agent',
+      revealAfterReplay: vi.fn(),
+    });
+    expect(session.replayActive).toBe(true);
+    session.skipReplay();
+    expect(session.replayActive).toBe(false);
   });
 
   it('does not restore scroll after skipReplay (WS reconnect)', () => {
