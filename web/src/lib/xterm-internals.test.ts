@@ -6,14 +6,14 @@ import {
   linesAboveBottom,
   linesAboveFromRatio,
   restoreLinesAboveBottom,
-  scrollRatioFromTerm,
   scrollBufferByLines,
+  scrollBufferWheel,
+  scrollRatioFromTerm,
   setScrollBarWidthZero,
+  sgrWheelInput,
   shouldForwardWheelToPty,
   shouldScrollXtermBuffer,
   shouldTouchScrollBuffer,
-  sgrWheelInput,
-  scrollBufferWheel,
   wheelInputForPty,
 } from './xterm-internals';
 
@@ -23,12 +23,16 @@ describe('xterm-internals', () => {
   });
 
   it('reads from _core path on xterm v5', () => {
-    const fake = { _core: { _renderService: { dimensions: { css: { cell: { width: 8, height: 16 } } } } } } as never;
+    const fake = {
+      _core: { _renderService: { dimensions: { css: { cell: { width: 8, height: 16 } } } } },
+    } as never;
     expect(getCellDimensions(fake)).toEqual({ width: 8, height: 16 });
   });
 
   it('returns null when width is 0 (cell not yet measured)', () => {
-    const fake = { _core: { _renderService: { dimensions: { css: { cell: { width: 0, height: 0 } } } } } } as never;
+    const fake = {
+      _core: { _renderService: { dimensions: { css: { cell: { width: 0, height: 0 } } } } },
+    } as never;
     expect(getCellDimensions(fake)).toBeNull();
   });
 
@@ -81,6 +85,24 @@ describe('xterm-internals', () => {
     const active = { type: 'alternate', length: 24 };
     const term = { buffer: { active, alternate: active }, rows: 24 };
     expect(shouldTouchScrollBuffer(term as never, 'claude', true)).toBe(false);
+  });
+
+  it('shouldTouchScrollBuffer forwards (false) for a mouse-reporting TUI on the normal buffer (Claude)', () => {
+    // Claude Code runs Ink on the normal buffer; the wheel path already
+    // forwards to the PTY (see "shouldScrollXtermBuffer is false for claude"
+    // below), so touch must match it instead of hijacking xterm's local
+    // viewport out from under Claude's redraws.
+    const active = { type: 'normal', length: 100 };
+    const term = { buffer: { active, alternate: {} }, rows: 24 };
+    expect(shouldTouchScrollBuffer(term as never, 'node claude-code', true)).toBe(false);
+    // A mouse-reporting TUI under any command name (alt screen or DECSET
+    // mouse mode) is forwarded too.
+    const mouseTerm = {
+      buffer: { active: { type: 'normal', length: 5 }, alternate: {} },
+      rows: 24,
+      _core: { coreMouseService: { areMouseEventsActive: true } },
+    };
+    expect(shouldTouchScrollBuffer(mouseTerm as never, null, true)).toBe(false);
   });
 
   it('shouldScrollXtermBuffer for cursor-agent without scrollback', () => {

@@ -34,20 +34,14 @@ export function getCellDimensions(term: Terminal): { width: number; height: numb
 export function isCursorAgentCmd(cmd: string | null | undefined): boolean {
   if (!cmd) return false;
   const c = cmd.toLowerCase();
-  return (
-    /cursor-agent|cursor agent/.test(c) || (/\bagent\b/.test(c) && /cursor-agent/.test(c))
-  );
+  return /cursor-agent|cursor agent/.test(c) || (/\bagent\b/.test(c) && /cursor-agent/.test(c));
 }
 
 /** True for Cursor CLI, Claude Code, and similar Ink foreground processes. */
 export function isInkForegroundCmd(cmd: string | null | undefined): boolean {
   if (!cmd) return false;
   const c = cmd.toLowerCase();
-  return (
-    isCursorAgentCmd(cmd) ||
-    /claude-code|claude code/.test(c) ||
-    /\bclaude\b/.test(c)
-  );
+  return isCursorAgentCmd(cmd) || /claude-code|claude code/.test(c) || /\bclaude\b/.test(c);
 }
 
 /** True when the running TUI has enabled xterm mouse reporting (Ink apps). */
@@ -71,10 +65,7 @@ export function bufferHasScrollback(term: Terminal): boolean {
 }
 
 /** Cursor agent on a normal buffer: scroll xterm scrollback, not the PTY. */
-export function shouldScrollXtermBuffer(
-  term: Terminal,
-  foregroundCmd?: string | null,
-): boolean {
+export function shouldScrollXtermBuffer(term: Terminal, foregroundCmd?: string | null): boolean {
   try {
     if (!isCursorAgentCmd(foregroundCmd)) return false;
     return term.buffer.active.type === 'normal';
@@ -83,7 +74,7 @@ export function shouldScrollXtermBuffer(
   }
 }
 
-/** Touch should scroll xterm scrollback (Cursor, or any normal-buffer TUI on mobile). */
+/** Touch should scroll xterm scrollback (Cursor, or a plain shell on mobile). */
 export function shouldTouchScrollBuffer(
   term: Terminal,
   foregroundCmd?: string | null,
@@ -91,9 +82,15 @@ export function shouldTouchScrollBuffer(
 ): boolean {
   if (shouldScrollXtermBuffer(term, foregroundCmd)) return true;
   if (!mobile) return false;
+  // Mobile touch mirrors the wheel path: only hijack into xterm's local
+  // scrollback when we would NOT forward a wheel to the PTY (i.e. plain,
+  // non-mouse-reporting shells). Mouse-reporting / alt-screen TUIs like
+  // Claude Code get the gesture forwarded so touch and wheel stay
+  // consistent. This previously returned true for ANY normal-buffer TUI on
+  // mobile, which scrolled xterm's viewport out from under Claude's
+  // absolute-cursor redraws (content shifted, cursor mispositioned).
   try {
-    // Alternate-screen Ink TUIs (Claude) need SGR wheel on the PTY instead.
-    return term.buffer.active.type === 'normal';
+    return !shouldForwardWheelToPty(term, foregroundCmd);
   } catch {
     return false;
   }
@@ -109,11 +106,7 @@ export function refreshVisibleRows(term: Terminal): void {
 }
 
 /** Scroll xterm's normal buffer by a signed line count (touch / wheel). */
-export function scrollBufferByLines(
-  term: Terminal,
-  lines: number,
-  repaint = false,
-): boolean {
+export function scrollBufferByLines(term: Terminal, lines: number, repaint = false): boolean {
   if (lines === 0) return false;
   try {
     const active = term.buffer.active;
@@ -179,10 +172,7 @@ export function scrollBufferWheel(term: Terminal, e: WheelEvent): boolean {
   }
 }
 
-export function shouldForwardWheelToPty(
-  term: Terminal,
-  foregroundCmd?: string | null,
-): boolean {
+export function shouldForwardWheelToPty(term: Terminal, foregroundCmd?: string | null): boolean {
   try {
     if (shouldScrollXtermBuffer(term, foregroundCmd)) return false;
     // Cursor on the normal buffer: never PTY-forward wheel — spurious
