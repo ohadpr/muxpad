@@ -134,6 +134,9 @@ export function XtermPane({
   const setReplayRestoringRef = useRef(setReplayRestoring);
   setReplayRestoringRef.current = setReplayRestoring;
   const tryOpenTermRef = useRef<(() => void) | null>(null);
+  // Convergent re-fit chain (0/100/250/500ms). Exposed so the paneActive
+  // become-visible effect can reuse it instead of a single-shot fit.
+  const reassertSizeRef = useRef<(() => void) | null>(null);
 
   // The terminal is created once per paneId. Font/theme changes are applied
   // in place by the live-update effect below (mutating term.options), so this
@@ -925,6 +928,7 @@ export function XtermPane({
         reassertSizeTimerIds.push(id);
       }
     };
+    reassertSizeRef.current = reassertSize;
     const reassertSizeFromEvent = (source: string) => {
       // Cursor: replay + refit + scroll-restore on lifecycle events fought
       // each other (reload dance, jump to top mid-session). Repaint only;
@@ -1249,6 +1253,7 @@ export function XtermPane({
       if (termRef.current === term) termRef.current = null;
       if (fitRef.current === fit) fitRef.current = null;
       tryOpenTermRef.current = null;
+      reassertSizeRef.current = null;
       dismissPasteToast();
       term.dispose();
     };
@@ -1262,10 +1267,16 @@ export function XtermPane({
 
     if (!wasActive && paneActive) {
       tryOpenTermRef.current?.();
-      requestAnimationFrame(() => {
+      // Re-fit through the convergent 0/100/250/500ms chain rather than a
+      // single rAF tick. A slot that just flipped from display:none hasn't
+      // settled its layout, so a one-shot fit() can measure a near-zero
+      // width and lock the terminal at a few columns (the "pane is 5% wide"
+      // bug) until the next unrelated resize. reassertSize also clears the
+      // size dedup so the corrected dims actually reach the PTY.
+      reassertSizeRef.current?.();
+      if (isMobileLayout()) {
         requestAnimationFrame(() => {
-          window.dispatchEvent(new Event('muxpad:layout-changed'));
-          if (isMobileLayout()) {
+          requestAnimationFrame(() => {
             const term = termRef.current;
             if (term && isCursorAgentCmd(foregroundCmdRef.current)) {
               try {
@@ -1275,9 +1286,9 @@ export function XtermPane({
                 // ignore
               }
             }
-          }
+          });
         });
-      });
+      }
     }
 
     wasPaneActiveRef.current = paneActive;
