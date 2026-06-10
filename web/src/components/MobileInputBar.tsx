@@ -164,6 +164,18 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
     const el = editableRef.current;
     if (!el) return;
     el.focus();
+    // This runs after an await (image upload), by which point the prior
+    // caret/selection may be gone (blur, context-menu paste). Collapse the
+    // selection to the end of the field so the inserted path lands
+    // predictably instead of at position 0 / nowhere.
+    const sel = window.getSelection();
+    if (sel) {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
     // execCommand('insertText') respects the caret/selection and undo stack
     // in a contenteditable; fall back to append if unavailable.
     if (!document.execCommand('insertText', false, text)) {

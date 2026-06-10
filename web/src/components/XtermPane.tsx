@@ -197,6 +197,20 @@ export function XtermPane({
     // silent while hidden.
     const mayDriveResize = () => document.visibilityState === 'visible' && paneActiveRef.current;
 
+    // Resize-send floor. ALL three fit-and-send paths (initial open below,
+    // the (re)connect `announceSize`, and `refit`) consult these so a
+    // near-zero measurement on a not-yet-settled layout (display:none→visible
+    // slot, mosaic re-layout) can't push a bogus SIGWINCH to the PTY and make
+    // a running TUI reflow / relocate its input bar. Declared up here (not
+    // inline near refit) so the earlier fit paths can share them without a
+    // temporal-dead-zone hazard.
+    const MIN_COLS = 40;
+    const MIN_ROWS = 10;
+    let lastSentCols = 0;
+    let lastSentRows = 0;
+    const containerTooSmall = () => container.clientWidth < 60 || container.clientHeight < 40;
+    const gridBelowFloor = () => term.cols < MIN_COLS || term.rows < MIN_ROWS;
+
     const chunker = new ChunkedWriter((s) => term.write(s), {
       chunkSize: 48 * 1024,
       raf: requestAnimationFrame.bind(window),
@@ -318,12 +332,16 @@ export function XtermPane({
       setScrollBarWidthZero(term);
       const initialFit = () => {
         try {
-          fit.fit();
-          const ws = wsRef.current;
-          if (ws && ws.readyState === WebSocket.OPEN && mayDriveResize()) {
-            lastSentCols = term.cols;
-            lastSentRows = term.rows;
-            ws.send(encodeResize(term.cols, term.rows));
+          // Don't fit a 0/near-zero container — fit() would mutate the
+          // terminal to a few columns locally even if we never send it.
+          if (!containerTooSmall()) {
+            fit.fit();
+            const ws = wsRef.current;
+            if (ws && ws.readyState === WebSocket.OPEN && mayDriveResize() && !gridBelowFloor()) {
+              lastSentCols = term.cols;
+              lastSentRows = term.rows;
+              ws.send(encodeResize(term.cols, term.rows));
+            }
           }
         } catch {
           // container may not yet be sized; resize observer will retry.
@@ -419,6 +437,10 @@ export function XtermPane({
         if (wasReconnect) term.writeln('\r\n[reconnected]');
         retries = 0;
         const announceSize = () => {
+          // Same floor as refit/initialFit: don't fit or announce a near-zero
+          // size on a not-yet-settled slot. reassertSize() (visibilitychange /
+          // become-visible) re-announces once the layout settles.
+          if (containerTooSmall()) return;
           try {
             fit.fit();
           } catch {
@@ -427,7 +449,11 @@ export function XtermPane({
           // Re-announce size on (re)connect — but only if this tab is
           // visible. A hidden tab reconnecting must not push its (stale)
           // size; reassertSize() on the next visibilitychange handles it.
-          if (mayDriveResize() && safeSend(encodeResize(term.cols, term.rows))) {
+          if (
+            mayDriveResize() &&
+            !gridBelowFloor() &&
+            safeSend(encodeResize(term.cols, term.rows))
+          ) {
             lastSentCols = term.cols;
             lastSentRows = term.rows;
           }
@@ -765,11 +791,6 @@ export function XtermPane({
       return !sendWheelToPty(e);
     });
 
-    const MIN_COLS = 40;
-    const MIN_ROWS = 10;
-    let lastSentCols = 0;
-    let lastSentRows = 0;
-
     const refit = () => {
       try {
         // A hidden tab must not drive the shared PTY size (see
@@ -786,7 +807,7 @@ export function XtermPane({
         // to receive a bogus SIGWINCH (e.g. 2×18) and redraw to that
         // ghost size before we send the real one a tick later — Claude
         // Code visibly relocates its input bar when this happens.
-        if (container.clientWidth < 60 || container.clientHeight < 40) return;
+        if (containerTooSmall()) return;
         const preserveScroll =
           isCursorAgentCmd(foregroundCmdRef.current) && linesAboveBottom(term) > 0;
         const scrollRatio = preserveScroll ? scrollRatioFromTerm(term) : 0;
