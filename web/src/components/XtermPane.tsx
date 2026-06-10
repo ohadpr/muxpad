@@ -60,8 +60,6 @@ export interface XtermPaneProps {
   foregroundCmd?: string | null | undefined;
   /** False when the parent tab/pane slot is hidden (display:none). */
   paneActive?: boolean | undefined;
-  /** Expose scroll metrics on window.__muxpad_e2e for Playwright. */
-  e2eHarness?: boolean | undefined;
 }
 
 const XTERM_THEMES: Record<
@@ -117,7 +115,6 @@ export function XtermPane({
   autoFocus = true,
   foregroundCmd = null,
   paneActive = true,
-  e2eHarness = false,
 }: XtermPaneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const foregroundCmdRef = useRef(foregroundCmd);
@@ -138,8 +135,6 @@ export function XtermPane({
   const setReplayRestoringRef = useRef(setReplayRestoring);
   setReplayRestoringRef.current = setReplayRestoring;
   const tryOpenTermRef = useRef<(() => void) | null>(null);
-  const e2eHarnessRef = useRef(e2eHarness);
-  e2eHarnessRef.current = e2eHarness;
 
   // The terminal is created once per paneId. Font/theme changes are applied
   // in place by the live-update effect below (mutating term.options), so this
@@ -1302,40 +1297,6 @@ export function XtermPane({
     };
     container.addEventListener('paste', onPaste, true);
 
-    if (e2eHarnessRef.current) {
-      (
-        window as unknown as {
-          __muxpad_e2e?: {
-            linesAboveBottom: () => number;
-            scrollRatio: () => number;
-            wheelUp: (ticks?: number) => void;
-            wheelDown: (ticks?: number) => void;
-            lifecycleStorm: (rounds?: number) => void;
-            flushScrollSave: () => void;
-          };
-        }
-      ).__muxpad_e2e = {
-        linesAboveBottom: () => linesAboveBottom(term),
-        scrollRatio: () => scrollRatioFromTerm(term),
-        wheelUp: (ticks = 5) => {
-          scrollBufferByLines(term, -ticks);
-        },
-        wheelDown: (ticks = 5) => {
-          scrollBufferByLines(term, ticks);
-        },
-        lifecycleStorm: (rounds = 3) => {
-          for (let i = 0; i < rounds; i++) {
-            window.dispatchEvent(new Event('muxpad:layout-changed'));
-            document.dispatchEvent(new Event('visibilitychange'));
-            window.dispatchEvent(new Event('focus'));
-          }
-        },
-        flushScrollSave: () => {
-          cursorScroll.onPageHide(term);
-        },
-      };
-    }
-
     return () => {
       intentionallyClosed = true;
       opened = true; // skip the deferred open if it fires after unmount
@@ -1387,9 +1348,6 @@ export function XtermPane({
       if (termRef.current === term) termRef.current = null;
       if (fitRef.current === fit) fitRef.current = null;
       tryOpenTermRef.current = null;
-      if (e2eHarnessRef.current) {
-        delete (window as unknown as { __muxpad_e2e?: unknown }).__muxpad_e2e;
-      }
       dismissPasteToast();
       term.dispose();
     };

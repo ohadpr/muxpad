@@ -9,8 +9,6 @@
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm -r test",
-    "test:e2e:cursor-scroll": "pnpm build && playwright test e2e/cursor-scroll.spec.ts",
-    "test:e2e:cursor-scroll:loop": "node scripts/e2e-cursor-scroll-loop.mjs",
     "lint": "pnpm -r lint",
     "dev": "pnpm -r --parallel dev",
     "serve": "./scripts/muxpad start",
@@ -23,8 +21,6 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
-    "@playwright/test": "^1.52.0",
-    "tsx": "^4.21.0",
     "typescript": "^5.6.3"
   },
   "packageManager": "pnpm@10.30.1",

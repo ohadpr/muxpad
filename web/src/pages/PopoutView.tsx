@@ -7,15 +7,10 @@ export function PopoutView() {
   const params =
     typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
   const foregroundCmd = params?.get('cursor') === '1' ? 'cursor-agent' : null;
-  const e2eHarness = params?.get('e2e') === '1';
   useDocumentTitle(`muxpad — pane ${paneId.slice(-6)}`);
   return (
     <div style={{ height: '100vh', background: '#0b0e14' }}>
-      <XtermPane
-        paneId={paneId}
-        foregroundCmd={foregroundCmd}
-        e2eHarness={e2eHarness}
-      />
+      <XtermPane paneId={paneId} foregroundCmd={foregroundCmd} />
     </div>
   );
 }
