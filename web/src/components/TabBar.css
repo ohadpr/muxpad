@@ -382,7 +382,7 @@
    transform = visual only, so the tab never changes width; the tab's
    overflow:hidden keeps the slid label from spilling into the next tab. */
 .ws-tab[data-quicknum="true"] .ws-tab-label {
-  transform: translateX(10px);
+  transform: translateX(7px);
 }
 
 .ws-tab-editing {
