@@ -61,7 +61,7 @@
    scrollWidth still tells the resize observer "tabs would still
    overflow if you tried to render us." Without this we'd flip-flop
    the moment we hide the tabs. */
-.ws-tabbar-tabs[data-collapsed='true'] {
+.ws-tabbar-tabs[data-collapsed="true"] {
   visibility: hidden;
   pointer-events: none;
 }
@@ -133,7 +133,7 @@
 /* When other tabs need attention, chevron + count both go accent. The
    pair lives on the chevron span (not next to the label) so the signal
    reads as "more inside" instead of "the active tab has news." */
-.ws-tabbar-dropdown-chevron[data-attention='true'] {
+.ws-tabbar-dropdown-chevron[data-attention="true"] {
   color: var(--accent);
 }
 /* Count pill — text-on-accent so it's clearly visible even when the
@@ -198,10 +198,10 @@
 .ws-tabbar-dropdown-item:hover {
   background: var(--bg-hover);
 }
-.ws-tabbar-dropdown-item[data-pressing='true'] {
+.ws-tabbar-dropdown-item[data-pressing="true"] {
   background: var(--bg-hover);
 }
-.ws-tabbar-dropdown-item[data-active='true'] {
+.ws-tabbar-dropdown-item[data-active="true"] {
   color: var(--fg);
   /* Tinted accent bg (visually distinct from hover so you can tell
      "currently selected" from "pointer is over this"). */
@@ -210,8 +210,8 @@
 /* Left-edge vertical rail — full row height, doesn't fight the close
    button at the right edge the way a bottom rail did. Matches the
    sidebar-active pattern used by Slack/Linear/etc. */
-.ws-tabbar-dropdown-item[data-active='true']::before {
-  content: '';
+.ws-tabbar-dropdown-item[data-active="true"]::before {
+  content: "";
   position: absolute;
   left: 0;
   top: 4px;
@@ -283,6 +283,9 @@
   gap: 8px;
   height: 100%;
   padding: 0 14px;
+  /* Clip so the label, when it slides right under Alt, truncates at the
+     tab's own edge instead of spilling into the neighbour. */
+  overflow: hidden;
   border: none;
   border-right: 1px solid var(--border);
   background: transparent;
@@ -297,16 +300,14 @@
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
-  transition:
-    color 100ms ease,
-    background 100ms ease;
+  transition: color 100ms ease, background 100ms ease;
 }
 .ws-tab:hover {
   color: var(--fg);
   background: var(--bg-hover);
   text-decoration: none;
 }
-.ws-tab[data-pressing='true'] {
+.ws-tab[data-pressing="true"] {
   background: var(--bg-hover);
 }
 
@@ -315,12 +316,12 @@
    rail underlines it. Both stay subtle enough to read at a glance
    without dominating the chrome plate. No font-weight change so the
    mono grid stays stable. */
-.ws-tab[data-active='true'] {
+.ws-tab[data-active="true"] {
   color: var(--fg);
   background: color-mix(in srgb, var(--accent) 12%, var(--bg));
 }
-.ws-tab[data-active='true']::after {
-  content: '';
+.ws-tab[data-active="true"]::after {
+  content: "";
   position: absolute;
   left: 0;
   right: 0;
@@ -328,8 +329,51 @@
   height: var(--chrome-rail);
   background: var(--accent);
 }
-.ws-tab[data-active='true']:hover {
+.ws-tab[data-active="true"]:hover {
   background: color-mix(in srgb, var(--accent) 18%, var(--bg));
+}
+
+/* Quick-switch number: shown on each tab while Option/Alt is held so the user
+   can see the Alt+<n> mapping. It sits in the tab's existing left padding and
+   is absolutely positioned, so it adds NO layout — the title never moves and
+   the tab never changes width when the numbers appear/disappear. Accent +
+   bold so it reads as a distinct affordance (not a chip / not an overlay over
+   the label — the label keeps its own space to the right). */
+/* Full-height flex box so the chip is vertically centred the exact same way
+   .ws-tab centres its label (align-items:center over the 36px plate) — keeps
+   the digit on the text's line rather than a translate approximation. */
+.ws-tab-quicknum {
+  position: absolute;
+  left: 3px;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+}
+/* The chip itself: a small box with a soft accent fill — a tad more highlight
+   than bare text without shouting. */
+.ws-tab-quicknum-chip {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Optical nudge: the boxed digit's glyph metrics sit a hair above the
+     larger label text even when geometrically centred. */
+  position: relative;
+  top: 1px;
+  min-width: 15px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-family: var(--chrome-font);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Attention is rendered inline as a .badge-dot at the tab's top-right.
@@ -339,10 +383,10 @@
 
 /* Drag-drop indicators — heavier inset rails on the leading/trailing edge,
    in the same accent so they read as "this is where the tab will land". */
-.ws-tab[data-drop='before'] {
+.ws-tab[data-drop="before"] {
   box-shadow: inset 3px 0 0 0 var(--accent);
 }
-.ws-tab[data-drop='after'] {
+.ws-tab[data-drop="after"] {
   box-shadow: inset -3px 0 0 0 var(--accent);
 }
 
@@ -350,6 +394,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: transform 90ms ease;
+}
+/* While Alt is held, slide the label right just enough to clear the number.
+   transform = visual only, so the tab never changes width; the tab's
+   overflow:hidden keeps the slid label from spilling into the next tab. */
+.ws-tab[data-quicknum="true"] .ws-tab-label {
+  transform: translateX(7px);
 }
 
 .ws-tab-editing {

@@ -353,6 +353,8 @@ export function panesScopedRoutes(deps: {
   // every pane simultaneously and "seen" applies to all of them.
   app.post('/:id/seen', async (c) => {
     const id = c.req.param('id');
+    if (!panes.getById(id))
+      return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
     try {
       await deps.ptyd.markSeen(id);
     } catch {

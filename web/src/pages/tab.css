@@ -1,3 +1,21 @@
+/* WorkspaceLayout keeps one TabView per tab mounted; only the active
+   slot is visible so xterm state survives tab switches. */
+.workspace-tabs-host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.workspace-tab-slot {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.workspace-tab-slot[hidden] {
+  display: none;
+}
+
 .workspace-root {
   display: flex;
   flex-direction: column;
@@ -93,6 +111,10 @@
   margin: 0;
 }
 
+/* No outer border on the pane — the 8px splitter between adjacent
+   panes handles separation. Adding a border here put a 1px line right
+   at the toolbar's top edge which looked like it was eating into the
+   header chrome. */
 .workspace-body .mosaic-window {
   background: var(--bg);
   border-radius: 0;
@@ -101,18 +123,11 @@
   overflow: hidden;
 }
 
-/* Sibling tiles get a 1px separator from the parent bg showing through */
-.workspace-body .mosaic-tile + .mosaic-tile {
-  /* react-mosaic uses absolute positioning per tile; nothing to set here */
-}
-
 /* Pane header — the same plate language as the top chrome, one level down.
-   Shorter (28px), darker shelf (--bg-chrome). Same two-channel idiom:
-     bottom rail (accent) = focused — "keyboard input is here"
-     top-right dot (red)  = attention — "BEL since last seen" (server emits
-                            via PaneManager diff-emit; client rendering of
-                            the per-pane dot is not wired yet — the tab-bar
-                            already shows the tab-level rollup) */
+   Shorter (28px), darker shelf (--bg-chrome). The bottom-rail accent
+   marks the focused pane ("keyboard input is here"). Per-pane attention
+   surfaces in the mobile PaneSelector and tab-level rollups; the pane
+   header itself doesn't paint a dot. */
 .workspace-body .mosaic-window-toolbar {
   position: relative;
   background: var(--bg-chrome) !important;
@@ -127,32 +142,51 @@
   transition: background 100ms ease, color 100ms ease;
 }
 
-/* Focused pane — bottom-edge accent rail plus a faint accent wash on
-   the toolbar plate. Mirrors the active-tab signal one level up: the
-   wash carries "this is where your keys go", the rail underlines it.
-   Title text lifts to --fg. The rail uses an absolutely-positioned
-   ::after on the toolbar (the !important borders prevent
-   border-bottom-color tricks). */
+/* Focused pane = vibrant toolbar + a real accent wash over the content.
+   The wash sits ON TOP of xterm via ::after on .mosaic-window-body
+   (setting `background:` on the body itself doesn't work — xterm paints
+   its own theme bg on top of it). Kept at 5% so terminal text contrast
+   stays readable. Combined with the toolbar treatment this is now a
+   genuinely "different surface," not a frame on top of one. */
 .workspace-body .mosaic-window[data-focused="true"] .mosaic-window-toolbar {
   color: var(--fg) !important;
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg-chrome)) !important;
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-chrome)) !important;
+  /* The accent rail is the ::after below — don't double up by also
+     tinting the border-bottom, which produces a slightly thicker
+     two-tone edge against the rail. */
 }
 .workspace-body .mosaic-window[data-focused="true"] .mosaic-window-toolbar::after {
-  content: "";
+  content: '';
   position: absolute;
   left: 0;
   right: 0;
   bottom: -1px;
-  height: var(--chrome-rail);
+  height: 2px;
   background: var(--accent);
   pointer-events: none;
 }
+.workspace-body .mosaic-window[data-focused="true"] .mosaic-window-body::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  pointer-events: none;
+  z-index: 4;
+}
 
-/* Per-pane attention slot: a future .badge-dot would render here, in
-   the top-right of the pane chrome. No left-edge rail — that channel
-   is reserved for the focused-pane selection rail above. The server
-   emits the signal (PaneManager diff-emit); the client doesn't paint
-   it yet. The tab-bar one level up already shows the tab-level rollup. */
+/* Unfocused panes recede via the toolbar treatment only — toolbar
+   neutralises to --bg, controls fade to 0.6 opacity. No content overlay
+   here: with the focused pane wearing the accent wash, the absence
+   of a wash IS the unfocused signal. */
+.workspace-body .mosaic-window:not([data-focused="true"]) .mosaic-window-toolbar {
+  background: var(--bg) !important;
+  color: var(--fg-faint) !important;
+}
+.workspace-body .mosaic-window:not([data-focused="true"]) .pane-chrome-typeswitch-wrap,
+.workspace-body .mosaic-window:not([data-focused="true"]) .pane-chrome-btn,
+.workspace-body .mosaic-window:not([data-focused="true"]) .pane-chrome-btn-inline {
+  opacity: 0.6;
+}
 
 .workspace-body .mosaic-window-body {
   background: var(--xterm-bg);
@@ -160,7 +194,13 @@
   overflow: hidden;
 }
 
-/* Splitter: wide enough to grab easily, with hover accent. */
+/* Splitter — visible solid bar between panes, --border for softness.
+   Two blueprint-theme defenses: (a) blueprint sets the outer hover bg
+   to `none` at specificity 0,3,0, so we match it to win; (b) it adds
+   a blue box-shadow on the inner .mosaic-split-line at hover, which
+   reads as a second blue line on top of ours — same trick suppresses
+   that. The non-blueprint hover path is unreachable today (TabView
+   hard-codes blueprintNamespace="bp4") but kept for safety. */
 .workspace-body .mosaic-split {
   background: var(--border);
   z-index: 5;
@@ -169,11 +209,17 @@
 .workspace-body .mosaic-split:hover {
   background: var(--accent);
 }
+.workspace-body .mosaic.mosaic-blueprint-theme .mosaic-split:hover {
+  background: var(--accent);
+}
+.workspace-body .mosaic.mosaic-blueprint-theme .mosaic-split:hover .mosaic-split-line {
+  box-shadow: none;
+}
 .workspace-body .mosaic-split.-row {
-  width: 6px;
+  width: 7px;
 }
 .workspace-body .mosaic-split.-column {
-  height: 6px;
+  height: 7px;
 }
 
 /* Hide react-mosaic's default toolbar bits we don't use */
@@ -265,6 +311,21 @@
 .workspace-body-mobile {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Keep every mobile pane mounted but show only the active one so xterm
+   state survives pane switches (WS stays open — no replay dance). */
+.mobile-pane-slot {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.mobile-pane-slot[hidden] {
+  display: none;
 }
 
 /* The MobileInputBar is position:fixed (so iOS Safari floats it above

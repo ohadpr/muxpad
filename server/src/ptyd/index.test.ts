@@ -386,6 +386,39 @@ describe('ptyd /pty/:id per-attach WS endpoint', () => {
     b.sock.close();
     await call('killPane', { id: 'snap1' });
   });
+
+  it('skips ring-buffer replay when ?replay=0', async () => {
+    const { socketPath, call } = await setupPtyd();
+    await call('ensurePane', {
+      spec: { id: 'norep1', shell: '/bin/cat', cwd: '/tmp' },
+    });
+    const a = await openPty(socketPath, 'norep1');
+    a.sock.send(encodeInput('marker-only-once\n'));
+    let accA = '';
+    for (let i = 0; i < 5 && !accA.includes('marker-only-once'); i++) {
+      accA += await a.nextOutput();
+    }
+    expect(accA).toContain('marker-only-once');
+    a.sock.close();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const sock = new WebSocket(`ws+unix://${socketPath}:/pty/norep1?replay=0`);
+    await new Promise<void>((resolve, reject) => {
+      sock.once('open', resolve);
+      sock.once('error', reject);
+    });
+    let gotOutput = false;
+    const onMsg = (b: Buffer) => {
+      const msg = decodeServerMessage(new Uint8Array(b));
+      if (msg.kind === 'output') gotOutput = true;
+    };
+    sock.on('message', onMsg);
+    await new Promise((r) => setTimeout(r, 200));
+    sock.off('message', onMsg);
+    expect(gotOutput).toBe(false);
+    sock.close();
+    await call('killPane', { id: 'norep1' });
+  });
 });
 
 describe('ptyd control push events', () => {

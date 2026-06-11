@@ -163,7 +163,8 @@ export async function startPtyd(opts: PtydOptions): Promise<PtydHandle> {
           ws.close(4404, 'pane not found');
           return;
         }
-        attachPty({ ws, runtime, paneId, paneSockets });
+        const replay = url.searchParams.get('replay') !== '0';
+        attachPty({ ws, runtime, paneId, paneSockets, replay });
       });
       return;
     }

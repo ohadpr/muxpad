@@ -11,16 +11,16 @@ import type { LayoutNode, PaneSpec } from '@muxpad/shared';
 import { spliceLayoutAtTarget } from '@muxpad/shared';
 import { type TabWithPanes, api } from '../api';
 import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
-import { SvgClose } from '../components/icons';
 import { MobileInputBar } from '../components/MobileInputBar';
 import { PaneSelector } from '../components/PaneSelector';
 import { UrlPane } from '../components/UrlPane';
 import { XtermPane } from '../components/XtermPane';
+import { SvgClose } from '../components/icons';
 import { subscribe, subscribeReconnect } from '../events';
-import { refreshTabs, useTabs } from '../tabs';
-import { useDocumentTitle } from '../use-document-title';
-import { useMediaQuery } from '../use-media-query';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
+import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
+import { refreshTabs, useTabs } from '../tabs';
+import { useMediaQuery } from '../use-media-query';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
 import './tab.css';
 
@@ -92,8 +92,15 @@ function collectPaneIds(layout: Layout): string[] {
   return [...collectPaneIds(layout.first as Layout), ...collectPaneIds(layout.second as Layout)];
 }
 
-export function TabView() {
-  const { wsSlug, tabSlug } = useParams({ from: '/_app/w/$wsSlug/t/$tabSlug' });
+export interface TabViewProps {
+  /** Stable slug for this instance — one TabView per tab in WorkspaceLayout. */
+  tabSlug: string;
+  /** False while the tab is mounted but hidden during a tab switch. */
+  isActive: boolean;
+}
+
+export function TabView({ tabSlug, isActive }: TabViewProps) {
+  const { wsSlug } = useParams({ from: '/_app/w/$wsSlug' });
   const navigate = useNavigate();
   const { workspaces } = useWorkspaces();
   const workspace = workspaces.find((w) => w.slug === wsSlug);
@@ -109,7 +116,7 @@ export function TabView() {
   const [closingTab, setClosingTab] = useState(false);
   const [mobileActiveId, setMobileActiveId] = useState<string | null>(null);
   const layoutRef = useRef<Layout>(null);
-  const isMobile = useMediaQuery('(max-width: 720px)');
+  const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
   // Holds the latest `addPane` function from the mobile render branch so
   // the top-level event listener below can reach it. The mobile chrome's
   // "+" button dispatches muxpad:add-pane (it lives in TabBar, outside
@@ -119,8 +126,9 @@ export function TabView() {
   // Remember which tab we're on so the next visit to /w/$wsSlug
   // restores it (see WorkspaceLayout).
   useEffect(() => {
+    if (!isActive) return;
     setLastTabSlug(wsSlug, tabSlug);
-  }, [wsSlug, tabSlug]);
+  }, [isActive, wsSlug, tabSlug]);
 
   // Persist the active pane per tab whenever it changes (mobile only —
   // desktop shows all panes via mosaic, no "active" concept).
@@ -128,6 +136,49 @@ export function TabView() {
     if (!isMobile || !tab || !mobileActiveId) return;
     setLastPaneId(tab.id, mobileActiveId);
   }, [isMobile, tab, mobileActiveId]);
+
+  // Mobile pane slots stay mounted when hidden (scroll position preserved).
+  // Focus the newly-selected pane's terminal when the active id changes.
+  useEffect(() => {
+    if (!isMobile || !tab || !isActive) return;
+    const paneIds = collectPaneIds(toMosaic(tab.layout));
+    const stored = getLastPaneId(tab.id);
+    const activeId =
+      mobileActiveId && paneIds.includes(mobileActiveId)
+        ? mobileActiveId
+        : stored && paneIds.includes(stored)
+          ? stored
+          : (paneIds[0] ?? null);
+    if (!activeId) return;
+    window.dispatchEvent(new CustomEvent('muxpad:focus-pane', { detail: { paneId: activeId } }));
+  }, [isMobile, tab, mobileActiveId, isActive]);
+
+  // Desktop: restore keyboard focus to the last-focused pane when this tab
+  // becomes active again. Panes stay mounted across tab switches, so
+  // XtermPane's mount-time autoFocus only fires on first visit — switching
+  // back to an already-mounted tab needs an explicit re-focus. We track
+  // "handled for this activation" rather than a bare false→true transition so
+  // the focus still lands if the tab's data finishes loading a beat after it
+  // became active (the source of the "doesn't happen all the time" flakiness).
+  const desktopFocusHandledRef = useRef(false);
+  useEffect(() => {
+    if (!isActive) {
+      desktopFocusHandledRef.current = false;
+      return;
+    }
+    if (isMobile || !tab || desktopFocusHandledRef.current) return;
+    const paneIds = collectPaneIds(toMosaic(tab.layout));
+    const stored = getLastPaneId(tab.id);
+    const target = stored && paneIds.includes(stored) ? stored : (paneIds[0] ?? null);
+    if (!target) return; // panes not ready yet; a later render retries
+    desktopFocusHandledRef.current = true;
+    // Defer a frame so the tab's container has flipped from hidden to visible
+    // — term.focus() on a still-`display:none` element doesn't stick.
+    const raf = requestAnimationFrame(() => {
+      window.dispatchEvent(new CustomEvent('muxpad:focus-pane', { detail: { paneId: target } }));
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [isActive, isMobile, tab]);
 
   // Forward the "+" tap from the chrome bar's TabBar (which lives in
   // AppLayout and can't reach into this component tree) to whatever
@@ -140,20 +191,52 @@ export function TabView() {
     return () => window.removeEventListener('muxpad:add-pane', onAddPane);
   }, []);
 
+  // Persist the active pane on every focus event from any XtermPane
+  // in the current tab. Desktop has no "active pane" in component
+  // state — focus lives entirely in the DOM — so we record it here so
+  // a page refresh can restore the right pane via getLastPaneId below.
+  useEffect(() => {
+    if (!tab) return;
+    const tabId = tab.id;
+    const ids = new Set(tab.panes.map((p) => p.id));
+    const onFocused = (e: Event) => {
+      const detail = (e as CustomEvent<{ paneId?: string }>).detail;
+      if (detail?.paneId && ids.has(detail.paneId)) {
+        setLastPaneId(tabId, detail.paneId);
+      }
+    };
+    window.addEventListener('muxpad:pane-focused', onFocused);
+    return () => window.removeEventListener('muxpad:pane-focused', onFocused);
+  }, [tab?.id, tab?.panes]);
+
   // Surgical mark-seen. Mobile: only the active pane (so other panes
   // can keep flagging in the dropdown). Desktop: bulk-seen because the
   // mosaic shows every pane at once — every pane is "seen" by virtue of
   // the tab being open. Fires on tab mount and on any pane switch.
   // Refreshes workspaces/tabs so the favicon + chrome dots update
   // without waiting for the 5s poll.
+  //
+  // For mobile we resolve the active pane through the same fallback
+  // chain the render branch uses (state → last-visited storage → first
+  // pane). Without this, the implicit-active pane on a fresh tab mount
+  // (mobileActiveId still null) would never get mark-seen until the
+  // user explicitly tapped it — leaving the attention dot stuck.
+  const mobileActiveResolved = (() => {
+    if (!isMobile || !tab) return null;
+    const ids = tab.panes.map((p) => p.id);
+    if (mobileActiveId && ids.includes(mobileActiveId)) return mobileActiveId;
+    const stored = getLastPaneId(tab.id);
+    if (stored && ids.includes(stored)) return stored;
+    return ids[0] ?? null;
+  })();
   useEffect(() => {
-    if (!tab || !workspace) return;
+    if (!tab || !workspace || !isActive) return;
     const refresh = () =>
       Promise.all([refreshTabs(workspace.id), refreshWorkspaces()]).catch(() => {});
     if (isMobile) {
-      if (!mobileActiveId) return;
+      if (!mobileActiveResolved) return;
       api
-        .markPaneSeen(mobileActiveId)
+        .markPaneSeen(mobileActiveResolved)
         .then(refresh)
         .catch(() => {});
     } else {
@@ -162,17 +245,24 @@ export function TabView() {
         .then(refresh)
         .catch(() => {});
     }
-  }, [tab?.id, mobileActiveId, isMobile, workspace?.id]);
+  }, [tab?.id, mobileActiveResolved, isMobile, workspace?.id, isActive]);
 
   // Title pulls the live name from the shared tabs list so renames in
   // the tab bar update the document title without a refetch here.
   const liveName = allTabs.find((t) => t.slug === tabSlug)?.name ?? tab?.name;
   const liveWorkspaceName = workspace?.name;
-  useDocumentTitle(
+  const documentTitle =
     liveWorkspaceName && liveName
       ? `${liveWorkspaceName} ⋅ ${liveName}`
-      : (liveName ?? liveWorkspaceName ?? 'muxpad'),
-  );
+      : (liveName ?? liveWorkspaceName ?? 'muxpad');
+  useEffect(() => {
+    if (!isActive) return;
+    const previous = document.title;
+    document.title = documentTitle;
+    return () => {
+      document.title = previous;
+    };
+  }, [isActive, documentTitle]);
 
   // Keep local tab.name in sync with the shared list.
   useEffect(() => {
@@ -209,16 +299,13 @@ export function TabView() {
     };
   }, []);
 
-  // Load the tab by slug once on mount/tab-change. Title / fg / attention
-  // and structural changes (pane add/remove, layout updates, kind flips)
-  // arrive via /ws/events — see the subscribe() effect below and the
-  // app-level handlers in main.tsx. There is no 5s poll anymore.
+  // Load this tab once when the TabView instance mounts. Each workspace
+  // tab gets its own instance (kept alive while hidden) so switching
+  // tabs does not tear down xterm panes. Title / fg / attention and
+  // structural changes arrive via /ws/events after the initial load.
   useEffect(() => {
     if (!workspace) return;
-    // Navigated to a new tab — reset the cascade-close placeholder so
-    // the new tab renders normally instead of stuck on "loading…".
     setClosingTab(false);
-    setTab(null);
     let viewedTabId: string | null = null;
     let cancelled = false;
     (async () => {
@@ -297,6 +384,11 @@ export function TabView() {
           ? created.id
           : splitAtPane(layoutRef.current, sourcePaneId, created.id, direction);
       layoutRef.current = newLayout;
+      // Persist the new pane as last-focused so the autoFocus gate on
+      // its mount evaluates to true (otherwise desktopFocusTarget would
+      // still resolve to the source pane and the new pane would mount
+      // without focus — surprising right after the user clicked split).
+      setLastPaneId(tab.id, created.id);
       setTab((prev) =>
         prev
           ? {
@@ -545,23 +637,34 @@ export function TabView() {
     });
   }, [tab?.id]);
 
-  if (error)
+  if (error && isActive)
     return (
       <div className="workspace-error">
         <p>{error}</p>
       </div>
     );
-  if (!tab) return <div className="workspace-loading">loading…</div>;
+  if (!tab) return isActive ? <div className="workspace-loading">loading…</div> : null;
   // While the cascade-close is in flight, render nothing instead of the
   // empty-tab CTA. The closeTab nav fires shortly after; this avoids a
   // brief flicker between "last pane gone" and "route changes".
-  if (closingTab) return <div className="workspace-loading">loading…</div>;
+  if (closingTab) return isActive ? <div className="workspace-loading">loading…</div> : null;
 
   const layout = layoutRef.current;
   const isEmpty = layout == null || layout === '';
 
-  const paneNumber = (paneId: string): number =>
-    tab.panes.findIndex((p) => p.id === paneId) + 1;
+  // Desktop autoFocus target: the persisted last-focused pane if it
+  // still exists in this tab, otherwise the first pane. Used as the
+  // single pane allowed to auto-focus on mount so a refresh doesn't
+  // hand focus to whichever pane finishes opening last.
+  const desktopFocusTarget = (() => {
+    if (isMobile || tab.panes.length === 0) return null;
+    const ids = tab.panes.map((p) => p.id);
+    const stored = getLastPaneId(tab.id);
+    if (stored && ids.includes(stored)) return stored;
+    return ids[0] ?? null;
+  })();
+
+  const paneNumber = (paneId: string): number => tab.panes.findIndex((p) => p.id === paneId) + 1;
 
   const paneLabel = (paneId: string): string => {
     const p = tab.panes.find((x) => x.id === paneId);
@@ -613,7 +716,7 @@ export function TabView() {
       await persistLayout(newLayout);
       notifyLayoutChanged();
     };
-    addPaneRef.current = () => void addPane();
+    addPaneRef.current = isActive ? () => void addPane() : null;
 
     const closeActivePane = () => {
       if (!activeId) return;
@@ -661,16 +764,31 @@ export function TabView() {
           </nav>
         )}
         <main className="workspace-body workspace-body-mobile">
-          {activeId &&
-            (() => {
-              const pane = tab.panes.find((p) => p.id === activeId);
-              if (!pane) return null;
-              return <PaneBody key={activeId} pane={pane} onExit={() => onPaneExited(activeId)} />;
-            })()}
+          {paneIds.map((paneId) => {
+            const pane = tab.panes.find((p) => p.id === paneId);
+            if (!pane) return null;
+            const paneIsActive = paneId === activeId;
+            return (
+              <div
+                key={paneId}
+                className="mobile-pane-slot"
+                hidden={!paneIsActive}
+                aria-hidden={!paneIsActive}
+              >
+                <PaneBody
+                  pane={pane}
+                  onExit={() => onPaneExited(paneId)}
+                  autoFocus={paneIsActive}
+                  paneActive={isActive && paneIsActive}
+                />
+              </div>
+            );
+          })}
         </main>
         <MobileInputBar
           paneId={activeId}
           paneKind={tab.panes.find((p) => p.id === activeId)?.kind ?? null}
+          foregroundCmd={tab.panes.find((p) => p.id === activeId)?.foreground_cmd ?? null}
         />
       </div>
     );
@@ -758,7 +876,14 @@ export function TabView() {
                     </div>
                   )}
                 >
-                  {tilePane && <PaneBody pane={tilePane} onExit={() => onPaneExited(paneId)} />}
+                  {tilePane && (
+                    <PaneBody
+                      pane={tilePane}
+                      onExit={() => onPaneExited(paneId)}
+                      autoFocus={paneId === desktopFocusTarget}
+                      paneActive={isActive}
+                    />
+                  )}
                 </MosaicWindow>
               );
             }}
@@ -786,11 +911,29 @@ export function TabView() {
  * The mosaic chrome (toolbar, splitter handles) is owned by the
  * caller — `PaneBody` is just the content.
  */
-function PaneBody({ pane, onExit }: { pane: PaneSpec; onExit: () => void }) {
+function PaneBody({
+  pane,
+  onExit,
+  autoFocus,
+  paneActive = true,
+}: {
+  pane: PaneSpec;
+  onExit: () => void;
+  autoFocus?: boolean;
+  paneActive?: boolean;
+}) {
   if (pane.kind === 'url') {
     return <UrlPane paneId={pane.id} url={pane.url} />;
   }
-  return <XtermPane paneId={pane.id} onExit={onExit} />;
+  return (
+    <XtermPane
+      paneId={pane.id}
+      onExit={onExit}
+      autoFocus={autoFocus}
+      foregroundCmd={pane.foreground_cmd ?? null}
+      paneActive={paneActive}
+    />
+  );
 }
 
 /**
@@ -1175,4 +1318,3 @@ function SvgTerminal() {
     </svg>
   );
 }
-

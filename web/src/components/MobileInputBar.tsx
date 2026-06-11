@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { api } from '../api';
-import { splitClipboard } from '../lib/clipboard-detect';
+import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
+import { isCursorAgentCmd } from '../lib/xterm-internals';
 import './MobileInputBar.css';
 
 /**
@@ -15,9 +16,16 @@ import './MobileInputBar.css';
  * needing a direct ref into the active terminal — it just knows the
  * paneId of the active pane.
  *
+ * The composer is a `contenteditable` div, NOT a <textarea>: iOS attaches
+ * its keyboard accessory bar (the "< > / Done" form-assistant strip) only
+ * to real form controls. A contenteditable element isn't a form field, so
+ * the keyboard comes up clean. We force plaintext editing and manage the
+ * content imperatively via a ref (React must not own a contenteditable's
+ * children or it fights the caret).
+ *
  * Behavior:
- *   - 1 line by default; grows up to MAX_VISIBLE_LINES as the user types
- *     or pastes; scrolls internally past that. Resets to 1 line after send.
+ *   - 1 line by default; grows up to the CSS max-height as the user types
+ *     or pastes; scrolls internally past that. Clears after send.
  *   - The Send button submits the buffer with a trailing CR so a typed
  *     command actually runs. Empty submit sends a bare CR (a blank Enter).
  *   - The special-keys row above the composer sends raw escape sequences
@@ -28,33 +36,14 @@ import './MobileInputBar.css';
 export interface MobileInputBarProps {
   paneId: string | null;
   paneKind: 'shell' | 'url' | null;
+  /** Best-effort foreground command — drives ↑/↓/End behavior. */
+  foregroundCmd?: string | null | undefined;
 }
 
-/** Cap auto-grow at ~5 lines of text before the textarea scrolls internally. */
-const MAX_VISIBLE_LINES = 5;
-/** Px per line at the composer's font-size (14px / line-height ~1.4). */
-const LINE_HEIGHT_PX = 20;
-
-export function MobileInputBar({ paneId, paneKind }: MobileInputBarProps) {
-  const [value, setValue] = useState('');
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: MobileInputBarProps) {
+  const cursorBufferScroll = isCursorAgentCmd(foregroundCmd);
+  const editableRef = useRef<HTMLDivElement | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
-
-  // Auto-grow: reset to auto so scrollHeight reflects content (not the
-  // previous explicit height), then clamp to MAX_VISIBLE_LINES.
-  const autoResize = () => {
-    const ta = textareaRef.current;
-    if (!ta) return;
-    ta.style.height = 'auto';
-    const cap = LINE_HEIGHT_PX * MAX_VISIBLE_LINES;
-    ta.style.height = `${Math.min(ta.scrollHeight, cap)}px`;
-  };
-
-  // Shrink back to 1 line after the parent swaps the active pane or
-  // after a send clears the value.
-  useEffect(() => {
-    autoResize();
-  }, [value]);
 
   // Anchor the bar's bottom edge to the visual viewport bottom (= top
   // of the on-screen keyboard when open). We position by `top`, not by
@@ -151,16 +140,63 @@ export function MobileInputBar({ paneId, paneKind }: MobileInputBarProps) {
     );
   };
 
-  // Image paste: textareas don't natively accept image clipboard data —
-  // we have to intercept paste, upload the blob to muxpad's attachments
-  // endpoint, and splice the returned path into the textarea so the
-  // user can add context before sending. Mirrors the XtermPane paste
-  // handler so behavior matches between desktop xterm and mobile composer.
-  const onPaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+  const scrollBuffer = (lines: number) => {
+    if (!paneId) return;
+    window.dispatchEvent(new CustomEvent('muxpad:scroll-buffer', { detail: { paneId, lines } }));
+  };
+
+  const scrollBufferBottom = () => {
+    if (!paneId) return;
+    window.dispatchEvent(
+      new CustomEvent('muxpad:scroll-buffer', { detail: { paneId, toBottom: true } }),
+    );
+  };
+
+  // Toggle the empty state so the CSS :before placeholder shows/hides.
+  // Driven off textContent (not :empty) so a stray <br> the browser may
+  // leave behind doesn't keep the placeholder hidden on an empty field.
+  const syncEmpty = () => {
+    const el = editableRef.current;
+    if (el) el.classList.toggle('is-empty', (el.textContent ?? '').length === 0);
+  };
+
+  const insertAtCaret = (text: string) => {
+    const el = editableRef.current;
+    if (!el) return;
+    el.focus();
+    // This runs after an await (image upload), by which point the prior
+    // caret/selection may be gone (blur, context-menu paste). Collapse the
+    // selection to the end of the field so the inserted path lands
+    // predictably instead of at position 0 / nowhere.
+    const sel = window.getSelection();
+    if (sel) {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+    // execCommand('insertText') respects the caret/selection and undo stack
+    // in a contenteditable; fall back to append if unavailable.
+    if (!document.execCommand('insertText', false, text)) {
+      el.textContent = (el.textContent ?? '') + text;
+    }
+    syncEmpty();
+  };
+
+  // Image paste: text fields don't natively accept image clipboard data —
+  // intercept paste, upload the blob to muxpad's attachments endpoint, and
+  // splice the returned path in at the caret so the user can add context
+  // before sending. Plain-text pastes fall through to the contenteditable's
+  // own plaintext-only handling. Mirrors the XtermPane paste handler.
+  const onPaste = async (e: React.ClipboardEvent<HTMLDivElement>) => {
     if (!paneId) return;
     const { imageOnly, imageItems } = splitClipboard(e.clipboardData);
-    if (imageItems.length === 0) return; // plain text → textarea handles it
+    if (imageItems.length === 0) return; // plain text → contenteditable handles it
     e.preventDefault();
+    // Read the text portion now — clipboardData is cleared once this handler
+    // returns / awaits.
+    const tail = imageOnly ? '' : companionTextForImagePaste(e.clipboardData.getData('text/plain'));
     const paths: string[] = [];
     for (const item of imageItems) {
       const blob = item.getAsFile();
@@ -174,35 +210,21 @@ export function MobileInputBar({ paneId, paneKind }: MobileInputBarProps) {
       }
     }
     if (paths.length === 0) return;
-    // Splice paths into the textarea content at the caret. Preserve any
-    // text portion of the paste (clipboard can carry both) after the path.
-    const ta = textareaRef.current;
-    const start = ta?.selectionStart ?? value.length;
-    const end = ta?.selectionEnd ?? value.length;
-    const pasted = paths.join(' ') + ' ';
-    const tail = imageOnly ? '' : e.clipboardData.getData('text/plain');
-    const before = value.slice(0, start);
-    const after = value.slice(end);
-    setValue(`${before}${pasted}${tail}${after}`);
+    insertAtCaret(`${paths.join(' ')} ${tail}`);
   };
 
   const submit = () => {
-    // Read straight from the DOM, not React state: iOS predictive text and
-    // composition events can land a final keystroke between the last
-    // onChange and our click handler, leaving `value` one tick behind the
-    // textarea's true contents.
-    const current = textareaRef.current?.value ?? value;
-    // Send text and CR as two separate events. Empirically the CR was
-    // sometimes "missing" when appended to text on iOS — text would land
-    // at the prompt but Claude wouldn't submit. Splitting them guarantees
-    // the CR gets its own dispatch / WS frame and can't get lost in the
-    // same iOS keyboard-dismiss tick as the text.
-    if (current.length > 0) send(current);
-    // Always end with a bare CR — empty submit = blank Enter at the prompt,
-    // useful to refresh a prompt or kick a TUI out of input mode.
-    send('\r');
-    setValue('');
-    // useEffect on [value] resets the textarea height on next tick.
+    const el = editableRef.current;
+    const current = el?.textContent ?? '';
+    // One WS frame for text+CR avoids an intermediate TUI render between
+    // "text at prompt" and "submitted" that can jerk Ink scroll position.
+    // Empty submit = bare CR (blank Enter at the prompt).
+    send(current.length > 0 ? `${current}\r` : '\r');
+    if (el) {
+      el.textContent = '';
+      el.focus(); // keep the keyboard up for the next command
+      syncEmpty();
+    }
   };
 
   return (
@@ -217,31 +239,23 @@ export function MobileInputBar({ paneId, paneKind }: MobileInputBarProps) {
         <button
           type="button"
           className="mobile-input-key"
-          onClick={() => send('\x1b[A')}
-          aria-label="Up"
+          onClick={() => (cursorBufferScroll ? scrollBuffer(-8) : send('\x1b[A'))}
+          aria-label={cursorBufferScroll ? 'Scroll up' : 'Up'}
         >
           ↑
         </button>
         <button
           type="button"
           className="mobile-input-key"
-          onClick={() => send('\x1b[B')}
-          aria-label="Down"
+          onClick={() => (cursorBufferScroll ? scrollBuffer(8) : send('\x1b[B'))}
+          aria-label={cursorBufferScroll ? 'Scroll down' : 'Down'}
         >
           ↓
         </button>
         <button
           type="button"
           className="mobile-input-key"
-          onClick={() => {
-            // Wheel events get coalesced by most TUIs into one scroll-
-            // increment-per-render-frame, so a burst of wheels only
-            // scrolls one page max. Page-Down is the keystroke
-            // equivalent — each is processed independently and jumps a
-            // whole screen. 50 is enough to clear any reasonable
-            // session's scroll buffer.
-            send('\x1b[6~'.repeat(50));
-          }}
+          onClick={() => (cursorBufferScroll ? scrollBufferBottom() : send('\x1b[6~'.repeat(50)))}
           aria-label="Jump to bottom"
         >
           End
@@ -256,22 +270,21 @@ export function MobileInputBar({ paneId, paneKind }: MobileInputBarProps) {
         </button>
       </div>
       <div className="mobile-input-row">
-        <textarea
-          ref={textareaRef}
-          className="mobile-input-textarea"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
+        {/* contenteditable, not <textarea>: keeps iOS's keyboard accessory
+            bar off (it only attaches to real form controls). plaintext-only
+            forces plain text + a sane paste model. */}
+        <div
+          ref={editableRef}
+          className="mobile-input-editable is-empty"
+          contentEditable="plaintext-only"
+          suppressContentEditableWarning
+          role="textbox"
+          tabIndex={0}
+          aria-multiline="true"
+          aria-label="Send to pane"
+          data-placeholder="Send to pane…"
+          onInput={syncEmpty}
           onPaste={onPaste}
-          placeholder="Send to pane…"
-          rows={1}
-          // Keep iOS autocorrect / autocapitalize / spellcheck ON — the
-          // composer is for natural-language input to Claude (and any
-          // TUI that accepts prose). autoComplete stays off since this
-          // isn't a form field that should suggest from history.
-          autoComplete="off"
-          // iOS won't show a submit affordance on a textarea's Return key;
-          // Return inserts a newline, which is what we want for paste /
-          // multi-line composition. Send button is the only submitter.
         />
         <button type="button" className="mobile-input-send" onClick={submit} aria-label="Send">
           Send

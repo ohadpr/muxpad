@@ -220,15 +220,17 @@ export class PaneRuntime extends EventEmitter {
   }
 
   write(data: string): void {
+    this.process?.write(data);
     if (this.needsAttention) {
       this.needsAttention = false;
       // Emit on the true→false transition so the manager broadcasts the
       // clear immediately. Symmetric with the false→true emit in onData;
       // without this the cleared state would wait for the next cmd-poll
       // tick (~10s) to reach the cache and the UI dot would linger.
+      // Emitted AFTER the PTY write so "attention cleared" implies the
+      // user input actually reached the shell.
       this.emit('attention-changed', false);
     }
-    this.process?.write(data);
   }
 
   /** True iff this pane has rung BEL since the user last interacted with it. */

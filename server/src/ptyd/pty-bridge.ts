@@ -7,6 +7,7 @@ import {
   encodeExit,
   encodeError,
   encodePong,
+  inkReplayPayload,
 } from '@muxpad/shared';
 import type { PaneRuntime } from '../runtime/PaneRuntime.js';
 
@@ -34,8 +35,15 @@ export function attachPty(opts: {
   runtime: PaneRuntime;
   paneId: string;
   paneSockets: Map<string, Set<WebSocket>>;
+  /**
+   * When false, skip the ring-buffer snapshot on attach. Used when the
+   * browser reconnects to an xterm that already has the session painted —
+   * replaying would duplicate output and jerk Ink TUIs to the bottom.
+   * Fresh mounts (new tab / page reload) must leave this true (default).
+   */
+  replay?: boolean | undefined;
 }): void {
-  const { ws, runtime, paneId, paneSockets } = opts;
+  const { ws, runtime, paneId, paneSockets, replay = true } = opts;
 
   // Bucket the socket by paneId so a future closePtyClients RPC (Task 2.5)
   // can iterate every attachment for a given pane and force-close them.
@@ -62,10 +70,14 @@ export function attachPty(opts: {
     if (ws.readyState === WS.OPEN) ws.send(frame);
   };
 
-  // Replay ring buffer so reconnecting clients see their backlog before
-  // any new output streams in.
-  const snapshot = runtime.snapshot();
-  if (snapshot.length) send(encodeOutput(snapshot));
+  // Replay ring buffer so fresh clients see their backlog before any new
+  // output streams in. Reconnecting clients that kept their xterm instance
+  // pass replay=false (?replay=0) to avoid duplicating output.
+  if (replay) {
+    const snapshot = runtime.snapshot();
+    const payload = inkReplayPayload(snapshot);
+    if (payload.length) send(encodeOutput(payload));
+  }
 
   const onOutput = (data: string) => send(encodeOutput(data));
   const onExit = (code: number) => {

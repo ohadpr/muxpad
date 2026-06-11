@@ -76,11 +76,10 @@ export function workspacesRoutes(deps: {
   });
 
   /**
-   * Refuses to delete a workspace that still has tabs. Clients are
-   * expected to drain the workspace first (close tabs in the UI, or
-   * `muxpad tab delete` per tab, etc.) — the WorkspaceLayout empty-
-   * state UI's "Close workspace" button only renders when the count
-   * has already reached zero.
+   * Cascades tabs → panes → workspace. See inline comment below for
+   * which events are emitted and why. The previous 409 "drain first"
+   * model was replaced when mobile's merged workspace+tab switcher
+   * needed a single delete-folder action.
    */
   app.delete('/:id', async (c) => {
     const id = c.req.param('id');
@@ -90,12 +89,20 @@ export function workspacesRoutes(deps: {
         { error: { code: 'not_found', message: 'workspace not found' } },
         404,
       );
-    // Cascade: kill panes, then drop tabs, then drop the workspace.
+    // Cascade: kill panes, drop tabs, then drop the workspace. Pane
+    // rows fall out via the ON DELETE CASCADE FK on tabs; the explicit
+    // tabs.delete() per tab is what lets us emit a per-tab tab.removed
+    // event (so any open TabView routes itself away). Clients infer
+    // the cascade-pane removals from tab.removed; we intentionally do
+    // not emit per-pane events here, matching the single-tab DELETE
+    // path in routes/tabs.ts.
+    //
     // Was a 409 "drain first" before — fine for the desktop UX where
     // tabs close one by one, but mobile's merged switcher expects a
     // "delete folder" semantic and there's no clean way to drain from
-    // there. Doing the cascade here removes the race window the client
-    // hit when issuing parallel tab-deletes before the workspace-delete.
+    // there. Doing the cascade here also removes the race window the
+    // client hit when issuing parallel tab-deletes before the
+    // workspace-delete.
     for (const t of tabs.listByWorkspace(id)) {
       for (const p of panes.listByTab(t.id)) {
         try {

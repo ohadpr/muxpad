@@ -6,6 +6,11 @@ export interface ProxyAttachOptions {
   /** Pane id; becomes the `/pty/<id>` path on ptyd. */
   paneId: string;
   /**
+   * Forward ring-buffer replay on attach. False when the browser client
+   * reconnects with an intact xterm (see `?replay=0` on /ws/pane/:id).
+   */
+  replay?: boolean | undefined;
+  /**
    * The browser-facing WS. Already OPEN (the caller is the upgrade handler
    * that just `handleUpgrade`'d the inbound request). proxyAttach does NOT
    * close this on construction failure — failures emerge via the 'close'
@@ -44,8 +49,9 @@ export interface ProxyAttachHandle {
  * to change.
  */
 export function proxyAttach(opts: ProxyAttachOptions): ProxyAttachHandle {
-  const { socketPath, paneId, browser } = opts;
-  const ptyd = new WebSocket(`ws+unix://${socketPath}:/pty/${paneId}`);
+  const { socketPath, paneId, browser, replay = true } = opts;
+  const replayQ = replay ? '' : '?replay=0';
+  const ptyd = new WebSocket(`ws+unix://${socketPath}:/pty/${paneId}${replayQ}`);
   // ptyd sends binary frames; match the default behavior of the existing
   // /ws/pane/:id endpoint so .send forwards Buffers verbatim without any
   // text conversion on either side.

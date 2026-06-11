@@ -5,7 +5,6 @@ import {
   Outlet,
 } from '@tanstack/react-router';
 import { RootRedirect } from './pages/RootRedirect';
-import { TabView } from './pages/TabView';
 import { PopoutView } from './pages/PopoutView';
 import { AppLayout } from './components/AppLayout';
 import { WorkspaceLayout } from './components/WorkspaceLayout';
@@ -37,11 +36,13 @@ const workspaceLayoutRoute = createRoute({
   component: WorkspaceLayout,
 });
 
-// /w/$wsSlug/t/$tabSlug — the actual tab view (panes etc.).
+// /w/$wsSlug/t/$tabSlug — URL segment only. TabView instances are
+// mounted by WorkspaceLayout (one per tab, hidden when inactive) so
+// xterm / Ink scroll state survives tab switches.
 const tabRoute = createRoute({
   getParentRoute: () => workspaceLayoutRoute,
   path: 't/$tabSlug',
-  component: TabView,
+  component: () => null,
 });
 
 // Pane popout — outside the app layout, renders chromeless.

@@ -374,9 +374,24 @@ select:focus {
 .app-layout > .ws-tabbar {
   flex: 0 0 auto;
 }
-.app-layout > .workspace-root {
+.app-layout > .workspace-root,
+.app-layout > .workspace-tabs-host,
+.app-layout > .workspace-hosts {
   flex: 1;
   min-height: 0;
+}
+.app-layout > .workspace-hosts {
+  display: flex;
+  flex-direction: column;
+}
+.workspace-host-slot {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.workspace-host-slot[hidden] {
+  display: none;
 }
 
 /* Brand (logo + wordmark) — a plate on the chrome board. Same height as
