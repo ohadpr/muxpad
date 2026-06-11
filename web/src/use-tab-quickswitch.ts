@@ -1,11 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 
-// How long Option/Alt must be held *alone* (no other key) before the tab
-// number badges appear. Short enough to feel responsive, long enough that an
-// incidental Alt chord (Alt+letter for a TUI Meta binding, etc.) doesn't flash
-// the overlay.
-const HOLD_MS = 300;
-
 /**
  * Map a pressed digit (1–9) to a tab index, or null if there's no such tab.
  * Pure — unit-tested. Badges/shortcuts only cover the first 9 tabs; beyond
@@ -19,6 +13,8 @@ export function quickSwitchIndex(digit: number, tabCount: number): number | null
 /**
  * Tab quick-switch: hold Option/Alt to reveal "1…9" badges on the tabs, then
  * Alt+<n> to jump to that tab. Returns whether the badges should be shown.
+ * Badges appear the instant Alt goes down and stay up — through repeated
+ * Alt+<n> switches — until Alt is released (or the window blurs).
  *
  * Why Alt (not Cmd or Ctrl): in a browser tab Cmd+number is owned by the
  * browser (switches browser tabs), and Ctrl+number has real terminal meaning
@@ -37,64 +33,39 @@ export function useTabQuickSwitch(opts: {
   onSwitchRef.current = opts.onSwitch;
 
   useEffect(() => {
-    let holdTimer: number | null = null;
-    let armed = false; // Alt is down and nothing else has been pressed yet
-
-    const clearHold = () => {
-      if (holdTimer !== null) {
-        window.clearTimeout(holdTimer);
-        holdTimer = null;
-      }
-    };
-    const hide = () => {
-      clearHold();
-      armed = false;
-      setShowNumbers(false);
-    };
-
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Alt') {
-        // Arm only on a fresh Alt press with no other modifier held.
-        if (e.repeat || e.metaKey || e.ctrlKey) return;
-        armed = true;
-        clearHold();
-        holdTimer = window.setTimeout(() => {
-          holdTimer = null;
-          if (armed) setShowNumbers(true);
-        }, HOLD_MS);
+        // Show instantly on Alt-down (Alt is free of browser/terminal meaning
+        // here, so no hold delay). Ignore when chorded with Cmd/Ctrl.
+        if (!e.repeat && !e.metaKey && !e.ctrlKey) setShowNumbers(true);
         return;
       }
       // Not our chord unless Alt is currently held.
       if (!e.altKey) return;
-      // Alt + digit → switch. Capture-phase preventDefault keeps it out of the
-      // focused terminal.
+      // Alt + digit: swallow before the focused terminal sees it, then switch.
+      // Keep the badges up — the user may fire several Alt+<n> in a row while
+      // Alt stays held; they only disappear on Alt-up.
       if (!e.metaKey && !e.ctrlKey && /^Digit[1-9]$/.test(e.code)) {
+        e.preventDefault();
+        e.stopPropagation();
         const idx = quickSwitchIndex(Number(e.code.slice(5)), tabCountRef.current);
-        if (idx !== null) {
-          e.preventDefault();
-          e.stopPropagation();
-          onSwitchRef.current(idx);
-        }
-        hide();
+        if (idx !== null) onSwitchRef.current(idx);
         return;
       }
-      // Alt + some other key (e.g. a TUI Meta binding) — the user isn't
-      // quick-switching; drop the overlay and let the key through untouched.
-      armed = false;
-      clearHold();
+      // Alt + some other key (e.g. a TUI Meta binding) — not a quick-switch;
+      // drop the overlay and let the key through untouched.
       setShowNumbers(false);
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'Alt') hide();
+      if (e.key === 'Alt') setShowNumbers(false);
     };
-    const onBlur = () => hide();
+    const onBlur = () => setShowNumbers(false);
 
     window.addEventListener('keydown', onKeyDown, { capture: true });
     window.addEventListener('keyup', onKeyUp, { capture: true });
     window.addEventListener('blur', onBlur);
     return () => {
-      clearHold();
       window.removeEventListener('keydown', onKeyDown, { capture: true });
       window.removeEventListener('keyup', onKeyUp, { capture: true });
       window.removeEventListener('blur', onBlur);
