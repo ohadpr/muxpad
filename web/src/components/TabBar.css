@@ -359,6 +359,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* Optical nudge: the boxed digit's glyph metrics sit a hair above the
+     larger label text even when geometrically centred. */
+  position: relative;
+  top: 1px;
   min-width: 15px;
   height: 16px;
   padding: 0 3px;
