@@ -280,10 +280,9 @@
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: 0;
+  gap: 8px;
   height: 100%;
   padding: 0 14px;
-  overflow: hidden;
   border: none;
   border-right: 1px solid var(--border);
   background: transparent;
@@ -332,28 +331,24 @@
 }
 
 /* Quick-switch number: shown on each tab while Option/Alt is held so the user
-   can see the Alt+<n> mapping. A subtle inline number tucked at the tab's left
-   edge — no chip, no overlay. When shown we trim the (generous 14px) right
-   padding down to 3px, which offsets the number's width: the title gets pushed
-   right just enough to clear the number while the tab's overall width barely
-   changes and the title never spills into its neighbour. The notif dot is
-   pushed to the same tight right edge. */
+   can see the Alt+<n> mapping. It sits in the tab's existing left padding and
+   is absolutely positioned, so it adds NO layout — the title never moves and
+   the tab never changes width when the numbers appear/disappear. Accent +
+   bold so it reads as a distinct affordance (not a chip / not an overlay over
+   the label — the label keeps its own space to the right). */
 .ws-tab-quicknum {
-  flex: 0 0 auto;
-  margin-right: 5px;
-  color: var(--fg-dim);
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  color: var(--accent);
   font-family: var(--chrome-font);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
-}
-.ws-tab[data-quicknum="true"] {
-  padding-right: 3px;
-}
-.ws-tab[data-quicknum="true"] .badge-dot {
-  right: 3px;
 }
 
 /* Attention is rendered inline as a .badge-dot at the tab's top-right.
@@ -371,8 +366,6 @@
 }
 
 .ws-tab-label {
-  flex: 1;
-  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

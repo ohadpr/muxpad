@@ -270,7 +270,6 @@ function TabItem({
       className="ws-tab"
       data-active={isActive}
       data-drop={dropSide}
-      data-quicknum={quickNumber !== undefined ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
       draggable
       onDragStart={onDragStart}
