@@ -331,22 +331,35 @@
 }
 
 /* Quick-switch number badge: shown on each tab while Option/Alt is held so
-   the user can see the Alt+<n> mapping. Absolutely positioned to OVERLAY the
-   tab (inset:0) rather than sit inline — that way revealing the numbers never
-   changes a tab's width or reflows the bar. A translucent accent scrim lets
-   the label ghost through behind the bold centred number. */
+   the user can see the Alt+<n> mapping. A small accent chip pinned to the
+   tab's left edge; the label slides aside via `transform` (visual only — no
+   reflow) to make room, so revealing the numbers never changes a tab's width
+   and never covers the label. */
+.ws-tab-label {
+  transition: transform 90ms ease;
+}
+.ws-tab[data-quicknum='true'] .ws-tab-label {
+  transform: translateX(20px);
+}
 .ws-tab-quicknum {
   position: absolute;
-  inset: 0;
+  left: 6px;
+  top: 50%;
+  transform: translateY(-50%);
   z-index: 2;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: color-mix(in srgb, var(--accent) 30%, transparent);
-  color: var(--fg);
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: var(--accent-fg);
   font-family: var(--chrome-font);
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
