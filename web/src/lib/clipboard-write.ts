@@ -24,6 +24,13 @@ export async function writeClipboard(text: string): Promise<boolean> {
   // Legacy fallback: execCommand('copy') from a hidden textarea. Works in
   // non-secure contexts where navigator.clipboard is unavailable.
   if (typeof document === 'undefined') return false;
+  // Save the element that currently owns focus so we can restore it after
+  // .select() steals focus to our hidden textarea. Without this, anything
+  // typing into xterm (which is just a focused textarea) loses focus the
+  // moment a TUI emits OSC 52 — and xterm's ClipboardAddon routes OSC 52
+  // through here. That bug surfaces as the focused pane silently going
+  // inactive whenever a shell/TUI writes to the clipboard.
+  const prevActive = document.activeElement as HTMLElement | null;
   const ta = document.createElement('textarea');
   ta.value = text;
   // Keep it out of view and out of layout flow, but still selectable.
@@ -41,6 +48,15 @@ export async function writeClipboard(text: string): Promise<boolean> {
     return false;
   } finally {
     document.body.removeChild(ta);
+    // Restore focus to whatever element had it before. focus() is a no-op
+    // if the element is no longer focusable or has been removed from DOM.
+    if (prevActive && typeof prevActive.focus === 'function') {
+      try {
+        prevActive.focus({ preventScroll: true });
+      } catch {
+        // ignore — element may have been disposed mid-write
+      }
+    }
   }
 }
 

@@ -27,6 +27,10 @@ const muxpadVersion: string = (() => {
 // Defaults match the original hardcoded values.
 const webPort = Number(process.env.MUXPAD_WEB_PORT ?? 5173);
 const serverPort = Number(process.env.MUXPAD_PORT ?? 7777);
+const apiProxy = {
+  '/api': `http://127.0.0.1:${serverPort}`,
+  '/ws': { target: `ws://127.0.0.1:${serverPort}`, ws: true },
+};
 
 export default defineConfig({
   define: {
@@ -35,14 +39,14 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: webPort,
-    // Accept Tailscale MagicDNS hostnames (anything ending in .ts.net) in
-    // addition to the default localhost / IP allowlist. Without this, vite
-    // rejects requests with "Blocked request. This host is not allowed."
-    // when reaching the dev server via e.g. https://your-machine.tail-xxxx.ts.net.
+    // Tailscale MagicDNS hostnames (*.ts.net) otherwise hit vite's
+    // "Blocked request. This host is not allowed." guard when accessing the
+    // dev server over the tailnet.
     allowedHosts: ['.ts.net'],
-    proxy: {
-      '/api': `http://localhost:${serverPort}`,
-      '/ws': { target: `ws://localhost:${serverPort}`, ws: true },
-    },
+    proxy: apiProxy,
+  },
+  preview: {
+    port: webPort,
+    proxy: apiProxy,
   },
 });

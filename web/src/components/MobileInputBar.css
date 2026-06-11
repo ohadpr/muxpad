@@ -78,35 +78,38 @@
   gap: 6px;
 }
 
-.mobile-input-textarea {
+/* contenteditable composer (see MobileInputBar.tsx for why it's not a
+   <textarea>). Grows with content from the 32px floor up to max-height,
+   then scrolls internally. */
+.mobile-input-editable {
   flex: 1;
   min-height: 32px;
-  /* height is set imperatively by autoResize() so it grows with content;
-     this is just the floor / initial value. */
-  height: 32px;
   max-height: 100px;
-  resize: none;
+  box-sizing: border-box;
   background: var(--bg-elev);
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 5px 10px;
-  /* Stay >=16px so iOS doesn't auto-zoom the page when the input gets
+  /* Stay >=16px so iOS doesn't auto-zoom the page when the field gets
      focus — anything smaller and Safari "helps" by zooming in. */
   font-size: 16px;
   line-height: 1.4;
   font-family: var(--chrome-font);
   outline: none;
-  /* Word-wrap behavior: standard wrap, no overflow scroll-x. */
   white-space: pre-wrap;
-  word-wrap: break-word;
+  word-break: break-word;
   overflow-y: auto;
 }
-.mobile-input-textarea:focus {
+.mobile-input-editable:focus {
   border-color: var(--accent);
 }
-.mobile-input-textarea::placeholder {
+/* Placeholder: generated content while empty (toggled via .is-empty in JS
+   off textContent, so a stray <br> can't keep it hidden). */
+.mobile-input-editable.is-empty::before {
+  content: attr(data-placeholder);
   color: var(--fg-faint);
+  pointer-events: none;
 }
 
 .mobile-input-send {

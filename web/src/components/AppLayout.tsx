@@ -1,4 +1,6 @@
 import { Outlet, useRouterState } from '@tanstack/react-router';
+import { useEffect, useState } from 'react';
+import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { useMediaQuery } from '../use-media-query';
 import { useWindowAttention } from '../use-window-attention';
 import { useWorkspaces } from '../workspaces';
@@ -6,6 +8,7 @@ import { Brand } from './Brand';
 import { MobileNavSwitcher } from './MobileNavSwitcher';
 import { SettingsMenu } from './SettingsMenu';
 import { TabBar } from './TabBar';
+import { WorkspaceShell } from './WorkspaceLayout';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 
 // Cross-workspace attention is surfaced exclusively on the WorkspaceSwitcher
@@ -30,19 +33,23 @@ export function AppLayout() {
   // workspace's tab list, so a browser tab parked on Workspace A still
   // shows the bell when Workspace B has activity.
   useWindowAttention(workspaces);
-  const activeWorkspace = wsSlug
-    ? workspaces.find((w) => w.slug === wsSlug)
-    : null;
-  const isMobile = useMediaQuery('(max-width: 720px)');
+  const activeWorkspace = wsSlug ? workspaces.find((w) => w.slug === wsSlug) : null;
+  const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
+  const [visitedWsSlugs, setVisitedWsSlugs] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    if (!wsSlug) return;
+    setVisitedWsSlugs((prev) => {
+      if (prev.has(wsSlug)) return prev;
+      const next = new Set(prev);
+      next.add(wsSlug);
+      return next;
+    });
+  }, [wsSlug]);
 
   return (
     <div className="app-layout">
       <header className="ws-tabbar">
-        <Brand
-          asLink={true}
-          responsive={true}
-          markOnly={!!activeWorkspace}
-        />
+        <Brand asLink={true} responsive={true} markOnly={!!activeWorkspace} />
         {activeWorkspace && isMobile && (
           // Single merged trigger on mobile: workspace + tab in a tree
           // dropdown. Replaces WorkspaceSwitcher + TabBar for thumb-
@@ -74,7 +81,22 @@ export function AppLayout() {
         </a>
         <SettingsMenu />
       </header>
-      <Outlet />
+      {wsSlug ? (
+        <div className="workspace-hosts">
+          {[...visitedWsSlugs].map((slug) => (
+            <div
+              key={slug}
+              className="workspace-host-slot"
+              hidden={slug !== wsSlug}
+              aria-hidden={slug !== wsSlug}
+            >
+              <WorkspaceShell wsSlug={slug} isActive={slug === wsSlug} />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <Outlet />
+      )}
     </div>
   );
 }
