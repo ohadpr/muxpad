@@ -1,48 +1,55 @@
-import { useEffect } from 'react';
-import { Outlet, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
+import { useEffect, useState } from 'react';
+import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { refreshTabs, useTabs } from '../tabs';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
 import { api } from '../api';
 import { getLastTabSlug } from '../lib/last-visited';
+import { TabView } from '../pages/TabView';
+
+export interface WorkspaceShellProps {
+  wsSlug: string;
+  isActive: boolean;
+}
 
 /**
- * Parent route for `/w/$wsSlug`. Two behaviors:
- *
- *   1. When the URL is just `/w/$wsSlug` (no tab), redirect to the first
- *      tab in the workspace.
- *   2. When the workspace has no tabs, render an empty-state UI with
- *      "+ New tab" / "or close this workspace" — workspaces never
- *      disappear implicitly anymore; the user closes them explicitly.
- *
- * The Outlet renders the active tab's TabView.
+ * One workspace's tab host. Mounted by AppLayout for every visited
+ * workspace (hidden when inactive) so xterm state survives workspace
+ * switches as well as tab switches.
  */
-export function WorkspaceLayout() {
-  const { wsSlug } = useParams({ from: '/_app/w/$wsSlug' });
+export function WorkspaceShell({ wsSlug, isActive }: WorkspaceShellProps) {
   const navigate = useNavigate();
   const { workspaces } = useWorkspaces();
   const workspace = workspaces.find((w) => w.slug === wsSlug);
   const { tabs } = useTabs(workspace?.id ?? '');
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const isExactWorkspacePath = pathname === `/w/${wsSlug}`;
+  const urlTabSlug =
+    isActive && pathname.startsWith(`/w/${wsSlug}/t/`)
+      ? (pathname.match(/^\/w\/[^/]+\/t\/([^/]+)/)?.[1] ?? null)
+      : null;
+  const [lastTabSlug, setLastTabSlug] = useState<string | null>(null);
+  const shownTabSlug = urlTabSlug ?? lastTabSlug;
 
-  // Redirect to the first tab when the URL has no tab segment. Preserve
-  // search params (e.g. ?debug=1) — otherwise visiting /w/foo from /
-  // would drop them on the way to /w/foo/t/bar.
-  //
-  // Defensive: only redirect when the tabs cache and workspaces cache
-  // agree on the count. Otherwise we may be mid-mutation (e.g. just
-  // deleted the last tab and `tabs` is stale from a not-yet-flushed
-  // setState) and would bounce the user right back to the tab they're
-  // trying to leave. Both caches refresh on tab.added/tab.removed
-  // events, so this guard resolves within one round trip.
   useEffect(() => {
-    if (!workspace) return;
+    if (urlTabSlug) setLastTabSlug(urlTabSlug);
+  }, [urlTabSlug]);
+
+  const [visitedTabSlugs, setVisitedTabSlugs] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    if (!urlTabSlug) return;
+    setVisitedTabSlugs((prev) => {
+      if (prev.has(urlTabSlug)) return prev;
+      const next = new Set(prev);
+      next.add(urlTabSlug);
+      return next;
+    });
+  }, [urlTabSlug]);
+
+  useEffect(() => {
+    if (!isActive || !workspace) return;
     if (!isExactWorkspacePath) return;
     if (tabs.length === 0) return;
     if (tabs.length !== workspace.tab_count) return;
-    // Prefer the last tab the user was on in this workspace; fall back to
-    // the first tab. The stored slug is only used if the tab still exists
-    // (workspace may have shrunk since the last visit).
     const storedSlug = getLastTabSlug(wsSlug);
     const target = (storedSlug && tabs.find((t) => t.slug === storedSlug)) || tabs[0]!;
     const search = Object.fromEntries(
@@ -54,29 +61,18 @@ export function WorkspaceLayout() {
       search,
       replace: true,
     });
-  }, [workspace, tabs, isExactWorkspacePath, wsSlug, navigate]);
+  }, [isActive, workspace, tabs, isExactWorkspacePath, wsSlug, navigate]);
 
-  // While `workspace` is undefined we render the same loading
-  // placeholder regardless of whether the slug genuinely doesn't exist
-  // or whether the workspaces list just hasn't loaded yet. Avoids a
-  // visible "Workspace not found." flash during cascade-close /
-  // navigation, where the workspace momentarily disappears from the
-  // refreshed list before the route changes.
   if (!workspace) {
-    return <div className="workspace-loading">loading…</div>;
+    return isActive ? <div className="workspace-loading">loading…</div> : null;
   }
 
-  // Empty workspace at /w/$wsSlug — either freshly created (CLI / UI)
-  // or just drained (last tab closed → TabView navigates here). Either
-  // way the user gets the same affordance: populate or close. We never
-  // auto-delete workspaces anymore.
-  //
-  // The tab_count guard prevents the empty UI from flickering during
-  // initial load when useTabs() hasn't fetched yet but the workspace
-  // actually has tabs. The 'tab.added'/'tab.removed' event handlers in
-  // main.tsx call refreshWorkspaces() so tab_count stays current after
-  // any tab mutation.
-  if (isExactWorkspacePath && tabs.length === 0 && workspace.tab_count === 0) {
+  if (
+    isActive &&
+    isExactWorkspacePath &&
+    tabs.length === 0 &&
+    workspace.tab_count === 0
+  ) {
     return (
       <div className="workspace-empty">
         <p>{workspace.name} has no tabs yet.</p>
@@ -118,5 +114,31 @@ export function WorkspaceLayout() {
     );
   }
 
-  return <Outlet />;
+  if (!shownTabSlug) {
+    return isActive ? <div className="workspace-loading">loading…</div> : null;
+  }
+
+  return (
+    <div className="workspace-tabs-host">
+      {tabs.map((t) => {
+        if (!visitedTabSlugs.has(t.slug)) return null;
+        const tabActive = isActive && t.slug === shownTabSlug;
+        return (
+          <div
+            key={t.id}
+            className="workspace-tab-slot"
+            hidden={!tabActive}
+            aria-hidden={!tabActive}
+          >
+            <TabView tabSlug={t.slug} isActive={tabActive} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Route placeholder — shells are mounted by AppLayout. */
+export function WorkspaceLayout() {
+  return null;
 }

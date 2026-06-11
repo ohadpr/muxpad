@@ -129,7 +129,13 @@ export function attachWsServer(deps: {
           // Race: the client may have already closed (e.g. tab nav)
           // while ensurePane was inflight. Skip the bridge in that case.
           if (ws.readyState !== WebSocket.OPEN) return;
-          proxyAttach({ socketPath: deps.ptyd.socketPath, paneId: pane.id, browser: ws });
+          const replay = url.searchParams.get('replay') !== '0';
+          proxyAttach({
+            socketPath: deps.ptyd.socketPath,
+            paneId: pane.id,
+            browser: ws,
+            replay,
+          });
         })
         .catch(() => {
           try {
