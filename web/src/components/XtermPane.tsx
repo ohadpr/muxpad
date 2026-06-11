@@ -1053,13 +1053,17 @@ export function XtermPane({
     // "I'm active here now" signal; on it we re-announce our size so the
     // mobile-driven SIGWINCH doesn't leave the desktop terminal stuck narrow.
     // Gated to desktop + a visible, drive-eligible pane so a mobile tap or a
-    // hidden tab can't fight whoever is actually looking.
-    const REACTIVATE_IDLE_MS = 5000;
-    let lastActivityAt = Date.now();
+    // hidden tab can't fight whoever is actually looking. The reassert force-
+    // re-announces our size (it can't know the PTY's current width, so it must
+    // resend), which costs a redundant SIGWINCH/redraw when no device-switch
+    // actually happened — so the idle threshold is set to "you physically
+    // stepped away" (20s), not "you paused reading output" (a few seconds).
+    const REACTIVATE_IDLE_MS = 20_000;
+    let lastInteractionAt = Date.now();
     const onLocalActivity = () => {
       const now = Date.now();
-      const returned = now - lastActivityAt >= REACTIVATE_IDLE_MS;
-      lastActivityAt = now;
+      const returned = now - lastInteractionAt >= REACTIVATE_IDLE_MS;
+      lastInteractionAt = now;
       if (returned && !isMobileLayout() && mayDriveResize()) {
         reassertSizeFromEvent('reactivate');
       }
@@ -1085,15 +1089,21 @@ export function XtermPane({
     // matchMedia is the canonical way to observe these. The query has
     // to be re-armed each time it fires; otherwise we only catch one.
     let dprMql: MediaQueryList | null = null;
+    let dprChangeHandler: (() => void) | null = null;
     const armDprListener = () => {
+      if (intentionallyClosed) return;
+      // Detach the previous query's listener before swapping — otherwise each
+      // DPR change leaks an immortal MediaQueryList+closure that fires against
+      // the (eventually disposed) term and re-arms itself forever.
+      if (dprMql && dprChangeHandler) dprMql.removeEventListener('change', dprChangeHandler);
       const current = window.devicePixelRatio;
       dprMql = window.matchMedia(`(resolution: ${current}dppx)`);
-      const onDprChange = () => {
+      dprChangeHandler = () => {
+        if (intentionallyClosed) return;
         reassertSizeFromEvent('dpr');
-        dprMql?.removeEventListener('change', onDprChange);
         armDprListener();
       };
-      dprMql.addEventListener('change', onDprChange);
+      dprMql.addEventListener('change', dprChangeHandler);
     };
     armDprListener();
 
@@ -1269,9 +1279,12 @@ export function XtermPane({
       window.removeEventListener('pageshow', onPageShow);
       window.removeEventListener('pagehide', onPageHide);
       document.removeEventListener('resume', onResume);
-      // dprMql's per-instance change listener is owned by armDprListener's
-      // closure; on unmount we drop the reference so the GC can reap it.
+      // Detach the live DPR listener so the MediaQueryList + its closure
+      // (which captures `term`) can be GC'd. `intentionallyClosed` is already
+      // true here, so any in-flight onDprChange also bails before re-arming.
+      if (dprMql && dprChangeHandler) dprMql.removeEventListener('change', dprChangeHandler);
       dprMql = null;
+      dprChangeHandler = null;
       for (const id of reassertSizeTimerIds) window.clearTimeout(id);
       if (refitTimer !== null) window.clearTimeout(refitTimer);
       window.removeEventListener('muxpad:focus-pane', onFocusPane);

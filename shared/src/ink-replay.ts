@@ -35,6 +35,19 @@ function sliceFromLastClear(snapshot: string): string | null {
  * the xterm normal buffer. Replaying the full ring buffer replays every
  * scroll step. Fall back to the tail after the last clear-screen sequence,
  * then cap by byte length.
+ *
+ * KNOWN LIMITATION (acceptable for the production target, Claude/Ink): this is
+ * a content-blind heuristic. It is only safe because Claude runs on the NORMAL
+ * buffer with self-contained DEC-2026 frames, and any mis-paint self-heals on
+ * the next live render tick. For a full-screen / alt-screen TUI (vim, htop, a
+ * future alt-screen agent) that is the foreground at attach time, slicing past
+ * the last marker can drop mode-set state established earlier in the session
+ * (alt-screen `?1049h`, mouse tracking) and replay a frame that assumes a mode
+ * the fresh xterm isn't in. Likewise `capTail` can front-truncate a single
+ * frame larger than INK_REPLAY_TAIL_BYTES mid-escape. The server has no
+ * foreground signal at this layer, so these are documented-and-deferred rather
+ * than fixed; revisit if muxpad starts hosting alt-screen TUIs as a first-class
+ * case.
  */
 export function inkReplayPayload(snapshot: string): string {
   if (!snapshot) return snapshot;
@@ -42,9 +55,7 @@ export function inkReplayPayload(snapshot: string): string {
   if (lastBegin >= 0) {
     const end = snapshot.indexOf(SYNC_END, lastBegin + SYNC_BEGIN.length);
     const frame =
-      end < 0
-        ? snapshot.slice(lastBegin)
-        : snapshot.slice(lastBegin, end + SYNC_END.length);
+      end < 0 ? snapshot.slice(lastBegin) : snapshot.slice(lastBegin, end + SYNC_END.length);
     return capTail(frame);
   }
   const cleared = sliceFromLastClear(snapshot);

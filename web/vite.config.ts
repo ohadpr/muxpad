@@ -39,6 +39,9 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: webPort,
+    // Tailscale MagicDNS hostnames (*.ts.net) otherwise hit vite's
+    // "Blocked request. This host is not allowed." guard when accessing the
+    // dev server over the tailnet.
     allowedHosts: ['.ts.net'],
     proxy: apiProxy,
   },

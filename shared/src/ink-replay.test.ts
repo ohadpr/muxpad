@@ -34,4 +34,30 @@ describe('inkReplayPayload', () => {
     const snap = `${BEGIN}${'y'.repeat(INK_REPLAY_TAIL_BYTES + 500)}`;
     expect(inkReplayPayload(snap).length).toBe(INK_REPLAY_TAIL_BYTES);
   });
+
+  it('replays the last full-screen Ink frame, escape-aligned at the head', () => {
+    // Two realistic synchronized full repaints (cursor-home + content).
+    const home = '\x1b[H\x1b[2J';
+    const frameA = `${BEGIN}${home}old prompt${END}`;
+    const frameB = `${BEGIN}${home}new prompt ▌${END}`;
+    const out = inkReplayPayload(`${frameA}between${frameB}`);
+    expect(out).toBe(frameB);
+    // Head is escape-aligned (begins with the sync-begin), so xterm doesn't
+    // receive a truncated CSI; and only the current frame is replayed.
+    expect(out.startsWith(BEGIN)).toBe(true);
+    expect(out).not.toContain('old prompt');
+  });
+
+  it('CHARACTERIZES the known alt-screen limitation (mode-set before the marker is dropped)', () => {
+    // A TUI enters the alt screen + mouse mode early, then later emits a synced
+    // frame. The slice keeps only the last frame and DROPS the ?1049h / mouse
+    // enables — so the replayed bytes assume modes the fresh xterm isn't in.
+    // This documents the deferred behavior (see inkReplayPayload's doc); it is
+    // acceptable because Claude/Ink runs on the NORMAL buffer (no ?1049h).
+    const enterAlt = '\x1b[?1049h\x1b[?1000h';
+    const frame = `${BEGIN}\x1b[Hmenu${END}`;
+    const out = inkReplayPayload(`${enterAlt}scrollback${frame}`);
+    expect(out).toBe(frame);
+    expect(out).not.toContain('\x1b[?1049h'); // mode-set lost — known limitation
+  });
 });

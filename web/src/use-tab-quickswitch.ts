@@ -44,8 +44,9 @@ export function useTabQuickSwitch(opts: {
       if (!e.altKey) return;
       // Alt + digit: swallow before the focused terminal sees it, then switch.
       // Keep the badges up — the user may fire several Alt+<n> in a row while
-      // Alt stays held; they only disappear on Alt-up.
-      if (!e.metaKey && !e.ctrlKey && /^Digit[1-9]$/.test(e.code)) {
+      // Alt stays held; they only disappear on Alt-up. Require the BARE chord
+      // (no Shift) so Alt+Shift+<n> stays available to a TUI's Meta bindings.
+      if (!e.metaKey && !e.ctrlKey && !e.shiftKey && /^Digit[1-9]$/.test(e.code)) {
         e.preventDefault();
         e.stopPropagation();
         const idx = quickSwitchIndex(Number(e.code.slice(5)), tabCountRef.current);
@@ -60,15 +61,22 @@ export function useTabQuickSwitch(opts: {
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key === 'Alt') setShowNumbers(false);
     };
-    const onBlur = () => setShowNumbers(false);
+    // Hide on anything that can swallow the Alt keyup (window blur, app/tab
+    // switch via Cmd-Tab / Mission Control) so the badges can't get stuck on.
+    const hide = () => setShowNumbers(false);
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') setShowNumbers(false);
+    };
 
     window.addEventListener('keydown', onKeyDown, { capture: true });
     window.addEventListener('keyup', onKeyUp, { capture: true });
-    window.addEventListener('blur', onBlur);
+    window.addEventListener('blur', hide);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       window.removeEventListener('keydown', onKeyDown, { capture: true });
       window.removeEventListener('keyup', onKeyUp, { capture: true });
-      window.removeEventListener('blur', onBlur);
+      window.removeEventListener('blur', hide);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, []);
 
