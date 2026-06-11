@@ -289,7 +289,7 @@ function TabItem({
     >
       {quickNumber !== undefined && (
         <span className="ws-tab-quicknum" aria-hidden="true">
-          {quickNumber}
+          <span className="ws-tab-quicknum-chip">{quickNumber}</span>
         </span>
       )}
       <span className="ws-tab-label">{tab.name}</span>
