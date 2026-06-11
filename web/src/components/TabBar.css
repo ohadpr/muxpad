@@ -282,10 +282,10 @@
   align-items: center;
   gap: 8px;
   height: 100%;
-  /* Asymmetric padding: extra room on the left for the Alt+<n> number,
-     pulled from the (generous) right side so the tab's total width is
-     unchanged. */
-  padding: 0 8px 0 20px;
+  padding: 0 14px;
+  /* Clip so the label, when it slides right under Alt, truncates at the
+     tab's own edge instead of spilling into the neighbour. */
+  overflow: hidden;
   border: none;
   border-right: 1px solid var(--border);
   background: transparent;
@@ -376,6 +376,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: transform 90ms ease;
+}
+/* While Alt is held, slide the label right just enough to clear the number.
+   transform = visual only, so the tab never changes width; the tab's
+   overflow:hidden keeps the slid label from spilling into the next tab. */
+.ws-tab[data-quicknum="true"] .ws-tab-label {
+  transform: translateX(10px);
 }
 
 .ws-tab-editing {
@@ -433,7 +440,7 @@
     gap: 0;
   }
   .ws-tab {
-    padding: 0 6px 0 18px;
+    padding: 0 12px;
     max-width: 160px;
   }
   /* Beefier touch targets in the dropdown — at 32px each, sequential
