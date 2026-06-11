@@ -6,6 +6,7 @@ import { api } from '../api';
 import { refreshTabs, useTabs } from '../tabs';
 import { openInNewTab, useLongPress } from '../use-long-press';
 import { useHorizontalOverflow } from '../use-overflow';
+import { useTabQuickSwitch } from '../use-tab-quickswitch';
 import { TabBarDropdown } from './TabBarDropdown';
 import './TabBar.css';
 
@@ -34,6 +35,18 @@ export function TabBar({ workspaceId, workspaceSlug }: TabBarProps) {
 
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const activeSlug = matchActiveTabSlug(pathname);
+
+  // Option/Alt-held tab quick-switch. Holding Alt reveals "1…9" badges; Alt+n
+  // jumps to that tab (see use-tab-quickswitch for the modifier rationale).
+  const switchToIndex = (i: number) => {
+    const t = tabs[i];
+    if (!t) return;
+    void navigate({
+      to: '/w/$wsSlug/t/$tabSlug',
+      params: { wsSlug: workspaceSlug, tabSlug: t.slug },
+    });
+  };
+  const showQuickNumbers = useTabQuickSwitch({ tabCount: tabs.length, onSwitch: switchToIndex });
 
   const { ref: tabsRef, overflowing } = useHorizontalOverflow<HTMLElement>([tabs.length]);
 
@@ -138,8 +151,9 @@ export function TabBar({ workspaceId, workspaceSlug }: TabBarProps) {
         data-collapsed={overflowing ? 'true' : undefined}
         ref={tabsRef as React.RefObject<HTMLElement>}
       >
-        {tabs.map((t) => {
+        {tabs.map((t, i) => {
           const isActive = t.slug === activeSlug;
+          const quickNumber = showQuickNumbers && i < 9 ? i + 1 : undefined;
           if (isActive && editingId === t.id) {
             return (
               <div key={t.id} className="ws-tab ws-tab-editing" data-active="true">
@@ -169,6 +183,7 @@ export function TabBar({ workspaceId, workspaceSlug }: TabBarProps) {
               tab={t}
               workspaceSlug={workspaceSlug}
               isActive={isActive}
+              quickNumber={quickNumber}
               dropSide={dropTargetId === t.id ? dropSide : undefined}
               onDragStart={(e) => onDragStart(e, t.id)}
               onDragOver={(e) => onDragOver(e, t.id)}
@@ -222,6 +237,8 @@ interface TabItemProps {
   tab: Tab;
   workspaceSlug: string;
   isActive: boolean;
+  /** 1–9 badge shown while Option/Alt is held for quick-switch; else undefined. */
+  quickNumber: number | undefined;
   dropSide: 'before' | 'after' | undefined;
   onDragStart: (e: ReactDragEvent<HTMLAnchorElement>) => void;
   onDragOver: (e: ReactDragEvent<HTMLAnchorElement>) => void;
@@ -234,6 +251,7 @@ function TabItem({
   tab,
   workspaceSlug,
   isActive,
+  quickNumber,
   dropSide,
   onDragStart,
   onDragOver,
@@ -268,10 +286,13 @@ function TabItem({
             : tab.name
       }
     >
-      <span className="ws-tab-label">{tab.name}</span>
-      {!isActive && tab.attention && (
-        <span className="badge-dot" aria-label="needs attention" />
+      {quickNumber !== undefined && (
+        <span className="ws-tab-quicknum" aria-hidden="true">
+          {quickNumber}
+        </span>
       )}
+      <span className="ws-tab-label">{tab.name}</span>
+      {!isActive && tab.attention && <span className="badge-dot" aria-label="needs attention" />}
     </Link>
   );
 }
