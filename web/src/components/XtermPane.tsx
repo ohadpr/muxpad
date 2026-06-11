@@ -948,6 +948,24 @@ export function XtermPane({
         const id = window.setTimeout(() => fitWhenCellReady(), delay);
         reassertSizeTimerIds.push(id);
       }
+      // Trailing repaint once the fit chain has settled. The immediate
+      // refresh above runs against a slot that may have JUST flipped from
+      // display:none (in-app tab switch — mobile and desktop both toggle
+      // paneActive, NOT document visibility), so xterm's DOM renderer can
+      // capture stale top rows before its cells finish laying out. An idle
+      // pane (Claude finished drawing, no new write) has nothing else to
+      // trigger the per-write repaint, so those garbled rows stick until the
+      // next pane switch. This final refresh clears them. The lifecycle path
+      // (reassertSizeFromEvent) schedules its own 600ms refresh; this makes
+      // the direct callers (the become-visible effect) just as robust.
+      const settleRefreshId = window.setTimeout(() => {
+        try {
+          term.refresh(0, term.rows - 1);
+        } catch {
+          // ignore — term may be disposed
+        }
+      }, 550);
+      reassertSizeTimerIds.push(settleRefreshId);
     };
     reassertSizeRef.current = reassertSize;
     const reassertSizeFromEvent = (source: string) => {
