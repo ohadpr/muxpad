@@ -1044,6 +1044,30 @@ export function XtermPane({
     const onWinFocus = () => reassertSizeFromEvent('window.focus');
     window.addEventListener('focus', onWinFocus);
 
+    // Reclaim the PTY size when the user returns to THIS device/pane after a
+    // lull. The lifecycle reasserts above cover a backgrounded tab or a window
+    // that lost focus — but NOT the common "desktop window stayed visible and
+    // focused while a phone drove the same pane" case. There, nothing fires
+    // when the user walks back, so the PTY stays at the phone's width. A real
+    // interaction (click/keypress/focus) after an idle gap is the reliable
+    // "I'm active here now" signal; on it we re-announce our size so the
+    // mobile-driven SIGWINCH doesn't leave the desktop terminal stuck narrow.
+    // Gated to desktop + a visible, drive-eligible pane so a mobile tap or a
+    // hidden tab can't fight whoever is actually looking.
+    const REACTIVATE_IDLE_MS = 5000;
+    let lastActivityAt = Date.now();
+    const onLocalActivity = () => {
+      const now = Date.now();
+      const returned = now - lastActivityAt >= REACTIVATE_IDLE_MS;
+      lastActivityAt = now;
+      if (returned && !isMobileLayout() && mayDriveResize()) {
+        reassertSizeFromEvent('reactivate');
+      }
+    };
+    container.addEventListener('pointerdown', onLocalActivity);
+    container.addEventListener('keydown', onLocalActivity, true);
+    container.addEventListener('focusin', onLocalActivity);
+
     // Page Lifecycle API — fires on Chrome tab discard/restore and
     // process freeze/resume, which standard visibilitychange misses on
     // macOS when the OS suspends the renderer for a backgrounded display.
@@ -1239,6 +1263,9 @@ export function XtermPane({
       window.screen.orientation?.removeEventListener('change', onOrientation);
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('focus', onWinFocus);
+      container.removeEventListener('pointerdown', onLocalActivity);
+      container.removeEventListener('keydown', onLocalActivity, true);
+      container.removeEventListener('focusin', onLocalActivity);
       window.removeEventListener('pageshow', onPageShow);
       window.removeEventListener('pagehide', onPageHide);
       document.removeEventListener('resume', onResume);
