@@ -11,15 +11,16 @@ import type { LayoutNode, PaneSpec } from '@muxpad/shared';
 import { spliceLayoutAtTarget } from '@muxpad/shared';
 import { type TabWithPanes, api } from '../api';
 import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
-import { SvgClose } from '../components/icons';
 import { MobileInputBar } from '../components/MobileInputBar';
 import { PaneSelector } from '../components/PaneSelector';
 import { UrlPane } from '../components/UrlPane';
 import { XtermPane } from '../components/XtermPane';
+import { SvgClose } from '../components/icons';
 import { subscribe, subscribeReconnect } from '../events';
+import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
+import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { refreshTabs, useTabs } from '../tabs';
 import { useMediaQuery } from '../use-media-query';
-import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
 import './tab.css';
 
@@ -115,7 +116,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   const [closingTab, setClosingTab] = useState(false);
   const [mobileActiveId, setMobileActiveId] = useState<string | null>(null);
   const layoutRef = useRef<Layout>(null);
-  const isMobile = useMediaQuery('(max-width: 720px)');
+  const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
   // Holds the latest `addPane` function from the mobile render branch so
   // the top-level event listener below can reach it. The mobile chrome's
   // "+" button dispatches muxpad:add-pane (it lives in TabBar, outside
@@ -636,8 +637,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     return ids[0] ?? null;
   })();
 
-  const paneNumber = (paneId: string): number =>
-    tab.panes.findIndex((p) => p.id === paneId) + 1;
+  const paneNumber = (paneId: string): number => tab.panes.findIndex((p) => p.id === paneId) + 1;
 
   const paneLabel = (paneId: string): string => {
     const p = tab.panes.find((x) => x.id === paneId);
@@ -1291,4 +1291,3 @@ function SvgTerminal() {
     </svg>
   );
 }
-

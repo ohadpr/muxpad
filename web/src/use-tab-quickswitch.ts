@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 
+/** Badges/shortcuts cover only the first N tabs (Alt+1…9); beyond that, use
+ *  the tab bar / dropdown. Single source of truth shared with TabBar. */
+export const MAX_QUICK_SWITCH_TABS = 9;
+
 /**
  * Map a pressed digit (1–9) to a tab index, or null if there's no such tab.
- * Pure — unit-tested. Badges/shortcuts only cover the first 9 tabs; beyond
- * that, use the tab bar / dropdown.
+ * Pure — unit-tested.
  */
 export function quickSwitchIndex(digit: number, tabCount: number): number | null {
   const idx = digit - 1;
-  return idx >= 0 && idx < tabCount && idx < 9 ? idx : null;
+  return idx >= 0 && idx < tabCount && idx < MAX_QUICK_SWITCH_TABS ? idx : null;
 }
 
 /**

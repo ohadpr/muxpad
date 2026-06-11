@@ -6,7 +6,7 @@ import { api } from '../api';
 import { refreshTabs, useTabs } from '../tabs';
 import { openInNewTab, useLongPress } from '../use-long-press';
 import { useHorizontalOverflow } from '../use-overflow';
-import { useTabQuickSwitch } from '../use-tab-quickswitch';
+import { MAX_QUICK_SWITCH_TABS, useTabQuickSwitch } from '../use-tab-quickswitch';
 import { TabBarDropdown } from './TabBarDropdown';
 import './TabBar.css';
 
@@ -153,7 +153,8 @@ export function TabBar({ workspaceId, workspaceSlug }: TabBarProps) {
       >
         {tabs.map((t, i) => {
           const isActive = t.slug === activeSlug;
-          const quickNumber = showQuickNumbers && i < 9 ? i + 1 : undefined;
+          const quickNumber =
+            showQuickNumbers && i < MAX_QUICK_SWITCH_TABS ? i + 1 : undefined;
           if (isActive && editingId === t.id) {
             return (
               <div key={t.id} className="ws-tab ws-tab-editing" data-active="true">
