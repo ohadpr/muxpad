@@ -341,19 +341,27 @@
    the label — the label keeps its own space to the right). */
 .ws-tab-quicknum {
   position: absolute;
-  left: 7px;
-  /* Full-height box + flex-centre, the same way .ws-tab centres its label —
-     so the number lands on the tab text's line rather than approximating it
-     with a top:50% translate. */
-  top: 0;
-  bottom: 0;
+  left: 3px;
+  /* Small box centred on the tab's text line. The soft accent fill gives the
+     digit a tad more highlight without shouting — it reads as a chip, not a
+     solid badge. */
+  top: 50%;
+  transform: translateY(-50%);
   z-index: 2;
-  display: flex;
+  box-sizing: border-box;
+  display: inline-flex;
   align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--accent);
   font-family: var(--chrome-font);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
