@@ -339,14 +339,18 @@
 .ws-tab-quicknum {
   position: absolute;
   left: 4px;
-  top: 50%;
-  transform: translateY(-50%);
+  /* Full-height box + flex-centre, the same way .ws-tab centres its label —
+     so the number lands on the tab text's line rather than approximating it
+     with a top:50% translate. */
+  top: 0;
+  bottom: 0;
   z-index: 2;
+  display: flex;
+  align-items: center;
   color: var(--accent);
   font-family: var(--chrome-font);
   font-size: 12px;
   font-weight: 700;
-  line-height: 1;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
