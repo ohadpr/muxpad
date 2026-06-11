@@ -153,6 +153,33 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     window.dispatchEvent(new CustomEvent('muxpad:focus-pane', { detail: { paneId: activeId } }));
   }, [isMobile, tab, mobileActiveId, isActive]);
 
+  // Desktop: restore keyboard focus to the last-focused pane when this tab
+  // becomes active again. Panes stay mounted across tab switches, so
+  // XtermPane's mount-time autoFocus only fires on first visit — switching
+  // back to an already-mounted tab needs an explicit re-focus. We track
+  // "handled for this activation" rather than a bare false→true transition so
+  // the focus still lands if the tab's data finishes loading a beat after it
+  // became active (the source of the "doesn't happen all the time" flakiness).
+  const desktopFocusHandledRef = useRef(false);
+  useEffect(() => {
+    if (!isActive) {
+      desktopFocusHandledRef.current = false;
+      return;
+    }
+    if (isMobile || !tab || desktopFocusHandledRef.current) return;
+    const paneIds = collectPaneIds(toMosaic(tab.layout));
+    const stored = getLastPaneId(tab.id);
+    const target = stored && paneIds.includes(stored) ? stored : (paneIds[0] ?? null);
+    if (!target) return; // panes not ready yet; a later render retries
+    desktopFocusHandledRef.current = true;
+    // Defer a frame so the tab's container has flipped from hidden to visible
+    // — term.focus() on a still-`display:none` element doesn't stick.
+    const raf = requestAnimationFrame(() => {
+      window.dispatchEvent(new CustomEvent('muxpad:focus-pane', { detail: { paneId: target } }));
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [isActive, isMobile, tab]);
+
   // Forward the "+" tap from the chrome bar's TabBar (which lives in
   // AppLayout and can't reach into this component tree) to whatever
   // addPane the mobile branch most recently rendered. The same event
