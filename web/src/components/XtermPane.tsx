@@ -204,8 +204,15 @@ export function XtermPane({
     // a running TUI reflow / relocate its input bar. Declared up here (not
     // inline near refit) so the earlier fit paths can share them without a
     // temporal-dead-zone hazard.
-    const MIN_COLS = 40;
-    const MIN_ROWS = 10;
+    //
+    // Floor values: must stay BELOW any size a real device can legitimately
+    // be. A phone with a bumped font size fits ~36-39 cols — the original
+    // 40x10 floor blocked those phones from ever connecting (tryInitialConnect
+    // gates on this too), leaving a blinking caret on an empty terminal.
+    // 20x5 still rejects the degenerate ghost sizes this floor exists for
+    // (8x4 storms from suspended layouts).
+    const MIN_COLS = 20;
+    const MIN_ROWS = 5;
     let lastSentCols = 0;
     let lastSentRows = 0;
     const containerTooSmall = () => container.clientWidth < 60 || container.clientHeight < 40;
@@ -520,7 +527,7 @@ export function XtermPane({
       // attach + ring-buffer replay until the pane is actually shown.
       if (!paneActiveRef.current) return;
       if (container.clientWidth < 60 || container.clientHeight < 40) return;
-      if (term.cols < 40 || term.rows < 10) return;
+      if (term.cols < MIN_COLS || term.rows < MIN_ROWS) return;
       initialConnectDone = true;
       connect();
     };

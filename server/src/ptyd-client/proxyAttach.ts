@@ -9,8 +9,10 @@ import WebSocket from 'ws';
 // pane to 8x4, blanking the terminals on every other device). ptyd itself
 // can't cheaply gain this guard — restarting it kills every live PTY — so
 // the long-lived-session-safe place to drop these frames is this proxy.
-const MIN_COLS = 40;
-const MIN_ROWS = 10;
+// Must stay below any legitimate device size: a large-font phone fits
+// ~36-39 cols, so 40 here would eat real mobile resizes.
+const MIN_COLS = 20;
+const MIN_ROWS = 5;
 
 /** True for a client resize frame whose dims are below the sanity floor. */
 function isSubFloorResize(data: WebSocket.RawData): boolean {
