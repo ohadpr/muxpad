@@ -504,3 +504,46 @@ describe('ptyd control push events', () => {
     expect(typeof evt.code).toBe('number');
   });
 });
+
+describe('ptyd — app-url detection (end-to-end)', () => {
+  it('emits paneAppUrls for a pane that serves and prints its URL', async () => {
+    const { call, waitForEvent } = await setupPtyd();
+    // A pane that opens a TCP listener and prints its URL — exactly the dev-
+    // server shape. The scanner scrapes the URL, the tracker confirms the
+    // port is actually listening, and the confirmed app surfaces as an event.
+    const serve =
+      "node -e \"const s=require('net').createServer();" +
+      "s.listen(0,'127.0.0.1',()=>console.log('ready http://localhost:'+s.address().port));" +
+      'setInterval(()=>{},1e9)"';
+    await call('ensurePane', {
+      spec: { id: 'srv1', shell: '/bin/sh', startup_cmd: serve, cwd: '/tmp' },
+    });
+    const evt = await waitForEvent('paneAppUrls', 8000);
+    const urls = (evt as unknown as { urls: Array<{ url: string; source: string }> }).urls;
+    expect(Array.isArray(urls)).toBe(true);
+    expect(urls.length).toBeGreaterThanOrEqual(1);
+    // Confirmed via a real listening probe; scraped from plain text.
+    expect(urls[0]!.url).toMatch(/^https?:\/\/[^/]+:\d+/);
+    expect(urls[0]!.source).toBe('text');
+  });
+
+  it('does NOT emit for a printed URL whose port is not listening', async () => {
+    const { call, waitForEvent } = await setupPtyd();
+    // Prints a localhost URL but nothing listens on it — the probe must
+    // reject it, so no paneAppUrls should ever arrive. (We assert by racing
+    // the event against a timeout and expecting the timeout to win.)
+    await call('ensurePane', {
+      spec: {
+        id: 'noserve1',
+        shell: '/bin/sh',
+        startup_cmd: "echo 'see http://localhost:59999/ for docs'",
+        cwd: '/tmp',
+      },
+    });
+    const got = await waitForEvent('paneAppUrls', 2500).then(
+      () => 'emitted',
+      () => 'timed-out',
+    );
+    expect(got).toBe('timed-out');
+  });
+});
