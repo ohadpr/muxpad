@@ -108,6 +108,10 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
 
   const [tab, setTab] = useState<TabWithPanes | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Live mirror of isActive for async closures (the tab-load effect doesn't
+  // re-run on activation, so its captured prop value can be stale).
+  const isActiveRef = useRef(isActive);
+  isActiveRef.current = isActive;
   // True from the moment we know the tab is about to disappear (cascade
   // close, explicit close-tab CTA, …) until we actually navigate away.
   // Used to suppress the empty-tab state flicker that would otherwise
@@ -313,7 +317,17 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         const tabs = await api.listTabs(workspace.id);
         const found = tabs.find((t) => t.slug === tabSlug);
         if (!found) {
+          // The shared tabs cache said this slug exists but the fresh list
+          // disagrees — the tab was deleted out from under us (another
+          // device, server-side cascade). Don't dead-end on an error
+          // screen; bounce to the workspace root, whose redirect effect
+          // picks a valid tab. Only the active view navigates — a hidden
+          // TabView yanking the router out from under the visible one
+          // would be worse than its silent stale state.
           setError('tab not found');
+          if (isActiveRef.current) {
+            void navigate({ to: '/w/$wsSlug', params: { wsSlug }, replace: true });
+          }
           return;
         }
         const detail = await api.getTab(found.id);
