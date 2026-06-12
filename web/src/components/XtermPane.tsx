@@ -1029,11 +1029,21 @@ export function XtermPane({
         window.setTimeout(() => {
           const ws = wsRef.current;
           if (!ws || ws.readyState !== WebSocket.OPEN) return;
+          // Same gates as every other resize sender. This wiggle used to be
+          // the ONE path that skipped both mayDriveResize() and the dim
+          // floor — a backgrounded client resuming against a throttled/tiny
+          // layout viewport (iOS Safari) would SIGWINCH every pane down to
+          // single-digit dims (8x4 storms in ptyd's [size] log), which reads
+          // as "terminal panes not showing" on every other device.
+          if (!mayDriveResize()) return;
           const cols = term.cols;
           const rows = term.rows;
-          if (cols < 2 || rows < 1) return;
+          if (cols < MIN_COLS || rows < MIN_ROWS) return;
           try {
-            ws.send(encodeResize(cols - 1, rows));
+            // Wiggle UP (+1 col, then back) instead of down: the transient
+            // never dips below the floor, so the server-side sub-floor
+            // resize backstop (proxyAttach) can't eat half the wiggle.
+            ws.send(encodeResize(cols + 1, rows));
             window.setTimeout(() => {
               if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
               try {

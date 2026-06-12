@@ -45,6 +45,20 @@ export function WorkspaceShell({ wsSlug, isActive }: WorkspaceShellProps) {
     });
   }, [urlTabSlug]);
 
+  // Recovery for a stale tab URL — a reload (or a PWA restoring its last
+  // URL) can land on /w/:ws/t/:tab where the tab no longer exists (deleted
+  // from another device). The tabs.map render below would then match
+  // nothing and the user gets a permanent blank screen with no way out.
+  // Once the tab list is confirmed fresh (length matches the workspace's
+  // tab_count), bounce to the workspace root, where the redirect effect
+  // below picks a valid tab (or the empty-state UI renders).
+  useEffect(() => {
+    if (!isActive || !workspace || !urlTabSlug) return;
+    if (tabs.length !== workspace.tab_count) return; // list not fresh yet
+    if (tabs.some((t) => t.slug === urlTabSlug)) return;
+    void navigate({ to: '/w/$wsSlug', params: { wsSlug }, replace: true });
+  }, [isActive, workspace, urlTabSlug, tabs, wsSlug, navigate]);
+
   useEffect(() => {
     if (!isActive || !workspace) return;
     if (!isExactWorkspacePath) return;

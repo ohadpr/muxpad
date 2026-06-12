@@ -301,6 +301,19 @@ export class PaneRuntime extends EventEmitter {
   setClientSize(clientId: string, cols: number, rows: number): void {
     this.connectedClients.add(clientId);
     if (cols < 1 || rows < 1) return;
+    // Sanity floor, mirroring the web client's MIN_COLS/MIN_ROWS: a
+    // well-behaved client never sends below 40x10 (its fit paths refuse
+    // to), so anything smaller is a buggy/stale client measuring a
+    // degenerate viewport. Observed in the wild as an 8x4 SIGWINCH storm
+    // from a backgrounded mobile browser that blanked every other view of
+    // the pane. proxyAttach drops these before they reach a running ptyd;
+    // this guard makes ptyd itself safe once it's eventually restarted.
+    if (cols < 40 || rows < 10) {
+      console.warn(
+        `[size] pane=${this.spec.id} client=${clientId.slice(-6)} REJECTED sub-floor ${cols}x${rows}`,
+      );
+      return;
+    }
     if (cols === this.cols && rows === this.rows) return;
     const prevCols = this.cols;
     const prevRows = this.rows;
