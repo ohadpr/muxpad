@@ -24,6 +24,10 @@ const execFileAsync = promisify(execFile);
  */
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1', '::']);
+// "All interfaces" bind addresses: valid to listen on, but NOT loadable as a
+// destination in a browser. When we can't rewrite to a tailnet name we must
+// swap these for a concrete loopback host or the web face would fail to load.
+const UNSPECIFIED_HOSTS = new Set(['0.0.0.0', '::']);
 
 // Cache the Tailscale self-identity (DNSName + IPs). `tailscale status` is a
 // subprocess; we don't want to spawn it per detected URL. Refreshed lazily
@@ -97,12 +101,22 @@ export async function isSelfHost(host: string, now = Date.now()): Promise<boolea
  */
 export async function toReachableUrl(rawUrl: string, now = Date.now()): Promise<string> {
   const identity = await getIdentity(now);
-  if (!identity.tailnetName) return rawUrl;
   try {
     const u = new URL(rawUrl);
-    if (!LOCAL_HOSTS.has(u.hostname.toLowerCase())) return rawUrl;
-    u.hostname = identity.tailnetName;
-    return u.toString();
+    const host = u.hostname.toLowerCase();
+    if (!LOCAL_HOSTS.has(host)) return rawUrl;
+    if (identity.tailnetName) {
+      // Prefer the tailnet name — reachable from any device on the tailnet.
+      u.hostname = identity.tailnetName;
+      return u.toString();
+    }
+    if (UNSPECIFIED_HOSTS.has(host)) {
+      // No tailnet to rewrite to, but 0.0.0.0/:: won't load in a browser —
+      // swap for loopback so the local (same-machine) viewer can reach it.
+      u.hostname = '127.0.0.1';
+      return u.toString();
+    }
+    return rawUrl;
   } catch {
     return rawUrl;
   }
