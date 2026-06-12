@@ -885,6 +885,45 @@ cmd_open() {
   fi
 }
 
+# `muxpad app-url <url> [--label=<text>]` declares the web app THIS pane is
+# serving. It prints a muxpad-private OSC escape (code 7771) to the pane's
+# own stdout; the daemon's per-pane output scanner picks it up, confirms the
+# port is actually listening, and offers it as a "switch to web view" entry
+# in the pane chrome. This is the explicit, zero-false-positive path — far
+# more reliable than muxpad scraping a URL out of arbitrary output. Run it
+# from your dev script once the server is up:
+#   muxpad app-url "http://localhost:5173" --label Web
+# The escape is invisible in the terminal. Must be run inside a pane (the
+# marker is meaningless elsewhere). The URL must not contain ';' (the OSC
+# field separator).
+cmd_app_url() {
+  if [ -z "${MUXPAD_PANE_ID:-}" ]; then
+    echo "muxpad app-url: must be run inside a muxpad pane" >&2
+    exit 1
+  fi
+  reset_flags label
+  parse_flags label -- "$@"
+  if [ "${#POSITIONAL[@]}" -lt 1 ]; then
+    echo "usage: muxpad app-url <url> [--label=<text>]" >&2
+    exit 1
+  fi
+  local url="${POSITIONAL[0]}"
+  local label="${FLAG_label:-}"
+  case "$url" in
+    *';'*) echo "muxpad app-url: url must not contain ';'" >&2; exit 1 ;;
+    http://*|https://*) ;;
+    *) echo "muxpad app-url: url must be http:// or https://" >&2; exit 1 ;;
+  esac
+  # Strip ';' from the label so it can't break the marker's field parsing.
+  label="${label//;/}"
+  # OSC 7771 ; muxpad ; app ; url=<url>[ ; label=<label> ] BEL
+  if [ -n "$label" ]; then
+    printf '\033]7771;muxpad;app;url=%s;label=%s\007' "$url" "$label"
+  else
+    printf '\033]7771;muxpad;app;url=%s\007' "$url"
+  fi
+}
+
 usage() {
   cat <<'USAGE' >&2
 muxpad — a personal multi-workspace terminal-and-browser mosaic.
@@ -939,6 +978,12 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      so the popup isn't blocked. For an iframe
                                      pane in the mosaic, use `pane open` above.
 
+  app-url <url> [--label=<text>]     declare the web app THIS pane serves.
+                                     The pane chrome then offers a "switch to
+                                     web view" of it. Run from your dev script
+                                     once the server is listening, e.g.
+                                     `muxpad app-url http://localhost:5173 --label Web`.
+
 global flags:
   --json                             emit raw JSON instead of pretty output
                                      (place BEFORE the subcommand)
@@ -987,6 +1032,7 @@ case "$VERB" in
   tab) cmd_tab "${ARGS[@]:1}" ;;
   pane) cmd_pane "${ARGS[@]:1}" ;;
   open) cmd_open "${ARGS[@]:1}" ;;
+  app-url) cmd_app_url "${ARGS[@]:1}" ;;
   ''|help|-h|--help) usage; [ "$VERB" = '' ] && exit 1 || exit 0 ;;
   *)
     echo "muxpad: unknown command '$VERB'" >&2

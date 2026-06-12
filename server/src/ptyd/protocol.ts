@@ -1,3 +1,4 @@
+import type { AppUrl } from '@muxpad/shared';
 import type { PaneRuntimeSpec } from '../runtime/PaneRuntime.js';
 
 /**
@@ -68,4 +69,5 @@ export type CtrlPushEvent =
   | { event: 'paneCwd'; id: string; cwd: string }
   | { event: 'paneTitle'; id: string; title: string | null }
   | { event: 'paneFg'; id: string; cmd: string | null }
-  | { event: 'paneAttention'; id: string; attention: boolean };
+  | { event: 'paneAttention'; id: string; attention: boolean }
+  | { event: 'paneAppUrls'; id: string; urls: AppUrl[] };
