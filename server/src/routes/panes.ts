@@ -261,7 +261,11 @@ export function panesScopedRoutes(deps: {
     }
     const refreshed = panes.getById(id);
     if (refreshed) {
-      const decorated = { ...refreshed, attention: deps.cache.getAttention(refreshed.id) };
+      const decorated = {
+        ...refreshed,
+        attention: deps.cache.getAttention(refreshed.id),
+        app_urls: deps.cache.getAppUrls(refreshed.id),
+      };
       deps.events.emit({ type: 'pane.updated', tab_id: refreshed.tab_id, pane: decorated });
       return c.json(decorated);
     }

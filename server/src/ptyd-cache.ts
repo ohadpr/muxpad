@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import type { AppUrl } from '@muxpad/shared';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 
 /**
@@ -32,6 +33,7 @@ export interface PaneState {
   fg?: string | null;
   title?: string | null;
   attention?: boolean;
+  appUrls?: AppUrl[];
 }
 
 /**
@@ -72,6 +74,12 @@ export class PtydCache extends EventEmitter {
     });
     client.on('paneAttention', (e: { id: string; attention: boolean }) => {
       this.update(e.id, { attention: e.attention });
+    });
+    client.on('paneAppUrls', (e: { id: string; urls: AppUrl[] }) => {
+      // The manager already diffs by content before emitting, so every event
+      // here is a real change — update() sees a fresh array (reference !==)
+      // and fires paneChange, which is exactly what we want.
+      this.update(e.id, { appUrls: e.urls });
     });
     client.on('paneExit', (e: { id: string }) => {
       // Drop the entry on exit so a respawned pane (same id) starts with a
@@ -170,6 +178,11 @@ export class PtydCache extends EventEmitter {
   /** Synchronous read — false when ptyd hasn't reported attention. */
   getAttention(id: string): boolean {
     return this.state.get(id)?.attention ?? false;
+  }
+
+  /** Synchronous read — empty array when no app urls have been reported. */
+  getAppUrls(id: string): AppUrl[] {
+    return this.state.get(id)?.appUrls ?? [];
   }
 
   /** Returns the full snapshot for the given pane, or undefined when unknown. */

@@ -113,3 +113,82 @@ describe('PtyScanner — title extraction', () => {
   });
 });
 
+
+describe('PtyScanner — plain-text URL extraction', () => {
+  it('extracts a localhost URL printed on a line', () => {
+    const ev = new PtyScanner().feed('  Local:   http://localhost:5173/\n');
+    expect(ev.urls).toEqual(['http://localhost:5173/']);
+  });
+
+  it('strips trailing punctuation a URL picks up in prose', () => {
+    const ev = new PtyScanner().feed('serving at http://127.0.0.1:3000.\n');
+    expect(ev.urls).toEqual(['http://127.0.0.1:3000']);
+  });
+
+  it('extracts multiple URLs across lines in one chunk', () => {
+    const ev = new PtyScanner().feed('a http://localhost:5173\nb http://localhost:8787\n');
+    expect(ev.urls).toEqual(['http://localhost:5173', 'http://localhost:8787']);
+  });
+
+  it('strips ANSI color codes around a URL', () => {
+    const ev = new PtyScanner().feed('\x1b[32mhttp://localhost:4000\x1b[0m\n');
+    expect(ev.urls).toEqual(['http://localhost:4000']);
+  });
+
+  it('scans the final line even without a trailing newline (CR closes it)', () => {
+    const ev = new PtyScanner().feed('progress http://localhost:9000\r');
+    expect(ev.urls).toEqual(['http://localhost:9000']);
+  });
+
+  it('reassembles a URL split across two chunks', () => {
+    const s = new PtyScanner();
+    expect(s.feed('Local: http://localho').urls).toBeUndefined();
+    expect(s.feed('st:5173/\n').urls).toEqual(['http://localhost:5173/']);
+  });
+
+  it('reports no urls for plain text', () => {
+    expect(new PtyScanner().feed('just some normal output\n').urls).toBeUndefined();
+  });
+});
+
+describe('PtyScanner — app-url marker (OSC 7771)', () => {
+  it('parses a marker with url + label', () => {
+    const ev = new PtyScanner().feed('\x1b]7771;muxpad;app;url=http://localhost:5173;label=Web\x07');
+    expect(ev.markers).toEqual([{ url: 'http://localhost:5173', label: 'Web' }]);
+  });
+
+  it('parses a marker with url only', () => {
+    const ev = new PtyScanner().feed('\x1b]7771;muxpad;app;url=http://localhost:5173\x07');
+    expect(ev.markers).toEqual([{ url: 'http://localhost:5173' }]);
+  });
+
+  it('ignores an OSC 7771 missing the muxpad;app namespace', () => {
+    const ev = new PtyScanner().feed('\x1b]7771;something;else\x07');
+    expect(ev.markers).toBeUndefined();
+  });
+
+  it('a marker does not set a title and does not ring bell', () => {
+    const ev = new PtyScanner().feed('\x1b]7771;muxpad;app;url=http://localhost:5173\x07');
+    expect(ev.title).toBeUndefined();
+    expect(ev.bel).toBe(false);
+  });
+});
+
+describe('PtyScanner — memory bounds', () => {
+  it('stays bounded on a 10MB stream with no newline', () => {
+    const s = new PtyScanner();
+    // 10MB of a single never-terminated line (the `yes`-style worst case).
+    const chunk = 'x'.repeat(1024 * 1024);
+    for (let i = 0; i < 10; i++) s.feed(chunk);
+    // Reach into the private buffer to assert it never grew unbounded.
+    const lineBuf = (s as unknown as { lineBuf: string }).lineBuf;
+    expect(lineBuf.length).toBeLessThanOrEqual(2048);
+  });
+
+  it('stays bounded on a carriage-return progress bar (no LF)', () => {
+    const s = new PtyScanner();
+    for (let i = 0; i < 100000; i++) s.feed(`\rDownloading ${i}%`);
+    const lineBuf = (s as unknown as { lineBuf: string }).lineBuf;
+    expect(lineBuf.length).toBeLessThanOrEqual(2048);
+  });
+});

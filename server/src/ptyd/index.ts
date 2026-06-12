@@ -121,8 +121,10 @@ export async function startPtyd(opts: PtydOptions): Promise<PtydHandle> {
         broadcastEvent({ event: 'paneTitle', id, title: change.title });
       } else if (change.kind === 'fg') {
         broadcastEvent({ event: 'paneFg', id, cmd: change.cmd });
-      } else {
+      } else if (change.kind === 'attention') {
         broadcastEvent({ event: 'paneAttention', id, attention: change.attention });
+      } else {
+        broadcastEvent({ event: 'paneAppUrls', id, urls: change.urls });
       }
     },
     onPaneExit: (id, code, cause) =>
