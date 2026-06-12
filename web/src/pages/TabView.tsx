@@ -7,14 +7,15 @@ import {
   MosaicWindow,
 } from 'react-mosaic-component';
 import 'react-mosaic-component/react-mosaic-component.css';
-import type { LayoutNode, PaneSpec } from '@muxpad/shared';
+import type { AppUrl, LayoutNode, PaneSpec } from '@muxpad/shared';
 import { spliceLayoutAtTarget } from '@muxpad/shared';
 import { type TabWithPanes, api } from '../api';
 import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
 import { MobileInputBar } from '../components/MobileInputBar';
 import { PaneSelector } from '../components/PaneSelector';
+import { PaneWebSwitch } from '../components/PaneWebSwitch';
+import { ShellPaneBody } from '../components/ShellPaneBody';
 import { UrlPane } from '../components/UrlPane';
-import { XtermPane } from '../components/XtermPane';
 import { SvgClose } from '../components/icons';
 import { subscribe, subscribeReconnect } from '../events';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
@@ -618,6 +619,10 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                     // runtime-only attention flag. Preserve prior so we
                     // don't clobber a true value with undefined.
                     attention: e.pane.attention ?? p.attention,
+                    // Same: a PATCH-route pane.updated carries the raw row
+                    // without runtime app_urls. Coalesce so a kind/url edit
+                    // doesn't transiently blank the web-switch dropdown.
+                    app_urls: e.pane.app_urls ?? p.app_urls,
                   };
                 }),
               }
@@ -799,6 +804,20 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
             )}
           </nav>
         )}
+        {/* Web-switch for the active shell pane. The wrapper collapses via
+            :empty when PaneWebSwitch renders nothing (no detected app and no
+            prior URL), so it only takes space when there's actually a web
+            view to offer. Placed at the top so its dropdown opens downward
+            into the pane area rather than off the bottom of the screen. */}
+        {(() => {
+          const ap = tab.panes.find((p) => p.id === activeId);
+          if (!activeId || !ap || ap.kind !== 'shell') return null;
+          return (
+            <div className="mobile-web-switch-bar">
+              <PaneWebSwitch paneId={activeId} appUrls={ap.app_urls ?? []} />
+            </div>
+          );
+        })()}
         <main className="workspace-body workspace-body-mobile">
           {paneIds.map((paneId) => {
             const pane = tab.panes.find((p) => p.id === paneId);
@@ -865,6 +884,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                         <ShellPaneTitle
                           paneId={paneId}
                           label={label}
+                          appUrls={tilePane?.app_urls ?? []}
                           onKindToggled={onKindToggled}
                         />
                       )}
@@ -961,15 +981,7 @@ function PaneBody({
   if (pane.kind === 'url') {
     return <UrlPane paneId={pane.id} url={pane.url} />;
   }
-  return (
-    <XtermPane
-      paneId={pane.id}
-      onExit={onExit}
-      autoFocus={autoFocus}
-      foregroundCmd={pane.foreground_cmd ?? null}
-      paneActive={paneActive}
-    />
-  );
+  return <ShellPaneBody pane={pane} onExit={onExit} autoFocus={autoFocus} paneActive={paneActive} />;
 }
 
 /**
@@ -1209,10 +1221,12 @@ function UrlPaneTitle({
 function ShellPaneTitle({
   paneId,
   label,
+  appUrls,
   onKindToggled,
 }: {
   paneId: string;
   label: string;
+  appUrls: AppUrl[];
   onKindToggled: (updated: PaneSpec) => void;
 }) {
   const handleSwitch = async (next: 'shell' | 'url') => {
@@ -1237,6 +1251,7 @@ function ShellPaneTitle({
       >
         <span className="pane-chrome-title">{label}</span>
       </a>
+      <PaneWebSwitch paneId={paneId} appUrls={appUrls} />
     </>
   );
 }

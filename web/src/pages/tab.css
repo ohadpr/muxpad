@@ -315,6 +315,22 @@
   flex-direction: column;
 }
 
+/* Contextual web-switch bar above the active mobile pane. Collapses to
+   nothing when the switch has nothing to offer (PaneWebSwitch returns null
+   → wrapper is :empty). Height matches the mobile-tab-strip for rhythm. */
+.mobile-web-switch-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  height: 36px;
+  padding: 0 6px;
+  background: var(--bg-tabbar);
+  border-bottom: 1px solid var(--border);
+}
+.mobile-web-switch-bar:empty {
+  display: none;
+}
+
 /* Keep every mobile pane mounted but show only the active one so xterm
    state survives pane switches (WS stays open — no replay dance). */
 .mobile-pane-slot {
