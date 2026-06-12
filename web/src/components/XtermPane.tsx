@@ -642,10 +642,13 @@ export function XtermPane({
         const mobile = isMobileLayout();
         // Cursor CLI runs on xterm's normal buffer without mouse reporting.
         // SGR wheel bytes would appear as literal input ( [<64;…M ).
-        // Touch: invert step sign so finger-up reveals older scrollback
-        // (natural mobile direction); PTY/SGR keeps the Claude convention.
+        // `steps` is already in wheel units (finger down → negative → older),
+        // matching the SGR path below — pass it through unchanged so both
+        // scroll modes feel identical under the same gesture. (A previous
+        // -steps inversion here made plain-shell/Cursor scrollback move
+        // opposite to Claude panes.)
         if (shouldTouchScrollBuffer(term, fg, mobile)) {
-          scrollBufferByLines(term, -steps, mobile);
+          scrollBufferByLines(term, steps, mobile);
         } else {
           const pos = cellAt(refX, refY);
           if (pos) {
@@ -696,7 +699,9 @@ export function XtermPane({
       // Suppress when this gesture ever had >1 finger — otherwise a
       // motionless 2-finger tap fires a phantom click when the second
       // finger lifts (pointers.size === 0, !p.moved, both true).
-      if (!p.moved && pointers.size === 0 && !multiFingerGesture) {
+      // Also suppress on pointercancel: the OS/browser stole the gesture
+      // (notification pull, edge swipe) — the user didn't tap the pane.
+      if (e.type === 'pointerup' && !p.moved && pointers.size === 0 && !multiFingerGesture) {
         // Same as wheel: Cursor has no mouse mode — SGR clicks become text.
         if (shouldTouchScrollBuffer(term, foregroundCmdRef.current, isMobileLayout())) return;
         const pos = cellAt(p.startX, p.startY);
