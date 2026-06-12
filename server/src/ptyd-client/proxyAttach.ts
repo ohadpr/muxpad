@@ -1,4 +1,31 @@
+import { OP_RESIZE } from '@muxpad/shared';
 import WebSocket from 'ws';
+
+// Mirror of the web client's resize-send floor (MIN_COLS/MIN_ROWS in
+// XtermPane). A well-behaved client never sends dims below this — its own
+// fit paths refuse to. Frames below the floor can only come from a buggy
+// or stale client measuring a degenerate viewport (observed in the wild: a
+// backgrounded iOS Safari running an old bundle SIGWINCH-stormed every
+// pane to 8x4, blanking the terminals on every other device). ptyd itself
+// can't cheaply gain this guard — restarting it kills every live PTY — so
+// the long-lived-session-safe place to drop these frames is this proxy.
+const MIN_COLS = 40;
+const MIN_ROWS = 10;
+
+/** True for a client resize frame whose dims are below the sanity floor. */
+function isSubFloorResize(data: WebSocket.RawData): boolean {
+  // Runs on every browser→ptyd frame (keystrokes included) — only coerce
+  // to a Buffer for the rare non-Buffer shapes; never copy the hot path.
+  const buf = Buffer.isBuffer(data)
+    ? data
+    : Array.isArray(data)
+      ? Buffer.concat(data)
+      : Buffer.from(data);
+  if (buf.length < 5 || buf[0] !== OP_RESIZE) return false;
+  const cols = buf.readUInt16BE(1);
+  const rows = buf.readUInt16BE(3);
+  return cols < MIN_COLS || rows < MIN_ROWS;
+}
 
 export interface ProxyAttachOptions {
   /** Absolute path to the ptyd unix socket. */
@@ -74,6 +101,13 @@ export function proxyAttach(opts: ProxyAttachOptions): ProxyAttachHandle {
   });
 
   browser.on('message', (data: WebSocket.RawData) => {
+    // Backstop: never forward a degenerate resize to the PTY (see
+    // isSubFloorResize above). Logged so a misbehaving client is
+    // diagnosable from server.log instead of silently shrinking panes.
+    if (isSubFloorResize(data)) {
+      console.warn(`[resize-floor] pane=${paneId} dropped sub-floor resize frame`);
+      return;
+    }
     // Drop instead of queue if ptyd isn't open yet — the existing protocol
     // is resilient to this (clients resend resize on open) and the
     // alternative (queue + flush) is unnecessary complexity. See header.
