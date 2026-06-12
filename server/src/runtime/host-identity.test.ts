@@ -61,4 +61,14 @@ describe('host-identity — toReachableUrl', () => {
   it('returns the original string for an unparseable URL', async () => {
     expect(await toReachableUrl('not a url')).toBe('not a url');
   });
+
+  it('rewrites an all-interfaces host to loopback when not on a tailnet', async () => {
+    // 0.0.0.0 is a valid bind address but won't load in a browser. Only
+    // assert the swap when this machine isn't on a tailnet (otherwise the
+    // result is the tailnet name, which is also fine but host-dependent).
+    const out = await toReachableUrl('http://0.0.0.0:3000/');
+    if (!out.includes('.ts.net')) {
+      expect(out).toBe('http://127.0.0.1:3000/');
+    }
+  });
 });
