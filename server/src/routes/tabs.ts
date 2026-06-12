@@ -109,6 +109,7 @@ export function tabsRoutes(deps: {
       title: deps.cache.getTitle(p.id),
       foreground_cmd: deps.cache.getFg(p.id),
       attention: deps.cache.getAttention(p.id),
+      app_urls: deps.cache.getAppUrls(p.id),
     }));
     return c.json({ ...t, panes: decorated });
   });

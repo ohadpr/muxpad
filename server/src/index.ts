@@ -55,6 +55,7 @@ cache.on('paneChange', (paneId: string) => {
       title: cache.getTitle(paneId),
       foreground_cmd: cache.getFg(paneId),
       attention: cache.getAttention(paneId),
+      app_urls: cache.getAppUrls(paneId),
     },
   });
 });

@@ -21,6 +21,23 @@ export const LayoutNodeSchema: z.ZodType<LayoutNode> = z.lazy(() =>
   ]),
 );
 
+/**
+ * A web app muxpad detected a shell pane is serving — surfaced so the pane
+ * can offer "switch into a web view of this" without the user adding a
+ * separate URL pane. `url` is the address to load (already rewritten to a
+ * viewer-reachable host where possible — e.g. a tailnet name instead of
+ * localhost). `label` is a human tag (from an explicit `muxpad app-url`
+ * marker, else null). `source` distinguishes an explicit marker from a
+ * URL muxpad scraped out of the pane's output — the chrome can badge /
+ * pre-select markers since they're zero-false-positive.
+ */
+export const AppUrlSchema = z.object({
+  url: z.string(),
+  label: z.string().nullable().default(null),
+  source: z.enum(['marker', 'text']),
+});
+export type AppUrl = z.infer<typeof AppUrlSchema>;
+
 export const PaneSpecSchema = z.object({
   id: z.string(),
   tab_id: z.string(),
@@ -39,6 +56,10 @@ export const PaneSpecSchema = z.object({
   // the user last interacted with it. Decorated at the route layer from
   // the ptyd cache (same source as Tab.attention / Workspace.attention).
   attention: z.boolean().optional(),
+  // Runtime-only. Web apps muxpad detected this (shell) pane is serving,
+  // confirmed listening. Decorated at the route layer from the ptyd cache.
+  // Empty/absent for url panes and shells that aren't serving anything.
+  app_urls: z.array(AppUrlSchema).optional(),
 });
 export type PaneSpec = z.infer<typeof PaneSpecSchema>;
 
