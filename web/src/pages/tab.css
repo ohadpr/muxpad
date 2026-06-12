@@ -330,9 +330,11 @@
 
 /* The MobileInputBar is position:fixed (so iOS Safari floats it above
    the bottom URL bar), so it doesn't reserve space in the flow. Pad
-   the workspace's bottom by the bar's measured height (set imperatively
-   by MobileInputBar.tsx via ResizeObserver). Falls back to 0 on screens
-   where the bar isn't mounted (desktop, or active URL pane). */
+   the workspace's bottom by the bar's measured height, which the bar
+   sets on THIS element (its closest .workspace-root) via ResizeObserver
+   — per-tab, so one tab's hidden bar can't zero another tab's padding.
+   Falls back to 0 when the bar is hidden (desktop, or active URL pane:
+   a hidden bar measures 0px). */
 .workspace-root.workspace-mobile {
   padding-bottom: var(--mobile-input-bar-height, 0px);
 }

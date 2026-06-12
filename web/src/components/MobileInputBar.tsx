@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { api } from '../api';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
+import { planSubmit } from '../lib/mobile-submit';
 import { isCursorAgentCmd } from '../lib/xterm-internals';
 import './MobileInputBar.css';
 
@@ -33,6 +34,11 @@ import './MobileInputBar.css';
  *
  * Hidden when the active pane is a URL pane (nothing to send to).
  */
+// Gap between sending composed text and the submitting Enter. Keeps the CR
+// out of the same PTY read so a paste-detecting TUI (Claude Code) treats it
+// as a real keypress, not pasted-newline content. See submit().
+const SUBMIT_ENTER_DELAY_MS = 50;
+
 export interface MobileInputBarProps {
   paneId: string | null;
   paneKind: 'shell' | 'url' | null;
@@ -45,6 +51,17 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
   const editableRef = useRef<HTMLDivElement | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
 
+  // The bar is ALWAYS rendered (hidden via the `hidden` attribute when the
+  // active pane isn't a shell) so the positioning effect below — which runs
+  // once per mount — always has a live element to observe. The previous
+  // `return null` early-out broke two ways: (a) mount while a URL pane was
+  // active → barRef was null when the effect ran, so the bar was never
+  // positioned even after switching to a shell pane; (b) shell → URL → shell
+  // re-created the DOM node while the effect still observed the old detached
+  // one. Hiding via attribute keeps one stable element for the lifetime of
+  // the component.
+  const visible = !!paneId && paneKind === 'shell';
+
   // Anchor the bar's bottom edge to the visual viewport bottom (= top
   // of the on-screen keyboard when open). We position by `top`, not by
   // `bottom:0`, because iOS Safari's keyboard-aware handling of
@@ -54,10 +71,18 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
   //
   // Also mirrors the bar's height into a CSS variable so the workspace
   // above can leave matching padding-bottom (the bar is position:fixed
-  // and doesn't reserve flow space).
+  // and doesn't reserve flow space). The variable is set on this tab's
+  // own .workspace-root, NOT document.documentElement: WorkspaceLayout
+  // keeps one TabView (and thus one MobileInputBar) mounted per tab, and
+  // a hidden tab's ResizeObserver firing with offsetHeight 0 used to zero
+  // the global variable out from under the visible tab. Scoping the var
+  // to the bar's own subtree makes each tab self-consistent — a hidden
+  // bar writes 0px to a root nobody can see, and doubles as the "no
+  // padding while a URL pane is active" behavior (hidden ⇒ 0px).
   useEffect(() => {
     const el = barRef.current;
     if (!el) return;
+    const root = el.closest<HTMLElement>('.workspace-root');
     // In standalone PWA mode (home-screen install) iOS has no URL bar
     // or form-accessory bar to fight, and its native handling of
     // `position: fixed; bottom: 0` correctly anchors to the visual
@@ -72,7 +97,7 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
     let barHeight = el.offsetHeight;
     const ro = new ResizeObserver(() => {
       barHeight = el.offsetHeight;
-      document.documentElement.style.setProperty('--mobile-input-bar-height', `${barHeight}px`);
+      root?.style.setProperty('--mobile-input-bar-height', `${barHeight}px`);
       reposition();
     });
     ro.observe(el);
@@ -126,13 +151,12 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
     return () => {
       ro.disconnect();
       cleanup();
-      document.documentElement.style.removeProperty('--mobile-input-bar-height');
+      root?.style.removeProperty('--mobile-input-bar-height');
     };
   }, []);
 
-  if (!paneId || paneKind !== 'shell') return null;
-
   const send = (data: string) => {
+    if (!paneId) return;
     window.dispatchEvent(
       new CustomEvent('muxpad:send-input', {
         detail: { paneId, data },
@@ -216,10 +240,22 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
   const submit = () => {
     const el = editableRef.current;
     const current = el?.textContent ?? '';
-    // One WS frame for text+CR avoids an intermediate TUI render between
-    // "text at prompt" and "submitted" that can jerk Ink scroll position.
-    // Empty submit = bare CR (blank Enter at the prompt).
-    send(current.length > 0 ? `${current}\r` : '\r');
+    // Send the text and the submitting Enter as TWO separate frames (see
+    // planSubmit). If they go out together (one PTY read), Claude Code's paste
+    // detection sees a multi-char burst ending in CR and treats the whole
+    // thing as a paste — so the trailing CR is inserted as a literal newline
+    // in the prompt instead of submitting, and the command just sits there. A
+    // standalone CR a beat later reads as a real Enter keypress and runs the
+    // command. The delay must exceed the TUI's paste-coalescing window (a few
+    // ms); 50ms is imperceptible but safely clear of it.
+    const { text, enter } = planSubmit(current);
+    if (text !== null) {
+      send(text);
+      window.setTimeout(() => send(enter), SUBMIT_ENTER_DELAY_MS);
+    } else {
+      // Empty submit = bare CR (blank Enter at the prompt).
+      send(enter);
+    }
     if (el) {
       el.textContent = '';
       el.focus(); // keep the keyboard up for the next command
@@ -228,7 +264,7 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
   };
 
   return (
-    <div ref={barRef} className="mobile-input-bar" data-pane={paneId}>
+    <div ref={barRef} className="mobile-input-bar" data-pane={paneId} hidden={!visible}>
       <div className="mobile-input-keys" role="toolbar" aria-label="Special keys">
         <button type="button" className="mobile-input-key" onClick={() => send('\x1b')}>
           Esc

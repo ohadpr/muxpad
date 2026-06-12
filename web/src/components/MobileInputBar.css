@@ -23,6 +23,12 @@
   /* Above any document-level overscroll bounce and any pane content. */
   z-index: 50;
 }
+/* The bar stays mounted with `hidden` when the active pane isn't a shell
+   (and inside hidden tab slots). `display: flex` above would otherwise
+   beat the UA stylesheet's [hidden] rule — make it explicit. */
+.mobile-input-bar[hidden] {
+  display: none;
+}
 
 /* Special-keys row — horizontally scrollable if the row overflows the
    viewport (gives room to add Ctrl-D, Ctrl-Z, etc. later without
