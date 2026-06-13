@@ -162,7 +162,11 @@ function WorkspaceNode({
   };
 
   return (
-    <div className="navtree-group" data-active={isActive ? 'true' : undefined}>
+    <div
+      className="navtree-group"
+      data-active={isActive ? 'true' : undefined}
+      data-expanded={expanded ? 'true' : undefined}
+    >
       <div className="navtree-ws-row" data-active={isActive ? 'true' : undefined}>
         <button
           type="button"

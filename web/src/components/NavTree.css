@@ -140,7 +140,13 @@
   font-weight: 600;
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
-.navtree-ws-row[data-active="true"]::after,
+/* The accent rail marks the EXACT place you are. Expanded active
+   workspace: the rail belongs to the active tab alone (ws tint + card
+   frame already carry the workspace-level signal — and with the first
+   tab active, two stacked rails read as one odd broken line). The ws
+   row only takes the rail when collapsed, i.e. when the tab's rail
+   isn't there to carry it. */
+.navtree-group:not([data-expanded="true"]) > .navtree-ws-row[data-active="true"]::after,
 .navtree-tab-row[data-active="true"]::after {
   content: "";
   position: absolute;
