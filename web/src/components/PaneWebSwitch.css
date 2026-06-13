@@ -170,6 +170,33 @@
   margin-top: 2px;
   padding-top: 8px;
 }
+/* Destructive pane-KIND conversion (shell→url): unlike the web-view actions
+   above (which keep the terminal alive), this CLOSES the terminal. Set apart
+   by a separator, a quieter idle tone, and a danger hover so it never reads
+   as just another way to "show web". */
+.pane-web-switch-convert {
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+  padding-top: 8px;
+  color: var(--fg-faint);
+}
+.pane-web-switch-convert:hover {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+}
+/* "closes terminal" — the inline clarifier that differentiates this from the
+   terminal-preserving web view. */
+.pane-web-switch-note {
+  margin-left: auto;
+  padding-left: 8px;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+.pane-web-switch-convert:hover .pane-web-switch-note {
+  color: var(--danger);
+}
 
 .pane-web-switch-input {
   margin: 4px 2px 2px;
