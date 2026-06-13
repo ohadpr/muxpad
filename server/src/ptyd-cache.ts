@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events';
 import type { AppUrl } from '@muxpad/shared';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
+import { AppUrlDetector } from './runtime/app-url-detector.js';
+import type { AppUrlMarker } from './runtime/pty-scanner.js';
 
 /**
  * Per-pane decoration state cached on the main server from ptyd push events.
@@ -60,6 +62,13 @@ export class PtydCache extends EventEmitter {
   // the paneCwd handler's `?.add` is a no-op — so the set never grows
   // beyond a single inflight flushCwds.
   private cwdEventRacers: Set<string> | null = null;
+  // Server-side app-url detection. ptyd ships raw URL sightings
+  // (`paneUrlsSeen`); the detector classifies hosts + probes for a listener
+  // and writes the confirmed list back into the cache. It lives here so this
+  // logic is a server-only restart away — never a ptyd bounce.
+  private readonly detector = new AppUrlDetector((paneId, urls) => {
+    this.update(paneId, { appUrls: urls });
+  });
 
   attach(client: PtydClient): void {
     client.on('paneCwd', (e: { id: string; cwd: string }) => {
@@ -75,17 +84,18 @@ export class PtydCache extends EventEmitter {
     client.on('paneAttention', (e: { id: string; attention: boolean }) => {
       this.update(e.id, { attention: e.attention });
     });
-    client.on('paneAppUrls', (e: { id: string; urls: AppUrl[] }) => {
-      // The manager already diffs by content before emitting, so every event
-      // here is a real change — update() sees a fresh array (reference !==)
-      // and fires paneChange, which is exactly what we want.
-      this.update(e.id, { appUrls: e.urls });
+    client.on('paneUrlsSeen', (e: { id: string; urls: string[]; markers: AppUrlMarker[] }) => {
+      // Raw sightings from ptyd's scanner. Hand them to the detector, which
+      // probes/classifies and calls back (its onAppUrls) into update() with
+      // the confirmed list once it changes.
+      this.detector.ingest(e.id, e.urls, e.markers);
     });
     client.on('paneExit', (e: { id: string }) => {
       // Drop the entry on exit so a respawned pane (same id) starts with a
       // clean slate. If the row still exists (delete is a separate
       // operation) the next ensurePane will surface fresh events to
       // repopulate the cache.
+      this.detector.forget(e.id);
       if (this.state.delete(e.id)) {
         this.emit('paneRemoved', e.id);
       }
@@ -192,6 +202,7 @@ export class PtydCache extends EventEmitter {
 
   /** Drop the entry for `id`. Used by route handlers on DELETE /api/panes/:id. */
   forget(id: string): void {
+    this.detector.forget(id);
     if (this.state.delete(id)) {
       this.emit('paneRemoved', id);
     }
