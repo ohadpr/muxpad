@@ -4,7 +4,7 @@
    One component, two chrome homes:
      [data-variant='sidebar'] — persistent desktop left rail. Dense
        file-navigator rows; close buttons appear on hover.
-     [data-variant='sheet']   — content of the mobile bottom sheet.
+     [data-variant='sheet']   — content of the mobile drop-down panel.
        Thumb-height rows; close buttons always faintly present (touch
        has no hover).
 
@@ -39,7 +39,7 @@
   --nt-hit: 32px;
   --nt-indent: 40px;
   --nt-guide: 20px;
-  /* The sheet itself is bg-elev; cards step back to bg for an inset read. */
+  /* The panel itself is bg-elev; cards step back to bg for an inset read. */
   --nt-card-bg: var(--bg);
 }
 

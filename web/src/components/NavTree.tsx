@@ -30,7 +30,7 @@ interface NavTreeProps {
  *     chrome entirely: dense file-navigator rows, hover-revealed close
  *     buttons, double-click inline rename on the active workspace/tab,
  *     Alt+1…9 quick-switch kept.
- *   variant="sheet" — content of the mobile bottom sheet. Same tree,
+ *   variant="sheet" — content of the mobile drop-down panel. Same tree,
  *     thumb-height rows, close buttons always faintly present (touch has
  *     no hover).
  *
