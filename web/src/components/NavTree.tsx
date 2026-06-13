@@ -74,6 +74,19 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
 
   return (
     <nav className="navtree" data-variant={variant} aria-label="Workspaces and tabs">
+      <div className="navtree-section">
+        <span className="navtree-section-label">Workspaces</span>
+        <button
+          type="button"
+          className="navtree-section-add"
+          onClick={() => void createWorkspace()}
+          disabled={creatingWs}
+          title="New workspace"
+          aria-label="New workspace"
+        >
+          {creatingWs ? '…' : '+'}
+        </button>
+      </div>
       <div className="navtree-scroll">
         {workspaces.map((w) => (
           <WorkspaceNode
@@ -90,14 +103,6 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
           />
         ))}
       </div>
-      <button
-        type="button"
-        className="navtree-new-ws"
-        onClick={() => void createWorkspace()}
-        disabled={creatingWs}
-      >
-        {creatingWs ? 'Creating…' : '+ New workspace'}
-      </button>
     </nav>
   );
 }
@@ -157,7 +162,7 @@ function WorkspaceNode({
   };
 
   return (
-    <div className="navtree-group">
+    <div className="navtree-group" data-active={isActive ? 'true' : undefined}>
       <div className="navtree-ws-row" data-active={isActive ? 'true' : undefined}>
         <button
           type="button"

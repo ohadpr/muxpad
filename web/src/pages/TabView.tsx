@@ -108,6 +108,19 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
 
   const [tab, setTab] = useState<TabWithPanes | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Bumping this re-runs the load effect. Used to retry a failed load
+  // when the tab is (re)activated — without it, one transient failure
+  // (server blip, stale-cache race) left a kept-alive instance on a
+  // permanent error screen that only a full page refresh could clear.
+  const [loadNonce, setLoadNonce] = useState(0);
+  const errorRef = useRef<string | null>(null);
+  errorRef.current = error;
+  useEffect(() => {
+    // Deliberately keyed on the activation transition only (not on
+    // `error`) so a failure while already active can't retry-loop;
+    // leaving and re-entering the tab is the retry gesture.
+    if (isActive && errorRef.current) setLoadNonce((n) => n + 1);
+  }, [isActive]);
   // Live mirror of isActive for async closures (the tab-load effect doesn't
   // re-run on activation, so its captured prop value can be stale).
   const isActiveRef = useRef(isActive);
@@ -128,11 +141,13 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   const addPaneRef = useRef<(() => void) | null>(null);
 
   // Remember which tab we're on so the next visit to /w/$wsSlug
-  // restores it (see WorkspaceLayout).
+  // restores it (see WorkspaceLayout). Gated on a successful load —
+  // recording a slug that turns out not to exist would make the
+  // workspace-root redirect bounce right back to the dead tab.
   useEffect(() => {
-    if (!isActive) return;
+    if (!isActive || !tab) return;
     setLastTabSlug(wsSlug, tabSlug);
-  }, [isActive, wsSlug, tabSlug]);
+  }, [isActive, tab, wsSlug, tabSlug]);
 
   // Persist the active pane per tab whenever it changes (mobile only —
   // desktop shows all panes via mosaic, no "active" concept).
@@ -308,8 +323,10 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   // tabs does not tear down xterm panes. Title / fg / attention and
   // structural changes arrive via /ws/events after the initial load.
   useEffect(() => {
+    void loadNonce; // dep is the retry trigger; no value needed in the body
     if (!workspace) return;
     setClosingTab(false);
+    setError(null);
     let viewedTabId: string | null = null;
     let cancelled = false;
     (async () => {
@@ -321,10 +338,15 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           // disagrees — the tab was deleted out from under us (another
           // device, server-side cascade). Don't dead-end on an error
           // screen; bounce to the workspace root, whose redirect effect
-          // picks a valid tab. Only the active view navigates — a hidden
-          // TabView yanking the router out from under the visible one
-          // would be worse than its silent stale state.
+          // picks a valid tab. Refresh the shared caches FIRST so that
+          // redirect can't pick this same dead slug out of the stale
+          // list and bounce straight back here. Only the active view
+          // navigates — a hidden TabView yanking the router out from
+          // under the visible one would be worse than its silent stale
+          // state.
           setError('tab not found');
+          await Promise.all([refreshTabs(workspace.id), refreshWorkspaces()]).catch(() => {});
+          if (cancelled) return;
           if (isActiveRef.current) {
             void navigate({ to: '/w/$wsSlug', params: { wsSlug }, replace: true });
           }
@@ -354,7 +376,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           .catch(() => {});
       }
     };
-  }, [workspace?.id, tabSlug]);
+  }, [workspace?.id, tabSlug, loadNonce]);
 
   const persistLayout = useCallback(
     async (layout: Layout) => {
