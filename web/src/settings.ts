@@ -27,7 +27,7 @@ const THEME_ALIASES: Record<string, Theme> = {
 // Where the workspace/tab navigator lives on desktop. 'top' is the
 // classic WorkspaceSwitcher + TabBar chrome; 'sidebar' replaces both
 // with a persistent left NavTree. Mobile ignores this (always the
-// bottom-sheet tree).
+// drop-down panel tree).
 export type NavLayout = 'top' | 'sidebar';
 
 export interface Settings {

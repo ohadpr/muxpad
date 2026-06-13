@@ -12,13 +12,16 @@ interface Props {
 /**
  * Mobile-only chrome trigger that replaces the desktop's separate
  * WorkspaceSwitcher + TabBar with a single breadcrumb-style trigger
- * (`Workspace › Tab ▾`) opening a BOTTOM SHEET.
+ * (`Workspace › Tab ▾`) opening a full-width PANEL that drops down
+ * from directly under the chrome bar.
  *
- * The sheet hosts the same NavTree the desktop sidebar uses — one
- * navigator, two presentations. Bottom-anchored because that's where
- * thumbs live: full-width rows, drag-handle affordance, scrim dismiss.
- * Replaces the old 280px anchored popover, which fought the viewport
- * for width and put every target at the top of the screen.
+ * The panel hosts the same NavTree the desktop sidebar uses — one
+ * navigator, two presentations. Top-anchored so the surface visibly
+ * originates from the trigger you just tapped (a bottom sheet read as
+ * disconnected: tap at the top, something appears at the bottom). The
+ * chrome bar stays undimmed above it, so the breadcrumb doubles as the
+ * panel's anchor — tap it again to close. Replaces the old 280px
+ * anchored popover, which fought the viewport for width.
  */
 export function MobileNavSwitcher({ activeWorkspaceSlug }: Props) {
   const [open, setOpen] = useState(false);
@@ -107,7 +110,7 @@ export function MobileNavSwitcher({ activeWorkspaceSlug }: Props) {
               <nav>. Not role="dialog": no focus trap / form semantics,
               just a disclosure surface dismissed via scrim or Escape. */}
           <div
-            className="mns-sheet"
+            className="mns-panel"
             data-closing={closing ? 'true' : undefined}
             onAnimationEnd={(e) => {
               if (closing && e.target === e.currentTarget) {
@@ -116,7 +119,6 @@ export function MobileNavSwitcher({ activeWorkspaceSlug }: Props) {
               }
             }}
           >
-            <div className="mns-sheet-handle" aria-hidden="true" />
             <NavTree
               variant="sheet"
               activeWorkspaceSlug={activeWorkspaceSlug}

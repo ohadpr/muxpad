@@ -30,7 +30,7 @@ const REPO_URL = 'https://github.com/ohadpr/muxpad';
  *   'top'     — WorkspaceSwitcher + TabBar in the chrome bar (classic).
  *   'sidebar' — a persistent left NavTree replaces both; the top bar
  *               slims down to brand + build + settings.
- * Mobile always gets the MobileNavSwitcher breadcrumb + bottom sheet.
+ * Mobile always gets the MobileNavSwitcher breadcrumb + drop-down panel.
  */
 export function AppLayout() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -71,7 +71,7 @@ export function AppLayout() {
           <Brand asLink={true} responsive={true} markOnly={!!activeWorkspace} />
           {activeWorkspace && isMobile && (
             // Single merged trigger on mobile: workspace + tab breadcrumb
-            // opening the bottom-sheet NavTree. Replaces WorkspaceSwitcher
+            // opening the drop-down NavTree panel. Replaces WorkspaceSwitcher
             // + TabBar for thumb-economy reasons.
             <MobileNavSwitcher activeWorkspaceSlug={activeWorkspace.slug} />
           )}
