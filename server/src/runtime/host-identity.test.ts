@@ -1,6 +1,12 @@
 import net from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { isSelfHost, normalizeHost, probeListening, toReachableUrl } from './host-identity.js';
+import {
+  isPrivateAddress,
+  isSelfHost,
+  normalizeHost,
+  probeListening,
+  toReachableUrl,
+} from './host-identity.js';
 
 /** Open a throwaway TCP server on a free port of `bindHost`; returns {port, close}. */
 function listenEphemeral(bindHost = '127.0.0.1'): Promise<{ port: number; close: () => void }> {
@@ -77,6 +83,42 @@ describe('host-identity — normalizeHost', () => {
   });
 });
 
+describe('host-identity — isPrivateAddress', () => {
+  it('accepts loopback / RFC1918 / link-local / CGNAT ranges', () => {
+    for (const ip of [
+      '127.0.0.1',
+      '10.0.0.5',
+      '192.168.1.20',
+      '172.16.5.5',
+      '172.31.255.255',
+      '169.254.1.1',
+      '100.64.0.1',
+      '100.118.83.18', // CGNAT (Tailscale-style)
+      '100.127.255.255',
+      '::1',
+      'fe80::1',
+      'fd7a:115c:a1e0::1', // unique-local (Tailscale-style)
+    ]) {
+      expect(isPrivateAddress(ip)).toBe(true);
+    }
+  });
+
+  it('rejects public addresses and out-of-range neighbours', () => {
+    for (const ip of [
+      '8.8.8.8',
+      '1.1.1.1',
+      '172.15.0.1', // just below the 172.16/12 block
+      '172.32.0.1', // just above it
+      '100.63.0.1', // just below CGNAT
+      '100.128.0.1', // just above CGNAT
+      '2606:4700::1', // public IPv6
+      '999.0.0.1', // not a valid octet
+    ]) {
+      expect(isPrivateAddress(ip)).toBe(false);
+    }
+  });
+});
+
 describe('host-identity — isSelfHost', () => {
   it('recognizes local host forms', async () => {
     expect(await isSelfHost('localhost')).toBe(true);
@@ -90,9 +132,20 @@ describe('host-identity — isSelfHost', () => {
     expect(await isSelfHost('[::]')).toBe(true);
   });
 
-  it('rejects an external host (the github-looking case)', async () => {
+  it('accepts private/LAN/VPN address literals without any DNS or VPN CLI', async () => {
+    expect(await isSelfHost('192.168.1.50')).toBe(true);
+    expect(await isSelfHost('10.1.2.3')).toBe(true);
+    expect(await isSelfHost('100.118.83.18')).toBe(true); // tailnet-style CGNAT IP
+  });
+
+  it('rejects a public address literal (no DNS needed)', async () => {
+    expect(await isSelfHost('8.8.8.8')).toBe(false);
+    expect(await isSelfHost('1.1.1.1')).toBe(false);
+  });
+
+  it('rejects an external host name (the github-looking case)', async () => {
+    // Resolves to a public IP (or fails to resolve) — either way, not local.
     expect(await isSelfHost('github.com')).toBe(false);
-    expect(await isSelfHost('docs.anthropic.com')).toBe(false);
   });
 });
 
