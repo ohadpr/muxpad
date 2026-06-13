@@ -1,17 +1,17 @@
-import type { AppUrl } from '@muxpad/shared';
 import { PaneRuntime, type PaneRuntimeSpec } from './PaneRuntime.js';
+import type { AppUrlMarker } from './pty-scanner.js';
 
 /**
  * A "raw" decoration change for a pane — the manager observed a delta in
- * one of {title, foreground_cmd, attention, appUrls} since the previous
- * tick. Used by ptyd to push lifecycle events on the control channel
- * without needing a PaneStore for full row hydration.
+ * one of {title, foreground_cmd, attention} since the previous tick. Used by
+ * ptyd to push lifecycle events on the control channel without needing a
+ * PaneStore for full row hydration. (App-url sightings are NOT decorations —
+ * they're forwarded raw via `onUrlsSeen` and judged on the main server.)
  */
 export type PaneChange =
   | { kind: 'title'; title: string | null }
   | { kind: 'fg'; cmd: string | null }
-  | { kind: 'attention'; attention: boolean }
-  | { kind: 'appUrls'; urls: AppUrl[] };
+  | { kind: 'attention'; attention: boolean };
 
 /**
  * Configuration for PaneManager. All callbacks are optional — ptyd wires
@@ -38,6 +38,13 @@ export interface PaneManagerOptions {
    */
   onPaneChange?: (paneId: string, change: PaneChange) => void;
   /**
+   * Fires with the raw http(s) URLs and app-url markers the scanner
+   * extracted from a pane's output. ptyd forwards these verbatim — it does
+   * NOT validate or probe them. The main server runs the AppUrlTracker on
+   * the far end, so detection logic lives on the restartable process.
+   */
+  onUrlsSeen?: (paneId: string, urls: string[], markers: AppUrlMarker[]) => void;
+  /**
    * Lifecycle callback fired when a runtime exits (naturally or via
    * `kill`). Mirrors the `onPaneChange` shape — independent of the cwd
    * persistence hook, so ptyd can wire it on its own.
@@ -61,9 +68,6 @@ export class PaneManager {
   private lastTitle = new Map<string, string | null>();
   private lastFg = new Map<string, string | null>();
   private lastAttention = new Map<string, boolean>();
-  // Diff state for app-urls: the JSON of the last list broadcast per pane.
-  // JSON compare keeps the diff cheap and order/label-sensitive.
-  private lastAppUrls = new Map<string, string>();
   private cwdPollTimer: NodeJS.Timeout | null = null;
   private cmdPollTimer: NodeJS.Timeout | null = null;
 
@@ -111,11 +115,7 @@ export class PaneManager {
     const entries = [...this.runtimes.entries()];
     const results = await Promise.allSettled(
       entries.map(async ([id, runtime]) => {
-        // Re-probe app-urls on the same cadence so a server that has since
-        // died drops out of the dropdown (and a late-binding one appears).
-        // It self-emits 'appurls-changed' only on a real delta.
         const cmd = await runtime.getForegroundCommand();
-        await runtime.refreshAppUrls();
         return { id, cmd };
       }),
     );
@@ -156,8 +156,6 @@ export class PaneManager {
       const title = runtime.getCurrentTitle();
       const fg = this.foregroundCmd.get(id) ?? null;
       const attention = runtime.getNeedsAttention();
-      const appUrls = runtime.getAppUrls();
-      const appUrlsJson = JSON.stringify(appUrls);
 
       // Compute per-field deltas explicitly. `has(id)` differentiates
       // "first sample" from "changed value" so the first observation
@@ -166,19 +164,16 @@ export class PaneManager {
       const fgChanged = !this.lastFg.has(id) || this.lastFg.get(id) !== fg;
       const attentionChanged =
         !this.lastAttention.has(id) || this.lastAttention.get(id) !== attention;
-      const appUrlsChanged = !this.lastAppUrls.has(id) || this.lastAppUrls.get(id) !== appUrlsJson;
-      if (!titleChanged && !fgChanged && !attentionChanged && !appUrlsChanged) continue;
+      if (!titleChanged && !fgChanged && !attentionChanged) continue;
 
       this.lastTitle.set(id, title);
       this.lastFg.set(id, fg);
       this.lastAttention.set(id, attention);
-      this.lastAppUrls.set(id, appUrlsJson);
 
       try {
         if (titleChanged) onPaneChange(id, { kind: 'title', title });
         if (fgChanged) onPaneChange(id, { kind: 'fg', cmd: fg });
         if (attentionChanged) onPaneChange(id, { kind: 'attention', attention });
-        if (appUrlsChanged) onPaneChange(id, { kind: 'appUrls', urls: appUrls });
       } catch {
         // Swallow — we don't want one bad subscriber to wedge the loop.
       }
@@ -230,11 +225,19 @@ export class PaneManager {
     r.on('attention-changed', () => {
       this.emitDecorations(spec.id);
     });
-    // App-url list changed (debounced confirm pass found a delta) — push it
-    // out eagerly rather than waiting for the next cmd-poll sweep.
-    r.on('appurls-changed', () => {
-      this.emitDecorations(spec.id);
-    });
+    // Raw URL/marker sightings — forward verbatim to the main server, which
+    // owns the tracker/probe. Fires only when the scanner finds a URL on a
+    // completed output line, so this isn't per-chunk chatter.
+    const onUrlsSeen = this.opts.onUrlsSeen;
+    if (onUrlsSeen) {
+      r.on('urls-seen', (urls, markers) => {
+        try {
+          onUrlsSeen(spec.id, urls, markers);
+        } catch {
+          // ignore — a bad subscriber shouldn't wedge the output path
+        }
+      });
+    }
     r.on('exit', (code) => {
       // Keep it referenced so post-exit consumers can still query snapshot/exitCode,
       // but unhook from the live map so a new spec for the same id can take over.
@@ -244,7 +247,6 @@ export class PaneManager {
       this.lastTitle.delete(spec.id);
       this.lastFg.delete(spec.id);
       this.lastAttention.delete(spec.id);
-      this.lastAppUrls.delete(spec.id);
       // Fire the manager-level exit hook AFTER local cleanup so callbacks
       // observing the manager's state see it consistent with the exit.
       const onPaneExit = this.opts.onPaneExit;

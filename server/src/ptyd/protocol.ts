@@ -1,5 +1,5 @@
-import type { AppUrl } from '@muxpad/shared';
 import type { PaneRuntimeSpec } from '../runtime/PaneRuntime.js';
+import type { AppUrlMarker } from '../runtime/pty-scanner.js';
 
 /**
  * Bump when wire shape changes incompatibly. Both ends should refuse to
@@ -70,4 +70,8 @@ export type CtrlPushEvent =
   | { event: 'paneTitle'; id: string; title: string | null }
   | { event: 'paneFg'; id: string; cmd: string | null }
   | { event: 'paneAttention'; id: string; attention: boolean }
-  | { event: 'paneAppUrls'; id: string; urls: AppUrl[] };
+  // Raw URL/marker sightings the scanner extracted from this pane's output.
+  // ptyd does NOT validate or probe these — the main server runs the
+  // AppUrlTracker (host classification + listening probe) so detection logic
+  // can change with a server-only restart, never a ptyd bounce.
+  | { event: 'paneUrlsSeen'; id: string; urls: string[]; markers: AppUrlMarker[] };
