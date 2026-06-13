@@ -1,0 +1,329 @@
+/* ──────────────────────────────────────────────────────────────────────
+   NavTree — the workspace/tab navigator tree.
+
+   One component, two chrome homes:
+     [data-variant='sidebar'] — persistent desktop left rail. Dense
+       file-navigator rows; close buttons appear on hover.
+     [data-variant='sheet']   — content of the mobile bottom sheet.
+       Thumb-height rows; close buttons always faintly present (touch
+       has no hover).
+
+   Visual grammar shared with the rest of muxpad's chrome:
+     accent tint + left rail  = active workspace ("you are here")
+     neutral bg + left rail   = active tab (different color family on
+                                purpose so the two active states read
+                                apart at a glance)
+     red dot                  = "wants you"
+     whitespace               = group separation (no borders, no fills)
+   ────────────────────────────────────────────────────────────────────── */
+
+.navtree {
+  /* Row metrics are the only thing the two variants disagree on. */
+  --nt-row-ws: 30px;
+  --nt-row-tab: 28px;
+  --nt-hit: 24px; /* square hit target for disclosure/close */
+  --nt-indent: 30px; /* tab text column = disclosure col + step */
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size);
+  color: var(--fg);
+}
+.navtree[data-variant="sheet"] {
+  --nt-row-ws: 44px;
+  --nt-row-tab: 42px;
+  --nt-hit: 32px;
+  --nt-indent: 40px;
+}
+
+.navtree-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 6px 0;
+}
+
+/* Whitespace is the chunking signal between workspace groups. */
+.navtree-group + .navtree-group {
+  margin-top: 6px;
+}
+
+/* ─── Workspace row ──────────────────────────────────────────────────── */
+
+.navtree-ws-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: var(--nt-row-ws);
+  padding: 0 8px 0 4px;
+  font-weight: 500;
+}
+.navtree-ws-row:hover {
+  background: var(--bg-hover);
+}
+.navtree-ws-row[data-active="true"] {
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.navtree-ws-row[data-active="true"]::after,
+.navtree-tab-row[data-active="true"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: var(--chrome-rail);
+  background: var(--accent);
+  border-radius: 0 2px 2px 0;
+}
+
+.navtree-disclosure {
+  flex: 0 0 var(--nt-hit);
+  height: var(--nt-hit);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--fg-faint);
+  cursor: pointer;
+  border-radius: 4px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.navtree-disclosure:hover {
+  color: var(--fg);
+}
+.navtree-disclosure svg {
+  transition: transform 120ms ease;
+}
+.navtree-disclosure[data-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.navtree-ws-name {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 2px;
+  color: inherit;
+  text-decoration: none;
+}
+.navtree-ws-name:hover {
+  text-decoration: none;
+}
+.navtree-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Quiet tab-count chip on collapsed rows — says what's folded away. */
+.navtree-ws-count {
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--fg-faint);
+  background: var(--bg-hover);
+  border-radius: 8px;
+  padding: 3px 6px;
+  margin-right: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Tab rows ───────────────────────────────────────────────────────── */
+
+.navtree-tab-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.navtree-tab-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--nt-row-tab);
+  padding: 0 8px 0 var(--nt-indent);
+  color: var(--fg-dim);
+  font-weight: 400;
+}
+.navtree-tab-row:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+/* Active TAB uses a neutral bg — the active WORKSPACE owns the accent
+   tint. Different color families keep them instantly distinguishable. */
+.navtree-tab-row[data-active="true"] {
+  color: var(--fg);
+  font-weight: 600;
+  background: var(--bg-hover);
+}
+
+.navtree-tab-link {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  color: inherit;
+  text-decoration: none;
+}
+.navtree-tab-link:hover {
+  text-decoration: none;
+}
+
+/* Alt-held quick-switch chip (sidebar only) — same accent chip language
+   as the top TabBar's numbers. */
+.navtree-quicknum {
+  flex: 0 0 auto;
+  min-width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* ─── Close affordance (per-row) ─────────────────────────────────────── */
+
+.navtree-close {
+  flex: 0 0 var(--nt-hit);
+  height: var(--nt-hit);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-faint);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  opacity: 0;
+  transition: opacity 80ms ease;
+  /* Kill iOS's double-tap zoom delay so taps register instantly. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+/* Touch has no hover — keep close faintly present on the sheet. */
+.navtree[data-variant="sheet"] .navtree-close {
+  opacity: 0.35;
+}
+.navtree-ws-row:hover .navtree-close,
+.navtree-ws-row:focus-within .navtree-close,
+.navtree-tab-row:hover .navtree-close,
+.navtree-tab-row:focus-within .navtree-close,
+.navtree-close:focus-visible {
+  opacity: 1;
+}
+.navtree-close:hover {
+  background: var(--border-strong);
+  color: var(--fg);
+  opacity: 1;
+}
+
+/* ─── Inline rename (sidebar) ────────────────────────────────────────── */
+
+.navtree-rename {
+  flex: 1;
+  min-width: 0;
+  height: calc(var(--nt-row-tab) - 6px);
+  margin: 0 2px;
+  padding: 0 6px;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: inherit;
+  outline: none;
+}
+
+/* ─── Actions ────────────────────────────────────────────────────────── */
+
+/* "+ New tab" — reads as an ACTION, not another tab: outdented from the
+   tab text column, smaller, accent-colored, quiet until hover. */
+.navtree-new-tab {
+  display: block;
+  margin: 2px 8px 4px calc(var(--nt-indent) - 4px);
+  padding: 4px 8px;
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: var(--chrome-size-sm);
+  font-weight: 500;
+  text-align: left;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.7;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.navtree[data-variant="sheet"] .navtree-new-tab {
+  padding: 8px;
+}
+.navtree-new-tab:hover {
+  opacity: 1;
+  background: var(--bg-hover);
+}
+
+/* "+ New workspace" — pinned footer below the scroll region, so it's
+   reachable no matter how long the tree gets. */
+.navtree-new-ws {
+  flex: 0 0 auto;
+  display: block;
+  width: 100%;
+  padding: 10px 14px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: var(--chrome-size);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.navtree[data-variant="sheet"] .navtree-new-ws {
+  padding: 14px;
+}
+.navtree-new-ws:hover {
+  background: var(--bg-hover);
+}
+.navtree-new-ws:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ─── Sidebar shell ──────────────────────────────────────────────────── */
+
+/* The desktop left rail hosting the tree. Chrome surface, hairline
+   divider against the workspace — same plate language as the top bar. */
+.sidenav {
+  flex: 0 0 240px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-chrome);
+  border-right: 1px solid var(--border);
+}
