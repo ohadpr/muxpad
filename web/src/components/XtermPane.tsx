@@ -465,6 +465,37 @@ export function XtermPane({
             lastSentRows = term.rows;
           }
         };
+        // A fresh xterm attach replays only Claude/Ink's last DEC-2026 frame
+        // (inkReplayPayload). Ink emits *differential* frames, so when the
+        // live screen last changed just the spinner/input rows, that frame
+        // repaints only the bottom — the transcript above stays blank. A hard
+        // refresh keeps the same window size, so announceSize's resize is a
+        // server-side no-op (PaneRuntime dedups equal sizes) and nothing
+        // SIGWINCHes the app into a full repaint; the pane sits half-empty
+        // until the user resizes. Nudge the PTY one row shorter and back —
+        // two real size changes the server can't dedup — so the app
+        // re-measures and repaints the whole screen. The local xterm stays at
+        // its real size throughout; only the PTY wiggles. Skipped for
+        // cursor-agent, which owns its own replay + scroll-restore that a
+        // SIGWINCH would jerk to the bottom.
+        const forceFullRepaint = () => {
+          if (intentionallyClosed) return;
+          if (isCursorAgentCmd(foregroundCmdRef.current)) return;
+          if (!mayDriveResize() || gridBelowFloor()) return;
+          const cols = term.cols;
+          const rows = term.rows;
+          if (rows - 1 < MIN_ROWS) return; // too short to wiggle safely
+          if (!safeSend(encodeResize(cols, rows - 1))) return;
+          lastSentCols = cols;
+          lastSentRows = rows - 1;
+          window.setTimeout(() => {
+            if (intentionallyClosed) return;
+            if (safeSend(encodeResize(cols, rows))) {
+              lastSentCols = cols;
+              lastSentRows = rows;
+            }
+          }, 80);
+        };
         // Mobile panes often open while display:none; defer fit until the
         // slot has real dimensions so we do not SIGWINCH a ghost size.
         if (isMobileLayout()) {
@@ -472,10 +503,15 @@ export function XtermPane({
         } else {
           announceSize();
         }
-        // Deliberately no wiggle-resize on reconnect: the xterm buffer is
-        // intact (we skipped ring-buffer replay via ?replay=0) and a
-        // SIGWINCH round-trip would force Ink TUIs to redraw and reset
-        // their internal scroll position.
+        // Fresh attach only: after the replayed frame has painted (and the
+        // foreground command has usually been detected), force the full
+        // repaint described above. Deliberately NOT on reconnect — there the
+        // xterm buffer is intact (ring-buffer replay was skipped via
+        // ?replay=0) and a SIGWINCH round-trip would force Ink TUIs to redraw
+        // and reset their internal scroll position.
+        if (!wasReconnect) {
+          window.setTimeout(forceFullRepaint, 220);
+        }
         armIdle();
       });
 
@@ -744,8 +780,10 @@ export function XtermPane({
     // and emit one step per WHEEL_NOTCH_PX of travel: ~1 step per notch
     // (the pre-rework feel) while small deltas sum smoothly. Per-pane state
     // (this closure), so panes don't share an accumulator.
-    const WHEEL_NOTCH_PX = 100; // ~one wheel notch of pixel delta
+    const WHEEL_NOTCH_PX = 80; // ~one wheel notch of pixel delta
+    const WHEEL_GESTURE_GAP_MS = 120; // silence that marks a new gesture
     let wheelAccumPx = 0;
+    let lastWheelAt = 0;
     const wheelStepsFor = (e: WheelEvent): number => {
       const cell = getCellDimensions(term);
       const lineH = cell?.height && cell.height > 0 ? cell.height : 16;
@@ -758,12 +796,26 @@ export function XtermPane({
       } else if (e.deltaMode === 2) {
         px = e.deltaY * lineH * term.rows;
       }
+      // Start of a new gesture (no wheel events for a beat): emit the first
+      // step right away instead of swallowing it into the accumulator's dead
+      // zone. Hi-res / macOS wheels emit a stream of small deltas per notch,
+      // so without this kick the first notch of travel scrolls nothing and
+      // scrolling feels slow to start.
+      const now = e.timeStamp || performance.now();
+      const idle = now - lastWheelAt > WHEEL_GESTURE_GAP_MS;
+      lastWheelAt = now;
       // A direction flip discards leftover opposite travel, so the first
       // step the other way lands immediately.
       if (px < 0 !== wheelAccumPx < 0) wheelAccumPx = 0;
       wheelAccumPx += px;
       let steps = Math.trunc(wheelAccumPx / WHEEL_NOTCH_PX);
-      if (steps !== 0) wheelAccumPx -= steps * WHEEL_NOTCH_PX;
+      if (idle && steps === 0 && Math.abs(px) >= 2) {
+        // Kick: one step now in the motion direction; consume the travel.
+        steps = px < 0 ? -1 : 1;
+        wheelAccumPx = 0;
+      } else if (steps !== 0) {
+        wheelAccumPx -= steps * WHEEL_NOTCH_PX;
+      }
       // Clamp one violent delta (free-spin flick coalesced into a single
       // event) so it can't leap multiple pages at once.
       if (steps > 4) steps = 4;
