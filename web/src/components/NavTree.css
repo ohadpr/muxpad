@@ -432,6 +432,11 @@
    it replaces. */
 .sidenav {
   flex: 0 0 240px;
+  /* min-width:0 caps the flex AUTOMATIC minimum (default min-width:auto
+     = content min-content size). Without it, the rename <input>'s
+     intrinsic width raises the sidebar's min-content above 240px and
+     overrides the fixed basis, so the rail visibly widens mid-edit. */
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
