@@ -58,7 +58,8 @@
   gap: 12px;
 }
 
-.settings-row label {
+.settings-row label,
+.settings-row .settings-label {
   font-size: var(--chrome-size);
   color: var(--fg-dim);
 }
@@ -77,11 +78,11 @@
   color: var(--fg-dim);
   cursor: pointer;
 }
-.settings-segmented button[data-active='true'] {
+.settings-segmented button[data-active="true"] {
   background: var(--accent);
   color: var(--accent-fg);
 }
-.settings-segmented button:hover:not([data-active='true']) {
+.settings-segmented button:hover:not([data-active="true"]) {
   background: var(--bg-hover);
   color: var(--fg);
 }
