@@ -434,11 +434,15 @@
   flex: 0 0 auto;
   display: flex;
   align-items: stretch;
-  height: var(--chrome-h);
+  /* Match the pane-header height (not the top-bar height) so the brand's
+     bottom hairline lines up exactly with the first pane header's bottom
+     line across the board. */
+  height: var(--chrome-pane-h);
   border-bottom: 1px solid var(--border);
 }
 .sidenav-brand .brand {
   flex: 1;
+  height: var(--chrome-pane-h);
   border-right: none;
 }
 
