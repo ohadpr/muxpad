@@ -571,6 +571,14 @@
 .pane-chrome-close:hover {
   color: var(--danger);
 }
+/* SvgClose is drawn in a 12-unit viewBox at strokeWidth 1.6; the generic
+   .pane-chrome-btn svg rule upscales it to 18px (×1.5), so its stroke
+   lands ~2.4px — heavier than the split icons' ~1.5px beside it. Thin the
+   stroke to match their weight. Scoped here so SvgClose stays unchanged in
+   the dropdowns/switchers that use it at its native size. */
+.pane-chrome-close svg path {
+  stroke-width: 1;
+}
 
 /* Inline variant — sits adjacent to text (e.g. URL pane reload),
    not in the right-side button group. Tight width, low-key idle
