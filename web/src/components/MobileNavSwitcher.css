@@ -121,11 +121,13 @@
      shell. The bottom margin leaves a band of scrim so "tap outside to
      dismiss" always has somewhere to land. */
   max-height: calc(100svh - var(--mns-panel-top) - 48px);
-  background: var(--bg-elev);
+  /* Chrome surface — the panel is an extension of the bar it hangs
+     from, and gives the bg-elev workspace cards the same figure/ground
+     contrast the desktop sidebar has. */
+  background: var(--bg-chrome);
   border-bottom: 1px solid var(--border);
-  border-radius: 0 0 14px 14px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.32);
-  padding-bottom: 4px;
+  border-radius: 0 0 12px 12px;
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
   animation: mns-panel-in 200ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 .mns-panel[data-closing="true"] {

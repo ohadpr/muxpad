@@ -39,8 +39,10 @@
   --nt-hit: 32px;
   --nt-indent: 40px;
   --nt-guide: 20px;
-  /* The panel itself is bg-elev; cards step back to bg for an inset read. */
-  --nt-card-bg: var(--bg);
+  /* Same surface pairing as the desktop sidebar: chrome bg underneath
+     (set on .mns-panel), elevated cards on top. Inverting it (elev
+     panel + bg cards) left near-zero contrast in the light themes,
+     where --bg and --bg-elev are siblings. */
 }
 
 /* ─── Section header ─────────────────────────────────────────────────── */
@@ -102,6 +104,14 @@
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   padding: 2px 8px 10px;
+}
+/* Touch surface breathes a little more: wider gutters, and enough
+   bottom inset that the last card clears the panel's rounded corners. */
+.navtree[data-variant="sheet"] .navtree-scroll {
+  padding: 2px 12px 14px;
+}
+.navtree[data-variant="sheet"] .navtree-section {
+  padding: 12px 14px 8px 20px;
 }
 
 /* Each workspace is a CARD — hairline-bordered plate holding its row +
