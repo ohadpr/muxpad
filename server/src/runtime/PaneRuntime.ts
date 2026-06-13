@@ -3,18 +3,13 @@ import { EventEmitter } from 'node:events';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import type { AppUrl } from '@muxpad/shared';
 import * as pty from 'node-pty';
 import { RingBuffer } from './RingBuffer.js';
-import { AppUrlTracker } from './app-url-tracker.js';
-import { isSelfHost, probeListening, toReachableUrl } from './host-identity.js';
-import { PtyScanner } from './pty-scanner.js';
+import { type AppUrlMarker, PtyScanner } from './pty-scanner.js';
 
 // Debounce window between a URL/marker sighting and the (async) confirm pass.
 // Coalesces the burst a server emits as it boots; the confirm itself is also
 // re-run on the manager's 10s poll, so this only governs first-surface latency.
-const APP_URL_REFRESH_DEBOUNCE_MS = 400;
-
 const execFileAsync = promisify(execFile);
 
 const RING_CAPACITY = 2 * 1024 * 1024; // 2MB
@@ -144,16 +139,6 @@ export class PaneRuntime extends EventEmitter {
   // and OSC title events without building intermediate strings beyond
   // the OSC payload. See pty-scanner.ts.
   private scanner = new PtyScanner();
-  // Tracks web apps this pane is serving (detected from output, confirmed
-  // by a listening probe). See app-url-tracker.ts / host-identity.ts.
-  private appUrlTracker = new AppUrlTracker({
-    isSelfHost: (host) => isSelfHost(host),
-    probe: (host, port) => probeListening(host, port),
-    toReachableUrl: (url) => toReachableUrl(url),
-    now: () => Date.now(),
-  });
-  private appUrls: AppUrl[] = [];
-  private appUrlRefreshTimer: NodeJS.Timeout | null = null;
 
   constructor(public readonly spec: PaneRuntimeSpec) {
     super();
@@ -212,11 +197,13 @@ export class PaneRuntime extends EventEmitter {
         this.emit('attention-changed', true);
       }
       if (ev.title !== undefined) this.currentTitle = ev.title;
-      // App-url detection: ingest is sync + cheap (parse + queue). The
-      // async confirm (self-host + listening probe) runs on a coalesced
-      // timer so the hot output path stays free of network/subprocess work.
+      // App-url detection: ptyd only *extracts* raw sightings here (cheap,
+      // sync). Host classification + the listening probe + tracking live on
+      // the main server (see ptyd-cache / app-url-detector), so that logic
+      // can change with a server-only restart instead of a ptyd bounce that
+      // kills every terminal. Forward the raw lists for the server to judge.
       if (ev.urls !== undefined || ev.markers !== undefined) {
-        if (this.appUrlTracker.ingest(ev)) this.scheduleAppUrlRefresh();
+        this.emit('urls-seen', ev.urls ?? [], ev.markers ?? []);
       }
       this.buffer.push(data);
       this.emit('output', data);
@@ -224,10 +211,6 @@ export class PaneRuntime extends EventEmitter {
     this.process.onExit(({ exitCode }) => {
       this.exited = true;
       this.exitCode = exitCode;
-      if (this.appUrlRefreshTimer) {
-        clearTimeout(this.appUrlRefreshTimer);
-        this.appUrlRefreshTimer = null;
-      }
       this.emit('exit', exitCode);
     });
     if (this.spec.startup_cmd) {
@@ -279,41 +262,6 @@ export class PaneRuntime extends EventEmitter {
   /** Latest terminal title emitted via OSC 0/1/2, or null if no title set yet. */
   getCurrentTitle(): string | null {
     return this.currentTitle;
-  }
-
-  /** Web apps this pane is serving, confirmed listening. Empty when none. */
-  getAppUrls(): AppUrl[] {
-    return this.appUrls;
-  }
-
-  // Coalesce a burst of detections into one async confirm pass.
-  private scheduleAppUrlRefresh(): void {
-    if (this.appUrlRefreshTimer || this.exited) return;
-    this.appUrlRefreshTimer = setTimeout(() => {
-      this.appUrlRefreshTimer = null;
-      void this.refreshAppUrls();
-    }, APP_URL_REFRESH_DEBOUNCE_MS);
-    this.appUrlRefreshTimer.unref?.();
-  }
-
-  /**
-   * Run the tracker's confirm/expire pass and, if the exposed list changed,
-   * publish it + emit so the manager pushes a pane.updated. Called from the
-   * debounced output path AND the manager's periodic poll (re-probe / expire
-   * a server that has since died). Safe to call concurrently — the tracker
-   * serializes its own state; this only swaps the snapshot + emits on change.
-   */
-  async refreshAppUrls(): Promise<void> {
-    if (this.exited) return;
-    let changed: boolean;
-    try {
-      changed = await this.appUrlTracker.refresh();
-    } catch {
-      return;
-    }
-    if (!changed) return;
-    this.appUrls = this.appUrlTracker.list();
-    this.emit('appurls-changed');
   }
 
   /**
@@ -469,7 +417,7 @@ export class PaneRuntime extends EventEmitter {
   override on(event: 'output', listener: Listener<[string]>): this;
   override on(event: 'exit', listener: Listener<[number]>): this;
   override on(event: 'attention-changed', listener: Listener<[boolean]>): this;
-  override on(event: 'appurls-changed', listener: Listener<[]>): this;
+  override on(event: 'urls-seen', listener: Listener<[string[], AppUrlMarker[]]>): this;
   override on(event: string, listener: (...args: any[]) => void): this {
     return super.on(event, listener);
   }
@@ -477,7 +425,7 @@ export class PaneRuntime extends EventEmitter {
   override off(event: 'output', listener: Listener<[string]>): this;
   override off(event: 'exit', listener: Listener<[number]>): this;
   override off(event: 'attention-changed', listener: Listener<[boolean]>): this;
-  override off(event: 'appurls-changed', listener: Listener<[]>): this;
+  override off(event: 'urls-seen', listener: Listener<[string[], AppUrlMarker[]]>): this;
   override off(event: string, listener: (...args: any[]) => void): this {
     return super.off(event, listener);
   }
