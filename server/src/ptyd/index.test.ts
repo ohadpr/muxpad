@@ -1,11 +1,11 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { startPtyd, type PtydHandle, type PtydOptions } from './index.js';
+import { decodeServerMessage, encodeInput } from '@muxpad/shared';
+import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { encodeRequest, decodeMessage, type CtrlResponse, type CtrlEvent } from './protocol.js';
-import { encodeInput, decodeServerMessage } from '@muxpad/shared';
+import { type PtydHandle, type PtydOptions, startPtyd } from './index.js';
+import { type CtrlEvent, type CtrlResponse, decodeMessage, encodeRequest } from './protocol.js';
 
 let handle: PtydHandle | null = null;
 let dir = '';
@@ -249,7 +249,10 @@ describe('ptyd /pty/:id per-attach WS endpoint', () => {
   // Open a binary WS to /pty/<id> over the same unix socket as control.
   // Returns the socket and a `nextOutput()` helper that resolves with the
   // decoded string body of the next output frame (or rejects on timeout).
-  async function openPty(socketPath: string, id: string): Promise<{
+  async function openPty(
+    socketPath: string,
+    id: string,
+  ): Promise<{
     sock: WebSocket;
     nextOutput: (timeoutMs?: number) => Promise<string>;
     nextClose: (timeoutMs?: number) => Promise<{ code: number; reason: string }>;
@@ -505,33 +508,29 @@ describe('ptyd control push events', () => {
   });
 });
 
-describe('ptyd — app-url detection (end-to-end)', () => {
-  it('emits paneAppUrls for a pane that serves and prints its URL', async () => {
+describe('ptyd — raw url sightings (end-to-end)', () => {
+  it('emits paneUrlsSeen with the raw URL a pane prints', async () => {
     const { call, waitForEvent } = await setupPtyd();
-    // A pane that opens a TCP listener and prints its URL — exactly the dev-
-    // server shape. The scanner scrapes the URL, the tracker confirms the
-    // port is actually listening, and the confirmed app surfaces as an event.
-    const serve =
-      "node -e \"const s=require('net').createServer();" +
-      "s.listen(0,'127.0.0.1',()=>console.log('ready http://localhost:'+s.address().port));" +
-      'setInterval(()=>{},1e9)"';
     await call('ensurePane', {
-      spec: { id: 'srv1', shell: '/bin/sh', startup_cmd: serve, cwd: '/tmp' },
+      spec: {
+        id: 'srv1',
+        shell: '/bin/sh',
+        startup_cmd: "echo 'ready http://localhost:5173/'",
+        cwd: '/tmp',
+      },
     });
-    const evt = await waitForEvent('paneAppUrls', 8000);
-    const urls = (evt as unknown as { urls: Array<{ url: string; source: string }> }).urls;
+    const evt = await waitForEvent('paneUrlsSeen', 8000);
+    const { urls, markers } = evt as unknown as { urls: string[]; markers: unknown[] };
     expect(Array.isArray(urls)).toBe(true);
-    expect(urls.length).toBeGreaterThanOrEqual(1);
-    // Confirmed via a real listening probe; scraped from plain text.
-    expect(urls[0]!.url).toMatch(/^https?:\/\/[^/]+:\d+/);
-    expect(urls[0]!.source).toBe('text');
+    expect(urls).toContain('http://localhost:5173/');
+    expect(Array.isArray(markers)).toBe(true);
   });
 
-  it('does NOT emit for a printed URL whose port is not listening', async () => {
+  it('emits raw sightings even when nothing is listening (ptyd does not probe)', async () => {
     const { call, waitForEvent } = await setupPtyd();
-    // Prints a localhost URL but nothing listens on it — the probe must
-    // reject it, so no paneAppUrls should ever arrive. (We assert by racing
-    // the event against a timeout and expecting the timeout to win.)
+    // Post-split, ptyd is a dumb extractor: it forwards every printed URL.
+    // Whether the port is actually listening is decided on the main server
+    // (AppUrlDetector / AppUrlTracker), not here — so the sighting DOES arrive.
     await call('ensurePane', {
       spec: {
         id: 'noserve1',
@@ -540,10 +539,8 @@ describe('ptyd — app-url detection (end-to-end)', () => {
         cwd: '/tmp',
       },
     });
-    const got = await waitForEvent('paneAppUrls', 2500).then(
-      () => 'emitted',
-      () => 'timed-out',
-    );
-    expect(got).toBe('timed-out');
+    const evt = await waitForEvent('paneUrlsSeen', 8000);
+    const { urls } = evt as unknown as { urls: string[] };
+    expect(urls).toContain('http://localhost:59999/');
   });
 });

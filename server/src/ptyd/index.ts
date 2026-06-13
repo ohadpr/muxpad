@@ -1,12 +1,16 @@
-import { createServer } from 'node:http';
-import { WebSocketServer, WebSocket } from 'ws';
-import { unlink, chmod } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { chmod, unlink } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { WebSocket, WebSocketServer } from 'ws';
 import { PaneManager } from '../runtime/PaneManager.js';
 import type { PaneRuntimeSpec } from '../runtime/PaneRuntime.js';
 import {
-  decodeMessage, encodeResponse, encodeErrorResponse, encodeEvent,
-  type CtrlMessage, type CtrlPushEvent,
+  type CtrlMessage,
+  type CtrlPushEvent,
+  decodeMessage,
+  encodeErrorResponse,
+  encodeEvent,
+  encodeResponse,
 } from './protocol.js';
 import { attachPty } from './pty-bridge.js';
 
@@ -28,7 +32,9 @@ export interface PtydOptions {
    */
   heartbeatMs?: number;
 }
-export interface PtydHandle { stop(): Promise<void>; }
+export interface PtydHandle {
+  stop(): Promise<void>;
+}
 
 export async function startPtyd(opts: PtydOptions): Promise<PtydHandle> {
   if (existsSync(opts.socketPath)) await unlink(opts.socketPath);
@@ -121,14 +127,12 @@ export async function startPtyd(opts: PtydOptions): Promise<PtydHandle> {
         broadcastEvent({ event: 'paneTitle', id, title: change.title });
       } else if (change.kind === 'fg') {
         broadcastEvent({ event: 'paneFg', id, cmd: change.cmd });
-      } else if (change.kind === 'attention') {
-        broadcastEvent({ event: 'paneAttention', id, attention: change.attention });
       } else {
-        broadcastEvent({ event: 'paneAppUrls', id, urls: change.urls });
+        broadcastEvent({ event: 'paneAttention', id, attention: change.attention });
       }
     },
-    onPaneExit: (id, code, cause) =>
-      broadcastEvent({ event: 'paneExit', id, code, cause }),
+    onUrlsSeen: (id, urls, markers) => broadcastEvent({ event: 'paneUrlsSeen', id, urls, markers }),
+    onPaneExit: (id, code, cause) => broadcastEvent({ event: 'paneExit', id, code, cause }),
   });
 
   http.on('upgrade', (req, socket, head) => {
@@ -201,8 +205,12 @@ function attachControl(
 ): void {
   ws.on('message', async (data: Buffer) => {
     let msg: CtrlMessage;
-    try { msg = decodeMessage(data.toString()); }
-    catch (e) { ws.send(encodeErrorResponse(0, String(e))); return; }
+    try {
+      msg = decodeMessage(data.toString());
+    } catch (e) {
+      ws.send(encodeErrorResponse(0, String(e)));
+      return;
+    }
     if (msg.kind !== 'request') return;
     try {
       if (msg.method === 'hasPane') {
@@ -271,8 +279,7 @@ function attachControl(
 
 // CLI entry
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const socketPath = process.env.MUXPAD_PTYD_SOCKET
-    ?? `${process.env.HOME}/.muxpad/ptyd.sock`;
+  const socketPath = process.env.MUXPAD_PTYD_SOCKET ?? `${process.env.HOME}/.muxpad/ptyd.sock`;
   startPtyd({ socketPath }).then(() => {
     console.log(`ptyd listening on ${socketPath}`);
   });
