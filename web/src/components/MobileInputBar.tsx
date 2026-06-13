@@ -258,7 +258,10 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
     }
     if (el) {
       el.textContent = '';
-      el.focus(); // keep the keyboard up for the next command
+      // Collapse the keyboard after send — the common next act is
+      // READING the command's output, which the keyboard covers half
+      // of. Tapping the composer brings it straight back.
+      el.blur();
       syncEmpty();
     }
   };
@@ -303,6 +306,20 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
           aria-label="Ctrl-C interrupt"
         >
           ^C
+        </button>
+        {/* Pane action, not a keystroke — pushed to the far end and
+            accent-tinted to read apart from the key chips. This is the
+            only always-available "new pane" affordance on mobile: the
+            pane strip (which also carries a "+") only renders once a
+            tab has two panes. */}
+        <button
+          type="button"
+          className="mobile-input-key mobile-input-key-pane"
+          onClick={() => window.dispatchEvent(new CustomEvent('muxpad:add-pane'))}
+          title="New pane"
+          aria-label="New pane"
+        >
+          ⊞
         </button>
       </div>
       <div className="mobile-input-row">

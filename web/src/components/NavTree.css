@@ -38,11 +38,9 @@
   --nt-row-tab: 42px;
   --nt-hit: 32px;
   --nt-indent: 40px;
-  --nt-guide: 20px;
-  /* Same surface pairing as the desktop sidebar: chrome bg underneath
-     (set on .mns-panel), elevated cards on top. Inverting it (elev
-     panel + bg cards) left near-zero contrast in the light themes,
-     where --bg and --bg-elev are siblings. */
+  --nt-guide: 24px; /* disclosure center: 8px row inset + 32px hit / 2 */
+  /* No --nt-card-bg here: the sheet renders a flat full-bleed list on
+     the panel's chrome surface — cards are a sidebar-only treatment. */
 }
 
 /* ─── Section header ─────────────────────────────────────────────────── */
@@ -105,32 +103,45 @@
   -webkit-overflow-scrolling: touch;
   padding: 2px 8px 10px;
 }
-/* Touch surface breathes a little more: wider gutters, and enough
-   bottom inset that the last card clears the panel's rounded corners. */
+/* Touch surface: full-bleed rows (no card gutters), enough bottom inset
+   that the last row clears the panel's rounded corners. */
 .navtree[data-variant="sheet"] .navtree-scroll {
-  padding: 2px 12px 14px;
+  padding: 0 0 12px;
 }
 .navtree[data-variant="sheet"] .navtree-section {
-  padding: 12px 14px 8px 20px;
+  padding: 12px 14px 6px 16px;
+}
+.navtree[data-variant="sheet"] .navtree-ws-row {
+  padding-left: 8px;
 }
 
-/* Each workspace is a CARD — hairline-bordered plate holding its row +
-   tab list. Articulates "these tabs belong to this workspace" much more
-   decisively than whitespace alone. overflow:hidden keeps the active
-   rail and row hover fills inside the rounded corners. */
-.navtree-group {
+/* SIDEBAR: each workspace is a CARD — hairline-bordered plate holding
+   its row + tab list. Articulates "these tabs belong to this workspace"
+   much more decisively than whitespace alone. overflow:hidden keeps the
+   active rail and row hover fills inside the rounded corners. */
+.navtree[data-variant="sidebar"] .navtree-group {
   background: var(--nt-card-bg);
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
 }
-.navtree-group + .navtree-group {
+.navtree[data-variant="sidebar"] .navtree-group + .navtree-group {
   margin-top: 8px;
 }
 /* The active workspace's card carries a whisper of accent in its frame
    so "you are here" reads at the group level too, not just the row. */
-.navtree-group[data-active="true"] {
+.navtree[data-variant="sidebar"] .navtree-group[data-active="true"] {
   border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+/* SHEET: no cards — frames-within-frames read fussy on a phone, where
+   the panel already provides the one frame. Full-bleed list rows with
+   hairline dividers between workspace groups (iOS-list style); the
+   active-row tint, rails and indent guide carry the structure. */
+.navtree[data-variant="sheet"] .navtree-group + .navtree-group {
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
 }
 
 /* ─── Workspace row ──────────────────────────────────────────────────── */
@@ -203,6 +214,16 @@
   padding: 0 2px;
   color: inherit;
   text-decoration: none;
+  /* Long-press = rename on touch; keep iOS's link-preview callout and
+     text selection from racing the gesture. */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* Long-press in flight — let the row acknowledge the held finger. */
+.navtree-ws-row[data-pressing="true"],
+.navtree-tab-row[data-pressing="true"] {
+  background: var(--bg-hover);
 }
 .navtree-ws-name:hover {
   text-decoration: none;
@@ -285,6 +306,9 @@
   height: 100%;
   color: inherit;
   text-decoration: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 .navtree-tab-link:hover {
   text-decoration: none;
