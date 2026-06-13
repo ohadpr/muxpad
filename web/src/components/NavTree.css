@@ -135,13 +135,18 @@
 }
 
 /* SHEET: no cards — frames-within-frames read fussy on a phone, where
-   the panel already provides the one frame. Full-bleed list rows with
-   hairline dividers between workspace groups (iOS-list style); the
-   active-row tint, rails and indent guide carry the structure. */
+   the panel already provides the one frame. Full-bleed list with
+   BANDED workspace headers: an elevated fill + heavier weight makes
+   each header the visual anchor of its group, so dividers between
+   groups aren't needed — just a breath of space. */
 .navtree[data-variant="sheet"] .navtree-group + .navtree-group {
-  margin-top: 6px;
-  border-top: 1px solid var(--border);
-  padding-top: 6px;
+  margin-top: 8px;
+}
+.navtree[data-variant="sheet"] .navtree-ws-row {
+  font-weight: 600;
+}
+.navtree[data-variant="sheet"] .navtree-ws-row:not([data-active="true"]) {
+  background: var(--bg-elev);
 }
 
 /* ─── Workspace row ──────────────────────────────────────────────────── */
@@ -220,9 +225,12 @@
   -webkit-user-select: none;
   user-select: none;
 }
-/* Long-press in flight — let the row acknowledge the held finger. */
+/* Long-press in flight — let the row acknowledge the held finger.
+   (Sheet selector repeated at higher specificity so this beats the
+   banded ws-header fill.) */
 .navtree-ws-row[data-pressing="true"],
-.navtree-tab-row[data-pressing="true"] {
+.navtree-tab-row[data-pressing="true"],
+.navtree[data-variant="sheet"] .navtree-ws-row[data-pressing="true"] {
   background: var(--bg-hover);
 }
 .navtree-ws-name:hover {

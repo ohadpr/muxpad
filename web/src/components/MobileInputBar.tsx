@@ -249,19 +249,27 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
     // command. The delay must exceed the TUI's paste-coalescing window (a few
     // ms); 50ms is imperceptible but safely clear of it.
     const { text, enter } = planSubmit(current);
+    // Collapse the keyboard after send — the common next act is READING
+    // the command's output, which the keyboard covers half of. Tapping
+    // the composer brings it straight back. MUST run only after the
+    // submitting Enter has been handed to the websocket: blurring
+    // earlier kicks off the keyboard-dismiss resize cascade
+    // (visualViewport → xterm refit → PTY SIGWINCH), which races the
+    // deferred CR and can swallow the submit.
+    const collapseKeyboard = () => editableRef.current?.blur();
     if (text !== null) {
       send(text);
-      window.setTimeout(() => send(enter), SUBMIT_ENTER_DELAY_MS);
+      window.setTimeout(() => {
+        send(enter);
+        collapseKeyboard();
+      }, SUBMIT_ENTER_DELAY_MS);
     } else {
       // Empty submit = bare CR (blank Enter at the prompt).
       send(enter);
+      collapseKeyboard();
     }
     if (el) {
       el.textContent = '';
-      // Collapse the keyboard after send — the common next act is
-      // READING the command's output, which the keyboard covers half
-      // of. Tapping the composer brings it straight back.
-      el.blur();
       syncEmpty();
     }
   };
