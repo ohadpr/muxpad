@@ -14,12 +14,17 @@ import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
 import { MobileInputBar } from '../components/MobileInputBar';
 import { PaneSelector } from '../components/PaneSelector';
 import { PaneWebSwitch } from '../components/PaneWebSwitch';
+// PaneSurfaceSwitch (below) reuses the .pane-web-switch-* menu classes, so
+// depend on that stylesheet explicitly rather than relying on the mobile
+// PaneWebSwitch mount to pull it into the bundle.
+import '../components/PaneWebSwitch.css';
 import { ShellPaneBody } from '../components/ShellPaneBody';
 import { UrlPane } from '../components/UrlPane';
 import { SvgClose } from '../components/icons';
 import { subscribe, subscribeReconnect } from '../events';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
+import { normalizePaneUrl, setPaneFace, usePaneFace } from '../lib/pane-face';
 import { refreshTabs, useTabs } from '../tabs';
 import { useMediaQuery } from '../use-media-query';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
@@ -555,7 +560,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   /**
    * Optimistically reflect a kind flip from the type-switch button into
    * local tab.panes. The server already returned the updated pane row
-   * (see TypeSwitcher → patchPane callers), so we can splice it in now
+   * (see PaneSurfaceSwitch → patchPane callers), so we can splice it in now
    * instead of waiting for the pane.updated event to round-trip — which
    * is fast on localhost but still perceptible.
    * Must be declared BEFORE the early-returns below — otherwise the hook
@@ -991,26 +996,53 @@ function PaneBody({
  * indicator via the optional `loading` prop, which overlays a spinner
  * ring on the icon.
  */
-function TypeSwitcher({
+/**
+ * The single "what surface is this pane" control, leftmost in the pane chrome
+ * for BOTH shell and url panes. It merges what used to be two separate
+ * terminal/web affordances:
+ *   - the pane *kind* switch (shell ⇄ url — a destructive conversion), and
+ *   - the shell pane *face* switch (terminal ⇄ a detected served app, which
+ *     keeps the terminal alive behind it).
+ *
+ * UX hierarchy: the icon reflects the current surface and its click does the
+ * frequent, non-destructive thing (flip to a detected app / back to terminal);
+ * the caret opens the full menu; the rare destructive kind-conversion sits
+ * below a separator. When a shell pane is serving an app, the control lights
+ * (accent + pulse) to advertise it. The mobile layout keeps its own
+ * PaneWebSwitch bar — this control is the desktop chrome's.
+ */
+function PaneSurfaceSwitch({
+  paneId,
   currentKind,
-  onSelect,
+  appUrls = [],
   loading,
+  onSelect,
 }: {
+  paneId: string;
   currentKind: 'shell' | 'url';
-  onSelect: (next: 'shell' | 'url') => void;
+  appUrls?: AppUrl[];
   loading?: boolean;
+  onSelect: (next: 'shell' | 'url') => void;
 }) {
+  const { face, url } = usePaneFace(paneId);
   const [open, setOpen] = useState(false);
+  const [typing, setTyping] = useState(false);
+  const [draft, setDraft] = useState('');
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
       if (wrapperRef.current?.contains(e.target as Node)) return;
       setOpen(false);
+      setTyping(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
+      if (e.key === 'Escape') {
+        setOpen(false);
+        setTyping(false);
+      }
     };
     document.addEventListener('mousedown', onDown, true);
     document.addEventListener('keydown', onKey);
@@ -1020,16 +1052,46 @@ function TypeSwitcher({
     };
   }, [open]);
 
-  const Icon = currentKind === 'url' ? SvgGlobe : SvgTerminal;
+  useEffect(() => {
+    if (typing) inputRef.current?.focus();
+  }, [typing]);
+
+  const onWeb = currentKind === 'shell' && face === 'web' && !!url;
+  const showsGlobe = currentKind === 'url' || onWeb;
+  const Icon = showsGlobe ? SvgGlobe : SvgTerminal;
+  // Terminal face + a detected app: advertise it (accent + pulse dot).
+  const available = currentKind === 'shell' && !onWeb && appUrls.length > 0;
+
+  const close = () => {
+    setOpen(false);
+    setTyping(false);
+  };
+  const flipToWeb = (target: string) => {
+    setPaneFace(paneId, { face: 'web', url: target });
+    close();
+  };
+  const flipToTerminal = () => {
+    setPaneFace(paneId, { face: 'terminal', url });
+    close();
+  };
+  const commitDraft = () => {
+    const next = normalizePaneUrl(draft);
+    if (next) flipToWeb(next);
+  };
+
+  // One control, one job: the icon shows the CURRENT surface (terminal vs
+  // globe) and the whole button opens the menu. No magic toggle — every
+  // change is an explicit, labeled menu item ("Back to terminal", a URL,
+  // "Convert to web pane"), so the button never reads as "what you'll become".
+  const surfaceWord = showsGlobe ? 'web' : 'terminal';
+
   return (
-    <div className="pane-chrome-typeswitch-wrap" ref={wrapperRef}>
+    <div className="pane-surface-switch" ref={wrapperRef}>
       <button
         type="button"
-        className={`pane-chrome-typeswitch pane-chrome-typeswitch-${currentKind}${
-          loading ? ' pane-chrome-typeswitch-loading' : ''
-        }`}
-        title="Switch pane type"
-        aria-label="Switch pane type"
+        className={`pane-surface-trigger${available ? ' is-available' : ''}`}
+        title={`Showing ${surfaceWord} — pane options`}
+        aria-label={`Showing ${surfaceWord} — pane options`}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={(e) => {
@@ -1041,42 +1103,126 @@ function TypeSwitcher({
       >
         <Icon />
         {loading && <span className="pane-chrome-typeswitch-spinner" aria-hidden="true" />}
+        {available && <span className="pane-surface-dot" aria-hidden="true" />}
+        <SvgChevron />
       </button>
       {open && (
-        <div
-          className="pane-chrome-typeswitch-menu"
-          role="menu"
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <button
-            type="button"
-            role="menuitem"
-            className="pane-chrome-typeswitch-menu-item"
-            disabled={currentKind === 'shell'}
-            onClick={() => {
-              setOpen(false);
-              if (currentKind !== 'shell') onSelect('shell');
-            }}
-          >
-            <SvgTerminal />
-            <span>Terminal</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="pane-chrome-typeswitch-menu-item"
-            disabled={currentKind === 'url'}
-            onClick={() => {
-              setOpen(false);
-              if (currentKind !== 'url') onSelect('url');
-            }}
-          >
-            <SvgGlobe />
-            <span>Web</span>
-          </button>
+        <div className="pane-web-switch-menu" role="menu" onMouseDown={(e) => e.stopPropagation()}>
+          {currentKind === 'shell' ? (
+            <>
+              {appUrls.length > 0 ? (
+                <div className="pane-web-switch-head">
+                  {appUrls.length === 1 ? 'Serving' : `Serving · ${appUrls.length}`}
+                </div>
+              ) : null}
+              {appUrls.map((a) => (
+                <button
+                  key={a.url}
+                  type="button"
+                  role="menuitem"
+                  className={`pane-web-switch-item${url === a.url && onWeb ? ' is-active' : ''}`}
+                  onClick={() => flipToWeb(a.url)}
+                  title={a.url}
+                >
+                  <SvgGlobe />
+                  <span className="pane-web-switch-item-label">{a.label ?? hostLabel(a.url)}</span>
+                  {a.source === 'marker' ? <span className="pane-web-switch-badge">app</span> : null}
+                </button>
+              ))}
+              {onWeb ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="pane-web-switch-item"
+                  onClick={flipToTerminal}
+                >
+                  <SvgTerminal />
+                  <span className="pane-web-switch-item-label">Back to terminal</span>
+                </button>
+              ) : null}
+              {typing ? (
+                <input
+                  ref={inputRef}
+                  className="pane-web-switch-input"
+                  value={draft}
+                  placeholder="https://…"
+                  spellCheck={false}
+                  autoComplete="off"
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitDraft();
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="pane-web-switch-item pane-web-switch-manual"
+                  onClick={() => {
+                    setDraft(url ?? '');
+                    setTyping(true);
+                  }}
+                >
+                  Enter URL…
+                </button>
+              )}
+              <button
+                type="button"
+                role="menuitem"
+                className="pane-web-switch-item pane-web-switch-convert"
+                title="Replace this terminal with a standalone web pane — the terminal (and anything running in it) is closed."
+                onClick={() => {
+                  close();
+                  onSelect('url');
+                }}
+              >
+                <SvgGlobe />
+                <span className="pane-web-switch-item-label">Convert to web pane</span>
+                <span className="pane-web-switch-note">closes terminal</span>
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              role="menuitem"
+              className="pane-web-switch-item"
+              onClick={() => {
+                close();
+                onSelect('shell');
+              }}
+            >
+              <SvgTerminal />
+              <span className="pane-web-switch-item-label">Convert to terminal</span>
+            </button>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+/** Best-effort short label for a URL (host:port, no scheme). */
+function hostLabel(raw: string): string {
+  try {
+    const u = new URL(raw);
+    return u.port ? `${u.hostname}:${u.port}` : u.hostname;
+  } catch {
+    return raw;
+  }
+}
+
+function SvgChevron() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+      <path
+        d="M3 4.5 L6 7.5 L9 4.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
@@ -1086,7 +1232,7 @@ function TypeSwitcher({
  * swaps to an input for editing (Enter saves via PATCH, Esc/blur cancels).
  * Plain click is preventDefault'd so it doesn't navigate the whole window.
  *
- * Leftmost: a TypeSwitcher that doubles as the loading spinner. When `url`
+ * Leftmost: a PaneSurfaceSwitch that doubles as the loading spinner. When `url`
  * is null (the pane was just type-switched from shell) we auto-enter edit
  * mode with an empty input focused, so the user can type a URL immediately.
  */
@@ -1170,7 +1316,12 @@ function UrlPaneTitle({
 
   return (
     <>
-      <TypeSwitcher currentKind="url" loading={loading} onSelect={handleSwitch} />
+      <PaneSurfaceSwitch
+        paneId={paneId}
+        currentKind="url"
+        loading={loading}
+        onSelect={handleSwitch}
+      />
       {editing ? (
         <input
           ref={inputRef}
@@ -1239,7 +1390,12 @@ function ShellPaneTitle({
   };
   return (
     <>
-      <TypeSwitcher currentKind="shell" onSelect={handleSwitch} />
+      <PaneSurfaceSwitch
+        paneId={paneId}
+        currentKind="shell"
+        appUrls={appUrls}
+        onSelect={handleSwitch}
+      />
       <a
         href={`/p/${paneId}`}
         className="pane-chrome-title-link"
@@ -1251,7 +1407,6 @@ function ShellPaneTitle({
       >
         <span className="pane-chrome-title">{label}</span>
       </a>
-      <PaneWebSwitch paneId={paneId} appUrls={appUrls} />
     </>
   );
 }
