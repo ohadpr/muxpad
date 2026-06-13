@@ -5,6 +5,7 @@ import { api } from '../api';
 import { getLastTabSlug } from '../lib/last-visited';
 import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansion';
 import { refreshTabs, useTabs } from '../tabs';
+import { useLongPress } from '../use-long-press';
 import { MAX_QUICK_SWITCH_TABS, useTabQuickSwitch } from '../use-tab-quickswitch';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
 import { SvgClose } from './icons';
@@ -132,6 +133,11 @@ function WorkspaceNode({
 }: WorkspaceNodeProps) {
   const navigate = useNavigate();
   const isEditing = editing?.kind === 'workspace' && editing.id === workspace.id;
+  // Touch rename: long-press the row (the hook ignores mouse/pen, so
+  // this never trips on desktop, where double-click does it).
+  const { pressing, handlers: pressHandlers } = useLongPress({
+    onLongPress: () => setEditing({ kind: 'workspace', id: workspace.id }),
+  });
 
   const closeWorkspace = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -167,7 +173,11 @@ function WorkspaceNode({
       data-active={isActive ? 'true' : undefined}
       data-expanded={expanded ? 'true' : undefined}
     >
-      <div className="navtree-ws-row" data-active={isActive ? 'true' : undefined}>
+      <div
+        className="navtree-ws-row"
+        data-active={isActive ? 'true' : undefined}
+        data-pressing={pressing ? 'true' : undefined}
+      >
         <button
           type="button"
           className="navtree-disclosure"
@@ -200,9 +210,10 @@ function WorkspaceNode({
             className="navtree-ws-name"
             title={variant === 'sidebar' && isActive ? 'Double-click to rename' : workspace.name}
             onDoubleClick={
-              // Rename mirrors the old chrome's affordance: the ACTIVE
-              // workspace only (avoids navigate-then-edit weirdness on
-              // inactive rows). Sidebar only — the sheet is touch.
+              // Desktop rename mirrors the old chrome's affordance: the
+              // ACTIVE workspace only (avoids navigate-then-edit
+              // weirdness on inactive rows). Touch renames any row via
+              // long-press, which never navigates.
               variant === 'sidebar' && isActive
                 ? (e) => {
                     e.preventDefault();
@@ -210,7 +221,11 @@ function WorkspaceNode({
                   }
                 : undefined
             }
+            {...pressHandlers}
             onClick={(e) => {
+              // Long-press consumes the tap (rename, not navigate).
+              pressHandlers.onClick(e);
+              if (e.defaultPrevented) return;
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
               onNavigate?.();
               // Jump straight to the last-visited tab in this workspace
@@ -345,72 +360,22 @@ function TabList({
 
   return (
     <div className="navtree-tab-list">
-      {tabs.map((t, i) => {
-        const isActiveTab = isActiveWorkspace && t.slug === activeTabSlug;
-        const isEditingTab = editing?.kind === 'tab' && editing.id === t.id;
-        const quickNumber =
-          showQuickNumbers && quickEnabled && i < MAX_QUICK_SWITCH_TABS ? i + 1 : undefined;
-        return (
-          <div
-            key={t.id}
-            className="navtree-tab-row"
-            data-active={isActiveTab ? 'true' : undefined}
-          >
-            {isEditingTab ? (
-              <RenameInput
-                initial={t.name}
-                onCommit={async (name) => {
-                  setEditing(null);
-                  if (!name || name === t.name) return;
-                  try {
-                    await api.patchTab(t.id, { name });
-                  } catch (err) {
-                    console.error('rename tab failed', err);
-                  }
-                  await refreshTabs(workspace.id);
-                }}
-                onCancel={() => setEditing(null)}
-              />
-            ) : (
-              <Link
-                to="/w/$wsSlug/t/$tabSlug"
-                params={{ wsSlug: workspace.slug, tabSlug: t.slug }}
-                className="navtree-tab-link"
-                title={variant === 'sidebar' && isActiveTab ? 'Double-click to rename' : t.name}
-                onDoubleClick={
-                  variant === 'sidebar' && isActiveTab
-                    ? (e) => {
-                        e.preventDefault();
-                        setEditing({ kind: 'tab', id: t.id });
-                      }
-                    : undefined
-                }
-                onClick={(e) => {
-                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-                  onNavigate?.();
-                }}
-              >
-                {quickNumber !== undefined && (
-                  <span className="navtree-quicknum" aria-hidden="true">
-                    {quickNumber}
-                  </span>
-                )}
-                <span className="navtree-name-text">{t.name}</span>
-                {t.attention && <span className="badge-dot -inline" aria-label="needs attention" />}
-              </Link>
-            )}
-            <button
-              type="button"
-              className="navtree-close"
-              onClick={(e) => void closeTab(e, t)}
-              title="Close tab"
-              aria-label={`Close tab ${t.name}`}
-            >
-              <SvgClose />
-            </button>
-          </div>
-        );
-      })}
+      {tabs.map((t, i) => (
+        <TabRow
+          key={t.id}
+          tab={t}
+          workspace={workspace}
+          isActiveTab={isActiveWorkspace && t.slug === activeTabSlug}
+          quickNumber={
+            showQuickNumbers && quickEnabled && i < MAX_QUICK_SWITCH_TABS ? i + 1 : undefined
+          }
+          variant={variant}
+          isEditing={editing?.kind === 'tab' && editing.id === t.id}
+          setEditing={setEditing}
+          onNavigate={onNavigate}
+          onClose={(e) => void closeTab(e, t)}
+        />
+      ))}
       <button
         type="button"
         className="navtree-new-tab"
@@ -418,6 +383,100 @@ function TabList({
         disabled={creating}
       >
         {creating ? 'Creating…' : '+ New tab'}
+      </button>
+    </div>
+  );
+}
+
+interface TabRowProps {
+  tab: Tab;
+  workspace: Workspace;
+  isActiveTab: boolean;
+  /** 1–9 chip shown while Alt is held (sidebar quick-switch); else undefined. */
+  quickNumber: number | undefined;
+  variant: NavTreeVariant;
+  isEditing: boolean;
+  setEditing: (e: Editing) => void;
+  onNavigate?: (() => void) | undefined;
+  onClose: (e: React.MouseEvent) => void;
+}
+
+function TabRow({
+  tab,
+  workspace,
+  isActiveTab,
+  quickNumber,
+  variant,
+  isEditing,
+  setEditing,
+  onNavigate,
+  onClose,
+}: TabRowProps) {
+  // Touch rename: long-press (ignores mouse/pen; desktop double-clicks).
+  const { pressing, handlers: pressHandlers } = useLongPress({
+    onLongPress: () => setEditing({ kind: 'tab', id: tab.id }),
+  });
+  return (
+    <div
+      className="navtree-tab-row"
+      data-active={isActiveTab ? 'true' : undefined}
+      data-pressing={pressing ? 'true' : undefined}
+    >
+      {isEditing ? (
+        <RenameInput
+          initial={tab.name}
+          onCommit={async (name) => {
+            setEditing(null);
+            if (!name || name === tab.name) return;
+            try {
+              await api.patchTab(tab.id, { name });
+            } catch (err) {
+              console.error('rename tab failed', err);
+            }
+            await refreshTabs(workspace.id);
+          }}
+          onCancel={() => setEditing(null)}
+        />
+      ) : (
+        <Link
+          to="/w/$wsSlug/t/$tabSlug"
+          params={{ wsSlug: workspace.slug, tabSlug: tab.slug }}
+          className="navtree-tab-link"
+          title={variant === 'sidebar' && isActiveTab ? 'Double-click to rename' : tab.name}
+          onDoubleClick={
+            variant === 'sidebar' && isActiveTab
+              ? (e) => {
+                  e.preventDefault();
+                  setEditing({ kind: 'tab', id: tab.id });
+                }
+              : undefined
+          }
+          {...pressHandlers}
+          onClick={(e) => {
+            // Long-press consumes the tap (rename, not navigate).
+            pressHandlers.onClick(e);
+            if (e.defaultPrevented) return;
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+            onNavigate?.();
+          }}
+        >
+          {quickNumber !== undefined && (
+            <span className="navtree-quicknum" aria-hidden="true">
+              {quickNumber}
+            </span>
+          )}
+          <span className="navtree-name-text">{tab.name}</span>
+          {tab.attention && <span className="badge-dot -inline" aria-label="needs attention" />}
+        </Link>
+      )}
+      <button
+        type="button"
+        className="navtree-close"
+        onClick={onClose}
+        title="Close tab"
+        aria-label={`Close tab ${tab.name}`}
+      >
+        <SvgClose />
       </button>
     </div>
   );
