@@ -20,8 +20,8 @@ import type { AppUrlMarker } from './pty-scanner.js';
 export interface AppUrlTrackerDeps {
   /** Does this host resolve to the machine ptyd runs on? */
   isSelfHost(host: string): Promise<boolean>;
-  /** Is something listening on this port of the host right now? */
-  probe(port: number): Promise<boolean>;
+  /** Is something listening on this host:port right now? */
+  probe(host: string, port: number): Promise<boolean>;
   /** Rewrite a localhost URL to a viewer-reachable (tailnet) form. */
   toReachableUrl(rawUrl: string): Promise<string>;
   now(): number;
@@ -141,7 +141,7 @@ export class AppUrlTracker {
     // measures "time since it stopped serving", not "time since its URL was
     // printed" — a server prints its URL once at boot but may run for hours.
     for (const [key, c] of [...this.candidates.entries()]) {
-      c.listening = await this.deps.probe(c.port);
+      c.listening = await this.deps.probe(c.host, c.port);
       if (c.listening) {
         c.lastSeen = now;
         c.displayUrl = await this.deps.toReachableUrl(c.rawUrl);

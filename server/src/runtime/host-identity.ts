@@ -87,10 +87,23 @@ async function getIdentity(now: number): Promise<SelfIdentity> {
   return inflight;
 }
 
+/**
+ * Lowercase a URL host and strip the brackets Node's URL API wraps around IPv6
+ * literals: `new URL('http://[::1]:3000').hostname` → `[::1]`. Our host sets
+ * (LOCAL_HOSTS, the identity set, UNSPECIFIED_HOSTS) all store the bare form,
+ * so every membership check must compare against the unbracketed host or an
+ * IPv6 server URL — e.g. Python 3.14's default `http://[::]:8000/` banner —
+ * never matches and the app is silently dropped before it's even probed.
+ */
+export function normalizeHost(host: string): string {
+  const lower = host.toLowerCase();
+  return lower.startsWith('[') && lower.endsWith(']') ? lower.slice(1, -1) : lower;
+}
+
 /** True iff `host` resolves to this machine (local form or this node's tailnet id). */
 export async function isSelfHost(host: string, now = Date.now()): Promise<boolean> {
   const identity = await getIdentity(now);
-  return identity.hosts.has(host.toLowerCase());
+  return identity.hosts.has(normalizeHost(host));
 }
 
 /**
@@ -103,7 +116,7 @@ export async function toReachableUrl(rawUrl: string, now = Date.now()): Promise<
   const identity = await getIdentity(now);
   try {
     const u = new URL(rawUrl);
-    const host = u.hostname.toLowerCase();
+    const host = normalizeHost(u.hostname);
     if (!LOCAL_HOSTS.has(host)) return rawUrl;
     if (identity.tailnetName) {
       // Prefer the tailnet name — reachable from any device on the tailnet.
@@ -123,18 +136,41 @@ export async function toReachableUrl(rawUrl: string, now = Date.now()): Promise<
 }
 
 /**
- * Is something accepting TCP connections on this port of the host right now?
- * Always probes 127.0.0.1 — every candidate is same-machine by construction
- * (isSelfHost gated it), and the host can always reach its own loopback even
- * when the server bound only to localhost. Short timeout; resolves false on
- * any error so a closed port is just "not listening", never a throw.
+ * Is something accepting TCP connections for this candidate right now? The
+ * candidate's own host decides where to dial — probing a fixed loopback is
+ * wrong for a server bound to a concrete interface:
+ *
+ *   - an unspecified bind (0.0.0.0 / ::) can't be connected to directly, so we
+ *     probe the matching loopback — a server bound to all interfaces is
+ *     listening there too;
+ *   - any concrete host (127.0.0.1, ::1, this node's Tailscale IP/name, a LAN
+ *     IP) is dialed as-is. A dev server bound ONLY to e.g. the Tailscale IP is
+ *     not on 127.0.0.1, so the old loopback-only probe reported it down and the
+ *     app never surfaced.
+ *
+ * isSelfHost has already gated the host to this machine. Short timeout;
+ * resolves true if any target connects, false on every error/timeout so a
+ * closed port is just "not listening", never a throw.
  */
-export function probeListening(port: number, timeoutMs = 400): Promise<boolean> {
+export function probeListening(host: string, port: number, timeoutMs = 400): Promise<boolean> {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return Promise.resolve(false);
+  const targets = probeTargets(host);
+  return Promise.all(targets.map((t) => connectOnce(t, port, timeoutMs))).then((rs) =>
+    rs.some(Boolean),
+  );
+}
+
+/** Where to actually dial for a candidate host (see probeListening). */
+function probeTargets(host: string): string[] {
+  const h = normalizeHost(host);
+  if (h === '0.0.0.0') return ['127.0.0.1'];
+  if (h === '::') return ['::1'];
+  return [h];
+}
+
+/** Resolve true iff a TCP connection to host:port completes within timeoutMs. */
+function connectOnce(host: string, port: number, timeoutMs: number): Promise<boolean> {
   return new Promise((resolve) => {
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      resolve(false);
-      return;
-    }
     const socket = new net.Socket();
     let settled = false;
     const done = (listening: boolean) => {
@@ -147,6 +183,6 @@ export function probeListening(port: number, timeoutMs = 400): Promise<boolean> 
     socket.once('connect', () => done(true));
     socket.once('timeout', () => done(false));
     socket.once('error', () => done(false));
-    socket.connect(port, '127.0.0.1');
+    socket.connect(port, host);
   });
 }
