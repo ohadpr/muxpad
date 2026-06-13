@@ -18,7 +18,7 @@ import type { AppUrlMarker } from './pty-scanner.js';
  * to be quiet, never perfectly right.
  */
 export interface AppUrlTrackerDeps {
-  /** Does this host resolve to the machine ptyd runs on? */
+  /** Is this host local/private (this machine or a network the viewer shares)? */
   isSelfHost(host: string): Promise<boolean>;
   /** Is something listening on this host:port right now? */
   probe(host: string, port: number): Promise<boolean>;
@@ -156,16 +156,34 @@ export class AppUrlTracker {
     return true;
   }
 
-  /** Confirmed-listening apps, markers first then most-recently-seen. */
+  /**
+   * Confirmed-listening apps, ordered: explicit markers first, then
+   * reachable-from-other-devices hosts before loopback-only ones (a loopback
+   * URL works only on this machine, so a LAN/VPN URL is the more useful
+   * default when both exist), then most-recently-seen.
+   */
   list(): AppUrl[] {
     return [...this.candidates.values()]
       .filter((c) => c.listening)
       .sort((a, b) => {
         if (a.source !== b.source) return a.source === 'marker' ? -1 : 1;
+        const reach = loopbackRank(a.host) - loopbackRank(b.host);
+        if (reach !== 0) return reach;
         return b.lastSeen - a.lastSeen;
       })
       .map((c) => ({ url: c.displayUrl, label: c.label, source: c.source }));
   }
+}
+
+// Loopback / unspecified hosts only reachable from this machine itself (the
+// IPv6 forms keep the brackets URL.hostname produces). Everything else — a
+// LAN IP, a VPN/tailnet address or name — is reachable from other devices and
+// sorts ahead of these in the dropdown.
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1', '::', '[::1]', '[::]']);
+
+/** 0 = reachable from other devices (sorts first), 1 = loopback-only. */
+function loopbackRank(host: string): number {
+  return LOOPBACK_HOSTS.has(host) ? 1 : 0;
 }
 
 /** Parse a URL into host/port, defaulting the port from the scheme. */
