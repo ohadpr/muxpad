@@ -1,12 +1,13 @@
 import net from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { isSelfHost, probeListening, toReachableUrl } from './host-identity.js';
+import { isSelfHost, normalizeHost, probeListening, toReachableUrl } from './host-identity.js';
 
-/** Open a throwaway TCP server on a free port; returns {port, close}. */
-function listenEphemeral(): Promise<{ port: number; close: () => void }> {
-  return new Promise((resolve) => {
+/** Open a throwaway TCP server on a free port of `bindHost`; returns {port, close}. */
+function listenEphemeral(bindHost = '127.0.0.1'): Promise<{ port: number; close: () => void }> {
+  return new Promise((resolve, reject) => {
     const server = net.createServer();
-    server.listen(0, '127.0.0.1', () => {
+    server.once('error', reject);
+    server.listen(0, bindHost, () => {
       const addr = server.address();
       const port = typeof addr === 'object' && addr ? addr.port : 0;
       resolve({ port, close: () => server.close() });
@@ -21,22 +22,58 @@ describe('host-identity — probeListening', () => {
     toClose = null;
   });
 
-  it('returns true for a port that is actually listening', async () => {
+  it('returns true for a host:port that is actually listening', async () => {
     const { port, close } = await listenEphemeral();
     toClose = close;
-    expect(await probeListening(port)).toBe(true);
+    expect(await probeListening('127.0.0.1', port)).toBe(true);
   });
 
   it('returns false for a port nothing is listening on', async () => {
     // Grab then immediately release a port so we know it is free.
     const { port, close } = await listenEphemeral();
     close();
-    expect(await probeListening(port, 200)).toBe(false);
+    expect(await probeListening('127.0.0.1', port, 200)).toBe(false);
   });
 
   it('returns false for an out-of-range port instead of throwing', async () => {
-    expect(await probeListening(0)).toBe(false);
-    expect(await probeListening(70000)).toBe(false);
+    expect(await probeListening('127.0.0.1', 0)).toBe(false);
+    expect(await probeListening('127.0.0.1', 70000)).toBe(false);
+  });
+
+  it('dials the candidate host, not a fixed loopback (concrete-IP bind)', async () => {
+    // A server bound only to ::1 is invisible to a 127.0.0.1 probe — the old
+    // bug. Dialing the candidate's own host finds it.
+    const { port, close } = await listenEphemeral('::1');
+    toClose = close;
+    expect(await probeListening('::1', port)).toBe(true);
+    expect(await probeListening('127.0.0.1', port, 200)).toBe(false);
+  });
+
+  it('maps an unspecified IPv6 bind (::) to its loopback when probing', async () => {
+    // Python 3.14 prints http://[::]:PORT/; the candidate host is `::`, which
+    // is not directly connectable — we must probe ::1.
+    const { port, close } = await listenEphemeral('::1');
+    toClose = close;
+    expect(await probeListening('::', port)).toBe(true);
+  });
+
+  it('maps an unspecified IPv4 bind (0.0.0.0) to 127.0.0.1 when probing', async () => {
+    const { port, close } = await listenEphemeral('127.0.0.1');
+    toClose = close;
+    expect(await probeListening('0.0.0.0', port)).toBe(true);
+  });
+});
+
+describe('host-identity — normalizeHost', () => {
+  it('strips the brackets Node wraps around IPv6 literals', () => {
+    expect(normalizeHost('[::1]')).toBe('::1');
+    expect(normalizeHost('[::]')).toBe('::');
+    expect(normalizeHost('[FE80::1]')).toBe('fe80::1');
+  });
+
+  it('lowercases and passes through ordinary hosts unchanged', () => {
+    expect(normalizeHost('LOCALHOST')).toBe('localhost');
+    expect(normalizeHost('127.0.0.1')).toBe('127.0.0.1');
   });
 });
 
@@ -45,6 +82,12 @@ describe('host-identity — isSelfHost', () => {
     expect(await isSelfHost('localhost')).toBe(true);
     expect(await isSelfHost('127.0.0.1')).toBe(true);
     expect(await isSelfHost('0.0.0.0')).toBe(true);
+  });
+
+  it('recognizes bracketed IPv6 loopback/unspecified forms (the dropped-app bug)', async () => {
+    // new URL('http://[::1]:3000').hostname === '[::1]' — must still match.
+    expect(await isSelfHost('[::1]')).toBe(true);
+    expect(await isSelfHost('[::]')).toBe(true);
   });
 
   it('rejects an external host (the github-looking case)', async () => {
@@ -67,6 +110,14 @@ describe('host-identity — toReachableUrl', () => {
     // assert the swap when this machine isn't on a tailnet (otherwise the
     // result is the tailnet name, which is also fine but host-dependent).
     const out = await toReachableUrl('http://0.0.0.0:3000/');
+    if (!out.includes('.ts.net')) {
+      expect(out).toBe('http://127.0.0.1:3000/');
+    }
+  });
+
+  it('rewrites an unspecified IPv6 bind ([::]) to loopback when not on a tailnet', async () => {
+    // The bracketed IPv6 form must be recognized as unspecified, same as 0.0.0.0.
+    const out = await toReachableUrl('http://[::]:3000/');
     if (!out.includes('.ts.net')) {
       expect(out).toBe('http://127.0.0.1:3000/');
     }

@@ -148,7 +148,7 @@ export class PaneRuntime extends EventEmitter {
   // by a listening probe). See app-url-tracker.ts / host-identity.ts.
   private appUrlTracker = new AppUrlTracker({
     isSelfHost: (host) => isSelfHost(host),
-    probe: (port) => probeListening(port),
+    probe: (host, port) => probeListening(host, port),
     toReachableUrl: (url) => toReachableUrl(url),
     now: () => Date.now(),
   });
