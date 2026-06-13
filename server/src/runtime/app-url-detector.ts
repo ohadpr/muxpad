@@ -27,6 +27,14 @@ export class AppUrlDetector {
   private trackers = new Map<string, AppUrlTracker>();
   private debounce = new Map<string, NodeJS.Timeout>();
   private reprobe: NodeJS.Timeout | null = null;
+  // Per-pane refresh serialization. A tracker's refresh() is async and
+  // mutates shared state across awaits, and it can be triggered from both the
+  // debounce and the 10s sweep — overlapping passes could drop a candidate
+  // (the MAX_CANDIDATES reassign) or double-probe. `running` marks an in-flight
+  // refresh; a request that arrives while one runs sets `rerun` so the latest
+  // sightings still get confirmed once the current pass finishes.
+  private running = new Set<string>();
+  private rerun = new Set<string>();
 
   /**
    * @param onAppUrls  called with the confirmed list whenever a pane's set
@@ -58,6 +66,10 @@ export class AppUrlDetector {
       clearTimeout(pending);
       this.debounce.delete(paneId);
     }
+    this.rerun.delete(paneId);
+    // An in-flight refreshOne can't be cancelled, but deleting the tracker
+    // makes its post-await membership re-check bail before calling onAppUrls,
+    // so a forgotten pane can't resurrect a cache entry.
     this.trackers.delete(paneId);
   }
 
@@ -69,6 +81,7 @@ export class AppUrlDetector {
     }
     for (const t of this.debounce.values()) clearTimeout(t);
     this.debounce.clear();
+    this.rerun.clear();
   }
 
   private scheduleRefresh(paneId: string): void {
@@ -82,15 +95,34 @@ export class AppUrlDetector {
   }
 
   private async refreshOne(paneId: string): Promise<void> {
+    // Serialize per tracker: if a pass is already running for this pane, mark
+    // it to re-run once and bail, so two passes never mutate one tracker's
+    // state concurrently.
+    if (this.running.has(paneId)) {
+      this.rerun.add(paneId);
+      return;
+    }
     const tracker = this.trackers.get(paneId);
     if (!tracker) return;
-    let changed: boolean;
+    this.running.add(paneId);
     try {
-      changed = await tracker.refresh();
-    } catch {
-      return; // a probe/lookup blip; the periodic re-probe will retry
+      let changed: boolean;
+      try {
+        changed = await tracker.refresh();
+      } catch {
+        return; // a probe/lookup blip; the periodic re-probe will retry
+      }
+      // forget() may have run during the await — don't resurrect a dropped
+      // pane's cache entry by calling back for it.
+      if (this.trackers.get(paneId) !== tracker) return;
+      if (changed) this.onAppUrls(paneId, tracker.list());
+    } finally {
+      this.running.delete(paneId);
+      // A sighting/sweep arrived mid-pass — run once more to confirm it.
+      if (this.rerun.delete(paneId) && this.trackers.has(paneId)) {
+        void this.refreshOne(paneId);
+      }
     }
-    if (changed) this.onAppUrls(paneId, tracker.list());
   }
 
   private async refreshAll(): Promise<void> {

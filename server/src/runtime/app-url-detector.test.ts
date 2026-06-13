@@ -91,4 +91,23 @@ describe('AppUrlDetector', () => {
     await sleep(550);
     expect(h.calls).toEqual([]);
   });
+
+  it('does not resurrect a pane forgotten while its confirm pass is in flight', async () => {
+    // Park the probe so the refresh is mid-await when we forget the pane —
+    // the post-await membership re-check must bail instead of calling back
+    // and re-creating a cache entry for the dead pane.
+    let releaseProbe: (listening: boolean) => void = () => {};
+    h = makeHarness({
+      probe: () =>
+        new Promise<boolean>((r) => {
+          releaseProbe = r;
+        }),
+    });
+    h.detector.ingest('p1', ['http://localhost:5173'], []);
+    await sleep(450); // let the debounce fire; refresh now parks on the probe
+    h.detector.forget('p1'); // forgotten mid-flight
+    releaseProbe(true); // probe resolves "listening" after the forget
+    await sleep(20);
+    expect(h.calls).toEqual([]);
+  });
 });
