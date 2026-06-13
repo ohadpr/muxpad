@@ -278,12 +278,17 @@
   color: var(--fg);
   background: var(--bg-hover);
 }
-/* Active TAB uses a neutral bg — the active WORKSPACE owns the accent
-   tint. Different color families keep them instantly distinguishable. */
+/* Active TAB gets a strong accent wash so it clearly reads as "you are
+   here" against the workspace's lighter band. It's deliberately more
+   saturated than the active WORKSPACE header (14%) so the tab — the more
+   granular selection — wins the eye. The left rail underlines it. */
 .navtree-tab-row[data-active="true"] {
   color: var(--fg);
   font-weight: 600;
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--accent) 24%, var(--bg));
+}
+.navtree-tab-row[data-active="true"]:hover {
+  background: color-mix(in srgb, var(--accent) 30%, var(--bg));
 }
 
 .navtree-tab-link {
