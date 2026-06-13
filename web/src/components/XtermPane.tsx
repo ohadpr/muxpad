@@ -736,6 +736,41 @@ export function XtermPane({
     container.addEventListener('pointerup', onPointerUpOrCancel);
     container.addEventListener('pointercancel', onPointerUpOrCancel);
 
+    // Desktop wheel → discrete scroll steps. A raw Chromium mouse notch is
+    // ~100-120px of deltaY; round(|deltaY|/30) turned one notch into 3-4
+    // steps (and a flick into 8), so the transcript flew past — and it had
+    // no sub-notch memory, so a precision wheel / trackpad's stream of tiny
+    // deltas each forced a full step. Accumulate deltaMode-normalized pixels
+    // and emit one step per WHEEL_NOTCH_PX of travel: ~1 step per notch
+    // (the pre-rework feel) while small deltas sum smoothly. Per-pane state
+    // (this closure), so panes don't share an accumulator.
+    const WHEEL_NOTCH_PX = 100; // ~one wheel notch of pixel delta
+    let wheelAccumPx = 0;
+    const wheelStepsFor = (e: WheelEvent): number => {
+      const cell = getCellDimensions(term);
+      const lineH = cell?.height && cell.height > 0 ? cell.height : 16;
+      // Normalize line/page-mode wheels (Firefox, some mice) to pixels so
+      // they aren't mis-scaled as if deltaY were already in pixels.
+      // deltaMode: 1 = DOM_DELTA_LINE, 2 = DOM_DELTA_PAGE, else pixels.
+      let px = e.deltaY;
+      if (e.deltaMode === 1) {
+        px = e.deltaY * lineH;
+      } else if (e.deltaMode === 2) {
+        px = e.deltaY * lineH * term.rows;
+      }
+      // A direction flip discards leftover opposite travel, so the first
+      // step the other way lands immediately.
+      if (px < 0 !== wheelAccumPx < 0) wheelAccumPx = 0;
+      wheelAccumPx += px;
+      let steps = Math.trunc(wheelAccumPx / WHEEL_NOTCH_PX);
+      if (steps !== 0) wheelAccumPx -= steps * WHEEL_NOTCH_PX;
+      // Clamp one violent delta (free-spin flick coalesced into a single
+      // event) so it can't leap multiple pages at once.
+      if (steps > 4) steps = 4;
+      else if (steps < -4) steps = -4;
+      return steps;
+    };
+
     // Capture-phase wheel on the pane container — must run before xterm's
     // bubble listener on term.element, which otherwise sends ↑/↓ to the
     // input composer when the TUI has no xterm scrollback.
@@ -754,21 +789,30 @@ export function XtermPane({
         deltaY: e.deltaY,
       });
       if (!forward) return false;
+      const steps = wheelStepsFor(e);
+      // Sub-notch travel: consumed into the accumulator. Still report the
+      // event as handled (return true) so xterm's fallback wheel handler
+      // doesn't also process it and double-count this delta.
+      if (steps === 0) return true;
       const hit = cellAt(e.clientX, e.clientY);
       // Aim at the transcript band (upper third), not the input row.
       const col = hit?.col ?? Math.max(1, Math.floor(term.cols / 2));
       const row = hit?.row ?? Math.max(1, Math.floor(term.rows / 4));
       const transcriptRow = Math.min(row, Math.max(1, Math.floor(term.rows / 3)));
+      // The encoders derive their step count from |delta|/stepPx; hand them
+      // a synthetic delta that yields exactly `steps` (one per accumulated
+      // notch) in the original direction, instead of the raw pixel delta.
+      const delta = steps * WHEEL_STEP_PX;
       const sent =
-        triggerWheelMouseEvent(term, col, transcriptRow, e.deltaY, WHEEL_STEP_PX) ||
+        triggerWheelMouseEvent(term, col, transcriptRow, delta, WHEEL_STEP_PX) ||
         safeSend(
-          encodeInput(wheelInputForPty(term, col, transcriptRow, e.deltaY, WHEEL_STEP_PX, ink)),
+          encodeInput(wheelInputForPty(term, col, transcriptRow, delta, WHEEL_STEP_PX, ink)),
         );
       if (!sent) {
         dbg('wheel dropped: ws not open');
         return false;
       }
-      dbg('wheel→pty', { col, row: transcriptRow, deltaY: e.deltaY });
+      dbg('wheel→pty', { col, row: transcriptRow, steps, deltaY: e.deltaY });
       return true;
     };
     const onWheelCapture = (e: WheelEvent) => {
