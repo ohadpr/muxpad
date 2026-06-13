@@ -8,13 +8,19 @@
        Thumb-height rows; close buttons always faintly present (touch
        has no hover).
 
+   Both variants render a flat list: each workspace is a BANDED header
+   (elevated fill + heavier weight) with its tabs below — no
+   bordered/rounded card per workspace (that read toy-ish against the
+   rest of the chrome). The band anchors the group; a breath of space
+   separates groups.
+
    Visual grammar shared with the rest of muxpad's chrome:
+     banded fill              = workspace header
      accent tint + left rail  = active workspace ("you are here")
      neutral bg + left rail   = active tab (different color family on
                                 purpose so the two active states read
                                 apart at a glance)
      red dot                  = "wants you"
-     whitespace               = group separation (no borders, no fills)
    ────────────────────────────────────────────────────────────────────── */
 
 .navtree {
@@ -24,7 +30,6 @@
   --nt-hit: 24px; /* square hit target for disclosure/close */
   --nt-indent: 30px; /* tab text column = disclosure col + step */
   --nt-guide: 16px; /* indent guide x = center of the disclosure column */
-  --nt-card-bg: var(--bg-elev); /* group card over the sidenav's chrome bg */
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -39,8 +44,6 @@
   --nt-hit: 32px;
   --nt-indent: 40px;
   --nt-guide: 24px; /* disclosure center: 8px row inset + 32px hit / 2 */
-  /* No --nt-card-bg here: the sheet renders a flat full-bleed list on
-     the panel's chrome surface — cards are a sidebar-only treatment. */
 }
 
 /* ─── Section header ─────────────────────────────────────────────────── */
@@ -93,18 +96,19 @@
   cursor: default;
 }
 
-/* ─── Scroll region + group cards ────────────────────────────────────── */
+/* ─── Scroll region + workspace groups ───────────────────────────────── */
 
+/* Full-bleed rows — the banded headers span edge to edge, so the
+   accent rail sits flush against the rail's left edge. Vertical pad
+   only (a touch at top, a clearing inset at the bottom). */
 .navtree-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: 2px 8px 10px;
+  padding: 2px 0 10px;
 }
-/* Touch surface: full-bleed rows (no card gutters), enough bottom inset
-   that the last row clears the panel's rounded corners. */
 .navtree[data-variant="sheet"] .navtree-scroll {
   padding: 0 0 12px;
 }
@@ -115,41 +119,17 @@
   padding-left: 8px;
 }
 
-/* SIDEBAR: each workspace is a CARD — hairline-bordered plate holding
-   its row + tab list. Articulates "these tabs belong to this workspace"
-   much more decisively than whitespace alone. overflow:hidden keeps the
-   active rail and row hover fills inside the rounded corners. */
-.navtree[data-variant="sidebar"] .navtree-group {
-  background: var(--nt-card-bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
-}
-.navtree[data-variant="sidebar"] .navtree-group + .navtree-group {
+/* Workspaces read as a flat list of BANDED headers (elevated fill +
+   heavier weight on the ws row) — no bordered/rounded card per
+   workspace (that read toy-ish against the rest of the chrome). The
+   band anchors each group; a breath of space separates groups; the
+   active row's accent tint + rail carry "you are here". Same treatment
+   on the sidebar and the sheet. */
+.navtree-group + .navtree-group {
   margin-top: 8px;
 }
-/* The active workspace's card carries a whisper of accent in its frame
-   so "you are here" reads at the group level too, not just the row. */
-.navtree[data-variant="sidebar"] .navtree-group[data-active="true"] {
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
-}
 
-/* SHEET: no cards — frames-within-frames read fussy on a phone, where
-   the panel already provides the one frame. Full-bleed list with
-   BANDED workspace headers: an elevated fill + heavier weight makes
-   each header the visual anchor of its group, so dividers between
-   groups aren't needed — just a breath of space. */
-.navtree[data-variant="sheet"] .navtree-group + .navtree-group {
-  margin-top: 8px;
-}
-.navtree[data-variant="sheet"] .navtree-ws-row {
-  font-weight: 600;
-}
-.navtree[data-variant="sheet"] .navtree-ws-row:not([data-active="true"]) {
-  background: var(--bg-elev);
-}
-
-/* ─── Workspace row ──────────────────────────────────────────────────── */
+/* ─── Workspace row (banded header) ──────────────────────────────────── */
 
 .navtree-ws-row {
   position: relative;
@@ -157,7 +137,8 @@
   align-items: center;
   height: var(--nt-row-ws);
   padding: 0 8px 0 4px;
-  font-weight: 500;
+  font-weight: 600;
+  background: var(--bg-elev);
 }
 .navtree-ws-row:hover {
   background: var(--bg-hover);
@@ -167,11 +148,11 @@
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 /* The accent rail marks the EXACT place you are. Expanded active
-   workspace: the rail belongs to the active tab alone (ws tint + card
-   frame already carry the workspace-level signal — and with the first
-   tab active, two stacked rails read as one odd broken line). The ws
-   row only takes the rail when collapsed, i.e. when the tab's rail
-   isn't there to carry it. */
+   workspace: the rail belongs to the active tab alone (the ws row's
+   accent tint already carries the workspace-level signal — and with
+   the first tab active, two stacked rails read as one odd broken
+   line). The ws row only takes the rail when collapsed, i.e. when the
+   tab's rail isn't there to carry it. */
 .navtree-group:not([data-expanded="true"]) > .navtree-ws-row[data-active="true"]::after,
 .navtree-tab-row[data-active="true"]::after {
   content: "";
@@ -277,8 +258,8 @@
   background: var(--border);
   pointer-events: none;
 }
-/* Hairline between the workspace row and its tabs — the ws row reads
-   as the card's header. */
+/* Hairline under the banded workspace header, separating it from its
+   tabs. */
 .navtree-group .navtree-tab-list {
   border-top: 1px solid var(--border);
 }
