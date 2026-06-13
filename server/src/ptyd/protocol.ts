@@ -5,8 +5,13 @@ import type { AppUrlMarker } from '../runtime/pty-scanner.js';
  * Bump when wire shape changes incompatibly. Both ends should refuse to
  * start on mismatch — not implemented yet, but the constant gives future
  * divergence a stable anchor.
+ *
+ * v2: replaced the computed `paneAppUrls` push with raw `paneUrlsSeen`
+ * (app-url detection moved from ptyd to the main server). An old ptyd against
+ * a new server would silently surface zero app-urls; a `restart --all`
+ * (which relaunches both from the same tree) sidesteps the mismatch.
  */
-export const PTYD_PROTOCOL_VERSION = 1;
+export const PTYD_PROTOCOL_VERSION = 2;
 
 export type CtrlRequest = {
   kind: 'request';

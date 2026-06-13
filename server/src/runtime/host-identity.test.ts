@@ -168,11 +168,13 @@ describe('host-identity — toReachableUrl', () => {
     }
   });
 
-  it('rewrites an unspecified IPv6 bind ([::]) to loopback when not on a tailnet', async () => {
-    // The bracketed IPv6 form must be recognized as unspecified, same as 0.0.0.0.
+  it('rewrites an unspecified IPv6 bind ([::]) to the IPv6 loopback when not on a tailnet', async () => {
+    // [::] is unspecified like 0.0.0.0, but rewrite to ::1 (not 127.0.0.1) so
+    // the display host matches the probe's address family — a v6-only bind
+    // must stay v6 or the browser face would fail to connect.
     const out = await toReachableUrl('http://[::]:3000/');
     if (!out.includes('.ts.net')) {
-      expect(out).toBe('http://127.0.0.1:3000/');
+      expect(out).toBe('http://[::1]:3000/');
     }
   });
 });
