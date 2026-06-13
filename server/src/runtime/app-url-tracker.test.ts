@@ -17,7 +17,7 @@ function makeDeps(overrides: Partial<AppUrlTrackerDeps> = {}): {
   let clock = 1000;
   const deps: AppUrlTrackerDeps = {
     isSelfHost: async (host) => selfHosts.has(host),
-    probe: async (port) => listening.has(port),
+    probe: async (_host, port) => listening.has(port),
     toReachableUrl: async (url) => url.replace('localhost', 'host.ts.net'),
     now: () => clock,
     ...overrides,
