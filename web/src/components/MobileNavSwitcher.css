@@ -2,12 +2,17 @@
    MobileNavSwitcher
 
    Breadcrumb trigger in the chrome bar (`Workspace › Tab ▾`) + a
-   bottom sheet hosting NavTree (see NavTree.css for the tree itself).
-   Bottom-anchored because that's where thumbs live; scrim tap, Escape,
-   or any navigation dismisses it.
+   full-width panel that drops down from directly under the bar,
+   hosting NavTree (see NavTree.css for the tree itself). Top-anchored
+   so the surface visibly belongs to the trigger; the undimmed chrome
+   bar stays tappable as the close affordance. Scrim tap, Escape, the
+   trigger, or any navigation dismisses it.
    ────────────────────────────────────────────────────────────────────── */
 
 .mns {
+  /* Fixed-position offset for the panel + scrim: chrome bar height plus
+     the iPhone status-bar/notch inset the app shell reserves above it. */
+  --mns-panel-top: calc(env(safe-area-inset-top, 0px) + var(--chrome-h));
   position: relative;
   flex: 1;
   min-width: 0;
@@ -34,8 +39,15 @@
   cursor: pointer;
   text-align: left;
 }
-.mns-trigger:hover {
+.mns-trigger:hover,
+.mns-trigger[aria-expanded='true'] {
   background: var(--bg-hover);
+}
+.mns-trigger-chevron svg {
+  transition: transform 160ms ease;
+}
+.mns-trigger[aria-expanded='true'] .mns-trigger-chevron svg {
+  transform: rotate(180deg);
 }
 .mns-trigger-label {
   flex: 1;
@@ -74,71 +86,70 @@
   color: var(--accent);
 }
 
-/* ─── Bottom sheet ───────────────────────────────────────────────────── */
+/* ─── Drop-down panel ────────────────────────────────────────────────── */
 
-/* A <button> so dismissal is semantic, restyled to a plain dim layer. */
+/* A <button> so dismissal is semantic, restyled to a plain dim layer.
+   Starts BELOW the chrome bar — the bar stays undimmed so the
+   breadcrumb reads as the panel's anchor and stays tappable to close. */
 .mns-scrim {
   position: fixed;
-  inset: 0;
+  top: var(--mns-panel-top);
+  left: 0;
+  right: 0;
+  bottom: 0;
   background: rgba(0, 0, 0, 0.4);
   border: none;
   padding: 0;
   margin: 0;
   cursor: default;
   z-index: 1100;
-  animation: mns-scrim-in 200ms ease;
+  animation: mns-scrim-in 160ms ease;
 }
 .mns-scrim[data-closing="true"] {
-  animation: mns-scrim-out 180ms ease forwards;
+  animation: mns-scrim-out 140ms ease forwards;
 }
 
-.mns-sheet {
+.mns-panel {
   position: fixed;
+  top: var(--mns-panel-top);
   left: 0;
   right: 0;
-  bottom: 0;
   z-index: 1101;
   display: flex;
   flex-direction: column;
   /* svh: stable across iOS URL-bar collapse, same reasoning as the app
-     shell. 80 leaves a band of scrim so "tap outside to dismiss" always
-     has somewhere to land. */
-  max-height: 80svh;
+     shell. The bottom margin leaves a band of scrim so "tap outside to
+     dismiss" always has somewhere to land. */
+  max-height: calc(100svh - var(--mns-panel-top) - 48px);
   background: var(--bg-elev);
-  border-top: 1px solid var(--border);
-  border-radius: 14px 14px 0 0;
-  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.32);
-  /* Keep the "+ New workspace" footer above the home indicator. */
-  padding-bottom: env(safe-area-inset-bottom);
-  animation: mns-sheet-in 260ms cubic-bezier(0.32, 0.72, 0, 1);
+  border-bottom: 1px solid var(--border);
+  border-radius: 0 0 14px 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.32);
+  padding-bottom: 4px;
+  animation: mns-panel-in 200ms cubic-bezier(0.32, 0.72, 0, 1);
 }
-.mns-sheet[data-closing="true"] {
-  animation: mns-sheet-out 200ms ease-in forwards;
-}
-
-.mns-sheet-handle {
-  flex: 0 0 auto;
-  width: 36px;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--border-strong);
-  margin: 8px auto 4px;
+.mns-panel[data-closing="true"] {
+  animation: mns-panel-out 150ms ease-in forwards;
 }
 
-@keyframes mns-sheet-in {
+@keyframes mns-panel-in {
   from {
-    transform: translateY(100%);
+    opacity: 0;
+    transform: translateY(-10px);
   }
   to {
-    transform: translateY(0);
+    opacity: 1;
+    transform: none;
   }
 }
-@keyframes mns-sheet-out {
+@keyframes mns-panel-out {
   from {
-    transform: translateY(0);
+    opacity: 1;
+    transform: none;
   }
   to {
-    transform: translateY(100%);
+    opacity: 0;
+    transform: translateY(-10px);
   }
 }
 @keyframes mns-scrim-in {
@@ -162,7 +173,7 @@
    unmounts immediately instead of waiting for animationend. */
 @media (prefers-reduced-motion: reduce) {
   .mns-scrim,
-  .mns-sheet {
+  .mns-panel {
     animation: none;
   }
 }
