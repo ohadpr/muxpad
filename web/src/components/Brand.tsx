@@ -48,9 +48,9 @@ function BrandMark() {
       viewBox="0 0 32 32"
       aria-hidden="true"
     >
-      <rect x="2" y="2" width="14" height="28" rx="3" fill="#89b4fa" />
-      <rect x="18" y="2" width="12" height="13" rx="3" fill="#a6e3a1" />
-      <rect x="18" y="17" width="12" height="13" rx="3" fill="#f38ba8" />
+      <rect x="2" y="2" width="14" height="28" rx="3" fill="#334155" />
+      <rect x="18" y="2" width="12" height="13" rx="3" fill="#f59e0b" />
+      <rect x="18" y="17" width="12" height="13" rx="3" fill="#475569" />
     </svg>
   );
 }
