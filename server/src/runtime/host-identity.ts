@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { lookup as dnsLookup } from 'node:dns/promises';
 import net from 'node:net';
 import { promisify } from 'node:util';
 
@@ -100,10 +101,51 @@ export function normalizeHost(host: string): string {
   return lower.startsWith('[') && lower.endsWith(']') ? lower.slice(1, -1) : lower;
 }
 
-/** True iff `host` resolves to this machine (local form or this node's tailnet id). */
-export async function isSelfHost(host: string, now = Date.now()): Promise<boolean> {
-  const identity = await getIdentity(now);
-  return identity.hosts.has(normalizeHost(host));
+/**
+ * Is this IP literal non-publicly-routable — loopback, RFC1918 private,
+ * link-local, or CGNAT (100.64/10, where Tailscale and other overlay VPNs
+ * hand out addresses)? A server at such an address is on this machine or a
+ * network the viewer shares, never the public internet. This is the
+ * first-principles definition of "local" — no dependency on any specific VPN
+ * or tool being installed.
+ */
+export function isPrivateAddress(ip: string): boolean {
+  const h = normalizeHost(ip);
+  const v4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) {
+    const octets = v4.slice(1).map(Number);
+    if (octets.some((n) => n > 255)) return false;
+    const [a, b] = octets as [number, number, number, number];
+    if (a === 127 || a === 10) return true; // loopback, private
+    if (a === 192 && b === 168) return true; // private
+    if (a === 172 && b >= 16 && b <= 31) return true; // private
+    if (a === 169 && b === 254) return true; // link-local
+    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT (Tailscale et al.)
+    return false;
+  }
+  if (h === '::1') return true; // loopback
+  if (h.startsWith('fe80')) return true; // link-local
+  if (h.startsWith('fc') || h.startsWith('fd')) return true; // unique-local (incl. Tailscale fd7a)
+  return false;
+}
+
+/**
+ * True iff a printed URL's host denotes a server on this machine or a network
+ * the viewer shares — the gate that keeps github/docs/registry URLs out of the
+ * dropdown. A local form or private-range IP literal passes immediately; a
+ * hostname (a *.local box, a tailnet MagicDNS name, a LAN alias) is resolved
+ * once and accepted iff it points at a private address. github.com resolves to
+ * a public IP and is rejected. Listening is confirmed separately by the probe.
+ */
+export async function isSelfHost(host: string): Promise<boolean> {
+  const h = normalizeHost(host);
+  if (LOCAL_HOSTS.has(h) || isPrivateAddress(h)) return true;
+  try {
+    const { address } = await dnsLookup(h);
+    return isPrivateAddress(address);
+  } catch {
+    return false;
+  }
 }
 
 /**
