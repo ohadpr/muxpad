@@ -58,52 +58,73 @@ export function AppLayout() {
     });
   }, [wsSlug]);
 
+  // Sidebar mode absorbs the whole top bar while inside a workspace:
+  // brand moves to the sidebar's head, build + settings to its foot.
+  // The bar still renders on the workspace picker ('/'), where there is
+  // no sidebar to host them.
+  const showTopBar = !(sidebarMode && wsSlug);
+
   return (
     <div className="app-layout">
-      <header className="ws-tabbar">
-        {/* In sidebar mode the switcher no longer occupies the wordmark's
-            slot, so the brand keeps its full wordmark. */}
-        <Brand asLink={true} responsive={true} markOnly={!!activeWorkspace && !sidebarMode} />
-        {activeWorkspace && isMobile && (
-          // Single merged trigger on mobile: workspace + tab breadcrumb
-          // opening the bottom-sheet NavTree. Replaces WorkspaceSwitcher
-          // + TabBar for thumb-economy reasons.
-          <MobileNavSwitcher activeWorkspaceSlug={activeWorkspace.slug} />
-        )}
-        {activeWorkspace && !isMobile && !sidebarMode && (
-          <>
-            <WorkspaceSwitcher activeWorkspaceSlug={activeWorkspace.slug} />
-            {/* `key` forces a remount when the workspace changes so the
-                tab list never momentarily shows stale entries from the
-                previous workspace. */}
-            <TabBar
-              key={activeWorkspace.id}
-              workspaceId={activeWorkspace.id}
-              workspaceSlug={activeWorkspace.slug}
-            />
-          </>
-        )}
-        {(!activeWorkspace || sidebarMode) && <span className="ws-tabbar-spacer" />}
-        <a
-          className="brand-text-side"
-          href={REPO_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={`muxpad — build ${__MUXPAD_VERSION__}`}
-        >
-          muxpad <span className="brand-text-side-version">{__MUXPAD_VERSION__}</span>
-        </a>
-        <SettingsMenu />
-      </header>
+      {showTopBar && (
+        <header className="ws-tabbar">
+          <Brand asLink={true} responsive={true} markOnly={!!activeWorkspace} />
+          {activeWorkspace && isMobile && (
+            // Single merged trigger on mobile: workspace + tab breadcrumb
+            // opening the bottom-sheet NavTree. Replaces WorkspaceSwitcher
+            // + TabBar for thumb-economy reasons.
+            <MobileNavSwitcher activeWorkspaceSlug={activeWorkspace.slug} />
+          )}
+          {activeWorkspace && !isMobile && (
+            <>
+              <WorkspaceSwitcher activeWorkspaceSlug={activeWorkspace.slug} />
+              {/* `key` forces a remount when the workspace changes so the
+                  tab list never momentarily shows stale entries from the
+                  previous workspace. */}
+              <TabBar
+                key={activeWorkspace.id}
+                workspaceId={activeWorkspace.id}
+                workspaceSlug={activeWorkspace.slug}
+              />
+            </>
+          )}
+          {!activeWorkspace && <span className="ws-tabbar-spacer" />}
+          <a
+            className="brand-text-side"
+            href={REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`muxpad — build ${__MUXPAD_VERSION__}`}
+          >
+            muxpad <span className="brand-text-side-version">{__MUXPAD_VERSION__}</span>
+          </a>
+          <SettingsMenu />
+        </header>
+      )}
       {wsSlug ? (
         <div className="app-body">
           {sidebarMode && (
             <aside className="sidenav">
+              <div className="sidenav-brand">
+                <Brand asLink={true} responsive={false} />
+              </div>
               <NavTree
                 variant="sidebar"
                 activeWorkspaceSlug={wsSlug}
                 activeTabSlug={activeTabSlug}
               />
+              <div className="sidenav-footer">
+                <a
+                  className="sidenav-build"
+                  href={REPO_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={`muxpad — build ${__MUXPAD_VERSION__}`}
+                >
+                  {__MUXPAD_VERSION__}
+                </a>
+                <SettingsMenu />
+              </div>
             </aside>
           )}
           <div className="workspace-hosts">

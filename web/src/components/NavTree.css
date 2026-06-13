@@ -18,11 +18,13 @@
    ────────────────────────────────────────────────────────────────────── */
 
 .navtree {
-  /* Row metrics are the only thing the two variants disagree on. */
+  /* Row metrics + surfaces are the only things the variants disagree on. */
   --nt-row-ws: 30px;
   --nt-row-tab: 28px;
   --nt-hit: 24px; /* square hit target for disclosure/close */
   --nt-indent: 30px; /* tab text column = disclosure col + step */
+  --nt-guide: 16px; /* indent guide x = center of the disclosure column */
+  --nt-card-bg: var(--bg-elev); /* group card over the sidenav's chrome bg */
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -36,7 +38,62 @@
   --nt-row-tab: 42px;
   --nt-hit: 32px;
   --nt-indent: 40px;
+  --nt-guide: 20px;
+  /* The sheet itself is bg-elev; cards step back to bg for an inset read. */
+  --nt-card-bg: var(--bg);
 }
+
+/* ─── Section header ─────────────────────────────────────────────────── */
+
+.navtree-section {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 10px 10px 6px 16px;
+}
+.navtree-section-label {
+  flex: 1;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  user-select: none;
+}
+.navtree-section-add {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg-dim);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 80ms ease, color 80ms ease, border-color 80ms ease;
+}
+.navtree[data-variant="sheet"] .navtree-section-add {
+  width: 28px;
+  height: 28px;
+}
+.navtree-section-add:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+.navtree-section-add:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ─── Scroll region + group cards ────────────────────────────────────── */
 
 .navtree-scroll {
   flex: 1;
@@ -44,12 +101,26 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: 6px 0;
+  padding: 2px 8px 10px;
 }
 
-/* Whitespace is the chunking signal between workspace groups. */
+/* Each workspace is a CARD — hairline-bordered plate holding its row +
+   tab list. Articulates "these tabs belong to this workspace" much more
+   decisively than whitespace alone. overflow:hidden keeps the active
+   rail and row hover fills inside the rounded corners. */
+.navtree-group {
+  background: var(--nt-card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
 .navtree-group + .navtree-group {
-  margin-top: 6px;
+  margin-top: 8px;
+}
+/* The active workspace's card carries a whisper of accent in its frame
+   so "you are here" reads at the group level too, not just the row. */
+.navtree-group[data-active="true"] {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
 }
 
 /* ─── Workspace row ──────────────────────────────────────────────────── */
@@ -143,8 +214,28 @@
 /* ─── Tab rows ───────────────────────────────────────────────────────── */
 
 .navtree-tab-list {
+  position: relative;
   display: flex;
   flex-direction: column;
+  padding-bottom: 2px;
+}
+/* Indent guide — a vertical hairline dropping from the disclosure
+   chevron through the tab list, Finder/VS Code style. Makes the
+   parent→children relationship explicit instead of indent-only. */
+.navtree-tab-list::before {
+  content: "";
+  position: absolute;
+  left: var(--nt-guide);
+  top: 0;
+  bottom: 6px;
+  width: 1px;
+  background: var(--border);
+  pointer-events: none;
+}
+/* Hairline between the workspace row and its tabs — the ws row reads
+   as the card's header. */
+.navtree-group .navtree-tab-list {
+  border-top: 1px solid var(--border);
 }
 
 .navtree-tab-row {
@@ -285,40 +376,12 @@
   background: var(--bg-hover);
 }
 
-/* "+ New workspace" — pinned footer below the scroll region, so it's
-   reachable no matter how long the tree gets. */
-.navtree-new-ws {
-  flex: 0 0 auto;
-  display: block;
-  width: 100%;
-  padding: 10px 14px;
-  background: transparent;
-  border: none;
-  border-top: 1px solid var(--border);
-  color: var(--accent);
-  font-family: inherit;
-  font-size: var(--chrome-size);
-  font-weight: 500;
-  text-align: left;
-  cursor: pointer;
-  touch-action: manipulation;
-  -webkit-tap-highlight-color: transparent;
-}
-.navtree[data-variant="sheet"] .navtree-new-ws {
-  padding: 14px;
-}
-.navtree-new-ws:hover {
-  background: var(--bg-hover);
-}
-.navtree-new-ws:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
 /* ─── Sidebar shell ──────────────────────────────────────────────────── */
 
-/* The desktop left rail hosting the tree. Chrome surface, hairline
-   divider against the workspace — same plate language as the top bar. */
+/* The desktop left rail. In sidebar mode it absorbs the whole top bar:
+   brand plate at the head, build + settings at the foot, tree between.
+   Chrome surface + hairline divider — same plate language as the bar
+   it replaces. */
 .sidenav {
   flex: 0 0 240px;
   min-height: 0;
@@ -326,4 +389,57 @@
   flex-direction: column;
   background: var(--bg-chrome);
   border-right: 1px solid var(--border);
+}
+
+.sidenav-brand {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  height: var(--chrome-h);
+  border-bottom: 1px solid var(--border);
+}
+.sidenav-brand .brand {
+  flex: 1;
+  border-right: none;
+}
+
+.sidenav-footer {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  height: var(--chrome-h);
+  border-top: 1px solid var(--border);
+}
+.sidenav-build {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  color: var(--fg-dim);
+  font-family: var(--chrome-font);
+  font-size: 11px;
+  text-decoration: none;
+  transition: background 80ms ease, color 80ms ease;
+}
+.sidenav-build:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+  text-decoration: none;
+}
+/* Settings popover normally drops DOWN from the top bar; anchored to
+   the sidebar's foot it must open UP, with the sharp corner meeting
+   the gear plate below it. */
+.sidenav-footer .settings-popover {
+  top: auto;
+  bottom: 100%;
+  /* Anchor left and spill rightward over the workspace — right-anchored
+     it would overflow past the viewport's left edge (popover is wider
+     than the sidebar). */
+  right: auto;
+  left: 0;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 6px 6px 6px 0;
+  box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.22);
 }
