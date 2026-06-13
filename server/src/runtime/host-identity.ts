@@ -140,12 +140,36 @@ export function isPrivateAddress(ip: string): boolean {
 export async function isSelfHost(host: string): Promise<boolean> {
   const h = normalizeHost(host);
   if (LOCAL_HOSTS.has(h) || isPrivateAddress(h)) return true;
-  try {
-    const { address } = await dnsLookup(h);
-    return isPrivateAddress(address);
-  } catch {
-    return false;
-  }
+  const address = await resolveWithTimeout(h);
+  return address !== null && isPrivateAddress(address);
+}
+
+// Cap how long a hostname resolution may stall the (server-side) detection
+// refresh path. dns.lookup → getaddrinfo has no built-in timeout and a
+// non-resolving name can hang for the OS resolver's full retry budget
+// (seconds); a pane printing bogus hostnames must not wedge detection. On
+// timeout we treat the host as "not resolved" (→ not self).
+const DNS_LOOKUP_TIMEOUT_MS = 500;
+
+function resolveWithTimeout(
+  host: string,
+  timeoutMs = DNS_LOOKUP_TIMEOUT_MS,
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (addr: string | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(addr);
+    };
+    const timer = setTimeout(() => done(null), timeoutMs);
+    timer.unref?.();
+    dnsLookup(host).then(
+      ({ address }) => done(address),
+      () => done(null),
+    );
+  });
 }
 
 /**
@@ -168,7 +192,11 @@ export async function toReachableUrl(rawUrl: string, now = Date.now()): Promise<
     if (UNSPECIFIED_HOSTS.has(host)) {
       // No tailnet to rewrite to, but 0.0.0.0/:: won't load in a browser —
       // swap for loopback so the local (same-machine) viewer can reach it.
-      u.hostname = '127.0.0.1';
+      // Match the probe's address family (see probeTargets): an IPv6 `::`
+      // bind may be v6-only, so a 127.0.0.1 URL would fail to load even
+      // though the probe confirmed it listening via ::1. URL hostnames take
+      // the bracketed IPv6 form.
+      u.hostname = host === '::' ? '[::1]' : '127.0.0.1';
       return u.toString();
     }
     return rawUrl;
