@@ -27,8 +27,45 @@
 .pane-web-switch-main.is-web {
   color: var(--accent);
 }
+/* Terminal face + a detected app: announce it. The control becomes an accent
+   pill so it reads as "this pane is serving a web app — click to view it",
+   marrying the detection indicator and the switch into one prominent affordance. */
+.pane-web-switch-main.is-available {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  font-weight: 600;
+}
+.pane-web-switch-main.is-available:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+}
 .pane-web-switch-label {
   font-weight: 500;
+}
+
+/* Live "a server is up here" pulse — draws the eye to a freshly detected app. */
+.pane-web-switch-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pane-web-switch-pulse 2.2s ease-out infinite;
+}
+@keyframes pane-web-switch-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pane-web-switch-dot {
+    animation: none;
+  }
 }
 
 .pane-web-switch-caret {
@@ -49,6 +86,10 @@
   color: var(--fg);
   background: var(--bg-hover);
 }
+.pane-web-switch-caret.is-available {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
 
 .pane-web-switch-menu {
   position: absolute;
@@ -60,10 +101,21 @@
   min-width: 200px;
   max-width: 320px;
   padding: 4px;
-  background: var(--bg-chrome);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+/* Quiet section label so the popup reads as a deliberate menu, not a tooltip. */
+.pane-web-switch-head {
+  padding: 4px 10px 5px;
+  color: var(--fg-faint);
+  font-family: var(--chrome-font);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .pane-web-switch-item {
@@ -74,7 +126,7 @@
   background: transparent;
   border: 0;
   border-radius: 3px;
-  color: var(--fg-dim);
+  color: var(--fg);
   cursor: pointer;
   font-family: var(--chrome-font);
   font-size: var(--chrome-size-sm);
@@ -111,7 +163,7 @@
 
 .pane-web-switch-manual,
 .pane-web-switch-back {
-  color: var(--fg-faint);
+  color: var(--fg-dim);
 }
 .pane-web-switch-back {
   border-top: 1px solid var(--border);
