@@ -50,6 +50,9 @@ export function PaneWebSwitch({ paneId, appUrls }: { paneId: string; appUrls: Ap
   if (appUrls.length === 0 && !url) return null;
 
   const showWeb = face === 'web' && !!url;
+  // On the terminal face with at least one detected app: announce it. This is
+  // the prominent "a web app is being served here — click to view" state.
+  const available = !showWeb && appUrls.length > 0;
 
   const flipToWeb = (target: string) => {
     setPaneFace(paneId, { face: 'web', url: target });
@@ -75,17 +78,18 @@ export function PaneWebSwitch({ paneId, appUrls }: { paneId: string; appUrls: Ap
     <div className="pane-web-switch" ref={wrapRef} onMouseDown={(e) => e.stopPropagation()}>
       <button
         type="button"
-        className={`pane-web-switch-main${showWeb ? ' is-web' : ''}`}
+        className={`pane-web-switch-main${showWeb ? ' is-web' : ''}${available ? ' is-available' : ''}`}
         title={showWeb ? 'Back to terminal' : 'View web app'}
         aria-label={showWeb ? 'Back to terminal' : 'View web app'}
         onClick={onMainClick}
       >
         {showWeb ? <SvgTerminalGlyph /> : <SvgGlobe />}
         <span className="pane-web-switch-label">{showWeb ? 'Terminal' : 'Web'}</span>
+        {available ? <span className="pane-web-switch-dot" aria-hidden="true" /> : null}
       </button>
       <button
         type="button"
-        className="pane-web-switch-caret"
+        className={`pane-web-switch-caret${available ? ' is-available' : ''}`}
         title="Choose web app"
         aria-label="Choose web app"
         aria-haspopup="menu"
@@ -96,6 +100,11 @@ export function PaneWebSwitch({ paneId, appUrls }: { paneId: string; appUrls: Ap
       </button>
       {open ? (
         <div className="pane-web-switch-menu" role="menu">
+          {appUrls.length > 0 ? (
+            <div className="pane-web-switch-head">
+              {appUrls.length === 1 ? 'Serving' : `Serving · ${appUrls.length}`}
+            </div>
+          ) : null}
           {appUrls.map((a) => (
             <button
               key={a.url}
