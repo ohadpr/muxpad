@@ -140,4 +140,19 @@ describe('AppUrlTracker', () => {
     expect(await t.refresh()).toBe(false);
     expect(t.list()).toEqual([]);
   });
+
+  it('sorts a reachable host ahead of a loopback one (same server, both shown)', async () => {
+    // A dev server that prints both its localhost and its LAN/VPN URL should
+    // surface both; the externally-reachable one is the more useful default.
+    const local = makeDeps({ toReachableUrl: async (u) => u }); // no rewrite
+    local.selfHosts.add('10.0.0.9');
+    local.listening.add(5173);
+    const t = new AppUrlTracker(local.deps);
+    t.ingest({ urls: ['http://localhost:5173', 'http://10.0.0.9:5173'] });
+    await t.refresh();
+    expect(t.list().map((u) => u.url)).toEqual([
+      'http://10.0.0.9:5173',
+      'http://localhost:5173',
+    ]);
+  });
 });
