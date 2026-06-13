@@ -77,6 +77,13 @@
   border-color: var(--danger);
   opacity: 0.85;
 }
+/* "New pane" — an action, not a keystroke: pushed to the row's far end
+   and accent-tinted so it reads apart from the key chips. */
+.mobile-input-key-pane {
+  margin-left: auto;
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
 
 .mobile-input-row {
   display: flex;
