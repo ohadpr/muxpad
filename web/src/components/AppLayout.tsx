@@ -1,11 +1,13 @@
 import { Outlet, useRouterState } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
+import { useSettings } from '../settings';
 import { useMediaQuery } from '../use-media-query';
 import { useWindowAttention } from '../use-window-attention';
 import { useWorkspaces } from '../workspaces';
 import { Brand } from './Brand';
 import { MobileNavSwitcher } from './MobileNavSwitcher';
+import { NavTree } from './NavTree';
 import { SettingsMenu } from './SettingsMenu';
 import { TabBar } from './TabBar';
 import { WorkspaceShell } from './WorkspaceLayout';
@@ -23,11 +25,19 @@ const REPO_URL = 'https://github.com/ohadpr/muxpad';
  * the active workspace's tab list (when inside one), and the Settings
  * menu. The right-side "muxpad <build>" wordmark doubles as the GitHub
  * repo link. Popout routes are mounted outside this layout.
+ *
+ * Navigator placement (desktop) follows settings.navLayout:
+ *   'top'     — WorkspaceSwitcher + TabBar in the chrome bar (classic).
+ *   'sidebar' — a persistent left NavTree replaces both; the top bar
+ *               slims down to brand + build + settings.
+ * Mobile always gets the MobileNavSwitcher breadcrumb + bottom sheet.
  */
 export function AppLayout() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const wsSlugMatch = pathname.match(/^\/w\/([^/]+)/);
   const wsSlug = wsSlugMatch?.[1] ?? null;
+  const tabMatch = pathname.match(/^\/w\/[^/]+\/t\/([^/]+)/);
+  const activeTabSlug = tabMatch?.[1] ? decodeURIComponent(tabMatch[1]) : null;
   const { workspaces } = useWorkspaces();
   // Favicon is driven by the cross-workspace rollup, not by the current
   // workspace's tab list, so a browser tab parked on Workspace A still
@@ -35,6 +45,8 @@ export function AppLayout() {
   useWindowAttention(workspaces);
   const activeWorkspace = wsSlug ? workspaces.find((w) => w.slug === wsSlug) : null;
   const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
+  const settings = useSettings();
+  const sidebarMode = !isMobile && settings.navLayout === 'sidebar';
   const [visitedWsSlugs, setVisitedWsSlugs] = useState<Set<string>>(() => new Set());
   useEffect(() => {
     if (!wsSlug) return;
@@ -49,14 +61,16 @@ export function AppLayout() {
   return (
     <div className="app-layout">
       <header className="ws-tabbar">
-        <Brand asLink={true} responsive={true} markOnly={!!activeWorkspace} />
+        {/* In sidebar mode the switcher no longer occupies the wordmark's
+            slot, so the brand keeps its full wordmark. */}
+        <Brand asLink={true} responsive={true} markOnly={!!activeWorkspace && !sidebarMode} />
         {activeWorkspace && isMobile && (
-          // Single merged trigger on mobile: workspace + tab in a tree
-          // dropdown. Replaces WorkspaceSwitcher + TabBar for thumb-
-          // economy reasons (4-tap cross-workspace switches → 2).
+          // Single merged trigger on mobile: workspace + tab breadcrumb
+          // opening the bottom-sheet NavTree. Replaces WorkspaceSwitcher
+          // + TabBar for thumb-economy reasons.
           <MobileNavSwitcher activeWorkspaceSlug={activeWorkspace.slug} />
         )}
-        {activeWorkspace && !isMobile && (
+        {activeWorkspace && !isMobile && !sidebarMode && (
           <>
             <WorkspaceSwitcher activeWorkspaceSlug={activeWorkspace.slug} />
             {/* `key` forces a remount when the workspace changes so the
@@ -69,7 +83,7 @@ export function AppLayout() {
             />
           </>
         )}
-        {!activeWorkspace && <span className="ws-tabbar-spacer" />}
+        {(!activeWorkspace || sidebarMode) && <span className="ws-tabbar-spacer" />}
         <a
           className="brand-text-side"
           href={REPO_URL}
@@ -82,17 +96,28 @@ export function AppLayout() {
         <SettingsMenu />
       </header>
       {wsSlug ? (
-        <div className="workspace-hosts">
-          {[...visitedWsSlugs].map((slug) => (
-            <div
-              key={slug}
-              className="workspace-host-slot"
-              hidden={slug !== wsSlug}
-              aria-hidden={slug !== wsSlug}
-            >
-              <WorkspaceShell wsSlug={slug} isActive={slug === wsSlug} />
-            </div>
-          ))}
+        <div className="app-body">
+          {sidebarMode && (
+            <aside className="sidenav">
+              <NavTree
+                variant="sidebar"
+                activeWorkspaceSlug={wsSlug}
+                activeTabSlug={activeTabSlug}
+              />
+            </aside>
+          )}
+          <div className="workspace-hosts">
+            {[...visitedWsSlugs].map((slug) => (
+              <div
+                key={slug}
+                className="workspace-host-slot"
+                hidden={slug !== wsSlug}
+                aria-hidden={slug !== wsSlug}
+              >
+                <WorkspaceShell wsSlug={slug} isActive={slug === wsSlug} />
+              </div>
+            ))}
+          </div>
         </div>
       ) : (
         <Outlet />

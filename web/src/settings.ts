@@ -1,11 +1,6 @@
 import { useEffect, useState } from 'react';
 
-export type Theme =
-  | 'tokyo-night'
-  | 'dracula'
-  | 'github-light'
-  | 'trayo'
-  | 'trayo-dark';
+export type Theme = 'tokyo-night' | 'dracula' | 'github-light' | 'trayo' | 'trayo-dark';
 
 export const THEMES: { value: Theme; label: string }[] = [
   { value: 'tokyo-night', label: 'Tokyo Night' },
@@ -29,16 +24,24 @@ const THEME_ALIASES: Record<string, Theme> = {
   latte: 'github-light',
 };
 
+// Where the workspace/tab navigator lives on desktop. 'top' is the
+// classic WorkspaceSwitcher + TabBar chrome; 'sidebar' replaces both
+// with a persistent left NavTree. Mobile ignores this (always the
+// bottom-sheet tree).
+export type NavLayout = 'top' | 'sidebar';
+
 export interface Settings {
   fontSize: number;
   fontFamily: string;
   theme: Theme;
+  navLayout: NavLayout;
 }
 
 const DEFAULTS: Settings = {
   fontSize: 14,
   fontFamily: 'Menlo, Monaco, monospace',
   theme: 'trayo',
+  navLayout: 'top',
 };
 
 const KEY = 'muxpad.settings.v1';
@@ -61,8 +64,7 @@ function read(): Settings {
     const parsed = JSON.parse(raw) as Partial<Settings>;
     return {
       fontSize: typeof parsed.fontSize === 'number' ? parsed.fontSize : DEFAULTS.fontSize,
-      fontFamily:
-        typeof parsed.fontFamily === 'string' ? parsed.fontFamily : DEFAULTS.fontFamily,
+      fontFamily: typeof parsed.fontFamily === 'string' ? parsed.fontFamily : DEFAULTS.fontFamily,
       theme: ((): Theme => {
         const t = parsed.theme;
         if (typeof t !== 'string') return DEFAULTS.theme;
@@ -70,6 +72,7 @@ function read(): Settings {
         if (t in THEME_ALIASES) return THEME_ALIASES[t] as Theme;
         return DEFAULTS.theme;
       })(),
+      navLayout: parsed.navLayout === 'sidebar' ? 'sidebar' : DEFAULTS.navLayout,
     };
   } catch {
     return DEFAULTS;

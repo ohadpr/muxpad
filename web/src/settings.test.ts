@@ -47,6 +47,18 @@ describe('settings', () => {
     expect(s.fontFamily).toBe('Menlo, Monaco, monospace');
   });
 
+  it('reads navLayout back and rejects unknown values', async () => {
+    localStorage.setItem('muxpad.settings.v1', JSON.stringify({ navLayout: 'sidebar' }));
+    vi.resetModules();
+    let { getSettings: get } = await import('./settings');
+    expect(get().navLayout).toBe('sidebar');
+
+    localStorage.setItem('muxpad.settings.v1', JSON.stringify({ navLayout: 'bogus' }));
+    vi.resetModules();
+    ({ getSettings: get } = await import('./settings'));
+    expect(get().navLayout).toBe('top');
+  });
+
   it('falls back to defaults for a corrupt localStorage blob', async () => {
     localStorage.setItem('muxpad.settings.v1', '{not json');
     vi.resetModules();
@@ -55,6 +67,7 @@ describe('settings', () => {
       fontSize: 14,
       fontFamily: 'Menlo, Monaco, monospace',
       theme: 'trayo',
+      navLayout: 'top',
     });
   });
 });
