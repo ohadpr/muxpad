@@ -331,6 +331,19 @@
   display: none;
 }
 
+/* The terminal/web switch when it rides inside the multi-pane strip (instead
+   of its own bar). Sits between the truncating chooser and the +/× buttons;
+   collapses when PaneWebSwitch has nothing to offer. */
+.mobile-strip-webswitch {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+.mobile-strip-webswitch:empty {
+  display: none;
+}
+
 /* Keep every mobile pane mounted but show only the active one so xterm
    state survives pane switches (WS stays open — no replay dance). */
 .mobile-pane-slot {
