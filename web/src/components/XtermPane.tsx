@@ -669,13 +669,31 @@ export function XtermPane({
       const pos = cellAt(clientX, clientY);
       if (!pos) return null;
       const buf = term.buffer.active;
-      const line = buf.getLine(buf.viewportY + pos.row - 1);
-      if (!line) return null;
-      const text = line.translateToString(false);
-      const colIdx = pos.col - 1;
+      const tappedRow = buf.viewportY + pos.row - 1;
+      // A long URL wraps across rows; xterm flags continuation rows with
+      // `isWrapped`. Walk back to the logical line's start, then join it and
+      // its continuations into one string so a URL split across rows (e.g.
+      // `…gallery-v2.` + `html`) is matched whole — and track where the tap
+      // falls in the joined text. Capped so a pathological run can't spin.
+      let startRow = tappedRow;
+      const MAX_WRAP = 32;
+      for (let i = 0; i < MAX_WRAP && startRow > 0 && buf.getLine(startRow)?.isWrapped; i++) {
+        startRow--;
+      }
+      let text = '';
+      let tapOffset = -1;
+      for (let r = startRow; r < startRow + MAX_WRAP; r++) {
+        const line = buf.getLine(r);
+        if (!line) break;
+        if (r === tappedRow) tapOffset = text.length + (pos.col - 1);
+        text += line.translateToString(false);
+        const next = buf.getLine(r + 1);
+        if (!next || !next.isWrapped) break;
+      }
+      if (tapOffset < 0) return null;
       for (const m of text.matchAll(/https?:\/\/[^\s"'<>`]+/g)) {
         const start = m.index ?? 0;
-        if (colIdx >= start && colIdx < start + m[0].length) {
+        if (tapOffset >= start && tapOffset < start + m[0].length) {
           return m[0].replace(/[.,;:!?)\]}>'"]+$/, '');
         }
       }
