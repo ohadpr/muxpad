@@ -214,6 +214,23 @@
 .navtree[data-variant="sheet"] .navtree-ws-row[data-pressing="true"] {
   background: var(--bg-hover);
 }
+
+/* Drag-to-reorder (desktop sidebar). The row carries the drag; the dragged
+   row dims, and the row it would drop onto gets an accent outline. */
+.navtree[data-variant="sidebar"] .navtree-ws-row[draggable="true"],
+.navtree[data-variant="sidebar"] .navtree-tab-row[draggable="true"] {
+  cursor: grab;
+}
+.navtree-ws-row[data-dragging="true"],
+.navtree-tab-row[data-dragging="true"] {
+  opacity: 0.4;
+}
+.navtree-ws-row[data-dragover="true"],
+.navtree-tab-row[data-dragover="true"] {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  border-radius: 4px;
+}
 .navtree-ws-name:hover {
   text-decoration: none;
 }
