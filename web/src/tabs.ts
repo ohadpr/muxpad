@@ -28,6 +28,24 @@ export async function refreshTabs(workspaceId: string): Promise<void> {
   if (subs) for (const fn of subs) fn(next);
 }
 
+/**
+ * Optimistically reorder a workspace's cached tabs so the sidebar moves the
+ * row immediately, before the reorder round-trip. Bumps the per-workspace
+ * version so an in-flight poll-refresh is discarded; the caller's own
+ * refreshTabs() afterwards reconciles. No-op if `ids` doesn't cover the set.
+ */
+export function applyTabOrder(workspaceId: string, ids: string[]): void {
+  const current = caches.get(workspaceId);
+  if (!current) return;
+  const byId = new Map(current.map((t) => [t.id, t]));
+  const next = ids.map((id) => byId.get(id)).filter((t): t is Tab => t !== undefined);
+  if (next.length !== current.length) return;
+  versions.set(workspaceId, (versions.get(workspaceId) ?? 0) + 1);
+  caches.set(workspaceId, next);
+  const subs = listenersByWs.get(workspaceId);
+  if (subs) for (const fn of subs) fn(next);
+}
+
 export function useTabs(workspaceId: string): {
   tabs: Tab[];
   refresh: () => Promise<void>;
