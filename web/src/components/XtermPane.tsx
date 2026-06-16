@@ -670,11 +670,12 @@ export function XtermPane({
       if (!pos) return null;
       const buf = term.buffer.active;
       const tappedRow = buf.viewportY + pos.row - 1;
+
       // A long URL wraps across rows; xterm flags continuation rows with
       // `isWrapped`. Walk back to the logical line's start, then join it and
-      // its continuations into one string so a URL split across rows (e.g.
-      // `…gallery-v2.` + `html`) is matched whole — and track where the tap
-      // falls in the joined text. Capped so a pathological run can't spin.
+      // its continuations into one string so a URL split across rows is
+      // matched whole — tracking where the tap falls. (Public xterm buffer
+      // API only — no reaching into internals.)
       let startRow = tappedRow;
       const MAX_WRAP = 32;
       for (let i = 0; i < MAX_WRAP && startRow > 0 && buf.getLine(startRow)?.isWrapped; i++) {
