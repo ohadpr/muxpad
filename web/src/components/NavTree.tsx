@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { getLastTabSlug } from '../lib/last-visited';
 import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansion';
+import { reorderByDrop } from '../lib/reorder';
 import { refreshTabs, useTabs } from '../tabs';
 import { useLongPress } from '../use-long-press';
 import { MAX_QUICK_SWITCH_TABS, useTabQuickSwitch } from '../use-tab-quickswitch';
@@ -14,6 +15,66 @@ import './NavTree.css';
 export type NavTreeVariant = 'sidebar' | 'sheet';
 
 type Editing = { kind: 'workspace' | 'tab'; id: string } | null;
+
+/** Props spread onto a draggable row to make it reorderable. */
+interface DragItemProps {
+  draggable: boolean;
+  onDragStart: (e: React.DragEvent) => void;
+  onDragOver: (e: React.DragEvent) => void;
+  onDrop: (e: React.DragEvent) => void;
+  onDragEnd: () => void;
+  'data-dragging'?: 'true';
+  'data-dragover'?: 'true';
+}
+
+/**
+ * Native HTML5 drag-to-reorder for a flat list. `orderedIds` is the current
+ * order; on drop it computes the new order (dragging downward drops AFTER the
+ * target so an item can reach the end) and calls `persist`. Returns a function
+ * giving the props to spread on each row. Touch never starts an HTML5 drag, so
+ * this is inert on mobile — reorder is a desktop-sidebar affordance.
+ */
+function useListReorder(
+  orderedIds: string[],
+  persist: (ids: string[]) => void,
+): (id: string) => DragItemProps {
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+  return (id: string) => ({
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => {
+      setDragId(id);
+      e.dataTransfer.effectAllowed = 'move';
+      // Some browsers won't start a drag unless dataTransfer carries data.
+      try {
+        e.dataTransfer.setData('text/plain', id);
+      } catch {
+        /* noop */
+      }
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!dragId || dragId === id) return;
+      e.preventDefault(); // allow drop
+      e.dataTransfer.dropEffect = 'move';
+      if (overId !== id) setOverId(id);
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      const from = dragId;
+      setDragId(null);
+      setOverId(null);
+      if (!from || from === id) return;
+      const next = reorderByDrop(orderedIds, from, id);
+      if (next !== orderedIds) persist(next);
+    },
+    onDragEnd: () => {
+      setDragId(null);
+      setOverId(null);
+    },
+    ...(dragId === id ? { 'data-dragging': 'true' as const } : {}),
+    ...(overId === id ? { 'data-dragover': 'true' as const } : {}),
+  });
+}
 
 interface NavTreeProps {
   activeWorkspaceSlug: string;
@@ -52,6 +113,22 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
   // across the whole tree.
   const [editing, setEditing] = useState<Editing>(null);
   const [creatingWs, setCreatingWs] = useState(false);
+
+  // Drag-to-reorder workspaces (desktop sidebar). Persist the new order, then
+  // refresh; on failure refresh anyway to snap back to the server's truth.
+  const wsDnd = useListReorder(
+    workspaces.map((w) => w.id),
+    (ids) => {
+      void (async () => {
+        try {
+          await api.reorderWorkspaces(ids);
+        } catch (err) {
+          console.error('reorder workspaces failed', err);
+        }
+        await refreshWorkspaces();
+      })();
+    },
+  );
 
   const createWorkspace = async () => {
     if (creatingWs) return;
@@ -101,6 +178,7 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
             editing={editing}
             setEditing={setEditing}
             onNavigate={onNavigate}
+            rowDnd={variant === 'sidebar' ? wsDnd(w.id) : undefined}
           />
         ))}
       </div>
@@ -118,6 +196,7 @@ interface WorkspaceNodeProps {
   editing: Editing;
   setEditing: (e: Editing) => void;
   onNavigate?: (() => void) | undefined;
+  rowDnd?: DragItemProps | undefined;
 }
 
 function WorkspaceNode({
@@ -130,6 +209,7 @@ function WorkspaceNode({
   editing,
   setEditing,
   onNavigate,
+  rowDnd,
 }: WorkspaceNodeProps) {
   const navigate = useNavigate();
   const isEditing = editing?.kind === 'workspace' && editing.id === workspace.id;
@@ -177,6 +257,7 @@ function WorkspaceNode({
         className="navtree-ws-row"
         data-active={isActive ? 'true' : undefined}
         data-pressing={pressing ? 'true' : undefined}
+        {...(rowDnd && !isEditing ? rowDnd : {})}
       >
         <button
           type="button"
@@ -208,6 +289,9 @@ function WorkspaceNode({
             to="/w/$wsSlug"
             params={{ wsSlug: workspace.slug }}
             className="navtree-ws-name"
+            // The row owns drag-to-reorder; stop the anchor's native
+            // drag-the-URL from hijacking it.
+            draggable={false}
             title={variant === 'sidebar' && isActive ? 'Double-click to rename' : workspace.name}
             onDoubleClick={
               // Desktop rename mirrors the old chrome's affordance: the
@@ -305,6 +389,21 @@ function TabList({
   const { tabs } = useTabs(workspace.id);
   const [creating, setCreating] = useState(false);
 
+  // Drag-to-reorder tabs within this workspace (desktop sidebar).
+  const tabDnd = useListReorder(
+    tabs.map((t) => t.id),
+    (ids) => {
+      void (async () => {
+        try {
+          await api.reorderTabs(ids);
+        } catch (err) {
+          console.error('reorder tabs failed', err);
+        }
+        await refreshTabs(workspace.id);
+      })();
+    },
+  );
+
   // Alt+1…9 quick-switch parity with the top-nav TabBar. Only the
   // sidebar wires it (the sheet is touch; TabBar owns it in top mode).
   // tabCount 0 disables the inactive instances without breaking the
@@ -374,6 +473,7 @@ function TabList({
           setEditing={setEditing}
           onNavigate={onNavigate}
           onClose={(e) => void closeTab(e, t)}
+          rowDnd={variant === 'sidebar' ? tabDnd(t.id) : undefined}
         />
       ))}
       <button
@@ -399,6 +499,7 @@ interface TabRowProps {
   setEditing: (e: Editing) => void;
   onNavigate?: (() => void) | undefined;
   onClose: (e: React.MouseEvent) => void;
+  rowDnd?: DragItemProps | undefined;
 }
 
 function TabRow({
@@ -410,6 +511,7 @@ function TabRow({
   isEditing,
   setEditing,
   onNavigate,
+  rowDnd,
   onClose,
 }: TabRowProps) {
   // Touch rename: long-press (ignores mouse/pen; desktop double-clicks).
@@ -421,6 +523,7 @@ function TabRow({
       className="navtree-tab-row"
       data-active={isActiveTab ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
+      {...(rowDnd && !isEditing ? rowDnd : {})}
     >
       {isEditing ? (
         <RenameInput
@@ -442,6 +545,8 @@ function TabRow({
           to="/w/$wsSlug/t/$tabSlug"
           params={{ wsSlug: workspace.slug, tabSlug: tab.slug }}
           className="navtree-tab-link"
+          // The row owns drag-to-reorder; don't let the anchor drag its URL.
+          draggable={false}
           title={variant === 'sidebar' && isActiveTab ? 'Double-click to rename' : tab.name}
           onDoubleClick={
             variant === 'sidebar' && isActiveTab
