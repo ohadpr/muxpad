@@ -5,10 +5,10 @@ import { api } from '../api';
 import { getLastTabSlug } from '../lib/last-visited';
 import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansion';
 import { reorderByDrop } from '../lib/reorder';
-import { refreshTabs, useTabs } from '../tabs';
+import { applyTabOrder, refreshTabs, useTabs } from '../tabs';
 import { useLongPress } from '../use-long-press';
 import { MAX_QUICK_SWITCH_TABS, useTabQuickSwitch } from '../use-tab-quickswitch';
-import { refreshWorkspaces, useWorkspaces } from '../workspaces';
+import { applyWorkspaceOrder, refreshWorkspaces, useWorkspaces } from '../workspaces';
 import { SvgClose } from './icons';
 import './NavTree.css';
 
@@ -21,6 +21,7 @@ interface DragItemProps {
   draggable: boolean;
   onDragStart: (e: React.DragEvent) => void;
   onDragOver: (e: React.DragEvent) => void;
+  onDragLeave: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent) => void;
   onDragEnd: () => void;
   'data-dragging'?: 'true';
@@ -57,6 +58,14 @@ function useListReorder(
       e.preventDefault(); // allow drop
       e.dataTransfer.dropEffect = 'move';
       if (overId !== id) setOverId(id);
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      // Clear the highlight only when leaving the row entirely (not when the
+      // pointer crosses into a child element), so dragging off the list onto
+      // empty space / the +button doesn't leave a stuck accent.
+      if (overId === id && !e.currentTarget.contains(e.relatedTarget as Node | null)) {
+        setOverId(null);
+      }
     },
     onDrop: (e: React.DragEvent) => {
       e.preventDefault();
@@ -119,6 +128,7 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
   const wsDnd = useListReorder(
     workspaces.map((w) => w.id),
     (ids) => {
+      applyWorkspaceOrder(ids); // move immediately; refresh below reconciles
       void (async () => {
         try {
           await api.reorderWorkspaces(ids);
@@ -393,6 +403,7 @@ function TabList({
   const tabDnd = useListReorder(
     tabs.map((t) => t.id),
     (ids) => {
+      applyTabOrder(workspace.id, ids); // move immediately; refresh below reconciles
       void (async () => {
         try {
           await api.reorderTabs(ids);

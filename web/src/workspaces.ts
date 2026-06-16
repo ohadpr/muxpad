@@ -43,6 +43,22 @@ export async function refreshWorkspaces(opts?: { broadcast?: boolean }): Promise
   return next;
 }
 
+/**
+ * Optimistically reorder the cached workspaces so the sidebar moves the row
+ * immediately, before the reorder round-trip. Bumps `version` so an in-flight
+ * poll-refresh (with the old order) is discarded rather than clobbering this;
+ * the caller's own refreshWorkspaces() afterwards reconciles with server truth.
+ * No-op if `ids` doesn't exactly cover the current set.
+ */
+export function applyWorkspaceOrder(ids: string[]): void {
+  const byId = new Map(cache.map((w) => [w.id, w]));
+  const next = ids.map((id) => byId.get(id)).filter((w): w is Workspace => w !== undefined);
+  if (next.length !== cache.length) return;
+  version++;
+  cache = next;
+  for (const fn of listeners) fn(cache);
+}
+
 export function useWorkspaces(): {
   workspaces: Workspace[];
   refresh: () => Promise<Workspace[]>;

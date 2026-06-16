@@ -430,8 +430,11 @@ export function XtermPane({
             // reconnects and force-closes again: the background reconnect loop.
             // A hidden pane shows data to no one; its liveness is covered by
             // the server's protocol-level heartbeat (which the browser answers
-            // automatically) plus the reconnect-on-visible path. So while
-            // hidden, just re-arm and re-check — don't probe, don't close.
+            // automatically). A socket that died while hidden is caught once
+            // the tab is shown again: this re-armed idle timer fires, now
+            // passes the visibility gate, pings, and force-closes on no pong →
+            // reconnect. So while hidden, just re-arm and re-check — don't
+            // probe, don't close.
             if (document.visibilityState !== 'visible') {
               lastActivityAt = Date.now();
               armIdle();
