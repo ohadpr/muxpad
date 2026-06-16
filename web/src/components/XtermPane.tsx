@@ -408,14 +408,35 @@ export function XtermPane({
       // TCP timeout — matters most on flaky mobile networks.
       const HEARTBEAT_IDLE_MS = 15_000;
       const HEARTBEAT_PONG_MS = 5_000;
+      // The backoff (retries) is only cleared once a connection has stayed
+      // open this long. Resetting it the instant we open lets a
+      // connect-then-immediately-drop loop reconnect forever with no backoff
+      // (and spam the terminal); gating on stability makes a persistent drop
+      // back off 200ms→5s instead of hammering.
+      const CONNECTION_STABLE_MS = 10_000;
       let lastActivityAt = Date.now();
       let pongWaitTimer: number | null = null;
       let idleTimer: number | null = null;
+      let stableTimer: number | null = null;
       const armIdle = () => {
         if (idleTimer !== null) window.clearTimeout(idleTimer);
         const elapsed = Date.now() - lastActivityAt;
         idleTimer = window.setTimeout(
           () => {
+            // Never run the ping/force-close while the tab is hidden. Browsers
+            // throttle (and eventually freeze) setTimeout in background tabs,
+            // so the pong-wait below fires spuriously even when ptyd's pong is
+            // arriving — force-closing a perfectly healthy socket, which then
+            // reconnects and force-closes again: the background reconnect loop.
+            // A hidden pane shows data to no one; its liveness is covered by
+            // the server's protocol-level heartbeat (which the browser answers
+            // automatically) plus the reconnect-on-visible path. So while
+            // hidden, just re-arm and re-check — don't probe, don't close.
+            if (document.visibilityState !== 'visible') {
+              lastActivityAt = Date.now();
+              armIdle();
+              return;
+            }
             safeSend(encodePing());
             pongWaitTimer = window.setTimeout(() => {
               dbg('heartbeat pong timeout — force-closing');
@@ -442,7 +463,13 @@ export function XtermPane({
         dbg('ws open', { paneId, retries });
         const wasReconnect = retries > 0;
         if (wasReconnect) term.writeln('\r\n[reconnected]');
-        retries = 0;
+        // Clear the backoff only after the connection proves stable (see
+        // CONNECTION_STABLE_MS) — not the instant it opens.
+        if (stableTimer !== null) window.clearTimeout(stableTimer);
+        stableTimer = window.setTimeout(() => {
+          retries = 0;
+          stableTimer = null;
+        }, CONNECTION_STABLE_MS);
         const announceSize = () => {
           // Same floor as refit/initialFit: don't fit or announce a near-zero
           // size on a not-yet-settled slot. reassertSize() (visibilitychange /
@@ -542,6 +569,12 @@ export function XtermPane({
       ws.addEventListener('close', (e) => {
         if (idleTimer !== null) window.clearTimeout(idleTimer);
         if (pongWaitTimer !== null) window.clearTimeout(pongWaitTimer);
+        // A connection that closed before proving stable must keep its
+        // backoff — cancel the pending reset so retries++ below sticks.
+        if (stableTimer !== null) {
+          window.clearTimeout(stableTimer);
+          stableTimer = null;
+        }
         dbg('ws close', { paneId, intentionallyClosed, paneExited, retries, code: e.code });
         if (wsRef.current === ws) wsRef.current = null;
         if (intentionallyClosed || paneExited) return;
