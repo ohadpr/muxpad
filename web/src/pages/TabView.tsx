@@ -778,50 +778,53 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
             choose between. The "+" inside it dispatches muxpad:add-pane;
             TabView listens at the window level and forwards to the
             mobile branch's addPane closure. */}
-        {paneIds.length > 1 && (
-          <nav className="mobile-tab-strip" aria-label="Panes">
-            <PaneSelector
-              paneIds={paneIds}
-              activeId={activeId}
-              paneLabel={paneLabel}
-              paneAttention={(id) => tab.panes.find((p) => p.id === id)?.attention ?? false}
-              onSelect={setMobileActiveId}
-            />
-            <button
-              type="button"
-              className="ws-tab-add"
-              onClick={() => window.dispatchEvent(new CustomEvent('muxpad:add-pane'))}
-              title="New pane"
-              aria-label="New pane"
-            >
-              +
-            </button>
-            {activeId && (
-              <button
-                type="button"
-                className="mobile-tab-close"
-                onClick={closeActivePane}
-                title="Close active pane"
-                aria-label="Close active pane"
-              >
-                <SvgClose size={12} />
-              </button>
-            )}
-          </nav>
-        )}
-        {/* Web-switch for the active shell pane. The wrapper collapses via
-            :empty when PaneWebSwitch renders nothing (no detected app and no
-            prior URL), so it only takes space when there's actually a web
-            view to offer. Placed at the top so its dropdown opens downward
-            into the pane area rather than off the bottom of the screen. */}
+        {/* Mobile pane header. With >1 pane it's a single row: chooser
+            (truncates), the terminal/web switch, then add + close — instead of
+            wasting a second line on the switch. With one pane there's no
+            chooser, so the switch gets its own slim bar (which collapses to
+            nothing when there's no web view to offer). The switch sits at the
+            top either way so its dropdown opens downward into the pane area. */}
         {(() => {
-          const ap = tab.panes.find((p) => p.id === activeId);
-          if (!activeId || !ap || ap.kind !== 'shell') return null;
-          return (
-            <div className="mobile-web-switch-bar">
-              <PaneWebSwitch paneId={activeId} appUrls={ap.app_urls ?? []} />
-            </div>
-          );
+          const ap = activeId ? tab.panes.find((p) => p.id === activeId) : undefined;
+          const webSwitch =
+            ap && ap.kind === 'shell' ? (
+              <PaneWebSwitch paneId={ap.id} appUrls={ap.app_urls ?? []} />
+            ) : null;
+          if (paneIds.length > 1) {
+            return (
+              <nav className="mobile-tab-strip" aria-label="Panes">
+                <PaneSelector
+                  paneIds={paneIds}
+                  activeId={activeId}
+                  paneLabel={paneLabel}
+                  paneAttention={(id) => tab.panes.find((p) => p.id === id)?.attention ?? false}
+                  onSelect={setMobileActiveId}
+                />
+                {webSwitch && <div className="mobile-strip-webswitch">{webSwitch}</div>}
+                <button
+                  type="button"
+                  className="ws-tab-add"
+                  onClick={() => window.dispatchEvent(new CustomEvent('muxpad:add-pane'))}
+                  title="New pane"
+                  aria-label="New pane"
+                >
+                  +
+                </button>
+                {activeId && (
+                  <button
+                    type="button"
+                    className="mobile-tab-close"
+                    onClick={closeActivePane}
+                    title="Close active pane"
+                    aria-label="Close active pane"
+                  >
+                    <SvgClose size={12} />
+                  </button>
+                )}
+              </nav>
+            );
+          }
+          return webSwitch ? <div className="mobile-web-switch-bar">{webSwitch}</div> : null;
         })()}
         <main className="workspace-body workspace-body-mobile">
           {paneIds.map((paneId) => {
