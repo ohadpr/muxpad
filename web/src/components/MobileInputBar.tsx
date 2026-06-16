@@ -60,7 +60,12 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
   // re-created the DOM node while the effect still observed the old detached
   // one. Hiding via attribute keeps one stable element for the lifetime of
   // the component.
-  const visible = !!paneId && paneKind === 'shell';
+  // Hide only for a *confirmed* URL pane. Using `!== 'url'` (rather than
+  // `=== 'shell'`) means a transient null kind — which happens for a frame
+  // while a pane.updated / tab refetch is in flight — doesn't flip the bar to
+  // `hidden`, blur the contenteditable, and dismiss the soft keyboard "on its
+  // own". A shell pane briefly reading as unknown stays visible.
+  const visible = !!paneId && paneKind !== 'url';
 
   // Anchor the bar's bottom edge to the visual viewport bottom (= top
   // of the on-screen keyboard when open). We position by `top`, not by

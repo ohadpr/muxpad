@@ -659,6 +659,28 @@ export function XtermPane({
       );
       return { col, row };
     };
+    // Plain-text URL under a tapped cell, if any. On mobile a tap is otherwise
+    // sent to the TUI as a mouse click (below) and never reaches xterm's link
+    // opener — so a tapped link did nothing. We re-scan the tapped buffer line
+    // for an http(s) URL spanning the tapped column and open it in THIS
+    // device's browser. (Covers the common case; OSC 8 hyperlinks whose text
+    // isn't itself a URL aren't handled here.)
+    const linkAtTap = (clientX: number, clientY: number): string | null => {
+      const pos = cellAt(clientX, clientY);
+      if (!pos) return null;
+      const buf = term.buffer.active;
+      const line = buf.getLine(buf.viewportY + pos.row - 1);
+      if (!line) return null;
+      const text = line.translateToString(false);
+      const colIdx = pos.col - 1;
+      for (const m of text.matchAll(/https?:\/\/[^\s"'<>`]+/g)) {
+        const start = m.index ?? 0;
+        if (colIdx >= start && colIdx < start + m[0].length) {
+          return m[0].replace(/[.,;:!?)\]}>'"]+$/, '');
+        }
+      }
+      return null;
+    };
     // Re-seed the reference Y from currently active pointers and reset
     // the wheel accumulator. Called when the pointer set changes so a
     // newly-added or removed finger doesn't cause a phantom jump.
@@ -778,12 +800,20 @@ export function XtermPane({
       // Also suppress on pointercancel: the OS/browser stole the gesture
       // (notification pull, edge swipe) — the user didn't tap the pane.
       if (e.type === 'pointerup' && !p.moved && pointers.size === 0 && !multiFingerGesture) {
-        // Same as wheel: Cursor has no mouse mode — SGR clicks become text.
-        if (shouldTouchScrollBuffer(term, foregroundCmdRef.current, isMobileLayout())) return;
-        const pos = cellAt(p.startX, p.startY);
-        if (pos) {
-          const seq = `\x1b[<0;${pos.col};${pos.row}M\x1b[<0;${pos.col};${pos.row}m`;
-          safeSend(encodeInput(seq));
+        const tappedUrl = linkAtTap(p.startX, p.startY);
+        if (tappedUrl) {
+          // Tapped a link → open it in THIS device's browser (the phone),
+          // not as a mouse click to the TUI (and never on the host machine).
+          openUri(tappedUrl);
+        } else if (!shouldTouchScrollBuffer(term, foregroundCmdRef.current, isMobileLayout())) {
+          // Cursor / scrollback mode has no mouse reporting — SGR clicks would
+          // become literal text, so only synthesize a click for a real
+          // mouse-mode TUI.
+          const pos = cellAt(p.startX, p.startY);
+          if (pos) {
+            const seq = `\x1b[<0;${pos.col};${pos.row}M\x1b[<0;${pos.col};${pos.row}m`;
+            safeSend(encodeInput(seq));
+          }
         }
       }
       if (pointers.size === 0) {
@@ -1287,7 +1317,10 @@ export function XtermPane({
     // a pane so the next remaining pane picks up focus without a click.
     const onFocusPane = (e: Event) => {
       const detail = (e as CustomEvent<{ paneId?: string }>).detail;
-      if (detail?.paneId === paneId) term.focus();
+      // Not on mobile: the MobileInputBar owns input there, and focusing the
+      // terminal's hidden textarea would yank focus off the composer and
+      // dismiss the soft keyboard.
+      if (detail?.paneId === paneId && !isMobileLayout()) term.focus();
     };
     window.addEventListener('muxpad:focus-pane', onFocusPane);
 
