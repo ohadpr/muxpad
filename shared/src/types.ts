@@ -56,6 +56,10 @@ export const PaneSpecSchema = z.object({
   // the user last interacted with it. Decorated at the route layer from
   // the ptyd cache (same source as Tab.attention / Workspace.attention).
   attention: z.boolean().optional(),
+  // Runtime-only flag. True while this pane is actively producing output
+  // (the foreground app is working, not idling at a prompt). Decorated at
+  // the route layer from the ptyd cache; same source as Tab.busy.
+  busy: z.boolean().optional(),
   // Runtime-only. Web apps muxpad detected this (shell) pane is serving,
   // confirmed listening. Decorated at the route layer from the ptyd cache.
   // Empty/absent for url panes and shells that aren't serving anything.
@@ -81,6 +85,11 @@ export const TabSchema = z.object({
   // Runtime-only flag. True iff at least one pane in this tab has
   // received a BEL (\x07) since the user last interacted with it.
   attention: z.boolean().optional(),
+  // Runtime-only flag. True iff at least one pane in this tab is actively
+  // producing output (a foreground app working). Drives the busy spinner in
+  // the navigator. Distinct from `attention` ("wants you"): busy says
+  // "working", and clears on its own when the work goes quiet.
+  busy: z.boolean().optional(),
 });
 export type Tab = z.infer<typeof TabSchema>;
 
@@ -101,6 +110,10 @@ export const WorkspaceSchema = z.object({
   // has rung BEL since the user last interacted with it. The list
   // endpoint folds this in from PaneManager state.
   attention: z.boolean().optional(),
+  // Runtime-only flag. True iff any pane in any tab in this workspace is
+  // actively producing output. Folded in by the workspace list endpoint so a
+  // collapsed workspace row can show it's working without being expanded.
+  busy: z.boolean().optional(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 

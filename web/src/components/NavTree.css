@@ -214,6 +214,45 @@
   min-width: 0;
 }
 
+/* ─── Busy spinner ──────────────────────────────────────────────────────
+   "This tab's app is working." A different channel from .badge-dot
+   ("wants you"): the spinner says "in progress" and clears itself when the
+   output stream goes quiet. Sits inline to the right of the name; never
+   shrinks. Accent-tinted so it reads as activity, not alarm. */
+.navtree-busy {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  line-height: 0;
+}
+.navtree-busy svg {
+  animation: navtree-spin 0.8s linear infinite;
+  transform-origin: center;
+}
+@keyframes navtree-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* Honor reduced-motion: drop the rotation, keep a static (but visible)
+   indicator via a gentle opacity pulse instead of a spin. */
+@media (prefers-reduced-motion: reduce) {
+  .navtree-busy svg {
+    animation: navtree-busy-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes navtree-busy-pulse {
+    0%,
+    100% {
+      opacity: 0.4;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+}
+
 /* Quiet tab-count chip on collapsed rows — says what's folded away. */
 .navtree-ws-count {
   flex: 0 0 auto;
@@ -230,7 +269,9 @@
 /* The collapsed workspace holding the active tab: tint just the NAME accent.
    A quiet "you are here, folded away" — without tinting the header (reads as
    selected) or restyling the count chip (reads as a notification bubble). */
-.navtree-group:not([data-expanded="true"]) > .navtree-ws-row[data-active="true"] .navtree-name-text {
+.navtree-group:not([data-expanded="true"])
+  > .navtree-ws-row[data-active="true"]
+  .navtree-name-text {
   color: var(--accent);
 }
 

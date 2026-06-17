@@ -365,6 +365,13 @@ function WorkspaceNode({
             }}
           >
             <span className="navtree-name-text">{workspace.name}</span>
+            {/* Same busy spinner as tab rows — surfaces a working tab even when
+                the workspace is collapsed and its tabs aren't rendered. */}
+            {workspace.busy && (
+              <span className="navtree-busy" role="img" aria-label="busy" title="Working…">
+                <SvgSpinner />
+              </span>
+            )}
             {workspace.attention && (
               <span className="badge-dot -inline" aria-label="needs attention" />
             )}
@@ -677,6 +684,16 @@ function TabRow({
             </span>
           )}
           <span className="navtree-name-text">{tab.name}</span>
+          {/* Mode icon: a spinner while the tab's active app is producing
+              output (working). It clears on its own when the stream goes
+              quiet — that "no spinner" state is the done/waiting signal, even
+              if the process (e.g. `claude`) is still alive. Distinct channel
+              from the attention dot ("wants you"); both can show at once. */}
+          {tab.busy && (
+            <span className="navtree-busy" role="img" aria-label="busy" title="Working…">
+              <SvgSpinner />
+            </span>
+          )}
           {tab.attention && <span className="badge-dot -inline" aria-label="needs attention" />}
         </Link>
       )}
@@ -882,6 +899,34 @@ function RenameInput({
         }
       }}
     />
+  );
+}
+
+/**
+ * Busy spinner — a partial ring stroked in the accent color, rotated by CSS
+ * (.navtree-busy). `currentColor` so it inherits the row's tint; the wrapper
+ * span sets the color and respects prefers-reduced-motion (see NavTree.css).
+ */
+function SvgSpinner() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 16 16" aria-hidden="true">
+      <circle
+        cx="8"
+        cy="8"
+        r="6"
+        stroke="currentColor"
+        strokeWidth="2"
+        fill="none"
+        opacity="0.25"
+      />
+      <path
+        d="M8 2 a6 6 0 0 1 6 6"
+        stroke="currentColor"
+        strokeWidth="2"
+        fill="none"
+        strokeLinecap="round"
+      />
+    </svg>
   );
 }
 

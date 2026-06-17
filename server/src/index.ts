@@ -1,17 +1,17 @@
-import { serve } from '@hono/node-server';
-import { serveStatic } from '@hono/node-server/serve-static';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { mkdirSync, readFileSync } from 'node:fs';
 import type { Server } from 'node:http';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { serve } from '@hono/node-server';
+import { serveStatic } from '@hono/node-server/serve-static';
 import { loadConfig } from './config.js';
-import { createApp } from './server.js';
-import { openDb } from './store/db.js';
-import { PaneStore } from './store/PaneStore.js';
-import { PtydClient } from './ptyd-client/PtydClient.js';
-import { PtydCache } from './ptyd-cache.js';
-import { attachWsServer } from './ws.js';
 import { EventBus } from './events.js';
+import { PtydCache } from './ptyd-cache.js';
+import { PtydClient } from './ptyd-client/PtydClient.js';
+import { createApp } from './server.js';
+import { PaneStore } from './store/PaneStore.js';
+import { openDb } from './store/db.js';
+import { attachWsServer } from './ws.js';
 
 const config = loadConfig();
 mkdirSync(config.dataDir, { recursive: true });
@@ -40,7 +40,7 @@ ptyd.on('paneCwd', (e: { id: string; cwd: string }) => {
   paneStore.updateCwd(e.id, e.cwd);
 });
 
-// Whenever any of (title, fg, attention) changes for a pane, push a
+// Whenever any of (title, fg, attention, busy) changes for a pane, push a
 // decorated `pane.updated` event on the EventBus so /ws/events
 // subscribers see the diff. The cache emits a single 'paneChange' per
 // field-mutation; we rebuild the full decorated row from the cache + db.
@@ -55,6 +55,7 @@ cache.on('paneChange', (paneId: string) => {
       title: cache.getTitle(paneId),
       foreground_cmd: cache.getFg(paneId),
       attention: cache.getAttention(paneId),
+      busy: cache.getBusy(paneId),
       app_urls: cache.getAppUrls(paneId),
     },
   });
@@ -101,12 +102,9 @@ app.notFound((c) => {
   }
 });
 
-const server = serve(
-  { fetch: app.fetch, port: config.port, hostname: config.host },
-  (info) => {
-    console.log(`muxpad listening on http://${info.address}:${info.port}`);
-  },
-);
+const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
+  console.log(`muxpad listening on http://${info.address}:${info.port}`);
+});
 
 const httpServer = server as unknown as Server;
 const wsServer = attachWsServer({ http: httpServer, db, ptyd, events });
