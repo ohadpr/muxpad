@@ -133,6 +133,11 @@ export function XtermPane({
   const [replayRestoring, setReplayRestoring] = useState(true);
   const setReplayRestoringRef = useRef(setReplayRestoring);
   setReplayRestoringRef.current = setReplayRestoring;
+  // Connection status shown as a DOM overlay — never written into the
+  // terminal buffer (that corrupted full-screen TUIs until a refresh).
+  const [reconnecting, setReconnecting] = useState(false);
+  const setReconnectingRef = useRef(setReconnecting);
+  setReconnectingRef.current = setReconnecting;
   const tryOpenTermRef = useRef<(() => void) | null>(null);
   // Convergent re-fit chain (0/100/250/500ms). Exposed so the paneActive
   // become-visible effect can reuse it instead of a single-shot fit.
@@ -465,7 +470,10 @@ export function XtermPane({
       ws.addEventListener('open', () => {
         dbg('ws open', { paneId, retries });
         const wasReconnect = retries > 0;
-        if (wasReconnect) term.writeln('\r\n[reconnected]');
+        // Clear the DOM "reconnecting" badge. NOT written into the terminal:
+        // injecting text into a full-screen TUI's buffer corrupted the
+        // display until a refresh.
+        setReconnectingRef.current(false);
         // Clear the backoff only after the connection proves stable (see
         // CONNECTION_STABLE_MS) — not the instant it opens.
         if (stableTimer !== null) window.clearTimeout(stableTimer);
@@ -586,7 +594,8 @@ export function XtermPane({
         // this component as soon as the optimistic state update lands.
         if (e.code === 4001) return;
         const delay = Math.min(200 * 2 ** retries, 5000);
-        if (retries === 0) term.writeln(`\r\n[connection lost, reconnecting…]`);
+        // Surface "reconnecting" as a DOM badge, not terminal text.
+        setReconnectingRef.current(true);
         retries++;
         retryTimer = window.setTimeout(connect, delay);
       });
@@ -1626,6 +1635,12 @@ export function XtermPane({
       }`}
     >
       <div className="xterm-pane" ref={containerRef} tabIndex={0} />
+      {reconnecting ? (
+        <div className="xterm-reconnecting" role="status" aria-live="polite">
+          <span className="xterm-reconnecting-dot" aria-hidden="true" />
+          Reconnecting…
+        </div>
+      ) : null}
       {pasteToast ? (
         <div className="xterm-paste-toast" title={pasteToast.path}>
           <img
