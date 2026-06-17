@@ -51,13 +51,15 @@ export function tabsRoutes(deps: {
       );
     }
     const list = tabs.listByWorkspace(workspaceId);
-    // Fold in per-tab attention flag from the ptyd cache. A tab flags as
-    // needing attention if any of its panes has rung BEL since the user
-    // last interacted with it. Panes whose runtime isn't running
-    // (lazy-spawn, no client connected) contribute false.
+    // Fold in per-tab attention flag. A tab flags as needing attention if
+    // it was manually marked unread, OR any of its panes has rung BEL
+    // since the user last interacted with it. Panes whose runtime isn't
+    // running (lazy-spawn, no client connected) contribute false.
+    const unreadIds = tabs.unreadIdsByWorkspace(workspaceId);
     const decorated = list.map((t) => {
       const tabPanes = panes.listByTab(t.id);
-      const attention = tabPanes.some((p) => deps.cache.getAttention(p.id));
+      const attention =
+        unreadIds.has(t.id) || tabPanes.some((p) => deps.cache.getAttention(p.id));
       return { ...t, attention };
     });
     return c.json(decorated);
@@ -68,6 +70,9 @@ export function tabsRoutes(deps: {
   // attention dot doesn't reappear if they leave without typing.
   app.post('/:id/seen', async (c) => {
     const id = c.req.param('id');
+    // Viewing the tab also clears any manual "unread" mark — seeing it is
+    // the read action. Synchronous DB write, independent of ptyd.
+    tabs.setUnread(id, false);
     // Issue markSeen against ptyd in parallel; swallow per-pane failures
     // (idempotent — markSeen on a missing id is a no-op on ptyd's side).
     // No response payload, so the round-trip latency only blocks the 204
@@ -79,6 +84,19 @@ export function tabsRoutes(deps: {
         }),
       ),
     );
+    return c.body(null, 204);
+  });
+
+  // Manually flag a tab "unread" — restores the attention dot until the
+  // tab is next viewed. Complements the BEL-driven runtime attention;
+  // persisted in the DB so it survives ptyd/server restarts and needs no
+  // ptyd round-trip. The initiating client refreshes its tab list; other
+  // clients pick it up on the next poll.
+  app.post('/:id/unread', (c) => {
+    const id = c.req.param('id');
+    if (!tabs.getById(id))
+      return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
+    tabs.setUnread(id, true);
     return c.body(null, 204);
   });
 
@@ -119,6 +137,7 @@ export function tabsRoutes(deps: {
       .object({
         name: z.string().optional(),
         slug: z.string().optional(),
+        icon: z.string().optional(),
         layout: LayoutNodeSchema.optional(),
       })
       .parse(await c.req.json());
