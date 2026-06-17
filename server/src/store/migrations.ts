@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { randomTabIcon, splitLeadingEmoji } from '@muxpad/shared';
 
 interface Migration {
   version: number;
@@ -121,6 +122,38 @@ const MIGRATIONS: Migration[] = [
       DROP TABLE panes_v1;
       CREATE INDEX panes_tab_id ON panes(tab_id);
     `,
+  },
+  {
+    // Manual "mark as unread": a persistent per-tab flag, folded into the
+    // tab's attention dot alongside the BEL-driven runtime attention. Lives
+    // in the DB (not ptyd's runtime) so it survives restarts and needs no
+    // ptyd round-trip; cleared when the tab is next viewed (markSeen).
+    version: 7,
+    sql: `ALTER TABLE tabs ADD COLUMN unread INTEGER NOT NULL DEFAULT 0;`,
+  },
+  {
+    // Per-tab icon. Adds the column, then backfills: lift a leading emoji
+    // out of the name into the icon slot (the old "emoji in the name"
+    // convention) so the navigator's icon column is consistent and we
+    // don't double up; tabs without a leading emoji get a random icon.
+    version: 8,
+    sql: `ALTER TABLE tabs ADD COLUMN icon TEXT;`,
+    apply: (db) => {
+      const rows = db.prepare('SELECT id, name FROM tabs').all() as {
+        id: string;
+        name: string;
+      }[];
+      const upd = db.prepare('UPDATE tabs SET name = ?, icon = ? WHERE id = ?');
+      for (const r of rows) {
+        const { icon, rest } = splitLeadingEmoji(r.name);
+        const trimmed = rest.trim();
+        if (icon && trimmed)
+          upd.run(trimmed, icon, r.id); // "🌐 Home" → name "Home", icon 🌐
+        else if (icon)
+          upd.run(r.name, icon, r.id); // name was only an emoji → use it as the icon, no random mismatch
+        else upd.run(r.name, randomTabIcon(), r.id); // no leading emoji → random icon
+      }
+    },
   },
 ];
 
