@@ -1,4 +1,4 @@
-import type { Workspace, Tab, PaneSpec, LayoutNode } from '@muxpad/shared';
+import type { LayoutNode, PaneSpec, Tab, Workspace } from '@muxpad/shared';
 
 async function req<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   const res = await fetch(input, {
@@ -36,8 +36,7 @@ export const api = {
       body: JSON.stringify(patch),
     }),
 
-  deleteWorkspace: (id: string) =>
-    req<void>(`/api/workspaces/${id}`, { method: 'DELETE' }),
+  deleteWorkspace: (id: string) => req<void>(`/api/workspaces/${id}`, { method: 'DELETE' }),
 
   reorderWorkspaces: (ids: string[]) =>
     req<void>('/api/workspaces/reorder', {
@@ -50,10 +49,7 @@ export const api = {
   listTabs: (workspaceId: string) =>
     req<Tab[]>(`/api/tabs?workspaceId=${encodeURIComponent(workspaceId)}`),
 
-  createTab: (
-    workspaceId: string,
-    body: { name?: string; layout?: LayoutNode } = {},
-  ) =>
+  createTab: (workspaceId: string, body: { name?: string; layout?: LayoutNode } = {}) =>
     req<Tab>('/api/tabs', {
       method: 'POST',
       body: JSON.stringify({ workspace_id: workspaceId, ...body }),
@@ -63,7 +59,7 @@ export const api = {
 
   patchTab: (
     id: string,
-    patch: { name?: string; slug?: string; layout?: LayoutNode },
+    patch: { name?: string; slug?: string; icon?: string; layout?: LayoutNode },
   ) =>
     req<Tab>(`/api/tabs/${id}`, {
       method: 'PATCH',
@@ -72,14 +68,15 @@ export const api = {
 
   deleteTab: (id: string) => req<void>(`/api/tabs/${id}`, { method: 'DELETE' }),
 
-  markTabSeen: (id: string) =>
-    req<void>(`/api/tabs/${id}/seen`, { method: 'POST' }),
+  markTabSeen: (id: string) => req<void>(`/api/tabs/${id}/seen`, { method: 'POST' }),
+
+  // Manually flag a tab unread — restores its attention dot until viewed.
+  markTabUnread: (id: string) => req<void>(`/api/tabs/${id}/unread`, { method: 'POST' }),
 
   // Surgical "I'm looking at this one pane right now" used by mobile.
   // Keeps other panes' attention flags alive so the pane dropdown can
   // surface them.
-  markPaneSeen: (id: string) =>
-    req<void>(`/api/panes/${id}/seen`, { method: 'POST' }),
+  markPaneSeen: (id: string) => req<void>(`/api/panes/${id}/seen`, { method: 'POST' }),
 
   reorderTabs: (ids: string[]) =>
     req<void>('/api/tabs/reorder', {
@@ -108,23 +105,15 @@ export const api = {
 
   deletePane: (id: string) => req<void>(`/api/panes/${id}`, { method: 'DELETE' }),
 
-  patchPane: (
-    id: string,
-    patch: { kind?: 'shell' | 'url'; url?: string | null },
-  ) =>
+  patchPane: (id: string, patch: { kind?: 'shell' | 'url'; url?: string | null }) =>
     req<PaneSpec>(`/api/panes/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
     }),
 
-  respawnPane: (id: string) =>
-    req<void>(`/api/panes/${id}/respawn`, { method: 'POST' }),
+  respawnPane: (id: string) => req<void>(`/api/panes/${id}/respawn`, { method: 'POST' }),
 
-  uploadAttachment: async (
-    paneId: string,
-    blob: Blob,
-    name: string,
-  ): Promise<{ path: string }> => {
+  uploadAttachment: async (paneId: string, blob: Blob, name: string): Promise<{ path: string }> => {
     const fd = new FormData();
     fd.append('file', blob, name);
     const res = await fetch(`/api/panes/${paneId}/attachments`, {

@@ -23,9 +23,16 @@ export function workspacesRoutes(deps: {
   const tabs = new TabStore(deps.db);
   const panes = new PaneStore(deps.db);
 
-  /** Returns true iff any pane in any tab in `workspaceId` flags attention. */
+  /**
+   * Returns true iff any tab in `workspaceId` flags attention — either
+   * manually marked unread, or any of its panes has rung BEL since last
+   * seen. Mirrors the per-tab fold in routes/tabs.ts so the workspace
+   * rollup dot and the tab dots never disagree.
+   */
   const workspaceAttention = (workspaceId: string): boolean => {
+    const unreadIds = tabs.unreadIdsByWorkspace(workspaceId);
     for (const t of tabs.listByWorkspace(workspaceId)) {
+      if (unreadIds.has(t.id)) return true;
       for (const p of panes.listByTab(t.id)) {
         if (deps.cache.getAttention(p.id)) return true;
       }

@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import { monotonicFactory } from 'ulid';
-import type { LayoutNode, Tab } from '@muxpad/shared';
+import { type LayoutNode, type Tab, randomTabIcon } from '@muxpad/shared';
 
 const ulid = monotonicFactory();
 
@@ -23,6 +23,7 @@ interface TabRow {
   id: string;
   slug: string;
   name: string;
+  icon: string | null;
   layout: string;
   workspace_id: string;
   created_at: number;
@@ -36,10 +37,13 @@ export class TabStore {
     name: string;
     layout: LayoutNode;
     workspace_id: string;
+    icon?: string;
   }): Tab {
     const id = ulid();
     const slug = this.uniqueSlug();
     const now = Date.now();
+    // New tabs get a random icon by default (the picker can change it).
+    const icon = input.icon ?? randomTabIcon();
     const maxPos =
       (
         this.db
@@ -50,12 +54,13 @@ export class TabStore {
       )?.m ?? -1;
     this.db
       .prepare(
-        'INSERT INTO tabs (id, slug, name, layout, workspace_id, created_at, updated_at, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO tabs (id, slug, name, icon, layout, workspace_id, created_at, updated_at, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         id,
         slug,
         input.name,
+        icon,
         JSON.stringify(input.layout),
         input.workspace_id,
         now,
@@ -66,6 +71,7 @@ export class TabStore {
       id,
       slug,
       name: input.name,
+      icon,
       layout: input.layout,
       created_at: now,
       updated_at: now,
@@ -133,6 +139,7 @@ export class TabStore {
     patch: {
       name?: string | undefined;
       slug?: string | undefined;
+      icon?: string | undefined;
       layout?: LayoutNode | undefined;
     },
   ): Tab {
@@ -141,19 +148,41 @@ export class TabStore {
     const next = {
       name: patch.name ?? existing.name,
       slug: patch.slug ?? existing.slug,
+      icon: patch.icon ?? existing.icon,
       layout: patch.layout ?? existing.layout,
     };
     const now = Date.now();
     this.db
       .prepare(
-        'UPDATE tabs SET name = ?, slug = ?, layout = ?, updated_at = ? WHERE id = ?',
+        'UPDATE tabs SET name = ?, slug = ?, icon = ?, layout = ?, updated_at = ? WHERE id = ?',
       )
-      .run(next.name, next.slug, JSON.stringify(next.layout), now, id);
+      .run(next.name, next.slug, next.icon ?? null, JSON.stringify(next.layout), now, id);
     return { ...existing, ...next, updated_at: now };
   }
 
   delete(id: string): void {
     this.db.prepare('DELETE FROM tabs WHERE id = ?').run(id);
+  }
+
+  /**
+   * Manual "unread" flag — folded into the tab's attention dot alongside
+   * the BEL-driven runtime attention. Set from the tab context menu,
+   * cleared when the tab is next viewed (the /seen route). Best-effort:
+   * a missing id is a silent no-op.
+   */
+  setUnread(id: string, unread: boolean): void {
+    this.db.prepare('UPDATE tabs SET unread = ? WHERE id = ?').run(unread ? 1 : 0, id);
+  }
+
+  /**
+   * Ids of the tabs in a workspace currently flagged unread, as one query
+   * so the list/rollup routes can fold the flag without an N+1 of reads.
+   */
+  unreadIdsByWorkspace(workspaceId: string): Set<string> {
+    const rows = this.db
+      .prepare('SELECT id FROM tabs WHERE workspace_id = ? AND unread = 1')
+      .all(workspaceId) as { id: string }[];
+    return new Set(rows.map((r) => r.id));
   }
 
   private row(r: unknown): Tab | null {
@@ -163,6 +192,7 @@ export class TabStore {
       id: x.id,
       slug: x.slug,
       name: x.name,
+      ...(x.icon ? { icon: x.icon } : {}),
       layout: JSON.parse(x.layout),
       created_at: x.created_at,
       updated_at: x.updated_at,
