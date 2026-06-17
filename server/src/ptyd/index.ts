@@ -127,6 +127,8 @@ export async function startPtyd(opts: PtydOptions): Promise<PtydHandle> {
         broadcastEvent({ event: 'paneTitle', id, title: change.title });
       } else if (change.kind === 'fg') {
         broadcastEvent({ event: 'paneFg', id, cmd: change.cmd });
+      } else if (change.kind === 'busy') {
+        broadcastEvent({ event: 'paneBusy', id, busy: change.busy });
       } else {
         broadcastEvent({ event: 'paneAttention', id, attention: change.attention });
       }

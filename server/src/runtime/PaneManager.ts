@@ -11,7 +11,8 @@ import type { AppUrlMarker } from './pty-scanner.js';
 export type PaneChange =
   | { kind: 'title'; title: string | null }
   | { kind: 'fg'; cmd: string | null }
-  | { kind: 'attention'; attention: boolean };
+  | { kind: 'attention'; attention: boolean }
+  | { kind: 'busy'; busy: boolean };
 
 /**
  * Configuration for PaneManager. All callbacks are optional — ptyd wires
@@ -68,6 +69,7 @@ export class PaneManager {
   private lastTitle = new Map<string, string | null>();
   private lastFg = new Map<string, string | null>();
   private lastAttention = new Map<string, boolean>();
+  private lastBusy = new Map<string, boolean>();
   private cwdPollTimer: NodeJS.Timeout | null = null;
   private cmdPollTimer: NodeJS.Timeout | null = null;
 
@@ -181,6 +183,31 @@ export class PaneManager {
   }
 
   /**
+   * Emit a busy-state delta for a single pane. Kept separate from
+   * emitDecorations on purpose: busy changes ONLY via the runtime's
+   * markBusy/clearBusy (each fires `busy-changed`), so this is the only path
+   * that ever needs to publish it — and routing it through emitDecorations
+   * would drag the title/fg/attention "first sample" emissions forward to the
+   * first output chunk, surfacing a spurious attention:false before the BEL
+   * that sets it. Diffs against the shared lastBusy map so the periodic tick
+   * and this eager path never double-emit.
+   */
+  private emitBusy(paneId: string): void {
+    const { onPaneChange } = this.opts;
+    if (!onPaneChange) return;
+    const runtime = this.runtimes.get(paneId);
+    if (!runtime) return;
+    const busy = runtime.getBusy();
+    if (this.lastBusy.has(paneId) && this.lastBusy.get(paneId) === busy) return;
+    this.lastBusy.set(paneId, busy);
+    try {
+      onPaneChange(paneId, { kind: 'busy', busy });
+    } catch {
+      // Swallow — a bad subscriber shouldn't wedge the output path.
+    }
+  }
+
+  /**
    * Returns the most recently observed foreground command for a pane, or
    * null if we haven't successfully sampled one yet. Used by the API
    * layer to decorate workspace lists without spawning ps per request.
@@ -225,6 +252,14 @@ export class PaneManager {
     r.on('attention-changed', () => {
       this.emitDecorations(spec.id);
     });
+    // Eager busy emit: output activity flips busy sub-second and the decay
+    // timer flips it back after a quiet window. Both edges fire
+    // `busy-changed` (transition-only — never per output chunk), so the
+    // spinner in the UI tracks work without waiting for the 10s poll tick.
+    // Uses the dedicated emitBusy (not emitDecorations) — see emitBusy.
+    r.on('busy-changed', () => {
+      this.emitBusy(spec.id);
+    });
     // Raw URL/marker sightings — forward verbatim to the main server, which
     // owns the tracker/probe. Fires only when the scanner finds a URL on a
     // completed output line, so this isn't per-chunk chatter.
@@ -247,6 +282,7 @@ export class PaneManager {
       this.lastTitle.delete(spec.id);
       this.lastFg.delete(spec.id);
       this.lastAttention.delete(spec.id);
+      this.lastBusy.delete(spec.id);
       // Fire the manager-level exit hook AFTER local cleanup so callbacks
       // observing the manager's state see it consistent with the exit.
       const onPaneExit = this.opts.onPaneExit;
