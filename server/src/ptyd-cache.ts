@@ -35,6 +35,10 @@ export interface PaneState {
   fg?: string | null;
   title?: string | null;
   attention?: boolean;
+  // True while the pane is actively producing output (foreground app
+  // working). Sourced from ptyd's `paneBusy` events; read synchronously by
+  // the tab/workspace list handlers to roll a "busy" flag up to each tab.
+  busy?: boolean;
   appUrls?: AppUrl[];
 }
 
@@ -83,6 +87,9 @@ export class PtydCache extends EventEmitter {
     });
     client.on('paneAttention', (e: { id: string; attention: boolean }) => {
       this.update(e.id, { attention: e.attention });
+    });
+    client.on('paneBusy', (e: { id: string; busy: boolean }) => {
+      this.update(e.id, { busy: e.busy });
     });
     client.on('paneUrlsSeen', (e: { id: string; urls: string[]; markers: AppUrlMarker[] }) => {
       // Raw sightings from ptyd's scanner. Hand them to the detector, which
@@ -188,6 +195,11 @@ export class PtydCache extends EventEmitter {
   /** Synchronous read — false when ptyd hasn't reported attention. */
   getAttention(id: string): boolean {
     return this.state.get(id)?.attention ?? false;
+  }
+
+  /** Synchronous read — false when ptyd hasn't reported busy state yet. */
+  getBusy(id: string): boolean {
+    return this.state.get(id)?.busy ?? false;
   }
 
   /** Synchronous read — empty array when no app urls have been reported. */
