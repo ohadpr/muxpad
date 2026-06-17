@@ -45,6 +45,13 @@
   --chrome-size: 13px;
   --chrome-size-sm: 12px;
 
+  /* Proportional UI sans for prose-y chrome — chiefly the sidebar nav
+     labels (workspace/tab names), where the machined monospace reads
+     spaced-out, truncates sooner in the narrow rail, and fights the
+     clean nav feel. Tabular/technical chrome (build hash, number chips)
+     stays on --chrome-font. */
+  --ui-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
   /* The header-bar height — referenced from multiple places so it's one
      knob. 36px desktop / 40px mobile (set via media query at the bottom). */
   --chrome-h: 36px;

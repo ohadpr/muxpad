@@ -1,8 +1,7 @@
-import type { Tab, Workspace } from '@muxpad/shared';
+import { DEFAULT_TAB_ICON, type Tab, type Workspace } from '@muxpad/shared';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
-import { getLastTabSlug } from '../lib/last-visited';
 import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansion';
 import { reorderByDrop } from '../lib/reorder';
 import { applyTabOrder, refreshTabs, useTabs } from '../tabs';
@@ -11,6 +10,34 @@ import { MAX_QUICK_SWITCH_TABS, useTabQuickSwitch } from '../use-tab-quickswitch
 import { applyWorkspaceOrder, refreshWorkspaces, useWorkspaces } from '../workspaces';
 import { SvgClose } from './icons';
 import './NavTree.css';
+
+// Lazy so emoji-mart + its dataset load only when the picker is opened.
+const EmojiMartPicker = lazy(() => import('./EmojiMartPicker'));
+
+/** Match emoji-mart's light/dark skin to the active muxpad theme via --bg luminance. */
+function pickerTheme(): 'light' | 'dark' {
+  try {
+    // Resolve --bg through a hidden probe: the browser normalizes whatever
+    // format the theme uses (hex, rgb(), oklch, named) into rgb() on the
+    // computed `color`, so we don't depend on --bg being hex.
+    const probe = document.createElement('span');
+    probe.style.color = 'var(--bg)';
+    probe.style.display = 'none';
+    document.body.appendChild(probe);
+    const rgb = getComputedStyle(probe).color;
+    probe.remove();
+    const m = /(\d+(?:\.\d+)?)[\s,]+(\d+(?:\.\d+)?)[\s,]+(\d+(?:\.\d+)?)/.exec(rgb);
+    if (m) {
+      const r = Number(m[1]);
+      const g = Number(m[2]);
+      const b = Number(m[3]);
+      return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.5 ? 'dark' : 'light';
+    }
+  } catch {
+    /* fall through */
+  }
+  return 'dark';
+}
 
 export type NavTreeVariant = 'sidebar' | 'sheet';
 
@@ -162,19 +189,14 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
 
   return (
     <nav className="navtree" data-variant={variant} aria-label="Workspaces and tabs">
-      <div className="navtree-section">
-        <span className="navtree-section-label">Workspaces</span>
-        <button
-          type="button"
-          className="navtree-section-add"
-          onClick={() => void createWorkspace()}
-          disabled={creatingWs}
-          title="New workspace"
-          aria-label="New workspace"
-        >
-          {creatingWs ? '…' : '+'}
-        </button>
-      </div>
+      {/* The label is the mobile sheet's only title, so keep it there. On
+          desktop the brand plate above the tree already names the app and
+          the tree is the only section — the label is redundant, so drop it. */}
+      {variant === 'sheet' && (
+        <div className="navtree-section">
+          <span className="navtree-section-label">Workspaces</span>
+        </div>
+      )}
       <div className="navtree-scroll">
         {workspaces.map((w) => (
           <WorkspaceNode
@@ -191,6 +213,15 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
             rowDnd={variant === 'sidebar' ? wsDnd(w.id) : undefined}
           />
         ))}
+        {/* Same action language as "+ New tab", at the workspace indent. */}
+        <button
+          type="button"
+          className="navtree-add navtree-new-workspace"
+          onClick={() => void createWorkspace()}
+          disabled={creatingWs}
+        >
+          {creatingWs ? 'Creating…' : '+ New workspace'}
+        </button>
       </div>
     </nav>
   );
@@ -317,21 +348,20 @@ function WorkspaceNode({
             }
             {...pressHandlers}
             onClick={(e) => {
-              // Long-press consumes the tap (rename, not navigate).
+              // Long-press consumes the tap (rename, not toggle).
               pressHandlers.onClick(e);
               if (e.defaultPrevented) return;
+              // Modified / middle click falls through to the native anchor
+              // (href below) so ⌘/Ctrl-click and right-click → "open in new
+              // tab" still open the whole workspace in a new browser tab.
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-              onNavigate?.();
-              // Jump straight to the last-visited tab in this workspace
-              // if known, instead of the default first tab.
-              const stored = getLastTabSlug(workspace.slug);
-              if (stored) {
-                e.preventDefault();
-                void navigate({
-                  to: '/w/$wsSlug/t/$tabSlug',
-                  params: { wsSlug: workspace.slug, tabSlug: stored },
-                });
-              }
+              // Plain left-click minimizes/expands the workspace in place —
+              // it does NOT navigate. You navigate by clicking a tab inside
+              // it. (Collapsing collides with navigating on one click; the
+              // new-browser-tab affordance is preserved via the modified
+              // clicks handled above.)
+              e.preventDefault();
+              toggleExpanded(workspace.slug, activeWorkspaceSlug);
             }}
           >
             <span className="navtree-name-text">{workspace.name}</span>
@@ -447,6 +477,28 @@ function TabList({
     }
   };
 
+  // Manual unread toggle (context menu). `want=true` flags the attention
+  // dot; `want=false` clears it (same path as viewing the tab). Refresh
+  // both the tab list and the workspace rollup so the dot updates at once.
+  const setTabUnread = async (tab: Tab, want: boolean) => {
+    try {
+      await (want ? api.markTabUnread(tab.id) : api.markTabSeen(tab.id));
+      await refreshTabs(workspace.id);
+      await refreshWorkspaces();
+    } catch (err) {
+      console.error('set tab unread failed', err);
+    }
+  };
+
+  const setTabIcon = async (tab: Tab, icon: string) => {
+    try {
+      await api.patchTab(tab.id, { icon });
+      await refreshTabs(workspace.id);
+    } catch (err) {
+      console.error('set tab icon failed', err);
+    }
+  };
+
   const createTab = async () => {
     if (creating) return;
     setCreating(true);
@@ -484,12 +536,14 @@ function TabList({
           setEditing={setEditing}
           onNavigate={onNavigate}
           onClose={(e) => void closeTab(e, t)}
+          onSetUnread={(want) => void setTabUnread(t, want)}
+          onSetIcon={(icon) => void setTabIcon(t, icon)}
           rowDnd={variant === 'sidebar' ? tabDnd(t.id) : undefined}
         />
       ))}
       <button
         type="button"
-        className="navtree-new-tab"
+        className="navtree-add navtree-new-tab"
         onClick={() => void createTab()}
         disabled={creating}
       >
@@ -510,6 +564,10 @@ interface TabRowProps {
   setEditing: (e: Editing) => void;
   onNavigate?: (() => void) | undefined;
   onClose: (e: React.MouseEvent) => void;
+  /** Toggle the manual unread mark — true flags the dot, false clears it. */
+  onSetUnread: (want: boolean) => void;
+  /** Set this tab's leading icon (emoji). */
+  onSetIcon: (icon: string) => void;
   rowDnd?: DragItemProps | undefined;
 }
 
@@ -524,16 +582,30 @@ function TabRow({
   onNavigate,
   rowDnd,
   onClose,
+  onSetUnread,
+  onSetIcon,
 }: TabRowProps) {
   // Touch rename: long-press (ignores mouse/pen; desktop double-clicks).
   const { pressing, handlers: pressHandlers } = useLongPress({
     onLongPress: () => setEditing({ kind: 'tab', id: tab.id }),
   });
+  // Right-click context menu (desktop sidebar). Anchored at the cursor.
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  // Icon picker, anchored under the clicked icon.
+  const [picker, setPicker] = useState<{ x: number; y: number } | null>(null);
   return (
     <div
       className="navtree-tab-row"
       data-active={isActiveTab ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
+      {...(variant === 'sidebar' && !isEditing
+        ? {
+            onContextMenu: (e: React.MouseEvent) => {
+              e.preventDefault();
+              setMenu({ x: e.clientX, y: e.clientY });
+            },
+          }
+        : {})}
       {...(rowDnd && !isEditing ? rowDnd : {})}
     >
       {isEditing ? (
@@ -576,6 +648,29 @@ function TabRow({
             onNavigate?.();
           }}
         >
+          {/* Leading icon — click to open the picker. A span (not a button)
+              since it lives inside the anchor; stop+prevent so the click
+              picks an icon instead of navigating. Mouse-only by design — the
+              keyboard-accessible path is the row context menu "Change icon…". */}
+          {/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard path is the context menu's "Change icon…" item */}
+          <span
+            className="navtree-tab-icon"
+            title="Change icon"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              setPicker({ x: r.left, y: r.bottom + 4 });
+            }}
+            onDoubleClick={(e) => {
+              // Don't let a fast double-click on the icon trip the row's
+              // rename-on-doubleclick.
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+          >
+            {tab.icon ?? DEFAULT_TAB_ICON}
+          </span>
           {quickNumber !== undefined && (
             <span className="navtree-quicknum" aria-hidden="true">
               {quickNumber}
@@ -594,6 +689,163 @@ function TabRow({
       >
         <SvgClose />
       </button>
+      {menu && (
+        <NavContextMenu
+          x={menu.x}
+          y={menu.y}
+          onDismiss={() => setMenu(null)}
+          items={[
+            tab.attention
+              ? { label: 'Mark as read', onSelect: () => onSetUnread(false) }
+              : { label: 'Mark as unread', onSelect: () => onSetUnread(true) },
+            {
+              label: 'Change icon…',
+              onSelect: () => setPicker({ x: menu.x, y: menu.y }),
+            },
+            { label: 'Rename', onSelect: () => setEditing({ kind: 'tab', id: tab.id }) },
+            {
+              label: 'Close tab',
+              danger: true,
+              // onClose expects a MouseEvent for stopPropagation; the menu
+              // already dismissed, so a lightweight stub is enough.
+              onSelect: () =>
+                onClose({ stopPropagation() {}, preventDefault() {} } as React.MouseEvent),
+            },
+          ]}
+        />
+      )}
+      {picker && (
+        <IconPicker
+          x={picker.x}
+          y={picker.y}
+          onPick={(icon) => {
+            setPicker(null);
+            onSetIcon(icon);
+          }}
+          onDismiss={() => setPicker(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** One row in a NavContextMenu. */
+interface MenuItem {
+  label: string;
+  onSelect: () => void;
+  danger?: boolean;
+}
+
+/**
+ * Cursor-anchored context menu for a nav row (desktop right-click), used by
+ * both tab and workspace rows. A full-viewport backdrop catches the
+ * outside-click / right-click-elsewhere dismissal; Escape also closes. Kept
+ * inside NavTree since it's the only consumer and shares its chrome tokens.
+ */
+function NavContextMenu({
+  x,
+  y,
+  items,
+  onDismiss,
+}: {
+  x: number;
+  y: number;
+  items: MenuItem[];
+  onDismiss: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onDismiss();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onDismiss]);
+  // Clamp so the menu never spills past the viewport edge (approx size —
+  // exact enough to keep all items reachable near the bottom/right).
+  const MENU_W = 200;
+  const MENU_H = 44 + items.length * 34;
+  const left = Math.max(4, Math.min(x, window.innerWidth - MENU_W - 4));
+  const top = Math.max(4, Math.min(y, window.innerHeight - MENU_H - 4));
+  return (
+    <div
+      className="navtree-menu-backdrop"
+      onMouseDown={onDismiss}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onDismiss();
+      }}
+    >
+      <div
+        className="navtree-menu"
+        style={{ left, top }}
+        onMouseDown={(e) => e.stopPropagation()}
+        role="menu"
+      >
+        {items.map((it) => (
+          <button
+            key={it.label}
+            type="button"
+            className={it.danger ? 'navtree-menu-item -danger' : 'navtree-menu-item'}
+            role="menuitem"
+            onClick={() => {
+              onDismiss();
+              it.onSelect();
+            }}
+          >
+            {it.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Anchor-positioned emoji picker (full searchable emoji-mart keyboard).
+ * Same backdrop dismissal contract as NavContextMenu (outside-click /
+ * right-click / Escape). Picking an emoji calls onPick and closes.
+ */
+function IconPicker({
+  x,
+  y,
+  onPick,
+  onDismiss,
+}: {
+  x: number;
+  y: number;
+  onPick: (icon: string) => void;
+  onDismiss: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onDismiss();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onDismiss]);
+  // emoji-mart's default picker is ~352×435; clamp so it stays on-screen.
+  const W = 360;
+  const H = 440;
+  const left = Math.max(4, Math.min(x, window.innerWidth - W - 4));
+  const top = Math.max(4, Math.min(y, window.innerHeight - H - 4));
+  return (
+    <div
+      className="navtree-menu-backdrop"
+      onMouseDown={onDismiss}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onDismiss();
+      }}
+    >
+      <div
+        className="navtree-emoji-popover"
+        style={{ left, top }}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <Suspense fallback={<div className="navtree-emoji-loading">Loading…</div>}>
+          <EmojiMartPicker theme={pickerTheme()} onPick={onPick} />
+        </Suspense>
+      </div>
     </div>
   );
 }
