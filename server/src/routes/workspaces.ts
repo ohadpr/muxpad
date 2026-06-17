@@ -1,12 +1,12 @@
+import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import type Database from 'better-sqlite3';
-import { WorkspaceStore } from '../store/WorkspaceStore.js';
-import { TabStore } from '../store/TabStore.js';
-import { PaneStore } from '../store/PaneStore.js';
-import type { PtydClient } from '../ptyd-client/PtydClient.js';
-import type { PtydCache } from '../ptyd-cache.js';
 import type { EventBus } from '../events.js';
+import type { PtydCache } from '../ptyd-cache.js';
+import type { PtydClient } from '../ptyd-client/PtydClient.js';
+import { PaneStore } from '../store/PaneStore.js';
+import { TabStore } from '../store/TabStore.js';
+import { WorkspaceStore } from '../store/WorkspaceStore.js';
 
 /**
  * CRUD for the top-level workspace concept. Workspaces own tabs; tabs
@@ -40,9 +40,27 @@ export function workspacesRoutes(deps: {
     return false;
   };
 
+  /**
+   * Returns true iff any pane in any tab of `workspaceId` is busy (actively
+   * producing output). Mirrors the per-tab fold in routes/tabs.ts so a
+   * collapsed workspace row can show a busy spinner without being expanded.
+   */
+  const workspaceBusy = (workspaceId: string): boolean => {
+    for (const t of tabs.listByWorkspace(workspaceId)) {
+      for (const p of panes.listByTab(t.id)) {
+        if (deps.cache.getBusy(p.id)) return true;
+      }
+    }
+    return false;
+  };
+
   app.get('/', (c) => {
     const list = workspaces.list();
-    const decorated = list.map((w) => ({ ...w, attention: workspaceAttention(w.id) }));
+    const decorated = list.map((w) => ({
+      ...w,
+      attention: workspaceAttention(w.id),
+      busy: workspaceBusy(w.id),
+    }));
     return c.json(decorated);
   });
 
@@ -58,12 +76,8 @@ export function workspacesRoutes(deps: {
 
   app.get('/:id', (c) => {
     const w = workspaces.getById(c.req.param('id'));
-    if (!w)
-      return c.json(
-        { error: { code: 'not_found', message: 'workspace not found' } },
-        404,
-      );
-    return c.json({ ...w, attention: workspaceAttention(w.id) });
+    if (!w) return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
+    return c.json({ ...w, attention: workspaceAttention(w.id), busy: workspaceBusy(w.id) });
   });
 
   app.patch('/:id', async (c) => {
@@ -75,10 +89,7 @@ export function workspacesRoutes(deps: {
       deps.events.emit({ type: 'workspace.updated', workspace: updated });
       return c.json(updated);
     } catch {
-      return c.json(
-        { error: { code: 'not_found', message: 'workspace not found' } },
-        404,
-      );
+      return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
     }
   });
 
@@ -91,11 +102,7 @@ export function workspacesRoutes(deps: {
   app.delete('/:id', async (c) => {
     const id = c.req.param('id');
     const w = workspaces.getById(id);
-    if (!w)
-      return c.json(
-        { error: { code: 'not_found', message: 'workspace not found' } },
-        404,
-      );
+    if (!w) return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
     // Cascade: kill panes, drop tabs, then drop the workspace. Pane
     // rows fall out via the ON DELETE CASCADE FK on tabs; the explicit
     // tabs.delete() per tab is what lets us emit a per-tab tab.removed

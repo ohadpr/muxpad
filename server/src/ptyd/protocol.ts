@@ -75,6 +75,9 @@ export type CtrlPushEvent =
   | { event: 'paneTitle'; id: string; title: string | null }
   | { event: 'paneFg'; id: string; cmd: string | null }
   | { event: 'paneAttention'; id: string; attention: boolean }
+  // Output-activity state: true while the pane is actively producing output
+  // (foreground app working), false after it falls quiet (idle / waiting).
+  | { event: 'paneBusy'; id: string; busy: boolean }
   // Raw URL/marker sightings the scanner extracted from this pane's output.
   // ptyd does NOT validate or probe these — the main server runs the
   // AppUrlTracker (host classification + listening probe) so detection logic

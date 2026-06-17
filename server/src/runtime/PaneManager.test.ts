@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { PaneManager } from './PaneManager.js';
 
 describe('PaneManager', () => {
@@ -75,7 +75,13 @@ describe('PaneManager → raw change callbacks (no PaneStore)', () => {
   // ptyd usage shape: the daemon has no db, only the manager + callbacks.
 
   it('fires onPaneChange with kind:title when an OSC title is set', async () => {
-    type Change = { id: string; kind: string; title?: string | null; cmd?: string | null; attention?: boolean };
+    type Change = {
+      id: string;
+      kind: string;
+      title?: string | null;
+      cmd?: string | null;
+      attention?: boolean;
+    };
     const changes: Change[] = [];
     const mgr = new PaneManager({
       cmdPollInterval: 50,
@@ -226,7 +232,13 @@ describe('PaneManager → raw change callbacks (no PaneStore)', () => {
     // consecutive cmd-poll ticks. A previous bug emitted on every tick,
     // which (via PtydCache → pane.updated) fanned a fresh event out to
     // every browser even when nothing had actually changed.
-    type Change = { id: string; kind: string; title?: string | null; cmd?: string | null; attention?: boolean };
+    type Change = {
+      id: string;
+      kind: string;
+      title?: string | null;
+      cmd?: string | null;
+      attention?: boolean;
+    };
     const changes: Change[] = [];
     const mgr = new PaneManager({
       // Short poll so we observe at least two ticks well within the test
@@ -257,6 +269,45 @@ describe('PaneManager → raw change callbacks (no PaneStore)', () => {
       // The first tick fires; every subsequent tick with the same value
       // must be suppressed. Exactly one event for this title.
       expect(titleEvents).toHaveLength(1);
+    } finally {
+      await mgr.killAll();
+    }
+  });
+
+  it('fires busy:true on output and busy:false after the stream goes quiet', async () => {
+    // Output-activity drives the "busy" indicator: a pane is busy while it's
+    // emitting bytes and idle once it falls silent for BUSY_QUIET_MS (1.5s).
+    // This is what lets the navigator distinguish an app *working* from one
+    // *waiting at a prompt* — the foreground process is identical in both.
+    type Change = { id: string; kind: string; busy?: boolean };
+    const changes: Change[] = [];
+    const mgr = new PaneManager({
+      // Large poll so any busy event we see came from the eager busy-changed
+      // path, not a periodic tick (which doesn't evaluate busy at all).
+      cmdPollInterval: 60_000,
+      onPaneChange: (id, change) => {
+        if (change.kind === 'busy') changes.push({ id, kind: change.kind, busy: change.busy });
+      },
+    });
+    // Emit a burst, then sleep silently — so we cross busy:true then idle.
+    const runtime = mgr.getOrCreate({
+      id: 'busy1',
+      shell: '/bin/sh',
+      startup_cmd: `printf 'working'; sleep 5`,
+      cwd: '/tmp',
+    });
+    try {
+      // Output lands within a few hundred ms → busy:true, and getBusy() agrees.
+      await new Promise((r) => setTimeout(r, 400));
+      expect(runtime.getBusy()).toBe(true);
+      expect(changes.some((c) => c.id === 'busy1' && c.busy === true)).toBe(true);
+      expect(changes.some((c) => c.id === 'busy1' && c.busy === false)).toBe(false);
+
+      // After the quiet window elapses with no further output, decay to idle.
+      await new Promise((r) => setTimeout(r, 1700));
+      expect(runtime.getBusy()).toBe(false);
+      const idleEvents = changes.filter((c) => c.id === 'busy1' && c.busy === false);
+      expect(idleEvents).toHaveLength(1);
     } finally {
       await mgr.killAll();
     }
