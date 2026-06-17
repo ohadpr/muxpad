@@ -72,6 +72,9 @@ export const TabSchema = z.object({
   id: z.string(),
   slug: z.string(),
   name: z.string(),
+  // A single emoji shown in the navigator's leading icon column. Assigned
+  // a random default at creation; user-changeable via the icon picker.
+  icon: z.string().optional(),
   layout: LayoutNodeSchema,
   created_at: z.number(),
   updated_at: z.number(),
