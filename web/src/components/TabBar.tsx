@@ -1,4 +1,4 @@
-import type { Tab } from '@muxpad/shared';
+import { DEFAULT_TAB_ICON, type Tab } from '@muxpad/shared';
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent } from 'react';
@@ -153,8 +153,7 @@ export function TabBar({ workspaceId, workspaceSlug }: TabBarProps) {
       >
         {tabs.map((t, i) => {
           const isActive = t.slug === activeSlug;
-          const quickNumber =
-            showQuickNumbers && i < MAX_QUICK_SWITCH_TABS ? i + 1 : undefined;
+          const quickNumber = showQuickNumbers && i < MAX_QUICK_SWITCH_TABS ? i + 1 : undefined;
           if (isActive && editingId === t.id) {
             return (
               <div key={t.id} className="ws-tab ws-tab-editing" data-active="true">
@@ -293,6 +292,9 @@ function TabItem({
           <span className="ws-tab-quicknum-chip">{quickNumber}</span>
         </span>
       )}
+      <span className="ws-tab-icon" aria-hidden="true">
+        {tab.icon ?? DEFAULT_TAB_ICON}
+      </span>
       <span className="ws-tab-label">{tab.name}</span>
       {!isActive && tab.attention && <span className="badge-dot" aria-label="needs attention" />}
     </Link>
