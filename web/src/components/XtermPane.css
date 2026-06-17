@@ -47,6 +47,44 @@
   background: transparent !important;
 }
 
+/* Connection-status badge — a DOM overlay so reconnect text never lands
+   in the terminal buffer (which corrupted full-screen TUIs). */
+.xterm-reconnecting {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--xterm-bg) 76%, #000 24%);
+  border: 1px solid color-mix(in srgb, var(--xterm-fg, #ccc) 20%, transparent);
+  box-shadow: 0 4px 16px color-mix(in srgb, #000 35%, transparent);
+  color: var(--xterm-fg, #c0caf5);
+  font-family: var(--ui-font, sans-serif);
+  font-size: 12px;
+  opacity: 0.95;
+  pointer-events: none;
+}
+.xterm-reconnecting-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--danger, #e5484d);
+  animation: xterm-reconnecting-pulse 1s ease-in-out infinite;
+}
+@keyframes xterm-reconnecting-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 .xterm-paste-toast {
   position: absolute;
   right: 12px;
