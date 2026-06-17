@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
 import type { Tab } from '@muxpad/shared';
+import { useEffect, useState } from 'react';
 import { api } from './api';
+import { subscribe } from './events';
+import { refreshWorkspaces } from './workspaces';
 
 /**
  * Per-workspace tabs hook. Each workspace has its own cache slot, so
@@ -27,6 +29,32 @@ export async function refreshTabs(workspaceId: string): Promise<void> {
   const subs = listenersByWs.get(workspaceId);
   if (subs) for (const fn of subs) fn(next);
 }
+
+// ── Live decoration refresh ──────────────────────────────────────────────
+// The 5s poll surfaces attention/busy on tabs you're not looking at, but a
+// busy spinner that lags 5s reads as broken. `pane.updated` fires (debounced
+// at the source) on every title/fg/attention/busy transition, so we use it to
+// refresh promptly: the owning workspace's tab list (so its rows update) plus
+// the workspace rollup (so a collapsed workspace's spinner stays honest). We
+// only refetch a workspace whose cached tab list actually contains the changed
+// tab, so unrelated expanded workspaces don't refetch on every pane blip.
+let liveRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+const pendingWorkspaceRefresh = new Set<string>();
+subscribe((e) => {
+  if (e.type !== 'pane.updated') return;
+  for (const [wsId, list] of caches) {
+    if (list.some((t) => t.id === e.tab_id)) pendingWorkspaceRefresh.add(wsId);
+  }
+  if (liveRefreshTimer !== null) return;
+  liveRefreshTimer = setTimeout(() => {
+    liveRefreshTimer = null;
+    const wss = [...pendingWorkspaceRefresh];
+    pendingWorkspaceRefresh.clear();
+    for (const wsId of wss) void refreshTabs(wsId);
+    // Keep collapsed-workspace busy/attention rollups live too.
+    void refreshWorkspaces();
+  }, 250);
+});
 
 /**
  * Optimistically reorder a workspace's cached tabs so the sidebar moves the

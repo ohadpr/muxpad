@@ -1,14 +1,14 @@
+import { LayoutNodeSchema } from '@muxpad/shared';
+import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import type Database from 'better-sqlite3';
-import { LayoutNodeSchema } from '@muxpad/shared';
-import { TabStore } from '../store/TabStore.js';
-import { PaneStore } from '../store/PaneStore.js';
-import { pruneDeadPanes } from '../store/migrations.js';
-import type { PtydClient } from '../ptyd-client/PtydClient.js';
-import type { PtydCache } from '../ptyd-cache.js';
-import { randomWorkspaceName } from '../random-name.js';
 import type { EventBus } from '../events.js';
+import type { PtydCache } from '../ptyd-cache.js';
+import type { PtydClient } from '../ptyd-client/PtydClient.js';
+import { randomWorkspaceName } from '../random-name.js';
+import { PaneStore } from '../store/PaneStore.js';
+import { TabStore } from '../store/TabStore.js';
+import { pruneDeadPanes } from '../store/migrations.js';
 
 /**
  * CRUD for tabs (the things in the tab bar). Each tab belongs to a
@@ -58,9 +58,12 @@ export function tabsRoutes(deps: {
     const unreadIds = tabs.unreadIdsByWorkspace(workspaceId);
     const decorated = list.map((t) => {
       const tabPanes = panes.listByTab(t.id);
-      const attention =
-        unreadIds.has(t.id) || tabPanes.some((p) => deps.cache.getAttention(p.id));
-      return { ...t, attention };
+      const attention = unreadIds.has(t.id) || tabPanes.some((p) => deps.cache.getAttention(p.id));
+      // Busy = any pane in the tab is actively producing output. Unlike
+      // attention this is purely runtime (never manual/persisted) and clears
+      // itself when the work goes quiet.
+      const busy = tabPanes.some((p) => deps.cache.getBusy(p.id));
+      return { ...t, attention, busy };
     });
     return c.json(decorated);
   });
@@ -113,8 +116,7 @@ export function tabsRoutes(deps: {
 
   app.get('/:id', (c) => {
     const t = tabs.getById(c.req.param('id'));
-    if (!t)
-      return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
+    if (!t) return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
     const livePanes = panes.listByTab(t.id);
     const valid = new Set(livePanes.map((p) => p.id));
     const cleaned = pruneDeadPanes(t.layout, valid);
@@ -127,6 +129,7 @@ export function tabsRoutes(deps: {
       title: deps.cache.getTitle(p.id),
       foreground_cmd: deps.cache.getFg(p.id),
       attention: deps.cache.getAttention(p.id),
+      busy: deps.cache.getBusy(p.id),
       app_urls: deps.cache.getAppUrls(p.id),
     }));
     return c.json({ ...t, panes: decorated });
@@ -153,8 +156,7 @@ export function tabsRoutes(deps: {
   app.delete('/:id', async (c) => {
     const id = c.req.param('id');
     const t = tabs.getById(id);
-    if (!t)
-      return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
+    if (!t) return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
     // TabStore.getById doesn't surface workspace_id (the shared Tab type
     // omits it). Pull it via the dedicated helper so the emitted event
     // carries the right workspace context for clients.
