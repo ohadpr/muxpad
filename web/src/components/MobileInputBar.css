@@ -125,6 +125,31 @@
   pointer-events: none;
 }
 
+/* Photo/camera attach — icon-only square, bottom-aligned with Send. Quiet
+   chrome by default (it's secondary to the composer); accent on press. */
+.mobile-input-attach {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 32px;
+  padding: 0;
+  background: var(--bg-elev);
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+.mobile-input-attach:active {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
 .mobile-input-send {
   flex: 0 0 auto;
   min-width: 56px;
