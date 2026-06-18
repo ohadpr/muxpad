@@ -449,7 +449,8 @@ select:focus {
 .brand-text {
   font-weight: 400;
   letter-spacing: 0.06em;
-  color: var(--fg-dim);
+  /* Quiet, but not washed out — sit partway between dim and full fg. */
+  color: color-mix(in srgb, var(--fg-dim) 50%, var(--fg));
   transition: color 120ms ease;
 }
 
@@ -467,7 +468,7 @@ select:focus {
      without adding another loud color to the rail. Restored to full color on
      hover (see below). */
   filter: grayscale(0.7);
-  opacity: 0.6;
+  opacity: 0.78;
   transition: filter 120ms ease, opacity 120ms ease;
 }
 
