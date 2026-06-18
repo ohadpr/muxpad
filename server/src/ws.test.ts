@@ -1,16 +1,16 @@
-import { describe, it, expect, afterEach } from 'vitest';
 import { createServer } from 'node:http';
-import { WebSocket } from 'ws';
-import { openDb } from './store/db.js';
-import { attachWsServer } from './ws.js';
-import { EventBus } from './events.js';
-import { encodeInput, encodeResize, decodeServerMessage, encodePing } from '@muxpad/shared';
 import type { AddressInfo } from 'node:net';
+import { decodeServerMessage, encodeInput, encodePing, encodeResize } from '@muxpad/shared';
+import { afterEach, describe, expect, it } from 'vitest';
+import { WebSocket } from 'ws';
+import { EventBus } from './events.js';
+import { PtydCache } from './ptyd-cache.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
-import { spawnPtyd, type SpawnedPtyd } from './test-helpers/spawnPtyd.js';
-import { PtydCache } from './ptyd-cache.js';
+import { openDb } from './store/db.js';
+import { type SpawnedPtyd, spawnPtyd } from './test-helpers/spawnPtyd.js';
+import { attachWsServer } from './ws.js';
 
 let cleanup: (() => Promise<void>) | null = null;
 
@@ -33,6 +33,7 @@ async function bootServer(opts?: { heartbeatMs?: number }) {
     http,
     db,
     ptyd: ptyd.client,
+    cache: new PtydCache(),
     events: new EventBus(),
     ...(opts?.heartbeatMs !== undefined ? { heartbeatMs: opts.heartbeatMs } : {}),
   });
@@ -109,7 +110,7 @@ describe('WS server', () => {
     const tab = tabs.create({ name: 'T', layout: 'p1', workspace_id: wsRow.id });
     const pane = panes.create({ tab_id: tab.id, kind: 'url', url: 'https://example.com' });
     const http = createServer();
-    attachWsServer({ http, db, ptyd: ptyd.client, events: new EventBus() });
+    attachWsServer({ http, db, ptyd: ptyd.client, cache: new PtydCache(), events: new EventBus() });
     await new Promise<void>((r) => http.listen(0, r));
     const port = (http.address() as AddressInfo).port;
     cleanup = async () => {
@@ -157,7 +158,7 @@ describe('WS server', () => {
     const tab = tabs.create({ name: 'T', layout: 'p1', workspace_id: wsRow.id });
     const pane = panes.create({ tab_id: tab.id, shell: '/bin/cat', cwd: '/tmp' });
     const http = createServer();
-    attachWsServer({ http, db, ptyd: ptyd.client, events: new EventBus() });
+    attachWsServer({ http, db, ptyd: ptyd.client, cache: new PtydCache(), events: new EventBus() });
     // Mount the Hono app on the same http server for the PATCH call.
     const { createApp } = await import('./server.js');
     const app = createApp({
