@@ -243,7 +243,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--accent);
+  /* Neutral, NOT accent: "working" is a machine/progress signal. Accent is
+     reserved for the "concerns you" channel (selection pill + attention dot),
+     so the spinner reads as quiet in-progress, distinct from the accent dot
+     it shares a status slot with. */
+  color: var(--fg-dim);
   line-height: 0;
   /* Optical nudge: flex align-items:center centers the icon's BOX, but text
      glyphs sit low within their line box, so a box-centered icon reads ~1px
