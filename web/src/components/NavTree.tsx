@@ -698,12 +698,14 @@ function TabRow({
             </span>
           )}
           <span className="navtree-name-text">{tab.name}</span>
-          {/* Mode icon: a spinner while the tab's active app is producing
-              output (working). It clears on its own when the stream goes
-              quiet — that "no spinner" state is the done/waiting signal, even
-              if the process (e.g. `claude`) is still alive. Distinct channel
-              from the attention dot ("wants you"); both can show at once. */}
-          {tab.busy && (
+          {/* Mode icon: a spinner while the tab's app is producing output
+              (working). Suppressed on the ACTIVE tab — you're looking at the
+              terminal, so the app's own spinner/output is right there and a
+              second indicator is just noise. It's peripheral awareness for tabs
+              you can't see. (The attention dot self-hides on the active tab via
+              markSeen; busy is live, so it needs this explicit guard.) Distinct
+              channel from the dot ("wants you"); both can show on a background tab. */}
+          {!isActiveTab && tab.busy && (
             <span className="navtree-busy" role="img" aria-label="busy" title="Working…">
               <SvgSpinner />
             </span>
