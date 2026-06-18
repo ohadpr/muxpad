@@ -245,6 +245,11 @@
   justify-content: center;
   color: var(--accent);
   line-height: 0;
+  /* Optical nudge: flex align-items:center centers the icon's BOX, but text
+     glyphs sit low within their line box, so a box-centered icon reads ~1px
+     high against the label. Drop it to sit on the text's optical center. */
+  position: relative;
+  top: 1px;
 }
 .navtree-busy svg {
   animation: navtree-spin 0.8s linear infinite;
