@@ -326,7 +326,7 @@ select:focus {
 }
 
 /* ─── Notification dot ───────────────────────────────────────────────────
-   iOS-style red dot. Two modes:
+   Theme-accented dot. Two modes:
 
    .badge-dot          — absolutely positioned top-right of its parent;
                          parent must be position:relative. Use this on
@@ -335,9 +335,14 @@ select:focus {
    .badge-dot.-inline  — flow-laid out, drop into a row next to text
                          (dropdown rows next to the workspace/tab name).
 
-   Single signal across the app: "this wants you." Selection rails
-   (var(--accent), bottom-edge) are a *different* channel — they say
-   "you are here." The two never share a surface. */
+   Single signal across the app: "this wants you." Uses var(--accent) (the
+   theme color — violet on Acme, etc.) rather than a hard red: "your turn"
+   isn't an error, and everything else in the chrome speaks the theme palette.
+   It shares the accent hue with the selection pill ("you are here"), but the
+   two never co-occur on a row (viewing a tab clears its dot) and read as very
+   different forms — a filled row pill vs a 7px dot. The MACHINE/progress
+   channel (the busy spinner) is deliberately NEUTRAL grey, not accent, so the
+   "concerns you" hue stays exclusively about you. */
 .badge-dot {
   position: absolute;
   top: 6px;
@@ -345,7 +350,7 @@ select:focus {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--danger);
+  background: var(--accent);
   box-shadow: 0 0 0 1.5px var(--bg-tabbar);
   pointer-events: none;
 }
