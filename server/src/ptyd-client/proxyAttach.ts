@@ -14,30 +14,28 @@ import WebSocket from 'ws';
 const MIN_COLS = 20;
 const MIN_ROWS = 5;
 
-/** True for a client resize frame whose dims are below the sanity floor. */
-function isSubFloorResize(data: WebSocket.RawData): boolean {
-  // Runs on every browser→ptyd frame (keystrokes included) — only coerce
-  // to a Buffer for the rare non-Buffer shapes; never copy the hot path.
-  const buf = Buffer.isBuffer(data)
+/** Coerce a ws RawData frame to a Buffer. Real Buffers (the hot path) pass
+ *  through with no copy; only the rare ArrayBuffer / Buffer[] shapes allocate.
+ *  Coerce ONCE per frame and share the result across the checks below. */
+function toBuffer(data: WebSocket.RawData): Buffer {
+  return Buffer.isBuffer(data)
     ? data
     : Array.isArray(data)
       ? Buffer.concat(data)
       : Buffer.from(data);
+}
+
+/** True for a client resize frame whose dims are below the sanity floor. */
+function isSubFloorResize(buf: Buffer): boolean {
   if (buf.length < 5 || buf[0] !== OP_RESIZE) return false;
   const cols = buf.readUInt16BE(1);
   const rows = buf.readUInt16BE(3);
   return cols < MIN_COLS || rows < MIN_ROWS;
 }
 
-/** True for a client keystroke (OP_INPUT) frame — i.e. the user typing, as
- *  opposed to a resize (OP_RESIZE) or heartbeat (OP_PING). */
-function isInputFrame(data: WebSocket.RawData): boolean {
-  // For a real Buffer (the hot path) this is just an index read, no copy.
-  const buf = Buffer.isBuffer(data)
-    ? data
-    : Array.isArray(data)
-      ? Buffer.concat(data)
-      : Buffer.from(data);
+/** True for a client keystroke (OP_INPUT) frame — the user typing, as opposed
+ *  to a resize (OP_RESIZE) or heartbeat (OP_PING). */
+function isInputFrame(buf: Buffer): boolean {
   return buf.length >= 1 && buf[0] === OP_INPUT;
 }
 
@@ -122,16 +120,18 @@ export function proxyAttach(opts: ProxyAttachOptions): ProxyAttachHandle {
   });
 
   browser.on('message', (data: WebSocket.RawData) => {
+    // Coerce once; both inspections below read the same Buffer.
+    const buf = toBuffer(data);
     // Backstop: never forward a degenerate resize to the PTY (see
     // isSubFloorResize above). Logged so a misbehaving client is
     // diagnosable from server.log instead of silently shrinking panes.
-    if (isSubFloorResize(data)) {
+    if (isSubFloorResize(buf)) {
       console.warn(`[resize-floor] pane=${paneId} dropped sub-floor resize frame`);
       return;
     }
     // Note user keystrokes so the busy indicator can discount the echo they
     // produce (see PtydCache.noteInput). Resize/ping frames don't count.
-    if (onInput && isInputFrame(data)) onInput();
+    if (onInput && isInputFrame(buf)) onInput();
     // Drop instead of queue if ptyd isn't open yet — the existing protocol
     // is resilient to this (clients resend resize on open) and the
     // alternative (queue + flush) is unnecessary complexity. See header.

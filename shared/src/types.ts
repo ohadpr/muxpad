@@ -110,10 +110,6 @@ export const WorkspaceSchema = z.object({
   // has rung BEL since the user last interacted with it. The list
   // endpoint folds this in from PaneManager state.
   attention: z.boolean().optional(),
-  // Runtime-only flag. True iff any pane in any tab in this workspace is
-  // actively producing output. Folded in by the workspace list endpoint so a
-  // collapsed workspace row can show it's working without being expanded.
-  busy: z.boolean().optional(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 
