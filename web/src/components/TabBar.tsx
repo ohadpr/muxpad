@@ -36,7 +36,7 @@ export function TabBar({ workspaceId, workspaceSlug }: TabBarProps) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const activeSlug = matchActiveTabSlug(pathname);
 
-  // Option/Alt-held tab quick-switch. Holding Alt reveals "1…9" badges; Alt+n
+  // Ctrl-held tab quick-switch. Holding Ctrl reveals "1…9" badges; Ctrl+n
   // jumps to that tab (see use-tab-quickswitch for the modifier rationale).
   const switchToIndex = (i: number) => {
     const t = tabs[i];
@@ -237,7 +237,7 @@ interface TabItemProps {
   tab: Tab;
   workspaceSlug: string;
   isActive: boolean;
-  /** 1–9 badge shown while Option/Alt is held for quick-switch; else undefined. */
+  /** 1–9 badge shown while Ctrl is held for quick-switch; else undefined. */
   quickNumber: number | undefined;
   dropSide: 'before' | 'after' | undefined;
   onDragStart: (e: ReactDragEvent<HTMLAnchorElement>) => void;

@@ -33,7 +33,7 @@
   /* Tab leading-icon column. Tuned so a tab's icon lands directly under the
      workspace NAME (one chevron-width step) — the icon itself is the
      hierarchy cue, so no extra text-column indent is spent. */
-  --nt-indent: 20px;
+  --nt-indent: 12px;
   --nt-pill: 6px; /* selection/hover pill corner radius */
   display: flex;
   flex-direction: column;
@@ -189,7 +189,9 @@
 }
 
 /* Drag-to-reorder (desktop sidebar). The row carries the drag; the dragged
-   row dims, and the row it would drop onto gets an accent outline. */
+   row dims, and a horizontal accent line marks the insertion point between
+   rows — on the target's top edge when the row would land before it, bottom
+   edge when after (direction-aware, matching reorderByDrop). */
 .navtree[data-variant="sidebar"] .navtree-ws-row[draggable="true"],
 .navtree[data-variant="sidebar"] .navtree-tab-row[draggable="true"] {
   cursor: grab;
@@ -198,11 +200,28 @@
 .navtree-tab-row[data-dragging="true"] {
   opacity: 0.4;
 }
-.navtree-ws-row[data-dragover="true"],
-.navtree-tab-row[data-dragover="true"] {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  box-shadow: inset 0 0 0 1px var(--accent);
-  border-radius: var(--nt-pill);
+/* The drop line. A 2px accent bar pinned to the indicated edge, with rounded
+   ends and a tiny horizontal inset so it reads as a divider between rows, not
+   a border on one. pointer-events:none so it never interferes with the drag. */
+.navtree-ws-row[data-drop-edge]::after,
+.navtree-tab-row[data-drop-edge]::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 2;
+}
+.navtree-ws-row[data-drop-edge="top"]::after,
+.navtree-tab-row[data-drop-edge="top"]::after {
+  top: -1px;
+}
+.navtree-ws-row[data-drop-edge="bottom"]::after,
+.navtree-tab-row[data-drop-edge="bottom"]::after {
+  bottom: -1px;
 }
 .navtree-ws-name:hover {
   text-decoration: none;
@@ -335,8 +354,9 @@
   text-decoration: none;
 }
 
-/* Alt-held quick-switch chip (sidebar only) — same accent chip language
-   as the top TabBar's numbers. */
+/* Ctrl-held quick-switch chip (sidebar only) — same accent chip language
+   as the top TabBar's numbers. Soft accent fill + medium weight: present as a
+   hint while Ctrl is held, not a loud solid pill. */
 .navtree-quicknum {
   flex: 0 0 auto;
   min-width: 14px;
@@ -346,11 +366,11 @@
   justify-content: center;
   padding: 0 3px;
   border-radius: 3px;
-  background: var(--accent);
-  color: var(--accent-fg);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
   font-family: var(--chrome-font);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1;
 }
 
