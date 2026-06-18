@@ -1,11 +1,12 @@
-import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'node:http';
 import type Database from 'better-sqlite3';
+import { WebSocket, WebSocketServer } from 'ws';
+import type { EventBus } from './events.js';
+import type { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { proxyAttach } from './ptyd-client/proxyAttach.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
-import type { EventBus } from './events.js';
 
 export interface WsServerHandle {
   close(): Promise<void>;
@@ -15,6 +16,7 @@ export function attachWsServer(deps: {
   http: Server;
   db: Database.Database;
   ptyd: PtydClient;
+  cache: PtydCache;
   events: EventBus;
   /** Liveness ping interval in ms. Defaults to 15s; tests pass a small value. */
   heartbeatMs?: number;
@@ -135,6 +137,9 @@ export function attachWsServer(deps: {
             paneId: pane.id,
             browser: ws,
             replay,
+            // Discount the echo the user's own typing produces from busy
+            // detection (see PtydCache.noteInput / markBusy).
+            onInput: () => deps.cache.noteInput(pane.id),
           });
         })
         .catch(() => {

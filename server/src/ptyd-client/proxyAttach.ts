@@ -1,4 +1,4 @@
-import { OP_RESIZE } from '@muxpad/shared';
+import { OP_INPUT, OP_RESIZE } from '@muxpad/shared';
 import WebSocket from 'ws';
 
 // Mirror of the web client's resize-send floor (MIN_COLS/MIN_ROWS in
@@ -29,6 +29,18 @@ function isSubFloorResize(data: WebSocket.RawData): boolean {
   return cols < MIN_COLS || rows < MIN_ROWS;
 }
 
+/** True for a client keystroke (OP_INPUT) frame — i.e. the user typing, as
+ *  opposed to a resize (OP_RESIZE) or heartbeat (OP_PING). */
+function isInputFrame(data: WebSocket.RawData): boolean {
+  // For a real Buffer (the hot path) this is just an index read, no copy.
+  const buf = Buffer.isBuffer(data)
+    ? data
+    : Array.isArray(data)
+      ? Buffer.concat(data)
+      : Buffer.from(data);
+  return buf.length >= 1 && buf[0] === OP_INPUT;
+}
+
 export interface ProxyAttachOptions {
   /** Absolute path to the ptyd unix socket. */
   socketPath: string;
@@ -46,6 +58,13 @@ export interface ProxyAttachOptions {
    * event with the appropriate code.
    */
   browser: WebSocket;
+  /**
+   * Called once per user keystroke (OP_INPUT) frame forwarded to ptyd. Lets the
+   * main server mark "the user is interacting with this pane" so the busy
+   * indicator can ignore the echo their typing produces (which is otherwise
+   * indistinguishable from the app doing work). Resize/ping frames don't fire it.
+   */
+  onInput?: (() => void) | undefined;
 }
 
 export interface ProxyAttachHandle {
@@ -78,7 +97,7 @@ export interface ProxyAttachHandle {
  * to change.
  */
 export function proxyAttach(opts: ProxyAttachOptions): ProxyAttachHandle {
-  const { socketPath, paneId, browser, replay = true } = opts;
+  const { socketPath, paneId, browser, replay = true, onInput } = opts;
   const replayQ = replay ? '' : '?replay=0';
   const ptyd = new WebSocket(`ws+unix://${socketPath}:/pty/${paneId}${replayQ}`);
   // ptyd sends binary frames; match the default behavior of the existing
@@ -110,6 +129,9 @@ export function proxyAttach(opts: ProxyAttachOptions): ProxyAttachHandle {
       console.warn(`[resize-floor] pane=${paneId} dropped sub-floor resize frame`);
       return;
     }
+    // Note user keystrokes so the busy indicator can discount the echo they
+    // produce (see PtydCache.noteInput). Resize/ping frames don't count.
+    if (onInput && isInputFrame(data)) onInput();
     // Drop instead of queue if ptyd isn't open yet — the existing protocol
     // is resilient to this (clients resend resize on open) and the
     // alternative (queue + flush) is unnecessary complexity. See header.

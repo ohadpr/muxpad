@@ -1,22 +1,22 @@
-import { describe, it, expect, afterEach } from 'vitest';
-import { createServer } from 'node:http';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { Server as HttpServer } from 'node:http';
+import type { AddressInfo, Server as NetServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { decodeServerMessage, encodeInput } from '@muxpad/shared';
+import type Database from 'better-sqlite3';
+import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import type { AddressInfo, Server as NetServer } from 'node:net';
-import type { Server as HttpServer } from 'node:http';
-import { encodeInput, decodeServerMessage } from '@muxpad/shared';
-import { startPtyd, type PtydHandle } from '../ptyd/index.js';
-import { PtydClient } from '../ptyd-client/PtydClient.js';
+import { EventBus } from '../events.js';
 import { PtydCache } from '../ptyd-cache.js';
-import { openDb } from '../store/db.js';
+import { PtydClient } from '../ptyd-client/PtydClient.js';
+import { type PtydHandle, startPtyd } from '../ptyd/index.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
-import { attachWsServer, type WsServerHandle } from '../ws.js';
-import { EventBus } from '../events.js';
-import type Database from 'better-sqlite3';
+import { openDb } from '../store/db.js';
+import { type WsServerHandle, attachWsServer } from '../ws.js';
 
 /**
  * A minimal "main server" boot: HTTP server + WS upgrade arm + connected
@@ -54,6 +54,7 @@ async function spawnMain(opts: {
     http,
     db: opts.db,
     ptyd: ptydClient,
+    cache,
     events: new EventBus(),
   });
   await new Promise<void>((r) => http.listen(0, r));
