@@ -32,16 +32,27 @@ export async function refreshTabs(workspaceId: string): Promise<void> {
 
 // ── Live decoration refresh ──────────────────────────────────────────────
 // The 5s poll surfaces attention/busy on tabs you're not looking at, but a
-// busy spinner that lags 5s reads as broken. `pane.updated` fires (debounced
-// at the source) on every title/fg/attention/busy transition, so we use it to
-// refresh promptly: the owning workspace's tab list (so its rows update) plus
-// the workspace rollup (so a collapsed workspace's spinner stays honest). We
-// only refetch a workspace whose cached tab list actually contains the changed
-// tab, so unrelated expanded workspaces don't refetch on every pane blip.
+// busy spinner that lags 5s reads as broken. `pane.updated` lets us refresh
+// promptly. BUT pane.updated also fires on title/fg/cwd churn — only `busy` and
+// `attention` actually affect the tab/workspace lists, so we gate on those: a
+// per-pane (busy,attention) signature, and we ignore events that don't change
+// it. Without this gate a title-churning pane (vim, a clock, a streaming
+// session) would drive /tabs + /workspaces refetches at the debounce rate for
+// its whole lifetime. We also only refetch a workspace whose cached tab list
+// contains the changed tab.
 let liveRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 const pendingWorkspaceRefresh = new Set<string>();
-subscribe((e) => {
+const lastPaneStatus = new Map<string, string>();
+const unsubLiveRefresh = subscribe((e) => {
+  // Forget a removed pane's signature so a recreated id starts clean.
+  if (e.type === 'pane.removed') {
+    lastPaneStatus.delete(e.pane_id);
+    return;
+  }
   if (e.type !== 'pane.updated') return;
+  const status = `${e.pane.busy ?? false}|${e.pane.attention ?? false}`;
+  if (lastPaneStatus.get(e.pane.id) === status) return; // title/fg-only → no list change
+  lastPaneStatus.set(e.pane.id, status);
   for (const [wsId, list] of caches) {
     if (list.some((t) => t.id === e.tab_id)) pendingWorkspaceRefresh.add(wsId);
   }
@@ -51,10 +62,13 @@ subscribe((e) => {
     const wss = [...pendingWorkspaceRefresh];
     pendingWorkspaceRefresh.clear();
     for (const wsId of wss) void refreshTabs(wsId);
-    // Keep collapsed-workspace busy/attention rollups live too.
+    // Keep the collapsed-workspace attention rollup live too.
     void refreshWorkspaces();
   }, 250);
 });
+// Vite HMR: dispose the subscription so editing this module in dev doesn't
+// stack duplicate handlers on the events singleton. No-op in production.
+if (import.meta.hot) import.meta.hot.dispose(() => unsubLiveRefresh());
 
 /**
  * Optimistically reorder a workspace's cached tabs so the sidebar moves the

@@ -13,6 +13,14 @@ export function quickSwitchIndex(digit: number, tabCount: number): number | null
   return idx >= 0 && idx < tabCount && idx < MAX_QUICK_SWITCH_TABS ? idx : null;
 }
 
+/** True when the event target is a text field, so Ctrl+digit should pass
+ *  through to it rather than triggering quick-switch. */
+function isEditableTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || typeof el.tagName !== 'string') return false;
+  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable === true;
+}
+
 /**
  * Tab quick-switch: hold Ctrl to reveal "1…9" badges on the tabs, then
  * Ctrl+<n> to jump to that tab. Returns whether the badges should be shown.
@@ -49,10 +57,17 @@ export function useTabQuickSwitch(opts: {
       // Ctrl stays held; they only disappear on Ctrl-up. Require the BARE chord
       // (no Shift/Cmd/Alt) so other chorded bindings stay available.
       if (!e.metaKey && !e.altKey && !e.shiftKey && /^Digit[1-9]$/.test(e.code)) {
+        // Don't hijack Ctrl+<n> while the user is typing in a field (rename
+        // input, mobile composer) — let it reach the focused control.
+        if (isEditableTarget(e.target)) return;
+        const idx = quickSwitchIndex(Number(e.code.slice(5)), tabCountRef.current);
+        // No matching tab → don't swallow it. Ctrl+digit has TTY meaning, so we
+        // only intercept when we actually switch (a no-op swallow would eat,
+        // e.g., Ctrl+5 from the terminal for nothing).
+        if (idx === null) return;
         e.preventDefault();
         e.stopPropagation();
-        const idx = quickSwitchIndex(Number(e.code.slice(5)), tabCountRef.current);
-        if (idx !== null) onSwitchRef.current(idx);
+        onSwitchRef.current(idx);
         return;
       }
       // Ctrl + some other key — not a quick-switch; drop the overlay and let
