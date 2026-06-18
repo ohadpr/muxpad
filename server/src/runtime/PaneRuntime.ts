@@ -15,19 +15,18 @@ const execFileAsync = promisify(execFile);
 const RING_CAPACITY = 2 * 1024 * 1024; // 2MB
 
 /**
- * How long a pane must go without emitting any output before we consider it
- * idle ("done / waiting"). Output activity is the only transparent signal that
- * distinguishes an interactive app *working* from one *waiting for input* —
- * the foreground process is the same in both cases (e.g. `claude` is always
- * the foreground process whether it's thinking or sitting at its prompt), so
- * tcgetpgrp/`ps` can't tell them apart. A working app streams bytes (Claude's
- * spinner redraws ~10×/s and its elapsed-time counter ticks every second); a
- * waiting one falls silent (the blinking cursor is drawn client-side and emits
- * nothing). The window must exceed the slowest steady heartbeat — Claude's 1s
- * timer tick — so we don't flicker to idle between ticks. 1.5s clears that with
- * margin; the cost is only a ~1.5s lag before "done" shows after real work ends.
+ * Minimum gap between `activity` ticks forwarded for a pane. ptyd's job here is
+ * only to surface the RAW "this pane produced output" signal — the busy/idle
+ * *policy* (how long quiet means done, what counts) lives on the main server,
+ * so it can change with a server-only restart instead of a ptyd bounce that
+ * kills every terminal (same split as app-url detection). A heavy stream (e.g.
+ * Claude's spinner redrawing ~10×/s) would otherwise fan a control event per
+ * chunk; throttling to one tick per this interval bounds that to ≤4/s/pane
+ * while still giving the server far finer resolution than its decay window
+ * needs. Mechanism, not policy — kept here precisely because it never needs to
+ * be tuned for behavior.
  */
-const BUSY_QUIET_MS = 1500;
+const ACTIVITY_THROTTLE_MS = 250;
 
 /**
  * Absolute path to the repo's `scripts/` directory. Resolved relative to
@@ -147,17 +146,10 @@ export class PaneRuntime extends EventEmitter {
   // workspace tab). The workspace list endpoint folds these into a
   // per-workspace attention flag so the tab bar can render a dot.
   private needsAttention = false;
-  // True iff this pane has emitted output within the last BUSY_QUIET_MS —
-  // i.e. the foreground app is actively doing work, not idling at a prompt.
-  // Flipped true on the first output byte after a quiet spell and back to
-  // false by busyTimer when the stream goes quiet. See markBusy() and the
-  // BUSY_QUIET_MS comment for why output-activity (not the foreground pgid)
-  // is the signal here.
-  private busy = false;
-  // Decay timer that flips `busy` back to false after a quiet window. Reset
-  // (debounced) on every output chunk; unref'd so it never holds the daemon
-  // alive on its own.
-  private busyTimer: NodeJS.Timeout | null = null;
+  // Timestamp (ms) of the last `activity` tick we emitted for this pane.
+  // Throttles the raw output-activity signal to one per ACTIVITY_THROTTLE_MS;
+  // the busy/idle decay it feeds is computed on the main server.
+  private lastActivityEmit = 0;
   // Latest terminal title set by an OSC 0/1/2 sequence in PTY output.
   // Updated in real-time by the scanner; exposed via getCurrentTitle().
   private currentTitle: string | null = null;
@@ -231,23 +223,20 @@ export class PaneRuntime extends EventEmitter {
       if (ev.urls !== undefined || ev.markers !== undefined) {
         this.emit('urls-seen', ev.urls ?? [], ev.markers ?? []);
       }
-      // Any output chunk is activity → the pane is busy. markBusy() handles
-      // the false→true transition (eager emit) and (re)arms the decay timer.
-      // Done AFTER the scanner/BEL/title work so, on the very first output
-      // chunk, attention/title/fg surface with their real first-sample values
-      // rather than the all-null/false snapshot a busy-triggered emit would
-      // otherwise capture first.
-      this.markBusy();
+      // Forward a throttled raw "output happened" tick. The main server folds
+      // these into a busy/idle state (with its own decay window) — see
+      // PtydCache. We only signal that output occurred; the policy lives there.
+      const now = Date.now();
+      if (now - this.lastActivityEmit >= ACTIVITY_THROTTLE_MS) {
+        this.lastActivityEmit = now;
+        this.emit('activity');
+      }
       this.buffer.push(data);
       this.emit('output', data);
     });
     this.process.onExit(({ exitCode }) => {
       this.exited = true;
       this.exitCode = exitCode;
-      // A dead pane isn't busy. Cancel the decay timer and clear the flag
-      // (emitting the transition) so a tab whose pane just exited mid-run
-      // doesn't keep a stale spinner until the timer would have fired.
-      this.clearBusy();
       this.emit('exit', exitCode);
     });
     if (this.spec.startup_cmd) {
@@ -284,49 +273,6 @@ export class PaneRuntime extends EventEmitter {
   /** True iff this pane has rung BEL since the user last interacted with it. */
   getNeedsAttention(): boolean {
     return this.needsAttention;
-  }
-
-  /**
-   * True iff the pane has produced output within the last BUSY_QUIET_MS —
-   * the foreground app is actively working rather than idling at a prompt.
-   */
-  getBusy(): boolean {
-    return this.busy;
-  }
-
-  /**
-   * Note output activity: flip to busy (emitting the false→true transition
-   * so the manager can fan it out eagerly, without waiting for the next poll
-   * tick) and (re)arm the decay timer that returns the pane to idle after a
-   * quiet window. Called once per output chunk.
-   */
-  private markBusy(): void {
-    if (!this.busy) {
-      this.busy = true;
-      this.emit('busy-changed', true);
-    }
-    if (this.busyTimer) clearTimeout(this.busyTimer);
-    this.busyTimer = setTimeout(() => {
-      this.busyTimer = null;
-      if (this.busy) {
-        this.busy = false;
-        this.emit('busy-changed', false);
-      }
-    }, BUSY_QUIET_MS);
-    // Don't let the decay timer keep the daemon's event loop alive.
-    this.busyTimer.unref?.();
-  }
-
-  /** Cancel the decay timer and clear busy (emitting the transition if set). */
-  private clearBusy(): void {
-    if (this.busyTimer) {
-      clearTimeout(this.busyTimer);
-      this.busyTimer = null;
-    }
-    if (this.busy) {
-      this.busy = false;
-      this.emit('busy-changed', false);
-    }
   }
 
   /** Clear the attention flag without writing input (e.g. user opened the tab). */
@@ -446,9 +392,6 @@ export class PaneRuntime extends EventEmitter {
       clearTimeout(this.startupTimer);
       this.startupTimer = null;
     }
-    // Stop the busy decay timer up front; onExit also calls clearBusy(), but
-    // a SIGKILL fallback path may not deliver onExit promptly.
-    this.clearBusy();
     if (!this.process || this.exited) return;
     try {
       this.process.kill(signal);
@@ -500,7 +443,7 @@ export class PaneRuntime extends EventEmitter {
   override on(event: 'output', listener: Listener<[string]>): this;
   override on(event: 'exit', listener: Listener<[number]>): this;
   override on(event: 'attention-changed', listener: Listener<[boolean]>): this;
-  override on(event: 'busy-changed', listener: Listener<[boolean]>): this;
+  override on(event: 'activity', listener: Listener<[]>): this;
   override on(event: 'urls-seen', listener: Listener<[string[], AppUrlMarker[]]>): this;
   override on(event: string, listener: (...args: any[]) => void): this {
     return super.on(event, listener);
@@ -509,7 +452,7 @@ export class PaneRuntime extends EventEmitter {
   override off(event: 'output', listener: Listener<[string]>): this;
   override off(event: 'exit', listener: Listener<[number]>): this;
   override off(event: 'attention-changed', listener: Listener<[boolean]>): this;
-  override off(event: 'busy-changed', listener: Listener<[boolean]>): this;
+  override off(event: 'activity', listener: Listener<[]>): this;
   override off(event: 'urls-seen', listener: Listener<[string[], AppUrlMarker[]]>): this;
   override off(event: string, listener: (...args: any[]) => void): this {
     return super.off(event, listener);

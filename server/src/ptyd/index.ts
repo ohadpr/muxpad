@@ -127,12 +127,11 @@ export async function startPtyd(opts: PtydOptions): Promise<PtydHandle> {
         broadcastEvent({ event: 'paneTitle', id, title: change.title });
       } else if (change.kind === 'fg') {
         broadcastEvent({ event: 'paneFg', id, cmd: change.cmd });
-      } else if (change.kind === 'busy') {
-        broadcastEvent({ event: 'paneBusy', id, busy: change.busy });
       } else {
         broadcastEvent({ event: 'paneAttention', id, attention: change.attention });
       }
     },
+    onPaneActivity: (id) => broadcastEvent({ event: 'paneActivity', id }),
     onUrlsSeen: (id, urls, markers) => broadcastEvent({ event: 'paneUrlsSeen', id, urls, markers }),
     onPaneExit: (id, code, cause) => broadcastEvent({ event: 'paneExit', id, code, cause }),
   });
