@@ -379,13 +379,6 @@ function WorkspaceNode({
             }}
           >
             <span className="navtree-name-text">{workspace.name}</span>
-            {/* Same busy spinner as tab rows — surfaces a working tab even when
-                the workspace is collapsed and its tabs aren't rendered. */}
-            {workspace.busy && (
-              <span className="navtree-busy" role="img" aria-label="busy" title="Working…">
-                <SvgSpinner />
-              </span>
-            )}
             {workspace.attention && (
               <span className="badge-dot -inline" aria-label="needs attention" />
             )}
