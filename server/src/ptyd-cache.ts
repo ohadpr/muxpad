@@ -36,8 +36,10 @@ export interface PaneState {
   title?: string | null;
   attention?: boolean;
   // True while the pane is actively producing output (foreground app
-  // working). Sourced from ptyd's `paneBusy` events; read synchronously by
-  // the tab/workspace list handlers to roll a "busy" flag up to each tab.
+  // working). Computed HERE from ptyd's raw `paneActivity` ticks + a decay
+  // timer (see markBusy / busyQuietMs) — ptyd ships only the raw ticks so this
+  // policy is a server-only restart away. Read synchronously by the
+  // tab/workspace list handlers to roll a "busy" flag up to each tab.
   busy?: boolean;
   appUrls?: AppUrl[];
 }
@@ -73,6 +75,25 @@ export class PtydCache extends EventEmitter {
   private readonly detector = new AppUrlDetector((paneId, urls) => {
     this.update(paneId, { appUrls: urls });
   });
+  // Per-pane decay timers for busy state. Armed/reset on each `paneActivity`
+  // tick; on fire the pane goes idle. Cleared on pane removal so a pending
+  // timer can't resurrect a deleted entry via update({busy:false}).
+  private readonly busyTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly busyQuietMs: number;
+
+  /**
+   * @param opts.busyQuietMs How long a pane may go without an activity tick
+   *   before it's marked idle ("done / waiting"). This is the busy POLICY, and
+   *   it lives here (not in ptyd) precisely so it can be tuned with a
+   *   server-only restart. Must exceed ptyd's activity throttle AND the slowest
+   *   steady output heartbeat we still want to read as busy — e.g. Claude's 1s
+   *   elapsed-timer tick — so it doesn't flicker to idle mid-work. Default
+   *   1500ms: clears the 1s tick with margin, ~1.5s lag before "done" shows.
+   */
+  constructor(opts: { busyQuietMs?: number } = {}) {
+    super();
+    this.busyQuietMs = opts.busyQuietMs ?? 1500;
+  }
 
   attach(client: PtydClient): void {
     client.on('paneCwd', (e: { id: string; cwd: string }) => {
@@ -88,8 +109,8 @@ export class PtydCache extends EventEmitter {
     client.on('paneAttention', (e: { id: string; attention: boolean }) => {
       this.update(e.id, { attention: e.attention });
     });
-    client.on('paneBusy', (e: { id: string; busy: boolean }) => {
-      this.update(e.id, { busy: e.busy });
+    client.on('paneActivity', (e: { id: string }) => {
+      this.markBusy(e.id);
     });
     client.on('paneUrlsSeen', (e: { id: string; urls: string[]; markers: AppUrlMarker[] }) => {
       // Raw sightings from ptyd's scanner. Hand them to the detector, which
@@ -102,6 +123,7 @@ export class PtydCache extends EventEmitter {
       // clean slate. If the row still exists (delete is a separate
       // operation) the next ensurePane will surface fresh events to
       // repopulate the cache.
+      this.clearBusyTimer(e.id);
       this.detector.forget(e.id);
       if (this.state.delete(e.id)) {
         this.emit('paneRemoved', e.id);
@@ -138,6 +160,34 @@ export class PtydCache extends EventEmitter {
         if (this.cwdEventRacers === racers) this.cwdEventRacers = null;
       }
     });
+  }
+
+  /**
+   * Fold a raw activity tick into busy state: flip the pane busy (the
+   * update() only emits paneChange on the false→true edge, so sustained
+   * output doesn't spam) and (re)arm the decay timer that returns it to idle
+   * after busyQuietMs of silence. This is the server-side busy policy.
+   */
+  private markBusy(id: string): void {
+    this.update(id, { busy: true });
+    const existing = this.busyTimers.get(id);
+    if (existing) clearTimeout(existing);
+    const t = setTimeout(() => {
+      this.busyTimers.delete(id);
+      this.update(id, { busy: false });
+    }, this.busyQuietMs);
+    // Don't let a pending decay timer keep the process alive.
+    t.unref?.();
+    this.busyTimers.set(id, t);
+  }
+
+  /** Cancel a pane's decay timer (on removal) so it can't fire post-delete. */
+  private clearBusyTimer(id: string): void {
+    const t = this.busyTimers.get(id);
+    if (t) {
+      clearTimeout(t);
+      this.busyTimers.delete(id);
+    }
   }
 
   private update(id: string, patch: PaneState): void {
@@ -214,6 +264,7 @@ export class PtydCache extends EventEmitter {
 
   /** Drop the entry for `id`. Used by route handlers on DELETE /api/panes/:id. */
   forget(id: string): void {
+    this.clearBusyTimer(id);
     this.detector.forget(id);
     if (this.state.delete(id)) {
       this.emit('paneRemoved', id);

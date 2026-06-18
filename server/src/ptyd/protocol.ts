@@ -10,8 +10,12 @@ import type { AppUrlMarker } from '../runtime/pty-scanner.js';
  * (app-url detection moved from ptyd to the main server). An old ptyd against
  * a new server would silently surface zero app-urls; a `restart --all`
  * (which relaunches both from the same tree) sidesteps the mismatch.
+ *
+ * v3: added the raw `paneActivity` tick (busy/idle detection moved to the main
+ * server, same split rationale as v2). An old ptyd against a new server
+ * surfaces no busy spinners until it's bounced; a `restart --all` syncs both.
  */
-export const PTYD_PROTOCOL_VERSION = 2;
+export const PTYD_PROTOCOL_VERSION = 3;
 
 export type CtrlRequest = {
   kind: 'request';
@@ -75,9 +79,10 @@ export type CtrlPushEvent =
   | { event: 'paneTitle'; id: string; title: string | null }
   | { event: 'paneFg'; id: string; cmd: string | null }
   | { event: 'paneAttention'; id: string; attention: boolean }
-  // Output-activity state: true while the pane is actively producing output
-  // (foreground app working), false after it falls quiet (idle / waiting).
-  | { event: 'paneBusy'; id: string; busy: boolean }
+  // Raw, throttled "this pane produced output" tick. ptyd does NOT compute
+  // busy/idle from it — the main server folds these into a busy state with its
+  // own decay window, so that policy is a server-only restart away.
+  | { event: 'paneActivity'; id: string }
   // Raw URL/marker sightings the scanner extracted from this pane's output.
   // ptyd does NOT validate or probe these — the main server runs the
   // AppUrlTracker (host classification + listening probe) so detection logic
