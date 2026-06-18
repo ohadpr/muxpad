@@ -52,7 +52,10 @@ interface DragItemProps {
   onDrop: (e: React.DragEvent) => void;
   onDragEnd: () => void;
   'data-dragging'?: 'true';
-  'data-dragover'?: 'true';
+  /** Which edge of this row the drop line renders on — where the dragged row
+   *  will land (top = before this row, bottom = after). Absent when not a
+   *  current drop target. */
+  'data-drop-edge'?: 'top' | 'bottom';
 }
 
 /**
@@ -68,48 +71,59 @@ function useListReorder(
 ): (id: string) => DragItemProps {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
-  return (id: string) => ({
-    draggable: true,
-    onDragStart: (e: React.DragEvent) => {
-      setDragId(id);
-      e.dataTransfer.effectAllowed = 'move';
-      // Some browsers won't start a drag unless dataTransfer carries data.
-      try {
-        e.dataTransfer.setData('text/plain', id);
-      } catch {
-        /* noop */
-      }
-    },
-    onDragOver: (e: React.DragEvent) => {
-      if (!dragId || dragId === id) return;
-      e.preventDefault(); // allow drop
-      e.dataTransfer.dropEffect = 'move';
-      if (overId !== id) setOverId(id);
-    },
-    onDragLeave: (e: React.DragEvent) => {
-      // Clear the highlight only when leaving the row entirely (not when the
-      // pointer crosses into a child element), so dragging off the list onto
-      // empty space / the +button doesn't leave a stuck accent.
-      if (overId === id && !e.currentTarget.contains(e.relatedTarget as Node | null)) {
+  return (id: string) => {
+    // Direction-aware drop edge: dragging downward lands AFTER the target
+    // (line on its bottom), upward lands BEFORE it (top) — matches
+    // reorderByDrop so the line shows exactly where the row will go.
+    const dropEdge: 'top' | 'bottom' | null =
+      overId === id && dragId !== null && dragId !== id
+        ? orderedIds.indexOf(dragId) < orderedIds.indexOf(id)
+          ? 'bottom'
+          : 'top'
+        : null;
+    return {
+      draggable: true,
+      onDragStart: (e: React.DragEvent) => {
+        setDragId(id);
+        e.dataTransfer.effectAllowed = 'move';
+        // Some browsers won't start a drag unless dataTransfer carries data.
+        try {
+          e.dataTransfer.setData('text/plain', id);
+        } catch {
+          /* noop */
+        }
+      },
+      onDragOver: (e: React.DragEvent) => {
+        if (!dragId || dragId === id) return;
+        e.preventDefault(); // allow drop
+        e.dataTransfer.dropEffect = 'move';
+        if (overId !== id) setOverId(id);
+      },
+      onDragLeave: (e: React.DragEvent) => {
+        // Clear the highlight only when leaving the row entirely (not when the
+        // pointer crosses into a child element), so dragging off the list onto
+        // empty space / the +button doesn't leave a stuck accent.
+        if (overId === id && !e.currentTarget.contains(e.relatedTarget as Node | null)) {
+          setOverId(null);
+        }
+      },
+      onDrop: (e: React.DragEvent) => {
+        e.preventDefault();
+        const from = dragId;
+        setDragId(null);
         setOverId(null);
-      }
-    },
-    onDrop: (e: React.DragEvent) => {
-      e.preventDefault();
-      const from = dragId;
-      setDragId(null);
-      setOverId(null);
-      if (!from || from === id) return;
-      const next = reorderByDrop(orderedIds, from, id);
-      if (next !== orderedIds) persist(next);
-    },
-    onDragEnd: () => {
-      setDragId(null);
-      setOverId(null);
-    },
-    ...(dragId === id ? { 'data-dragging': 'true' as const } : {}),
-    ...(overId === id ? { 'data-dragover': 'true' as const } : {}),
-  });
+        if (!from || from === id) return;
+        const next = reorderByDrop(orderedIds, from, id);
+        if (next !== orderedIds) persist(next);
+      },
+      onDragEnd: () => {
+        setDragId(null);
+        setOverId(null);
+      },
+      ...(dragId === id ? { 'data-dragging': 'true' as const } : {}),
+      ...(dropEdge ? { 'data-drop-edge': dropEdge } : {}),
+    };
+  };
 }
 
 interface NavTreeProps {
@@ -127,7 +141,7 @@ interface NavTreeProps {
  *     Navigation → Sidebar). Replaces the WorkspaceSwitcher + TabBar top
  *     chrome entirely: dense file-navigator rows, hover-revealed close
  *     buttons, double-click inline rename on the active workspace/tab,
- *     Alt+1…9 quick-switch kept.
+ *     Ctrl+1…9 quick-switch kept.
  *   variant="sheet" — content of the mobile drop-down panel. Same tree,
  *     thumb-height rows, close buttons always faintly present (touch has
  *     no hover).
@@ -452,7 +466,7 @@ function TabList({
     },
   );
 
-  // Alt+1…9 quick-switch parity with the top-nav TabBar. Only the
+  // Ctrl+1…9 quick-switch parity with the top-nav TabBar. Only the
   // sidebar wires it (the sheet is touch; TabBar owns it in top mode).
   // tabCount 0 disables the inactive instances without breaking the
   // rules of hooks.
@@ -564,7 +578,7 @@ interface TabRowProps {
   tab: Tab;
   workspace: Workspace;
   isActiveTab: boolean;
-  /** 1–9 chip shown while Alt is held (sidebar quick-switch); else undefined. */
+  /** 1–9 chip shown while Ctrl is held (sidebar quick-switch); else undefined. */
   quickNumber: number | undefined;
   variant: NavTreeVariant;
   isEditing: boolean;
