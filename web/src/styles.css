@@ -442,6 +442,16 @@ select:focus {
   background: transparent;
 }
 
+/* Wordmark treatment. Deliberately set apart from the workspace headers below
+   it (bold sans, near-black): the brand is a quiet mono LOGOTYPE — lighter
+   weight, tracked out, dimmed — so it reads as persistent app chrome, not as
+   another bold section header competing for the same rung of the hierarchy. */
+.brand-text {
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--fg-dim);
+}
+
 /* Mark-only mode (icon, no wordmark): used inside a workspace where the
    workspace switcher takes the wordmark's slot. Tighter horizontal
    padding so the mark visually anchors the left edge of the board. */
