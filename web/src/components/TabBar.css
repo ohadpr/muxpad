@@ -283,7 +283,7 @@
   gap: 8px;
   height: 100%;
   padding: 0 14px;
-  /* Clip so the label, when it slides right under Alt, truncates at the
+  /* Clip so the label, when it slides right under Ctrl, truncates at the
      tab's own edge instead of spilling into the neighbour. */
   overflow: hidden;
   border: none;
@@ -333,8 +333,8 @@
   background: color-mix(in srgb, var(--accent) 18%, var(--bg));
 }
 
-/* Quick-switch number: shown on each tab while Option/Alt is held so the user
-   can see the Alt+<n> mapping. It sits in the tab's existing left padding and
+/* Quick-switch number: shown on each tab while Ctrl is held so the user
+   can see the Ctrl+<n> mapping. It sits in the tab's existing left padding and
    is absolutely positioned, so it adds NO layout — the title never moves and
    the tab never changes width when the numbers appear/disappear. Accent +
    bold so it reads as a distinct affordance (not a chip / not an overlay over
@@ -367,11 +367,11 @@
   height: 16px;
   padding: 0 3px;
   border-radius: 4px;
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--accent);
   font-family: var(--chrome-font);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
@@ -402,7 +402,7 @@
   white-space: nowrap;
   transition: transform 90ms ease;
 }
-/* While Alt is held, slide the label right just enough to clear the number.
+/* While Ctrl is held, slide the label right just enough to clear the number.
    transform = visual only, so the tab never changes width; the tab's
    overflow:hidden keeps the slid label from spilling into the next tab. */
 .ws-tab[data-quicknum="true"] .ws-tab-label {

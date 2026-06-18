@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
-/** Badges/shortcuts cover only the first N tabs (Alt+1…9); beyond that, use
+/** Badges/shortcuts cover only the first N tabs (Ctrl+1…9); beyond that, use
  *  the tab bar / dropdown. Single source of truth shared with TabBar. */
 export const MAX_QUICK_SWITCH_TABS = 9;
 
@@ -14,16 +14,16 @@ export function quickSwitchIndex(digit: number, tabCount: number): number | null
 }
 
 /**
- * Tab quick-switch: hold Option/Alt to reveal "1…9" badges on the tabs, then
- * Alt+<n> to jump to that tab. Returns whether the badges should be shown.
- * Badges appear the instant Alt goes down and stay up — through repeated
- * Alt+<n> switches — until Alt is released (or the window blurs).
+ * Tab quick-switch: hold Ctrl to reveal "1…9" badges on the tabs, then
+ * Ctrl+<n> to jump to that tab. Returns whether the badges should be shown.
+ * Badges appear the instant Ctrl goes down and stay up — through repeated
+ * Ctrl+<n> switches — until Ctrl is released (or the window blurs).
  *
- * Why Alt (not Cmd or Ctrl): in a browser tab Cmd+number is owned by the
- * browser (switches browser tabs), and Ctrl+number has real terminal meaning
- * (Ctrl+3 = ESC, …). Alt/Meta+digit is free in the browser and effectively
- * unused by TUIs. The handler runs in the **capture phase** so Alt+digit is
- * intercepted before the focused xterm forwards it to the PTY.
+ * The handler runs in the **capture phase** so Ctrl+digit is intercepted
+ * before the focused xterm forwards it to the PTY. Note: this claims Ctrl+1…9
+ * from terminal apps (Ctrl+digit has C0 meaning in a TTY); that's the
+ * deliberate trade for putting quick-switch on Ctrl. Cmd+number stays with the
+ * browser (switches browser tabs), so it's left alone.
  */
 export function useTabQuickSwitch(opts: {
   tabCount: number;
@@ -37,34 +37,33 @@ export function useTabQuickSwitch(opts: {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Alt') {
-        // Show instantly on Alt-down (Alt is free of browser/terminal meaning
-        // here, so no hold delay). Ignore when chorded with Cmd/Ctrl.
-        if (!e.repeat && !e.metaKey && !e.ctrlKey) setShowNumbers(true);
+      if (e.key === 'Control') {
+        // Show instantly on Ctrl-down. Ignore when chorded with Cmd/Alt.
+        if (!e.repeat && !e.metaKey && !e.altKey) setShowNumbers(true);
         return;
       }
-      // Not our chord unless Alt is currently held.
-      if (!e.altKey) return;
-      // Alt + digit: swallow before the focused terminal sees it, then switch.
-      // Keep the badges up — the user may fire several Alt+<n> in a row while
-      // Alt stays held; they only disappear on Alt-up. Require the BARE chord
-      // (no Shift) so Alt+Shift+<n> stays available to a TUI's Meta bindings.
-      if (!e.metaKey && !e.ctrlKey && !e.shiftKey && /^Digit[1-9]$/.test(e.code)) {
+      // Not our chord unless Ctrl is currently held.
+      if (!e.ctrlKey) return;
+      // Ctrl + digit: swallow before the focused terminal sees it, then switch.
+      // Keep the badges up — the user may fire several Ctrl+<n> in a row while
+      // Ctrl stays held; they only disappear on Ctrl-up. Require the BARE chord
+      // (no Shift/Cmd/Alt) so other chorded bindings stay available.
+      if (!e.metaKey && !e.altKey && !e.shiftKey && /^Digit[1-9]$/.test(e.code)) {
         e.preventDefault();
         e.stopPropagation();
         const idx = quickSwitchIndex(Number(e.code.slice(5)), tabCountRef.current);
         if (idx !== null) onSwitchRef.current(idx);
         return;
       }
-      // Alt + some other key (e.g. a TUI Meta binding) — not a quick-switch;
-      // drop the overlay and let the key through untouched.
+      // Ctrl + some other key — not a quick-switch; drop the overlay and let
+      // the key through untouched.
       setShowNumbers(false);
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'Alt') setShowNumbers(false);
+      if (e.key === 'Control') setShowNumbers(false);
     };
-    // Hide on anything that can swallow the Alt keyup (window blur, app/tab
+    // Hide on anything that can swallow the Ctrl keyup (window blur, app/tab
     // switch via Cmd-Tab / Mission Control) so the badges can't get stuck on.
     const hide = () => setShowNumbers(false);
     const onVisibility = () => {
