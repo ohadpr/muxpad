@@ -39,32 +39,52 @@ describe('PtydCache', () => {
     expect(cache.getAttention('p1')).toBe(true);
   });
 
-  it('marks busy on paneActivity and decays to idle after busyQuietMs', async () => {
-    // Busy policy lives here, not in ptyd: a raw activity tick → busy, and the
-    // pane decays to idle busyQuietMs after the last tick. Short window so the
-    // test is fast.
-    const cache = new PtydCache({ busyQuietMs: 80 });
+  it('marks busy once output is sustained past warmup, then decays to idle', async () => {
+    // Busy policy lives here, not in ptyd. Warmup: the first tick only starts
+    // warming up; busy flips true once activity persists past busyWarmupMs.
+    // Then it decays to idle busyQuietMs after the last tick. Short windows so
+    // the test is fast.
+    const cache = new PtydCache({ busyQuietMs: 120, busyWarmupMs: 40 });
     const c = fakeClient();
     cache.attach(c);
     const changes: string[] = [];
     cache.on('paneChange', (id) => changes.push(id));
 
+    // First tick: warming up, not busy yet.
     (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
-    expect(cache.getBusy('p1')).toBe(true);
-    // A second tick within the window keeps it busy and emits no extra change.
+    expect(cache.getBusy('p1')).toBe(false);
+
+    // A later tick, past the warmup window → real work → busy.
+    await new Promise((r) => setTimeout(r, 55));
     (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
     expect(cache.getBusy('p1')).toBe(true);
 
-    await new Promise((r) => setTimeout(r, 140));
+    await new Promise((r) => setTimeout(r, 200));
     expect(cache.getBusy('p1')).toBe(false);
     // Exactly two transitions reached consumers: busy:true then busy:false.
     expect(changes.filter((id) => id === 'p1')).toEqual(['p1', 'p1']);
   });
 
-  it('clears the decay timer on paneExit so it cannot resurrect the entry', async () => {
-    const cache = new PtydCache({ busyQuietMs: 60 });
+  it('does not blip busy for a single transient burst (e.g. a tab-open redraw)', async () => {
+    const cache = new PtydCache({ busyQuietMs: 60, busyWarmupMs: 40 });
     const c = fakeClient();
     cache.attach(c);
+    const changes: string[] = [];
+    cache.on('paneChange', (id) => changes.push(id));
+    // One lone tick, then silence — never qualifies as busy.
+    (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
+    expect(cache.getBusy('p1')).toBe(false);
+    await new Promise((r) => setTimeout(r, 90));
+    expect(cache.getBusy('p1')).toBe(false);
+    expect(changes.filter((id) => id === 'p1')).toEqual([]); // no transitions emitted
+  });
+
+  it('clears decay/warmup state on paneExit so it cannot resurrect the entry', async () => {
+    const cache = new PtydCache({ busyQuietMs: 60, busyWarmupMs: 20 });
+    const c = fakeClient();
+    cache.attach(c);
+    (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
+    await new Promise((r) => setTimeout(r, 30));
     (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
     expect(cache.getBusy('p1')).toBe(true);
     (c as unknown as EventEmitter).emit('paneExit', { id: 'p1', code: 0, cause: 'natural' });

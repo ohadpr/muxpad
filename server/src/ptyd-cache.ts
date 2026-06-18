@@ -79,7 +79,12 @@ export class PtydCache extends EventEmitter {
   // tick; on fire the pane goes idle. Cleared on pane removal so a pending
   // timer can't resurrect a deleted entry via update({busy:false}).
   private readonly busyTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // First activity tick of the current spell, per pane, while still "warming
+  // up" (not yet declared busy). Cleared once busy flips true, or when the
+  // decay timer fires. See markBusy / busyWarmupMs.
+  private readonly busyPending = new Map<string, number>();
   private readonly busyQuietMs: number;
+  private readonly busyWarmupMs: number;
 
   /**
    * @param opts.busyQuietMs How long a pane may go without an activity tick
@@ -89,10 +94,17 @@ export class PtydCache extends EventEmitter {
    *   steady output heartbeat we still want to read as busy — e.g. Claude's 1s
    *   elapsed-timer tick — so it doesn't flicker to idle mid-work. Default
    *   1500ms: clears the 1s tick with margin, ~1.5s lag before "done" shows.
+   * @param opts.busyWarmupMs How long output must be SUSTAINED before a pane is
+   *   declared busy. Filters one-off bursts that aren't real work — chiefly the
+   *   single redraw a foreground app emits when a tab is opened (the attach
+   *   resizes the PTY → SIGWINCH → one repaint), but also quick commands that
+   *   finish instantly. Genuine work (Claude thinking, a running build) streams
+   *   well past this. Default 600ms.
    */
-  constructor(opts: { busyQuietMs?: number } = {}) {
+  constructor(opts: { busyQuietMs?: number; busyWarmupMs?: number } = {}) {
     super();
     this.busyQuietMs = opts.busyQuietMs ?? 1500;
+    this.busyWarmupMs = opts.busyWarmupMs ?? 600;
   }
 
   attach(client: PtydClient): void {
@@ -163,31 +175,55 @@ export class PtydCache extends EventEmitter {
   }
 
   /**
-   * Fold a raw activity tick into busy state: flip the pane busy (the
-   * update() only emits paneChange on the false→true edge, so sustained
-   * output doesn't spam) and (re)arm the decay timer that returns it to idle
-   * after busyQuietMs of silence. This is the server-side busy policy.
+   * Fold a raw activity tick into busy state. Two gates:
+   *  - WARMUP: don't declare busy on the first tick — wait until output has
+   *    been sustained for busyWarmupMs. A one-off burst (the redraw a tab emits
+   *    when opened, a quick command) never crosses it, so it doesn't blip the
+   *    spinner; real work streams well past it.
+   *  - DECAY: once busy, stay busy until busyQuietMs of silence.
+   * update() only emits paneChange on the actual false→true / true→false edge,
+   * so sustained output doesn't spam consumers.
    */
   private markBusy(id: string): void {
-    this.update(id, { busy: true });
+    const now = Date.now();
+    const alreadyBusy = this.state.get(id)?.busy === true;
+    if (!alreadyBusy) {
+      const firstAt = this.busyPending.get(id);
+      if (firstAt === undefined) {
+        // First tick of a new spell — start warming up, don't show busy yet.
+        this.busyPending.set(id, now);
+      } else if (now - firstAt >= this.busyWarmupMs) {
+        // Output has persisted past the warmup window → it's real work.
+        this.busyPending.delete(id);
+        this.update(id, { busy: true });
+      }
+      // else: still within the warmup window — keep waiting for more ticks.
+    }
+    // (re)arm the decay timer: on fire, drop busy AND abandon any warmup in
+    // progress (the spell ended before it qualified).
     const existing = this.busyTimers.get(id);
     if (existing) clearTimeout(existing);
     const t = setTimeout(() => {
       this.busyTimers.delete(id);
-      this.update(id, { busy: false });
+      this.busyPending.delete(id);
+      // Only emit the idle transition if we actually went busy — a warmup that
+      // never qualified (a transient burst) must leave no trace, not flip an
+      // undefined busy to false (which would fan a needless pane.updated).
+      if (this.state.get(id)?.busy === true) this.update(id, { busy: false });
     }, this.busyQuietMs);
     // Don't let a pending decay timer keep the process alive.
     t.unref?.();
     this.busyTimers.set(id, t);
   }
 
-  /** Cancel a pane's decay timer (on removal) so it can't fire post-delete. */
+  /** Cancel a pane's decay/warmup state (on removal) so nothing fires post-delete. */
   private clearBusyTimer(id: string): void {
     const t = this.busyTimers.get(id);
     if (t) {
       clearTimeout(t);
       this.busyTimers.delete(id);
     }
+    this.busyPending.delete(id);
   }
 
   private update(id: string, patch: PaneState): void {
