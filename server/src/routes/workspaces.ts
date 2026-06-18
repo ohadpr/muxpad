@@ -40,27 +40,9 @@ export function workspacesRoutes(deps: {
     return false;
   };
 
-  /**
-   * Returns true iff any pane in any tab of `workspaceId` is busy (actively
-   * producing output). Mirrors the per-tab fold in routes/tabs.ts so a
-   * collapsed workspace row can show a busy spinner without being expanded.
-   */
-  const workspaceBusy = (workspaceId: string): boolean => {
-    for (const t of tabs.listByWorkspace(workspaceId)) {
-      for (const p of panes.listByTab(t.id)) {
-        if (deps.cache.getBusy(p.id)) return true;
-      }
-    }
-    return false;
-  };
-
   app.get('/', (c) => {
     const list = workspaces.list();
-    const decorated = list.map((w) => ({
-      ...w,
-      attention: workspaceAttention(w.id),
-      busy: workspaceBusy(w.id),
-    }));
+    const decorated = list.map((w) => ({ ...w, attention: workspaceAttention(w.id) }));
     return c.json(decorated);
   });
 
@@ -77,7 +59,7 @@ export function workspacesRoutes(deps: {
   app.get('/:id', (c) => {
     const w = workspaces.getById(c.req.param('id'));
     if (!w) return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
-    return c.json({ ...w, attention: workspaceAttention(w.id), busy: workspaceBusy(w.id) });
+    return c.json({ ...w, attention: workspaceAttention(w.id) });
   });
 
   app.patch('/:id', async (c) => {
