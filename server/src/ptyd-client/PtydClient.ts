@@ -40,7 +40,7 @@ type Pending = {
  *    last WS 'error' as payload (`Error | null`) when one was observed
  *    before the close.
  *  - 'paneExit' / 'paneCwd' / 'paneTitle' / 'paneFg' / 'paneAttention' /
- *    'paneBusy' / 'paneUrlsSeen' — forwarded from ptyd's control-event frames. Payload is
+ *    'paneActivity' / 'paneUrlsSeen' — forwarded from ptyd's control-event frames. Payload is
  *    the rest of the event object minus `event` (e.g. for paneExit:
  *    `{id, code, cause}`; for paneUrlsSeen: `{id, urls, markers}`).
  */

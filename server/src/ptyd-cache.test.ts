@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { describe, expect, it } from 'vitest';
 import { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 
@@ -37,6 +37,40 @@ describe('PtydCache', () => {
     (c as unknown as EventEmitter).emit('paneAttention', { id: 'p1', attention: true });
     expect(cache.getTitle('p1')).toBe('hello');
     expect(cache.getAttention('p1')).toBe(true);
+  });
+
+  it('marks busy on paneActivity and decays to idle after busyQuietMs', async () => {
+    // Busy policy lives here, not in ptyd: a raw activity tick → busy, and the
+    // pane decays to idle busyQuietMs after the last tick. Short window so the
+    // test is fast.
+    const cache = new PtydCache({ busyQuietMs: 80 });
+    const c = fakeClient();
+    cache.attach(c);
+    const changes: string[] = [];
+    cache.on('paneChange', (id) => changes.push(id));
+
+    (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
+    expect(cache.getBusy('p1')).toBe(true);
+    // A second tick within the window keeps it busy and emits no extra change.
+    (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
+    expect(cache.getBusy('p1')).toBe(true);
+
+    await new Promise((r) => setTimeout(r, 140));
+    expect(cache.getBusy('p1')).toBe(false);
+    // Exactly two transitions reached consumers: busy:true then busy:false.
+    expect(changes.filter((id) => id === 'p1')).toEqual(['p1', 'p1']);
+  });
+
+  it('clears the decay timer on paneExit so it cannot resurrect the entry', async () => {
+    const cache = new PtydCache({ busyQuietMs: 60 });
+    const c = fakeClient();
+    cache.attach(c);
+    (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
+    expect(cache.getBusy('p1')).toBe(true);
+    (c as unknown as EventEmitter).emit('paneExit', { id: 'p1', code: 0, cause: 'natural' });
+    // Past when the decay timer would have fired update({busy:false}).
+    await new Promise((r) => setTimeout(r, 100));
+    expect(cache.get('p1')).toBeUndefined();
   });
 
   it('drops entry on paneExit and emits paneRemoved', () => {

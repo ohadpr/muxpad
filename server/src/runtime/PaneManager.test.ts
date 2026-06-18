@@ -274,40 +274,24 @@ describe('PaneManager → raw change callbacks (no PaneStore)', () => {
     }
   });
 
-  it('fires busy:true on output and busy:false after the stream goes quiet', async () => {
-    // Output-activity drives the "busy" indicator: a pane is busy while it's
-    // emitting bytes and idle once it falls silent for BUSY_QUIET_MS (1.5s).
-    // This is what lets the navigator distinguish an app *working* from one
-    // *waiting at a prompt* — the foreground process is identical in both.
-    type Change = { id: string; kind: string; busy?: boolean };
-    const changes: Change[] = [];
+  it('forwards onPaneActivity (throttled) when a pane produces output', async () => {
+    // ptyd ships only the RAW activity tick; the busy/idle decay is computed
+    // on the main server (PtydCache). Here we just prove the tick fires on
+    // output. Throttled in PaneRuntime, so a burst yields ≥1 (not per-chunk).
+    const activity: string[] = [];
     const mgr = new PaneManager({
-      // Large poll so any busy event we see came from the eager busy-changed
-      // path, not a periodic tick (which doesn't evaluate busy at all).
       cmdPollInterval: 60_000,
-      onPaneChange: (id, change) => {
-        if (change.kind === 'busy') changes.push({ id, kind: change.kind, busy: change.busy });
-      },
+      onPaneActivity: (id) => activity.push(id),
     });
-    // Emit a burst, then sleep silently — so we cross busy:true then idle.
-    const runtime = mgr.getOrCreate({
-      id: 'busy1',
+    mgr.getOrCreate({
+      id: 'act1',
       shell: '/bin/sh',
       startup_cmd: `printf 'working'; sleep 5`,
       cwd: '/tmp',
     });
     try {
-      // Output lands within a few hundred ms → busy:true, and getBusy() agrees.
       await new Promise((r) => setTimeout(r, 400));
-      expect(runtime.getBusy()).toBe(true);
-      expect(changes.some((c) => c.id === 'busy1' && c.busy === true)).toBe(true);
-      expect(changes.some((c) => c.id === 'busy1' && c.busy === false)).toBe(false);
-
-      // After the quiet window elapses with no further output, decay to idle.
-      await new Promise((r) => setTimeout(r, 1700));
-      expect(runtime.getBusy()).toBe(false);
-      const idleEvents = changes.filter((c) => c.id === 'busy1' && c.busy === false);
-      expect(idleEvents).toHaveLength(1);
+      expect(activity.filter((id) => id === 'act1').length).toBeGreaterThan(0);
     } finally {
       await mgr.killAll();
     }
