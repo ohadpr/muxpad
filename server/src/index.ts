@@ -107,7 +107,7 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
 });
 
 const httpServer = server as unknown as Server;
-const wsServer = attachWsServer({ http: httpServer, db, ptyd, events });
+const wsServer = attachWsServer({ http: httpServer, db, ptyd, cache, events });
 
 let shuttingDown = false;
 const shutdown = async () => {

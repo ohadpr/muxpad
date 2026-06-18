@@ -79,6 +79,29 @@ describe('PtydCache', () => {
     expect(changes.filter((id) => id === 'p1')).toEqual([]); // no transitions emitted
   });
 
+  it('discounts echo: activity right after user input does not trip busy', async () => {
+    // Typing echoes back as output; that echo must not light the spinner.
+    const cache = new PtydCache({ busyQuietMs: 300, busyWarmupMs: 30, busyInputGraceMs: 80 });
+    const c = fakeClient();
+    cache.attach(c);
+    // Simulate the user typing: each keystroke notes input, then its echo
+    // arrives as an activity tick. All within the input-grace window.
+    for (let i = 0; i < 4; i++) {
+      cache.noteInput('p1');
+      (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(cache.getBusy('p1')).toBe(false);
+
+    // Now the app works on its own (no further input). Once activity sustains
+    // past the grace + warmup, it trips busy normally.
+    await new Promise((r) => setTimeout(r, 120)); // let input grace lapse
+    (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
+    await new Promise((r) => setTimeout(r, 50));
+    (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
+    expect(cache.getBusy('p1')).toBe(true);
+  });
+
   it('clears decay/warmup state on paneExit so it cannot resurrect the entry', async () => {
     const cache = new PtydCache({ busyQuietMs: 60, busyWarmupMs: 20 });
     const c = fakeClient();

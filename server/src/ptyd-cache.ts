@@ -83,8 +83,12 @@ export class PtydCache extends EventEmitter {
   // up" (not yet declared busy). Cleared once busy flips true, or when the
   // decay timer fires. See markBusy / busyWarmupMs.
   private readonly busyPending = new Map<string, number>();
+  // Timestamp of the last user keystroke per pane (from proxyAttach's onInput).
+  // Activity within busyInputGraceMs of this is treated as echo, not work.
+  private readonly lastInputAt = new Map<string, number>();
   private readonly busyQuietMs: number;
   private readonly busyWarmupMs: number;
+  private readonly busyInputGraceMs: number;
 
   /**
    * @param opts.busyQuietMs How long a pane may go without an activity tick
@@ -100,11 +104,29 @@ export class PtydCache extends EventEmitter {
    *   resizes the PTY → SIGWINCH → one repaint), but also quick commands that
    *   finish instantly. Genuine work (Claude thinking, a running build) streams
    *   well past this. Default 600ms.
+   * @param opts.busyInputGraceMs After a user keystroke (noteInput), output
+   *   within this window is treated as the echo of their typing — not the app
+   *   working — and doesn't count toward busy. So typing into a pane (incl. a
+   *   TUI that repaints its input on each key, like Claude's composer) doesn't
+   *   light the spinner. A command's own output keeps streaming past the grace
+   *   and still trips busy. Default 500ms.
    */
-  constructor(opts: { busyQuietMs?: number; busyWarmupMs?: number } = {}) {
+  constructor(
+    opts: { busyQuietMs?: number; busyWarmupMs?: number; busyInputGraceMs?: number } = {},
+  ) {
     super();
     this.busyQuietMs = opts.busyQuietMs ?? 1500;
     this.busyWarmupMs = opts.busyWarmupMs ?? 600;
+    this.busyInputGraceMs = opts.busyInputGraceMs ?? 500;
+  }
+
+  /**
+   * Record that the user just typed into a pane. Activity ticks arriving within
+   * busyInputGraceMs are then discounted as echo (see markBusy). Called by the
+   * WS proxy on each OP_INPUT frame — server-side, so no ptyd involvement.
+   */
+  noteInput(id: string): void {
+    this.lastInputAt.set(id, Date.now());
   }
 
   attach(client: PtydClient): void {
@@ -186,6 +208,11 @@ export class PtydCache extends EventEmitter {
    */
   private markBusy(id: string): void {
     const now = Date.now();
+    // Echo of the user's own typing isn't "busy work". Ignore activity that
+    // lands within busyInputGraceMs of their last keystroke — don't accumulate
+    // warmup off it, and don't extend an existing busy spell. Genuine app
+    // output keeps streaming past the grace window and trips busy normally.
+    if (now - (this.lastInputAt.get(id) ?? 0) < this.busyInputGraceMs) return;
     const alreadyBusy = this.state.get(id)?.busy === true;
     if (!alreadyBusy) {
       const firstAt = this.busyPending.get(id);
@@ -224,6 +251,7 @@ export class PtydCache extends EventEmitter {
       this.busyTimers.delete(id);
     }
     this.busyPending.delete(id);
+    this.lastInputAt.delete(id);
   }
 
   private update(id: string, patch: PaneState): void {
