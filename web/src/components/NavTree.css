@@ -255,6 +255,15 @@
   position: relative;
   top: 1px;
 }
+
+/* The inline attention dot shares the spinner's status slot and the same
+   flex-box-centering quirk — box-centered, so it reads ~1px high against the
+   text. Give it the identical optical nudge so dot and spinner sit level. */
+.navtree-tab-link .badge-dot.-inline,
+.navtree-ws-name .badge-dot.-inline {
+  position: relative;
+  top: 1px;
+}
 .navtree-busy svg {
   animation: navtree-spin 0.8s linear infinite;
   transform-origin: center;
