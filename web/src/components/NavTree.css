@@ -596,6 +596,9 @@
   flex: 1;
   height: var(--chrome-pane-h);
   border-right: none;
+  /* Center the wordmark+mark so the brand reads as a title plate, set apart
+     from the left-aligned workspace/tab rows below it. */
+  justify-content: center;
 }
 
 .sidenav-footer {
