@@ -447,7 +447,7 @@ select:focus {
    weight, tracked out, dimmed — so it reads as persistent app chrome, not as
    another bold section header competing for the same rung of the hierarchy. */
 .brand-text {
-  font-weight: 500;
+  font-weight: 400;
   letter-spacing: 0.06em;
   color: var(--fg-dim);
 }
@@ -461,6 +461,11 @@ select:focus {
 
 .brand-mark {
   flex: 0 0 auto;
+  /* Mute the mark so it doesn't compete with the colorful tab emojis below —
+     mostly desaturated + lowered opacity keeps a faint hint of the brand
+     without adding another loud color to the rail. */
+  filter: grayscale(0.7);
+  opacity: 0.6;
 }
 
 /* Quiet "muxpad <build>" wordmark pinned to the right of the chrome,
