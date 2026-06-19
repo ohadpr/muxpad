@@ -5,6 +5,7 @@ import type { EventBus } from './events.js';
 import type { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { proxyAttach } from './ptyd-client/proxyAttach.js';
+import { safeCwd } from './safe-cwd.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 
@@ -122,7 +123,7 @@ export function attachWsServer(deps: {
           id: pane.id,
           shell: pane.shell ?? process.env.SHELL ?? '/bin/zsh',
           startup_cmd: pane.startup_cmd,
-          cwd: pane.cwd ?? process.env.HOME ?? '/',
+          cwd: safeCwd(pane.cwd),
           env: pane.env,
           tab_id: pane.tab_id,
           ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
