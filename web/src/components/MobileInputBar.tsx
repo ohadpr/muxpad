@@ -264,7 +264,11 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
   const onPickFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const input = e.target;
     const items = Array.from(input.files ?? [])
-      .filter((f) => f.type.startsWith('image/'))
+      // The OS already constrained the picker to images via accept="image/*";
+      // accept empty-type too — some Android providers and HEIC captures report
+      // type "" and would otherwise be silently dropped (photo taken, nothing
+      // happens). Reject only files that explicitly declare a non-image type.
+      .filter((f) => f.type === '' || f.type.startsWith('image/'))
       .map((f) => ({ blob: f, name: f.name || `image.${f.type.split('/')[1] ?? 'png'}` }));
     // Reset first so picking the SAME file again still fires onChange.
     input.value = '';
