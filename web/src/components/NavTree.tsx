@@ -919,9 +919,8 @@ function RenameInput({
 
 /**
  * Busy spinner — a partial ring in `currentColor`, rotated by CSS (.navtree-busy).
- * The wrapper span sets the color (neutral --fg-dim, the machine/working channel
- * — distinct from the accent "concerns you" channel) and respects
- * prefers-reduced-motion (see NavTree.css).
+ * The wrapper span sets the color (a muted accent that rhymes with the attention
+ * dot but stays quieter) and respects prefers-reduced-motion (see NavTree.css).
  */
 function SvgSpinner() {
   return (
