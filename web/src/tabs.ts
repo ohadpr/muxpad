@@ -1,7 +1,7 @@
 import type { Tab } from '@muxpad/shared';
 import { useEffect, useState } from 'react';
 import { api } from './api';
-import { subscribe } from './events';
+import { subscribe, subscribeReconnect } from './events';
 import { refreshWorkspaces } from './workspaces';
 
 /**
@@ -66,9 +66,22 @@ const unsubLiveRefresh = subscribe((e) => {
     void refreshWorkspaces();
   }, 250);
 });
-// Vite HMR: dispose the subscription so editing this module in dev doesn't
-// stack duplicate handlers on the events singleton. No-op in production.
-if (import.meta.hot) import.meta.hot.dispose(() => unsubLiveRefresh());
+// Events don't replay across a reconnect, and pane.updated only fires on busy
+// edges — so a transition missed during a disconnect would stay deduped in
+// lastPaneStatus forever (the spinner would wait for the 5s poll). The baseline
+// refetch on reconnect fixes the display; clear the dedup cache so the next
+// live edge schedules a refresh again.
+subscribeReconnect(() => lastPaneStatus.clear());
+
+// Vite HMR: dispose the subscription (and any pending debounce) so editing this
+// module in dev doesn't stack duplicate handlers or fire a stale timer. No-op
+// in production.
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    unsubLiveRefresh();
+    if (liveRefreshTimer !== null) clearTimeout(liveRefreshTimer);
+  });
+}
 
 /**
  * Optimistically reorder a workspace's cached tabs so the sidebar moves the

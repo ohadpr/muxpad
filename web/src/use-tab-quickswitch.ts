@@ -13,11 +13,18 @@ export function quickSwitchIndex(digit: number, tabCount: number): number | null
   return idx >= 0 && idx < tabCount && idx < MAX_QUICK_SWITCH_TABS ? idx : null;
 }
 
-/** True when the event target is a text field, so Ctrl+digit should pass
- *  through to it rather than triggering quick-switch. */
+/** True when the event target is a real text field the user is typing into, so
+ *  Ctrl+digit should pass through rather than trigger quick-switch.
+ *
+ *  Excludes xterm.js's hidden helper <textarea> (class `xterm-helper-textarea`,
+ *  tabIndex -1): that IS the focused terminal in the common case, and the whole
+ *  point of quick-switch is to intercept Ctrl+digit there before it reaches the
+ *  PTY. Treating it as editable would silently disable the feature whenever a
+ *  terminal is focused. */
 function isEditableTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   if (!el || typeof el.tagName !== 'string') return false;
+  if (el.classList?.contains('xterm-helper-textarea')) return false;
   return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable === true;
 }
 
