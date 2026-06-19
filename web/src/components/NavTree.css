@@ -237,7 +237,8 @@
    "This tab's app is working." A different channel from .badge-dot
    ("wants you"): the spinner says "in progress" and clears itself when the
    output stream goes quiet. Sits inline to the right of the name; never
-   shrinks. Accent-tinted so it reads as activity, not alarm. */
+   shrinks. Neutral grey (the machine/working channel) — NOT accent, which is
+   reserved for the "concerns you" channel (selection pill + attention dot). */
 .navtree-busy {
   flex: 0 0 auto;
   display: inline-flex;
