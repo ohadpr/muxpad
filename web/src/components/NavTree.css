@@ -244,11 +244,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  /* Neutral, NOT accent: "working" is a machine/progress signal. Accent is
-     reserved for the "concerns you" channel (selection pill + attention dot),
-     so the spinner reads as quiet in-progress, distinct from the accent dot
-     it shares a status slot with. */
-  color: var(--fg-dim);
+  /* Muted accent — a quieter cousin of the attention dot it shares a slot
+     with: same hue family so the two "rhyme", but desaturated toward neutral
+     (and a thin animated ring vs the dot's solid fill) so "working" still
+     reads distinct from "wants you". */
+  color: color-mix(in srgb, var(--accent) 60%, var(--fg-dim));
   line-height: 0;
   /* Sit just after the name with a little breathing room (on top of the row's
      5px flex gap) — not jammed against the text, not flung to the right edge.
