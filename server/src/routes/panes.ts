@@ -1,14 +1,14 @@
-import { Hono } from 'hono';
-import { z } from 'zod';
-import { homedir } from 'node:os';
-import type Database from 'better-sqlite3';
 import type { LayoutNode } from '@muxpad/shared';
 import { spliceLayoutAtTarget } from '@muxpad/shared';
+import type Database from 'better-sqlite3';
+import { Hono } from 'hono';
+import { z } from 'zod';
+import type { EventBus } from '../events.js';
+import type { PtydCache } from '../ptyd-cache.js';
+import type { PtydClient } from '../ptyd-client/PtydClient.js';
+import { safeCwd } from '../safe-cwd.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
-import type { PtydClient } from '../ptyd-client/PtydClient.js';
-import type { PtydCache } from '../ptyd-cache.js';
-import type { EventBus } from '../events.js';
 
 const defaultShell = process.env.SHELL ?? '/bin/zsh';
 
@@ -65,8 +65,7 @@ export function panesTabScopedRoutes(deps: {
   app.post('/:id/panes', async (c) => {
     const tabId = c.req.param('id');
     const t = tabs.getById(tabId);
-    if (!t)
-      return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
+    if (!t) return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
     const body = z
       .object({
         kind: z.enum(['shell', 'url']).optional(),
@@ -133,7 +132,7 @@ export function panesTabScopedRoutes(deps: {
       if (source && source.tab_id === tabId) {
         const live = deps.cache.getCwd(source.id);
         // source.cwd is nullable since the schema widening for URL panes;
-        // collapse null back to undefined so the homedir() default below fires.
+        // collapse null back to undefined so safeCwd's home fallback fires.
         cwd = live ?? source.cwd ?? undefined;
       }
     }
@@ -141,7 +140,10 @@ export function panesTabScopedRoutes(deps: {
     const pane = panes.create({
       tab_id: tabId,
       shell: body.shell ?? defaultShell,
-      cwd: cwd ?? homedir(),
+      // Fall back to home if the resolved cwd (often an inherited sibling cwd)
+      // no longer exists — a deleted dir makes the shell spawn fail + the pane
+      // cascade-delete itself (see safeCwd).
+      cwd: safeCwd(cwd),
       startup_cmd: body.startup_cmd ?? null,
       env: body.env ?? null,
     });
@@ -166,7 +168,7 @@ export function panesTabScopedRoutes(deps: {
         id: pane.id,
         shell: pane.shell ?? defaultShell,
         startup_cmd: pane.startup_cmd,
-        cwd: pane.cwd ?? homedir(),
+        cwd: safeCwd(pane.cwd),
         env: pane.env,
         tab_id: tabId,
         workspace_id: workspaceId,
@@ -193,8 +195,7 @@ export function panesScopedRoutes(deps: {
 
   app.get('/:id', async (c) => {
     const p = panes.getById(c.req.param('id'));
-    if (!p)
-      return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
     // hasPane is an async RPC; this handler is rare (single-pane GET).
     // Fall back to false if ptyd is disconnected — the row is still
     // useful for the caller.
@@ -210,8 +211,7 @@ export function panesScopedRoutes(deps: {
   app.patch('/:id', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p)
-      return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
     const body = z
       .object({
         kind: z.enum(['shell', 'url']).optional(),
@@ -275,8 +275,7 @@ export function panesScopedRoutes(deps: {
   app.delete('/:id', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p)
-      return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
     // Capture tab_id BEFORE the delete so the event still carries it.
     const tabId = p.tab_id;
     // ptyd holds runtime state; SQLite is the source of truth. If ptyd
@@ -297,13 +296,9 @@ export function panesScopedRoutes(deps: {
   app.post('/:id/respawn', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p)
-      return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
     if (p.kind === 'url') {
-      return c.json(
-        { error: { code: 'bad_request', message: 'cannot respawn a url pane' } },
-        400,
-      );
+      return c.json({ error: { code: 'bad_request', message: 'cannot respawn a url pane' } }, 400);
     }
     // ptyd holds runtime state; SQLite is the source of truth. If ptyd
     // is unreachable, swallow the kill — the second call (ensurePane)
@@ -330,7 +325,7 @@ export function panesScopedRoutes(deps: {
         id: p.id,
         shell: p.shell ?? defaultShell,
         startup_cmd: p.startup_cmd,
-        cwd: p.cwd ?? process.env.HOME ?? '/',
+        cwd: safeCwd(p.cwd),
         env: p.env,
         tab_id: p.tab_id,
         ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
