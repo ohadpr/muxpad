@@ -139,6 +139,13 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   const [closingTab, setClosingTab] = useState(false);
   const [mobileActiveId, setMobileActiveId] = useState<string | null>(null);
   const layoutRef = useRef<Layout>(null);
+  // >0 while a local layout PATCH is in flight (split / drag-resize / close).
+  // The server-snapshot appliers (tab.updated, reconnect re-fetch) must NOT
+  // overwrite layoutRef/panes during this window — a snapshot taken before our
+  // patch landed reflects the PRE-change layout and would revert an
+  // optimistic split ("flashes then nothing"). Our own patch echo (carrying
+  // the new layout) reconciles once the window closes.
+  const pendingLayoutWrites = useRef(0);
   const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
   // Holds the latest `addPane` function from the mobile render branch so
   // the top-level event listener below can reach it. The mobile chrome's
@@ -387,10 +394,13 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   const persistLayout = useCallback(
     async (layout: Layout) => {
       if (!tab) return;
+      pendingLayoutWrites.current += 1;
       try {
         await api.patchTab(tab.id, { layout: fromMosaic(layout) });
       } catch (e) {
         console.error('failed to persist layout', e);
+      } finally {
+        pendingLayoutWrites.current -= 1;
       }
     },
     [tab],
@@ -436,7 +446,11 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           ? {
               ...prev,
               layout: fromMosaic(newLayout),
-              panes: [...prev.panes, created],
+              // Dedup: the pane.added event for `created` may have already
+              // landed and appended it (it carries the same id).
+              panes: prev.panes.some((p) => p.id === created.id)
+                ? prev.panes
+                : [...prev.panes, created],
             }
           : prev,
       );
@@ -634,13 +648,16 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
             : prev,
         );
       } else if (e.type === 'tab.updated' && e.tab.id === tabId) {
+        // Skip the layout if we have a local layout write in flight — this
+        // snapshot may predate it and would revert an optimistic split.
+        const applyLayout = pendingLayoutWrites.current === 0;
         setTab((prev) =>
           prev
             ? {
                 ...prev,
                 name: e.tab.name,
                 slug: e.tab.slug,
-                layout: e.tab.layout,
+                ...(applyLayout ? { layout: e.tab.layout } : {}),
                 // tab.updated is emitted from PATCH /tabs and from pane
                 // append/remove paths; the server-side Tab row doesn't
                 // carry the runtime-only `attention` field, so e.tab.attention
@@ -651,7 +668,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
               }
             : prev,
         );
-        layoutRef.current = toMosaic(e.tab.layout);
+        if (applyLayout) layoutRef.current = toMosaic(e.tab.layout);
       } else if (e.type === 'tab.removed' && e.tab_id === tabId) {
         setClosingTab(true);
         void navigate({ to: '/w/$wsSlug', params: { wsSlug } });
@@ -672,8 +689,17 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
       void api
         .getTab(tabId)
         .then((detail) => {
-          setTab((prev) => (prev && prev.id === tabId ? { ...prev, ...detail } : prev));
-          layoutRef.current = toMosaic(detail.layout);
+          // If a local layout write is in flight, this snapshot may predate it
+          // — keep our optimistic layout + panes (the just-split pane isn't in
+          // the server's copy yet) and take only the rest.
+          const applyLayout = pendingLayoutWrites.current === 0;
+          setTab((prev) => {
+            if (!prev || prev.id !== tabId) return prev;
+            if (applyLayout) return { ...prev, ...detail };
+            const { layout: _layout, panes: _panes, ...rest } = detail;
+            return { ...prev, ...rest };
+          });
+          if (applyLayout) layoutRef.current = toMosaic(detail.layout);
         })
         .catch(() => {
           // Tab may have been deleted during the disconnect window — the
@@ -754,7 +780,11 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           ? {
               ...prev,
               layout: fromMosaic(newLayout),
-              panes: [...prev.panes, created],
+              // Dedup: the pane.added event for `created` may have already
+              // landed and appended it (it carries the same id).
+              panes: prev.panes.some((p) => p.id === created.id)
+                ? prev.panes
+                : [...prev.panes, created],
             }
           : prev,
       );
