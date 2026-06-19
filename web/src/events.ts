@@ -1,4 +1,4 @@
-import { MuxpadEventSchema, type MuxpadEvent } from '@muxpad/shared';
+import { type MuxpadEvent, MuxpadEventSchema } from '@muxpad/shared';
 
 /**
  * Singleton client for the server-pushed event stream at /ws/events.
@@ -36,15 +36,30 @@ function connect(): void {
   ws.onopen = () => {
     reconnectDelayMs = 250;
     for (const h of reconnectHandlers) {
-      try { h(); } catch (err) { console.warn('reconnect handler threw', err); }
+      try {
+        h();
+      } catch (err) {
+        console.warn('reconnect handler threw', err);
+      }
     }
   };
   ws.onmessage = (m) => {
+    let e: MuxpadEvent;
     try {
-      const e = MuxpadEventSchema.parse(JSON.parse(m.data));
-      for (const h of eventHandlers) h(e);
+      e = MuxpadEventSchema.parse(JSON.parse(m.data));
     } catch (err) {
       console.warn('bad event payload', err);
+      return;
+    }
+    // Isolate handlers: one throwing subscriber must not skip the rest
+    // (handlers run in registration order; a throw used to drop every later
+    // one, e.g. the active TabView's pane/layout sync).
+    for (const h of eventHandlers) {
+      try {
+        h(e);
+      } catch (err) {
+        console.warn('event handler threw', err);
+      }
     }
   };
   ws.onclose = () => {
