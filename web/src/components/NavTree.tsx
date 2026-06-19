@@ -75,12 +75,14 @@ function useListReorder(
     // Direction-aware drop edge: dragging downward lands AFTER the target
     // (line on its bottom), upward lands BEFORE it (top) — matches
     // reorderByDrop so the line shows exactly where the row will go.
-    const dropEdge: 'top' | 'bottom' | null =
-      overId === id && dragId !== null && dragId !== id
-        ? orderedIds.indexOf(dragId) < orderedIds.indexOf(id)
-          ? 'bottom'
-          : 'top'
-        : null;
+    let dropEdge: 'top' | 'bottom' | null = null;
+    if (overId === id && dragId !== null && dragId !== id) {
+      const from = orderedIds.indexOf(dragId);
+      const to = orderedIds.indexOf(id);
+      // Guard against a mid-drag list reconcile (refresh) dropping dragId out of
+      // the order — indexOf -1 would otherwise force a wrong 'bottom' edge.
+      if (from >= 0 && to >= 0) dropEdge = from < to ? 'bottom' : 'top';
+    }
     return {
       draggable: true,
       onDragStart: (e: React.DragEvent) => {
@@ -699,7 +701,10 @@ function TabRow({
               app's own output is right there); the dot self-hides there anyway
               via markSeen. So the tab you're on shows nothing. */}
           {!isActiveTab && tab.busy ? (
-            <span className="navtree-busy" role="img" aria-label="busy" title="Working…">
+            // Decorative: aria-hidden so this fast-toggling glyph doesn't churn
+            // the link's accessible name ("Home busy" → "Home" → …). title is
+            // the mouse affordance.
+            <span className="navtree-busy" aria-hidden="true" title="Working…">
               <SvgSpinner />
             </span>
           ) : tab.attention ? (
@@ -913,9 +918,10 @@ function RenameInput({
 }
 
 /**
- * Busy spinner — a partial ring stroked in the accent color, rotated by CSS
- * (.navtree-busy). `currentColor` so it inherits the row's tint; the wrapper
- * span sets the color and respects prefers-reduced-motion (see NavTree.css).
+ * Busy spinner — a partial ring in `currentColor`, rotated by CSS (.navtree-busy).
+ * The wrapper span sets the color (neutral --fg-dim, the machine/working channel
+ * — distinct from the accent "concerns you" channel) and respects
+ * prefers-reduced-motion (see NavTree.css).
  */
 function SvgSpinner() {
   return (
