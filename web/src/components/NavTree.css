@@ -250,10 +250,10 @@
      it shares a status slot with. */
   color: var(--fg-dim);
   line-height: 0;
-  /* Push to the row's right edge — a right-aligned status badge, clear of the
-     name (the row's flex children otherwise pack left, jamming it against the
-     text). Matches the attention dot below. */
-  margin-left: auto;
+  /* Sit just after the name with a little breathing room (on top of the row's
+     5px flex gap) — not jammed against the text, not flung to the right edge.
+     Matches the attention dot below. */
+  margin-left: 4px;
   /* Optical nudge: flex align-items:center centers the icon's BOX, but text
      glyphs sit low within their line box, so a box-centered icon reads ~1px
      high against the label. Drop it to sit on the text's optical center. */
@@ -272,8 +272,8 @@
   position: relative;
   top: 1px;
   right: auto;
-  /* Right-align the badge, clear of the name (siblings pack left otherwise). */
-  margin-left: auto;
+  /* A little breathing room after the name (atop the flex gap), not flush-right. */
+  margin-left: 4px;
 }
 .navtree-busy svg {
   animation: navtree-spin 0.8s linear infinite;
