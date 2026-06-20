@@ -170,9 +170,20 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   }, [isMobile, tab, mobileActiveId]);
 
   // Mobile pane slots stay mounted when hidden (scroll position preserved).
-  // Focus the newly-selected pane's terminal when the active id changes.
+  // Focus the active pane's terminal when the active pane CHANGES (switch /
+  // tab entry) — NOT on every render. `tab` gets a new reference on every
+  // pane.updated (title/fg/attention/busy), and this effect deps on it; without
+  // the guard, a churning pane re-dispatches focus-pane constantly, which steals
+  // focus from the mobile composer the user is typing in (the terminal's helper
+  // textarea has inputMode=none, so grabbing it dismisses the soft keyboard and
+  // the input bar drops). Mirrors desktopFocusHandledRef below.
+  const mobileFocusedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!isMobile || !tab || !isActive) return;
+    if (!isMobile || !tab || !isActive) {
+      // Reset on deactivation so re-entering the tab refocuses its pane.
+      if (!isActive) mobileFocusedRef.current = null;
+      return;
+    }
     const paneIds = collectPaneIds(toMosaic(tab.layout));
     const stored = getLastPaneId(tab.id);
     const activeId =
@@ -182,6 +193,9 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           ? stored
           : (paneIds[0] ?? null);
     if (!activeId) return;
+    // Already focused this pane → don't re-grab (would steal composer focus).
+    if (mobileFocusedRef.current === activeId) return;
+    mobileFocusedRef.current = activeId;
     window.dispatchEvent(new CustomEvent('muxpad:focus-pane', { detail: { paneId: activeId } }));
   }, [isMobile, tab, mobileActiveId, isActive]);
 
