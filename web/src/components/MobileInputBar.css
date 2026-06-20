@@ -113,6 +113,12 @@
   white-space: pre-wrap;
   word-break: break-word;
   overflow-y: auto;
+  /* Disable iOS double-tap-to-zoom on the composer. Without this, a double-tap
+     (to select a word / prep a paste) zooms the page, which shifts the visual
+     viewport and flings this viewport-anchored bar away ("minimizes" it).
+     manipulation keeps panning, pinch-zoom, AND in-field word selection — it
+     only kills the double-tap zoom gesture. */
+  touch-action: manipulation;
 }
 .mobile-input-editable:focus {
   border-color: var(--accent);
