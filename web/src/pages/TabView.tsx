@@ -7,7 +7,7 @@ import {
   MosaicWindow,
 } from 'react-mosaic-component';
 import 'react-mosaic-component/react-mosaic-component.css';
-import type { AppUrl, LayoutNode, PaneSpec } from '@muxpad/shared';
+import type { AppUrl, LayoutNode, PaneSpec, Tab } from '@muxpad/shared';
 import { spliceLayoutAtTarget } from '@muxpad/shared';
 import { type TabWithPanes, api } from '../api';
 import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
@@ -23,6 +23,7 @@ import { UrlPane } from '../components/UrlPane';
 import { SvgClose } from '../components/icons';
 import { subscribe, subscribeReconnect } from '../events';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
+import { pushUndo } from '../lib/move-undo-store';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { normalizePaneUrl, setPaneFace, usePaneFace } from '../lib/pane-face';
 import { refreshTabs, useTabs } from '../tabs';
@@ -474,6 +475,81 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     [tab, persistLayout, notifyLayoutChanged],
   );
 
+  // Navigate to a tab we just moved a pane into — "follow the pane" so the
+  // move is immediately visible (and the user isn't stranded on a source tab
+  // that may have just auto-closed). setLastTabSlug first so the
+  // workspace-root redirect resolves here if a source `tab.removed` races us.
+  const followToTab = useCallback(
+    (toTab: Tab) => {
+      setLastTabSlug(wsSlug, toTab.slug);
+      void navigate({ to: '/w/$wsSlug/t/$tabSlug', params: { wsSlug, tabSlug: toTab.slug } });
+    },
+    [navigate, wsSlug],
+  );
+
+  /**
+   * Move a pane to another tab in this workspace (existing tab via
+   * `toTabId`, or a fresh one via `newTab`).
+   *
+   * Extract (`newTab`) FOLLOWS the pane to its new tab — but only after
+   * priming the tab/workspace caches, or WorkspaceShell's stale-URL recovery
+   * would bounce off a slug it hasn't seen yet. Move-to-existing deliberately
+   * does NOT navigate: you stay put and the pane simply leaves your view
+   * ("send away"); if the source tab empties, its own `tab.removed` handler
+   * redirects you to a neighbor.
+   *
+   * `paneLabelText` is captured at call time for the undo message (paneLabel
+   * itself is only in scope after the loading early-returns).
+   */
+  const movePane = useCallback(
+    async (paneId: string, paneLabelText: string, dest: { toTabId?: string; newTab?: boolean }) => {
+      if (!tab || !workspace) return;
+      const sourceSlug = tab.slug;
+      const followed = dest.newTab === true;
+      try {
+        const res = await api.movePane(paneId, dest);
+        // Server declined (e.g. extracting a sole pane is a no-op): nothing
+        // moved, so no follow and no undo.
+        if (res.to_tab.id === res.from_tab_id) return;
+        if (followed) {
+          await Promise.all([refreshTabs(workspace.id), refreshWorkspaces()]);
+          followToTab(res.to_tab);
+        }
+        if (!res.from_tab_removed) {
+          pushUndo({
+            message: `Moved “${paneLabelText}” to “${res.to_tab.name}”`,
+            run: async () => {
+              // Navigate back to the SOURCE tab BEFORE reversing the move (for
+              // the extract case — move-to-existing never left, so no nav).
+              // Order matters: reversing the move empties and deletes the
+              // extracted tab we're viewing; if we're still on it when that
+              // happens, its `tab.removed` handler redirects to the
+              // workspace's FIRST tab, overriding our jump to the source.
+              // Navigating first makes the extracted tab inactive, so the
+              // isActive guard suppresses that redirect and we land on the
+              // tab the pane actually returned to.
+              if (followed) {
+                setLastTabSlug(wsSlug, sourceSlug);
+                void navigate({
+                  to: '/w/$wsSlug/t/$tabSlug',
+                  params: { wsSlug, tabSlug: sourceSlug },
+                });
+              }
+              try {
+                await api.movePane(paneId, { toTabId: res.from_tab_id });
+              } catch (err) {
+                console.error('undo move failed', err);
+              }
+            },
+          });
+        }
+      } catch (err) {
+        console.error('move pane failed', err);
+      }
+    },
+    [tab, workspace, followToTab, navigate, wsSlug],
+  );
+
   /**
    * Delete the current tab. Used both by the explicit "close this tab"
    * link and by removePaneFromLayout when the last pane is gone (full
@@ -685,7 +761,14 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         if (applyLayout) layoutRef.current = toMosaic(e.tab.layout);
       } else if (e.type === 'tab.removed' && e.tab_id === tabId) {
         setClosingTab(true);
-        void navigate({ to: '/w/$wsSlug', params: { wsSlug } });
+        // Only the ACTIVE tab's removal should redirect. A hidden tab being
+        // removed — closed from the sidebar, or relocated to another
+        // workspace (tab.removed now doubles as "moved away") — must not yank
+        // the user off the tab they're actually viewing. (last-visited used to
+        // paper over this with a redirect bounce; the guard makes it clean.)
+        if (isActiveRef.current) {
+          void navigate({ to: '/w/$wsSlug', params: { wsSlug } });
+        }
       }
     });
   }, [tab?.id, navigate, wsSlug]);
@@ -973,6 +1056,22 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                       >
                         <SvgSplitDown />
                       </button>
+                      {/* One-click "pop this pane out into its own tab". Only
+                          shown when the tab has another pane to leave behind —
+                          extracting a sole pane is a no-op. Moving a pane to an
+                          EXISTING tab is intentionally not a chrome dropdown
+                          (cramped, and clipped in narrow panes); that belongs on
+                          a drag-onto-sidebar-tab gesture. */}
+                      {tab.panes.length > 1 && (
+                        <button
+                          className="pane-chrome-btn"
+                          title="Pop out to a new tab"
+                          aria-label="Pop out to a new tab"
+                          onClick={() => void movePane(paneId, paneLabel(paneId), { newTab: true })}
+                        >
+                          <SvgMove />
+                        </button>
+                      )}
                       <button
                         className="pane-chrome-btn pane-chrome-close"
                         title="Close pane"
@@ -1256,6 +1355,33 @@ function hostLabel(raw: string): string {
   } catch {
     return raw;
   }
+}
+
+function SvgMove() {
+  // Pane glyph with an arrow leaving it — "send this pane elsewhere".
+  return (
+    <svg width="16" height="16" viewBox="0 0 14 14" aria-hidden="true">
+      <rect
+        x="1.5"
+        y="2.5"
+        width="6.5"
+        height="6.5"
+        rx="1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
+      <path
+        d="M6.5 11 H11.5 M9.3 8.8 L11.8 11 L9.3 13"
+        transform="translate(0 -2.5)"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
 }
 
 function SvgChevron() {

@@ -181,5 +181,37 @@ export function tabsRoutes(deps: {
     return c.body(null, 204);
   });
 
+  // Move a whole tab (and all its panes) to a different workspace. Pure FK
+  // reparent — the panes reference the tab, not the workspace, so they come
+  // along with no layout surgery and no PTY churn. Surfaced to clients as a
+  // tab.removed (old workspace) + tab.added (new workspace) pair, which the
+  // global event router turns into the right per-workspace tab-list refreshes.
+  app.post('/:id/move', async (c) => {
+    const id = c.req.param('id');
+    const body = z.object({ workspace_id: z.string() }).parse(await c.req.json().catch(() => ({})));
+    const fromWorkspace = tabs.getWorkspaceId(id);
+    if (!fromWorkspace)
+      return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
+    if (fromWorkspace === body.workspace_id) {
+      // No-op — already there. Return the current tab unchanged.
+      const t = tabs.getById(id);
+      return c.json(t);
+    }
+    let updated: ReturnType<typeof tabs.setWorkspace>;
+    try {
+      updated = tabs.setWorkspace(id, body.workspace_id);
+    } catch {
+      // setWorkspace throws on a missing tab or (via the workspace_id FK) a
+      // non-existent target workspace.
+      return c.json(
+        { error: { code: 'bad_request', message: 'tab or target workspace not found' } },
+        400,
+      );
+    }
+    deps.events.emit({ type: 'tab.removed', workspace_id: fromWorkspace, tab_id: id });
+    deps.events.emit({ type: 'tab.added', workspace_id: body.workspace_id, tab: updated });
+    return c.json(updated);
+  });
+
   return app;
 }

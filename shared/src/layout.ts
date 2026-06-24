@@ -71,3 +71,38 @@ export function spliceLayoutAtTarget(
   const next = walk(layout);
   return { layout: next, placed };
 }
+
+/**
+ * Remove the first leaf matching `paneId` from the tree, collapsing any
+ * branch left with a single child. Returns `''` if the tree becomes empty.
+ *
+ * Mirrors the server's `pruneDeadPanes` collapse rules, but targets one id
+ * instead of a validity set — used by the pane-move endpoint to splice a
+ * pane out of its source tab's layout. Pure; safe to share client + server.
+ */
+export function removeLeafFromLayout(layout: LayoutNode, paneId: string): LayoutNode {
+  if (layout === '' || layout == null) return '';
+  if (typeof layout === 'string') return layout === paneId ? '' : layout;
+  const first = removeLeafFromLayout(layout.first, paneId);
+  const second = removeLeafFromLayout(layout.second, paneId);
+  if (first === '' && second === '') return '';
+  if (first === '') return second;
+  if (second === '') return first;
+  return { ...layout, first, second };
+}
+
+/**
+ * Append `paneId` as a new split wrapping the whole existing tree. Placement
+ * is intentionally dumb — the pane lands as the second child of a single
+ * top-level split (or becomes the root if the tree is empty). The move UX
+ * deliberately doesn't let the user pick a target pane / side on arrival, so
+ * a predictable root-append is all the destination tab needs.
+ */
+export function appendLeafToLayout(
+  layout: LayoutNode,
+  paneId: string,
+  direction: 'row' | 'column' = 'row',
+): LayoutNode {
+  if (layout === '' || layout == null) return paneId;
+  return { direction, first: layout, second: paneId };
+}
