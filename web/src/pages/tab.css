@@ -444,6 +444,7 @@
   align-items: stretch;
   height: 100%;
 }
+
 /* ONE button: the current-surface icon + a 12px chevron, a single hit target
    with a single hover state (the icon and caret used to be two separate
    buttons). Clicking opens the menu — it never silently toggles, so the icon

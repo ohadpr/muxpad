@@ -2,6 +2,7 @@ import { DEFAULT_TAB_ICON, type Tab, type Workspace } from '@muxpad/shared';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
+import { pushUndo } from '../lib/move-undo-store';
 import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansion';
 import { reorderByDrop } from '../lib/reorder';
 import { applyTabOrder, refreshTabs, useTabs } from '../tabs';
@@ -42,6 +43,66 @@ function pickerTheme(): 'light' | 'dark' {
 export type NavTreeVariant = 'sidebar' | 'sheet';
 
 type Editing = { kind: 'workspace' | 'tab'; id: string } | null;
+
+// Custom drag MIME for "this drag is a tab being moved across workspaces".
+// Distinct from the plain-text id that useListReorder sets, so a workspace
+// row can tell a cross-workspace tab drop apart from a workspace-reorder drag
+// (only `dataTransfer.types` is readable during dragover — hence a dedicated
+// type rather than sniffing the payload).
+const TAB_DRAG_MIME = 'application/x-muxpad-tab';
+
+interface TabDragPayload {
+  tabId: string;
+  tabName: string;
+  fromWorkspaceId: string;
+}
+
+// Origin of the in-flight tab drag, set on dragstart / cleared on dragend.
+// `dataTransfer.getData` is unreadable during dragover (only `types` is
+// exposed), so a workspace row can't tell from the event alone whether a
+// hovering tab came from ITSELF (a reorder) or another workspace (a move).
+// This module-level mirror lets the drop target make that call during
+// dragover — used only to gate the cross-workspace drop affordance, never as
+// the source of truth for the move itself (the drop reads the real payload).
+let activeTabDrag: TabDragPayload | null = null;
+
+/**
+ * Move a tab to another workspace and offer an undo. Refreshes both
+ * workspaces' tab caches (the global event router does too, but doing it
+ * here makes the sidebar update feel immediate) plus the workspace rollup.
+ * Shared by the tab context menu and the drag-onto-workspace-row gesture.
+ */
+async function moveTabToWorkspace(args: {
+  tabId: string;
+  tabName: string;
+  fromWorkspaceId: string;
+  toWorkspaceId: string;
+  toWorkspaceName: string;
+}): Promise<void> {
+  const refresh = () =>
+    Promise.all([
+      refreshTabs(args.fromWorkspaceId),
+      refreshTabs(args.toWorkspaceId),
+      refreshWorkspaces(),
+    ]);
+  try {
+    await api.moveTabToWorkspace(args.tabId, args.toWorkspaceId);
+    await refresh();
+    pushUndo({
+      message: `Moved “${args.tabName}” to “${args.toWorkspaceName}”`,
+      run: async () => {
+        try {
+          await api.moveTabToWorkspace(args.tabId, args.fromWorkspaceId);
+          await refresh();
+        } catch (err) {
+          console.error('undo tab→workspace move failed', err);
+        }
+      },
+    });
+  } catch (err) {
+    console.error('move tab→workspace failed', err);
+  }
+}
 
 /** Props spread onto a draggable row to make it reorderable. */
 interface DragItemProps {
@@ -276,6 +337,47 @@ function WorkspaceNode({
     onLongPress: () => setEditing({ kind: 'workspace', id: workspace.id }),
   });
 
+  // Accept a tab dragged from ANOTHER workspace, dropped anywhere on this
+  // group (header row OR — when expanded — the tab list below it; the handlers
+  // live on the whole .navtree-group so an expanded workspace's body isn't a
+  // dead zone). Gated on `activeTabDrag` originating elsewhere, so dragging a
+  // tab to reorder it WITHIN its own workspace never lights this up or steals
+  // the drop. Workspace-reorder dnd stays on the ws-row (rowDnd) and is a
+  // different drag type, so it's unaffected.
+  const [tabDropOver, setTabDropOver] = useState(false);
+  const isCrossWsTabDrag = (e: React.DragEvent) =>
+    e.dataTransfer.types.includes(TAB_DRAG_MIME) && activeTabDrag?.fromWorkspaceId !== workspace.id;
+  const onGroupDragOver = (e: React.DragEvent) => {
+    if (!isCrossWsTabDrag(e)) return; // workspace reorder / same-ws tab reorder
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (!tabDropOver) setTabDropOver(true);
+  };
+  const onGroupDragLeave = (e: React.DragEvent) => {
+    if (tabDropOver && !e.currentTarget.contains(e.relatedTarget as Node | null)) {
+      setTabDropOver(false);
+    }
+  };
+  const onGroupDrop = (e: React.DragEvent) => {
+    const raw = e.dataTransfer.getData(TAB_DRAG_MIME);
+    if (!raw) return;
+    setTabDropOver(false);
+    try {
+      const payload = JSON.parse(raw) as TabDragPayload;
+      if (payload.fromWorkspaceId === workspace.id) return; // same-ws → reorder owns it
+      e.preventDefault();
+      void moveTabToWorkspace({
+        tabId: payload.tabId,
+        tabName: payload.tabName,
+        fromWorkspaceId: payload.fromWorkspaceId,
+        toWorkspaceId: workspace.id,
+        toWorkspaceName: workspace.name,
+      });
+    } catch {
+      // malformed payload — ignore
+    }
+  };
+
   const closeWorkspace = async (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
@@ -309,11 +411,15 @@ function WorkspaceNode({
       className="navtree-group"
       data-active={isActive ? 'true' : undefined}
       data-expanded={expanded ? 'true' : undefined}
+      onDragOver={onGroupDragOver}
+      onDragLeave={onGroupDragLeave}
+      onDrop={onGroupDrop}
     >
       <div
         className="navtree-ws-row"
         data-active={isActive ? 'true' : undefined}
         data-pressing={pressing ? 'true' : undefined}
+        data-tab-drop={tabDropOver ? 'true' : undefined}
         {...(rowDnd && !isEditing ? rowDnd : {})}
       >
         <button
@@ -381,7 +487,11 @@ function WorkspaceNode({
             }}
           >
             <span className="navtree-name-text">{workspace.name}</span>
-            {workspace.attention && (
+            {/* Rollup dot only when collapsed — expanded rows show the
+                per-tab dots, which say *which* tab wants you, so the
+                workspace-level dot would just double-signal. Mirrors the
+                tab-count chip below, which is likewise collapsed-only. */}
+            {!expanded && workspace.attention && (
               <span className="badge-dot -inline" aria-label="needs attention" />
             )}
           </Link>
@@ -609,6 +719,40 @@ function TabRow({
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   // Icon picker, anchored under the clicked icon.
   const [picker, setPicker] = useState<{ x: number; y: number } | null>(null);
+  // Workspaces other than this tab's own — both the "Move to workspace…"
+  // menu targets and the legal drop targets for the drag gesture.
+  const { workspaces } = useWorkspaces();
+  const otherWorkspaces = workspaces.filter((w) => w.id !== workspace.id);
+
+  // Reuse the row's reorder dnd, but also stamp a typed payload on dragstart
+  // so a workspace row can recognise this as a cross-workspace tab move.
+  const baseDnd = rowDnd && !isEditing ? rowDnd : undefined;
+  const tabRowDnd: Partial<DragItemProps> = baseDnd
+    ? {
+        ...baseDnd,
+        onDragStart: (e: React.DragEvent) => {
+          baseDnd.onDragStart(e);
+          const payload: TabDragPayload = {
+            tabId: tab.id,
+            tabName: tab.name,
+            fromWorkspaceId: workspace.id,
+          };
+          // Mirror the origin so workspace rows can gate their drop affordance
+          // during dragover (when the payload itself is unreadable).
+          activeTabDrag = payload;
+          try {
+            e.dataTransfer.setData(TAB_DRAG_MIME, JSON.stringify(payload));
+          } catch {
+            // some browsers restrict custom MIME during dragstart — the
+            // context-menu path still covers the move.
+          }
+        },
+        onDragEnd: () => {
+          activeTabDrag = null;
+          baseDnd.onDragEnd();
+        },
+      }
+    : {};
   return (
     <div
       className="navtree-tab-row"
@@ -622,7 +766,7 @@ function TabRow({
             },
           }
         : {})}
-      {...(rowDnd && !isEditing ? rowDnd : {})}
+      {...tabRowDnd}
     >
       {isEditing ? (
         <RenameInput
@@ -735,6 +879,27 @@ function TabRow({
               onSelect: () => setPicker({ x: menu.x, y: menu.y }),
             },
             { label: 'Rename', onSelect: () => setEditing({ kind: 'tab', id: tab.id }) },
+            // "Move to workspace ▸" with the workspaces in a hover flyout, so
+            // the main menu stays short. Omitted entirely when there's nowhere
+            // to move to. (Dragging the tab onto a workspace row also works.)
+            ...(otherWorkspaces.length > 0
+              ? [
+                  {
+                    label: 'Move to workspace',
+                    submenu: otherWorkspaces.map((w) => ({
+                      label: w.name,
+                      onSelect: () =>
+                        void moveTabToWorkspace({
+                          tabId: tab.id,
+                          tabName: tab.name,
+                          fromWorkspaceId: workspace.id,
+                          toWorkspaceId: w.id,
+                          toWorkspaceName: w.name,
+                        }),
+                    })),
+                  },
+                ]
+              : []),
             {
               label: 'Close tab',
               danger: true,
@@ -761,11 +926,13 @@ function TabRow({
   );
 }
 
-/** One row in a NavContextMenu. */
+/** One row in a NavContextMenu. With `submenu`, the row opens a flyout of
+ *  child rows on hover instead of acting on click. */
 interface MenuItem {
   label: string;
-  onSelect: () => void;
+  onSelect?: () => void;
   danger?: boolean;
+  submenu?: { label: string; onSelect: () => void }[];
 }
 
 /**
@@ -785,6 +952,7 @@ function NavContextMenu({
   items: MenuItem[];
   onDismiss: () => void;
 }) {
+  const [openSub, setOpenSub] = useState<string | null>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onDismiss();
@@ -798,6 +966,9 @@ function NavContextMenu({
   const MENU_H = 44 + items.length * 34;
   const left = Math.max(4, Math.min(x, window.innerWidth - MENU_W - 4));
   const top = Math.max(4, Math.min(y, window.innerHeight - MENU_H - 4));
+  // Flyout side: open to the left when the menu sits in the right half of the
+  // viewport, so the submenu doesn't run off-screen.
+  const flyoutLeft = left > window.innerWidth / 2;
   return (
     <div
       className="navtree-menu-backdrop"
@@ -813,20 +984,63 @@ function NavContextMenu({
         onMouseDown={(e) => e.stopPropagation()}
         role="menu"
       >
-        {items.map((it) => (
-          <button
-            key={it.label}
-            type="button"
-            className={it.danger ? 'navtree-menu-item -danger' : 'navtree-menu-item'}
-            role="menuitem"
-            onClick={() => {
-              onDismiss();
-              it.onSelect();
-            }}
-          >
-            {it.label}
-          </button>
-        ))}
+        {items.map((it) =>
+          it.submenu ? (
+            <div
+              key={it.label}
+              className="navtree-menu-sub"
+              onMouseEnter={() => setOpenSub(it.label)}
+              onMouseLeave={() => setOpenSub(null)}
+            >
+              <button
+                type="button"
+                className="navtree-menu-item navtree-menu-item-parent"
+                role="menuitem"
+                aria-haspopup="menu"
+                aria-expanded={openSub === it.label}
+              >
+                <span>{it.label}</span>
+                <span className="navtree-menu-caret" aria-hidden="true">
+                  ›
+                </span>
+              </button>
+              {openSub === it.label && (
+                <div
+                  className={`navtree-submenu${flyoutLeft ? ' -left' : ''}`}
+                  role="menu"
+                >
+                  {it.submenu.map((sub) => (
+                    <button
+                      key={sub.label}
+                      type="button"
+                      className="navtree-menu-item"
+                      role="menuitem"
+                      onClick={() => {
+                        onDismiss();
+                        sub.onSelect();
+                      }}
+                    >
+                      {sub.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <button
+              key={it.label}
+              type="button"
+              className={it.danger ? 'navtree-menu-item -danger' : 'navtree-menu-item'}
+              role="menuitem"
+              onClick={() => {
+                onDismiss();
+                it.onSelect?.();
+              }}
+            >
+              {it.label}
+            </button>
+          ),
+        )}
       </div>
     </div>
   );

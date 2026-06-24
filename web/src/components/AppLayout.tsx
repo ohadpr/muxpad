@@ -7,6 +7,7 @@ import { useWindowAttention } from '../use-window-attention';
 import { useWorkspaces } from '../workspaces';
 import { Brand } from './Brand';
 import { MobileNavSwitcher } from './MobileNavSwitcher';
+import { MoveUndoToast } from './MoveUndoToast';
 import { NavTree } from './NavTree';
 import { SettingsMenu } from './SettingsMenu';
 import { TabBar } from './TabBar';
@@ -143,6 +144,9 @@ export function AppLayout() {
       ) : (
         <Outlet />
       )}
+      {/* Global, route-independent — a move-undo toast must outlive the
+          navigation the move triggers (follow-the-pane / follow-the-tab). */}
+      <MoveUndoToast />
     </div>
   );
 }

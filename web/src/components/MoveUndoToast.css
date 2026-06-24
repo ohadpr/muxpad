@@ -1,0 +1,75 @@
+/* Move-undo toast stack, bottom-left (the external-open stack owns
+   bottom-right). Viewport-anchored so it's reachable whatever has focus. */
+.move-undo-toasts {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+  pointer-events: none;
+}
+
+.move-undo-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px 9px 14px;
+  background: var(--bg-tabbar);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+  max-width: 420px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.move-undo-toast-msg {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.move-undo-toast-action {
+  background: var(--bg-hover);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  padding: 4px 12px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 80ms ease, border-color 80ms ease;
+}
+.move-undo-toast-action:hover {
+  background: var(--border-strong);
+  border-color: var(--fg-faint);
+}
+.move-undo-toast-action:focus-visible {
+  outline: 2px solid var(--fg-faint);
+  outline-offset: 2px;
+}
+
+.move-undo-toast-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--fg-faint);
+  font-size: 18px;
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.move-undo-toast-dismiss:hover {
+  background: var(--border-strong);
+  color: var(--fg);
+}
