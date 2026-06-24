@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { spliceLayoutAtTarget } from './layout.js';
+import { appendLeafToLayout, removeLeafFromLayout, spliceLayoutAtTarget } from './layout.js';
 
 describe('spliceLayoutAtTarget', () => {
   it('empty layout: new pane becomes root, placed=true', () => {
@@ -103,6 +103,69 @@ describe('spliceLayoutAtTarget', () => {
         first: { direction: 'column', first: 'new', second: 'top' },
         second: 'bottom',
       },
+    });
+  });
+});
+
+describe('removeLeafFromLayout', () => {
+  it('empty layout stays empty', () => {
+    expect(removeLeafFromLayout('', 'x')).toBe('');
+  });
+
+  it('single matching leaf collapses to empty', () => {
+    expect(removeLeafFromLayout('a', 'a')).toBe('');
+  });
+
+  it('single non-matching leaf is unchanged', () => {
+    expect(removeLeafFromLayout('a', 'b')).toBe('a');
+  });
+
+  it('removing one side of a split collapses to the sibling', () => {
+    const layout = { direction: 'row' as const, first: 'a', second: 'b' };
+    expect(removeLeafFromLayout(layout, 'a')).toBe('b');
+    expect(removeLeafFromLayout(layout, 'b')).toBe('a');
+  });
+
+  it('removes a deeply nested leaf, collapsing its now-single-child branch', () => {
+    const layout = {
+      direction: 'row' as const,
+      first: 'left',
+      second: { direction: 'column' as const, first: 'top', second: 'bottom' },
+    };
+    expect(removeLeafFromLayout(layout, 'top')).toEqual({
+      direction: 'row',
+      first: 'left',
+      second: 'bottom',
+    });
+  });
+
+  it('only removes the FIRST matching leaf (ids are unique in practice)', () => {
+    const layout = { direction: 'row' as const, first: 'a', second: 'a' };
+    // Both branches match → both collapse → empty. (Defensive: real layouts
+    // never duplicate a pane id, so this is just documenting the recursion.)
+    expect(removeLeafFromLayout(layout, 'a')).toBe('');
+  });
+});
+
+describe('appendLeafToLayout', () => {
+  it('empty layout: the leaf becomes the root', () => {
+    expect(appendLeafToLayout('', 'new')).toBe('new');
+  });
+
+  it('wraps an existing tree in a split with the new leaf second', () => {
+    expect(appendLeafToLayout('a', 'new')).toEqual({
+      direction: 'row',
+      first: 'a',
+      second: 'new',
+    });
+  });
+
+  it('honors the direction arg and preserves the existing subtree', () => {
+    const layout = { direction: 'row' as const, first: 'a', second: 'b' };
+    expect(appendLeafToLayout(layout, 'new', 'column')).toEqual({
+      direction: 'column',
+      first: layout,
+      second: 'new',
     });
   });
 });

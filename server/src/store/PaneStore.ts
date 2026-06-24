@@ -60,6 +60,16 @@ export class PaneStore {
   }
 
   /**
+   * Reparent a pane to a different tab. Used by the pane-move endpoint; the
+   * pane's runtime/PTY is keyed by pane id and is unaffected (it keeps
+   * running). Caller is responsible for fixing up the source and destination
+   * tabs' layout trees.
+   */
+  setTab(id: string, tabId: string): void {
+    this.db.prepare('UPDATE panes SET tab_id = ? WHERE id = ?').run(tabId, id);
+  }
+
+  /**
    * Persist the pane's current working directory. Called by the runtime when
    * it polls the live shell's cwd; this is what makes "respawn at the cwd
    * the user was actually in" work after a daemon restart, instead of

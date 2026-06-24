@@ -17,6 +17,14 @@ export interface TabWithPanes extends Tab {
   panes: PaneSpec[];
 }
 
+export interface MovePaneResult {
+  pane: PaneSpec | null;
+  from_tab_id: string;
+  to_tab: Tab;
+  /** True if the source tab was deleted because the pane was its last one. */
+  from_tab_removed: boolean;
+}
+
 export const api = {
   // ── Workspaces (the new top-level concept) ─────────────────────────────
 
@@ -104,6 +112,22 @@ export const api = {
     }),
 
   deletePane: (id: string) => req<void>(`/api/panes/${id}`, { method: 'DELETE' }),
+
+  // Move a pane to another tab in the same workspace. `toTabId` targets an
+  // existing tab; `newTab` extracts it into a fresh tab. The PTY keeps
+  // running — only the pane's parent tab + both tabs' layouts change.
+  movePane: (id: string, dest: { toTabId?: string; newTab?: boolean }) =>
+    req<MovePaneResult>(`/api/panes/${id}/move`, {
+      method: 'POST',
+      body: JSON.stringify({ to_tab_id: dest.toTabId, new_tab: dest.newTab }),
+    }),
+
+  // Move a whole tab (and its panes) to a different workspace.
+  moveTabToWorkspace: (id: string, workspaceId: string) =>
+    req<Tab>(`/api/tabs/${id}/move`, {
+      method: 'POST',
+      body: JSON.stringify({ workspace_id: workspaceId }),
+    }),
 
   patchPane: (id: string, patch: { kind?: 'shell' | 'url'; url?: string | null }) =>
     req<PaneSpec>(`/api/panes/${id}`, {
