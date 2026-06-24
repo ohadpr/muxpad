@@ -6,7 +6,7 @@ import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { loadConfig } from './config.js';
 import { EventBus } from './events.js';
-import { PtydCache } from './ptyd-cache.js';
+import { PtydCache, decoratePane } from './ptyd-cache.js';
 import { PtydClient } from './ptyd-client/PtydClient.js';
 import { createApp } from './server.js';
 import { PaneStore } from './store/PaneStore.js';
@@ -50,14 +50,7 @@ cache.on('paneChange', (paneId: string) => {
   events.emit({
     type: 'pane.updated',
     tab_id: pane.tab_id,
-    pane: {
-      ...pane,
-      title: cache.getTitle(paneId),
-      foreground_cmd: cache.getFg(paneId),
-      attention: cache.getAttention(paneId),
-      busy: cache.getBusy(paneId),
-      app_urls: cache.getAppUrls(paneId),
-    },
+    pane: decoratePane(cache, pane),
   });
 });
 

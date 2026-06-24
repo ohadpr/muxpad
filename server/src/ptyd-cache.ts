@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import type { AppUrl } from '@muxpad/shared';
+import type { AppUrl, PaneSpec } from '@muxpad/shared';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { AppUrlDetector } from './runtime/app-url-detector.js';
 import type { AppUrlMarker } from './runtime/pty-scanner.js';
@@ -334,4 +334,23 @@ export class PtydCache extends EventEmitter {
       this.emit('paneRemoved', id);
     }
   }
+}
+
+/**
+ * Decorate a stored pane row with its live runtime fields (title, foreground
+ * command, attention/busy flags, detected app urls) from the cache. The single
+ * place this composition lives: the tab GET, the pane-move endpoint, and the
+ * ptyd→`pane.updated` forwarder all route through it, so a pane is described
+ * identically however it's surfaced. (The PATCH-route event is deliberately
+ * partial — it carries the raw row without these — so it does NOT use this.)
+ */
+export function decoratePane(cache: PtydCache, pane: PaneSpec): PaneSpec {
+  return {
+    ...pane,
+    title: cache.getTitle(pane.id),
+    foreground_cmd: cache.getFg(pane.id),
+    attention: cache.getAttention(pane.id),
+    busy: cache.getBusy(pane.id),
+    app_urls: cache.getAppUrls(pane.id),
+  };
 }

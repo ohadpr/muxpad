@@ -9,7 +9,7 @@ import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { EventBus } from '../events.js';
-import type { PtydCache } from '../ptyd-cache.js';
+import { type PtydCache, decoratePane } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { randomWorkspaceName } from '../random-name.js';
 import { safeCwd } from '../safe-cwd.js';
@@ -400,15 +400,7 @@ export function panesScopedRoutes(deps: {
 
     const decorate = (paneId: string) => {
       const p = panes.getById(paneId);
-      if (!p) return null;
-      return {
-        ...p,
-        title: deps.cache.getTitle(paneId),
-        foreground_cmd: deps.cache.getFg(paneId),
-        attention: deps.cache.getAttention(paneId),
-        busy: deps.cache.getBusy(paneId),
-        app_urls: deps.cache.getAppUrls(paneId),
-      };
+      return p ? decoratePane(deps.cache, p) : null;
     };
 
     // Extracting the SOLE pane of a tab into a new tab is pure churn — it
