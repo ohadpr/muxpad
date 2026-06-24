@@ -165,6 +165,28 @@ export class TabStore {
   }
 
   /**
+   * Move a tab to a different workspace, dropping it at the end of the
+   * target workspace's tab order. The tab's panes follow automatically
+   * (they reference the tab, not the workspace). Throws if the tab or the
+   * target workspace doesn't exist (the workspace_id FK enforces the latter).
+   */
+  setWorkspace(id: string, workspaceId: string): Tab {
+    const existing = this.getById(id);
+    if (!existing) throw new Error(`tab ${id} not found`);
+    const maxPos =
+      (
+        this.db
+          .prepare('SELECT COALESCE(MAX(position), -1) AS m FROM tabs WHERE workspace_id = ?')
+          .get(workspaceId) as { m: number } | undefined
+      )?.m ?? -1;
+    const now = Date.now();
+    this.db
+      .prepare('UPDATE tabs SET workspace_id = ?, position = ?, updated_at = ? WHERE id = ?')
+      .run(workspaceId, maxPos + 1, now, id);
+    return { ...existing, updated_at: now };
+  }
+
+  /**
    * Manual "unread" flag — folded into the tab's attention dot alongside
    * the BEL-driven runtime attention. Set from the tab context menu,
    * cleared when the tab is next viewed (the /seen route). Best-effort:
