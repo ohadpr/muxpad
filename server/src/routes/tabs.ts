@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { EventBus } from '../events.js';
-import type { PtydCache } from '../ptyd-cache.js';
+import { type PtydCache, decoratePane } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { randomWorkspaceName } from '../random-name.js';
 import { PaneStore } from '../store/PaneStore.js';
@@ -124,14 +124,7 @@ export function tabsRoutes(deps: {
       tabs.update(t.id, { layout: cleaned });
       t.layout = cleaned;
     }
-    const decorated = livePanes.map((p) => ({
-      ...p,
-      title: deps.cache.getTitle(p.id),
-      foreground_cmd: deps.cache.getFg(p.id),
-      attention: deps.cache.getAttention(p.id),
-      busy: deps.cache.getBusy(p.id),
-      app_urls: deps.cache.getAppUrls(p.id),
-    }));
+    const decorated = livePanes.map((p) => decoratePane(deps.cache, p));
     return c.json({ ...t, panes: decorated });
   });
 
