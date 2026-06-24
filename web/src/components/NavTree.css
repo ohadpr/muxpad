@@ -223,6 +223,14 @@
 .navtree-tab-row[data-drop-edge="bottom"]::after {
   bottom: -1px;
 }
+/* A tab is being dragged over this workspace row — light the whole row as a
+   drop basin (distinct from the thin reorder line above, which means "insert
+   between rows"). */
+.navtree-ws-row[data-tab-drop="true"] {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  border-radius: 4px;
+}
 .navtree-ws-name:hover {
   text-decoration: none;
 }
@@ -500,6 +508,42 @@
 }
 .navtree-menu-item.-danger:hover {
   background: color-mix(in srgb, var(--danger) 16%, transparent);
+}
+
+/* Submenu (e.g. "Move to workspace ›") — a hover flyout off the parent row. */
+.navtree-menu-sub {
+  position: relative;
+}
+.navtree-menu-item-parent {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.navtree-menu-caret {
+  color: var(--fg-faint);
+  font-size: 15px;
+  line-height: 1;
+}
+.navtree-submenu {
+  position: absolute;
+  top: -5px; /* align the flyout's first row with the parent row */
+  left: 100%; /* flush, so crossing into it doesn't pass through a dead gap */
+  z-index: 1;
+  min-width: 150px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+.navtree-submenu.-left {
+  left: auto;
+  right: 100%;
 }
 
 /* ─── Tab leading icon + picker ──────────────────────────────────────── */
