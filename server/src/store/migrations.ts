@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { randomTabIcon, splitLeadingEmoji } from '@muxpad/shared';
+import { type LayoutNode, pruneLayout, randomTabIcon, splitLeadingEmoji } from '@muxpad/shared';
 
 interface Migration {
   version: number;
@@ -7,28 +7,13 @@ interface Migration {
   apply?: (db: Database.Database) => void;
 }
 
-type LayoutValue =
-  | string
-  | {
-      direction: 'row' | 'column';
-      splitPercentage?: number | undefined;
-      first: LayoutValue;
-      second: LayoutValue;
-    };
-
 /**
  * Walk the binary layout tree and drop any pane IDs not in `valid`. Empty
  * branches collapse upward; if everything is gone the layout becomes ''.
+ * Thin wrapper over the shared `pruneLayout` collapse routine.
  */
-export function pruneDeadPanes(layout: LayoutValue, valid: Set<string>): LayoutValue {
-  if (layout == null || layout === '') return '';
-  if (typeof layout === 'string') return valid.has(layout) ? layout : '';
-  const first = pruneDeadPanes(layout.first, valid);
-  const second = pruneDeadPanes(layout.second, valid);
-  if (first === '' && second === '') return '';
-  if (first === '') return second;
-  if (second === '') return first;
-  return { ...layout, first, second };
+export function pruneDeadPanes(layout: LayoutNode, valid: Set<string>): LayoutNode {
+  return pruneLayout(layout, (id) => valid.has(id));
 }
 
 /**

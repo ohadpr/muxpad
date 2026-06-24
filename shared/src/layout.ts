@@ -73,22 +73,34 @@ export function spliceLayoutAtTarget(
 }
 
 /**
- * Remove the first leaf matching `paneId` from the tree, collapsing any
- * branch left with a single child. Returns `''` if the tree becomes empty.
- *
- * Mirrors the server's `pruneDeadPanes` collapse rules, but targets one id
- * instead of a validity set — used by the pane-move endpoint to splice a
- * pane out of its source tab's layout. Pure; safe to share client + server.
+ * Walk the binary layout tree and drop every leaf for which `keep` returns
+ * false, collapsing any branch left with a single child. Returns `''` if the
+ * whole tree is pruned away. Pure; the one collapse routine shared by:
+ *   - `removeLeafFromLayout` (keep everything but one id) — pane moves, and
+ *   - the server's `pruneDeadPanes` (keep only ids in a validity set) — load-
+ *     time / migration cleanup.
  */
-export function removeLeafFromLayout(layout: LayoutNode, paneId: string): LayoutNode {
+export function pruneLayout(
+  layout: LayoutNode,
+  keep: (paneId: string) => boolean,
+): LayoutNode {
   if (layout === '' || layout == null) return '';
-  if (typeof layout === 'string') return layout === paneId ? '' : layout;
-  const first = removeLeafFromLayout(layout.first, paneId);
-  const second = removeLeafFromLayout(layout.second, paneId);
+  if (typeof layout === 'string') return keep(layout) ? layout : '';
+  const first = pruneLayout(layout.first, keep);
+  const second = pruneLayout(layout.second, keep);
   if (first === '' && second === '') return '';
   if (first === '') return second;
   if (second === '') return first;
   return { ...layout, first, second };
+}
+
+/**
+ * Remove the first leaf matching `paneId` from the tree, collapsing any
+ * branch left with a single child. Returns `''` if the tree becomes empty.
+ * Used by the pane-move endpoint to splice a pane out of its source tab.
+ */
+export function removeLeafFromLayout(layout: LayoutNode, paneId: string): LayoutNode {
+  return pruneLayout(layout, (id) => id !== paneId);
 }
 
 /**
