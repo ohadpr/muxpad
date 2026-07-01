@@ -14,7 +14,7 @@ import { useEffect, useState } from 'react';
  * workspaces caches.
  */
 export interface PaneFace {
-  face: 'terminal' | 'web';
+  face: 'terminal' | 'web' | 'chat';
   /** The web URL to show when face === 'web'. Null until one is chosen. */
   url: string | null;
 }
@@ -35,7 +35,8 @@ function read(): State {
     if (parsed && typeof parsed === 'object') {
       for (const [id, v] of Object.entries(parsed as Record<string, unknown>)) {
         if (v && typeof v === 'object') {
-          const face = (v as PaneFace).face === 'web' ? 'web' : 'terminal';
+          const raw = (v as PaneFace).face;
+          const face = raw === 'web' || raw === 'chat' ? raw : 'terminal';
           const url = typeof (v as PaneFace).url === 'string' ? (v as PaneFace).url : null;
           out[id] = { face, url };
         }
