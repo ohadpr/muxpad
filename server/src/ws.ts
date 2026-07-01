@@ -6,8 +6,10 @@ import type { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { proxyAttach } from './ptyd-client/proxyAttach.js';
 import { safeCwd } from './safe-cwd.js';
+import { AgentSessionStore } from './store/AgentSessionStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
+import { TranscriptTail } from './chat/TranscriptReader.js';
 
 export interface WsServerHandle {
   close(): Promise<void>;
@@ -25,6 +27,7 @@ export function attachWsServer(deps: {
   const wss = new WebSocketServer({ noServer: true });
   const panes = new PaneStore(deps.db);
   const tabs = new TabStore(deps.db);
+  const agents = new AgentSessionStore(deps.db);
 
   // Server-side liveness detection. A WebSocket severed abruptly (browser
   // hard-reload, crashed tab, network blip) does NOT fire 'close' until the
@@ -77,6 +80,38 @@ export function attachWsServer(deps: {
         });
         ws.on('close', unsub);
         ws.on('error', unsub);
+      });
+      return;
+    }
+    // Chat view of an agent session: replay the tracked session's transcript
+    // as normalized chat events, then stream live appends. Read-only (Phase 2);
+    // driving/switching comes later. Works even while the TUI is the live
+    // writer — we only tail the JSONL, never the terminal.
+    const chatMatch = url.pathname.match(/^\/ws\/chat\/([^/]+)$/);
+    if (chatMatch) {
+      const chatPaneId = chatMatch[1] as string;
+      if (!panes.getById(chatPaneId)) {
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        const live = ws as WebSocket & { isAlive?: boolean };
+        live.isAlive = true;
+        ws.on('pong', () => {
+          live.isAlive = true;
+        });
+        const send = (obj: unknown) => {
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+        };
+        const session = agents.getByPane(chatPaneId);
+        send({ t: 'session', session });
+        if (!session || !session.current_sid) return; // nothing to tail yet
+        const tail = new TranscriptTail(session.current_sid, {
+          onEvents: (events, phase) => send({ t: 'events', phase, events }),
+        });
+        tail.start();
+        ws.on('close', () => tail.close());
+        ws.on('error', () => tail.close());
       });
       return;
     }
