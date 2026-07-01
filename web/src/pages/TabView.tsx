@@ -26,6 +26,7 @@ import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visite
 import { pushUndo } from '../lib/move-undo-store';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { normalizePaneUrl, setPaneFace, usePaneFace } from '../lib/pane-face';
+import { setTabViewMode, useTabViewMode } from '../lib/tab-view-mode';
 import { refreshTabs, useTabs } from '../tabs';
 import { useMediaQuery } from '../use-media-query';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
@@ -148,6 +149,11 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   // the new layout) reconciles once the window closes.
   const pendingLayoutWrites = useRef(0);
   const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
+  // Desktop 'tabbed' mode renders the same single-pane-at-a-time UI mobile is
+  // forced into, so both share the "active pane" machinery below via
+  // `singlePane`. `mobileActiveId` is the shared active-pane state for both.
+  const viewMode = useTabViewMode(tab?.id ?? null);
+  const singlePane = isMobile || viewMode === 'tabbed';
   // Holds the latest `addPane` function from the mobile render branch so
   // the top-level event listener below can reach it. The mobile chrome's
   // "+" button dispatches muxpad:add-pane (it lives in TabBar, outside
@@ -163,12 +169,12 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     setLastTabSlug(wsSlug, tabSlug);
   }, [isActive, tab, wsSlug, tabSlug]);
 
-  // Persist the active pane per tab whenever it changes (mobile only —
-  // desktop shows all panes via mosaic, no "active" concept).
+  // Persist the active pane per tab whenever it changes (single-pane views
+  // only — the split mosaic shows every pane at once, so has no "active" one).
   useEffect(() => {
-    if (!isMobile || !tab || !mobileActiveId) return;
+    if (!singlePane || !tab || !mobileActiveId) return;
     setLastPaneId(tab.id, mobileActiveId);
-  }, [isMobile, tab, mobileActiveId]);
+  }, [singlePane, tab, mobileActiveId]);
 
   // Mobile pane slots stay mounted when hidden (scroll position preserved).
   // Focus the active pane's terminal when the active pane CHANGES (switch /
@@ -180,7 +186,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   // the input bar drops). Mirrors desktopFocusHandledRef below.
   const mobileFocusedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!isMobile || !tab || !isActive) {
+    if (!singlePane || !tab || !isActive) {
       // Reset on deactivation so re-entering the tab refocuses its pane.
       if (!isActive) mobileFocusedRef.current = null;
       return;
@@ -198,7 +204,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     if (mobileFocusedRef.current === activeId) return;
     mobileFocusedRef.current = activeId;
     window.dispatchEvent(new CustomEvent('muxpad:focus-pane', { detail: { paneId: activeId } }));
-  }, [isMobile, tab, mobileActiveId, isActive]);
+  }, [singlePane, tab, mobileActiveId, isActive]);
 
   // Desktop: restore keyboard focus to the last-focused pane when this tab
   // becomes active again. Panes stay mounted across tab switches, so
@@ -428,6 +434,18 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     window.setTimeout(fire, 200);
     window.setTimeout(fire, 500);
   }, []);
+
+  // Flip split ⇄ tabbed. The visible pane's container changes width (a split
+  // tile → full width, or back), so nudge the terminals to refit — the mode
+  // lives in localStorage, which fires no layout PATCH of its own.
+  const changeViewMode = useCallback(
+    (next: 'split' | 'tabbed') => {
+      if (!tab) return;
+      setTabViewMode(tab.id, next);
+      notifyLayoutChanged();
+    },
+    [tab, notifyLayoutChanged],
+  );
 
   const onChange = useCallback(
     (layout: Layout) => {
@@ -984,6 +1002,148 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     );
   }
 
+  // ── Desktop 'tabbed' mode ────────────────────────────────────────────────
+  // Browser-style tab headers over a single visible pane. Same panes, same
+  // stable keys as the split mosaic — flipping here never remounts a terminal
+  // (see tab-view-mode.ts). Deliberately mirrors the mobile branch's
+  // single-pane arrangement; the only real difference is inline tab headers
+  // instead of a dropdown chooser.
+  if (viewMode === 'tabbed' && !isEmpty) {
+    const paneIds = collectPaneIds(layout);
+    const stored = tab ? getLastPaneId(tab.id) : undefined;
+    const activeId =
+      mobileActiveId && paneIds.includes(mobileActiveId)
+        ? mobileActiveId
+        : stored && paneIds.includes(stored)
+          ? stored
+          : (paneIds[0] ?? null);
+
+    const addPane = async () => {
+      const target = activeId ?? paneIds[paneIds.length - 1];
+      const created = await api.createPane(tab.id, target ? { inherit_cwd_from: target } : {});
+      const newLayout: Layout = target
+        ? splitAtPane(layoutRef.current, target, created.id, 'row')
+        : created.id;
+      layoutRef.current = newLayout;
+      setTab((prev) =>
+        prev
+          ? {
+              ...prev,
+              layout: fromMosaic(newLayout),
+              panes: prev.panes.some((p) => p.id === created.id)
+                ? prev.panes
+                : [...prev.panes, created],
+            }
+          : prev,
+      );
+      setMobileActiveId(created.id);
+      await persistLayout(newLayout);
+      notifyLayoutChanged();
+    };
+
+    const closePane = (paneId: string) => {
+      if (paneId === activeId) {
+        const idx = paneIds.indexOf(paneId);
+        setMobileActiveId(paneIds[idx + 1] ?? paneIds[idx - 1] ?? null);
+      }
+      void killPane(paneId);
+    };
+
+    const activePane = activeId ? tab.panes.find((p) => p.id === activeId) : undefined;
+    const activeWebSwitch =
+      activePane && activePane.kind === 'shell' ? (
+        <PaneWebSwitch paneId={activePane.id} appUrls={activePane.app_urls ?? []} />
+      ) : null;
+
+    return (
+      <div className="workspace-root">
+        <nav className="desktop-tab-strip" aria-label="Panes">
+          <div className="desktop-tab-strip-tabs" role="tablist">
+            {paneIds.map((paneId) => {
+              const p = tab.panes.find((x) => x.id === paneId);
+              return (
+                <div
+                  key={paneId}
+                  className="desktop-tab"
+                  data-active={paneId === activeId ? 'true' : undefined}
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={paneId === activeId}
+                    className="desktop-tab-select"
+                    onClick={() => setMobileActiveId(paneId)}
+                  >
+                    <span className="desktop-tab-label">{paneLabel(paneId)}</span>
+                    {p?.attention && (
+                      <span className="badge-dot -inline" aria-label="needs attention" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    className="desktop-tab-close"
+                    title="Close pane"
+                    aria-label="Close pane"
+                    onClick={() => closePane(paneId)}
+                  >
+                    <SvgClose size={11} />
+                  </button>
+                </div>
+              );
+            })}
+            <button
+              type="button"
+              className="desktop-tab-add"
+              title="New pane"
+              aria-label="New pane"
+              onClick={() => void addPane()}
+            >
+              +
+            </button>
+          </div>
+          <div className="desktop-tab-strip-actions">
+            {activeWebSwitch}
+            <button
+              type="button"
+              className="pane-chrome-btn"
+              title="Expand to split"
+              aria-label="Expand to split view"
+              onClick={() => changeViewMode('split')}
+            >
+              <SvgSplitView />
+            </button>
+          </div>
+        </nav>
+        <main className="workspace-body">
+          {paneIds.map((paneId) => {
+            const pane = tab.panes.find((p) => p.id === paneId);
+            if (!pane) return null;
+            const paneIsActive = paneId === activeId;
+            return (
+              <div
+                key={paneId}
+                className="tabbed-pane-slot"
+                hidden={!paneIsActive}
+                aria-hidden={!paneIsActive}
+              >
+                <PaneBody
+                  pane={pane}
+                  onExit={() => onPaneExited(paneId)}
+                  autoFocus={paneIsActive}
+                  paneActive={isActive && paneIsActive}
+                />
+              </div>
+            );
+          })}
+        </main>
+        <ExternalOpenToasts
+          currentTabId={tab.id}
+          paneLabel={(id) => (tab.panes.some((p) => p.id === id) ? paneLabel(id) : null)}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="workspace-root">
       <main className="workspace-body">
@@ -1056,6 +1216,16 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                       >
                         <SvgSplitDown />
                       </button>
+                      {tab.panes.length > 1 && (
+                        <button
+                          className="pane-chrome-btn"
+                          title="Collapse to tabs"
+                          aria-label="Collapse panes to tabs"
+                          onClick={() => changeViewMode('tabbed')}
+                        >
+                          <SvgTabsView />
+                        </button>
+                      )}
                       {/* One-click "pop this pane out into its own tab". Only
                           shown when the tab has another pane to leave behind —
                           extracting a sole pane is a no-op. Moving a pane to an
@@ -1639,6 +1809,27 @@ function SvgSplitDown() {
         strokeWidth="1.2"
       />
       <rect x="2" y="8" width="10" height="5" rx="1" fill="currentColor" opacity="0.4" />
+    </svg>
+  );
+}
+
+function SvgTabsView() {
+  // Two stacked header tabs over a body — reads as "browser tabs".
+  return (
+    <svg width="18" height="18" viewBox="0 0 14 14" aria-hidden="true">
+      <rect x="1" y="4" width="12" height="9" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <rect x="2" y="1.5" width="4.5" height="3" rx="0.8" fill="currentColor" opacity="0.7" />
+      <rect x="7" y="1.5" width="4.5" height="3" rx="0.8" fill="currentColor" opacity="0.3" />
+    </svg>
+  );
+}
+
+function SvgSplitView() {
+  // Two side-by-side panes — reads as "tiled split".
+  return (
+    <svg width="18" height="18" viewBox="0 0 14 14" aria-hidden="true">
+      <rect x="1" y="2" width="5" height="10" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <rect x="8" y="2" width="5" height="10" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" />
     </svg>
   );
 }
