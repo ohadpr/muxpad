@@ -90,7 +90,10 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: 3px 8px 12px;
+  /* Tighter LEFT gutter than right: the left edge is dead margin, so trimming
+     it (8 → 4) hands real width back to the names. Right stays 8 for the
+     scrollbar + close-button breathing room. */
+  padding: 3px 8px 12px 4px;
 }
 /* Desktop has no section header (dropped as redundant under the brand),
    so the list sits directly below the brand hairline — give it a little
@@ -381,6 +384,9 @@
   /* Indent tab text past the workspace name, so the parent→child step
      reads from alignment alone (replaces the old guide hairline). */
   padding-left: var(--nt-indent);
+  /* Trailing gutter so the name never kisses the pill edge once the close
+     button collapses away — keeps a touch of breathing room on the right. */
+  padding-right: 6px;
   color: inherit;
   text-decoration: none;
   -webkit-touch-callout: none;
@@ -414,11 +420,18 @@
 /* ─── Close affordance (per-row) ─────────────────────────────────────── */
 
 .navtree-close {
-  flex: 0 0 var(--nt-hit);
+  /* Collapsed to zero width while hidden so it doesn't steal room from the
+     tab name; the negative margin swallows the row's flex gap so the name
+     gets the full width back. It only claims its hit-area on hover/focus
+     (below), where it visibly pushes the name in. */
+  flex: 0 0 0;
+  width: 0;
+  margin-left: -4px;
   height: var(--nt-hit);
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
   color: var(--fg-faint);
   background: transparent;
   border: 0;
@@ -427,13 +440,16 @@
   cursor: pointer;
   user-select: none;
   opacity: 0;
-  transition: opacity 80ms ease;
+  transition: opacity 80ms ease, width 80ms ease, flex-basis 80ms ease, margin-left 80ms ease;
   /* Kill iOS's double-tap zoom delay so taps register instantly. */
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
-/* Touch has no hover — keep close faintly present on the sheet. */
+/* Touch has no hover — keep close faintly present (and sized) on the sheet. */
 .navtree[data-variant="sheet"] .navtree-close {
+  flex-basis: var(--nt-hit);
+  width: var(--nt-hit);
+  margin-left: 0;
   opacity: 0.35;
 }
 .navtree-ws-row:hover .navtree-close,
@@ -441,6 +457,9 @@
 .navtree-tab-row:hover .navtree-close,
 .navtree-tab-row:focus-within .navtree-close,
 .navtree-close:focus-visible {
+  flex-basis: var(--nt-hit);
+  width: var(--nt-hit);
+  margin-left: 0;
   opacity: 1;
 }
 .navtree-close:hover {
@@ -642,6 +661,9 @@
    Chrome surface + hairline divider — same plate language as the bar
    it replaces. */
 .sidenav {
+  /* flex-basis is overridden inline with the persisted/dragged width; this
+     is just the fallback before React mounts. grow/shrink stay 0 so the rail
+     holds whatever width the user dragged. */
   flex: 0 0 240px;
   /* min-width:0 caps the flex AUTOMATIC minimum (default min-width:auto
      = content min-content size). Without it, the rename <input>'s
@@ -649,10 +671,60 @@
      overrides the fixed basis, so the rail visibly widens mid-edit. */
   min-width: 0;
   min-height: 0;
+  /* Anchor for the absolutely-positioned resize grip on the right edge. */
+  position: relative;
   display: flex;
   flex-direction: column;
-  background: var(--bg-chrome);
+  /* The distinctly-darker "chrome board" token (same as the top tab bar /
+     mobile strip), not --bg-chrome: the latter is only a hair off --bg, so
+     the rail's empty space + footer blurred into the pane content behind it. */
+  background: var(--bg-tabbar);
   border-right: 1px solid var(--border);
+}
+
+/* ─── Drag-to-resize grip ────────────────────────────────────────────────
+   Straddles the right hairline as a wide-enough hit target; invisible until
+   hovered/dragged, then a faint accent line marks the seam. */
+.sidenav-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -3px;
+  width: 7px;
+  z-index: 5;
+  cursor: col-resize;
+  /* Keep pointer drags from being stolen as scrolls/selections. */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.sidenav-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* Center a 2px line over the rail's 1px border (border sits at right:3px
+     within this 7px-wide, right:-3px-offset strip). */
+  right: 3px;
+  width: 2px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+.sidenav-resize-handle:hover::after,
+body.sidenav-resizing .sidenav-resize-handle::after {
+  opacity: 0.6;
+}
+/* While dragging, force the resize cursor everywhere and kill selection so a
+   fast drag over the panes (incl. iframe/xterm content) stays smooth. */
+body.sidenav-resizing {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+/* Web panes are iframes; without this a drag that crosses one would let the
+   iframe swallow the pointer and stall the resize. */
+body.sidenav-resizing iframe {
+  pointer-events: none;
 }
 
 .sidenav-brand {

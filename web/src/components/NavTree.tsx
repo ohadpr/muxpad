@@ -836,7 +836,9 @@ function TabRow({
               {quickNumber}
             </span>
           )}
-          <span className="navtree-name-text">{tab.name}</span>
+          <span className="navtree-name-text" title={tab.name}>
+            {tab.name}
+          </span>
           {/* One status slot per row — never two glyphs competing. The states
               are really a progression: a tab is WORKING (spinner), then maybe
               DONE & WANTING YOU (dot), then idle. So show by priority: spinner
