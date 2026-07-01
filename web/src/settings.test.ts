@@ -68,6 +68,7 @@ describe('settings', () => {
       fontFamily: 'Menlo, Monaco, monospace',
       theme: 'acme',
       navLayout: 'top',
+      sidebarWidth: 240,
     });
   });
 });

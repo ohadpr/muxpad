@@ -368,6 +368,179 @@
   padding-bottom: var(--mobile-input-bar-height, 0px);
 }
 
+/* ── Desktop 'tabbed' mode ────────────────────────────────────────────────
+   Browser-style tab headers over a single visible pane. Shares the mounted-
+   all/one-visible pattern with the mobile view (.tabbed-pane-slot mirrors
+   .mobile-pane-slot) so flipping in/out never remounts a terminal. */
+.desktop-tab-strip {
+  display: flex;
+  align-items: stretch;
+  /* Recessed chrome bar (same tone as the top nav .ws-tabbar) so the tabs read
+     as plates sitting ON a bar. The empty area past the last tab stays this
+     bar colour — distinct from the raised tab plates, which are --bg. */
+  background: var(--bg-tabbar);
+  border-bottom: 1px solid var(--border);
+  height: var(--chrome-h);
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size);
+  flex: 0 0 auto;
+}
+
+.desktop-tab-strip-tabs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.desktop-tab-strip-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/* Edge-to-edge plate with a hairline right divider, no radius/box. Inactive
+   tabs sit at the content colour (--bg) — raised plates on the recessed bar,
+   clearly distinct from the empty bar area. The active tab adds the accent
+   wash + rail on top so it's the standout. */
+.desktop-tab {
+  position: relative;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 240px;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+  transition: background 100ms ease;
+}
+.desktop-tab:hover {
+  background: var(--bg-hover);
+}
+/* Active tab uses the top nav's exact active-tab treatment (.ws-tab active):
+   a 12% accent wash + the bottom rail below. Stronger than the pane's 5%
+   surface wash on purpose — a tab header is a control that has to clearly
+   read as selected, not blend into the strip. */
+.desktop-tab[data-active="true"] {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+}
+.desktop-tab[data-active="true"]:hover {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg));
+}
+.desktop-tab[data-active="true"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--chrome-rail);
+  background: var(--accent);
+}
+
+.desktop-tab-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding: 0 6px 0 14px;
+  background: transparent;
+  border: none;
+  color: var(--fg-dim);
+  font-family: inherit;
+  font-size: inherit;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+}
+.desktop-tab:hover .desktop-tab-select,
+.desktop-tab[data-active="true"] .desktop-tab-select {
+  color: var(--fg);
+}
+
+.desktop-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktop-tab-close {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin-right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--fg-faint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 100ms ease, color 100ms ease, background 100ms ease;
+}
+.desktop-tab:hover .desktop-tab-close,
+.desktop-tab[data-active="true"] .desktop-tab-close {
+  opacity: 1;
+}
+.desktop-tab-close:hover {
+  color: var(--danger);
+  background: var(--bg-hover);
+}
+
+.desktop-tab-add {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 100%;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+.desktop-tab-add:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+
+.desktop-tab-strip-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  border-left: 1px solid var(--border);
+}
+
+/* Same keep-mounted/hide-inactive trick as .mobile-pane-slot. */
+.tabbed-pane-slot {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.tabbed-pane-slot[hidden] {
+  display: none;
+}
+/* The visible tabbed pane IS the active pane, so it wears the exact same
+   accent wash a focused pane gets in the split view (tab.css's
+   .mosaic-window[data-focused] .mosaic-window-body::after) — otherwise it
+   reads as plain --bg, nearly the sidebar colour. pointer-events:none so it
+   never eats clicks/typing; z-index above the terminal like the split wash. */
+.tabbed-pane-slot:not([hidden])::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  pointer-events: none;
+  z-index: 4;
+}
+
 /* Pane chrome interior — fills the 28px toolbar plate. Mono throughout to
    match the rest of the chrome, tighter padding than the top bar since
    panes are nested one level deeper. */
