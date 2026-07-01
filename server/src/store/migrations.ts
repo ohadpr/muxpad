@@ -140,6 +140,32 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // Agent sessions: muxpad's own handle on a Claude (later Codex/Cursor)
+    // session running in a pane, so the session can be viewed/driven as a
+    // terminal or as web chat and switched between the two. `current_sid`
+    // is the live provider session-id, captured via the SessionStart hook
+    // the `muxpad claude` wrapper installs; `lineage` is the JSON list of
+    // every session-id this pane's session has carried (resume/compact/fork
+    // can mint a new one). One row per pane. See
+    // docs/plans/2026-07-01-web-chat-session-switching.md.
+    version: 9,
+    sql: `
+      CREATE TABLE agent_sessions (
+        id           TEXT PRIMARY KEY,
+        pane_id      TEXT NOT NULL UNIQUE REFERENCES panes(id) ON DELETE CASCADE,
+        assistant    TEXT NOT NULL DEFAULT 'claude',
+        cwd          TEXT,
+        current_sid  TEXT,
+        lineage      TEXT NOT NULL DEFAULT '[]',
+        view_mode    TEXT NOT NULL DEFAULT 'terminal',
+        writer       TEXT NOT NULL DEFAULT 'tui',
+        status       TEXT NOT NULL DEFAULT 'idle',
+        created_at   INTEGER NOT NULL,
+        updated_at   INTEGER NOT NULL
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

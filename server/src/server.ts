@@ -7,6 +7,7 @@ import { tabsRoutes } from './routes/tabs.js';
 import { panesTabScopedRoutes, panesScopedRoutes } from './routes/panes.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { openRoutes } from './routes/open.js';
+import { agentSessionsRoutes } from './routes/agent-sessions.js';
 import { EventBus } from './events.js';
 
 export interface AppDeps {
@@ -47,5 +48,6 @@ export function createApp(deps: AppDeps): Hono {
   app.route('/api/panes', panesScopedRoutes(resolved));
   app.route('/api/panes', attachmentsRoutes(resolved));
   app.route('/api/open', openRoutes(resolved));
+  app.route('/api/agent-sessions', agentSessionsRoutes(resolved));
   return app;
 }
