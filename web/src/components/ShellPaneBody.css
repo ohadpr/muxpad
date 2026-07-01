@@ -34,3 +34,28 @@
 body.mosaic-dragging .shell-pane-web {
   pointer-events: none;
 }
+
+/* Floating terminal↔chat toggle. Small and unobtrusive top-right; the chat
+   face is a read-only mirror of the session tracked via `muxpad claude`. */
+.shell-pane-chat-toggle {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 6;
+  padding: 2px 9px;
+  font-size: 11px;
+  line-height: 1.6;
+  border-radius: 999px;
+  border: 1px solid #2b3040;
+  background: rgba(20, 22, 30, 0.72);
+  color: #aab2c4;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  opacity: 0.55;
+  transition: opacity 0.12s ease;
+}
+.shell-pane-chat-toggle:hover {
+  opacity: 1;
+  border-color: #3d7bbf;
+  color: #cdd4e2;
+}

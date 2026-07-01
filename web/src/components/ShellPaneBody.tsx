@@ -1,5 +1,7 @@
 import type { PaneSpec } from '@muxpad/shared';
-import { usePaneFace } from '../lib/pane-face';
+import { useEffect, useState } from 'react';
+import { setPaneFace, usePaneFace } from '../lib/pane-face';
+import { ChatPane } from './ChatPane';
 import { XtermPane } from './XtermPane';
 import './ShellPaneBody.css';
 
@@ -34,16 +36,33 @@ export function ShellPaneBody({
 }) {
   const { face, url } = usePaneFace(pane.id);
   const showWeb = face === 'web' && !!url;
+  const showChat = face === 'chat';
+
+  // Lazily mount the chat face on first use, then keep it mounted-but-hidden
+  // (same contract as the web face) so its /ws/chat stays open and flipping
+  // back is instant. Panes never viewed as chat pay nothing.
+  const [chatMounted, setChatMounted] = useState(false);
+  useEffect(() => {
+    if (showChat) setChatMounted(true);
+  }, [showChat]);
 
   return (
     <div className="shell-pane-body">
-      <div className="shell-pane-face" hidden={showWeb}>
+      <button
+        type="button"
+        className="shell-pane-chat-toggle"
+        onClick={() => setPaneFace(pane.id, { face: showChat ? 'terminal' : 'chat', url })}
+        title={showChat ? 'Back to terminal' : 'Chat view of this session'}
+      >
+        {showChat ? 'Terminal' : 'Chat'}
+      </button>
+      <div className="shell-pane-face" hidden={showWeb || showChat}>
         <XtermPane
           paneId={pane.id}
           onExit={onExit}
           autoFocus={autoFocus}
           foregroundCmd={pane.foreground_cmd ?? null}
-          paneActive={paneActive && !showWeb}
+          paneActive={paneActive && !showWeb && !showChat}
         />
       </div>
       {url ? (
@@ -58,6 +77,11 @@ export function ShellPaneBody({
             referrerPolicy="no-referrer"
             title={url}
           />
+        </div>
+      ) : null}
+      {chatMounted ? (
+        <div className="shell-pane-face" hidden={!showChat}>
+          <ChatPane paneId={pane.id} active={showChat} />
         </div>
       ) : null}
     </div>
