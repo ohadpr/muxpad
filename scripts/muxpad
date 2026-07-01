@@ -924,6 +924,91 @@ cmd_app_url() {
   fi
 }
 
+# `muxpad claude [claude args...]` — launch Claude Code in THIS pane as a
+# muxpad-tracked agent session, so it can later be viewed/driven from the web
+# chat and switched between terminal and chat. Passthrough that AUGMENTS: runs
+# the real `claude` with your exact args, injecting only what muxpad needs to
+# know the session, then exec's it so the terminal is byte-identical to
+# running `claude` directly.
+#   - Mints a --session-id (unless you passed your own).
+#   - Installs a SessionStart hook (via --settings, unless you passed your
+#     own) that reports the real session-id back on every start/resume/
+#     compact/fork.
+#   - Pre-registers the session so the tracker has a row before the first
+#     prompt creates the transcript. All best-effort — never blocks the launch.
+# See docs/plans/2026-07-01-web-chat-session-switching.md.
+cmd_claude() {
+  if [ -z "${MUXPAD_PANE_ID:-}" ]; then
+    echo "muxpad claude: must be run inside a muxpad pane (no MUXPAD_PANE_ID)" >&2
+    exit 1
+  fi
+
+  # Respect user-supplied --session-id / --settings; only inject ours when
+  # absent.
+  local user_has_sid=0 user_has_settings=0 a
+  for a in "$@"; do
+    case "$a" in
+      --session-id|--session-id=*) user_has_sid=1 ;;
+      --settings|--settings=*) user_has_settings=1 ;;
+    esac
+  done
+
+  local extra=() sid=""
+  if [ "$user_has_sid" = "0" ]; then
+    sid="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+    extra+=(--session-id "$sid")
+  fi
+  if [ "$user_has_settings" = "0" ]; then
+    local hooks_dir="$DATA_DIR/agent-hooks"
+    mkdir -p "$hooks_dir"
+    local settings_file="$hooks_dir/$MUXPAD_PANE_ID.json"
+    # SessionStart hook → `muxpad _agent-hook`, which reads the hook payload
+    # on stdin, pulls session_id, and reports it for THIS pane.
+    printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":%s}]}]}}\n' \
+      "$(json_string "${MUXPAD_BIN:-muxpad} _agent-hook")" > "$settings_file"
+    extra+=(--settings "$settings_file")
+  else
+    echo "muxpad claude: --settings supplied; skipping hook injection (this session won't be web-switchable)" >&2
+  fi
+
+  # Pre-register (best-effort; the launch must succeed even if the daemon is
+  # unreachable or slow).
+  if [ -n "${MUXPAD_API_URL:-}" ]; then
+    local body
+    body="{\"pane_id\":$(json_string "$MUXPAD_PANE_ID"),\"assistant\":\"claude\",\"cwd\":$(json_string "$PWD")"
+    [ -n "$sid" ] && body+=",\"session_id\":$(json_string "$sid")"
+    body+='}'
+    # Subshell so http_request's exit-on-non-2xx (e.g. an older server with
+    # no /api/agent-sessions route) can't abort the launch. Registration is
+    # best-effort; the SessionStart hook re-reports the id anyway.
+    ( http_request POST /api/agent-sessions/register "$body" ) >/dev/null 2>&1 || true
+  fi
+
+  if [ "${#extra[@]}" -gt 0 ]; then
+    exec claude "$@" "${extra[@]}"
+  else
+    exec claude "$@"
+  fi
+}
+
+# Internal: SessionStart hook target installed by `muxpad claude`. Reads the
+# hook payload JSON on stdin, extracts session_id, and reports it to the
+# daemon for the current pane. Always exits 0 — it runs inside a live Claude
+# session and must never break it.
+cmd_agent_hook() {
+  local payload sid
+  payload="$(cat)"
+  sid="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null || true)"
+  if [ -n "$sid" ] && [ -n "${MUXPAD_PANE_ID:-}" ] && [ -n "${MUXPAD_API_URL:-}" ]; then
+    local body
+    body="{\"pane_id\":$(json_string "$MUXPAD_PANE_ID"),\"session_id\":$(json_string "$sid"),\"source\":\"SessionStart\"}"
+    # Subshell so http_request's exit-on-non-2xx can never fail the hook (it
+    # runs inside a live Claude session); we always want to exit 0 below.
+    ( http_request POST /api/agent-sessions/hook "$body" ) >/dev/null 2>&1 || true
+  fi
+  exit 0
+}
+
 usage() {
   cat <<'USAGE' >&2
 muxpad — a personal multi-workspace terminal-and-browser mosaic.
@@ -984,6 +1069,14 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      once the server is listening, e.g.
                                      `muxpad app-url http://localhost:5173 --label Web`.
 
+  claude [claude args...]            launch Claude Code in THIS pane as a
+                                     muxpad-tracked session so it can be viewed
+                                     and driven from the web chat (and switched
+                                     between terminal and chat). Passes your
+                                     args straight through to the real `claude`;
+                                     just adds session tracking. e.g.
+                                     `muxpad claude --dangerously-skip-permissions`.
+
 global flags:
   --json                             emit raw JSON instead of pretty output
                                      (place BEFORE the subcommand)
@@ -1033,6 +1126,8 @@ case "$VERB" in
   pane) cmd_pane "${ARGS[@]:1}" ;;
   open) cmd_open "${ARGS[@]:1}" ;;
   app-url) cmd_app_url "${ARGS[@]:1}" ;;
+  claude) cmd_claude "${ARGS[@]:1}" ;;
+  _agent-hook) cmd_agent_hook ;;
   ''|help|-h|--help) usage; [ "$VERB" = '' ] && exit 1 || exit 0 ;;
   *)
     echo "muxpad: unknown command '$VERB'" >&2
