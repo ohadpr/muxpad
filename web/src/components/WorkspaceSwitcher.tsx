@@ -258,12 +258,13 @@ function WorkspaceItem({
     >
       <span className="ws-switcher-item-label">
         <span className="ws-switcher-item-label-text">{name}</span>
-        {attention && (
-          // Render on the active row too — `markSeen` only clears
-          // attention when the user touches the pane that BEL'd, not
-          // just by visiting the parent workspace. So the active row's
-          // own dot is a real signal: "your current workspace still has
-          // a pane asking for you."
+        {attention && !isActive && (
+          // Rollup dot only on *inactive* rows, whose tabs are hidden —
+          // there it's the sole signal something inside wants you. The
+          // active workspace is the one you're in: its per-tab dots are
+          // already visible in the tab bar, so a workspace-level dot here
+          // would just double-signal. (Mirrors the sidebar, where the
+          // rollup dot shows only when the row is collapsed.)
           <span className="badge-dot -inline" aria-label="needs attention" />
         )}
       </span>
