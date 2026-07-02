@@ -1,6 +1,7 @@
 import type { PaneSpec } from '@muxpad/shared';
 import { useEffect, useState } from 'react';
 import { setPaneFace, usePaneFace } from '../lib/pane-face';
+import { sendPaneInput } from '../lib/pane-input';
 import { ChatPane } from './ChatPane';
 import { XtermPane } from './XtermPane';
 import './ShellPaneBody.css';
@@ -51,16 +52,41 @@ export function ShellPaneBody({
     if (showChat) setChatMounted(true);
   }, [showChat]);
 
+  // The single toggle switches the view AND what drives the session underneath:
+  //   → chat: stop the Claude TUI (server SIGTERM) so chat becomes the driver.
+  //   → terminal: relaunch `muxpad claude --resume <sid>` in the pane's shell.
+  // We await the hand-off before flipping so the target view is always live.
+  const [switching, setSwitching] = useState(false);
+  const switchTo = async (target: 'terminal' | 'chat') => {
+    if (switching) return;
+    setSwitching(true);
+    try {
+      if (target === 'chat') {
+        await fetch(`/api/agent-sessions/${pane.id}/takeover`, { method: 'POST' }).catch(() => {});
+      } else {
+        const res = await fetch(`/api/agent-sessions/by-pane/${pane.id}`).catch(() => null);
+        const s = res?.ok ? ((await res.json()) as { current_sid?: string | null }) : null;
+        if (s?.current_sid) {
+          await sendPaneInput(pane.id, `muxpad claude --resume ${s.current_sid}\r`);
+        }
+      }
+    } finally {
+      setSwitching(false);
+      setPaneFace(pane.id, { face: target, url });
+    }
+  };
+
   return (
     <div className="shell-pane-body">
       {showChat || isAgent ? (
         <button
           type="button"
           className="shell-pane-chat-toggle"
-          onClick={() => setPaneFace(pane.id, { face: showChat ? 'terminal' : 'chat', url })}
-          title={showChat ? 'Back to terminal' : 'Chat view of this session'}
+          onClick={() => switchTo(showChat ? 'terminal' : 'chat')}
+          disabled={switching}
+          title={showChat ? 'Switch to terminal' : 'Switch to chat'}
         >
-          {showChat ? 'Terminal' : 'Chat'}
+          {switching ? '…' : showChat ? 'Terminal' : 'Chat'}
         </button>
       ) : null}
       <div className="shell-pane-face" hidden={showWeb || showChat}>

@@ -134,49 +134,6 @@ export function attachWsServer(deps: {
             chatRunners.get(chatPaneId)?.interrupt();
             return;
           }
-          // Hand the session from the terminal to chat: SIGTERM the Claude TUI
-          // (its PID, recorded by the wrapper) and wait for it to clear before
-          // letting chat drive — a clean stop that upholds single-writer.
-          if (msg.t === 'takeover') {
-            void deps.ptyd
-              .getForegroundCommand(chatPaneId)
-              .catch(() => null)
-              .then(async (fg) => {
-                if (fg && /\bclaude\b/i.test(fg)) {
-                  const s2 = agents.getByPane(chatPaneId);
-                  if (s2?.tui_pid) {
-                    try {
-                      process.kill(s2.tui_pid, 'SIGTERM');
-                    } catch {
-                      // already gone, or not our process
-                    }
-                  }
-                  for (let i = 0; i < 25; i++) {
-                    await new Promise((r) => setTimeout(r, 150));
-                    let f: string | null = null;
-                    try {
-                      f = await deps.ptyd.getForegroundCommand(chatPaneId);
-                    } catch {
-                      f = null;
-                    }
-                    if (!f || !/\bclaude\b/i.test(f)) break;
-                  }
-                  let still: string | null = null;
-                  try {
-                    still = await deps.ptyd.getForegroundCommand(chatPaneId);
-                  } catch {
-                    still = null;
-                  }
-                  if (still && /\bclaude\b/i.test(still)) {
-                    send({ t: 'error', message: 'could not stop the terminal' });
-                    return;
-                  }
-                }
-                agents.setWriter(chatPaneId, 'headless');
-                send({ t: 'took-over' });
-              });
-            return;
-          }
           if (msg.t !== 'send' || typeof msg.text !== 'string' || !msg.text.trim()) return;
           const s = agents.getByPane(chatPaneId);
           if (!s?.current_sid) {

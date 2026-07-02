@@ -1,7 +1,5 @@
 import type { ChatEvent, ToolResultEvent, ToolUseEvent } from '@muxpad/shared';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { getPaneFace, setPaneFace } from '../lib/pane-face';
-import { sendPaneInput } from '../lib/pane-input';
 import './ChatPane.css';
 
 interface SessionMeta {
@@ -17,16 +15,16 @@ type ServerMsg =
   | { t: 'turn-start' }
   | { t: 'turn-done'; ok: boolean; error?: string }
   | { t: 'blocked'; reason: string }
-  | { t: 'took-over' }
   | { t: 'error'; message: string };
 
 /**
  * Chat view of the Claude session tracked in a pane. Connects to
  * /ws/chat/:paneId, replays the transcript as chat, then streams live turns
  * (dedupes by event id — the server may re-emit history after a compaction
- * rewrite). You can also drive the session from here: the composer runs a
- * headless turn. While a Claude TUI is driving the session, the composer is
- * blocked and offers a one-click "Take over" that stops the terminal.
+ * rewrite). The composer drives the session (a headless turn). Switching
+ * between terminal and chat — and stopping/relaunching the underlying Claude —
+ * is owned by the pane's Terminal/Chat toggle, so by the time chat is showing,
+ * it is already the driver.
  */
 export function ChatPane({ paneId, active }: { paneId: string; active: boolean }) {
   // undefined = still connecting; null = connected but no agent session.
@@ -41,9 +39,6 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  // Held so that if the first send is blocked by a live TUI, we can transparently
-  // take over (stop the terminal) and auto-resend it — no user-facing step.
-  const pendingText = useRef<string>('');
 
   useEffect(() => {
     byId.current = new Map();
@@ -84,28 +79,12 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
         setSending(false);
         setNotice(msg.ok ? null : (msg.error ?? 'turn failed'));
       } else if (msg.t === 'blocked') {
-        // A Claude TUI is driving. Transparently take over (stop the terminal);
-        // the pending message auto-sends on 'took-over'. Stay in the working
-        // state — no CTA, the user just sees their message start.
-        wsRef.current?.send(JSON.stringify({ t: 'takeover' }));
-        setSending(true);
-      } else if (msg.t === 'took-over') {
-        const pending = pendingText.current;
-        if (pending) {
-          pendingText.current = '';
-          wsRef.current?.send(JSON.stringify({ t: 'send', text: pending }));
-          setInput('');
-          setSending(true);
-        } else {
-          setSending(false);
-        }
+        // Defensive: switching to chat already stopped the TUI, so this
+        // shouldn't fire. If it does, tell the user to flip the toggle.
+        setSending(false);
+        setNotice('The terminal is driving this session — switch this pane to chat.');
       } else if (msg.t === 'error') {
         setSending(false);
-        // Don't lose the user's message if the hand-off failed.
-        if (pendingText.current) {
-          setInput(pendingText.current);
-          pendingText.current = '';
-        }
         setNotice(msg.message);
       }
     };
@@ -118,24 +97,12 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   const sendMessage = () => {
     const text = input.trim();
     if (!text || sending) return;
-    pendingText.current = text; // kept so a take-over can auto-resend it
     wsRef.current?.send(JSON.stringify({ t: 'send', text }));
     setInput('');
     setNotice(null);
     setSending(true);
   };
   const stop = () => wsRef.current?.send(JSON.stringify({ t: 'stop' }));
-
-  // Hand the session back to the real terminal: type `muxpad claude --resume
-  // <sid>` into the pane's shell, then flip this pane's face to the terminal.
-  // Safe + reliable (it's a launch, not a fragile TUI-exit). Only meaningful
-  // when no claude TUI is already running the pane.
-  const resumeInTerminal = async () => {
-    const sid = session?.current_sid;
-    if (!sid) return;
-    await sendPaneInput(paneId, `muxpad claude --resume ${sid}\r`);
-    setPaneFace(paneId, { face: 'terminal', url: getPaneFace(paneId).url });
-  };
 
   // Keep pinned to the bottom as new events arrive, unless the user scrolled up.
   // `events` is a deliberate trigger dependency (we re-scroll on new events)
@@ -253,16 +220,6 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
             <span>read-only</span>
           )}
         </span>
-        {session?.current_sid ? (
-          <button
-            type="button"
-            className="chat-resume"
-            onClick={resumeInTerminal}
-            title="Relaunch this session in the terminal"
-          >
-            Resume in terminal ▸
-          </button>
-        ) : null}
       </div>
     </div>
   );
