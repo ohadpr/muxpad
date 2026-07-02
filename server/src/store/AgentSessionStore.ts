@@ -114,6 +114,20 @@ export class AgentSessionStore {
     return this.getByPane(pane_id);
   }
 
+  /** Update the single-writer token — which surface currently drives the session. */
+  setWriter(pane_id: string, writer: Writer): void {
+    this.db
+      .prepare('UPDATE agent_sessions SET writer = ?, updated_at = ? WHERE pane_id = ?')
+      .run(writer, Date.now(), pane_id);
+  }
+
+  /** Record the view muxpad last showed for this pane (terminal | chat). */
+  setViewMode(pane_id: string, view_mode: ViewMode): void {
+    this.db
+      .prepare('UPDATE agent_sessions SET view_mode = ?, updated_at = ? WHERE pane_id = ?')
+      .run(view_mode, Date.now(), pane_id);
+  }
+
   getByPane(pane_id: string): AgentSession | null {
     return this.row(this.db.prepare('SELECT * FROM agent_sessions WHERE pane_id = ?').get(pane_id));
   }
