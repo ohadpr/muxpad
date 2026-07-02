@@ -557,7 +557,7 @@
   gap: 8px;
   max-width: 768px;
   margin: 0 auto;
-  padding: 6px 6px 6px 18px;
+  padding: 6px 8px;
   background: var(--chat-elev);
   border: 1px solid var(--chat-border);
   border-radius: 26px;
@@ -567,6 +567,42 @@
 .chat-composer:focus-within {
   border-color: color-mix(in srgb, var(--chat-accent) 65%, var(--chat-border));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-accent) 22%, transparent);
+}
+
+/* Photo/attach button on the left (opens the OS photo picker → uploads via the
+   same attachments endpoint the TUI composer uses). Quiet ghost button. */
+.chat-attach {
+  flex: 0 0 auto;
+  align-self: flex-end;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--chat-dim);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+}
+.chat-attach:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--chat-fg) 10%, transparent);
+  color: var(--chat-fg);
+}
+.chat-attach:active:not(:disabled) {
+  transform: scale(0.92);
+}
+.chat-attach:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.chat-attach-spin {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--chat-border-strong);
+  border-top-color: var(--chat-accent);
+  animation: chat-spin 720ms linear infinite;
 }
 
 .chat-input {

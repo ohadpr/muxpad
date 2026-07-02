@@ -1,7 +1,8 @@
 import type { ChatEvent, ToolResultEvent, ToolUseEvent } from '@muxpad/shared';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { api } from '../api';
 import './ChatPane.css';
 
 // Assistant + streaming text is rendered as GitHub-flavored markdown. No raw
@@ -20,6 +21,21 @@ function Markdown({ text }: { text: string }) {
         {text}
       </ReactMarkdown>
     </div>
+  );
+}
+
+/** Camera glyph for the photo/attach button (matches the TUI composer). */
+function SvgCamera() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" fill="none">
+      <path
+        d="M4 8a2 2 0 0 1 2-2h1.2a2 2 0 0 0 1.66-.89l.62-.92A1 1 0 0 1 10.3 4h3.4a1 1 0 0 1 .82.43l.62.92A2 2 0 0 0 16.8 6H18a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8Z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+      <circle cx="12" cy="13" r="3.2" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
   );
 }
 
@@ -58,8 +74,10 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   const pinnedToBottom = useRef(true);
   const wsRef = useRef<WebSocket | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   // Live assistant text streamed from the headless turn (token-level), shown
   // as a preview until the final message lands in the transcript tail.
@@ -158,6 +176,33 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   };
   const stop = () => wsRef.current?.send(JSON.stringify({ t: 'stop' }));
 
+  // Photo picker → upload via the same attachments endpoint the TUI composer
+  // uses, then append the returned path(s) to the message so Claude reads the
+  // image. accept="image/*" with no `capture` → the OS sheet offers library +
+  // camera. Empty-type files (HEIC / some Android providers) are kept.
+  const onPickImages = async (e: ChangeEvent<HTMLInputElement>) => {
+    const el = e.target;
+    const files = Array.from(el.files ?? []).filter(
+      (f) => f.type === '' || f.type.startsWith('image/'),
+    );
+    el.value = ''; // reset so re-picking the same file still fires onChange
+    if (files.length === 0) return;
+    setUploading(true);
+    const paths: string[] = [];
+    for (const f of files) {
+      try {
+        const { path } = await api.uploadAttachment(paneId, f, f.name || 'image.png');
+        paths.push(path);
+      } catch {
+        // drop this one; the rest still upload
+      }
+    }
+    setUploading(false);
+    if (paths.length === 0) return;
+    setInput((prev) => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${paths.join(' ')} `);
+    inputRef.current?.focus();
+  };
+
   // Keep pinned to the bottom as new events arrive, unless the user scrolled up.
   // `events` is a deliberate trigger dependency (we re-scroll on new events)
   // even though the body reads it only via the DOM.
@@ -249,6 +294,24 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
         <div className="chat-composer-wrap">
           {notice ? <div className="chat-notice">{notice}</div> : null}
           <div className="chat-composer">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              onChange={onPickImages}
+            />
+            <button
+              type="button"
+              className="chat-attach"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={sending || uploading}
+              aria-label="Add photo"
+              title="Add photo"
+            >
+              {uploading ? <span className="chat-attach-spin" aria-hidden="true" /> : <SvgCamera />}
+            </button>
             <textarea
               ref={inputRef}
               className="chat-input"
