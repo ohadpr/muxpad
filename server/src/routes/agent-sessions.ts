@@ -8,6 +8,7 @@ const RegisterSchema = z.object({
   assistant: z.string().optional(),
   cwd: z.string().optional(),
   session_id: z.string().optional(),
+  pid: z.number().int().positive().optional(),
 });
 
 const HookSchema = z.object({
