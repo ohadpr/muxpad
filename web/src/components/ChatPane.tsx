@@ -43,6 +43,10 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   // Live assistant text streamed from the headless turn (token-level), shown
   // as a preview until the final message lands in the transcript tail.
   const [streamingText, setStreamingText] = useState('');
+  // For the send↔takeover race: if a send lands before the toggle's hand-off
+  // finished, we silently take over and resend the held text (once).
+  const pendingText = useRef('');
+  const takeoverTried = useRef(false);
 
   useEffect(() => {
     byId.current = new Map();
@@ -80,6 +84,7 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
         setSending(true);
         setNotice(null);
         setStreamingText('');
+        pendingText.current = '';
       } else if (msg.t === 'stream') {
         setStreamingText((s) => s + msg.delta);
       } else if (msg.t === 'turn-done') {
@@ -87,10 +92,28 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
         setStreamingText('');
         setNotice(msg.ok ? null : (msg.error ?? 'turn failed'));
       } else if (msg.t === 'blocked') {
-        // Defensive: switching to chat already stopped the TUI, so this
-        // shouldn't fire. If it does, tell the user to flip the toggle.
-        setSending(false);
-        setNotice('The terminal is driving this session — switch this pane to chat.');
+        // The terminal hand-off hasn't finished (raced the toggle). Silently
+        // finish taking over, then resend — once — so the user never sees it.
+        if (takeoverTried.current) {
+          setSending(false);
+          setNotice('Could not take over from the terminal — exit Claude there and retry.');
+        } else {
+          takeoverTried.current = true;
+          setSending(true);
+          fetch(`/api/agent-sessions/${paneId}/takeover`, { method: 'POST' })
+            .then((r) => {
+              if (r.ok && pendingText.current) {
+                wsRef.current?.send(JSON.stringify({ t: 'send', text: pendingText.current }));
+              } else {
+                setSending(false);
+                setNotice('Could not take over from the terminal — exit Claude there and retry.');
+              }
+            })
+            .catch(() => {
+              setSending(false);
+              setNotice('Could not take over from the terminal.');
+            });
+        }
       } else if (msg.t === 'error') {
         setSending(false);
         setNotice(msg.message);
@@ -105,6 +128,8 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   const sendMessage = () => {
     const text = input.trim();
     if (!text || sending) return;
+    pendingText.current = text; // held for a silent takeover-and-resend if blocked
+    takeoverTried.current = false;
     wsRef.current?.send(JSON.stringify({ t: 'send', text }));
     setInput('');
     setNotice(null);
