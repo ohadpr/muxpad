@@ -39,10 +39,30 @@ export function ShellPaneBody({
   const showWeb = face === 'web' && !!url;
   const showChat = face === 'chat';
 
-  // Chat is a face of a *recognized agent* (Claude today), not of every shell.
-  // Only surface the toggle when the pane is running one — or when we're already
-  // in chat, so you can always get back to the terminal.
-  const isAgent = /\bclaude\b/i.test(pane.foreground_cmd ?? '');
+  // Surface the toggle as soon as the pane has a muxpad-tracked Claude session
+  // (launched via `muxpad claude`). This is known the instant the wrapper
+  // registers — far faster than the ~10s foreground-cmd poll the old gate used,
+  // which made the toggle lag ~7s behind claude starting/stopping. It's sticky:
+  // chat stays a valid face of the session for the pane's life (view / drive /
+  // resume it), so it never flickers.
+  const [hasSession, setHasSession] = useState(false);
+  useEffect(() => {
+    if (hasSession) return; // sticky once found → stop polling
+    let alive = true;
+    const check = () => {
+      fetch(`/api/agent-sessions/by-pane/${pane.id}`)
+        .then((r) => {
+          if (alive && r.ok) setHasSession(true);
+        })
+        .catch(() => {});
+    };
+    check();
+    const iv = setInterval(check, 2000);
+    return () => {
+      alive = false;
+      clearInterval(iv);
+    };
+  }, [pane.id, hasSession]);
 
   // Lazily mount the chat face on first use, then keep it mounted-but-hidden
   // (same contract as the web face) so its /ws/chat stays open and flipping
@@ -78,7 +98,7 @@ export function ShellPaneBody({
 
   return (
     <div className="shell-pane-body">
-      {showChat || isAgent ? (
+      {showChat || hasSession ? (
         <button
           type="button"
           className="shell-pane-chat-toggle"
