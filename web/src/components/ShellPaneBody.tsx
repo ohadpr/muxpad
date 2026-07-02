@@ -80,6 +80,9 @@ export function ShellPaneBody({
   const switchTo = async (target: 'terminal' | 'chat') => {
     if (switching) return;
     setSwitching(true);
+    // Flip the view immediately so you go straight to the target (no flash of
+    // the other face); the hand-off runs underneath while the toggle shows "…".
+    setPaneFace(pane.id, { face: target, url });
     try {
       if (target === 'chat') {
         await fetch(`/api/agent-sessions/${pane.id}/takeover`, { method: 'POST' }).catch(() => {});
@@ -92,7 +95,6 @@ export function ShellPaneBody({
       }
     } finally {
       setSwitching(false);
-      setPaneFace(pane.id, { face: target, url });
     }
   };
 
