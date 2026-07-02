@@ -1,6 +1,6 @@
 import type { PaneSpec } from '@muxpad/shared';
 import { useEffect, useState } from 'react';
-import { setPaneFace, usePaneFace } from '../lib/pane-face';
+import { getPaneFace, setPaneFace, usePaneFace } from '../lib/pane-face';
 import { sendPaneInput } from '../lib/pane-input';
 import { ChatPane } from './ChatPane';
 import { XtermPane } from './XtermPane';
@@ -47,22 +47,32 @@ export function ShellPaneBody({
   // resume it), so it never flickers.
   const [hasSession, setHasSession] = useState(false);
   useEffect(() => {
-    if (hasSession) return; // sticky once found → stop polling
     let alive = true;
-    const check = () => {
-      fetch(`/api/agent-sessions/by-pane/${pane.id}`)
-        .then((r) => {
-          if (alive && r.ok) setHasSession(true);
-        })
-        .catch(() => {});
+    const check = async () => {
+      const r = await fetch(`/api/agent-sessions/by-pane/${pane.id}`).catch(() => null);
+      if (!alive || !r?.ok) return;
+      const s = (await r.json().catch(() => null)) as { view_mode?: string } | null;
+      setHasSession(true);
+      // Sync THIS device's terminal/chat face to the session's SHARED view-mode
+      // so a switch on one device shows up on the others — mobile no longer
+      // lands on an empty terminal after a desktop switch to chat. The 'web'
+      // face is device-local; never override it here.
+      const local = getPaneFace(pane.id);
+      if (
+        local.face !== 'web' &&
+        (s?.view_mode === 'chat' || s?.view_mode === 'terminal') &&
+        s.view_mode !== local.face
+      ) {
+        setPaneFace(pane.id, { face: s.view_mode, url: local.url });
+      }
     };
-    check();
-    const iv = setInterval(check, 2000);
+    void check();
+    const iv = setInterval(() => void check(), 2500);
     return () => {
       alive = false;
       clearInterval(iv);
     };
-  }, [pane.id, hasSession]);
+  }, [pane.id]);
 
   // Lazily mount the chat face on first use, then keep it mounted-but-hidden
   // (same contract as the web face) so its /ws/chat stays open and flipping
@@ -80,6 +90,13 @@ export function ShellPaneBody({
   const switchTo = async (target: 'terminal' | 'chat') => {
     if (switching) return;
     setSwitching(true);
+    // Record the SHARED view-mode first (fast) so other devices follow, and so
+    // this device's own poll doesn't revert the face mid-handoff.
+    void fetch(`/api/agent-sessions/${pane.id}/view-mode`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: target }),
+    }).catch(() => {});
     try {
       if (target === 'chat') {
         // Flip immediately (no flash of the terminal exiting); stop the TUI
