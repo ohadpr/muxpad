@@ -13,6 +13,7 @@ type ServerMsg =
   | { t: 'session'; session: (SessionMeta & Record<string, unknown>) | null }
   | { t: 'events'; phase: 'history' | 'live'; events: ChatEvent[] }
   | { t: 'turn-start' }
+  | { t: 'stream'; delta: string }
   | { t: 'turn-done'; ok: boolean; error?: string }
   | { t: 'blocked'; reason: string }
   | { t: 'error'; message: string };
@@ -39,6 +40,9 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // Live assistant text streamed from the headless turn (token-level), shown
+  // as a preview until the final message lands in the transcript tail.
+  const [streamingText, setStreamingText] = useState('');
 
   useEffect(() => {
     byId.current = new Map();
@@ -75,8 +79,12 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
       } else if (msg.t === 'turn-start') {
         setSending(true);
         setNotice(null);
+        setStreamingText('');
+      } else if (msg.t === 'stream') {
+        setStreamingText((s) => s + msg.delta);
       } else if (msg.t === 'turn-done') {
         setSending(false);
+        setStreamingText('');
         setNotice(msg.ok ? null : (msg.error ?? 'turn failed'));
       } else if (msg.t === 'blocked') {
         // Defensive: switching to chat already stopped the TUI, so this
@@ -107,11 +115,11 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   // Keep pinned to the bottom as new events arrive, unless the user scrolled up.
   // `events` is a deliberate trigger dependency (we re-scroll on new events)
   // even though the body reads it only via the DOM.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: events is the scroll trigger
+  // biome-ignore lint/correctness/useExhaustiveDependencies: events + streamingText are the scroll triggers
   useEffect(() => {
     const el = scrollRef.current;
     if (el && active && pinnedToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [events, active]);
+  }, [events, streamingText, active]);
 
   // Auto-grow the composer like ChatGPT: reset to content height, capped by CSS
   // max-height (the textarea keeps scrolling past that). `input` is the trigger
@@ -163,7 +171,30 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   return (
     <div className="chat-pane">
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
-        <div className="chat-list">{body}</div>
+        <div className="chat-list">
+          {body}
+          {(sending || streamingText) && session?.current_sid ? (
+            <div className="chat-turn chat-turn-assistant">
+              <div className="chat-avatar" aria-hidden="true">
+                ✳
+              </div>
+              {streamingText ? (
+                <div className="chat-msg">
+                  {streamingText}
+                  <span className="chat-cursor" aria-hidden="true" />
+                </div>
+              ) : (
+                <div className="chat-msg chat-working" aria-label="Claude is working">
+                  <span className="chat-typing" aria-hidden="true">
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                </div>
+              )}
+            </div>
+          ) : null}
+        </div>
       </div>
       {session?.current_sid ? (
         <div className="chat-composer-wrap">

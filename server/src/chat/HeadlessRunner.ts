@@ -3,6 +3,8 @@ import { type ChildProcess, spawn } from 'node:child_process';
 export interface HeadlessRunnerCallbacks {
   /** The provider session-id from the stream's init event (may differ from the resumed id). */
   onSessionId?: (sid: string) => void;
+  /** Streaming assistant text deltas (for a live "typing" preview in chat). */
+  onText?: (delta: string) => void;
   /** Turn finished. ok=false with an optional message on error/nonzero exit. */
   onDone?: (ok: boolean, error?: string) => void;
 }
@@ -49,6 +51,7 @@ export class HeadlessRunner {
       '--output-format',
       'stream-json',
       '--verbose',
+      '--include-partial-messages',
       '--permission-mode',
       'bypassPermissions',
     ];
@@ -93,6 +96,19 @@ export class HeadlessRunner {
       // Also present on the final `result` event; harmless to re-capture.
       if (obj.type === 'result' && typeof obj.session_id === 'string') {
         this.opts.cb?.onSessionId?.(obj.session_id);
+      }
+      // Streaming text deltas (--include-partial-messages) for a live preview.
+      if (obj.type === 'stream_event') {
+        const evt = obj.event as
+          | { type?: string; delta?: { type?: string; text?: string } }
+          | undefined;
+        if (
+          evt?.type === 'content_block_delta' &&
+          evt.delta?.type === 'text_delta' &&
+          typeof evt.delta.text === 'string'
+        ) {
+          this.opts.cb?.onText?.(evt.delta.text);
+        }
       }
     }
   }
