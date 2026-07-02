@@ -350,7 +350,7 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
               type="button"
               className="chat-attach"
               onClick={() => fileInputRef.current?.click()}
-              disabled={sending || uploading}
+              disabled={uploading}
               aria-label="Add photo"
               title="Add photo"
             >
@@ -367,9 +367,8 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
                   sendMessage();
                 }
               }}
-              placeholder={sending ? 'Claude is working…' : 'Message Claude…'}
+              placeholder="Message Claude…"
               rows={1}
-              disabled={sending}
             />
             {sending ? (
               <button
