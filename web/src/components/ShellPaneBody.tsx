@@ -80,18 +80,22 @@ export function ShellPaneBody({
   const switchTo = async (target: 'terminal' | 'chat') => {
     if (switching) return;
     setSwitching(true);
-    // Flip the view immediately so you go straight to the target (no flash of
-    // the other face); the hand-off runs underneath while the toggle shows "…".
-    setPaneFace(pane.id, { face: target, url });
     try {
       if (target === 'chat') {
+        // Flip immediately (no flash of the terminal exiting); stop the TUI
+        // underneath while the toggle shows "…".
+        setPaneFace(pane.id, { face: 'chat', url });
         await fetch(`/api/agent-sessions/${pane.id}/takeover`, { method: 'POST' }).catch(() => {});
       } else {
+        // Relaunch claude, give it a beat to start drawing, THEN reveal the
+        // terminal — so you land on Claude coming up, not the raw command echo.
         const res = await fetch(`/api/agent-sessions/by-pane/${pane.id}`).catch(() => null);
         const s = res?.ok ? ((await res.json()) as { current_sid?: string | null }) : null;
         if (s?.current_sid) {
           await sendPaneInput(pane.id, `muxpad claude --resume ${s.current_sid}\r`);
+          await new Promise((r) => setTimeout(r, 1200));
         }
+        setPaneFace(pane.id, { face: 'terminal', url });
       }
     } finally {
       setSwitching(false);
