@@ -38,6 +38,11 @@ export function ShellPaneBody({
   const showWeb = face === 'web' && !!url;
   const showChat = face === 'chat';
 
+  // Chat is a face of a *recognized agent* (Claude today), not of every shell.
+  // Only surface the toggle when the pane is running one — or when we're already
+  // in chat, so you can always get back to the terminal.
+  const isAgent = /\bclaude\b/i.test(pane.foreground_cmd ?? '');
+
   // Lazily mount the chat face on first use, then keep it mounted-but-hidden
   // (same contract as the web face) so its /ws/chat stays open and flipping
   // back is instant. Panes never viewed as chat pay nothing.
@@ -48,14 +53,16 @@ export function ShellPaneBody({
 
   return (
     <div className="shell-pane-body">
-      <button
-        type="button"
-        className="shell-pane-chat-toggle"
-        onClick={() => setPaneFace(pane.id, { face: showChat ? 'terminal' : 'chat', url })}
-        title={showChat ? 'Back to terminal' : 'Chat view of this session'}
-      >
-        {showChat ? 'Terminal' : 'Chat'}
-      </button>
+      {showChat || isAgent ? (
+        <button
+          type="button"
+          className="shell-pane-chat-toggle"
+          onClick={() => setPaneFace(pane.id, { face: showChat ? 'terminal' : 'chat', url })}
+          title={showChat ? 'Back to terminal' : 'Chat view of this session'}
+        >
+          {showChat ? 'Terminal' : 'Chat'}
+        </button>
+      ) : null}
       <div className="shell-pane-face" hidden={showWeb || showChat}>
         <XtermPane
           paneId={pane.id}
