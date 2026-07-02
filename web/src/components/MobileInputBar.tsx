@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { api } from '../api';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
 import { planSubmit } from '../lib/mobile-submit';
+import { usePaneFace } from '../lib/pane-face';
 import { isCursorAgentCmd } from '../lib/xterm-internals';
 import './MobileInputBar.css';
 
@@ -48,6 +49,9 @@ export interface MobileInputBarProps {
 
 export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: MobileInputBarProps) {
   const cursorBufferScroll = isCursorAgentCmd(foregroundCmd);
+  // Hide the terminal composer when the pane is showing its chat face — chat
+  // has its own composer, and two stacked input bars is wrong.
+  const { face } = usePaneFace(paneId ?? '');
   const editableRef = useRef<HTMLDivElement | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -66,7 +70,7 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
   // while a pane.updated / tab refetch is in flight — doesn't flip the bar to
   // `hidden`, blur the contenteditable, and dismiss the soft keyboard "on its
   // own". A shell pane briefly reading as unknown stays visible.
-  const visible = !!paneId && paneKind !== 'url';
+  const visible = !!paneId && paneKind !== 'url' && face !== 'chat';
 
   // Anchor the bar's bottom edge to the visual viewport bottom (= top
   // of the on-screen keyboard when open). We position by `top`, not by
