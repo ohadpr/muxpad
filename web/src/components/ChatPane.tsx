@@ -1,5 +1,7 @@
 import type { ChatEvent, ToolResultEvent, ToolUseEvent } from '@muxpad/shared';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { getPaneFace, setPaneFace } from '../lib/pane-face';
+import { sendPaneInput } from '../lib/pane-input';
 import './ChatPane.css';
 
 interface SessionMeta {
@@ -101,6 +103,17 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   };
   const stop = () => wsRef.current?.send(JSON.stringify({ t: 'stop' }));
 
+  // Hand the session back to the real terminal: type `muxpad claude --resume
+  // <sid>` into the pane's shell, then flip this pane's face to the terminal.
+  // Safe + reliable (it's a launch, not a fragile TUI-exit). Only meaningful
+  // when no claude TUI is already running the pane.
+  const resumeInTerminal = async () => {
+    const sid = session?.current_sid;
+    if (!sid) return;
+    await sendPaneInput(paneId, `muxpad claude --resume ${sid}\r`);
+    setPaneFace(paneId, { face: 'terminal', url: getPaneFace(paneId).url });
+  };
+
   // Keep pinned to the bottom as new events arrive, unless the user scrolled up.
   // `events` is a deliberate trigger dependency (we re-scroll on new events)
   // even though the body reads it only via the DOM.
@@ -174,12 +187,24 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
         </div>
       ) : null}
       <div className="chat-footer">
-        <span className={`chat-dot ${connected ? 'on' : 'off'}`} />
+        <span className="chat-footer-status">
+          <span className={`chat-dot ${connected ? 'on' : 'off'}`} />
+          {session?.current_sid ? (
+            <span>driven from {session.writer === 'headless' ? 'chat' : 'terminal'}</span>
+          ) : (
+            <span>read-only</span>
+          )}
+        </span>
         {session?.current_sid ? (
-          <span>view · driven from {session.writer === 'headless' ? 'chat' : 'terminal'}</span>
-        ) : (
-          <span>read-only</span>
-        )}
+          <button
+            type="button"
+            className="chat-resume"
+            onClick={resumeInTerminal}
+            title="Relaunch this session in the terminal"
+          >
+            Resume in terminal ▸
+          </button>
+        ) : null}
       </div>
     </div>
   );
