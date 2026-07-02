@@ -1,8 +1,8 @@
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { takeoverPane } from '../chat/takeover.js';
+import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
 
 const RegisterSchema = z.object({
@@ -36,6 +36,18 @@ export function agentSessionsRoutes(deps: { db: Database.Database; ptyd: PtydCli
   app.post('/:paneId/takeover', async (c) => {
     const res = await takeoverPane(c.req.param('paneId'), store, deps.ptyd);
     return c.json(res, res.ok ? 200 : 409);
+  });
+
+  // Live foreground of the pane — the chat→terminal toggle uses this to avoid
+  // typing the relaunch command INTO a Claude TUI that's already running.
+  app.get('/:paneId/foreground', async (c) => {
+    let fg: string | null = null;
+    try {
+      fg = await deps.ptyd.getForegroundCommand(c.req.param('paneId'));
+    } catch {
+      fg = null;
+    }
+    return c.json({ foreground: fg, isClaude: !!fg && /\bclaude\b/i.test(fg) });
   });
 
   app.post('/register', async (c) => {
