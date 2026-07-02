@@ -1,6 +1,27 @@
 import type { ChatEvent, ToolResultEvent, ToolUseEvent } from '@muxpad/shared';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import ReactMarkdown, { type Components } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import './ChatPane.css';
+
+// Assistant + streaming text is rendered as GitHub-flavored markdown. No raw
+// HTML is allowed through (no rehype-raw) so user/model content can't inject
+// markup — react-markdown escapes everything by default. Links open safely in
+// a new tab; everything else is styled from the .chat-md-* rules in the CSS.
+const MD_COMPONENTS: Components = {
+  a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" />,
+};
+
+/** Renders (possibly partial/streaming) markdown for assistant messages. */
+function Markdown({ text }: { text: string }) {
+  return (
+    <div className="chat-md">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+}
 
 interface SessionMeta {
   current_sid: string | null;
@@ -154,7 +175,10 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
     const el = inputRef.current;
     if (!el) return;
     el.style.height = 'auto';
+    const max = Number.parseFloat(getComputedStyle(el).maxHeight) || Number.POSITIVE_INFINITY;
     el.style.height = `${el.scrollHeight}px`;
+    // No scrollbar while growing; only reveal one once we hit the max height.
+    el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden';
   }, [input]);
 
   const onScroll = () => {
@@ -205,7 +229,7 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
               </div>
               {streamingText ? (
                 <div className="chat-msg">
-                  {streamingText}
+                  <Markdown text={streamingText} />
                   <span className="chat-cursor" aria-hidden="true" />
                 </div>
               ) : (
@@ -295,7 +319,9 @@ function ChatRow({ event }: { event: ChatEvent }) {
           <div className="chat-avatar" aria-hidden="true">
             ✳
           </div>
-          <div className="chat-msg">{event.text}</div>
+          <div className="chat-msg">
+            <Markdown text={event.text} />
+          </div>
         </div>
       );
     case 'thinking':
