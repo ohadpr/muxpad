@@ -553,7 +553,7 @@
 
 .chat-composer {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 8px;
   max-width: 768px;
   margin: 0 auto;
@@ -573,7 +573,7 @@
    same attachments endpoint the TUI composer uses). Quiet ghost button. */
 .chat-attach {
   flex: 0 0 auto;
-  align-self: flex-end;
+  align-self: center;
   display: grid;
   place-items: center;
   width: 36px;
@@ -584,6 +584,10 @@
   color: var(--chat-dim);
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+}
+.chat-attach:focus:not(:focus-visible),
+.chat-send:focus:not(:focus-visible) {
+  outline: none;
 }
 .chat-attach:hover:not(:disabled) {
   background: color-mix(in srgb, var(--chat-fg) 10%, transparent);
@@ -646,7 +650,7 @@
 
 .chat-send {
   flex: 0 0 auto;
-  align-self: flex-end;
+  align-self: center;
   display: grid;
   place-items: center;
   width: 36px;
