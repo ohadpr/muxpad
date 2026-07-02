@@ -87,13 +87,19 @@ export function ShellPaneBody({
         setPaneFace(pane.id, { face: 'chat', url });
         await fetch(`/api/agent-sessions/${pane.id}/takeover`, { method: 'POST' }).catch(() => {});
       } else {
-        // Relaunch claude, give it a beat to start drawing, THEN reveal the
-        // terminal — so you land on Claude coming up, not the raw command echo.
-        const res = await fetch(`/api/agent-sessions/by-pane/${pane.id}`).catch(() => null);
-        const s = res?.ok ? ((await res.json()) as { current_sid?: string | null }) : null;
-        if (s?.current_sid) {
-          await sendPaneInput(pane.id, `muxpad claude --resume ${s.current_sid}\r`);
-          await new Promise((r) => setTimeout(r, 1200));
+        // Only relaunch if Claude ISN'T already running in the pane — otherwise
+        // the command would be typed INTO the live TUI as a prompt (bug). If it's
+        // already there (e.g. a take-over failed, or we're just peeking), reveal
+        // the terminal as-is.
+        const fgRes = await fetch(`/api/agent-sessions/${pane.id}/foreground`).catch(() => null);
+        const fg = fgRes?.ok ? ((await fgRes.json()) as { isClaude?: boolean }) : null;
+        if (!fg?.isClaude) {
+          const res = await fetch(`/api/agent-sessions/by-pane/${pane.id}`).catch(() => null);
+          const s = res?.ok ? ((await res.json()) as { current_sid?: string | null }) : null;
+          if (s?.current_sid) {
+            await sendPaneInput(pane.id, `muxpad claude --resume ${s.current_sid}\r`);
+            await new Promise((r) => setTimeout(r, 1200));
+          }
         }
         setPaneFace(pane.id, { face: 'terminal', url });
       }
