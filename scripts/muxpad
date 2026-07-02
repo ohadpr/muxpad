@@ -975,7 +975,10 @@ cmd_claude() {
   # unreachable or slow).
   if [ -n "${MUXPAD_API_URL:-}" ]; then
     local body
-    body="{\"pane_id\":$(json_string "$MUXPAD_PANE_ID"),\"assistant\":\"claude\",\"cwd\":$(json_string "$PWD")"
+    # $$ is this script's PID, which `exec claude` below inherits — so it is
+    # claude's runtime PID. The server SIGTERMs it to hand the session from the
+    # terminal to chat (a clean stop; no fragile keystrokes).
+    body="{\"pane_id\":$(json_string "$MUXPAD_PANE_ID"),\"assistant\":\"claude\",\"cwd\":$(json_string "$PWD"),\"pid\":$$"
     [ -n "$sid" ] && body+=",\"session_id\":$(json_string "$sid")"
     body+='}'
     # Subshell so http_request's exit-on-non-2xx (e.g. an older server with
