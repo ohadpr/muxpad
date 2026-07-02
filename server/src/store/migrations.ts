@@ -166,6 +166,13 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    // The Claude TUI's PID, captured by the `muxpad claude` wrapper via $$
+    // (exec-inherited into claude). The server SIGTERMs it to hand a session
+    // from the terminal to chat cleanly — no keystroke fragility, no ptyd RPC.
+    version: 10,
+    sql: 'ALTER TABLE agent_sessions ADD COLUMN tui_pid INTEGER;',
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

@@ -18,6 +18,8 @@ export interface AgentSession {
   lineage: string[];
   view_mode: ViewMode;
   writer: Writer;
+  /** PID of the Claude TUI (from the wrapper's $$), for a clean SIGTERM handoff. Null if unknown. */
+  tui_pid: number | null;
   status: string;
   created_at: number;
   updated_at: number;
@@ -32,6 +34,7 @@ interface AgentSessionRow {
   lineage: string;
   view_mode: ViewMode;
   writer: Writer;
+  tui_pid: number | null;
   status: string;
   created_at: number;
   updated_at: number;
@@ -66,30 +69,32 @@ export class AgentSessionStore {
     assistant?: string | undefined;
     cwd?: string | null | undefined;
     session_id?: string | null | undefined;
+    pid?: number | null | undefined;
   }): AgentSession {
     const now = Date.now();
     const assistant = input.assistant ?? 'claude';
     const cwd = input.cwd ?? null;
     const sid = input.session_id ?? null;
+    const pid = input.pid ?? null;
     const lineage = JSON.stringify(sid ? [sid] : []);
     const existing = this.getByPane(input.pane_id);
     if (existing) {
       this.db
         .prepare(
           `UPDATE agent_sessions
-             SET assistant = ?, cwd = ?, current_sid = ?, lineage = ?,
+             SET assistant = ?, cwd = ?, current_sid = ?, lineage = ?, tui_pid = ?,
                  view_mode = 'terminal', writer = 'tui', status = 'idle', updated_at = ?
            WHERE pane_id = ?`,
         )
-        .run(assistant, cwd, sid, lineage, now, input.pane_id);
+        .run(assistant, cwd, sid, lineage, pid, now, input.pane_id);
     } else {
       this.db
         .prepare(
           `INSERT INTO agent_sessions
-             (id, pane_id, assistant, cwd, current_sid, lineage, view_mode, writer, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'terminal', 'tui', 'idle', ?, ?)`,
+             (id, pane_id, assistant, cwd, current_sid, lineage, tui_pid, view_mode, writer, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'terminal', 'tui', 'idle', ?, ?)`,
         )
-        .run(ulid(), input.pane_id, assistant, cwd, sid, lineage, now, now);
+        .run(ulid(), input.pane_id, assistant, cwd, sid, lineage, pid, now, now);
     }
     return this.getByPane(input.pane_id) as AgentSession;
   }
@@ -157,6 +162,7 @@ export class AgentSessionStore {
       lineage: JSON.parse(r.lineage) as string[],
       view_mode: r.view_mode,
       writer: r.writer,
+      tui_pid: r.tui_pid ?? null,
       status: r.status,
       created_at: r.created_at,
       updated_at: r.updated_at,
