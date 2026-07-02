@@ -1,6 +1,8 @@
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import type { PtydClient } from '../ptyd-client/PtydClient.js';
+import { takeoverPane } from '../chat/takeover.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
 
 const RegisterSchema = z.object({
@@ -25,9 +27,16 @@ const HookSchema = z.object({
  *     start / resume / compact / fork, with the real provider session-id.
  * See docs/plans/2026-07-01-web-chat-session-switching.md.
  */
-export function agentSessionsRoutes(deps: { db: Database.Database }): Hono {
+export function agentSessionsRoutes(deps: { db: Database.Database; ptyd: PtydClient }): Hono {
   const app = new Hono();
   const store = new AgentSessionStore(deps.db);
+
+  // The terminal→chat toggle calls this: stop the Claude TUI (if any) and make
+  // chat the driver, so switching the view switches what's underneath too.
+  app.post('/:paneId/takeover', async (c) => {
+    const res = await takeoverPane(c.req.param('paneId'), store, deps.ptyd);
+    return c.json(res, res.ok ? 200 : 409);
+  });
 
   app.post('/register', async (c) => {
     const body = RegisterSchema.parse(await c.req.json().catch(() => ({})));
