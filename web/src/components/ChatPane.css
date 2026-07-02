@@ -528,12 +528,14 @@
   padding: 8px 16px 12px;
   background: var(--chat-bg);
 }
-/* Soft fade so the conversation dissolves into the composer, ChatGPT-style. */
+/* Soft fade so the conversation dissolves into the composer, ChatGPT-style.
+   Inset the right edge by the scroll-bar width (9px, see .chat-scroll) so the
+   fade doesn't paint over the scrollbar. */
 .chat-composer-wrap::before {
   content: "";
   position: absolute;
   left: 0;
-  right: 0;
+  right: 9px;
   top: -28px;
   height: 28px;
   background: linear-gradient(to top, var(--chat-bg), transparent);
