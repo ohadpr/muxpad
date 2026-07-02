@@ -85,6 +85,9 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   // A session whose transcript never shows up (ended, or its file is gone):
   // after a grace period, say so instead of spinning "waiting" forever.
   const [stale, setStale] = useState(false);
+  // The message you just sent, shown immediately as a user bubble until the
+  // real one lands from the transcript tail (then deduped away).
+  const [optimisticUser, setOptimisticUser] = useState<string | null>(null);
   // For the send↔takeover race: if a send lands before the toggle's hand-off
   // finished, we silently take over and resend the held text (once).
   const pendingText = useRef('');
@@ -96,6 +99,7 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
     setSession(undefined);
     setSending(false);
     setNotice(null);
+    setOptimisticUser(null);
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${proto}//${location.host}/ws/chat/${paneId}`);
     wsRef.current = ws;
@@ -132,6 +136,7 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
       } else if (msg.t === 'turn-done') {
         setSending(false);
         setStreamingText('');
+        setOptimisticUser(null);
         setNotice(msg.ok ? null : (msg.error ?? 'turn failed'));
       } else if (msg.t === 'blocked') {
         // The terminal hand-off hasn't finished (raced the toggle). Silently
@@ -172,6 +177,7 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
     if (!text || sending) return;
     pendingText.current = text; // held for a silent takeover-and-resend if blocked
     takeoverTried.current = false;
+    setOptimisticUser(text); // show it immediately, don't wait for the transcript
     wsRef.current?.send(JSON.stringify({ t: 'send', text }));
     setInput('');
     setNotice(null);
@@ -209,11 +215,11 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   // Keep pinned to the bottom as new events arrive, unless the user scrolled up.
   // `events` is a deliberate trigger dependency (we re-scroll on new events)
   // even though the body reads it only via the DOM.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: events + streamingText are the scroll triggers
+  // biome-ignore lint/correctness/useExhaustiveDependencies: events/streamingText/optimisticUser are the scroll triggers
   useEffect(() => {
     const el = scrollRef.current;
     if (el && active && pinnedToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [events, streamingText, active]);
+  }, [events, streamingText, optimisticUser, active]);
 
   // Auto-grow the composer like ChatGPT: reset to content height, capped by CSS
   // max-height (the textarea keeps scrolling past that). `input` is the trigger
@@ -243,6 +249,13 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
     return () => clearTimeout(t);
   }, [connected, session?.current_sid, events.length]);
 
+  // Drop the optimistic user bubble once the real one lands from the transcript.
+  useEffect(() => {
+    if (optimisticUser && events.some((e) => e.kind === 'user' && e.text === optimisticUser)) {
+      setOptimisticUser(null);
+    }
+  }, [events, optimisticUser]);
+
   const body = useMemo(() => {
     if (session === undefined)
       return (
@@ -263,7 +276,7 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
           </p>
         </div>
       );
-    if (events.length === 0)
+    if (events.length === 0 && !optimisticUser && !sending)
       return (
         <div className="chat-empty">
           {stale ? (
@@ -286,13 +299,18 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
         </div>
       );
     return events.map((e) => <ChatRow key={e.id} event={e} />);
-  }, [session, connected, events, stale]);
+  }, [session, connected, events, stale, optimisticUser, sending]);
 
   return (
     <div className="chat-pane">
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="chat-list">
           {body}
+          {optimisticUser ? (
+            <div className="chat-turn chat-turn-user">
+              <div className="chat-bubble">{optimisticUser}</div>
+            </div>
+          ) : null}
           {(sending || streamingText) && session?.current_sid ? (
             <div className="chat-turn chat-turn-assistant">
               <div className="chat-avatar" aria-hidden="true">
