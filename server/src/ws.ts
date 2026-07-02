@@ -161,6 +161,7 @@ export function attachWsServer(deps: {
                 text,
                 cb: {
                   onSessionId: (sid) => agents.recordSessionId(chatPaneId, sid),
+                  onText: (delta) => send({ t: 'stream', delta }),
                   onDone: (ok, error) => {
                     chatRunners.delete(chatPaneId);
                     agents.setWriter(chatPaneId, 'none');
