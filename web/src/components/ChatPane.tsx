@@ -82,6 +82,9 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   // Live assistant text streamed from the headless turn (token-level), shown
   // as a preview until the final message lands in the transcript tail.
   const [streamingText, setStreamingText] = useState('');
+  // A session whose transcript never shows up (ended, or its file is gone):
+  // after a grace period, say so instead of spinning "waiting" forever.
+  const [stale, setStale] = useState(false);
   // For the send↔takeover race: if a send lands before the toggle's hand-off
   // finished, we silently take over and resend the held text (once).
   const pendingText = useRef('');
@@ -232,6 +235,14 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
     pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
   };
 
+  // Grace timer: a present session with no transcript after a while → likely ended.
+  useEffect(() => {
+    setStale(false);
+    if (!connected || !session?.current_sid || events.length > 0) return;
+    const t = setTimeout(() => setStale(true), 8000);
+    return () => clearTimeout(t);
+  }, [connected, session?.current_sid, events.length]);
+
   const body = useMemo(() => {
     if (session === undefined)
       return (
@@ -255,12 +266,27 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
     if (events.length === 0)
       return (
         <div className="chat-empty">
-          <div className="chat-empty-spinner" aria-hidden="true" />
-          <p>Waiting for the first message…</p>
+          {stale ? (
+            <>
+              <div className="chat-empty-mark" aria-hidden="true">
+                ✳
+              </div>
+              <p className="chat-empty-title">No messages here</p>
+              <p className="chat-empty-hint">
+                This session may have ended. Switch to Terminal, or start a new one with{' '}
+                <code>muxpad claude</code>.
+              </p>
+            </>
+          ) : (
+            <>
+              <div className="chat-empty-spinner" aria-hidden="true" />
+              <p>Waiting for the first message…</p>
+            </>
+          )}
         </div>
       );
     return events.map((e) => <ChatRow key={e.id} event={e} />);
-  }, [session, connected, events]);
+  }, [session, connected, events, stale]);
 
   return (
     <div className="chat-pane">
