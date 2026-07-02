@@ -38,6 +38,17 @@ export function agentSessionsRoutes(deps: { db: Database.Database; ptyd: PtydCli
     return c.json(res, res.ok ? 200 : 409);
   });
 
+  // Shared view mode (terminal | chat) for the session — persisted so the
+  // choice propagates across devices (switch to chat on desktop → mobile shows
+  // chat too, instead of an empty terminal whose Claude was taken over).
+  app.post('/:paneId/view-mode', async (c) => {
+    const body = z
+      .object({ mode: z.enum(['terminal', 'chat']) })
+      .parse(await c.req.json().catch(() => ({})));
+    store.setViewMode(c.req.param('paneId'), body.mode);
+    return c.body(null, 204);
+  });
+
   // Live foreground of the pane — the chat→terminal toggle uses this to avoid
   // typing the relaunch command INTO a Claude TUI that's already running.
   app.get('/:paneId/foreground', async (c) => {
