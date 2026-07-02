@@ -227,12 +227,31 @@
   flex: 0 0 auto;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
   padding: 5px 12px;
   border-top: 1px solid #22242e;
   color: #6f7488;
   font-size: 11.5px;
   background: #0f1017;
+}
+.chat-footer-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chat-resume {
+  border: 1px solid #2b3040;
+  background: transparent;
+  color: #8aa0c0;
+  font-size: 11.5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.chat-resume:hover {
+  border-color: #3d7bbf;
+  color: #cdd4e2;
 }
 .chat-dot {
   width: 7px;
