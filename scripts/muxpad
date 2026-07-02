@@ -945,16 +945,19 @@ cmd_claude() {
 
   # Respect user-supplied --session-id / --settings; only inject ours when
   # absent.
-  local user_has_sid=0 user_has_settings=0 a
+  local user_has_sid=0 user_has_settings=0 user_is_resume=0 a
   for a in "$@"; do
     case "$a" in
       --session-id|--session-id=*) user_has_sid=1 ;;
       --settings|--settings=*) user_has_settings=1 ;;
+      --resume|--resume=*|--continue|-c) user_is_resume=1 ;;
     esac
   done
 
   local extra=() sid=""
-  if [ "$user_has_sid" = "0" ]; then
+  # Don't mint a --session-id when resuming: claude rejects --session-id with
+  # --resume/--continue. The SessionStart hook still reports the resumed id.
+  if [ "$user_has_sid" = "0" ] && [ "$user_is_resume" = "0" ]; then
     sid="$(uuidgen | tr '[:upper:]' '[:lower:]')"
     extra+=(--session-id "$sid")
   fi
