@@ -1,6 +1,9 @@
 import type { Server } from 'node:http';
+import { homedir } from 'node:os';
 import type Database from 'better-sqlite3';
 import { WebSocket, WebSocketServer } from 'ws';
+import { HeadlessRunner } from './chat/HeadlessRunner.js';
+import { TranscriptTail } from './chat/TranscriptReader.js';
 import type { EventBus } from './events.js';
 import type { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
@@ -9,7 +12,6 @@ import { safeCwd } from './safe-cwd.js';
 import { AgentSessionStore } from './store/AgentSessionStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
-import { TranscriptTail } from './chat/TranscriptReader.js';
 
 export interface WsServerHandle {
   close(): Promise<void>;
@@ -28,6 +30,9 @@ export function attachWsServer(deps: {
   const panes = new PaneStore(deps.db);
   const tabs = new TabStore(deps.db);
   const agents = new AgentSessionStore(deps.db);
+  // One in-flight headless turn per pane. Keyed by pane (not ws) so a client
+  // reconnect never spawns a second driver or aborts a running turn.
+  const chatRunners = new Map<string, HeadlessRunner>();
 
   // Server-side liveness detection. A WebSocket severed abruptly (browser
   // hard-reload, crashed tab, network blip) does NOT fire 'close' until the
@@ -84,9 +89,10 @@ export function attachWsServer(deps: {
       return;
     }
     // Chat view of an agent session: replay the tracked session's transcript
-    // as normalized chat events, then stream live appends. Read-only (Phase 2);
-    // driving/switching comes later. Works even while the TUI is the live
-    // writer — we only tail the JSONL, never the terminal.
+    // as normalized chat events, then stream live appends. Reading works even
+    // while the TUI is the live writer (we only tail the JSONL, never the
+    // terminal). Driving (composer → headless turn) is gated on single-writer:
+    // see the message handler below.
     const chatMatch = url.pathname.match(/^\/ws\/chat\/([^/]+)$/);
     if (chatMatch) {
       const chatPaneId = chatMatch[1] as string;
@@ -105,13 +111,67 @@ export function attachWsServer(deps: {
         };
         const session = agents.getByPane(chatPaneId);
         send({ t: 'session', session });
-        if (!session || !session.current_sid) return; // nothing to tail yet
-        const tail = new TranscriptTail(session.current_sid, {
-          onEvents: (events, phase) => send({ t: 'events', phase, events }),
+        if (session?.current_sid) {
+          const tail = new TranscriptTail(session.current_sid, {
+            onEvents: (events, phase) => send({ t: 'events', phase, events }),
+          });
+          tail.start();
+          ws.on('close', () => tail.close());
+          ws.on('error', () => tail.close());
+        }
+        // Composer: drive a turn from chat. Single-writer is enforced by
+        // refusing to spawn while a Claude TUI is the pane's live foreground —
+        // two drivers on one session-id corrupt the transcript. One turn per
+        // pane at a time; the runner is keyed by pane so it outlives this ws.
+        ws.on('message', (data) => {
+          let msg: { t?: string; text?: string };
+          try {
+            msg = JSON.parse(data.toString());
+          } catch {
+            return;
+          }
+          if (msg.t === 'stop') {
+            chatRunners.get(chatPaneId)?.interrupt();
+            return;
+          }
+          if (msg.t !== 'send' || typeof msg.text !== 'string' || !msg.text.trim()) return;
+          const s = agents.getByPane(chatPaneId);
+          if (!s?.current_sid) {
+            send({ t: 'error', message: 'no session to drive' });
+            return;
+          }
+          if (chatRunners.has(chatPaneId)) {
+            send({ t: 'error', message: 'a turn is already running' });
+            return;
+          }
+          const text = msg.text;
+          void deps.ptyd
+            .getForegroundCommand(chatPaneId)
+            .catch(() => null)
+            .then((fg) => {
+              if (fg && /\bclaude\b/i.test(fg)) {
+                send({ t: 'blocked', reason: 'terminal-driving' });
+                return;
+              }
+              agents.setWriter(chatPaneId, 'headless');
+              send({ t: 'turn-start' });
+              const runner = new HeadlessRunner({
+                cwd: s.cwd ?? homedir(),
+                resumeSid: s.current_sid as string,
+                text,
+                cb: {
+                  onSessionId: (sid) => agents.recordSessionId(chatPaneId, sid),
+                  onDone: (ok, error) => {
+                    chatRunners.delete(chatPaneId);
+                    agents.setWriter(chatPaneId, 'none');
+                    send({ t: 'turn-done', ok, ...(error ? { error } : {}) });
+                  },
+                },
+              });
+              chatRunners.set(chatPaneId, runner);
+              runner.start();
+            });
         });
-        tail.start();
-        ws.on('close', () => tail.close());
-        ws.on('error', () => tail.close());
       });
       return;
     }

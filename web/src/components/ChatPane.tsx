@@ -11,7 +11,11 @@ interface SessionMeta {
 
 type ServerMsg =
   | { t: 'session'; session: (SessionMeta & Record<string, unknown>) | null }
-  | { t: 'events'; phase: 'history' | 'live'; events: ChatEvent[] };
+  | { t: 'events'; phase: 'history' | 'live'; events: ChatEvent[] }
+  | { t: 'turn-start' }
+  | { t: 'turn-done'; ok: boolean; error?: string }
+  | { t: 'blocked'; reason: string }
+  | { t: 'error'; message: string };
 
 /**
  * Read-only chat view of the Claude session tracked in a pane. Connects to
@@ -28,13 +32,20 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   const byId = useRef(new Map<string, ChatEvent>());
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
+  const wsRef = useRef<WebSocket | null>(null);
+  const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     byId.current = new Map();
     setEvents([]);
     setSession(undefined);
+    setSending(false);
+    setNotice(null);
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${proto}//${location.host}/ws/chat/${paneId}`);
+    wsRef.current = ws;
     ws.onopen = () => setConnected(true);
     ws.onclose = () => setConnected(false);
     ws.onmessage = (ev) => {
@@ -58,12 +69,37 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
       } else if (msg.t === 'events') {
         for (const e of msg.events) byId.current.set(e.id, e);
         setEvents(Array.from(byId.current.values()));
+      } else if (msg.t === 'turn-start') {
+        setSending(true);
+        setNotice(null);
+      } else if (msg.t === 'turn-done') {
+        setSending(false);
+        setNotice(msg.ok ? null : (msg.error ?? 'turn failed'));
+      } else if (msg.t === 'blocked') {
+        setSending(false);
+        setNotice(
+          'The terminal is running this session. Exit it (Ctrl-C twice) to drive from chat.',
+        );
+      } else if (msg.t === 'error') {
+        setSending(false);
+        setNotice(msg.message);
       }
     };
     return () => {
+      wsRef.current = null;
       ws.close();
     };
   }, [paneId]);
+
+  const sendMessage = () => {
+    const text = input.trim();
+    if (!text || sending) return;
+    wsRef.current?.send(JSON.stringify({ t: 'send', text }));
+    setInput('');
+    setNotice(null);
+    setSending(true);
+  };
+  const stop = () => wsRef.current?.send(JSON.stringify({ t: 'stop' }));
 
   // Keep pinned to the bottom as new events arrive, unless the user scrolled up.
   // `events` is a deliberate trigger dependency (we re-scroll on new events)
@@ -102,6 +138,41 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="chat-list">{body}</div>
       </div>
+      {session?.current_sid ? (
+        <div className="chat-composer-wrap">
+          {notice ? <div className="chat-notice">{notice}</div> : null}
+          <div className="chat-composer">
+            <textarea
+              className="chat-input"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  sendMessage();
+                }
+              }}
+              placeholder={sending ? 'Claude is working…' : 'Message Claude…'}
+              rows={1}
+              disabled={sending}
+            />
+            {sending ? (
+              <button type="button" className="chat-send stop" onClick={stop}>
+                Stop
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="chat-send"
+                onClick={sendMessage}
+                disabled={!input.trim()}
+              >
+                Send
+              </button>
+            )}
+          </div>
+        </div>
+      ) : null}
       <div className="chat-footer">
         <span className={`chat-dot ${connected ? 'on' : 'off'}`} />
         {session?.current_sid ? (
