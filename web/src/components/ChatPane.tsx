@@ -313,9 +313,6 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
           ) : null}
           {(sending || streamingText) && session?.current_sid ? (
             <div className="chat-turn chat-turn-assistant">
-              <div className="chat-avatar" aria-hidden="true">
-                ✳
-              </div>
               {streamingText ? (
                 <div className="chat-msg">
                   <Markdown text={streamingText} />
@@ -422,9 +419,6 @@ function ChatRow({ event }: { event: ChatEvent }) {
     case 'assistant':
       return (
         <div className="chat-turn chat-turn-assistant">
-          <div className="chat-avatar" aria-hidden="true">
-            ✳
-          </div>
           <div className="chat-msg">
             <Markdown text={event.text} />
           </div>
@@ -433,7 +427,6 @@ function ChatRow({ event }: { event: ChatEvent }) {
     case 'thinking':
       return (
         <div className="chat-turn chat-turn-assistant">
-          <div className="chat-gutter" aria-hidden="true" />
           <div className="chat-thinking">{event.text}</div>
         </div>
       );
@@ -464,7 +457,6 @@ function summarizeToolInput(name: string, input: unknown): string {
 function ToolUseCard({ event }: { event: ToolUseEvent }) {
   return (
     <div className="chat-turn chat-turn-assistant">
-      <div className="chat-gutter" aria-hidden="true" />
       <div className="chat-tool">
         <span className="chat-tool-name">{event.name || 'tool'}</span>
         <span className="chat-tool-arg">{summarizeToolInput(event.name, event.input)}</span>
@@ -476,7 +468,6 @@ function ToolUseCard({ event }: { event: ToolUseEvent }) {
 function ToolResultCard({ event }: { event: ToolResultEvent }) {
   return (
     <div className="chat-turn chat-turn-assistant">
-      <div className="chat-gutter" aria-hidden="true" />
       <div className={`chat-tool-result ${event.ok ? '' : 'error'}`}>
         {event.diff ? (
           <DiffView diff={event.diff} />
