@@ -1,5 +1,5 @@
 import type { PaneSpec } from '@muxpad/shared';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getPaneFace, setPaneFace, usePaneFace } from '../lib/pane-face';
 import { sendPaneInput } from '../lib/pane-input';
 import { ChatPane } from './ChatPane';
@@ -53,6 +53,10 @@ export function ShellPaneBody({
       if (!alive || !r?.ok) return;
       const s = (await r.json().catch(() => null)) as { view_mode?: string } | null;
       setHasSession(true);
+      // A poll can be in flight across a local toggle and return the pre-switch
+      // view_mode; don't let that revert the face — the server catches up in a
+      // couple seconds. Skip the sync briefly after a local switch.
+      if (Date.now() - lastSwitch.current < 4000) return;
       // Sync THIS device's terminal/chat face to the session's SHARED view-mode
       // so a switch on one device shows up on the others — mobile no longer
       // lands on an empty terminal after a desktop switch to chat. The 'web'
@@ -87,9 +91,11 @@ export function ShellPaneBody({
   //   → terminal: relaunch `muxpad claude --resume <sid>` in the pane's shell.
   // We await the hand-off before flipping so the target view is always live.
   const [switching, setSwitching] = useState(false);
+  const lastSwitch = useRef(0);
   const switchTo = async (target: 'terminal' | 'chat') => {
     if (switching) return;
     setSwitching(true);
+    lastSwitch.current = Date.now();
     // Record the SHARED view-mode first (fast) so other devices follow, and so
     // this device's own poll doesn't revert the face mid-handoff.
     void fetch(`/api/agent-sessions/${pane.id}/view-mode`, {

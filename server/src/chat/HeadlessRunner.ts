@@ -37,6 +37,8 @@ export class HeadlessRunner {
   private outBuf = '';
   private errText = '';
   private done = false;
+  private reapTimer: ReturnType<typeof setTimeout> | undefined;
+  private killTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly opts: HeadlessRunnerOpts) {}
 
@@ -93,9 +95,23 @@ export class HeadlessRunner {
       if (obj.type === 'system' && obj.subtype === 'init' && typeof obj.session_id === 'string') {
         this.opts.cb?.onSessionId?.(obj.session_id);
       }
-      // Also present on the final `result` event; harmless to re-capture.
-      if (obj.type === 'result' && typeof obj.session_id === 'string') {
-        this.opts.cb?.onSessionId?.(obj.session_id);
+      // The final `result` event also carries the session-id (harmless to
+      // re-capture) and marks the turn logically complete. If the child then
+      // hangs on teardown (stuck stdout, leaked MCP child), reap it so onDone
+      // still fires and the single-writer lock releases — otherwise the pane
+      // wedges forever with "a turn is already running".
+      if (obj.type === 'result') {
+        if (typeof obj.session_id === 'string') this.opts.cb?.onSessionId?.(obj.session_id);
+        if (!this.reapTimer && !this.done) {
+          this.reapTimer = setTimeout(() => {
+            try {
+              this.proc?.kill('SIGKILL');
+            } catch {
+              // already gone
+            }
+            this.finish(true);
+          }, 5000);
+        }
       }
       // Streaming text deltas (--include-partial-messages) for a live preview.
       if (obj.type === 'stream_event') {
@@ -116,12 +132,26 @@ export class HeadlessRunner {
   private finish(ok: boolean, error?: string): void {
     if (this.done) return;
     this.done = true;
+    if (this.reapTimer) clearTimeout(this.reapTimer);
+    if (this.killTimer) clearTimeout(this.killTimer);
     this.opts.cb?.onDone?.(ok, error);
   }
 
-  /** Graceful interrupt of the in-flight turn (the chat Stop button). */
+  /** Interrupt the in-flight turn (the chat Stop button). SIGTERM, then SIGKILL
+   * if it doesn't die — otherwise a stubborn child holds the single-writer lock. */
   interrupt(): void {
     this.proc?.kill('SIGTERM');
+    if (!this.killTimer && !this.done) {
+      this.killTimer = setTimeout(() => {
+        if (!this.done) {
+          try {
+            this.proc?.kill('SIGKILL');
+          } catch {
+            // already gone
+          }
+        }
+      }, 2000);
+    }
   }
 
   get running(): boolean {
