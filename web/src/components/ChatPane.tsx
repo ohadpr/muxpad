@@ -100,12 +100,12 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
     setSending(false);
     setNotice(null);
     setOptimisticUser(null);
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${proto}//${location.host}/ws/chat/${paneId}`);
-    wsRef.current = ws;
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => setConnected(false);
-    ws.onmessage = (ev) => {
+
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
+
+    const onMessage = (ev: MessageEvent) => {
       let msg: ServerMsg;
       try {
         msg = JSON.parse(typeof ev.data === 'string' ? ev.data : '') as ServerMsg;
@@ -166,9 +166,55 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
         setNotice(msg.message);
       }
     };
+
+    const connect = () => {
+      if (cancelled) return;
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${proto}//${location.host}/ws/chat/${paneId}`);
+      wsRef.current = ws;
+      ws.onopen = () => {
+        attempt = 0;
+        setConnected(true);
+      };
+      ws.onmessage = onMessage;
+      ws.onerror = () => {
+        try {
+          ws.close();
+        } catch {
+          // ignore; onclose drives the retry
+        }
+      };
+      ws.onclose = () => {
+        setConnected(false);
+        if (cancelled) return;
+        // Reconnect with backoff — covers server restarts, network blips, and
+        // the mobile tab being backgrounded (which drops the socket). Replaying
+        // history on reconnect dedupes into byId, so no duplicates.
+        retryTimer = setTimeout(connect, Math.min(1000 * 2 ** attempt, 10000));
+        attempt += 1;
+      };
+    };
+
+    // Reconnect right away when the tab returns to the foreground, instead of
+    // waiting out the backoff (mobile drops the socket while backgrounded).
+    const onVisible = () => {
+      if (cancelled || document.visibilityState !== 'visible') return;
+      const rs = wsRef.current?.readyState;
+      if (rs === WebSocket.OPEN || rs === WebSocket.CONNECTING) return;
+      if (retryTimer) clearTimeout(retryTimer);
+      attempt = 0;
+      connect();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    connect();
+
     return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      document.removeEventListener('visibilitychange', onVisible);
+      const ws = wsRef.current;
       wsRef.current = null;
-      ws.close();
+      ws?.close();
     };
   }, [paneId]);
 
@@ -394,16 +440,6 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
           </div>
         </div>
       ) : null}
-      <div className="chat-footer">
-        <span className="chat-footer-status">
-          <span className={`chat-dot ${connected ? 'on' : 'off'}`} />
-          {session?.current_sid ? (
-            <span>driven from {session.writer === 'headless' ? 'chat' : 'terminal'}</span>
-          ) : (
-            <span>read-only</span>
-          )}
-        </span>
-      </div>
     </div>
   );
 }
