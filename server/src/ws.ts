@@ -33,6 +33,10 @@ export function attachWsServer(deps: {
   // One in-flight headless turn per pane. Keyed by pane (not ws) so a client
   // reconnect never spawns a second driver or aborts a running turn.
   const chatRunners = new Map<string, HeadlessRunner>();
+  // Panes whose turn is mid-spawn (past the guard, awaiting the foreground
+  // check, before the runner lands in chatRunners). Reserved SYNCHRONOUSLY so a
+  // double-send can't slip two runners onto one session across the await.
+  const startingChat = new Set<string>();
 
   // Server-side liveness detection. A WebSocket severed abruptly (browser
   // hard-reload, crashed tab, network blip) does NOT fire 'close' until the
@@ -140,16 +144,21 @@ export function attachWsServer(deps: {
             send({ t: 'error', message: 'no session to drive' });
             return;
           }
-          if (chatRunners.has(chatPaneId)) {
+          if (chatRunners.has(chatPaneId) || startingChat.has(chatPaneId)) {
             send({ t: 'error', message: 'a turn is already running' });
             return;
           }
+          // Reserve the pane synchronously — before the awaited foreground
+          // check — so a second concurrent send can't spawn a second runner on
+          // the same session-id (transcript corruption).
+          startingChat.add(chatPaneId);
           const text = msg.text;
           void deps.ptyd
             .getForegroundCommand(chatPaneId)
             .catch(() => null)
             .then((fg) => {
               if (fg && /\bclaude\b/i.test(fg)) {
+                startingChat.delete(chatPaneId);
                 send({ t: 'blocked', reason: 'terminal-driving' });
                 return;
               }
@@ -170,6 +179,7 @@ export function attachWsServer(deps: {
                 },
               });
               chatRunners.set(chatPaneId, runner);
+              startingChat.delete(chatPaneId);
               runner.start();
             });
         });

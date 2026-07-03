@@ -1,7 +1,22 @@
+import { execFile } from 'node:child_process';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import type { AgentSessionStore } from '../store/AgentSessionStore.js';
 
 const isClaude = (fg: string | null): boolean => !!fg && /\bclaude\b/i.test(fg);
+
+/**
+ * Confirm a PID currently belongs to a claude process before we SIGTERM it.
+ * The wrapper records claude's PID at launch; if that claude was hard-killed
+ * and the OS recycled the PID, killing it blind could take out an unrelated
+ * process (e.g. a database). Cheap `ps` check, fail-closed on any error.
+ */
+function pidIsClaude(pid: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile('ps', ['-p', String(pid), '-o', 'command='], (err, stdout) => {
+      resolve(!err && /\bclaude\b/i.test(stdout));
+    });
+  });
+}
 
 /**
  * Hand a pane's session from its Claude TUI to chat. If a Claude TUI is the
@@ -23,11 +38,11 @@ export async function takeoverPane(
   }
   if (isClaude(fg)) {
     const s = store.getByPane(paneId);
-    if (s?.tui_pid) {
+    if (s?.tui_pid && (await pidIsClaude(s.tui_pid))) {
       try {
         process.kill(s.tui_pid, 'SIGTERM');
       } catch {
-        // already gone, or not our process
+        // already gone
       }
     }
     for (let i = 0; i < 25; i++) {
