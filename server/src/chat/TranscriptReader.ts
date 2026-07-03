@@ -102,12 +102,22 @@ export class TranscriptTail {
     const from = this.offset;
     const len = to - from;
     if (len <= 0) return;
-    const fd = openSync(this.path as string, 'r');
-    const buf = Buffer.allocUnsafe(len);
+    let buf: Buffer;
     try {
-      readSync(fd, buf, 0, len, from);
-    } finally {
-      closeSync(fd);
+      const fd = openSync(this.path as string, 'r');
+      buf = Buffer.allocUnsafe(len);
+      try {
+        readSync(fd, buf, 0, len, from);
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      // The file was rotated/removed between statSync and open (a /compact
+      // rewrite or resume rotating the file). Never throw out of the poll
+      // timer — an uncaught error here would crash the whole server. Drop the
+      // path and re-resolve on the next tick.
+      this.path = null;
+      return;
     }
     this.offset = to;
     const text = this.carry + buf.toString('utf8');

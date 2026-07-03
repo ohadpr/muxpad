@@ -5,17 +5,22 @@ import { takeoverPane } from '../chat/takeover.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
 
+// Session ids become a filename (`<sid>.jsonl`) that the tail resolves by
+// scanning project dirs — so constrain the charset to prevent a crafted id
+// (`../…`, absolute paths) from making the reader probe/stream arbitrary files.
+const SessionId = z.string().regex(/^[A-Za-z0-9._-]{1,128}$/);
+
 const RegisterSchema = z.object({
   pane_id: z.string().min(1),
   assistant: z.string().optional(),
   cwd: z.string().optional(),
-  session_id: z.string().optional(),
+  session_id: SessionId.optional(),
   pid: z.number().int().positive().optional(),
 });
 
 const HookSchema = z.object({
   pane_id: z.string().min(1),
-  session_id: z.string().min(1),
+  session_id: SessionId,
   source: z.string().optional(),
 });
 
