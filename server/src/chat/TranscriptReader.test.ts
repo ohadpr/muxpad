@@ -99,6 +99,62 @@ describe('TranscriptReader', () => {
     tail.close();
   });
 
+  it('tailBytes: initial load is the recent tail; loadOlder pages the rest', () => {
+    const texts = ['aa', 'bb', 'cc', 'dd', 'ee', 'ff'];
+    writeFileSync(file, texts.map((t, i) => userLine(`u${i}`, t)).join(''));
+    const hist: string[] = [];
+    const older: string[] = [];
+    const tail = new TranscriptTail(SID, {
+      dir,
+      tailBytes: 120,
+      onEvents: (es, p) => {
+        for (const e of es) (p === 'older' ? older : hist).push((e as { text: string }).text);
+      },
+    });
+    tail.tick();
+    // Only a suffix loaded initially (not the whole file), and it IS a suffix.
+    expect(hist.length).toBeGreaterThan(0);
+    expect(hist.length).toBeLessThan(texts.length);
+    expect(hist).toEqual(texts.slice(texts.length - hist.length));
+
+    // Page backward until the file start is reached.
+    let more = true;
+    let guard = 20;
+    while (more && guard-- > 0) more = tail.loadOlder();
+    expect(more).toBe(false);
+
+    // Every line accounted for exactly once, no dupes, across history + older.
+    const all = [...hist, ...older].sort();
+    expect(all).toEqual([...texts].sort());
+    expect(new Set(all).size).toBe(texts.length);
+    tail.close();
+  });
+
+  it('tailBytes: appended lines still stream as live after a tail load', () => {
+    writeFileSync(file, ['aa', 'bb', 'cc'].map((t, i) => userLine(`u${i}`, t)).join(''));
+    const live: string[] = [];
+    const tail = new TranscriptTail(SID, {
+      dir,
+      tailBytes: 60,
+      onEvents: (es, p) => {
+        if (p === 'live') for (const e of es) live.push((e as { text: string }).text);
+      },
+    });
+    tail.tick();
+    appendFileSync(file, userLine('u9', 'zz'));
+    tail.tick();
+    expect(live).toEqual(['zz']);
+    tail.close();
+  });
+
+  it('loadOlder returns false when no tail window was ever used (whole file loaded)', () => {
+    writeFileSync(file, userLine('u1', 'only'));
+    const tail = new TranscriptTail(SID, { dir, onEvents: () => {} });
+    tail.tick();
+    expect(tail.loadOlder()).toBe(false);
+    tail.close();
+  });
+
   it('skips torn/garbage lines without breaking the feed', () => {
     writeFileSync(
       file,

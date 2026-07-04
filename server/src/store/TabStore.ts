@@ -25,6 +25,7 @@ interface TabRow {
   name: string;
   icon: string | null;
   layout: string;
+  view_mode: string;
   workspace_id: string;
   created_at: number;
   updated_at: number;
@@ -73,6 +74,7 @@ export class TabStore {
       name: input.name,
       icon,
       layout: input.layout,
+      view_mode: 'split',
       created_at: now,
       updated_at: now,
     };
@@ -141,6 +143,7 @@ export class TabStore {
       slug?: string | undefined;
       icon?: string | undefined;
       layout?: LayoutNode | undefined;
+      view_mode?: 'split' | 'tabbed' | undefined;
     },
   ): Tab {
     const existing = this.getById(id);
@@ -150,13 +153,22 @@ export class TabStore {
       slug: patch.slug ?? existing.slug,
       icon: patch.icon ?? existing.icon,
       layout: patch.layout ?? existing.layout,
+      view_mode: patch.view_mode ?? existing.view_mode ?? 'split',
     };
     const now = Date.now();
     this.db
       .prepare(
-        'UPDATE tabs SET name = ?, slug = ?, icon = ?, layout = ?, updated_at = ? WHERE id = ?',
+        'UPDATE tabs SET name = ?, slug = ?, icon = ?, layout = ?, view_mode = ?, updated_at = ? WHERE id = ?',
       )
-      .run(next.name, next.slug, next.icon ?? null, JSON.stringify(next.layout), now, id);
+      .run(
+        next.name,
+        next.slug,
+        next.icon ?? null,
+        JSON.stringify(next.layout),
+        next.view_mode,
+        now,
+        id,
+      );
     return { ...existing, ...next, updated_at: now };
   }
 
@@ -216,6 +228,7 @@ export class TabStore {
       name: x.name,
       ...(x.icon ? { icon: x.icon } : {}),
       layout: JSON.parse(x.layout),
+      view_mode: x.view_mode === 'tabbed' ? 'tabbed' : 'split',
       created_at: x.created_at,
       updated_at: x.updated_at,
     };

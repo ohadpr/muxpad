@@ -13,6 +13,7 @@ interface PaneRow {
   startup_cmd: string | null;
   cwd: string | null;
   env: string | null;
+  name: string | null;
   created_at: number;
 }
 
@@ -41,7 +42,18 @@ export class PaneStore {
         'INSERT INTO panes (id, tab_id, kind, url, shell, startup_cmd, cwd, env, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(id, input.tab_id, kind, url, shell, startup_cmd, cwd, env ? JSON.stringify(env) : null, now);
-    return { id, tab_id: input.tab_id, kind, url, shell, startup_cmd, cwd, env, created_at: now };
+    return {
+      id,
+      tab_id: input.tab_id,
+      kind,
+      url,
+      shell,
+      startup_cmd,
+      cwd,
+      env,
+      name: null,
+      created_at: now,
+    };
   }
 
   getById(id: string): PaneSpec | null {
@@ -93,6 +105,18 @@ export class PaneStore {
     return rows;
   }
 
+  /**
+   * Set (or clear) the pane's user-given name. Passing null/'' clears it,
+   * reverting the tab-strip label to the live-derived title. Pure SQLite —
+   * ptyd never sees this, so a rename can't disturb the running PTY.
+   */
+  setName(id: string, name: string | null): void {
+    const trimmed = name?.trim();
+    this.db
+      .prepare('UPDATE panes SET name = ? WHERE id = ?')
+      .run(trimmed ? trimmed : null, id);
+  }
+
   updateUrl(id: string, url: string): void {
     this.db.prepare('UPDATE panes SET url = ? WHERE id = ? AND kind = ?').run(url, id, 'url');
   }
@@ -139,6 +163,7 @@ export class PaneStore {
       startup_cmd: x.startup_cmd,
       cwd: x.cwd,
       env: x.env ? (JSON.parse(x.env) as Record<string, string>) : null,
+      name: x.name ?? null,
       created_at: x.created_at,
     };
   }

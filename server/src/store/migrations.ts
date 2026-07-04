@@ -173,6 +173,25 @@ const MIGRATIONS: Migration[] = [
     version: 10,
     sql: 'ALTER TABLE agent_sessions ADD COLUMN tui_pid INTEGER;',
   },
+  {
+    // User-set pane name. Persistent override for the live-derived tab-strip
+    // label (terminal title / foreground command), so a rename in the pane
+    // tab bar sticks and isn't overwritten by claude/the shell. Nullable —
+    // null means "use the live label". Lives in SQLite, not ptyd, so it
+    // survives restarts and needs no ptyd round-trip.
+    version: 11,
+    sql: 'ALTER TABLE panes ADD COLUMN name TEXT;',
+  },
+  {
+    // Desktop split ⇄ tabbed rendering mode per tab ('split' | 'tabbed').
+    // Was a localStorage-only prototype (per device, lost on cache clear);
+    // persisting it server-side makes the choice survive reloads and follow
+    // the user across devices — same rationale as agent_sessions.view_mode.
+    // The split layout tree is untouched by the flip; this is only how the
+    // same panes are presented.
+    version: 12,
+    sql: "ALTER TABLE tabs ADD COLUMN view_mode TEXT NOT NULL DEFAULT 'split';",
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

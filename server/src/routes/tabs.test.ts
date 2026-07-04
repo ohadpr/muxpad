@@ -118,6 +118,32 @@ describe('tabs routes', () => {
     expect(res.status).toBe(200);
   });
 
+  it('persists view_mode via PATCH and rejects junk values', async () => {
+    const created = (await (await postTab({ name: 'Dev' })).json()) as {
+      id: string;
+      view_mode?: string;
+    };
+    expect(created.view_mode).toBe('split'); // default
+    const res = await test.app.request(`/api/tabs/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ view_mode: 'tabbed' }),
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { view_mode?: string }).view_mode).toBe('tabbed');
+    const got = (await (await test.app.request(`/api/tabs/${created.id}`)).json()) as {
+      view_mode?: string;
+    };
+    expect(got.view_mode).toBe('tabbed');
+    // zod enum: anything but split|tabbed is rejected — an error status, no write.
+    const bad = await test.app.request(`/api/tabs/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ view_mode: 'mosaic' }),
+    });
+    expect(bad.status).toBeGreaterThanOrEqual(400);
+  });
+
   it('deletes a tab', async () => {
     const created = (await (await postTab({ name: 'Dev' })).json()) as { id: string };
     const res = await test.app.request(`/api/tabs/${created.id}`, { method: 'DELETE' });

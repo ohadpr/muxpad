@@ -48,6 +48,10 @@
   align-items: stretch;
   gap: 0;
   height: 100%;
+  /* Small gap after the switcher's divider so the first tab's plate (and its
+     active bottom rail) doesn't butt the vertical line — gives the logo/switcher
+     side a clean bit of air before the tab strip begins. */
+  padding-left: 7px;
   overflow-x: hidden;
   overflow-y: hidden;
   scrollbar-width: none;
@@ -311,14 +315,15 @@
   background: var(--bg-hover);
 }
 
-/* Active — bottom-edge accent rail plus a faint accent wash on the
-   background. The wash is the load-bearing "you are here" signal; the
-   rail underlines it. Both stay subtle enough to read at a glance
-   without dominating the chrome plate. No font-weight change so the
-   mono grid stays stable. */
+/* Active — the tab takes the CONTENT background so it reads as one surface
+   with the panel below it (browser-tab convention), and the accent bottom rail
+   carries the "you are here" signal. Inactive tabs stay at the bar background
+   (transparent), so active vs inactive is a gentle bar→content step plus the
+   rail — no third accent-tinted plate color. No font-weight change so the mono
+   grid stays stable. */
 .ws-tab[data-active="true"] {
   color: var(--fg);
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  background: var(--bg);
 }
 .ws-tab[data-active="true"]::after {
   content: "";
@@ -330,7 +335,7 @@
   background: var(--accent);
 }
 .ws-tab[data-active="true"]:hover {
-  background: color-mix(in srgb, var(--accent) 18%, var(--bg));
+  background: var(--bg);
 }
 
 /* Quick-switch number: shown on each tab while Ctrl is held so the user
