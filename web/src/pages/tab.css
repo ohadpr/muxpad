@@ -182,7 +182,7 @@
   background: var(--bg) !important;
   color: var(--fg-faint) !important;
 }
-.workspace-body .mosaic-window:not([data-focused="true"]) .pane-chrome-typeswitch-wrap,
+.workspace-body .mosaic-window:not([data-focused="true"]) .pane-surface-trigger,
 .workspace-body .mosaic-window:not([data-focused="true"]) .pane-chrome-btn,
 .workspace-body .mosaic-window:not([data-focused="true"]) .pane-chrome-btn-inline {
   opacity: 0.6;
@@ -315,6 +315,35 @@
   flex-direction: column;
 }
 
+/* Contextual web-switch bar above the active mobile pane. Collapses to
+   nothing when the switch has nothing to offer (PaneWebSwitch returns null
+   → wrapper is :empty). Height matches the mobile-tab-strip for rhythm. */
+.mobile-web-switch-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  height: 36px;
+  padding: 0 6px;
+  background: var(--bg-tabbar);
+  border-bottom: 1px solid var(--border);
+}
+.mobile-web-switch-bar:empty {
+  display: none;
+}
+
+/* The terminal/web switch when it rides inside the multi-pane strip (instead
+   of its own bar). Sits between the truncating chooser and the +/× buttons;
+   collapses when PaneWebSwitch has nothing to offer. */
+.mobile-strip-webswitch {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+.mobile-strip-webswitch:empty {
+  display: none;
+}
+
 /* Keep every mobile pane mounted but show only the active one so xterm
    state survives pane switches (WS stays open — no replay dance). */
 .mobile-pane-slot {
@@ -337,6 +366,287 @@
    a hidden bar measures 0px). */
 .workspace-root.workspace-mobile {
   padding-bottom: var(--mobile-input-bar-height, 0px);
+}
+
+/* ── Desktop 'tabbed' mode ────────────────────────────────────────────────
+   Browser-style tab headers over a single visible pane. Shares the mounted-
+   all/one-visible pattern with the mobile view (.tabbed-pane-slot mirrors
+   .mobile-pane-slot) so flipping in/out never remounts a terminal. */
+.desktop-tab-strip {
+  display: flex;
+  align-items: stretch;
+  /* Recessed chrome bar (same tone as the top nav .ws-tabbar) so the tabs read
+     as plates sitting ON a bar. The empty area past the last tab stays this
+     bar colour — distinct from the raised tab plates, which are --bg. */
+  background: var(--bg-tabbar);
+  border-bottom: 1px solid var(--border);
+  height: var(--chrome-h);
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size);
+  flex: 0 0 auto;
+}
+
+.desktop-tab-strip-tabs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  /* Small gap + top/side inset so each tab reads as its own rounded plate
+     floating on the recessed bar (echoes the sidebar's rounded selection
+     pills) rather than an edge-to-edge block of squares. */
+  gap: 3px;
+  padding: 4px 4px 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.desktop-tab-strip-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/* Chrome-style width: every tab shares the strip equally (flex-basis 0,
+   grow 1), so widths depend on the count — a few tabs sit at max-width with
+   empty bar to their right; add more and they shrink evenly down to a floor.
+   Below the floor they stop shrinking and the strip scrolls (overflow-x on
+   .desktop-tab-strip-tabs), rather than squeezing labels to nothing.
+
+   Active state is a LIFTED FILLED PLATE, not an underline: the active tab is
+   a brighter, accent-tinted elevated surface that reads as foreground, while
+   inactive tabs recede into the bar with only a faint fill. No bottom rail —
+   the fill contrast alone carries "selected" (browser-tab feel). */
+.desktop-tab {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 68px;
+  max-width: 220px;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  /* Rounded top corners — a browser-tab plate. The gap on the strip separates
+     neighbours, so no hairline divider is needed. */
+  border-radius: 7px 7px 0 0;
+  /* Two clean levels, no accent tint:
+       bar (--bg-tabbar) ≈ inactive tab  <  active tab (--bg, the content color).
+     Inactive tabs sit just a hair above the strip so they recede into the bar
+     (they read as "not open"); the active tab jumps to the content background so
+     it merges with the panel below it — the browser-tab "this is the open pane"
+     cue, no colored fill needed. */
+  background: color-mix(in srgb, var(--bg) 20%, var(--bg-tabbar));
+  transition: background 100ms ease;
+}
+.desktop-tab:hover {
+  background: color-mix(in srgb, var(--bg) 55%, var(--bg-tabbar));
+}
+.desktop-tab[data-active="true"],
+.desktop-tab[data-active="true"]:hover {
+  /* Match the active pane's exact colour — it wears a 5%-accent wash
+     (.tabbed-pane-slot::after), so plain --bg would read as a different shade
+     and the tab wouldn't fuse into the pane. */
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
+  /* Sit above the strip so the connector below can paint over its bottom border. */
+  z-index: 1;
+}
+/* Connector: a strip of the pane background painted over the strip's bottom
+   hairline, directly under the active tab, so the tab fuses seamlessly into the
+   pane below it (browser-tab "the open tab IS the page" feel) — no dividing line
+   between the active tab and its content. */
+.desktop-tab[data-active="true"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  /* Same washed colour as the tab/pane so the seam over the strip border
+     vanishes and the tab reads as continuous with the pane. */
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
+}
+
+/* Drag-to-reorder. The dragged plate dims; the drop target shows an inset
+   accent edge on the side the pane would land (inset box-shadow, not a
+   pseudo-element, so it never collides with the active tab's ::after rail). */
+.desktop-tab[data-dragging="true"] {
+  opacity: 0.4;
+}
+.desktop-tab[data-drop="before"] {
+  box-shadow: inset 3px 0 0 0 var(--accent);
+}
+.desktop-tab[data-drop="after"] {
+  box-shadow: inset -3px 0 0 0 var(--accent);
+}
+
+/* Busy spinner in a pane header — same treatment as the navigator's
+   .navtree-busy: a muted-accent thin ring that spins, sharing the status slot
+   with the attention dot (shown by priority in the JSX). */
+.desktop-tab-busy {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  color: color-mix(in srgb, var(--accent) 60%, var(--fg-dim));
+}
+.desktop-tab-busy svg {
+  animation: desktop-tab-spin 0.8s linear infinite;
+  transform-origin: center;
+}
+@keyframes desktop-tab-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .desktop-tab-busy svg {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
+/* Inline rename input — replaces the select/close buttons while editing a
+   pane's header. Sized by the `size` attr on the element; styled to sit
+   flush inside the tab plate. */
+.desktop-tab-input {
+  flex: 1 1 auto;
+  min-width: 60px;
+  margin: 0 6px 0 12px;
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size);
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 2px 6px;
+  height: 22px;
+}
+
+.desktop-tab-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 2px 0 12px;
+  background: transparent;
+  border: none;
+  color: var(--fg-dim);
+  font-family: inherit;
+  font-size: inherit;
+  /* Medium weight — the app-wide `-webkit-font-smoothing: antialiased`
+     (grayscale) renders light mono text thin on the dark recessed bar, so at
+     the default 400 the labels read as faint/flaky. 500 restores body. */
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+}
+.desktop-tab:hover .desktop-tab-select,
+.desktop-tab[data-active="true"] .desktop-tab-select {
+  color: var(--fg);
+}
+
+.desktop-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Fixed trailing box the status glyph and the × share. Reserved even when
+   empty so the label width never jumps as a status appears/disappears. */
+.desktop-tab-trailing {
+  position: relative;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 100%;
+  margin-right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Status (spinner/dot) fades out as the × fades in — they occupy the same
+   spot, so hover/active swaps one for the other in place. */
+.desktop-tab-trailing > .desktop-tab-busy,
+.desktop-tab-trailing > .badge-dot {
+  transition: opacity 100ms ease;
+}
+.desktop-tab:hover .desktop-tab-trailing > .desktop-tab-busy,
+.desktop-tab:hover .desktop-tab-trailing > .badge-dot,
+.desktop-tab[data-active="true"] .desktop-tab-trailing > .desktop-tab-busy,
+.desktop-tab[data-active="true"] .desktop-tab-trailing > .badge-dot {
+  opacity: 0;
+}
+.desktop-tab-close {
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--fg-faint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 100ms ease, color 100ms ease, background 100ms ease;
+}
+.desktop-tab:hover .desktop-tab-close,
+.desktop-tab[data-active="true"] .desktop-tab-close {
+  opacity: 1;
+}
+.desktop-tab-close:hover {
+  color: var(--danger);
+  background: var(--bg-hover);
+}
+
+.desktop-tab-add {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 100%;
+  background: transparent;
+  border: none;
+  border-radius: 7px 7px 0 0;
+  color: var(--fg-dim);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+.desktop-tab-add:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+
+.desktop-tab-strip-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  border-left: 1px solid var(--border);
+}
+
+/* Same keep-mounted/hide-inactive trick as .mobile-pane-slot. */
+.tabbed-pane-slot {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.tabbed-pane-slot[hidden] {
+  display: none;
+}
+/* The visible tabbed pane IS the active pane, so it wears the exact same
+   accent wash a focused pane gets in the split view (tab.css's
+   .mosaic-window[data-focused] .mosaic-window-body::after) — otherwise it
+   reads as plain --bg, nearly the sidebar colour. pointer-events:none so it
+   never eats clicks/typing; z-index above the terminal like the split wash. */
+.tabbed-pane-slot:not([hidden])::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  pointer-events: none;
+  z-index: 4;
 }
 
 /* Pane chrome interior — fills the 28px toolbar plate. Mono throughout to
@@ -383,100 +693,11 @@
   min-width: 0;
 }
 
-/* Wraps the type-switch button + its dropdown menu so the menu can be
-   absolutely positioned relative to the button. */
-.pane-chrome-typeswitch-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: stretch;
-  height: 100%;
-}
-
-/* Dropdown menu shown when the type-switch button is clicked. Anchored
-   below the button via the .pane-chrome-typeswitch-wrap parent. Above
-   the splitter (z-index 5) and any pane bodies. */
-.pane-chrome-typeswitch-menu {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  z-index: 50;
-  display: flex;
-  flex-direction: column;
-  min-width: 140px;
-  padding: 4px;
-  background: var(--bg-chrome);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-}
-
-.pane-chrome-typeswitch-menu-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  background: transparent;
-  border: 0;
-  border-radius: 3px;
-  color: var(--fg-dim);
-  cursor: pointer;
-  font-family: var(--chrome-font);
-  font-size: var(--chrome-size-sm);
-  text-align: left;
-}
-.pane-chrome-typeswitch-menu-item:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--fg);
-}
-.pane-chrome-typeswitch-menu-item:disabled {
-  color: var(--accent, #4a9eff);
-  cursor: default;
-  opacity: 0.85;
-}
-.pane-chrome-typeswitch-menu-item svg {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-}
-
-/* Leftmost type-switch button — the chrome's "what kind of pane is this".
-   For URL panes it shows a globe (and overlays a rotating ring while the
-   iframe is loading); for shell panes a terminal icon. Click opens a
-   menu with the available pane types. Sized to match .pane-chrome-btn-inline
-   so it sits flush with the title without inflating the chrome row height. */
-.pane-chrome-typeswitch {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  flex-shrink: 0;
-  width: 22px;
-  height: 100%;
-  padding: 0;
-  background: transparent;
-  border: none;
-  color: var(--fg-faint);
-  cursor: pointer;
-  opacity: 0.6;
-  transition: opacity 80ms ease, color 80ms ease;
-}
-.pane-chrome-typeswitch:hover {
-  opacity: 1;
-  color: var(--fg);
-}
-.pane-chrome-typeswitch:focus-visible {
-  outline: none;
-  opacity: 1;
-  color: var(--fg);
-}
-.pane-chrome-typeswitch svg {
-  width: 14px;
-  height: 14px;
-}
-
 /* Loading state: a rotating ring overlays the globe icon. Sized slightly
    larger than the icon so it reads as "around" the globe rather than
-   covering it. */
+   covering it. (Used by the url-pane spinner inside .pane-surface-trigger;
+   the old standalone .pane-chrome-typeswitch button it once belonged to was
+   replaced by PaneSurfaceSwitch.) */
 .pane-chrome-typeswitch-spinner {
   position: absolute;
   width: 16px;
@@ -491,6 +712,85 @@
 @keyframes url-pane-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* Unified pane-surface control. The wrapper only positions the dropdown
+   (.pane-web-switch-menu anchors to it); it must NOT carry opacity, or the
+   unfocused-pane dim would bleed onto the open menu and let the iframe show
+   through. So the dim (below) targets the trigger button, never this wrapper. */
+.pane-surface-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  height: 100%;
+}
+
+/* ONE button: the current-surface icon + a 12px chevron, a single hit target
+   with a single hover state (the icon and caret used to be two separate
+   buttons). Clicking opens the menu — it never silently toggles, so the icon
+   reads as "where you are", not "what you'll become". */
+.pane-surface-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  position: relative;
+  flex-shrink: 0;
+  height: 100%;
+  padding: 0 4px;
+  background: transparent;
+  border: none;
+  color: var(--fg-faint);
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 80ms ease, color 80ms ease, background 80ms ease;
+}
+.pane-surface-trigger:hover,
+.pane-surface-trigger:focus-visible {
+  outline: none;
+  opacity: 1;
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+/* Serving an app: the control goes accent so it announces itself. */
+.pane-surface-trigger.is-available {
+  color: var(--accent);
+  opacity: 1;
+}
+/* URL-pane loading ring — re-anchored over the leading icon (the generic
+   .pane-chrome-typeswitch-spinner has no offsets; in this wider button it
+   would drift), avoiding the chevron. */
+.pane-surface-trigger .pane-chrome-typeswitch-spinner {
+  left: 4px;
+  top: calc(50% - 8px);
+}
+/* Live "a server is up here" pulse, top-right corner of the control. */
+.pane-surface-dot {
+  position: absolute;
+  top: 3px;
+  right: 1px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pane-surface-pulse 2.2s ease-out infinite;
+  pointer-events: none;
+}
+@keyframes pane-surface-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pane-surface-dot {
+    animation: none;
   }
 }
 
@@ -554,6 +854,14 @@
 
 .pane-chrome-close:hover {
   color: var(--danger);
+}
+/* SvgClose is drawn in a 12-unit viewBox at strokeWidth 1.6; the generic
+   .pane-chrome-btn svg rule upscales it to 18px (×1.5), so its stroke
+   lands ~2.4px — heavier than the split icons' ~1.5px beside it. Thin the
+   stroke to match their weight. Scoped here so SvgClose stays unchanged in
+   the dropdowns/switchers that use it at its native size. */
+.pane-chrome-close svg path {
+  stroke-width: 1;
 }
 
 /* Inline variant — sits adjacent to text (e.g. URL pane reload),

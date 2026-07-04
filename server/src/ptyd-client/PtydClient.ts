@@ -39,9 +39,10 @@ type Pending = {
  *    every open/close including reconnects). 'disconnected' carries the
  *    last WS 'error' as payload (`Error | null`) when one was observed
  *    before the close.
- *  - 'paneExit' / 'paneCwd' / 'paneTitle' / 'paneFg' / 'paneAttention' —
- *    forwarded from ptyd's control-event frames. Payload is the rest of
- *    the event object minus `event` (e.g. for paneExit: `{id, code, cause}`).
+ *  - 'paneExit' / 'paneCwd' / 'paneTitle' / 'paneFg' / 'paneAttention' /
+ *    'paneActivity' / 'paneUrlsSeen' — forwarded from ptyd's control-event frames. Payload is
+ *    the rest of the event object minus `event` (e.g. for paneExit:
+ *    `{id, code, cause}`; for paneUrlsSeen: `{id, urls, markers}`).
  */
 export class PtydClient extends EventEmitter {
   readonly socketPath: string;

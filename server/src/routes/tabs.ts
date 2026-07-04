@@ -1,14 +1,14 @@
+import { LayoutNodeSchema } from '@muxpad/shared';
+import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import type Database from 'better-sqlite3';
-import { LayoutNodeSchema } from '@muxpad/shared';
-import { TabStore } from '../store/TabStore.js';
-import { PaneStore } from '../store/PaneStore.js';
-import { pruneDeadPanes } from '../store/migrations.js';
-import type { PtydClient } from '../ptyd-client/PtydClient.js';
-import type { PtydCache } from '../ptyd-cache.js';
-import { randomWorkspaceName } from '../random-name.js';
 import type { EventBus } from '../events.js';
+import { type PtydCache, decoratePane } from '../ptyd-cache.js';
+import type { PtydClient } from '../ptyd-client/PtydClient.js';
+import { randomWorkspaceName } from '../random-name.js';
+import { PaneStore } from '../store/PaneStore.js';
+import { TabStore } from '../store/TabStore.js';
+import { pruneDeadPanes } from '../store/migrations.js';
 
 /**
  * CRUD for tabs (the things in the tab bar). Each tab belongs to a
@@ -51,14 +51,19 @@ export function tabsRoutes(deps: {
       );
     }
     const list = tabs.listByWorkspace(workspaceId);
-    // Fold in per-tab attention flag from the ptyd cache. A tab flags as
-    // needing attention if any of its panes has rung BEL since the user
-    // last interacted with it. Panes whose runtime isn't running
-    // (lazy-spawn, no client connected) contribute false.
+    // Fold in per-tab attention flag. A tab flags as needing attention if
+    // it was manually marked unread, OR any of its panes has rung BEL
+    // since the user last interacted with it. Panes whose runtime isn't
+    // running (lazy-spawn, no client connected) contribute false.
+    const unreadIds = tabs.unreadIdsByWorkspace(workspaceId);
     const decorated = list.map((t) => {
       const tabPanes = panes.listByTab(t.id);
-      const attention = tabPanes.some((p) => deps.cache.getAttention(p.id));
-      return { ...t, attention };
+      const attention = unreadIds.has(t.id) || tabPanes.some((p) => deps.cache.getAttention(p.id));
+      // Busy = any pane in the tab is actively producing output. Unlike
+      // attention this is purely runtime (never manual/persisted) and clears
+      // itself when the work goes quiet.
+      const busy = tabPanes.some((p) => deps.cache.getBusy(p.id));
+      return { ...t, attention, busy };
     });
     return c.json(decorated);
   });
@@ -68,6 +73,9 @@ export function tabsRoutes(deps: {
   // attention dot doesn't reappear if they leave without typing.
   app.post('/:id/seen', async (c) => {
     const id = c.req.param('id');
+    // Viewing the tab also clears any manual "unread" mark — seeing it is
+    // the read action. Synchronous DB write, independent of ptyd.
+    tabs.setUnread(id, false);
     // Issue markSeen against ptyd in parallel; swallow per-pane failures
     // (idempotent — markSeen on a missing id is a no-op on ptyd's side).
     // No response payload, so the round-trip latency only blocks the 204
@@ -79,6 +87,19 @@ export function tabsRoutes(deps: {
         }),
       ),
     );
+    return c.body(null, 204);
+  });
+
+  // Manually flag a tab "unread" — restores the attention dot until the
+  // tab is next viewed. Complements the BEL-driven runtime attention;
+  // persisted in the DB so it survives ptyd/server restarts and needs no
+  // ptyd round-trip. The initiating client refreshes its tab list; other
+  // clients pick it up on the next poll.
+  app.post('/:id/unread', (c) => {
+    const id = c.req.param('id');
+    if (!tabs.getById(id))
+      return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
+    tabs.setUnread(id, true);
     return c.body(null, 204);
   });
 
@@ -95,8 +116,7 @@ export function tabsRoutes(deps: {
 
   app.get('/:id', (c) => {
     const t = tabs.getById(c.req.param('id'));
-    if (!t)
-      return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
+    if (!t) return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
     const livePanes = panes.listByTab(t.id);
     const valid = new Set(livePanes.map((p) => p.id));
     const cleaned = pruneDeadPanes(t.layout, valid);
@@ -104,12 +124,7 @@ export function tabsRoutes(deps: {
       tabs.update(t.id, { layout: cleaned });
       t.layout = cleaned;
     }
-    const decorated = livePanes.map((p) => ({
-      ...p,
-      title: deps.cache.getTitle(p.id),
-      foreground_cmd: deps.cache.getFg(p.id),
-      attention: deps.cache.getAttention(p.id),
-    }));
+    const decorated = livePanes.map((p) => decoratePane(deps.cache, p));
     return c.json({ ...t, panes: decorated });
   });
 
@@ -118,7 +133,12 @@ export function tabsRoutes(deps: {
       .object({
         name: z.string().optional(),
         slug: z.string().optional(),
+        icon: z.string().optional(),
         layout: LayoutNodeSchema.optional(),
+        // Desktop split ⇄ tabbed rendering mode. Persisted so the choice
+        // follows the user across devices (the emitted tab.updated syncs
+        // other connected clients live).
+        view_mode: z.enum(['split', 'tabbed']).optional(),
       })
       .parse(await c.req.json());
     try {
@@ -133,8 +153,7 @@ export function tabsRoutes(deps: {
   app.delete('/:id', async (c) => {
     const id = c.req.param('id');
     const t = tabs.getById(id);
-    if (!t)
-      return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
+    if (!t) return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
     // TabStore.getById doesn't surface workspace_id (the shared Tab type
     // omits it). Pull it via the dedicated helper so the emitted event
     // carries the right workspace context for clients.
@@ -157,6 +176,38 @@ export function tabsRoutes(deps: {
       deps.events.emit({ type: 'tab.removed', workspace_id: workspaceId, tab_id: id });
     }
     return c.body(null, 204);
+  });
+
+  // Move a whole tab (and all its panes) to a different workspace. Pure FK
+  // reparent — the panes reference the tab, not the workspace, so they come
+  // along with no layout surgery and no PTY churn. Surfaced to clients as a
+  // tab.removed (old workspace) + tab.added (new workspace) pair, which the
+  // global event router turns into the right per-workspace tab-list refreshes.
+  app.post('/:id/move', async (c) => {
+    const id = c.req.param('id');
+    const body = z.object({ workspace_id: z.string() }).parse(await c.req.json().catch(() => ({})));
+    const fromWorkspace = tabs.getWorkspaceId(id);
+    if (!fromWorkspace)
+      return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
+    if (fromWorkspace === body.workspace_id) {
+      // No-op — already there. Return the current tab unchanged.
+      const t = tabs.getById(id);
+      return c.json(t);
+    }
+    let updated: ReturnType<typeof tabs.setWorkspace>;
+    try {
+      updated = tabs.setWorkspace(id, body.workspace_id);
+    } catch {
+      // setWorkspace throws on a missing tab or (via the workspace_id FK) a
+      // non-existent target workspace.
+      return c.json(
+        { error: { code: 'bad_request', message: 'tab or target workspace not found' } },
+        400,
+      );
+    }
+    deps.events.emit({ type: 'tab.removed', workspace_id: fromWorkspace, tab_id: id });
+    deps.events.emit({ type: 'tab.added', workspace_id: body.workspace_id, tab: updated });
+    return c.json(updated);
   });
 
   return app;
