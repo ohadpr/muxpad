@@ -77,6 +77,20 @@ describe('TabStore', () => {
     expect(store.getWorkspaceId('does-not-exist')).toBeUndefined();
   });
 
+  it('defaults view_mode to split and persists a tabbed flip without touching layout', () => {
+    const w = store.create({ name: 'Dev', layout: 'pane-1', workspace_id: workspaceId });
+    expect(w.view_mode).toBe('split');
+    expect(store.getById(w.id)?.view_mode).toBe('split');
+    const flipped = store.update(w.id, { view_mode: 'tabbed' });
+    expect(flipped.view_mode).toBe('tabbed');
+    expect(store.getById(w.id)?.view_mode).toBe('tabbed');
+    // The split tree must survive the flip so switching back restores it.
+    expect(store.getById(w.id)?.layout).toEqual('pane-1');
+    // Unrelated updates don't reset the mode.
+    store.update(w.id, { name: 'Dev2' });
+    expect(store.getById(w.id)?.view_mode).toBe('tabbed');
+  });
+
   it('round-trips deeply nested layout JSON', () => {
     const layout = {
       direction: 'row' as const,

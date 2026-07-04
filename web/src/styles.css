@@ -45,6 +45,13 @@
   --chrome-size: 13px;
   --chrome-size-sm: 12px;
 
+  /* Proportional UI sans for prose-y chrome — chiefly the sidebar nav
+     labels (workspace/tab names), where the machined monospace reads
+     spaced-out, truncates sooner in the narrow rail, and fights the
+     clean nav feel. Tabular/technical chrome (build hash, number chips)
+     stays on --chrome-font. */
+  --ui-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
   /* The header-bar height — referenced from multiple places so it's one
      knob. 36px desktop / 40px mobile (set via media query at the bottom). */
   --chrome-h: 36px;
@@ -319,7 +326,7 @@ select:focus {
 }
 
 /* ─── Notification dot ───────────────────────────────────────────────────
-   iOS-style red dot. Two modes:
+   Theme-accented dot. Two modes:
 
    .badge-dot          — absolutely positioned top-right of its parent;
                          parent must be position:relative. Use this on
@@ -328,9 +335,14 @@ select:focus {
    .badge-dot.-inline  — flow-laid out, drop into a row next to text
                          (dropdown rows next to the workspace/tab name).
 
-   Single signal across the app: "this wants you." Selection rails
-   (var(--accent), bottom-edge) are a *different* channel — they say
-   "you are here." The two never share a surface. */
+   Single signal across the app: "this wants you." Uses var(--accent) (the
+   theme color — violet on Trayo, etc.) rather than a hard red: "your turn"
+   isn't an error, and everything else in the chrome speaks the theme palette.
+   It shares the accent hue with the selection pill ("you are here"), but the
+   two never co-occur on a row (viewing a tab clears its dot) and read as very
+   different forms — a filled row pill vs a 7px dot. The MACHINE/progress
+   channel (the busy spinner) is deliberately NEUTRAL grey, not accent, so the
+   "concerns you" hue stays exclusively about you. */
 .badge-dot {
   position: absolute;
   top: 6px;
@@ -338,7 +350,7 @@ select:focus {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--danger);
+  background: var(--accent);
   box-shadow: 0 0 0 1.5px var(--bg-tabbar);
   pointer-events: none;
 }
@@ -380,8 +392,8 @@ select:focus {
   flex: 1;
   min-height: 0;
 }
-/* Row holding the optional sidebar (sidenav, see NavTree.css) and the
-   workspace hosts. With navLayout 'top' it's just the hosts. */
+/* Row holding the sidebar (sidenav, see NavTree.css) and the workspace hosts.
+   On desktop the sidebar is always present; on mobile it's just the hosts. */
 .app-body {
   display: flex;
   align-items: stretch;
@@ -435,6 +447,18 @@ select:focus {
   background: transparent;
 }
 
+/* Wordmark treatment. Deliberately set apart from the workspace headers below
+   it (bold sans, near-black): the brand is a quiet mono LOGOTYPE — lighter
+   weight, tracked out, dimmed — so it reads as persistent app chrome, not as
+   another bold section header competing for the same rung of the hierarchy. */
+.brand-text {
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  /* Quiet, but not washed out — sit close to full fg with just a touch of dim. */
+  color: color-mix(in srgb, var(--fg-dim) 20%, var(--fg));
+  transition: color 120ms ease;
+}
+
 /* Mark-only mode (icon, no wordmark): used inside a workspace where the
    workspace switcher takes the wordmark's slot. Tighter horizontal
    padding so the mark visually anchors the left edge of the board. */
@@ -444,6 +468,24 @@ select:focus {
 
 .brand-mark {
   flex: 0 0 auto;
+  /* Mute the mark so it doesn't compete with the colorful tab emojis below —
+     mostly desaturated + lowered opacity keeps a faint hint of the brand
+     without adding another loud color to the rail. Restored to full color on
+     hover (see below). */
+  filter: grayscale(0.7);
+  opacity: 0.92;
+  transition: filter 120ms ease, opacity 120ms ease;
+}
+
+/* Hover brings the brand to full vibrancy: the mark's real colors and a crisp
+   wordmark. The resting state is quiet chrome; hover is the "this is muxpad"
+   moment. */
+.brand:hover .brand-mark {
+  filter: none;
+  opacity: 1;
+}
+.brand:hover .brand-text {
+  color: var(--fg);
 }
 
 /* Quiet "muxpad <build>" wordmark pinned to the right of the chrome,
@@ -483,5 +525,10 @@ select:focus {
   .brand-text-responsive,
   .brand-text-side {
     display: none;
+  }
+  /* Taller chrome bars on mobile — 36px is cramped for a thumb; 46px gives the
+     workspace + pane tab strips a comfortable touch height. */
+  :root {
+    --chrome-h: 46px;
   }
 }

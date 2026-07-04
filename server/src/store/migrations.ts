@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { type LayoutNode, pruneLayout, randomTabIcon, splitLeadingEmoji } from '@muxpad/shared';
 
 interface Migration {
   version: number;
@@ -6,28 +7,13 @@ interface Migration {
   apply?: (db: Database.Database) => void;
 }
 
-type LayoutValue =
-  | string
-  | {
-      direction: 'row' | 'column';
-      splitPercentage?: number | undefined;
-      first: LayoutValue;
-      second: LayoutValue;
-    };
-
 /**
  * Walk the binary layout tree and drop any pane IDs not in `valid`. Empty
  * branches collapse upward; if everything is gone the layout becomes ''.
+ * Thin wrapper over the shared `pruneLayout` collapse routine.
  */
-export function pruneDeadPanes(layout: LayoutValue, valid: Set<string>): LayoutValue {
-  if (layout == null || layout === '') return '';
-  if (typeof layout === 'string') return valid.has(layout) ? layout : '';
-  const first = pruneDeadPanes(layout.first, valid);
-  const second = pruneDeadPanes(layout.second, valid);
-  if (first === '' && second === '') return '';
-  if (first === '') return second;
-  if (second === '') return first;
-  return { ...layout, first, second };
+export function pruneDeadPanes(layout: LayoutNode, valid: Set<string>): LayoutNode {
+  return pruneLayout(layout, (id) => valid.has(id));
 }
 
 /**
@@ -121,6 +107,90 @@ const MIGRATIONS: Migration[] = [
       DROP TABLE panes_v1;
       CREATE INDEX panes_tab_id ON panes(tab_id);
     `,
+  },
+  {
+    // Manual "mark as unread": a persistent per-tab flag, folded into the
+    // tab's attention dot alongside the BEL-driven runtime attention. Lives
+    // in the DB (not ptyd's runtime) so it survives restarts and needs no
+    // ptyd round-trip; cleared when the tab is next viewed (markSeen).
+    version: 7,
+    sql: `ALTER TABLE tabs ADD COLUMN unread INTEGER NOT NULL DEFAULT 0;`,
+  },
+  {
+    // Per-tab icon. Adds the column, then backfills: lift a leading emoji
+    // out of the name into the icon slot (the old "emoji in the name"
+    // convention) so the navigator's icon column is consistent and we
+    // don't double up; tabs without a leading emoji get a random icon.
+    version: 8,
+    sql: `ALTER TABLE tabs ADD COLUMN icon TEXT;`,
+    apply: (db) => {
+      const rows = db.prepare('SELECT id, name FROM tabs').all() as {
+        id: string;
+        name: string;
+      }[];
+      const upd = db.prepare('UPDATE tabs SET name = ?, icon = ? WHERE id = ?');
+      for (const r of rows) {
+        const { icon, rest } = splitLeadingEmoji(r.name);
+        const trimmed = rest.trim();
+        if (icon && trimmed)
+          upd.run(trimmed, icon, r.id); // "🌐 Home" → name "Home", icon 🌐
+        else if (icon)
+          upd.run(r.name, icon, r.id); // name was only an emoji → use it as the icon, no random mismatch
+        else upd.run(r.name, randomTabIcon(), r.id); // no leading emoji → random icon
+      }
+    },
+  },
+  {
+    // Agent sessions: muxpad's own handle on a Claude (later Codex/Cursor)
+    // session running in a pane, so the session can be viewed/driven as a
+    // terminal or as web chat and switched between the two. `current_sid`
+    // is the live provider session-id, captured via the SessionStart hook
+    // the `muxpad claude` wrapper installs; `lineage` is the JSON list of
+    // every session-id this pane's session has carried (resume/compact/fork
+    // can mint a new one). One row per pane. See
+    // docs/plans/2026-07-01-web-chat-session-switching.md.
+    version: 9,
+    sql: `
+      CREATE TABLE agent_sessions (
+        id           TEXT PRIMARY KEY,
+        pane_id      TEXT NOT NULL UNIQUE REFERENCES panes(id) ON DELETE CASCADE,
+        assistant    TEXT NOT NULL DEFAULT 'claude',
+        cwd          TEXT,
+        current_sid  TEXT,
+        lineage      TEXT NOT NULL DEFAULT '[]',
+        view_mode    TEXT NOT NULL DEFAULT 'terminal',
+        writer       TEXT NOT NULL DEFAULT 'tui',
+        status       TEXT NOT NULL DEFAULT 'idle',
+        created_at   INTEGER NOT NULL,
+        updated_at   INTEGER NOT NULL
+      );
+    `,
+  },
+  {
+    // The Claude TUI's PID, captured by the `muxpad claude` wrapper via $$
+    // (exec-inherited into claude). The server SIGTERMs it to hand a session
+    // from the terminal to chat cleanly — no keystroke fragility, no ptyd RPC.
+    version: 10,
+    sql: 'ALTER TABLE agent_sessions ADD COLUMN tui_pid INTEGER;',
+  },
+  {
+    // User-set pane name. Persistent override for the live-derived tab-strip
+    // label (terminal title / foreground command), so a rename in the pane
+    // tab bar sticks and isn't overwritten by claude/the shell. Nullable —
+    // null means "use the live label". Lives in SQLite, not ptyd, so it
+    // survives restarts and needs no ptyd round-trip.
+    version: 11,
+    sql: 'ALTER TABLE panes ADD COLUMN name TEXT;',
+  },
+  {
+    // Desktop split ⇄ tabbed rendering mode per tab ('split' | 'tabbed').
+    // Was a localStorage-only prototype (per device, lost on cache clear);
+    // persisting it server-side makes the choice survive reloads and follow
+    // the user across devices — same rationale as agent_sessions.view_mode.
+    // The split layout tree is untouched by the flip; this is only how the
+    // same panes are presented.
+    version: 12,
+    sql: "ALTER TABLE tabs ADD COLUMN view_mode TEXT NOT NULL DEFAULT 'split';",
   },
 ];
 

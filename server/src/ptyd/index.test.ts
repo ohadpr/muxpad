@@ -1,11 +1,11 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { startPtyd, type PtydHandle, type PtydOptions } from './index.js';
+import { decodeServerMessage, encodeInput } from '@muxpad/shared';
+import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { encodeRequest, decodeMessage, type CtrlResponse, type CtrlEvent } from './protocol.js';
-import { encodeInput, decodeServerMessage } from '@muxpad/shared';
+import { type PtydHandle, type PtydOptions, startPtyd } from './index.js';
+import { type CtrlEvent, type CtrlResponse, decodeMessage, encodeRequest } from './protocol.js';
 
 let handle: PtydHandle | null = null;
 let dir = '';
@@ -249,7 +249,10 @@ describe('ptyd /pty/:id per-attach WS endpoint', () => {
   // Open a binary WS to /pty/<id> over the same unix socket as control.
   // Returns the socket and a `nextOutput()` helper that resolves with the
   // decoded string body of the next output frame (or rejects on timeout).
-  async function openPty(socketPath: string, id: string): Promise<{
+  async function openPty(
+    socketPath: string,
+    id: string,
+  ): Promise<{
     sock: WebSocket;
     nextOutput: (timeoutMs?: number) => Promise<string>;
     nextClose: (timeoutMs?: number) => Promise<{ code: number; reason: string }>;
@@ -502,5 +505,42 @@ describe('ptyd control push events', () => {
     expect(evt.id).toBe('ex1');
     expect(evt.cause).toBe('killed');
     expect(typeof evt.code).toBe('number');
+  });
+});
+
+describe('ptyd — raw url sightings (end-to-end)', () => {
+  it('emits paneUrlsSeen with the raw URL a pane prints', async () => {
+    const { call, waitForEvent } = await setupPtyd();
+    await call('ensurePane', {
+      spec: {
+        id: 'srv1',
+        shell: '/bin/sh',
+        startup_cmd: "echo 'ready http://localhost:5173/'",
+        cwd: '/tmp',
+      },
+    });
+    const evt = await waitForEvent('paneUrlsSeen', 8000);
+    const { urls, markers } = evt as unknown as { urls: string[]; markers: unknown[] };
+    expect(Array.isArray(urls)).toBe(true);
+    expect(urls).toContain('http://localhost:5173/');
+    expect(Array.isArray(markers)).toBe(true);
+  });
+
+  it('emits raw sightings even when nothing is listening (ptyd does not probe)', async () => {
+    const { call, waitForEvent } = await setupPtyd();
+    // Post-split, ptyd is a dumb extractor: it forwards every printed URL.
+    // Whether the port is actually listening is decided on the main server
+    // (AppUrlDetector / AppUrlTracker), not here — so the sighting DOES arrive.
+    await call('ensurePane', {
+      spec: {
+        id: 'noserve1',
+        shell: '/bin/sh',
+        startup_cmd: "echo 'see http://localhost:59999/ for docs'",
+        cwd: '/tmp',
+      },
+    });
+    const evt = await waitForEvent('paneUrlsSeen', 8000);
+    const { urls } = evt as unknown as { urls: string[] };
+    expect(urls).toContain('http://localhost:59999/');
   });
 });

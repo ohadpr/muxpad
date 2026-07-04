@@ -1,14 +1,20 @@
+import type { LayoutNode } from '@muxpad/shared';
+import {
+  appendLeafToLayout,
+  removeLeafFromLayout,
+  splitLeadingEmoji,
+  spliceLayoutAtTarget,
+} from '@muxpad/shared';
+import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { homedir } from 'node:os';
-import type Database from 'better-sqlite3';
-import type { LayoutNode } from '@muxpad/shared';
-import { spliceLayoutAtTarget } from '@muxpad/shared';
+import type { EventBus } from '../events.js';
+import { type PtydCache, decoratePane } from '../ptyd-cache.js';
+import type { PtydClient } from '../ptyd-client/PtydClient.js';
+import { randomWorkspaceName } from '../random-name.js';
+import { safeCwd } from '../safe-cwd.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
-import type { PtydClient } from '../ptyd-client/PtydClient.js';
-import type { PtydCache } from '../ptyd-cache.js';
-import type { EventBus } from '../events.js';
 
 const defaultShell = process.env.SHELL ?? '/bin/zsh';
 
@@ -65,8 +71,7 @@ export function panesTabScopedRoutes(deps: {
   app.post('/:id/panes', async (c) => {
     const tabId = c.req.param('id');
     const t = tabs.getById(tabId);
-    if (!t)
-      return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
+    if (!t) return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
     const body = z
       .object({
         kind: z.enum(['shell', 'url']).optional(),
@@ -133,7 +138,7 @@ export function panesTabScopedRoutes(deps: {
       if (source && source.tab_id === tabId) {
         const live = deps.cache.getCwd(source.id);
         // source.cwd is nullable since the schema widening for URL panes;
-        // collapse null back to undefined so the homedir() default below fires.
+        // collapse null back to undefined so safeCwd's home fallback fires.
         cwd = live ?? source.cwd ?? undefined;
       }
     }
@@ -141,7 +146,10 @@ export function panesTabScopedRoutes(deps: {
     const pane = panes.create({
       tab_id: tabId,
       shell: body.shell ?? defaultShell,
-      cwd: cwd ?? homedir(),
+      // Fall back to home if the resolved cwd (often an inherited sibling cwd)
+      // no longer exists — a deleted dir makes the shell spawn fail + the pane
+      // cascade-delete itself (see safeCwd).
+      cwd: safeCwd(cwd),
       startup_cmd: body.startup_cmd ?? null,
       env: body.env ?? null,
     });
@@ -166,7 +174,7 @@ export function panesTabScopedRoutes(deps: {
         id: pane.id,
         shell: pane.shell ?? defaultShell,
         startup_cmd: pane.startup_cmd,
-        cwd: pane.cwd ?? homedir(),
+        cwd: safeCwd(pane.cwd),
         env: pane.env,
         tab_id: tabId,
         workspace_id: workspaceId,
@@ -193,8 +201,7 @@ export function panesScopedRoutes(deps: {
 
   app.get('/:id', async (c) => {
     const p = panes.getById(c.req.param('id'));
-    if (!p)
-      return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
     // hasPane is an async RPC; this handler is rare (single-pane GET).
     // Fall back to false if ptyd is disconnected — the row is still
     // useful for the caller.
@@ -210,14 +217,20 @@ export function panesScopedRoutes(deps: {
   app.patch('/:id', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p)
-      return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
     const body = z
       .object({
         kind: z.enum(['shell', 'url']).optional(),
         url: z.string().url().nullable().optional(),
+        // User-given pane name for the tab-strip label. '' or null clears it
+        // back to the live-derived title. Independent of kind/url edits.
+        name: z.string().nullable().optional(),
       })
       .parse(await c.req.json().catch(() => ({})));
+
+    // Rename is orthogonal to the kind/url mutations below and never touches
+    // ptyd, so apply it up front regardless of which branch runs next.
+    if (body.name !== undefined) panes.setName(id, body.name);
 
     if (body.kind && body.kind !== p.kind) {
       // Kind flip: close ptyd-attached clients FIRST (with code 4001) so
@@ -261,7 +274,11 @@ export function panesScopedRoutes(deps: {
     }
     const refreshed = panes.getById(id);
     if (refreshed) {
-      const decorated = { ...refreshed, attention: deps.cache.getAttention(refreshed.id) };
+      const decorated = {
+        ...refreshed,
+        attention: deps.cache.getAttention(refreshed.id),
+        app_urls: deps.cache.getAppUrls(refreshed.id),
+      };
       deps.events.emit({ type: 'pane.updated', tab_id: refreshed.tab_id, pane: decorated });
       return c.json(decorated);
     }
@@ -271,8 +288,7 @@ export function panesScopedRoutes(deps: {
   app.delete('/:id', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p)
-      return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
     // Capture tab_id BEFORE the delete so the event still carries it.
     const tabId = p.tab_id;
     // ptyd holds runtime state; SQLite is the source of truth. If ptyd
@@ -293,13 +309,9 @@ export function panesScopedRoutes(deps: {
   app.post('/:id/respawn', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
-    if (!p)
-      return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
     if (p.kind === 'url') {
-      return c.json(
-        { error: { code: 'bad_request', message: 'cannot respawn a url pane' } },
-        400,
-      );
+      return c.json({ error: { code: 'bad_request', message: 'cannot respawn a url pane' } }, 400);
     }
     // ptyd holds runtime state; SQLite is the source of truth. If ptyd
     // is unreachable, swallow the kill — the second call (ensurePane)
@@ -326,7 +338,7 @@ export function panesScopedRoutes(deps: {
         id: p.id,
         shell: p.shell ?? defaultShell,
         startup_cmd: p.startup_cmd,
-        cwd: p.cwd ?? process.env.HOME ?? '/',
+        cwd: safeCwd(p.cwd),
         env: p.env,
         tab_id: p.tab_id,
         ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
@@ -361,6 +373,155 @@ export function panesScopedRoutes(deps: {
       // best-effort — same swallow as the tab-level seen
     }
     return c.body(null, 204);
+  });
+
+  // Move a pane to a different tab in the SAME workspace. Either to an
+  // existing tab (`to_tab_id`) or a freshly-created one (`new_tab: true`).
+  //
+  // The pane's runtime/PTY is keyed by pane id and survives untouched — only
+  // SQLite (the pane's tab_id) and the two tabs' layout trees change. The
+  // running shell's baked-in MUXPAD_TAB_ID env goes stale until the next
+  // respawn, which only matters for new in-pane CLI invocations; we
+  // deliberately don't push a live env update for v1.
+  //
+  // If the source tab is left with no panes, it's deleted (mirrors the
+  // client-side "last pane closed → close tab" cascade). `from_tab_removed`
+  // in the response tells the client whether an "undo" is still possible.
+  app.post('/:id/move', async (c) => {
+    const id = c.req.param('id');
+    const pane = panes.getById(id);
+    if (!pane) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    const body = z
+      .object({
+        to_tab_id: z.string().optional(),
+        new_tab: z.boolean().optional(),
+      })
+      .parse(await c.req.json().catch(() => ({})));
+
+    const sourceTab = tabs.getById(pane.tab_id);
+    if (!sourceTab)
+      return c.json({ error: { code: 'not_found', message: 'source tab not found' } }, 404);
+    const workspaceId = tabs.getWorkspaceId(pane.tab_id);
+    if (!workspaceId)
+      return c.json({ error: { code: 'not_found', message: 'source workspace not found' } }, 404);
+
+    const decorate = (paneId: string) => {
+      const p = panes.getById(paneId);
+      return p ? decoratePane(deps.cache, p) : null;
+    };
+
+    // Extracting the SOLE pane of a tab into a new tab is pure churn — it
+    // would create a fresh tab and delete the old one, throwing away the
+    // source tab's name/icon/slug for an identical single-pane result. Treat
+    // it as a no-op so neither the UI nor a CLI caller can trash a tab's
+    // identity by "extracting" its only pane. (Moving a sole pane to an
+    // EXISTING tab is still allowed — that's the normal "last pane left, tab
+    // closes" cascade, not identity churn.)
+    if (body.new_tab && panes.listByTab(pane.tab_id).length <= 1) {
+      return c.json({
+        pane: decorate(id),
+        from_tab_id: sourceTab.id,
+        to_tab: sourceTab,
+        from_tab_removed: false,
+      });
+    }
+
+    // Resolve / create the destination tab.
+    let destTab: typeof sourceTab;
+    let createdNewTab = false;
+    if (body.new_tab) {
+      // Seed the new tab from the pane's live title / foreground command, so
+      // an extracted pane lands in a tab that reads like its contents instead
+      // of a random codename. Sanitize it: strip stray control chars, and
+      // split any LEADING emoji into the tab's dedicated icon slot. Left in
+      // the name, that emoji renders as a tofu box — the label font has no
+      // emoji fallback (the icon column does) — and the icon slot is exactly
+      // where a tab's glyph belongs (see splitLeadingEmoji / tab-icons).
+      const rawTitle = (deps.cache.getTitle(id) || deps.cache.getFg(id) || '')
+        // Strip control chars (\p{Cc}) AND private-use glyphs (\p{Co}) — the
+        // latter are Nerd Font / Powerline icons that shells stuff into the
+        // terminal title (Starship, p10k, …); they're font-private, render as
+        // tofu boxes in the chrome's label font, and are never meaningful text.
+        .replace(/[\p{Cc}\p{Co}]/gu, '')
+        .trim();
+      const { icon: leadingIcon, rest } = splitLeadingEmoji(rawTitle);
+      const seedName = rest.trim() || randomWorkspaceName();
+      destTab = tabs.create({
+        name: seedName,
+        layout: id,
+        workspace_id: workspaceId,
+        ...(leadingIcon ? { icon: leadingIcon } : {}),
+      });
+      createdNewTab = true;
+    } else {
+      if (!body.to_tab_id)
+        return c.json(
+          { error: { code: 'bad_request', message: 'to_tab_id or new_tab required' } },
+          400,
+        );
+      const t = tabs.getById(body.to_tab_id);
+      if (!t)
+        return c.json({ error: { code: 'not_found', message: 'destination tab not found' } }, 404);
+      if (tabs.getWorkspaceId(t.id) !== workspaceId)
+        return c.json(
+          {
+            error: {
+              code: 'bad_request',
+              message: 'destination tab is in a different workspace',
+            },
+          },
+          400,
+        );
+      destTab = t;
+    }
+
+    // No-op move (same tab). For new_tab this can't happen; for an explicit
+    // to_tab_id it can, so short-circuit before mutating anything.
+    if (destTab.id === sourceTab.id) {
+      return c.json({ pane: decorate(id), from_tab_id: sourceTab.id, to_tab: destTab, from_tab_removed: false });
+    }
+
+    // Reparent the pane row, then fix up both layout trees.
+    panes.setTab(id, destTab.id);
+
+    let finalDest = destTab;
+    if (!createdNewTab) {
+      finalDest = tabs.update(destTab.id, { layout: appendLeafToLayout(destTab.layout, id) });
+    }
+
+    const sourceLayout = removeLeafFromLayout(sourceTab.layout, id);
+    const sourceEmpty = sourceLayout === '' || sourceLayout == null;
+
+    // Emit destination events first so a client already viewing the dest tab
+    // has the pane in its list before the layout referencing it lands.
+    const decorated = decorate(id);
+    if (createdNewTab) {
+      // tab.added carries the full tab (layout already = the moved pane), so
+      // the dest is fully described in one event; no separate pane.added.
+      deps.events.emit({ type: 'tab.added', workspace_id: workspaceId, tab: finalDest });
+    } else {
+      if (decorated) deps.events.emit({ type: 'pane.added', tab_id: destTab.id, pane: decorated });
+      deps.events.emit({ type: 'tab.updated', tab: finalDest });
+    }
+
+    // Then the source side.
+    deps.events.emit({ type: 'pane.removed', tab_id: sourceTab.id, pane_id: id });
+    if (sourceEmpty) {
+      // The pane already moved out (its tab_id points at dest), so the
+      // ON DELETE CASCADE won't touch it — only the now-empty source row goes.
+      tabs.delete(sourceTab.id);
+      deps.events.emit({ type: 'tab.removed', workspace_id: workspaceId, tab_id: sourceTab.id });
+    } else {
+      const updatedSource = tabs.update(sourceTab.id, { layout: sourceLayout });
+      deps.events.emit({ type: 'tab.updated', tab: updatedSource });
+    }
+
+    return c.json({
+      pane: decorated,
+      from_tab_id: sourceTab.id,
+      to_tab: finalDest,
+      from_tab_removed: sourceEmpty,
+    });
   });
 
   return app;

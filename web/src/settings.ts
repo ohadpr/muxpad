@@ -24,24 +24,27 @@ const THEME_ALIASES: Record<string, Theme> = {
   latte: 'github-light',
 };
 
-// Where the workspace/tab navigator lives on desktop. 'top' is the
-// classic WorkspaceSwitcher + TabBar chrome; 'sidebar' replaces both
-// with a persistent left NavTree. Mobile ignores this (always the
-// drop-down panel tree).
-export type NavLayout = 'top' | 'sidebar';
-
 export interface Settings {
   fontSize: number;
   fontFamily: string;
   theme: Theme;
-  navLayout: NavLayout;
+  // Persisted width of the desktop sidebar. The upper bound is enforced live
+  // while dragging (never wider than the longest tab name + its status/close
+  // icon needs); this stored value is only sanity-clamped on read.
+  sidebarWidth: number;
 }
+
+// Hard floor/ceiling for the stored sidebar width. The *useful* max while
+// dragging is computed from content; these just keep a corrupt localStorage
+// value from producing an unusable rail.
+export const SIDENAV_MIN_WIDTH = 160;
+export const SIDENAV_MAX_WIDTH = 640;
 
 const DEFAULTS: Settings = {
   fontSize: 14,
   fontFamily: 'Menlo, Monaco, monospace',
   theme: 'trayo',
-  navLayout: 'top',
+  sidebarWidth: 240,
 };
 
 const KEY = 'muxpad.settings.v1';
@@ -72,7 +75,10 @@ function read(): Settings {
         if (t in THEME_ALIASES) return THEME_ALIASES[t] as Theme;
         return DEFAULTS.theme;
       })(),
-      navLayout: parsed.navLayout === 'sidebar' ? 'sidebar' : DEFAULTS.navLayout,
+      sidebarWidth:
+        typeof parsed.sidebarWidth === 'number' && Number.isFinite(parsed.sidebarWidth)
+          ? Math.min(SIDENAV_MAX_WIDTH, Math.max(SIDENAV_MIN_WIDTH, parsed.sidebarWidth))
+          : DEFAULTS.sidebarWidth,
     };
   } catch {
     return DEFAULTS;
