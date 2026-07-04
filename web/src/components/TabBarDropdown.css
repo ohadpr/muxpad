@@ -1,0 +1,203 @@
+/* Tab-switcher dropdown. Extracted from the old TabBar.css when the
+   desktop top-nav TabBar was removed (desktop is sidebar-only now).
+   These rules are still live: TabBarDropdown is used by PaneSelector,
+   so its styles must ship independently of the deleted TabBar. */
+.ws-tabbar-dropdown {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: stretch;
+  /* Let taps on empty area (right of the trigger) fall through to the
+     floating + button sitting under us in the same wrap. Children
+     re-enable pointer-events so the trigger and menu stay clickable. */
+  pointer-events: none;
+}
+.ws-tabbar-dropdown > * {
+  pointer-events: auto;
+}
+
+.ws-tabbar-dropdown-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding: 0 14px;
+  border: none;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size);
+  /* The workspace switcher is the bold anchor; the tab dropdown stays
+     in regular weight to read as secondary chrome and keep visual
+     hierarchy clear. */
+  font-weight: 400;
+  color: var(--fg);
+  cursor: pointer;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: background 80ms ease;
+}
+.ws-tabbar-dropdown-trigger:hover {
+  background: var(--bg-hover);
+}
+.ws-tabbar-dropdown-trigger svg {
+  flex: 0 0 auto;
+  /* Inherit from the chevron span so the accent swap on data-attention
+     colors both the SVG and the count consistently. */
+  color: inherit;
+}
+.ws-tabbar-dropdown-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Attention on the collapsed trigger: notification dot anchored to the
+   chevron (not the plate) so it doesn't float in negative space. */
+.ws-tabbar-dropdown-chevron {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding-top: 1px;
+  color: var(--fg-faint);
+}
+/* When other tabs need attention, chevron + count both go accent. The
+   pair lives on the chevron span (not next to the label) so the signal
+   reads as "more inside" instead of "the active tab has news." */
+.ws-tabbar-dropdown-chevron[data-attention="true"] {
+  color: var(--accent);
+}
+/* Count pill — text-on-accent so it's clearly visible even when the
+   chevron color shift alone is subtle (e.g. Acme cream theme where
+   --fg-faint and --accent don't differ much in luminance). */
+.ws-tabbar-dropdown-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent-fg);
+  background: var(--accent);
+  border-radius: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ws-tabbar-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+  min-width: 240px;
+  max-width: 320px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 4px 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--chrome-font);
+}
+
+.ws-tabbar-dropdown-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 32px;
+  padding: 0 14px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: background 100ms ease, color 100ms ease;
+}
+.ws-tabbar-dropdown-item:hover {
+  background: var(--bg-hover);
+}
+.ws-tabbar-dropdown-item[data-pressing="true"] {
+  background: var(--bg-hover);
+}
+.ws-tabbar-dropdown-item[data-active="true"] {
+  color: var(--fg);
+  /* Tinted accent bg (visually distinct from hover so you can tell
+     "currently selected" from "pointer is over this"). */
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-elev));
+}
+/* Left-edge vertical rail — full row height, doesn't fight the close
+   button at the right edge the way a bottom rail did. Matches the
+   sidebar-active pattern used by Slack/Linear/etc. */
+.ws-tabbar-dropdown-item[data-active="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  background: var(--accent);
+  border-radius: 0 2px 2px 0;
+}
+.ws-tabbar-dropdown-item-add {
+  color: var(--fg-dim);
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 8px;
+}
+.ws-tabbar-dropdown-item-close {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--fg-faint);
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+.ws-tabbar-dropdown-item-close:hover {
+  background: var(--border-strong);
+  color: var(--fg);
+}
+.ws-tabbar-dropdown-item-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.ws-tabbar-dropdown-item-label-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Beefier touch targets in the dropdown on mobile (was in TabBar.css's
+   @media block). 40px gives a comfortable thumb hit area. */
+@media (max-width: 720px) {
+  .ws-tabbar-dropdown-item {
+    height: 40px;
+  }
+}
