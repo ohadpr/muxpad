@@ -39,6 +39,7 @@
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow: hidden;
+  position: relative; /* anchors the scroll-down arrow + tool modal */
 }
 
 .chat-scroll {
@@ -64,7 +65,10 @@
   display: flex;
   flex-direction: column;
   gap: 22px;
-  padding: 22px 20px 28px;
+  /* Bottom padding clears the floating composer (~90px tall + safe-area) so the
+     last message settles just above it; earlier messages scroll frosted-through
+     underneath. */
+  padding: 22px 20px calc(96px + env(safe-area-inset-bottom, 0px));
   max-width: 768px;
   margin: 0 auto;
 }
@@ -219,6 +223,9 @@
   border-bottom: 1px solid color-mix(in srgb, var(--chat-accent) 40%, transparent);
 }
 .chat-md a:hover {
+  /* The underline is the border-bottom; suppress the global a:hover
+     text-decoration so hover doesn't paint a second underline. */
+  text-decoration: none;
   border-bottom-color: var(--chat-accent);
 }
 
@@ -432,61 +439,277 @@
   border-left: 2px solid var(--chat-border-strong);
 }
 
-/* ── Tool call + result cards ──────────────────────────────────────────── */
-.chat-tool,
-.chat-tool-result {
+/* ── Collapsed tool row (taps open the detail modal) ───────────────────────
+   Deliberately quiet: a tool call is secondary to the conversation, so it reads
+   as a muted line, not a card. */
+.chat-toolrow {
   flex: 1 1 auto;
   min-width: 0;
-  font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
-}
-.chat-tool {
   display: flex;
-  gap: 9px;
+  gap: 8px;
   align-items: baseline;
-  background: var(--chat-panel);
-  border: 1px solid var(--chat-border);
-  border-radius: 9px;
-  padding: 7px 11px;
+  width: 100%;
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--chat-faint);
+  font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 7px;
+  transition: color 120ms ease, background 120ms ease;
 }
-.chat-tool-name {
+.chat-toolrow:hover {
+  color: var(--chat-dim);
+  background: color-mix(in srgb, var(--chat-panel) 55%, transparent);
+}
+.chat-toolrow-verb {
   flex: 0 0 auto;
-  color: var(--chat-accent);
+  color: var(--chat-dim);
   font-weight: 600;
 }
-.chat-tool-arg {
-  color: var(--chat-dim);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+.chat-toolrow.error .chat-toolrow-verb {
+  color: var(--chat-danger);
+}
+.chat-toolrow-arg {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-toolrow-stat {
+  flex: 0 0 auto;
+  font-size: 11.5px;
+}
+.chat-toolrow-stat .add {
+  color: #3fb950;
+}
+.chat-toolrow-stat .del {
+  color: var(--chat-danger);
+}
+.chat-toolrow-chevron {
+  flex: 0 0 auto;
+  color: var(--chat-faint);
+  font-size: 15px;
+  line-height: 1;
 }
 
-.chat-tool-result {
+/* ── Jump-to-latest arrow (only when scrolled up) ──────────────────────────── */
+.chat-scroll-down {
+  position: absolute;
+  bottom: 92px;
+  left: 50%;
+  /* translateX centers it; the enter animation must NOT touch `transform` or it
+     clobbers this and the button drifts right. Fade only. */
+  transform: translateX(-50%);
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--chat-border-strong);
   background: var(--chat-panel);
-  border: 1px solid var(--chat-border);
-  border-radius: 9px;
-  overflow: hidden;
+  color: var(--chat-fg);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 6px 20px -6px rgba(0, 0, 0, 0.6);
+  animation: chat-fade 160ms ease both;
 }
-.chat-tool-result.error {
-  border-color: color-mix(in srgb, var(--chat-danger) 45%, var(--chat-border));
+.chat-scroll-down:hover {
+  border-color: var(--chat-accent);
 }
-.chat-tool-ok {
-  display: block;
-  padding: 6px 11px;
-  color: var(--chat-faint);
-  font-size: 12.5px;
+
+/* ── Tool detail modal (bottom sheet) ──────────────────────────────────────── */
+.chat-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: color-mix(in srgb, #000 45%, transparent);
+  animation: chat-fade 140ms ease both;
 }
-.chat-tool-out {
+@keyframes chat-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.chat-modal-scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
   margin: 0;
-  padding: 9px 11px;
+  background: transparent;
+  cursor: default;
+}
+.chat-modal {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 768px;
+  max-height: 85%;
+  background: var(--chat-bg);
+  border: 1px solid var(--chat-border);
+  border-bottom: 0;
+  border-radius: 18px 18px 0 0;
+  box-shadow: 0 -12px 40px -12px rgba(0, 0, 0, 0.7);
+  animation: chat-sheet-up 220ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+@keyframes chat-sheet-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+/* Desktop: a vertically-centered dialog with all corners rounded, rather than a
+   bottom sheet anchored to the edge (the sheet only reads right on a phone). */
+@media (min-width: 721px) {
+  .chat-modal-backdrop {
+    align-items: center;
+    padding: 24px;
+  }
+  .chat-modal {
+    max-height: 80%;
+    border-bottom: 1px solid var(--chat-border);
+    border-radius: 16px;
+    box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.6);
+  }
+}
+.chat-modal-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--chat-border);
+}
+.chat-modal-close {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--chat-border);
+  background: transparent;
+  color: var(--chat-dim);
+  font-size: 13px;
+  cursor: pointer;
+}
+.chat-modal-close:hover {
+  color: var(--chat-fg);
+  border-color: var(--chat-border-strong);
+}
+.chat-modal-title {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--chat-fg);
+}
+.chat-modal-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 14px 16px 22px;
+  -webkit-overflow-scrolling: touch;
+}
+.chat-modal-label {
+  margin: 6px 0 6px;
+  color: var(--chat-faint);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.chat-modal-label:not(:first-child) {
+  margin-top: 18px;
+}
+.chat-modal-block {
+  margin: 0;
+  padding: 11px 13px;
+  border: 1px solid var(--chat-border);
+  border-radius: 10px;
+  background: var(--chat-panel);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-family: inherit;
-  font-size: 12px;
+  font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
   line-height: 1.5;
   color: var(--chat-dim);
-  max-height: 320px;
-  overflow: auto;
+}
+.chat-modal-empty {
+  padding: 10px 0;
+  color: var(--chat-faint);
+  font-size: 13px;
+}
+
+/* Top-of-list spinner while paging in older history on scroll-up. */
+.chat-load-earlier-spinner {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 2px;
+}
+.chat-load-earlier-spinner .chat-empty-spinner {
+  width: 18px;
+  height: 18px;
+}
+
+/* ── Harness control notices (task updates / session reminders) ───────────
+   Centered, muted chip so they read as system chrome, not a chat turn. */
+.chat-turn-notice {
+  justify-content: center;
+}
+.chat-sysnote {
+  display: inline-flex;
+  gap: 8px;
+  align-items: baseline;
+  max-width: 100%;
+  padding: 5px 11px;
+  border: 1px solid var(--chat-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chat-panel) 60%, transparent);
+  color: var(--chat-faint);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.chat-sysnote-icon {
+  flex: 0 0 auto;
+  color: var(--chat-dim);
+  font-size: 12px;
+}
+.chat-sysnote-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Single line — a verbose summary (e.g. a background task's "no completion
+     record…") stays a compact pill instead of a tall multi-line box. Full text
+     is on the title tooltip. */
+  white-space: nowrap;
+}
+.chat-sysnote-detail {
+  flex: 0 0 auto;
+  margin-left: 1px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--chat-border-strong) 50%, transparent);
+  color: var(--chat-dim);
+  font-size: 11px;
+}
+.chat-sysnote-task .chat-sysnote-icon {
+  color: var(--chat-accent);
 }
 
 /* ── Diffs ─────────────────────────────────────────────────────────────── */
@@ -522,24 +745,24 @@
 }
 
 /* ── Composer ──────────────────────────────────────────────────────────── */
+/* ONLY the pill floats — the wrap itself is fully transparent, so the
+   conversation stays visible in every gap around the input (left/right of it on
+   desktop, above and below it) instead of being hidden behind an opaque bar.
+   The pill is opaque with a drop shadow so it reads as floating over the
+   content, and .chat-list reserves the wrap's measured height as bottom padding
+   so, at rest, the last message sits fully above the pill (never covered). */
 .chat-composer-wrap {
-  position: relative;
-  flex: 0 0 auto;
-  padding: 8px 16px 12px;
-  background: var(--chat-bg);
-}
-/* Soft fade so the conversation dissolves into the composer, ChatGPT-style.
-   Inset the right edge by the scroll-bar width (9px, see .chat-scroll) so the
-   fade doesn't paint over the scrollbar. */
-.chat-composer-wrap::before {
-  content: "";
   position: absolute;
   left: 0;
-  right: 9px;
-  top: -28px;
-  height: 28px;
-  background: linear-gradient(to top, var(--chat-bg), transparent);
-  pointer-events: none;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  padding: 8px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  background: transparent;
+  pointer-events: none; /* the transparent gaps don't eat scroll/clicks… */
+}
+.chat-composer-wrap > * {
+  pointer-events: auto; /* …but the pill + notice stay interactive */
 }
 
 .chat-notice {
@@ -559,16 +782,20 @@
   gap: 8px;
   max-width: 768px;
   margin: 0 auto;
-  padding: 6px 8px;
-  background: var(--chat-elev);
-  border: 1px solid var(--chat-border);
+  padding: 7px 8px 7px 10px;
+  background: color-mix(in srgb, var(--chat-elev) 92%, var(--chat-fg));
+  border: 1px solid color-mix(in srgb, var(--chat-fg) 12%, var(--chat-border));
   border-radius: 26px;
-  box-shadow: 0 2px 16px -10px rgba(0, 0, 0, 0.6);
+  /* Floats over the conversation (the wrap behind it is transparent) — a real
+     drop shadow so the pill reads as lifted above the content directly behind it. */
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.45), 0 2px 8px -4px rgba(0, 0, 0, 0.35);
   transition: border-color 140ms ease, box-shadow 140ms ease;
 }
 .chat-composer:focus-within {
   border-color: color-mix(in srgb, var(--chat-accent) 65%, var(--chat-border));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-accent) 22%, transparent);
+  /* Keep the float shadow AND add the accent focus ring (don't replace it). */
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-accent) 22%, transparent), 0 10px 30px -10px
+    rgba(0, 0, 0, 0.45), 0 2px 8px -4px rgba(0, 0, 0, 0.35);
 }
 
 /* Photo/attach button on the left (opens the OS photo picker → uploads via the
@@ -619,10 +846,10 @@
   /* One line is exactly button-height (36px = 22 line + 2×7 padding) so a
      single line sits perfectly centered next to the round buttons; JS grows
      `height` from here for multi-line. */
-  height: 36px;
-  min-height: 36px;
+  height: 48px;
+  min-height: 48px;
   max-height: 200px;
-  padding: 7px 0;
+  padding: 13px 0;
   border: 0;
   background: transparent;
   color: var(--chat-fg);
@@ -647,7 +874,10 @@
   background-clip: content-box;
 }
 .chat-input::placeholder {
-  color: var(--chat-faint);
+  /* Muted toward the bar background so it reads as a quiet hint, not a
+     saturated accent-colored label. */
+  color: color-mix(in srgb, var(--chat-faint) 70%, var(--chat-elev));
+  opacity: 1;
 }
 .chat-input:disabled {
   opacity: 0.7;
@@ -752,5 +982,19 @@
   .chat-resume,
   .chat-composer {
     transition: none;
+  }
+}
+
+/* Mobile: bump the message text ~15% for readability on small screens. Prose
+   (user bubbles + assistant markdown) inherits this base; em-sized markdown
+   scales with it. Breakpoint mirrors MOBILE_BREAKPOINT in lib/mobile-layout.ts. */
+@media (max-width: 720px) {
+  .chat-pane {
+    font-size: 17.8px;
+  }
+  /* Composer ≥16px: matches the bigger prose AND stops iOS from auto-zooming
+     the viewport when the field takes focus (it zooms any input under 16px). */
+  .chat-input {
+    font-size: 17px;
   }
 }

@@ -51,13 +51,27 @@ export interface ToolResultEvent extends Base {
   text?: string;
   diff?: ChatDiff;
 }
+/**
+ * A harness "control" message — Claude Code injects these into the transcript as
+ * user-role text (background-task updates, session reminders). They are not
+ * things a human typed, so we render them as a bespoke notice chip rather than a
+ * raw `<task-notification>…` chat bubble. `variant` drives the icon/styling.
+ */
+export interface NoticeEvent extends Base {
+  kind: 'notice';
+  variant: 'task' | 'reminder';
+  text: string;
+  /** Secondary line, e.g. a task-notification's status. */
+  detail?: string;
+}
 
 export type ChatEvent =
   | UserTextEvent
   | AssistantTextEvent
   | ThinkingEvent
   | ToolUseEvent
-  | ToolResultEvent;
+  | ToolResultEvent
+  | NoticeEvent;
 
 function tsOf(raw: Record<string, unknown>): number | null {
   const t = raw.timestamp;
@@ -73,11 +87,59 @@ function isPlumbingUserText(text: string): boolean {
   const t = text.trimStart();
   return (
     t.startsWith('Caveat: The messages below') ||
+    t.startsWith('<local-command-caveat>') ||
     t.startsWith('<command-name>') ||
     t.startsWith('<command-message>') ||
     t.startsWith('<local-command-stdout>') ||
     t.startsWith('<user-prompt-submit-hook>')
   );
+}
+
+/** First `<tag>…</tag>` inner text, trimmed; undefined if the tag is absent. */
+function extractTag(xml: string, tag: string): string | undefined {
+  const m = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`));
+  return m?.[1]?.trim();
+}
+
+/**
+ * Inner text when the WHOLE string (mod surrounding whitespace) is a single
+ * `<tag>…</tag>` block; null otherwise. Checking both edges — not just the
+ * opening tag — matters: Claude Code also PREPENDS reminders to real user
+ * messages, and those must stay user bubbles, not lose the user's text.
+ */
+function wholeTagContent(content: string, tag: string): string | null {
+  const t = content.trim();
+  const open = `<${tag}>`;
+  const close = `</${tag}>`;
+  if (!t.startsWith(open) || !t.endsWith(close)) return null;
+  // The first closing tag must be the final one, or there's real text
+  // sandwiched between two wrapper blocks.
+  if (t.indexOf(close) !== t.length - close.length) return null;
+  return t.slice(open.length, t.length - close.length).trim();
+}
+
+/**
+ * Recognise a harness control message (a whole user string that IS one wrapper
+ * tag) and turn it into a NoticeEvent. Returns null for ordinary user text —
+ * including messages that merely have a reminder prepended/appended around what
+ * the human typed — so only standalone control messages are intercepted.
+ */
+function parseNotice(content: string, id: string, ts: number | null): NoticeEvent | null {
+  const task = wholeTagContent(content, 'task-notification');
+  if (task !== null) {
+    const status = extractTag(task, 'status');
+    return {
+      kind: 'notice',
+      id,
+      ts,
+      variant: 'task',
+      text: extractTag(task, 'summary') || 'Background task update',
+      ...(status ? { detail: status } : {}),
+    };
+  }
+  const reminder = wholeTagContent(content, 'system-reminder');
+  if (reminder) return { kind: 'notice', id, ts, variant: 'reminder', text: reminder };
+  return null;
 }
 
 // A tool_result's `content` is either a string or an array of text blocks.
@@ -132,7 +194,10 @@ export function normalizeTranscriptLine(line: unknown): ChatEvent[] {
     const content = message?.content;
     if (typeof content === 'string') {
       if (!content.trim() || isPlumbingUserText(content)) return [];
-      return [{ kind: 'user', id: uuid || `u:${ts}`, ts, text: content }];
+      const id = uuid || `u:${ts}`;
+      const notice = parseNotice(content, id, ts);
+      if (notice) return [notice];
+      return [{ kind: 'user', id, ts, text: content }];
     }
     if (Array.isArray(content)) {
       const out: ChatEvent[] = [];

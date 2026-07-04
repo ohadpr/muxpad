@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3';
 import { WebSocket, WebSocketServer } from 'ws';
 import { HeadlessRunner } from './chat/HeadlessRunner.js';
 import { TranscriptTail } from './chat/TranscriptReader.js';
+import { findConversationRival } from './chat/conversation-guard.js';
 import type { EventBus } from './events.js';
 import type { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
@@ -16,6 +17,12 @@ import { TabStore } from './store/TabStore.js';
 export interface WsServerHandle {
   close(): Promise<void>;
 }
+
+// Initial chat history window: only the last ~128 KB of the transcript ship on
+// connect (≈ a few hundred recent messages for typical transcripts). Older
+// messages page in on scroll-up via the `load-older` request, so opening a chat
+// backed by a tens-of-MB transcript stays instant.
+const CHAT_HISTORY_TAIL_BYTES = 128 * 1024;
 
 export function attachWsServer(deps: {
   http: Server;
@@ -30,6 +37,9 @@ export function attachWsServer(deps: {
   const panes = new PaneStore(deps.db);
   const tabs = new TabStore(deps.db);
   const agents = new AgentSessionStore(deps.db);
+  // Any headless writer / running status persisted by a previous process is a
+  // turn that died with it (restart mid-turn) — clear it or panes look stuck.
+  agents.reconcileStartup();
   // One in-flight headless turn per pane. Keyed by pane (not ws) so a client
   // reconnect never spawns a second driver or aborts a running turn.
   const chatRunners = new Map<string, HeadlessRunner>();
@@ -37,6 +47,15 @@ export function attachWsServer(deps: {
   // check, before the runner lands in chatRunners). Reserved SYNCHRONOUSLY so a
   // double-send can't slip two runners onto one session across the await.
   const startingChat = new Set<string>();
+  // Session-ids with a headless turn reserved or in flight → the driving pane.
+  // Single-writer is per CONVERSATION, not per pane: a cross-pane
+  // `muxpad claude --resume <sid>` can leave two panes tracking the same sid,
+  // and two writers on one sid corrupt the transcript regardless of pane.
+  const drivingSids = new Map<string, string>();
+  // Live chat sockets per pane. Turn lifecycle frames (turn-start / stream /
+  // turn-done) broadcast to every open chat view of the pane — including one
+  // that reconnected mid-turn — not just the socket that sent the message.
+  const chatClients = new Map<string, Set<(obj: unknown) => void>>();
 
   // Server-side liveness detection. A WebSocket severed abruptly (browser
   // hard-reload, crashed tab, network blip) does NOT fire 'close' until the
@@ -113,15 +132,42 @@ export function attachWsServer(deps: {
         const send = (obj: unknown) => {
           if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
         };
+        // Register for pane-wide broadcasts (turn lifecycle frames) and tell
+        // the client whether a turn is ALREADY in flight — a socket that
+        // reconnected mid-turn must restore its working/Stop state instead of
+        // stranding the composer as idle.
+        let clients = chatClients.get(chatPaneId);
+        if (!clients) {
+          clients = new Set();
+          chatClients.set(chatPaneId, clients);
+        }
+        clients.add(send);
+        const unregister = () => {
+          clients.delete(send);
+          if (clients.size === 0) chatClients.delete(chatPaneId);
+        };
+        ws.on('close', unregister);
+        ws.on('error', unregister);
+        const bcast = (obj: unknown) => {
+          for (const fn of chatClients.get(chatPaneId) ?? []) fn(obj);
+        };
         const session = agents.getByPane(chatPaneId);
-        send({ t: 'session', session });
+        send({
+          t: 'session',
+          session,
+          turnRunning: chatRunners.has(chatPaneId) || startingChat.has(chatPaneId),
+        });
+        // Open with only the recent tail (a big transcript can be tens of MB);
+        // the client pages older history in on scroll-up via `load-older`.
+        let tail: TranscriptTail | null = null;
         if (session?.current_sid) {
-          const tail = new TranscriptTail(session.current_sid, {
+          tail = new TranscriptTail(session.current_sid, {
+            tailBytes: CHAT_HISTORY_TAIL_BYTES,
             onEvents: (events, phase) => send({ t: 'events', phase, events }),
           });
           tail.start();
-          ws.on('close', () => tail.close());
-          ws.on('error', () => tail.close());
+          ws.on('close', () => tail?.close());
+          ws.on('error', () => tail?.close());
         }
         // Composer: drive a turn from chat. Single-writer is enforced by
         // refusing to spawn while a Claude TUI is the pane's live foreground —
@@ -138,9 +184,17 @@ export function attachWsServer(deps: {
             chatRunners.get(chatPaneId)?.interrupt();
             return;
           }
+          if (msg.t === 'load-older') {
+            // Page in the previous chunk of history (emitted as phase 'older'),
+            // then tell the client whether any remains so it can stop asking.
+            const hasMore = tail?.loadOlder() ?? false;
+            send({ t: 'older-done', hasMore });
+            return;
+          }
           if (msg.t !== 'send' || typeof msg.text !== 'string' || !msg.text.trim()) return;
           const s = agents.getByPane(chatPaneId);
-          if (!s?.current_sid) {
+          const sid = s?.current_sid;
+          if (!s || !sid) {
             send({ t: 'error', message: 'no session to drive' });
             return;
           }
@@ -148,40 +202,90 @@ export function attachWsServer(deps: {
             send({ t: 'error', message: 'a turn is already running' });
             return;
           }
-          // Reserve the pane synchronously — before the awaited foreground
-          // check — so a second concurrent send can't spawn a second runner on
-          // the same session-id (transcript corruption).
+          // Conversation-level single-writer: another pane may hold the same
+          // sid (cross-pane `--resume`); its runner is just as much a second
+          // writer as one on this pane.
+          if (drivingSids.has(sid)) {
+            send({ t: 'error', message: 'another pane is already driving this conversation' });
+            return;
+          }
+          // Reserve the pane AND the sid synchronously — before the awaited
+          // foreground checks — so a second concurrent send (same pane or a
+          // sibling on the same sid) can't spawn a second runner on one
+          // session-id (transcript corruption).
           startingChat.add(chatPaneId);
+          drivingSids.set(sid, chatPaneId);
+          const release = () => {
+            startingChat.delete(chatPaneId);
+            if (drivingSids.get(sid) === chatPaneId) drivingSids.delete(sid);
+          };
           const text = msg.text;
-          void deps.ptyd
-            .getForegroundCommand(chatPaneId)
-            .catch(() => null)
-            .then((fg) => {
-              if (fg && /\bclaude\b/i.test(fg)) {
-                startingChat.delete(chatPaneId);
-                send({ t: 'blocked', reason: 'terminal-driving' });
-                return;
-              }
-              agents.setWriter(chatPaneId, 'headless');
-              send({ t: 'turn-start' });
-              const runner = new HeadlessRunner({
-                cwd: s.cwd ?? homedir(),
-                resumeSid: s.current_sid as string,
-                text,
-                cb: {
-                  onSessionId: (sid) => agents.recordSessionId(chatPaneId, sid),
-                  onText: (delta) => send({ t: 'stream', delta }),
-                  onDone: (ok, error) => {
-                    chatRunners.delete(chatPaneId);
-                    agents.setWriter(chatPaneId, 'none');
-                    send({ t: 'turn-done', ok, ...(error ? { error } : {}) });
-                  },
-                },
+          void (async () => {
+            const fg = await deps.ptyd.getForegroundCommand(chatPaneId).catch(() => null);
+            if (fg && /\bclaude\b/i.test(fg)) {
+              release();
+              send({ t: 'blocked', reason: 'terminal-driving' });
+              return;
+            }
+            // Same check for every OTHER pane tracking this sid: a live
+            // Claude TUI there is already writing this conversation, and the
+            // per-pane foreground check above can't see it.
+            const rival = await findConversationRival(chatPaneId, sid, agents.list(), (id) =>
+              deps.ptyd.getForegroundCommand(id),
+            );
+            if (rival) {
+              release();
+              send({
+                t: 'error',
+                message: "another pane's terminal is driving this conversation",
               });
-              chatRunners.set(chatPaneId, runner);
-              startingChat.delete(chatPaneId);
-              runner.start();
+              return;
+            }
+            agents.setWriter(chatPaneId, 'headless');
+            agents.setStatus(chatPaneId, 'running');
+            // Light the pane's busy flag for the turn. A headless turn writes
+            // the transcript file, not the PTY, so the output-activity
+            // detector never sees it — without this the tab/workspace spinner
+            // stays dark while chat works. The cache emits paneChange →
+            // pane.updated, so the spinner flips live, not on the next poll.
+            deps.cache.setAgentBusy(chatPaneId, true);
+            bcast({ t: 'turn-start' });
+            const runner = new HeadlessRunner({
+              cwd: s.cwd ?? homedir(),
+              resumeSid: sid,
+              text,
+              cb: {
+                onSessionId: (newSid) => agents.recordSessionId(chatPaneId, newSid),
+                onText: (delta) => bcast({ t: 'stream', delta }),
+                onDone: (ok, error) => {
+                  chatRunners.delete(chatPaneId);
+                  if (drivingSids.get(sid) === chatPaneId) drivingSids.delete(sid);
+                  agents.setWriter(chatPaneId, 'none');
+                  agents.setStatus(chatPaneId, 'idle');
+                  deps.cache.setAgentBusy(chatPaneId, false);
+                  bcast({ t: 'turn-done', ok, ...(error ? { error } : {}) });
+                },
+              },
             });
+            chatRunners.set(chatPaneId, runner);
+            startingChat.delete(chatPaneId);
+            runner.start();
+          })().catch((e) => {
+            // Anything thrown past the guards (store write, runner ctor)
+            // must release the reservations, or the pane wedges forever on
+            // "a turn is already running".
+            if (!chatRunners.has(chatPaneId)) {
+              release();
+              deps.cache.setAgentBusy(chatPaneId, false);
+              try {
+                agents.setWriter(chatPaneId, 'none');
+                agents.setStatus(chatPaneId, 'idle');
+              } catch {
+                // the store write itself may be what failed
+              }
+            }
+            send({ t: 'error', message: e instanceof Error ? e.message : String(e) });
+          });
         });
       });
       return;
