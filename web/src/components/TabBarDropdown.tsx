@@ -5,6 +5,7 @@ import { api } from '../api';
 import { refreshTabs } from '../tabs';
 import { openInNewTab, useLongPress } from '../use-long-press';
 import { SvgClose } from './icons';
+import './TabBarDropdown.css';
 
 interface TabBarDropdownProps {
   tabs: Tab[];
