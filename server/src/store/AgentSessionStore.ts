@@ -74,10 +74,17 @@ export class AgentSessionStore {
     const now = Date.now();
     const assistant = input.assistant ?? 'claude';
     const cwd = input.cwd ?? null;
-    const sid = input.session_id ?? null;
     const pid = input.pid ?? null;
-    const lineage = JSON.stringify(sid ? [sid] : []);
     const existing = this.getByPane(input.pane_id);
+    // A resume relaunch registers WITHOUT a session_id (claude rejects
+    // --session-id alongside --resume); the SessionStart hook re-reports the
+    // real id moments later. Keep the existing sid/lineage across that window
+    // — wiping them to null bricks chat ("no session to drive") if the hook
+    // is slow, fails, or the resume itself dies before it fires.
+    const sid = input.session_id ?? (existing ? existing.current_sid : null);
+    const lineage = JSON.stringify(
+      input.session_id ? [input.session_id] : (existing?.lineage ?? []),
+    );
     if (existing) {
       this.db
         .prepare(
@@ -124,6 +131,32 @@ export class AgentSessionStore {
     this.db
       .prepare('UPDATE agent_sessions SET writer = ?, updated_at = ? WHERE pane_id = ?')
       .run(writer, Date.now(), pane_id);
+  }
+
+  /** Update the live activity flag — 'running' while a headless turn is in flight, else 'idle'. */
+  setStatus(pane_id: string, status: 'running' | 'idle'): void {
+    this.db
+      .prepare('UPDATE agent_sessions SET status = ?, updated_at = ? WHERE pane_id = ?')
+      .run(status, Date.now(), pane_id);
+  }
+
+  /**
+   * Startup reconciliation. Headless turns live in the server process (the
+   * ws layer's in-memory runner map), so any 'headless' writer or 'running'
+   * status still in the DB when we come up belongs to a turn that died with
+   * the previous process (restart mid-turn). Clear them so panes recover
+   * instead of looking permanently driven/busy.
+   */
+  reconcileStartup(): void {
+    const now = Date.now();
+    this.db
+      .prepare(
+        "UPDATE agent_sessions SET writer = 'none', updated_at = ? WHERE writer = 'headless'",
+      )
+      .run(now);
+    this.db
+      .prepare("UPDATE agent_sessions SET status = 'idle', updated_at = ? WHERE status != 'idle'")
+      .run(now);
   }
 
   /** Record the view muxpad last showed for this pane (terminal | chat). */

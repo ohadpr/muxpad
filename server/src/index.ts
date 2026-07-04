@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
+import type { Context } from 'hono';
 import { loadConfig } from './config.js';
 import { EventBus } from './events.js';
 import { PtydCache, decoratePane } from './ptyd-cache.js';
@@ -65,6 +66,26 @@ const app = createApp({
 // Static asset serving (CSS, JS, images, etc.) from the built web bundle.
 const here = dirname(fileURLToPath(import.meta.url));
 const webRoot = join(here, '..', '..', 'web', 'dist');
+
+// The HTML shell must be served `no-cache` so the browser ALWAYS revalidates it
+// and picks up a rebuilt bundle's new hashed asset names. Assets themselves are
+// content-hashed (immutable) and keep serveStatic's cacheable headers — only the
+// index.html entrypoint is the stale-after-rebuild trap. Without this, a reload
+// can keep serving an old index.html that references the pre-rebuild CSS/JS.
+const serveIndexHtml = (c: Context) => {
+  c.header('Cache-Control', 'no-cache');
+  try {
+    return c.html(readFileSync(join(webRoot, 'index.html'), 'utf-8'));
+  } catch {
+    return c.text('not found', 404);
+  }
+};
+app.get('/', serveIndexHtml);
+// Direct /index.html requests must not slip through to serveStatic either —
+// that would hand the shell back with cacheable headers, the exact trap the
+// no-cache route exists to close.
+app.get('/index.html', serveIndexHtml);
+
 app.use('/*', serveStatic({ root: webRoot }));
 
 // Anything that fell through both API routes and static files lands here.
@@ -88,11 +109,8 @@ app.notFound((c) => {
   if (path.startsWith('/assets/') || /\.[a-zA-Z0-9]+$/.test(path)) {
     return c.text('not found', 404);
   }
-  try {
-    return c.html(readFileSync(join(webRoot, 'index.html'), 'utf-8'));
-  } catch {
-    return c.text('not found', 404);
-  }
+  // SPA client route (e.g. /w/:ws/t/:tab) → the no-cache HTML shell.
+  return serveIndexHtml(c);
 });
 
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {

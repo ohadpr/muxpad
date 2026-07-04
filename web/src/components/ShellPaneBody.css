@@ -59,3 +59,43 @@ body.mosaic-dragging .shell-pane-web {
   border-color: #3d7bbf;
   color: #cdd4e2;
 }
+
+/* Activity dot on the toggle — a headless (chat-driven) turn is running for
+   this pane's session, even if you're looking at the terminal/web face. */
+.shell-pane-agent-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #4cc38a;
+  vertical-align: 1px;
+  animation: shell-pane-agent-pulse 1.4s ease-in-out infinite;
+}
+@keyframes shell-pane-agent-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Transient banner under the toggle: the terminal→chat hand-off failed, so
+   chat is view-only until the Claude TUI exits. Auto-dismisses. */
+.shell-pane-handoff-notice {
+  position: absolute;
+  top: 34px;
+  right: 8px;
+  z-index: 6;
+  max-width: 340px;
+  padding: 6px 10px;
+  font-size: 11px;
+  line-height: 1.45;
+  border-radius: 8px;
+  border: 1px solid #5a4a2a;
+  background: rgba(46, 38, 20, 0.92);
+  color: #e4c97a;
+  backdrop-filter: blur(4px);
+}
