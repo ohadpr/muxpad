@@ -1,20 +1,34 @@
-import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'node:http';
+import { homedir } from 'node:os';
 import type Database from 'better-sqlite3';
+import { WebSocket, WebSocketServer } from 'ws';
+import { HeadlessRunner } from './chat/HeadlessRunner.js';
+import { TranscriptTail } from './chat/TranscriptReader.js';
+import { findConversationRival } from './chat/conversation-guard.js';
+import type { EventBus } from './events.js';
+import type { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { proxyAttach } from './ptyd-client/proxyAttach.js';
+import { safeCwd } from './safe-cwd.js';
+import { AgentSessionStore } from './store/AgentSessionStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
-import type { EventBus } from './events.js';
 
 export interface WsServerHandle {
   close(): Promise<void>;
 }
 
+// Initial chat history window: only the last ~128 KB of the transcript ship on
+// connect (≈ a few hundred recent messages for typical transcripts). Older
+// messages page in on scroll-up via the `load-older` request, so opening a chat
+// backed by a tens-of-MB transcript stays instant.
+const CHAT_HISTORY_TAIL_BYTES = 128 * 1024;
+
 export function attachWsServer(deps: {
   http: Server;
   db: Database.Database;
   ptyd: PtydClient;
+  cache: PtydCache;
   events: EventBus;
   /** Liveness ping interval in ms. Defaults to 15s; tests pass a small value. */
   heartbeatMs?: number;
@@ -22,6 +36,26 @@ export function attachWsServer(deps: {
   const wss = new WebSocketServer({ noServer: true });
   const panes = new PaneStore(deps.db);
   const tabs = new TabStore(deps.db);
+  const agents = new AgentSessionStore(deps.db);
+  // Any headless writer / running status persisted by a previous process is a
+  // turn that died with it (restart mid-turn) — clear it or panes look stuck.
+  agents.reconcileStartup();
+  // One in-flight headless turn per pane. Keyed by pane (not ws) so a client
+  // reconnect never spawns a second driver or aborts a running turn.
+  const chatRunners = new Map<string, HeadlessRunner>();
+  // Panes whose turn is mid-spawn (past the guard, awaiting the foreground
+  // check, before the runner lands in chatRunners). Reserved SYNCHRONOUSLY so a
+  // double-send can't slip two runners onto one session across the await.
+  const startingChat = new Set<string>();
+  // Session-ids with a headless turn reserved or in flight → the driving pane.
+  // Single-writer is per CONVERSATION, not per pane: a cross-pane
+  // `muxpad claude --resume <sid>` can leave two panes tracking the same sid,
+  // and two writers on one sid corrupt the transcript regardless of pane.
+  const drivingSids = new Map<string, string>();
+  // Live chat sockets per pane. Turn lifecycle frames (turn-start / stream /
+  // turn-done) broadcast to every open chat view of the pane — including one
+  // that reconnected mid-turn — not just the socket that sent the message.
+  const chatClients = new Map<string, Set<(obj: unknown) => void>>();
 
   // Server-side liveness detection. A WebSocket severed abruptly (browser
   // hard-reload, crashed tab, network blip) does NOT fire 'close' until the
@@ -77,6 +111,185 @@ export function attachWsServer(deps: {
       });
       return;
     }
+    // Chat view of an agent session: replay the tracked session's transcript
+    // as normalized chat events, then stream live appends. Reading works even
+    // while the TUI is the live writer (we only tail the JSONL, never the
+    // terminal). Driving (composer → headless turn) is gated on single-writer:
+    // see the message handler below.
+    const chatMatch = url.pathname.match(/^\/ws\/chat\/([^/]+)$/);
+    if (chatMatch) {
+      const chatPaneId = chatMatch[1] as string;
+      if (!panes.getById(chatPaneId)) {
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        const live = ws as WebSocket & { isAlive?: boolean };
+        live.isAlive = true;
+        ws.on('pong', () => {
+          live.isAlive = true;
+        });
+        const send = (obj: unknown) => {
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+        };
+        // Register for pane-wide broadcasts (turn lifecycle frames) and tell
+        // the client whether a turn is ALREADY in flight — a socket that
+        // reconnected mid-turn must restore its working/Stop state instead of
+        // stranding the composer as idle.
+        let clients = chatClients.get(chatPaneId);
+        if (!clients) {
+          clients = new Set();
+          chatClients.set(chatPaneId, clients);
+        }
+        clients.add(send);
+        const unregister = () => {
+          clients.delete(send);
+          if (clients.size === 0) chatClients.delete(chatPaneId);
+        };
+        ws.on('close', unregister);
+        ws.on('error', unregister);
+        const bcast = (obj: unknown) => {
+          for (const fn of chatClients.get(chatPaneId) ?? []) fn(obj);
+        };
+        const session = agents.getByPane(chatPaneId);
+        send({
+          t: 'session',
+          session,
+          turnRunning: chatRunners.has(chatPaneId) || startingChat.has(chatPaneId),
+        });
+        // Open with only the recent tail (a big transcript can be tens of MB);
+        // the client pages older history in on scroll-up via `load-older`.
+        let tail: TranscriptTail | null = null;
+        if (session?.current_sid) {
+          tail = new TranscriptTail(session.current_sid, {
+            tailBytes: CHAT_HISTORY_TAIL_BYTES,
+            onEvents: (events, phase) => send({ t: 'events', phase, events }),
+          });
+          tail.start();
+          ws.on('close', () => tail?.close());
+          ws.on('error', () => tail?.close());
+        }
+        // Composer: drive a turn from chat. Single-writer is enforced by
+        // refusing to spawn while a Claude TUI is the pane's live foreground —
+        // two drivers on one session-id corrupt the transcript. One turn per
+        // pane at a time; the runner is keyed by pane so it outlives this ws.
+        ws.on('message', (data) => {
+          let msg: { t?: string; text?: string };
+          try {
+            msg = JSON.parse(data.toString());
+          } catch {
+            return;
+          }
+          if (msg.t === 'stop') {
+            chatRunners.get(chatPaneId)?.interrupt();
+            return;
+          }
+          if (msg.t === 'load-older') {
+            // Page in the previous chunk of history (emitted as phase 'older'),
+            // then tell the client whether any remains so it can stop asking.
+            const hasMore = tail?.loadOlder() ?? false;
+            send({ t: 'older-done', hasMore });
+            return;
+          }
+          if (msg.t !== 'send' || typeof msg.text !== 'string' || !msg.text.trim()) return;
+          const s = agents.getByPane(chatPaneId);
+          const sid = s?.current_sid;
+          if (!s || !sid) {
+            send({ t: 'error', message: 'no session to drive' });
+            return;
+          }
+          if (chatRunners.has(chatPaneId) || startingChat.has(chatPaneId)) {
+            send({ t: 'error', message: 'a turn is already running' });
+            return;
+          }
+          // Conversation-level single-writer: another pane may hold the same
+          // sid (cross-pane `--resume`); its runner is just as much a second
+          // writer as one on this pane.
+          if (drivingSids.has(sid)) {
+            send({ t: 'error', message: 'another pane is already driving this conversation' });
+            return;
+          }
+          // Reserve the pane AND the sid synchronously — before the awaited
+          // foreground checks — so a second concurrent send (same pane or a
+          // sibling on the same sid) can't spawn a second runner on one
+          // session-id (transcript corruption).
+          startingChat.add(chatPaneId);
+          drivingSids.set(sid, chatPaneId);
+          const release = () => {
+            startingChat.delete(chatPaneId);
+            if (drivingSids.get(sid) === chatPaneId) drivingSids.delete(sid);
+          };
+          const text = msg.text;
+          void (async () => {
+            const fg = await deps.ptyd.getForegroundCommand(chatPaneId).catch(() => null);
+            if (fg && /\bclaude\b/i.test(fg)) {
+              release();
+              send({ t: 'blocked', reason: 'terminal-driving' });
+              return;
+            }
+            // Same check for every OTHER pane tracking this sid: a live
+            // Claude TUI there is already writing this conversation, and the
+            // per-pane foreground check above can't see it.
+            const rival = await findConversationRival(chatPaneId, sid, agents.list(), (id) =>
+              deps.ptyd.getForegroundCommand(id),
+            );
+            if (rival) {
+              release();
+              send({
+                t: 'error',
+                message: "another pane's terminal is driving this conversation",
+              });
+              return;
+            }
+            agents.setWriter(chatPaneId, 'headless');
+            agents.setStatus(chatPaneId, 'running');
+            // Light the pane's busy flag for the turn. A headless turn writes
+            // the transcript file, not the PTY, so the output-activity
+            // detector never sees it — without this the tab/workspace spinner
+            // stays dark while chat works. The cache emits paneChange →
+            // pane.updated, so the spinner flips live, not on the next poll.
+            deps.cache.setAgentBusy(chatPaneId, true);
+            bcast({ t: 'turn-start' });
+            const runner = new HeadlessRunner({
+              cwd: s.cwd ?? homedir(),
+              resumeSid: sid,
+              text,
+              cb: {
+                onSessionId: (newSid) => agents.recordSessionId(chatPaneId, newSid),
+                onText: (delta) => bcast({ t: 'stream', delta }),
+                onDone: (ok, error) => {
+                  chatRunners.delete(chatPaneId);
+                  if (drivingSids.get(sid) === chatPaneId) drivingSids.delete(sid);
+                  agents.setWriter(chatPaneId, 'none');
+                  agents.setStatus(chatPaneId, 'idle');
+                  deps.cache.setAgentBusy(chatPaneId, false);
+                  bcast({ t: 'turn-done', ok, ...(error ? { error } : {}) });
+                },
+              },
+            });
+            chatRunners.set(chatPaneId, runner);
+            startingChat.delete(chatPaneId);
+            runner.start();
+          })().catch((e) => {
+            // Anything thrown past the guards (store write, runner ctor)
+            // must release the reservations, or the pane wedges forever on
+            // "a turn is already running".
+            if (!chatRunners.has(chatPaneId)) {
+              release();
+              deps.cache.setAgentBusy(chatPaneId, false);
+              try {
+                agents.setWriter(chatPaneId, 'none');
+                agents.setStatus(chatPaneId, 'idle');
+              } catch {
+                // the store write itself may be what failed
+              }
+            }
+            send({ t: 'error', message: e instanceof Error ? e.message : String(e) });
+          });
+        });
+      });
+      return;
+    }
     const match = url.pathname.match(/^\/ws\/pane\/([^/]+)$/);
     if (!match) {
       socket.destroy();
@@ -120,7 +333,7 @@ export function attachWsServer(deps: {
           id: pane.id,
           shell: pane.shell ?? process.env.SHELL ?? '/bin/zsh',
           startup_cmd: pane.startup_cmd,
-          cwd: pane.cwd ?? process.env.HOME ?? '/',
+          cwd: safeCwd(pane.cwd),
           env: pane.env,
           tab_id: pane.tab_id,
           ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
@@ -135,6 +348,9 @@ export function attachWsServer(deps: {
             paneId: pane.id,
             browser: ws,
             replay,
+            // Discount the echo the user's own typing produces from busy
+            // detection (see PtydCache.noteInput / markBusy).
+            onInput: () => deps.cache.noteInput(pane.id),
           });
         })
         .catch(() => {

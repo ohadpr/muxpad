@@ -113,6 +113,12 @@
   white-space: pre-wrap;
   word-break: break-word;
   overflow-y: auto;
+  /* Disable iOS double-tap-to-zoom on the composer. Without this, a double-tap
+     (to select a word / prep a paste) zooms the page, which shifts the visual
+     viewport and flings this viewport-anchored bar away ("minimizes" it).
+     manipulation keeps panning, pinch-zoom, AND in-field word selection — it
+     only kills the double-tap zoom gesture. */
+  touch-action: manipulation;
 }
 .mobile-input-editable:focus {
   border-color: var(--accent);
@@ -123,6 +129,31 @@
   content: attr(data-placeholder);
   color: var(--fg-faint);
   pointer-events: none;
+}
+
+/* Photo/camera attach — icon-only square, bottom-aligned with Send. Quiet
+   chrome by default (it's secondary to the composer); accent on press. */
+.mobile-input-attach {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 32px;
+  padding: 0;
+  background: var(--bg-elev);
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+.mobile-input-attach:active {
+  background: var(--bg-hover);
+  color: var(--accent);
 }
 
 .mobile-input-send {

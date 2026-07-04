@@ -68,5 +68,21 @@ subscribe((e) => {
 // stylesheet-only height keeps the pane CSS box constant, so XtermPane's
 // own resize listener short-circuits at the dedup check.
 
+// Stale lazy-chunk recovery. A dynamic import (e.g. the lazy EmojiMartPicker)
+// fails with "Failed to fetch dynamically imported module" when a new build
+// replaced the content-hashed chunk filenames while this page still holds the
+// old index.html — common here, since muxpad's web bundle is rebuilt often.
+// Vite fires `vite:preloadError` for these; reload once to pick up the fresh
+// bundle. Guard with a short sessionStorage cooldown so a genuinely missing
+// chunk (or an offline server) can't spin a reload loop.
+window.addEventListener('vite:preloadError', (e) => {
+  e.preventDefault(); // we handle recovery; don't let it surface as unhandled
+  const KEY = 'muxpad:preload-reloaded-at';
+  const last = Number(sessionStorage.getItem(KEY) ?? 0);
+  if (Date.now() - last < 10_000) return; // just reloaded — don't loop
+  sessionStorage.setItem(KEY, String(Date.now()));
+  window.location.reload();
+});
+
 const root = createRoot(document.getElementById('root') as HTMLElement);
 root.render(<RouterProvider router={router} />);

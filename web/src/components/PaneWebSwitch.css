@@ -1,0 +1,211 @@
+.pane-web-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  height: 100%;
+}
+
+.pane-web-switch-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 100%;
+  padding: 0 6px 0 8px;
+  background: transparent;
+  border: none;
+  color: var(--fg-faint);
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size-sm);
+  cursor: pointer;
+  transition: color 80ms ease, background 80ms ease;
+}
+.pane-web-switch-main:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+/* In web face the toggle is "lit" so it reads as the active surface marker. */
+.pane-web-switch-main.is-web {
+  color: var(--accent);
+}
+/* Terminal face + a detected app: announce it. The control becomes an accent
+   pill so it reads as "this pane is serving a web app — click to view it",
+   marrying the detection indicator and the switch into one prominent affordance. */
+.pane-web-switch-main.is-available {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  font-weight: 600;
+}
+.pane-web-switch-main.is-available:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+.pane-web-switch-label {
+  font-weight: 500;
+}
+
+/* Live "a server is up here" pulse — draws the eye to a freshly detected app. */
+.pane-web-switch-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pane-web-switch-pulse 2.2s ease-out infinite;
+}
+@keyframes pane-web-switch-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pane-web-switch-dot {
+    animation: none;
+  }
+}
+
+.pane-web-switch-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 100%;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--fg-faint);
+  font-size: 10px;
+  cursor: pointer;
+  transition: color 80ms ease, background 80ms ease;
+}
+.pane-web-switch-caret:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+.pane-web-switch-caret.is-available {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.pane-web-switch-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  max-width: 320px;
+  padding: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+/* Quiet section label so the popup reads as a deliberate menu, not a tooltip. */
+.pane-web-switch-head {
+  padding: 4px 10px 5px;
+  color: var(--fg-faint);
+  font-family: var(--chrome-font);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.pane-web-switch-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  color: var(--fg);
+  cursor: pointer;
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size-sm);
+  text-align: left;
+  width: 100%;
+}
+.pane-web-switch-item:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.pane-web-switch-item.is-active {
+  color: var(--accent);
+}
+.pane-web-switch-item svg {
+  flex-shrink: 0;
+}
+.pane-web-switch-item-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.pane-web-switch-badge {
+  margin-left: auto;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.pane-web-switch-manual,
+.pane-web-switch-back {
+  color: var(--fg-dim);
+}
+.pane-web-switch-back {
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+  padding-top: 8px;
+}
+/* Destructive pane-KIND conversion (shell→url): unlike the web-view actions
+   above (which keep the terminal alive), this CLOSES the terminal. Set apart
+   by a separator, a quieter idle tone, and a danger hover so it never reads
+   as just another way to "show web". */
+.pane-web-switch-convert {
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+  padding-top: 8px;
+  color: var(--fg-faint);
+}
+.pane-web-switch-convert:hover {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+}
+/* "closes terminal" — the inline clarifier that differentiates this from the
+   terminal-preserving web view. */
+.pane-web-switch-note {
+  margin-left: auto;
+  padding-left: 8px;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+.pane-web-switch-convert:hover .pane-web-switch-note {
+  color: var(--danger);
+}
+
+.pane-web-switch-input {
+  margin: 4px 2px 2px;
+  padding: 5px 8px;
+  background: var(--bg-elev, rgba(0, 0, 0, 0.3));
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--fg);
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size-sm);
+  outline: none;
+}
