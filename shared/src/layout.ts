@@ -71,3 +71,50 @@ export function spliceLayoutAtTarget(
   const next = walk(layout);
   return { layout: next, placed };
 }
+
+/**
+ * Walk the binary layout tree and drop every leaf for which `keep` returns
+ * false, collapsing any branch left with a single child. Returns `''` if the
+ * whole tree is pruned away. Pure; the one collapse routine shared by:
+ *   - `removeLeafFromLayout` (keep everything but one id) — pane moves, and
+ *   - the server's `pruneDeadPanes` (keep only ids in a validity set) — load-
+ *     time / migration cleanup.
+ */
+export function pruneLayout(
+  layout: LayoutNode,
+  keep: (paneId: string) => boolean,
+): LayoutNode {
+  if (layout === '' || layout == null) return '';
+  if (typeof layout === 'string') return keep(layout) ? layout : '';
+  const first = pruneLayout(layout.first, keep);
+  const second = pruneLayout(layout.second, keep);
+  if (first === '' && second === '') return '';
+  if (first === '') return second;
+  if (second === '') return first;
+  return { ...layout, first, second };
+}
+
+/**
+ * Remove the first leaf matching `paneId` from the tree, collapsing any
+ * branch left with a single child. Returns `''` if the tree becomes empty.
+ * Used by the pane-move endpoint to splice a pane out of its source tab.
+ */
+export function removeLeafFromLayout(layout: LayoutNode, paneId: string): LayoutNode {
+  return pruneLayout(layout, (id) => id !== paneId);
+}
+
+/**
+ * Append `paneId` as a new split wrapping the whole existing tree. Placement
+ * is intentionally dumb — the pane lands as the second child of a single
+ * top-level split (or becomes the root if the tree is empty). The move UX
+ * deliberately doesn't let the user pick a target pane / side on arrival, so
+ * a predictable root-append is all the destination tab needs.
+ */
+export function appendLeafToLayout(
+  layout: LayoutNode,
+  paneId: string,
+  direction: 'row' | 'column' = 'row',
+): LayoutNode {
+  if (layout === '' || layout == null) return paneId;
+  return { direction, first: layout, second: paneId };
+}

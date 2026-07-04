@@ -1,11 +1,21 @@
 import type { PaneRuntimeSpec } from '../runtime/PaneRuntime.js';
+import type { AppUrlMarker } from '../runtime/pty-scanner.js';
 
 /**
  * Bump when wire shape changes incompatibly. Both ends should refuse to
  * start on mismatch — not implemented yet, but the constant gives future
  * divergence a stable anchor.
+ *
+ * v2: replaced the computed `paneAppUrls` push with raw `paneUrlsSeen`
+ * (app-url detection moved from ptyd to the main server). An old ptyd against
+ * a new server would silently surface zero app-urls; a `restart --all`
+ * (which relaunches both from the same tree) sidesteps the mismatch.
+ *
+ * v3: added the raw `paneActivity` tick (busy/idle detection moved to the main
+ * server, same split rationale as v2). An old ptyd against a new server
+ * surfaces no busy spinners until it's bounced; a `restart --all` syncs both.
  */
-export const PTYD_PROTOCOL_VERSION = 1;
+export const PTYD_PROTOCOL_VERSION = 3;
 
 export type CtrlRequest = {
   kind: 'request';
@@ -68,4 +78,13 @@ export type CtrlPushEvent =
   | { event: 'paneCwd'; id: string; cwd: string }
   | { event: 'paneTitle'; id: string; title: string | null }
   | { event: 'paneFg'; id: string; cmd: string | null }
-  | { event: 'paneAttention'; id: string; attention: boolean };
+  | { event: 'paneAttention'; id: string; attention: boolean }
+  // Raw, throttled "this pane produced output" tick. ptyd does NOT compute
+  // busy/idle from it — the main server folds these into a busy state with its
+  // own decay window, so that policy is a server-only restart away.
+  | { event: 'paneActivity'; id: string }
+  // Raw URL/marker sightings the scanner extracted from this pane's output.
+  // ptyd does NOT validate or probe these — the main server runs the
+  // AppUrlTracker (host classification + listening probe) so detection logic
+  // can change with a server-only restart, never a ptyd bounce.
+  | { event: 'paneUrlsSeen'; id: string; urls: string[]; markers: AppUrlMarker[] };

@@ -118,6 +118,32 @@ describe('tabs routes', () => {
     expect(res.status).toBe(200);
   });
 
+  it('persists view_mode via PATCH and rejects junk values', async () => {
+    const created = (await (await postTab({ name: 'Dev' })).json()) as {
+      id: string;
+      view_mode?: string;
+    };
+    expect(created.view_mode).toBe('split'); // default
+    const res = await test.app.request(`/api/tabs/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ view_mode: 'tabbed' }),
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { view_mode?: string }).view_mode).toBe('tabbed');
+    const got = (await (await test.app.request(`/api/tabs/${created.id}`)).json()) as {
+      view_mode?: string;
+    };
+    expect(got.view_mode).toBe('tabbed');
+    // zod enum: anything but split|tabbed is rejected — an error status, no write.
+    const bad = await test.app.request(`/api/tabs/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ view_mode: 'mosaic' }),
+    });
+    expect(bad.status).toBeGreaterThanOrEqual(400);
+  });
+
   it('deletes a tab', async () => {
     const created = (await (await postTab({ name: 'Dev' })).json()) as { id: string };
     const res = await test.app.request(`/api/tabs/${created.id}`, { method: 'DELETE' });
@@ -174,6 +200,90 @@ describe('tabs routes', () => {
         expect(removed.workspace_id).toBe(ws.id);
         expect(removed.tab_id).toBe(created.id);
       }
+    } finally {
+      await local.cleanup();
+    }
+  });
+
+  // ── tab → workspace move (POST /api/tabs/:id/move) ────────────────────
+
+  const mkWorkspace = async (name: string): Promise<string> =>
+    (
+      (await (
+        await test.app.request('/api/workspaces', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name }),
+        })
+      ).json()) as { id: string }
+    ).id;
+
+  it('moves a tab to another workspace', async () => {
+    const tab = (await (await postTab({ name: 'Mover' })).json()) as { id: string };
+    const dest = await mkWorkspace('Dest');
+    const res = await test.app.request(`/api/tabs/${tab.id}/move`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workspace_id: dest }),
+    });
+    expect(res.status).toBe(200);
+    // Gone from the source workspace, present in the destination.
+    const srcList = (await (
+      await test.app.request(`/api/tabs?workspaceId=${workspaceId}`)
+    ).json()) as { id: string }[];
+    const destList = (await (
+      await test.app.request(`/api/tabs?workspaceId=${dest}`)
+    ).json()) as { id: string }[];
+    expect(srcList.some((t) => t.id === tab.id)).toBe(false);
+    expect(destList.some((t) => t.id === tab.id)).toBe(true);
+  });
+
+  it('rejects a move to a non-existent workspace (FK)', async () => {
+    const tab = (await (await postTab({ name: 'X' })).json()) as { id: string };
+    const res = await test.app.request(`/api/tabs/${tab.id}/move`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workspace_id: 'does-not-exist' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('tab→workspace move emits tab.removed (old) + tab.added (new)', async () => {
+    const events = new EventBus();
+    const local = await createTestApp({ db: openDb(':memory:'), dataDir: tmp, events });
+    try {
+      const mkWs = async (name: string) =>
+        (
+          (await (
+            await local.app.request('/api/workspaces', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ name }),
+            })
+          ).json()) as { id: string }
+        ).id;
+      const from = await mkWs('From');
+      const to = await mkWs('To');
+      const tab = (await (
+        await local.app.request('/api/tabs', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'T', workspace_id: from }),
+        })
+      ).json()) as { id: string };
+
+      const received: MuxpadEvent[] = [];
+      events.subscribe((e) => received.push(e));
+      await local.app.request(`/api/tabs/${tab.id}/move`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspace_id: to }),
+      });
+
+      const removed = received.find((e) => e.type === 'tab.removed');
+      const added = received.find((e) => e.type === 'tab.added');
+      expect(removed?.type === 'tab.removed' && removed.workspace_id).toBe(from);
+      expect(added?.type === 'tab.added' && added.workspace_id).toBe(to);
     } finally {
       await local.cleanup();
     }

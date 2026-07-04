@@ -374,6 +374,186 @@ describe('panes routes', () => {
     }
   });
 
+  // ── pane move (POST /api/panes/:id/move) ──────────────────────────────
+
+  /** Make a pane in `tab`, returning its id. */
+  const makePane = async (tab: string): Promise<string> => {
+    const p = (await (
+      await test.app.request(`/api/tabs/${tab}/panes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      })
+    ).json()) as { id: string };
+    return p.id;
+  };
+  const getLayout = async (tab: string): Promise<unknown> =>
+    ((await (await test.app.request(`/api/tabs/${tab}`)).json()) as { layout: unknown }).layout;
+  const setLayout = (tab: string, layout: unknown) =>
+    test.app.request(`/api/tabs/${tab}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ layout }),
+    });
+  const move = (paneId: string, body: unknown) =>
+    test.app.request(`/api/panes/${paneId}/move`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const mkTab = async (name: string, workspace = wsId): Promise<string> =>
+    (
+      (await (
+        await test.app.request('/api/tabs', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name, workspace_id: workspace }),
+        })
+      ).json()) as { id: string }
+    ).id;
+
+  it('moves a pane to an existing tab: source loses it, dest gains it', async () => {
+    const a = await makePane(tabId);
+    const b = await makePane(tabId);
+    await setLayout(tabId, { direction: 'row', first: a, second: b });
+    const dest = await mkTab('Dest');
+    const d1 = await makePane(dest);
+    await setLayout(dest, d1);
+
+    const res = await move(a, { to_tab_id: dest });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { from_tab_removed: boolean; to_tab: { id: string } };
+    expect(body.from_tab_removed).toBe(false);
+    expect(body.to_tab.id).toBe(dest);
+
+    // Source collapsed to just b; dest now a split holding d1 + a.
+    expect(await getLayout(tabId)).toBe(b);
+    expect(await getLayout(dest)).toMatchObject({ direction: 'row', first: d1, second: a });
+    // The pane row really reparented.
+    const detail = (await (await test.app.request(`/api/tabs/${dest}`)).json()) as {
+      panes: { id: string }[];
+    };
+    expect(detail.panes.map((p) => p.id).sort()).toEqual([a, d1].sort());
+  });
+
+  it('moving the last pane out deletes the now-empty source tab', async () => {
+    const only = await makePane(tabId);
+    await setLayout(tabId, only);
+    const dest = await mkTab('Dest');
+    await setLayout(dest, await makePane(dest));
+
+    const res = await move(only, { to_tab_id: dest });
+    const body = (await res.json()) as { from_tab_removed: boolean };
+    expect(body.from_tab_removed).toBe(true);
+    expect((await test.app.request(`/api/tabs/${tabId}`)).status).toBe(404);
+  });
+
+  it('extracts a pane into a fresh tab (new_tab)', async () => {
+    const a = await makePane(tabId);
+    const b = await makePane(tabId);
+    await setLayout(tabId, { direction: 'row', first: a, second: b });
+
+    const res = await move(a, { new_tab: true });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { to_tab: { id: string }; from_tab_removed: boolean };
+    expect(body.from_tab_removed).toBe(false);
+    // New tab holds exactly the extracted pane as its root.
+    expect(await getLayout(body.to_tab.id)).toBe(a);
+    // Source collapsed to b.
+    expect(await getLayout(tabId)).toBe(b);
+  });
+
+  it('extracting the SOLE pane of a tab is a no-op (keeps the tab intact)', async () => {
+    const only = await makePane(tabId);
+    await setLayout(tabId, only);
+    const res = await move(only, { new_tab: true });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { from_tab_id: string; to_tab: { id: string } };
+    // Returns the SAME tab — no new tab created, source not deleted.
+    expect(body.to_tab.id).toBe(tabId);
+    expect(body.from_tab_id).toBe(tabId);
+    expect((await test.app.request(`/api/tabs/${tabId}`)).status).toBe(200);
+    expect(await getLayout(tabId)).toBe(only);
+  });
+
+  it('rejects a move to a tab in a different workspace', async () => {
+    const a = await makePane(tabId);
+    await setLayout(tabId, a);
+    const otherWs = (await (
+      await test.app.request('/api/workspaces', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Other' }),
+      })
+    ).json()) as { id: string };
+    const foreignTab = await mkTab('Foreign', otherWs.id);
+    const res = await move(a, { to_tab_id: foreignTab });
+    expect(res.status).toBe(400);
+  });
+
+  it('move emits dest pane.added + source pane.removed', async () => {
+    const events = new EventBus();
+    const local = await createTestApp({ db: openDb(':memory:'), dataDir: tmp, events });
+    try {
+      const ws = (await (
+        await local.app.request('/api/workspaces', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'W' }),
+        })
+      ).json()) as { id: string };
+      const mk = async (name: string) =>
+        (
+          (await (
+            await local.app.request('/api/tabs', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ name, workspace_id: ws.id }),
+            })
+          ).json()) as { id: string }
+        ).id;
+      const src = await mk('Src');
+      const dst = await mk('Dst');
+      const mkP = async (tab: string) =>
+        (
+          (await (
+            await local.app.request(`/api/tabs/${tab}/panes`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: '{}',
+            })
+          ).json()) as { id: string }
+        ).id;
+      const keep = await mkP(src);
+      const moving = await mkP(src);
+      await local.app.request(`/api/tabs/${src}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ layout: { direction: 'row', first: keep, second: moving } }),
+      });
+      await local.app.request(`/api/tabs/${dst}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ layout: await mkP(dst) }),
+      });
+
+      const received: MuxpadEvent[] = [];
+      events.subscribe((e) => received.push(e));
+      await local.app.request(`/api/panes/${moving}/move`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ to_tab_id: dst }),
+      });
+
+      const added = received.find((e) => e.type === 'pane.added');
+      const removed = received.find((e) => e.type === 'pane.removed');
+      expect(added?.type === 'pane.added' && added.tab_id).toBe(dst);
+      expect(removed?.type === 'pane.removed' && removed.pane_id).toBe(moving);
+    } finally {
+      await local.cleanup();
+    }
+  });
+
   it('rejects respawn on a url pane with 400', async () => {
     // URL panes have no PTY — respawn is nonsensical and must be guarded
     // so ptyd never sees a null-shell spec.

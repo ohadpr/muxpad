@@ -8,125 +8,115 @@
        Thumb-height rows; close buttons always faintly present (touch
        has no hover).
 
-   Both variants render a flat list: each workspace is a BANDED header
-   (elevated fill + heavier weight) with its tabs below — no
-   bordered/rounded card per workspace (that read toy-ish against the
-   rest of the chrome). The band anchors the group; a breath of space
-   separates groups.
+   Both variants render a flat list, Slack-rail style: workspaces are
+   quiet bold headers (a disclosure chevron + name, no fill) with their
+   tabs indented below. Selection is a ROUNDED PILL inset from the rail's
+   edges — hover is a faint pill, the active tab is one crisp solid-accent
+   pill. Hierarchy comes from indent + weight + that single strong anchor,
+   not from bands, rails, and guide-lines stacked together.
 
    Visual grammar shared with the rest of muxpad's chrome:
-     banded fill              = workspace header
-     accent tint + left rail  = active workspace ("you are here")
-     neutral bg + left rail   = active tab (different color family on
-                                purpose so the two active states read
-                                apart at a glance)
+     bold name, no fill       = workspace header
+     faint accent tint        = active workspace, collapsed ("you are in")
+     solid accent pill        = active tab ("you are here") — the one
+                                dominant anchor in the list
+     faint pill on hover      = hover affordance
      red dot                  = "wants you"
    ────────────────────────────────────────────────────────────────────── */
 
 .navtree {
   /* Row metrics + surfaces are the only things the variants disagree on. */
-  --nt-row-ws: 30px;
-  --nt-row-tab: 28px;
-  --nt-hit: 24px; /* square hit target for disclosure/close */
-  --nt-indent: 30px; /* tab text column = disclosure col + step */
-  --nt-guide: 16px; /* indent guide x = center of the disclosure column */
+  --nt-row-ws: 32px;
+  --nt-row-tab: 30px;
+  --nt-hit: 24px; /* square hit target for the close button */
+  --nt-disc: 18px; /* disclosure chevron column — narrow; the glyph is tiny */
+  /* Tab leading-icon column. Tuned so a tab's icon lands directly under the
+     workspace NAME (one chevron-width step) — the icon itself is the
+     hierarchy cue, so no extra text-column indent is spent. */
+  --nt-indent: 12px;
+  --nt-pill: 6px; /* selection/hover pill corner radius */
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  font-family: var(--chrome-font);
-  font-size: var(--chrome-size);
+  /* Proportional sans for the nav labels — readable names that don't
+     truncate early. Tabular bits below opt back into --chrome-font.
+     14px (not the 13px chrome size) so the text fills the row metrics
+     instead of floating in them. */
+  font-family: var(--ui-font);
+  font-size: 14px;
   color: var(--fg);
 }
 .navtree[data-variant="sheet"] {
   --nt-row-ws: 44px;
   --nt-row-tab: 42px;
   --nt-hit: 32px;
-  --nt-indent: 40px;
-  --nt-guide: 24px; /* disclosure center: 8px row inset + 32px hit / 2 */
+  --nt-disc: 24px;
+  --nt-indent: 28px;
+  font-size: 15px;
 }
 
 /* ─── Section header ─────────────────────────────────────────────────── */
 
+/* Inset bottom hairline so the header is separated from the list the same
+   way the workspace groups are separated from each other — the margin
+   matches the scroll's 8px inset so all the tree's dividers line up. */
 .navtree-section {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  padding: 10px 10px 6px 16px;
+  margin: 0 8px;
+  padding: 12px 2px 8px 4px;
+  border-bottom: 1px solid var(--border);
 }
 .navtree-section-label {
   flex: 1;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--fg-faint);
   user-select: none;
 }
-.navtree-section-add {
-  flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--fg-dim);
-  font-family: inherit;
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-  touch-action: manipulation;
-  -webkit-tap-highlight-color: transparent;
-  transition: background 80ms ease, color 80ms ease, border-color 80ms ease;
-}
-.navtree[data-variant="sheet"] .navtree-section-add {
-  width: 28px;
-  height: 28px;
-}
-.navtree-section-add:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
-  color: var(--fg);
-}
-.navtree-section-add:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
 
 /* ─── Scroll region + workspace groups ───────────────────────────────── */
 
-/* Full-bleed rows — the banded headers span edge to edge, so the
-   accent rail sits flush against the rail's left edge. Vertical pad
-   only (a touch at top, a clearing inset at the bottom). */
+/* Rows sit inside a horizontal inset so selection/hover render as
+   rounded pills that float off the rail's edges (Slack-style), rather
+   than full-bleed bands. */
 .navtree-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: 2px 0 10px;
+  /* Tighter LEFT gutter than right: the left edge is dead margin, so trimming
+     it (8 → 4) hands real width back to the names. Right stays 8 for the
+     scrollbar + close-button breathing room. */
+  padding: 3px 8px 12px 4px;
+}
+/* Desktop has no section header (dropped as redundant under the brand),
+   so the list sits directly below the brand hairline — give it a little
+   breathing room there. */
+.navtree[data-variant="sidebar"] .navtree-scroll {
+  padding-top: 8px;
 }
 .navtree[data-variant="sheet"] .navtree-scroll {
-  padding: 0 0 12px;
+  padding: 2px 8px 14px;
 }
 .navtree[data-variant="sheet"] .navtree-section {
-  padding: 12px 14px 6px 16px;
-}
-.navtree[data-variant="sheet"] .navtree-ws-row {
-  padding-left: 8px;
+  padding: 12px 6px 6px 8px;
 }
 
-/* Workspaces read as a flat list of BANDED headers (elevated fill +
-   heavier weight on the ws row) — no bordered/rounded card per
-   workspace (that read toy-ish against the rest of the chrome). The
-   band anchors each group; a breath of space separates groups; the
-   active row's accent tint + rail carry "you are here". Same treatment
-   on the sidebar and the sheet. */
+/* Workspaces read as a flat list of quiet bold headers (chevron + name,
+   no fill) with their tabs indented below. A hairline + balanced space
+   separates groups, so the gap between workspaces reads as a deliberate
+   section break rather than undefined void. The active TAB's tint pill is
+   the one strong anchor. */
 .navtree-group + .navtree-group {
-  margin-top: 8px;
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
 }
 
 /* ─── Workspace row (banded header) ──────────────────────────────────── */
@@ -136,37 +126,23 @@
   display: flex;
   align-items: center;
   height: var(--nt-row-ws);
-  padding: 0 8px 0 4px;
+  padding: 0 4px;
+  border-radius: var(--nt-pill);
   font-weight: 600;
-  background: var(--bg-elev);
+  color: var(--fg);
 }
 .navtree-ws-row:hover {
   background: var(--bg-hover);
 }
-.navtree-ws-row[data-active="true"] {
-  font-weight: 600;
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-/* The accent rail marks the EXACT place you are. Expanded active
-   workspace: the rail belongs to the active tab alone (the ws row's
-   accent tint already carries the workspace-level signal — and with
-   the first tab active, two stacked rails read as one odd broken
-   line). The ws row only takes the rail when collapsed, i.e. when the
-   tab's rail isn't there to carry it. */
-.navtree-group:not([data-expanded="true"]) > .navtree-ws-row[data-active="true"]::after,
-.navtree-tab-row[data-active="true"]::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 4px;
-  bottom: 4px;
-  width: var(--chrome-rail);
-  background: var(--accent);
-  border-radius: 0 2px 2px 0;
-}
+/* Active workspace: the bold name alone marks it — the active TAB's tint
+   pill is the dominant anchor, so a competing fill on the header would
+   only muddy it. When COLLAPSED, the active tab (and its pill) is folded
+   away; rather than tint the whole minimized header — which reads as if
+   the header itself were selected — we accent just the tab-count chip
+   (below) to say "your active tab is folded in here". */
 
 .navtree-disclosure {
-  flex: 0 0 var(--nt-hit);
+  flex: 0 0 var(--nt-disc);
   height: var(--nt-hit);
   display: inline-flex;
   align-items: center;
@@ -214,6 +190,50 @@
 .navtree[data-variant="sheet"] .navtree-ws-row[data-pressing="true"] {
   background: var(--bg-hover);
 }
+
+/* Drag-to-reorder (desktop sidebar). The row carries the drag; the dragged
+   row dims, and a horizontal accent line marks the insertion point between
+   rows — on the target's top edge when the row would land before it, bottom
+   edge when after (direction-aware, matching reorderByDrop). */
+.navtree[data-variant="sidebar"] .navtree-ws-row[draggable="true"],
+.navtree[data-variant="sidebar"] .navtree-tab-row[draggable="true"] {
+  cursor: grab;
+}
+.navtree-ws-row[data-dragging="true"],
+.navtree-tab-row[data-dragging="true"] {
+  opacity: 0.4;
+}
+/* The drop line. A 2px accent bar pinned to the indicated edge, with rounded
+   ends and a tiny horizontal inset so it reads as a divider between rows, not
+   a border on one. pointer-events:none so it never interferes with the drag. */
+.navtree-ws-row[data-drop-edge]::after,
+.navtree-tab-row[data-drop-edge]::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 2;
+}
+.navtree-ws-row[data-drop-edge="top"]::after,
+.navtree-tab-row[data-drop-edge="top"]::after {
+  top: -1px;
+}
+.navtree-ws-row[data-drop-edge="bottom"]::after,
+.navtree-tab-row[data-drop-edge="bottom"]::after {
+  bottom: -1px;
+}
+/* A tab is being dragged over this workspace row — light the whole row as a
+   drop basin (distinct from the thin reorder line above, which means "insert
+   between rows"). */
+.navtree-ws-row[data-tab-drop="true"] {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  border-radius: 4px;
+}
 .navtree-ws-name:hover {
   text-decoration: none;
 }
@@ -222,6 +242,74 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+
+/* ─── Busy spinner ──────────────────────────────────────────────────────
+   "This tab's app is working." A different channel from .badge-dot
+   ("wants you"): the spinner says "in progress" and clears itself when the
+   output stream goes quiet. Sits inline to the right of the name; never
+   shrinks. Neutral grey (the machine/working channel) — NOT accent, which is
+   reserved for the "concerns you" channel (selection pill + attention dot). */
+.navtree-busy {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Muted accent — a quieter cousin of the attention dot it shares a slot
+     with: same hue family so the two "rhyme", but desaturated toward neutral
+     (and a thin animated ring vs the dot's solid fill) so "working" still
+     reads distinct from "wants you". */
+  color: color-mix(in srgb, var(--accent) 60%, var(--fg-dim));
+  line-height: 0;
+  /* Sit just after the name with a little breathing room (on top of the row's
+     5px flex gap) — not jammed against the text, not flung to the right edge.
+     Matches the attention dot below. */
+  margin-left: 4px;
+  /* Optical nudge: flex align-items:center centers the icon's BOX, but text
+     glyphs sit low within their line box, so a box-centered icon reads ~1px
+     high against the label. Drop it to sit on the text's optical center. */
+  position: relative;
+  top: 1px;
+}
+
+/* The inline attention dot shares the spinner's status slot and the same
+   flex-box-centering quirk — box-centered, so it reads ~1px high against the
+   text. Give it the identical optical nudge so dot and spinner sit level.
+   `right: auto` is load-bearing: the base .badge-dot (absolute variant) sets
+   `right: 6px`, which `position: relative` here would otherwise reactivate and
+   shove the dot 6px left into the text. */
+.navtree-tab-link .badge-dot.-inline,
+.navtree-ws-name .badge-dot.-inline {
+  position: relative;
+  top: 1px;
+  right: auto;
+  /* A little breathing room after the name (atop the flex gap), not flush-right. */
+  margin-left: 4px;
+}
+.navtree-busy svg {
+  animation: navtree-spin 0.8s linear infinite;
+  transform-origin: center;
+}
+@keyframes navtree-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* Honor reduced-motion: drop the rotation, keep a static (but visible)
+   indicator via a gentle opacity pulse instead of a spin. */
+@media (prefers-reduced-motion: reduce) {
+  .navtree-busy svg {
+    animation: navtree-busy-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes navtree-busy-pulse {
+    0%,
+    100% {
+      opacity: 0.4;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
 }
 
 /* Quiet tab-count chip on collapsed rows — says what's folded away. */
@@ -234,7 +322,16 @@
   border-radius: 8px;
   padding: 3px 6px;
   margin-right: 2px;
+  font-family: var(--chrome-font);
   font-variant-numeric: tabular-nums;
+}
+/* The collapsed workspace holding the active tab: tint just the NAME accent.
+   A quiet "you are here, folded away" — without tinting the header (reads as
+   selected) or restyling the count chip (reads as a notification bubble). */
+.navtree-group:not([data-expanded="true"])
+  > .navtree-ws-row[data-active="true"]
+  .navtree-name-text {
+  color: var(--accent);
 }
 
 /* ─── Tab rows ───────────────────────────────────────────────────────── */
@@ -245,24 +342,6 @@
   flex-direction: column;
   padding-bottom: 2px;
 }
-/* Indent guide — a vertical hairline dropping from the disclosure
-   chevron through the tab list, Finder/VS Code style. Makes the
-   parent→children relationship explicit instead of indent-only. */
-.navtree-tab-list::before {
-  content: "";
-  position: absolute;
-  left: var(--nt-guide);
-  top: 0;
-  bottom: 6px;
-  width: 1px;
-  background: var(--border);
-  pointer-events: none;
-}
-/* Hairline under the banded workspace header, separating it from its
-   tabs. */
-.navtree-group .navtree-tab-list {
-  border-top: 1px solid var(--border);
-}
 
 .navtree-tab-row {
   position: relative;
@@ -270,20 +349,29 @@
   align-items: center;
   gap: 4px;
   height: var(--nt-row-tab);
-  padding: 0 8px 0 var(--nt-indent);
+  padding: 0 4px;
+  border-radius: var(--nt-pill);
   color: var(--fg-dim);
-  font-weight: 400;
+  font-weight: 500;
 }
 .navtree-tab-row:hover {
   color: var(--fg);
   background: var(--bg-hover);
 }
-/* Active TAB uses a neutral bg — the active WORKSPACE owns the accent
-   tint. Different color families keep them instantly distinguishable. */
+/* Active TAB is the one strong anchor in the list: a clear accent-TINT
+   pill with dark bold text. A tint (not a solid fill) so emoji in tab
+   names render naturally — full-color glyphs clash on a saturated fill —
+   while still reading as an unmistakable "you are here". */
 .navtree-tab-row[data-active="true"] {
   color: var(--fg);
   font-weight: 600;
-  background: var(--bg-hover);
+  /* A clean tint pill, nudged a touch stronger so "active" holds its own
+     next to the red attention dots. Derived from --accent / --bg, so it
+     works across every theme. No left edge — just the pill. */
+  background: color-mix(in srgb, var(--accent) 32%, var(--bg));
+}
+.navtree-tab-row[data-active="true"]:hover {
+  background: color-mix(in srgb, var(--accent) 38%, var(--bg));
 }
 
 .navtree-tab-link {
@@ -291,8 +379,14 @@
   min-width: 0;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   height: 100%;
+  /* Indent tab text past the workspace name, so the parent→child step
+     reads from alignment alone (replaces the old guide hairline). */
+  padding-left: var(--nt-indent);
+  /* Trailing gutter so the name never kisses the pill edge once the close
+     button collapses away — keeps a touch of breathing room on the right. */
+  padding-right: 6px;
   color: inherit;
   text-decoration: none;
   -webkit-touch-callout: none;
@@ -303,8 +397,9 @@
   text-decoration: none;
 }
 
-/* Alt-held quick-switch chip (sidebar only) — same accent chip language
-   as the top TabBar's numbers. */
+/* Ctrl-held quick-switch chip (sidebar only) — same accent chip language
+   as the top TabBar's numbers. Soft accent fill + medium weight: present as a
+   hint while Ctrl is held, not a loud solid pill. */
 .navtree-quicknum {
   flex: 0 0 auto;
   min-width: 14px;
@@ -314,21 +409,29 @@
   justify-content: center;
   padding: 0 3px;
   border-radius: 3px;
-  background: var(--accent);
-  color: var(--accent-fg);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-family: var(--chrome-font);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1;
 }
 
 /* ─── Close affordance (per-row) ─────────────────────────────────────── */
 
 .navtree-close {
-  flex: 0 0 var(--nt-hit);
+  /* Collapsed to zero width while hidden so it doesn't steal room from the
+     tab name; the negative margin swallows the row's flex gap so the name
+     gets the full width back. It only claims its hit-area on hover/focus
+     (below), where it visibly pushes the name in. */
+  flex: 0 0 0;
+  width: 0;
+  margin-left: -4px;
   height: var(--nt-hit);
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
   color: var(--fg-faint);
   background: transparent;
   border: 0;
@@ -337,13 +440,16 @@
   cursor: pointer;
   user-select: none;
   opacity: 0;
-  transition: opacity 80ms ease;
+  transition: opacity 80ms ease, width 80ms ease, flex-basis 80ms ease, margin-left 80ms ease;
   /* Kill iOS's double-tap zoom delay so taps register instantly. */
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
-/* Touch has no hover — keep close faintly present on the sheet. */
+/* Touch has no hover — keep close faintly present (and sized) on the sheet. */
 .navtree[data-variant="sheet"] .navtree-close {
+  flex-basis: var(--nt-hit);
+  width: var(--nt-hit);
+  margin-left: 0;
   opacity: 0.35;
 }
 .navtree-ws-row:hover .navtree-close,
@@ -351,6 +457,9 @@
 .navtree-tab-row:hover .navtree-close,
 .navtree-tab-row:focus-within .navtree-close,
 .navtree-close:focus-visible {
+  flex-basis: var(--nt-hit);
+  width: var(--nt-hit);
+  margin-left: 0;
   opacity: 1;
 }
 .navtree-close:hover {
@@ -376,13 +485,140 @@
   outline: none;
 }
 
+/* ─── Tab context menu (desktop right-click) ─────────────────────────── */
+
+/* Full-viewport catcher: an outside click or a right-click elsewhere
+   dismisses the menu (Escape does too, wired in the component). */
+.navtree-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+}
+.navtree-menu {
+  position: fixed;
+  min-width: 168px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  font-family: var(--ui-font);
+  font-size: 13px;
+}
+.navtree-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.navtree-menu-item:hover {
+  background: var(--bg-hover);
+}
+.navtree-menu-item.-danger {
+  color: var(--danger);
+}
+.navtree-menu-item.-danger:hover {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+}
+
+/* Submenu (e.g. "Move to workspace ›") — a hover flyout off the parent row. */
+.navtree-menu-sub {
+  position: relative;
+}
+.navtree-menu-item-parent {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.navtree-menu-caret {
+  color: var(--fg-faint);
+  font-size: 15px;
+  line-height: 1;
+}
+.navtree-submenu {
+  position: absolute;
+  top: -5px; /* align the flyout's first row with the parent row */
+  left: 100%; /* flush, so crossing into it doesn't pass through a dead gap */
+  z-index: 1;
+  min-width: 150px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+.navtree-submenu.-left {
+  left: auto;
+  right: 100%;
+}
+
+/* ─── Tab leading icon + picker ──────────────────────────────────────── */
+
+/* Fixed leading column so every tab row has a glyph in the same place. */
+.navtree-tab-icon {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* A hair larger than the label so the emoji reads as a proper icon,
+     not shrunk-down text. */
+  font-size: 1.2em;
+  line-height: 1;
+  border-radius: 4px;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.navtree[data-variant="sheet"] .navtree-tab-icon {
+  width: 26px;
+  height: 26px;
+  font-size: 1.25em;
+}
+.navtree-tab-icon:hover {
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+}
+
+/* Positioned wrapper for the emoji-mart picker (which brings its own
+   surface, shadow, and search UI). */
+.navtree-emoji-popover {
+  position: fixed;
+  z-index: 1001;
+}
+.navtree-emoji-loading {
+  padding: 16px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  color: var(--fg-dim);
+  font-family: var(--ui-font);
+  font-size: 13px;
+}
+
 /* ─── Actions ────────────────────────────────────────────────────────── */
 
-/* "+ New tab" — reads as an ACTION, not another tab: outdented from the
-   tab text column, smaller, accent-colored, quiet until hover. */
-.navtree-new-tab {
+/* "+ New tab" / "+ New workspace" — both read as an ACTION, not another
+   row: smaller, accent-colored, quiet until hover. ONE shared style; the
+   only difference is the left indent (each sits at its own list's level).
+   "+ New tab" is outdented from the tab text column; "+ New workspace"
+   sits at the workspace (outer) level. */
+.navtree-add {
   display: block;
-  margin: 2px 8px 4px calc(var(--nt-indent) - 4px);
   padding: 4px 8px;
   background: transparent;
   border: none;
@@ -397,12 +633,25 @@
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
-.navtree[data-variant="sheet"] .navtree-new-tab {
+.navtree[data-variant="sheet"] .navtree-add {
   padding: 8px;
 }
-.navtree-new-tab:hover {
+.navtree-add:hover {
   opacity: 1;
   background: var(--bg-hover);
+}
+.navtree-add:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.navtree-new-tab {
+  margin: 2px 8px 4px calc(var(--nt-indent) - 4px);
+}
+/* Extra top space sets "+ New workspace" apart from the last group's
+   "+ New tab" so it reads as the outer-level action, not part of the
+   group above it. */
+.navtree-new-workspace {
+  margin: 16px 8px 6px 8px;
 }
 
 /* ─── Sidebar shell ──────────────────────────────────────────────────── */
@@ -412,6 +661,9 @@
    Chrome surface + hairline divider — same plate language as the bar
    it replaces. */
 .sidenav {
+  /* flex-basis is overridden inline with the persisted/dragged width; this
+     is just the fallback before React mounts. grow/shrink stay 0 so the rail
+     holds whatever width the user dragged. */
   flex: 0 0 240px;
   /* min-width:0 caps the flex AUTOMATIC minimum (default min-width:auto
      = content min-content size). Without it, the rename <input>'s
@@ -419,22 +671,79 @@
      overrides the fixed basis, so the rail visibly widens mid-edit. */
   min-width: 0;
   min-height: 0;
+  /* Anchor for the absolutely-positioned resize grip on the right edge. */
+  position: relative;
   display: flex;
   flex-direction: column;
-  background: var(--bg-chrome);
+  /* The distinctly-darker "chrome board" token (same as the top tab bar /
+     mobile strip), not --bg-chrome: the latter is only a hair off --bg, so
+     the rail's empty space + footer blurred into the pane content behind it. */
+  background: var(--bg-tabbar);
   border-right: 1px solid var(--border);
+}
+
+/* ─── Drag-to-resize grip ────────────────────────────────────────────────
+   Straddles the right hairline as a wide-enough hit target; invisible until
+   hovered/dragged, then a faint accent line marks the seam. */
+.sidenav-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -3px;
+  width: 7px;
+  z-index: 5;
+  cursor: col-resize;
+  /* Keep pointer drags from being stolen as scrolls/selections. */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.sidenav-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* Center a 2px line over the rail's 1px border (border sits at right:3px
+     within this 7px-wide, right:-3px-offset strip). */
+  right: 3px;
+  width: 2px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+.sidenav-resize-handle:hover::after,
+body.sidenav-resizing .sidenav-resize-handle::after {
+  opacity: 0.6;
+}
+/* While dragging, force the resize cursor everywhere and kill selection so a
+   fast drag over the panes (incl. iframe/xterm content) stays smooth. */
+body.sidenav-resizing {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+/* Web panes are iframes; without this a drag that crosses one would let the
+   iframe swallow the pointer and stall the resize. */
+body.sidenav-resizing iframe {
+  pointer-events: none;
 }
 
 .sidenav-brand {
   flex: 0 0 auto;
   display: flex;
   align-items: stretch;
+  /* Match the pane tab-strip height (--chrome-h) so the brand's bottom
+     hairline lines up exactly with the tab strip's bottom line at the top
+     of the workspace, in both split and tabbed views. */
   height: var(--chrome-h);
   border-bottom: 1px solid var(--border);
 }
 .sidenav-brand .brand {
   flex: 1;
+  height: var(--chrome-h);
   border-right: none;
+  /* Center the wordmark+mark so the brand reads as a title plate, set apart
+     from the left-aligned workspace/tab rows below it. */
+  justify-content: center;
 }
 
 .sidenav-footer {

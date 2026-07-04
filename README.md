@@ -42,13 +42,14 @@ Multiple browser tabs or devices can attach to the same workspace simultaneously
 
 - macOS or Linux (the cwd-tracking path uses `lsof`)
 - Node 22+
-- pnpm 10+ (`brew install pnpm` or via corepack)
+- pnpm 10+ (`corepack enable && corepack prepare pnpm@10.30.1 --activate`, or `brew install pnpm`)
 
 ## Install
 
 For a personal install that runs in the background and survives terminal close:
 
 ```bash
+corepack enable && corepack prepare pnpm@10.30.1 --activate   # match the pinned pnpm
 pnpm install
 pnpm serve            # build if needed, start in background, print URL
 pnpm serve:status     # state, URL, log path
@@ -60,6 +61,10 @@ pnpm serve:restart    # stop + start (after pulling)
 Logs go to `~/.muxpad/server.log` and `~/.muxpad/ptyd.log`. The daemon does not auto-start on reboot; the macOS launchd setup is in [docs/launchd.md](docs/launchd.md).
 
 First load lands you on the workspace picker at `/`. Make a workspace, you'll land in an empty tab with a single shell pane, split it with the chrome buttons or `muxpad pane new --cmd=…` from inside.
+
+### Troubleshooting
+
+- **`pnpm build` fails with `Cannot find module '@muxpad/shared'`** — a stale `tsconfig.tsbuildinfo` cache is out of sync with a removed/incomplete `dist/`, so `tsc -b` thinks it's already built and skips emitting. Run `pnpm clean && pnpm build` to clear the cache and rebuild from scratch. (`pnpm serve` also self-heals this by dropping the cache whenever it rebuilds a missing `dist`.)
 
 ## Security
 

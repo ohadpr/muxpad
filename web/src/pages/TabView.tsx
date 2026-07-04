@@ -1,4 +1,5 @@
 import { useNavigate, useParams } from '@tanstack/react-router';
+import type { DragEvent as ReactDragEvent } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Mosaic,
@@ -7,18 +8,26 @@ import {
   MosaicWindow,
 } from 'react-mosaic-component';
 import 'react-mosaic-component/react-mosaic-component.css';
-import type { LayoutNode, PaneSpec } from '@muxpad/shared';
+import type { AppUrl, LayoutNode, PaneSpec, Tab } from '@muxpad/shared';
 import { spliceLayoutAtTarget } from '@muxpad/shared';
 import { type TabWithPanes, api } from '../api';
 import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
 import { MobileInputBar } from '../components/MobileInputBar';
 import { PaneSelector } from '../components/PaneSelector';
+import { PaneWebSwitch } from '../components/PaneWebSwitch';
+// PaneSurfaceSwitch (below) reuses the .pane-web-switch-* menu classes, so
+// depend on that stylesheet explicitly rather than relying on the mobile
+// PaneWebSwitch mount to pull it into the bundle.
+import '../components/PaneWebSwitch.css';
+import { ShellPaneBody } from '../components/ShellPaneBody';
 import { UrlPane } from '../components/UrlPane';
-import { XtermPane } from '../components/XtermPane';
 import { SvgClose } from '../components/icons';
 import { subscribe, subscribeReconnect } from '../events';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
+import { pushUndo } from '../lib/move-undo-store';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
+import { normalizePaneUrl, setPaneFace, usePaneFace } from '../lib/pane-face';
+import { setTabViewMode, useTabViewMode } from '../lib/tab-view-mode';
 import { refreshTabs, useTabs } from '../tabs';
 import { useMediaQuery } from '../use-media-query';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
@@ -92,6 +101,29 @@ function collectPaneIds(layout: Layout): string[] {
   return [...collectPaneIds(layout.first as Layout), ...collectPaneIds(layout.second as Layout)];
 }
 
+/**
+ * Rebuild a layout tree from an ordered list of pane ids as a balanced row.
+ * Used when the user drags to reorder pane headers in the tab strip: the
+ * strip order is derived from `collectPaneIds` (in-order traversal), so to
+ * persist a new order we regenerate the tree. This deliberately discards the
+ * previous split geometry/percentages — reordering tabs is a tabbed-mode
+ * gesture, and losing the bsplit arrangement on the flip is acceptable (a
+ * balanced row is a sane default when you next open split view). Balanced
+ * (not right-leaning) so a subsequent split view shows even-ish columns.
+ */
+function buildRowLayout(ids: string[]): Layout {
+  if (ids.length === 0) return null;
+  if (ids.length === 1) return ids[0] ?? null;
+  const mid = Math.ceil(ids.length / 2);
+  const first = buildRowLayout(ids.slice(0, mid));
+  const second = buildRowLayout(ids.slice(mid));
+  if (first == null) return second;
+  if (second == null) return first;
+  return { direction: 'row', first, second };
+}
+
+const PANE_DRAG_MIME = 'application/x-muxpad-pane-id';
+
 export interface TabViewProps {
   /** Stable slug for this instance — one TabView per tab in WorkspaceLayout. */
   tabSlug: string;
@@ -132,8 +164,28 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   // "navigate to next route".
   const [closingTab, setClosingTab] = useState(false);
   const [mobileActiveId, setMobileActiveId] = useState<string | null>(null);
+  // Inline rename of a pane's tab-strip header (desktop 'tabbed' mode).
+  const [editingPaneId, setEditingPaneId] = useState<string | null>(null);
+  const [paneDraft, setPaneDraft] = useState('');
+  const paneEditRef = useRef<HTMLInputElement | null>(null);
+  // Drag-to-reorder pane headers within the strip.
+  const [paneDragId, setPaneDragId] = useState<string | null>(null);
+  const [paneDropTargetId, setPaneDropTargetId] = useState<string | null>(null);
+  const [paneDropSide, setPaneDropSide] = useState<'before' | 'after'>('before');
   const layoutRef = useRef<Layout>(null);
+  // >0 while a local layout PATCH is in flight (split / drag-resize / close).
+  // The server-snapshot appliers (tab.updated, reconnect re-fetch) must NOT
+  // overwrite layoutRef/panes during this window — a snapshot taken before our
+  // patch landed reflects the PRE-change layout and would revert an
+  // optimistic split ("flashes then nothing"). Our own patch echo (carrying
+  // the new layout) reconciles once the window closes.
+  const pendingLayoutWrites = useRef(0);
   const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
+  // Desktop 'tabbed' mode renders the same single-pane-at-a-time UI mobile is
+  // forced into, so both share the "active pane" machinery below via
+  // `singlePane`. `mobileActiveId` is the shared active-pane state for both.
+  const viewMode = useTabViewMode(tab?.id ?? null, tab?.view_mode);
+  const singlePane = isMobile || viewMode === 'tabbed';
   // Holds the latest `addPane` function from the mobile render branch so
   // the top-level event listener below can reach it. The mobile chrome's
   // "+" button dispatches muxpad:add-pane (it lives in TabBar, outside
@@ -149,17 +201,28 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     setLastTabSlug(wsSlug, tabSlug);
   }, [isActive, tab, wsSlug, tabSlug]);
 
-  // Persist the active pane per tab whenever it changes (mobile only —
-  // desktop shows all panes via mosaic, no "active" concept).
+  // Persist the active pane per tab whenever it changes (single-pane views
+  // only — the split mosaic shows every pane at once, so has no "active" one).
   useEffect(() => {
-    if (!isMobile || !tab || !mobileActiveId) return;
+    if (!singlePane || !tab || !mobileActiveId) return;
     setLastPaneId(tab.id, mobileActiveId);
-  }, [isMobile, tab, mobileActiveId]);
+  }, [singlePane, tab, mobileActiveId]);
 
   // Mobile pane slots stay mounted when hidden (scroll position preserved).
-  // Focus the newly-selected pane's terminal when the active id changes.
+  // Focus the active pane's terminal when the active pane CHANGES (switch /
+  // tab entry) — NOT on every render. `tab` gets a new reference on every
+  // pane.updated (title/fg/attention/busy), and this effect deps on it; without
+  // the guard, a churning pane re-dispatches focus-pane constantly, which steals
+  // focus from the mobile composer the user is typing in (the terminal's helper
+  // textarea has inputMode=none, so grabbing it dismisses the soft keyboard and
+  // the input bar drops). Mirrors desktopFocusHandledRef below.
+  const mobileFocusedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!isMobile || !tab || !isActive) return;
+    if (!singlePane || !tab || !isActive) {
+      // Reset on deactivation so re-entering the tab refocuses its pane.
+      if (!isActive) mobileFocusedRef.current = null;
+      return;
+    }
     const paneIds = collectPaneIds(toMosaic(tab.layout));
     const stored = getLastPaneId(tab.id);
     const activeId =
@@ -169,8 +232,11 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           ? stored
           : (paneIds[0] ?? null);
     if (!activeId) return;
+    // Already focused this pane → don't re-grab (would steal composer focus).
+    if (mobileFocusedRef.current === activeId) return;
+    mobileFocusedRef.current = activeId;
     window.dispatchEvent(new CustomEvent('muxpad:focus-pane', { detail: { paneId: activeId } }));
-  }, [isMobile, tab, mobileActiveId, isActive]);
+  }, [singlePane, tab, mobileActiveId, isActive]);
 
   // Desktop: restore keyboard focus to the last-focused pane when this tab
   // becomes active again. Panes stay mounted across tab switches, so
@@ -274,14 +340,49 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     liveWorkspaceName && liveName
       ? `${liveWorkspaceName} ⋅ ${liveName}`
       : (liveName ?? liveWorkspaceName ?? 'muxpad');
+
+  // In single-pane views (mobile or desktop 'tabbed') the browser tab is a
+  // window onto ONE pane at a time, so we can meaningfully say "the visible
+  // pane is working" by animating a spinner into the tab title. Split view
+  // shows every pane at once — there's no single active pane to represent, so
+  // we leave the title clean there.
+  const activePaneBusy = (() => {
+    if (!singlePane || !tab) return false;
+    const ids = tab.panes.map((p) => p.id);
+    let activeId: string | null = null;
+    if (mobileActiveId && ids.includes(mobileActiveId)) activeId = mobileActiveId;
+    else {
+      const stored = getLastPaneId(tab.id);
+      activeId = stored && ids.includes(stored) ? stored : (ids[0] ?? null);
+    }
+    return tab.panes.find((p) => p.id === activeId)?.busy ?? false;
+  })();
+
   useEffect(() => {
     if (!isActive) return;
     const previous = document.title;
-    document.title = documentTitle;
+    if (!activePaneBusy) {
+      document.title = documentTitle;
+      return () => {
+        document.title = previous;
+      };
+    }
+    // Braille spinner cycled via the title itself — the only way to show a
+    // live loading indicator in a browser tab (favicons can't animate without
+    // canvas hackery, and the emoji/text of the title is all we control).
+    const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    let i = 0;
+    const tick = () => {
+      document.title = `${frames[i]} ${documentTitle}`;
+      i = (i + 1) % frames.length;
+    };
+    tick();
+    const id = window.setInterval(tick, 120);
     return () => {
+      window.clearInterval(id);
       document.title = previous;
     };
-  }, [isActive, documentTitle]);
+  }, [isActive, documentTitle, activePaneBusy]);
 
   // Keep local tab.name in sync with the shared list.
   useEffect(() => {
@@ -381,14 +482,24 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   const persistLayout = useCallback(
     async (layout: Layout) => {
       if (!tab) return;
+      pendingLayoutWrites.current += 1;
       try {
         await api.patchTab(tab.id, { layout: fromMosaic(layout) });
       } catch (e) {
         console.error('failed to persist layout', e);
+      } finally {
+        pendingLayoutWrites.current -= 1;
       }
     },
     [tab],
   );
+
+  useEffect(() => {
+    if (editingPaneId) {
+      paneEditRef.current?.focus();
+      paneEditRef.current?.select();
+    }
+  }, [editingPaneId]);
 
   const notifyLayoutChanged = useCallback(() => {
     const fire = () => window.dispatchEvent(new Event('muxpad:layout-changed'));
@@ -397,6 +508,19 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     window.setTimeout(fire, 200);
     window.setTimeout(fire, 500);
   }, []);
+
+  // Flip split ⇄ tabbed. The visible pane's container changes width (a split
+  // tile → full width, or back), so nudge the terminals to refit — the mode
+  // is its own tab field (PATCHed by setTabViewMode), never a layout write,
+  // so the split tree survives the flip.
+  const changeViewMode = useCallback(
+    (next: 'split' | 'tabbed') => {
+      if (!tab) return;
+      setTabViewMode(tab.id, next);
+      notifyLayoutChanged();
+    },
+    [tab, notifyLayoutChanged],
+  );
 
   const onChange = useCallback(
     (layout: Layout) => {
@@ -430,7 +554,11 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           ? {
               ...prev,
               layout: fromMosaic(newLayout),
-              panes: [...prev.panes, created],
+              // Dedup: the pane.added event for `created` may have already
+              // landed and appended it (it carries the same id).
+              panes: prev.panes.some((p) => p.id === created.id)
+                ? prev.panes
+                : [...prev.panes, created],
             }
           : prev,
       );
@@ -438,6 +566,81 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
       notifyLayoutChanged();
     },
     [tab, persistLayout, notifyLayoutChanged],
+  );
+
+  // Navigate to a tab we just moved a pane into — "follow the pane" so the
+  // move is immediately visible (and the user isn't stranded on a source tab
+  // that may have just auto-closed). setLastTabSlug first so the
+  // workspace-root redirect resolves here if a source `tab.removed` races us.
+  const followToTab = useCallback(
+    (toTab: Tab) => {
+      setLastTabSlug(wsSlug, toTab.slug);
+      void navigate({ to: '/w/$wsSlug/t/$tabSlug', params: { wsSlug, tabSlug: toTab.slug } });
+    },
+    [navigate, wsSlug],
+  );
+
+  /**
+   * Move a pane to another tab in this workspace (existing tab via
+   * `toTabId`, or a fresh one via `newTab`).
+   *
+   * Extract (`newTab`) FOLLOWS the pane to its new tab — but only after
+   * priming the tab/workspace caches, or WorkspaceShell's stale-URL recovery
+   * would bounce off a slug it hasn't seen yet. Move-to-existing deliberately
+   * does NOT navigate: you stay put and the pane simply leaves your view
+   * ("send away"); if the source tab empties, its own `tab.removed` handler
+   * redirects you to a neighbor.
+   *
+   * `paneLabelText` is captured at call time for the undo message (paneLabel
+   * itself is only in scope after the loading early-returns).
+   */
+  const movePane = useCallback(
+    async (paneId: string, paneLabelText: string, dest: { toTabId?: string; newTab?: boolean }) => {
+      if (!tab || !workspace) return;
+      const sourceSlug = tab.slug;
+      const followed = dest.newTab === true;
+      try {
+        const res = await api.movePane(paneId, dest);
+        // Server declined (e.g. extracting a sole pane is a no-op): nothing
+        // moved, so no follow and no undo.
+        if (res.to_tab.id === res.from_tab_id) return;
+        if (followed) {
+          await Promise.all([refreshTabs(workspace.id), refreshWorkspaces()]);
+          followToTab(res.to_tab);
+        }
+        if (!res.from_tab_removed) {
+          pushUndo({
+            message: `Moved “${paneLabelText}” to “${res.to_tab.name}”`,
+            run: async () => {
+              // Navigate back to the SOURCE tab BEFORE reversing the move (for
+              // the extract case — move-to-existing never left, so no nav).
+              // Order matters: reversing the move empties and deletes the
+              // extracted tab we're viewing; if we're still on it when that
+              // happens, its `tab.removed` handler redirects to the
+              // workspace's FIRST tab, overriding our jump to the source.
+              // Navigating first makes the extracted tab inactive, so the
+              // isActive guard suppresses that redirect and we land on the
+              // tab the pane actually returned to.
+              if (followed) {
+                setLastTabSlug(wsSlug, sourceSlug);
+                void navigate({
+                  to: '/w/$wsSlug/t/$tabSlug',
+                  params: { wsSlug, tabSlug: sourceSlug },
+                });
+              }
+              try {
+                await api.movePane(paneId, { toTabId: res.from_tab_id });
+              } catch (err) {
+                console.error('undo move failed', err);
+              }
+            },
+          });
+        }
+      } catch (err) {
+        console.error('move pane failed', err);
+      }
+    },
+    [tab, workspace, followToTab, navigate, wsSlug],
   );
 
   /**
@@ -554,7 +757,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   /**
    * Optimistically reflect a kind flip from the type-switch button into
    * local tab.panes. The server already returned the updated pane row
-   * (see TypeSwitcher → patchPane callers), so we can splice it in now
+   * (see PaneSurfaceSwitch → patchPane callers), so we can splice it in now
    * instead of waiting for the pane.updated event to round-trip — which
    * is fast on localhost but still perceptible.
    * Must be declared BEFORE the early-returns below — otherwise the hook
@@ -618,19 +821,26 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                     // runtime-only attention flag. Preserve prior so we
                     // don't clobber a true value with undefined.
                     attention: e.pane.attention ?? p.attention,
+                    // Same: a PATCH-route pane.updated carries the raw row
+                    // without runtime app_urls. Coalesce so a kind/url edit
+                    // doesn't transiently blank the web-switch dropdown.
+                    app_urls: e.pane.app_urls ?? p.app_urls,
                   };
                 }),
               }
             : prev,
         );
       } else if (e.type === 'tab.updated' && e.tab.id === tabId) {
+        // Skip the layout if we have a local layout write in flight — this
+        // snapshot may predate it and would revert an optimistic split.
+        const applyLayout = pendingLayoutWrites.current === 0;
         setTab((prev) =>
           prev
             ? {
                 ...prev,
                 name: e.tab.name,
                 slug: e.tab.slug,
-                layout: e.tab.layout,
+                ...(applyLayout ? { layout: e.tab.layout } : {}),
                 // tab.updated is emitted from PATCH /tabs and from pane
                 // append/remove paths; the server-side Tab row doesn't
                 // carry the runtime-only `attention` field, so e.tab.attention
@@ -641,10 +851,17 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
               }
             : prev,
         );
-        layoutRef.current = toMosaic(e.tab.layout);
+        if (applyLayout) layoutRef.current = toMosaic(e.tab.layout);
       } else if (e.type === 'tab.removed' && e.tab_id === tabId) {
         setClosingTab(true);
-        void navigate({ to: '/w/$wsSlug', params: { wsSlug } });
+        // Only the ACTIVE tab's removal should redirect. A hidden tab being
+        // removed — closed from the sidebar, or relocated to another
+        // workspace (tab.removed now doubles as "moved away") — must not yank
+        // the user off the tab they're actually viewing. (last-visited used to
+        // paper over this with a redirect bounce; the guard makes it clean.)
+        if (isActiveRef.current) {
+          void navigate({ to: '/w/$wsSlug', params: { wsSlug } });
+        }
       }
     });
   }, [tab?.id, navigate, wsSlug]);
@@ -662,8 +879,17 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
       void api
         .getTab(tabId)
         .then((detail) => {
-          setTab((prev) => (prev && prev.id === tabId ? { ...prev, ...detail } : prev));
-          layoutRef.current = toMosaic(detail.layout);
+          // If a local layout write is in flight, this snapshot may predate it
+          // — keep our optimistic layout + panes (the just-split pane isn't in
+          // the server's copy yet) and take only the rest.
+          const applyLayout = pendingLayoutWrites.current === 0;
+          setTab((prev) => {
+            if (!prev || prev.id !== tabId) return prev;
+            if (applyLayout) return { ...prev, ...detail };
+            const { layout: _layout, panes: _panes, ...rest } = detail;
+            return { ...prev, ...rest };
+          });
+          if (applyLayout) layoutRef.current = toMosaic(detail.layout);
         })
         .catch(() => {
           // Tab may have been deleted during the disconnect window — the
@@ -704,6 +930,11 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
 
   const paneLabel = (paneId: string): string => {
     const p = tab.panes.find((x) => x.id === paneId);
+    // A user-set name wins over everything — that's the whole point of the
+    // rename: claude/the shell can rewrite the terminal title all it likes,
+    // but the pinned name is what shows until the user clears it.
+    const custom = p?.name?.trim();
+    if (custom) return custom;
     if (p?.kind === 'url' && p.url) {
       try {
         return new URL(p.url).hostname;
@@ -716,6 +947,84 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     const cmd = p?.foreground_cmd?.trim();
     if (cmd) return cmd;
     return `Pane ${paneNumber(paneId)}`;
+  };
+
+  // ── Pane-header rename (tab strip) ───────────────────────────────────────
+  const startPaneRename = (paneId: string) => {
+    setEditingPaneId(paneId);
+    // Seed with the currently-shown label so pinning the live title is a
+    // double-click-then-Enter; the user edits from what they already see.
+    setPaneDraft(paneLabel(paneId));
+  };
+
+  const commitPaneRename = async () => {
+    const id = editingPaneId;
+    if (!id) return;
+    setEditingPaneId(null);
+    const target = tab.panes.find((p) => p.id === id);
+    if (!target) return;
+    const next = paneDraft.trim();
+    const current = (target.name ?? '').trim();
+    if (next === current) return;
+    // Optimistic: update local pane.name immediately (empty → clear/revert).
+    setTab((prev) =>
+      prev
+        ? { ...prev, panes: prev.panes.map((p) => (p.id === id ? { ...p, name: next || null } : p)) }
+        : prev,
+    );
+    try {
+      await api.patchPane(id, { name: next || null });
+    } catch (err) {
+      console.error('pane rename failed', err);
+    }
+  };
+
+  const cancelPaneRename = () => setEditingPaneId(null);
+
+  // ── Pane-header drag-to-reorder ──────────────────────────────────────────
+  const reorderPanes = async (sourceId: string, targetId: string, side: 'before' | 'after') => {
+    if (sourceId === targetId) return;
+    const ids = collectPaneIds(layoutRef.current);
+    const sourceIdx = ids.indexOf(sourceId);
+    if (sourceIdx === -1) return;
+    ids.splice(sourceIdx, 1);
+    let insertAt = ids.indexOf(targetId);
+    if (insertAt === -1) return;
+    if (side === 'after') insertAt += 1;
+    ids.splice(insertAt, 0, sourceId);
+    const newLayout = buildRowLayout(ids);
+    layoutRef.current = newLayout;
+    setTab((prev) => (prev ? { ...prev, layout: fromMosaic(newLayout) } : prev));
+    await persistLayout(newLayout);
+    notifyLayoutChanged();
+  };
+
+  const onPaneDragStart = (e: ReactDragEvent, id: string) => {
+    e.dataTransfer.setData(PANE_DRAG_MIME, id);
+    e.dataTransfer.effectAllowed = 'move';
+    setPaneDragId(id);
+  };
+  const onPaneDragOver = (e: ReactDragEvent, id: string) => {
+    if (!paneDragId || paneDragId === id) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const rect = e.currentTarget.getBoundingClientRect();
+    const side: 'before' | 'after' = e.clientX < rect.left + rect.width / 2 ? 'before' : 'after';
+    setPaneDropTargetId(id);
+    setPaneDropSide(side);
+  };
+  const onPaneDragEnd = () => {
+    setPaneDragId(null);
+    setPaneDropTargetId(null);
+  };
+  const onPaneDrop = (e: ReactDragEvent, targetId: string) => {
+    e.preventDefault();
+    const sourceId = e.dataTransfer.getData(PANE_DRAG_MIME) || paneDragId;
+    const side = paneDropSide;
+    setPaneDragId(null);
+    setPaneDropTargetId(null);
+    if (!sourceId) return;
+    void reorderPanes(sourceId, targetId, side);
   };
 
   if (isMobile && !isEmpty) {
@@ -744,7 +1053,11 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           ? {
               ...prev,
               layout: fromMosaic(newLayout),
-              panes: [...prev.panes, created],
+              // Dedup: the pane.added event for `created` may have already
+              // landed and appended it (it carries the same id).
+              panes: prev.panes.some((p) => p.id === created.id)
+                ? prev.panes
+                : [...prev.panes, created],
             }
           : prev,
       );
@@ -768,37 +1081,54 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
             choose between. The "+" inside it dispatches muxpad:add-pane;
             TabView listens at the window level and forwards to the
             mobile branch's addPane closure. */}
-        {paneIds.length > 1 && (
-          <nav className="mobile-tab-strip" aria-label="Panes">
-            <PaneSelector
-              paneIds={paneIds}
-              activeId={activeId}
-              paneLabel={paneLabel}
-              paneAttention={(id) => tab.panes.find((p) => p.id === id)?.attention ?? false}
-              onSelect={setMobileActiveId}
-            />
-            <button
-              type="button"
-              className="ws-tab-add"
-              onClick={() => window.dispatchEvent(new CustomEvent('muxpad:add-pane'))}
-              title="New pane"
-              aria-label="New pane"
-            >
-              +
-            </button>
-            {activeId && (
-              <button
-                type="button"
-                className="mobile-tab-close"
-                onClick={closeActivePane}
-                title="Close active pane"
-                aria-label="Close active pane"
-              >
-                <SvgClose size={12} />
-              </button>
-            )}
-          </nav>
-        )}
+        {/* Mobile pane header. With >1 pane it's a single row: chooser
+            (truncates), the terminal/web switch, then add + close — instead of
+            wasting a second line on the switch. With one pane there's no
+            chooser, so the switch gets its own slim bar (which collapses to
+            nothing when there's no web view to offer). The switch sits at the
+            top either way so its dropdown opens downward into the pane area. */}
+        {(() => {
+          const ap = activeId ? tab.panes.find((p) => p.id === activeId) : undefined;
+          const webSwitch =
+            ap && ap.kind === 'shell' ? (
+              <PaneWebSwitch paneId={ap.id} appUrls={ap.app_urls ?? []} />
+            ) : null;
+          if (paneIds.length > 1) {
+            return (
+              <nav className="mobile-tab-strip" aria-label="Panes">
+                <PaneSelector
+                  paneIds={paneIds}
+                  activeId={activeId}
+                  paneLabel={paneLabel}
+                  paneAttention={(id) => tab.panes.find((p) => p.id === id)?.attention ?? false}
+                  onSelect={setMobileActiveId}
+                />
+                {webSwitch && <div className="mobile-strip-webswitch">{webSwitch}</div>}
+                <button
+                  type="button"
+                  className="ws-tab-add"
+                  onClick={() => window.dispatchEvent(new CustomEvent('muxpad:add-pane'))}
+                  title="New pane"
+                  aria-label="New pane"
+                >
+                  +
+                </button>
+                {activeId && (
+                  <button
+                    type="button"
+                    className="mobile-tab-close"
+                    onClick={closeActivePane}
+                    title="Close active pane"
+                    aria-label="Close active pane"
+                  >
+                    <SvgClose size={12} />
+                  </button>
+                )}
+              </nav>
+            );
+          }
+          return webSwitch ? <div className="mobile-web-switch-bar">{webSwitch}</div> : null;
+        })()}
         <main className="workspace-body workspace-body-mobile">
           {paneIds.map((paneId) => {
             const pane = tab.panes.find((p) => p.id === paneId);
@@ -830,8 +1160,230 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     );
   }
 
+  // ── Desktop 'tabbed' mode ────────────────────────────────────────────────
+  // Browser-style tab headers over a single visible pane. Same panes, same
+  // stable keys as the split mosaic — flipping here never remounts a terminal
+  // (see tab-view-mode.ts). Deliberately mirrors the mobile branch's
+  // single-pane arrangement; the only real difference is inline tab headers
+  // instead of a dropdown chooser.
+  if (viewMode === 'tabbed' && !isEmpty) {
+    const paneIds = collectPaneIds(layout);
+    const stored = tab ? getLastPaneId(tab.id) : undefined;
+    const activeId =
+      mobileActiveId && paneIds.includes(mobileActiveId)
+        ? mobileActiveId
+        : stored && paneIds.includes(stored)
+          ? stored
+          : (paneIds[0] ?? null);
+
+    const addPane = async () => {
+      const target = activeId ?? paneIds[paneIds.length - 1];
+      const created = await api.createPane(tab.id, target ? { inherit_cwd_from: target } : {});
+      const newLayout: Layout = target
+        ? splitAtPane(layoutRef.current, target, created.id, 'row')
+        : created.id;
+      layoutRef.current = newLayout;
+      setTab((prev) =>
+        prev
+          ? {
+              ...prev,
+              layout: fromMosaic(newLayout),
+              panes: prev.panes.some((p) => p.id === created.id)
+                ? prev.panes
+                : [...prev.panes, created],
+            }
+          : prev,
+      );
+      setMobileActiveId(created.id);
+      await persistLayout(newLayout);
+      notifyLayoutChanged();
+    };
+
+    const closePane = (paneId: string) => {
+      if (paneId === activeId) {
+        const idx = paneIds.indexOf(paneId);
+        setMobileActiveId(paneIds[idx + 1] ?? paneIds[idx - 1] ?? null);
+      }
+      void killPane(paneId);
+    };
+
+    const activePane = activeId ? tab.panes.find((p) => p.id === activeId) : undefined;
+    const activeWebSwitch =
+      activePane && activePane.kind === 'shell' ? (
+        <PaneWebSwitch paneId={activePane.id} appUrls={activePane.app_urls ?? []} />
+      ) : null;
+
+    return (
+      <div className="workspace-root">
+        <nav className="desktop-tab-strip" aria-label="Panes">
+          <div className="desktop-tab-strip-tabs" role="tablist">
+            {paneIds.map((paneId) => {
+              const p = tab.panes.find((x) => x.id === paneId);
+              const isActiveTab = paneId === activeId;
+              const isEditing = editingPaneId === paneId;
+              return (
+                <div
+                  key={paneId}
+                  className="desktop-tab"
+                  data-active={isActiveTab ? 'true' : undefined}
+                  data-drop={paneDropTargetId === paneId ? paneDropSide : undefined}
+                  data-dragging={paneDragId === paneId ? 'true' : undefined}
+                  // Editing borrows the header for a text input; dragging then
+                  // would steal the pointer selection, so disable it mid-edit.
+                  draggable={!isEditing}
+                  onDragStart={(e) => onPaneDragStart(e, paneId)}
+                  onDragOver={(e) => onPaneDragOver(e, paneId)}
+                  onDragEnd={onPaneDragEnd}
+                  onDrop={(e) => onPaneDrop(e, paneId)}
+                >
+                  {isEditing ? (
+                    <input
+                      ref={paneEditRef}
+                      className="desktop-tab-input"
+                      value={paneDraft}
+                      onChange={(e) => setPaneDraft(e.target.value)}
+                      onBlur={() => void commitPaneRename()}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          void commitPaneRename();
+                        } else if (e.key === 'Escape') {
+                          e.preventDefault();
+                          cancelPaneRename();
+                        }
+                      }}
+                      size={Math.max(6, paneDraft.length + 1)}
+                    />
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={isActiveTab}
+                        className="desktop-tab-select"
+                        onClick={() => setMobileActiveId(paneId)}
+                        onDoubleClick={() => startPaneRename(paneId)}
+                        title={p?.name ? p.name : 'Double-click to rename'}
+                      >
+                        <span className="desktop-tab-label">{paneLabel(paneId)}</span>
+                      </button>
+                      {/* Trailing slot: the status glyph and the close × share
+                          ONE fixed-width box — the × fades in over the status on
+                          hover/active. So the label's available width is the
+                          same whether or not a status shows, and the two never
+                          collide even at the min tab width. Status priority
+                          mirrors the navigator: WORKING (spinner) → WANTS YOU
+                          (dot) → idle. Busy is hidden on the active tab (its
+                          output is right there); the dot self-clears on view. */}
+                      <span className="desktop-tab-trailing">
+                        {!isActiveTab && p?.busy ? (
+                          <span className="desktop-tab-busy" aria-hidden="true" title="Working…">
+                            <SvgSpinner />
+                          </span>
+                        ) : p?.attention ? (
+                          <span className="badge-dot -inline" aria-label="needs attention" />
+                        ) : null}
+                        <button
+                          type="button"
+                          className="desktop-tab-close"
+                          title="Close pane"
+                          aria-label="Close pane"
+                          onClick={() => closePane(paneId)}
+                        >
+                          <SvgClose size={11} />
+                        </button>
+                      </span>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+            <button
+              type="button"
+              className="desktop-tab-add"
+              title="New pane"
+              aria-label="New pane"
+              onClick={() => void addPane()}
+            >
+              +
+            </button>
+          </div>
+          <div className="desktop-tab-strip-actions">
+            {activeWebSwitch}
+            <button
+              type="button"
+              className="pane-chrome-btn"
+              title="Expand to split"
+              aria-label="Expand to split view"
+              onClick={() => changeViewMode('split')}
+            >
+              <SvgSplitView />
+            </button>
+          </div>
+        </nav>
+        <main className="workspace-body">
+          {/* Render the pane bodies in a STABLE order (sorted pane id), NOT in
+              tab-strip order. Only one slot is visible at a time (absolutely
+              positioned, full-bleed), so their DOM order is invisible — but if
+              the bodies followed the header order, dragging to reorder a tab
+              would move the active pane's DOM node via insertBefore. Moving an
+              xterm/iframe node reloads it and refits it to a transient (often
+              half) width. Keeping the bodies put means a reorder only shuffles
+              the cheap header divs; the terminal never moves. */}
+          {[...paneIds]
+            .sort()
+            .map((paneId) => {
+              const pane = tab.panes.find((p) => p.id === paneId);
+              if (!pane) return null;
+              const paneIsActive = paneId === activeId;
+              return (
+                <div
+                  key={paneId}
+                  className="tabbed-pane-slot"
+                  hidden={!paneIsActive}
+                  aria-hidden={!paneIsActive}
+                >
+                  <PaneBody
+                    pane={pane}
+                    onExit={() => onPaneExited(paneId)}
+                    autoFocus={paneIsActive}
+                    paneActive={isActive && paneIsActive}
+                  />
+                </div>
+              );
+            })}
+        </main>
+        <ExternalOpenToasts
+          currentTabId={tab.id}
+          paneLabel={(id) => (tab.panes.some((p) => p.id === id) ? paneLabel(id) : null)}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="workspace-root">
+      {/* In split (bsplit) mode we still keep the top strip present so the
+          workspace's top edge is stable across the split⇄tabbed flip and the
+          sidebar brand lines up with it. It carries no pane headers here —
+          just the mirror of the tabbed strip's mode toggle, in the same
+          right-hand slot, to collapse the whole split into a tabbed view. */}
+      {!isEmpty && (
+        <nav className="desktop-tab-strip -split" aria-label="Panes">
+          <div className="desktop-tab-strip-tabs" />
+          <div className="desktop-tab-strip-actions">
+            <button
+              type="button"
+              className="pane-chrome-btn"
+              title="Collapse to tabs"
+              aria-label="Switch to tabbed view"
+              onClick={() => changeViewMode('tabbed')}
+            >
+              <SvgTabsView />
+            </button>
+          </div>
+        </nav>
+      )}
       <main className="workspace-body">
         {isEmpty ? (
           <div className="workspace-empty">
@@ -865,6 +1417,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                         <ShellPaneTitle
                           paneId={paneId}
                           label={label}
+                          appUrls={tilePane?.app_urls ?? []}
                           onKindToggled={onKindToggled}
                         />
                       )}
@@ -901,6 +1454,25 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                       >
                         <SvgSplitDown />
                       </button>
+                      {/* The split⇄tabbed toggle lives once, in the top strip's
+                          right slot (mirroring tabbed mode's "expand to split"),
+                          not per-pane — so it's not repeated here. */}
+                      {/* One-click "pop this pane out into its own tab". Only
+                          shown when the tab has another pane to leave behind —
+                          extracting a sole pane is a no-op. Moving a pane to an
+                          EXISTING tab is intentionally not a chrome dropdown
+                          (cramped, and clipped in narrow panes); that belongs on
+                          a drag-onto-sidebar-tab gesture. */}
+                      {tab.panes.length > 1 && (
+                        <button
+                          className="pane-chrome-btn"
+                          title="Pop out to a new tab"
+                          aria-label="Pop out to a new tab"
+                          onClick={() => void movePane(paneId, paneLabel(paneId), { newTab: true })}
+                        >
+                          <SvgMove />
+                        </button>
+                      )}
                       <button
                         className="pane-chrome-btn pane-chrome-close"
                         title="Close pane"
@@ -961,15 +1533,7 @@ function PaneBody({
   if (pane.kind === 'url') {
     return <UrlPane paneId={pane.id} url={pane.url} />;
   }
-  return (
-    <XtermPane
-      paneId={pane.id}
-      onExit={onExit}
-      autoFocus={autoFocus}
-      foregroundCmd={pane.foreground_cmd ?? null}
-      paneActive={paneActive}
-    />
-  );
+  return <ShellPaneBody pane={pane} onExit={onExit} autoFocus={autoFocus} paneActive={paneActive} />;
 }
 
 /**
@@ -979,26 +1543,53 @@ function PaneBody({
  * indicator via the optional `loading` prop, which overlays a spinner
  * ring on the icon.
  */
-function TypeSwitcher({
+/**
+ * The single "what surface is this pane" control, leftmost in the pane chrome
+ * for BOTH shell and url panes. It merges what used to be two separate
+ * terminal/web affordances:
+ *   - the pane *kind* switch (shell ⇄ url — a destructive conversion), and
+ *   - the shell pane *face* switch (terminal ⇄ a detected served app, which
+ *     keeps the terminal alive behind it).
+ *
+ * UX hierarchy: the icon reflects the current surface and its click does the
+ * frequent, non-destructive thing (flip to a detected app / back to terminal);
+ * the caret opens the full menu; the rare destructive kind-conversion sits
+ * below a separator. When a shell pane is serving an app, the control lights
+ * (accent + pulse) to advertise it. The mobile layout keeps its own
+ * PaneWebSwitch bar — this control is the desktop chrome's.
+ */
+function PaneSurfaceSwitch({
+  paneId,
   currentKind,
-  onSelect,
+  appUrls = [],
   loading,
+  onSelect,
 }: {
+  paneId: string;
   currentKind: 'shell' | 'url';
-  onSelect: (next: 'shell' | 'url') => void;
+  appUrls?: AppUrl[];
   loading?: boolean;
+  onSelect: (next: 'shell' | 'url') => void;
 }) {
+  const { face, url } = usePaneFace(paneId);
   const [open, setOpen] = useState(false);
+  const [typing, setTyping] = useState(false);
+  const [draft, setDraft] = useState('');
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
       if (wrapperRef.current?.contains(e.target as Node)) return;
       setOpen(false);
+      setTyping(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
+      if (e.key === 'Escape') {
+        setOpen(false);
+        setTyping(false);
+      }
     };
     document.addEventListener('mousedown', onDown, true);
     document.addEventListener('keydown', onKey);
@@ -1008,16 +1599,46 @@ function TypeSwitcher({
     };
   }, [open]);
 
-  const Icon = currentKind === 'url' ? SvgGlobe : SvgTerminal;
+  useEffect(() => {
+    if (typing) inputRef.current?.focus();
+  }, [typing]);
+
+  const onWeb = currentKind === 'shell' && face === 'web' && !!url;
+  const showsGlobe = currentKind === 'url' || onWeb;
+  const Icon = showsGlobe ? SvgGlobe : SvgTerminal;
+  // Terminal face + a detected app: advertise it (accent + pulse dot).
+  const available = currentKind === 'shell' && !onWeb && appUrls.length > 0;
+
+  const close = () => {
+    setOpen(false);
+    setTyping(false);
+  };
+  const flipToWeb = (target: string) => {
+    setPaneFace(paneId, { face: 'web', url: target });
+    close();
+  };
+  const flipToTerminal = () => {
+    setPaneFace(paneId, { face: 'terminal', url });
+    close();
+  };
+  const commitDraft = () => {
+    const next = normalizePaneUrl(draft);
+    if (next) flipToWeb(next);
+  };
+
+  // One control, one job: the icon shows the CURRENT surface (terminal vs
+  // globe) and the whole button opens the menu. No magic toggle — every
+  // change is an explicit, labeled menu item ("Back to terminal", a URL,
+  // "Convert to web pane"), so the button never reads as "what you'll become".
+  const surfaceWord = showsGlobe ? 'web' : 'terminal';
+
   return (
-    <div className="pane-chrome-typeswitch-wrap" ref={wrapperRef}>
+    <div className="pane-surface-switch" ref={wrapperRef}>
       <button
         type="button"
-        className={`pane-chrome-typeswitch pane-chrome-typeswitch-${currentKind}${
-          loading ? ' pane-chrome-typeswitch-loading' : ''
-        }`}
-        title="Switch pane type"
-        aria-label="Switch pane type"
+        className={`pane-surface-trigger${available ? ' is-available' : ''}`}
+        title={`Showing ${surfaceWord} — pane options`}
+        aria-label={`Showing ${surfaceWord} — pane options`}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={(e) => {
@@ -1029,42 +1650,153 @@ function TypeSwitcher({
       >
         <Icon />
         {loading && <span className="pane-chrome-typeswitch-spinner" aria-hidden="true" />}
+        {available && <span className="pane-surface-dot" aria-hidden="true" />}
+        <SvgChevron />
       </button>
       {open && (
-        <div
-          className="pane-chrome-typeswitch-menu"
-          role="menu"
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <button
-            type="button"
-            role="menuitem"
-            className="pane-chrome-typeswitch-menu-item"
-            disabled={currentKind === 'shell'}
-            onClick={() => {
-              setOpen(false);
-              if (currentKind !== 'shell') onSelect('shell');
-            }}
-          >
-            <SvgTerminal />
-            <span>Terminal</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="pane-chrome-typeswitch-menu-item"
-            disabled={currentKind === 'url'}
-            onClick={() => {
-              setOpen(false);
-              if (currentKind !== 'url') onSelect('url');
-            }}
-          >
-            <SvgGlobe />
-            <span>Web</span>
-          </button>
+        <div className="pane-web-switch-menu" role="menu" onMouseDown={(e) => e.stopPropagation()}>
+          {currentKind === 'shell' ? (
+            <>
+              {appUrls.length > 0 ? (
+                <div className="pane-web-switch-head">
+                  {appUrls.length === 1 ? 'Serving' : `Serving · ${appUrls.length}`}
+                </div>
+              ) : null}
+              {appUrls.map((a) => (
+                <button
+                  key={a.url}
+                  type="button"
+                  role="menuitem"
+                  className={`pane-web-switch-item${url === a.url && onWeb ? ' is-active' : ''}`}
+                  onClick={() => flipToWeb(a.url)}
+                  title={a.url}
+                >
+                  <SvgGlobe />
+                  <span className="pane-web-switch-item-label">{a.label ?? hostLabel(a.url)}</span>
+                  {a.source === 'marker' ? <span className="pane-web-switch-badge">app</span> : null}
+                </button>
+              ))}
+              {onWeb ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="pane-web-switch-item"
+                  onClick={flipToTerminal}
+                >
+                  <SvgTerminal />
+                  <span className="pane-web-switch-item-label">Back to terminal</span>
+                </button>
+              ) : null}
+              {typing ? (
+                <input
+                  ref={inputRef}
+                  className="pane-web-switch-input"
+                  value={draft}
+                  placeholder="https://…"
+                  spellCheck={false}
+                  autoComplete="off"
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitDraft();
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="pane-web-switch-item pane-web-switch-manual"
+                  onClick={() => {
+                    setDraft(url ?? '');
+                    setTyping(true);
+                  }}
+                >
+                  Enter URL…
+                </button>
+              )}
+              <button
+                type="button"
+                role="menuitem"
+                className="pane-web-switch-item pane-web-switch-convert"
+                title="Replace this terminal with a standalone web pane — the terminal (and anything running in it) is closed."
+                onClick={() => {
+                  close();
+                  onSelect('url');
+                }}
+              >
+                <SvgGlobe />
+                <span className="pane-web-switch-item-label">Convert to web pane</span>
+                <span className="pane-web-switch-note">closes terminal</span>
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              role="menuitem"
+              className="pane-web-switch-item"
+              onClick={() => {
+                close();
+                onSelect('shell');
+              }}
+            >
+              <SvgTerminal />
+              <span className="pane-web-switch-item-label">Convert to terminal</span>
+            </button>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+/** Best-effort short label for a URL (host:port, no scheme). */
+function hostLabel(raw: string): string {
+  try {
+    const u = new URL(raw);
+    return u.port ? `${u.hostname}:${u.port}` : u.hostname;
+  } catch {
+    return raw;
+  }
+}
+
+function SvgMove() {
+  // Pane glyph with an arrow leaving it — "send this pane elsewhere".
+  return (
+    <svg width="16" height="16" viewBox="0 0 14 14" aria-hidden="true">
+      <rect
+        x="1.5"
+        y="2.5"
+        width="6.5"
+        height="6.5"
+        rx="1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
+      <path
+        d="M6.5 11 H11.5 M9.3 8.8 L11.8 11 L9.3 13"
+        transform="translate(0 -2.5)"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function SvgChevron() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+      <path
+        d="M3 4.5 L6 7.5 L9 4.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
@@ -1074,7 +1806,7 @@ function TypeSwitcher({
  * swaps to an input for editing (Enter saves via PATCH, Esc/blur cancels).
  * Plain click is preventDefault'd so it doesn't navigate the whole window.
  *
- * Leftmost: a TypeSwitcher that doubles as the loading spinner. When `url`
+ * Leftmost: a PaneSurfaceSwitch that doubles as the loading spinner. When `url`
  * is null (the pane was just type-switched from shell) we auto-enter edit
  * mode with an empty input focused, so the user can type a URL immediately.
  */
@@ -1158,7 +1890,12 @@ function UrlPaneTitle({
 
   return (
     <>
-      <TypeSwitcher currentKind="url" loading={loading} onSelect={handleSwitch} />
+      <PaneSurfaceSwitch
+        paneId={paneId}
+        currentKind="url"
+        loading={loading}
+        onSelect={handleSwitch}
+      />
       {editing ? (
         <input
           ref={inputRef}
@@ -1209,10 +1946,12 @@ function UrlPaneTitle({
 function ShellPaneTitle({
   paneId,
   label,
+  appUrls,
   onKindToggled,
 }: {
   paneId: string;
   label: string;
+  appUrls: AppUrl[];
   onKindToggled: (updated: PaneSpec) => void;
 }) {
   const handleSwitch = async (next: 'shell' | 'url') => {
@@ -1225,7 +1964,12 @@ function ShellPaneTitle({
   };
   return (
     <>
-      <TypeSwitcher currentKind="shell" onSelect={handleSwitch} />
+      <PaneSurfaceSwitch
+        paneId={paneId}
+        currentKind="shell"
+        appUrls={appUrls}
+        onSelect={handleSwitch}
+      />
       <a
         href={`/p/${paneId}`}
         className="pane-chrome-title-link"
@@ -1296,6 +2040,47 @@ function SvgSplitDown() {
         strokeWidth="1.2"
       />
       <rect x="2" y="8" width="10" height="5" rx="1" fill="currentColor" opacity="0.4" />
+    </svg>
+  );
+}
+
+function SvgTabsView() {
+  // Two stacked header tabs over a body — reads as "browser tabs".
+  return (
+    <svg width="18" height="18" viewBox="0 0 14 14" aria-hidden="true">
+      <rect x="1" y="4" width="12" height="9" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <rect x="2" y="1.5" width="4.5" height="3" rx="0.8" fill="currentColor" opacity="0.7" />
+      <rect x="7" y="1.5" width="4.5" height="3" rx="0.8" fill="currentColor" opacity="0.3" />
+    </svg>
+  );
+}
+
+/**
+ * Busy spinner for a pane header — a partial ring in `currentColor`, spun by
+ * CSS (.desktop-tab-busy). Mirrors the navigator's SvgSpinner so "working"
+ * reads the same in the tab strip as in the sidebar.
+ */
+function SvgSpinner() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2" fill="none" opacity="0.25" />
+      <path
+        d="M8 2 a6 6 0 0 1 6 6"
+        stroke="currentColor"
+        strokeWidth="2"
+        fill="none"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function SvgSplitView() {
+  // Two side-by-side panes — reads as "tiled split".
+  return (
+    <svg width="18" height="18" viewBox="0 0 14 14" aria-hidden="true">
+      <rect x="1" y="2" width="5" height="10" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <rect x="8" y="2" width="5" height="10" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" />
     </svg>
   );
 }

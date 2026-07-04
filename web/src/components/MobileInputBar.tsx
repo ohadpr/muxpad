@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { api } from '../api';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
 import { planSubmit } from '../lib/mobile-submit';
+import { usePaneFace } from '../lib/pane-face';
 import { isCursorAgentCmd } from '../lib/xterm-internals';
 import './MobileInputBar.css';
 
@@ -48,8 +49,12 @@ export interface MobileInputBarProps {
 
 export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: MobileInputBarProps) {
   const cursorBufferScroll = isCursorAgentCmd(foregroundCmd);
+  // Hide the terminal composer when the pane is showing its chat face — chat
+  // has its own composer, and two stacked input bars is wrong.
+  const { face } = usePaneFace(paneId ?? '');
   const editableRef = useRef<HTMLDivElement | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // The bar is ALWAYS rendered (hidden via the `hidden` attribute when the
   // active pane isn't a shell) so the positioning effect below — which runs
@@ -60,7 +65,12 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
   // re-created the DOM node while the effect still observed the old detached
   // one. Hiding via attribute keeps one stable element for the lifetime of
   // the component.
-  const visible = !!paneId && paneKind === 'shell';
+  // Hide only for a *confirmed* URL pane. Using `!== 'url'` (rather than
+  // `=== 'shell'`) means a transient null kind — which happens for a frame
+  // while a pane.updated / tab refetch is in flight — doesn't flip the bar to
+  // `hidden`, blur the contenteditable, and dismiss the soft keyboard "on its
+  // own". A shell pane briefly reading as unknown stays visible.
+  const visible = !!paneId && paneKind !== 'url' && face !== 'chat';
 
   // Anchor the bar's bottom edge to the visual viewport bottom (= top
   // of the on-screen keyboard when open). We position by `top`, not by
@@ -208,11 +218,29 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
     syncEmpty();
   };
 
+  // Upload image blobs to muxpad's attachments endpoint and splice the returned
+  // path(s) in at the caret, with an optional trailing text. Shared by the
+  // paste handler and the photo/camera picker so both behave identically.
+  const uploadAndInsert = async (items: Array<{ blob: Blob; name: string }>, tail: string) => {
+    if (!paneId || items.length === 0) return;
+    const paths: string[] = [];
+    for (const { blob, name } of items) {
+      try {
+        const { path } = await api.uploadAttachment(paneId, blob, name);
+        paths.push(path);
+      } catch {
+        // ignore — drop this image; the rest still get a chance
+      }
+    }
+    if (paths.length === 0) return;
+    insertAtCaret(`${paths.join(' ')} ${tail}`);
+  };
+
   // Image paste: text fields don't natively accept image clipboard data —
-  // intercept paste, upload the blob to muxpad's attachments endpoint, and
-  // splice the returned path in at the caret so the user can add context
-  // before sending. Plain-text pastes fall through to the contenteditable's
-  // own plaintext-only handling. Mirrors the XtermPane paste handler.
+  // intercept paste, upload the blob(s), and splice the returned path(s) in at
+  // the caret so the user can add context before sending. Plain-text pastes
+  // fall through to the contenteditable's own plaintext-only handling. Mirrors
+  // the XtermPane paste handler.
   const onPaste = async (e: React.ClipboardEvent<HTMLDivElement>) => {
     if (!paneId) return;
     const { imageOnly, imageItems } = splitClipboard(e.clipboardData);
@@ -221,20 +249,34 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
     // Read the text portion now — clipboardData is cleared once this handler
     // returns / awaits.
     const tail = imageOnly ? '' : companionTextForImagePaste(e.clipboardData.getData('text/plain'));
-    const paths: string[] = [];
-    for (const item of imageItems) {
-      const blob = item.getAsFile();
-      if (!blob) continue;
-      const ext = blob.type.split('/')[1] ?? 'png';
-      try {
-        const { path } = await api.uploadAttachment(paneId, blob, `pasted.${ext}`);
-        paths.push(path);
-      } catch {
-        // ignore — drop this image; other items in the same paste still get a chance
-      }
-    }
-    if (paths.length === 0) return;
-    insertAtCaret(`${paths.join(' ')} ${tail}`);
+    const items = imageItems
+      .map((item) => {
+        const blob = item.getAsFile();
+        if (!blob) return null;
+        const ext = blob.type.split('/')[1] ?? 'png';
+        return { blob, name: `pasted.${ext}` };
+      })
+      .filter((x): x is { blob: File; name: string } => x !== null);
+    await uploadAndInsert(items, tail);
+  };
+
+  // Photo/camera button → native file picker. `accept="image/*"` with NO
+  // `capture` attribute makes iOS show the full sheet (Photo Library / Take
+  // Photo / Choose File) and Android offer camera + gallery, so the one button
+  // covers both grabbing an existing photo and shooting a new one. Uploads the
+  // chosen image(s) through the same path as paste.
+  const onPickFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.target;
+    const items = Array.from(input.files ?? [])
+      // The OS already constrained the picker to images via accept="image/*";
+      // accept empty-type too — some Android providers and HEIC captures report
+      // type "" and would otherwise be silently dropped (photo taken, nothing
+      // happens). Reject only files that explicitly declare a non-image type.
+      .filter((f) => f.type === '' || f.type.startsWith('image/'))
+      .map((f) => ({ blob: f, name: f.name || `image.${f.type.split('/')[1] ?? 'png'}` }));
+    // Reset first so picking the SAME file again still fires onChange.
+    input.value = '';
+    await uploadAndInsert(items, '');
   };
 
   const submit = () => {
@@ -331,6 +373,26 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
         </button>
       </div>
       <div className="mobile-input-row">
+        {/* Photo/camera attach. The hidden input does the work; the button is
+            the visible affordance. accept="image/*" + no `capture` → native
+            sheet offers both library and camera (see onPickFiles). */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          hidden
+          onChange={onPickFiles}
+        />
+        <button
+          type="button"
+          className="mobile-input-attach"
+          onClick={() => fileInputRef.current?.click()}
+          title="Add photo"
+          aria-label="Add photo or take a picture"
+        >
+          <SvgCamera />
+        </button>
         {/* contenteditable, not <textarea>: keeps iOS's keyboard accessory
             bar off (it only attaches to real form controls). plaintext-only
             forces plain text + a sane paste model. */}
@@ -352,5 +414,20 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
         </button>
       </div>
     </div>
+  );
+}
+
+/** Simple camera glyph for the photo/attach button. */
+function SvgCamera() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" fill="none">
+      <path
+        d="M4 8a2 2 0 0 1 2-2h1.2a2 2 0 0 0 1.66-.89l.62-.92A1 1 0 0 1 10.3 4h3.4a1 1 0 0 1 .82.43l.62.92A2 2 0 0 0 16.8 6H18a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8Z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+      <circle cx="12" cy="13" r="3.2" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
   );
 }

@@ -5,11 +5,28 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import * as pty from 'node-pty';
 import { RingBuffer } from './RingBuffer.js';
-import { PtyScanner } from './pty-scanner.js';
+import { type AppUrlMarker, PtyScanner } from './pty-scanner.js';
 
+// Debounce window between a URL/marker sighting and the (async) confirm pass.
+// Coalesces the burst a server emits as it boots; the confirm itself is also
+// re-run on the manager's 10s poll, so this only governs first-surface latency.
 const execFileAsync = promisify(execFile);
 
 const RING_CAPACITY = 2 * 1024 * 1024; // 2MB
+
+/**
+ * Minimum gap between `activity` ticks forwarded for a pane. ptyd's job here is
+ * only to surface the RAW "this pane produced output" signal — the busy/idle
+ * *policy* (how long quiet means done, what counts) lives on the main server,
+ * so it can change with a server-only restart instead of a ptyd bounce that
+ * kills every terminal (same split as app-url detection). A heavy stream (e.g.
+ * Claude's spinner redrawing ~10×/s) would otherwise fan a control event per
+ * chunk; throttling to one tick per this interval bounds that to ≤4/s/pane
+ * while still giving the server far finer resolution than its decay window
+ * needs. Mechanism, not policy — kept here precisely because it never needs to
+ * be tuned for behavior.
+ */
+const ACTIVITY_THROTTLE_MS = 250;
 
 /**
  * Absolute path to the repo's `scripts/` directory. Resolved relative to
@@ -129,6 +146,10 @@ export class PaneRuntime extends EventEmitter {
   // workspace tab). The workspace list endpoint folds these into a
   // per-workspace attention flag so the tab bar can render a dot.
   private needsAttention = false;
+  // Timestamp (ms) of the last `activity` tick we emitted for this pane.
+  // Throttles the raw output-activity signal to one per ACTIVITY_THROTTLE_MS;
+  // the busy/idle decay it feeds is computed on the main server.
+  private lastActivityEmit = 0;
   // Latest terminal title set by an OSC 0/1/2 sequence in PTY output.
   // Updated in real-time by the scanner; exposed via getCurrentTitle().
   private currentTitle: string | null = null;
@@ -194,6 +215,22 @@ export class PaneRuntime extends EventEmitter {
         this.emit('attention-changed', true);
       }
       if (ev.title !== undefined) this.currentTitle = ev.title;
+      // App-url detection: ptyd only *extracts* raw sightings here (cheap,
+      // sync). Host classification + the listening probe + tracking live on
+      // the main server (see ptyd-cache / app-url-detector), so that logic
+      // can change with a server-only restart instead of a ptyd bounce that
+      // kills every terminal. Forward the raw lists for the server to judge.
+      if (ev.urls !== undefined || ev.markers !== undefined) {
+        this.emit('urls-seen', ev.urls ?? [], ev.markers ?? []);
+      }
+      // Forward a throttled raw "output happened" tick. The main server folds
+      // these into a busy/idle state (with its own decay window) — see
+      // PtydCache. We only signal that output occurred; the policy lives there.
+      const now = Date.now();
+      if (now - this.lastActivityEmit >= ACTIVITY_THROTTLE_MS) {
+        this.lastActivityEmit = now;
+        this.emit('activity');
+      }
       this.buffer.push(data);
       this.emit('output', data);
     });
@@ -406,6 +443,8 @@ export class PaneRuntime extends EventEmitter {
   override on(event: 'output', listener: Listener<[string]>): this;
   override on(event: 'exit', listener: Listener<[number]>): this;
   override on(event: 'attention-changed', listener: Listener<[boolean]>): this;
+  override on(event: 'activity', listener: Listener<[]>): this;
+  override on(event: 'urls-seen', listener: Listener<[string[], AppUrlMarker[]]>): this;
   override on(event: string, listener: (...args: any[]) => void): this {
     return super.on(event, listener);
   }
@@ -413,6 +452,8 @@ export class PaneRuntime extends EventEmitter {
   override off(event: 'output', listener: Listener<[string]>): this;
   override off(event: 'exit', listener: Listener<[number]>): this;
   override off(event: 'attention-changed', listener: Listener<[boolean]>): this;
+  override off(event: 'activity', listener: Listener<[]>): this;
+  override off(event: 'urls-seen', listener: Listener<[string[], AppUrlMarker[]]>): this;
   override off(event: string, listener: (...args: any[]) => void): this {
     return super.off(event, listener);
   }

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { PaneManager } from './PaneManager.js';
 
 describe('PaneManager', () => {
@@ -75,7 +75,13 @@ describe('PaneManager → raw change callbacks (no PaneStore)', () => {
   // ptyd usage shape: the daemon has no db, only the manager + callbacks.
 
   it('fires onPaneChange with kind:title when an OSC title is set', async () => {
-    type Change = { id: string; kind: string; title?: string | null; cmd?: string | null; attention?: boolean };
+    type Change = {
+      id: string;
+      kind: string;
+      title?: string | null;
+      cmd?: string | null;
+      attention?: boolean;
+    };
     const changes: Change[] = [];
     const mgr = new PaneManager({
       cmdPollInterval: 50,
@@ -226,7 +232,13 @@ describe('PaneManager → raw change callbacks (no PaneStore)', () => {
     // consecutive cmd-poll ticks. A previous bug emitted on every tick,
     // which (via PtydCache → pane.updated) fanned a fresh event out to
     // every browser even when nothing had actually changed.
-    type Change = { id: string; kind: string; title?: string | null; cmd?: string | null; attention?: boolean };
+    type Change = {
+      id: string;
+      kind: string;
+      title?: string | null;
+      cmd?: string | null;
+      attention?: boolean;
+    };
     const changes: Change[] = [];
     const mgr = new PaneManager({
       // Short poll so we observe at least two ticks well within the test
@@ -257,6 +269,29 @@ describe('PaneManager → raw change callbacks (no PaneStore)', () => {
       // The first tick fires; every subsequent tick with the same value
       // must be suppressed. Exactly one event for this title.
       expect(titleEvents).toHaveLength(1);
+    } finally {
+      await mgr.killAll();
+    }
+  });
+
+  it('forwards onPaneActivity (throttled) when a pane produces output', async () => {
+    // ptyd ships only the RAW activity tick; the busy/idle decay is computed
+    // on the main server (PtydCache). Here we just prove the tick fires on
+    // output. Throttled in PaneRuntime, so a burst yields ≥1 (not per-chunk).
+    const activity: string[] = [];
+    const mgr = new PaneManager({
+      cmdPollInterval: 60_000,
+      onPaneActivity: (id) => activity.push(id),
+    });
+    mgr.getOrCreate({
+      id: 'act1',
+      shell: '/bin/sh',
+      startup_cmd: `printf 'working'; sleep 5`,
+      cwd: '/tmp',
+    });
+    try {
+      await new Promise((r) => setTimeout(r, 400));
+      expect(activity.filter((id) => id === 'act1').length).toBeGreaterThan(0);
     } finally {
       await mgr.killAll();
     }

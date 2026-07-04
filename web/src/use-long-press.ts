@@ -39,6 +39,10 @@ export function useLongPress({
   const timer = useRef<number | null>(null);
   const start = useRef<{ x: number; y: number } | null>(null);
   const armed = useRef(false);
+  // Tracks whether the most recent pointer interaction was touch, so the
+  // contextmenu handler only suppresses the platform menu for touch
+  // long-press (Android) and lets desktop right-click open the NATIVE menu.
+  const lastWasTouch = useRef(false);
   const cb = useRef(onLongPress);
   cb.current = onLongPress;
 
@@ -57,6 +61,7 @@ export function useLongPress({
     pressing,
     handlers: {
       onPointerDown: (e) => {
+        lastWasTouch.current = e.pointerType === 'touch';
         if (e.pointerType !== 'touch') return;
         armed.current = false;
         start.current = { x: e.clientX, y: e.clientY };
@@ -87,10 +92,11 @@ export function useLongPress({
         cancel();
       },
       onContextMenu: (e) => {
-        // Kill Android's long-press context menu so it doesn't race ours.
-        // iOS's link-preview callout is suppressed via CSS instead
-        // (-webkit-touch-callout: none on the target element).
-        e.preventDefault();
+        // Suppress the platform menu ONLY for touch long-press (Android's
+        // selection menu would race ours; iOS's callout is killed via CSS).
+        // On desktop, let the native right-click menu through so links keep
+        // their "Open in New Tab" / "Copy Link" affordances.
+        if (lastWasTouch.current) e.preventDefault();
       },
       onClick: (e) => {
         // Fire the callback inside the click handler so window.open runs
