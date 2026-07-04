@@ -391,7 +391,11 @@
   min-width: 0;
   display: flex;
   align-items: stretch;
-  gap: 0;
+  /* Small gap + top/side inset so each tab reads as its own rounded plate
+     floating on the recessed bar (echoes the sidebar's rounded selection
+     pills) rather than an edge-to-edge block of squares. */
+  gap: 3px;
+  padding: 4px 4px 0;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -399,43 +403,122 @@
   display: none;
 }
 
-/* Edge-to-edge plate with a hairline right divider, no radius/box. Inactive
-   tabs sit at the content colour (--bg) — raised plates on the recessed bar,
-   clearly distinct from the empty bar area. The active tab adds the accent
-   wash + rail on top so it's the standout. */
+/* Chrome-style width: every tab shares the strip equally (flex-basis 0,
+   grow 1), so widths depend on the count — a few tabs sit at max-width with
+   empty bar to their right; add more and they shrink evenly down to a floor.
+   Below the floor they stop shrinking and the strip scrolls (overflow-x on
+   .desktop-tab-strip-tabs), rather than squeezing labels to nothing.
+
+   Active state is a LIFTED FILLED PLATE, not an underline: the active tab is
+   a brighter, accent-tinted elevated surface that reads as foreground, while
+   inactive tabs recede into the bar with only a faint fill. No bottom rail —
+   the fill contrast alone carries "selected" (browser-tab feel). */
 .desktop-tab {
   position: relative;
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 240px;
+  flex: 1 1 0;
+  min-width: 68px;
+  max-width: 220px;
   display: flex;
   align-items: center;
   height: 100%;
-  border-right: 1px solid var(--border);
-  background: var(--bg);
+  /* Rounded top corners — a browser-tab plate. The gap on the strip separates
+     neighbours, so no hairline divider is needed. */
+  border-radius: 7px 7px 0 0;
+  /* Two clean levels, no accent tint:
+       bar (--bg-tabbar) ≈ inactive tab  <  active tab (--bg, the content color).
+     Inactive tabs sit just a hair above the strip so they recede into the bar
+     (they read as "not open"); the active tab jumps to the content background so
+     it merges with the panel below it — the browser-tab "this is the open pane"
+     cue, no colored fill needed. */
+  background: color-mix(in srgb, var(--bg) 20%, var(--bg-tabbar));
   transition: background 100ms ease;
 }
 .desktop-tab:hover {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--bg) 55%, var(--bg-tabbar));
 }
-/* Active tab uses the top nav's exact active-tab treatment (.ws-tab active):
-   a 12% accent wash + the bottom rail below. Stronger than the pane's 5%
-   surface wash on purpose — a tab header is a control that has to clearly
-   read as selected, not blend into the strip. */
-.desktop-tab[data-active="true"] {
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
-}
+.desktop-tab[data-active="true"],
 .desktop-tab[data-active="true"]:hover {
-  background: color-mix(in srgb, var(--accent) 18%, var(--bg));
+  /* Match the active pane's exact colour — it wears a 5%-accent wash
+     (.tabbed-pane-slot::after), so plain --bg would read as a different shade
+     and the tab wouldn't fuse into the pane. */
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
+  /* Sit above the strip so the connector below can paint over its bottom border. */
+  z-index: 1;
 }
+/* Connector: a strip of the pane background painted over the strip's bottom
+   hairline, directly under the active tab, so the tab fuses seamlessly into the
+   pane below it (browser-tab "the open tab IS the page" feel) — no dividing line
+   between the active tab and its content. */
 .desktop-tab[data-active="true"]::after {
   content: "";
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
-  height: var(--chrome-rail);
-  background: var(--accent);
+  bottom: -1px;
+  height: 2px;
+  /* Same washed colour as the tab/pane so the seam over the strip border
+     vanishes and the tab reads as continuous with the pane. */
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
+}
+
+/* Drag-to-reorder. The dragged plate dims; the drop target shows an inset
+   accent edge on the side the pane would land (inset box-shadow, not a
+   pseudo-element, so it never collides with the active tab's ::after rail). */
+.desktop-tab[data-dragging="true"] {
+  opacity: 0.4;
+}
+.desktop-tab[data-drop="before"] {
+  box-shadow: inset 3px 0 0 0 var(--accent);
+}
+.desktop-tab[data-drop="after"] {
+  box-shadow: inset -3px 0 0 0 var(--accent);
+}
+
+/* Busy spinner in a pane header — same treatment as the navigator's
+   .navtree-busy: a muted-accent thin ring that spins, sharing the status slot
+   with the attention dot (shown by priority in the JSX). */
+.desktop-tab-busy {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  color: color-mix(in srgb, var(--accent) 60%, var(--fg-dim));
+}
+.desktop-tab-busy svg {
+  animation: desktop-tab-spin 0.8s linear infinite;
+  transform-origin: center;
+}
+@keyframes desktop-tab-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .desktop-tab-busy svg {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
+/* Inline rename input — replaces the select/close buttons while editing a
+   pane's header. Sized by the `size` attr on the element; styled to sit
+   flush inside the tab plate. */
+.desktop-tab-input {
+  flex: 1 1 auto;
+  min-width: 60px;
+  margin: 0 6px 0 12px;
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size);
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 2px 6px;
+  height: 22px;
 }
 
 .desktop-tab-select {
@@ -443,14 +526,17 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
   height: 100%;
-  padding: 0 6px 0 14px;
+  padding: 0 2px 0 12px;
   background: transparent;
   border: none;
   color: var(--fg-dim);
   font-family: inherit;
   font-size: inherit;
+  /* Medium weight — the app-wide `-webkit-font-smoothing: antialiased`
+     (grayscale) renders light mono text thin on the dark recessed bar, so at
+     the default 400 the labels read as faint/flaky. 500 restores body. */
+  font-weight: 500;
   letter-spacing: -0.01em;
   cursor: pointer;
 }
@@ -465,11 +551,33 @@
   white-space: nowrap;
 }
 
-.desktop-tab-close {
+/* Fixed trailing box the status glyph and the × share. Reserved even when
+   empty so the label width never jumps as a status appears/disappears. */
+.desktop-tab-trailing {
+  position: relative;
   flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
-  margin-right: 6px;
+  width: 22px;
+  height: 100%;
+  margin-right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Status (spinner/dot) fades out as the × fades in — they occupy the same
+   spot, so hover/active swaps one for the other in place. */
+.desktop-tab-trailing > .desktop-tab-busy,
+.desktop-tab-trailing > .badge-dot {
+  transition: opacity 100ms ease;
+}
+.desktop-tab:hover .desktop-tab-trailing > .desktop-tab-busy,
+.desktop-tab:hover .desktop-tab-trailing > .badge-dot,
+.desktop-tab[data-active="true"] .desktop-tab-trailing > .desktop-tab-busy,
+.desktop-tab[data-active="true"] .desktop-tab-trailing > .badge-dot {
+  opacity: 0;
+}
+.desktop-tab-close {
+  position: absolute;
+  inset: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -492,11 +600,11 @@
 
 .desktop-tab-add {
   flex: 0 0 auto;
-  width: 40px;
+  width: 34px;
   height: 100%;
   background: transparent;
   border: none;
-  border-right: 1px solid var(--border);
+  border-radius: 7px 7px 0 0;
   color: var(--fg-dim);
   font-size: 17px;
   line-height: 1;

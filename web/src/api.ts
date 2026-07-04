@@ -67,7 +67,13 @@ export const api = {
 
   patchTab: (
     id: string,
-    patch: { name?: string; slug?: string; icon?: string; layout?: LayoutNode },
+    patch: {
+      name?: string;
+      slug?: string;
+      icon?: string;
+      layout?: LayoutNode;
+      view_mode?: 'split' | 'tabbed';
+    },
   ) =>
     req<Tab>(`/api/tabs/${id}`, {
       method: 'PATCH',
@@ -129,7 +135,10 @@ export const api = {
       body: JSON.stringify({ workspace_id: workspaceId }),
     }),
 
-  patchPane: (id: string, patch: { kind?: 'shell' | 'url'; url?: string | null }) =>
+  patchPane: (
+    id: string,
+    patch: { kind?: 'shell' | 'url'; url?: string | null; name?: string | null },
+  ) =>
     req<PaneSpec>(`/api/panes/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),

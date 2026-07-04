@@ -222,8 +222,15 @@ export function panesScopedRoutes(deps: {
       .object({
         kind: z.enum(['shell', 'url']).optional(),
         url: z.string().url().nullable().optional(),
+        // User-given pane name for the tab-strip label. '' or null clears it
+        // back to the live-derived title. Independent of kind/url edits.
+        name: z.string().nullable().optional(),
       })
       .parse(await c.req.json().catch(() => ({})));
+
+    // Rename is orthogonal to the kind/url mutations below and never touches
+    // ptyd, so apply it up front regardless of which branch runs next.
+    if (body.name !== undefined) panes.setName(id, body.name);
 
     if (body.kind && body.kind !== p.kind) {
       // Kind flip: close ptyd-attached clients FIRST (with code 4001) so

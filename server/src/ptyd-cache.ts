@@ -86,6 +86,14 @@ export class PtydCache extends EventEmitter {
   // Timestamp of the last user keystroke per pane (from proxyAttach's onInput).
   // Activity within busyInputGraceMs of this is treated as echo, not work.
   private readonly lastInputAt = new Map<string, number>();
+  // Panes with a headless (web-chat-driven) agent turn in flight. A chat turn
+  // is a separate `claude -p` process writing the transcript FILE — it produces
+  // zero PTY output, so the activity detector above never sees it. The ws chat
+  // layer flips this on turn start/finish; getBusy() ORs it in, which is what
+  // makes the tab/workspace spinners cover chat work like terminal work. Kept
+  // OUTSIDE PaneState so PTY lifecycle (paneExit dropping the entry) can't
+  // clear a turn that's still running.
+  private readonly agentBusy = new Set<string>();
   private readonly busyQuietMs: number;
   private readonly busyWarmupMs: number;
   private readonly busyInputGraceMs: number;
@@ -311,9 +319,28 @@ export class PtydCache extends EventEmitter {
     return this.state.get(id)?.attention ?? false;
   }
 
-  /** Synchronous read — false when ptyd hasn't reported busy state yet. */
+  /**
+   * Synchronous read — false when ptyd hasn't reported busy state yet.
+   * Busy = PTY output activity OR a headless chat turn in flight (see
+   * setAgentBusy) — both mean "this pane's agent is working".
+   */
   getBusy(id: string): boolean {
-    return this.state.get(id)?.busy ?? false;
+    return (this.state.get(id)?.busy ?? false) || this.agentBusy.has(id);
+  }
+
+  /**
+   * Mark a pane busy because a headless (web-chat-driven) agent turn started/
+   * finished there. Emits 'paneChange' only when the EFFECTIVE busy value
+   * flips (PTY-output busy may already hold it true), so consumers see the
+   * same edge-triggered contract markBusy provides and a chat turn fans a
+   * live `pane.updated` the moment it starts and ends.
+   */
+  setAgentBusy(id: string, on: boolean): void {
+    if (on === this.agentBusy.has(id)) return;
+    const before = this.getBusy(id);
+    if (on) this.agentBusy.add(id);
+    else this.agentBusy.delete(id);
+    if (this.getBusy(id) !== before) this.emit('paneChange', id);
   }
 
   /** Synchronous read — empty array when no app urls have been reported. */
@@ -329,6 +356,7 @@ export class PtydCache extends EventEmitter {
   /** Drop the entry for `id`. Used by route handlers on DELETE /api/panes/:id. */
   forget(id: string): void {
     this.clearBusyTimer(id);
+    this.agentBusy.delete(id);
     this.detector.forget(id);
     if (this.state.delete(id)) {
       this.emit('paneRemoved', id);

@@ -62,4 +62,29 @@ describe('AgentSessionStore', () => {
     expect(relaunch.current_sid).toBe('sid-3');
     expect(agents.list()).toHaveLength(1);
   });
+
+  it('a resume relaunch (no session_id) keeps the existing sid and lineage', () => {
+    // `muxpad claude --resume <sid>` registers WITHOUT a session_id (claude
+    // rejects --session-id with --resume); the hook re-reports the id later.
+    // The existing sid/lineage must survive that window.
+    agents.register({ pane_id: paneId, session_id: 'sid-1' });
+    agents.recordSessionId(paneId, 'sid-2');
+    const relaunch = agents.register({ pane_id: paneId });
+    expect(relaunch.current_sid).toBe('sid-2');
+    expect(relaunch.lineage).toEqual(['sid-1', 'sid-2']);
+    expect(relaunch.writer).toBe('tui'); // ownership still resets to the TUI
+    expect(relaunch.view_mode).toBe('terminal');
+  });
+
+  it('tracks status and clears stale headless state on startup reconcile', () => {
+    agents.register({ pane_id: paneId, session_id: 'sid-1' });
+    agents.setWriter(paneId, 'headless');
+    agents.setStatus(paneId, 'running');
+    expect(agents.getByPane(paneId)?.status).toBe('running');
+    // Simulates a restart mid-turn: the runner map died with the process.
+    agents.reconcileStartup();
+    const s = agents.getByPane(paneId);
+    expect(s?.writer).toBe('none');
+    expect(s?.status).toBe('idle');
+  });
 });

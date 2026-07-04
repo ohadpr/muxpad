@@ -46,13 +46,20 @@ export function ShellPaneBody({
   // chat stays a valid face of the session for the pane's life (view / drive /
   // resume it), so it never flickers.
   const [hasSession, setHasSession] = useState(false);
+  // True while a headless (chat-driven) turn is running for this pane's
+  // session — drives the activity dot on the Terminal/Chat toggle.
+  const [agentRunning, setAgentRunning] = useState(false);
   useEffect(() => {
     let alive = true;
     const check = async () => {
       const r = await fetch(`/api/agent-sessions/by-pane/${pane.id}`).catch(() => null);
       if (!alive || !r?.ok) return;
-      const s = (await r.json().catch(() => null)) as { view_mode?: string } | null;
+      const s = (await r.json().catch(() => null)) as {
+        view_mode?: string;
+        status?: string;
+      } | null;
       setHasSession(true);
+      setAgentRunning(s?.status === 'running');
       // A poll can be in flight across a local toggle and return the pre-switch
       // view_mode; don't let that revert the face — the server catches up in a
       // couple seconds. Skip the sync briefly after a local switch.
@@ -92,6 +99,16 @@ export function ShellPaneBody({
   // We await the hand-off before flipping so the target view is always live.
   const [switching, setSwitching] = useState(false);
   const lastSwitch = useRef(0);
+  // Transient banner for a failed terminal→chat hand-off (the TUI wouldn't
+  // stop): the chat face still opens (viewing is fine) but can't drive yet.
+  const [handoffNotice, setHandoffNotice] = useState<string | null>(null);
+  const noticeTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(noticeTimer.current), []);
+  const showNotice = (text: string) => {
+    setHandoffNotice(text);
+    window.clearTimeout(noticeTimer.current);
+    noticeTimer.current = window.setTimeout(() => setHandoffNotice(null), 8000);
+  };
   const switchTo = async (target: 'terminal' | 'chat') => {
     if (switching) return;
     setSwitching(true);
@@ -106,9 +123,18 @@ export function ShellPaneBody({
     try {
       if (target === 'chat') {
         // Flip immediately (no flash of the terminal exiting); stop the TUI
-        // underneath while the toggle shows "…".
+        // underneath while the toggle shows "…". If the hand-off FAILS (the
+        // TUI wouldn't die / server unreachable), keep the chat face — viewing
+        // is legitimate — but say so: chat can't drive until the TUI is gone.
         setPaneFace(pane.id, { face: 'chat', url });
-        await fetch(`/api/agent-sessions/${pane.id}/takeover`, { method: 'POST' }).catch(() => {});
+        const r = await fetch(`/api/agent-sessions/${pane.id}/takeover`, {
+          method: 'POST',
+        }).catch(() => null);
+        if (!r?.ok) {
+          showNotice(
+            'Terminal is still running Claude — chat is read-only until you exit it there.',
+          );
+        }
       } else {
         // Only relaunch if Claude ISN'T already running in the pane — otherwise
         // the command would be typed INTO the live TUI as a prompt (bug). If it's
@@ -141,9 +167,11 @@ export function ShellPaneBody({
           disabled={switching}
           title={showChat ? 'Switch to terminal' : 'Switch to chat'}
         >
+          {agentRunning ? <span className="shell-pane-agent-dot" aria-hidden="true" /> : null}
           {switching ? '…' : showChat ? 'Terminal' : 'Chat'}
         </button>
       ) : null}
+      {handoffNotice ? <div className="shell-pane-handoff-notice">{handoffNotice}</div> : null}
       <div className="shell-pane-face" hidden={showWeb || showChat}>
         <XtermPane
           paneId={pane.id}

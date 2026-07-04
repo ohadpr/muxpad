@@ -1,8 +1,9 @@
-import type { ChatEvent, ToolResultEvent, ToolUseEvent } from '@muxpad/shared';
-import { type ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
+import type { ChatEvent, NoticeEvent, ToolResultEvent, ToolUseEvent } from '@muxpad/shared';
+import { type ChangeEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api } from '../api';
+import { isMobileLayout } from '../lib/mobile-layout';
 import './ChatPane.css';
 
 // Assistant + streaming text is rendered as GitHub-flavored markdown. No raw
@@ -47,8 +48,15 @@ interface SessionMeta {
 }
 
 type ServerMsg =
-  | { t: 'session'; session: (SessionMeta & Record<string, unknown>) | null }
-  | { t: 'events'; phase: 'history' | 'live'; events: ChatEvent[] }
+  | {
+      t: 'session';
+      session: (SessionMeta & Record<string, unknown>) | null;
+      // True when a headless turn is already in flight for this pane — a
+      // reconnect mid-turn restores the working/Stop state from this.
+      turnRunning?: boolean;
+    }
+  | { t: 'events'; phase: 'history' | 'live' | 'older'; events: ChatEvent[] }
+  | { t: 'older-done'; hasMore: boolean }
   | { t: 'turn-start' }
   | { t: 'stream'; delta: string }
   | { t: 'turn-done'; ok: boolean; error?: string }
@@ -68,8 +76,12 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   // undefined = still connecting; null = connected but no agent session.
   const [session, setSession] = useState<SessionMeta | null | undefined>(undefined);
   const [events, setEvents] = useState<ChatEvent[]>([]);
+  // Ordered event list (source of truth for `events`). The server sends the
+  // recent tail first, then older batches on demand — which must be PREPENDED,
+  // so we keep an explicit array rather than relying on Map insertion order.
+  const ordered = useRef<ChatEvent[]>([]);
   const [connected, setConnected] = useState(false);
-  const byId = useRef(new Map<string, ChatEvent>());
+  const byId = useRef(new Set<string>()); // seen event ids, for dedupe
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
   const wsRef = useRef<WebSocket | null>(null);
@@ -79,6 +91,29 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // Older-history pagination: the server opens with just the recent tail; we
+  // page earlier messages in on scroll-up. `hasMoreOlder` starts true and is
+  // corrected by the server's `older-done`; `olderAnchor` preserves the scroll
+  // position across a prepend so the view doesn't jump.
+  const [hasMoreOlder, setHasMoreOlder] = useState(true);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const loadingOlderRef = useRef(false);
+  // The in-flight request's safety-net timer — cleared when `older-done` lands
+  // (or on unmount/pane switch) so a stale timer can't fire into a LATER
+  // request and clear its loading flag mid-flight.
+  const olderTimeout = useRef<number | undefined>(undefined);
+  const olderAnchor = useRef<{ height: number; top: number } | null>(null);
+  // Tool calls collapse to a one-line summary; tapping opens this modal with the
+  // full command + output. null = closed.
+  const [openTool, setOpenTool] = useState<ToolDetail | null>(null);
+  // Floating "jump to latest" arrow — shown only when scrolled up off the bottom.
+  const [showScrollDown, setShowScrollDown] = useState(false);
+  // The floating composer overlaps the scroll area, so we reserve its exact
+  // measured height as bottom padding — that way, scrolled all the way down, the
+  // last message clears the box instead of hiding behind it (the box grows with
+  // multi-line input + the mobile safe-area, so a fixed guess isn't enough).
+  const composerRef = useRef<HTMLDivElement>(null);
+  const [composerH, setComposerH] = useState(0);
   // Live assistant text streamed from the headless turn (token-level), shown
   // as a preview until the final message lands in the transcript tail.
   const [streamingText, setStreamingText] = useState('');
@@ -94,12 +129,19 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   const takeoverTried = useRef(false);
 
   useEffect(() => {
-    byId.current = new Map();
+    byId.current = new Set();
+    ordered.current = [];
     setEvents([]);
     setSession(undefined);
     setSending(false);
     setNotice(null);
     setOptimisticUser(null);
+    setHasMoreOlder(true);
+    setLoadingOlder(false);
+    loadingOlderRef.current = false;
+    window.clearTimeout(olderTimeout.current);
+    olderTimeout.current = undefined;
+    olderAnchor.current = null;
 
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -123,9 +165,33 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
               }
             : null,
         );
+        // A (re)connect that lands mid-turn restores the working/Stop state —
+        // the turn's frames now broadcast to every socket of the pane, so this
+        // socket will get the stream/turn-done too.
+        if (msg.turnRunning) setSending(true);
       } else if (msg.t === 'events') {
-        for (const e of msg.events) byId.current.set(e.id, e);
-        setEvents(Array.from(byId.current.values()));
+        const fresh = msg.events.filter((e) => !byId.current.has(e.id));
+        if (fresh.length) {
+          for (const e of fresh) byId.current.add(e.id);
+          if (msg.phase === 'older') {
+            // Anchor the scroll to the current top so the prepend (which grows
+            // content above the viewport) doesn't yank the view — see the
+            // useLayoutEffect below. The batch is chronological and entirely
+            // before the current head, so prepend it wholesale.
+            const el = scrollRef.current;
+            if (el) olderAnchor.current = { height: el.scrollHeight, top: el.scrollTop };
+            ordered.current = [...fresh, ...ordered.current];
+          } else {
+            ordered.current = [...ordered.current, ...fresh];
+          }
+          setEvents(ordered.current);
+        }
+      } else if (msg.t === 'older-done') {
+        window.clearTimeout(olderTimeout.current);
+        olderTimeout.current = undefined;
+        setHasMoreOlder(msg.hasMore);
+        setLoadingOlder(false);
+        loadingOlderRef.current = false;
       } else if (msg.t === 'turn-start') {
         setSending(true);
         setNotice(null);
@@ -186,6 +252,12 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
       };
       ws.onclose = () => {
         setConnected(false);
+        // Reset the composer while disconnected so it doesn't sit on Stop with
+        // a frozen preview. If a turn is still running server-side, the
+        // reconnect's session hello (turnRunning) restores the working state,
+        // and the turn's frames broadcast to the new socket.
+        setSending(false);
+        setStreamingText('');
         if (cancelled) return;
         // Reconnect with backoff — covers server restarts, network blips, and
         // the mobile tab being backgrounded (which drops the socket). Replaying
@@ -200,7 +272,9 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
     const onVisible = () => {
       if (cancelled || document.visibilityState !== 'visible') return;
       const rs = wsRef.current?.readyState;
-      if (rs === WebSocket.OPEN || rs === WebSocket.CONNECTING) return;
+      // Skip if a socket is already up or coming up. CLOSING too: its onclose
+      // will schedule the retry, and connecting now would leave a duplicate.
+      if (rs === WebSocket.OPEN || rs === WebSocket.CONNECTING || rs === WebSocket.CLOSING) return;
       if (retryTimer) clearTimeout(retryTimer);
       attempt = 0;
       connect();
@@ -211,6 +285,8 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
     return () => {
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
+      window.clearTimeout(olderTimeout.current);
+      olderTimeout.current = undefined;
       document.removeEventListener('visibilitychange', onVisible);
       const ws = wsRef.current;
       wsRef.current = null;
@@ -281,10 +357,94 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
     el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden';
   }, [input]);
 
+  // Track the floating composer's height so the scroll area can reserve exactly
+  // that much bottom padding (see composerH usage on .chat-list). Re-attaches
+  // when the composer mounts (session appears) and follows multi-line growth.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: current_sid gates when the composer (and its ref) mounts.
+  useEffect(() => {
+    const el = composerRef.current;
+    if (!el) {
+      setComposerH(0);
+      return;
+    }
+    const measure = () => setComposerH(el.offsetHeight);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [session?.current_sid]);
+
+  // Type-to-focus: when this chat is the visible face and you start typing a
+  // printable character with nothing else focused, jump focus to the composer so
+  // the keystroke lands there (same as Slack/Discord). Skips modifier combos
+  // (shortcuts), other inputs, and when the tool modal is open.
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
+      if (openTool) return;
+      const input = inputRef.current;
+      if (!input || document.activeElement === input) return;
+      const ae = document.activeElement as HTMLElement | null;
+      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable))
+        return;
+      input.focus(); // the character then lands in the now-focused textarea
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [active, openTool]);
+
+  // After an older-history batch prepends, content grew above the viewport;
+  // restore the scroll so the messages the user was looking at stay put (runs
+  // before paint, so there's no visible jump).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: events is the trigger — the effect fires after the prepend renders.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const a = olderAnchor.current;
+    if (el && a) {
+      el.scrollTop = el.scrollHeight - a.height + a.top;
+      olderAnchor.current = null;
+    }
+  }, [events]);
+
+  const requestOlder = () => {
+    if (loadingOlderRef.current || !hasMoreOlder) return;
+    const ws = wsRef.current;
+    if (ws?.readyState !== WebSocket.OPEN) return;
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    ws.send(JSON.stringify({ t: 'load-older' }));
+    // Safety net: if no `older-done` comes back (a dropped message, or a server
+    // build without the handler), clear the spinner instead of hanging on it.
+    window.clearTimeout(olderTimeout.current);
+    olderTimeout.current = window.setTimeout(() => {
+      olderTimeout.current = undefined;
+      if (loadingOlderRef.current) {
+        loadingOlderRef.current = false;
+        setLoadingOlder(false);
+      }
+    }, 4000);
+  };
+
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    pinnedToBottom.current = nearBottom;
+    // Hysteresis: only reveal the arrow once meaningfully scrolled up, so it
+    // doesn't flicker on tiny nudges near the bottom.
+    setShowScrollDown(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
+    // Near the top → page in earlier messages (once events exist, so we don't
+    // fire during the initial empty/loading state).
+    if (el.scrollTop < 240 && events.length > 0) requestOlder();
+  };
+
+  const scrollToBottom = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    pinnedToBottom.current = true;
+    setShowScrollDown(false);
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   };
 
   // Grace timer: a present session with no transcript after a while → likely ended.
@@ -344,20 +504,69 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
           )}
         </div>
       );
-    return events.map((e) => <ChatRow key={e.id} event={e} />);
-  }, [session, connected, events, stale, optimisticUser, sending]);
+    // Pair each tool_use with its tool_result (by id) so the collapsed row can
+    // open both in one modal; the standalone result row is then suppressed.
+    const resultFor = new Map<string, ToolResultEvent>();
+    for (const e of events)
+      if (e.kind === 'tool_result' && e.toolUseId) resultFor.set(e.toolUseId, e);
+    const consumed = new Set<string>();
+    for (const e of events)
+      if (e.kind === 'tool_use') {
+        const r = resultFor.get(e.toolUseId);
+        if (r) consumed.add(r.id);
+      }
+    return (
+      <>
+        {loadingOlder ? (
+          <div className="chat-load-earlier-spinner" aria-hidden="true">
+            <div className="chat-empty-spinner" />
+          </div>
+        ) : null}
+        {events.map((e) => {
+          if (e.kind === 'tool_use')
+            return (
+              <ToolRow
+                key={e.id}
+                use={e}
+                result={resultFor.get(e.toolUseId)}
+                onOpen={setOpenTool}
+              />
+            );
+          // Result already shown by its tool_use row above.
+          if (e.kind === 'tool_result' && consumed.has(e.id)) return null;
+          if (e.kind === 'tool_result')
+            return <ToolRow key={e.id} result={e} onOpen={setOpenTool} />;
+          return <ChatRow key={e.id} event={e} />;
+        })}
+      </>
+    );
+  }, [session, connected, events, stale, optimisticUser, sending, loadingOlder]);
+
+  // The agent is working when: we're driving a turn (`sending`), tokens are
+  // streaming, OR the newest event is a tool_use still awaiting its result (a
+  // step is mid-run — covers between-steps gaps and opening chat on an already-
+  // running turn, where there's no local `sending` flag). Self-clears when the
+  // result lands or the turn ends.
+  const lastEvent = events[events.length - 1];
+  const pendingTool =
+    lastEvent?.kind === 'tool_use' &&
+    !events.some((e) => e.kind === 'tool_result' && e.toolUseId === lastEvent.toolUseId);
+  const agentWorking = Boolean((sending || streamingText || pendingTool) && session?.current_sid);
 
   return (
     <div className="chat-pane">
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
-        <div className="chat-list">
+        <div
+          className="chat-list"
+          style={composerH ? { paddingBottom: `${composerH + 14}px` } : undefined}
+        >
           {body}
           {optimisticUser ? (
             <div className="chat-turn chat-turn-user">
               <div className="chat-bubble">{optimisticUser}</div>
             </div>
           ) : null}
-          {(sending || streamingText) && session?.current_sid ? (
+          {agentWorking ? (
             <div className="chat-turn chat-turn-assistant">
               {streamingText ? (
                 <div className="chat-msg">
@@ -377,8 +586,21 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
           ) : null}
         </div>
       </div>
+      {showScrollDown ? (
+        <button
+          type="button"
+          className="chat-scroll-down"
+          style={composerH ? { bottom: `${composerH + 12}px` } : undefined}
+          onClick={scrollToBottom}
+          aria-label="Jump to latest"
+          title="Jump to latest"
+        >
+          ↓
+        </button>
+      ) : null}
+      {openTool ? <ToolModal detail={openTool} onClose={() => setOpenTool(null)} /> : null}
       {session?.current_sid ? (
-        <div className="chat-composer-wrap">
+        <div className="chat-composer-wrap" ref={composerRef}>
           {notice ? <div className="chat-notice">{notice}</div> : null}
           <div className="chat-composer">
             <input
@@ -405,7 +627,10 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
+                // Desktop: Enter sends, Shift+Enter = newline. Mobile: the
+                // on-screen Return key inserts a newline (send is the button) —
+                // otherwise every line break fires off a message.
+                if (e.key === 'Enter' && !e.shiftKey && !isMobileLayout()) {
                   e.preventDefault();
                   sendMessage();
                 }
@@ -466,13 +691,34 @@ function ChatRow({ event }: { event: ChatEvent }) {
           <div className="chat-thinking">{event.text}</div>
         </div>
       );
-    case 'tool_use':
-      return <ToolUseCard event={event} />;
-    case 'tool_result':
-      return <ToolResultCard event={event} />;
+    case 'notice':
+      return <NoticeCard event={event} />;
+    // tool_use / tool_result are rendered as collapsed ToolRows in the body map
+    // (paired into one row), never through ChatRow.
     default:
       return null;
   }
+}
+
+// Icon per notice variant — a task update vs a session reminder.
+const NOTICE_ICON: Record<NoticeEvent['variant'], string> = {
+  task: '⚙',
+  reminder: 'ⓘ',
+};
+
+/** Harness control message (background-task update / session reminder). */
+function NoticeCard({ event }: { event: NoticeEvent }) {
+  return (
+    <div className="chat-turn chat-turn-notice">
+      <div className={`chat-sysnote chat-sysnote-${event.variant}`} title={event.text}>
+        <span className="chat-sysnote-icon" aria-hidden="true">
+          {NOTICE_ICON[event.variant]}
+        </span>
+        <span className="chat-sysnote-text">{event.text}</span>
+        {event.detail ? <span className="chat-sysnote-detail">{event.detail}</span> : null}
+      </div>
+    </div>
+  );
 }
 
 function summarizeToolInput(name: string, input: unknown): string {
@@ -490,28 +736,134 @@ function summarizeToolInput(name: string, input: unknown): string {
   );
 }
 
-function ToolUseCard({ event }: { event: ToolUseEvent }) {
+// A collapsed tool call + its result, opened together in the ToolModal.
+type ToolDetail = { use?: ToolUseEvent | undefined; result?: ToolResultEvent | undefined };
+
+// Human verb per tool name for the collapsed row ("Ran npm build", "Edited x.ts").
+const TOOL_VERB: Record<string, string> = {
+  Bash: 'Ran',
+  Edit: 'Edited',
+  Write: 'Wrote',
+  MultiEdit: 'Edited',
+  NotebookEdit: 'Edited',
+  Read: 'Read',
+  Grep: 'Searched',
+  Glob: 'Searched',
+  Task: 'Delegated',
+  WebFetch: 'Fetched',
+  WebSearch: 'Searched',
+};
+
+function commandText(use: ToolUseEvent): string {
+  const o =
+    use.input && typeof use.input === 'object' ? (use.input as Record<string, unknown>) : {};
+  if (typeof o.command === 'string') return o.command;
+  try {
+    return JSON.stringify(use.input, null, 2);
+  } catch {
+    return String(use.input);
+  }
+}
+
+function diffStat(diff?: ToolResultEvent['diff']): { add: number; del: number } | null {
+  if (!diff) return null;
+  let add = 0;
+  let del = 0;
+  for (const h of diff.patch)
+    for (const l of h.lines) {
+      if (l[0] === '+') add++;
+      else if (l[0] === '-') del++;
+    }
+  return { add, del };
+}
+
+/** Collapsed one-line tool call — muted, taps open the ToolModal. */
+function ToolRow({
+  use,
+  result,
+  onOpen,
+}: {
+  use?: ToolUseEvent | undefined;
+  result?: ToolResultEvent | undefined;
+  onOpen: (d: ToolDetail) => void;
+}) {
+  const verb = use
+    ? (TOOL_VERB[use.name] ?? use.name ?? 'Tool')
+    : result?.ok === false
+      ? 'Failed'
+      : 'Result';
+  const arg = use ? summarizeToolInput(use.name, use.input) : '';
+  const err = result?.ok === false;
+  const stat = diffStat(result?.diff);
   return (
     <div className="chat-turn chat-turn-assistant">
-      <div className="chat-tool">
-        <span className="chat-tool-name">{event.name || 'tool'}</span>
-        <span className="chat-tool-arg">{summarizeToolInput(event.name, event.input)}</span>
-      </div>
+      <button
+        type="button"
+        className={`chat-toolrow${err ? ' error' : ''}`}
+        onClick={() => onOpen({ use, result })}
+      >
+        <span className="chat-toolrow-verb">{verb}</span>
+        {arg ? <span className="chat-toolrow-arg">{arg}</span> : null}
+        {stat && (stat.add || stat.del) ? (
+          <span className="chat-toolrow-stat">
+            <span className="add">+{stat.add}</span> <span className="del">-{stat.del}</span>
+          </span>
+        ) : null}
+        <span className="chat-toolrow-chevron" aria-hidden="true">
+          ›
+        </span>
+      </button>
     </div>
   );
 }
 
-function ToolResultCard({ event }: { event: ToolResultEvent }) {
+/** Bottom-sheet detail for a tool call: Command + Output (or a diff). */
+function ToolModal({ detail, onClose }: { detail: ToolDetail; onClose: () => void }) {
+  const { use, result } = detail;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
   return (
-    <div className="chat-turn chat-turn-assistant">
-      <div className={`chat-tool-result ${event.ok ? '' : 'error'}`}>
-        {event.diff ? (
-          <DiffView diff={event.diff} />
-        ) : event.text ? (
-          <pre className="chat-tool-out">{event.text.slice(0, 4000)}</pre>
-        ) : (
-          <span className="chat-tool-ok">{event.ok ? 'done' : 'error'}</span>
-        )}
+    <div className="chat-modal-backdrop">
+      {/* Semantic button scrim: click or keyboard-activate to dismiss. Sits
+          behind the sheet so sheet clicks never reach it. */}
+      <button type="button" className="chat-modal-scrim" aria-label="Close" onClick={onClose} />
+      <div className="chat-modal">
+        <div className="chat-modal-head">
+          <button type="button" className="chat-modal-close" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
+          <span className="chat-modal-title">{use?.name || 'Output'}</span>
+        </div>
+        <div className="chat-modal-body">
+          {use ? (
+            <>
+              <div className="chat-modal-label">Command</div>
+              <pre className="chat-modal-block">{commandText(use)}</pre>
+            </>
+          ) : null}
+          {result?.diff ? (
+            <>
+              <div className="chat-modal-label">Changes</div>
+              <DiffView diff={result.diff} />
+            </>
+          ) : result?.text ? (
+            <>
+              <div className="chat-modal-label">Output</div>
+              <pre className="chat-modal-block">{result.text.slice(0, 20000)}</pre>
+            </>
+          ) : result ? (
+            <div className="chat-modal-empty">
+              {result.ok ? 'Completed with no output.' : 'Failed with no output.'}
+            </div>
+          ) : (
+            <div className="chat-modal-empty">No output captured yet.</div>
+          )}
+        </div>
       </div>
     </div>
   );
