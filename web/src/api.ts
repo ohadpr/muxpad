@@ -1,4 +1,4 @@
-import type { Workspace, Tab, PaneSpec, LayoutNode } from '@muxpad/shared';
+import type { LayoutNode, PaneSpec, Tab, Workspace } from '@muxpad/shared';
 
 async function req<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   const res = await fetch(input, {
@@ -15,6 +15,14 @@ async function req<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
 
 export interface TabWithPanes extends Tab {
   panes: PaneSpec[];
+}
+
+export interface MovePaneResult {
+  pane: PaneSpec | null;
+  from_tab_id: string;
+  to_tab: Tab;
+  /** True if the source tab was deleted because the pane was its last one. */
+  from_tab_removed: boolean;
 }
 
 export const api = {
@@ -36,8 +44,7 @@ export const api = {
       body: JSON.stringify(patch),
     }),
 
-  deleteWorkspace: (id: string) =>
-    req<void>(`/api/workspaces/${id}`, { method: 'DELETE' }),
+  deleteWorkspace: (id: string) => req<void>(`/api/workspaces/${id}`, { method: 'DELETE' }),
 
   reorderWorkspaces: (ids: string[]) =>
     req<void>('/api/workspaces/reorder', {
@@ -50,10 +57,7 @@ export const api = {
   listTabs: (workspaceId: string) =>
     req<Tab[]>(`/api/tabs?workspaceId=${encodeURIComponent(workspaceId)}`),
 
-  createTab: (
-    workspaceId: string,
-    body: { name?: string; layout?: LayoutNode } = {},
-  ) =>
+  createTab: (workspaceId: string, body: { name?: string; layout?: LayoutNode } = {}) =>
     req<Tab>('/api/tabs', {
       method: 'POST',
       body: JSON.stringify({ workspace_id: workspaceId, ...body }),
@@ -63,7 +67,13 @@ export const api = {
 
   patchTab: (
     id: string,
-    patch: { name?: string; slug?: string; layout?: LayoutNode },
+    patch: {
+      name?: string;
+      slug?: string;
+      icon?: string;
+      layout?: LayoutNode;
+      view_mode?: 'split' | 'tabbed';
+    },
   ) =>
     req<Tab>(`/api/tabs/${id}`, {
       method: 'PATCH',
@@ -72,14 +82,15 @@ export const api = {
 
   deleteTab: (id: string) => req<void>(`/api/tabs/${id}`, { method: 'DELETE' }),
 
-  markTabSeen: (id: string) =>
-    req<void>(`/api/tabs/${id}/seen`, { method: 'POST' }),
+  markTabSeen: (id: string) => req<void>(`/api/tabs/${id}/seen`, { method: 'POST' }),
+
+  // Manually flag a tab unread — restores its attention dot until viewed.
+  markTabUnread: (id: string) => req<void>(`/api/tabs/${id}/unread`, { method: 'POST' }),
 
   // Surgical "I'm looking at this one pane right now" used by mobile.
   // Keeps other panes' attention flags alive so the pane dropdown can
   // surface them.
-  markPaneSeen: (id: string) =>
-    req<void>(`/api/panes/${id}/seen`, { method: 'POST' }),
+  markPaneSeen: (id: string) => req<void>(`/api/panes/${id}/seen`, { method: 'POST' }),
 
   reorderTabs: (ids: string[]) =>
     req<void>('/api/tabs/reorder', {
@@ -108,23 +119,34 @@ export const api = {
 
   deletePane: (id: string) => req<void>(`/api/panes/${id}`, { method: 'DELETE' }),
 
+  // Move a pane to another tab in the same workspace. `toTabId` targets an
+  // existing tab; `newTab` extracts it into a fresh tab. The PTY keeps
+  // running — only the pane's parent tab + both tabs' layouts change.
+  movePane: (id: string, dest: { toTabId?: string; newTab?: boolean }) =>
+    req<MovePaneResult>(`/api/panes/${id}/move`, {
+      method: 'POST',
+      body: JSON.stringify({ to_tab_id: dest.toTabId, new_tab: dest.newTab }),
+    }),
+
+  // Move a whole tab (and its panes) to a different workspace.
+  moveTabToWorkspace: (id: string, workspaceId: string) =>
+    req<Tab>(`/api/tabs/${id}/move`, {
+      method: 'POST',
+      body: JSON.stringify({ workspace_id: workspaceId }),
+    }),
+
   patchPane: (
     id: string,
-    patch: { kind?: 'shell' | 'url'; url?: string | null },
+    patch: { kind?: 'shell' | 'url'; url?: string | null; name?: string | null },
   ) =>
     req<PaneSpec>(`/api/panes/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
     }),
 
-  respawnPane: (id: string) =>
-    req<void>(`/api/panes/${id}/respawn`, { method: 'POST' }),
+  respawnPane: (id: string) => req<void>(`/api/panes/${id}/respawn`, { method: 'POST' }),
 
-  uploadAttachment: async (
-    paneId: string,
-    blob: Blob,
-    name: string,
-  ): Promise<{ path: string }> => {
+  uploadAttachment: async (paneId: string, blob: Blob, name: string): Promise<{ path: string }> => {
     const fd = new FormData();
     fd.append('file', blob, name);
     const res = await fetch(`/api/panes/${paneId}/attachments`, {

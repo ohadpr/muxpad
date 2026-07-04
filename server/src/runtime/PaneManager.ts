@@ -1,10 +1,12 @@
 import { PaneRuntime, type PaneRuntimeSpec } from './PaneRuntime.js';
+import type { AppUrlMarker } from './pty-scanner.js';
 
 /**
  * A "raw" decoration change for a pane — the manager observed a delta in
- * one of {title, foreground_cmd, attention} since the previous tick. Used
- * by ptyd to push lifecycle events on the control channel without needing
- * a PaneStore for full row hydration.
+ * one of {title, foreground_cmd, attention} since the previous tick. Used by
+ * ptyd to push lifecycle events on the control channel without needing a
+ * PaneStore for full row hydration. (App-url sightings are NOT decorations —
+ * they're forwarded raw via `onUrlsSeen` and judged on the main server.)
  */
 export type PaneChange =
   | { kind: 'title'; title: string | null }
@@ -35,6 +37,21 @@ export interface PaneManagerOptions {
    * full pane row, so it doesn't need a PaneStore.
    */
   onPaneChange?: (paneId: string, change: PaneChange) => void;
+  /**
+   * Fires with the raw http(s) URLs and app-url markers the scanner
+   * extracted from a pane's output. ptyd forwards these verbatim — it does
+   * NOT validate or probe them. The main server runs the AppUrlTracker on
+   * the far end, so detection logic lives on the restartable process.
+   */
+  onUrlsSeen?: (paneId: string, urls: string[], markers: AppUrlMarker[]) => void;
+  /**
+   * Fires (throttled) when a pane produces output. A RAW activity signal —
+   * ptyd forwards it verbatim and the main server folds it into a busy/idle
+   * state with its own decay window, so the busy *policy* lives on the
+   * restartable server (mirrors onUrlsSeen / app-url detection). No payload
+   * beyond the pane id: "this pane just produced output".
+   */
+  onPaneActivity?: (paneId: string) => void;
   /**
    * Lifecycle callback fired when a runtime exits (naturally or via
    * `kill`). Mirrors the `onPaneChange` shape — independent of the cwd
@@ -216,6 +233,32 @@ export class PaneManager {
     r.on('attention-changed', () => {
       this.emitDecorations(spec.id);
     });
+    // Raw output-activity tick — forward verbatim (throttled in PaneRuntime).
+    // The main server folds these into busy/idle with its own decay window, so
+    // the busy policy can change with a server-only restart. Mirrors onUrlsSeen.
+    const onPaneActivity = this.opts.onPaneActivity;
+    if (onPaneActivity) {
+      r.on('activity', () => {
+        try {
+          onPaneActivity(spec.id);
+        } catch {
+          // ignore — a bad subscriber shouldn't wedge the output path
+        }
+      });
+    }
+    // Raw URL/marker sightings — forward verbatim to the main server, which
+    // owns the tracker/probe. Fires only when the scanner finds a URL on a
+    // completed output line, so this isn't per-chunk chatter.
+    const onUrlsSeen = this.opts.onUrlsSeen;
+    if (onUrlsSeen) {
+      r.on('urls-seen', (urls, markers) => {
+        try {
+          onUrlsSeen(spec.id, urls, markers);
+        } catch {
+          // ignore — a bad subscriber shouldn't wedge the output path
+        }
+      });
+    }
     r.on('exit', (code) => {
       // Keep it referenced so post-exit consumers can still query snapshot/exitCode,
       // but unhook from the live map so a new spec for the same id can take over.

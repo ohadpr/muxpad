@@ -1,5 +1,8 @@
 import { EventEmitter } from 'node:events';
+import type { AppUrl, PaneSpec } from '@muxpad/shared';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
+import { AppUrlDetector } from './runtime/app-url-detector.js';
+import type { AppUrlMarker } from './runtime/pty-scanner.js';
 
 /**
  * Per-pane decoration state cached on the main server from ptyd push events.
@@ -32,6 +35,13 @@ export interface PaneState {
   fg?: string | null;
   title?: string | null;
   attention?: boolean;
+  // True while the pane is actively producing output (foreground app
+  // working). Computed HERE from ptyd's raw `paneActivity` ticks + a decay
+  // timer (see markBusy / busyQuietMs) — ptyd ships only the raw ticks so this
+  // policy is a server-only restart away. Read synchronously by the
+  // tab/workspace list handlers to roll a "busy" flag up to each tab.
+  busy?: boolean;
+  appUrls?: AppUrl[];
 }
 
 /**
@@ -58,6 +68,74 @@ export class PtydCache extends EventEmitter {
   // the paneCwd handler's `?.add` is a no-op — so the set never grows
   // beyond a single inflight flushCwds.
   private cwdEventRacers: Set<string> | null = null;
+  // Server-side app-url detection. ptyd ships raw URL sightings
+  // (`paneUrlsSeen`); the detector classifies hosts + probes for a listener
+  // and writes the confirmed list back into the cache. It lives here so this
+  // logic is a server-only restart away — never a ptyd bounce.
+  private readonly detector = new AppUrlDetector((paneId, urls) => {
+    this.update(paneId, { appUrls: urls });
+  });
+  // Per-pane decay timers for busy state. Armed/reset on each `paneActivity`
+  // tick; on fire the pane goes idle. Cleared on pane removal so a pending
+  // timer can't resurrect a deleted entry via update({busy:false}).
+  private readonly busyTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // First activity tick of the current spell, per pane, while still "warming
+  // up" (not yet declared busy). Cleared once busy flips true, or when the
+  // decay timer fires. See markBusy / busyWarmupMs.
+  private readonly busyPending = new Map<string, number>();
+  // Timestamp of the last user keystroke per pane (from proxyAttach's onInput).
+  // Activity within busyInputGraceMs of this is treated as echo, not work.
+  private readonly lastInputAt = new Map<string, number>();
+  // Panes with a headless (web-chat-driven) agent turn in flight. A chat turn
+  // is a separate `claude -p` process writing the transcript FILE — it produces
+  // zero PTY output, so the activity detector above never sees it. The ws chat
+  // layer flips this on turn start/finish; getBusy() ORs it in, which is what
+  // makes the tab/workspace spinners cover chat work like terminal work. Kept
+  // OUTSIDE PaneState so PTY lifecycle (paneExit dropping the entry) can't
+  // clear a turn that's still running.
+  private readonly agentBusy = new Set<string>();
+  private readonly busyQuietMs: number;
+  private readonly busyWarmupMs: number;
+  private readonly busyInputGraceMs: number;
+
+  /**
+   * @param opts.busyQuietMs How long a pane may go without an activity tick
+   *   before it's marked idle ("done / waiting"). This is the busy POLICY, and
+   *   it lives here (not in ptyd) precisely so it can be tuned with a
+   *   server-only restart. Must exceed ptyd's activity throttle AND the slowest
+   *   steady output heartbeat we still want to read as busy — e.g. Claude's 1s
+   *   elapsed-timer tick — so it doesn't flicker to idle mid-work. Default
+   *   1500ms: clears the 1s tick with margin, ~1.5s lag before "done" shows.
+   * @param opts.busyWarmupMs How long output must be SUSTAINED before a pane is
+   *   declared busy. Filters one-off bursts that aren't real work — chiefly the
+   *   single redraw a foreground app emits when a tab is opened (the attach
+   *   resizes the PTY → SIGWINCH → one repaint), but also quick commands that
+   *   finish instantly. Genuine work (Claude thinking, a running build) streams
+   *   well past this. Default 600ms.
+   * @param opts.busyInputGraceMs After a user keystroke (noteInput), output
+   *   within this window is treated as the echo of their typing — not the app
+   *   working — and doesn't count toward busy. So typing into a pane (incl. a
+   *   TUI that repaints its input on each key, like Claude's composer) doesn't
+   *   light the spinner. A command's own output keeps streaming past the grace
+   *   and still trips busy. Default 500ms.
+   */
+  constructor(
+    opts: { busyQuietMs?: number; busyWarmupMs?: number; busyInputGraceMs?: number } = {},
+  ) {
+    super();
+    this.busyQuietMs = opts.busyQuietMs ?? 1500;
+    this.busyWarmupMs = opts.busyWarmupMs ?? 600;
+    this.busyInputGraceMs = opts.busyInputGraceMs ?? 500;
+  }
+
+  /**
+   * Record that the user just typed into a pane. Activity ticks arriving within
+   * busyInputGraceMs are then discounted as echo (see markBusy). Called by the
+   * WS proxy on each OP_INPUT frame — server-side, so no ptyd involvement.
+   */
+  noteInput(id: string): void {
+    this.lastInputAt.set(id, Date.now());
+  }
 
   attach(client: PtydClient): void {
     client.on('paneCwd', (e: { id: string; cwd: string }) => {
@@ -73,11 +151,22 @@ export class PtydCache extends EventEmitter {
     client.on('paneAttention', (e: { id: string; attention: boolean }) => {
       this.update(e.id, { attention: e.attention });
     });
+    client.on('paneActivity', (e: { id: string }) => {
+      this.markBusy(e.id);
+    });
+    client.on('paneUrlsSeen', (e: { id: string; urls: string[]; markers: AppUrlMarker[] }) => {
+      // Raw sightings from ptyd's scanner. Hand them to the detector, which
+      // probes/classifies and calls back (its onAppUrls) into update() with
+      // the confirmed list once it changes.
+      this.detector.ingest(e.id, e.urls, e.markers);
+    });
     client.on('paneExit', (e: { id: string }) => {
       // Drop the entry on exit so a respawned pane (same id) starts with a
       // clean slate. If the row still exists (delete is a separate
       // operation) the next ensurePane will surface fresh events to
       // repopulate the cache.
+      this.clearBusyTimer(e.id);
+      this.detector.forget(e.id);
       if (this.state.delete(e.id)) {
         this.emit('paneRemoved', e.id);
       }
@@ -113,6 +202,64 @@ export class PtydCache extends EventEmitter {
         if (this.cwdEventRacers === racers) this.cwdEventRacers = null;
       }
     });
+  }
+
+  /**
+   * Fold a raw activity tick into busy state. Two gates:
+   *  - WARMUP: don't declare busy on the first tick — wait until output has
+   *    been sustained for busyWarmupMs. A one-off burst (the redraw a tab emits
+   *    when opened, a quick command) never crosses it, so it doesn't blip the
+   *    spinner; real work streams well past it.
+   *  - DECAY: once busy, stay busy until busyQuietMs of silence.
+   * update() only emits paneChange on the actual false→true / true→false edge,
+   * so sustained output doesn't spam consumers.
+   */
+  private markBusy(id: string): void {
+    const now = Date.now();
+    // Echo of the user's own typing isn't "busy work". Ignore activity that
+    // lands within busyInputGraceMs of their last keystroke — don't accumulate
+    // warmup off it, and don't extend an existing busy spell. Genuine app
+    // output keeps streaming past the grace window and trips busy normally.
+    if (now - (this.lastInputAt.get(id) ?? 0) < this.busyInputGraceMs) return;
+    const alreadyBusy = this.state.get(id)?.busy === true;
+    if (!alreadyBusy) {
+      const firstAt = this.busyPending.get(id);
+      if (firstAt === undefined) {
+        // First tick of a new spell — start warming up, don't show busy yet.
+        this.busyPending.set(id, now);
+      } else if (now - firstAt >= this.busyWarmupMs) {
+        // Output has persisted past the warmup window → it's real work.
+        this.busyPending.delete(id);
+        this.update(id, { busy: true });
+      }
+      // else: still within the warmup window — keep waiting for more ticks.
+    }
+    // (re)arm the decay timer: on fire, drop busy AND abandon any warmup in
+    // progress (the spell ended before it qualified).
+    const existing = this.busyTimers.get(id);
+    if (existing) clearTimeout(existing);
+    const t = setTimeout(() => {
+      this.busyTimers.delete(id);
+      this.busyPending.delete(id);
+      // Only emit the idle transition if we actually went busy — a warmup that
+      // never qualified (a transient burst) must leave no trace, not flip an
+      // undefined busy to false (which would fan a needless pane.updated).
+      if (this.state.get(id)?.busy === true) this.update(id, { busy: false });
+    }, this.busyQuietMs);
+    // Don't let a pending decay timer keep the process alive.
+    t.unref?.();
+    this.busyTimers.set(id, t);
+  }
+
+  /** Cancel a pane's decay/warmup state (on removal) so nothing fires post-delete. */
+  private clearBusyTimer(id: string): void {
+    const t = this.busyTimers.get(id);
+    if (t) {
+      clearTimeout(t);
+      this.busyTimers.delete(id);
+    }
+    this.busyPending.delete(id);
+    this.lastInputAt.delete(id);
   }
 
   private update(id: string, patch: PaneState): void {
@@ -172,6 +319,35 @@ export class PtydCache extends EventEmitter {
     return this.state.get(id)?.attention ?? false;
   }
 
+  /**
+   * Synchronous read — false when ptyd hasn't reported busy state yet.
+   * Busy = PTY output activity OR a headless chat turn in flight (see
+   * setAgentBusy) — both mean "this pane's agent is working".
+   */
+  getBusy(id: string): boolean {
+    return (this.state.get(id)?.busy ?? false) || this.agentBusy.has(id);
+  }
+
+  /**
+   * Mark a pane busy because a headless (web-chat-driven) agent turn started/
+   * finished there. Emits 'paneChange' only when the EFFECTIVE busy value
+   * flips (PTY-output busy may already hold it true), so consumers see the
+   * same edge-triggered contract markBusy provides and a chat turn fans a
+   * live `pane.updated` the moment it starts and ends.
+   */
+  setAgentBusy(id: string, on: boolean): void {
+    if (on === this.agentBusy.has(id)) return;
+    const before = this.getBusy(id);
+    if (on) this.agentBusy.add(id);
+    else this.agentBusy.delete(id);
+    if (this.getBusy(id) !== before) this.emit('paneChange', id);
+  }
+
+  /** Synchronous read — empty array when no app urls have been reported. */
+  getAppUrls(id: string): AppUrl[] {
+    return this.state.get(id)?.appUrls ?? [];
+  }
+
   /** Returns the full snapshot for the given pane, or undefined when unknown. */
   get(id: string): PaneState | undefined {
     return this.state.get(id);
@@ -179,8 +355,30 @@ export class PtydCache extends EventEmitter {
 
   /** Drop the entry for `id`. Used by route handlers on DELETE /api/panes/:id. */
   forget(id: string): void {
+    this.clearBusyTimer(id);
+    this.agentBusy.delete(id);
+    this.detector.forget(id);
     if (this.state.delete(id)) {
       this.emit('paneRemoved', id);
     }
   }
+}
+
+/**
+ * Decorate a stored pane row with its live runtime fields (title, foreground
+ * command, attention/busy flags, detected app urls) from the cache. The single
+ * place this composition lives: the tab GET, the pane-move endpoint, and the
+ * ptyd→`pane.updated` forwarder all route through it, so a pane is described
+ * identically however it's surfaced. (The PATCH-route event is deliberately
+ * partial — it carries the raw row without these — so it does NOT use this.)
+ */
+export function decoratePane(cache: PtydCache, pane: PaneSpec): PaneSpec {
+  return {
+    ...pane,
+    title: cache.getTitle(pane.id),
+    foreground_cmd: cache.getFg(pane.id),
+    attention: cache.getAttention(pane.id),
+    busy: cache.getBusy(pane.id),
+    app_urls: cache.getAppUrls(pane.id),
+  };
 }

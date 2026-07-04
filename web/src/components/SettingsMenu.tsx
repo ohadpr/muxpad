@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import {
   FONT_FAMILIES,
   FONT_FAMILY_LABELS,
@@ -8,16 +7,12 @@ import {
   updateSettings,
   useSettings,
 } from '../settings';
-import { useMediaQuery } from '../use-media-query';
 import './SettingsMenu.css';
 
 export function SettingsMenu() {
   const settings = useSettings();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
-  // navLayout only matters on desktop — mobile always uses the bottom
-  // sheet — so hide the row there instead of showing a dead control.
-  const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
 
   useEffect(() => {
     if (!open) return;
@@ -106,28 +101,6 @@ export function SettingsMenu() {
               ))}
             </select>
           </div>
-
-          {!isMobile && (
-            <div className="settings-row">
-              <span className="settings-label">Navigation</span>
-              <div className="settings-segmented">
-                <button
-                  type="button"
-                  data-active={settings.navLayout === 'top' ? 'true' : undefined}
-                  onClick={() => updateSettings({ navLayout: 'top' })}
-                >
-                  Top bar
-                </button>
-                <button
-                  type="button"
-                  data-active={settings.navLayout === 'sidebar' ? 'true' : undefined}
-                  onClick={() => updateSettings({ navLayout: 'sidebar' })}
-                >
-                  Sidebar
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       )}
     </div>

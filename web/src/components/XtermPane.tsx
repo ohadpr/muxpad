@@ -133,6 +133,11 @@ export function XtermPane({
   const [replayRestoring, setReplayRestoring] = useState(true);
   const setReplayRestoringRef = useRef(setReplayRestoring);
   setReplayRestoringRef.current = setReplayRestoring;
+  // Connection status shown as a DOM overlay — never written into the
+  // terminal buffer (that corrupted full-screen TUIs until a refresh).
+  const [reconnecting, setReconnecting] = useState(false);
+  const setReconnectingRef = useRef(setReconnecting);
+  setReconnectingRef.current = setReconnecting;
   const tryOpenTermRef = useRef<(() => void) | null>(null);
   // Convergent re-fit chain (0/100/250/500ms). Exposed so the paneActive
   // become-visible effect can reuse it instead of a single-shot fit.
@@ -408,14 +413,38 @@ export function XtermPane({
       // TCP timeout — matters most on flaky mobile networks.
       const HEARTBEAT_IDLE_MS = 15_000;
       const HEARTBEAT_PONG_MS = 5_000;
+      // The backoff (retries) is only cleared once a connection has stayed
+      // open this long. Resetting it the instant we open lets a
+      // connect-then-immediately-drop loop reconnect forever with no backoff
+      // (and spam the terminal); gating on stability makes a persistent drop
+      // back off 200ms→5s instead of hammering.
+      const CONNECTION_STABLE_MS = 10_000;
       let lastActivityAt = Date.now();
       let pongWaitTimer: number | null = null;
       let idleTimer: number | null = null;
+      let stableTimer: number | null = null;
       const armIdle = () => {
         if (idleTimer !== null) window.clearTimeout(idleTimer);
         const elapsed = Date.now() - lastActivityAt;
         idleTimer = window.setTimeout(
           () => {
+            // Never run the ping/force-close while the tab is hidden. Browsers
+            // throttle (and eventually freeze) setTimeout in background tabs,
+            // so the pong-wait below fires spuriously even when ptyd's pong is
+            // arriving — force-closing a perfectly healthy socket, which then
+            // reconnects and force-closes again: the background reconnect loop.
+            // A hidden pane shows data to no one; its liveness is covered by
+            // the server's protocol-level heartbeat (which the browser answers
+            // automatically). A socket that died while hidden is caught once
+            // the tab is shown again: this re-armed idle timer fires, now
+            // passes the visibility gate, pings, and force-closes on no pong →
+            // reconnect. So while hidden, just re-arm and re-check — don't
+            // probe, don't close.
+            if (document.visibilityState !== 'visible') {
+              lastActivityAt = Date.now();
+              armIdle();
+              return;
+            }
             safeSend(encodePing());
             pongWaitTimer = window.setTimeout(() => {
               dbg('heartbeat pong timeout — force-closing');
@@ -441,8 +470,17 @@ export function XtermPane({
       ws.addEventListener('open', () => {
         dbg('ws open', { paneId, retries });
         const wasReconnect = retries > 0;
-        if (wasReconnect) term.writeln('\r\n[reconnected]');
-        retries = 0;
+        // Clear the DOM "reconnecting" badge. NOT written into the terminal:
+        // injecting text into a full-screen TUI's buffer corrupted the
+        // display until a refresh.
+        setReconnectingRef.current(false);
+        // Clear the backoff only after the connection proves stable (see
+        // CONNECTION_STABLE_MS) — not the instant it opens.
+        if (stableTimer !== null) window.clearTimeout(stableTimer);
+        stableTimer = window.setTimeout(() => {
+          retries = 0;
+          stableTimer = null;
+        }, CONNECTION_STABLE_MS);
         const announceSize = () => {
           // Same floor as refit/initialFit: don't fit or announce a near-zero
           // size on a not-yet-settled slot. reassertSize() (visibilitychange /
@@ -465,6 +503,37 @@ export function XtermPane({
             lastSentRows = term.rows;
           }
         };
+        // A fresh xterm attach replays only Claude/Ink's last DEC-2026 frame
+        // (inkReplayPayload). Ink emits *differential* frames, so when the
+        // live screen last changed just the spinner/input rows, that frame
+        // repaints only the bottom — the transcript above stays blank. A hard
+        // refresh keeps the same window size, so announceSize's resize is a
+        // server-side no-op (PaneRuntime dedups equal sizes) and nothing
+        // SIGWINCHes the app into a full repaint; the pane sits half-empty
+        // until the user resizes. Nudge the PTY one row shorter and back —
+        // two real size changes the server can't dedup — so the app
+        // re-measures and repaints the whole screen. The local xterm stays at
+        // its real size throughout; only the PTY wiggles. Skipped for
+        // cursor-agent, which owns its own replay + scroll-restore that a
+        // SIGWINCH would jerk to the bottom.
+        const forceFullRepaint = () => {
+          if (intentionallyClosed) return;
+          if (isCursorAgentCmd(foregroundCmdRef.current)) return;
+          if (!mayDriveResize() || gridBelowFloor()) return;
+          const cols = term.cols;
+          const rows = term.rows;
+          if (rows - 1 < MIN_ROWS) return; // too short to wiggle safely
+          if (!safeSend(encodeResize(cols, rows - 1))) return;
+          lastSentCols = cols;
+          lastSentRows = rows - 1;
+          window.setTimeout(() => {
+            if (intentionallyClosed) return;
+            if (safeSend(encodeResize(cols, rows))) {
+              lastSentCols = cols;
+              lastSentRows = rows;
+            }
+          }, 80);
+        };
         // Mobile panes often open while display:none; defer fit until the
         // slot has real dimensions so we do not SIGWINCH a ghost size.
         if (isMobileLayout()) {
@@ -472,10 +541,15 @@ export function XtermPane({
         } else {
           announceSize();
         }
-        // Deliberately no wiggle-resize on reconnect: the xterm buffer is
-        // intact (we skipped ring-buffer replay via ?replay=0) and a
-        // SIGWINCH round-trip would force Ink TUIs to redraw and reset
-        // their internal scroll position.
+        // Fresh attach only: after the replayed frame has painted (and the
+        // foreground command has usually been detected), force the full
+        // repaint described above. Deliberately NOT on reconnect — there the
+        // xterm buffer is intact (ring-buffer replay was skipped via
+        // ?replay=0) and a SIGWINCH round-trip would force Ink TUIs to redraw
+        // and reset their internal scroll position.
+        if (!wasReconnect) {
+          window.setTimeout(forceFullRepaint, 220);
+        }
         armIdle();
       });
 
@@ -506,6 +580,12 @@ export function XtermPane({
       ws.addEventListener('close', (e) => {
         if (idleTimer !== null) window.clearTimeout(idleTimer);
         if (pongWaitTimer !== null) window.clearTimeout(pongWaitTimer);
+        // A connection that closed before proving stable must keep its
+        // backoff — cancel the pending reset so retries++ below sticks.
+        if (stableTimer !== null) {
+          window.clearTimeout(stableTimer);
+          stableTimer = null;
+        }
         dbg('ws close', { paneId, intentionallyClosed, paneExited, retries, code: e.code });
         if (wsRef.current === ws) wsRef.current = null;
         if (intentionallyClosed || paneExited) return;
@@ -514,7 +594,8 @@ export function XtermPane({
         // this component as soon as the optimistic state update lands.
         if (e.code === 4001) return;
         const delay = Math.min(200 * 2 ** retries, 5000);
-        if (retries === 0) term.writeln(`\r\n[connection lost, reconnecting…]`);
+        // Surface "reconnecting" as a DOM badge, not terminal text.
+        setReconnectingRef.current(true);
         retries++;
         retryTimer = window.setTimeout(connect, delay);
       });
@@ -589,6 +670,47 @@ export function XtermPane({
         Math.min(term.rows, Math.floor((clientY - rect.top) / cell.height) + 1),
       );
       return { col, row };
+    };
+    // Plain-text URL under a tapped cell, if any. On mobile a tap is otherwise
+    // sent to the TUI as a mouse click (below) and never reaches xterm's link
+    // opener — so a tapped link did nothing. We re-scan the tapped buffer line
+    // for an http(s) URL spanning the tapped column and open it in THIS
+    // device's browser. (Covers the common case; OSC 8 hyperlinks whose text
+    // isn't itself a URL aren't handled here.)
+    const linkAtTap = (clientX: number, clientY: number): string | null => {
+      const pos = cellAt(clientX, clientY);
+      if (!pos) return null;
+      const buf = term.buffer.active;
+      const tappedRow = buf.viewportY + pos.row - 1;
+
+      // A long URL wraps across rows; xterm flags continuation rows with
+      // `isWrapped`. Walk back to the logical line's start, then join it and
+      // its continuations into one string so a URL split across rows is
+      // matched whole — tracking where the tap falls. (Public xterm buffer
+      // API only — no reaching into internals.)
+      let startRow = tappedRow;
+      const MAX_WRAP = 32;
+      for (let i = 0; i < MAX_WRAP && startRow > 0 && buf.getLine(startRow)?.isWrapped; i++) {
+        startRow--;
+      }
+      let text = '';
+      let tapOffset = -1;
+      for (let r = startRow; r < startRow + MAX_WRAP; r++) {
+        const line = buf.getLine(r);
+        if (!line) break;
+        if (r === tappedRow) tapOffset = text.length + (pos.col - 1);
+        text += line.translateToString(false);
+        const next = buf.getLine(r + 1);
+        if (!next || !next.isWrapped) break;
+      }
+      if (tapOffset < 0) return null;
+      for (const m of text.matchAll(/https?:\/\/[^\s"'<>`]+/g)) {
+        const start = m.index ?? 0;
+        if (tapOffset >= start && tapOffset < start + m[0].length) {
+          return m[0].replace(/[.,;:!?)\]}>'"]+$/, '');
+        }
+      }
+      return null;
     };
     // Re-seed the reference Y from currently active pointers and reset
     // the wheel accumulator. Called when the pointer set changes so a
@@ -709,12 +831,20 @@ export function XtermPane({
       // Also suppress on pointercancel: the OS/browser stole the gesture
       // (notification pull, edge swipe) — the user didn't tap the pane.
       if (e.type === 'pointerup' && !p.moved && pointers.size === 0 && !multiFingerGesture) {
-        // Same as wheel: Cursor has no mouse mode — SGR clicks become text.
-        if (shouldTouchScrollBuffer(term, foregroundCmdRef.current, isMobileLayout())) return;
-        const pos = cellAt(p.startX, p.startY);
-        if (pos) {
-          const seq = `\x1b[<0;${pos.col};${pos.row}M\x1b[<0;${pos.col};${pos.row}m`;
-          safeSend(encodeInput(seq));
+        const tappedUrl = linkAtTap(p.startX, p.startY);
+        if (tappedUrl) {
+          // Tapped a link → open it in THIS device's browser (the phone),
+          // not as a mouse click to the TUI (and never on the host machine).
+          openUri(tappedUrl);
+        } else if (!shouldTouchScrollBuffer(term, foregroundCmdRef.current, isMobileLayout())) {
+          // Cursor / scrollback mode has no mouse reporting — SGR clicks would
+          // become literal text, so only synthesize a click for a real
+          // mouse-mode TUI.
+          const pos = cellAt(p.startX, p.startY);
+          if (pos) {
+            const seq = `\x1b[<0;${pos.col};${pos.row}M\x1b[<0;${pos.col};${pos.row}m`;
+            safeSend(encodeInput(seq));
+          }
         }
       }
       if (pointers.size === 0) {
@@ -736,6 +866,57 @@ export function XtermPane({
     container.addEventListener('pointerup', onPointerUpOrCancel);
     container.addEventListener('pointercancel', onPointerUpOrCancel);
 
+    // Desktop wheel → discrete scroll steps. A raw Chromium mouse notch is
+    // ~100-120px of deltaY; round(|deltaY|/30) turned one notch into 3-4
+    // steps (and a flick into 8), so the transcript flew past — and it had
+    // no sub-notch memory, so a precision wheel / trackpad's stream of tiny
+    // deltas each forced a full step. Accumulate deltaMode-normalized pixels
+    // and emit one step per WHEEL_NOTCH_PX of travel: ~1 step per notch
+    // (the pre-rework feel) while small deltas sum smoothly. Per-pane state
+    // (this closure), so panes don't share an accumulator.
+    const WHEEL_NOTCH_PX = 80; // ~one wheel notch of pixel delta
+    const WHEEL_GESTURE_GAP_MS = 120; // silence that marks a new gesture
+    let wheelAccumPx = 0;
+    let lastWheelAt = 0;
+    const wheelStepsFor = (e: WheelEvent): number => {
+      const cell = getCellDimensions(term);
+      const lineH = cell?.height && cell.height > 0 ? cell.height : 16;
+      // Normalize line/page-mode wheels (Firefox, some mice) to pixels so
+      // they aren't mis-scaled as if deltaY were already in pixels.
+      // deltaMode: 1 = DOM_DELTA_LINE, 2 = DOM_DELTA_PAGE, else pixels.
+      let px = e.deltaY;
+      if (e.deltaMode === 1) {
+        px = e.deltaY * lineH;
+      } else if (e.deltaMode === 2) {
+        px = e.deltaY * lineH * term.rows;
+      }
+      // Start of a new gesture (no wheel events for a beat): emit the first
+      // step right away instead of swallowing it into the accumulator's dead
+      // zone. Hi-res / macOS wheels emit a stream of small deltas per notch,
+      // so without this kick the first notch of travel scrolls nothing and
+      // scrolling feels slow to start.
+      const now = e.timeStamp || performance.now();
+      const idle = now - lastWheelAt > WHEEL_GESTURE_GAP_MS;
+      lastWheelAt = now;
+      // A direction flip discards leftover opposite travel, so the first
+      // step the other way lands immediately.
+      if (px < 0 !== wheelAccumPx < 0) wheelAccumPx = 0;
+      wheelAccumPx += px;
+      let steps = Math.trunc(wheelAccumPx / WHEEL_NOTCH_PX);
+      if (idle && steps === 0 && Math.abs(px) >= 2) {
+        // Kick: one step now in the motion direction; consume the travel.
+        steps = px < 0 ? -1 : 1;
+        wheelAccumPx = 0;
+      } else if (steps !== 0) {
+        wheelAccumPx -= steps * WHEEL_NOTCH_PX;
+      }
+      // Clamp one violent delta (free-spin flick coalesced into a single
+      // event) so it can't leap multiple pages at once.
+      if (steps > 4) steps = 4;
+      else if (steps < -4) steps = -4;
+      return steps;
+    };
+
     // Capture-phase wheel on the pane container — must run before xterm's
     // bubble listener on term.element, which otherwise sends ↑/↓ to the
     // input composer when the TUI has no xterm scrollback.
@@ -754,21 +935,30 @@ export function XtermPane({
         deltaY: e.deltaY,
       });
       if (!forward) return false;
+      const steps = wheelStepsFor(e);
+      // Sub-notch travel: consumed into the accumulator. Still report the
+      // event as handled (return true) so xterm's fallback wheel handler
+      // doesn't also process it and double-count this delta.
+      if (steps === 0) return true;
       const hit = cellAt(e.clientX, e.clientY);
       // Aim at the transcript band (upper third), not the input row.
       const col = hit?.col ?? Math.max(1, Math.floor(term.cols / 2));
       const row = hit?.row ?? Math.max(1, Math.floor(term.rows / 4));
       const transcriptRow = Math.min(row, Math.max(1, Math.floor(term.rows / 3)));
+      // The encoders derive their step count from |delta|/stepPx; hand them
+      // a synthetic delta that yields exactly `steps` (one per accumulated
+      // notch) in the original direction, instead of the raw pixel delta.
+      const delta = steps * WHEEL_STEP_PX;
       const sent =
-        triggerWheelMouseEvent(term, col, transcriptRow, e.deltaY, WHEEL_STEP_PX) ||
+        triggerWheelMouseEvent(term, col, transcriptRow, delta, WHEEL_STEP_PX) ||
         safeSend(
-          encodeInput(wheelInputForPty(term, col, transcriptRow, e.deltaY, WHEEL_STEP_PX, ink)),
+          encodeInput(wheelInputForPty(term, col, transcriptRow, delta, WHEEL_STEP_PX, ink)),
         );
       if (!sent) {
         dbg('wheel dropped: ws not open');
         return false;
       }
-      dbg('wheel→pty', { col, row: transcriptRow, deltaY: e.deltaY });
+      dbg('wheel→pty', { col, row: transcriptRow, steps, deltaY: e.deltaY });
       return true;
     };
     const onWheelCapture = (e: WheelEvent) => {
@@ -1158,7 +1348,10 @@ export function XtermPane({
     // a pane so the next remaining pane picks up focus without a click.
     const onFocusPane = (e: Event) => {
       const detail = (e as CustomEvent<{ paneId?: string }>).detail;
-      if (detail?.paneId === paneId) term.focus();
+      // Not on mobile: the MobileInputBar owns input there, and focusing the
+      // terminal's hidden textarea would yank focus off the composer and
+      // dismiss the soft keyboard.
+      if (detail?.paneId === paneId && !isMobileLayout()) term.focus();
     };
     window.addEventListener('muxpad:focus-pane', onFocusPane);
 
@@ -1442,6 +1635,12 @@ export function XtermPane({
       }`}
     >
       <div className="xterm-pane" ref={containerRef} tabIndex={0} />
+      {reconnecting ? (
+        <div className="xterm-reconnecting" role="status" aria-live="polite">
+          <span className="xterm-reconnecting-dot" aria-hidden="true" />
+          Reconnecting…
+        </div>
+      ) : null}
       {pasteToast ? (
         <div className="xterm-paste-toast" title={pasteToast.path}>
           <img

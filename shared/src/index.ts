@@ -1,4 +1,6 @@
 export * from './types.js';
+export * from './chat-events.js';
 export * from './ws-protocol.js';
 export * from './layout.js';
 export * from './ink-replay.js';
+export * from './tab-icons.js';
