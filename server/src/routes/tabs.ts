@@ -135,6 +135,10 @@ export function tabsRoutes(deps: {
         slug: z.string().optional(),
         icon: z.string().optional(),
         layout: LayoutNodeSchema.optional(),
+        // Desktop split ⇄ tabbed rendering mode. Persisted so the choice
+        // follows the user across devices (the emitted tab.updated syncs
+        // other connected clients live).
+        view_mode: z.enum(['split', 'tabbed']).optional(),
       })
       .parse(await c.req.json());
     try {

@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
+import type { PaneSpec } from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
-import { PtydCache } from './ptyd-cache.js';
+import { PtydCache, decoratePane } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 
 // We don't need a real PtydClient for unit tests — only the EventEmitter
@@ -180,5 +181,73 @@ describe('PtydCache', () => {
     expect(removed).toEqual(['p1']);
     cache.forget('p1');
     expect(removed).toEqual(['p1']); // idempotent
+  });
+
+  it('setAgentBusy makes a pane busy with zero PTY activity and fans paneChange edges', () => {
+    // A headless chat turn writes the transcript file, not the PTY — the
+    // activity detector never sees it. setAgentBusy is what lights the
+    // tab/workspace spinner for chat work.
+    const cache = new PtydCache();
+    const c = fakeClient();
+    cache.attach(c);
+    const changes: string[] = [];
+    cache.on('paneChange', (id) => changes.push(id));
+    expect(cache.getBusy('p1')).toBe(false);
+    cache.setAgentBusy('p1', true);
+    expect(cache.getBusy('p1')).toBe(true);
+    cache.setAgentBusy('p1', true); // idempotent — no duplicate event
+    cache.setAgentBusy('p1', false);
+    expect(cache.getBusy('p1')).toBe(false);
+    expect(changes).toEqual(['p1', 'p1']); // exactly the true and false edges
+  });
+
+  it('agent busy composes with PTY busy: no spurious edges while the other holds it', async () => {
+    const cache = new PtydCache({ busyQuietMs: 120, busyWarmupMs: 20 });
+    const c = fakeClient();
+    cache.attach(c);
+    // Drive PTY busy true first.
+    (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
+    await new Promise((r) => setTimeout(r, 30));
+    (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
+    expect(cache.getBusy('p1')).toBe(true);
+    const changes: string[] = [];
+    cache.on('paneChange', (id) => changes.push(id));
+    // Agent turn starts and ends while PTY busy holds — effective busy never
+    // flips, so no agent-driven edges fan out.
+    cache.setAgentBusy('p1', true);
+    cache.setAgentBusy('p1', false);
+    expect(changes).toEqual([]);
+    // Now agent busy holds through the PTY decay: still busy after quiet.
+    cache.setAgentBusy('p1', true);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(cache.getBusy('p1')).toBe(true); // PTY decayed; agent turn holds it
+    cache.setAgentBusy('p1', false);
+    expect(cache.getBusy('p1')).toBe(false);
+  });
+
+  it('forget() clears agent busy so a recreated pane id starts clean', () => {
+    const cache = new PtydCache();
+    cache.setAgentBusy('p1', true);
+    expect(cache.getBusy('p1')).toBe(true);
+    cache.forget('p1');
+    expect(cache.getBusy('p1')).toBe(false);
+  });
+
+  it('decoratePane stamps busy from an agent turn (the tab/workspace rollup source)', () => {
+    const cache = new PtydCache();
+    const pane: PaneSpec = {
+      id: 'p1',
+      tab_id: 't1',
+      kind: 'shell',
+      url: null,
+      shell: '/bin/zsh',
+      startup_cmd: null,
+      cwd: '/tmp',
+      env: null,
+      created_at: 0,
+    };
+    expect(decoratePane(cache, pane).busy).toBe(false);
+    cache.setAgentBusy('p1', true);
+    expect(decoratePane(cache, pane).busy).toBe(true);
   });
 });

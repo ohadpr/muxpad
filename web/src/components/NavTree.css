@@ -731,15 +731,15 @@ body.sidenav-resizing iframe {
   flex: 0 0 auto;
   display: flex;
   align-items: stretch;
-  /* Match the pane-header height (not the top-bar height) so the brand's
-     bottom hairline lines up exactly with the first pane header's bottom
-     line across the board. */
-  height: var(--chrome-pane-h);
+  /* Match the pane tab-strip height (--chrome-h) so the brand's bottom
+     hairline lines up exactly with the tab strip's bottom line at the top
+     of the workspace, in both split and tabbed views. */
+  height: var(--chrome-h);
   border-bottom: 1px solid var(--border);
 }
 .sidenav-brand .brand {
   flex: 1;
-  height: var(--chrome-pane-h);
+  height: var(--chrome-h);
   border-right: none;
   /* Center the wordmark+mark so the brand reads as a title plate, set apart
      from the left-aligned workspace/tab rows below it. */

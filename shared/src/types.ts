@@ -49,6 +49,11 @@ export const PaneSpecSchema = z.object({
   cwd: z.string().nullable().default(null),
   env: z.record(z.string()).nullable().default(null),
   created_at: z.number(),
+  // User-set pane name. Persistent (stored on the row), overriding the
+  // live-derived label (terminal title → foreground_cmd → "Pane N") so a
+  // rename sticks and isn't clobbered by whatever claude/the shell writes
+  // to the terminal title. Null/absent → fall back to the live label.
+  name: z.string().nullable().optional(),
   // Runtime-only fields decorated by the route layer.
   title: z.string().nullable().optional(),
   foreground_cmd: z.string().nullable().optional(),
@@ -80,6 +85,14 @@ export const TabSchema = z.object({
   // a random default at creation; user-changeable via the icon picker.
   icon: z.string().optional(),
   layout: LayoutNodeSchema,
+  // How the tab arranges its panes on desktop: the react-mosaic tiling
+  // ('split', the default) or one-pane-at-a-time with a header strip
+  // ('tabbed'). Server-persisted so the choice survives reloads and follows
+  // the user across devices, like the pane-level terminal/chat view_mode.
+  // Purely a rendering choice — the split layout tree above is kept either
+  // way, so flipping back restores the tiling. Optional for rows/servers
+  // that predate the column.
+  view_mode: z.enum(['split', 'tabbed']).optional(),
   created_at: z.number(),
   updated_at: z.number(),
   // Runtime-only flag. True iff at least one pane in this tab has

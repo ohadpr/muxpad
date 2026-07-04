@@ -526,4 +526,9 @@ select:focus {
   .brand-text-side {
     display: none;
   }
+  /* Taller chrome bars on mobile — 36px is cramped for a thumb; 46px gives the
+     workspace + pane tab strips a comfortable touch height. */
+  :root {
+    --chrome-h: 46px;
+  }
 }
