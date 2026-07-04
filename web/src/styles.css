@@ -383,6 +383,33 @@ select:focus {
     height: 100lvh;
   }
 }
+/* Top chrome bar: brand + (mobile breadcrumb / picker spacer) + settings laid
+   out in a row. Owned here since the desktop TabBar was removed (desktop is
+   sidebar-only); the bar now only renders on mobile and on the '/' picker. */
+.ws-tabbar {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+  background: var(--bg-tabbar);
+  border-bottom: 1px solid var(--border);
+  height: var(--chrome-h);
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size);
+  flex: 0 0 auto;
+}
+.ws-tabbar > .brand {
+  flex: 0 0 auto;
+}
+.ws-tabbar-spacer {
+  flex: 1;
+}
+@media (max-width: 720px) {
+  .ws-tabbar {
+    padding: 0;
+    gap: 0;
+  }
+}
 .app-layout > .ws-tabbar {
   flex: 0 0 auto;
 }
