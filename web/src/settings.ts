@@ -24,21 +24,13 @@ const THEME_ALIASES: Record<string, Theme> = {
   latte: 'github-light',
 };
 
-// Where the workspace/tab navigator lives on desktop. 'top' is the
-// classic WorkspaceSwitcher + TabBar chrome; 'sidebar' replaces both
-// with a persistent left NavTree. Mobile ignores this (always the
-// drop-down panel tree).
-export type NavLayout = 'top' | 'sidebar';
-
 export interface Settings {
   fontSize: number;
   fontFamily: string;
   theme: Theme;
-  navLayout: NavLayout;
-  // Persisted width of the desktop sidebar (sidebar nav layout only). The
-  // upper bound is enforced live while dragging (never wider than the longest
-  // tab name + its status/close icon needs); this stored value is only
-  // sanity-clamped on read.
+  // Persisted width of the desktop sidebar. The upper bound is enforced live
+  // while dragging (never wider than the longest tab name + its status/close
+  // icon needs); this stored value is only sanity-clamped on read.
   sidebarWidth: number;
 }
 
@@ -52,7 +44,6 @@ const DEFAULTS: Settings = {
   fontSize: 14,
   fontFamily: 'Menlo, Monaco, monospace',
   theme: 'acme',
-  navLayout: 'top',
   sidebarWidth: 240,
 };
 
@@ -84,7 +75,6 @@ function read(): Settings {
         if (t in THEME_ALIASES) return THEME_ALIASES[t] as Theme;
         return DEFAULTS.theme;
       })(),
-      navLayout: parsed.navLayout === 'sidebar' ? 'sidebar' : DEFAULTS.navLayout,
       sidebarWidth:
         typeof parsed.sidebarWidth === 'number' && Number.isFinite(parsed.sidebarWidth)
           ? Math.min(SIDENAV_MAX_WIDTH, Math.max(SIDENAV_MIN_WIDTH, parsed.sidebarWidth))

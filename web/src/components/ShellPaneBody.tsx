@@ -51,9 +51,24 @@ export function ShellPaneBody({
   const [agentRunning, setAgentRunning] = useState(false);
   useEffect(() => {
     let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Poll cadence with backoff. A pane launched via `muxpad claude` has a
+    // session and polls fast (2.5s) to keep the toggle/activity-dot/view-mode
+    // in sync. A session-LESS pane (plain shell) 404s forever otherwise, so we
+    // back off geometrically up to 30s to kill the console/network spam — while
+    // still checking occasionally, since the pane can gain a session later
+    // (user runs `muxpad claude`). A found session resets to the fast cadence.
+    const FAST = 2500;
+    const MAX = 30000;
+    let delay = FAST;
     const check = async () => {
       const r = await fetch(`/api/agent-sessions/by-pane/${pane.id}`).catch(() => null);
-      if (!alive || !r?.ok) return;
+      if (!alive) return;
+      if (!r?.ok) {
+        delay = Math.min(delay * 2, MAX);
+        return;
+      }
+      delay = FAST;
       const s = (await r.json().catch(() => null)) as {
         view_mode?: string;
         status?: string;
@@ -77,11 +92,15 @@ export function ShellPaneBody({
         setPaneFace(pane.id, { face: s.view_mode, url: local.url });
       }
     };
-    void check();
-    const iv = setInterval(() => void check(), 2500);
+    const tick = async () => {
+      await check();
+      if (!alive) return;
+      timer = setTimeout(() => void tick(), delay);
+    };
+    void tick();
     return () => {
       alive = false;
-      clearInterval(iv);
+      clearTimeout(timer);
     };
   }, [pane.id]);
 

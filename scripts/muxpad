@@ -85,11 +85,25 @@ cmd_start() {
     return
   fi
 
-  if [ ! -f "$ROOT/server/dist/index.js" ] \
+  if [ ! -f "$ROOT/shared/dist/index.js" ] \
+    || [ ! -f "$ROOT/server/dist/index.js" ] \
     || [ ! -f "$ROOT/server/dist/ptyd/index.js" ] \
     || [ ! -f "$ROOT/web/dist/index.html" ]; then
     echo "building..."
-    (cd "$ROOT" && pnpm build) > /dev/null
+    # dist is missing/incomplete, but the tsc -b build cache (*.tsbuildinfo)
+    # may have survived (manual cleanup, editor action, partial sync). tsc
+    # trusts that cache, believes it's already built, and skips emitting — so
+    # dist stays incomplete and the server later dies with a baffling
+    # "Cannot find module '@muxpad/shared'" that looks like a code bug. Drop
+    # the cache here so the build regenerates dist from scratch, in lockstep.
+    rm -f "$ROOT/shared/tsconfig.tsbuildinfo" "$ROOT/server/tsconfig.tsbuildinfo"
+    # Capture build output; on failure print the tail so the real tsc error is
+    # visible instead of a bare "ELIFECYCLE Command failed" with no context.
+    if ! (cd "$ROOT" && pnpm build) > "$LOG_FILE.build" 2>&1; then
+      echo "build failed — last 50 lines of $LOG_FILE.build:" >&2
+      tail -50 "$LOG_FILE.build" >&2
+      exit 1
+    fi
   fi
 
   # Start ptyd first (if not already up). The main server connects to its
