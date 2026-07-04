@@ -10,28 +10,18 @@ import { MobileNavSwitcher } from './MobileNavSwitcher';
 import { MoveUndoToast } from './MoveUndoToast';
 import { NavTree } from './NavTree';
 import { SettingsMenu } from './SettingsMenu';
-import { TabBar } from './TabBar';
 import { WorkspaceShell } from './WorkspaceLayout';
-import { WorkspaceSwitcher } from './WorkspaceSwitcher';
-
-// Cross-workspace attention is surfaced exclusively on the WorkspaceSwitcher
-// trigger. The brand mark used to carry a duplicate dot on the same
-// condition, which read as two separate signals — removed to keep one
-// canonical place to look.
 
 const REPO_URL = 'https://github.com/ohadpr/muxpad';
 
 /**
- * Persistent application chrome. Renders the top bar with the brand,
- * the active workspace's tab list (when inside one), and the Settings
- * menu. The right-side "muxpad <build>" wordmark doubles as the GitHub
- * repo link. Popout routes are mounted outside this layout.
+ * Persistent application chrome. Popout routes are mounted outside this layout.
  *
- * Navigator placement (desktop) follows settings.navLayout:
- *   'top'     — WorkspaceSwitcher + TabBar in the chrome bar (classic).
- *   'sidebar' — a persistent left NavTree replaces both; the top bar
- *               slims down to brand + build + settings.
- * Mobile always gets the MobileNavSwitcher breadcrumb + drop-down panel.
+ * Desktop, inside a workspace: a persistent left NavTree sidebar is the only
+ * navigator; it absorbs the top bar entirely (brand at its head, build +
+ * settings at its foot). Mobile gets the MobileNavSwitcher breadcrumb +
+ * drop-down panel in a top bar. The workspace picker ('/') has no workspace to
+ * host a sidebar, so it keeps a slim brand + build + settings top bar.
  */
 export function AppLayout() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -47,7 +37,8 @@ export function AppLayout() {
   const activeWorkspace = wsSlug ? workspaces.find((w) => w.slug === wsSlug) : null;
   const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
   const settings = useSettings();
-  const sidebarMode = !isMobile && settings.navLayout === 'sidebar';
+  // Desktop always uses the persistent left sidebar; mobile never can.
+  const sidebarMode = !isMobile;
   const sidenavRef = useRef<HTMLElement>(null);
   const [visitedWsSlugs, setVisitedWsSlugs] = useState<Set<string>>(() => new Set());
   useEffect(() => {
@@ -73,22 +64,9 @@ export function AppLayout() {
           <Brand asLink={true} responsive={true} markOnly={!!activeWorkspace} />
           {activeWorkspace && isMobile && (
             // Single merged trigger on mobile: workspace + tab breadcrumb
-            // opening the drop-down NavTree panel. Replaces WorkspaceSwitcher
-            // + TabBar for thumb-economy reasons.
+            // opening the drop-down NavTree panel. The top bar only ever hosts
+            // navigation on mobile now — desktop lives in the sidebar.
             <MobileNavSwitcher activeWorkspaceSlug={activeWorkspace.slug} />
-          )}
-          {activeWorkspace && !isMobile && (
-            <>
-              <WorkspaceSwitcher activeWorkspaceSlug={activeWorkspace.slug} />
-              {/* `key` forces a remount when the workspace changes so the
-                  tab list never momentarily shows stale entries from the
-                  previous workspace. */}
-              <TabBar
-                key={activeWorkspace.id}
-                workspaceId={activeWorkspace.id}
-                workspaceSlug={activeWorkspace.slug}
-              />
-            </>
           )}
           {!activeWorkspace && <span className="ws-tabbar-spacer" />}
           <a

@@ -392,8 +392,8 @@ select:focus {
   flex: 1;
   min-height: 0;
 }
-/* Row holding the optional sidebar (sidenav, see NavTree.css) and the
-   workspace hosts. With navLayout 'top' it's just the hosts. */
+/* Row holding the sidebar (sidenav, see NavTree.css) and the workspace hosts.
+   On desktop the sidebar is always present; on mobile it's just the hosts. */
 .app-body {
   display: flex;
   align-items: stretch;
