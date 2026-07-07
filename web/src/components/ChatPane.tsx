@@ -270,6 +270,9 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
           fetch(`/api/agent-sessions/${paneId}/takeover`, { method: 'POST' })
             .then((r) => {
               if (r.ok && pendingText.current) {
+                // Re-arm delivery tracking — this resend can die on a zombie
+                // socket exactly like a composer send.
+                armSendWatchdog(pendingText.current);
                 wsRef.current?.send(JSON.stringify({ t: 'send', text: pendingText.current }));
               } else {
                 setSending(false);
@@ -374,30 +377,14 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
     };
   }, [paneId]);
 
-  const sendMessage = () => {
-    const text = input.trim();
-    if (!text || sending) return;
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      // Don't fire into a dead socket (the browser would drop it silently).
-      // Keep the text in the composer, kick a reconnect, let the user retry.
-      setNotice('Reconnecting — try again in a moment.');
-      reconnectNow.current();
-      return;
-    }
-    pendingText.current = text; // held for a silent takeover-and-resend if blocked
-    takeoverTried.current = false;
+  // Watchdog: a socket can look OPEN yet be dead (mobile background/network
+  // flip) — a send then vanishes with no close event for minutes. No ack in
+  // time → restore the composer and close the zombie so the backoff machinery
+  // brings up a fresh socket (a close on a dead link can dawdle in CLOSING,
+  // so don't wait for onclose to do the restoring). Armed by every path that
+  // fires a `send` frame — the composer AND the blocked-takeover resend.
+  const armSendWatchdog = (text: string) => {
     acked.current = false;
-    setOptimisticUser(text); // show it immediately, don't wait for the transcript
-    ws.send(JSON.stringify({ t: 'send', text }));
-    setInput('');
-    setNotice(null);
-    setSending(true);
-    // Watchdog: a socket can look OPEN yet be dead (mobile background/network
-    // flip) — the send then vanishes with no close event for minutes. No ack
-    // in time → restore the composer and close the zombie so the backoff
-    // machinery brings up a fresh socket (a close on a dead link can dawdle
-    // in CLOSING, so don't wait for onclose to do the restoring).
     window.clearTimeout(sendWatchdog.current);
     sendWatchdog.current = window.setTimeout(() => {
       if (acked.current) return;
@@ -413,6 +400,27 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
         // already closing
       }
     }, 6000);
+  };
+
+  const sendMessage = () => {
+    const text = input.trim();
+    if (!text || sending) return;
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      // Don't fire into a dead socket (the browser would drop it silently).
+      // Keep the text in the composer, kick a reconnect, let the user retry.
+      setNotice('Reconnecting — try again in a moment.');
+      reconnectNow.current();
+      return;
+    }
+    pendingText.current = text; // held for a silent takeover-and-resend if blocked
+    takeoverTried.current = false;
+    setOptimisticUser(text); // show it immediately, don't wait for the transcript
+    ws.send(JSON.stringify({ t: 'send', text }));
+    setInput('');
+    setNotice(null);
+    setSending(true);
+    armSendWatchdog(text);
   };
   const stop = () => wsRef.current?.send(JSON.stringify({ t: 'stop' }));
 
