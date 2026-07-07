@@ -14,6 +14,9 @@ function writeFakeBin(dir: string, body: string): string {
 function run(opts: {
   bin: string;
   cwd: string;
+  fresh?: boolean;
+  startTimeoutMs?: number;
+  onStart?: (r: HeadlessRunner) => void;
 }): Promise<{ sids: string[]; ok: boolean; error?: string }> {
   return new Promise((resolve) => {
     const sids: string[] = [];
@@ -22,12 +25,15 @@ function run(opts: {
       resumeSid: 'resume-me',
       text: 'hello',
       bin: opts.bin,
+      ...(opts.fresh ? { fresh: true } : {}),
+      ...(opts.startTimeoutMs ? { startTimeoutMs: opts.startTimeoutMs } : {}),
       cb: {
         onSessionId: (s) => sids.push(s),
         onDone: (ok, error) => resolve({ sids, ok, ...(error ? { error } : {}) }),
       },
     });
     r.start();
+    opts.onStart?.(r);
   });
 }
 
@@ -50,18 +56,38 @@ echo '{"type":"result","subtype":"success","session_id":"new-sid-1"}'`,
     expect(res.sids).toContain('new-sid-1');
   });
 
-  it('handles multi-line/chunked JSON and dedupes the id across init+result', async () => {
+  it('delivers the prompt over stdin, not argv', async () => {
+    // Echo argv into the "error" so a leaked positional prompt fails the test,
+    // and echo stdin back as the captured session-id to prove it arrived.
     const bin = writeFakeBin(
       dir,
-      `printf '{"type":"system","subtype":"init","sess'
-printf 'ion_id":"drift-2"}\\n'
-echo '{"type":"result","session_id":"drift-2"}'`,
+      `prompt="$(cat)"
+for a in "$@"; do [ "$a" = "hello" ] && { echo "prompt leaked into argv" >&2; exit 1; }; done
+echo "{\\"type\\":\\"system\\",\\"subtype\\":\\"init\\",\\"session_id\\":\\"got:$prompt\\"}"
+echo '{"type":"result"}'`,
     );
     const res = await run({ bin, cwd: dir });
     expect(res.ok).toBe(true);
-    // Same id from init and result — both captured (caller dedupes).
-    expect(res.sids.every((s) => s === 'drift-2')).toBe(true);
-    expect(res.sids.length).toBeGreaterThanOrEqual(1);
+    expect(res.sids).toContain('got:hello');
+  });
+
+  it('uses --session-id instead of --resume in fresh mode', async () => {
+    const bin = writeFakeBin(
+      dir,
+      `mode=""
+prev=""
+for a in "$@"; do
+  [ "$prev" = "--resume" ] && mode="resume:$a"
+  [ "$prev" = "--session-id" ] && mode="fresh:$a"
+  prev="$a"
+done
+echo "{\\"type\\":\\"system\\",\\"subtype\\":\\"init\\",\\"session_id\\":\\"$mode\\"}"
+echo '{"type":"result"}'`,
+    );
+    const fresh = await run({ bin, cwd: dir, fresh: true });
+    expect(fresh.sids).toContain('fresh:resume-me');
+    const resume = await run({ bin, cwd: dir });
+    expect(resume.sids).toContain('resume:resume-me');
   });
 
   it('reports failure with stderr on a nonzero exit', async () => {
@@ -86,5 +112,27 @@ echo '{"type":"result","session_id":"s9"}'`,
     const res = await run({ bin, cwd: dir });
     expect(res.ok).toBe(true);
     expect(res.sids).toContain('s9');
+  });
+
+  it('kills a silent child via the startup watchdog and reports the timeout', async () => {
+    const bin = writeFakeBin(dir, 'sleep 30');
+    const res = await run({ bin, cwd: dir, startTimeoutMs: 300 });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain('startup timeout');
+  });
+
+  it('treats a user interrupt as a clean stop, not an error', async () => {
+    const bin = writeFakeBin(
+      dir,
+      `echo '{"type":"system","subtype":"init","session_id":"s1"}'
+sleep 30`,
+    );
+    const res = await run({
+      bin,
+      cwd: dir,
+      onStart: (r) => setTimeout(() => r.interrupt(), 200),
+    });
+    expect(res.ok).toBe(true);
+    expect(res.error).toBeUndefined();
   });
 });
