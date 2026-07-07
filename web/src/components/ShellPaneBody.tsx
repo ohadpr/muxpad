@@ -156,18 +156,29 @@ export function ShellPaneBody({
         }
       } else {
         // Only relaunch if Claude ISN'T already running in the pane — otherwise
-        // the command would be typed INTO the live TUI as a prompt (bug). If it's
-        // already there (e.g. a take-over failed, or we're just peeking), reveal
-        // the terminal as-is.
+        // the command would be typed INTO the live TUI as a prompt (bug). Same
+        // for any other foreground program (vim, a running build, ssh): typing
+        // a command into those is worse than doing nothing, so we only type
+        // when the pane is sitting at its shell prompt. If Claude is already
+        // there (e.g. a take-over failed, or we're just peeking), reveal the
+        // terminal as-is.
         const fgRes = await fetch(`/api/agent-sessions/${pane.id}/foreground`).catch(() => null);
-        const fg = fgRes?.ok ? ((await fgRes.json()) as { isClaude?: boolean }) : null;
-        if (!fg?.isClaude) {
+        const fg = fgRes?.ok
+          ? ((await fgRes.json()) as { isClaude?: boolean; foreground?: string | null })
+          : null;
+        const fgCmd = (fg?.foreground ?? '').trim();
+        const atShellPrompt = !fgCmd || /(^|[/\s-])(zsh|bash|fish|dash|sh|nu)$/.test(fgCmd);
+        if (!fg?.isClaude && atShellPrompt) {
           const res = await fetch(`/api/agent-sessions/by-pane/${pane.id}`).catch(() => null);
           const s = res?.ok ? ((await res.json()) as { current_sid?: string | null }) : null;
           if (s?.current_sid) {
             await sendPaneInput(pane.id, `muxpad claude --resume ${s.current_sid}\r`);
             await new Promise((r) => setTimeout(r, 1200));
           }
+        } else if (!fg?.isClaude && !atShellPrompt) {
+          showNotice(
+            'Another program is in the terminal — resume Claude manually when it is free.',
+          );
         }
         setPaneFace(pane.id, { face: 'terminal', url });
       }
