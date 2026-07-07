@@ -188,10 +188,20 @@ export const ExternalUrlOpenEventSchema = z.object({
   pane_id: z.string().optional(),
 });
 
+// A pane's agent session changed (runner attached/detached, view-mode
+// switched, turn started/ended, session id recorded). Deliberately thin —
+// pane_id only — the client re-fetches /api/agent-sessions/by-pane/:id, so
+// the event can't go stale and the payload can't drift from the store.
+export const AgentSessionUpdatedEventSchema = z.object({
+  type: z.literal('agent_session.updated'),
+  pane_id: z.string(),
+});
+
 export const MuxpadEventSchema = z.discriminatedUnion('type', [
   PaneAddedEventSchema,
   PaneRemovedEventSchema,
   PaneUpdatedEventSchema,
+  AgentSessionUpdatedEventSchema,
   TabAddedEventSchema,
   TabUpdatedEventSchema,
   TabRemovedEventSchema,

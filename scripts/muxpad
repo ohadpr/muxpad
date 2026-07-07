@@ -1021,6 +1021,25 @@ cmd_claude() {
   fi
 }
 
+# `muxpad agent [--resume <sid>]` — run a persistent, chat-native Claude
+# session in THIS pane. Unlike `muxpad claude` (the interactive TUI), this
+# hosts the session via the Agent SDK and is driven from the pane's web chat
+# face; the terminal shows a compact activity log. The pane's startup command
+# is rewritten to `muxpad agent --resume <sid>` by the server, so a ptyd
+# restart or reboot springs the pane back into the same session from disk.
+cmd_agent() {
+  if [ -z "${MUXPAD_PANE_ID:-}" ]; then
+    echo "muxpad agent: must be run inside a muxpad pane (no MUXPAD_PANE_ID)" >&2
+    exit 1
+  fi
+  local runner="$ROOT/server/dist/agent-runner/index.js"
+  if [ ! -f "$runner" ]; then
+    echo "muxpad agent: runner not built ($runner missing) — run 'pnpm build' in $ROOT" >&2
+    exit 1
+  fi
+  exec node "$runner" "$@"
+}
+
 # Internal: SessionStart hook target installed by `muxpad claude`. Reads the
 # hook payload JSON on stdin, extracts session_id, and reports it to the
 # daemon for the current pane. Always exits 0 — it runs inside a live Claude
@@ -1099,6 +1118,11 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      once the server is listening, e.g.
                                      `muxpad app-url http://localhost:5173 --label Web`.
 
+  agent [--resume <sid>]             run a persistent chat-native Claude session
+                                     in THIS pane: drive it from the pane's web
+                                     chat face; the terminal shows an activity
+                                     log. Auto-resumes across ptyd restarts via
+                                     the pane's saved startup command.
   claude [claude args...]            launch Claude Code in THIS pane as a
                                      muxpad-tracked session so it can be viewed
                                      and driven from the web chat (and switched
@@ -1157,6 +1181,7 @@ case "$VERB" in
   open) cmd_open "${ARGS[@]:1}" ;;
   app-url) cmd_app_url "${ARGS[@]:1}" ;;
   claude) cmd_claude "${ARGS[@]:1}" ;;
+  agent) cmd_agent "${ARGS[@]:1}" ;;
   _agent-hook) cmd_agent_hook ;;
   ''|help|-h|--help) usage; [ "$VERB" = '' ] && exit 1 || exit 0 ;;
   *)

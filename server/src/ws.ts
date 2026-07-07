@@ -2,6 +2,7 @@ import type { Server } from 'node:http';
 import { homedir } from 'node:os';
 import type Database from 'better-sqlite3';
 import { WebSocket, WebSocketServer } from 'ws';
+import { type RunnerFrame, type ServerFrame, parseFrame } from './agent-runner/protocol.js';
 import { HeadlessRunner } from './chat/HeadlessRunner.js';
 import { TranscriptTail, findTranscript } from './chat/TranscriptReader.js';
 import { findConversationRival } from './chat/conversation-guard.js';
@@ -60,6 +61,22 @@ export function attachWsServer(deps: {
   // that (re)connects mid-turn can show the partial assistant text instead of
   // a bare typing indicator until the next delta.
   const streamBufs = new Map<string, string>();
+  // Connected agent runners (`muxpad agent` processes living in panes),
+  // keyed by pane. A connected runner owns its pane's session: chat sends
+  // and stops relay to it instead of spawning per-turn `claude -p` workers,
+  // and its turn lifecycle fans back out through chatClients.
+  interface AgentRunnerConn {
+    ws: WebSocket;
+    sid: string | null;
+    turnActive: boolean;
+  }
+  const agentRunners = new Map<string, AgentRunnerConn>();
+  const sendToRunner = (paneId: string, frame: ServerFrame): boolean => {
+    const r = agentRunners.get(paneId);
+    if (!r || r.ws.readyState !== WebSocket.OPEN) return false;
+    r.ws.send(JSON.stringify(frame));
+    return true;
+  };
 
   // Server-side liveness detection. A WebSocket severed abruptly (browser
   // hard-reload, crashed tab, network blip) does NOT fire 'close' until the
@@ -112,6 +129,101 @@ export function attachWsServer(deps: {
         });
         ws.on('close', unsub);
         ws.on('error', unsub);
+      });
+      return;
+    }
+    // Agent runner link: a `muxpad agent` process (living inside the pane's
+    // pty) hosting a persistent Claude session. On hello it becomes the
+    // pane's single writer, the pane's shared face flips to chat, and the
+    // pane's startup_cmd is rewritten to `muxpad agent --resume <sid>` so a
+    // ptyd restart/reboot self-heals into the same session. Turn lifecycle
+    // frames fan out to the pane's chat clients; sends/stops relay back.
+    const runnerMatch = url.pathname.match(/^\/ws\/agent-runner\/([^/]+)$/);
+    if (runnerMatch) {
+      const paneId = runnerMatch[1] as string;
+      if (!panes.getById(paneId)) {
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        const live = ws as WebSocket & { isAlive?: boolean };
+        live.isAlive = true;
+        ws.on('pong', () => {
+          live.isAlive = true;
+        });
+        // Newest runner wins: a respawn (pane reload, crashed process) may
+        // connect before the old socket's close fires. Terminate the old one
+        // so its close handler can't tear down the new registration.
+        const prev = agentRunners.get(paneId);
+        if (prev) {
+          agentRunners.delete(paneId);
+          try {
+            prev.ws.terminate();
+          } catch {
+            // already dead
+          }
+        }
+        const conn: AgentRunnerConn = { ws, sid: null, turnActive: false };
+        agentRunners.set(paneId, conn);
+        const bcast = (obj: unknown) => {
+          for (const fn of chatClients.get(paneId) ?? []) fn(obj);
+        };
+        const emitChange = () =>
+          deps.events.emit({ type: 'agent_session.updated', pane_id: paneId });
+        ws.on('message', (data) => {
+          const frame = parseFrame<RunnerFrame>(data);
+          if (!frame) return;
+          if (frame.t === 'hello') {
+            conn.sid = frame.sid;
+            conn.turnActive = frame.turnActive;
+            agents.attachRunner({ pane_id: paneId, cwd: frame.cwd, session_id: frame.sid });
+            if (frame.turnActive) agents.setStatus(paneId, 'running');
+            deps.cache.setAgentBusy(paneId, frame.turnActive);
+            // Self-heal: the pane's startup command now resumes THIS session,
+            // so the pane survives ptyd restarts and reboots.
+            panes.setStartupCmd(paneId, `muxpad agent --resume ${frame.sid}`);
+            emitChange();
+          } else if (frame.t === 'turn-start') {
+            conn.turnActive = true;
+            streamBufs.set(paneId, '');
+            agents.setStatus(paneId, 'running');
+            deps.cache.setAgentBusy(paneId, true);
+            bcast({ t: 'turn-start' });
+            emitChange();
+          } else if (frame.t === 'stream') {
+            if (typeof frame.delta !== 'string') return;
+            streamBufs.set(paneId, (streamBufs.get(paneId) ?? '') + frame.delta);
+            bcast({ t: 'stream', delta: frame.delta });
+          } else if (frame.t === 'turn-done') {
+            conn.turnActive = false;
+            streamBufs.delete(paneId);
+            agents.setStatus(paneId, 'idle');
+            deps.cache.setAgentBusy(paneId, false);
+            bcast({
+              t: 'turn-done',
+              ok: frame.ok !== false,
+              ...(frame.error ? { error: frame.error } : {}),
+            });
+            emitChange();
+          } else if (frame.t === 'fatal') {
+            bcast({ t: 'error', message: `agent exited: ${frame.error}` });
+          }
+        });
+        const teardown = () => {
+          // Only tear down if this socket is still the registered runner —
+          // a replaced (old) socket must not detach its successor.
+          if (agentRunners.get(paneId) !== conn) return;
+          agentRunners.delete(paneId);
+          agents.detachRunner(paneId);
+          deps.cache.setAgentBusy(paneId, false);
+          streamBufs.delete(paneId);
+          if (conn.turnActive) {
+            bcast({ t: 'turn-done', ok: false, error: 'agent disconnected' });
+          }
+          emitChange();
+        };
+        ws.on('close', teardown);
+        ws.on('error', teardown);
       });
       return;
     }
@@ -174,7 +286,10 @@ export function attachWsServer(deps: {
           });
           if (first || hello !== lastHello) {
             lastHello = hello;
-            const turnRunning = chatRunners.has(chatPaneId) || startingChat.has(chatPaneId);
+            const turnRunning =
+              chatRunners.has(chatPaneId) ||
+              startingChat.has(chatPaneId) ||
+              agentRunners.get(chatPaneId)?.turnActive === true;
             const streamText = streamBufs.get(chatPaneId);
             send({
               t: 'session',
@@ -220,7 +335,9 @@ export function attachWsServer(deps: {
             return;
           }
           if (msg.t === 'stop') {
-            chatRunners.get(chatPaneId)?.interrupt();
+            if (!sendToRunner(chatPaneId, { t: 'stop' })) {
+              chatRunners.get(chatPaneId)?.interrupt();
+            }
             return;
           }
           if (msg.t === 'load-older') {
@@ -236,6 +353,16 @@ export function attachWsServer(deps: {
           // knows the socket was dead and restores the composer instead of
           // spinning forever on a message the server never saw.
           send({ t: 'send-ack' });
+          // A pane with a live agent runner: relay straight to it. The runner
+          // owns the session (it IS the pane's foreground process), so none
+          // of the TUI/single-writer guards below apply — it serializes
+          // queued sends itself and broadcasts the turn lifecycle back.
+          if (agentRunners.has(chatPaneId)) {
+            if (!sendToRunner(chatPaneId, { t: 'send', text: msg.text })) {
+              send({ t: 'error', message: 'agent is reconnecting — try again' });
+            }
+            return;
+          }
           const s = agents.getByPane(chatPaneId);
           const sid = s?.current_sid;
           if (!s || !sid) {
