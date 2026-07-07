@@ -106,15 +106,6 @@ cmd_start() {
     fi
   fi
 
-  # Start ptyd first (if not already up). The main server connects to its
-  # socket on startup, so we must wait for the socket to appear before
-  # spawning the server.
-  if ! is_ptyd_running; then
-    start_ptyd
-  else
-    echo "ptyd: already running (PID $(cat "$PID_FILE_PTYD"))"
-  fi
-
   local host port
   host="$(resolve_host)"
   port="${MUXPAD_PORT:-7777}"
@@ -124,6 +115,20 @@ cmd_start() {
   # Otherwise bind whatever resolve_host picked.
   if [ "${MUXPAD_TAILSCALE_SERVE:-0}" = "1" ]; then
     host="127.0.0.1"
+  fi
+
+  # Start ptyd first (if not already up). The main server connects to its
+  # socket on startup, so we must wait for the socket to appear before
+  # spawning the server. ptyd needs MUXPAD_HOST/MUXPAD_PORT too — it's the
+  # one that actually spawns pane shells (PaneRuntime lives in ptyd), and
+  # sets each shell's MUXPAD_API_URL from those vars. Without them here,
+  # panes fall back to the localhost default and can't reach a daemon
+  # bound to a non-loopback host (e.g. Tailscale) — restarting ptyd alone
+  # never fixes it since the vars were never in its env to begin with.
+  if ! is_ptyd_running; then
+    start_ptyd "$host" "$port"
+  else
+    echo "ptyd: already running (PID $(cat "$PID_FILE_PTYD"))"
   fi
 
   echo "starting on http://$host:$port"
@@ -145,11 +150,14 @@ cmd_start() {
 }
 
 start_ptyd() {
+  local host="$1" port="$2"
   mkdir -p "$(dirname "$PTYD_SOCKET")"
   # Stale socket file from a crashed previous run will block bind().
   # Remove it only when we know no ptyd is currently using it.
   [ -S "$PTYD_SOCKET" ] && rm -f "$PTYD_SOCKET"
   echo "starting ptyd (socket: $PTYD_SOCKET)"
+  MUXPAD_HOST="$host" \
+  MUXPAD_PORT="$port" \
   MUXPAD_DATA_DIR="$DATA_DIR" \
   MUXPAD_PTYD_SOCKET="$PTYD_SOCKET" \
     nohup node "$ROOT/server/dist/ptyd/index.js" \
@@ -964,7 +972,7 @@ cmd_claude() {
     case "$a" in
       --session-id|--session-id=*) user_has_sid=1 ;;
       --settings|--settings=*) user_has_settings=1 ;;
-      --resume|--resume=*|--continue|-c) user_is_resume=1 ;;
+      --resume|--resume=*|-r|--continue|-c) user_is_resume=1 ;;
     esac
   done
 
@@ -980,9 +988,11 @@ cmd_claude() {
     mkdir -p "$hooks_dir"
     local settings_file="$hooks_dir/$MUXPAD_PANE_ID.json"
     # SessionStart hook → `muxpad _agent-hook`, which reads the hook payload
-    # on stdin, pulls session_id, and reports it for THIS pane.
+    # on stdin, pulls session_id, and reports it for THIS pane. The bin path
+    # is shell-quoted — the hook command runs through a shell, and an
+    # unquoted path with a space would silently never fire.
     printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":%s}]}]}}\n' \
-      "$(json_string "${MUXPAD_BIN:-muxpad} _agent-hook")" > "$settings_file"
+      "$(json_string "\"${MUXPAD_BIN:-muxpad}\" _agent-hook")" > "$settings_file"
     extra+=(--settings "$settings_file")
   else
     echo "muxpad claude: --settings supplied; skipping hook injection (this session won't be web-switchable)" >&2

@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import type Database from 'better-sqlite3';
 import { WebSocket, WebSocketServer } from 'ws';
 import { HeadlessRunner } from './chat/HeadlessRunner.js';
-import { TranscriptTail } from './chat/TranscriptReader.js';
+import { TranscriptTail, findTranscript } from './chat/TranscriptReader.js';
 import { findConversationRival } from './chat/conversation-guard.js';
 import type { EventBus } from './events.js';
 import type { PtydCache } from './ptyd-cache.js';
@@ -56,6 +56,10 @@ export function attachWsServer(deps: {
   // turn-done) broadcast to every open chat view of the pane — including one
   // that reconnected mid-turn — not just the socket that sent the message.
   const chatClients = new Map<string, Set<(obj: unknown) => void>>();
+  // Accumulated streamed text of the in-flight turn per pane, so a socket
+  // that (re)connects mid-turn can show the partial assistant text instead of
+  // a bare typing indicator until the next delta.
+  const streamBufs = new Map<string, string>();
 
   // Server-side liveness detection. A WebSocket severed abruptly (browser
   // hard-reload, crashed tab, network blip) does NOT fire 'close' until the
@@ -151,24 +155,59 @@ export function attachWsServer(deps: {
         const bcast = (obj: unknown) => {
           for (const fn of chatClients.get(chatPaneId) ?? []) fn(obj);
         };
-        const session = agents.getByPane(chatPaneId);
-        send({
-          t: 'session',
-          session,
-          turnRunning: chatRunners.has(chatPaneId) || startingChat.has(chatPaneId),
-        });
-        // Open with only the recent tail (a big transcript can be tens of MB);
-        // the client pages older history in on scroll-up via `load-older`.
+        // Session + tail lifecycle. The session row (and its current_sid) can
+        // change AFTER this socket connects: `muxpad claude` launches later, a
+        // SessionStart hook lands late, or a resume/compact/fork mints a new
+        // id mid-turn. A tail bound once at connect goes silently stale in all
+        // of those — the classic "I send messages and nothing comes back". So
+        // re-check every second: rebind the tail whenever the sid changes and
+        // push a fresh `session` frame whenever the row's shape changes.
         let tail: TranscriptTail | null = null;
-        if (session?.current_sid) {
-          tail = new TranscriptTail(session.current_sid, {
-            tailBytes: CHAT_HISTORY_TAIL_BYTES,
-            onEvents: (events, phase) => send({ t: 'events', phase, events }),
+        let tailSid: string | null = null;
+        let lastHello = '';
+        const syncSession = (first: boolean) => {
+          const session = agents.getByPane(chatPaneId);
+          const hello = JSON.stringify({
+            sid: session?.current_sid ?? null,
+            writer: session?.writer ?? null,
+            view: session?.view_mode ?? null,
           });
-          tail.start();
-          ws.on('close', () => tail?.close());
-          ws.on('error', () => tail?.close());
-        }
+          if (first || hello !== lastHello) {
+            lastHello = hello;
+            const turnRunning = chatRunners.has(chatPaneId) || startingChat.has(chatPaneId);
+            const streamText = streamBufs.get(chatPaneId);
+            send({
+              t: 'session',
+              session,
+              turnRunning,
+              ...(turnRunning && streamText ? { streamText } : {}),
+            });
+          }
+          const sid = session?.current_sid ?? null;
+          if (sid === tailSid) return;
+          tail?.close();
+          tail = null;
+          tailSid = sid;
+          if (sid) {
+            // Open with only the recent tail (a big transcript can be tens of
+            // MB); the client pages older history in via `load-older`. The
+            // client dedupes by event id, so a rebind re-emitting overlapping
+            // history is harmless.
+            tail = new TranscriptTail(sid, {
+              tailBytes: CHAT_HISTORY_TAIL_BYTES,
+              onEvents: (events, phase) => send({ t: 'events', phase, events }),
+            });
+            tail.start();
+          }
+        };
+        syncSession(true);
+        const sessionPoll = setInterval(() => syncSession(false), 1000);
+        const teardown = () => {
+          clearInterval(sessionPoll);
+          tail?.close();
+        };
+        ws.on('close', teardown);
+        ws.on('error', teardown);
         // Composer: drive a turn from chat. Single-writer is enforced by
         // refusing to spawn while a Claude TUI is the pane's live foreground —
         // two drivers on one session-id corrupt the transcript. One turn per
@@ -192,6 +231,11 @@ export function attachWsServer(deps: {
             return;
           }
           if (msg.t !== 'send' || typeof msg.text !== 'string' || !msg.text.trim()) return;
+          // Ack receipt immediately (before any guard). The client arms a
+          // watchdog on send: with no ack/error/turn-start coming back it
+          // knows the socket was dead and restores the composer instead of
+          // spinning forever on a message the server never saw.
+          send({ t: 'send-ack' });
           const s = agents.getByPane(chatPaneId);
           const sid = s?.current_sid;
           if (!s || !sid) {
@@ -249,17 +293,28 @@ export function attachWsServer(deps: {
             // stays dark while chat works. The cache emits paneChange →
             // pane.updated, so the spinner flips live, not on the next poll.
             deps.cache.setAgentBusy(chatPaneId, true);
+            streamBufs.set(chatPaneId, '');
             bcast({ t: 'turn-start' });
+            // A session launched via `muxpad claude` but never prompted has no
+            // transcript yet — `--resume` would fail with "no conversation
+            // found". Start it fresh under the same id instead, so the first
+            // message CAN come from chat.
+            const fresh = !findTranscript(sid);
             const runner = new HeadlessRunner({
               cwd: s.cwd ?? homedir(),
               resumeSid: sid,
+              fresh,
               text,
               cb: {
                 onSessionId: (newSid) => agents.recordSessionId(chatPaneId, newSid),
-                onText: (delta) => bcast({ t: 'stream', delta }),
+                onText: (delta) => {
+                  streamBufs.set(chatPaneId, (streamBufs.get(chatPaneId) ?? '') + delta);
+                  bcast({ t: 'stream', delta });
+                },
                 onDone: (ok, error) => {
                   chatRunners.delete(chatPaneId);
                   if (drivingSids.get(sid) === chatPaneId) drivingSids.delete(sid);
+                  streamBufs.delete(chatPaneId);
                   agents.setWriter(chatPaneId, 'none');
                   agents.setStatus(chatPaneId, 'idle');
                   deps.cache.setAgentBusy(chatPaneId, false);
@@ -276,6 +331,7 @@ export function attachWsServer(deps: {
             // "a turn is already running".
             if (!chatRunners.has(chatPaneId)) {
               release();
+              streamBufs.delete(chatPaneId);
               deps.cache.setAgentBusy(chatPaneId, false);
               try {
                 agents.setWriter(chatPaneId, 'none');

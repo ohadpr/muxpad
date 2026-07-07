@@ -166,10 +166,12 @@ export class PaneRuntime extends EventEmitter {
   start(): void {
     if (this.process) return;
     // The daemon may bind a non-localhost interface (Tailscale IP,
-    // 0.0.0.0) via MUXPAD_HOST, but the spawned shell is always on the
-    // same machine — hit localhost regardless of bind host. Port comes
-    // from MUXPAD_PORT (same env var the daemon reads at startup).
+    // 0.0.0.0) via MUXPAD_HOST. It only listens on the address it bound,
+    // so the spawned shell must hit that same address — "localhost"
+    // connection-refuses when the daemon bound a specific non-loopback IP.
+    // Port comes from MUXPAD_PORT (same env var the daemon reads at startup).
     const apiPort = process.env.MUXPAD_PORT ?? '7777';
+    const apiHost = process.env.MUXPAD_HOST ?? '127.0.0.1';
     const env: Record<string, string> = {
       ...sanitizeEnv(process.env),
       ...(this.spec.env ?? {}),
@@ -184,7 +186,7 @@ export class PaneRuntime extends EventEmitter {
       // reads these so `muxpad pane new` (no flags) creates a sibling
       // in the current tab; `muxpad tab new` (no flags) creates a tab
       // in the current workspace; etc.
-      MUXPAD_API_URL: `http://localhost:${apiPort}`,
+      MUXPAD_API_URL: `http://${apiHost}:${apiPort}`,
       MUXPAD_PANE_ID: this.spec.id,
       MUXPAD_TAB_ID: this.spec.tab_id ?? '',
       MUXPAD_WORKSPACE_ID: this.spec.workspace_id ?? '',
