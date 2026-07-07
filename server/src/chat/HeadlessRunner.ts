@@ -11,20 +11,33 @@ export interface HeadlessRunnerCallbacks {
 
 export interface HeadlessRunnerOpts {
   cwd: string;
+  /** The session-id to resume — or to CREATE when `fresh` is set. */
   resumeSid: string;
+  /**
+   * First turn of a session whose transcript doesn't exist yet (launched via
+   * `muxpad claude` but never prompted): `--resume` would fail with "no
+   * conversation found", so start the session fresh under the same id
+   * (`--session-id`) instead. The transcript lands under that id, so the tail
+   * and later resumes line up.
+   */
+  fresh?: boolean;
   text: string;
   cb?: HeadlessRunnerCallbacks;
   /** Override the claude binary (tests). */
   bin?: string;
   /** Extra args before the prompt (tests / future). */
   extraArgs?: string[];
+  /** Startup watchdog in ms (tests shrink it). Kills a claude that never emits an event. */
+  startTimeoutMs?: number;
 }
 
 /**
- * Drives ONE turn of a Claude session headlessly: `claude -p <text> --resume
- * <sid> --output-format stream-json --permission-mode bypassPermissions`. The
- * turn is appended to the same transcript file, so the existing TranscriptTail
- * on /ws/chat renders it — this runner does NOT re-emit chat events. Its only
+ * Drives ONE turn of a Claude session headlessly: `claude -p --resume <sid>
+ * --output-format stream-json --permission-mode bypassPermissions`, with the
+ * prompt written to stdin (argv would misparse a message starting with `-`,
+ * and argv has size limits a long pasted message can hit). The turn is
+ * appended to the same transcript file, so the existing TranscriptTail on
+ * /ws/chat renders it — this runner does NOT re-emit chat events. Its only
  * jobs are (a) capture the session-id from the init event (lineage), and (b)
  * signal turn completion so the caller can release the single-writer lock.
  *
@@ -37,8 +50,11 @@ export class HeadlessRunner {
   private outBuf = '';
   private errText = '';
   private done = false;
+  private interrupted = false;
+  private sawEvent = false;
   private reapTimer: ReturnType<typeof setTimeout> | undefined;
   private killTimer: ReturnType<typeof setTimeout> | undefined;
+  private startTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly opts: HeadlessRunnerOpts) {}
 
@@ -47,8 +63,7 @@ export class HeadlessRunner {
     const args = [
       ...(this.opts.extraArgs ?? []),
       '-p',
-      this.opts.text,
-      '--resume',
+      ...(this.opts.fresh ? ['--session-id'] : ['--resume']),
       this.opts.resumeSid,
       '--output-format',
       'stream-json',
@@ -61,7 +76,7 @@ export class HeadlessRunner {
     try {
       proc = spawn(bin, args, {
         cwd: this.opts.cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
         env: process.env,
       });
     } catch (e) {
@@ -69,14 +84,41 @@ export class HeadlessRunner {
       return;
     }
     this.proc = proc;
+    // Prompt over stdin (`claude -p` reads it when no positional prompt is
+    // given), then EOF so the turn starts.
+    proc.stdin?.on('error', () => {
+      // EPIPE if claude died before reading — the exit handler reports it.
+    });
+    proc.stdin?.end(this.opts.text);
     proc.stdout?.on('data', (d: Buffer) => this.onStdout(d.toString('utf8')));
     proc.stderr?.on('data', (d: Buffer) => {
       this.errText += d.toString('utf8');
     });
     proc.on('error', (e) => this.finish(false, e.message));
-    proc.on('exit', (code) =>
-      this.finish(code === 0, code === 0 ? undefined : this.errText.trim() || `exit ${code}`),
-    );
+    proc.on('exit', (code) => {
+      if (this.interrupted) {
+        // A user Stop is a clean end of the turn, not a failure — the partial
+        // work is already on disk and the composer should return to idle
+        // without an error banner.
+        this.finish(true);
+        return;
+      }
+      this.finish(code === 0, code === 0 ? undefined : this.errText.trim() || `exit ${code}`);
+    });
+    // Startup watchdog: a healthy `claude -p` emits its init event within a
+    // couple of seconds. If NOTHING parseable arrives, the child is wedged
+    // (bad PATH shim, waiting on something it can't get) — kill it so the
+    // single-writer lock releases instead of the pane hanging forever.
+    this.startTimer = setTimeout(() => {
+      if (!this.sawEvent && !this.done) {
+        try {
+          this.proc?.kill('SIGKILL');
+        } catch {
+          // already gone
+        }
+        this.finish(false, this.errText.trim() || 'claude produced no output (startup timeout)');
+      }
+    }, this.opts.startTimeoutMs ?? 30_000);
   }
 
   private onStdout(chunk: string): void {
@@ -91,6 +133,7 @@ export class HeadlessRunner {
       } catch {
         continue;
       }
+      this.sawEvent = true;
       // The init event carries the (possibly new) session-id.
       if (obj.type === 'system' && obj.subtype === 'init' && typeof obj.session_id === 'string') {
         this.opts.cb?.onSessionId?.(obj.session_id);
@@ -134,12 +177,14 @@ export class HeadlessRunner {
     this.done = true;
     if (this.reapTimer) clearTimeout(this.reapTimer);
     if (this.killTimer) clearTimeout(this.killTimer);
+    if (this.startTimer) clearTimeout(this.startTimer);
     this.opts.cb?.onDone?.(ok, error);
   }
 
   /** Interrupt the in-flight turn (the chat Stop button). SIGTERM, then SIGKILL
    * if it doesn't die — otherwise a stubborn child holds the single-writer lock. */
   interrupt(): void {
+    this.interrupted = true;
     this.proc?.kill('SIGTERM');
     if (!this.killTimer && !this.done) {
       this.killTimer = setTimeout(() => {
