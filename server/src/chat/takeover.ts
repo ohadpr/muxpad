@@ -30,6 +30,10 @@ export async function takeoverPane(
   store: AgentSessionStore,
   ptyd: PtydClient,
 ): Promise<{ ok: boolean; error?: string }> {
+  // An SDK runner pane needs no takeover: the runner is already the chat
+  // driver, and flipping its writer to 'headless' here would let a per-turn
+  // `claude -p` spawn race the live runner on one session.
+  if (store.getByPane(paneId)?.writer === 'sdk') return { ok: true };
   let fg: string | null = null;
   try {
     fg = await ptyd.getForegroundCommand(paneId);

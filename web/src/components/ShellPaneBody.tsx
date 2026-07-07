@@ -1,5 +1,6 @@
 import type { PaneSpec } from '@muxpad/shared';
 import { useEffect, useRef, useState } from 'react';
+import { subscribe } from '../events';
 import { getPaneFace, setPaneFace, usePaneFace } from '../lib/pane-face';
 import { sendPaneInput } from '../lib/pane-input';
 import { ChatPane } from './ChatPane';
@@ -49,6 +50,13 @@ export function ShellPaneBody({
   // True while a headless (chat-driven) turn is running for this pane's
   // session — drives the activity dot on the Terminal/Chat toggle.
   const [agentRunning, setAgentRunning] = useState(false);
+  // Which surface currently drives the session. 'sdk' = a `muxpad agent`
+  // runner lives in the pane — the toggle then only switches the VIEW
+  // (chat ⇄ runner log); there is no TUI to kill or relaunch.
+  const writerRef = useRef<string>('none');
+  // Latest session check, exposed so the event subscription below can fire
+  // it immediately instead of waiting out the poll interval.
+  const checkRef = useRef<() => void>(() => {});
   useEffect(() => {
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -72,9 +80,11 @@ export function ShellPaneBody({
       const s = (await r.json().catch(() => null)) as {
         view_mode?: string;
         status?: string;
+        writer?: string;
       } | null;
       setHasSession(true);
       setAgentRunning(s?.status === 'running');
+      writerRef.current = s?.writer ?? 'none';
       // A poll can be in flight across a local toggle and return the pre-switch
       // view_mode; don't let that revert the face — the server catches up in a
       // couple seconds. Skip the sync briefly after a local switch.
@@ -97,11 +107,21 @@ export function ShellPaneBody({
       if (!alive) return;
       timer = setTimeout(() => void tick(), delay);
     };
+    checkRef.current = () => void check();
     void tick();
     return () => {
       alive = false;
       clearTimeout(timer);
     };
+  }, [pane.id]);
+
+  // Server-pushed session changes (a runner attached, another device switched
+  // the view, a turn started/ended) re-check immediately — the face flips the
+  // moment `muxpad agent` registers instead of on the next poll.
+  useEffect(() => {
+    return subscribe((e) => {
+      if (e.type === 'agent_session.updated' && e.pane_id === pane.id) checkRef.current();
+    });
   }, [pane.id]);
 
   // Lazily mount the chat face on first use, then keep it mounted-but-hidden
@@ -145,15 +165,23 @@ export function ShellPaneBody({
         // underneath while the toggle shows "…". If the hand-off FAILS (the
         // TUI wouldn't die / server unreachable), keep the chat face — viewing
         // is legitimate — but say so: chat can't drive until the TUI is gone.
+        // An SDK runner pane skips the takeover entirely: the runner is
+        // already the chat driver, this is purely a view flip.
         setPaneFace(pane.id, { face: 'chat', url });
-        const r = await fetch(`/api/agent-sessions/${pane.id}/takeover`, {
-          method: 'POST',
-        }).catch(() => null);
-        if (!r?.ok) {
-          showNotice(
-            'Terminal is still running Claude — chat is read-only until you exit it there.',
-          );
+        if (writerRef.current !== 'sdk') {
+          const r = await fetch(`/api/agent-sessions/${pane.id}/takeover`, {
+            method: 'POST',
+          }).catch(() => null);
+          if (!r?.ok) {
+            showNotice(
+              'Terminal is still running Claude — chat is read-only until you exit it there.',
+            );
+          }
         }
+      } else if (writerRef.current === 'sdk') {
+        // Runner pane: the terminal face is the runner's activity log —
+        // reveal it as-is; never type a relaunch command at it.
+        setPaneFace(pane.id, { face: 'terminal', url });
       } else {
         // Only relaunch if Claude ISN'T already running in the pane — otherwise
         // the command would be typed INTO the live TUI as a prompt (bug). Same
