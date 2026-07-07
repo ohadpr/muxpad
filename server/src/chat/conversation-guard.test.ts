@@ -48,4 +48,19 @@ describe('findConversationRival', () => {
     });
     expect(erroring).toBeNull();
   });
+
+  it("flags a sibling SDK runner (writer='sdk') without a foreground probe", async () => {
+    // An agent runner's foreground is `node …/agent-runner` — invisible to
+    // the claude regex; the recorded writer must be enough on its own.
+    const rival = await findConversationRival(
+      'pane-a',
+      'sid-1',
+      [
+        { pane_id: 'pane-a', current_sid: 'sid-1' },
+        { pane_id: 'pane-b', current_sid: 'sid-1', writer: 'sdk' },
+      ],
+      async () => 'node /x/dist/agent-runner/index.js',
+    );
+    expect(rival).toBe('pane-b');
+  });
 });

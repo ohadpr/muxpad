@@ -16,6 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import { type Options, type SDKUserMessage, query } from '@anthropic-ai/claude-agent-sdk';
 import WebSocket from 'ws';
+import { findTranscript } from '../chat/TranscriptReader.js';
 import { type RunnerFrame, type ServerFrame, parseFrame } from './protocol.js';
 
 const paneId = process.env.MUXPAD_PANE_ID;
@@ -29,13 +30,22 @@ if (!paneId || !apiUrl) {
 
 // --resume <sid> (written into the pane's startup_cmd by the server once the
 // session exists, so a respawned pane resumes instead of minting a session).
-let resumeSid: string | null = null;
+let requestedSid: string | null = null;
 {
   const args = process.argv.slice(2);
   const i = args.indexOf('--resume');
-  if (i !== -1 && args[i + 1]) resumeSid = args[i + 1] as string;
+  if (i !== -1 && args[i + 1]) requestedSid = args[i + 1] as string;
 }
-const sid = resumeSid ?? randomUUID();
+// The self-heal startup_cmd is written on hello — BEFORE any turn — so a pane
+// can respawn with `--resume <sid>` for a session that never wrote a
+// transcript. `resume` on a transcript-less sid kills the session ("no
+// conversation found"); start fresh UNDER that id instead, exactly like the
+// headless runner's fresh-mode fallback. Either way the pane keeps the id.
+const resumeSid = requestedSid && findTranscript(requestedSid) ? requestedSid : null;
+if (requestedSid && !resumeSid) {
+  console.log(`no transcript yet for ${requestedSid} — starting the session fresh under that id`);
+}
+const sid = requestedSid ?? randomUUID();
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
@@ -87,10 +97,20 @@ async function* userMessages(): AsyncGenerator<SDKUserMessage> {
 const wsUrl = `${apiUrl.replace(/^http/, 'ws')}/ws/agent-runner/${paneId}`;
 let ws: WebSocket | null = null;
 let closed = false;
+// The id the live session actually runs under — updated if a resume drifts.
+let liveSid = sid;
 
 function sendFrame(frame: RunnerFrame): void {
   if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(frame));
 }
+
+const helloFrame = (): RunnerFrame => ({
+  t: 'hello',
+  sid: liveSid,
+  cwd: process.cwd(),
+  pid: process.pid,
+  turnActive: inTurn,
+});
 
 function connect(): void {
   if (closed) return;
@@ -98,7 +118,7 @@ function connect(): void {
   ws = sock;
   sock.on('open', () => {
     log(dim('connected to muxpad'));
-    sendFrame({ t: 'hello', sid, cwd: process.cwd(), pid: process.pid, turnActive: inTurn });
+    sendFrame(helloFrame());
   });
   sock.on('message', (data) => {
     const frame = parseFrame<ServerFrame>(data);
@@ -171,20 +191,27 @@ async function main(): Promise<void> {
   log(dim(`pane ${paneId} · ${process.cwd()}`));
   log(dim('drive this session from the pane’s Chat face; this log is the terminal face'));
 
+  // A turn can also start WITHOUT a user send: scheduled wakeups and crons
+  // fire autonomously inside the persistent session (live-verified). Emit
+  // turn-start on the first activity so chat shows the typing indicator, the
+  // busy dot lights, and Stop works for those turns too.
+  const noteAutonomousTurn = () => {
+    if (inTurn) return;
+    inTurn = true;
+    interruptRequested = false;
+    sendFrame({ t: 'turn-start' });
+    log(dim('▸ autonomous turn (wakeup/cron/background)'));
+  };
+
   for await (const msg of session) {
     if (msg.type === 'system' && msg.subtype === 'init') {
       log(dim(`ready · ${msg.model} · ${msg.tools.length} tools`));
-      if (msg.session_id !== sid) {
+      if (msg.session_id !== liveSid) {
         // Session-id drift (resume minted a new id). Re-hello so the server
         // re-points the tail and the self-heal startup_cmd at the real id.
         log(dim(`session id drifted → ${msg.session_id}`));
-        sendFrame({
-          t: 'hello',
-          sid: msg.session_id,
-          cwd: process.cwd(),
-          pid: process.pid,
-          turnActive: inTurn,
-        });
+        liveSid = msg.session_id;
+        sendFrame(helloFrame());
       }
     } else if (msg.type === 'stream_event') {
       const evt = msg.event as {
@@ -197,9 +224,11 @@ async function main(): Promise<void> {
         typeof evt.delta.text === 'string' &&
         msg.parent_tool_use_id === null
       ) {
+        noteAutonomousTurn();
         sendFrame({ t: 'stream', delta: evt.delta.text });
       }
     } else if (msg.type === 'assistant' && msg.parent_tool_use_id === null) {
+      noteAutonomousTurn();
       for (const block of msg.message.content ?? []) {
         if (block.type === 'text' && block.text.trim()) {
           log(`${bold('claude')} ${block.text.trim()}`);
