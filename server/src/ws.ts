@@ -59,8 +59,19 @@ export function attachWsServer(deps: {
   const chatClients = new Map<string, Set<(obj: unknown) => void>>();
   // Accumulated streamed text of the in-flight turn per pane, so a socket
   // that (re)connects mid-turn can show the partial assistant text instead of
-  // a bare typing indicator until the next delta.
+  // a bare typing indicator until the next delta. Capped: it's a typing
+  // preview, not the source of truth (the transcript is) — a runaway turn
+  // must not balloon server memory or reconnect payloads.
   const streamBufs = new Map<string, string>();
+  const STREAM_BUF_MAX = 256 * 1024;
+  const appendStreamBuf = (paneId: string, delta: string) => {
+    const next = (streamBufs.get(paneId) ?? '') + delta;
+    streamBufs.set(paneId, next.length > STREAM_BUF_MAX ? next.slice(-STREAM_BUF_MAX) : next);
+  };
+  // Fan a frame out to every open chat view of a pane.
+  const bcastToPane = (paneId: string, obj: unknown) => {
+    for (const fn of chatClients.get(paneId) ?? []) fn(obj);
+  };
   // Connected agent runners (`muxpad agent` processes living in panes),
   // keyed by pane. A connected runner owns its pane's session: chat sends
   // and stops relay to it instead of spawning per-turn `claude -p` workers,
@@ -165,20 +176,30 @@ export function attachWsServer(deps: {
         }
         const conn: AgentRunnerConn = { ws, sid: null, turnActive: false };
         agentRunners.set(paneId, conn);
-        const bcast = (obj: unknown) => {
-          for (const fn of chatClients.get(paneId) ?? []) fn(obj);
-        };
+        const bcast = (obj: unknown) => bcastToPane(paneId, obj);
         const emitChange = () =>
           deps.events.emit({ type: 'agent_session.updated', pane_id: paneId });
         ws.on('message', (data) => {
           const frame = parseFrame<RunnerFrame>(data);
           if (!frame) return;
           if (frame.t === 'hello') {
+            // The sid ends up in a startup_cmd that PaneRuntime TYPES INTO A
+            // SHELL on respawn — constrain its charset (same rule as the
+            // HTTP register/hook routes) so a crafted hello can't smuggle
+            // shell syntax into the pane. cwd only lands in SQLite, but must
+            // at least be a string.
+            if (
+              typeof frame.sid !== 'string' ||
+              !/^[A-Za-z0-9._-]{1,128}$/.test(frame.sid) ||
+              typeof frame.cwd !== 'string'
+            ) {
+              return;
+            }
             conn.sid = frame.sid;
-            conn.turnActive = frame.turnActive;
+            conn.turnActive = frame.turnActive === true;
             agents.attachRunner({ pane_id: paneId, cwd: frame.cwd, session_id: frame.sid });
-            if (frame.turnActive) agents.setStatus(paneId, 'running');
-            deps.cache.setAgentBusy(paneId, frame.turnActive);
+            if (conn.turnActive) agents.setStatus(paneId, 'running');
+            deps.cache.setAgentBusy(paneId, conn.turnActive);
             // Self-heal: the pane's startup command now resumes THIS session,
             // so the pane survives ptyd restarts and reboots.
             panes.setStartupCmd(paneId, `muxpad agent --resume ${frame.sid}`);
@@ -187,12 +208,14 @@ export function attachWsServer(deps: {
             conn.turnActive = true;
             streamBufs.set(paneId, '');
             agents.setStatus(paneId, 'running');
+            // Busy propagates via the cache's own paneChange → pane.updated
+            // event; no agent_session.updated here — emitting per turn made
+            // every open view refetch the session twice per turn.
             deps.cache.setAgentBusy(paneId, true);
             bcast({ t: 'turn-start' });
-            emitChange();
           } else if (frame.t === 'stream') {
             if (typeof frame.delta !== 'string') return;
-            streamBufs.set(paneId, (streamBufs.get(paneId) ?? '') + frame.delta);
+            appendStreamBuf(paneId, frame.delta);
             bcast({ t: 'stream', delta: frame.delta });
           } else if (frame.t === 'turn-done') {
             conn.turnActive = false;
@@ -204,7 +227,6 @@ export function attachWsServer(deps: {
               ok: frame.ok !== false,
               ...(frame.error ? { error: frame.error } : {}),
             });
-            emitChange();
           } else if (frame.t === 'fatal') {
             bcast({ t: 'error', message: `agent exited: ${frame.error}` });
           }
@@ -264,16 +286,16 @@ export function attachWsServer(deps: {
         };
         ws.on('close', unregister);
         ws.on('error', unregister);
-        const bcast = (obj: unknown) => {
-          for (const fn of chatClients.get(chatPaneId) ?? []) fn(obj);
-        };
+        const bcast = (obj: unknown) => bcastToPane(chatPaneId, obj);
         // Session + tail lifecycle. The session row (and its current_sid) can
         // change AFTER this socket connects: `muxpad claude` launches later, a
         // SessionStart hook lands late, or a resume/compact/fork mints a new
         // id mid-turn. A tail bound once at connect goes silently stale in all
         // of those — the classic "I send messages and nothing comes back". So
-        // re-check every second: rebind the tail whenever the sid changes and
-        // push a fresh `session` frame whenever the row's shape changes.
+        // re-sync on every agent_session.updated event for this pane (all the
+        // store mutation points emit it), with a slow poll as the belt-and-
+        // braces fallback: rebind the tail whenever the sid changes and push a
+        // fresh `session` frame whenever the row's shape changes.
         let tail: TranscriptTail | null = null;
         let tailSid: string | null = null;
         let lastHello = '';
@@ -316,9 +338,13 @@ export function attachWsServer(deps: {
           }
         };
         syncSession(true);
-        const sessionPoll = setInterval(() => syncSession(false), 1000);
+        const unsubEvents = deps.events.subscribe((e) => {
+          if (e.type === 'agent_session.updated' && e.pane_id === chatPaneId) syncSession(false);
+        });
+        const sessionPoll = setInterval(() => syncSession(false), 10_000);
         const teardown = () => {
           clearInterval(sessionPoll);
+          unsubEvents();
           tail?.close();
         };
         ws.on('close', teardown);
@@ -328,12 +354,8 @@ export function attachWsServer(deps: {
         // two drivers on one session-id corrupt the transcript. One turn per
         // pane at a time; the runner is keyed by pane so it outlives this ws.
         ws.on('message', (data) => {
-          let msg: { t?: string; text?: string };
-          try {
-            msg = JSON.parse(data.toString());
-          } catch {
-            return;
-          }
+          const msg = parseFrame<{ t?: string; text?: string }>(data);
+          if (!msg) return;
           if (msg.t === 'stop') {
             if (!sendToRunner(chatPaneId, { t: 'stop' })) {
               chatRunners.get(chatPaneId)?.interrupt();
@@ -379,6 +401,19 @@ export function attachWsServer(deps: {
           if (drivingSids.has(sid)) {
             send({ t: 'error', message: 'another pane is already driving this conversation' });
             return;
+          }
+          // Same rule for a live agent runner on ANOTHER pane: its foreground
+          // is `node …/agent-runner`, so the claude-foreground rival scan
+          // below can't see it — check the registry (and, via the guard's
+          // writer field, the store) directly.
+          for (const [otherPane, otherConn] of agentRunners) {
+            if (otherPane !== chatPaneId && otherConn.sid === sid) {
+              send({
+                t: 'error',
+                message: "another pane's agent is driving this conversation",
+              });
+              return;
+            }
           }
           // Reserve the pane AND the sid synchronously — before the awaited
           // foreground checks — so a second concurrent send (same pane or a
@@ -433,18 +468,31 @@ export function attachWsServer(deps: {
               fresh,
               text,
               cb: {
-                onSessionId: (newSid) => agents.recordSessionId(chatPaneId, newSid),
+                onSessionId: (newSid) => {
+                  const prev = agents.getByPane(chatPaneId)?.current_sid;
+                  agents.recordSessionId(chatPaneId, newSid);
+                  // Sid drift mid-turn: push so every chat socket rebinds its
+                  // tail now instead of on the slow fallback poll.
+                  if (prev !== newSid) {
+                    deps.events.emit({ type: 'agent_session.updated', pane_id: chatPaneId });
+                  }
+                },
                 onText: (delta) => {
-                  streamBufs.set(chatPaneId, (streamBufs.get(chatPaneId) ?? '') + delta);
+                  appendStreamBuf(chatPaneId, delta);
                   bcast({ t: 'stream', delta });
                 },
                 onDone: (ok, error) => {
                   chatRunners.delete(chatPaneId);
                   if (drivingSids.get(sid) === chatPaneId) drivingSids.delete(sid);
-                  streamBufs.delete(chatPaneId);
-                  agents.setWriter(chatPaneId, 'none');
-                  agents.setStatus(chatPaneId, 'idle');
-                  deps.cache.setAgentBusy(chatPaneId, false);
+                  // An agent runner may have attached mid-turn (the user typed
+                  // `muxpad agent` while this headless turn ran) — its writer/
+                  // busy/preview state is not ours to clobber then.
+                  if (!agentRunners.has(chatPaneId)) {
+                    streamBufs.delete(chatPaneId);
+                    agents.setWriter(chatPaneId, 'none');
+                    agents.setStatus(chatPaneId, 'idle');
+                    deps.cache.setAgentBusy(chatPaneId, false);
+                  }
                   bcast({ t: 'turn-done', ok, ...(error ? { error } : {}) });
                 },
               },
@@ -458,13 +506,15 @@ export function attachWsServer(deps: {
             // "a turn is already running".
             if (!chatRunners.has(chatPaneId)) {
               release();
-              streamBufs.delete(chatPaneId);
-              deps.cache.setAgentBusy(chatPaneId, false);
-              try {
-                agents.setWriter(chatPaneId, 'none');
-                agents.setStatus(chatPaneId, 'idle');
-              } catch {
-                // the store write itself may be what failed
+              if (!agentRunners.has(chatPaneId)) {
+                streamBufs.delete(chatPaneId);
+                deps.cache.setAgentBusy(chatPaneId, false);
+                try {
+                  agents.setWriter(chatPaneId, 'none');
+                  agents.setStatus(chatPaneId, 'idle');
+                } catch {
+                  // the store write itself may be what failed
+                }
               }
             }
             send({ t: 'error', message: e instanceof Error ? e.message : String(e) });

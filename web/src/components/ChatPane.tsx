@@ -285,6 +285,10 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
         acked.current = true;
         window.clearTimeout(sendWatchdog.current);
         setSending(false);
+        // The send was rejected — its message never reaches the transcript,
+        // so the optimistic bubble would otherwise stick around forever.
+        setOptimisticUser(null);
+        pendingText.current = '';
         setNotice(msg.message);
       }
     };
