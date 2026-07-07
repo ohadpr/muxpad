@@ -203,6 +203,10 @@ export function attachWsServer(deps: {
             // Self-heal: the pane's startup command now resumes THIS session,
             // so the pane survives ptyd restarts and reboots.
             panes.setStartupCmd(paneId, `muxpad agent --resume ${frame.sid}`);
+            // A mid-turn reconnect: already-open chat clients still show an
+            // idle composer (their session frame doesn't change shape), so
+            // re-broadcast the running state — idempotent client-side.
+            if (conn.turnActive) bcast({ t: 'turn-start' });
             emitChange();
           } else if (frame.t === 'turn-start') {
             conn.turnActive = true;
@@ -385,6 +389,16 @@ export function attachWsServer(deps: {
             }
             return;
           }
+          // Runner-owned pane whose runner is between connections (server
+          // just restarted; ws blip): it vanishes from agentRunners and
+          // reconcile clears its writer, but its SDK process is still alive
+          // in the pty. Falling through would spawn `claude -p` as a second
+          // writer on the live session. The pane's startup_cmd is the
+          // durable marker of runner ownership — refuse until it re-hellos.
+          if (panes.getById(chatPaneId)?.startup_cmd?.startsWith('muxpad agent')) {
+            send({ t: 'error', message: 'agent is reconnecting — try again in a few seconds' });
+            return;
+          }
           const s = agents.getByPane(chatPaneId);
           const sid = s?.current_sid;
           if (!s || !sid) {
@@ -428,7 +442,9 @@ export function attachWsServer(deps: {
           const text = msg.text;
           void (async () => {
             const fg = await deps.ptyd.getForegroundCommand(chatPaneId).catch(() => null);
-            if (fg && /\bclaude\b/i.test(fg)) {
+            // claude = the TUI; agent-runner = a live SDK runner process
+            // (belt-and-braces behind the startup_cmd check above).
+            if (fg && /\bclaude\b|agent-runner/i.test(fg)) {
               release();
               send({ t: 'blocked', reason: 'terminal-driving' });
               return;

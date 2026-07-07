@@ -212,6 +212,39 @@ describe('agent-runner relay', () => {
     chat.close();
   });
 
+  it('refuses chat sends while a runner-owned pane is between connections', async () => {
+    const { port, paneId } = await boot();
+    const { sock: runner } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: false }));
+    await new Promise((r) => setTimeout(r, 150));
+    // Runner drops (server restart / ws blip). Its SDK process is still
+    // alive in the pty — a send must NOT fall through to the headless
+    // `claude -p` path (second writer on a live session).
+    runner.close();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
+    await fromChat.next((f) => f.t === 'session');
+    chat.send(JSON.stringify({ t: 'send', text: 'hi' }));
+    const err = await fromChat.next((f) => f.t === 'error');
+    expect(String(err.message)).toContain('reconnecting');
+    chat.close();
+  });
+
+  it('re-broadcasts turn-start when a runner reconnects mid-turn', async () => {
+    const { port, paneId } = await boot();
+    const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
+    await fromChat.next((f) => f.t === 'session');
+
+    const { sock: runner } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: true }));
+    // The already-open chat client learns the turn is running from the
+    // re-broadcast, not from a session-shape change.
+    await fromChat.next((f) => f.t === 'turn-start');
+    runner.close();
+    chat.close();
+  });
+
   it('rejects a runner for a pane that does not exist', async () => {
     const { port } = await boot();
     const sock = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-runner/nope`);
