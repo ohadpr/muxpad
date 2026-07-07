@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { takeoverPane } from '../chat/takeover.js';
+import type { EventBus } from '../events.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
 
@@ -32,9 +33,15 @@ const HookSchema = z.object({
  *     start / resume / compact / fork, with the real provider session-id.
  * See docs/plans/2026-07-01-web-chat-session-switching.md.
  */
-export function agentSessionsRoutes(deps: { db: Database.Database; ptyd: PtydClient }): Hono {
+export function agentSessionsRoutes(deps: {
+  db: Database.Database;
+  ptyd: PtydClient;
+  events?: EventBus;
+}): Hono {
   const app = new Hono();
   const store = new AgentSessionStore(deps.db);
+  const emitChange = (paneId: string) =>
+    deps.events?.emit({ type: 'agent_session.updated', pane_id: paneId });
 
   // The terminal→chat toggle calls this: stop the Claude TUI (if any) and make
   // chat the driver, so switching the view switches what's underneath too.
@@ -51,6 +58,8 @@ export function agentSessionsRoutes(deps: { db: Database.Database; ptyd: PtydCli
       .object({ mode: z.enum(['terminal', 'chat']) })
       .parse(await c.req.json().catch(() => ({})));
     store.setViewMode(c.req.param('paneId'), body.mode);
+    // Push (don't wait for the poll): other devices flip their face live.
+    emitChange(c.req.param('paneId'));
     return c.body(null, 204);
   });
 
@@ -68,7 +77,9 @@ export function agentSessionsRoutes(deps: { db: Database.Database; ptyd: PtydCli
 
   app.post('/register', async (c) => {
     const body = RegisterSchema.parse(await c.req.json().catch(() => ({})));
-    return c.json(store.register(body), 201);
+    const session = store.register(body);
+    emitChange(body.pane_id);
+    return c.json(session, 201);
   });
 
   app.post('/hook', async (c) => {
@@ -77,6 +88,7 @@ export function agentSessionsRoutes(deps: { db: Database.Database; ptyd: PtydCli
     // Unknown pane = a session muxpad didn't launch. Out of scope; ack softly
     // so the hook (which runs inside Claude) never surfaces an error.
     if (!session) return c.json({ ok: false, reason: 'no agent session for pane' }, 202);
+    emitChange(body.pane_id);
     return c.json(session);
   });
 

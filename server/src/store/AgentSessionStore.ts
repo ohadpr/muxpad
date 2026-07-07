@@ -4,7 +4,7 @@ import { monotonicFactory } from 'ulid';
 const ulid = monotonicFactory();
 
 export type ViewMode = 'terminal' | 'chat';
-export type Writer = 'tui' | 'headless' | 'none';
+export type Writer = 'tui' | 'headless' | 'sdk' | 'none';
 
 export interface AgentSession {
   /** muxpad's own stable handle — survives every provider session-id hop. */
@@ -141,17 +141,68 @@ export class AgentSessionStore {
   }
 
   /**
+   * Attach an SDK agent runner to a pane's session: the runner (a long-lived
+   * process inside the pane's pty, launched by `muxpad agent`) becomes the
+   * single writer and the pane's shared face flips to chat. Upserts — a pane
+   * that never ran `muxpad claude` gets a fresh row; an existing row keeps its
+   * lineage and gains the runner's sid.
+   */
+  attachRunner(input: {
+    pane_id: string;
+    cwd?: string | null;
+    session_id?: string | null;
+  }): AgentSession {
+    const existing = this.getByPane(input.pane_id);
+    const now = Date.now();
+    const sid = input.session_id ?? existing?.current_sid ?? null;
+    const lineage = existing ? existing.lineage.slice() : [];
+    if (sid && !lineage.includes(sid)) lineage.push(sid);
+    const cwd = input.cwd ?? existing?.cwd ?? null;
+    if (existing) {
+      this.db
+        .prepare(
+          `UPDATE agent_sessions
+             SET assistant = 'claude', cwd = ?, current_sid = ?, lineage = ?, tui_pid = NULL,
+                 view_mode = 'chat', writer = 'sdk', status = 'idle', updated_at = ?
+           WHERE pane_id = ?`,
+        )
+        .run(cwd, sid, JSON.stringify(lineage), now, input.pane_id);
+    } else {
+      this.db
+        .prepare(
+          `INSERT INTO agent_sessions
+             (id, pane_id, assistant, cwd, current_sid, lineage, tui_pid, view_mode, writer, status, created_at, updated_at)
+           VALUES (?, ?, 'claude', ?, ?, ?, NULL, 'chat', 'sdk', 'idle', ?, ?)`,
+        )
+        .run(ulid(), input.pane_id, cwd, sid, JSON.stringify(lineage), now, now);
+    }
+    return this.getByPane(input.pane_id) as AgentSession;
+  }
+
+  /** The pane's runner disconnected — release the single-writer token (only if a runner holds it). */
+  detachRunner(pane_id: string): void {
+    this.db
+      .prepare(
+        "UPDATE agent_sessions SET writer = 'none', status = 'idle', updated_at = ? WHERE pane_id = ? AND writer = 'sdk'",
+      )
+      .run(Date.now(), pane_id);
+  }
+
+  /**
    * Startup reconciliation. Headless turns live in the server process (the
    * ws layer's in-memory runner map), so any 'headless' writer or 'running'
    * status still in the DB when we come up belongs to a turn that died with
    * the previous process (restart mid-turn). Clear them so panes recover
-   * instead of looking permanently driven/busy.
+   * instead of looking permanently driven/busy. SDK runners outlive the
+   * server (they live in ptyd panes) but re-hello within seconds of the
+   * server coming back — clear their writer too so a runner that died while
+   * the server was down doesn't leave the pane looking driven forever.
    */
   reconcileStartup(): void {
     const now = Date.now();
     this.db
       .prepare(
-        "UPDATE agent_sessions SET writer = 'none', updated_at = ? WHERE writer = 'headless'",
+        "UPDATE agent_sessions SET writer = 'none', updated_at = ? WHERE writer = 'headless' OR writer = 'sdk'",
       )
       .run(now);
     this.db
