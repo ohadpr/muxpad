@@ -195,7 +195,8 @@ export function ShellPaneBody({
           ? ((await fgRes.json()) as { isClaude?: boolean; foreground?: string | null })
           : null;
         const fgCmd = (fg?.foreground ?? '').trim();
-        const atShellPrompt = !fgCmd || /(^|[/\s-])(zsh|bash|fish|dash|sh|nu)$/.test(fgCmd);
+        const atShellPrompt =
+          !fgCmd || /(^|[/\s-])(zsh|bash|fish|dash|sh|nu|tcsh|csh|ksh|pwsh|xonsh)$/.test(fgCmd);
         if (!fg?.isClaude && atShellPrompt) {
           const res = await fetch(`/api/agent-sessions/by-pane/${pane.id}`).catch(() => null);
           const s = res?.ok ? ((await res.json()) as { current_sid?: string | null }) : null;
