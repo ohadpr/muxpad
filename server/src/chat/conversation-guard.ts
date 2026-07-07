@@ -14,11 +14,14 @@
 export async function findConversationRival(
   paneId: string,
   sid: string,
-  sessions: { pane_id: string; current_sid: string | null }[],
+  sessions: { pane_id: string; current_sid: string | null; writer?: string }[],
   getForegroundCommand: (paneId: string) => Promise<string | null>,
 ): Promise<string | null> {
   const siblings = sessions.filter((s) => s.pane_id !== paneId && s.current_sid === sid);
   for (const sib of siblings) {
+    // An SDK runner's foreground is `node …/agent-runner`, invisible to the
+    // claude regex — its recorded writer is the authoritative signal.
+    if (sib.writer === 'sdk') return sib.pane_id;
     const fg = await getForegroundCommand(sib.pane_id).catch(() => null);
     if (fg && /\bclaude\b/i.test(fg)) return sib.pane_id;
   }
