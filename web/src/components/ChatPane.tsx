@@ -54,14 +54,36 @@ type ServerMsg =
       // True when a headless turn is already in flight for this pane — a
       // reconnect mid-turn restores the working/Stop state from this.
       turnRunning?: boolean;
+      // The turn's streamed text so far, so that reconnect shows the partial
+      // assistant message instead of a bare typing indicator.
+      streamText?: string;
     }
   | { t: 'events'; phase: 'history' | 'live' | 'older'; events: ChatEvent[] }
   | { t: 'older-done'; hasMore: boolean }
+  | { t: 'send-ack' }
   | { t: 'turn-start' }
   | { t: 'stream'; delta: string }
   | { t: 'turn-done'; ok: boolean; error?: string }
   | { t: 'blocked'; reason: string }
   | { t: 'error'; message: string };
+
+/**
+ * Drop transcript-confirmed assistant text from the head of the streaming
+ * preview. The preview accumulates every text delta of the turn; once a
+ * message lands in the transcript (rendered as a real event), its copy must
+ * leave the preview or it shows twice — the "every message doubled while a
+ * turn runs" bug. Deltas always precede the transcript line (same ordered
+ * stdout + tail poll lag), so the landed text is a prefix of the preview.
+ */
+function consumeStreamedText(preview: string, landed: string[]): string {
+  let p = preview;
+  for (const text of landed) {
+    const t = p.trimStart();
+    if (t.startsWith(text)) p = t.slice(text.length);
+    else if (t && text.startsWith(t.trimEnd())) p = ''; // preview lagged behind — it's all stale
+  }
+  return p;
+}
 
 /**
  * Chat view of the Claude session tracked in a pane. Connects to
@@ -127,6 +149,16 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   // finished, we silently take over and resend the held text (once).
   const pendingText = useRef('');
   const takeoverTried = useRef(false);
+  // Delivery tracking. A send on a half-dead socket (mobile coming back from
+  // background) vanishes silently — the browser reports the socket open until
+  // the TCP timeout. The server acks every received frame; if neither an ack
+  // nor a close arrives in time, we restore the composer instead of spinning
+  // on a message that went nowhere.
+  const acked = useRef(true);
+  const sendWatchdog = useRef<number | undefined>(undefined);
+  // Escape hatch to trigger an immediate reconnect from outside the effect
+  // (assigned inside it, where the socket machinery lives).
+  const reconnectNow = useRef<() => void>(() => {});
 
   useEffect(() => {
     byId.current = new Set();
@@ -142,6 +174,9 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
     window.clearTimeout(olderTimeout.current);
     olderTimeout.current = undefined;
     olderAnchor.current = null;
+    acked.current = true;
+    pendingText.current = '';
+    window.clearTimeout(sendWatchdog.current);
 
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -167,12 +202,24 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
         );
         // A (re)connect that lands mid-turn restores the working/Stop state —
         // the turn's frames now broadcast to every socket of the pane, so this
-        // socket will get the stream/turn-done too.
-        if (msg.turnRunning) setSending(true);
+        // socket will get the stream/turn-done too. streamText carries the
+        // partial assistant message so far.
+        if (msg.turnRunning) {
+          setSending(true);
+          if (msg.streamText) setStreamingText(msg.streamText);
+        }
       } else if (msg.t === 'events') {
         const fresh = msg.events.filter((e) => !byId.current.has(e.id));
         if (fresh.length) {
           for (const e of fresh) byId.current.add(e.id);
+          // Assistant text that just landed in the transcript leaves the
+          // streaming preview, or it would render twice until turn end.
+          if (msg.phase === 'live') {
+            const landed = fresh
+              .filter((e): e is Extract<ChatEvent, { kind: 'assistant' }> => e.kind === 'assistant')
+              .map((e) => e.text);
+            if (landed.length) setStreamingText((s) => (s ? consumeStreamedText(s, landed) : s));
+          }
           if (msg.phase === 'older') {
             // Anchor the scroll to the current top so the prepend (which grows
             // content above the viewport) doesn't yank the view — see the
@@ -192,7 +239,12 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
         setHasMoreOlder(msg.hasMore);
         setLoadingOlder(false);
         loadingOlderRef.current = false;
+      } else if (msg.t === 'send-ack') {
+        acked.current = true;
+        window.clearTimeout(sendWatchdog.current);
       } else if (msg.t === 'turn-start') {
+        acked.current = true;
+        window.clearTimeout(sendWatchdog.current);
         setSending(true);
         setNotice(null);
         setStreamingText('');
@@ -205,6 +257,8 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
         setOptimisticUser(null);
         setNotice(msg.ok ? null : (msg.error ?? 'turn failed'));
       } else if (msg.t === 'blocked') {
+        acked.current = true;
+        window.clearTimeout(sendWatchdog.current);
         // The terminal hand-off hasn't finished (raced the toggle). Silently
         // finish taking over, then resend — once — so the user never sees it.
         if (takeoverTried.current) {
@@ -228,6 +282,8 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
             });
         }
       } else if (msg.t === 'error') {
+        acked.current = true;
+        window.clearTimeout(sendWatchdog.current);
         setSending(false);
         setNotice(msg.message);
       }
@@ -258,6 +314,20 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
         // and the turn's frames broadcast to the new socket.
         setSending(false);
         setStreamingText('');
+        // A send the server never acked died with this socket — put the text
+        // back in the composer and drop the optimistic bubble, so the message
+        // isn't silently lost (nor blindly re-sent, which could double it).
+        if (!acked.current) {
+          acked.current = true;
+          window.clearTimeout(sendWatchdog.current);
+          const lost = pendingText.current;
+          pendingText.current = '';
+          setOptimisticUser(null);
+          if (lost) {
+            setInput((prev) => prev || lost);
+            setNotice('Connection dropped before the message was sent — try again.');
+          }
+        }
         if (cancelled) return;
         // Reconnect with backoff — covers server restarts, network blips, and
         // the mobile tab being backgrounded (which drops the socket). Replaying
@@ -267,17 +337,22 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
       };
     };
 
-    // Reconnect right away when the tab returns to the foreground, instead of
-    // waiting out the backoff (mobile drops the socket while backgrounded).
-    const onVisible = () => {
-      if (cancelled || document.visibilityState !== 'visible') return;
+    // Immediate reconnect if the socket is down — skipping any pending backoff.
+    // A socket already up or coming up is left alone; CLOSING too: its onclose
+    // will schedule the retry, and connecting now would leave a duplicate.
+    const kick = () => {
+      if (cancelled) return;
       const rs = wsRef.current?.readyState;
-      // Skip if a socket is already up or coming up. CLOSING too: its onclose
-      // will schedule the retry, and connecting now would leave a duplicate.
       if (rs === WebSocket.OPEN || rs === WebSocket.CONNECTING || rs === WebSocket.CLOSING) return;
       if (retryTimer) clearTimeout(retryTimer);
       attempt = 0;
       connect();
+    };
+    reconnectNow.current = kick;
+    // Reconnect right away when the tab returns to the foreground, instead of
+    // waiting out the backoff (mobile drops the socket while backgrounded).
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') kick();
     };
     document.addEventListener('visibilitychange', onVisible);
     connect();
@@ -287,6 +362,7 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
       if (retryTimer) clearTimeout(retryTimer);
       window.clearTimeout(olderTimeout.current);
       olderTimeout.current = undefined;
+      window.clearTimeout(sendWatchdog.current);
       document.removeEventListener('visibilitychange', onVisible);
       const ws = wsRef.current;
       wsRef.current = null;
@@ -297,13 +373,42 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   const sendMessage = () => {
     const text = input.trim();
     if (!text || sending) return;
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      // Don't fire into a dead socket (the browser would drop it silently).
+      // Keep the text in the composer, kick a reconnect, let the user retry.
+      setNotice('Reconnecting — try again in a moment.');
+      reconnectNow.current();
+      return;
+    }
     pendingText.current = text; // held for a silent takeover-and-resend if blocked
     takeoverTried.current = false;
+    acked.current = false;
     setOptimisticUser(text); // show it immediately, don't wait for the transcript
-    wsRef.current?.send(JSON.stringify({ t: 'send', text }));
+    ws.send(JSON.stringify({ t: 'send', text }));
     setInput('');
     setNotice(null);
     setSending(true);
+    // Watchdog: a socket can look OPEN yet be dead (mobile background/network
+    // flip) — the send then vanishes with no close event for minutes. No ack
+    // in time → restore the composer and close the zombie so the backoff
+    // machinery brings up a fresh socket (a close on a dead link can dawdle
+    // in CLOSING, so don't wait for onclose to do the restoring).
+    window.clearTimeout(sendWatchdog.current);
+    sendWatchdog.current = window.setTimeout(() => {
+      if (acked.current) return;
+      acked.current = true;
+      pendingText.current = '';
+      setSending(false);
+      setOptimisticUser(null);
+      setInput((prev) => prev || text);
+      setNotice('Message not delivered — reconnecting. Try again.');
+      try {
+        wsRef.current?.close();
+      } catch {
+        // already closing
+      }
+    }, 6000);
   };
   const stop = () => wsRef.current?.send(JSON.stringify({ t: 'stop' }));
 
