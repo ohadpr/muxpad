@@ -1,6 +1,6 @@
+import type { PaneSpec } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { monotonicFactory } from 'ulid';
-import type { PaneSpec } from '@muxpad/shared';
 
 const ulid = monotonicFactory();
 
@@ -41,7 +41,17 @@ export class PaneStore {
       .prepare(
         'INSERT INTO panes (id, tab_id, kind, url, shell, startup_cmd, cwd, env, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(id, input.tab_id, kind, url, shell, startup_cmd, cwd, env ? JSON.stringify(env) : null, now);
+      .run(
+        id,
+        input.tab_id,
+        kind,
+        url,
+        shell,
+        startup_cmd,
+        cwd,
+        env ? JSON.stringify(env) : null,
+        now,
+      );
     return {
       id,
       tab_id: input.tab_id,
@@ -112,13 +122,23 @@ export class PaneStore {
    */
   setName(id: string, name: string | null): void {
     const trimmed = name?.trim();
-    this.db
-      .prepare('UPDATE panes SET name = ? WHERE id = ?')
-      .run(trimmed ? trimmed : null, id);
+    this.db.prepare('UPDATE panes SET name = ? WHERE id = ?').run(trimmed ? trimmed : null, id);
   }
 
   updateUrl(id: string, url: string): void {
     this.db.prepare('UPDATE panes SET url = ? WHERE id = ? AND kind = ?').run(url, id, 'url');
+  }
+
+  /**
+   * Update only the pane's startup command. Used by the agent-runner attach
+   * path to make agent panes self-healing: once the session id is known the
+   * startup command becomes `muxpad agent --resume <sid>`, so a ptyd restart
+   * (or reboot) re-runs it and the pane springs back into the same session.
+   */
+  setStartupCmd(id: string, startup_cmd: string | null): void {
+    this.db
+      .prepare("UPDATE panes SET startup_cmd = ? WHERE id = ? AND kind = 'shell'")
+      .run(startup_cmd, id);
   }
 
   /**

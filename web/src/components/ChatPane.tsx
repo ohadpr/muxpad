@@ -583,7 +583,8 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
           </div>
           <p className="chat-empty-title">No Claude session here yet</p>
           <p className="chat-empty-hint">
-            Start one with <code>muxpad claude</code> in the terminal.
+            Start one with <code>muxpad agent</code> (chat-native) or <code>muxpad claude</code> in
+            the terminal.
           </p>
         </div>
       );
