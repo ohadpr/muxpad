@@ -169,9 +169,14 @@ export class PaneRuntime extends EventEmitter {
     // 0.0.0.0) via MUXPAD_HOST. It only listens on the address it bound,
     // so the spawned shell must hit that same address — "localhost"
     // connection-refuses when the daemon bound a specific non-loopback IP.
-    // Port comes from MUXPAD_PORT (same env var the daemon reads at startup).
+    // A wildcard bind is the exception: 0.0.0.0/:: isn't a connectable
+    // address (Darwin only sometimes routes it to loopback) but does listen
+    // on loopback, so map it there. Port comes from MUXPAD_PORT (same env
+    // var the daemon reads at startup).
     const apiPort = process.env.MUXPAD_PORT ?? '7777';
-    const apiHost = process.env.MUXPAD_HOST ?? '127.0.0.1';
+    const boundHost = process.env.MUXPAD_HOST;
+    const apiHost =
+      !boundHost || boundHost === '0.0.0.0' || boundHost === '::' ? '127.0.0.1' : boundHost;
     const env: Record<string, string> = {
       ...sanitizeEnv(process.env),
       ...(this.spec.env ?? {}),
