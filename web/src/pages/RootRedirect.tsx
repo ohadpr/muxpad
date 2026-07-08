@@ -1,8 +1,8 @@
-import { useEffect, useRef } from 'react';
 import { useNavigate } from '@tanstack/react-router';
+import { useEffect, useRef } from 'react';
 import { api } from '../api';
-import { refreshWorkspaces } from '../workspaces';
 import { useDocumentTitle } from '../use-document-title';
+import { refreshWorkspaces } from '../workspaces';
 
 // Module-level so two RootRedirect mounts (StrictMode double-invoke,
 // route remounts, etc.) don't both fire workspace-bootstrap and create
@@ -34,9 +34,7 @@ export function RootRedirect() {
     // Preserve the current URL's search params (e.g. ?debug=1) across
     // the redirect chain — without this, devtools tooling that relies on
     // query flags would silently lose state on every visit to /.
-    const search = Object.fromEntries(
-      new URLSearchParams(window.location.search).entries(),
-    );
+    const search = Object.fromEntries(new URLSearchParams(window.location.search).entries());
 
     let cancelled = false;
     const run = async () => {
@@ -54,12 +52,10 @@ export function RootRedirect() {
       }
       // No workspaces — bootstrap one so the user is never stuck on a
       // blank page. Mirrors the create-from-dropdown flow: workspace +
-      // tab + pane, then navigate straight to the tab.
+      // tab-with-pane (created atomically server-side), then navigate.
       try {
         const w = await api.createWorkspace();
-        const t = await api.createTab(w.id);
-        const pane = await api.createPane(t.id, {});
-        await api.patchTab(t.id, { layout: pane.id });
+        const t = await api.createTab(w.id, { bootstrap: 'shell' });
         await refreshWorkspaces();
         if (cancelled) return;
         void navigate({
