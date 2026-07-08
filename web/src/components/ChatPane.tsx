@@ -91,7 +91,6 @@ type ServerMsg =
   | { t: 'question'; qid: string; questions: AgentQuestion[] }
   | { t: 'question-done'; qid: string }
   | { t: 'subagent'; progress: SubagentProgress }
-  | { t: 'blocked'; reason: string }
   | { t: 'error'; message: string };
 
 /**
@@ -196,10 +195,9 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   const [question, setQuestion] = useState<PendingQuestion | null>(null);
   // Live per-task subagent progress, keyed by the Task tool-use id.
   const [subagents, setSubagents] = useState<Record<string, SubagentProgress>>({});
-  // For the send↔takeover race: if a send lands before the toggle's hand-off
-  // finished, we silently take over and resend the held text (once).
+  // The text of the in-flight send, held so a socket death before the ack
+  // can restore it into the composer instead of losing it.
   const pendingText = useRef('');
-  const takeoverTried = useRef(false);
   // Delivery tracking. A send on a half-dead socket (mobile coming back from
   // background) vanishes silently — the browser reports the socket open until
   // the TCP timeout. The server acks every received frame; if neither an ack
@@ -360,34 +358,6 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
         setQuestion((q) => (q?.qid === msg.qid ? null : q));
       } else if (msg.t === 'subagent') {
         setSubagents((m) => ({ ...m, [msg.progress.toolUseId]: msg.progress }));
-      } else if (msg.t === 'blocked') {
-        acked.current = true;
-        window.clearTimeout(sendWatchdog.current);
-        // The terminal hand-off hasn't finished (raced the toggle). Silently
-        // finish taking over, then resend — once — so the user never sees it.
-        if (takeoverTried.current) {
-          setSending(false);
-          setNotice('Could not take over from the terminal — exit Claude there and retry.');
-        } else {
-          takeoverTried.current = true;
-          setSending(true);
-          fetch(`/api/agent-sessions/${paneId}/takeover`, { method: 'POST' })
-            .then((r) => {
-              if (r.ok && pendingText.current) {
-                // Re-arm delivery tracking — this resend can die on a zombie
-                // socket exactly like a composer send.
-                armSendWatchdog(pendingText.current);
-                wsRef.current?.send(JSON.stringify({ t: 'send', text: pendingText.current }));
-              } else {
-                setSending(false);
-                setNotice('Could not take over from the terminal — exit Claude there and retry.');
-              }
-            })
-            .catch(() => {
-              setSending(false);
-              setNotice('Could not take over from the terminal.');
-            });
-        }
       } else if (msg.t === 'error') {
         acked.current = true;
         window.clearTimeout(sendWatchdog.current);
@@ -512,7 +482,7 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   // time → restore the composer and close the zombie so the backoff machinery
   // brings up a fresh socket (a close on a dead link can dawdle in CLOSING,
   // so don't wait for onclose to do the restoring). Armed by every path that
-  // fires a `send` frame — the composer AND the blocked-takeover resend.
+  // fires a `send` frame.
   const armSendWatchdog = (text: string) => {
     acked.current = false;
     window.clearTimeout(sendWatchdog.current);
@@ -555,8 +525,7 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
       reconnectNow.current();
       return;
     }
-    pendingText.current = text; // held for a silent takeover-and-resend if blocked
-    takeoverTried.current = false;
+    pendingText.current = text;
     setOptimisticUser(text); // show it immediately, don't wait for the transcript
     ws.send(JSON.stringify({ t: 'send', text }));
     setInput('');

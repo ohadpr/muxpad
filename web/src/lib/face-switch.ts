@@ -2,11 +2,11 @@
  * Window-event contract for switching a pane's face (terminal | web | chat).
  *
  * Face menus live in the pane CHROME (tab strip, mosaic title bar, mobile
- * bar), but the semantics of a switch live in ShellPaneBody: flipping to chat
- * may need a TUI takeover, flipping chat→terminal may need to relaunch
- * `muxpad claude --resume`, and the failure notices render inside the pane.
- * So menus REQUEST a face here and the pane's mounted body executes it —
- * same pattern as muxpad:focus-pane / muxpad:send-input.
+ * bar), but the pane's mounted body owns its faces — so menus REQUEST a face
+ * here and ShellPaneBody executes the flip. Same pattern as
+ * muxpad:focus-pane / muxpad:send-input. Every switch is a pure view flip;
+ * the old TUI driver hand-off (takeover / relaunch) was dropped in favor of
+ * the one-way agent handoff (lib/agent-handoff.ts).
  */
 export interface SetFaceDetail {
   paneId: string;

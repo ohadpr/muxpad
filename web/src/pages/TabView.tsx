@@ -24,6 +24,7 @@ import { ShellPaneBody } from '../components/ShellPaneBody';
 import { UrlPane } from '../components/UrlPane';
 import { SvgClose } from '../components/icons';
 import { subscribe, subscribeReconnect } from '../events';
+import { handoffToAgent } from '../lib/agent-handoff';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { pushUndo } from '../lib/move-undo-store';
@@ -276,6 +277,42 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     window.addEventListener('muxpad:add-pane', onAddPane);
     return () => window.removeEventListener('muxpad:add-pane', onAddPane);
   }, []);
+
+  // "Continue in Agent tab" from a TUI pane's face menu: orchestrate the
+  // one-way handoff (TUI writes its context file and retires itself; a fresh
+  // agent tab absorbs it — lib/agent-handoff.ts). Lives here because the
+  // menu knows only paneId; this component holds the workspace + pane cwd
+  // and can navigate. The async flow survives the navigation-triggered
+  // remount — it's just fetches in a closure.
+  useEffect(() => {
+    const onHandoff = (e: Event) => {
+      const d = (e as CustomEvent<{ paneId?: string }>).detail;
+      const p = d?.paneId ? tab?.panes.find((x) => x.id === d.paneId) : undefined;
+      if (!p || !workspace) return;
+      void handoffToAgent({
+        paneId: p.id,
+        workspaceId: workspace.id,
+        cwd: p.cwd,
+        // Retire the whole tab when this is its only pane — a bare
+        // pane-delete would leave an empty tab shell in the sidebar.
+        closeCmd:
+          tab && tab.panes.length === 1
+            ? `muxpad tab delete ${tab.id}`
+            : `muxpad pane delete ${p.id}`,
+        onTabCreated: (tabSlug) => {
+          // Refresh the tabs list FIRST — navigating to a slug the client
+          // hasn't loaded yet trips the dead-tab redirect and bounces back.
+          void refreshTabs(workspace.id)
+            .catch(() => {})
+            .then(() => navigate({ to: '/w/$wsSlug/t/$tabSlug', params: { wsSlug, tabSlug } }));
+        },
+      }).then((res) => {
+        if (!res.ok && res.error) window.alert(res.error);
+      });
+    };
+    window.addEventListener('muxpad:handoff-to-agent', onHandoff);
+    return () => window.removeEventListener('muxpad:handoff-to-agent', onHandoff);
+  }, [tab, workspace, navigate, wsSlug]);
 
   // Persist the active pane on every focus event from any XtermPane
   // in the current tab. Desktop has no "active pane" in component
