@@ -268,7 +268,27 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
         // partial assistant message so far.
         if (msg.turnRunning) {
           setSending(true);
-          if (msg.streamText) setStreamingText(msg.streamText);
+          if (msg.streamText) {
+            // The hello's streamText is the WHOLE turn's accumulated buffer —
+            // including text that already landed in the transcript. On a
+            // same-socket-lifecycle reconnect those landed messages are
+            // already rendered (and dedupe away from the history replay), so
+            // consume them here or every text segment of the turn shows
+            // twice. The current turn's messages = everything after the last
+            // user message in the ordered log.
+            let lastUser = -1;
+            for (let i = ordered.current.length - 1; i >= 0; i--) {
+              if (ordered.current[i]?.kind === 'user') {
+                lastUser = i;
+                break;
+              }
+            }
+            const landed = ordered.current
+              .slice(lastUser + 1)
+              .filter((e): e is Extract<ChatEvent, { kind: 'assistant' }> => e.kind === 'assistant')
+              .map((e) => e.text);
+            setStreamingText(consumeStreamedText(msg.streamText, landed));
+          }
         }
         setQuestion(msg.question ?? null);
         if (msg.subagents) {
@@ -280,7 +300,15 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
           for (const e of fresh) byId.current.add(e.id);
           // Assistant text that just landed in the transcript leaves the
           // streaming preview, or it would render twice until turn end.
-          if (msg.phase === 'live') {
+          // 'history' matters as much as 'live': a mid-turn (re)connect —
+          // tab switch remounting this pane, heartbeat reconnect — restores
+          // the FULL stream buffer from the hello, while the turn's already-
+          // landed messages replay as history. Without consuming those, every
+          // text segment of the turn shows again, concatenated, until
+          // turn-done. Non-matching (older-turn) texts fall through the
+          // prefix check as no-ops. Only 'older' pages are excluded — back-
+          // scrolled ancient messages must never touch the live preview.
+          if (msg.phase !== 'older') {
             const landed = fresh
               .filter((e): e is Extract<ChatEvent, { kind: 'assistant' }> => e.kind === 'assistant')
               .map((e) => e.text);
