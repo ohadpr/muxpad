@@ -24,8 +24,8 @@ import { UrlPane } from '../components/UrlPane';
 import { SvgClose } from '../components/icons';
 import { subscribe, subscribeReconnect } from '../events';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
-import { pushUndo } from '../lib/move-undo-store';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
+import { pushUndo } from '../lib/move-undo-store';
 import { normalizePaneUrl, setPaneFace, usePaneFace } from '../lib/pane-face';
 import { setTabViewMode, useTabViewMode } from '../lib/tab-view-mode';
 import { refreshTabs, useTabs } from '../tabs';
@@ -69,6 +69,69 @@ function fromMosaic(layout: Layout): LayoutNode {
  * the Mosaic `Layout` type (null for empty) and the wire `LayoutNode`
  * type ('' for empty).
  */
+type NewPaneKind = 'terminal' | 'agent';
+
+/**
+ * The one "+" control for creating panes: a small menu offering the pane
+ * kinds a tab can hold (Terminal, chat-native Agent) — same choices as the
+ * sidebar's "+ New tab" / "+ Agent", one level down. Every creation surface
+ * offers the same set so there's a single mental model.
+ */
+function NewPaneMenu({
+  className,
+  onPick,
+}: {
+  className: string;
+  onPick: (kind: NewPaneKind) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown, true);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown, true);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  const pick = (kind: NewPaneKind) => {
+    setOpen(false);
+    onPick(kind);
+  };
+  return (
+    <div className="new-pane-menu" ref={wrapRef}>
+      <button
+        type="button"
+        className={className}
+        title="New pane"
+        aria-label="New pane"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        +
+      </button>
+      {open ? (
+        <div className="new-pane-menu-list" role="menu">
+          <button type="button" role="menuitem" onClick={() => pick('terminal')}>
+            Terminal
+          </button>
+          <button type="button" role="menuitem" onClick={() => pick('agent')}>
+            <span aria-hidden="true">✳ </span>Agent
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function splitAtPane(
   layout: Layout,
   targetId: string,
@@ -533,12 +596,18 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   );
 
   const splitFromPane = useCallback(
-    async (sourcePaneId: string | null, direction: MosaicDirection) => {
+    async (
+      sourcePaneId: string | null,
+      direction: MosaicDirection,
+      kind: NewPaneKind = 'terminal',
+    ) => {
       if (!tab) return;
-      const created = await api.createPane(
-        tab.id,
-        sourcePaneId ? { inherit_cwd_from: sourcePaneId } : {},
-      );
+      const created = await api.createPane(tab.id, {
+        ...(sourcePaneId ? { inherit_cwd_from: sourcePaneId } : {}),
+        // Agent pane: a chat-native Claude session (`muxpad agent` runs in
+        // the pty underneath; the face lands on chat immediately).
+        ...(kind === 'agent' ? { startup_cmd: 'muxpad agent', face: 'chat' as const } : {}),
+      });
       const newLayout =
         sourcePaneId == null
           ? created.id
@@ -969,7 +1038,10 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     // Optimistic: update local pane.name immediately (empty → clear/revert).
     setTab((prev) =>
       prev
-        ? { ...prev, panes: prev.panes.map((p) => (p.id === id ? { ...p, name: next || null } : p)) }
+        ? {
+            ...prev,
+            panes: prev.panes.map((p) => (p.id === id ? { ...p, name: next || null } : p)),
+          }
         : prev,
     );
     try {
@@ -1176,9 +1248,12 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           ? stored
           : (paneIds[0] ?? null);
 
-    const addPane = async () => {
+    const addPane = async (kind: NewPaneKind = 'terminal') => {
       const target = activeId ?? paneIds[paneIds.length - 1];
-      const created = await api.createPane(tab.id, target ? { inherit_cwd_from: target } : {});
+      const created = await api.createPane(tab.id, {
+        ...(target ? { inherit_cwd_from: target } : {}),
+        ...(kind === 'agent' ? { startup_cmd: 'muxpad agent', face: 'chat' as const } : {}),
+      });
       const newLayout: Layout = target
         ? splitAtPane(layoutRef.current, target, created.id, 'row')
         : created.id;
@@ -1298,15 +1373,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                 </div>
               );
             })}
-            <button
-              type="button"
-              className="desktop-tab-add"
-              title="New pane"
-              aria-label="New pane"
-              onClick={() => void addPane()}
-            >
-              +
-            </button>
+            <NewPaneMenu className="desktop-tab-add" onPick={(k) => void addPane(k)} />
           </div>
           <div className="desktop-tab-strip-actions">
             {activeWebSwitch}
@@ -1330,28 +1397,26 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
               xterm/iframe node reloads it and refits it to a transient (often
               half) width. Keeping the bodies put means a reorder only shuffles
               the cheap header divs; the terminal never moves. */}
-          {[...paneIds]
-            .sort()
-            .map((paneId) => {
-              const pane = tab.panes.find((p) => p.id === paneId);
-              if (!pane) return null;
-              const paneIsActive = paneId === activeId;
-              return (
-                <div
-                  key={paneId}
-                  className="tabbed-pane-slot"
-                  hidden={!paneIsActive}
-                  aria-hidden={!paneIsActive}
-                >
-                  <PaneBody
-                    pane={pane}
-                    onExit={() => onPaneExited(paneId)}
-                    autoFocus={paneIsActive}
-                    paneActive={isActive && paneIsActive}
-                  />
-                </div>
-              );
-            })}
+          {[...paneIds].sort().map((paneId) => {
+            const pane = tab.panes.find((p) => p.id === paneId);
+            if (!pane) return null;
+            const paneIsActive = paneId === activeId;
+            return (
+              <div
+                key={paneId}
+                className="tabbed-pane-slot"
+                hidden={!paneIsActive}
+                aria-hidden={!paneIsActive}
+              >
+                <PaneBody
+                  pane={pane}
+                  onExit={() => onPaneExited(paneId)}
+                  autoFocus={paneIsActive}
+                  paneActive={isActive && paneIsActive}
+                />
+              </div>
+            );
+          })}
         </main>
         <ExternalOpenToasts
           currentTabId={tab.id}
@@ -1389,7 +1454,13 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           <div className="workspace-empty">
             <p>This tab has no panes.</p>
             <button className="btn btn-primary" onClick={() => void splitFromPane(null, 'row')}>
-              + New pane
+              + Terminal
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={() => void splitFromPane(null, 'row', 'agent')}
+            >
+              ✳ Agent
             </button>
             <button type="button" className="workspace-empty-close" onClick={() => void closeTab()}>
               or close this tab
@@ -1533,7 +1604,9 @@ function PaneBody({
   if (pane.kind === 'url') {
     return <UrlPane paneId={pane.id} url={pane.url} />;
   }
-  return <ShellPaneBody pane={pane} onExit={onExit} autoFocus={autoFocus} paneActive={paneActive} />;
+  return (
+    <ShellPaneBody pane={pane} onExit={onExit} autoFocus={autoFocus} paneActive={paneActive} />
+  );
 }
 
 /**
@@ -1673,7 +1746,9 @@ function PaneSurfaceSwitch({
                 >
                   <SvgGlobe />
                   <span className="pane-web-switch-item-label">{a.label ?? hostLabel(a.url)}</span>
-                  {a.source === 'marker' ? <span className="pane-web-switch-badge">app</span> : null}
+                  {a.source === 'marker' ? (
+                    <span className="pane-web-switch-badge">app</span>
+                  ) : null}
                 </button>
               ))}
               {onWeb ? (
@@ -2048,7 +2123,16 @@ function SvgTabsView() {
   // Two stacked header tabs over a body — reads as "browser tabs".
   return (
     <svg width="18" height="18" viewBox="0 0 14 14" aria-hidden="true">
-      <rect x="1" y="4" width="12" height="9" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <rect
+        x="1"
+        y="4"
+        width="12"
+        height="9"
+        rx="1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
       <rect x="2" y="1.5" width="4.5" height="3" rx="0.8" fill="currentColor" opacity="0.7" />
       <rect x="7" y="1.5" width="4.5" height="3" rx="0.8" fill="currentColor" opacity="0.3" />
     </svg>
@@ -2063,7 +2147,15 @@ function SvgTabsView() {
 function SvgSpinner() {
   return (
     <svg width="11" height="11" viewBox="0 0 16 16" aria-hidden="true">
-      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2" fill="none" opacity="0.25" />
+      <circle
+        cx="8"
+        cy="8"
+        r="6"
+        stroke="currentColor"
+        strokeWidth="2"
+        fill="none"
+        opacity="0.25"
+      />
       <path
         d="M8 2 a6 6 0 0 1 6 6"
         stroke="currentColor"
@@ -2079,8 +2171,26 @@ function SvgSplitView() {
   // Two side-by-side panes — reads as "tiled split".
   return (
     <svg width="18" height="18" viewBox="0 0 14 14" aria-hidden="true">
-      <rect x="1" y="2" width="5" height="10" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" />
-      <rect x="8" y="2" width="5" height="10" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <rect
+        x="1"
+        y="2"
+        width="5"
+        height="10"
+        rx="1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
+      <rect
+        x="8"
+        y="2"
+        width="5"
+        height="10"
+        rx="1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
     </svg>
   );
 }

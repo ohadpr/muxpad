@@ -657,13 +657,17 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   };
 
-  // Grace timer: a present session with no transcript after a while → likely ended.
+  // Grace timer: connected but still nothing to show after a while — either a
+  // session with no transcript (likely ended) or no session at all (nothing
+  // running here). Until it fires, show a spinner: an agent tab's runner
+  // takes a few seconds to boot and register, and flashing "no session"
+  // during that window reads as broken.
   useEffect(() => {
     setStale(false);
-    if (!connected || !session?.current_sid || events.length > 0) return;
+    if (!connected || session === undefined || events.length > 0) return;
     const t = setTimeout(() => setStale(true), 8000);
     return () => clearTimeout(t);
-  }, [connected, session?.current_sid, events.length]);
+  }, [connected, session, events.length]);
 
   // Drop the optimistic user bubble once the real one lands from the transcript.
   useEffect(() => {
@@ -680,7 +684,17 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
           <p>{connected ? 'Loading conversation…' : 'Connecting…'}</p>
         </div>
       );
-    if (session === null || !session.current_sid)
+    if (session === null || !session.current_sid) {
+      // Grace: a just-created agent tab has no session row until its runner
+      // boots and hellos (a few seconds) — spin briefly before declaring
+      // there's nothing here.
+      if (!stale)
+        return (
+          <div className="chat-empty">
+            <div className="chat-empty-spinner" aria-hidden="true" />
+            <p>Starting…</p>
+          </div>
+        );
       return (
         <div className="chat-empty">
           <div className="chat-empty-mark" aria-hidden="true">
@@ -693,7 +707,21 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
           </p>
         </div>
       );
-    if (events.length === 0 && !optimisticUser && !sending)
+    }
+    if (events.length === 0 && !optimisticUser && !sending) {
+      // A live agent runner with no transcript yet is a FRESH session (the
+      // transcript file only appears on the first message) — greet, don't
+      // spin for 8s and then claim the session "may have ended".
+      if (session.writer === 'sdk')
+        return (
+          <div className="chat-empty">
+            <div className="chat-empty-mark" aria-hidden="true">
+              ✳
+            </div>
+            <p className="chat-empty-title">Ready when you are</p>
+            <p className="chat-empty-hint">Send a message below to start this session.</p>
+          </div>
+        );
       return (
         <div className="chat-empty">
           {stale ? (
@@ -704,7 +732,7 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
               <p className="chat-empty-title">No messages here</p>
               <p className="chat-empty-hint">
                 This session may have ended. Switch to Terminal, or start a new one with{' '}
-                <code>muxpad claude</code>.
+                <code>muxpad agent</code> (chat) or <code>muxpad claude</code> (terminal).
               </p>
             </>
           ) : (
@@ -715,6 +743,7 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
           )}
         </div>
       );
+    }
     // Pair each tool_use with its tool_result (by id) so the collapsed row can
     // open both in one modal; the standalone result row is then suppressed.
     const resultFor = new Map<string, ToolResultEvent>();
