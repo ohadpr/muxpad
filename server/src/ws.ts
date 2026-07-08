@@ -90,6 +90,45 @@ export function attachWsServer(deps: {
       });
     }
   };
+  // Auto-name agent panes/tabs from the session's AI title (the `ai-title`
+  // records Claude appends to the transcript after the first turn and on topic
+  // shifts). A user-given name always wins: we only overwrite a null name or
+  // one WE set from an earlier title — tracked here in memory, so after a
+  // server restart an existing auto-name is treated as user-given (titles
+  // change rarely; losing one update beats clobbering a manual rename).
+  const autoTitledPanes = new Map<string, string>();
+  const autoTitledTabs = new Map<string, string>();
+  const applyAiTitle = (paneId: string, rawTitle: string) => {
+    const title = rawTitle.trim().slice(0, 80);
+    if (!title) return;
+    // Only agent-native panes (persistent SDK runner) self-name; a terminal
+    // pane where the user runs `muxpad claude` keeps its own labeling.
+    if (agents.getByPane(paneId)?.writer !== 'sdk') return;
+    const pane = panes.getById(paneId);
+    if (!pane) return;
+    if (pane.name === null || pane.name === autoTitledPanes.get(paneId)) {
+      if (pane.name !== title) {
+        panes.setName(paneId, title);
+        autoTitledPanes.set(paneId, title);
+        emitPaneUpdated(paneId);
+      } else {
+        autoTitledPanes.set(paneId, title);
+      }
+    }
+    // Rename the tab too when this pane is its only one (the agent-tab shape)
+    // and the tab still wears the bootstrap default or our previous title.
+    const tab = tabs.getById(pane.tab_id);
+    if (!tab || panes.listByTab(tab.id).length !== 1) return;
+    if (tab.name === 'agent' || tab.name === autoTitledTabs.get(tab.id)) {
+      if (tab.name !== title) {
+        const updated = tabs.update(tab.id, { name: title });
+        autoTitledTabs.set(tab.id, title);
+        if (updated) deps.events.emit({ type: 'tab.updated', tab: updated });
+      } else {
+        autoTitledTabs.set(tab.id, title);
+      }
+    }
+  };
   // Connected agent runners (`muxpad agent` processes living in panes),
   // keyed by pane. A connected runner owns its pane's session: chat sends
   // and stops relay to it instead of spawning per-turn `claude -p` workers,
@@ -283,6 +322,11 @@ export function attachWsServer(deps: {
             if (!frame.progress || typeof frame.progress.toolUseId !== 'string') return;
             conn.subagents.set(frame.progress.toolUseId, frame.progress);
             bcast({ t: 'subagent', progress: frame.progress });
+          } else if (frame.t === 'title') {
+            // Runner-generated conversation title (SDK sessions get no
+            // ai-title transcript records) — same rename policy as the
+            // transcript-tail path: user-given names always win.
+            if (typeof frame.title === 'string') applyAiTitle(paneId, frame.title);
           } else if (frame.t === 'fatal') {
             bcast({ t: 'error', message: `agent exited: ${frame.error}` });
           }
@@ -396,6 +440,7 @@ export function attachWsServer(deps: {
             tail = new TranscriptTail(sid, {
               tailBytes: CHAT_HISTORY_TAIL_BYTES,
               onEvents: (events, phase) => send({ t: 'events', phase, events }),
+              onTitle: (title) => applyAiTitle(chatPaneId, title),
             });
             tail.start();
           }
