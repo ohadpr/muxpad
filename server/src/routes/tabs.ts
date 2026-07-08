@@ -42,16 +42,18 @@ export function tabsRoutes(deps: {
       })
       .parse(await c.req.json().catch(() => ({})));
     const name = body.name?.trim() || randomWorkspaceName();
-    let t = tabs.create({
-      name,
-      layout: body.layout ?? '',
-      workspace_id: body.workspace_id,
-    });
-    let bootstrappedPane: ReturnType<PaneStore['create']> | null = null;
-    if (body.bootstrap) {
+    // Transaction so a mid-request failure can't commit a half-bootstrapped
+    // ghost tab (tab row present, pane/layout missing).
+    const created = deps.db.transaction(() => {
+      let tab = tabs.create({
+        name,
+        layout: body.layout ?? '',
+        workspace_id: body.workspace_id,
+      });
+      if (!body.bootstrap) return { tab, pane: null };
       const agent = body.bootstrap === 'agent';
-      bootstrappedPane = panes.create({
-        tab_id: t.id,
+      const pane = panes.create({
+        tab_id: tab.id,
         shell: process.env.SHELL ?? '/bin/zsh',
         cwd: safeCwd(body.cwd),
         startup_cmd: agent ? 'muxpad agent' : null,
@@ -59,9 +61,12 @@ export function tabsRoutes(deps: {
         // face spawns the pty underneath, which runs the startup command.
         face: agent ? 'chat' : 'terminal',
       });
-      t = tabs.update(t.id, { layout: bootstrappedPane.id }) ?? t;
-      if (agent && !t.icon) t = tabs.update(t.id, { icon: '✳' }) ?? t;
-    }
+      tab = tabs.update(tab.id, { layout: pane.id }) ?? tab;
+      if (agent && !tab.icon) tab = tabs.update(tab.id, { icon: '✳' }) ?? tab;
+      return { tab, pane };
+    })();
+    const t = created.tab;
+    const bootstrappedPane = created.pane;
     deps.events.emit({ type: 'tab.added', workspace_id: body.workspace_id, tab: t });
     if (bootstrappedPane) {
       deps.events.emit({ type: 'pane.added', tab_id: t.id, pane: bootstrappedPane });

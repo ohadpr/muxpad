@@ -92,6 +92,8 @@ const kick = () => {
 // ---------------------------------------------------------------------------
 interface PendingQuestion {
   qid: string;
+  /** The frame, kept so a server reconnect can re-deliver the question. */
+  frame: RunnerFrame & { t: 'question' };
   resolve: (answers: Array<{ question: string; answers: string[] }> | null) => void;
 }
 const pendingQuestions = new Map<string, PendingQuestion>();
@@ -138,8 +140,9 @@ const askUserTool = tool(
     log(`${bold('? asking user')} ${questions.map((qq) => qq.header).join(', ')}`);
     const answers = await new Promise<Array<{ question: string; answers: string[] }> | null>(
       (resolve) => {
-        pendingQuestions.set(qid, { qid, resolve });
-        sendFrame({ t: 'question', qid, questions });
+        const frame = { t: 'question', qid, questions } as const;
+        pendingQuestions.set(qid, { qid, frame, resolve });
+        sendFrame(frame);
       },
     );
     if (!answers) {
@@ -245,6 +248,10 @@ function connect(): void {
   sock.on('open', () => {
     log(dim('connected to muxpad'));
     sendFrame(helloFrame());
+    // The server's per-connection state starts empty — re-deliver any
+    // question still blocking the turn so chat clients regain it after a
+    // server restart or ws blip.
+    for (const pq of pendingQuestions.values()) sendFrame(pq.frame);
   });
   sock.on('message', (data) => {
     const frame = parseFrame<ServerFrame>(data);

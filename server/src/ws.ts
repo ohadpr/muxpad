@@ -228,13 +228,20 @@ export function attachWsServer(deps: {
             agents.attachRunner({ pane_id: paneId, cwd: frame.cwd, session_id: frame.sid });
             if (conn.turnActive) agents.setStatus(paneId, 'running');
             deps.cache.setAgentBusy(paneId, conn.turnActive);
+            // A NEW runner attaching (fresh `muxpad agent`, or a resume under
+            // a different sid) is the "this pane is chat now" signal — flip
+            // the persisted face on every device. A RECONNECT of the same
+            // session (server restart, ws blip) must NOT: the user may have
+            // deliberately switched to the terminal face since.
+            const selfHealCmd = `muxpad agent --resume ${frame.sid}`;
+            const isReconnect = panes.getById(paneId)?.startup_cmd === selfHealCmd;
             // Self-heal: the pane's startup command now resumes THIS session,
             // so the pane survives ptyd restarts and reboots.
-            panes.setStartupCmd(paneId, `muxpad agent --resume ${frame.sid}`);
-            // A runner attaching IS the "this pane is chat now" signal — the
-            // persisted face flips every device's view live.
-            panes.setFace(paneId, 'chat');
-            emitPaneUpdated(paneId);
+            panes.setStartupCmd(paneId, selfHealCmd);
+            if (!isReconnect) {
+              panes.setFace(paneId, 'chat');
+              emitPaneUpdated(paneId);
+            }
             // A mid-turn reconnect: already-open chat clients still show an
             // idle composer (their session frame doesn't change shape), so
             // re-broadcast the running state — idempotent client-side.
@@ -431,7 +438,19 @@ export function attachWsServer(deps: {
             return;
           }
           if (msg.t === 'answer') {
-            if (typeof msg.qid === 'string' && Array.isArray(msg.answers)) {
+            // Validate the inner shape too — a malformed entry would throw
+            // inside the runner's blocked tool call and fail the turn.
+            if (
+              typeof msg.qid === 'string' &&
+              Array.isArray(msg.answers) &&
+              msg.answers.every(
+                (a) =>
+                  a &&
+                  typeof a.question === 'string' &&
+                  Array.isArray(a.answers) &&
+                  a.answers.every((x) => typeof x === 'string'),
+              )
+            ) {
               sendToRunner(chatPaneId, { t: 'answer', qid: msg.qid, answers: msg.answers });
             }
             return;

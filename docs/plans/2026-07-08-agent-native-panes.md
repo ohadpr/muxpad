@@ -76,14 +76,38 @@ view flip).
 Direction: new chat-first work targets agent panes; the toggle stays as the
 mobile mirror for TUI sessions.
 
-## Known gaps (v1)
+## Round 2 (same day): tabs-first + faces + questions + progress
 
-- Subagent activity is filtered out of the chat view (sidechains) — the
-  terminal face shows tool/subagent lines; nested rendering is a follow-up
-  (`forwardSubagentText` SDK option exists).
-- AskUserQuestion-style interactive dialogs aren't wired to chat; autonomous
-  sessions rarely hit them, but a `canUseTool`/dialog bridge is the eventual
-  non-yolo path.
-- Starting an agent pane still requires typing `muxpad agent` once (or
-  creating a pane with that startup_cmd); a "new agent pane" UI affordance is
-  trivial sugar later: `muxpad pane new --cmd 'muxpad agent'`.
+- **"+ Agent" / atomic tab bootstrap**: `POST /api/tabs {bootstrap: 'shell'|
+  'agent'}` creates tab + single full-size pane in one request (layout set,
+  pty eagerly spawned). An agent tab's runner attaches with zero clients —
+  chat-native sessions can be born from a phone. CLI: `muxpad tab new
+  --bootstrap=agent`. All web creation flows are tabs-first; splitting stays
+  an explicit in-tab action.
+- **Server-persisted faces**: `panes.face`/`face_url` (+ PATCH + pane.updated
+  events); `pane-face.ts` is now an optimistic overlay over the server value
+  (tab-view-mode pattern) with one-time localStorage migration. Every face —
+  including web + URL — survives reloads and follows across devices. The
+  agent_sessions.view_mode channel is legacy (still written, no longer read
+  by the client).
+- **ask_user question chips**: Claude Code's AskUserQuestion is NOT offered
+  to SDK sessions (spike-verified), so the runner exposes `ask_user` via the
+  SDK in-process MCP server. Chat renders tappable option cards (single-tap /
+  multi-select / free-text "Other…"); the blocked tool call resolves on
+  answer; Stop and turn-end dismiss it; server restarts re-deliver it (the
+  runner re-sends pending questions after every hello).
+- **Subagent live progress (stage 1)**: the runner counts subagent stream
+  messages per Task tool-use id → throttled `{steps, lastTool}` frames → the
+  chat Task row shows "N steps · Bash: …" with a spinner while running.
+- **Chat heartbeat**: app-level ping/pong (20s, visible tabs) detects zombie
+  idle sockets; complements the send-time ack watchdog.
+
+## Known gaps (v2)
+
+- Nested subagent transcript (drill-in) — deliberately deferred; the
+  progress line covers the "is it alive" need. `forwardSubagentText` is the
+  SDK hook when wanted.
+- Non-yolo permission prompts in chat (`PreToolUse` hook is the gate that
+  works under bypass; `canUseTool` is shadowed).
+- "Who drives this pane" is still branched client-side in a few places
+  (guarded server-side); a server-owned driver concept would clean it up.
