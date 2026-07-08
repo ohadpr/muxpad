@@ -127,7 +127,26 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   const wsRef = useRef<WebSocket | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [input, setInput] = useState('');
+  // Composer draft, persisted per pane: switching sidebar tabs unmounts the
+  // whole pane tree, so plain state would wipe half-typed messages. Restored
+  // on mount, cleared when the input empties (send, or manual delete).
+  // Device-local by design — a draft is not cross-device state.
+  const draftKey = `muxpad.chatDraft.${paneId}`;
+  const [input, setInput] = useState(() => {
+    try {
+      return localStorage.getItem(draftKey) ?? '';
+    } catch {
+      return '';
+    }
+  });
+  useEffect(() => {
+    try {
+      if (input) localStorage.setItem(draftKey, input);
+      else localStorage.removeItem(draftKey);
+    } catch {
+      // storage unavailable (private mode / quota) — drafts just don't persist
+    }
+  }, [input, draftKey]);
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
