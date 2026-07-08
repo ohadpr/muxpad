@@ -2,7 +2,6 @@ import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AgentBridge } from '../agent-bridge.js';
-import { takeoverPane } from '../chat/takeover.js';
 import type { EventBus } from '../events.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
@@ -45,13 +44,6 @@ export function agentSessionsRoutes(deps: {
   const emitChange = (paneId: string) =>
     deps.events?.emit({ type: 'agent_session.updated', pane_id: paneId });
 
-  // The terminal→chat toggle calls this: stop the Claude TUI (if any) and make
-  // chat the driver, so switching the view switches what's underneath too.
-  app.post('/:paneId/takeover', async (c) => {
-    const res = await takeoverPane(c.req.param('paneId'), store, deps.ptyd);
-    return c.json(res, res.ok ? 200 : 409);
-  });
-
   // Shared view mode (terminal | chat) for the session — persisted so the
   // choice propagates across devices (switch to chat on desktop → mobile shows
   // chat too, instead of an empty terminal whose Claude was taken over).
@@ -87,8 +79,9 @@ export function agentSessionsRoutes(deps: {
     return c.json(res, res.ok ? 202 : 409);
   });
 
-  // Live foreground of the pane — the chat→terminal toggle uses this to avoid
-  // typing the relaunch command INTO a Claude TUI that's already running.
+  // Live foreground of the pane — the handoff-to-agent flow uses this to
+  // verify a Claude TUI is actually running before typing the handoff
+  // instruction at the pane.
   app.get('/:paneId/foreground', async (c) => {
     let fg: string | null = null;
     try {
