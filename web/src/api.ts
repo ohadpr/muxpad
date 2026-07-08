@@ -120,6 +120,7 @@ export const api = {
       cwd?: string;
       env?: Record<string, string> | null;
       inherit_cwd_from?: string;
+      face?: 'terminal' | 'web' | 'chat';
     } = {},
   ) =>
     req<PaneSpec>(`/api/tabs/${tabId}/panes`, {

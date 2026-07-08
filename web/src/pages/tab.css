@@ -156,7 +156,7 @@
      two-tone edge against the rail. */
 }
 .workspace-body .mosaic-window[data-focused="true"] .mosaic-window-toolbar::after {
-  content: '';
+  content: "";
   position: absolute;
   left: 0;
   right: 0;
@@ -166,7 +166,7 @@
   pointer-events: none;
 }
 .workspace-body .mosaic-window[data-focused="true"] .mosaic-window-body::after {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   background: color-mix(in srgb, var(--accent) 5%, transparent);
@@ -641,7 +641,7 @@
    reads as plain --bg, nearly the sidebar colour. pointer-events:none so it
    never eats clicks/typing; z-index above the terminal like the split wash. */
 .tabbed-pane-slot:not([hidden])::after {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   background: color-mix(in srgb, var(--accent) 5%, transparent);
@@ -881,4 +881,37 @@
 .pane-chrome-btn-inline svg {
   width: 14px;
   height: 14px;
+}
+
+/* ── "+" new-pane menu (tabbed strip) ──────────────────────────────────── */
+.new-pane-menu {
+  position: relative;
+  display: inline-flex;
+}
+.new-pane-menu-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  min-width: 130px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--border-strong, #3b4261);
+  border-radius: 8px;
+  background: var(--bg-chrome, #16161e);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.new-pane-menu-list button {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg, #d7dae0);
+  font-size: var(--chrome-size-sm, 12px);
+  text-align: left;
+  cursor: pointer;
+}
+.new-pane-menu-list button:hover {
+  background: color-mix(in srgb, var(--accent, #4a9eff) 14%, transparent);
 }
