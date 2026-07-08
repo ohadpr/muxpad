@@ -15,7 +15,7 @@ import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
 import { MobileInputBar } from '../components/MobileInputBar';
 import { NewKindMenu, type NewKind as NewPaneKind } from '../components/NewKindMenu';
 import { PaneSelector } from '../components/PaneSelector';
-import { PaneWebSwitch } from '../components/PaneWebSwitch';
+import { PaneFaceMenuList, PaneWebSwitch } from '../components/PaneWebSwitch';
 // PaneSurfaceSwitch (below) reuses the .pane-web-switch-* menu classes, so
 // depend on that stylesheet explicitly rather than relying on the mobile
 // PaneWebSwitch mount to pull it into the bundle.
@@ -27,7 +27,7 @@ import { subscribe, subscribeReconnect } from '../events';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { pushUndo } from '../lib/move-undo-store';
-import { normalizePaneUrl, setPaneFace, usePaneFace } from '../lib/pane-face';
+import { usePaneFace } from '../lib/pane-face';
 import { setTabViewMode, useTabViewMode } from '../lib/tab-view-mode';
 import { refreshTabs, useTabs } from '../tabs';
 import { useMediaQuery } from '../use-media-query';
@@ -1101,7 +1101,11 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           const ap = activeId ? tab.panes.find((p) => p.id === activeId) : undefined;
           const webSwitch =
             ap && ap.kind === 'shell' ? (
-              <PaneWebSwitch paneId={ap.id} appUrls={ap.app_urls ?? []} />
+              <PaneWebSwitch
+                paneId={ap.id}
+                appUrls={ap.app_urls ?? []}
+                startupCmd={ap.startup_cmd}
+              />
             ) : null;
           if (paneIds.length > 1) {
             return (
@@ -1223,7 +1227,11 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     const activePane = activeId ? tab.panes.find((p) => p.id === activeId) : undefined;
     const activeWebSwitch =
       activePane && activePane.kind === 'shell' ? (
-        <PaneWebSwitch paneId={activePane.id} appUrls={activePane.app_urls ?? []} />
+        <PaneWebSwitch
+          paneId={activePane.id}
+          appUrls={activePane.app_urls ?? []}
+          startupCmd={activePane.startup_cmd}
+        />
       ) : null;
 
     return (
@@ -1432,6 +1440,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                           paneId={paneId}
                           label={label}
                           appUrls={tilePane?.app_urls ?? []}
+                          startupCmd={tilePane?.startup_cmd}
                           onKindToggled={onKindToggled}
                         />
                       )}
@@ -1578,175 +1587,130 @@ function PaneSurfaceSwitch({
   paneId,
   currentKind,
   appUrls = [],
+  startupCmd,
   loading,
   onSelect,
 }: {
   paneId: string;
   currentKind: 'shell' | 'url';
   appUrls?: AppUrl[];
+  startupCmd?: string | null | undefined;
   loading?: boolean;
   onSelect: (next: 'shell' | 'url') => void;
 }) {
   const { face, url } = usePaneFace(paneId);
-  const [open, setOpen] = useState(false);
-  const [typing, setTyping] = useState(false);
-  const [draft, setDraft] = useState('');
+  const [menuAt, setMenuAt] = useState<{ top: number; left: number } | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!menuAt) return;
+    const close = () => setMenuAt(null);
     const onDown = (e: MouseEvent) => {
       if (wrapperRef.current?.contains(e.target as Node)) return;
-      setOpen(false);
-      setTyping(false);
+      close();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setOpen(false);
-        setTyping(false);
-      }
+      if (e.key === 'Escape') close();
     };
     document.addEventListener('mousedown', onDown, true);
     document.addEventListener('keydown', onKey);
+    // The menu is position:fixed (measured from the trigger) — coords go
+    // stale on scroll/resize, so just close.
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
     return () => {
       document.removeEventListener('mousedown', onDown, true);
       document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
     };
-  }, [open]);
+  }, [menuAt]);
 
-  useEffect(() => {
-    if (typing) inputRef.current?.focus();
-  }, [typing]);
-
+  const onChat = currentKind === 'shell' && face === 'chat';
   const onWeb = currentKind === 'shell' && face === 'web' && !!url;
   const showsGlobe = currentKind === 'url' || onWeb;
   const Icon = showsGlobe ? SvgGlobe : SvgTerminal;
   // Terminal face + a detected app: advertise it (accent + pulse dot).
   const available = currentKind === 'shell' && !onWeb && appUrls.length > 0;
 
-  const close = () => {
-    setOpen(false);
-    setTyping(false);
-  };
-  const flipToWeb = (target: string) => {
-    setPaneFace(paneId, { face: 'web', url: target });
-    close();
-  };
-  const flipToTerminal = () => {
-    setPaneFace(paneId, { face: 'terminal', url });
-    close();
-  };
-  const commitDraft = () => {
-    const next = normalizePaneUrl(draft);
-    if (next) flipToWeb(next);
+  const close = () => setMenuAt(null);
+  const toggle = () => {
+    if (menuAt) {
+      close();
+      return;
+    }
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setMenuAt({ top: rect.bottom + 4, left: rect.left });
   };
 
-  // One control, one job: the icon shows the CURRENT surface (terminal vs
-  // globe) and the whole button opens the menu. No magic toggle — every
-  // change is an explicit, labeled menu item ("Back to terminal", a URL,
-  // "Convert to web pane"), so the button never reads as "what you'll become".
-  const surfaceWord = showsGlobe ? 'web' : 'terminal';
+  // One control, one job: the icon shows the CURRENT surface and the whole
+  // button opens the menu. No magic toggle — every change is an explicit,
+  // labeled menu item. Face selection (terminal/chat/web URLs) is the shared
+  // PaneFaceMenuList; the destructive pane-KIND conversion is appended below
+  // its separator.
+  const surfaceWord = onChat ? 'chat' : showsGlobe ? 'web' : 'terminal';
 
   return (
     <div className="pane-surface-switch" ref={wrapperRef}>
       <button
+        ref={triggerRef}
         type="button"
         className={`pane-surface-trigger${available ? ' is-available' : ''}`}
         title={`Showing ${surfaceWord} — pane options`}
         aria-label={`Showing ${surfaceWord} — pane options`}
         aria-haspopup="menu"
-        aria-expanded={open}
+        aria-expanded={menuAt !== null}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          setOpen((o) => !o);
+          toggle();
         }}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <Icon />
+        {onChat ? (
+          <span className="pane-web-switch-glyph" aria-hidden="true">
+            ✳
+          </span>
+        ) : (
+          <Icon />
+        )}
         {loading && <span className="pane-chrome-typeswitch-spinner" aria-hidden="true" />}
         {available && <span className="pane-surface-dot" aria-hidden="true" />}
         <SvgChevron />
       </button>
-      {open && (
-        <div className="pane-web-switch-menu" role="menu" onMouseDown={(e) => e.stopPropagation()}>
-          {currentKind === 'shell' ? (
-            <>
-              {appUrls.length > 0 ? (
-                <div className="pane-web-switch-head">
-                  {appUrls.length === 1 ? 'Serving' : `Serving · ${appUrls.length}`}
-                </div>
-              ) : null}
-              {appUrls.map((a) => (
-                <button
-                  key={a.url}
-                  type="button"
-                  role="menuitem"
-                  className={`pane-web-switch-item${url === a.url && onWeb ? ' is-active' : ''}`}
-                  onClick={() => flipToWeb(a.url)}
-                  title={a.url}
-                >
-                  <SvgGlobe />
-                  <span className="pane-web-switch-item-label">{a.label ?? hostLabel(a.url)}</span>
-                  {a.source === 'marker' ? (
-                    <span className="pane-web-switch-badge">app</span>
-                  ) : null}
-                </button>
-              ))}
-              {onWeb ? (
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="pane-web-switch-item"
-                  onClick={flipToTerminal}
-                >
-                  <SvgTerminal />
-                  <span className="pane-web-switch-item-label">Back to terminal</span>
-                </button>
-              ) : null}
-              {typing ? (
-                <input
-                  ref={inputRef}
-                  className="pane-web-switch-input"
-                  value={draft}
-                  placeholder="https://…"
-                  spellCheck={false}
-                  autoComplete="off"
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') commitDraft();
-                  }}
-                />
-              ) : (
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="pane-web-switch-item pane-web-switch-manual"
-                  onClick={() => {
-                    setDraft(url ?? '');
-                    setTyping(true);
-                  }}
-                >
-                  Enter URL…
-                </button>
-              )}
-              <button
-                type="button"
-                role="menuitem"
-                className="pane-web-switch-item pane-web-switch-convert"
-                title="Replace this terminal with a standalone web pane — the terminal (and anything running in it) is closed."
-                onClick={() => {
-                  close();
-                  onSelect('url');
-                }}
-              >
-                <SvgGlobe />
-                <span className="pane-web-switch-item-label">Convert to web pane</span>
-                <span className="pane-web-switch-note">closes terminal</span>
-              </button>
-            </>
-          ) : (
+      {menuAt &&
+        (currentKind === 'shell' ? (
+          <PaneFaceMenuList
+            paneId={paneId}
+            appUrls={appUrls}
+            startupCmd={startupCmd}
+            at={menuAt}
+            onClose={close}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              className="pane-web-switch-item pane-web-switch-convert"
+              title="Replace this terminal with a standalone web pane — the terminal (and anything running in it) is closed."
+              onClick={() => {
+                close();
+                onSelect('url');
+              }}
+            >
+              <SvgGlobe />
+              <span className="pane-web-switch-item-label">Convert to web pane</span>
+              <span className="pane-web-switch-note">closes terminal</span>
+            </button>
+          </PaneFaceMenuList>
+        ) : (
+          <div
+            className="pane-web-switch-menu is-fixed"
+            role="menu"
+            style={{ top: menuAt.top, left: menuAt.left }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
             <button
               type="button"
               role="menuitem"
@@ -1759,21 +1723,10 @@ function PaneSurfaceSwitch({
               <SvgTerminal />
               <span className="pane-web-switch-item-label">Convert to terminal</span>
             </button>
-          )}
-        </div>
-      )}
+          </div>
+        ))}
     </div>
   );
-}
-
-/** Best-effort short label for a URL (host:port, no scheme). */
-function hostLabel(raw: string): string {
-  try {
-    const u = new URL(raw);
-    return u.port ? `${u.hostname}:${u.port}` : u.hostname;
-  } catch {
-    return raw;
-  }
 }
 
 function SvgMove() {
@@ -1965,11 +1918,13 @@ function ShellPaneTitle({
   paneId,
   label,
   appUrls,
+  startupCmd,
   onKindToggled,
 }: {
   paneId: string;
   label: string;
   appUrls: AppUrl[];
+  startupCmd?: string | null | undefined;
   onKindToggled: (updated: PaneSpec) => void;
 }) {
   const handleSwitch = async (next: 'shell' | 'url') => {
@@ -1986,6 +1941,7 @@ function ShellPaneTitle({
         paneId={paneId}
         currentKind="shell"
         appUrls={appUrls}
+        startupCmd={startupCmd}
         onSelect={handleSwitch}
       />
       <a
