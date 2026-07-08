@@ -99,3 +99,15 @@ body.mosaic-dragging .shell-pane-web {
   color: #e4c97a;
   backdrop-filter: blur(4px);
 }
+
+/* Web face refused (self-embed guard): explain instead of a blank tile. */
+.shell-pane-web-blocked {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+  color: var(--fg-faint, #6f7488);
+  font-size: 13px;
+}

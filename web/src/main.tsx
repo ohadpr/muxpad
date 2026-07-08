@@ -7,14 +7,36 @@ import { refreshTabs } from './tabs';
 import { refreshWorkspaces } from './workspaces';
 import './styles.css';
 
+/**
+ * Self-embed breaker. A pane's web face pointed at muxpad's own origin
+ * recursively embeds the app — each nesting level boots another full client
+ * (event sockets, polls, more nested iframes) until the browser exhausts
+ * resources and the whole page goes unresponsive (observed live: hundreds of
+ * ERR_INSUFFICIENT_RESOURCES failures). ShellPaneBody refuses to create such
+ * iframes; this is the defense-in-depth backstop for any other path. A
+ * cross-origin parent throws on the .origin read — that's a legitimate embed
+ * and boots normally.
+ */
+function isSelfEmbedded(): boolean {
+  if (window.self === window.top) return false;
+  try {
+    return window.top?.location.origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
+const selfEmbedded = isSelfEmbedded();
+
 // Open the app-level event stream as soon as the bundle boots. On every
 // reconnect, refetch the workspace list so we recover any events missed
 // while the socket was down. Per-workspace tab caches refresh via the
 // 5s poll in useTabs / useWorkspaces (also retriggered by tab/workspace
 // events below). The active TabView has its own subscribe() that merges
 // pane-level events into local state without waiting for any poll.
-startEvents();
-subscribeReconnect(() => void refreshWorkspaces());
+if (!selfEmbedded) {
+  startEvents();
+  subscribeReconnect(() => void refreshWorkspaces());
+}
 
 // Global router: forward structural events into the right module caches.
 // TabView subscribes directly to handle pane events for the active tab.
@@ -85,4 +107,12 @@ window.addEventListener('vite:preloadError', (e) => {
 });
 
 const root = createRoot(document.getElementById('root') as HTMLElement);
-root.render(<RouterProvider router={router} />);
+if (selfEmbedded) {
+  root.render(
+    <div style={{ padding: 16, fontFamily: 'system-ui', opacity: 0.7 }}>
+      muxpad can’t embed itself — open this URL in its own tab.
+    </div>,
+  );
+} else {
+  root.render(<RouterProvider router={router} />);
+}

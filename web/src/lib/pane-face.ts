@@ -170,3 +170,17 @@ export function normalizePaneUrl(raw: string): string | null {
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   return `https://${trimmed}`;
 }
+
+/**
+ * True when a pane web-face URL points back at muxpad's own origin. Such an
+ * iframe recursively embeds the whole client (each nesting level boots
+ * another app with sockets, polls, and a further nested iframe) until the
+ * browser exhausts resources — refuse to render it anywhere.
+ */
+export function isSelfOriginUrl(url: string): boolean {
+  try {
+    return new URL(url, window.location.href).origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
