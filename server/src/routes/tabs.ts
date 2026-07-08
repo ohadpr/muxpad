@@ -41,7 +41,11 @@ export function tabsRoutes(deps: {
         cwd: z.string().optional(),
       })
       .parse(await c.req.json().catch(() => ({})));
-    const name = body.name?.trim() || randomWorkspaceName();
+    // Agent tabs get a deliberate name + mark (auto-renamed to the session's
+    // AI title once the conversation has one); everything else keeps the
+    // random-name default.
+    const name =
+      body.name?.trim() || (body.bootstrap === 'agent' ? 'agent' : randomWorkspaceName());
     // Transaction so a mid-request failure can't commit a half-bootstrapped
     // ghost tab (tab row present, pane/layout missing).
     const created = deps.db.transaction(() => {
@@ -49,6 +53,7 @@ export function tabsRoutes(deps: {
         name,
         layout: body.layout ?? '',
         workspace_id: body.workspace_id,
+        ...(body.bootstrap === 'agent' ? { icon: '✳' } : {}),
       });
       if (!body.bootstrap) return { tab, pane: null };
       const agent = body.bootstrap === 'agent';
@@ -62,7 +67,6 @@ export function tabsRoutes(deps: {
         face: agent ? 'chat' : 'terminal',
       });
       tab = tabs.update(tab.id, { layout: pane.id }) ?? tab;
-      if (agent && !tab.icon) tab = tabs.update(tab.id, { icon: '✳' }) ?? tab;
       return { tab, pane };
     })();
     const t = created.tab;

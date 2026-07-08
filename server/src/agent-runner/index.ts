@@ -197,10 +197,62 @@ function flushSubagents(): void {
   subagents.clear();
 }
 
+// ---------------------------------------------------------------------------
+// Self-titling. Interactive Claude Code writes `ai-title` records into the
+// transcript; SDK-hosted sessions don't (verified: no ai-title lines, and
+// getSessionInfo().summary just echoes the first prompt). So after the first
+// completed turn of a FRESH session, generate a title ourselves with a cheap
+// one-shot haiku query and send it to the server, which names the pane/tab
+// (user renames always win there). Fire-and-forget — never blocks the queue.
+// ---------------------------------------------------------------------------
+let firstUserText: string | null = null;
+let firstAssistantText = '';
+let titleGenerated = false;
+
+async function generateTitle(): Promise<void> {
+  if (titleGenerated || !firstUserText) return;
+  titleGenerated = true;
+  const abort = new AbortController();
+  const timeout = setTimeout(() => abort.abort(), 60_000);
+  try {
+    const prompt = `Generate a concise 3–6 word title for this conversation, in its language. Reply with ONLY the title — no quotes, no trailing punctuation.\n\nUser: ${firstUserText.slice(0, 500)}\n\nAssistant: ${firstAssistantText.slice(0, 500)}`;
+    const one = query({
+      prompt,
+      options: {
+        model: 'haiku',
+        maxTurns: 1,
+        // Bare completion: no user/project settings, no MCP, no tools.
+        settingSources: [],
+        allowedTools: [],
+        abortController: abort,
+      },
+    });
+    let title = '';
+    for await (const m of one) {
+      if (m.type === 'result' && m.subtype === 'success') title = m.result;
+    }
+    title = title
+      .trim()
+      .replace(/^["'“”]+|["'“”.]+$/g, '')
+      .replace(/\s+/g, ' ')
+      .slice(0, 60)
+      .trim();
+    if (!title) return;
+    log(dim(`titled: ${title}`));
+    sendFrame({ t: 'title', title });
+    process.stdout.write(`\x1b]0;✳ ${title}\x07`);
+  } catch (e) {
+    log(dim(`title generation failed: ${e instanceof Error ? e.message : String(e)}`));
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function* userMessages(): AsyncGenerator<SDKUserMessage> {
   while (true) {
     while (!inTurn && pendingTexts.length > 0) {
       const text = pendingTexts.shift() as string;
+      if (firstUserText === null) firstUserText = text;
       inTurn = true;
       interruptRequested = false;
       sendFrame({ t: 'turn-start' });
@@ -323,6 +375,10 @@ const session = query({ prompt: userMessages(), options });
 
 async function main(): Promise<void> {
   connect();
+  // Name the pty deliberately (OSC 0) — otherwise the pane label falls back
+  // to whatever the shell last set ("muxpad", the node path, …). The pane's
+  // persistent NAME gets the session's AI title via the transcript tail.
+  process.stdout.write('\x1b]0;\u2733 agent\x07');
   log(`${bold('muxpad agent')} — session ${sid}${resumeSid ? ' (resumed)' : ''}`);
   log(dim(`pane ${paneId} · ${process.cwd()}`));
   log(dim('drive this session from the pane’s Chat face; this log is the terminal face'));
@@ -367,6 +423,9 @@ async function main(): Promise<void> {
       noteAutonomousTurn();
       for (const block of msg.message.content ?? []) {
         if (block.type === 'text' && block.text.trim()) {
+          if (!titleGenerated && firstAssistantText.length < 500) {
+            firstAssistantText += `${block.text.trim()}\n`;
+          }
           log(`${bold('claude')} ${block.text.trim()}`);
         } else if (block.type === 'tool_use') {
           const arg = summarizeToolInput(block.name, block.input);
@@ -402,6 +461,9 @@ async function main(): Promise<void> {
       } else if (msg.subtype === 'success') {
         log(dim(`✓ turn done · ${secs}s · $${msg.total_cost_usd.toFixed(2)}`));
         sendFrame({ t: 'turn-done', ok: true });
+        // First completed turn of a fresh session: self-title (resumed
+        // sessions keep whatever name their pane/tab already carries).
+        if (!resumeSid && !titleGenerated) void generateTitle();
       } else {
         const error = msg.errors?.join('; ') || msg.subtype;
         log(`✗ turn failed: ${error}`);
