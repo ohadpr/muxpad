@@ -2,6 +2,7 @@ import type { Server } from 'node:http';
 import { homedir } from 'node:os';
 import type Database from 'better-sqlite3';
 import { WebSocket, WebSocketServer } from 'ws';
+import type { AgentBridge } from './agent-bridge.js';
 import {
   type AgentQuestion,
   type RunnerFrame,
@@ -39,6 +40,8 @@ export function attachWsServer(deps: {
   events: EventBus;
   /** Liveness ping interval in ms. Defaults to 15s; tests pass a small value. */
   heartbeatMs?: number;
+  /** When provided, gets its `send` bound to the live runner registry. */
+  agentBridge?: AgentBridge;
 }): WsServerHandle {
   const wss = new WebSocketServer({ noServer: true });
   const panes = new PaneStore(deps.db);
@@ -149,6 +152,26 @@ export function attachWsServer(deps: {
     r.ws.send(JSON.stringify(frame));
     return true;
   };
+  // Bind the HTTP route layer's late-bound relay (POST /agent-sessions/
+  // :paneId/send) to the live registry. Runner-owned panes only — the
+  // headless-spawn path with its guard cascade stays chat-socket-only.
+  if (deps.agentBridge) {
+    deps.agentBridge.send = (paneId, text) => {
+      const t = text.trim();
+      if (!t) return { ok: false, reason: 'empty message' };
+      const pane = panes.getById(paneId);
+      if (!pane) return { ok: false, reason: 'pane not found' };
+      if (agentRunners.has(paneId)) {
+        return sendToRunner(paneId, { t: 'send', text: t })
+          ? { ok: true }
+          : { ok: false, reason: 'agent is reconnecting — retry' };
+      }
+      if (pane.startup_cmd?.startsWith('muxpad agent')) {
+        return { ok: false, reason: 'agent is starting — retry' };
+      }
+      return { ok: false, reason: 'pane has no agent runner' };
+    };
+  }
 
   // Server-side liveness detection. A WebSocket severed abruptly (browser
   // hard-reload, crashed tab, network blip) does NOT fire 'close' until the
