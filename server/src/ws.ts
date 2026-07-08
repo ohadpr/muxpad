@@ -1,5 +1,4 @@
 import type { Server } from 'node:http';
-import { homedir } from 'node:os';
 import type Database from 'better-sqlite3';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { AgentBridge } from './agent-bridge.js';
@@ -10,9 +9,7 @@ import {
   type SubagentProgress,
   parseFrame,
 } from './agent-runner/protocol.js';
-import { HeadlessRunner } from './chat/HeadlessRunner.js';
-import { TranscriptTail, findTranscript } from './chat/TranscriptReader.js';
-import { findConversationRival } from './chat/conversation-guard.js';
+import { TranscriptTail } from './chat/TranscriptReader.js';
 import type { EventBus } from './events.js';
 import { type PtydCache, decoratePane } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
@@ -50,18 +47,6 @@ export function attachWsServer(deps: {
   // Any headless writer / running status persisted by a previous process is a
   // turn that died with it (restart mid-turn) — clear it or panes look stuck.
   agents.reconcileStartup();
-  // One in-flight headless turn per pane. Keyed by pane (not ws) so a client
-  // reconnect never spawns a second driver or aborts a running turn.
-  const chatRunners = new Map<string, HeadlessRunner>();
-  // Panes whose turn is mid-spawn (past the guard, awaiting the foreground
-  // check, before the runner lands in chatRunners). Reserved SYNCHRONOUSLY so a
-  // double-send can't slip two runners onto one session across the await.
-  const startingChat = new Set<string>();
-  // Session-ids with a headless turn reserved or in flight → the driving pane.
-  // Single-writer is per CONVERSATION, not per pane: a cross-pane
-  // `muxpad claude --resume <sid>` can leave two panes tracking the same sid,
-  // and two writers on one sid corrupt the transcript regardless of pane.
-  const drivingSids = new Map<string, string>();
   // Live chat sockets per pane. Turn lifecycle frames (turn-start / stream /
   // turn-done) broadcast to every open chat view of the pane — including one
   // that reconnected mid-turn — not just the socket that sent the message.
@@ -432,10 +417,7 @@ export function attachWsServer(deps: {
           if (first || hello !== lastHello) {
             lastHello = hello;
             const runner = agentRunners.get(chatPaneId);
-            const turnRunning =
-              chatRunners.has(chatPaneId) ||
-              startingChat.has(chatPaneId) ||
-              runner?.turnActive === true;
+            const turnRunning = runner?.turnActive === true;
             const streamText = streamBufs.get(chatPaneId);
             send({
               t: 'session',
@@ -480,10 +462,8 @@ export function attachWsServer(deps: {
         };
         ws.on('close', teardown);
         ws.on('error', teardown);
-        // Composer: drive a turn from chat. Single-writer is enforced by
-        // refusing to spawn while a Claude TUI is the pane's live foreground —
-        // two drivers on one session-id corrupt the transcript. One turn per
-        // pane at a time; the runner is keyed by pane so it outlives this ws.
+        // Composer: drive a turn from chat by relaying to the pane's agent
+        // runner (the only chat driver — TUI sessions are view-only here).
         ws.on('message', (data) => {
           const msg = parseFrame<{
             t?: string;
@@ -500,9 +480,7 @@ export function attachWsServer(deps: {
             return;
           }
           if (msg.t === 'stop') {
-            if (!sendToRunner(chatPaneId, { t: 'stop' })) {
-              chatRunners.get(chatPaneId)?.interrupt();
-            }
+            sendToRunner(chatPaneId, { t: 'stop' });
             return;
           }
           if (msg.t === 'answer') {
@@ -531,15 +509,16 @@ export function attachWsServer(deps: {
             return;
           }
           if (msg.t !== 'send' || typeof msg.text !== 'string' || !msg.text.trim()) return;
-          // Ack receipt immediately (before any guard). The client arms a
-          // watchdog on send: with no ack/error/turn-start coming back it
-          // knows the socket was dead and restores the composer instead of
-          // spinning forever on a message the server never saw.
+          // Ack receipt immediately. The client arms a watchdog on send: with
+          // no ack/error/turn-start coming back it knows the socket was dead
+          // and restores the composer instead of spinning forever.
           send({ t: 'send-ack' });
-          // A pane with a live agent runner: relay straight to it. The runner
-          // owns the session (it IS the pane's foreground process), so none
-          // of the TUI/single-writer guards below apply — it serializes
-          // queued sends itself and broadcasts the turn lifecycle back.
+          // Chat drives exactly one thing: the pane's agent runner. TUI
+          // sessions (`muxpad claude`) are terminal-driven and chat is a live
+          // read-only view of their transcript — the old terminal⇄chat driver
+          // hand-off (headless per-turn `claude -p`, takeover, dual-writer
+          // guards) was dropped; see PR "drop terminal⇄chat session
+          // switching" for the capability's record.
           if (agentRunners.has(chatPaneId)) {
             if (!sendToRunner(chatPaneId, { t: 'send', text: msg.text })) {
               send({ t: 'error', message: 'agent is reconnecting — try again' });
@@ -547,150 +526,17 @@ export function attachWsServer(deps: {
             return;
           }
           // Runner-owned pane whose runner is between connections (server
-          // just restarted; ws blip): it vanishes from agentRunners and
-          // reconcile clears its writer, but its SDK process is still alive
-          // in the pty. Falling through would spawn `claude -p` as a second
-          // writer on the live session. The pane's startup_cmd is the
-          // durable marker of runner ownership — refuse until it re-hellos.
+          // just restarted; ws blip): the startup_cmd marker is the durable
+          // sign of runner ownership — tell the user to retry, never fall
+          // back to another writer.
           if (panes.getById(chatPaneId)?.startup_cmd?.startsWith('muxpad agent')) {
             send({ t: 'error', message: 'agent is reconnecting — try again in a few seconds' });
             return;
           }
-          const s = agents.getByPane(chatPaneId);
-          const sid = s?.current_sid;
-          if (!s || !sid) {
-            send({ t: 'error', message: 'no session to drive' });
-            return;
-          }
-          if (chatRunners.has(chatPaneId) || startingChat.has(chatPaneId)) {
-            send({ t: 'error', message: 'a turn is already running' });
-            return;
-          }
-          // Conversation-level single-writer: another pane may hold the same
-          // sid (cross-pane `--resume`); its runner is just as much a second
-          // writer as one on this pane.
-          if (drivingSids.has(sid)) {
-            send({ t: 'error', message: 'another pane is already driving this conversation' });
-            return;
-          }
-          // Same rule for a live agent runner on ANOTHER pane: its foreground
-          // is `node …/agent-runner`, so the claude-foreground rival scan
-          // below can't see it — check the registry (and, via the guard's
-          // writer field, the store) directly.
-          for (const [otherPane, otherConn] of agentRunners) {
-            if (otherPane !== chatPaneId && otherConn.sid === sid) {
-              send({
-                t: 'error',
-                message: "another pane's agent is driving this conversation",
-              });
-              return;
-            }
-          }
-          // Reserve the pane AND the sid synchronously — before the awaited
-          // foreground checks — so a second concurrent send (same pane or a
-          // sibling on the same sid) can't spawn a second runner on one
-          // session-id (transcript corruption).
-          startingChat.add(chatPaneId);
-          drivingSids.set(sid, chatPaneId);
-          const release = () => {
-            startingChat.delete(chatPaneId);
-            if (drivingSids.get(sid) === chatPaneId) drivingSids.delete(sid);
-          };
-          const text = msg.text;
-          void (async () => {
-            const fg = await deps.ptyd.getForegroundCommand(chatPaneId).catch(() => null);
-            // claude = the TUI; agent-runner = a live SDK runner process
-            // (belt-and-braces behind the startup_cmd check above).
-            if (fg && /\bclaude\b|agent-runner/i.test(fg)) {
-              release();
-              send({ t: 'blocked', reason: 'terminal-driving' });
-              return;
-            }
-            // Same check for every OTHER pane tracking this sid: a live
-            // Claude TUI there is already writing this conversation, and the
-            // per-pane foreground check above can't see it.
-            const rival = await findConversationRival(chatPaneId, sid, agents.list(), (id) =>
-              deps.ptyd.getForegroundCommand(id),
-            );
-            if (rival) {
-              release();
-              send({
-                t: 'error',
-                message: "another pane's terminal is driving this conversation",
-              });
-              return;
-            }
-            agents.setWriter(chatPaneId, 'headless');
-            agents.setStatus(chatPaneId, 'running');
-            // Light the pane's busy flag for the turn. A headless turn writes
-            // the transcript file, not the PTY, so the output-activity
-            // detector never sees it — without this the tab/workspace spinner
-            // stays dark while chat works. The cache emits paneChange →
-            // pane.updated, so the spinner flips live, not on the next poll.
-            deps.cache.setAgentBusy(chatPaneId, true);
-            streamBufs.set(chatPaneId, '');
-            bcast({ t: 'turn-start' });
-            // A session launched via `muxpad claude` but never prompted has no
-            // transcript yet — `--resume` would fail with "no conversation
-            // found". Start it fresh under the same id instead, so the first
-            // message CAN come from chat.
-            const fresh = !findTranscript(sid);
-            const runner = new HeadlessRunner({
-              cwd: s.cwd ?? homedir(),
-              resumeSid: sid,
-              fresh,
-              text,
-              cb: {
-                onSessionId: (newSid) => {
-                  const prev = agents.getByPane(chatPaneId)?.current_sid;
-                  agents.recordSessionId(chatPaneId, newSid);
-                  // Sid drift mid-turn: push so every chat socket rebinds its
-                  // tail now instead of on the slow fallback poll.
-                  if (prev !== newSid) {
-                    deps.events.emit({ type: 'agent_session.updated', pane_id: chatPaneId });
-                  }
-                },
-                onText: (delta) => {
-                  appendStreamBuf(chatPaneId, delta);
-                  bcast({ t: 'stream', delta });
-                },
-                onDone: (ok, error) => {
-                  chatRunners.delete(chatPaneId);
-                  if (drivingSids.get(sid) === chatPaneId) drivingSids.delete(sid);
-                  // An agent runner may have attached mid-turn (the user typed
-                  // `muxpad agent` while this headless turn ran) — its writer/
-                  // busy/preview state is not ours to clobber then.
-                  if (!agentRunners.has(chatPaneId)) {
-                    streamBufs.delete(chatPaneId);
-                    agents.setWriter(chatPaneId, 'none');
-                    agents.setStatus(chatPaneId, 'idle');
-                    deps.cache.setAgentBusy(chatPaneId, false);
-                  }
-                  bcast({ t: 'turn-done', ok, ...(error ? { error } : {}) });
-                },
-              },
-            });
-            chatRunners.set(chatPaneId, runner);
-            startingChat.delete(chatPaneId);
-            runner.start();
-          })().catch((e) => {
-            // Anything thrown past the guards (store write, runner ctor)
-            // must release the reservations, or the pane wedges forever on
-            // "a turn is already running".
-            if (!chatRunners.has(chatPaneId)) {
-              release();
-              if (!agentRunners.has(chatPaneId)) {
-                streamBufs.delete(chatPaneId);
-                deps.cache.setAgentBusy(chatPaneId, false);
-                try {
-                  agents.setWriter(chatPaneId, 'none');
-                  agents.setStatus(chatPaneId, 'idle');
-                } catch {
-                  // the store write itself may be what failed
-                }
-              }
-            }
-            send({ t: 'error', message: e instanceof Error ? e.message : String(e) });
+          send({
+            t: 'error',
+            message:
+              'This session is driven from its terminal — chat is a read-only view. Start an ✳ Agent tab for a chat-native session.',
           });
         });
       });
