@@ -4,6 +4,10 @@
 // server relays chat clients' sends/stops to it and fans its turn lifecycle
 // back out to every open chat view of the pane.
 
+import type { AgentQuestion, SubagentProgress } from '@muxpad/shared';
+
+export type { AgentQuestion, SubagentProgress };
+
 /** runner → server */
 export type RunnerFrame =
   | {
@@ -19,13 +23,33 @@ export type RunnerFrame =
   | { t: 'stream'; delta: string }
   | { t: 'turn-done'; ok: boolean; error?: string }
   | {
+      /** The session is blocked on the user: render these as tappable chips. */
+      t: 'question';
+      qid: string;
+      questions: AgentQuestion[];
+    }
+  | {
+      /** The question was resolved (answered, or the turn ended) — dismiss it. */
+      t: 'question-done';
+      qid: string;
+    }
+  | { t: 'subagent'; progress: SubagentProgress }
+  | {
       /** The session died and the runner is exiting (claude crash, fatal error). */
       t: 'fatal';
       error: string;
     };
 
 /** server → runner */
-export type ServerFrame = { t: 'send'; text: string } | { t: 'stop' };
+export type ServerFrame =
+  | { t: 'send'; text: string }
+  | { t: 'stop' }
+  | {
+      /** The user's answer to a `question` frame. One entry per question, in order. */
+      t: 'answer';
+      qid: string;
+      answers: Array<{ question: string; answers: string[] }>;
+    };
 
 export function parseFrame<T>(data: unknown): T | null {
   try {

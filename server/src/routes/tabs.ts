@@ -6,6 +6,7 @@ import type { EventBus } from '../events.js';
 import { type PtydCache, decoratePane } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { randomWorkspaceName } from '../random-name.js';
+import { safeCwd } from '../safe-cwd.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { pruneDeadPanes } from '../store/migrations.js';
@@ -30,15 +31,58 @@ export function tabsRoutes(deps: {
         workspace_id: z.string(),
         name: z.string().optional(),
         layout: LayoutNodeSchema.optional(),
+        // Atomic tab-with-pane creation — the tabs-first default. 'shell'
+        // gives a full-size terminal; 'agent' a chat-native Claude session
+        // (`muxpad agent` startup command, chat face). One request replaces
+        // the old createTab → createPane → patchTab client dance, so a tab
+        // can never be observed half-bootstrapped.
+        bootstrap: z.enum(['shell', 'agent']).optional(),
+        // Optional cwd for the bootstrapped pane.
+        cwd: z.string().optional(),
       })
       .parse(await c.req.json().catch(() => ({})));
     const name = body.name?.trim() || randomWorkspaceName();
-    const t = tabs.create({
+    let t = tabs.create({
       name,
       layout: body.layout ?? '',
       workspace_id: body.workspace_id,
     });
+    let bootstrappedPane: ReturnType<PaneStore['create']> | null = null;
+    if (body.bootstrap) {
+      const agent = body.bootstrap === 'agent';
+      bootstrappedPane = panes.create({
+        tab_id: t.id,
+        shell: process.env.SHELL ?? '/bin/zsh',
+        cwd: safeCwd(body.cwd),
+        startup_cmd: agent ? 'muxpad agent' : null,
+        // Agent tabs land directly on the chat face; the (hidden) terminal
+        // face spawns the pty underneath, which runs the startup command.
+        face: agent ? 'chat' : 'terminal',
+      });
+      t = tabs.update(t.id, { layout: bootstrappedPane.id }) ?? t;
+      if (agent && !t.icon) t = tabs.update(t.id, { icon: '✳' }) ?? t;
+    }
     deps.events.emit({ type: 'tab.added', workspace_id: body.workspace_id, tab: t });
+    if (bootstrappedPane) {
+      deps.events.emit({ type: 'pane.added', tab_id: t.id, pane: bootstrappedPane });
+      // Eager spawn (same as the panes route): an agent tab created from a
+      // phone starts its runner immediately, before any terminal view ever
+      // attaches.
+      try {
+        await deps.ptyd.ensurePane({
+          id: bootstrappedPane.id,
+          shell: bootstrappedPane.shell ?? process.env.SHELL ?? '/bin/zsh',
+          startup_cmd: bootstrappedPane.startup_cmd,
+          cwd: safeCwd(bootstrappedPane.cwd),
+          env: bootstrappedPane.env,
+          tab_id: t.id,
+          workspace_id: body.workspace_id,
+        });
+      } catch {
+        // ptyd unreachable: the rows are committed; the runtime spawns
+        // lazily when a client attaches and ptyd reconnects.
+      }
+    }
     return c.json(t, 201);
   });
 

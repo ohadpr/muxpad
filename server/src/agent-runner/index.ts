@@ -14,10 +14,24 @@
 // verified for SDK sessions); this process only drives turns and streams the
 // live-typing preview.
 import { randomUUID } from 'node:crypto';
-import { type Options, type SDKUserMessage, query } from '@anthropic-ai/claude-agent-sdk';
+import {
+  type Options,
+  type SDKUserMessage,
+  createSdkMcpServer,
+  query,
+  tool,
+} from '@anthropic-ai/claude-agent-sdk';
+import { summarizeToolInput } from '@muxpad/shared';
 import WebSocket from 'ws';
+import { z } from 'zod';
 import { findTranscript } from '../chat/TranscriptReader.js';
-import { type RunnerFrame, type ServerFrame, parseFrame } from './protocol.js';
+import {
+  type AgentQuestion,
+  type RunnerFrame,
+  type ServerFrame,
+  type SubagentProgress,
+  parseFrame,
+} from './protocol.js';
 
 const paneId = process.env.MUXPAD_PANE_ID;
 const apiUrl = process.env.MUXPAD_API_URL;
@@ -67,6 +81,118 @@ const kick = () => {
   wakeQueue?.();
   wakeQueue = null;
 };
+
+// ---------------------------------------------------------------------------
+// ask_user: the chat-native question tool. Claude Code's own AskUserQuestion
+// is not offered to SDK-hosted sessions (spike-verified), so the runner
+// provides an equivalent through the SDK's in-process MCP server: the model
+// calls it, the question renders as tappable chips in the chat UI, and the
+// tool call blocks until the answer frame comes back (or the turn is
+// interrupted — Stop resolves it so the session never wedges).
+// ---------------------------------------------------------------------------
+interface PendingQuestion {
+  qid: string;
+  resolve: (answers: Array<{ question: string; answers: string[] }> | null) => void;
+}
+const pendingQuestions = new Map<string, PendingQuestion>();
+
+function resolveAllQuestions(reason: 'interrupted' | 'shutdown'): void {
+  for (const [qid, pq] of pendingQuestions) {
+    pendingQuestions.delete(qid);
+    sendFrame({ t: 'question-done', qid });
+    log(dim(`question dismissed (${reason})`));
+    pq.resolve(null);
+  }
+}
+
+const OptionSchema = z.object({
+  label: z.string().min(1).max(80).describe('Concise display text (1–5 words)'),
+  description: z.string().max(300).optional().describe('What choosing this means'),
+});
+const QuestionSchema = z.object({
+  question: z
+    .string()
+    .min(1)
+    .max(500)
+    .describe('The complete question, ending with a question mark'),
+  header: z.string().min(1).max(16).describe('Very short chip label, e.g. "Approach"'),
+  multiSelect: z.boolean().optional().describe('Allow selecting multiple options'),
+  options: z.array(OptionSchema).min(2).max(5),
+});
+
+const askUserTool = tool(
+  'ask_user',
+  'Ask the user 1–3 multiple-choice questions when you are blocked on a decision only they can make. Each question renders as tappable options in the muxpad chat UI (the user may also type a custom answer). Use it sparingly: for reversible choices with a sensible default, proceed without asking.',
+  { questions: z.array(QuestionSchema).min(1).max(3) },
+  async (args) => {
+    const qid = randomUUID();
+    const questions: AgentQuestion[] = args.questions.map((qq) => ({
+      question: qq.question,
+      header: qq.header,
+      multiSelect: qq.multiSelect === true,
+      options: qq.options.map((o) => ({
+        label: o.label,
+        ...(o.description ? { description: o.description } : {}),
+      })),
+    }));
+    log(`${bold('? asking user')} ${questions.map((qq) => qq.header).join(', ')}`);
+    const answers = await new Promise<Array<{ question: string; answers: string[] }> | null>(
+      (resolve) => {
+        pendingQuestions.set(qid, { qid, resolve });
+        sendFrame({ t: 'question', qid, questions });
+      },
+    );
+    if (!answers) {
+      return {
+        content: [
+          { type: 'text' as const, text: 'The user dismissed the question without answering.' },
+        ],
+      };
+    }
+    const text = answers
+      .map((a) => `${a.question}\n→ ${a.answers.join(', ') || '(no selection)'}`)
+      .join('\n\n');
+    log(dim(`answered: ${answers.map((a) => a.answers.join(', ')).join(' · ')}`));
+    return { content: [{ type: 'text' as const, text }] };
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Subagent progress. Subagent messages arrive on the same stream with
+// parent_tool_use_id set; count them per task and forward a throttled live
+// status so the chat's Task row shows "running · N steps · lastTool" instead
+// of sitting inert for minutes.
+// ---------------------------------------------------------------------------
+const subagents = new Map<string, SubagentProgress & { lastSentAt: number; dirty: boolean }>();
+
+function noteSubagentActivity(parentToolUseId: string, lastTool?: string): void {
+  let p = subagents.get(parentToolUseId);
+  if (!p) {
+    p = { toolUseId: parentToolUseId, steps: 0, lastSentAt: 0, dirty: false };
+    subagents.set(parentToolUseId, p);
+  }
+  p.steps++;
+  if (lastTool) p.lastTool = lastTool;
+  p.dirty = true;
+  const now = Date.now();
+  if (now - p.lastSentAt >= 500) {
+    p.lastSentAt = now;
+    p.dirty = false;
+    const { lastSentAt, dirty, ...progress } = p;
+    sendFrame({ t: 'subagent', progress });
+  }
+}
+
+/** Flush any throttled-but-unsent progress, then drop the counters. */
+function flushSubagents(): void {
+  for (const p of subagents.values()) {
+    if (p.dirty) {
+      const { lastSentAt, dirty, ...progress } = p;
+      sendFrame({ t: 'subagent', progress });
+    }
+  }
+  subagents.clear();
+}
 
 async function* userMessages(): AsyncGenerator<SDKUserMessage> {
   while (true) {
@@ -130,9 +256,19 @@ function connect(): void {
       if (inTurn) {
         interruptRequested = true;
         log(dim('⏹ interrupt requested'));
+        // A turn parked on ask_user must unblock first or the interrupt has
+        // nothing to land on but the tool call.
+        resolveAllQuestions('interrupted');
         session.interrupt().catch((e: unknown) => {
           log(dim(`interrupt failed: ${e instanceof Error ? e.message : String(e)}`));
         });
+      }
+    } else if (frame.t === 'answer') {
+      const pq = pendingQuestions.get(frame.qid);
+      if (pq) {
+        pendingQuestions.delete(frame.qid);
+        sendFrame({ t: 'question-done', qid: frame.qid });
+        pq.resolve(Array.isArray(frame.answers) ? frame.answers : null);
       }
     }
   });
@@ -166,24 +302,17 @@ const options: Options = {
   permissionMode: 'bypassPermissions',
   allowDangerouslySkipPermissions: true,
   includePartialMessages: true,
+  // The chat-native question tool (Claude Code's own AskUserQuestion is not
+  // offered to SDK sessions). alwaysLoad keeps it in the prompt rather than
+  // behind tool search — it must be discoverable at the moment of doubt.
+  mcpServers: {
+    muxpad: createSdkMcpServer({ name: 'muxpad', tools: [askUserTool], alwaysLoad: true }),
+  },
   // No settingSources override: default = user+project+local settings,
   // CLAUDE.md, skills, MCP — same session the terminal TUI would run.
 };
 
 const session = query({ prompt: userMessages(), options });
-
-function summarizeToolUse(name: string, input: unknown): string {
-  if (input && typeof input === 'object') {
-    const o = input as Record<string, unknown>;
-    for (const k of ['command', 'file_path', 'path', 'pattern', 'url', 'description', 'prompt']) {
-      if (typeof o[k] === 'string') {
-        const v = (o[k] as string).replace(/\s+/g, ' ');
-        return v.length > 120 ? `${v.slice(0, 120)}…` : v;
-      }
-    }
-  }
-  return '';
-}
 
 async function main(): Promise<void> {
   connect();
@@ -233,12 +362,31 @@ async function main(): Promise<void> {
         if (block.type === 'text' && block.text.trim()) {
           log(`${bold('claude')} ${block.text.trim()}`);
         } else if (block.type === 'tool_use') {
-          const arg = summarizeToolUse(block.name, block.input);
+          const arg = summarizeToolInput(block.name, block.input);
           log(`${dim('⚙')} ${block.name}${arg ? dim(` ${arg}`) : ''}`);
         }
       }
+    } else if (
+      (msg.type === 'assistant' || msg.type === 'user') &&
+      typeof msg.parent_tool_use_id === 'string'
+    ) {
+      // Subagent traffic: surface live progress on the parent Task row.
+      let lastTool: string | undefined;
+      if (msg.type === 'assistant') {
+        for (const block of msg.message.content ?? []) {
+          if (block.type === 'tool_use') {
+            const arg = summarizeToolInput(block.name, block.input);
+            lastTool = arg ? `${block.name}: ${arg}` : block.name;
+          }
+        }
+      }
+      noteSubagentActivity(msg.parent_tool_use_id, lastTool);
     } else if (msg.type === 'result') {
       inTurn = false;
+      // Belt-and-braces: no question outlives its turn, and subagent
+      // counters reset (their Task rows resolve via the transcript).
+      resolveAllQuestions('interrupted');
+      flushSubagents();
       const ok = msg.subtype === 'success' || interruptRequested;
       const secs = (msg.duration_ms / 1000).toFixed(1);
       if (interruptRequested) {
@@ -261,6 +409,7 @@ async function main(): Promise<void> {
 function shutdown(code: number): void {
   if (closed) return;
   closed = true;
+  resolveAllQuestions('shutdown');
   try {
     session.close();
   } catch {

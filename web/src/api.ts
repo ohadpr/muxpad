@@ -57,7 +57,17 @@ export const api = {
   listTabs: (workspaceId: string) =>
     req<Tab[]>(`/api/tabs?workspaceId=${encodeURIComponent(workspaceId)}`),
 
-  createTab: (workspaceId: string, body: { name?: string; layout?: LayoutNode } = {}) =>
+  createTab: (
+    workspaceId: string,
+    body: {
+      name?: string;
+      layout?: LayoutNode;
+      // Atomic tab-with-pane creation (the tabs-first default): 'shell' =
+      // full-size terminal, 'agent' = chat-native Claude session.
+      bootstrap?: 'shell' | 'agent';
+      cwd?: string;
+    } = {},
+  ) =>
     req<Tab>('/api/tabs', {
       method: 'POST',
       body: JSON.stringify({ workspace_id: workspaceId, ...body }),
@@ -137,7 +147,13 @@ export const api = {
 
   patchPane: (
     id: string,
-    patch: { kind?: 'shell' | 'url'; url?: string | null; name?: string | null },
+    patch: {
+      kind?: 'shell' | 'url';
+      url?: string | null;
+      name?: string | null;
+      face?: 'terminal' | 'web' | 'chat';
+      face_url?: string | null;
+    },
   ) =>
     req<PaneSpec>(`/api/panes/${id}`, {
       method: 'PATCH',

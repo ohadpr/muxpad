@@ -54,6 +54,11 @@ export const PaneSpecSchema = z.object({
   // rename sticks and isn't clobbered by whatever claude/the shell writes
   // to the terminal title. Null/absent → fall back to the live label.
   name: z.string().nullable().optional(),
+  // Which face a shell pane shows. Server-persisted so the choice survives
+  // reloads and follows the user across devices (synced via pane.updated
+  // events). `face_url` is the web face's chosen URL.
+  face: z.enum(['terminal', 'web', 'chat']).default('terminal'),
+  face_url: z.string().nullable().default(null),
   // Runtime-only fields decorated by the route layer.
   title: z.string().nullable().optional(),
   foreground_cmd: z.string().nullable().optional(),

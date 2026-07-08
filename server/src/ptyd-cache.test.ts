@@ -244,6 +244,8 @@ describe('PtydCache', () => {
       startup_cmd: null,
       cwd: '/tmp',
       env: null,
+      face: 'terminal',
+      face_url: null,
       created_at: 0,
     };
     expect(decoratePane(cache, pane).busy).toBe(false);

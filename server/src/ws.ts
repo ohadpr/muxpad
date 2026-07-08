@@ -2,12 +2,18 @@ import type { Server } from 'node:http';
 import { homedir } from 'node:os';
 import type Database from 'better-sqlite3';
 import { WebSocket, WebSocketServer } from 'ws';
-import { type RunnerFrame, type ServerFrame, parseFrame } from './agent-runner/protocol.js';
+import {
+  type AgentQuestion,
+  type RunnerFrame,
+  type ServerFrame,
+  type SubagentProgress,
+  parseFrame,
+} from './agent-runner/protocol.js';
 import { HeadlessRunner } from './chat/HeadlessRunner.js';
 import { TranscriptTail, findTranscript } from './chat/TranscriptReader.js';
 import { findConversationRival } from './chat/conversation-guard.js';
 import type { EventBus } from './events.js';
-import type { PtydCache } from './ptyd-cache.js';
+import { type PtydCache, decoratePane } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { proxyAttach } from './ptyd-client/proxyAttach.js';
 import { safeCwd } from './safe-cwd.js';
@@ -72,6 +78,18 @@ export function attachWsServer(deps: {
   const bcastToPane = (paneId: string, obj: unknown) => {
     for (const fn of chatClients.get(paneId) ?? []) fn(obj);
   };
+  // Push a pane's fresh row to every browser (face flips, startup_cmd) so
+  // views sync live instead of on their next fetch.
+  const emitPaneUpdated = (paneId: string) => {
+    const pane = panes.getById(paneId);
+    if (pane) {
+      deps.events.emit({
+        type: 'pane.updated',
+        tab_id: pane.tab_id,
+        pane: decoratePane(deps.cache, pane),
+      });
+    }
+  };
   // Connected agent runners (`muxpad agent` processes living in panes),
   // keyed by pane. A connected runner owns its pane's session: chat sends
   // and stops relay to it instead of spawning per-turn `claude -p` workers,
@@ -80,6 +98,10 @@ export function attachWsServer(deps: {
     ws: WebSocket;
     sid: string | null;
     turnActive: boolean;
+    /** Question awaiting the user, so a (re)connecting chat client can render it. */
+    pendingQuestion: { qid: string; questions: AgentQuestion[] } | null;
+    /** Latest per-task subagent progress for mid-turn (re)connects. */
+    subagents: Map<string, SubagentProgress>;
   }
   const agentRunners = new Map<string, AgentRunnerConn>();
   const sendToRunner = (paneId: string, frame: ServerFrame): boolean => {
@@ -174,7 +196,13 @@ export function attachWsServer(deps: {
             // already dead
           }
         }
-        const conn: AgentRunnerConn = { ws, sid: null, turnActive: false };
+        const conn: AgentRunnerConn = {
+          ws,
+          sid: null,
+          turnActive: false,
+          pendingQuestion: null,
+          subagents: new Map(),
+        };
         agentRunners.set(paneId, conn);
         const bcast = (obj: unknown) => bcastToPane(paneId, obj);
         const emitChange = () =>
@@ -203,6 +231,10 @@ export function attachWsServer(deps: {
             // Self-heal: the pane's startup command now resumes THIS session,
             // so the pane survives ptyd restarts and reboots.
             panes.setStartupCmd(paneId, `muxpad agent --resume ${frame.sid}`);
+            // A runner attaching IS the "this pane is chat now" signal — the
+            // persisted face flips every device's view live.
+            panes.setFace(paneId, 'chat');
+            emitPaneUpdated(paneId);
             // A mid-turn reconnect: already-open chat clients still show an
             // idle composer (their session frame doesn't change shape), so
             // re-broadcast the running state — idempotent client-side.
@@ -223,6 +255,8 @@ export function attachWsServer(deps: {
             bcast({ t: 'stream', delta: frame.delta });
           } else if (frame.t === 'turn-done') {
             conn.turnActive = false;
+            conn.pendingQuestion = null;
+            conn.subagents.clear();
             streamBufs.delete(paneId);
             agents.setStatus(paneId, 'idle');
             deps.cache.setAgentBusy(paneId, false);
@@ -231,6 +265,17 @@ export function attachWsServer(deps: {
               ok: frame.ok !== false,
               ...(frame.error ? { error: frame.error } : {}),
             });
+          } else if (frame.t === 'question') {
+            if (typeof frame.qid !== 'string' || !Array.isArray(frame.questions)) return;
+            conn.pendingQuestion = { qid: frame.qid, questions: frame.questions };
+            bcast({ t: 'question', qid: frame.qid, questions: frame.questions });
+          } else if (frame.t === 'question-done') {
+            if (conn.pendingQuestion?.qid === frame.qid) conn.pendingQuestion = null;
+            bcast({ t: 'question-done', qid: frame.qid });
+          } else if (frame.t === 'subagent') {
+            if (!frame.progress || typeof frame.progress.toolUseId !== 'string') return;
+            conn.subagents.set(frame.progress.toolUseId, frame.progress);
+            bcast({ t: 'subagent', progress: frame.progress });
           } else if (frame.t === 'fatal') {
             bcast({ t: 'error', message: `agent exited: ${frame.error}` });
           }
@@ -312,16 +357,23 @@ export function attachWsServer(deps: {
           });
           if (first || hello !== lastHello) {
             lastHello = hello;
+            const runner = agentRunners.get(chatPaneId);
             const turnRunning =
               chatRunners.has(chatPaneId) ||
               startingChat.has(chatPaneId) ||
-              agentRunners.get(chatPaneId)?.turnActive === true;
+              runner?.turnActive === true;
             const streamText = streamBufs.get(chatPaneId);
             send({
               t: 'session',
               session,
               turnRunning,
               ...(turnRunning && streamText ? { streamText } : {}),
+              // Mid-turn (re)connect extras: a question awaiting the user and
+              // live subagent progress would otherwise be lost to this socket.
+              ...(runner?.pendingQuestion ? { question: runner.pendingQuestion } : {}),
+              ...(runner && runner.subagents.size > 0
+                ? { subagents: [...runner.subagents.values()] }
+                : {}),
             });
           }
           const sid = session?.current_sid ?? null;
@@ -358,11 +410,29 @@ export function attachWsServer(deps: {
         // two drivers on one session-id corrupt the transcript. One turn per
         // pane at a time; the runner is keyed by pane so it outlives this ws.
         ws.on('message', (data) => {
-          const msg = parseFrame<{ t?: string; text?: string }>(data);
+          const msg = parseFrame<{
+            t?: string;
+            text?: string;
+            qid?: string;
+            answers?: Array<{ question: string; answers: string[] }>;
+          }>(data);
           if (!msg) return;
+          // App-level heartbeat: the client pings on an interval and treats a
+          // missing pong as a zombie socket (browsers can't observe protocol-
+          // level ping/pong, so this rides the JSON channel).
+          if (msg.t === 'ping') {
+            send({ t: 'pong' });
+            return;
+          }
           if (msg.t === 'stop') {
             if (!sendToRunner(chatPaneId, { t: 'stop' })) {
               chatRunners.get(chatPaneId)?.interrupt();
+            }
+            return;
+          }
+          if (msg.t === 'answer') {
+            if (typeof msg.qid === 'string' && Array.isArray(msg.answers)) {
+              sendToRunner(chatPaneId, { t: 'answer', qid: msg.qid, answers: msg.answers });
             }
             return;
           }

@@ -1,4 +1,12 @@
-import type { ChatEvent, NoticeEvent, ToolResultEvent, ToolUseEvent } from '@muxpad/shared';
+import {
+  type AgentQuestion,
+  type ChatEvent,
+  type NoticeEvent,
+  type SubagentProgress,
+  type ToolResultEvent,
+  type ToolUseEvent,
+  summarizeToolInput,
+} from '@muxpad/shared';
 import { type ChangeEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -47,6 +55,8 @@ interface SessionMeta {
   assistant: string;
 }
 
+type PendingQuestion = { qid: string; questions: AgentQuestion[] };
+
 type ServerMsg =
   | {
       t: 'session';
@@ -57,13 +67,21 @@ type ServerMsg =
       // The turn's streamed text so far, so that reconnect shows the partial
       // assistant message instead of a bare typing indicator.
       streamText?: string;
+      // Mid-turn (re)connect extras: an unanswered agent question and live
+      // subagent progress.
+      question?: PendingQuestion;
+      subagents?: SubagentProgress[];
     }
   | { t: 'events'; phase: 'history' | 'live' | 'older'; events: ChatEvent[] }
   | { t: 'older-done'; hasMore: boolean }
   | { t: 'send-ack' }
+  | { t: 'pong' }
   | { t: 'turn-start' }
   | { t: 'stream'; delta: string }
   | { t: 'turn-done'; ok: boolean; error?: string }
+  | { t: 'question'; qid: string; questions: AgentQuestion[] }
+  | { t: 'question-done'; qid: string }
+  | { t: 'subagent'; progress: SubagentProgress }
   | { t: 'blocked'; reason: string }
   | { t: 'error'; message: string };
 
@@ -145,6 +163,11 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   // The message you just sent, shown immediately as a user bubble until the
   // real one lands from the transcript tail (then deduped away).
   const [optimisticUser, setOptimisticUser] = useState<string | null>(null);
+  // An agent question awaiting the user (the runner's ask_user tool) —
+  // rendered as tappable option chips at the end of the conversation.
+  const [question, setQuestion] = useState<PendingQuestion | null>(null);
+  // Live per-task subagent progress, keyed by the Task tool-use id.
+  const [subagents, setSubagents] = useState<Record<string, SubagentProgress>>({});
   // For the send↔takeover race: if a send lands before the toggle's hand-off
   // finished, we silently take over and resend the held text (once).
   const pendingText = useRef('');
@@ -159,6 +182,11 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   // Escape hatch to trigger an immediate reconnect from outside the effect
   // (assigned inside it, where the socket machinery lives).
   const reconnectNow = useRef<() => void>(() => {});
+  // App-level heartbeat: browsers can't observe ws protocol pings, so the
+  // client pings over the JSON channel and treats a missing pong as a zombie
+  // socket (mobile networks kill connections without a close event). This
+  // catches death while IDLE — the send watchdog only catches it on send.
+  const lastPongAt = useRef(0);
 
   useEffect(() => {
     byId.current = new Set();
@@ -168,6 +196,8 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
     setSending(false);
     setNotice(null);
     setOptimisticUser(null);
+    setQuestion(null);
+    setSubagents({});
     setHasMoreOlder(true);
     setLoadingOlder(false);
     loadingOlderRef.current = false;
@@ -208,6 +238,10 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
           setSending(true);
           if (msg.streamText) setStreamingText(msg.streamText);
         }
+        setQuestion(msg.question ?? null);
+        if (msg.subagents) {
+          setSubagents(Object.fromEntries(msg.subagents.map((p) => [p.toolUseId, p])));
+        }
       } else if (msg.t === 'events') {
         const fresh = msg.events.filter((e) => !byId.current.has(e.id));
         if (fresh.length) {
@@ -242,6 +276,8 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
       } else if (msg.t === 'send-ack') {
         acked.current = true;
         window.clearTimeout(sendWatchdog.current);
+      } else if (msg.t === 'pong') {
+        lastPongAt.current = Date.now();
       } else if (msg.t === 'turn-start') {
         acked.current = true;
         window.clearTimeout(sendWatchdog.current);
@@ -255,7 +291,15 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
         setSending(false);
         setStreamingText('');
         setOptimisticUser(null);
+        setQuestion(null);
+        setSubagents({});
         setNotice(msg.ok ? null : (msg.error ?? 'turn failed'));
+      } else if (msg.t === 'question') {
+        setQuestion({ qid: msg.qid, questions: msg.questions });
+      } else if (msg.t === 'question-done') {
+        setQuestion((q) => (q?.qid === msg.qid ? null : q));
+      } else if (msg.t === 'subagent') {
+        setSubagents((m) => ({ ...m, [msg.progress.toolUseId]: msg.progress }));
       } else if (msg.t === 'blocked') {
         acked.current = true;
         window.clearTimeout(sendWatchdog.current);
@@ -364,8 +408,34 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
     document.addEventListener('visibilitychange', onVisible);
     connect();
 
+    // Heartbeat sweep. Only while visible — a backgrounded tab's socket is
+    // expected to die, and the visibilitychange handler reconnects on return.
+    const heartbeat = window.setInterval(() => {
+      if (cancelled || document.visibilityState !== 'visible') return;
+      const sock = wsRef.current;
+      if (!sock || sock.readyState !== WebSocket.OPEN) return;
+      const pingSentAt = Date.now();
+      try {
+        sock.send(JSON.stringify({ t: 'ping' }));
+      } catch {
+        return; // dying socket; onclose drives the retry
+      }
+      window.setTimeout(() => {
+        // No pong since this ping → zombie. Close it; the backoff machinery
+        // (plus onVisible) brings up a fresh socket.
+        if (!cancelled && wsRef.current === sock && lastPongAt.current < pingSentAt) {
+          try {
+            sock.close();
+          } catch {
+            // already closing
+          }
+        }
+      }, 8000);
+    }, 20000);
+
     return () => {
       cancelled = true;
+      window.clearInterval(heartbeat);
       if (retryTimer) clearTimeout(retryTimer);
       window.clearTimeout(olderTimeout.current);
       olderTimeout.current = undefined;
@@ -424,6 +494,13 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   };
   const stop = () => wsRef.current?.send(JSON.stringify({ t: 'stop' }));
 
+  const answerQuestion = (qid: string, answers: Array<{ question: string; answers: string[] }>) => {
+    wsRef.current?.send(JSON.stringify({ t: 'answer', qid, answers }));
+    // Optimistic dismiss; the server's question-done broadcast confirms it
+    // (and clears it on every other device's view too).
+    setQuestion((q) => (q?.qid === qid ? null : q));
+  };
+
   // Photo picker → upload via the same attachments endpoint the TUI composer
   // uses, then append the returned path(s) to the message so Claude reads the
   // image. accept="image/*" with no `capture` → the OS sheet offers library +
@@ -454,11 +531,11 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   // Keep pinned to the bottom as new events arrive, unless the user scrolled up.
   // `events` is a deliberate trigger dependency (we re-scroll on new events)
   // even though the body reads it only via the DOM.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: events/streamingText/optimisticUser are the scroll triggers
+  // biome-ignore lint/correctness/useExhaustiveDependencies: events/streamingText/optimisticUser/question are the scroll triggers
   useEffect(() => {
     const el = scrollRef.current;
     if (el && active && pinnedToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [events, streamingText, optimisticUser, active]);
+  }, [events, streamingText, optimisticUser, question, active]);
 
   // Auto-grow the composer like ChatGPT: reset to content height, capped by CSS
   // max-height (the textarea keeps scrolling past that). `input` is the trigger
@@ -647,6 +724,7 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
                 key={e.id}
                 use={e}
                 result={resultFor.get(e.toolUseId)}
+                progress={resultFor.has(e.toolUseId) ? undefined : subagents[e.toolUseId]}
                 onOpen={setOpenTool}
               />
             );
@@ -658,7 +736,7 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
         })}
       </>
     );
-  }, [session, connected, events, stale, optimisticUser, sending, loadingOlder]);
+  }, [session, connected, events, stale, optimisticUser, sending, loadingOlder, subagents]);
 
   // The agent is working when: we're driving a turn (`sending`), tokens are
   // streaming, OR the newest event is a tool_use still awaiting its result (a
@@ -684,7 +762,7 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
               <div className="chat-bubble">{optimisticUser}</div>
             </div>
           ) : null}
-          {agentWorking ? (
+          {agentWorking && !question ? (
             <div className="chat-turn chat-turn-assistant">
               {streamingText ? (
                 <div className="chat-msg">
@@ -701,6 +779,13 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
                 </div>
               )}
             </div>
+          ) : null}
+          {question ? (
+            <QuestionCard
+              key={question.qid}
+              pending={question}
+              onAnswer={(answers) => answerQuestion(question.qid, answers)}
+            />
           ) : null}
         </div>
       </div>
@@ -839,21 +924,6 @@ function NoticeCard({ event }: { event: NoticeEvent }) {
   );
 }
 
-function summarizeToolInput(name: string, input: unknown): string {
-  if (!input || typeof input !== 'object') return '';
-  const o = input as Record<string, unknown>;
-  const pick = (k: string) => (typeof o[k] === 'string' ? (o[k] as string) : undefined);
-  return (
-    pick('command') ??
-    pick('file_path') ??
-    pick('path') ??
-    pick('pattern') ??
-    pick('url') ??
-    pick('description') ??
-    JSON.stringify(o).slice(0, 200)
-  );
-}
-
 // A collapsed tool call + its result, opened together in the ToolModal.
 type ToolDetail = { use?: ToolUseEvent | undefined; result?: ToolResultEvent | undefined };
 
@@ -899,10 +969,13 @@ function diffStat(diff?: ToolResultEvent['diff']): { add: number; del: number } 
 function ToolRow({
   use,
   result,
+  progress,
   onOpen,
 }: {
   use?: ToolUseEvent | undefined;
   result?: ToolResultEvent | undefined;
+  /** Live subagent progress for a still-running Task call. */
+  progress?: SubagentProgress | undefined;
   onOpen: (d: ToolDetail) => void;
 }) {
   const verb = use
@@ -931,6 +1004,133 @@ function ToolRow({
           ›
         </span>
       </button>
+      {progress && !result ? (
+        <div className="chat-toolrow-progress">
+          <span className="chat-toolrow-spinner" aria-hidden="true" />
+          {progress.steps} step{progress.steps === 1 ? '' : 's'}
+          {progress.lastTool ? (
+            <span className="chat-toolrow-progress-tool"> · {progress.lastTool}</span>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * An agent question (the runner's ask_user tool) rendered as tappable option
+ * chips. A single single-select question answers on tap; multi-select or
+ * multi-question forms collect selections and submit once every question has
+ * an answer. "Other…" opens a free-text input per question.
+ */
+function QuestionCard({
+  pending,
+  onAnswer,
+}: {
+  pending: PendingQuestion;
+  onAnswer: (answers: Array<{ question: string; answers: string[] }>) => void;
+}) {
+  const qs = pending.questions;
+  const [sel, setSel] = useState<Record<number, string[]>>({});
+  const [otherOpen, setOtherOpen] = useState<Record<number, boolean>>({});
+  const [otherText, setOtherText] = useState<Record<number, string>>({});
+  const instant = qs.length === 1 && !qs[0]?.multiSelect;
+
+  const buildAnswers = (s: Record<number, string[]>) =>
+    qs.map((q, i) => ({ question: q.question, answers: s[i] ?? [] }));
+
+  const pick = (i: number, label: string) => {
+    const q = qs[i];
+    if (!q) return;
+    let next: Record<number, string[]>;
+    if (q.multiSelect) {
+      const cur = sel[i] ?? [];
+      next = {
+        ...sel,
+        [i]: cur.includes(label) ? cur.filter((l) => l !== label) : [...cur, label],
+      };
+      setSel(next);
+      return;
+    }
+    next = { ...sel, [i]: [label] };
+    setSel(next);
+    if (instant) onAnswer(buildAnswers(next));
+  };
+
+  const commitOther = (i: number) => {
+    const text = (otherText[i] ?? '').trim();
+    if (!text) return;
+    const next = { ...sel, [i]: [text] };
+    setSel(next);
+    setOtherOpen((o) => ({ ...o, [i]: false }));
+    if (instant) onAnswer(buildAnswers(next));
+  };
+
+  const complete = qs.every((_, i) => (sel[i] ?? []).length > 0);
+
+  return (
+    <div className="chat-turn chat-turn-assistant">
+      <div className="chat-question">
+        {qs.map((q, i) => (
+          <div className="chat-question-block" key={q.question}>
+            <div className="chat-question-head">
+              <span className="chat-question-tag">{q.header}</span>
+              <span className="chat-question-text">{q.question}</span>
+            </div>
+            <div className="chat-question-options">
+              {q.options.map((o) => {
+                const on = (sel[i] ?? []).includes(o.label);
+                return (
+                  <button
+                    key={o.label}
+                    type="button"
+                    className={`chat-question-option${on ? ' selected' : ''}`}
+                    onClick={() => pick(i, o.label)}
+                    title={o.description ?? o.label}
+                  >
+                    <span className="chat-question-option-label">{o.label}</span>
+                    {o.description ? (
+                      <span className="chat-question-option-desc">{o.description}</span>
+                    ) : null}
+                  </button>
+                );
+              })}
+              {otherOpen[i] ? (
+                <input
+                  className="chat-question-other-input"
+                  // biome-ignore lint/a11y/noAutofocus: opened by an explicit tap on "Other…"
+                  autoFocus
+                  placeholder="Type your answer…"
+                  value={otherText[i] ?? ''}
+                  onChange={(e) => setOtherText((t) => ({ ...t, [i]: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitOther(i);
+                    if (e.key === 'Escape') setOtherOpen((o) => ({ ...o, [i]: false }));
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="chat-question-option chat-question-other"
+                  onClick={() => setOtherOpen((o) => ({ ...o, [i]: true }))}
+                >
+                  <span className="chat-question-option-label">Other…</span>
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+        {instant ? null : (
+          <button
+            type="button"
+            className="chat-question-submit"
+            disabled={!complete}
+            onClick={() => onAnswer(buildAnswers(sel))}
+          >
+            Send answers
+          </button>
+        )}
+      </div>
     </div>
   );
 }
