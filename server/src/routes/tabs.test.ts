@@ -123,18 +123,18 @@ describe('tabs routes', () => {
       id: string;
       view_mode?: string;
     };
-    expect(created.view_mode).toBe('split'); // default
+    expect(created.view_mode).toBe('tabbed'); // tabbed-first default for new tabs
     const res = await test.app.request(`/api/tabs/${created.id}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ view_mode: 'tabbed' }),
+      body: JSON.stringify({ view_mode: 'split' }),
     });
     expect(res.status).toBe(200);
-    expect(((await res.json()) as { view_mode?: string }).view_mode).toBe('tabbed');
+    expect(((await res.json()) as { view_mode?: string }).view_mode).toBe('split');
     const got = (await (await test.app.request(`/api/tabs/${created.id}`)).json()) as {
       view_mode?: string;
     };
-    expect(got.view_mode).toBe('tabbed');
+    expect(got.view_mode).toBe('split');
     // zod enum: anything but split|tabbed is rejected — an error status, no write.
     const bad = await test.app.request(`/api/tabs/${created.id}`, {
       method: 'PATCH',
