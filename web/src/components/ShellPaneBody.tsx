@@ -55,8 +55,16 @@ export function ShellPaneBody({
   const [agentRunning, setAgentRunning] = useState(false);
   // Which surface currently drives the session. 'sdk' = a `muxpad agent`
   // runner lives in the pane — the toggle then only switches the VIEW
-  // (chat ⇄ runner log); there is no TUI to kill or relaunch.
+  // (chat ⇄ runner log); there is no TUI to kill or relaunch. Mirrored into
+  // state because rendering depends on it: an sdk pane is chat-NATIVE, so the
+  // Terminal toggle is hidden while chat shows (a stray terminal-face sdk
+  // pane still gets a "Chat" button to find its way home).
   const writerRef = useRef<string>('none');
+  const [writer, setWriter] = useState<string>('none');
+  // Agent-native from the very first paint: the startup_cmd marker is in the
+  // pane row itself, so a fresh agent pane never flashes the Terminal button
+  // while the first session poll is still in flight.
+  const isAgentNative = writer === 'sdk' || (pane.startup_cmd?.startsWith('muxpad agent') ?? false);
   // Latest session check, exposed so the event subscription below can fire
   // it immediately instead of waiting out the poll interval.
   const checkRef = useRef<() => void>(() => {});
@@ -88,6 +96,7 @@ export function ShellPaneBody({
       setHasSession(true);
       setAgentRunning(s?.status === 'running');
       writerRef.current = s?.writer ?? 'none';
+      setWriter(writerRef.current);
       // Face sync now rides the server-persisted pane.face (usePaneFace above)
       // — the session poll only feeds the toggle/activity-dot/writer state.
     };
@@ -204,7 +213,7 @@ export function ShellPaneBody({
 
   return (
     <div className="shell-pane-body">
-      {showChat || hasSession ? (
+      {(showChat || hasSession) && !(isAgentNative && showChat) ? (
         <button
           type="button"
           className="shell-pane-chat-toggle"

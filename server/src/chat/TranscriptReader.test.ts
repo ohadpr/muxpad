@@ -64,6 +64,30 @@ describe('TranscriptReader', () => {
     tail.close();
   });
 
+  it('fires onTitle for ai-title records on history and live, but not older pages', () => {
+    const titleLine = (t: string) =>
+      `${JSON.stringify({ type: 'ai-title', aiTitle: t, sessionId: SID })}\n`;
+    // Padding so the tailBytes window starts after the first title — that
+    // older title must only surface via loadOlder, which must NOT fire onTitle.
+    const pad = userLine('u1', 'x'.repeat(300));
+    writeFileSync(file, titleLine('Old stale title') + pad + titleLine('Current title'));
+    const titles: string[] = [];
+    const tail = new TranscriptTail(SID, {
+      dir,
+      tailBytes: 128,
+      onEvents: () => {},
+      onTitle: (t) => titles.push(t),
+    });
+    tail.tick();
+    expect(titles).toEqual(['Current title']);
+    tail.loadOlder(); // pages in the old title's chunk — must stay silent
+    expect(titles).toEqual(['Current title']);
+    appendFileSync(file, titleLine('Renamed live'));
+    tail.tick();
+    expect(titles).toEqual(['Current title', 'Renamed live']);
+    tail.close();
+  });
+
   it('does not parse a half-written trailing line until its newline lands', () => {
     const seen: ChatEvent[] = [];
     const tail = new TranscriptTail(SID, { dir, onEvents: (e) => seen.push(...e) });

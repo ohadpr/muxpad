@@ -39,6 +39,13 @@ export type TailPhase = 'history' | 'live' | 'older';
 
 export interface TranscriptTailOpts {
   onEvents: (events: ChatEvent[], phase: TailPhase) => void;
+  /**
+   * Fired with the session's AI-generated title whenever an `ai-title` record
+   * passes through the tail (Claude writes one after the first turn and on
+   * topic shifts). Not fired for `older` pages — back-scrolling must never
+   * regress the name to an earlier title. Used to auto-name agent panes/tabs.
+   */
+  onTitle?: (title: string) => void;
   /** Override the projects dir (tests). */
   dir?: string;
   /** Poll interval for `start()`. Tests drive `tick()` directly instead. */
@@ -244,6 +251,16 @@ export class TranscriptTail {
         obj = JSON.parse(line);
       } catch {
         continue; // torn/garbage line — skip, never break the feed
+      }
+      if (
+        phase !== 'older' &&
+        this.opts.onTitle &&
+        typeof obj === 'object' &&
+        obj !== null &&
+        (obj as { type?: unknown }).type === 'ai-title' &&
+        typeof (obj as { aiTitle?: unknown }).aiTitle === 'string'
+      ) {
+        this.opts.onTitle((obj as { aiTitle: string }).aiTitle);
       }
       events.push(...normalizeTranscriptLine(obj));
     }
