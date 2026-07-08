@@ -9,6 +9,7 @@ import { applyTabOrder, refreshTabs, useTabs } from '../tabs';
 import { useLongPress } from '../use-long-press';
 import { MAX_QUICK_SWITCH_TABS, useTabQuickSwitch } from '../use-tab-quickswitch';
 import { applyWorkspaceOrder, refreshWorkspaces, useWorkspaces } from '../workspaces';
+import { type NewKind, NewKindMenu } from './NewKindMenu';
 import { SvgClose } from './icons';
 import './NavTree.css';
 
@@ -666,25 +667,13 @@ function TabList({
           rowDnd={variant === 'sidebar' ? tabDnd(t.id) : undefined}
         />
       ))}
-      <div className="navtree-add-row">
-        <button
-          type="button"
-          className="navtree-add navtree-new-tab"
-          onClick={() => void createTab('shell')}
-          disabled={creating}
-        >
-          {creating ? 'Creating…' : '+ New tab'}
-        </button>
-        <button
-          type="button"
-          className="navtree-add navtree-new-agent"
-          onClick={() => void createTab('agent')}
-          disabled={creating}
-          title="New agent tab — a chat-native Claude session"
-        >
-          + Agent
-        </button>
-      </div>
+      <NewKindMenu
+        className="navtree-add navtree-new-tab"
+        label={creating ? 'Creating…' : '+ New tab'}
+        title="New tab — terminal or agent"
+        disabled={creating}
+        onPick={(k: NewKind) => void createTab(k === 'agent' ? 'agent' : 'shell')}
+      />
     </div>
   );
 }
