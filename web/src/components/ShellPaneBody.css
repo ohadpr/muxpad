@@ -35,58 +35,11 @@ body.mosaic-dragging .shell-pane-web {
   pointer-events: none;
 }
 
-/* Floating terminal↔chat toggle. Small and unobtrusive top-right; the chat
-   face is a read-only mirror of the session tracked via `muxpad claude`. */
-.shell-pane-chat-toggle {
-  position: absolute;
-  top: 6px;
-  right: 8px;
-  z-index: 6;
-  padding: 2px 9px;
-  font-size: 11px;
-  line-height: 1.6;
-  border-radius: 999px;
-  border: 1px solid #2b3040;
-  background: rgba(20, 22, 30, 0.72);
-  color: #aab2c4;
-  cursor: pointer;
-  backdrop-filter: blur(4px);
-  opacity: 0.55;
-  transition: opacity 0.12s ease;
-}
-.shell-pane-chat-toggle:hover {
-  opacity: 1;
-  border-color: #3d7bbf;
-  color: #cdd4e2;
-}
-
-/* Activity dot on the toggle — a headless (chat-driven) turn is running for
-   this pane's session, even if you're looking at the terminal/web face. */
-.shell-pane-agent-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 6px;
-  border-radius: 50%;
-  background: #4cc38a;
-  vertical-align: 1px;
-  animation: shell-pane-agent-pulse 1.4s ease-in-out infinite;
-}
-@keyframes shell-pane-agent-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
-}
-
-/* Transient banner under the toggle: the terminal→chat hand-off failed, so
-   chat is view-only until the Claude TUI exits. Auto-dismisses. */
+/* Transient banner top-right: the terminal→chat hand-off failed, so chat is
+   view-only until the Claude TUI exits. Auto-dismisses. */
 .shell-pane-handoff-notice {
   position: absolute;
-  top: 34px;
+  top: 8px;
   right: 8px;
   z-index: 6;
   max-width: 340px;
@@ -100,9 +53,12 @@ body.mosaic-dragging .shell-pane-web {
   backdrop-filter: blur(4px);
 }
 
-/* Web face refused (self-embed guard): explain instead of a blank tile. */
+/* Web face refused (self-embed guard) or dead (nothing answering at the
+   URL): explain instead of a blank tile. */
 .shell-pane-web-blocked {
   display: flex;
+  flex-direction: column;
+  gap: 14px;
   align-items: center;
   justify-content: center;
   height: 100%;
@@ -110,4 +66,16 @@ body.mosaic-dragging .shell-pane-web {
   text-align: center;
   color: var(--fg-faint, #6f7488);
   font-size: 13px;
+}
+.shell-pane-web-back {
+  padding: 5px 14px;
+  border: 1px solid var(--border-strong, #3b4261);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg, #d7dae0);
+  font-size: 12px;
+  cursor: pointer;
+}
+.shell-pane-web-back:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
 }

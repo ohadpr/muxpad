@@ -1,6 +1,7 @@
 import type { PaneSpec } from '@muxpad/shared';
 import { useEffect, useRef, useState } from 'react';
 import { subscribe } from '../events';
+import { probeUrl } from '../lib/face-switch';
 import { isSelfOriginUrl, setPaneFace, usePaneFace } from '../lib/pane-face';
 import { sendPaneInput } from '../lib/pane-input';
 import { ChatPane } from './ChatPane';
@@ -43,28 +44,12 @@ export function ShellPaneBody({
   const showWeb = face === 'web' && !!url;
   const showChat = face === 'chat';
 
-  // Surface the toggle as soon as the pane has a muxpad-tracked Claude session
-  // (launched via `muxpad claude`). This is known the instant the wrapper
-  // registers — far faster than the ~10s foreground-cmd poll the old gate used,
-  // which made the toggle lag ~7s behind claude starting/stopping. It's sticky:
-  // chat stays a valid face of the session for the pane's life (view / drive /
-  // resume it), so it never flickers.
-  const [hasSession, setHasSession] = useState(false);
-  // True while a headless (chat-driven) turn is running for this pane's
-  // session — drives the activity dot on the Terminal/Chat toggle.
-  const [agentRunning, setAgentRunning] = useState(false);
-  // Which surface currently drives the session. 'sdk' = a `muxpad agent`
-  // runner lives in the pane — the toggle then only switches the VIEW
-  // (chat ⇄ runner log); there is no TUI to kill or relaunch. Mirrored into
-  // state because rendering depends on it: an sdk pane is chat-NATIVE, so the
-  // Terminal toggle is hidden while chat shows (a stray terminal-face sdk
-  // pane still gets a "Chat" button to find its way home).
+  // Which surface currently drives the pane's Claude session. 'sdk' = a
+  // `muxpad agent` runner lives in the pane — face switches are then pure
+  // VIEW flips (chat ⇄ runner log); there is no TUI to kill or relaunch.
+  // Face SELECTION lives in the chrome's face menu (PaneFaceMenuList); this
+  // component executes the requested switch with the right semantics.
   const writerRef = useRef<string>('none');
-  const [writer, setWriter] = useState<string>('none');
-  // Agent-native from the very first paint: the startup_cmd marker is in the
-  // pane row itself, so a fresh agent pane never flashes the Terminal button
-  // while the first session poll is still in flight.
-  const isAgentNative = writer === 'sdk' || (pane.startup_cmd?.startsWith('muxpad agent') ?? false);
   // Latest session check, exposed so the event subscription below can fire
   // it immediately instead of waiting out the poll interval.
   const checkRef = useRef<() => void>(() => {});
@@ -93,12 +78,9 @@ export function ShellPaneBody({
         status?: string;
         writer?: string;
       } | null;
-      setHasSession(true);
-      setAgentRunning(s?.status === 'running');
       writerRef.current = s?.writer ?? 'none';
-      setWriter(writerRef.current);
-      // Face sync now rides the server-persisted pane.face (usePaneFace above)
-      // — the session poll only feeds the toggle/activity-dot/writer state.
+      // Face sync rides the server-persisted pane.face (usePaneFace above) —
+      // the session poll only keeps the writer fresh for switch semantics.
     };
     const tick = async () => {
       await check();
@@ -130,9 +112,11 @@ export function ShellPaneBody({
     if (showChat) setChatMounted(true);
   }, [showChat]);
 
-  // The single toggle switches the view AND what drives the session underneath:
+  // Executes face switches requested by the chrome's face menu (muxpad:set-
+  // face). Switching the view can switch what DRIVES the session underneath:
   //   → chat: stop the Claude TUI (server SIGTERM) so chat becomes the driver.
-  //   → terminal: relaunch `muxpad claude --resume <sid>` in the pane's shell.
+  //   → terminal FROM chat: relaunch `muxpad claude --resume <sid>`.
+  //   → terminal from web, or any switch on an SDK-runner pane: pure flip.
   // We await the hand-off before flipping so the target view is always live.
   const [switching, setSwitching] = useState(false);
   // Kept for the setPaneFace local-wins window (a stale poll must not revert
@@ -148,14 +132,17 @@ export function ShellPaneBody({
     window.clearTimeout(noticeTimer.current);
     noticeTimer.current = window.setTimeout(() => setHandoffNotice(null), 8000);
   };
-  const switchTo = async (target: 'terminal' | 'chat') => {
+  const switchTo = async (target: 'terminal' | 'web' | 'chat', targetUrl?: string) => {
     if (switching) return;
     setSwitching(true);
     lastSwitch.current = Date.now();
     // setPaneFace below persists the face server-side (PATCH) and the
     // resulting pane.updated event flips every other device's view.
     try {
-      if (target === 'chat') {
+      if (target === 'web') {
+        // Pure view flip — the terminal keeps running underneath.
+        setPaneFace(pane.id, { face: 'web', url: targetUrl ?? url });
+      } else if (target === 'chat') {
         // Flip immediately (no flash of the terminal exiting); stop the TUI
         // underneath while the toggle shows "…". If the hand-off FAILS (the
         // TUI wouldn't die / server unreachable), keep the chat face — viewing
@@ -173,9 +160,10 @@ export function ShellPaneBody({
             );
           }
         }
-      } else if (writerRef.current === 'sdk') {
-        // Runner pane: the terminal face is the runner's activity log —
-        // reveal it as-is; never type a relaunch command at it.
+      } else if (writerRef.current === 'sdk' || face !== 'chat') {
+        // Runner pane (terminal face = the runner's activity log — never type
+        // a relaunch command at it), or coming from the web face where the
+        // terminal was never taken over: reveal it as-is.
         setPaneFace(pane.id, { face: 'terminal', url });
       } else {
         // Only relaunch if Claude ISN'T already running in the pane — otherwise
@@ -211,20 +199,52 @@ export function ShellPaneBody({
     }
   };
 
+  // Face switches arrive from the chrome's face menu as window events (the
+  // menu lives in a different subtree). Ref-bound so the handler always sees
+  // the freshest closure without re-subscribing per render.
+  const switchToRef = useRef(switchTo);
+  switchToRef.current = switchTo;
+  useEffect(() => {
+    const onSetFace = (e: Event) => {
+      const d = (e as CustomEvent<{ paneId: string; face: string; url?: string | null }>).detail;
+      if (d?.paneId !== pane.id) return;
+      if (d.face === 'terminal' || d.face === 'web' || d.face === 'chat') {
+        void switchToRef.current(d.face, d.url ?? undefined);
+      }
+    };
+    window.addEventListener('muxpad:set-face', onSetFace);
+    return () => window.removeEventListener('muxpad:set-face', onSetFace);
+  }, [pane.id]);
+
+  // Dead-URL detection for the web face: a stopped dev server otherwise
+  // renders as an unexplained blank iframe. Probe while the web face is
+  // showing; when nothing answers, swap in a notice with a way out. Re-probes
+  // on an interval so restarting the server heals the view by itself.
+  const [webDead, setWebDead] = useState(false);
+  useEffect(() => {
+    if (!showWeb || !url || isSelfOriginUrl(url)) {
+      setWebDead(false);
+      return;
+    }
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const check = async () => {
+      const ok = await probeUrl(url);
+      if (!alive) return;
+      setWebDead(!ok);
+      // Dead → retry every 3s so recovery is quick; alive → occasional
+      // re-check catches a server that dies while you look at it.
+      timer = setTimeout(() => void check(), ok ? 15000 : 3000);
+    };
+    void check();
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [showWeb, url]);
+
   return (
     <div className="shell-pane-body">
-      {(showChat || hasSession) && !(isAgentNative && showChat) ? (
-        <button
-          type="button"
-          className="shell-pane-chat-toggle"
-          onClick={() => switchTo(showChat ? 'terminal' : 'chat')}
-          disabled={switching}
-          title={showChat ? 'Switch to terminal' : 'Switch to chat'}
-        >
-          {agentRunning ? <span className="shell-pane-agent-dot" aria-hidden="true" /> : null}
-          {switching ? '…' : showChat ? 'Terminal' : 'Chat'}
-        </button>
-      ) : null}
       {handoffNotice ? <div className="shell-pane-handoff-notice">{handoffNotice}</div> : null}
       <div className="shell-pane-face" hidden={showWeb || showChat}>
         <XtermPane
@@ -237,16 +257,29 @@ export function ShellPaneBody({
       </div>
       {url && !isSelfOriginUrl(url) ? (
         <div className="shell-pane-face" hidden={!showWeb}>
-          <iframe
-            // Keying on the url means picking a different app reloads the
-            // iframe; toggling face (same url) does not.
-            key={url}
-            className="shell-pane-web"
-            src={url}
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
-            referrerPolicy="no-referrer"
-            title={url}
-          />
+          {webDead ? (
+            <div className="shell-pane-web-blocked">
+              <div>Nothing is responding at {url} — the server may have stopped.</div>
+              <button
+                type="button"
+                className="shell-pane-web-back"
+                onClick={() => switchTo('terminal')}
+              >
+                Back to terminal
+              </button>
+            </div>
+          ) : (
+            <iframe
+              // Keying on the url means picking a different app reloads the
+              // iframe; toggling face (same url) does not.
+              key={url}
+              className="shell-pane-web"
+              src={url}
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+              referrerPolicy="no-referrer"
+              title={url}
+            />
+          )}
         </div>
       ) : url ? (
         // muxpad-inside-muxpad recursively boots the whole client per nesting

@@ -1,169 +1,309 @@
 import type { AppUrl } from '@muxpad/shared';
-import { useEffect, useRef, useState } from 'react';
-import { normalizePaneUrl, setPaneFace, usePaneFace } from '../lib/pane-face';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { probeUrl, requestFace } from '../lib/face-switch';
+import { normalizePaneUrl, usePaneFace } from '../lib/pane-face';
+import { addUrlRecent, getUrlRecents } from '../lib/url-recents';
 import './PaneWebSwitch.css';
 
 /**
- * Pane-chrome control for the terminal⇄web face toggle. Appears only when the
- * pane is serving at least one detected app (or has been pointed at a URL
- * before). The main button flips faces; the caret opens a dropdown to pick
- * among multiple apps, type a URL by hand, or jump back to the terminal.
+ * THE face menu for a pane — the one place to see and switch what a pane is
+ * showing: Terminal, Chat (when a Claude session lives here), any detected
+ * serving URL, recently-typed URLs, or a manually entered one.
  *
- * The detection heuristic is deliberately non-authoritative — we never
- * auto-flip; the human picks here. That's why "enter URL manually" is always
- * offered: if detection missed the server entirely, you're never stuck.
+ * Selection dispatches a muxpad:set-face request that the pane's mounted
+ * ShellPaneBody executes — it owns the switch semantics (chat takeover,
+ * `--resume` relaunch, failure notices), the menu is purely chrome. Two
+ * triggers render this list: PaneWebSwitch below (mobile bar + tabbed strip)
+ * and the desktop mosaic chrome's PaneSurfaceSwitch (which appends its
+ * pane-KIND conversion items as children).
+ *
+ * The list renders position:fixed at coordinates measured from the trigger —
+ * every host is a scroll/overflow container that would clip an absolutely-
+ * positioned child (same lesson as NewKindMenu).
  */
-export function PaneWebSwitch({ paneId, appUrls }: { paneId: string; appUrls: AppUrl[] }) {
+export function PaneFaceMenuList({
+  paneId,
+  appUrls,
+  startupCmd,
+  at,
+  onClose,
+  children,
+}: {
+  paneId: string;
+  appUrls: AppUrl[];
+  startupCmd?: string | null | undefined;
+  /** Viewport coords for the fixed-position menu (measured from the trigger). */
+  at: { top: number; left: number };
+  onClose: () => void;
+  /** Extra menu items appended after a separator (e.g. kind conversion). */
+  children?: React.ReactNode;
+}) {
   const { face, url } = usePaneFace(paneId);
-  const [open, setOpen] = useState(false);
+  const isAgent = startupCmd?.startsWith('muxpad agent') ?? false;
   const [typing, setTyping] = useState(false);
   const [draft, setDraft] = useState('');
-  const wrapRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (wrapRef.current?.contains(e.target as Node)) return;
-      setOpen(false);
-      setTyping(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setOpen(false);
-        setTyping(false);
-      }
-    };
-    document.addEventListener('mousedown', onDown, true);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown, true);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-
   useEffect(() => {
     if (typing) inputRef.current?.focus();
   }, [typing]);
 
-  // Nothing to offer: no detected apps and never pointed anywhere.
-  if (appUrls.length === 0 && !url) return null;
+  // Chat is offered when the pane tracks a Claude session. One fetch per
+  // menu-open (this component mounts on open) — no standing poll.
+  const [session, setSession] = useState<{ writer: string; running: boolean } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void fetch(`/api/agent-sessions/by-pane/${paneId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s: { writer?: string; status?: string } | null) => {
+        if (alive && s) {
+          setSession({ writer: s.writer ?? 'none', running: s.status === 'running' });
+        }
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [paneId]);
 
-  const showWeb = face === 'web' && !!url;
-  // On the terminal face with at least one detected app: announce it. This is
-  // the prominent "a web app is being served here — click to view" state.
-  const available = !showWeb && appUrls.length > 0;
+  // Reachability, checked once per open for every URL on offer. true = alive,
+  // false = nothing answered, undefined = still checking (rendered neutral).
+  const recents = useMemo(
+    () => getUrlRecents(paneId).filter((u) => !appUrls.some((a) => a.url === u)),
+    [paneId, appUrls],
+  );
+  const [alive, setAlive] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    let on = true;
+    const targets = [...new Set([...appUrls.map((a) => a.url), ...recents])];
+    for (const target of targets) {
+      void probeUrl(target).then((ok) => {
+        if (on) setAlive((m) => ({ ...m, [target]: ok }));
+      });
+    }
+    return () => {
+      on = false;
+    };
+  }, [appUrls, recents]);
 
-  const flipToWeb = (target: string) => {
-    setPaneFace(paneId, { face: 'web', url: target });
-    setOpen(false);
-    setTyping(false);
-  };
-  const flipToTerminal = () => {
-    setPaneFace(paneId, { face: 'terminal', url });
-    setOpen(false);
-    setTyping(false);
-  };
-  // Main button: flip to the current/first app, or back to the terminal.
-  const onMainClick = () => {
-    if (showWeb) flipToTerminal();
-    else flipToWeb(url ?? appUrls[0]?.url ?? '');
+  const pick = (nextFace: 'terminal' | 'web' | 'chat', nextUrl?: string) => {
+    requestFace({ paneId, face: nextFace, url: nextUrl ?? null });
+    onClose();
   };
   const commitDraft = () => {
     const next = normalizePaneUrl(draft);
-    if (next) flipToWeb(next);
+    if (!next) return;
+    addUrlRecent(paneId, next);
+    pick('web', next);
+  };
+
+  const showChat = isAgent || face === 'chat' || session !== null;
+  const urlItem = (target: string, label: string, sub?: string, badge?: string) => {
+    const active = face === 'web' && url === target;
+    const dead = alive[target] === false;
+    return (
+      <button
+        key={target}
+        type="button"
+        role="menuitem"
+        className={`pane-web-switch-item${active ? ' is-active' : ''}${dead ? ' is-dead' : ''}`}
+        onClick={() => pick('web', target)}
+        title={dead ? `${target} — nothing is responding here right now` : target}
+      >
+        <SvgGlobe />
+        <span className="pane-web-switch-item-label">
+          {label}
+          {sub ? <span className="pane-web-switch-item-sub"> {sub}</span> : null}
+        </span>
+        {dead ? (
+          <span className="pane-web-switch-note">offline</span>
+        ) : badge ? (
+          <span className="pane-web-switch-badge">{badge}</span>
+        ) : null}
+      </button>
+    );
+  };
+
+  return (
+    <div
+      className="pane-web-switch-menu is-fixed"
+      role="menu"
+      style={{ top: at.top, left: at.left }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <div className="pane-web-switch-head">View</div>
+      <button
+        type="button"
+        role="menuitem"
+        className={`pane-web-switch-item${face === 'terminal' ? ' is-active' : ''}`}
+        onClick={() => pick('terminal')}
+      >
+        <SvgTerminalGlyph />
+        <span className="pane-web-switch-item-label">{isAgent ? 'Agent log' : 'Terminal'}</span>
+      </button>
+      {showChat ? (
+        <button
+          type="button"
+          role="menuitem"
+          className={`pane-web-switch-item${face === 'chat' ? ' is-active' : ''}`}
+          onClick={() => pick('chat')}
+        >
+          <span className="pane-web-switch-glyph" aria-hidden="true">
+            ✳
+          </span>
+          <span className="pane-web-switch-item-label">Chat</span>
+          {session?.running ? <span className="pane-web-switch-dot" aria-hidden="true" /> : null}
+        </button>
+      ) : null}
+      {appUrls.length > 0 ? (
+        <div className="pane-web-switch-head">
+          {appUrls.length === 1 ? 'Serving' : `Serving · ${appUrls.length}`}
+        </div>
+      ) : null}
+      {appUrls.map((a) =>
+        urlItem(
+          a.url,
+          a.label ?? hostLabel(a.url),
+          a.label ? hostLabel(a.url) : undefined,
+          a.source === 'marker' ? 'app' : undefined,
+        ),
+      )}
+      {recents.length > 0 ? <div className="pane-web-switch-head">Recent</div> : null}
+      {recents.map((u) => urlItem(u, hostLabel(u)))}
+      {typing ? (
+        <input
+          ref={inputRef}
+          className="pane-web-switch-input"
+          value={draft}
+          placeholder="https://…"
+          spellCheck={false}
+          autoComplete="off"
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commitDraft();
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          role="menuitem"
+          className="pane-web-switch-item pane-web-switch-manual"
+          onClick={() => {
+            setDraft(face === 'web' ? (url ?? '') : '');
+            setTyping(true);
+          }}
+        >
+          Enter URL…
+        </button>
+      )}
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Face-menu trigger for the mobile bar and the desktop tabbed strip: one
+ * button showing the CURRENT face (never a silent toggle — with three faces
+ * "flip" is ambiguous, so every change is an explicit menu pick). Lights up
+ * accent when a detected app is being served and the pane isn't showing it.
+ */
+export function PaneWebSwitch({
+  paneId,
+  appUrls,
+  startupCmd,
+}: {
+  paneId: string;
+  appUrls: AppUrl[];
+  startupCmd?: string | null | undefined;
+}) {
+  const { face, url } = usePaneFace(paneId);
+  const [menuAt, setMenuAt] = useState<{ top: number; left: number } | null>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const isAgent = startupCmd?.startsWith('muxpad agent') ?? false;
+
+  useEffect(() => {
+    if (!menuAt) return;
+    const close = () => setMenuAt(null);
+    const onDown = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close();
+    };
+    document.addEventListener('mousedown', onDown, true);
+    document.addEventListener('keydown', onKey);
+    // Fixed coords go stale on any scroll/resize — just close.
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      document.removeEventListener('mousedown', onDown, true);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [menuAt]);
+
+  // Nothing to offer: no faces beyond the terminal itself.
+  if (appUrls.length === 0 && !url && !isAgent && face === 'terminal') return null;
+
+  const showWeb = face === 'web' && !!url;
+  const showChat = face === 'chat';
+  const available = !showWeb && appUrls.length > 0;
+
+  const toggle = () => {
+    if (menuAt) {
+      setMenuAt(null);
+      return;
+    }
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setMenuAt({ top: rect.bottom + 4, left: rect.left });
   };
 
   return (
     <div className="pane-web-switch" ref={wrapRef} onMouseDown={(e) => e.stopPropagation()}>
       <button
+        ref={triggerRef}
         type="button"
-        className={`pane-web-switch-main${showWeb ? ' is-web' : ''}${available ? ' is-available' : ''}`}
-        title={showWeb ? 'Back to terminal' : 'View web app'}
-        aria-label={showWeb ? 'Back to terminal' : 'View web app'}
-        onClick={onMainClick}
-      >
-        {showWeb ? <SvgTerminalGlyph /> : <SvgGlobe />}
-        <span className="pane-web-switch-label">{showWeb ? 'Terminal' : 'Web'}</span>
-        {available ? <span className="pane-web-switch-dot" aria-hidden="true" /> : null}
-      </button>
-      <button
-        type="button"
-        className={`pane-web-switch-caret${available ? ' is-available' : ''}`}
-        title="Choose web app"
-        aria-label="Choose web app"
+        className={`pane-web-switch-main${showWeb || showChat ? ' is-web' : ''}${available ? ' is-available' : ''}`}
+        title="Pane view — terminal, chat, or web"
+        aria-label="Pane view — terminal, chat, or web"
         aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
+        aria-expanded={menuAt !== null}
+        onClick={toggle}
       >
-        ▾
+        {showChat ? (
+          <span className="pane-web-switch-glyph" aria-hidden="true">
+            ✳
+          </span>
+        ) : showWeb ? (
+          <SvgGlobe />
+        ) : (
+          <SvgTerminalGlyph />
+        )}
+        <span className="pane-web-switch-label">
+          {showChat ? 'Chat' : showWeb ? 'Web' : 'Terminal'}
+        </span>
+        {available ? <span className="pane-web-switch-dot" aria-hidden="true" /> : null}
+        <span className="pane-web-switch-chevron" aria-hidden="true">
+          ▾
+        </span>
       </button>
-      {open ? (
-        <div className="pane-web-switch-menu" role="menu">
-          {appUrls.length > 0 ? (
-            <div className="pane-web-switch-head">
-              {appUrls.length === 1 ? 'Serving' : `Serving · ${appUrls.length}`}
-            </div>
-          ) : null}
-          {appUrls.map((a) => (
-            <button
-              key={a.url}
-              type="button"
-              role="menuitem"
-              className={`pane-web-switch-item${url === a.url && showWeb ? ' is-active' : ''}`}
-              onClick={() => flipToWeb(a.url)}
-              title={a.url}
-            >
-              <SvgGlobe />
-              <span className="pane-web-switch-item-label">{a.label ?? hostLabel(a.url)}</span>
-              {a.source === 'marker' ? <span className="pane-web-switch-badge">app</span> : null}
-            </button>
-          ))}
-          {typing ? (
-            <input
-              ref={inputRef}
-              className="pane-web-switch-input"
-              value={draft}
-              placeholder="https://…"
-              spellCheck={false}
-              autoComplete="off"
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') commitDraft();
-              }}
-            />
-          ) : (
-            <button
-              type="button"
-              role="menuitem"
-              className="pane-web-switch-item pane-web-switch-manual"
-              onClick={() => {
-                setDraft(url ?? '');
-                setTyping(true);
-              }}
-            >
-              Enter URL…
-            </button>
-          )}
-          {showWeb ? (
-            <button
-              type="button"
-              role="menuitem"
-              className="pane-web-switch-item pane-web-switch-back"
-              onClick={flipToTerminal}
-            >
-              <SvgTerminalGlyph />
-              <span className="pane-web-switch-item-label">Back to terminal</span>
-            </button>
-          ) : null}
-        </div>
+      {menuAt ? (
+        <PaneFaceMenuList
+          paneId={paneId}
+          appUrls={appUrls}
+          startupCmd={startupCmd}
+          at={menuAt}
+          onClose={() => setMenuAt(null)}
+        />
       ) : null}
     </div>
   );
 }
 
 /** Best-effort short label for a URL (host:port, no scheme). */
-function hostLabel(raw: string): string {
+export function hostLabel(raw: string): string {
   try {
     const u = new URL(raw);
     return u.port ? `${u.hostname}:${u.port}` : u.hostname;
