@@ -13,6 +13,7 @@ import { spliceLayoutAtTarget } from '@muxpad/shared';
 import { type TabWithPanes, api } from '../api';
 import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
 import { MobileInputBar } from '../components/MobileInputBar';
+import { NewKindMenu, type NewKind as NewPaneKind } from '../components/NewKindMenu';
 import { PaneSelector } from '../components/PaneSelector';
 import { PaneWebSwitch } from '../components/PaneWebSwitch';
 // PaneSurfaceSwitch (below) reuses the .pane-web-switch-* menu classes, so
@@ -69,69 +70,6 @@ function fromMosaic(layout: Layout): LayoutNode {
  * the Mosaic `Layout` type (null for empty) and the wire `LayoutNode`
  * type ('' for empty).
  */
-type NewPaneKind = 'terminal' | 'agent';
-
-/**
- * The one "+" control for creating panes: a small menu offering the pane
- * kinds a tab can hold (Terminal, chat-native Agent) — same choices as the
- * sidebar's "+ New tab" / "+ Agent", one level down. Every creation surface
- * offers the same set so there's a single mental model.
- */
-function NewPaneMenu({
-  className,
-  onPick,
-}: {
-  className: string;
-  onPick: (kind: NewPaneKind) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', onDown, true);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown, true);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-  const pick = (kind: NewPaneKind) => {
-    setOpen(false);
-    onPick(kind);
-  };
-  return (
-    <div className="new-pane-menu" ref={wrapRef}>
-      <button
-        type="button"
-        className={className}
-        title="New pane"
-        aria-label="New pane"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-      >
-        +
-      </button>
-      {open ? (
-        <div className="new-pane-menu-list" role="menu">
-          <button type="button" role="menuitem" onClick={() => pick('terminal')}>
-            Terminal
-          </button>
-          <button type="button" role="menuitem" onClick={() => pick('agent')}>
-            <span aria-hidden="true">✳ </span>Agent
-          </button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function splitAtPane(
   layout: Layout,
   targetId: string,
@@ -1373,7 +1311,12 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                 </div>
               );
             })}
-            <NewPaneMenu className="desktop-tab-add" onPick={(k) => void addPane(k)} />
+            <NewKindMenu
+              className="desktop-tab-add"
+              label="+"
+              title="New pane"
+              onPick={(k) => void addPane(k)}
+            />
           </div>
           <div className="desktop-tab-strip-actions">
             {activeWebSwitch}
