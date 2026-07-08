@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import type { AgentBridge } from '../agent-bridge.js';
 import { takeoverPane } from '../chat/takeover.js';
 import type { EventBus } from '../events.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
@@ -37,6 +38,7 @@ export function agentSessionsRoutes(deps: {
   db: Database.Database;
   ptyd: PtydClient;
   events?: EventBus;
+  agentBridge?: AgentBridge;
 }): Hono {
   const app = new Hono();
   const store = new AgentSessionStore(deps.db);
@@ -61,6 +63,28 @@ export function agentSessionsRoutes(deps: {
     // Push (don't wait for the poll): other devices flip their face live.
     emitChange(c.req.param('paneId'));
     return c.body(null, 204);
+  });
+
+  // Deliver a user message to the pane's connected agent runner — HTTP
+  // counterpart of the chat socket's `send` frame, for the CLI's
+  // `muxpad agent new "message"` flow (and anything else scripted). Only
+  // runner-owned panes: no headless-spawn fallback, none of its guard
+  // cascade. 409 with a reason while the runner is still booting — callers
+  // poll; the runner registers within a few seconds of pane spawn.
+  app.post('/:paneId/send', async (c) => {
+    const body = z
+      .object({
+        text: z
+          .string()
+          .min(1)
+          .max(64 * 1024),
+      })
+      .parse(await c.req.json().catch(() => ({})));
+    const res = deps.agentBridge?.send(c.req.param('paneId'), body.text) ?? {
+      ok: false as const,
+      reason: 'agent relay unavailable',
+    };
+    return c.json(res, res.ok ? 202 : 409);
   });
 
   // Live foreground of the pane — the chat→terminal toggle uses this to avoid
