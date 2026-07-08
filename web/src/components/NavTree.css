@@ -699,7 +699,7 @@
   user-select: none;
 }
 .sidenav-resize-handle::after {
-  content: '';
+  content: "";
   position: absolute;
   top: 0;
   bottom: 0;
@@ -785,4 +785,21 @@ body.sidenav-resizing iframe {
   border-bottom: none;
   border-radius: 6px 6px 6px 0;
   box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.22);
+}
+
+/* "+ New tab" and "+ Agent" side by side under a workspace's tab list. */
+.navtree-add-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 2px 8px 4px calc(var(--nt-indent) - 4px);
+}
+.navtree-add-row .navtree-new-tab {
+  flex: 1 1 auto;
+  margin: 0;
+}
+.navtree-new-agent {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  margin: 0;
 }

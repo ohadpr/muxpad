@@ -1,5 +1,5 @@
-import type Database from 'better-sqlite3';
 import { type LayoutNode, pruneLayout, randomTabIcon, splitLeadingEmoji } from '@muxpad/shared';
+import type Database from 'better-sqlite3';
 
 interface Migration {
   version: number;
@@ -191,6 +191,19 @@ const MIGRATIONS: Migration[] = [
     // same panes are presented.
     version: 12,
     sql: "ALTER TABLE tabs ADD COLUMN view_mode TEXT NOT NULL DEFAULT 'split';",
+  },
+  {
+    // Which face a shell pane shows ('terminal' | 'web' | 'chat') and, for
+    // the web face, the chosen URL. Was localStorage-only (device-local,
+    // lost on another device / cache clear) with terminal⇄chat separately
+    // half-synced through agent_sessions.view_mode; one server-persisted
+    // pane-level value makes every face survive reloads and follow the user
+    // across devices — same pattern as tabs.view_mode.
+    version: 13,
+    sql: `
+      ALTER TABLE panes ADD COLUMN face TEXT NOT NULL DEFAULT 'terminal';
+      ALTER TABLE panes ADD COLUMN face_url TEXT;
+    `,
   },
 ];
 

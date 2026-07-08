@@ -661,19 +661,23 @@ cmd_workspace() {
 # ─── tab ────────────────────────────────────────────────────────────────────
 
 cmd_tab_new() {
-  reset_flags workspace name
-  parse_flags workspace name -- "$@"
+  # --bootstrap=shell creates the tab WITH a full-size terminal pane
+  # atomically (the tabs-first default the web UI uses); --bootstrap=agent
+  # creates a chat-native Claude session tab (`muxpad agent` pane, chat
+  # face). Omitted → a bare tab, as before.
+  reset_flags workspace name bootstrap cwd
+  parse_flags workspace name bootstrap cwd -- "$@"
   local workspace_id="${FLAG_workspace:-${MUXPAD_WORKSPACE_ID:-}}"
   if [ -z "$workspace_id" ]; then
     echo "muxpad: --workspace=<id> required (no MUXPAD_WORKSPACE_ID in env)" >&2
     exit 1
   fi
   local body
-  if [ -n "${FLAG_name:-}" ]; then
-    body="{\"workspace_id\":$(json_string "$workspace_id"),\"name\":$(json_string "$FLAG_name")}"
-  else
-    body="{\"workspace_id\":$(json_string "$workspace_id")}"
-  fi
+  body="{\"workspace_id\":$(json_string "$workspace_id")"
+  [ -n "${FLAG_name:-}" ] && body+=",\"name\":$(json_string "$FLAG_name")"
+  [ -n "${FLAG_bootstrap:-}" ] && body+=",\"bootstrap\":$(json_string "$FLAG_bootstrap")"
+  [ -n "${FLAG_cwd:-}" ] && body+=",\"cwd\":$(json_string "$FLAG_cwd")"
+  body+='}'
   local res
   res="$(http_request POST /api/tabs "$body")"
   print_created tab "$res"
@@ -1089,7 +1093,7 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
   workspace list
   workspace delete <id>
 
-  tab new       [--workspace=<id>] [--name=<name>]
+  tab new       [--workspace=<id>] [--name=<name>] [--bootstrap=shell|agent] [--cwd=<dir>]
   tab list      [--workspace=<id>]
   tab delete    <id>
 

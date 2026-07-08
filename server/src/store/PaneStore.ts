@@ -14,6 +14,8 @@ interface PaneRow {
   cwd: string | null;
   env: string | null;
   name: string | null;
+  face: 'terminal' | 'web' | 'chat';
+  face_url: string | null;
   created_at: number;
 }
 
@@ -28,6 +30,7 @@ export class PaneStore {
     cwd?: string | null;
     startup_cmd?: string | null;
     env?: Record<string, string> | null;
+    face?: 'terminal' | 'web' | 'chat';
   }): PaneSpec {
     const id = ulid();
     const now = Date.now();
@@ -37,9 +40,10 @@ export class PaneStore {
     const cwd = input.cwd ?? null;
     const startup_cmd = input.startup_cmd ?? null;
     const env = input.env ?? null;
+    const face = input.face ?? 'terminal';
     this.db
       .prepare(
-        'INSERT INTO panes (id, tab_id, kind, url, shell, startup_cmd, cwd, env, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO panes (id, tab_id, kind, url, shell, startup_cmd, cwd, env, face, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         id,
@@ -50,6 +54,7 @@ export class PaneStore {
         startup_cmd,
         cwd,
         env ? JSON.stringify(env) : null,
+        face,
         now,
       );
     return {
@@ -62,6 +67,8 @@ export class PaneStore {
       cwd,
       env,
       name: null,
+      face,
+      face_url: null,
       created_at: now,
     };
   }
@@ -130,6 +137,21 @@ export class PaneStore {
   }
 
   /**
+   * Persist which face the pane shows (terminal | web | chat) and, for the
+   * web face, the chosen URL. `face_url` is kept when omitted so a
+   * terminal⇄chat flip doesn't forget the last web URL.
+   */
+  setFace(id: string, face: 'terminal' | 'web' | 'chat', face_url?: string | null): void {
+    if (face_url === undefined) {
+      this.db.prepare('UPDATE panes SET face = ? WHERE id = ?').run(face, id);
+    } else {
+      this.db
+        .prepare('UPDATE panes SET face = ?, face_url = ? WHERE id = ?')
+        .run(face, face_url, id);
+    }
+  }
+
+  /**
    * Update only the pane's startup command. Used by the agent-runner attach
    * path to make agent panes self-healing: once the session id is known the
    * startup command becomes `muxpad agent --resume <sid>`, so a ptyd restart
@@ -184,6 +206,8 @@ export class PaneStore {
       cwd: x.cwd,
       env: x.env ? (JSON.parse(x.env) as Record<string, string>) : null,
       name: x.name ?? null,
+      face: x.face ?? 'terminal',
+      face_url: x.face_url ?? null,
       created_at: x.created_at,
     };
   }
