@@ -160,10 +160,19 @@ export function ShellPaneBody({
             );
           }
         }
-      } else if (writerRef.current === 'sdk' || face !== 'chat') {
+      } else if (
+        writerRef.current === 'sdk' ||
+        pane.startup_cmd?.startsWith('muxpad agent') ||
+        face !== 'chat'
+      ) {
         // Runner pane (terminal face = the runner's activity log — never type
         // a relaunch command at it), or coming from the web face where the
-        // terminal was never taken over: reveal it as-is.
+        // terminal was never taken over: reveal it as-is. The startup_cmd
+        // marker is the DURABLE agent check: writerRef comes from a poll and
+        // reads 'none' while the runner is between connections (server
+        // restart, runner crash) — trusting it alone once typed a
+        // `muxpad claude --resume` TUI relaunch INTO an agent pane's shell,
+        // hijacking the session out of chat.
         setPaneFace(pane.id, { face: 'terminal', url });
       } else {
         // Only relaunch if Claude ISN'T already running in the pane — otherwise

@@ -1,5 +1,6 @@
 import type { AppUrl } from '@muxpad/shared';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { subscribe } from '../events';
 import { probeUrl, requestFace } from '../lib/face-switch';
 import { normalizePaneUrl, usePaneFace } from '../lib/pane-face';
 import { addUrlRecent, getUrlRecents } from '../lib/url-recents';
@@ -256,6 +257,29 @@ export function PaneWebSwitch({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const isAgent = startupCmd?.startsWith('muxpad agent') ?? false;
 
+  // A `muxpad claude` pane on its terminal face with no web URLs offers
+  // nothing visible — but it HAS a chat face, and hiding the trigger there
+  // strands the user in the terminal. One fetch on mount (no poll) plus the
+  // agent_session.updated push keeps this sticky-true once a session exists.
+  const [hasSession, setHasSession] = useState(false);
+  useEffect(() => {
+    let aliveFlag = true;
+    const check = () =>
+      void fetch(`/api/agent-sessions/by-pane/${paneId}`)
+        .then((r) => {
+          if (aliveFlag && r.ok) setHasSession(true);
+        })
+        .catch(() => {});
+    check();
+    const unsub = subscribe((e) => {
+      if (e.type === 'agent_session.updated' && e.pane_id === paneId) check();
+    });
+    return () => {
+      aliveFlag = false;
+      unsub();
+    };
+  }, [paneId]);
+
   useEffect(() => {
     if (!menuAt) return;
     const close = () => setMenuAt(null);
@@ -279,7 +303,7 @@ export function PaneWebSwitch({
   }, [menuAt]);
 
   // Nothing to offer: no faces beyond the terminal itself.
-  if (appUrls.length === 0 && !url && !isAgent && face === 'terminal') return null;
+  if (appUrls.length === 0 && !url && !isAgent && !hasSession && face === 'terminal') return null;
 
   const showWeb = face === 'web' && !!url;
   const showChat = face === 'chat';
