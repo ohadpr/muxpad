@@ -73,6 +73,29 @@ export type ChatEvent =
   | ToolResultEvent
   | NoticeEvent;
 
+/**
+ * One multiple-choice question an agent poses to the user mid-turn (the
+ * runner's ask_user tool). Rendered as tappable chips in the chat UI; the
+ * answer resolves the blocked tool call. Shared between the agent-runner
+ * protocol (server) and the chat client.
+ */
+export interface AgentQuestion {
+  question: string;
+  /** Short chip label, e.g. "Approach". */
+  header: string;
+  multiSelect: boolean;
+  options: Array<{ label: string; description?: string }>;
+}
+
+/** Live progress of one subagent (Task tool call), keyed by its tool-use id. */
+export interface SubagentProgress {
+  toolUseId: string;
+  /** Messages seen from the subagent so far — a coarse "it's alive" counter. */
+  steps: number;
+  /** Most recent tool the subagent invoked, e.g. "Bash: pnpm test". */
+  lastTool?: string;
+}
+
 function tsOf(raw: Record<string, unknown>): number | null {
   const t = raw.timestamp;
   if (typeof t !== 'string') return null;
@@ -140,6 +163,38 @@ function parseNotice(content: string, id: string, ts: number | null): NoticeEven
   const reminder = wholeTagContent(content, 'system-reminder');
   if (reminder) return { kind: 'notice', id, ts, variant: 'reminder', text: reminder };
   return null;
+}
+
+/**
+ * One-line human summary of a tool call's input — the argument shown next to
+ * the verb in collapsed tool rows (web chat) and the runner's terminal log.
+ * Picks the most identifying string field, collapses whitespace, truncates.
+ */
+export function summarizeToolInput(_name: string, input: unknown): string {
+  if (input && typeof input === 'object') {
+    const o = input as Record<string, unknown>;
+    for (const k of [
+      'command',
+      'file_path',
+      'path',
+      'pattern',
+      'url',
+      'description',
+      'prompt',
+      'query',
+    ]) {
+      if (typeof o[k] === 'string' && o[k]) {
+        const v = (o[k] as string).replace(/\s+/g, ' ').trim();
+        return v.length > 160 ? `${v.slice(0, 160)}…` : v;
+      }
+    }
+    try {
+      return JSON.stringify(o).slice(0, 200);
+    } catch {
+      return '';
+    }
+  }
+  return '';
 }
 
 // A tool_result's `content` is either a string or an array of text blocks.

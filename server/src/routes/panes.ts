@@ -2,8 +2,8 @@ import type { LayoutNode } from '@muxpad/shared';
 import {
   appendLeafToLayout,
   removeLeafFromLayout,
-  splitLeadingEmoji,
   spliceLayoutAtTarget,
+  splitLeadingEmoji,
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
@@ -225,12 +225,24 @@ export function panesScopedRoutes(deps: {
         // User-given pane name for the tab-strip label. '' or null clears it
         // back to the live-derived title. Independent of kind/url edits.
         name: z.string().nullable().optional(),
+        // Which face the pane shows (terminal | web | chat) + the web face's
+        // URL. Server-persisted so it survives reloads and follows the user
+        // across devices; the emitted pane.updated syncs other clients live.
+        face: z.enum(['terminal', 'web', 'chat']).optional(),
+        face_url: z.string().nullable().optional(),
       })
       .parse(await c.req.json().catch(() => ({})));
 
     // Rename is orthogonal to the kind/url mutations below and never touches
     // ptyd, so apply it up front regardless of which branch runs next.
     if (body.name !== undefined) panes.setName(id, body.name);
+    // Face flips likewise never touch ptyd — the terminal keeps running
+    // underneath whatever face is showing.
+    if (body.face !== undefined) {
+      panes.setFace(id, body.face, body.face_url);
+    } else if (body.face_url !== undefined) {
+      panes.setFace(id, p.face, body.face_url);
+    }
 
     if (body.kind && body.kind !== p.kind) {
       // Kind flip: close ptyd-attached clients FIRST (with code 4001) so
@@ -478,7 +490,12 @@ export function panesScopedRoutes(deps: {
     // No-op move (same tab). For new_tab this can't happen; for an explicit
     // to_tab_id it can, so short-circuit before mutating anything.
     if (destTab.id === sourceTab.id) {
-      return c.json({ pane: decorate(id), from_tab_id: sourceTab.id, to_tab: destTab, from_tab_removed: false });
+      return c.json({
+        pane: decorate(id),
+        from_tab_id: sourceTab.id,
+        to_tab: destTab,
+        from_tab_removed: false,
+      });
     }
 
     // Reparent the pane row, then fix up both layout trees.
