@@ -131,29 +131,64 @@ export function PaneFaceMenuList({
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div className="pane-web-switch-head">View</div>
-      <button
-        type="button"
-        role="menuitem"
-        className={`pane-web-switch-item${face === 'terminal' ? ' is-active' : ''}`}
-        onClick={() => pick('terminal')}
-      >
-        <SvgTerminalGlyph />
-        <span className="pane-web-switch-item-label">{isAgent ? 'Agent log' : 'Terminal'}</span>
-      </button>
-      {showChat ? (
-        <button
-          type="button"
-          role="menuitem"
-          className={`pane-web-switch-item${face === 'chat' ? ' is-active' : ''}`}
-          onClick={() => pick('chat')}
-        >
-          <span className="pane-web-switch-glyph" aria-hidden="true">
-            ✳
-          </span>
-          <span className="pane-web-switch-item-label">Chat</span>
-          {session?.running ? <span className="pane-web-switch-dot" aria-hidden="true" /> : null}
-        </button>
-      ) : null}
+      {(() => {
+        // Every face is a VIEW over the same pane — nothing is lost by
+        // switching. But two items carry consequences beyond the flip, and
+        // one invites doubt, so those get a one-line explanation:
+        //   - agent panes' terminal face is just the runner's log (reassure);
+        //   - on a TUI pane, chat⇄terminal also hands over which surface
+        //     DRIVES the session (say so).
+        const isTuiSession = !isAgent && session !== null;
+        const terminalItem = (
+          <button
+            key="face-terminal"
+            type="button"
+            role="menuitem"
+            className={`pane-web-switch-item${face === 'terminal' ? ' is-active' : ''}`}
+            onClick={() => pick('terminal')}
+          >
+            <SvgTerminalGlyph />
+            <span className="pane-web-switch-item-text">
+              <span className="pane-web-switch-item-label">
+                {isAgent ? 'Agent log' : 'Terminal'}
+              </span>
+              {isAgent ? (
+                <span className="pane-web-switch-item-desc">
+                  Peek at the agent’s raw output — the chat keeps running
+                </span>
+              ) : isTuiSession && face === 'chat' ? (
+                <span className="pane-web-switch-item-desc">
+                  Resume the Claude TUI in this pane’s terminal
+                </span>
+              ) : null}
+            </span>
+          </button>
+        );
+        const chatItem = showChat ? (
+          <button
+            key="face-chat"
+            type="button"
+            role="menuitem"
+            className={`pane-web-switch-item${face === 'chat' ? ' is-active' : ''}`}
+            onClick={() => pick('chat')}
+          >
+            <span className="pane-web-switch-glyph" aria-hidden="true">
+              ✳
+            </span>
+            <span className="pane-web-switch-item-text">
+              <span className="pane-web-switch-item-label">Chat</span>
+              {isTuiSession && face !== 'chat' ? (
+                <span className="pane-web-switch-item-desc">
+                  Drive this session from chat — stops the terminal TUI
+                </span>
+              ) : null}
+            </span>
+            {session?.running ? <span className="pane-web-switch-dot" aria-hidden="true" /> : null}
+          </button>
+        ) : null;
+        // Chat is an agent pane's home face — it sorts first there.
+        return isAgent ? [chatItem, terminalItem] : [terminalItem, chatItem];
+      })()}
       {appUrls.length > 0 ? (
         <div className="pane-web-switch-head">
           {appUrls.length === 1 ? 'Serving' : `Serving · ${appUrls.length}`}
@@ -257,7 +292,7 @@ export function PaneWebSwitch({
     }
     const rect = triggerRef.current?.getBoundingClientRect();
     if (!rect) return;
-    setMenuAt({ top: rect.bottom + 4, left: rect.left });
+    setMenuAt({ top: rect.bottom + 4, left: clampMenuLeft(rect.left) });
   };
 
   return (
@@ -300,6 +335,15 @@ export function PaneWebSwitch({
       ) : null}
     </div>
   );
+}
+
+/**
+ * Clamp a fixed-position menu's left coordinate so its widest possible box
+ * (max-width 320px + padding) stays inside the viewport — triggers living at
+ * the right edge (pane chrome, tab strip) would otherwise push it offscreen.
+ */
+export function clampMenuLeft(left: number): number {
+  return Math.max(8, Math.min(left, window.innerWidth - 336));
 }
 
 /** Best-effort short label for a URL (host:port, no scheme). */
