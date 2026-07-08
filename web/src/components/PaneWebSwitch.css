@@ -67,28 +67,23 @@
     animation: none;
   }
 }
+/* Inside a menu item (the Chat row's "turn running" dot) it right-aligns. */
+.pane-web-switch-item .pane-web-switch-dot {
+  margin-left: auto;
+}
 
-.pane-web-switch-caret {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 100%;
-  padding: 0;
-  background: transparent;
-  border: none;
-  color: var(--fg-faint);
-  font-size: 10px;
-  cursor: pointer;
-  transition: color 80ms ease, background 80ms ease;
+/* Trigger chevron (the caret merged into the single button). */
+.pane-web-switch-chevron {
+  font-size: 9px;
+  opacity: 0.7;
 }
-.pane-web-switch-caret:hover {
-  color: var(--fg);
-  background: var(--bg-hover);
-}
-.pane-web-switch-caret.is-available {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+/* The chat face glyph (✳) sized to sit like the svg icons. */
+.pane-web-switch-glyph {
+  width: 14px;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1;
 }
 
 .pane-web-switch-menu {
@@ -105,6 +100,14 @@
   border: 1px solid var(--border-strong);
   border-radius: 6px;
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+/* Measured-from-trigger placement (viewport coords set inline) — overflow
+   hosts (tab strip, mobile bar, mosaic chrome) can't clip it. */
+.pane-web-switch-menu.is-fixed {
+  position: fixed;
+  top: auto;
+  left: auto;
+  z-index: 1000;
 }
 
 /* Quiet section label so the popup reads as a deliberate menu, not a tooltip. */
@@ -161,14 +164,21 @@
   text-transform: uppercase;
 }
 
-.pane-web-switch-manual,
-.pane-web-switch-back {
+.pane-web-switch-manual {
   color: var(--fg-dim);
 }
-.pane-web-switch-back {
-  border-top: 1px solid var(--border);
-  margin-top: 2px;
-  padding-top: 8px;
+/* Dim host:port shown after a declared label ("Web · localhost:5173"). */
+.pane-web-switch-item-sub {
+  color: var(--fg-faint);
+  font-size: 11px;
+}
+/* URL that answered nothing on the open-time probe: still clickable (the
+   probe is a heuristic), but visibly not promising. */
+.pane-web-switch-item.is-dead {
+  opacity: 0.55;
+}
+.pane-web-switch-item.is-dead .pane-web-switch-note {
+  color: var(--danger, #f7768e);
 }
 /* Destructive pane-KIND conversion (shell→url): unlike the web-view actions
    above (which keep the terminal alive), this CLOSES the terminal. Set apart
