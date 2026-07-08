@@ -1031,7 +1031,82 @@ cmd_claude() {
 # face; the terminal shows a compact activity log. The pane's startup command
 # is rewritten to `muxpad agent --resume <sid>` by the server, so a ptyd
 # restart or reboot springs the pane back into the same session from disk.
+# muxpad agent new [--workspace=<id>] [--cwd=<dir>] "first message"
+# One-shot launcher: creates an agent tab (chat-native Claude session), waits
+# for its runner to register, sends the first message so the session starts
+# processing immediately, and prints the tab's URL. The runner needs a couple
+# of seconds to boot inside the fresh pane, so the send polls until accepted.
+cmd_agent_new() {
+  reset_flags workspace cwd
+  parse_flags workspace cwd -- "$@"
+  local message="${POSITIONAL[0]:-}"
+  if [ -z "$message" ]; then
+    echo 'usage: muxpad agent new [--workspace=<id>] [--cwd=<dir>] "first message"' >&2
+    exit 1
+  fi
+  local workspace_id="${FLAG_workspace:-${MUXPAD_WORKSPACE_ID:-}}"
+  if [ -z "$workspace_id" ]; then
+    echo "muxpad: --workspace=<id> required (no MUXPAD_WORKSPACE_ID in env)" >&2
+    exit 1
+  fi
+  local cwd="${FLAG_cwd:-$PWD}"
+  local body
+  body="{\"workspace_id\":$(json_string "$workspace_id"),\"bootstrap\":\"agent\",\"cwd\":$(json_string "$cwd")}"
+  local tab_json tab_id tab_slug
+  tab_json="$(http_request POST /api/tabs "$body")"
+  tab_id="$(printf '%s' "$tab_json" | jq -r '.id')"
+  tab_slug="$(printf '%s' "$tab_json" | jq -r '.slug')"
+  local pane_id
+  pane_id="$(http_request GET "/api/tabs/$tab_id" | jq -r '.panes[0].id')"
+  # Poll the send until the runner registers (409 + reason until then).
+  # http_request exits on non-2xx, so drive curl directly here.
+  local send_body status tmp deadline
+  send_body="{\"text\":$(json_string "$message")}"
+  tmp="$(mktemp)"
+  deadline=$((SECONDS + 30))
+  while :; do
+    status="$(curl -sS -o "$tmp" -w '%{http_code}' \
+      -X POST -H 'content-type: application/json' \
+      --data "$send_body" \
+      "${MUXPAD_API_URL%/}/api/agent-sessions/$pane_id/send" || echo 000)"
+    [ "$status" = "202" ] && break
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      {
+        printf '%smuxpad: agent did not accept the message within 30s%s\n' "$C_RED" "$C_RESET"
+        [ -s "$tmp" ] && jq -r '.reason // empty' "$tmp" 2>/dev/null
+        printf 'the tab exists (%s) — send the message from its chat view\n' "$tab_id"
+      } >&2
+      rm -f "$tmp"
+      exit 1
+    fi
+    sleep 0.5
+  done
+  rm -f "$tmp"
+  # Compose a clickable URL (wildcard bind isn't connectable — show loopback).
+  local ws_slug base url
+  ws_slug="$(http_request GET /api/workspaces | jq -r --arg id "$workspace_id" '.[] | select(.id == $id) | .slug')"
+  base="${MUXPAD_API_URL%/}"
+  base="${base/0.0.0.0/127.0.0.1}"
+  url="$base/w/${ws_slug:-$workspace_id}/t/$tab_slug"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '{"tab_id":%s,"pane_id":%s,"url":%s}\n' \
+      "$(json_string "$tab_id")" "$(json_string "$pane_id")" "$(json_string "$url")"
+  else
+    printf '%s✓%s agent started, message sent\n' "$C_GREEN" "$C_RESET"
+    printf '  %stab:%s  %s\n' "$C_DIM" "$C_RESET" "$tab_id"
+    printf '  %spane:%s %s\n' "$C_DIM" "$C_RESET" "$pane_id"
+    printf '  %surl:%s  %s\n' "$C_DIM" "$C_RESET" "$url"
+  fi
+}
+
 cmd_agent() {
+  # `muxpad agent new …` is the HTTP launcher; anything else is the in-pane
+  # runner itself (including the server-written `muxpad agent --resume <sid>`).
+  if [ "${1:-}" = "new" ]; then
+    shift
+    cmd_agent_new "$@"
+    return
+  fi
   if [ -z "${MUXPAD_PANE_ID:-}" ]; then
     echo "muxpad agent: must be run inside a muxpad pane (no MUXPAD_PANE_ID)" >&2
     exit 1
@@ -1127,6 +1202,11 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      chat face; the terminal shows an activity
                                      log. Auto-resumes across ptyd restarts via
                                      the pane's saved startup command.
+  agent new [--workspace=<id>] [--cwd=<dir>] "message"
+                                     create an agent tab, send the first
+                                     message so it starts working immediately,
+                                     and print the tab's URL. cwd defaults to
+                                     $PWD; workspace to MUXPAD_WORKSPACE_ID.
   claude [claude args...]            launch Claude Code in THIS pane as a
                                      muxpad-tracked session so it can be viewed
                                      and driven from the web chat (and switched

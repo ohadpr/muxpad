@@ -7,10 +7,19 @@ import {
   type ToolUseEvent,
   summarizeToolInput,
 } from '@muxpad/shared';
-import { type ChangeEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  type ChangeEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api } from '../api';
+import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
 import { isMobileLayout } from '../lib/mobile-layout';
 import './ChatPane.css';
 
@@ -563,6 +572,62 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
     inputRef.current?.focus();
   };
 
+  // Pasting an image into the composer — same contract as the terminal face:
+  // upload to the pane's attachment dir, append the returned path to the
+  // message, and confirm with a preview toast (Claude renders the path, not
+  // the pixels, so the toast is how you know the right image went in).
+  const [pasteToast, setPasteToast] = useState<{ previewUrl: string; path: string } | null>(null);
+  const pasteToastTimer = useRef<number | undefined>(undefined);
+  const pasteToastUrl = useRef<string | null>(null);
+  const dismissPasteToast = useCallback(() => {
+    window.clearTimeout(pasteToastTimer.current);
+    if (pasteToastUrl.current) URL.revokeObjectURL(pasteToastUrl.current);
+    pasteToastUrl.current = null;
+    setPasteToast(null);
+  }, []);
+  useEffect(() => dismissPasteToast, [dismissPasteToast]);
+  const showPasteToast = (blob: Blob, path: string) => {
+    dismissPasteToast();
+    const previewUrl = URL.createObjectURL(blob);
+    pasteToastUrl.current = previewUrl;
+    setPasteToast({ previewUrl, path });
+    pasteToastTimer.current = window.setTimeout(dismissPasteToast, 3000);
+  };
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const data = e.clipboardData;
+    if (!data) return;
+    const { imageOnly, imageItems } = splitClipboard(data);
+    if (imageItems.length === 0) return; // plain text — default paste
+    // Swallow the event: the async upload finishes after the default paste
+    // would have run, so we insert both path(s) and any companion text
+    // ourselves for a deterministic order (macOS bundles a transient file://
+    // URL with screenshots; companionTextForImagePaste drops it).
+    e.preventDefault();
+    const text = imageOnly ? '' : companionTextForImagePaste(data.getData('text/plain'));
+    const blobs = imageItems.map((item) => item.getAsFile()).filter((b): b is File => b !== null);
+    void (async () => {
+      setUploading(true);
+      const paths: string[] = [];
+      let previewBlob: Blob | null = null;
+      for (const blob of blobs) {
+        if (!previewBlob) previewBlob = blob;
+        const ext = blob.type.split('/')[1] ?? 'png';
+        try {
+          const { path } = await api.uploadAttachment(paneId, blob, `pasted.${ext}`);
+          paths.push(path);
+        } catch {
+          setNotice('image upload failed');
+        }
+      }
+      setUploading(false);
+      if (paths.length === 0 && !text) return;
+      const insert = [paths.join(' '), text.trim()].filter(Boolean).join(' ');
+      setInput((prev) => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${insert} `);
+      if (previewBlob && paths.length) showPasteToast(previewBlob, paths.join(' '));
+      inputRef.current?.focus();
+    })();
+  };
+
   // Keep pinned to the bottom as new events arrive, unless the user scrolled up.
   // `events` is a deliberate trigger dependency (we re-scroll on new events)
   // even though the body reads it only via the DOM.
@@ -866,6 +931,20 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
         </button>
       ) : null}
       {openTool ? <ToolModal detail={openTool} onClose={() => setOpenTool(null)} /> : null}
+      {pasteToast ? (
+        <div
+          className="chat-paste-toast"
+          style={composerH ? { bottom: `${composerH + 12}px` } : undefined}
+          title={pasteToast.path}
+        >
+          <img
+            className="chat-paste-toast-preview"
+            src={pasteToast.previewUrl}
+            alt="Pasted screenshot"
+          />
+          <span className="chat-paste-toast-path">{pasteToast.path}</span>
+        </div>
+      ) : null}
       {session?.current_sid ? (
         <div className="chat-composer-wrap" ref={composerRef}>
           {notice ? <div className="chat-notice">{notice}</div> : null}
@@ -893,6 +972,7 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
               className="chat-input"
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              onPaste={onPaste}
               onKeyDown={(e) => {
                 // Desktop: Enter sends, Shift+Enter = newline. Mobile: the
                 // on-screen Return key inserts a newline (send is the button) —

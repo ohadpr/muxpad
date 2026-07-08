@@ -1128,3 +1128,52 @@
   opacity: 0.45;
   cursor: default;
 }
+
+/* Image-paste confirmation toast — the message carries a file path, not
+   pixels, so show the actual image briefly (same pattern as the terminal
+   face's xterm-paste-toast). Sits just above the composer. */
+.chat-paste-toast {
+  position: absolute;
+  right: 12px;
+  bottom: 92px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(360px, calc(100% - 24px));
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-chrome, #16161e) 82%, #000 18%);
+  border: 1px solid var(--border-strong, #3b4261);
+  box-shadow: 0 4px 16px color-mix(in srgb, #000 35%, transparent);
+  color: var(--fg, #d7dae0);
+  opacity: 0.97;
+  pointer-events: none;
+  animation: chat-paste-toast-in 160ms ease-out;
+}
+@keyframes chat-paste-toast-in {
+  from {
+    opacity: 0;
+    translate: 0 6px;
+  }
+  to {
+    opacity: 0.97;
+    translate: 0 0;
+  }
+}
+.chat-paste-toast-preview {
+  width: 52px;
+  height: 52px;
+  flex-shrink: 0;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--fg, #ccc) 14%, transparent);
+}
+.chat-paste-toast-path {
+  min-width: 0;
+  font: 11px / 1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
