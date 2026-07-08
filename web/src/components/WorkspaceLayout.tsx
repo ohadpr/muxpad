@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
-import { refreshTabs, useTabs } from '../tabs';
-import { refreshWorkspaces, useWorkspaces } from '../workspaces';
+import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { getLastTabSlug } from '../lib/last-visited';
 import { TabView } from '../pages/TabView';
+import { refreshTabs, useTabs } from '../tabs';
+import { refreshWorkspaces, useWorkspaces } from '../workspaces';
 
 export interface WorkspaceShellProps {
   wsSlug: string;
@@ -66,9 +66,7 @@ export function WorkspaceShell({ wsSlug, isActive }: WorkspaceShellProps) {
     if (tabs.length !== workspace.tab_count) return;
     const storedSlug = getLastTabSlug(wsSlug);
     const target = (storedSlug && tabs.find((t) => t.slug === storedSlug)) || tabs[0]!;
-    const search = Object.fromEntries(
-      new URLSearchParams(window.location.search).entries(),
-    );
+    const search = Object.fromEntries(new URLSearchParams(window.location.search).entries());
     void navigate({
       to: '/w/$wsSlug/t/$tabSlug',
       params: { wsSlug, tabSlug: target.slug },
@@ -81,12 +79,7 @@ export function WorkspaceShell({ wsSlug, isActive }: WorkspaceShellProps) {
     return isActive ? <div className="workspace-loading">loading…</div> : null;
   }
 
-  if (
-    isActive &&
-    isExactWorkspacePath &&
-    tabs.length === 0 &&
-    workspace.tab_count === 0
-  ) {
+  if (isActive && isExactWorkspacePath && tabs.length === 0 && workspace.tab_count === 0) {
     return (
       <div className="workspace-empty">
         <p>{workspace.name} has no tabs yet.</p>
@@ -95,7 +88,9 @@ export function WorkspaceShell({ wsSlug, isActive }: WorkspaceShellProps) {
           className="btn btn-primary"
           onClick={async () => {
             try {
-              const t = await api.createTab(workspace.id);
+              // Tabs-first: the server creates the tab with a full-size
+              // terminal pane atomically, so the user lands on a live shell.
+              const t = await api.createTab(workspace.id, { bootstrap: 'shell' });
               await refreshTabs(workspace.id);
               void navigate({
                 to: '/w/$wsSlug/t/$tabSlug',

@@ -71,39 +71,24 @@ export class AgentSessionStore {
     session_id?: string | null | undefined;
     pid?: number | null | undefined;
   }): AgentSession {
-    const now = Date.now();
-    const assistant = input.assistant ?? 'claude';
-    const cwd = input.cwd ?? null;
-    const pid = input.pid ?? null;
     const existing = this.getByPane(input.pane_id);
     // A resume relaunch registers WITHOUT a session_id (claude rejects
     // --session-id alongside --resume); the SessionStart hook re-reports the
     // real id moments later. Keep the existing sid/lineage across that window
     // — wiping them to null bricks chat ("no session to drive") if the hook
     // is slow, fails, or the resume itself dies before it fires.
-    const sid = input.session_id ?? (existing ? existing.current_sid : null);
-    const lineage = JSON.stringify(
-      input.session_id ? [input.session_id] : (existing?.lineage ?? []),
-    );
-    if (existing) {
-      this.db
-        .prepare(
-          `UPDATE agent_sessions
-             SET assistant = ?, cwd = ?, current_sid = ?, lineage = ?, tui_pid = ?,
-                 view_mode = 'terminal', writer = 'tui', status = 'idle', updated_at = ?
-           WHERE pane_id = ?`,
-        )
-        .run(assistant, cwd, sid, lineage, pid, now, input.pane_id);
-    } else {
-      this.db
-        .prepare(
-          `INSERT INTO agent_sessions
-             (id, pane_id, assistant, cwd, current_sid, lineage, tui_pid, view_mode, writer, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'terminal', 'tui', 'idle', ?, ?)`,
-        )
-        .run(ulid(), input.pane_id, assistant, cwd, sid, lineage, pid, now, now);
-    }
-    return this.getByPane(input.pane_id) as AgentSession;
+    return this.upsert(existing, {
+      pane_id: input.pane_id,
+      assistant: input.assistant ?? 'claude',
+      cwd: input.cwd ?? null,
+      current_sid: input.session_id ?? existing?.current_sid ?? null,
+      // A fresh launch RESETS the lineage to the minted id (it's a new
+      // conversation); a sid-less relaunch keeps the old lineage.
+      lineage: input.session_id ? [input.session_id] : (existing?.lineage ?? []),
+      tui_pid: input.pid ?? null,
+      view_mode: 'terminal',
+      writer: 'tui',
+    });
   }
 
   /**
@@ -153,30 +138,78 @@ export class AgentSessionStore {
     session_id?: string | null;
   }): AgentSession {
     const existing = this.getByPane(input.pane_id);
-    const now = Date.now();
     const sid = input.session_id ?? existing?.current_sid ?? null;
     const lineage = existing ? existing.lineage.slice() : [];
     if (sid && !lineage.includes(sid)) lineage.push(sid);
-    const cwd = input.cwd ?? existing?.cwd ?? null;
+    return this.upsert(existing, {
+      pane_id: input.pane_id,
+      assistant: 'claude',
+      cwd: input.cwd ?? existing?.cwd ?? null,
+      current_sid: sid,
+      lineage,
+      tui_pid: null,
+      view_mode: 'chat',
+      writer: 'sdk',
+    });
+  }
+
+  /** Shared launch-time upsert: one live agent session per pane. */
+  private upsert(
+    existing: AgentSession | null,
+    next: {
+      pane_id: string;
+      assistant: string;
+      cwd: string | null;
+      current_sid: string | null;
+      lineage: string[];
+      tui_pid: number | null;
+      view_mode: ViewMode;
+      writer: Writer;
+    },
+  ): AgentSession {
+    const now = Date.now();
+    const lineage = JSON.stringify(next.lineage);
     if (existing) {
       this.db
         .prepare(
           `UPDATE agent_sessions
-             SET assistant = 'claude', cwd = ?, current_sid = ?, lineage = ?, tui_pid = NULL,
-                 view_mode = 'chat', writer = 'sdk', status = 'idle', updated_at = ?
+             SET assistant = ?, cwd = ?, current_sid = ?, lineage = ?, tui_pid = ?,
+                 view_mode = ?, writer = ?, status = 'idle', updated_at = ?
            WHERE pane_id = ?`,
         )
-        .run(cwd, sid, JSON.stringify(lineage), now, input.pane_id);
+        .run(
+          next.assistant,
+          next.cwd,
+          next.current_sid,
+          lineage,
+          next.tui_pid,
+          next.view_mode,
+          next.writer,
+          now,
+          next.pane_id,
+        );
     } else {
       this.db
         .prepare(
           `INSERT INTO agent_sessions
              (id, pane_id, assistant, cwd, current_sid, lineage, tui_pid, view_mode, writer, status, created_at, updated_at)
-           VALUES (?, ?, 'claude', ?, ?, ?, NULL, 'chat', 'sdk', 'idle', ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)`,
         )
-        .run(ulid(), input.pane_id, cwd, sid, JSON.stringify(lineage), now, now);
+        .run(
+          ulid(),
+          next.pane_id,
+          next.assistant,
+          next.cwd,
+          next.current_sid,
+          lineage,
+          next.tui_pid,
+          next.view_mode,
+          next.writer,
+          now,
+          now,
+        );
     }
-    return this.getByPane(input.pane_id) as AgentSession;
+    return this.getByPane(next.pane_id) as AgentSession;
   }
 
   /** The pane's runner disconnected — release the single-writer token (only if a runner holds it). */

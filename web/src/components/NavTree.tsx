@@ -248,12 +248,10 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
     if (creatingWs) return;
     setCreatingWs(true);
     try {
-      // Bootstrap workspace + first tab + first pane in one go so the
-      // user lands somewhere usable (same as WorkspaceSwitcher).
+      // Bootstrap workspace + first tab-with-pane in one go so the user
+      // lands somewhere usable (the server creates the pane atomically).
       const w = await api.createWorkspace();
-      const t = await api.createTab(w.id);
-      const pane = await api.createPane(t.id, {});
-      await api.patchTab(t.id, { layout: pane.id });
+      const t = await api.createTab(w.id, { bootstrap: 'shell' });
       await refreshWorkspaces();
       onNavigate?.();
       void navigate({ to: '/w/$wsSlug/t/$tabSlug', params: { wsSlug: w.slug, tabSlug: t.slug } });
@@ -625,13 +623,14 @@ function TabList({
     }
   };
 
-  const createTab = async () => {
+  // Tabs-first creation: one server call makes the tab AND its single
+  // full-size pane atomically. 'shell' = terminal; 'agent' = a chat-native
+  // Claude session (`muxpad agent`) that lands directly on the chat face.
+  const createTab = async (bootstrap: 'shell' | 'agent' = 'shell') => {
     if (creating) return;
     setCreating(true);
     try {
-      const t = await api.createTab(workspace.id);
-      const pane = await api.createPane(t.id, {});
-      await api.patchTab(t.id, { layout: pane.id });
+      const t = await api.createTab(workspace.id, { bootstrap });
       await refreshTabs(workspace.id);
       await refreshWorkspaces();
       onNavigate?.();
@@ -667,14 +666,25 @@ function TabList({
           rowDnd={variant === 'sidebar' ? tabDnd(t.id) : undefined}
         />
       ))}
-      <button
-        type="button"
-        className="navtree-add navtree-new-tab"
-        onClick={() => void createTab()}
-        disabled={creating}
-      >
-        {creating ? 'Creating…' : '+ New tab'}
-      </button>
+      <div className="navtree-add-row">
+        <button
+          type="button"
+          className="navtree-add navtree-new-tab"
+          onClick={() => void createTab('shell')}
+          disabled={creating}
+        >
+          {creating ? 'Creating…' : '+ New tab'}
+        </button>
+        <button
+          type="button"
+          className="navtree-add navtree-new-agent"
+          onClick={() => void createTab('agent')}
+          disabled={creating}
+          title="New agent tab — a chat-native Claude session"
+        >
+          + Agent
+        </button>
+      </div>
     </div>
   );
 }
@@ -1007,10 +1017,7 @@ function NavContextMenu({
                 </span>
               </button>
               {openSub === it.label && (
-                <div
-                  className={`navtree-submenu${flyoutLeft ? ' -left' : ''}`}
-                  role="menu"
-                >
+                <div className={`navtree-submenu${flyoutLeft ? ' -left' : ''}`} role="menu">
                   {it.submenu.map((sub) => (
                     <button
                       key={sub.label}
