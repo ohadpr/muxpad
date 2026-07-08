@@ -15,7 +15,7 @@ import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
 import { MobileInputBar } from '../components/MobileInputBar';
 import { NewKindMenu, type NewKind as NewPaneKind } from '../components/NewKindMenu';
 import { PaneSelector } from '../components/PaneSelector';
-import { PaneFaceMenuList, PaneWebSwitch } from '../components/PaneWebSwitch';
+import { PaneFaceMenuList, PaneWebSwitch, clampMenuLeft } from '../components/PaneWebSwitch';
 // PaneSurfaceSwitch (below) reuses the .pane-web-switch-* menu classes, so
 // depend on that stylesheet explicitly rather than relying on the mobile
 // PaneWebSwitch mount to pull it into the bundle.
@@ -1642,7 +1642,7 @@ function PaneSurfaceSwitch({
     }
     const rect = triggerRef.current?.getBoundingClientRect();
     if (!rect) return;
-    setMenuAt({ top: rect.bottom + 4, left: rect.left });
+    setMenuAt({ top: rect.bottom + 4, left: clampMenuLeft(rect.left) });
   };
 
   // One control, one job: the icon shows the CURRENT surface and the whole
