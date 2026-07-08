@@ -1,7 +1,7 @@
 import type { PaneSpec } from '@muxpad/shared';
 import { useEffect, useRef, useState } from 'react';
 import { subscribe } from '../events';
-import { setPaneFace, usePaneFace } from '../lib/pane-face';
+import { isSelfOriginUrl, setPaneFace, usePaneFace } from '../lib/pane-face';
 import { sendPaneInput } from '../lib/pane-input';
 import { ChatPane } from './ChatPane';
 import { XtermPane } from './XtermPane';
@@ -226,7 +226,7 @@ export function ShellPaneBody({
           paneActive={paneActive && !showWeb && !showChat}
         />
       </div>
-      {url ? (
+      {url && !isSelfOriginUrl(url) ? (
         <div className="shell-pane-face" hidden={!showWeb}>
           <iframe
             // Keying on the url means picking a different app reloads the
@@ -238,6 +238,17 @@ export function ShellPaneBody({
             referrerPolicy="no-referrer"
             title={url}
           />
+        </div>
+      ) : url ? (
+        // muxpad-inside-muxpad recursively boots the whole client per nesting
+        // level until the browser exhausts resources — never mount it. (The
+        // iframe is mounted even while another face is showing, so this bomb
+        // would go off on every device holding the pane, whatever face it's
+        // on. main.tsx has a boot-time backstop too.)
+        <div className="shell-pane-face" hidden={!showWeb}>
+          <div className="shell-pane-web-blocked">
+            muxpad can’t embed itself — pick a different URL for this pane’s web view.
+          </div>
         </div>
       ) : null}
       {chatMounted ? (
