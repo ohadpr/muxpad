@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import type { Context } from 'hono';
+import { createAgentBridge } from './agent-bridge.js';
 import { loadConfig } from './config.js';
 import { EventBus } from './events.js';
 import { PtydCache, decoratePane } from './ptyd-cache.js';
@@ -55,12 +56,17 @@ cache.on('paneChange', (paneId: string) => {
   });
 });
 
+// Shared between the route layer (built now) and the ws layer (attached after
+// the HTTP server exists) — ws.ts binds the real runner relay onto it.
+const agentBridge = createAgentBridge();
+
 const app = createApp({
   db,
   ptyd,
   cache,
   dataDir: config.dataDir,
   events,
+  agentBridge,
 });
 
 // Static asset serving (CSS, JS, images, etc.) from the built web bundle.
@@ -118,7 +124,7 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
 });
 
 const httpServer = server as unknown as Server;
-const wsServer = attachWsServer({ http: httpServer, db, ptyd, cache, events });
+const wsServer = attachWsServer({ http: httpServer, db, ptyd, cache, events, agentBridge });
 
 let shuttingDown = false;
 const shutdown = async () => {

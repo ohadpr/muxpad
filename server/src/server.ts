@@ -9,6 +9,7 @@ import { attachmentsRoutes } from './routes/attachments.js';
 import { openRoutes } from './routes/open.js';
 import { agentSessionsRoutes } from './routes/agent-sessions.js';
 import { EventBus } from './events.js';
+import type { AgentBridge } from './agent-bridge.js';
 
 export interface AppDeps {
   db: Database.Database;
@@ -33,6 +34,12 @@ export interface AppDeps {
    * it — `createApp` materialises a bus locally in that case.
    */
   events?: EventBus;
+  /**
+   * Late-bound relay into the ws layer's agent-runner registry (see
+   * agent-bridge.ts). Optional so HTTP-only tests can omit it — the send
+   * route then reports the agent as unavailable.
+   */
+  agentBridge?: AgentBridge;
 }
 
 export function createApp(deps: AppDeps): Hono {
