@@ -12,11 +12,12 @@ import './PaneWebSwitch.css';
  * serving URL, recently-typed URLs, or a manually entered one.
  *
  * Selection dispatches a muxpad:set-face request that the pane's mounted
- * ShellPaneBody executes — it owns the switch semantics (chat takeover,
- * `--resume` relaunch, failure notices), the menu is purely chrome. Two
- * triggers render this list: PaneWebSwitch below (mobile bar + tabbed strip)
- * and the desktop mosaic chrome's PaneSurfaceSwitch (which appends its
- * pane-KIND conversion items as children).
+ * ShellPaneBody executes; every switch is a pure view flip (the old TUI
+ * driver hand-off is gone — TUI panes get a one-way "Continue in Agent tab"
+ * handoff instead). Two triggers render this list: PaneWebSwitch below
+ * (mobile bar + tabbed strip) and the desktop mosaic chrome's
+ * PaneSurfaceSwitch (which appends its pane-KIND conversion items as
+ * children).
  *
  * The list renders position:fixed at coordinates measured from the trigger —
  * every host is a scroll/overflow container that would clip an absolutely-
@@ -97,7 +98,9 @@ export function PaneFaceMenuList({
     pick('web', next);
   };
 
-  const showChat = isAgent || face === 'chat' || session !== null;
+  // Chat is agent-pane-only now (the runner is the one chat driver). The
+  // face==='chat' escape covers legacy panes persisted on a chat face.
+  const showChat = isAgent || face === 'chat';
   const urlItem = (target: string, label: string, sub?: string, badge?: string) => {
     const active = face === 'web' && url === target;
     const dead = alive[target] === false;
@@ -134,12 +137,10 @@ export function PaneFaceMenuList({
       <div className="pane-web-switch-head">View</div>
       {(() => {
         // Every face is a VIEW over the same pane — nothing is lost by
-        // switching. But two items carry consequences beyond the flip, and
-        // one invites doubt, so those get a one-line explanation:
-        //   - agent panes' terminal face is just the runner's log (reassure);
-        //   - on a TUI pane, chat⇄terminal also hands over which surface
-        //     DRIVES the session (say so).
-        const isTuiSession = !isAgent && session !== null;
+        // switching. Chat exists only on agent panes (their runner is the
+        // one chat driver); a TUI session pane instead offers a one-way
+        // handoff into a fresh agent tab. Items that invite doubt explain
+        // themselves in a second line.
         const terminalItem = (
           <button
             key="face-terminal"
@@ -157,10 +158,6 @@ export function PaneFaceMenuList({
                 <span className="pane-web-switch-item-desc">
                   Peek at the agent’s raw output — the chat keeps running
                 </span>
-              ) : isTuiSession && face === 'chat' ? (
-                <span className="pane-web-switch-item-desc">
-                  Resume the Claude TUI in this pane’s terminal
-                </span>
               ) : null}
             </span>
           </button>
@@ -176,19 +173,39 @@ export function PaneFaceMenuList({
             <span className="pane-web-switch-glyph" aria-hidden="true">
               ✳
             </span>
-            <span className="pane-web-switch-item-text">
-              <span className="pane-web-switch-item-label">Chat</span>
-              {isTuiSession && face !== 'chat' ? (
-                <span className="pane-web-switch-item-desc">
-                  Drive this session from chat — stops the terminal TUI
-                </span>
-              ) : null}
-            </span>
+            <span className="pane-web-switch-item-label">Chat</span>
             {session?.running ? <span className="pane-web-switch-dot" aria-hidden="true" /> : null}
           </button>
         ) : null;
+        // A tracked TUI session: offer the handoff instead of a chat face.
+        const handoffItem =
+          !isAgent && session !== null ? (
+            <button
+              key="handoff"
+              type="button"
+              role="menuitem"
+              className="pane-web-switch-item"
+              onClick={() => {
+                window.dispatchEvent(
+                  new CustomEvent('muxpad:handoff-to-agent', { detail: { paneId } }),
+                );
+                onClose();
+              }}
+            >
+              <span className="pane-web-switch-glyph" aria-hidden="true">
+                ✳
+              </span>
+              <span className="pane-web-switch-item-text">
+                <span className="pane-web-switch-item-label">Continue in Agent tab</span>
+                <span className="pane-web-switch-item-desc">
+                  The running Claude writes its context to a handoff file, a new agent tab picks it
+                  up, and this terminal closes itself
+                </span>
+              </span>
+            </button>
+          ) : null;
         // Chat is an agent pane's home face — it sorts first there.
-        return isAgent ? [chatItem, terminalItem] : [terminalItem, chatItem];
+        return isAgent ? [chatItem, terminalItem] : [terminalItem, chatItem, handoffItem];
       })()}
       {appUrls.length > 0 ? (
         <div className="pane-web-switch-head">
