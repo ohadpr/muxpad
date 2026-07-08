@@ -81,6 +81,8 @@ export function panesTabScopedRoutes(deps: {
         cwd: z.string().optional(),
         env: z.record(z.string()).nullable().optional(),
         inherit_cwd_from: z.string().optional(),
+        // Which face the pane opens on — agent panes land directly on chat.
+        face: z.enum(['terminal', 'web', 'chat']).optional(),
         // Layout placement controls. Off by default — the UI patches the
         // tab's layout in a separate request after creating the pane. When
         // `append_to_layout` is true the server places the new pane atomically:
@@ -152,6 +154,7 @@ export function panesTabScopedRoutes(deps: {
       cwd: safeCwd(cwd),
       startup_cmd: body.startup_cmd ?? null,
       env: body.env ?? null,
+      ...(body.face ? { face: body.face } : {}),
     });
     deps.events.emit({ type: 'pane.added', tab_id: tabId, pane });
     if (body.append_to_layout) {
