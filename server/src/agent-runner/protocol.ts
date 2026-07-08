@@ -35,6 +35,16 @@ export type RunnerFrame =
     }
   | { t: 'subagent'; progress: SubagentProgress }
   | {
+      /**
+       * A short conversation title the runner generated after the first turn
+       * (SDK sessions never get the CLI's ai-title transcript records, so the
+       * runner titles itself). The server applies it to the pane/tab name —
+       * user renames always win over it.
+       */
+      t: 'title';
+      title: string;
+    }
+  | {
       /** The session died and the runner is exiting (claude crash, fatal error). */
       t: 'fatal';
       error: string;
