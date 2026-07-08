@@ -152,6 +152,27 @@
   white-space: nowrap;
   min-width: 0;
 }
+/* Label + one-line consequence/reassurance description stacked. */
+.pane-web-switch-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.pane-web-switch-item-desc {
+  color: var(--fg-faint);
+  font-size: 10.5px;
+  line-height: 1.35;
+  white-space: normal;
+}
+/* Keep the icon aligned with the label line, not centered across both. */
+.pane-web-switch-item:has(.pane-web-switch-item-desc) {
+  align-items: flex-start;
+}
+.pane-web-switch-item:has(.pane-web-switch-item-desc) svg,
+.pane-web-switch-item:has(.pane-web-switch-item-desc) .pane-web-switch-glyph {
+  margin-top: 2px;
+}
 
 .pane-web-switch-badge {
   margin-left: auto;
