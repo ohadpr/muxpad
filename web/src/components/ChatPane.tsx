@@ -219,6 +219,10 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
       } catch {
         return;
       }
+      // ANY server frame proves the socket is alive — a busy server (large
+      // transcript read stalling the pong) must not read as a zombie while
+      // stream deltas are flowing.
+      lastPongAt.current = Date.now();
       if (msg.t === 'session') {
         setSession(
           msg.session
@@ -474,7 +478,19 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
 
   const sendMessage = () => {
     const text = input.trim();
-    if (!text || sending) return;
+    if (!text) return;
+    // While a question card is showing, the composer IS the free-text answer
+    // — a normal send would silently queue behind the blocked turn and
+    // vanish until it ends (the tool description promises typed answers).
+    if (question) {
+      answerQuestion(
+        question.qid,
+        question.questions.map((q) => ({ question: q.question, answers: [text] })),
+      );
+      setInput('');
+      return;
+    }
+    if (sending) return;
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       // Don't fire into a dead socket (the browser would drop it silently).
@@ -838,10 +854,10 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
                   sendMessage();
                 }
               }}
-              placeholder="Message Claude…"
+              placeholder={question ? 'Type an answer, or tap an option…' : 'Message Claude…'}
               rows={1}
             />
-            {sending ? (
+            {sending && !question ? (
               <button
                 type="button"
                 className="chat-send is-stop"
@@ -1060,13 +1076,31 @@ function QuestionCard({
   const commitOther = (i: number) => {
     const text = (otherText[i] ?? '').trim();
     if (!text) return;
-    const next = { ...sel, [i]: [text] };
+    // Multi-select: the custom answer joins the picked options; single-select
+    // it replaces them.
+    const cur = qs[i]?.multiSelect ? (sel[i] ?? []) : [];
+    const next = { ...sel, [i]: cur.includes(text) ? cur : [...cur, text] };
     setSel(next);
     setOtherOpen((o) => ({ ...o, [i]: false }));
     if (instant) onAnswer(buildAnswers(next));
   };
 
-  const complete = qs.every((_, i) => (sel[i] ?? []).length > 0);
+  // Fold any still-open "Other…" text into the selections — typed-but-not-
+  // Entered text must not be silently dropped by the submit button.
+  const withPendingOther = () => {
+    let s = sel;
+    qs.forEach((q, i) => {
+      const text = (otherText[i] ?? '').trim();
+      if (!otherOpen[i] || !text) return;
+      const cur = q.multiSelect ? (s[i] ?? []) : [];
+      if (!cur.includes(text)) s = { ...s, [i]: [...cur, text] };
+    });
+    return s;
+  };
+
+  const complete = qs.every(
+    (_, i) => (sel[i] ?? []).length > 0 || (otherOpen[i] && !!(otherText[i] ?? '').trim()),
+  );
 
   return (
     <div className="chat-turn chat-turn-assistant">
@@ -1125,7 +1159,7 @@ function QuestionCard({
             type="button"
             className="chat-question-submit"
             disabled={!complete}
-            onClick={() => onAnswer(buildAnswers(sel))}
+            onClick={() => onAnswer(buildAnswers(withPendingOther()))}
           >
             Send answers
           </button>
