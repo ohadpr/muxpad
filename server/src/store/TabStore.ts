@@ -53,9 +53,16 @@ export class TabStore {
           )
           .get(input.workspace_id) as { m: number } | undefined
       )?.m ?? -1;
+    // NEW tabs default to the tabbed presentation: a tab is primarily "one
+    // full-size pane" (more panes appear as sub-tabs in the header strip),
+    // with the bsplit mosaic available via the per-tab split toggle.
+    // Existing rows keep whatever they have (their stored value / the
+    // column's 'split' default) — this changes the default going forward
+    // only.
+    const view_mode = 'tabbed' as const;
     this.db
       .prepare(
-        'INSERT INTO tabs (id, slug, name, icon, layout, workspace_id, created_at, updated_at, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO tabs (id, slug, name, icon, layout, workspace_id, view_mode, created_at, updated_at, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         id,
@@ -64,6 +71,7 @@ export class TabStore {
         icon,
         JSON.stringify(input.layout),
         input.workspace_id,
+        view_mode,
         now,
         now,
         maxPos + 1,
@@ -74,7 +82,7 @@ export class TabStore {
       name: input.name,
       icon,
       layout: input.layout,
-      view_mode: 'split',
+      view_mode,
       created_at: now,
       updated_at: now,
     };
