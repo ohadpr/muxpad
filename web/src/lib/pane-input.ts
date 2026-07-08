@@ -2,14 +2,24 @@ import { encodeInput } from '@muxpad/shared';
 
 /**
  * Send a short burst of input to a pane's PTY over a transient /ws/pane
- * connection (same binary protocol XtermPane uses). Used to type a command
- * into a pane's shell from outside the terminal view — e.g. "Resume in
- * terminal" relaunches `muxpad claude --resume <sid>` so a session driven
- * from chat can be picked back up in the real TUI.
+ * connection (same binary protocol XtermPane uses). Used to type into a
+ * pane from outside the terminal view — e.g. the agent handoff types its
+ * instruction into the running Claude TUI.
  *
- * This is the WRITE side of the pane (deliberate, single action) — not the
- * fragile terminal-output scraping we avoid. `replay=0` skips the ring-buffer
- * replay we don't need for a fire-and-forget write.
+ * Two hard-won timing rules live here:
+ *
+ * 1. proxyAttach DROPS browser→ptyd frames that arrive before its ptyd leg
+ *    opens (documented there; interactive clients never notice because a
+ *    human's first keystroke comes long after). A transient socket that
+ *    sends on 'open' races that window and loses often. So we attach WITH
+ *    replay (the ring-buffer replay is the "bridge is up" signal) and only
+ *    send after the first server frame — with a timer fallback for a pane
+ *    whose buffer is empty.
+ *
+ * 2. `sendPaneMessage` submits text to a TUI as two frames: the text, then
+ *    a lone '\r' a beat later — a big single chunk ending in newline can be
+ *    treated as a PASTE by TUI input editors (newline inserted, nothing
+ *    submitted).
  */
 export function sendPaneInput(paneId: string, data: string): Promise<void> {
   return new Promise((resolve) => {
@@ -22,17 +32,22 @@ export function sendPaneInput(paneId: string, data: string): Promise<void> {
     };
     let ws: WebSocket;
     try {
-      ws = new WebSocket(`${proto}//${location.host}/ws/pane/${paneId}?replay=0`);
+      ws = new WebSocket(`${proto}//${location.host}/ws/pane/${paneId}`);
     } catch {
       done();
       return;
     }
     ws.binaryType = 'arraybuffer';
-    ws.onopen = () => {
-      try {
-        ws.send(encodeInput(data));
-      } catch {
-        // ignore
+    let sent = false;
+    const sendNow = () => {
+      if (sent) return;
+      sent = true;
+      if (ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(encodeInput(data));
+        } catch {
+          // ignore — fire and forget
+        }
       }
       // Give the frame time to flush before closing.
       setTimeout(() => {
@@ -44,6 +59,27 @@ export function sendPaneInput(paneId: string, data: string): Promise<void> {
         done();
       }, 150);
     };
+    ws.onopen = () => {
+      // First frame from the server (ring-buffer replay) proves the
+      // server↔ptyd bridge is open; before that, input frames are dropped.
+      const fallback = setTimeout(sendNow, 700);
+      ws.onmessage = () => {
+        clearTimeout(fallback);
+        // Next tick: let any replay burst pass before we type.
+        setTimeout(sendNow, 50);
+      };
+    };
     ws.onerror = () => done();
   });
+}
+
+/**
+ * Type `text` into the pane and submit it with a separate Enter — the safe
+ * way to send a MESSAGE to a TUI (see rule 2 above). For raw keystrokes use
+ * sendPaneInput directly.
+ */
+export async function sendPaneMessage(paneId: string, text: string): Promise<void> {
+  await sendPaneInput(paneId, text);
+  await new Promise((r) => setTimeout(r, 350));
+  await sendPaneInput(paneId, '\r');
 }
