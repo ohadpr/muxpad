@@ -1354,10 +1354,10 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                           aria-label="Close pane"
                           onClick={() => closePane(paneId)}
                         >
-                          {/* 16 → ~10px drawn X, the optical match for the
-                              face glyph's 14px outline next door — the two
-                              18px squares should read as equals. */}
-                          <SvgClose size={16} />
+                          {/* 13 → ~8px drawn X with a light stroke — reads
+                              as the face glyph's equal (a 16px X overpowered
+                              its thin 14px outline). */}
+                          <SvgClose size={13} />
                         </button>
                       </span>
                     </>

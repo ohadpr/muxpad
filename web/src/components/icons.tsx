@@ -15,7 +15,7 @@ export function SvgClose({ size = 12 }: { size?: number }) {
           edge of the viewbox). */}
       <path
         stroke="currentColor"
-        strokeWidth="1.5"
+        strokeWidth="1.4"
         strokeLinecap="round"
         d="M2.25 2.25l7.5 7.5M9.75 2.25l-7.5 7.5"
       />
