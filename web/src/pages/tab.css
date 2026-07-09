@@ -594,8 +594,15 @@
   opacity: 0;
 }
 .desktop-tab-close {
+  /* A small centered square, NOT the trailing box's full height — a
+     full-height button's hover wash painted right up to the pill's top
+     edge, covering the active tab's accent rail. */
   position: absolute;
-  inset: 0;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 18px;
+  height: 18px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
