@@ -353,15 +353,22 @@ export function PaneWebSwitch({
         ) : (
           <SvgTerminalGlyph />
         )}
+        {/* Compact (in the strip tab) is the bare face glyph — one quiet
+            18px square matching the × next to it. The label, pulse dot and
+            caret are the full (mobile-bar) form; in the pill they made the
+            trigger the loudest thing there. "App detected" survives as an
+            accent tint on the glyph (CSS .is-available). */}
         {compact ? null : (
-          <span className="pane-web-switch-label">
-            {showChat ? 'Chat' : showWeb ? 'Web' : 'Terminal'}
-          </span>
+          <>
+            <span className="pane-web-switch-label">
+              {showChat ? 'Chat' : showWeb ? 'Web' : 'Terminal'}
+            </span>
+            {available ? <span className="pane-web-switch-dot" aria-hidden="true" /> : null}
+            <span className="pane-web-switch-chevron" aria-hidden="true">
+              ▾
+            </span>
+          </>
         )}
-        {available ? <span className="pane-web-switch-dot" aria-hidden="true" /> : null}
-        <span className="pane-web-switch-chevron" aria-hidden="true">
-          ▾
-        </span>
       </button>
       {menuAt ? (
         <PaneFaceMenuList
