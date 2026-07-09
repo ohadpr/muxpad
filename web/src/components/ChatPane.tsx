@@ -310,7 +310,11 @@ export function ChatPane({
   }, [input, draftKey]);
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  // tone 'info' = transient connection chatter (reconnecting, not connected
+  // yet) — rendered as a quiet muted line and auto-cleared when the socket
+  // recovers. tone 'danger' = a real failure (turn failed, send rejected)
+  // that keeps the loud styling and sticks until the next turn.
+  const [notice, setNotice] = useState<{ text: string; tone: 'info' | 'danger' } | null>(null);
   // Older-history pagination: the server opens with just the recent tail; we
   // page earlier messages in on scroll-up. `hasMoreOlder` starts true and is
   // corrected by the server's `older-done`; `olderAnchor` preserves the scroll
@@ -524,7 +528,7 @@ export function ChatPane({
         setOptimisticUser(null);
         setQuestion(null);
         setSubagents({});
-        setNotice(msg.ok ? null : (msg.error ?? 'turn failed'));
+        setNotice(msg.ok ? null : { text: msg.error ?? 'turn failed', tone: 'danger' });
       } else if (msg.t === 'question') {
         setQuestion({ qid: msg.qid, questions: msg.questions });
       } else if (msg.t === 'question-done') {
@@ -544,7 +548,7 @@ export function ChatPane({
           return prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
         });
       } else if (msg.t === 'notice') {
-        setNotice(msg.message);
+        setNotice({ text: msg.message, tone: 'info' });
       } else if (msg.t === 'error') {
         acked.current = true;
         window.clearTimeout(sendWatchdog.current);
@@ -553,7 +557,7 @@ export function ChatPane({
         // so the optimistic bubble would otherwise stick around forever.
         setOptimisticUser(null);
         pendingText.current = '';
-        setNotice(msg.message);
+        setNotice({ text: msg.message, tone: 'danger' });
       }
     };
 
@@ -565,6 +569,9 @@ export function ChatPane({
       ws.onopen = () => {
         attempt = 0;
         setConnected(true);
+        // A recovered socket makes "reconnecting…" chatter stale — clear it
+        // (real failures stay until the next turn resolves them).
+        setNotice((n) => (n?.tone === 'info' ? null : n));
       };
       ws.onmessage = onMessage;
       ws.onerror = () => {
@@ -593,7 +600,10 @@ export function ChatPane({
           setOptimisticUser(null);
           if (lost) {
             setInput((prev) => prev || lost);
-            setNotice('Connection dropped before the message was sent — try again.');
+            setNotice({
+              text: 'Connection dropped before the message was sent — try again.',
+              tone: 'info',
+            });
           }
         }
         if (cancelled) return;
@@ -680,7 +690,7 @@ export function ChatPane({
       setSending(false);
       setOptimisticUser(null);
       setInput((prev) => prev || text);
-      setNotice('Message not delivered — reconnecting. Try again.');
+      setNotice({ text: 'Message not delivered — reconnecting. Try again.', tone: 'info' });
       try {
         wsRef.current?.close();
       } catch {
@@ -708,7 +718,7 @@ export function ChatPane({
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       // Don't fire into a dead socket (the browser would drop it silently).
       // Keep the text in the composer, kick a reconnect, let the user retry.
-      setNotice('Reconnecting — try again in a moment.');
+      setNotice({ text: 'Reconnecting — try again in a moment.', tone: 'info' });
       reconnectNow.current();
       return;
     }
@@ -800,7 +810,7 @@ export function ChatPane({
           const { path } = await api.uploadAttachment(paneId, blob, `pasted.${ext}`);
           paths.push(path);
         } catch {
-          setNotice('image upload failed');
+          setNotice({ text: 'image upload failed', tone: 'danger' });
         }
       }
       setUploading(false);
@@ -1136,7 +1146,11 @@ export function ChatPane({
       ) : null}
       {session?.current_sid ? (
         <div className="chat-composer-wrap" ref={composerRef}>
-          {notice ? <div className="chat-notice">{notice}</div> : null}
+          {notice ? (
+            <div className={`chat-notice${notice.tone === 'danger' ? ' -danger' : ''}`}>
+              {notice.text}
+            </div>
+          ) : null}
           {agentStatus ? (
             <div className="chat-session-row">
               <SessionMenu
@@ -1147,7 +1161,7 @@ export function ChatPane({
                   // CLOSED one (silent drop) — fail loudly instead.
                   const sock = wsRef.current;
                   if (!sock || sock.readyState !== WebSocket.OPEN) {
-                    setNotice('Not connected — try again in a moment.');
+                    setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
                     return;
                   }
                   sock.send(JSON.stringify(obj));
