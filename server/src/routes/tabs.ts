@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { EventBus } from '../events.js';
+import { queuePaneKill } from '../pane-reaper.js';
 import { type PtydCache, decoratePane } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { randomWorkspaceName } from '../random-name.js';
@@ -218,7 +219,10 @@ export function tabsRoutes(deps: {
       try {
         await deps.ptyd.killPane(p.id);
       } catch {
-        // ptyd disconnected; continue with the cascade.
+        // ptyd unreachable / kill lost in transit: the DB cascade proceeds,
+        // so queue the kill durably — the reaper retries until the pty is
+        // confirmed gone (otherwise it would run forever, invisible).
+        queuePaneKill(deps.db, p.id);
       }
       deps.cache.forget(p.id);
     }
