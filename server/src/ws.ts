@@ -237,16 +237,29 @@ export function attachWsServer(deps: {
           live.isAlive = true;
         });
         // Newest runner wins: a respawn (pane reload, crashed process) may
-        // connect before the old socket's close fires. Terminate the old one
-        // so its close handler can't tear down the new registration.
+        // connect before the old socket's close fires. Close the old one
+        // with 4001 — a DISPLACED runner that is still a live process (an
+        // orphaned pty duplicate) must exit rather than reconnect, or the
+        // two processes trade the registration forever, strobing the chat's
+        // status/busy on every steal. A dead peer never completes the close
+        // handshake, so force-terminate after a grace; the teardown handler
+        // guards on registration, so late close events from it are inert.
         const prev = agentRunners.get(paneId);
         if (prev) {
           agentRunners.delete(paneId);
+          const stale = prev.ws;
           try {
-            prev.ws.terminate();
+            stale.close(4001, 'replaced by a newer runner for this pane');
           } catch {
             // already dead
           }
+          setTimeout(() => {
+            try {
+              stale.terminate();
+            } catch {
+              // already dead
+            }
+          }, 5_000).unref?.();
         }
         const conn: AgentRunnerConn = {
           ws,
@@ -262,6 +275,10 @@ export function attachWsServer(deps: {
         const emitChange = () =>
           deps.events.emit({ type: 'agent_session.updated', pane_id: paneId });
         ws.on('message', (data) => {
+          // A displaced socket can still deliver in-flight frames during the
+          // close handshake — a stale runner's state must not leak into the
+          // pane (busy flips, status strobing) once a successor registered.
+          if (agentRunners.get(paneId) !== conn) return;
           const frame = parseFrame<RunnerFrame>(data);
           if (!frame) return;
           if (frame.t === 'hello') {
