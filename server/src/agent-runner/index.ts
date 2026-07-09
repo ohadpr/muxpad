@@ -75,6 +75,9 @@ const log = (line: string) => console.log(`${ts()} ${line}`);
 // ---------------------------------------------------------------------------
 const pendingTexts: string[] = [];
 let inTurn = false;
+// Timestamp of the last message seen from the SDK session — the "is a query
+// actually alive" signal the failed-interrupt disambiguation relies on.
+let lastSessionActivityAt = 0;
 let interruptRequested = false;
 let wakeQueue: (() => void) | null = null;
 const kick = () => {
@@ -302,8 +305,10 @@ function connect(): void {
     sendFrame(helloFrame());
     // The server's per-connection state starts empty — re-deliver any
     // question still blocking the turn so chat clients regain it after a
-    // server restart or ws blip.
+    // server restart or ws blip, and the latest status so the chat header
+    // isn't blank until the next turn.
     for (const pq of pendingQuestions.values()) sendFrame(pq.frame);
+    if (lastStatus) sendFrame(lastStatus);
   });
   sock.on('message', (data) => {
     const frame = parseFrame<ServerFrame>(data);
@@ -311,7 +316,30 @@ function connect(): void {
     if (frame.t === 'send' && typeof frame.text === 'string' && frame.text.trim()) {
       pendingTexts.push(frame.text);
       kick();
+    } else if (frame.t === 'set-model') {
+      if (typeof frame.model === 'string' && frame.model) {
+        session
+          .setModel(frame.model)
+          .then(() => {
+            log(`${bold('model')} → ${frame.model}`);
+            return refreshStatus(false);
+          })
+          .catch((e: unknown) => {
+            log(dim(`set-model failed: ${e instanceof Error ? e.message : String(e)}`));
+          });
+      }
+    } else if (frame.t === 'slash') {
+      // Session-management commands ride the normal turn queue so turn
+      // accounting stays exact (the CLI executes them in-band).
+      if (frame.cmd === 'compact' || frame.cmd === 'clear') {
+        log(dim(`/${frame.cmd} requested from chat`));
+        pendingTexts.push(`/${frame.cmd}`);
+        kick();
+      }
     } else if (frame.t === 'stop') {
+      // Stop while idle is a no-op here — the SERVER answers the requesting
+      // socket with a per-client turn-done resync (a broadcast from here once
+      // wiped other clients' in-flight sends).
       if (inTurn) {
         interruptRequested = true;
         log(dim('⏹ interrupt requested'));
@@ -320,6 +348,22 @@ function connect(): void {
         resolveAllQuestions('interrupted');
         session.interrupt().catch((e: unknown) => {
           log(dim(`interrupt failed: ${e instanceof Error ? e.message : String(e)}`));
+          // Two cases hide behind a rejection: a transient failure while a
+          // query is genuinely running (its result will close the turn —
+          // do NOTHING now; resetting here once leaked a queued message into
+          // the live query), or accounting drift (inTurn stuck true with no
+          // query — nothing will ever close it). Disambiguate by waiting:
+          // real turns produce session messages; drift is silent. Only after
+          // a quiet window reset and release the queue.
+          const failedAt = Date.now();
+          setTimeout(() => {
+            if (inTurn && lastSessionActivityAt < failedAt) {
+              log(dim('no session activity since failed interrupt — resetting turn state'));
+              inTurn = false;
+              sendFrame({ t: 'turn-done', ok: false, error: 'stop failed — turn state reset' });
+              kick();
+            }
+          }, 10_000);
         });
       }
     } else if (frame.t === 'answer') {
@@ -373,8 +417,69 @@ const options: Options = {
 
 const session = query({ prompt: userMessages(), options });
 
+// ---------------------------------------------------------------------------
+// Session status for the chat header: model + context-window fill (+ the
+// model list on the first frame). Refreshed after init, after every turn,
+// and after a model switch; cached for re-delivery on reconnect.
+// ---------------------------------------------------------------------------
+let lastStatus: (RunnerFrame & { t: 'status' }) | null = null;
+let modelList: Array<{ value: string; displayName: string; resolvedModel?: string }> | null = null;
+
+async function refreshStatus(includeModels: boolean): Promise<void> {
+  try {
+    if ((includeModels && !modelList) || modelList === null) {
+      const models = await session.supportedModels();
+      modelList = models.map((m) => ({
+        value: m.value,
+        displayName: m.displayName,
+        ...(m.resolvedModel ? { resolvedModel: m.resolvedModel } : {}),
+      }));
+    }
+    const usage = await session.getContextUsage();
+    const frame: RunnerFrame & { t: 'status' } = {
+      t: 'status',
+      model: usage.model,
+      context: {
+        pct: Math.round(usage.percentage),
+        tokens: usage.totalTokens,
+        max: usage.maxTokens,
+      },
+      // The list rides every status frame — it's small, and the server keeps
+      // only the latest frame for reconnecting chat clients.
+      ...(modelList ? { models: modelList } : {}),
+    };
+    lastStatus = frame;
+    sendFrame(frame);
+  } catch (e) {
+    // Status is decoration — never let it break the session loop.
+    log(dim(`status refresh failed: ${e instanceof Error ? e.message : String(e)}`));
+  }
+}
+
+// Long agentic turns grow the context for minutes between results — refresh
+// mid-turn too so the chat's fill meter tracks live instead of only moving
+// at rest. Guarded to skip when a refresh is already in flight (control
+// requests are async against a busy session).
+let statusRefreshing = false;
+setInterval(() => {
+  if (!inTurn || statusRefreshing) return;
+  statusRefreshing = true;
+  void refreshStatus(false).finally(() => {
+    statusRefreshing = false;
+  });
+}, 20_000);
+
 async function main(): Promise<void> {
   connect();
+  // Resumed sessions don't emit `init` until their first turn — without a
+  // boot-time fetch the chat's session chip stays blank until the user
+  // sends something. Two attempts, in case the control channel needs a
+  // moment (refreshStatus swallows failures).
+  for (const ms of [3_000, 15_000]) {
+    setTimeout(() => {
+      if (!lastStatus) void refreshStatus(true);
+    }, ms);
+  }
   // Name the pty deliberately (OSC 0) — otherwise the pane label falls back
   // to whatever the shell last set ("muxpad", the node path, …). The pane's
   // persistent NAME gets the session's AI title via the transcript tail.
@@ -396,13 +501,18 @@ async function main(): Promise<void> {
   };
 
   for await (const msg of session) {
+    lastSessionActivityAt = Date.now();
     if (msg.type === 'system' && msg.subtype === 'init') {
       log(dim(`ready · ${msg.model} · ${msg.tools.length} tools`));
+      void refreshStatus(true);
       if (msg.session_id !== liveSid) {
-        // Session-id drift (resume minted a new id). Re-hello so the server
-        // re-points the tail and the self-heal startup_cmd at the real id.
+        // Session-id drift (resume minted a new id, /clear started fresh).
+        // Re-hello so the server re-points the tail and the self-heal
+        // startup_cmd at the real id — and drop the cached status: the old
+        // session's context fill must not be re-delivered over the new one.
         log(dim(`session id drifted → ${msg.session_id}`));
         liveSid = msg.session_id;
+        lastStatus = null;
         sendFrame(helloFrame());
       }
     } else if (msg.type === 'stream_event') {
@@ -471,6 +581,7 @@ async function main(): Promise<void> {
       }
       interruptRequested = false;
       kick(); // release the next queued send, if any
+      void refreshStatus(false); // context fill changed with the turn
     }
   }
 }
