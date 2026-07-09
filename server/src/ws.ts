@@ -1,4 +1,5 @@
 import type { Server } from 'node:http';
+import { sanitizeAgentStatus } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { AgentBridge } from './agent-bridge.js';
@@ -261,6 +262,10 @@ export function attachWsServer(deps: {
           const frame = parseFrame<RunnerFrame>(data);
           if (!frame) return;
           if (frame.t === 'hello') {
+            // A (re)hello means new runner process or new session id — the
+            // cached status may describe the OLD session; the runner re-sends
+            // its current status right after hello.
+            conn.status = null;
             // The sid ends up in a startup_cmd that PaneRuntime TYPES INTO A
             // SHELL on respawn — constrain its charset (same rule as the
             // HTTP register/hook routes) so a crafted hello can't smuggle
@@ -334,8 +339,21 @@ export function attachWsServer(deps: {
             conn.subagents.set(frame.progress.toolUseId, frame.progress);
             bcast({ t: 'subagent', progress: frame.progress });
           } else if (frame.t === 'status') {
-            conn.status = frame;
-            bcast(frame);
+            // Validate off the wire — version-skewed runners are NORMAL
+            // (they only pick up new code when their pane respawns), and an
+            // unvalidated frame cached here would be re-delivered in every
+            // hello and crash clients at render. Merge rather than replace:
+            // the models list rides only fetch frames, but reconnect hellos
+            // must still carry the last known list.
+            const clean = sanitizeAgentStatus(frame);
+            if (!clean) return;
+            const merged = {
+              t: 'status' as const,
+              ...clean,
+              ...(clean.models ? {} : conn.status?.models ? { models: conn.status.models } : {}),
+            };
+            conn.status = merged;
+            bcast(merged);
           } else if (frame.t === 'title') {
             // Runner-generated conversation title (SDK sessions get no
             // ai-title transcript records) — same rename policy as the
@@ -489,18 +507,32 @@ export function attachWsServer(deps: {
             return;
           }
           if (msg.t === 'stop') {
-            sendToRunner(chatPaneId, { t: 'stop' });
+            // Only relay when a turn is actually active. Otherwise answer
+            // THIS socket with a turn-done resync: a stray Stop proves this
+            // client thinks a turn is running, and a per-socket reply heals
+            // it without wiping other clients' in-flight sends (a runner-side
+            // broadcast used to) — and it works even with the runner gone.
+            const conn = agentRunners.get(chatPaneId);
+            if (conn?.turnActive) {
+              sendToRunner(chatPaneId, { t: 'stop' });
+            } else {
+              send({ t: 'turn-done', ok: true });
+            }
             return;
           }
           if (msg.t === 'set-model') {
             if (typeof msg.model === 'string' && msg.model.length <= 128) {
-              sendToRunner(chatPaneId, { t: 'set-model', model: msg.model });
+              if (!sendToRunner(chatPaneId, { t: 'set-model', model: msg.model })) {
+                send({ t: 'error', message: 'agent is reconnecting — try again in a moment' });
+              }
             }
             return;
           }
           if (msg.t === 'slash') {
             if (msg.cmd === 'compact' || msg.cmd === 'clear') {
-              sendToRunner(chatPaneId, { t: 'slash', cmd: msg.cmd });
+              if (!sendToRunner(chatPaneId, { t: 'slash', cmd: msg.cmd })) {
+                send({ t: 'error', message: 'agent is reconnecting — try again in a moment' });
+              }
             }
             return;
           }

@@ -96,6 +96,60 @@ export interface SubagentProgress {
   lastTool?: string;
 }
 
+/**
+ * Session status pushed by the agent runner: current model, context-window
+ * fill, and (when freshly fetched) the available models. ONE definition for
+ * the whole runner→server→web pipeline — hand-kept copies of cross-boundary
+ * shapes are how fields silently vanish between hops.
+ */
+export interface AgentSessionStatus {
+  model: string;
+  context: { pct: number; tokens: number; max: number };
+  models?: Array<{ value: string; displayName: string; resolvedModel?: string }>;
+}
+
+/**
+ * Runtime validator for a status frame arriving off the wire from a runner
+ * (version skew is normal: runners only pick up new code when their pane
+ * respawns). Returns a sanitized copy or null — an unvalidated frame that
+ * reaches a client render is an app-wide crash.
+ */
+export function sanitizeAgentStatus(raw: unknown): AgentSessionStatus | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const o = raw as Record<string, unknown>;
+  const ctx = o.context as Record<string, unknown> | undefined;
+  if (
+    typeof o.model !== 'string' ||
+    typeof ctx !== 'object' ||
+    ctx === null ||
+    typeof ctx.pct !== 'number' ||
+    typeof ctx.tokens !== 'number' ||
+    typeof ctx.max !== 'number'
+  ) {
+    return null;
+  }
+  const models = Array.isArray(o.models)
+    ? o.models
+        .filter(
+          (m): m is { value: string; displayName: string; resolvedModel?: string } =>
+            typeof m === 'object' &&
+            m !== null &&
+            typeof (m as Record<string, unknown>).value === 'string' &&
+            typeof (m as Record<string, unknown>).displayName === 'string',
+        )
+        .map((m) => ({
+          value: m.value,
+          displayName: m.displayName,
+          ...(typeof m.resolvedModel === 'string' ? { resolvedModel: m.resolvedModel } : {}),
+        }))
+    : undefined;
+  return {
+    model: o.model,
+    context: { pct: ctx.pct, tokens: ctx.tokens, max: ctx.max },
+    ...(models && models.length > 0 ? { models } : {}),
+  };
+}
+
 function tsOf(raw: Record<string, unknown>): number | null {
   const t = raw.timestamp;
   if (typeof t !== 'string') return null;
