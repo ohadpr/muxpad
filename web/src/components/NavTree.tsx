@@ -9,7 +9,6 @@ import { applyTabOrder, refreshTabs, useTabs } from '../tabs';
 import { useLongPress } from '../use-long-press';
 import { MAX_QUICK_SWITCH_TABS, useTabQuickSwitch } from '../use-tab-quickswitch';
 import { applyWorkspaceOrder, refreshWorkspaces, useWorkspaces } from '../workspaces';
-import { type NewKind, NewKindMenu } from './NewKindMenu';
 import { SvgClose } from './icons';
 import './NavTree.css';
 
@@ -667,13 +666,29 @@ function TabList({
           rowDnd={variant === 'sidebar' ? tabDnd(t.id) : undefined}
         />
       ))}
-      <NewKindMenu
-        className="navtree-add navtree-new-tab"
-        label={creating ? 'Creating…' : '+ New tab'}
-        title="New tab — terminal or agent"
-        disabled={creating}
-        onPick={(k: NewKind) => void createTab(k === 'agent' ? 'agent' : 'shell')}
-      />
+      {/* Two direct, symmetric choices — no popup between intent and tab.
+          (A menu here made agent creation a two-step hunt, and its mixed
+          icon/no-icon rows read as different kinds of items.) */}
+      <div className="navtree-new-row">
+        <button
+          type="button"
+          className="navtree-add navtree-new-tab"
+          title="New terminal tab"
+          disabled={creating}
+          onClick={() => void createTab('shell')}
+        >
+          {creating ? 'Creating…' : '+ Terminal'}
+        </button>
+        <button
+          type="button"
+          className="navtree-add navtree-new-tab"
+          title="New agent tab (chat-native Claude session)"
+          disabled={creating}
+          onClick={() => void createTab('agent')}
+        >
+          {creating ? 'Creating…' : '✳ Agent'}
+        </button>
+      </div>
     </div>
   );
 }
