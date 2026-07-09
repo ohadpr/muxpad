@@ -1354,7 +1354,9 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                           aria-label="Close pane"
                           onClick={() => closePane(paneId)}
                         >
-                          <SvgClose size={11} />
+                          {/* 14 = the face glyph's icon size next door — the
+                              two 18px squares should read as equals. */}
+                          <SvgClose size={14} />
                         </button>
                       </span>
                     </>
