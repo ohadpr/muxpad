@@ -75,6 +75,9 @@ const log = (line: string) => console.log(`${ts()} ${line}`);
 // ---------------------------------------------------------------------------
 const pendingTexts: string[] = [];
 let inTurn = false;
+// Timestamp of the last message seen from the SDK session — the "is a query
+// actually alive" signal the failed-interrupt disambiguation relies on.
+let lastSessionActivityAt = 0;
 let interruptRequested = false;
 let wakeQueue: (() => void) | null = null;
 const kick = () => {
@@ -334,6 +337,9 @@ function connect(): void {
         kick();
       }
     } else if (frame.t === 'stop') {
+      // Stop while idle is a no-op here — the SERVER answers the requesting
+      // socket with a per-client turn-done resync (a broadcast from here once
+      // wiped other clients' in-flight sends).
       if (inTurn) {
         interruptRequested = true;
         log(dim('⏹ interrupt requested'));
@@ -342,19 +348,23 @@ function connect(): void {
         resolveAllQuestions('interrupted');
         session.interrupt().catch((e: unknown) => {
           log(dim(`interrupt failed: ${e instanceof Error ? e.message : String(e)}`));
-          // The interrupt had nothing to land on (turn accounting drifted —
-          // e.g. an injected message flipped inTurn without a real query).
-          // Resync everyone to idle; if a query IS still running its result
-          // will emit another turn-done, which is harmless.
-          inTurn = false;
-          sendFrame({ t: 'turn-done', ok: true });
-          kick();
+          // Two cases hide behind a rejection: a transient failure while a
+          // query is genuinely running (its result will close the turn —
+          // do NOTHING now; resetting here once leaked a queued message into
+          // the live query), or accounting drift (inTurn stuck true with no
+          // query — nothing will ever close it). Disambiguate by waiting:
+          // real turns produce session messages; drift is silent. Only after
+          // a quiet window reset and release the queue.
+          const failedAt = Date.now();
+          setTimeout(() => {
+            if (inTurn && lastSessionActivityAt < failedAt) {
+              log(dim('no session activity since failed interrupt — resetting turn state'));
+              inTurn = false;
+              sendFrame({ t: 'turn-done', ok: false, error: 'stop failed — turn state reset' });
+              kick();
+            }
+          }, 10_000);
         });
-      } else {
-        // Stop while idle: the tap proves some client thinks a turn is
-        // running. Answer with turn-done so every stuck view resyncs to
-        // idle instead of showing Stop forever.
-        sendFrame({ t: 'turn-done', ok: true });
       }
     } else if (frame.t === 'answer') {
       const pq = pendingQuestions.get(frame.qid);
@@ -465,12 +475,11 @@ async function main(): Promise<void> {
   // boot-time fetch the chat's session chip stays blank until the user
   // sends something. Two attempts, in case the control channel needs a
   // moment (refreshStatus swallows failures).
-  setTimeout(() => {
-    if (!lastStatus) void refreshStatus(true);
-  }, 3000);
-  setTimeout(() => {
-    if (!lastStatus) void refreshStatus(true);
-  }, 15000);
+  for (const ms of [3_000, 15_000]) {
+    setTimeout(() => {
+      if (!lastStatus) void refreshStatus(true);
+    }, ms);
+  }
   // Name the pty deliberately (OSC 0) — otherwise the pane label falls back
   // to whatever the shell last set ("muxpad", the node path, …). The pane's
   // persistent NAME gets the session's AI title via the transcript tail.
@@ -492,14 +501,18 @@ async function main(): Promise<void> {
   };
 
   for await (const msg of session) {
+    lastSessionActivityAt = Date.now();
     if (msg.type === 'system' && msg.subtype === 'init') {
       log(dim(`ready · ${msg.model} · ${msg.tools.length} tools`));
       void refreshStatus(true);
       if (msg.session_id !== liveSid) {
-        // Session-id drift (resume minted a new id). Re-hello so the server
-        // re-points the tail and the self-heal startup_cmd at the real id.
+        // Session-id drift (resume minted a new id, /clear started fresh).
+        // Re-hello so the server re-points the tail and the self-heal
+        // startup_cmd at the real id — and drop the cached status: the old
+        // session's context fill must not be re-delivered over the new one.
         log(dim(`session id drifted → ${msg.session_id}`));
         liveSid = msg.session_id;
+        lastStatus = null;
         sendFrame(helloFrame());
       }
     } else if (msg.type === 'stream_event') {

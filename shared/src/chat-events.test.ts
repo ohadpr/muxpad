@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type ChatEvent, normalizeTranscriptLine } from './chat-events.js';
+import { type ChatEvent, normalizeTranscriptLine, sanitizeAgentStatus } from './chat-events.js';
 
 const TS = '2026-07-01T10:00:00.000Z';
 const MS = Date.parse(TS);
@@ -213,5 +213,43 @@ describe('normalizeTranscriptLine', () => {
     ]) {
       expect(normalizeTranscriptLine(line)).toEqual([]);
     }
+  });
+});
+
+describe('sanitizeAgentStatus', () => {
+  it('accepts a valid frame and strips unknown/malformed model entries', () => {
+    const out = sanitizeAgentStatus({
+      t: 'status',
+      model: 'claude-x',
+      context: { pct: 12, tokens: 24000, max: 200000 },
+      models: [
+        { value: 'a', displayName: 'A', resolvedModel: 'claude-a' },
+        { value: 42, displayName: 'bad' },
+        'garbage',
+      ],
+    });
+    expect(out).toEqual({
+      model: 'claude-x',
+      context: { pct: 12, tokens: 24000, max: 200000 },
+      models: [{ value: 'a', displayName: 'A', resolvedModel: 'claude-a' }],
+    });
+  });
+
+  it('rejects frames missing model or context fields', () => {
+    expect(sanitizeAgentStatus(null)).toBeNull();
+    expect(sanitizeAgentStatus({ model: 'x' })).toBeNull();
+    expect(
+      sanitizeAgentStatus({ model: 'x', context: { pct: '12', tokens: 1, max: 2 } }),
+    ).toBeNull();
+    expect(sanitizeAgentStatus({ context: { pct: 1, tokens: 1, max: 2 } })).toBeNull();
+  });
+
+  it('omits models when the array sanitizes to empty', () => {
+    const out = sanitizeAgentStatus({
+      model: 'x',
+      context: { pct: 1, tokens: 2, max: 3 },
+      models: ['junk'],
+    });
+    expect(out).toEqual({ model: 'x', context: { pct: 1, tokens: 2, max: 3 } });
   });
 });
