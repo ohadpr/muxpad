@@ -45,6 +45,17 @@ export type RunnerFrame =
       title: string;
     }
   | {
+      /**
+       * Session status for the chat header: current model, context-window
+       * fill, and (on the first frame / model list changes) the available
+       * models. Sent after init, after every turn, and after a model switch.
+       */
+      t: 'status';
+      model: string;
+      context: { pct: number; tokens: number; max: number };
+      models?: Array<{ value: string; displayName: string; resolvedModel?: string }>;
+    }
+  | {
       /** The session died and the runner is exiting (claude crash, fatal error). */
       t: 'fatal';
       error: string;
@@ -54,6 +65,12 @@ export type RunnerFrame =
 export type ServerFrame =
   | { t: 'send'; text: string }
   | { t: 'stop' }
+  | { t: 'set-model'; model: string }
+  | {
+      /** Run a session-management slash command (queued like a user turn). */
+      t: 'slash';
+      cmd: 'compact' | 'clear';
+    }
   | {
       /** The user's answer to a `question` frame. One entry per question, in order. */
       t: 'answer';
