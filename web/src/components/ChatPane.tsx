@@ -93,9 +93,16 @@ function SessionMenu({
       document.removeEventListener('keydown', onKey);
     };
   }, [open]);
-  const current = status.models?.find(
-    (m) => m.value === status.model || m.resolvedModel === status.model,
-  );
+  // Match the reported model to a list row. Order matters: several rows can
+  // RESOLVE to the same wire model (e.g. "Default" resolves to the same id as
+  // "Opus"), and a naive first-match made a switch to Opus label itself
+  // "Default". Exact value first, then a resolved match on a specific row,
+  // and the default row only as a last resort.
+  const list = status.models ?? [];
+  const current =
+    list.find((m) => m.value === status.model) ??
+    list.find((m) => m.value !== 'default' && m.resolvedModel === status.model) ??
+    list.find((m) => m.resolvedModel === status.model);
   const modelLabel = current?.displayName ?? status.model;
   const kTokens = (n: number) => `${Math.round(n / 1000)}k`;
   return (

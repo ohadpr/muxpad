@@ -1011,6 +1011,7 @@ function NavContextMenu({
                 role="menuitem"
                 aria-haspopup="menu"
                 aria-expanded={openSub === it.label}
+                onClick={() => setOpenSub((cur) => (cur === it.label ? null : it.label))}
               >
                 <span>{it.label}</span>
                 <span className="navtree-menu-caret" aria-hidden="true">

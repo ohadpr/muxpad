@@ -496,7 +496,13 @@ function refreshStatus(refetchModels: boolean): Promise<void> {
         lastStatus.context.pct !== frame.context.pct ||
         lastStatus.context.tokens !== frame.context.tokens ||
         freshModels;
-      lastStatus = frame;
+      // The CACHE always carries the model list (a reconnect re-delivers
+      // lastStatus as the server's whole snapshot — without the list the
+      // chip loses its picker and shows raw ids); the WIRE frame stays slim.
+      lastStatus = {
+        ...frame,
+        ...(modelList && modelList.length > 0 ? { models: modelList } : {}),
+      };
       if (changed) sendFrame(frame);
     } catch (e) {
       // Status is decoration — never let it break the session loop.
