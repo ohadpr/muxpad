@@ -253,6 +253,40 @@ function consumeStreamedText(preview: string, landed: string[]): string {
 }
 
 /**
+ * Scroll positions per pane. A ChatPane loses its scroll constantly — tab
+ * navigation unmounts it, and same-tab pane/face switches hide it with
+ * display:none (which zeroes scrollTop) — so returning to a chat always
+ * snapped to the bottom. Remember {top, pinned} per pane (module map,
+ * write-through to sessionStorage so reloads keep it too) and restore on
+ * the next activation: a reader parked mid-history lands back where they
+ * were; a pinned-to-bottom reader keeps the follow-new-messages behavior.
+ * The sid guards staleness — a cleared/rotated session forgets the spot.
+ */
+type ChatScrollMem = { top: number; pinned: boolean; sid: string | null };
+const CHAT_SCROLL_KEY = 'muxpad:chat-scroll';
+const chatScrollMem: Map<string, ChatScrollMem> = (() => {
+  try {
+    const raw = sessionStorage.getItem(CHAT_SCROLL_KEY);
+    return new Map(raw ? (JSON.parse(raw) as [string, ChatScrollMem][]) : []);
+  } catch {
+    return new Map();
+  }
+})();
+let chatScrollFlush: number | undefined;
+function rememberChatScroll(paneId: string, mem: ChatScrollMem): void {
+  chatScrollMem.set(paneId, mem);
+  // Debounced write-through: onScroll fires per frame while scrolling.
+  window.clearTimeout(chatScrollFlush);
+  chatScrollFlush = window.setTimeout(() => {
+    try {
+      sessionStorage.setItem(CHAT_SCROLL_KEY, JSON.stringify([...chatScrollMem]));
+    } catch {
+      // quota / private mode — the in-memory map still covers this session
+    }
+  }, 250);
+}
+
+/**
  * Chat view of the Claude session tracked in a pane. Connects to
  * /ws/chat/:paneId, replays the transcript as chat, then streams live turns
  * (dedupes by event id — the server may re-emit history after a compaction
@@ -882,6 +916,29 @@ export function ChatPane({
     return () => window.removeEventListener('keydown', onKey);
   }, [active, openTool]);
 
+  // Restore the remembered scroll once per activation, after the replayed
+  // history has rendered. Runs BEFORE the follow-the-bottom effect (layout
+  // effects fire first) so setting pinned=false here stops it from snapping
+  // a returning reader to the bottom. Pinned/unknown memory keeps the
+  // existing behavior; a sid mismatch (cleared session) is stale — ignore.
+  const restoredScroll = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: events is the "history rendered" trigger
+  useLayoutEffect(() => {
+    if (!active) {
+      restoredScroll.current = false; // hidden panes lose scrollTop — re-restore on return
+      return;
+    }
+    if (restoredScroll.current || events.length === 0) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    restoredScroll.current = true;
+    const mem = chatScrollMem.get(paneId);
+    if (mem && !mem.pinned && mem.sid === renderedSid.current) {
+      pinnedToBottom.current = false;
+      el.scrollTop = mem.top;
+    }
+  }, [active, events, paneId]);
+
   // After an older-history batch prepends, content grew above the viewport;
   // restore the scroll so the messages the user was looking at stay put (runs
   // before paint, so there's no visible jump).
@@ -919,6 +976,11 @@ export function ChatPane({
     if (!el) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     pinnedToBottom.current = nearBottom;
+    rememberChatScroll(paneId, {
+      top: el.scrollTop,
+      pinned: nearBottom,
+      sid: renderedSid.current,
+    });
     // Hysteresis: only reveal the arrow once meaningfully scrolled up, so it
     // doesn't flicker on tiny nudges near the bottom.
     setShowScrollDown(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
@@ -932,6 +994,9 @@ export function ChatPane({
     if (!el) return;
     pinnedToBottom.current = true;
     setShowScrollDown(false);
+    // Record the re-pin immediately — the smooth scroll's own onScroll
+    // events lag, and switching away mid-glide must not save a stale spot.
+    rememberChatScroll(paneId, { top: el.scrollHeight, pinned: true, sid: renderedSid.current });
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   };
 
