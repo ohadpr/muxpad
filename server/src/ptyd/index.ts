@@ -228,6 +228,13 @@ function attachControl(
         ws.send(encodeResponse(msg.id, { ok: true }));
         return;
       }
+      if (msg.method === 'listPanes') {
+        // Live pane ids, for the server's straggler reconcile on (re)connect:
+        // a pty whose DB row was deleted while a kill was lost in transit
+        // would otherwise run forever, invisible to every UI.
+        ws.send(encodeResponse(msg.id, { ok: true, ids: pm.ids() }));
+        return;
+      }
       if (msg.method === 'killPane') {
         const { id } = msg.params as { id: string };
         // pm.kill awaits PTY exit (with a 2s SIGKILL fallback). The response
