@@ -13,7 +13,6 @@ import { spliceLayoutAtTarget } from '@muxpad/shared';
 import { type TabWithPanes, api } from '../api';
 import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
 import { MobileInputBar } from '../components/MobileInputBar';
-import { NewKindMenu, type NewKind as NewPaneKind } from '../components/NewKindMenu';
 import { PaneSelector } from '../components/PaneSelector';
 import { PaneFaceMenuList, PaneWebSwitch, clampMenuLeft } from '../components/PaneWebSwitch';
 // PaneSurfaceSwitch (below) reuses the .pane-web-switch-* menu classes, so
@@ -33,6 +32,9 @@ import { setTabViewMode, useTabViewMode } from '../lib/tab-view-mode';
 import { refreshTabs, useTabs } from '../tabs';
 import { useMediaQuery } from '../use-media-query';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
+
+// What a "+" creates: a plain terminal pane or a chat-native agent pane.
+type NewPaneKind = 'terminal' | 'agent';
 import './tab.css';
 
 type Layout = MosaicNode<string> | null;
@@ -1359,12 +1361,23 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                 </div>
               );
             })}
-            <NewKindMenu
+            {/* Two direct choices, mirroring the sidebar — no popup. */}
+            <button
+              type="button"
               className="desktop-tab-add"
-              label="+"
-              title="New pane"
-              onPick={(k) => void addPane(k)}
-            />
+              title="New terminal pane"
+              onClick={() => void addPane('terminal')}
+            >
+              +
+            </button>
+            <button
+              type="button"
+              className="desktop-tab-add"
+              title="New agent pane (chat-native Claude session)"
+              onClick={() => void addPane('agent')}
+            >
+              ✳
+            </button>
           </div>
           <div className="desktop-tab-strip-actions">
             <button
