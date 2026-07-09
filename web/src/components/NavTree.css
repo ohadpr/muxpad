@@ -427,7 +427,10 @@
   flex: 0 0 0;
   width: 0;
   margin-left: -4px;
-  height: var(--nt-hit);
+  /* 18px square when revealed — the exact box the strip tabs' × uses; the
+     row is taller, so it centers as an inset square (not a full-height slab). */
+  height: 18px;
+  align-self: center;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -449,6 +452,7 @@
 .navtree[data-variant="sheet"] .navtree-close {
   flex-basis: var(--nt-hit);
   width: var(--nt-hit);
+  height: var(--nt-hit); /* touch needs the full hit square */
   margin-left: 0;
   opacity: 0.35;
 }
@@ -457,8 +461,8 @@
 .navtree-tab-row:hover .navtree-close,
 .navtree-tab-row:focus-within .navtree-close,
 .navtree-close:focus-visible {
-  flex-basis: var(--nt-hit);
-  width: var(--nt-hit);
+  flex-basis: 18px;
+  width: 18px;
   margin-left: 0;
   opacity: 1;
 }
