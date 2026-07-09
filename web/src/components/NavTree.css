@@ -492,7 +492,10 @@
 .navtree-menu-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  /* Above the mobile nav sheet (z 1101) — the menu opens from rows INSIDE
+     that sheet on touch (long-press); at 1000 it rendered underneath it,
+     invisible and untappable. */
+  z-index: 1200;
 }
 .navtree-menu {
   position: fixed;
@@ -597,7 +600,8 @@
    surface, shadow, and search UI). */
 .navtree-emoji-popover {
   position: fixed;
-  z-index: 1001;
+  /* Above the menu backdrop (1200) — the picker opens FROM the menu. */
+  z-index: 1201;
 }
 .navtree-emoji-loading {
   padding: 16px;
