@@ -1361,14 +1361,16 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                 </div>
               );
             })}
-            {/* Two direct choices, mirroring the sidebar — no popup. */}
+            {/* Two direct labeled choices — same wording as the sidebar's
+                new-tab row, so creation reads identically everywhere (bare
+                glyphs were too cryptic). */}
             <button
               type="button"
               className="desktop-tab-add"
               title="New terminal pane"
               onClick={() => void addPane('terminal')}
             >
-              +
+              + Terminal
             </button>
             <button
               type="button"
@@ -1376,7 +1378,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
               title="New agent pane (chat-native Claude session)"
               onClick={() => void addPane('agent')}
             >
-              ✳
+              ✳ Agent
             </button>
           </div>
           <div className="desktop-tab-strip-actions">
