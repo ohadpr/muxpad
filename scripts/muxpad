@@ -556,6 +556,17 @@ parse_flags() {
   while [ $# -gt 0 ]; do
     local a="$1"
     case "$a" in
+      --)
+        # End of flags (`muxpad serve --url … -- <command…>`): everything
+        # after the bare -- is positional, verbatim — flags belonging to the
+        # wrapped command must not be parsed as ours.
+        shift
+        while [ $# -gt 0 ]; do
+          POSITIONAL+=("$1")
+          shift
+        done
+        break
+        ;;
       --*=*)
         local k="${a%%=*}"; k="${k#--}"
         local v="${a#*=}"
@@ -950,6 +961,64 @@ cmd_app_url() {
   fi
 }
 
+# `muxpad serve [--url <url>] [--label <text>] -- <command...>` — run a local
+# web server IN THIS PANE under muxpad supervision:
+#   - declares the app URL (OSC marker) so the pane flips to its web face and
+#     the face menu offers Terminal ⇄ Web — same pattern as agent chat panes;
+#   - restarts the command when it dies (crash-loop backoff: quick deaths
+#     back off 2s→30s; a run that lived >10s resets to 2s);
+#   - Ctrl-C stops for real (the loop exits instead of restarting).
+# The web face's dead-URL probe shows "server stopped" during the gap and
+# self-heals when the restart comes up — no manual reload.
+cmd_serve() {
+  if [ -z "${MUXPAD_PANE_ID:-}" ]; then
+    echo "muxpad serve: must be run inside a muxpad pane" >&2
+    exit 1
+  fi
+  reset_flags url label
+  parse_flags url label -- "$@"
+  if [ "${#POSITIONAL[@]}" -lt 1 ]; then
+    echo 'usage: muxpad serve [--url <url>] [--label <text>] -- <command...>' >&2
+    exit 1
+  fi
+  # Snapshot NOW: FLAG_*/POSITIONAL are globals, and cmd_app_url below runs
+  # its own reset/parse_flags — without copies the loop would execute the
+  # URL as the command on round two.
+  local serve_url="${FLAG_url:-}" serve_label="${FLAG_label:-}"
+  local cmdv=("${POSITIONAL[@]}")
+  local stopped=0
+  trap 'stopped=1' INT TERM
+  local backoff=2
+  while :; do
+    # (Re)declare the app URL each round — idempotent server-side, and it
+    # only flips the face when the URL is NEW to this pane, so a user who
+    # switched to the terminal view stays there across restarts.
+    if [ -n "$serve_url" ]; then
+      if [ -n "$serve_label" ]; then
+        cmd_app_url "$serve_url" --label "$serve_label"
+      else
+        cmd_app_url "$serve_url"
+      fi
+    fi
+    local started=$SECONDS code=0
+    "${cmdv[@]}" || code=$?
+    local ran=$((SECONDS - started))
+    if [ "$stopped" = "1" ]; then
+      echo "muxpad serve: stopped"
+      break
+    fi
+    # Crash-loop backoff: a server that dies within 10s of starting doubles
+    # the wait (max 30s); a healthy long run resets it.
+    if [ "$ran" -lt 10 ]; then
+      backoff=$((backoff * 2)); [ "$backoff" -gt 30 ] && backoff=30
+    else
+      backoff=2
+    fi
+    echo "muxpad serve: command exited (code $code, ran ${ran}s) — restarting in ${backoff}s (Ctrl-C to stop)"
+    sleep "$backoff" || break
+  done
+}
+
 # `muxpad claude [claude args...]` — launch Claude Code in THIS pane as a
 # muxpad-tracked agent session, so it can later be viewed/driven from the web
 # chat and switched between terminal and chat. Passthrough that AUGMENTS: runs
@@ -1191,6 +1260,15 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      so the popup isn't blocked. For an iframe
                                      pane in the mosaic, use `pane open` above.
 
+  serve [--url=<url>] [--label=<text>] -- <command...>
+                                     run a local web server in THIS pane under
+                                     muxpad supervision: auto-restart on crash
+                                     (with backoff; Ctrl-C stops for real) and
+                                     the pane flips to the app's web view,
+                                     with Terminal always in the face menu.
+                                     e.g. muxpad serve --url=http://host:4321 \
+                                            --label=Notes -- ./start
+
   app-url <url> [--label=<text>]     declare the web app THIS pane serves.
                                      The pane chrome then offers a "switch to
                                      web view" of it. Run from your dev script
@@ -1264,6 +1342,7 @@ case "$VERB" in
   pane) cmd_pane "${ARGS[@]:1}" ;;
   open) cmd_open "${ARGS[@]:1}" ;;
   app-url) cmd_app_url "${ARGS[@]:1}" ;;
+  serve) cmd_serve "${ARGS[@]:1}" ;;
   claude) cmd_claude "${ARGS[@]:1}" ;;
   agent) cmd_agent "${ARGS[@]:1}" ;;
   _agent-hook) cmd_agent_hook ;;
