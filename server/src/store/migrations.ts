@@ -217,6 +217,19 @@ const MIGRATIONS: Migration[] = [
         AND (startup_cmd IS NULL OR startup_cmd NOT LIKE 'muxpad agent%');
     `,
   },
+  {
+    // Durable kill queue: a pane DELETE whose ptyd kill fails in transit
+    // must not leave the pty running forever with no DB row (an invisible
+    // straggler no UI can ever reach). Failed kills land here and a sweeper
+    // retries until ptyd confirms.
+    version: 15,
+    sql: `
+      CREATE TABLE pending_pane_kills (
+        pane_id TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
