@@ -263,10 +263,14 @@ export function PaneWebSwitch({
   paneId,
   appUrls,
   startupCmd,
+  compact = false,
 }: {
   paneId: string;
   appUrls: AppUrl[];
   startupCmd?: string | null | undefined;
+  /** Icon + caret only — for hosts that already show the pane's name
+   *  (the active strip tab). */
+  compact?: boolean;
 }) {
   const { face, url } = usePaneFace(paneId);
   const [menuAt, setMenuAt] = useState<{ top: number; left: number } | null>(null);
@@ -357,9 +361,11 @@ export function PaneWebSwitch({
         ) : (
           <SvgTerminalGlyph />
         )}
-        <span className="pane-web-switch-label">
-          {showChat ? 'Chat' : showWeb ? 'Web' : 'Terminal'}
-        </span>
+        {compact ? null : (
+          <span className="pane-web-switch-label">
+            {showChat ? 'Chat' : showWeb ? 'Web' : 'Terminal'}
+          </span>
+        )}
         {available ? <span className="pane-web-switch-dot" aria-hidden="true" /> : null}
         <span className="pane-web-switch-chevron" aria-hidden="true">
           ▾
