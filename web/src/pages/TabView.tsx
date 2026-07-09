@@ -1261,16 +1261,6 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
       void killPane(paneId);
     };
 
-    const activePane = activeId ? tab.panes.find((p) => p.id === activeId) : undefined;
-    const activeWebSwitch =
-      activePane && activePane.kind === 'shell' ? (
-        <PaneWebSwitch
-          paneId={activePane.id}
-          appUrls={activePane.app_urls ?? []}
-          startupCmd={activePane.startup_cmd}
-        />
-      ) : null;
-
     return (
       <div className="workspace-root">
         <nav className="desktop-tab-strip" aria-label="Panes">
@@ -1325,6 +1315,19 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                       >
                         <span className="desktop-tab-label">{paneLabel(paneId)}</span>
                       </button>
+                      {/* The face switch lives ON the active tab — it
+                          describes THIS pane's view (terminal/chat/web), so
+                          parking it at the strip's edge read as global
+                          chrome, disconnected from its subject. Compact
+                          (icon + caret): the tab already carries the name. */}
+                      {isActiveTab && p?.kind === 'shell' ? (
+                        <PaneWebSwitch
+                          paneId={p.id}
+                          appUrls={p.app_urls ?? []}
+                          startupCmd={p.startup_cmd}
+                          compact
+                        />
+                      ) : null}
                       {/* Trailing slot: the status glyph and the close × share
                           ONE fixed-width box — the × fades in over the status on
                           hover/active. So the label's available width is the
@@ -1364,7 +1367,6 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
             />
           </div>
           <div className="desktop-tab-strip-actions">
-            {activeWebSwitch}
             <button
               type="button"
               className="pane-chrome-btn"
