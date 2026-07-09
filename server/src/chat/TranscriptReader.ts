@@ -146,33 +146,37 @@ export class TranscriptTail {
   loadOlder(): boolean {
     if (this.closed || !this.path || this.historyStart <= 0) return false;
     const to = this.historyStart; // always a line boundary (byte after a '\n')
-    const from = Math.max(0, to - (this.opts.tailBytes ?? 65536));
-    const buf = this.readBytes(from, to);
-    if (!buf) return false;
-    // Snap past the partial leading line unless we've reached the file start;
-    // its full copy arrives on the next loadOlder (this chunk's from = its to).
-    let sliceFrom = 0;
-    let newStart = 0;
-    if (from > 0) {
-      const nl = buf.indexOf(NL);
-      if (nl === -1) {
-        // One line longer than the window — read from the file start to
-        // guarantee forward progress instead of spinning on the same chunk.
-        const full = this.readBytes(0, to);
-        if (full) {
-          this.historyStart = 0;
-          this.emit(full.toString('utf8').split('\n'), 'older');
-        }
+    const tb = this.opts.tailBytes ?? 65536;
+    // The window must contain at least one COMPLETE line or historyStart
+    // can't move. A single giant line (base64 image pastes run to hundreds
+    // of KB) can swallow the window two ways: no newline at all, or its
+    // terminating newline as the window's very last byte (`to - 1`) — the
+    // partial-line snap then lands exactly back on `to`, emitting nothing
+    // and making zero byte progress, so hasMore=true spins forever (the
+    // "chat shows one message and can't scroll" bug). Grow the window
+    // backward until a complete line fits or we reach the file start.
+    let from = Math.max(0, to - tb);
+    for (;;) {
+      const buf = this.readBytes(from, to);
+      if (!buf) return false;
+      if (from === 0) {
+        this.historyStart = 0;
+        this.emit(buf.toString('utf8').split('\n'), 'older');
         return false;
       }
-      sliceFrom = nl + 1;
-      newStart = from + nl + 1;
+      // Snap past the partial leading line; its full copy arrives on the
+      // next loadOlder (this chunk's from = its to).
+      const nl = buf.indexOf(NL);
+      if (nl === -1 || nl + 1 >= buf.length) {
+        from = Math.max(0, from - tb);
+        continue;
+      }
+      this.historyStart = from + nl + 1;
+      // buf ends at `to` (a line boundary), so the last split part is '' — no
+      // carry to manage here; emit() skips blank lines.
+      this.emit(buf.toString('utf8', nl + 1).split('\n'), 'older');
+      return this.historyStart > 0;
     }
-    this.historyStart = newStart;
-    // buf ends at `to` (a line boundary), so the last split part is '' — no
-    // carry to manage here; emit() skips blank lines.
-    this.emit(buf.toString('utf8', sliceFrom).split('\n'), 'older');
-    return this.historyStart > 0;
   }
 
   private loadHistory(size: number): void {
