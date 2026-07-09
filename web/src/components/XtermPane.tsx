@@ -386,7 +386,7 @@ export function XtermPane({
     // Assigned inside connect(); lets the visibility handler force an
     // immediate liveness check of the current socket on resume instead of
     // waiting out the idle-heartbeat cycle (~20s of typing into a zombie).
-    let probeLiveness: () => void = () => {};
+    let probeLiveness: (hiddenForMs: number) => void = () => {};
 
     // Returns true iff the frame was actually written to an open socket.
     // Callers that cache "last sent" state (the resize dedup) MUST gate that
@@ -455,6 +455,13 @@ export function XtermPane({
               armIdle();
               return;
             }
+            // A probe (resume-time liveness check) may already have a
+            // pong-wait armed — overwriting its handle would orphan a timer
+            // that later force-closes a healthy socket.
+            if (pongWaitTimer !== null) {
+              armIdle();
+              return;
+            }
             safeSend(encodePing());
             pongWaitTimer = window.setTimeout(() => {
               dbg('heartbeat pong timeout — force-closing');
@@ -482,12 +489,18 @@ export function XtermPane({
       // vanishes ("the pane doesn't respond at all"). Ping NOW; a live socket
       // answers within the pong window, a dead one gets force-closed into the
       // reconnect path immediately.
-      probeLiveness = () => {
+      probeLiveness = (hiddenForMs: number) => {
         if (ws !== wsRef.current || ws.readyState !== WebSocket.OPEN) return;
         if (pongWaitTimer !== null) return; // probe already in flight
         safeSend(encodePing());
         pongWaitTimer = window.setTimeout(() => {
           dbg('resume probe pong timeout — force-closing');
+          // A zombie detected here died sometime during the background —
+          // iOS never fired 'close', so the outage clock never started.
+          // Backdate it to the hidden start: the reconnect's gap check must
+          // see the REAL outage (PTY output written while we were deaf) and
+          // fire the full repaint, not the few-hundred-ms close→open hop.
+          if (disconnectedAt === null) disconnectedAt = Date.now() - hiddenForMs;
           try {
             ws.close();
           } catch {
@@ -1307,7 +1320,7 @@ export function XtermPane({
         // survived the background before trusting it with input.
         const hiddenForMs = hiddenSince ? Date.now() - hiddenSince : 0;
         reassertSizeFromEvent('visibilitychange');
-        if (hiddenForMs >= 2000) probeLiveness();
+        if (hiddenForMs >= 2000) probeLiveness(hiddenForMs);
         hiddenSince = null;
       }
     };
