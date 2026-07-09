@@ -8,6 +8,7 @@ import type { Context } from 'hono';
 import { createAgentBridge } from './agent-bridge.js';
 import { loadConfig } from './config.js';
 import { EventBus } from './events.js';
+import { startPaneReaper } from './pane-reaper.js';
 import { PtydCache, decoratePane } from './ptyd-cache.js';
 import { PtydClient } from './ptyd-client/PtydClient.js';
 import { createApp } from './server.js';
@@ -147,6 +148,10 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
 
 const httpServer = server as unknown as Server;
 const wsServer = attachWsServer({ http: httpServer, db, ptyd, cache, events, agentBridge });
+
+// Straggler prevention: retry pane kills that failed in transit, and (once
+// ptyd supports listPanes) kill any live pty whose DB row is gone.
+startPaneReaper({ db, ptyd, paneExists: (id) => paneStore.getById(id) !== null });
 
 let shuttingDown = false;
 const shutdown = async () => {
