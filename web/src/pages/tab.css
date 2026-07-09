@@ -653,12 +653,16 @@
   padding: 0;
   font-size: 14px;
   line-height: 20px;
+  /* A step further from the last pill than the pills are from each other,
+     so "+" reads as the strip's action, not part of the tab. */
+  margin-left: 4px;
 }
 .desktop-tab-add-choices {
   flex: 0 0 auto;
   align-self: center;
   display: flex;
   gap: 4px;
+  margin-left: 4px;
 }
 
 .desktop-tab-strip-actions {
@@ -938,6 +942,8 @@
 .desktop-tab .pane-web-switch {
   height: auto;
   align-self: center;
+  /* Breathing room between the pill's controls (face glyph ↔ ×). */
+  margin-right: 4px;
 }
 .desktop-tab .pane-web-switch-main {
   width: 18px;
