@@ -13,6 +13,7 @@ import { spliceLayoutAtTarget } from '@muxpad/shared';
 import { type TabWithPanes, api } from '../api';
 import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
 import { MobileInputBar } from '../components/MobileInputBar';
+import { NewTabChooser } from '../components/NewTabChooser';
 import { PaneSelector } from '../components/PaneSelector';
 import { PaneFaceMenuList, PaneWebSwitch, clampMenuLeft } from '../components/PaneWebSwitch';
 // PaneSurfaceSwitch (below) reuses the .pane-web-switch-* menu classes, so
@@ -1361,25 +1362,17 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                 </div>
               );
             })}
-            {/* Two direct labeled choices — same wording as the sidebar's
-                new-tab row, so creation reads identically everywhere (bare
-                glyphs were too cryptic). */}
-            <button
-              type="button"
-              className="desktop-tab-add"
-              title="New terminal pane"
-              onClick={() => void addPane('terminal')}
-            >
-              + Terminal
-            </button>
-            <button
-              type="button"
-              className="desktop-tab-add"
-              title="New agent pane (chat-native Claude session)"
-              onClick={() => void addPane('agent')}
-            >
-              ✳ Agent
-            </button>
+            {/* Browser-standard lone "+"; the Terminal/Agent choice expands
+                in place on click — see NewTabChooser for why the standing
+                two-chip pair lost. */}
+            <NewTabChooser
+              idleLabel="+"
+              idleTitle="New pane"
+              idleClassName="desktop-tab-add desktop-tab-add-plus"
+              choicesClassName="desktop-tab-add-choices"
+              choiceClassName="desktop-tab-add"
+              onCreate={(kind) => void addPane(kind)}
+            />
           </div>
           <div className="desktop-tab-strip-actions">
             <button
@@ -1459,13 +1452,13 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           <div className="workspace-empty">
             <p>This tab has no panes.</p>
             <button className="btn btn-primary" onClick={() => void splitFromPane(null, 'row')}>
-              + Terminal
+              New terminal
             </button>
             <button
               className="btn btn-primary"
               onClick={() => void splitFromPane(null, 'row', 'agent')}
             >
-              ✳ Agent
+              New agent
             </button>
             <button type="button" className="workspace-empty-close" onClick={() => void closeTab()}>
               or close this tab

@@ -791,9 +791,9 @@ body.sidenav-resizing iframe {
   box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.22);
 }
 
-/* The two new-tab choices side by side (terminal / agent) — equal-width
-   ghost-chip BUTTONS (bordered, centered), not text links: creation is the
-   row's whole job, so it should look pressable at a glance. */
+/* The transient Terminal/Agent choice row — appears in place of the quiet
+   "+ New tab" action only while choosing. Equal-width ghost-chip BUTTONS
+   (bordered, centered, identical) so both read as flavors of one action. */
 .navtree-new-row {
   display: flex;
   gap: 6px;
