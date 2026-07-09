@@ -134,13 +134,13 @@ export function PaneFaceMenuList({
       style={{ top: at.top, left: at.left }}
       onMouseDown={(e) => e.stopPropagation()}
     >
-      <div className="pane-web-switch-head">View</div>
       {(() => {
         // Every face is a VIEW over the same pane — nothing is lost by
         // switching. Chat exists only on agent panes (their runner is the
         // one chat driver); a TUI session pane instead offers a one-way
-        // handoff into a fresh agent tab. Items that invite doubt explain
-        // themselves in a second line.
+        // handoff into a fresh agent tab. Explanations live in tooltips;
+        // inline copy earns its place only when a consequence must be
+        // visible before hovering (the right-aligned notes).
         const terminalItem = (
           <button
             key="face-terminal"
@@ -148,18 +148,14 @@ export function PaneFaceMenuList({
             role="menuitem"
             className={`pane-web-switch-item${face === 'terminal' ? ' is-active' : ''}`}
             onClick={() => pick('terminal')}
+            title={
+              isAgent
+                ? 'Read-only view of the agent’s raw output — the chat keeps running'
+                : undefined
+            }
           >
             <SvgTerminalGlyph />
-            <span className="pane-web-switch-item-text">
-              <span className="pane-web-switch-item-label">
-                {isAgent ? 'Agent log' : 'Terminal'}
-              </span>
-              {isAgent ? (
-                <span className="pane-web-switch-item-desc">
-                  Peek at the agent’s raw output — the chat keeps running
-                </span>
-              ) : null}
-            </span>
+            <span className="pane-web-switch-item-label">{isAgent ? 'Agent log' : 'Terminal'}</span>
           </button>
         );
         const chatItem = showChat ? (
@@ -191,17 +187,13 @@ export function PaneFaceMenuList({
                 );
                 onClose();
               }}
+              title="The running Claude writes its context to a handoff file, a new agent tab picks it up, and this terminal closes itself"
             >
               <span className="pane-web-switch-glyph" aria-hidden="true">
                 ✳
               </span>
-              <span className="pane-web-switch-item-text">
-                <span className="pane-web-switch-item-label">Continue in Agent tab</span>
-                <span className="pane-web-switch-item-desc">
-                  The running Claude writes its context to a handoff file, a new agent tab picks it
-                  up, and this terminal closes itself
-                </span>
-              </span>
+              <span className="pane-web-switch-item-label">Continue in Agent tab</span>
+              <span className="pane-web-switch-note">closes terminal</span>
             </button>
           ) : null;
         // Chat is an agent pane's home face — it sorts first there.
