@@ -348,6 +348,10 @@ export function XtermPane({
           // terminal to a few columns locally even if we never send it.
           if (!containerTooSmall()) {
             fit.fit();
+            // fit() silently bails when xterm hasn't measured cell metrics
+            // yet (see fitWhenCellReady) — only a metrics-backed fit counts
+            // as "the grid is real" for the connect gate below.
+            if (getCellDimensions(term)) fittedOnce = true;
             const ws = wsRef.current;
             if (ws && ws.readyState === WebSocket.OPEN && mayDriveResize() && !gridBelowFloor()) {
               lastSentCols = term.cols;
@@ -377,6 +381,13 @@ export function XtermPane({
     let retries = 0;
     let retryTimer: number | null = null;
     let initialConnectDone = false;
+    // True once a fit() has applied REAL cell metrics. The initial attach
+    // must not race the first fit: xterm's default 80×24 passes the size
+    // floors, so connecting before a metrics-backed fit replays the whole
+    // scrollback into the wrong grid — the later refit then reflows it,
+    // permanently garbling TUI history ("terminal looks weird when I come
+    // back" — intermittent, depends on font/metric readiness at mount).
+    let fittedOnce = false;
     // Wall-clock start of the current outage (first unintentional close).
     // On reconnect, a long gap means the PTY kept writing into a void —
     // reconnects skip the ring-buffer replay, so that output never renders
@@ -659,6 +670,9 @@ export function XtermPane({
       if (!paneActiveRef.current) return;
       if (container.clientWidth < 60 || container.clientHeight < 40) return;
       if (term.cols < MIN_COLS || term.rows < MIN_ROWS) return;
+      // No replay into the un-fitted default grid (see fittedOnce). The
+      // refit chain calls back in here as soon as a real fit lands.
+      if (!fittedOnce) return;
       initialConnectDone = true;
       connect();
     };
@@ -1064,6 +1078,7 @@ export function XtermPane({
           isCursorAgentCmd(foregroundCmdRef.current) && linesAboveBottom(term) > 0;
         const scrollRatio = preserveScroll ? scrollRatioFromTerm(term) : 0;
         fit.fit();
+        fittedOnce = true; // only reachable with cell metrics ready (fitWhenCellReady)
         const cols = term.cols;
         const rows = term.rows;
         if (cols < MIN_COLS || rows < MIN_ROWS) {
@@ -1108,6 +1123,13 @@ export function XtermPane({
       }
       if (attemptsLeft > 0) {
         window.setTimeout(() => fitWhenCellReady(attemptsLeft - 1), 50);
+      } else if (opened && paneActiveRef.current) {
+        // Metrics never materialized (pathological). Liveness beats a
+        // pretty replay: stop gating the initial attach on a real fit —
+        // an unfitted connect (the pre-fittedOnce behavior) is better
+        // than a pane that never connects at all.
+        fittedOnce = true;
+        tryInitialConnect();
       }
     };
     fitWhenCellReady();
