@@ -635,9 +635,19 @@
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
-/* Two chips side by side need breathing room. */
-.desktop-tab-add + .desktop-tab-add {
-  margin-left: 4px;
+/* At rest the strip shows only the browser-standard lone "+" — a compact
+   square chip. Clicking swaps it in place for the Terminal/Agent choices. */
+.desktop-tab-add-plus {
+  width: 24px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 20px;
+}
+.desktop-tab-add-choices {
+  flex: 0 0 auto;
+  align-self: center;
+  display: flex;
+  gap: 4px;
 }
 
 .desktop-tab-strip-actions {

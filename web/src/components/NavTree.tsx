@@ -9,6 +9,7 @@ import { applyTabOrder, refreshTabs, useTabs } from '../tabs';
 import { useLongPress } from '../use-long-press';
 import { MAX_QUICK_SWITCH_TABS, useTabQuickSwitch } from '../use-tab-quickswitch';
 import { applyWorkspaceOrder, refreshWorkspaces, useWorkspaces } from '../workspaces';
+import { NewTabChooser } from './NewTabChooser';
 import { SvgClose } from './icons';
 import './NavTree.css';
 
@@ -666,29 +667,18 @@ function TabList({
           rowDnd={variant === 'sidebar' ? tabDnd(t.id) : undefined}
         />
       ))}
-      {/* Two direct, symmetric choices — no popup between intent and tab.
-          (A menu here made agent creation a two-step hunt, and its mixed
-          icon/no-icon rows read as different kinds of items.) */}
-      <div className="navtree-new-row">
-        <button
-          type="button"
-          className="navtree-add navtree-new-tab"
-          title="New terminal tab"
-          disabled={creating}
-          onClick={() => void createTab('shell')}
-        >
-          {creating ? 'Creating…' : '+ Terminal'}
-        </button>
-        <button
-          type="button"
-          className="navtree-add navtree-new-tab"
-          title="New agent tab (chat-native Claude session)"
-          disabled={creating}
-          onClick={() => void createTab('agent')}
-        >
-          {creating ? 'Creating…' : '✳ Agent'}
-        </button>
-      </div>
+      {/* One quiet action at rest (mirrors "+ New workspace"); the kind
+          choice appears in place only after intent is declared — see
+          NewTabChooser for why the standing alternatives lost. */}
+      <NewTabChooser
+        idleLabel={creating ? 'Creating…' : '+ New tab'}
+        idleTitle="New tab"
+        idleClassName="navtree-add navtree-new-tab"
+        choicesClassName="navtree-new-row"
+        choiceClassName="navtree-add"
+        disabled={creating}
+        onCreate={(kind) => void createTab(kind === 'agent' ? 'agent' : 'shell')}
+      />
     </div>
   );
 }
