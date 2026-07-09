@@ -308,6 +308,50 @@ describe('agent-runner relay', () => {
     chat.close();
   });
 
+  it('closes a displaced runner with 4001 and mutes its late frames', async () => {
+    const { port, paneId } = await boot();
+    const { sock: first } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    first.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: false }));
+    await new Promise((r) => setTimeout(r, 100));
+
+    const closeCode = new Promise<number>((resolve) => {
+      first.once('close', (code) => resolve(code));
+    });
+
+    const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
+    await fromChat.next((f) => f.t === 'session');
+
+    // The registration swap happens at SECOND's upgrade, so once its open
+    // resolves the first socket is already displaced server-side. A frame
+    // the stale socket manages to flush during its close handshake must not
+    // reach chat clients (status strobing / busy flips) — send with an
+    // error-swallowing callback since the socket may already be closing.
+    const { sock: second } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    first.send(
+      JSON.stringify({
+        t: 'status',
+        model: 'stale-model',
+        context: { pct: 99, tokens: 1, max: 2 },
+      }),
+      () => {},
+    );
+    second.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 2, turnActive: false }));
+    second.send(
+      JSON.stringify({ t: 'status', model: 'live-model', context: { pct: 5, tokens: 1, max: 2 } }),
+    );
+
+    // The displaced runner is told to EXIT (4001), not merely dropped — a
+    // live orphan that reconnected would steal the pane back forever.
+    expect(await closeCode).toBe(4001);
+
+    const status = await fromChat.next((f) => f.t === 'status');
+    expect(status.model).toBe('live-model');
+    expect(fromChat.frames.filter((f) => f.t === 'status')).toHaveLength(1);
+
+    second.close();
+    chat.close();
+  });
+
   it('refuses chat sends while a runner-owned pane is between connections', async () => {
     const { port, paneId } = await boot();
     const { sock: runner } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
