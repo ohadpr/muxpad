@@ -790,3 +790,13 @@ body.sidenav-resizing iframe {
   border-radius: 6px 6px 6px 0;
   box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.22);
 }
+
+/* The two new-tab choices side by side (terminal / agent) — direct buttons,
+   no popup between intent and tab. */
+.navtree-new-row {
+  display: flex;
+  gap: 2px;
+}
+.navtree-new-row .navtree-add {
+  flex: 0 0 auto;
+}
