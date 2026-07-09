@@ -765,9 +765,18 @@
   pointer-events: auto; /* …but the pill + notice stay interactive */
 }
 
+/* Default (info) tone: transient connection chatter — a quiet muted line,
+   no box, no red; it self-clears when the socket recovers. Real failures
+   add `-danger` and keep the loud alert styling. */
 .chat-notice {
   max-width: 768px;
-  margin: 0 auto 8px;
+  margin: 0 auto 6px;
+  padding: 0 14px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--chat-fg) 55%, transparent);
+}
+.chat-notice.-danger {
+  margin-bottom: 8px;
   padding: 8px 14px;
   font-size: 13px;
   color: color-mix(in srgb, var(--chat-danger) 82%, var(--chat-fg));
