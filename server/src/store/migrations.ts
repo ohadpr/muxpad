@@ -205,6 +205,18 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE panes ADD COLUMN face_url TEXT;
     `,
   },
+  {
+    // Terminal⇄chat session switching was dropped (PR #4): chat is an
+    // agent-pane face only. Any non-agent pane still persisted on the chat
+    // face is legacy state from the switching era — reset it to terminal so
+    // no pane is stranded on a face the UI no longer offers.
+    version: 14,
+    sql: `
+      UPDATE panes SET face = 'terminal'
+      WHERE face = 'chat'
+        AND (startup_cmd IS NULL OR startup_cmd NOT LIKE 'muxpad agent%');
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
