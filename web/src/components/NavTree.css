@@ -462,9 +462,11 @@
   margin-left: 0;
   opacity: 1;
 }
+/* Same hover grammar as the strip tabs' ×: quiet hover square, danger-red
+   glyph — "this deletes", consistent everywhere a close lives. */
 .navtree-close:hover {
-  background: var(--border-strong);
-  color: var(--fg);
+  background: var(--bg-hover);
+  color: var(--danger);
   opacity: 1;
 }
 
