@@ -434,8 +434,31 @@ async function refreshStatus(includeModels: boolean): Promise<void> {
   }
 }
 
+// Long agentic turns grow the context for minutes between results — refresh
+// mid-turn too so the chat's fill meter tracks live instead of only moving
+// at rest. Guarded to skip when a refresh is already in flight (control
+// requests are async against a busy session).
+let statusRefreshing = false;
+setInterval(() => {
+  if (!inTurn || statusRefreshing) return;
+  statusRefreshing = true;
+  void refreshStatus(false).finally(() => {
+    statusRefreshing = false;
+  });
+}, 20_000);
+
 async function main(): Promise<void> {
   connect();
+  // Resumed sessions don't emit `init` until their first turn — without a
+  // boot-time fetch the chat's session chip stays blank until the user
+  // sends something. Two attempts, in case the control channel needs a
+  // moment (refreshStatus swallows failures).
+  setTimeout(() => {
+    if (!lastStatus) void refreshStatus(true);
+  }, 3000);
+  setTimeout(() => {
+    if (!lastStatus) void refreshStatus(true);
+  }, 15000);
   // Name the pty deliberately (OSC 0) — otherwise the pane label falls back
   // to whatever the shell last set ("muxpad", the node path, …). The pane's
   // persistent NAME gets the session's AI title via the transcript tail.
