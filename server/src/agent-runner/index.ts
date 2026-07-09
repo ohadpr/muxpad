@@ -393,12 +393,26 @@ function connect(): void {
       }
     }
   });
-  const retry = () => {
+  const retry = (code?: number) => {
     if (closed) return;
+    // A superseded socket's late close must not clobber the live one (or
+    // act on its close code) — only the CURRENT socket drives reconnects.
+    if (ws !== sock) return;
     ws = null;
+    // 4001 = the server replaced this runner with a newer process for the
+    // same pane. Reconnecting would only steal the pane back — two live
+    // processes would then trade the registration forever, strobing the
+    // chat's status/busy on every steal (live-observed with orphaned
+    // duplicate ptys). The loser's correct move is to exit; the pane and
+    // its startup_cmd self-heal belong to the survivor.
+    if (code === 4001) {
+      log('another runner took over this pane — exiting');
+      shutdown(0);
+      return;
+    }
     setTimeout(connect, 2000);
   };
-  sock.on('close', retry);
+  sock.on('close', (code) => retry(code));
   sock.on('error', () => {
     try {
       sock.close();
