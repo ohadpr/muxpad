@@ -925,14 +925,40 @@
   height: 14px;
 }
 
-/* Face switch embedded in the ACTIVE strip tab (compact icon+caret). Sized
-   to sit inline with the label without inflating the tab. */
+/* Face switch embedded in the ACTIVE strip tab: the bare current-face
+   glyph in an 18px square — the same quiet grammar as the × beside it
+   (monochrome at rest, hover reveals). The full variant's tinted pill,
+   caret and pulse dot were the loudest thing in the tab; here the only
+   surviving emphasis is an accent-tinted glyph when a detected app is
+   waiting to be viewed. */
 .desktop-tab .pane-web-switch {
   height: auto;
   align-self: center;
 }
 .desktop-tab .pane-web-switch-main {
-  height: 22px;
-  padding: 0 4px;
-  border-radius: 5px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--fg-faint);
+}
+.desktop-tab .pane-web-switch-main:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+.desktop-tab .pane-web-switch-main.is-web {
+  color: var(--fg-faint);
+}
+.desktop-tab .pane-web-switch-main.is-web:hover {
+  color: var(--fg);
+}
+.desktop-tab .pane-web-switch-main.is-available,
+.desktop-tab .pane-web-switch-main.is-available:hover {
+  color: var(--accent);
+  background: transparent;
+  font-weight: 400;
+}
+.desktop-tab .pane-web-switch-main.is-available:hover {
+  background: var(--bg-hover);
 }
