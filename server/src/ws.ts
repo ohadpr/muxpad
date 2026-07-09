@@ -129,6 +129,8 @@ export function attachWsServer(deps: {
     pendingQuestion: { qid: string; questions: AgentQuestion[] } | null;
     /** Latest per-task subagent progress for mid-turn (re)connects. */
     subagents: Map<string, SubagentProgress>;
+    /** Latest session status (model, context fill, model list) for hellos. */
+    status: (RunnerFrame & { t: 'status' }) | null;
   }
   const agentRunners = new Map<string, AgentRunnerConn>();
   const sendToRunner = (paneId: string, frame: ServerFrame): boolean => {
@@ -249,6 +251,7 @@ export function attachWsServer(deps: {
           turnActive: false,
           pendingQuestion: null,
           subagents: new Map(),
+          status: null,
         };
         agentRunners.set(paneId, conn);
         const bcast = (obj: unknown) => bcastToPane(paneId, obj);
@@ -330,6 +333,9 @@ export function attachWsServer(deps: {
             if (!frame.progress || typeof frame.progress.toolUseId !== 'string') return;
             conn.subagents.set(frame.progress.toolUseId, frame.progress);
             bcast({ t: 'subagent', progress: frame.progress });
+          } else if (frame.t === 'status') {
+            conn.status = frame;
+            bcast(frame);
           } else if (frame.t === 'title') {
             // Runner-generated conversation title (SDK sessions get no
             // ai-title transcript records) — same rename policy as the
@@ -427,6 +433,7 @@ export function attachWsServer(deps: {
               // Mid-turn (re)connect extras: a question awaiting the user and
               // live subagent progress would otherwise be lost to this socket.
               ...(runner?.pendingQuestion ? { question: runner.pendingQuestion } : {}),
+              ...(runner?.status ? { status: runner.status } : {}),
               ...(runner && runner.subagents.size > 0
                 ? { subagents: [...runner.subagents.values()] }
                 : {}),
@@ -469,6 +476,8 @@ export function attachWsServer(deps: {
             t?: string;
             text?: string;
             qid?: string;
+            model?: string;
+            cmd?: string;
             answers?: Array<{ question: string; answers: string[] }>;
           }>(data);
           if (!msg) return;
@@ -481,6 +490,18 @@ export function attachWsServer(deps: {
           }
           if (msg.t === 'stop') {
             sendToRunner(chatPaneId, { t: 'stop' });
+            return;
+          }
+          if (msg.t === 'set-model') {
+            if (typeof msg.model === 'string' && msg.model.length <= 128) {
+              sendToRunner(chatPaneId, { t: 'set-model', model: msg.model });
+            }
+            return;
+          }
+          if (msg.t === 'slash') {
+            if (msg.cmd === 'compact' || msg.cmd === 'clear') {
+              sendToRunner(chatPaneId, { t: 'slash', cmd: msg.cmd });
+            }
             return;
           }
           if (msg.t === 'answer') {
