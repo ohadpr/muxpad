@@ -98,9 +98,9 @@ export function PaneFaceMenuList({
     pick('web', next);
   };
 
-  // Chat is agent-pane-only now (the runner is the one chat driver). The
-  // face==='chat' escape covers legacy panes persisted on a chat face.
-  const showChat = isAgent || face === 'chat';
+  // Chat is agent-pane-only: the runner is the one chat driver (migration 14
+  // reset any legacy non-agent pane persisted on the chat face).
+  const showChat = isAgent;
   const urlItem = (target: string, label: string, sub?: string, badge?: string) => {
     const active = face === 'web' && url === target;
     const dead = alive[target] === false;
