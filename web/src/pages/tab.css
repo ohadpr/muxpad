@@ -603,6 +603,10 @@
   transform: translate(-50%, -50%);
   width: 18px;
   height: 18px;
+  /* Kill the UA button padding — 6px per side leaves a 6px content box
+     in an 18px button, and the svg (a shrinkable flex item) collapses
+     into it, rendering the × at a fraction of its nominal size. */
+  padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
