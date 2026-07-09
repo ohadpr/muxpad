@@ -1022,12 +1022,15 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   }, [session, connected, events, stale, optimisticUser, sending, loadingOlder, subagents]);
 
   // The agent is working when: we're driving a turn (`sending`), tokens are
-  // streaming, OR the newest event is a tool_use still awaiting its result (a
-  // step is mid-run — covers between-steps gaps and opening chat on an already-
-  // running turn, where there's no local `sending` flag). Self-clears when the
-  // result lands or the turn ends.
+  // streaming, OR — for sessions WITHOUT a live runner (legacy/TUI views) —
+  // the newest event is a tool_use still awaiting its result. That transcript
+  // heuristic must not apply to runner (sdk) panes: their turn frames are
+  // authoritative, and a BACKGROUND subagent's dispatch legitimately leaves
+  // its tool_result pending for minutes after the turn ended — the old check
+  // showed "…working" while the agent was plainly waiting for input.
   const lastEvent = events[events.length - 1];
   const pendingTool =
+    session?.writer !== 'sdk' &&
     lastEvent?.kind === 'tool_use' &&
     !events.some((e) => e.kind === 'tool_result' && e.toolUseId === lastEvent.toolUseId);
   const agentWorking = Boolean((sending || streamingText || pendingTool) && session?.current_sid);

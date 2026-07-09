@@ -342,7 +342,19 @@ function connect(): void {
         resolveAllQuestions('interrupted');
         session.interrupt().catch((e: unknown) => {
           log(dim(`interrupt failed: ${e instanceof Error ? e.message : String(e)}`));
+          // The interrupt had nothing to land on (turn accounting drifted —
+          // e.g. an injected message flipped inTurn without a real query).
+          // Resync everyone to idle; if a query IS still running its result
+          // will emit another turn-done, which is harmless.
+          inTurn = false;
+          sendFrame({ t: 'turn-done', ok: true });
+          kick();
         });
+      } else {
+        // Stop while idle: the tap proves some client thinks a turn is
+        // running. Answer with turn-done so every stuck view resyncs to
+        // idle instead of showing Stop forever.
+        sendFrame({ t: 'turn-done', ok: true });
       }
     } else if (frame.t === 'answer') {
       const pq = pendingQuestions.get(frame.qid);
