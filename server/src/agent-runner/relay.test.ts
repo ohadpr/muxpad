@@ -158,29 +158,38 @@ describe('agent-runner relay', () => {
     expect(done.ok).toBe(true);
     await fromChat2.next((f) => f.t === 'turn-done');
 
-    // Idle Stop (the turn is over) resyncs ONLY the requesting socket with a
-    // turn-done — it is not relayed to the runner and other clients see
-    // nothing (a broadcast here once wiped their in-flight optimistic sends).
-    const chat2FramesBefore = fromChat2.frames.length;
-    chat.send(JSON.stringify({ t: 'stop' }));
-    await fromChat.next(
-      (f, i = fromChat.frames.indexOf(f)) => f.t === 'turn-done' && i > fromChat.frames.length - 3,
-    );
-    await new Promise((r) => setTimeout(r, 150));
-    expect(fromServer.frames.some((f) => f.t === 'stop')).toBe(false);
-    expect(fromChat2.frames.length).toBe(chat2FramesBefore);
-
-    // Mid-turn Stop DOES relay.
-    chat.send(JSON.stringify({ t: 'send', text: 'again' }));
-    await fromServer.next((f) => f.t === 'send' && f.text === 'again');
-    runner.send(JSON.stringify({ t: 'turn-start' }));
-    await fromChat.next(
-      (f, idx = 0) =>
-        f.t === 'turn-start' && fromChat.frames.filter((x) => x.t === 'turn-start').length >= 2,
-    );
+    // Stop right after a send (turn over, but a send was relayed within the
+    // recency window) RELAYS — the "send, then immediately Stop (oops)"
+    // pattern must reach the runner so it can cancel the queued message;
+    // turnActive alone lags a fresh send by a round trip.
     chat.send(JSON.stringify({ t: 'stop' }));
     await fromServer.next((f) => f.t === 'stop');
 
+    runner.close();
+    chat.close();
+    chat2.close();
+  });
+
+  it('idle stop with no recent send resyncs only the requesting socket', async () => {
+    const { port, paneId } = await boot();
+    const { sock: runner, rx: fromServer } = await openSock(
+      `ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`,
+    );
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: false }));
+    const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
+    const { sock: chat2, rx: fromChat2 } = await openSock(
+      `ws://127.0.0.1:${port}/ws/chat/${paneId}`,
+    );
+    await fromChat.next((f) => f.t === 'session');
+    await fromChat2.next((f) => f.t === 'session');
+    const chat2FramesBefore = fromChat2.frames.length;
+    chat.send(JSON.stringify({ t: 'stop' }));
+    await fromChat.next((f) => f.t === 'turn-done');
+    await new Promise((r) => setTimeout(r, 150));
+    // Not relayed (no turn, no recent send), and the OTHER client saw
+    // nothing (a broadcast here once wiped its optimistic send state).
+    expect(fromServer.frames.some((f) => f.t === 'stop')).toBe(false);
+    expect(fromChat2.frames.length).toBe(chat2FramesBefore);
     runner.close();
     chat.close();
     chat2.close();
@@ -237,17 +246,20 @@ describe('agent-runner relay', () => {
     chat2.close();
   });
 
-  it('answers set-model/slash with an error frame when no runner is connected', async () => {
+  it('answers set-model/slash with a notice frame when no runner is connected', async () => {
     const { port, paneId } = await boot();
     const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
     await fromChat.next((f) => f.t === 'session');
     chat.send(JSON.stringify({ t: 'set-model', model: 'sonnet' }));
-    const err1 = await fromChat.next((f) => f.t === 'error');
-    expect(String(err1.message)).toMatch(/reconnecting/);
+    // `notice`, NOT `error` — the client's error handler resets send state,
+    // which is wrong for a failed menu action during a streaming turn.
+    const n1 = await fromChat.next((f) => f.t === 'notice');
+    expect(String(n1.message)).toMatch(/reconnecting/);
     chat.send(JSON.stringify({ t: 'slash', cmd: 'compact' }));
     await fromChat.next(
-      (f) => f.t === 'error' && fromChat.frames.filter((x) => x.t === 'error').length >= 2,
+      (f) => f.t === 'notice' && fromChat.frames.filter((x) => x.t === 'notice').length >= 2,
     );
+    expect(fromChat.frames.some((f) => f.t === 'error')).toBe(false);
     chat.close();
   });
 

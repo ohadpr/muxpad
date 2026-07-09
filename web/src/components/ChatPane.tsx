@@ -219,7 +219,13 @@ type ServerMsg =
   | { t: 'question-done'; qid: string }
   | { t: 'subagent'; progress: SubagentProgress }
   | ({ t: 'status' } & AgentStatus)
-  | { t: 'error'; message: string };
+  | { t: 'error'; message: string }
+  | {
+      /** Non-fatal server notice (e.g. a menu action while the runner is
+       * reconnecting). Display only — never touches send/turn state. */
+      t: 'notice';
+      message: string;
+    };
 
 /**
  * Drop transcript-confirmed assistant text from the head of the streaming
@@ -530,6 +536,8 @@ export function ChatPane({
           // the client-side belt to its braces).
           return prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
         });
+      } else if (msg.t === 'notice') {
+        setNotice(msg.message);
       } else if (msg.t === 'error') {
         acked.current = true;
         window.clearTimeout(sendWatchdog.current);

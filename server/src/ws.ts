@@ -132,6 +132,8 @@ export function attachWsServer(deps: {
     subagents: Map<string, SubagentProgress>;
     /** Latest session status (model, context fill, model list) for hellos. */
     status: (RunnerFrame & { t: 'status' }) | null;
+    /** When the last chat send was relayed — see the stop handler's gate. */
+    lastSendAt: number;
   }
   const agentRunners = new Map<string, AgentRunnerConn>();
   const sendToRunner = (paneId: string, frame: ServerFrame): boolean => {
@@ -253,6 +255,7 @@ export function attachWsServer(deps: {
           pendingQuestion: null,
           subagents: new Map(),
           status: null,
+          lastSendAt: 0,
         };
         agentRunners.set(paneId, conn);
         const bcast = (obj: unknown) => bcastToPane(paneId, obj);
@@ -262,10 +265,6 @@ export function attachWsServer(deps: {
           const frame = parseFrame<RunnerFrame>(data);
           if (!frame) return;
           if (frame.t === 'hello') {
-            // A (re)hello means new runner process or new session id — the
-            // cached status may describe the OLD session; the runner re-sends
-            // its current status right after hello.
-            conn.status = null;
             // The sid ends up in a startup_cmd that PaneRuntime TYPES INTO A
             // SHELL on respawn — constrain its charset (same rule as the
             // HTTP register/hook routes) so a crafted hello can't smuggle
@@ -278,6 +277,11 @@ export function attachWsServer(deps: {
             ) {
               return;
             }
+            // ACCEPTED (re)hello = new runner process or new session id — the
+            // cached status may describe the OLD session; the runner re-sends
+            // its current status right after hello. (After validation: a
+            // rejected hello must not wipe a status nothing will re-send.)
+            conn.status = null;
             conn.sid = frame.sid;
             conn.turnActive = frame.turnActive === true;
             agents.attachRunner({ pane_id: paneId, cwd: frame.cwd, session_id: frame.sid });
@@ -507,23 +511,31 @@ export function attachWsServer(deps: {
             return;
           }
           if (msg.t === 'stop') {
-            // Only relay when a turn is actually active. Otherwise answer
+            // Relay when a turn is active OR a send was just relayed —
+            // turnActive lags a fresh send by a full round trip, and
+            // "send, then immediately Stop (oops)" is the most common stop
+            // pattern; the runner cancels the queued send. Otherwise answer
             // THIS socket with a turn-done resync: a stray Stop proves this
             // client thinks a turn is running, and a per-socket reply heals
-            // it without wiping other clients' in-flight sends (a runner-side
-            // broadcast used to) — and it works even with the runner gone.
+            // it without wiping other clients' in-flight sends — and works
+            // even with the runner gone.
             const conn = agentRunners.get(chatPaneId);
-            if (conn?.turnActive) {
+            const sendInFlight = conn ? Date.now() - conn.lastSendAt < 15_000 : false;
+            if (conn && (conn.turnActive || sendInFlight)) {
               sendToRunner(chatPaneId, { t: 'stop' });
             } else {
               send({ t: 'turn-done', ok: true });
             }
             return;
           }
+          // Control-relay failures reply with `notice`, NOT `error`: the
+          // client's error handler treats errors as a rejected SEND and
+          // resets sending/optimistic state — wrong for a menu action that
+          // failed while a turn may be streaming.
           if (msg.t === 'set-model') {
             if (typeof msg.model === 'string' && msg.model.length <= 128) {
               if (!sendToRunner(chatPaneId, { t: 'set-model', model: msg.model })) {
-                send({ t: 'error', message: 'agent is reconnecting — try again in a moment' });
+                send({ t: 'notice', message: 'agent is reconnecting — try again in a moment' });
               }
             }
             return;
@@ -531,7 +543,7 @@ export function attachWsServer(deps: {
           if (msg.t === 'slash') {
             if (msg.cmd === 'compact' || msg.cmd === 'clear') {
               if (!sendToRunner(chatPaneId, { t: 'slash', cmd: msg.cmd })) {
-                send({ t: 'error', message: 'agent is reconnecting — try again in a moment' });
+                send({ t: 'notice', message: 'agent is reconnecting — try again in a moment' });
               }
             }
             return;
@@ -573,7 +585,10 @@ export function attachWsServer(deps: {
           // guards) was dropped; see PR "drop terminal⇄chat session
           // switching" for the capability's record.
           if (agentRunners.has(chatPaneId)) {
-            if (!sendToRunner(chatPaneId, { t: 'send', text: msg.text })) {
+            if (sendToRunner(chatPaneId, { t: 'send', text: msg.text })) {
+              const conn = agentRunners.get(chatPaneId);
+              if (conn) conn.lastSendAt = Date.now();
+            } else {
               send({ t: 'error', message: 'agent is reconnecting — try again' });
             }
             return;
