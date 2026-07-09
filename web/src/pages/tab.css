@@ -882,3 +882,15 @@
   width: 14px;
   height: 14px;
 }
+
+/* Face switch embedded in the ACTIVE strip tab (compact icon+caret). Sized
+   to sit inline with the label without inflating the tab. */
+.desktop-tab .pane-web-switch {
+  height: auto;
+  align-self: center;
+}
+.desktop-tab .pane-web-switch-main {
+  height: 22px;
+  padding: 0 4px;
+  border-radius: 5px;
+}
