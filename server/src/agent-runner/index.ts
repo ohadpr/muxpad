@@ -302,8 +302,10 @@ function connect(): void {
     sendFrame(helloFrame());
     // The server's per-connection state starts empty — re-deliver any
     // question still blocking the turn so chat clients regain it after a
-    // server restart or ws blip.
+    // server restart or ws blip, and the latest status so the chat header
+    // isn't blank until the next turn.
     for (const pq of pendingQuestions.values()) sendFrame(pq.frame);
+    if (lastStatus) sendFrame(lastStatus);
   });
   sock.on('message', (data) => {
     const frame = parseFrame<ServerFrame>(data);
@@ -311,6 +313,26 @@ function connect(): void {
     if (frame.t === 'send' && typeof frame.text === 'string' && frame.text.trim()) {
       pendingTexts.push(frame.text);
       kick();
+    } else if (frame.t === 'set-model') {
+      if (typeof frame.model === 'string' && frame.model) {
+        session
+          .setModel(frame.model)
+          .then(() => {
+            log(`${bold('model')} → ${frame.model}`);
+            return refreshStatus(false);
+          })
+          .catch((e: unknown) => {
+            log(dim(`set-model failed: ${e instanceof Error ? e.message : String(e)}`));
+          });
+      }
+    } else if (frame.t === 'slash') {
+      // Session-management commands ride the normal turn queue so turn
+      // accounting stays exact (the CLI executes them in-band).
+      if (frame.cmd === 'compact' || frame.cmd === 'clear') {
+        log(dim(`/${frame.cmd} requested from chat`));
+        pendingTexts.push(`/${frame.cmd}`);
+        kick();
+      }
     } else if (frame.t === 'stop') {
       if (inTurn) {
         interruptRequested = true;
@@ -373,6 +395,45 @@ const options: Options = {
 
 const session = query({ prompt: userMessages(), options });
 
+// ---------------------------------------------------------------------------
+// Session status for the chat header: model + context-window fill (+ the
+// model list on the first frame). Refreshed after init, after every turn,
+// and after a model switch; cached for re-delivery on reconnect.
+// ---------------------------------------------------------------------------
+let lastStatus: (RunnerFrame & { t: 'status' }) | null = null;
+let modelList: Array<{ value: string; displayName: string; resolvedModel?: string }> | null = null;
+
+async function refreshStatus(includeModels: boolean): Promise<void> {
+  try {
+    if ((includeModels && !modelList) || modelList === null) {
+      const models = await session.supportedModels();
+      modelList = models.map((m) => ({
+        value: m.value,
+        displayName: m.displayName,
+        ...(m.resolvedModel ? { resolvedModel: m.resolvedModel } : {}),
+      }));
+    }
+    const usage = await session.getContextUsage();
+    const frame: RunnerFrame & { t: 'status' } = {
+      t: 'status',
+      model: usage.model,
+      context: {
+        pct: Math.round(usage.percentage),
+        tokens: usage.totalTokens,
+        max: usage.maxTokens,
+      },
+      // The list rides every status frame — it's small, and the server keeps
+      // only the latest frame for reconnecting chat clients.
+      ...(modelList ? { models: modelList } : {}),
+    };
+    lastStatus = frame;
+    sendFrame(frame);
+  } catch (e) {
+    // Status is decoration — never let it break the session loop.
+    log(dim(`status refresh failed: ${e instanceof Error ? e.message : String(e)}`));
+  }
+}
+
 async function main(): Promise<void> {
   connect();
   // Name the pty deliberately (OSC 0) — otherwise the pane label falls back
@@ -398,6 +459,7 @@ async function main(): Promise<void> {
   for await (const msg of session) {
     if (msg.type === 'system' && msg.subtype === 'init') {
       log(dim(`ready · ${msg.model} · ${msg.tools.length} tools`));
+      void refreshStatus(true);
       if (msg.session_id !== liveSid) {
         // Session-id drift (resume minted a new id). Re-hello so the server
         // re-points the tail and the self-heal startup_cmd at the real id.
@@ -471,6 +533,7 @@ async function main(): Promise<void> {
       }
       interruptRequested = false;
       kick(); // release the next queued send, if any
+      void refreshStatus(false); // context fill changed with the turn
     }
   }
 }
