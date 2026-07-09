@@ -791,12 +791,28 @@ body.sidenav-resizing iframe {
   box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.22);
 }
 
-/* The two new-tab choices side by side (terminal / agent) — direct buttons,
-   no popup between intent and tab. */
+/* The two new-tab choices side by side (terminal / agent) — equal-width
+   ghost-chip BUTTONS (bordered, centered), not text links: creation is the
+   row's whole job, so it should look pressable at a glance. */
 .navtree-new-row {
   display: flex;
-  gap: 2px;
+  gap: 6px;
+  padding: 4px 8px 6px;
 }
 .navtree-new-row .navtree-add {
-  flex: 0 0 auto;
+  flex: 1 1 0;
+  padding: 5px 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: var(--chrome-size-sm, 12px);
+  text-align: center;
+  cursor: pointer;
+  transition: color 80ms ease, border-color 80ms ease, background 80ms ease;
+}
+.navtree-new-row .navtree-add:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
