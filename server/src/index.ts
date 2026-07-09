@@ -42,6 +42,28 @@ ptyd.on('paneCwd', (e: { id: string; cwd: string }) => {
   paneStore.updateCwd(e.id, e.cwd);
 });
 
+// An EXPLICIT app-url declaration (`muxpad app-url` / `muxpad serve` — the
+// OSC marker, not the output-scan heuristic) is the "this pane is a web app"
+// signal: flip the pane's face to the web view, same pattern as an agent
+// runner's first hello flipping to chat. Only on a NEW url — a redeclare
+// (the serve wrapper announces on every restart of its loop) must not
+// override a user who deliberately switched to the terminal face since.
+ptyd.on(
+  'paneUrlsSeen',
+  (e: { id: string; urls: string[]; markers?: Array<{ url: string; label?: string }> }) => {
+    const marker = e.markers?.[e.markers.length - 1];
+    if (!marker) return;
+    const pane = paneStore.getById(e.id);
+    if (!pane || pane.kind !== 'shell') return;
+    if (pane.face_url === marker.url) return; // redeclare — face choice stands
+    paneStore.setFace(e.id, 'web', marker.url);
+    const fresh = paneStore.getById(e.id);
+    if (fresh) {
+      events.emit({ type: 'pane.updated', tab_id: fresh.tab_id, pane: decoratePane(cache, fresh) });
+    }
+  },
+);
+
 // Whenever any of (title, fg, attention, busy) changes for a pane, push a
 // decorated `pane.updated` event on the EventBus so /ws/events
 // subscribers see the diff. The cache emits a single 'paneChange' per
