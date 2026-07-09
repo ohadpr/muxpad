@@ -1,5 +1,6 @@
 import {
   type AgentQuestion,
+  type AgentSessionStatus,
   type ChatEvent,
   type NoticeEvent,
   type SubagentProgress,
@@ -57,6 +58,127 @@ function SvgCamera() {
   );
 }
 
+/**
+ * Composer chip + dropdown for session management: shows "model · ctx%",
+ * opens a menu with the context meter, a model picker (SDK setModel), and
+ * Compact / Clear (relayed to the runner as /compact and /clear through the
+ * normal turn queue). Renders only when a runner has pushed status — chat
+ * views without a live agent runner have nothing to manage.
+ */
+function SessionMenu({
+  status,
+  send,
+}: {
+  status: AgentStatus;
+  send: (obj: unknown) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) {
+      setConfirmClear(false);
+      return;
+    }
+    const onDown = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown, true);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown, true);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  const current = status.models?.find(
+    (m) => m.value === status.model || m.resolvedModel === status.model,
+  );
+  const modelLabel = current?.displayName ?? status.model;
+  const kTokens = (n: number) => `${Math.round(n / 1000)}k`;
+  return (
+    <div className="chat-session" ref={wrapRef}>
+      <button
+        type="button"
+        className="chat-session-chip"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Session — model, context, compact, clear"
+      >
+        {modelLabel} · {status.context.pct}%
+      </button>
+      {open ? (
+        <div className="chat-session-menu" role="menu">
+          <div className="chat-session-head">Context</div>
+          <div className="chat-session-context">
+            <div className="chat-session-bar">
+              <div
+                className="chat-session-bar-fill"
+                style={{ width: `${Math.min(100, status.context.pct)}%` }}
+              />
+            </div>
+            <span className="chat-session-context-label">
+              {status.context.pct}% · {kTokens(status.context.tokens)} /{' '}
+              {kTokens(status.context.max)} tokens
+            </span>
+          </div>
+          {status.models?.length ? <div className="chat-session-head">Model</div> : null}
+          {status.models?.map((m) => (
+            <button
+              key={m.value}
+              type="button"
+              role="menuitem"
+              className={`chat-session-item${m === current ? ' is-active' : ''}`}
+              onClick={() => {
+                if (m !== current) send({ t: 'set-model', model: m.value });
+                setOpen(false);
+              }}
+            >
+              <span className="chat-session-item-label">{m.displayName}</span>
+            </button>
+          ))}
+          <div className="chat-session-head">Session</div>
+          <button
+            type="button"
+            role="menuitem"
+            className="chat-session-item"
+            onClick={() => {
+              send({ t: 'slash', cmd: 'compact' });
+              setOpen(false);
+            }}
+          >
+            <span className="chat-session-item-label">Compact conversation</span>
+            <span className="chat-session-item-desc">Summarize history to free context</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={`chat-session-item${confirmClear ? ' is-danger' : ''}`}
+            onClick={() => {
+              if (!confirmClear) {
+                setConfirmClear(true);
+                return;
+              }
+              send({ t: 'slash', cmd: 'clear' });
+              setOpen(false);
+            }}
+          >
+            <span className="chat-session-item-label">
+              {confirmClear ? 'Tap again to clear everything' : 'Clear conversation'}
+            </span>
+            {!confirmClear ? (
+              <span className="chat-session-item-desc">Wipes the conversation — starts fresh</span>
+            ) : null}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 interface SessionMeta {
   current_sid: string | null;
   writer: string;
@@ -65,6 +187,10 @@ interface SessionMeta {
 }
 
 type PendingQuestion = { qid: string; questions: AgentQuestion[] };
+
+/** Session status pushed by the agent runner — shape shared with the server
+ * pipeline via @muxpad/shared so the two ends can't drift apart. */
+type AgentStatus = AgentSessionStatus;
 
 type ServerMsg =
   | {
@@ -80,6 +206,7 @@ type ServerMsg =
       // subagent progress.
       question?: PendingQuestion;
       subagents?: SubagentProgress[];
+      status?: AgentStatus;
     }
   | { t: 'events'; phase: 'history' | 'live' | 'older'; events: ChatEvent[] }
   | { t: 'older-done'; hasMore: boolean }
@@ -91,6 +218,7 @@ type ServerMsg =
   | { t: 'question'; qid: string; questions: AgentQuestion[] }
   | { t: 'question-done'; qid: string }
   | { t: 'subagent'; progress: SubagentProgress }
+  | ({ t: 'status' } & AgentStatus)
   | { t: 'error'; message: string };
 
 /**
@@ -120,7 +248,16 @@ function consumeStreamedText(preview: string, landed: string[]): string {
  * is owned by the pane's Terminal/Chat toggle, so by the time chat is showing,
  * it is already the driver.
  */
-export function ChatPane({ paneId, active }: { paneId: string; active: boolean }) {
+export function ChatPane({
+  paneId,
+  active,
+  agentNative = false,
+}: {
+  paneId: string;
+  active: boolean;
+  /** Pane runs `muxpad agent` (durable startup_cmd marker). */
+  agentNative?: boolean;
+}) {
   // undefined = still connecting; null = connected but no agent session.
   const [session, setSession] = useState<SessionMeta | null | undefined>(undefined);
   const [events, setEvents] = useState<ChatEvent[]>([]);
@@ -130,6 +267,9 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   const ordered = useRef<ChatEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const byId = useRef(new Set<string>()); // seen event ids, for dedupe
+  // The sid whose events are currently rendered — a mid-mount sid change
+  // (/clear, resume rotation) wipes the log (see the session handler).
+  const renderedSid = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
   const wsRef = useRef<WebSocket | null>(null);
@@ -195,6 +335,9 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   const [question, setQuestion] = useState<PendingQuestion | null>(null);
   // Live per-task subagent progress, keyed by the Task tool-use id.
   const [subagents, setSubagents] = useState<Record<string, SubagentProgress>>({});
+  // Runner-pushed session status: model, context fill, available models.
+  // null = no runner status yet (TUI-view chats never get one).
+  const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   // The text of the in-flight send, held so a socket death before the ack
   // can restore it into the composer instead of losing it.
   const pendingText = useRef('');
@@ -250,6 +393,20 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
       // stream deltas are flowing.
       lastPongAt.current = Date.now();
       if (msg.t === 'session') {
+        // Session-id changed under the same pane (/clear starts fresh, a
+        // resume rotates ids): the rendered log belongs to the OLD id — wipe
+        // it and let the rebound tail re-deliver the new transcript's
+        // history (for a resume that includes the carried-over messages; for
+        // /clear it's empty, which is the point).
+        const newSid = msg.session?.current_sid ?? null;
+        if (newSid && renderedSid.current && renderedSid.current !== newSid) {
+          byId.current = new Set();
+          ordered.current = [];
+          setEvents([]);
+          setStreamingText('');
+          setHasMoreOlder(true);
+        }
+        if (newSid) renderedSid.current = newSid;
         setSession(
           msg.session
             ? {
@@ -289,6 +446,9 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
           }
         }
         setQuestion(msg.question ?? null);
+        // Mirror the hello exactly: no status means no live runner status —
+        // a stale chip would keep offering controls that go nowhere.
+        setAgentStatus(msg.status ?? null);
         if (msg.subagents) {
           setSubagents(Object.fromEntries(msg.subagents.map((p) => [p.toolUseId, p])));
         }
@@ -358,6 +518,18 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
         setQuestion((q) => (q?.qid === msg.qid ? null : q));
       } else if (msg.t === 'subagent') {
         setSubagents((m) => ({ ...m, [msg.progress.toolUseId]: msg.progress }));
+      } else if (msg.t === 'status') {
+        setAgentStatus((prev) => {
+          const next: AgentStatus = {
+            model: msg.model,
+            context: msg.context,
+            ...(msg.models ? { models: msg.models } : {}),
+          };
+          // Identical payload → keep the previous object so React skips the
+          // re-render (the runner already suppresses no-op frames; this is
+          // the client-side belt to its braces).
+          return prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+        });
       } else if (msg.t === 'error') {
         acked.current = true;
         window.clearTimeout(sendWatchdog.current);
@@ -865,12 +1037,17 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   }, [session, connected, events, stale, optimisticUser, sending, loadingOlder, subagents]);
 
   // The agent is working when: we're driving a turn (`sending`), tokens are
-  // streaming, OR the newest event is a tool_use still awaiting its result (a
-  // step is mid-run — covers between-steps gaps and opening chat on an already-
-  // running turn, where there's no local `sending` flag). Self-clears when the
-  // result lands or the turn ends.
+  // streaming, OR — for sessions WITHOUT a runner (legacy/TUI views) — the
+  // newest event is a tool_use still awaiting its result. That transcript
+  // heuristic must never apply to agent panes: their turn frames are
+  // authoritative, and a BACKGROUND subagent's dispatch legitimately leaves
+  // its tool_result pending for minutes after the turn ended. Gated on the
+  // DURABLE startup_cmd marker (agentNative), not the session writer — the
+  // writer flips to 'none' whenever the runner is briefly detached, which
+  // used to re-arm the heuristic on exactly the panes it was disabled for.
   const lastEvent = events[events.length - 1];
   const pendingTool =
+    !agentNative &&
     lastEvent?.kind === 'tool_use' &&
     !events.some((e) => e.kind === 'tool_result' && e.toolUseId === lastEvent.toolUseId);
   const agentWorking = Boolean((sending || streamingText || pendingTool) && session?.current_sid);
@@ -945,6 +1122,24 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
       {session?.current_sid ? (
         <div className="chat-composer-wrap" ref={composerRef}>
           {notice ? <div className="chat-notice">{notice}</div> : null}
+          {agentStatus ? (
+            <div className="chat-session-row">
+              <SessionMenu
+                status={agentStatus}
+                send={(obj) => {
+                  // Same guard as the composer: during the reconnect window
+                  // wsRef can hold a CONNECTING socket (send throws) or a
+                  // CLOSED one (silent drop) — fail loudly instead.
+                  const sock = wsRef.current;
+                  if (!sock || sock.readyState !== WebSocket.OPEN) {
+                    setNotice('Not connected — try again in a moment.');
+                    return;
+                  }
+                  sock.send(JSON.stringify(obj));
+                }}
+              />
+            </div>
+          ) : null}
           <div className="chat-composer">
             <input
               ref={fileInputRef}
