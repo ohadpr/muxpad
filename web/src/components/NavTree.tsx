@@ -509,7 +509,7 @@ function WorkspaceNode({
           title="Close workspace"
           aria-label={`Close workspace ${workspace.name}`}
         >
-          <SvgClose />
+          <SvgClose size={13} />
         </button>
       </div>
       {expanded && (
@@ -882,7 +882,7 @@ function TabRow({
         title="Close tab"
         aria-label={`Close tab ${tab.name}`}
       >
-        <SvgClose />
+        <SvgClose size={13} />
       </button>
       {menu && (
         <NavContextMenu
