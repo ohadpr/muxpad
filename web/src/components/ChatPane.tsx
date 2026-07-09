@@ -1,5 +1,6 @@
 import {
   type AgentQuestion,
+  type AgentSessionStatus,
   type ChatEvent,
   type NoticeEvent,
   type SubagentProgress,
@@ -187,12 +188,9 @@ interface SessionMeta {
 
 type PendingQuestion = { qid: string; questions: AgentQuestion[] };
 
-/** Session status pushed by the agent runner: model + context-window fill. */
-type AgentStatus = {
-  model: string;
-  context: { pct: number; tokens: number; max: number };
-  models?: Array<{ value: string; displayName: string; resolvedModel?: string }>;
-};
+/** Session status pushed by the agent runner — shape shared with the server
+ * pipeline via @muxpad/shared so the two ends can't drift apart. */
+type AgentStatus = AgentSessionStatus;
 
 type ServerMsg =
   | {
@@ -250,7 +248,16 @@ function consumeStreamedText(preview: string, landed: string[]): string {
  * is owned by the pane's Terminal/Chat toggle, so by the time chat is showing,
  * it is already the driver.
  */
-export function ChatPane({ paneId, active }: { paneId: string; active: boolean }) {
+export function ChatPane({
+  paneId,
+  active,
+  agentNative = false,
+}: {
+  paneId: string;
+  active: boolean;
+  /** Pane runs `muxpad agent` (durable startup_cmd marker). */
+  agentNative?: boolean;
+}) {
   // undefined = still connecting; null = connected but no agent session.
   const [session, setSession] = useState<SessionMeta | null | undefined>(undefined);
   const [events, setEvents] = useState<ChatEvent[]>([]);
@@ -439,7 +446,9 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
           }
         }
         setQuestion(msg.question ?? null);
-        if (msg.status) setAgentStatus(msg.status);
+        // Mirror the hello exactly: no status means no live runner status —
+        // a stale chip would keep offering controls that go nowhere.
+        setAgentStatus(msg.status ?? null);
         if (msg.subagents) {
           setSubagents(Object.fromEntries(msg.subagents.map((p) => [p.toolUseId, p])));
         }
@@ -510,10 +519,16 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
       } else if (msg.t === 'subagent') {
         setSubagents((m) => ({ ...m, [msg.progress.toolUseId]: msg.progress }));
       } else if (msg.t === 'status') {
-        setAgentStatus({
-          model: msg.model,
-          context: msg.context,
-          ...(msg.models ? { models: msg.models } : {}),
+        setAgentStatus((prev) => {
+          const next: AgentStatus = {
+            model: msg.model,
+            context: msg.context,
+            ...(msg.models ? { models: msg.models } : {}),
+          };
+          // Identical payload → keep the previous object so React skips the
+          // re-render (the runner already suppresses no-op frames; this is
+          // the client-side belt to its braces).
+          return prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
         });
       } else if (msg.t === 'error') {
         acked.current = true;
@@ -1022,15 +1037,17 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
   }, [session, connected, events, stale, optimisticUser, sending, loadingOlder, subagents]);
 
   // The agent is working when: we're driving a turn (`sending`), tokens are
-  // streaming, OR — for sessions WITHOUT a live runner (legacy/TUI views) —
-  // the newest event is a tool_use still awaiting its result. That transcript
-  // heuristic must not apply to runner (sdk) panes: their turn frames are
+  // streaming, OR — for sessions WITHOUT a runner (legacy/TUI views) — the
+  // newest event is a tool_use still awaiting its result. That transcript
+  // heuristic must never apply to agent panes: their turn frames are
   // authoritative, and a BACKGROUND subagent's dispatch legitimately leaves
-  // its tool_result pending for minutes after the turn ended — the old check
-  // showed "…working" while the agent was plainly waiting for input.
+  // its tool_result pending for minutes after the turn ended. Gated on the
+  // DURABLE startup_cmd marker (agentNative), not the session writer — the
+  // writer flips to 'none' whenever the runner is briefly detached, which
+  // used to re-arm the heuristic on exactly the panes it was disabled for.
   const lastEvent = events[events.length - 1];
   const pendingTool =
-    session?.writer !== 'sdk' &&
+    !agentNative &&
     lastEvent?.kind === 'tool_use' &&
     !events.some((e) => e.kind === 'tool_result' && e.toolUseId === lastEvent.toolUseId);
   const agentWorking = Boolean((sending || streamingText || pendingTool) && session?.current_sid);
@@ -1109,7 +1126,17 @@ export function ChatPane({ paneId, active }: { paneId: string; active: boolean }
             <div className="chat-session-row">
               <SessionMenu
                 status={agentStatus}
-                send={(obj) => wsRef.current?.send(JSON.stringify(obj))}
+                send={(obj) => {
+                  // Same guard as the composer: during the reconnect window
+                  // wsRef can hold a CONNECTING socket (send throws) or a
+                  // CLOSED one (silent drop) — fail loudly instead.
+                  const sock = wsRef.current;
+                  if (!sock || sock.readyState !== WebSocket.OPEN) {
+                    setNotice('Not connected — try again in a moment.');
+                    return;
+                  }
+                  sock.send(JSON.stringify(obj));
+                }}
               />
             </div>
           ) : null}
