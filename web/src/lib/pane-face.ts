@@ -27,11 +27,16 @@ export interface PaneFace {
 }
 
 const DEFAULT: PaneFace = { face: 'terminal', url: null };
-// The pre-server-persistence store (per-device localStorage). Kept ONLY as a
-// one-time migration source: a pane whose server row still has the default
-// but had a face chosen here keeps that choice (pushed up to the server),
-// after which the entry is deleted and the server is the sole source of truth.
+// The pre-server-persistence localStorage store. Its migration era is OVER:
+// the entry is now only deleted, never read. Reading it was actively harmful
+// — a stale device could re-push a chat face onto a non-agent pane, exactly
+// the rows server migration 14 swept, silently undoing it for every device.
 const LEGACY_KEY = 'muxpad.paneFace.v1';
+try {
+  localStorage.removeItem(LEGACY_KEY);
+} catch {
+  // storage unavailable — nothing to clean
+}
 
 // How long a local flip outranks an incoming server snapshot. A pane object
 // fetched BEFORE our PATCH landed still carries the old face; adopting it
@@ -52,28 +57,6 @@ export function getPaneFace(paneId: string): PaneFace {
   return faces.get(paneId) ?? DEFAULT;
 }
 
-/** Pop this pane's entry from the legacy localStorage store, if any. */
-function takeLegacy(paneId: string): PaneFace | null {
-  try {
-    const raw = localStorage.getItem(LEGACY_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== 'object') return null;
-    const record = parsed as Record<string, unknown>;
-    if (!(paneId in record)) return null;
-    const v = record[paneId] as Partial<PaneFace> | undefined;
-    delete record[paneId];
-    if (Object.keys(record).length === 0) localStorage.removeItem(LEGACY_KEY);
-    else localStorage.setItem(LEGACY_KEY, JSON.stringify(record));
-    if (!v || typeof v !== 'object') return null;
-    const face = v.face === 'web' || v.face === 'chat' ? v.face : 'terminal';
-    const url = typeof v.url === 'string' ? v.url : null;
-    return { face, url };
-  } catch {
-    return null;
-  }
-}
-
 /** Flip the face: optimistic local update + server PATCH (fire-and-forget). */
 export function setPaneFace(paneId: string, next: PaneFace): void {
   const prev = getPaneFace(paneId);
@@ -92,26 +75,13 @@ export function setPaneFace(paneId: string, next: PaneFace): void {
  * Reconcile with the server's value for this pane (from the pane object the
  * page already holds, kept live by pane.updated events). Server wins —
  * except inside the short window after a local flip, whose PATCH echo will
- * confirm it. A legacy localStorage choice migrates up the first time the
- * pane is seen with a still-default server row.
+ * confirm it.
  */
 export function syncPaneFace(
   paneId: string,
   serverFace: PaneFace['face'] | undefined,
   serverUrl: string | null | undefined,
 ): void {
-  const legacy = takeLegacy(paneId);
-  if (
-    legacy &&
-    (legacy.face !== 'terminal' || legacy.url) &&
-    (serverFace ?? 'terminal') === 'terminal' &&
-    !serverUrl
-  ) {
-    // One-time migration: this device chose a face before the columns
-    // existed; keep the choice and make it durable.
-    setPaneFace(paneId, legacy);
-    return;
-  }
   if (serverFace === undefined) return;
   const next: PaneFace = { face: serverFace, url: serverUrl ?? null };
   const cur = getPaneFace(paneId);
