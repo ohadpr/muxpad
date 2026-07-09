@@ -377,6 +377,16 @@ export function XtermPane({
     let retries = 0;
     let retryTimer: number | null = null;
     let initialConnectDone = false;
+    // Wall-clock start of the current outage (first unintentional close).
+    // On reconnect, a long gap means the PTY kept writing into a void —
+    // reconnects skip the ring-buffer replay, so that output never renders
+    // and an Ink TUI's differential frames repaint only the bottom region:
+    // the classic "top of the terminal is frozen" mobile-resume bug.
+    let disconnectedAt: number | null = null;
+    // Assigned inside connect(); lets the visibility handler force an
+    // immediate liveness check of the current socket on resume instead of
+    // waiting out the idle-heartbeat cycle (~20s of typing into a zombie).
+    let probeLiveness: () => void = () => {};
 
     // Returns true iff the frame was actually written to an open socket.
     // Callers that cache "last sent" state (the resize dedup) MUST gate that
@@ -466,6 +476,25 @@ export function XtermPane({
         }
         armIdle();
       };
+      // Resume-time zombie check: iOS routinely kills sockets of backgrounded
+      // pages without firing 'close', and the idle heartbeat only notices
+      // ~HEARTBEAT_IDLE_MS later — during which every keystroke silently
+      // vanishes ("the pane doesn't respond at all"). Ping NOW; a live socket
+      // answers within the pong window, a dead one gets force-closed into the
+      // reconnect path immediately.
+      probeLiveness = () => {
+        if (ws !== wsRef.current || ws.readyState !== WebSocket.OPEN) return;
+        if (pongWaitTimer !== null) return; // probe already in flight
+        safeSend(encodePing());
+        pongWaitTimer = window.setTimeout(() => {
+          dbg('resume probe pong timeout — force-closing');
+          try {
+            ws.close();
+          } catch {
+            /* ignore */
+          }
+        }, HEARTBEAT_PONG_MS);
+      };
 
       ws.addEventListener('open', () => {
         dbg('ws open', { paneId, retries });
@@ -541,13 +570,20 @@ export function XtermPane({
         } else {
           announceSize();
         }
-        // Fresh attach only: after the replayed frame has painted (and the
+        // Fresh attach: after the replayed frame has painted (and the
         // foreground command has usually been detected), force the full
-        // repaint described above. Deliberately NOT on reconnect — there the
-        // xterm buffer is intact (ring-buffer replay was skipped via
-        // ?replay=0) and a SIGWINCH round-trip would force Ink TUIs to redraw
-        // and reset their internal scroll position.
-        if (!wasReconnect) {
+        // repaint described above. Quick reconnects skip it — the xterm
+        // buffer is intact (ring replay skipped via ?replay=0) and a
+        // SIGWINCH would force Ink TUIs to redraw and reset their scroll.
+        // But a LONG-gap reconnect (iOS killed the socket while the app was
+        // backgrounded) is different: the PTY kept writing while we were
+        // deaf, that output never renders, and without a SIGWINCH the TUI's
+        // differential frames repaint only the bottom rows — the screen
+        // above stays frozen until a manual resize. Repaint those too.
+        const STALE_GAP_MS = 1500;
+        const gapMs = disconnectedAt === null ? 0 : Date.now() - disconnectedAt;
+        disconnectedAt = null;
+        if (!wasReconnect || gapMs >= STALE_GAP_MS) {
           window.setTimeout(forceFullRepaint, 220);
         }
         armIdle();
@@ -588,6 +624,7 @@ export function XtermPane({
         }
         dbg('ws close', { paneId, intentionallyClosed, paneExited, retries, code: e.code });
         if (wsRef.current === ws) wsRef.current = null;
+        if (disconnectedAt === null) disconnectedAt = Date.now();
         if (intentionallyClosed || paneExited) return;
         // Server-side kind flip (PATCH /api/panes/:id) closes attached
         // WSes with code 4001. Don't reconnect — TabView will unmount
@@ -1266,7 +1303,11 @@ export function XtermPane({
         cursorScroll.onTabHidden(term);
         hiddenSince = Date.now();
       } else {
+        // Real resume (not a quick flip): verify the socket actually
+        // survived the background before trusting it with input.
+        const hiddenForMs = hiddenSince ? Date.now() - hiddenSince : 0;
         reassertSizeFromEvent('visibilitychange');
+        if (hiddenForMs >= 2000) probeLiveness();
         hiddenSince = null;
       }
     };
