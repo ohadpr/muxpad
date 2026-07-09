@@ -952,6 +952,23 @@ export function ChatPane({
     }
   }, [events]);
 
+  // Fill the viewport: the initial history window is a byte tail, and a few
+  // huge records (base64 image pastes run to hundreds of KB per line) can
+  // eat the whole window — rendering less than a screenful of chat. With no
+  // overflow there are no scroll events, so the scroll-up pager could never
+  // fire and the rest of the conversation was unreachable. Keep paging older
+  // batches until the content overflows (or history is exhausted): requests
+  // are single-flight, and every server call moves the byte cursor back, so
+  // this terminates even when a batch renders nothing new.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: events/loadingOlder are the re-check triggers; requestOlder is stable enough per render
+  useEffect(() => {
+    if (!active || loadingOlder || !hasMoreOlder) return;
+    if (!session?.current_sid) return; // history baseline not bound yet
+    const el = scrollRef.current;
+    if (!el || el.clientHeight < 40) return; // hidden/collapsed — don't page blind
+    if (el.scrollHeight <= el.clientHeight + 1) requestOlder();
+  }, [active, events, loadingOlder, hasMoreOlder, session?.current_sid]);
+
   const requestOlder = () => {
     if (loadingOlderRef.current || !hasMoreOlder) return;
     const ws = wsRef.current;
