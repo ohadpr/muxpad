@@ -424,17 +424,19 @@
   /* Rounded top corners — a browser-tab plate. The gap on the strip separates
      neighbours, so no hairline divider is needed. */
   border-radius: 7px 7px 0 0;
-  /* Two clean levels, no accent tint:
-       bar (--bg-tabbar) ≈ inactive tab  <  active tab (--bg, the content color).
-     Inactive tabs sit just a hair above the strip so they recede into the bar
-     (they read as "not open"); the active tab jumps to the content background so
-     it merges with the panel below it — the browser-tab "this is the open pane"
-     cue, no colored fill needed. */
-  background: color-mix(in srgb, var(--bg) 20%, var(--bg-tabbar));
+  /* Three distinct levels the eye can separate at a glance:
+       recessed bar  <  inactive plate  <  active plate (the pane's color).
+     Inactive plates get a real fill step above the bar plus a hairline so
+     they read as closed-but-present tabs (the old 20% mix melted into the
+     bar in light themes); the active tab fuses with the pane below (its
+     exact 5%-accent wash) and carries an accent top rail so active-vs-
+     inactive never hinges on two near-identical fills. */
+  background: color-mix(in srgb, var(--bg) 45%, var(--bg-tabbar));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 7%, transparent);
   transition: background 100ms ease;
 }
 .desktop-tab:hover {
-  background: color-mix(in srgb, var(--bg) 55%, var(--bg-tabbar));
+  background: color-mix(in srgb, var(--bg) 70%, var(--bg-tabbar));
 }
 .desktop-tab[data-active="true"],
 .desktop-tab[data-active="true"]:hover {
@@ -442,8 +444,21 @@
      (.tabbed-pane-slot::after), so plain --bg would read as a different shade
      and the tab wouldn't fuse into the pane. */
   background: color-mix(in srgb, var(--accent) 5%, var(--bg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 10%, transparent);
   /* Sit above the strip so the connector below can paint over its bottom border. */
   z-index: 1;
+}
+/* Accent top rail — the unmistakable "this one is open" cue (fill contrast
+   alone was too subtle between two light plates). Rounded to hug the plate. */
+.desktop-tab[data-active="true"]::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 7px 7px 0 0;
+  background: var(--accent);
 }
 /* Connector: a strip of the pane background painted over the strip's bottom
    hairline, directly under the active tab, so the tab fuses seamlessly into the
@@ -543,6 +558,9 @@
 .desktop-tab:hover .desktop-tab-select,
 .desktop-tab[data-active="true"] .desktop-tab-select {
   color: var(--fg);
+}
+.desktop-tab[data-active="true"] .desktop-tab-label {
+  font-weight: 600;
 }
 
 .desktop-tab-label {
