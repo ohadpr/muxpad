@@ -710,12 +710,24 @@ function TabRow({
   onSetUnread,
   onSetIcon,
 }: TabRowProps) {
-  // Touch rename: long-press (ignores mouse/pen; desktop double-clicks).
-  const { pressing, handlers: pressHandlers } = useLongPress({
-    onLongPress: () => setEditing({ kind: 'tab', id: tab.id }),
-  });
   // Right-click context menu (desktop sidebar). Anchored at the cursor.
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  // Touch long-press opens the SAME context menu (mark unread, rename,
+  // change icon, move, close) — mobile previously jumped straight to rename
+  // and had no path to the other actions at all. Anchored at the touch
+  // point, captured on pointerdown (the long-press hook doesn't carry
+  // coordinates through to its callback).
+  const touchPoint = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const { pressing, handlers: longPressHandlers } = useLongPress({
+    onLongPress: () => setMenu({ x: touchPoint.current.x, y: touchPoint.current.y }),
+  });
+  const pressHandlers = {
+    ...longPressHandlers,
+    onPointerDown: (e: React.PointerEvent) => {
+      touchPoint.current = { x: e.clientX, y: e.clientY };
+      longPressHandlers.onPointerDown(e);
+    },
+  };
   // Icon picker, anchored under the clicked icon.
   const [picker, setPicker] = useState<{ x: number; y: number } | null>(null);
   // Workspaces other than this tab's own — both the "Move to workspace…"
@@ -800,7 +812,7 @@ function TabRow({
           }
           {...pressHandlers}
           onClick={(e) => {
-            // Long-press consumes the tap (rename, not navigate).
+            // Long-press consumes the tap (opens the menu, not navigate).
             pressHandlers.onClick(e);
             if (e.defaultPrevented) return;
             if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
