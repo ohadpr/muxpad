@@ -853,11 +853,12 @@ function TabRow({
           {/* One status slot per row — never two glyphs competing. The states
               are really a progression: a tab is WORKING (spinner), then maybe
               DONE & WANTING YOU (dot), then idle. So show by priority: spinner
-              while busy, else the dot if it wants you, else nothing. Busy is
-              suppressed on the ACTIVE tab (you're looking at the terminal — the
-              app's own output is right there); the dot self-hides there anyway
-              via markSeen. So the tab you're on shows nothing. */}
-          {!isActiveTab && tab.busy ? (
+              while busy, else the dot if it wants you, else nothing. The
+              spinner shows on the ACTIVE tab too — agent panes work quietly
+              for minutes on their chat face, and even in a terminal a glance
+              at the sidebar should answer "is anything still running here?"
+              (the dot still self-hides on the active tab via markSeen). */}
+          {tab.busy ? (
             // Decorative: aria-hidden so this fast-toggling glyph doesn't churn
             // the link's accessible name ("Home busy" → "Home" → …). title is
             // the mouse affordance.
