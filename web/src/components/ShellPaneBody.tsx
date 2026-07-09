@@ -160,7 +160,11 @@ export function ShellPaneBody({
       ) : null}
       {chatMounted ? (
         <div className="shell-pane-face" hidden={!showChat}>
-          <ChatPane paneId={pane.id} active={showChat} />
+          <ChatPane
+            paneId={pane.id}
+            active={showChat}
+            agentNative={pane.startup_cmd?.startsWith('muxpad agent') ?? false}
+          />
         </div>
       ) : null}
     </div>

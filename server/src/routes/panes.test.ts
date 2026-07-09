@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openDb } from '../store/db.js';
-import { EventBus } from '../events.js';
 import type { MuxpadEvent } from '@muxpad/shared';
-import { createTestApp, type TestApp } from '../test-helpers/createTestApp.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { EventBus } from '../events.js';
+import { openDb } from '../store/db.js';
+import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
 
 describe('panes routes', () => {
   let test: TestApp;
@@ -212,6 +212,45 @@ describe('panes routes', () => {
       headers: { 'content-type': 'application/json' },
     });
     expect(res.status).toBe(400);
+  });
+
+  it('chat face is agent-pane-only on both create and patch', async () => {
+    // POST: plain shell pane asking for the chat face → rejected.
+    const bad = await test.app.request(`/api/tabs/${tabId}/panes`, {
+      method: 'POST',
+      body: JSON.stringify({ face: 'chat' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(bad.status).toBe(400);
+    // POST: agent pane (startup_cmd marker) → allowed.
+    const good = await test.app.request(`/api/tabs/${tabId}/panes`, {
+      method: 'POST',
+      body: JSON.stringify({ face: 'chat', startup_cmd: 'muxpad agent' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(good.status).toBe(201);
+    const agentPane = (await good.json()) as { id: string; face: string };
+    expect(agentPane.face).toBe('chat');
+    // PATCH: flipping a non-agent pane to chat → rejected; terminal/web fine.
+    const shell = (await (
+      await test.app.request(`/api/tabs/${tabId}/panes`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+        headers: { 'content-type': 'application/json' },
+      })
+    ).json()) as { id: string };
+    const patchBad = await test.app.request(`/api/panes/${shell.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ face: 'chat' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(patchBad.status).toBe(400);
+    const patchOk = await test.app.request(`/api/panes/${shell.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ face: 'web', face_url: 'https://x.example.com' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(patchOk.status).toBe(200);
   });
 
   it('PATCH flips shell → url, killing the PTY and updating the row', async () => {

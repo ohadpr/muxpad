@@ -1177,3 +1177,104 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
 }
+
+/* Session chip + menu: model / context% / compact / clear. Sits in a slim
+   right-aligned row above the composer; the menu opens upward. */
+.chat-session-row {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 6px 4px;
+}
+.chat-session {
+  position: relative;
+}
+.chat-session-chip {
+  padding: 2px 9px;
+  border: 1px solid color-mix(in srgb, var(--border-strong, #3b4261) 70%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-chrome, #16161e) 60%, transparent);
+  color: var(--fg-faint, #6f7488);
+  font-size: 10.5px;
+  line-height: 1.5;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chat-session-chip:hover {
+  color: var(--fg, #d7dae0);
+  border-color: var(--border-strong, #3b4261);
+}
+.chat-session-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 230px;
+  max-width: 300px;
+  max-height: 55vh;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border-strong, #3b4261);
+  border-radius: 8px;
+  background: var(--bg-elev, #1a1b26);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+.chat-session-head {
+  padding: 5px 10px 4px;
+  color: var(--fg-faint, #6f7488);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.chat-session-context {
+  padding: 2px 10px 6px;
+}
+.chat-session-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--fg-faint, #6f7488) 22%, transparent);
+  overflow: hidden;
+}
+.chat-session-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent, #4a9eff);
+}
+.chat-session-context-label {
+  display: block;
+  margin-top: 4px;
+  color: var(--fg-faint, #6f7488);
+  font-size: 10.5px;
+}
+.chat-session-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg, #d7dae0);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-session-item:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+.chat-session-item.is-active .chat-session-item-label {
+  color: var(--accent, #4a9eff);
+}
+.chat-session-item.is-active .chat-session-item-label::after {
+  content: " ✓";
+}
+.chat-session-item.is-danger .chat-session-item-label {
+  color: var(--danger, #f7768e);
+}
+.chat-session-item-desc {
+  color: var(--fg-faint, #6f7488);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
