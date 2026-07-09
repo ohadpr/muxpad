@@ -154,6 +154,38 @@ describe('TranscriptReader', () => {
     tail.close();
   });
 
+  it('tailBytes: loadOlder makes progress past lines far larger than the window', () => {
+    // A giant line (base64 image paste) directly before the tail used to
+    // stall loadOlder forever: the window's only newline was its last byte,
+    // so historyStart never moved and hasMore stayed true — zero events,
+    // infinite loop ("chat shows one message and can't scroll").
+    const texts = ['aa', 'bb'];
+    const giant = userLine('big', 'X'.repeat(2000)); // ~16× the 120B window
+    const last = userLine('u9', 'zz');
+    writeFileSync(file, texts.map((t, i) => userLine(`u${i}`, t)).join('') + giant + last);
+    const hist: string[] = [];
+    const older: string[] = [];
+    const tail = new TranscriptTail(SID, {
+      dir,
+      tailBytes: 120,
+      onEvents: (es, p) => {
+        for (const e of es) (p === 'older' ? older : hist).push((e as { text: string }).text);
+      },
+    });
+    tail.tick();
+    expect(hist).toEqual(['zz']); // the giant line ate the rest of the window
+
+    let more = true;
+    let guard = 30;
+    while (more && guard-- > 0) more = tail.loadOlder();
+    expect(more).toBe(false);
+    expect(guard).toBeGreaterThan(0); // terminated, not guard-exhausted
+
+    const all = [...hist, ...older].sort();
+    expect(all).toEqual(['aa', 'bb', 'X'.repeat(2000), 'zz'].sort());
+    tail.close();
+  });
+
   it('tailBytes: appended lines still stream as live after a tail load', () => {
     writeFileSync(file, ['aa', 'bb', 'cc'].map((t, i) => userLine(`u${i}`, t)).join(''));
     const live: string[] = [];
