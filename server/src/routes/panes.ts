@@ -145,6 +145,16 @@ export function panesTabScopedRoutes(deps: {
       }
     }
 
+    // The chat face is agent-pane-only (the runner is the one chat driver);
+    // enforcing it at the WRITE path is what keeps stale clients and scripts
+    // from re-stranding panes on a driverless chat face (migration 14 swept
+    // the legacy rows once — this keeps them swept).
+    if (body.face === 'chat' && !body.startup_cmd?.startsWith('muxpad agent')) {
+      return c.json(
+        { error: { code: 'bad_request', message: 'the chat face requires an agent pane' } },
+        400,
+      );
+    }
     const pane = panes.create({
       tab_id: tabId,
       shell: body.shell ?? defaultShell,
@@ -242,6 +252,13 @@ export function panesScopedRoutes(deps: {
     // Face flips likewise never touch ptyd — the terminal keeps running
     // underneath whatever face is showing.
     if (body.face !== undefined) {
+      // Chat face is agent-pane-only — see the create-path guard above.
+      if (body.face === 'chat' && !p.startup_cmd?.startsWith('muxpad agent')) {
+        return c.json(
+          { error: { code: 'bad_request', message: 'the chat face requires an agent pane' } },
+          400,
+        );
+      }
       panes.setFace(id, body.face, body.face_url);
     } else if (body.face_url !== undefined) {
       panes.setFace(id, p.face, body.face_url);

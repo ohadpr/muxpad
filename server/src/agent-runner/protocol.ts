@@ -4,9 +4,9 @@
 // server relays chat clients' sends/stops to it and fans its turn lifecycle
 // back out to every open chat view of the pane.
 
-import type { AgentQuestion, SubagentProgress } from '@muxpad/shared';
+import type { AgentQuestion, AgentSessionStatus, SubagentProgress } from '@muxpad/shared';
 
-export type { AgentQuestion, SubagentProgress };
+export type { AgentQuestion, AgentSessionStatus, SubagentProgress };
 
 /** runner → server */
 export type RunnerFrame =
@@ -44,17 +44,15 @@ export type RunnerFrame =
       t: 'title';
       title: string;
     }
-  | {
+  | ({
       /**
-       * Session status for the chat header: current model, context-window
-       * fill, and (on the first frame / model list changes) the available
-       * models. Sent after init, after every turn, and after a model switch.
+       * Session status for the chat header (shape shared with the web client
+       * via @muxpad/shared — see AgentSessionStatus). `models` rides only the
+       * frames where the list was (re)fetched; the server merges frames so a
+       * reconnect hello still carries the last known list.
        */
       t: 'status';
-      model: string;
-      context: { pct: number; tokens: number; max: number };
-      models?: Array<{ value: string; displayName: string; resolvedModel?: string }>;
-    }
+    } & AgentSessionStatus)
   | {
       /** The session died and the runner is exiting (claude crash, fatal error). */
       t: 'fatal';
