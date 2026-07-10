@@ -123,3 +123,31 @@
 .settings-popover input {
   font-family: var(--chrome-font);
 }
+
+/* Push-notification row: enable/disable + test buttons, styled like the
+   stepper's bordered plates; the note explains why push is unavailable. */
+.settings-push-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+.settings-push-actions button {
+  background: var(--bg);
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: var(--chrome-size-sm);
+  cursor: pointer;
+}
+.settings-push-actions button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.settings-push-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.settings-note {
+  font-size: var(--chrome-size-sm);
+  color: var(--fg-faint);
+}
