@@ -1,15 +1,17 @@
-import { Hono } from 'hono';
 import type Database from 'better-sqlite3';
-import type { PtydClient } from './ptyd-client/PtydClient.js';
+import { Hono } from 'hono';
+import type { AgentBridge } from './agent-bridge.js';
+import { EventBus } from './events.js';
 import type { PtydCache } from './ptyd-cache.js';
-import { workspacesRoutes } from './routes/workspaces.js';
-import { tabsRoutes } from './routes/tabs.js';
-import { panesTabScopedRoutes, panesScopedRoutes } from './routes/panes.js';
+import type { PtydClient } from './ptyd-client/PtydClient.js';
+import type { PushService } from './push.js';
+import { agentSessionsRoutes } from './routes/agent-sessions.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { openRoutes } from './routes/open.js';
-import { agentSessionsRoutes } from './routes/agent-sessions.js';
-import { EventBus } from './events.js';
-import type { AgentBridge } from './agent-bridge.js';
+import { panesScopedRoutes, panesTabScopedRoutes } from './routes/panes.js';
+import { pushRoutes } from './routes/push.js';
+import { tabsRoutes } from './routes/tabs.js';
+import { workspacesRoutes } from './routes/workspaces.js';
 
 export interface AppDeps {
   db: Database.Database;
@@ -40,6 +42,12 @@ export interface AppDeps {
    * route then reports the agent as unavailable.
    */
   agentBridge?: AgentBridge;
+  /**
+   * Web Push subscriptions + delivery (see push.ts). Optional so tests
+   * that don't exercise notifications can omit it — the /api/push routes
+   * simply aren't mounted then.
+   */
+  push?: PushService;
 }
 
 export function createApp(deps: AppDeps): Hono {
@@ -56,5 +64,6 @@ export function createApp(deps: AppDeps): Hono {
   app.route('/api/panes', attachmentsRoutes(resolved));
   app.route('/api/open', openRoutes(resolved));
   app.route('/api/agent-sessions', agentSessionsRoutes(resolved));
+  if (resolved.push) app.route('/api/push', pushRoutes(resolved.push));
   return app;
 }
