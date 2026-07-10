@@ -5,17 +5,18 @@ import { WebSocket, WebSocketServer } from 'ws';
 import type { AgentBridge } from './agent-bridge.js';
 import {
   type AgentQuestion,
+  CLOSE_RUNNER_DISPLACED,
   type RunnerFrame,
   type ServerFrame,
   type SubagentProgress,
   parseFrame,
-  CLOSE_RUNNER_DISPLACED,
 } from './agent-runner/protocol.js';
 import { TranscriptTail } from './chat/TranscriptReader.js';
 import type { EventBus } from './events.js';
 import { type PtydCache, decoratePane } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { proxyAttach } from './ptyd-client/proxyAttach.js';
+import type { PaneNotifier } from './push.js';
 import { safeCwd } from './safe-cwd.js';
 import { AgentSessionStore } from './store/AgentSessionStore.js';
 import { PaneStore } from './store/PaneStore.js';
@@ -41,6 +42,12 @@ export function attachWsServer(deps: {
   heartbeatMs?: number;
   /** When provided, gets its `send` bound to the live runner registry. */
   agentBridge?: AgentBridge;
+  /**
+   * Web Push sender for chat-runner events that never touch the terminal
+   * BEL/attention path: turn-done and agent questions. Optional — tests
+   * and push-less deployments omit it.
+   */
+  notifyPane?: PaneNotifier;
 }): WsServerHandle {
   const wss = new WebSocketServer({ noServer: true });
   const panes = new PaneStore(deps.db);
@@ -349,10 +356,23 @@ export function attachWsServer(deps: {
               ok: frame.ok !== false,
               ...(frame.error ? { error: frame.error } : {}),
             });
+            // Chat-native agents never ring BEL, so the attention-push path
+            // can't see them — notify turn completion here instead. Same
+            // semantics as the terminal bell: fires whether or not a client
+            // is watching (the tag coalesces repeats per pane).
+            deps.notifyPane?.(
+              paneId,
+              frame.ok !== false ? 'agent finished its turn' : 'agent turn failed',
+            );
           } else if (frame.t === 'question') {
             if (typeof frame.qid !== 'string' || !Array.isArray(frame.questions)) return;
             conn.pendingQuestion = { qid: frame.qid, questions: frame.questions };
             bcast({ t: 'question', qid: frame.qid, questions: frame.questions });
+            const q = frame.questions[0]?.question;
+            deps.notifyPane?.(
+              paneId,
+              q ? `agent asks: ${q.slice(0, 140)}` : 'agent has a question',
+            );
           } else if (frame.t === 'question-done') {
             if (conn.pendingQuestion?.qid === frame.qid) conn.pendingQuestion = null;
             bcast({ t: 'question-done', qid: frame.qid });
