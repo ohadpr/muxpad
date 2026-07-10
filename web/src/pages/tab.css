@@ -544,6 +544,7 @@
   min-width: 0;
   display: flex;
   align-items: center;
+  gap: 6px; /* leading status glyph ↔ label */
   height: 100%;
   padding: 0 2px 0 12px;
   background: transparent;

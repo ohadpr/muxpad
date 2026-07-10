@@ -230,6 +230,22 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    // Web Push subscriptions (one row per browser/device that enabled
+    // notifications). `endpoint` is the push service URL — unique per
+    // subscription, so it doubles as the primary key. `subscription` is the
+    // full PushSubscription JSON (endpoint + encryption keys) that web-push
+    // needs to send. Rows are pruned when the push service reports the
+    // subscription gone (404/410).
+    version: 16,
+    sql: `
+      CREATE TABLE push_subscriptions (
+        endpoint     TEXT PRIMARY KEY,
+        subscription TEXT NOT NULL,
+        created_at   INTEGER NOT NULL
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
