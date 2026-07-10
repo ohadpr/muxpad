@@ -3,6 +3,18 @@
 // (see server/src/index.ts) must stay the single source of truth, and a
 // caching SW is exactly the stale-bundle trap it avoids.
 
+// Take over immediately on update: without skipWaiting a revised SW sits
+// 'waiting' until every client closes, and without claim() the page that
+// registered us stays uncontrolled until its next navigation — which broke
+// notification-tap navigation (WindowClient.navigate rejects uncontrolled
+// clients). We keep no caches, so an eager takeover is always safe.
+self.addEventListener('install', () => {
+  self.skipWaiting();
+});
+self.addEventListener('activate', (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
 self.addEventListener('push', (event) => {
   let data = {};
   try {
@@ -14,31 +26,40 @@ self.addEventListener('push', (event) => {
     self.registration.showNotification(data.title || 'muxpad', {
       body: data.body || '',
       tag: data.tag || undefined,
-      data: { url: data.url || '/' },
+      data: {
+        url: data.url || '/',
+        tab_id: data.tab_id || null,
+        pane_id: data.pane_id || null,
+      },
     }),
   );
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = event.notification.data?.url || '/';
+  const data = event.notification.data || {};
+  const url = data.url || '/';
   event.waitUntil(
     (async () => {
+      // Reuse an open window (the installed PWA) when there is one. Don't
+      // use WindowClient.navigate(): it hard-reloads the whole app and iOS
+      // rejects it outright for uncontrolled clients (the original "tap
+      // does nothing" bug). Instead hand the deep link to the page's JS,
+      // which routes through the SPA router — instant, state-preserving.
       const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      // Reuse an open window (the installed PWA) when there is one.
-      for (const win of wins) {
-        if ('focus' in win) {
-          await win.focus();
-          if ('navigate' in win) {
-            try {
-              await win.navigate(url);
-            } catch {
-              // cross-origin or dead client — fall through to openWindow
-            }
-          }
-          return;
-        }
+      const win = wins.find((w) => 'focus' in w);
+      if (win) {
+        await win.focus();
+        win.postMessage({
+          type: 'muxpad:push-navigate',
+          url,
+          tab_id: data.tab_id || null,
+          pane_id: data.pane_id || null,
+        });
+        return;
       }
+      // Cold start: the URL itself carries the pane focus (?ptab=&pane=),
+      // read at boot — a postMessage would race the page's listener setup.
       await self.clients.openWindow(url);
     })(),
   );
