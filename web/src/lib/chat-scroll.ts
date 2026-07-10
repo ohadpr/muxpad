@@ -57,5 +57,10 @@ export function rememberChatScroll(paneId: string, m: ChatScrollMem): void {
 }
 
 export function recallChatScroll(paneId: string): ChatScrollMem | null {
-  return mem.get(paneId) ?? null;
+  const m = mem.get(paneId);
+  // Entries persisted by the earlier absolute-top format (same storage key)
+  // have no finite ratio — NaN scrollTop coerces to 0 and dumps the reader
+  // at the TOP of the chat. Treat them as no memory.
+  if (!m || !Number.isFinite(m.ratio)) return null;
+  return m;
 }

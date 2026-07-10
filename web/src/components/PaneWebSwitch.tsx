@@ -379,8 +379,9 @@ function SvgGlobe() {
 }
 
 /** Agent-chat face: a drawn four-point sparkle in the same stroke language
- *  as the terminal/globe glyphs — the old ✳ text char read as line noise. */
-function SvgAgentGlyph() {
+ *  as the terminal/globe glyphs — the old ✳ text char read as line noise.
+ *  Exported for the mosaic chrome's PaneSurfaceSwitch, the other trigger. */
+export function SvgAgentGlyph() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
       <path
