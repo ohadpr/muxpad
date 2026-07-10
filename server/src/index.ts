@@ -11,6 +11,7 @@ import { EventBus } from './events.js';
 import { startPaneReaper } from './pane-reaper.js';
 import { PtydCache, decoratePane } from './ptyd-cache.js';
 import { PtydClient } from './ptyd-client/PtydClient.js';
+import { PushService, attachAttentionPush } from './push.js';
 import { createApp } from './server.js';
 import { PaneStore } from './store/PaneStore.js';
 import { openDb } from './store/db.js';
@@ -83,6 +84,13 @@ cache.on('paneChange', (paneId: string) => {
 // the HTTP server exists) — ws.ts binds the real runner relay onto it.
 const agentBridge = createAgentBridge();
 
+// Web Push: notify subscribed devices (the installed PWA) when a pane's
+// attention flag rises. Requires the app to be reached over https (e.g.
+// `tailscale serve`) — over plain http the client never subscribes and
+// this sits dormant.
+const push = new PushService(db, config.dataDir);
+attachAttentionPush({ events, db, push });
+
 const app = createApp({
   db,
   ptyd,
@@ -90,6 +98,7 @@ const app = createApp({
   dataDir: config.dataDir,
   events,
   agentBridge,
+  push,
 });
 
 // Static asset serving (CSS, JS, images, etc.) from the built web bundle.
