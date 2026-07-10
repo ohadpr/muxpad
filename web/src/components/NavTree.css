@@ -520,28 +520,6 @@
   pointer-events: none;
 }
 
-/* Sheet ⋯ — the tab's full menu, visible (long-press is unreliable on
-   iOS). Generous touch square at the row's far right. */
-.navtree-more {
-  flex: 0 0 44px;
-  align-self: stretch;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  padding: 0;
-  color: var(--fg-faint);
-  font-size: 18px;
-  line-height: 1;
-  cursor: pointer;
-  border-radius: 4px;
-  touch-action: manipulation;
-  -webkit-tap-highlight-color: transparent;
-}
-.navtree-more:active {
-  background: var(--bg-hover);
-}
 .navtree-pane-expander[data-open="true"] svg {
   /* Instant flip — expansion itself is instant, an animated chevron next
      to a snapping list reads as lag. */
