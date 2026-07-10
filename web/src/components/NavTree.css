@@ -234,6 +234,14 @@
   box-shadow: inset 0 0 0 1px var(--accent);
   border-radius: 4px;
 }
+/* "Drop INTO this tab" — a dragged pane (whole row) or a dragged tab over
+   the row's middle band (merge). Same accent ring language as the
+   workspace rows' move-tab-here affordance. */
+.navtree-tab-row[data-drop-into="true"] {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  border-radius: var(--nt-pill);
+}
 .navtree-ws-name:hover {
   text-decoration: none;
 }

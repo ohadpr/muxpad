@@ -130,13 +130,21 @@ export const api = {
 
   deletePane: (id: string) => req<void>(`/api/panes/${id}`, { method: 'DELETE' }),
 
-  // Move a pane to another tab in the same workspace. `toTabId` targets an
+  // Move a pane to another tab (any workspace). `toTabId` targets an
   // existing tab; `newTab` extracts it into a fresh tab. The PTY keeps
   // running — only the pane's parent tab + both tabs' layouts change.
   movePane: (id: string, dest: { toTabId?: string; newTab?: boolean }) =>
     req<MovePaneResult>(`/api/panes/${id}/move`, {
       method: 'POST',
       body: JSON.stringify({ to_tab_id: dest.toTabId, new_tab: dest.newTab }),
+    }),
+
+  // Merge a whole tab into another: every pane moves over (keeping strip
+  // order), the emptied source tab is deleted. Panes keep running.
+  mergeTab: (id: string, intoTabId: string) =>
+    req<{ to_tab: Tab; from_tab_id: string; moved_pane_ids: string[] }>(`/api/tabs/${id}/merge`, {
+      method: 'POST',
+      body: JSON.stringify({ into_tab_id: intoTabId }),
     }),
 
   // Move a whole tab (and its panes) to a different workspace.

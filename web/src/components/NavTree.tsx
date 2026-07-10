@@ -9,6 +9,7 @@ import { applyTabOrder, refreshTabs, useTabs } from '../tabs';
 import { useLongPress } from '../use-long-press';
 import { MAX_QUICK_SWITCH_TABS, useTabQuickSwitch } from '../use-tab-quickswitch';
 import { applyWorkspaceOrder, refreshWorkspaces, useWorkspaces } from '../workspaces';
+import { PANE_DRAG_MIME, getActivePaneDrag } from '../lib/pane-drag';
 import { NewTabChooser } from './NewTabChooser';
 import { SvgClose } from './icons';
 import './NavTree.css';
@@ -56,6 +57,14 @@ interface TabDragPayload {
   tabId: string;
   tabName: string;
   fromWorkspaceId: string;
+}
+
+/** Middle band of a tab row = the "merge / move INTO this tab" drop zone;
+ *  the edges stay with reorder — the file-tree drop-into convention. */
+function inMergeBand(e: React.DragEvent): boolean {
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  const y = (e.clientY - r.top) / Math.max(1, r.height);
+  return y >= 0.3 && y <= 0.7;
 }
 
 // Origin of the in-flight tab drag, set on dragstart / cleared on dragend.
@@ -130,6 +139,12 @@ interface DragItemProps {
 function useListReorder(
   orderedIds: string[],
   persist: (ids: string[]) => void,
+  opts?: {
+    /** Return false to decline an otherwise-valid dragover (e.g. tab rows
+     *  cede their middle band to the merge-into affordance); a declined row
+     *  also clears its own drop-edge highlight so the two never coexist. */
+    claimOver?: (e: React.DragEvent) => boolean;
+  },
 ): (id: string) => DragItemProps {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
@@ -159,6 +174,10 @@ function useListReorder(
       },
       onDragOver: (e: React.DragEvent) => {
         if (!dragId || dragId === id) return;
+        if (opts?.claimOver && !opts.claimOver(e)) {
+          if (overId === id) setOverId(null);
+          return;
+        }
         e.preventDefault(); // allow drop
         e.dataTransfer.dropEffect = 'move';
         if (overId !== id) setOverId(id);
@@ -554,7 +573,10 @@ function TabList({
   const { tabs } = useTabs(workspace.id);
   const [creating, setCreating] = useState(false);
 
-  // Drag-to-reorder tabs within this workspace (desktop sidebar).
+  // Drag-to-reorder tabs within this workspace (desktop sidebar). Reorder
+  // claims only the EDGE bands of a row — the middle band belongs to
+  // merge-into (see TabRow), so one row hosts both gestures without the
+  // drop-line and the merge ring fighting.
   const tabDnd = useListReorder(
     tabs.map((t) => t.id),
     (ids) => {
@@ -568,7 +590,58 @@ function TabList({
         await refreshTabs(workspace.id);
       })();
     },
+    { claimOver: (e) => !inMergeBand(e) },
   );
+
+  // Merge a dragged tab's panes into `dest` (the row it was dropped on).
+  // The source tab dissolves; if it was the one being viewed, follow the
+  // panes to their new home (otherwise its TabView's tab.removed redirect
+  // would dump the user on the workspace's first tab).
+  const mergeTabInto = async (payload: TabDragPayload, dest: Tab) => {
+    const sourceWasActive =
+      isActiveWorkspace && tabs.some((t) => t.id === payload.tabId && t.slug === activeTabSlug);
+    try {
+      await api.mergeTab(payload.tabId, dest.id);
+      await Promise.all([
+        refreshTabs(payload.fromWorkspaceId),
+        refreshTabs(workspace.id),
+        refreshWorkspaces(),
+      ]);
+      if (sourceWasActive) {
+        onNavigate?.();
+        void navigate({
+          to: '/w/$wsSlug/t/$tabSlug',
+          params: { wsSlug: workspace.slug, tabSlug: dest.slug },
+        });
+      }
+    } catch (err) {
+      console.error('merge tab failed', err);
+    }
+  };
+
+  // Move a single pane (dragged from the tab strip) into `dest`.
+  const movePaneHere = async (paneId: string, dest: Tab) => {
+    try {
+      const res = await api.movePane(paneId, { toTabId: dest.id });
+      if (res.to_tab.id === res.from_tab_id) return; // no-op (already here)
+      await Promise.all([refreshTabs(workspace.id), refreshWorkspaces()]);
+      // Undo only while the source tab still exists to receive it back.
+      if (!res.from_tab_removed) {
+        pushUndo({
+          message: `Moved pane to “${dest.name}”`,
+          run: async () => {
+            try {
+              await api.movePane(paneId, { toTabId: res.from_tab_id });
+            } catch (err) {
+              console.error('undo pane move failed', err);
+            }
+          },
+        });
+      }
+    } catch (err) {
+      console.error('move pane failed', err);
+    }
+  };
 
   // Ctrl+1…9 quick-switch parity with the top-nav TabBar. Only the
   // sidebar wires it (the sheet is touch; TabBar owns it in top mode).
@@ -664,6 +737,8 @@ function TabList({
           onClose={(e) => void closeTab(e, t)}
           onSetUnread={(want) => void setTabUnread(t, want)}
           onSetIcon={(icon) => void setTabIcon(t, icon)}
+          onMergeInto={(payload) => void mergeTabInto(payload, t)}
+          onMovePaneHere={(paneId) => void movePaneHere(paneId, t)}
           rowDnd={variant === 'sidebar' ? tabDnd(t.id) : undefined}
         />
       ))}
@@ -698,6 +773,10 @@ interface TabRowProps {
   onSetUnread: (want: boolean) => void;
   /** Set this tab's leading icon (emoji). */
   onSetIcon: (icon: string) => void;
+  /** A dragged TAB was dropped on this row's merge band — absorb its panes. */
+  onMergeInto: (payload: TabDragPayload) => void;
+  /** A pane dragged from the strip was dropped here — move it into this tab. */
+  onMovePaneHere: (paneId: string) => void;
   rowDnd?: DragItemProps | undefined;
 }
 
@@ -714,6 +793,8 @@ function TabRow({
   onClose,
   onSetUnread,
   onSetIcon,
+  onMergeInto,
+  onMovePaneHere,
 }: TabRowProps) {
   // Right-click context menu (desktop sidebar). Anchored at the cursor.
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -739,6 +820,15 @@ function TabRow({
   // menu targets and the legal drop targets for the drag gesture.
   const { workspaces } = useWorkspaces();
   const otherWorkspaces = workspaces.filter((w) => w.id !== workspace.id);
+
+  // "Drop INTO this tab" affordance — lit for a pane dragged from the tab
+  // strip (whole row) or another tab dragged over the row's middle band
+  // (merge; the edges stay with reorder via the hook's claimOver).
+  const [dropInto, setDropInto] = useState(false);
+  const isForeignPaneDrag = (e: React.DragEvent) =>
+    e.dataTransfer.types.includes(PANE_DRAG_MIME) && getActivePaneDrag()?.fromTabId !== tab.id;
+  const isForeignTabDrag = (e: React.DragEvent) =>
+    e.dataTransfer.types.includes(TAB_DRAG_MIME) && activeTabDrag?.tabId !== tab.id;
 
   // Reuse the row's reorder dnd, but also stamp a typed payload on dragstart
   // so a workspace row can recognise this as a cross-workspace tab move.
@@ -769,11 +859,64 @@ function TabRow({
         },
       }
     : {};
+
+  // Compose drop-into on TOP of reorder: the claimed branches stopPropagation
+  // so the workspace group's move-tab-here handler (an ancestor) never
+  // double-handles the same drop.
+  const dropDnd: Partial<DragItemProps> =
+    variant === 'sidebar' && !isEditing
+      ? {
+          ...tabRowDnd,
+          onDragOver: (e: React.DragEvent) => {
+            if (isForeignPaneDrag(e) || (isForeignTabDrag(e) && inMergeBand(e))) {
+              e.preventDefault();
+              e.stopPropagation();
+              e.dataTransfer.dropEffect = 'move';
+              if (!dropInto) setDropInto(true);
+              return;
+            }
+            if (dropInto) setDropInto(false);
+            tabRowDnd.onDragOver?.(e);
+          },
+          onDragLeave: (e: React.DragEvent) => {
+            if (dropInto && !e.currentTarget.contains(e.relatedTarget as Node | null)) {
+              setDropInto(false);
+            }
+            tabRowDnd.onDragLeave?.(e);
+          },
+          onDrop: (e: React.DragEvent) => {
+            const paneId = e.dataTransfer.getData(PANE_DRAG_MIME);
+            if (paneId && getActivePaneDrag()?.fromTabId !== tab.id) {
+              e.preventDefault();
+              e.stopPropagation();
+              setDropInto(false);
+              onMovePaneHere(paneId);
+              return;
+            }
+            const rawTab = e.dataTransfer.getData(TAB_DRAG_MIME);
+            if (rawTab && dropInto) {
+              e.preventDefault();
+              e.stopPropagation();
+              setDropInto(false);
+              try {
+                const payload = JSON.parse(rawTab) as TabDragPayload;
+                if (payload.tabId !== tab.id) onMergeInto(payload);
+              } catch {
+                // malformed payload — ignore
+              }
+              return;
+            }
+            setDropInto(false);
+            tabRowDnd.onDrop?.(e);
+          },
+        }
+      : tabRowDnd;
   return (
     <div
       className="navtree-tab-row"
       data-active={isActiveTab ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
+      data-drop-into={dropInto ? 'true' : undefined}
       {...(variant === 'sidebar' && !isEditing
         ? {
             onContextMenu: (e: React.MouseEvent) => {
@@ -782,7 +925,7 @@ function TabRow({
             },
           }
         : {})}
-      {...tabRowDnd}
+      {...dropDnd}
     >
       {isEditing ? (
         <RenameInput

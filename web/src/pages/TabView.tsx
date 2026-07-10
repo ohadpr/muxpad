@@ -28,6 +28,7 @@ import { handoffToAgent } from '../lib/agent-handoff';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { pushUndo } from '../lib/move-undo-store';
+import { PANE_DRAG_MIME, setActivePaneDrag } from '../lib/pane-drag';
 import { usePaneFace } from '../lib/pane-face';
 import { setTabViewMode, useTabViewMode } from '../lib/tab-view-mode';
 import { refreshTabs, useTabs } from '../tabs';
@@ -126,8 +127,6 @@ function buildRowLayout(ids: string[]): Layout {
   if (second == null) return first;
   return { direction: 'row', first, second };
 }
-
-const PANE_DRAG_MIME = 'application/x-muxpad-pane-id';
 
 export interface TabViewProps {
   /** Stable slug for this instance — one TabView per tab in WorkspaceLayout. */
@@ -1053,6 +1052,9 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     e.dataTransfer.setData(PANE_DRAG_MIME, id);
     e.dataTransfer.effectAllowed = 'move';
     setPaneDragId(id);
+    // Mirror the origin so sidebar tab rows can gate their move-here drop
+    // affordance during dragover (when the payload itself is unreadable).
+    if (tab) setActivePaneDrag({ paneId: id, fromTabId: tab.id });
   };
   const onPaneDragOver = (e: ReactDragEvent, id: string) => {
     if (!paneDragId || paneDragId === id) return;
@@ -1064,6 +1066,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     setPaneDropSide(side);
   };
   const onPaneDragEnd = () => {
+    setActivePaneDrag(null);
     setPaneDragId(null);
     setPaneDropTargetId(null);
   };
