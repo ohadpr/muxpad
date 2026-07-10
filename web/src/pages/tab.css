@@ -455,7 +455,13 @@
      (.tabbed-pane-slot::after), so plain --bg would read as a different shade
      and the tab wouldn't fuse into the pane. */
   background: color-mix(in srgb, var(--accent) 5%, var(--bg));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 10%, transparent);
+  /* Hairline on the SIDES only — a full inset ring painted its own 1px
+     line across the tab's bottom edge, exactly the seam the height
+     overlap below exists to remove (the top edge is under the accent
+     rail, so it needs no line either). */
+  box-shadow:
+    inset 1px 0 0 color-mix(in srgb, var(--fg) 10%, transparent),
+    inset -1px 0 0 color-mix(in srgb, var(--fg) 10%, transparent);
   /* Full container height = over the strip's hairline: the open tab fuses
      seamlessly into its pane, no dividing line. */
   height: 100%;
