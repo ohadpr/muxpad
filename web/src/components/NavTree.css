@@ -392,6 +392,7 @@
   /* Indent tab text past the workspace name, so the parent→child step
      reads from alignment alone (replaces the old guide hairline). */
   padding-left: var(--nt-indent);
+
   /* Trailing gutter so the name never kisses the pill edge once the close
      button collapses away — keeps a touch of breathing room on the right. */
   padding-right: 6px;
@@ -457,6 +458,13 @@
   -webkit-tap-highlight-color: transparent;
 }
 /* Touch has no hover — keep close faintly present (and sized) on the sheet. */
+/* Sheet: the leading pane-expander supplies the tab indent — adding the
+   text indent on top floated names mid-row and made pane children render
+   LEFT of their parent. */
+.navtree[data-variant="sheet"] .navtree-tab-link {
+  padding-left: 0;
+}
+
 .navtree[data-variant="sheet"] .navtree-close {
   flex-basis: var(--nt-hit);
   width: var(--nt-hit);
@@ -480,6 +488,85 @@
   background: var(--bg-hover);
   color: var(--danger);
   opacity: 1;
+}
+
+/* ─── Sheet pane list (mobile: tab row expands into its panes) ───────── */
+
+/* Expander chevron LEADING sheet tab rows — same left-edge grammar and
+   rotation as the workspace disclosure, full row height so the thumb
+   target is generous and clearly separated from the name (navigate) and
+   the × (close) on the right. */
+.navtree-pane-expander {
+  flex: 0 0 40px;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin-left: -6px; /* claw back some of the tab indent for the target */
+  color: var(--fg-faint);
+  cursor: pointer;
+  border-radius: 4px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.navtree-pane-expander:active {
+  background: var(--bg-hover);
+}
+/* Inert indent twin for chevron-less rows. */
+.navtree-pane-expander.-spacer {
+  pointer-events: none;
+}
+
+.navtree-pane-expander[data-open="true"] svg {
+  /* Instant flip — expansion itself is instant, an animated chevron next
+     to a snapping list reads as lag. */
+  transform: rotate(90deg);
+}
+
+/* The expanded pane rows — one hierarchy step deeper than tab rows. */
+.navtree-pane-list {
+  display: flex;
+  flex-direction: column;
+  /* One hierarchy step DEEPER than the tab name — children must never
+     sit left of their parent. */
+  padding: 2px 8px 6px 64px;
+}
+.navtree-pane-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: calc(var(--nt-row-tab) - 4px);
+  padding: 0 8px;
+  background: transparent;
+  border: none;
+  border-radius: var(--nt-pill);
+  color: var(--fg-dim);
+  font-family: inherit;
+  font-size: 0.95em;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.navtree-pane-row:active {
+  background: var(--bg-hover);
+}
+.navtree-pane-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.navtree-pane-loading {
+  padding: 4px 8px;
+  color: var(--fg-faint);
+}
+.navtree-new-pane {
+  margin: 2px 0 0;
 }
 
 /* ─── Inline rename (sidebar) ────────────────────────────────────────── */
