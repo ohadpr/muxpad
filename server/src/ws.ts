@@ -9,6 +9,7 @@ import {
   type ServerFrame,
   type SubagentProgress,
   parseFrame,
+  CLOSE_RUNNER_DISPLACED,
 } from './agent-runner/protocol.js';
 import { TranscriptTail } from './chat/TranscriptReader.js';
 import type { EventBus } from './events.js';
@@ -249,7 +250,7 @@ export function attachWsServer(deps: {
           agentRunners.delete(paneId);
           const stale = prev.ws;
           try {
-            stale.close(4001, 'replaced by a newer runner for this pane');
+            stale.close(CLOSE_RUNNER_DISPLACED, 'replaced by a newer runner for this pane');
           } catch {
             // already dead
           }

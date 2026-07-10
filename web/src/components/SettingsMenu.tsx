@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useDismissable } from '../lib/use-dismissable';
 import {
   FONT_FAMILIES,
   FONT_FAMILY_LABELS,
@@ -14,19 +15,7 @@ export function SettingsMenu() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
-    document.addEventListener('mousedown', onClick);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onClick);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
+  useDismissable(open, ref, () => setOpen(false));
 
   return (
     <div className="settings-wrap" ref={ref}>

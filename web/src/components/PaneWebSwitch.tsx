@@ -4,6 +4,7 @@ import { subscribe } from '../events';
 import { probeUrl, requestFace } from '../lib/face-switch';
 import { normalizePaneUrl, usePaneFace } from '../lib/pane-face';
 import { addUrlRecent, getUrlRecents } from '../lib/url-recents';
+import { useDismissable } from '../lib/use-dismissable';
 import './PaneWebSwitch.css';
 
 /**
@@ -293,23 +294,14 @@ export function PaneWebSwitch({
     };
   }, [paneId]);
 
+  useDismissable(menuAt !== null, wrapRef, () => setMenuAt(null));
   useEffect(() => {
     if (!menuAt) return;
-    const close = () => setMenuAt(null);
-    const onDown = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) close();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close();
-    };
-    document.addEventListener('mousedown', onDown, true);
-    document.addEventListener('keydown', onKey);
     // Fixed coords go stale on any scroll/resize — just close.
+    const close = () => setMenuAt(null);
     window.addEventListener('scroll', close, true);
     window.addEventListener('resize', close);
     return () => {
-      document.removeEventListener('mousedown', onDown, true);
-      document.removeEventListener('keydown', onKey);
       window.removeEventListener('scroll', close, true);
       window.removeEventListener('resize', close);
     };

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
+import { useDismissable } from '../lib/use-dismissable';
 
 /**
  * The "create a tab/pane" control: ONE quiet trigger at rest that expands
@@ -34,21 +35,7 @@ export function NewTabChooser({
 }) {
   const [choosing, setChoosing] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!choosing) return;
-    const onDown = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setChoosing(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setChoosing(false);
-    };
-    document.addEventListener('pointerdown', onDown);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('pointerdown', onDown);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [choosing]);
+  useDismissable(choosing, ref, () => setChoosing(false));
   if (!choosing) {
     return (
       <button
