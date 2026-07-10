@@ -1234,11 +1234,14 @@
 
 /* Session chip + menu: model / context% / compact / clear. Sits in a slim
    right-aligned row above the composer; the menu opens upward. */
+/* Right-aligned vertical stack: the transient working cue sits ABOVE the
+   persistent session chip — side by side the two pills floated as an odd
+   unaligned pair in the empty space over the composer. */
 .chat-session-row {
   display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
   padding: 0 6px 4px;
 }
 /* Always-on-screen activity cue beside the session chip — a matching pill
