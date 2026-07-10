@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useDismissable } from '../lib/use-dismissable';
 import './PaneSelector.css';
 
 export interface PaneSelectorProps {
@@ -28,21 +29,7 @@ export function PaneSelector({
   const [open, setOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => {
-      if (!dropdownRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', onClick);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onClick);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
+  useDismissable(open, dropdownRef, () => setOpen(false));
 
   const activeName = activeId ? paneLabel(activeId) : '—';
   // How many *other* panes are flagging attention. Same chevron-pill

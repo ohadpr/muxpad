@@ -2,11 +2,16 @@
 // (…/attachments/<hash>.<ext>); the pixels live on the server host, so every
 // device loads them through the serve route, keyed by bare filename.
 
-const IMAGE_EXT = 'png|jpe?g|gif|webp';
+import { IMAGE_EXT_ALTERNATION } from '@muxpad/shared';
+
 // Match an attachments-dir path token: any non-space run ending in
 // `/attachments/<file>.<img-ext>`. Absolute paths never contain spaces, so a
 // greedy \S* cleanly captures the whole path while the group grabs the name.
-const ATTACHMENT_PATH_RE = new RegExp(`\\S*/attachments/([\\w.-]+\\.(?:${IMAGE_EXT}))`, 'gi');
+// The extension set is the shared pipeline-wide map — never a local list.
+const ATTACHMENT_PATH_RE = new RegExp(
+  `\\S*/attachments/([\\w.-]+\\.(?:${IMAGE_EXT_ALTERNATION}))`,
+  'gi',
+);
 
 export function attachmentUrl(name: string): string {
   return `/api/panes/attachments/${encodeURIComponent(name)}`;
