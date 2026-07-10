@@ -1241,14 +1241,32 @@
   gap: 10px;
   padding: 0 6px 4px;
 }
-/* Always-on-screen activity cue beside the session chip. */
+/* Always-on-screen activity cue beside the session chip — a matching pill
+   (same metrics as .chat-session-chip) so the row reads as one family; the
+   pulse lives in a leading accent dot, not the text. */
 .chat-composer-working {
-  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px;
+  border: 1px solid color-mix(in srgb, var(--border-strong, #3b4261) 70%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-chrome, #16161e) 60%, transparent);
+  font-size: 10.5px;
+  line-height: 1.5;
   color: var(--chat-faint);
+  white-space: nowrap;
+}
+.chat-composer-working::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
   animation: chat-subagent-pulse 2s ease-in-out infinite;
 }
 @media (prefers-reduced-motion: reduce) {
-  .chat-composer-working {
+  .chat-composer-working::before {
     animation: none;
   }
 }
