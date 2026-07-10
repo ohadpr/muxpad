@@ -515,6 +515,10 @@
 .navtree-pane-expander:active {
   background: var(--bg-hover);
 }
+/* Inert indent twin for chevron-less rows. */
+.navtree-pane-expander.-spacer {
+  pointer-events: none;
+}
 .navtree-pane-expander[data-open="true"] svg {
   /* Instant flip — expansion itself is instant, an animated chevron next
      to a snapping list reads as lag. */

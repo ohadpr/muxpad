@@ -1102,6 +1102,11 @@ function TabRow({
         >
           <SvgChevronRight />
         </button>
+      ) : variant === 'sheet' && !isEditing ? (
+        // The expander column doubles as the tab indent — chevron-less
+        // (single-pane) rows keep an identical-width spacer so every tab
+        // name sits on the same grid line.
+        <span className="navtree-pane-expander -spacer" aria-hidden="true" />
       ) : null}
       {isEditing ? (
         <RenameInput
