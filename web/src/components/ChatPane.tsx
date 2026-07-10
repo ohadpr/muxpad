@@ -1137,7 +1137,10 @@ export function ChatPane({
     const renderable = events.filter((e) => !(e.kind === 'tool_result' && consumed.has(e.id)));
     const isAction = (e: ChatEvent) =>
       e.kind === 'tool_use' || e.kind === 'tool_result' || e.kind === 'thinking';
-    const MIN_GROUP = 4;
+    // Fold from TWO actions up — real transcripts are full of 2-3 action
+    // stretches between prose, and leaving those inline read as "folding
+    // doesn't work". A lone action stays inline.
+    const MIN_GROUP = 2;
     const items: React.ReactNode[] = [];
     for (let i = 0; i < renderable.length; ) {
       const e = renderable[i] as ChatEvent;
