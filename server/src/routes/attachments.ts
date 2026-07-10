@@ -2,8 +2,8 @@ import { Hono } from 'hono';
 import { ulid } from 'ulid';
 import type Database from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join, extname } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, join, extname } from 'node:path';
 import { PaneStore } from '../store/PaneStore.js';
 
 export function attachmentsRoutes(deps: {
@@ -44,8 +44,35 @@ export function attachmentsRoutes(deps: {
     return c.json({ path }, 201);
   });
 
+  // Serve a stored attachment by bare filename so history thumbnails load over
+  // HTTP from any device (the DB only keeps a host-local absolute path). Locked
+  // to the flat attachments dir: basename-only (no traversal) and an image
+  // extension, matching what the POST route ever writes.
+  app.get('/attachments/:name', (c) => {
+    const name = c.req.param('name');
+    if (name !== basename(name) || name.includes('\0'))
+      return c.json({ error: { code: 'bad_request', message: 'bad name' } }, 400);
+    const mime = IMAGE_MIME[extname(name).toLowerCase()];
+    if (!mime)
+      return c.json({ error: { code: 'bad_request', message: 'not an image' } }, 400);
+    const path = join(deps.dataDir, 'attachments', name);
+    if (!existsSync(path))
+      return c.json({ error: { code: 'not_found', message: 'attachment not found' } }, 404);
+    return new Response(new Uint8Array(readFileSync(path)), {
+      headers: { 'content-type': mime, 'cache-control': 'private, max-age=31536000, immutable' },
+    });
+  });
+
   return app;
 }
+
+const IMAGE_MIME: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
 
 function mimeExt(mime: string): string {
   if (mime === 'image/png') return '.png';

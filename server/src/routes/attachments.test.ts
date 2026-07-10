@@ -76,4 +76,28 @@ describe('attachments', () => {
     });
     expect(res.status).toBe(404);
   });
+
+  it('serves a stored attachment by filename over HTTP', async () => {
+    const fd = new FormData();
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    fd.append('file', new Blob([bytes], { type: 'image/png' }), 'pasted.png');
+    const up = (await (
+      await test.app.request(`/api/panes/${paneId}/attachments`, { method: 'POST', body: fd })
+    ).json()) as { path: string };
+    const name = up.path.split('/').pop() as string;
+
+    const res = await test.app.request(`/api/panes/attachments/${name}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('image/png');
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes);
+  });
+
+  it('rejects path traversal and non-image names', async () => {
+    // basename-only guard: a nested/relative name never resolves.
+    expect((await test.app.request('/api/panes/attachments/..%2f..%2fdb.sqlite')).status).toBe(400);
+    // image-extension allowlist.
+    expect((await test.app.request('/api/panes/attachments/notes.txt')).status).toBe(400);
+    // well-formed but absent.
+    expect((await test.app.request('/api/panes/attachments/deadbeef.png')).status).toBe(404);
+  });
 });
