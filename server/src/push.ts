@@ -23,8 +23,16 @@ import { WorkspaceStore } from './store/WorkspaceStore.js';
 export interface PushPayload {
   title: string;
   body: string;
-  /** SPA path to open on tap, e.g. `/w/dev/t/muxpad`. */
+  /**
+   * SPA path to open on tap, e.g. `/w/dev/t/muxpad?ptab=<id>&pane=<id>`.
+   * The ptab/pane params are the COLD-START channel for pane focus: a tap
+   * that boots the PWA fresh can't receive a SW postMessage reliably, so
+   * the app reads them at boot (web/src/main.tsx) and strips them.
+   */
   url: string;
+  /** Pane-focus hints for the WARM path (SW → postMessage → open client). */
+  tab_id?: string;
+  pane_id?: string;
   /** Coalescing key — repeat notifications with the same tag replace. */
   tag?: string;
 }
@@ -140,7 +148,11 @@ export function createPaneNotifier(db: Database.Database, push: PushService): Pa
     void push.send({
       title: tab && ws ? `${tab.name} — ${ws.name}` : 'muxpad',
       body,
-      url: tab && ws ? `/w/${ws.slug}/t/${tab.slug}` : '/',
+      url:
+        tab && ws
+          ? `/w/${ws.slug}/t/${tab.slug}?ptab=${encodeURIComponent(tab.id)}&pane=${encodeURIComponent(paneId)}`
+          : '/',
+      ...(tab ? { tab_id: tab.id, pane_id: paneId } : {}),
       tag: paneId,
     });
   };

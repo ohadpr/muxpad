@@ -43,7 +43,9 @@ describe('createPaneNotifier', () => {
     expect(sent[0]).toMatchObject({
       title: `${tab.name} — ${ws.name}`,
       body: 'agent finished its turn',
-      url: `/w/${ws.slug}/t/${tab.slug}`,
+      url: `/w/${ws.slug}/t/${tab.slug}?ptab=${tab.id}&pane=${pane.id}`,
+      tab_id: tab.id,
+      pane_id: pane.id,
       tag: pane.id,
     });
   });
@@ -90,7 +92,7 @@ describe('attachAttentionPush', () => {
     events.emit({ type: 'pane.updated', tab_id: tabId, pane: makePane(paneId, tabId, true) });
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({
-      url: `/w/${wsSlug}/t/${tabSlug}`,
+      url: `/w/${wsSlug}/t/${tabSlug}?ptab=${tabId}&pane=${paneId}`,
       tag: paneId,
     });
     expect(sent[0]?.body).toContain('claude');

@@ -283,6 +283,22 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     return () => window.removeEventListener('muxpad:add-pane', onAddPane);
   }, []);
 
+  // Push-notification deep link: a tap targets a specific PANE, and the SW
+  // message handler (main.tsx) broadcasts muxpad:show-pane after routing to
+  // the owning tab. Every mounted TabView hears it; only the one that owns
+  // the pane reacts. Single-pane views flip their active pane to it; the
+  // split mosaic shows every pane anyway, so there it's a no-op.
+  useEffect(() => {
+    const onShowPane = (e: Event) => {
+      const paneId = (e as CustomEvent<{ paneId?: string }>).detail?.paneId;
+      if (!paneId || !tab) return;
+      if (!collectPaneIds(toMosaic(tab.layout)).includes(paneId)) return;
+      setMobileActiveId(paneId);
+    };
+    window.addEventListener('muxpad:show-pane', onShowPane);
+    return () => window.removeEventListener('muxpad:show-pane', onShowPane);
+  }, [tab]);
+
   // Persist the active pane on every focus event from any XtermPane
   // in the current tab. Desktop has no "active pane" in component
   // state — focus lives entirely in the DOM — so we record it here so
