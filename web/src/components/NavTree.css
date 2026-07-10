@@ -515,10 +515,9 @@
 .navtree-pane-expander:active {
   background: var(--bg-hover);
 }
-.navtree-pane-expander svg {
-  transition: transform 120ms ease;
-}
 .navtree-pane-expander[data-open="true"] svg {
+  /* Instant flip — expansion itself is instant, an animated chevron next
+     to a snapping list reads as lag. */
   transform: rotate(90deg);
 }
 
@@ -526,9 +525,9 @@
 .navtree-pane-list {
   display: flex;
   flex-direction: column;
-  /* One hierarchy step DEEPER than the tab name: 40px expander column
-     + 8px — children must never sit left of their parent. */
-  padding: 2px 8px 6px 48px;
+  /* One hierarchy step DEEPER than the tab name — children must never
+     sit left of their parent. */
+  padding: 2px 8px 6px 64px;
 }
 .navtree-pane-row {
   display: flex;
