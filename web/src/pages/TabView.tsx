@@ -289,6 +289,18 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     return () => window.removeEventListener('muxpad:add-pane', onAddPane);
   }, []);
 
+  // Pane selection from OUTSIDE the pane views (the mobile sheet's pane
+  // rows). A mounted TabView switches immediately; an unmounted one reads
+  // the sheet's setLastPaneId on mount instead.
+  useEffect(() => {
+    const onSelectPane = (e: Event) => {
+      const d = (e as CustomEvent<{ tabId?: string; paneId?: string }>).detail;
+      if (d?.tabId === tab?.id && d.paneId) setMobileActiveId(d.paneId);
+    };
+    window.addEventListener('muxpad:select-pane', onSelectPane);
+    return () => window.removeEventListener('muxpad:select-pane', onSelectPane);
+  }, [tab?.id]);
+
   // Push-notification deep link: a tap targets a specific PANE, and the SW
   // message handler (main.tsx) broadcasts muxpad:show-pane after routing to
   // the owning tab. Every mounted TabView hears it; only the one that owns
@@ -1106,13 +1118,18 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           ? stored
           : (paneIds[0] ?? null);
 
-    const addPane = async () => {
+    const addPane = async (kind: NewPaneKind = 'terminal') => {
       if (!tab) return;
       const target = activeId ?? paneIds[paneIds.length - 1];
-      const created = await api.createPane(tab.id, target ? { inherit_cwd_from: target } : {});
-      const newLayout: Layout = target
-        ? splitAtPane(layoutRef.current, target, created.id, 'column')
-        : created.id;
+      const created = await api.createPane(tab.id, {
+        ...(target ? { inherit_cwd_from: target } : {}),
+        ...(kind === 'agent' ? { startup_cmd: 'muxpad agent', face: 'chat' as const } : {}),
+      });
+      // Append at the END — same convention as the desktop strip's +.
+      const newLayout: Layout =
+        layoutRef.current == null
+          ? created.id
+          : { direction: 'row', first: layoutRef.current, second: created.id };
       layoutRef.current = newLayout;
       setTab((prev) =>
         prev
@@ -1163,9 +1180,18 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                 startupCmd={ap.startup_cmd}
               />
             ) : null;
-          if (paneIds.length > 1) {
-            return (
-              <nav className="mobile-tab-strip" aria-label="Panes">
+          // The bar renders for EVERY tab — it's the one predictable home
+          // for pane-level controls on mobile, mirroring the desktop strip:
+          // picker (only when there's a choice), face switch, and a visible
+          // + (creation must never hide behind a gesture or a pane-count
+          // threshold; single-pane tabs used to have NO way to add one).
+          return (
+            <nav className="mobile-tab-strip" aria-label="Panes">
+              {/* LEADING anchor in every mode: the pane picker when there's
+                  a choice, else the face switch — the bar always opens with
+                  the thing that names what you're looking at. Trailing:
+                  actions (+, ×), right-aligned as a group. */}
+              {paneIds.length > 1 ? (
                 <PaneSelector
                   paneIds={paneIds}
                   activeId={activeId}
@@ -1173,31 +1199,34 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                   paneAttention={(id) => tab.panes.find((p) => p.id === id)?.attention ?? false}
                   onSelect={setMobileActiveId}
                 />
-                {webSwitch && <div className="mobile-strip-webswitch">{webSwitch}</div>}
+              ) : (
+                webSwitch && <div className="mobile-strip-webswitch -lead">{webSwitch}</div>
+              )}
+              <span className="mobile-strip-spacer" aria-hidden="true" />
+              {paneIds.length > 1 && webSwitch ? (
+                <div className="mobile-strip-webswitch">{webSwitch}</div>
+              ) : null}
+              <NewTabChooser
+                idleLabel="+"
+                idleTitle="New pane"
+                idleClassName="mobile-strip-add"
+                choicesClassName="mobile-strip-choices"
+                choiceClassName="mobile-strip-add mobile-strip-choice"
+                onCreate={(kind) => void addPane(kind)}
+              />
+              {activeId && paneIds.length > 1 && (
                 <button
                   type="button"
-                  className="ws-tab-add"
-                  onClick={() => window.dispatchEvent(new CustomEvent('muxpad:add-pane'))}
-                  title="New pane"
-                  aria-label="New pane"
+                  className="mobile-tab-close"
+                  onClick={closeActivePane}
+                  title="Close active pane"
+                  aria-label="Close active pane"
                 >
-                  +
+                  <SvgClose size={12} />
                 </button>
-                {activeId && (
-                  <button
-                    type="button"
-                    className="mobile-tab-close"
-                    onClick={closeActivePane}
-                    title="Close active pane"
-                    aria-label="Close active pane"
-                  >
-                    <SvgClose size={12} />
-                  </button>
-                )}
-              </nav>
-            );
-          }
-          return webSwitch ? <div className="mobile-web-switch-bar">{webSwitch}</div> : null;
+              )}
+            </nav>
+          );
         })()}
         <main className="workspace-body workspace-body-mobile">
           {paneIds.map((paneId) => {
