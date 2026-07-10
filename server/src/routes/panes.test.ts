@@ -515,7 +515,11 @@ describe('panes routes', () => {
     expect(await getLayout(tabId)).toBe(only);
   });
 
-  it('rejects a move to a tab in a different workspace', async () => {
+  it('moves a pane to a tab in a different workspace (metadata-only re-home)', async () => {
+    // Cross-workspace moves are allowed: ptys and agent runners key by pane
+    // id, so nothing running notices, and the sidebar drop targets span
+    // workspaces. The response names the SOURCE workspace so the caller can
+    // refresh its tab cache.
     const a = await makePane(tabId);
     await setLayout(tabId, a);
     const otherWs = (await (
@@ -527,7 +531,16 @@ describe('panes routes', () => {
     ).json()) as { id: string };
     const foreignTab = await mkTab('Foreign', otherWs.id);
     const res = await move(a, { to_tab_id: foreignTab });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      to_tab: { id: string };
+      from_workspace_id: string;
+      from_tab_removed: boolean;
+    };
+    expect(body.to_tab.id).toBe(foreignTab);
+    expect(body.from_workspace_id).toBe(wsId);
+    expect(body.from_tab_removed).toBe(true); // `a` was the source's only pane
+    expect(await getLayout(foreignTab)).toBe(a);
   });
 
   it('move emits dest pane.added + source pane.removed', async () => {
