@@ -1207,15 +1207,37 @@ function TabRow({
           ) : null}
         </Link>
       )}
-      <button
-        type="button"
-        className="navtree-close"
-        onClick={onClose}
-        title="Close tab"
-        aria-label={`Close tab ${tab.name}`}
-      >
-        <SvgClose size={13} />
-      </button>
+      {variant === 'sheet' ? (
+        // Touch: one visible ⋯ opens the full tab menu (rename, icon, new
+        // pane, move, close). Long-press is unreliable on iOS (the armed
+        // click never arrives after a long hold), and a bare × next to the
+        // name was a mis-tap magnet — destructive close now lives in the
+        // menu instead.
+        <button
+          type="button"
+          className="navtree-more"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            setMenu({ x: r.right, y: r.bottom + 4 });
+          }}
+          aria-haspopup="menu"
+          aria-label={`Tab options for ${tab.name}`}
+        >
+          ⋯
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="navtree-close"
+          onClick={onClose}
+          title="Close tab"
+          aria-label={`Close tab ${tab.name}`}
+        >
+          <SvgClose size={13} />
+        </button>
+      )}
       {menu && (
         <NavContextMenu
           x={menu.x}
