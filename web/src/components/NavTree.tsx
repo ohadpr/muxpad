@@ -1062,6 +1062,26 @@ function TabRow({
         : {})}
       {...dropDnd}
     >
+      {/* Sheet: the pane disclosure LEADS the row — the same left-edge
+          grammar as the workspace rows, so thumbs already know where it
+          lives. Full row height; squeezing it between the name and the ×
+          made every tap a coin-flip between expand/navigate/close. */}
+      {variant === 'sheet' && !isEditing ? (
+        <button
+          type="button"
+          className="navtree-pane-expander"
+          data-open={panesOpen ? 'true' : undefined}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setPanesOpen((o) => !o);
+          }}
+          aria-expanded={panesOpen}
+          aria-label={panesOpen ? `Hide panes of ${tab.name}` : `Show panes of ${tab.name}`}
+        >
+          <SvgChevronRight />
+        </button>
+      ) : null}
       {isEditing ? (
         <RenameInput
           initial={tab.name}
@@ -1153,22 +1173,6 @@ function TabRow({
           ) : null}
         </Link>
       )}
-      {variant === 'sheet' ? (
-        <button
-          type="button"
-          className="navtree-pane-expander"
-          data-open={panesOpen ? 'true' : undefined}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            setPanesOpen((o) => !o);
-          }}
-          aria-expanded={panesOpen}
-          aria-label={panesOpen ? `Hide panes of ${tab.name}` : `Show panes of ${tab.name}`}
-        >
-          <SvgChevronRight />
-        </button>
-      ) : null}
       <button
         type="button"
         className="navtree-close"
