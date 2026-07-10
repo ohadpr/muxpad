@@ -125,6 +125,9 @@ export const api = {
       env?: Record<string, string> | null;
       inherit_cwd_from?: string;
       face?: 'terminal' | 'web' | 'chat';
+      /** Server places the pane atomically (root append) — for callers
+       *  without a local layout to patch (CLI, the nav sheet). */
+      append_to_layout?: boolean;
     } = {},
   ) =>
     req<PaneSpec>(`/api/tabs/${tabId}/panes`, {
