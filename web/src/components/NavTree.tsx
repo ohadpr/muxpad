@@ -3,7 +3,8 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { createDragOrigin } from '../lib/drag-origin';
-import { setFollowTarget } from '../lib/follow-tab';
+import { clearFollowTarget, setFollowTarget } from '../lib/follow-tab';
+import { useDismissable } from '../lib/use-dismissable';
 import { pushUndo } from '../lib/move-undo-store';
 import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansion';
 import { PANE_DRAG_MIME, paneDragOrigin } from '../lib/pane-drag';
@@ -612,6 +613,9 @@ function TabList({
         refreshWorkspaces(),
       ]);
     } catch (err) {
+      // The source tab survives a failed merge — retract the hint or a
+      // later unrelated close of that tab would teleport to `dest`.
+      clearFollowTarget(payload.tabId);
       console.error('merge tab failed', err);
     }
   };
@@ -623,6 +627,10 @@ function TabList({
     if (sourceTabId) setFollowTarget(sourceTabId, workspace.slug, dest.slug);
     try {
       const res = await api.movePane(paneId, { toTabId: dest.id });
+      // The hint only matters when the source tab dissolved (its removal is
+      // what navigates). Any other outcome must retract it — see
+      // clearFollowTarget.
+      if (sourceTabId && !res.from_tab_removed) clearFollowTarget(sourceTabId);
       if (res.to_tab.id === res.from_tab_id) return; // no-op (already here)
       await Promise.all([
         refreshTabs(workspace.id),
@@ -648,6 +656,7 @@ function TabList({
         });
       }
     } catch (err) {
+      if (sourceTabId) clearFollowTarget(sourceTabId);
       console.error('move pane failed', err);
     }
   };
@@ -1125,13 +1134,10 @@ function NavContextMenu({
   onDismiss: () => void;
 }) {
   const [openSub, setOpenSub] = useState<string | null>(null);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onDismiss();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onDismiss]);
+  const menuRef = useRef<HTMLDivElement>(null);
+  // Backdrop mousedown already covers outside-click; the hook adds Escape
+  // and keeps this menu on the ONE shared dismissal implementation.
+  useDismissable(true, menuRef, onDismiss);
   // Clamp so the menu never spills past the viewport edge (approx size —
   // exact enough to keep all items reachable near the bottom/right).
   const MENU_W = 200;
@@ -1151,6 +1157,7 @@ function NavContextMenu({
       }}
     >
       <div
+        ref={menuRef}
         className="navtree-menu"
         style={{ left, top }}
         onMouseDown={(e) => e.stopPropagation()}
@@ -1232,13 +1239,8 @@ function IconPicker({
   onPick: (icon: string) => void;
   onDismiss: () => void;
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onDismiss();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onDismiss]);
+  const pickerRef = useRef<HTMLDivElement>(null);
+  useDismissable(true, pickerRef, onDismiss);
   // emoji-mart's default picker is ~352×435; clamp so it stays on-screen.
   const W = 360;
   const H = 440;
@@ -1254,6 +1256,7 @@ function IconPicker({
       }}
     >
       <div
+        ref={pickerRef}
         className="navtree-emoji-popover"
         style={{ left, top }}
         onMouseDown={(e) => e.stopPropagation()}
