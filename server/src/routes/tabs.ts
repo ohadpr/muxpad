@@ -294,8 +294,10 @@ export function tabsRoutes(deps: {
     // ON DELETE CASCADE when the source tab is deleted below — silent pane
     // loss. Layout order first (keeps strip order), stragglers appended.
     const rows = panes.listByTab(id).map((p) => p.id);
-    const inLayout = collectLayoutLeaves(source.layout).filter((pid) => rows.includes(pid));
-    const paneIds = [...inLayout, ...rows.filter((pid) => !inLayout.includes(pid))];
+    const rowSet = new Set(rows);
+    const inLayout = collectLayoutLeaves(source.layout).filter((pid) => rowSet.has(pid));
+    const inLayoutSet = new Set(inLayout);
+    const paneIds = [...inLayout, ...rows.filter((pid) => !inLayoutSet.has(pid))];
 
     // Reparent every pane BEFORE deleting the source tab — rows already
     // pointing at dest are out of the cascade's blast radius.
