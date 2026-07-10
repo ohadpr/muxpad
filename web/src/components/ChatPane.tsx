@@ -6,10 +6,19 @@ import {
   type SubagentProgress,
   type ToolResultEvent,
   type ToolUseEvent,
+  IMAGE_MIME_BY_EXT,
   imageExtForMime,
   summarizeToolInput,
 } from '@muxpad/shared';
-import { type ChangeEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  type ChangeEvent,
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api } from '../api';
@@ -238,6 +247,15 @@ function consumeStreamedText(preview: string, landed: string[]): string {
  *  — its completing tool_result may never stream into an idle pane. */
 const SUBAGENT_STALE_MS = 10 * 60_000;
 
+/** '.ext' when the filename carries a renderable image extension — the
+ *  picker's fallback for providers that report an empty MIME type (mirrors
+ *  the server upload route's accept rule). */
+function imageExtFromName(name: string): string | null {
+  const m = /\.[a-z0-9]+$/i.exec(name);
+  const ext = m ? m[0].toLowerCase() : '';
+  return ext && ext in IMAGE_MIME_BY_EXT ? ext : null;
+}
+
 /**
  * Chat view of the Claude session tracked in a pane. Connects to
  * /ws/chat/:paneId, replays the transcript as chat, then streams live turns
@@ -462,7 +480,9 @@ export function ChatPane({
         setAgentStatus(msg.status ?? null);
         if (msg.subagents) {
           const now = Date.now();
-          for (const p of msg.subagents) subagentSeenAt.current.set(p.toolUseId, now);
+          // Full snapshot — REBUILD the seen-at map too (a plain set would
+          // leak entries for tasks the snapshot no longer carries).
+          subagentSeenAt.current = new Map(msg.subagents.map((p) => [p.toolUseId, now]));
           setSubagents(Object.fromEntries(msg.subagents.map((p) => [p.toolUseId, p])));
         }
       } else if (msg.t === 'events') {
@@ -472,6 +492,7 @@ export function ChatPane({
         // indicator itself filters on results, but the entries lingered).
         const resolvedNow = fresh.filter((e) => e.kind === 'tool_result').map((e) => e.toolUseId);
         if (resolvedNow.length) {
+          for (const id of resolvedNow) subagentSeenAt.current.delete(id);
           setSubagents((m) => {
             if (!resolvedNow.some((id) => id in m)) return m;
             const next = { ...m };
@@ -758,10 +779,21 @@ export function ChatPane({
   // camera. Empty-type files (HEIC / some Android providers) are kept.
   const onPickImages = async (e: ChangeEvent<HTMLInputElement>) => {
     const el = e.target;
-    // Only formats the whole pipeline renders (shared IMAGE_MIME_BY_EXT) —
-    // an empty/unknown-type file (some HEIC providers) would upload fine but
-    // could never thumbnail, and the serve route would 400 it.
-    const files = Array.from(el.files ?? []).filter((f) => imageExtForMime(f.type) !== null);
+    // Accept exactly what the server upload route accepts: a renderable
+    // MIME, or a renderable filename extension when the provider reports no
+    // type (HEIC pickers / some Android providers hand over type='').
+    // Dropping anything is LOUD — a silently-swallowed pick reads as "the
+    // app is broken".
+    const all = Array.from(el.files ?? []);
+    const files = all.filter(
+      (f) => imageExtForMime(f.type) !== null || imageExtFromName(f.name) !== null,
+    );
+    if (files.length < all.length) {
+      setNotice({
+        text: `some files were skipped — unsupported image type`,
+        tone: 'danger',
+      });
+    }
     el.value = ''; // reset so re-picking the same file still fires onChange
     if (files.length === 0) return;
     setUploading(true);
@@ -1034,6 +1066,30 @@ export function ChatPane({
     }
   }, [events, optimisticUser]);
 
+  // ONE tool-resolution index for everything below (and one place for the
+  // "a tool_use is resolved when a tool_result shares its toolUseId" rule).
+  // resultFor pairs each call with its result (the collapsed row opens both
+  // in one modal; the standalone result row is then suppressed via
+  // `consumed`). unresolvedTools is in event order, so its head is the
+  // OLDEST still-running call — with parallel tool calls the last event is
+  // often a sibling's result, which used to blank the working label.
+  const toolIndex = useMemo(() => {
+    const resultFor = new Map<string, ToolResultEvent>();
+    for (const e of events) if (e.kind === 'tool_result') resultFor.set(e.toolUseId, e);
+    const consumed = new Set<string>();
+    const unresolvedTools: ToolUseEvent[] = [];
+    const taskDescriptions = new Map<string, string>();
+    for (const e of events) {
+      if (e.kind !== 'tool_use') continue;
+      const r = resultFor.get(e.toolUseId);
+      if (r) consumed.add(r.id);
+      else unresolvedTools.push(e);
+      const input = e.input as { description?: string } | null;
+      if (input?.description) taskDescriptions.set(e.toolUseId, input.description);
+    }
+    return { resultFor, consumed, unresolvedTools, taskDescriptions };
+  }, [events]);
+
   const body = useMemo(() => {
     if (session === undefined)
       return (
@@ -1102,17 +1158,7 @@ export function ChatPane({
         </div>
       );
     }
-    // Pair each tool_use with its tool_result (by id) so the collapsed row can
-    // open both in one modal; the standalone result row is then suppressed.
-    const resultFor = new Map<string, ToolResultEvent>();
-    for (const e of events)
-      if (e.kind === 'tool_result' && e.toolUseId) resultFor.set(e.toolUseId, e);
-    const consumed = new Set<string>();
-    for (const e of events)
-      if (e.kind === 'tool_use') {
-        const r = resultFor.get(e.toolUseId);
-        if (r) consumed.add(r.id);
-      }
+    const { resultFor, consumed } = toolIndex;
     const renderEvent = (e: ChatEvent) => {
       if (e.kind === 'tool_use')
         return (
@@ -1156,7 +1202,10 @@ export function ChatPane({
       if (run.length < MIN_GROUP || trailingLive) {
         items.push(...run.map(renderEvent));
       } else {
-        const id = (run[0] as ChatEvent).id;
+        // Keyed by the run's LAST event: older-history prepends can extend
+        // a run at its head (changing the first id), which would orphan the
+        // expansion state; a closed run never grows at its tail.
+        const id = (run[run.length - 1] as ChatEvent).id;
         items.push(
           <ActionGroup
             key={`group-${id}`}
@@ -1197,27 +1246,8 @@ export function ChatPane({
     loadingOlder,
     subagents,
     expandedGroups,
+    toolIndex,
   ]);
-
-  // ONE tool-resolution index for everything below (and one place for the
-  // "a tool_use is resolved when a tool_result shares its toolUseId" rule —
-  // it used to be re-derived inline in four spots, each an O(events) scan
-  // re-run per streaming frame). unresolvedTools is in event order, so its
-  // head is the OLDEST still-running call — with parallel tool calls the
-  // last event is often a sibling's result, which used to blank the label.
-  const toolIndex = useMemo(() => {
-    const resolved = new Set<string>();
-    for (const e of events) if (e.kind === 'tool_result') resolved.add(e.toolUseId);
-    const unresolvedTools: ToolUseEvent[] = [];
-    const taskDescriptions = new Map<string, string>();
-    for (const e of events) {
-      if (e.kind !== 'tool_use') continue;
-      if (!resolved.has(e.toolUseId)) unresolvedTools.push(e);
-      const input = e.input as { description?: string } | null;
-      if (input?.description) taskDescriptions.set(e.toolUseId, input.description);
-    }
-    return { resolved, unresolvedTools, taskDescriptions };
-  }, [events]);
 
   // The agent is working when: we're driving a turn (`sending`), tokens are
   // streaming, OR — for sessions WITHOUT a runner (legacy/TUI views) — the
@@ -1230,7 +1260,7 @@ export function ChatPane({
   // used to re-arm the heuristic on exactly the panes it was disabled for.
   const lastEvent = events[events.length - 1];
   const pendingTool =
-    !agentNative && lastEvent?.kind === 'tool_use' && !toolIndex.resolved.has(lastEvent.toolUseId);
+    !agentNative && lastEvent?.kind === 'tool_use' && !toolIndex.resultFor.has(lastEvent.toolUseId);
   const agentWorking = Boolean((sending || streamingText || pendingTool) && session?.current_sid);
 
   // What the working row says. Bare dots read as "maybe stuck" during a long
@@ -1248,9 +1278,18 @@ export function ChatPane({
   // done, not running.
   const runningSubagents = Object.values(subagents).filter(
     (p) =>
-      !toolIndex.resolved.has(p.toolUseId) &&
+      !toolIndex.resultFor.has(p.toolUseId) &&
       Date.now() - (subagentSeenAt.current.get(p.toolUseId) ?? 0) < SUBAGENT_STALE_MS,
   );
+  // The staleness horizon is evaluated at render time — with a silent
+  // background task nothing else triggers a re-render, so the indicator
+  // would linger past the horizon forever. Tick while any rows show.
+  const [, forceStaleCheck] = useState(0);
+  useEffect(() => {
+    if (runningSubagents.length === 0) return;
+    const t = window.setTimeout(() => forceStaleCheck((n) => n + 1), 60_000);
+    return () => window.clearTimeout(t);
+  });
   const subagentLabel = (id: string): string => toolIndex.taskDescriptions.get(id) ?? 'subagent';
 
   return (
@@ -1461,11 +1500,17 @@ function ActionGroup({
   const counts = new Map<string, number>();
   let failed = 0;
   for (const e of events) {
-    const name = e.kind === 'tool_use' ? e.name : e.kind === 'thinking' ? 'thinking' : null;
-    if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+    // Orphan tool_results (their tool_use never reached this pane) count as
+    // actions too — a run of only results must not label itself '0 actions'.
+    const name =
+      e.kind === 'tool_use' ? e.name : e.kind === 'thinking' ? 'thinking' : 'result';
+    counts.set(name, (counts.get(name) ?? 0) + 1);
     if (e.kind === 'tool_result' && !e.ok) failed++;
   }
-  const actions = [...counts.values()].reduce((a, b) => a + b, 0);
+  // Paired results ride their tool_use row, so only orphans reach this run —
+  // but a tool_use + its paired result never co-occur here (consumed results
+  // are filtered before grouping), making every event one visible action.
+  const actions = events.length;
   const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
   const summary = top.map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(' · ');
   return (
@@ -1496,7 +1541,10 @@ function ActionGroup({
   );
 }
 
-function ChatRow({
+/** Memoized: the chat body rebuilds its element list on every subagent
+ *  progress frame (~2/s during turns); stable props must skip re-rendering
+ *  (and re-parsing Markdown for) the entire transcript. */
+const ChatRow = memo(function ChatRow({
   event,
   onOpenImage,
 }: {
@@ -1533,7 +1581,7 @@ function ChatRow({
     default:
       return null;
   }
-}
+});
 
 // A user message may embed absolute paths to pasted/picked images. Render each
 // as a clickable thumbnail (loaded over HTTP so it works from any device) while
@@ -1659,7 +1707,8 @@ function diffStat(diff?: ToolResultEvent['diff']): { add: number; del: number } 
 }
 
 /** Collapsed one-line tool call — muted, taps open the ToolModal. */
-function ToolRow({
+/** Memoized for the same reason as ChatRow — see there. */
+const ToolRow = memo(function ToolRow({
   use,
   result,
   progress,
@@ -1708,7 +1757,7 @@ function ToolRow({
       ) : null}
     </div>
   );
-}
+});
 
 /**
  * An agent question (the runner's ask_user tool) rendered as tappable option

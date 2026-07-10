@@ -32,6 +32,11 @@ export interface WsServerHandle {
 // backed by a tens-of-MB transcript stays instant.
 const CHAT_HISTORY_TAIL_BYTES = 128 * 1024;
 
+// A turn completing within this window of the user's own chat send is an
+// interactive conversation — its turn-done must not push-notify (the user
+// is right there). Longer turns and autonomous wakeup/cron turns do push.
+const INTERACTIVE_PUSH_SUPPRESS_MS = 2 * 60_000;
+
 export function attachWsServer(deps: {
   http: Server;
   db: Database.Database;
@@ -357,13 +362,18 @@ export function attachWsServer(deps: {
               ...(frame.error ? { error: frame.error } : {}),
             });
             // Chat-native agents never ring BEL, so the attention-push path
-            // can't see them — notify turn completion here instead. Same
-            // semantics as the terminal bell: fires whether or not a client
-            // is watching (the tag coalesces repeats per pane).
-            deps.notifyPane?.(
-              paneId,
-              frame.ok !== false ? 'agent finished its turn' : 'agent turn failed',
-            );
+            // can't see them — notify turn completion here instead. Gated on
+            // interactivity: a turn answered within the suppress window of
+            // the user's own chat send is a conversation they're actively
+            // driving (every reply would buzz their phone mid-chat).
+            // Long-running turns (the user walked away) and autonomous
+            // wakeup/cron turns (no recent send) do push.
+            if (Date.now() - conn.lastSendAt > INTERACTIVE_PUSH_SUPPRESS_MS) {
+              deps.notifyPane?.(
+                paneId,
+                frame.ok !== false ? 'agent finished its turn' : 'agent turn failed',
+              );
+            }
           } else if (frame.t === 'question') {
             if (typeof frame.qid !== 'string' || !Array.isArray(frame.questions)) return;
             conn.pendingQuestion = { qid: frame.qid, questions: frame.questions };

@@ -15,7 +15,12 @@ import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
 import { MobileInputBar } from '../components/MobileInputBar';
 import { NewTabChooser } from '../components/NewTabChooser';
 import { PaneSelector } from '../components/PaneSelector';
-import { PaneFaceMenuList, PaneWebSwitch, clampMenuLeft } from '../components/PaneWebSwitch';
+import {
+  PaneFaceMenuList,
+  PaneWebSwitch,
+  SvgAgentGlyph,
+  clampMenuLeft,
+} from '../components/PaneWebSwitch';
 // PaneSurfaceSwitch (below) reuses the .pane-web-switch-* menu classes, so
 // depend on that stylesheet explicitly rather than relying on the mobile
 // PaneWebSwitch mount to pull it into the bundle.
@@ -32,6 +37,7 @@ import { PANE_DRAG_MIME, paneDragOrigin } from '../lib/pane-drag';
 import { usePaneFace } from '../lib/pane-face';
 import { setTabViewMode, useTabViewMode } from '../lib/tab-view-mode';
 import { refreshTabs, useTabs } from '../tabs';
+import { useDismissable } from '../lib/use-dismissable';
 import { useMediaQuery } from '../use-media-query';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
 
@@ -1665,25 +1671,15 @@ function PaneSurfaceSwitch({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
+  useDismissable(menuAt !== null, wrapperRef, () => setMenuAt(null));
   useEffect(() => {
     if (!menuAt) return;
-    const close = () => setMenuAt(null);
-    const onDown = (e: MouseEvent) => {
-      if (wrapperRef.current?.contains(e.target as Node)) return;
-      close();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close();
-    };
-    document.addEventListener('mousedown', onDown, true);
-    document.addEventListener('keydown', onKey);
     // The menu is position:fixed (measured from the trigger) — coords go
     // stale on scroll/resize, so just close.
+    const close = () => setMenuAt(null);
     window.addEventListener('scroll', close, true);
     window.addEventListener('resize', close);
     return () => {
-      document.removeEventListener('mousedown', onDown, true);
-      document.removeEventListener('keydown', onKey);
       window.removeEventListener('scroll', close, true);
       window.removeEventListener('resize', close);
     };
@@ -1731,13 +1727,7 @@ function PaneSurfaceSwitch({
         }}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        {onChat ? (
-          <span className="pane-web-switch-glyph" aria-hidden="true">
-            ✳
-          </span>
-        ) : (
-          <Icon />
-        )}
+        {onChat ? <SvgAgentGlyph /> : <Icon />}
         {loading && <span className="pane-chrome-typeswitch-spinner" aria-hidden="true" />}
         {available && <span className="pane-surface-dot" aria-hidden="true" />}
         <SvgChevron />

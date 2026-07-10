@@ -9,6 +9,8 @@
  *     (the settings-menu button click), or iOS auto-denies.
  */
 
+import { req } from '../api';
+
 export type PushState = 'unsupported' | 'denied' | 'enabled' | 'disabled';
 
 function supported(): boolean {
@@ -50,14 +52,22 @@ export async function enablePush(): Promise<PushState> {
 
   const reg = await navigator.serviceWorker.register('/sw.js');
   await navigator.serviceWorker.ready;
-  const { key } = await fetchJson<{ key: string }>('/api/push/vapid-public-key');
-  const sub =
-    (await reg.pushManager.getSubscription()) ??
-    (await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: vapidKeyBytes(key) as BufferSource,
-    }));
-  await fetchJson('/api/push/subscriptions', {
+  const { key } = await req<{ key: string }>('/api/push/vapid-public-key');
+  const wanted = vapidKeyBytes(key);
+  let sub = await reg.pushManager.getSubscription();
+  // A subscription minted under DIFFERENT VAPID keys (rotation, vapid.json
+  // loss) fails 401/403 on every server send, forever — the server prunes
+  // it, but the client must also stop REUSING it or push stays broken
+  // while the UI claims 'enabled'. Re-subscribe under the current key.
+  if (sub && !keyMatches(sub.options.applicationServerKey, wanted)) {
+    await sub.unsubscribe();
+    sub = null;
+  }
+  sub ??= await reg.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: wanted as BufferSource,
+  });
+  await req('/api/push/subscriptions', {
     method: 'POST',
     body: JSON.stringify(sub.toJSON()),
   });
@@ -68,7 +78,7 @@ export async function disablePush(): Promise<PushState> {
   const reg = await navigator.serviceWorker.getRegistration();
   const sub = await reg?.pushManager.getSubscription();
   if (sub) {
-    await fetchJson('/api/push/subscriptions', {
+    await req('/api/push/subscriptions', {
       method: 'DELETE',
       body: JSON.stringify({ endpoint: sub.endpoint }),
     }).catch(() => undefined); // best effort — the server prunes dead subs anyway
@@ -79,15 +89,16 @@ export async function disablePush(): Promise<PushState> {
 
 /** Fire a round-trip test notification to every subscribed device. */
 export async function sendTestPush(): Promise<void> {
-  await fetchJson('/api/push/test', { method: 'POST' });
+  await req('/api/push/test', { method: 'POST' });
 }
 
-async function fetchJson<T = unknown>(input: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(input, {
-    ...init,
-    headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
-  });
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+/** Bytewise compare of the subscription's key against the server's current
+ *  one. A null stored key (some browsers don't expose it) reads as a match
+ *  — can't verify, so don't churn the subscription. */
+function keyMatches(stored: ArrayBuffer | null, wanted: Uint8Array): boolean {
+  if (!stored) return true;
+  const a = new Uint8Array(stored);
+  if (a.length !== wanted.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== wanted[i]) return false;
+  return true;
 }

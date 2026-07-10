@@ -1,6 +1,8 @@
 import type { LayoutNode, PaneSpec, Tab, Workspace } from '@muxpad/shared';
 
-async function req<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
+/** The one JSON fetch wrapper — exported so feature libs (push, …) don't
+ *  grow divergent copies of the same content-type/error/204 handling. */
+export async function req<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   const res = await fetch(input, {
     ...init,
     headers: {

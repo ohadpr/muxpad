@@ -91,10 +91,15 @@ export class PushService {
   }
 
   /**
-   * Send `payload` to every stored subscription. Dead subscriptions (the
-   * push service answers 404/410 — user removed the PWA, cleared site
-   * data, …) are pruned; other failures are logged and left in place so a
-   * transient push-service outage doesn't wipe the table.
+   * Send `payload` to every stored subscription. Permanently-dead
+   * subscriptions are pruned; other failures are logged and left in place
+   * so a transient push-service outage doesn't wipe the table. Pruned
+   * statuses: 404/410 (user removed the PWA / cleared site data) AND
+   * 401/403 (the subscription was minted under DIFFERENT VAPID keys —
+   * after a key rotation or vapid.json loss every old subscription fails
+   * this way forever; retaining them spams errors on every send and can
+   * never recover — the client re-subscribes with the current key on its
+   * next enable/boot check).
    */
   async send(payload: PushPayload): Promise<void> {
     const rows = this.db
@@ -107,7 +112,7 @@ export class PushService {
           await webpush.sendNotification(JSON.parse(row.subscription), body, { TTL: 300 });
         } catch (err) {
           const status = (err as { statusCode?: number }).statusCode;
-          if (status === 404 || status === 410) {
+          if (status === 404 || status === 410 || status === 401 || status === 403) {
             this.unsubscribe(row.endpoint);
           } else {
             console.error(`push send failed (${status ?? 'no status'})`, err);
