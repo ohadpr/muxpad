@@ -20,6 +20,8 @@ export interface TabWithPanes extends Tab {
 export interface MovePaneResult {
   pane: PaneSpec | null;
   from_tab_id: string;
+  /** Source workspace — may differ from the destination's (cross-ws moves). */
+  from_workspace_id?: string;
   to_tab: Tab;
   /** True if the source tab was deleted because the pane was its last one. */
   from_tab_removed: boolean;

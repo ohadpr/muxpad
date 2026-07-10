@@ -9,7 +9,7 @@ import {
 } from 'react-mosaic-component';
 import 'react-mosaic-component/react-mosaic-component.css';
 import type { AppUrl, LayoutNode, PaneSpec, Tab } from '@muxpad/shared';
-import { spliceLayoutAtTarget } from '@muxpad/shared';
+import { collectLayoutLeaves, spliceLayoutAtTarget } from '@muxpad/shared';
 import { type TabWithPanes, api } from '../api';
 import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
 import { MobileInputBar } from '../components/MobileInputBar';
@@ -25,10 +25,11 @@ import { UrlPane } from '../components/UrlPane';
 import { SvgClose } from '../components/icons';
 import { subscribe, subscribeReconnect } from '../events';
 import { handoffToAgent } from '../lib/agent-handoff';
+import { consumeFollowTarget } from '../lib/follow-tab';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { pushUndo } from '../lib/move-undo-store';
-import { PANE_DRAG_MIME, setActivePaneDrag } from '../lib/pane-drag';
+import { PANE_DRAG_MIME, paneDragOrigin } from '../lib/pane-drag';
 import { usePaneFace } from '../lib/pane-face';
 import { setTabViewMode, useTabViewMode } from '../lib/tab-view-mode';
 import { refreshTabs, useTabs } from '../tabs';
@@ -100,11 +101,11 @@ function removePane(layout: Layout, paneId: string): Layout {
   return { ...layout, first, second };
 }
 
-/** Walk the binary tree, returning all pane ids in tree order. */
+/** Walk the binary tree, returning all pane ids in tree order. Delegates to
+ *  the shared walker (one traversal, one set of empty-leaf semantics — the
+ *  old local copy returned [''] for an empty-string leaf). */
 function collectPaneIds(layout: Layout): string[] {
-  if (layout == null) return [];
-  if (typeof layout === 'string') return [layout];
-  return [...collectPaneIds(layout.first as Layout), ...collectPaneIds(layout.second as Layout)];
+  return collectLayoutLeaves((layout ?? '') as LayoutNode);
 }
 
 /**
@@ -184,6 +185,9 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   // optimistic split ("flashes then nothing"). Our own patch echo (carrying
   // the new layout) reconciles once the window closes.
   const pendingLayoutWrites = useRef(0);
+  // True when a tab.updated's layout was skipped mid-write — triggers a
+  // refetch once writes settle (see persistLayout).
+  const skippedTabUpdate = useRef(false);
   const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
   // Desktop 'tabbed' mode renders the same single-pane-at-a-time UI mobile is
   // forced into, so both share the "active pane" machinery below via
@@ -529,6 +533,14 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         console.error('failed to persist layout', e);
       } finally {
         pendingLayoutWrites.current -= 1;
+        // A tab.updated arrived while we were writing and its layout was
+        // skipped (it may have carried a concurrent merge/move into this
+        // tab). Our own optimistic layout can't know about those panes, so
+        // refetch the server's truth now that the write settled.
+        if (pendingLayoutWrites.current === 0 && skippedTabUpdate.current) {
+          skippedTabUpdate.current = false;
+          setLoadNonce((n) => n + 1);
+        }
       }
     },
     [tab],
@@ -878,8 +890,13 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         );
       } else if (e.type === 'tab.updated' && e.tab.id === tabId) {
         // Skip the layout if we have a local layout write in flight — this
-        // snapshot may predate it and would revert an optimistic split.
+        // snapshot may predate it and would revert an optimistic split. But
+        // REMEMBER the skip: the frame may also carry someone else's change
+        // (a merge landing panes into this tab), and dropping it silently
+        // would leave those panes in state but never in the mosaic. When the
+        // write settles, persistLayout refetches the server truth.
         const applyLayout = pendingLayoutWrites.current === 0;
+        if (!applyLayout) skippedTabUpdate.current = true;
         setTab((prev) =>
           prev
             ? {
@@ -906,7 +923,18 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         // the user off the tab they're actually viewing. (last-visited used to
         // paper over this with a redirect bounce; the guard makes it clean.)
         if (isActiveRef.current) {
-          void navigate({ to: '/w/$wsSlug', params: { wsSlug } });
+          // A gather gesture (merge / last-pane move) that dissolved THIS tab
+          // recorded where its panes went — follow them there instead of
+          // dumping the user on the workspace root.
+          const follow = consumeFollowTarget(tabId);
+          if (follow) {
+            void navigate({
+              to: '/w/$wsSlug/t/$tabSlug',
+              params: { wsSlug: follow.wsSlug, tabSlug: follow.tabSlug },
+            });
+          } else {
+            void navigate({ to: '/w/$wsSlug', params: { wsSlug } });
+          }
         }
       }
     });
@@ -1054,7 +1082,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     setPaneDragId(id);
     // Mirror the origin so sidebar tab rows can gate their move-here drop
     // affordance during dragover (when the payload itself is unreadable).
-    if (tab) setActivePaneDrag({ paneId: id, fromTabId: tab.id });
+    if (tab) paneDragOrigin.set({ paneId: id, fromTabId: tab.id });
   };
   const onPaneDragOver = (e: ReactDragEvent, id: string) => {
     if (!paneDragId || paneDragId === id) return;
@@ -1066,7 +1094,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     setPaneDropSide(side);
   };
   const onPaneDragEnd = () => {
-    setActivePaneDrag(null);
+    paneDragOrigin.set(null);
     setPaneDragId(null);
     setPaneDropTargetId(null);
   };
@@ -1336,14 +1364,17 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                       ) : null}
                       {/* Trailing slot: the status glyph and the close × share
                           ONE fixed-width box — the × fades in over the status on
-                          hover/active. So the label's available width is the
-                          same whether or not a status shows, and the two never
+                          hover. So the label's available width is the same
+                          whether or not a status shows, and the two never
                           collide even at the min tab width. Status priority
                           mirrors the navigator: WORKING (spinner) → WANTS YOU
-                          (dot) → idle. Busy is hidden on the active tab (its
-                          output is right there); the dot self-clears on view. */}
+                          (dot) → idle. The spinner shows on the ACTIVE tab too —
+                          an agent pane works quietly for minutes on its chat
+                          face, and a glance at the strip should answer "is
+                          anything still running here?" (the dot still
+                          self-clears on view). */}
                       <span className="desktop-tab-trailing">
-                        {!isActiveTab && p?.busy ? (
+                        {p?.busy ? (
                           <span className="desktop-tab-busy" aria-hidden="true" title="Working…">
                             <SvgSpinner />
                           </span>
