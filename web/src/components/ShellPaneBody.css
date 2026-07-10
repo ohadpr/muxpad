@@ -35,23 +35,6 @@ body.mosaic-dragging .shell-pane-web {
   pointer-events: none;
 }
 
-/* Transient banner top-right: the terminal→chat hand-off failed, so chat is
-   view-only until the Claude TUI exits. Auto-dismisses. */
-.shell-pane-handoff-notice {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 6;
-  max-width: 340px;
-  padding: 6px 10px;
-  font-size: 11px;
-  line-height: 1.45;
-  border-radius: 8px;
-  border: 1px solid #5a4a2a;
-  background: rgba(46, 38, 20, 0.92);
-  color: #e4c97a;
-  backdrop-filter: blur(4px);
-}
 
 /* Web face refused (self-embed guard) or dead (nothing answering at the
    URL): explain instead of a blank tile. */

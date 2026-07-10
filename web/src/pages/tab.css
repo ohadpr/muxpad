@@ -591,13 +591,8 @@
 .desktop-tab-trailing > .badge-dot {
   transition: opacity 100ms ease;
 }
-/* The × takes the slot on HOVER only — the active tab keeps its status
-   visible at rest, so a working agent's spinner stays in view even on the
-   tab you're looking at. */
-.desktop-tab:hover .desktop-tab-trailing > .desktop-tab-busy,
-.desktop-tab:hover .desktop-tab-trailing > .badge-dot {
-  opacity: 0;
-}
+/* (Status glyphs LEAD the label inside .desktop-tab-select; the trailing
+   box holds only the hover-revealed ×.) */
 .desktop-tab-close {
   /* A small centered square, NOT the trailing box's full height — a
      full-height button's hover wash painted right up to the pill's top
@@ -623,10 +618,18 @@
   opacity: 0;
   transition: opacity 100ms ease, color 100ms ease, background 100ms ease;
 }
-/* Hover-reveal only (the active tab included): at rest the slot belongs to
-   the status glyph — a busy spinner must stay visible on the active tab. */
+/* Hover-reveal only (the active tab included) — status leads the label, so
+   the trailing slot stays quiet until pointed at. Touch has no hover: keep
+   the ACTIVE tab's × always visible there, or a wide touch device (tablet
+   landscape, touchscreen laptop — too wide for the mobile layout) has no
+   way to close a pane from the strip. */
 .desktop-tab:hover .desktop-tab-close {
   opacity: 1;
+}
+@media (hover: none) {
+  .desktop-tab[data-active="true"] .desktop-tab-close {
+    opacity: 1;
+  }
 }
 .desktop-tab-close:hover {
   color: var(--danger);
@@ -978,7 +981,5 @@
   font-weight: 400;
 }
 .desktop-tab .pane-web-switch-main.is-available:hover {
-  color: var(--accent);
-  font-weight: 400;
   background: var(--bg-hover);
 }
