@@ -8,8 +8,10 @@ import type { Context } from 'hono';
 import { createAgentBridge } from './agent-bridge.js';
 import { loadConfig } from './config.js';
 import { EventBus } from './events.js';
+import { startPaneReaper } from './pane-reaper.js';
 import { PtydCache, decoratePane } from './ptyd-cache.js';
 import { PtydClient } from './ptyd-client/PtydClient.js';
+import { PushService, attachAttentionPush, createPaneNotifier } from './push.js';
 import { createApp } from './server.js';
 import { PaneStore } from './store/PaneStore.js';
 import { openDb } from './store/db.js';
@@ -42,6 +44,28 @@ ptyd.on('paneCwd', (e: { id: string; cwd: string }) => {
   paneStore.updateCwd(e.id, e.cwd);
 });
 
+// An EXPLICIT app-url declaration (`muxpad app-url` / `muxpad serve` — the
+// OSC marker, not the output-scan heuristic) is the "this pane is a web app"
+// signal: flip the pane's face to the web view, same pattern as an agent
+// runner's first hello flipping to chat. Only on a NEW url — a redeclare
+// (the serve wrapper announces on every restart of its loop) must not
+// override a user who deliberately switched to the terminal face since.
+ptyd.on(
+  'paneUrlsSeen',
+  (e: { id: string; urls: string[]; markers?: Array<{ url: string; label?: string }> }) => {
+    const marker = e.markers?.[e.markers.length - 1];
+    if (!marker) return;
+    const pane = paneStore.getById(e.id);
+    if (!pane || pane.kind !== 'shell') return;
+    if (pane.face_url === marker.url) return; // redeclare — face choice stands
+    paneStore.setFace(e.id, 'web', marker.url);
+    const fresh = paneStore.getById(e.id);
+    if (fresh) {
+      events.emit({ type: 'pane.updated', tab_id: fresh.tab_id, pane: decoratePane(cache, fresh) });
+    }
+  },
+);
+
 // Whenever any of (title, fg, attention, busy) changes for a pane, push a
 // decorated `pane.updated` event on the EventBus so /ws/events
 // subscribers see the diff. The cache emits a single 'paneChange' per
@@ -60,6 +84,13 @@ cache.on('paneChange', (paneId: string) => {
 // the HTTP server exists) — ws.ts binds the real runner relay onto it.
 const agentBridge = createAgentBridge();
 
+// Web Push: notify subscribed devices (the installed PWA) when a pane's
+// attention flag rises. Requires the app to be reached over https (e.g.
+// `tailscale serve`) — over plain http the client never subscribes and
+// this sits dormant.
+const push = new PushService(db, config.dataDir);
+attachAttentionPush({ events, db, push });
+
 const app = createApp({
   db,
   ptyd,
@@ -67,6 +98,7 @@ const app = createApp({
   dataDir: config.dataDir,
   events,
   agentBridge,
+  push,
 });
 
 // Static asset serving (CSS, JS, images, etc.) from the built web bundle.
@@ -124,7 +156,20 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
 });
 
 const httpServer = server as unknown as Server;
-const wsServer = attachWsServer({ http: httpServer, db, ptyd, cache, events, agentBridge });
+const wsServer = attachWsServer({
+  http: httpServer,
+  db,
+  ptyd,
+  cache,
+  events,
+  agentBridge,
+  // Chat-runner turn-done / question frames don't ring BEL — push them here.
+  notifyPane: createPaneNotifier(db, push),
+});
+
+// Straggler prevention: retry pane kills that failed in transit, and (once
+// ptyd supports listPanes) kill any live pty whose DB row is gone.
+startPaneReaper({ db, ptyd, paneExists: (id) => paneStore.getById(id) !== null });
 
 let shuttingDown = false;
 const shutdown = async () => {

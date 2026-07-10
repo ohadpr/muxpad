@@ -65,6 +65,12 @@ const DEFAULT_CMD_POLL_INTERVAL = 10_000;
 
 export class PaneManager {
   private runtimes = new Map<string, PaneRuntime>();
+
+  /** Live pane ids — the server reconciles these against its DB on connect. */
+  ids(): string[] {
+    return [...this.runtimes.keys()];
+  }
+
   /** Last cwd we reported per pane — used to suppress redundant writes. */
   private lastCwd = new Map<string, string>();
   /** Cached foreground command per pane, refreshed by cmdPollTimer. */

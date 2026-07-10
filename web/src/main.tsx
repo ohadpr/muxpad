@@ -2,6 +2,8 @@ import { RouterProvider } from '@tanstack/react-router';
 import { createRoot } from 'react-dom/client';
 import { startEvents, subscribe, subscribeReconnect } from './events';
 import { pushOpen } from './lib/external-open-store';
+import { setLastPaneId } from './lib/last-visited';
+import { registerServiceWorker } from './lib/push';
 import { router } from './router';
 import { refreshTabs } from './tabs';
 import { refreshWorkspaces } from './workspaces';
@@ -36,6 +38,54 @@ const selfEmbedded = isSelfEmbedded();
 if (!selfEmbedded) {
   startEvents();
   subscribeReconnect(() => void refreshWorkspaces());
+  // Keep the push service worker registered/updated. No-op over plain
+  // http (no secure context → no navigator.serviceWorker) and harmless
+  // where push was never enabled — the SW has no fetch handler.
+  registerServiceWorker();
+
+  // Notification-tap deep links, cold-start path: a tap that BOOTS the PWA
+  // lands on the payload URL, whose ?ptab=&pane= params say which pane to
+  // focus. Record it as the tab's last-visited pane BEFORE the router
+  // mounts (TabView falls back to that store when it has no active pane),
+  // then strip the params so they don't linger in the address bar.
+  {
+    const params = new URLSearchParams(window.location.search);
+    const ptab = params.get('ptab');
+    const pane = params.get('pane');
+    if (ptab && pane) {
+      setLastPaneId(ptab, pane);
+      params.delete('ptab');
+      params.delete('pane');
+      const qs = params.toString();
+      window.history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : ''));
+    }
+  }
+
+  // Notification-tap deep links, warm path: the service worker focused this
+  // already-running window and hands us the target instead of hard-reloading
+  // (WindowClient.navigate() reloads the app and iOS rejects it for
+  // uncontrolled clients). Route through the SPA router and point the tab
+  // at the right pane — TabView listens for muxpad:show-pane when mounted;
+  // the last-visited store covers it when it mounts after navigation.
+  navigator.serviceWorker?.addEventListener('message', (e) => {
+    const d = e.data as {
+      type?: string;
+      url?: string;
+      tab_id?: string | null;
+      pane_id?: string | null;
+    } | null;
+    if (d?.type !== 'muxpad:push-navigate' || !d.url) return;
+    if (d.tab_id && d.pane_id) setLastPaneId(d.tab_id, d.pane_id);
+    // Push the clean path — the ?ptab=&pane= params are only for cold boots.
+    router.history.push(d.url.split('?')[0] ?? d.url);
+    if (d.pane_id) {
+      const paneId = d.pane_id;
+      // Give the route transition a beat so the target TabView is mounted.
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('muxpad:show-pane', { detail: { paneId } }));
+      }, 150);
+    }
+  });
 }
 
 // Global router: forward structural events into the right module caches.
