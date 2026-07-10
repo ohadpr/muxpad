@@ -1186,50 +1186,80 @@
 /* Image-paste confirmation toast — the message carries a file path, not
    pixels, so show the actual image briefly (same pattern as the terminal
    face's xterm-paste-toast). Sits just above the composer. */
-.chat-paste-toast {
-  position: absolute;
-  right: 12px;
-  bottom: 92px;
-  z-index: 6;
+/* Persistent preview chips for images pasted/picked into the draft. They sit in
+   a wrapping row just above the composer and survive until their path leaves the
+   draft (or the message sends), so you can see what went in. */
+.chat-chips {
   display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 768px;
+  margin: 0 auto 6px;
+  padding: 0 4px;
+}
+.chat-chip {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  max-width: min(360px, calc(100% - 24px));
-  padding: 6px 8px;
+  gap: 6px;
+  max-width: 220px;
+  padding: 4px 8px 4px 4px;
   border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-chrome, #16161e) 82%, #000 18%);
-  border: 1px solid var(--border-strong, #3b4261);
-  box-shadow: 0 4px 16px color-mix(in srgb, #000 35%, transparent);
-  color: var(--fg, #d7dae0);
-  opacity: 0.97;
-  pointer-events: none;
-  animation: chat-paste-toast-in 160ms ease-out;
+  background: var(--chat-panel);
+  border: 1px solid var(--chat-border);
 }
-@keyframes chat-paste-toast-in {
-  from {
-    opacity: 0;
-    translate: 0 6px;
-  }
-  to {
-    opacity: 0.97;
-    translate: 0 0;
-  }
-}
-.chat-paste-toast-preview {
-  width: 52px;
-  height: 52px;
+.chat-chip-thumb {
+  width: 28px;
+  height: 28px;
   flex-shrink: 0;
   object-fit: cover;
-  border-radius: 4px;
-  border: 1px solid color-mix(in srgb, var(--fg, #ccc) 14%, transparent);
+  border-radius: 5px;
+  border: 1px solid color-mix(in srgb, var(--chat-fg) 12%, transparent);
 }
-.chat-paste-toast-path {
+.chat-chip-name {
   min-width: 0;
-  font: 11px / 1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
   overflow: hidden;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px / 1.3 var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: var(--chat-dim);
+}
+
+/* Clickable image thumbnail inline in a history bubble (opens the lightbox). */
+.chat-img-thumb {
+  display: block;
+  margin: 4px 0;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--chat-fg) 12%, transparent);
+  border-radius: 10px;
+  background: none;
+  cursor: pointer;
+  overflow: hidden;
+  line-height: 0;
+}
+.chat-img-thumb img {
+  display: block;
+  max-width: min(240px, 100%);
+  max-height: 240px;
+  object-fit: cover;
+}
+.chat-img-thumb:hover {
+  border-color: var(--chat-accent);
+}
+
+/* Lightbox: reuse the modal backdrop/scrim but center a bare full-size image. */
+.chat-img-backdrop {
+  align-items: center;
+  padding: 24px;
+}
+.chat-img-full {
+  position: relative;
+  z-index: 1;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.7);
+  animation: chat-fade 140ms ease both;
 }
 
 /* Session chip + menu: model / context% / compact / clear. Sits in a slim
