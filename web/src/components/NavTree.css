@@ -392,6 +392,7 @@
   /* Indent tab text past the workspace name, so the parent→child step
      reads from alignment alone (replaces the old guide hairline). */
   padding-left: var(--nt-indent);
+
   /* Trailing gutter so the name never kisses the pill edge once the close
      button collapses away — keeps a touch of breathing room on the right. */
   padding-right: 6px;
@@ -457,6 +458,13 @@
   -webkit-tap-highlight-color: transparent;
 }
 /* Touch has no hover — keep close faintly present (and sized) on the sheet. */
+/* Sheet: the leading pane-expander supplies the tab indent — adding the
+   text indent on top floated names mid-row and made pane children render
+   LEFT of their parent. */
+.navtree[data-variant="sheet"] .navtree-tab-link {
+  padding-left: 0;
+}
+
 .navtree[data-variant="sheet"] .navtree-close {
   flex-basis: var(--nt-hit);
   width: var(--nt-hit);
@@ -518,7 +526,9 @@
 .navtree-pane-list {
   display: flex;
   flex-direction: column;
-  padding: 2px 8px 6px calc(var(--nt-indent) + 16px);
+  /* One hierarchy step DEEPER than the tab name: 40px expander column
+     + 8px — children must never sit left of their parent. */
+  padding: 2px 8px 6px 48px;
 }
 .navtree-pane-row {
   display: flex;
