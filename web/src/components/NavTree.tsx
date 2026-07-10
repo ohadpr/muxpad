@@ -1,4 +1,10 @@
-import { DEFAULT_TAB_ICON, type PaneSpec, type Tab, type Workspace } from '@muxpad/shared';
+import {
+  DEFAULT_TAB_ICON,
+  type PaneSpec,
+  type Tab,
+  type Workspace,
+  collectLayoutLeaves,
+} from '@muxpad/shared';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
@@ -621,6 +627,30 @@ function TabList({
     }
   };
 
+  // Create a pane in `t` and land on it. Shared by the sheet pane list's
+  // chooser and the tab context menu's "New … pane" items (the only
+  // add-pane path for single-pane tabs on mobile, which show no expander).
+  const addPaneToTab = async (t: Tab, kind: 'terminal' | 'agent') => {
+    try {
+      const created = await api.createPane(t.id, {
+        append_to_layout: true,
+        ...(kind === 'agent' ? { startup_cmd: 'muxpad agent', face: 'chat' as const } : {}),
+      });
+      await refreshTabs(workspace.id);
+      setLastPaneId(t.id, created.id);
+      window.dispatchEvent(
+        new CustomEvent('muxpad:select-pane', { detail: { tabId: t.id, paneId: created.id } }),
+      );
+      onNavigate?.();
+      void navigate({
+        to: '/w/$wsSlug/t/$tabSlug',
+        params: { wsSlug: workspace.slug, tabSlug: t.slug },
+      });
+    } catch (err) {
+      console.error('add pane failed', err);
+    }
+  };
+
   // Move a single pane (dragged from the tab strip) into `dest`. If it was
   // the source tab's LAST pane, that tab dissolves — the follow hint makes
   // its tab.removed redirect land on `dest` instead of the workspace root.
@@ -757,6 +787,7 @@ function TabList({
           onSetUnread={(want) => void setTabUnread(t, want)}
           onSetIcon={(icon) => void setTabIcon(t, icon)}
           onMergeInto={(payload) => void mergeTabInto(payload, t)}
+          onAddPane={(kind) => void addPaneToTab(t, kind)}
           onMovePaneHere={(paneId, sourceTabId) => void movePaneHere(paneId, sourceTabId, t)}
           rowDnd={variant === 'sidebar' ? tabDnd(t.id) : undefined}
         />
@@ -803,14 +834,15 @@ function SheetPaneList({
   tab,
   workspace,
   onNavigate,
+  onAddPane,
 }: {
   tab: Tab;
   workspace: Workspace;
   onNavigate?: (() => void) | undefined;
+  onAddPane: (kind: 'terminal' | 'agent') => void;
 }) {
   const navigate = useNavigate();
   const [panes, setPanes] = useState<PaneSpec[] | null>(null);
-  const [creating, setCreating] = useState(false);
   useEffect(() => {
     let alive = true;
     api
@@ -840,23 +872,6 @@ function SheetPaneList({
     });
   };
 
-  const addPane = async (kind: 'terminal' | 'agent') => {
-    if (creating) return;
-    setCreating(true);
-    try {
-      const created = await api.createPane(tab.id, {
-        append_to_layout: true,
-        ...(kind === 'agent' ? { startup_cmd: 'muxpad agent', face: 'chat' as const } : {}),
-      });
-      await refreshTabs(workspace.id);
-      openPane(created.id);
-    } catch (err) {
-      console.error('add pane failed', err);
-    } finally {
-      setCreating(false);
-    }
-  };
-
   return (
     <div className="navtree-pane-list">
       {panes === null ? (
@@ -875,13 +890,12 @@ function SheetPaneList({
         ))
       )}
       <NewTabChooser
-        idleLabel={creating ? 'Creating…' : '+ New pane'}
+        idleLabel="+ New pane"
         idleTitle="New pane"
         idleClassName="navtree-add navtree-new-pane"
         choicesClassName="navtree-new-row"
         choiceClassName="navtree-add"
-        disabled={creating}
-        onCreate={(kind) => void addPane(kind)}
+        onCreate={onAddPane}
       />
     </div>
   );
@@ -904,6 +918,8 @@ interface TabRowProps {
   onSetIcon: (icon: string) => void;
   /** A dragged TAB was dropped on this row's merge band — absorb its panes. */
   onMergeInto: (payload: TabDragPayload) => void;
+  /** Create a pane in this tab and land on it. */
+  onAddPane: (kind: 'terminal' | 'agent') => void;
   /** A pane dragged from the strip was dropped here — move it into this tab.
    *  sourceTabId (from the drag mirror) feeds the follow-navigation hint. */
   onMovePaneHere: (paneId: string, sourceTabId: string | null) => void;
@@ -925,6 +941,7 @@ function TabRow({
   onSetIcon,
   onMergeInto,
   onMovePaneHere,
+  onAddPane,
 }: TabRowProps) {
   // Right-click context menu (desktop sidebar). Anchored at the cursor.
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -952,8 +969,11 @@ function TabRow({
   const otherWorkspaces = workspaces.filter((w) => w.id !== workspace.id);
 
   // Sheet-only: expand the row into its pane list (direct pane nav + the
-  // mobile "New pane" home).
+  // mobile "New pane" home). Single-pane tabs skip all of it — tapping
+  // them just opens the tab (there's nothing to pick), so no chevron.
   const [panesOpen, setPanesOpen] = useState(false);
+  const paneCount = collectLayoutLeaves(tab.layout).length;
+  const sheetPicksPane = variant === 'sheet' && paneCount > 1;
 
   // "Drop INTO this tab" affordance — lit for a pane dragged from the tab
   // strip (whole row) or another tab dragged over the row's middle band
@@ -1065,8 +1085,9 @@ function TabRow({
       {/* Sheet: the pane disclosure LEADS the row — the same left-edge
           grammar as the workspace rows, so thumbs already know where it
           lives. Full row height; squeezing it between the name and the ×
-          made every tap a coin-flip between expand/navigate/close. */}
-      {variant === 'sheet' && !isEditing ? (
+          made every tap a coin-flip between expand/navigate/close. Only
+          multi-pane tabs get it — with one pane there's nothing to pick. */}
+      {sheetPicksPane && !isEditing ? (
         <button
           type="button"
           className="navtree-pane-expander"
@@ -1119,6 +1140,14 @@ function TabRow({
             pressHandlers.onClick(e);
             if (e.defaultPrevented) return;
             if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+            // Multi-pane tab on the sheet: the tab name itself TOGGLES the
+            // pane list — you pick an actual pane, never land on "whichever
+            // pane happened to be active".
+            if (sheetPicksPane) {
+              e.preventDefault();
+              setPanesOpen((o) => !o);
+              return;
+            }
             onNavigate?.();
           }}
         >
@@ -1196,6 +1225,8 @@ function TabRow({
               onSelect: () => setPicker({ x: menu.x, y: menu.y }),
             },
             { label: 'Rename', onSelect: () => setEditing({ kind: 'tab', id: tab.id }) },
+            { label: 'New terminal pane', onSelect: () => onAddPane('terminal') },
+            { label: 'New agent pane', onSelect: () => onAddPane('agent') },
             // "Move to workspace ▸" with the workspaces in a hover flyout, so
             // the main menu stays short. Omitted entirely when there's nowhere
             // to move to. (Dragging the tab onto a workspace row also works.)
@@ -1240,8 +1271,13 @@ function TabRow({
         />
       )}
     </div>
-      {variant === 'sheet' && panesOpen ? (
-        <SheetPaneList tab={tab} workspace={workspace} onNavigate={onNavigate} />
+      {variant === 'sheet' && sheetPicksPane && panesOpen ? (
+        <SheetPaneList
+          tab={tab}
+          workspace={workspace}
+          onNavigate={onNavigate}
+          onAddPane={onAddPane}
+        />
       ) : null}
     </>
   );
