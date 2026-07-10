@@ -71,6 +71,8 @@ export interface CtrlMethods {
     result: { entries: Array<{ id: string; cwd: string }> };
   };
   closePtyClients: { params: IdParams; result: { ok: true } };
+  /** Live pane ids — the server's straggler reconcile on (re)connect. */
+  listPanes: { params: Record<string, never>; result: { ok: true; ids: string[] } };
 }
 
 export type CtrlPushEvent =

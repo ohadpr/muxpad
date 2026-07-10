@@ -9,6 +9,7 @@ import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { EventBus } from '../events.js';
+import { queuePaneKill } from '../pane-reaper.js';
 import { type PtydCache, decoratePane } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { randomWorkspaceName } from '../random-name.js';
@@ -281,7 +282,9 @@ export function panesScopedRoutes(deps: {
       try {
         await deps.ptyd.killPane(id);
       } catch {
-        // ptyd disconnected; proceed — see comment above.
+        // ptyd disconnected; proceed — the reaper retries the kill until
+        // ptyd confirms, so no straggler pty outlives the kind flip.
+        queuePaneKill(deps.db, id);
       }
       deps.cache.forget(id);
       if (body.kind === 'url') {
@@ -329,8 +332,10 @@ export function panesScopedRoutes(deps: {
     try {
       await deps.ptyd.killPane(id);
     } catch {
-      // ptyd disconnected; the runtime (if any) is already gone from
-      // its perspective. Proceed with the DB delete.
+      // ptyd disconnected/kill lost: proceed with the DB delete, but queue
+      // the kill — the reaper retries until the pty is confirmed gone.
+      queuePaneKill(deps.db, id);
+      // (the runtime, if any, would otherwise run forever with no row.)
     }
     deps.cache.forget(id);
     panes.delete(id);
@@ -494,16 +499,9 @@ export function panesScopedRoutes(deps: {
       const t = tabs.getById(body.to_tab_id);
       if (!t)
         return c.json({ error: { code: 'not_found', message: 'destination tab not found' } }, 404);
-      if (tabs.getWorkspaceId(t.id) !== workspaceId)
-        return c.json(
-          {
-            error: {
-              code: 'bad_request',
-              message: 'destination tab is in a different workspace',
-            },
-          },
-          400,
-        );
+      // Cross-workspace moves are allowed — a pane's home is pure metadata
+      // (ptys and agent runners key by pane id, so nothing running notices),
+      // and the sidebar drop targets naturally span workspaces.
       destTab = t;
     }
 
@@ -556,6 +554,9 @@ export function panesScopedRoutes(deps: {
     return c.json({
       pane: decorated,
       from_tab_id: sourceTab.id,
+      // Movers need the SOURCE workspace to refresh its tab cache — with
+      // cross-workspace moves the caller only knows the destination's.
+      from_workspace_id: workspaceId,
       to_tab: finalDest,
       from_tab_removed: sourceEmpty,
     });

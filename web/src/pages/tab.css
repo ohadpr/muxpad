@@ -398,6 +398,15 @@
   padding: 4px 4px 0;
   overflow-x: auto;
   scrollbar-width: none;
+  /* Extend 1px over the strip's bottom hairline so the ACTIVE tab's fill can
+     cover it (children paint over an ancestor's border). The old approach — a
+     ::after cover strip hanging below the tab — was silently clipped by this
+     container's overflow-x, which is why a seam always showed between the
+     active tab and its pane. Inactive tabs stop 1px short (height below), so
+     the hairline still runs beneath them. */
+  margin-bottom: -1px;
+  position: relative;
+  z-index: 1;
 }
 .desktop-tab-strip-tabs::-webkit-scrollbar {
   display: none;
@@ -420,21 +429,25 @@
   max-width: 220px;
   display: flex;
   align-items: center;
-  height: 100%;
+  /* 1px short of the (border-overlapping) container: the bar's hairline runs
+     under inactive plates; the active plate overrides to 100% and covers it. */
+  height: calc(100% - 1px);
   /* Rounded top corners — a browser-tab plate. The gap on the strip separates
      neighbours, so no hairline divider is needed. */
   border-radius: 7px 7px 0 0;
-  /* Two clean levels, no accent tint:
-       bar (--bg-tabbar) ≈ inactive tab  <  active tab (--bg, the content color).
-     Inactive tabs sit just a hair above the strip so they recede into the bar
-     (they read as "not open"); the active tab jumps to the content background so
-     it merges with the panel below it — the browser-tab "this is the open pane"
-     cue, no colored fill needed. */
-  background: color-mix(in srgb, var(--bg) 20%, var(--bg-tabbar));
+  /* Three levels the eye separates at a glance, in EVERY theme:
+     inactive pills are tinted with the FOREGROUND color, which pushes them
+     away from the bar regardless of theme polarity (darker pills on a light
+     bar, lighter pills on a dark bar) — bg-based mixes kept collapsing in
+     themes where --bg ≈ --bg-tabbar. The active tab stays the pane's exact
+     color (fusing with the content below) and reads lighter/cleaner than
+     the tinted inactive pills, plus the accent rail + bold label. */
+  background: color-mix(in srgb, var(--fg) 9%, var(--bg-tabbar));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 10%, transparent);
   transition: background 100ms ease;
 }
 .desktop-tab:hover {
-  background: color-mix(in srgb, var(--bg) 55%, var(--bg-tabbar));
+  background: color-mix(in srgb, var(--fg) 14%, var(--bg-tabbar));
 }
 .desktop-tab[data-active="true"],
 .desktop-tab[data-active="true"]:hover {
@@ -442,25 +455,30 @@
      (.tabbed-pane-slot::after), so plain --bg would read as a different shade
      and the tab wouldn't fuse into the pane. */
   background: color-mix(in srgb, var(--accent) 5%, var(--bg));
-  /* Sit above the strip so the connector below can paint over its bottom border. */
+  /* Hairline on the SIDES only — a full inset ring painted its own 1px
+     line across the tab's bottom edge, exactly the seam the height
+     overlap below exists to remove (the top edge is under the accent
+     rail, so it needs no line either). */
+  box-shadow:
+    inset 1px 0 0 color-mix(in srgb, var(--fg) 10%, transparent),
+    inset -1px 0 0 color-mix(in srgb, var(--fg) 10%, transparent);
+  /* Full container height = over the strip's hairline: the open tab fuses
+     seamlessly into its pane, no dividing line. */
+  height: 100%;
   z-index: 1;
 }
-/* Connector: a strip of the pane background painted over the strip's bottom
-   hairline, directly under the active tab, so the tab fuses seamlessly into the
-   pane below it (browser-tab "the open tab IS the page" feel) — no dividing line
-   between the active tab and its content. */
-.desktop-tab[data-active="true"]::after {
+/* Accent top rail — the unmistakable "this one is open" cue (fill contrast
+   alone was too subtle between two light plates). Rounded to hug the plate. */
+.desktop-tab[data-active="true"]::before {
   content: "";
   position: absolute;
+  top: 0;
   left: 0;
   right: 0;
-  bottom: -1px;
   height: 2px;
-  /* Same washed colour as the tab/pane so the seam over the strip border
-     vanishes and the tab reads as continuous with the pane. */
-  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
+  border-radius: 7px 7px 0 0;
+  background: var(--accent);
 }
-
 /* Drag-to-reorder. The dragged plate dims; the drop target shows an inset
    accent edge on the side the pane would land (inset box-shadow, not a
    pseudo-element, so it never collides with the active tab's ::after rail). */
@@ -526,6 +544,7 @@
   min-width: 0;
   display: flex;
   align-items: center;
+  gap: 6px; /* leading status glyph ↔ label */
   height: 100%;
   padding: 0 2px 0 12px;
   background: transparent;
@@ -543,6 +562,9 @@
 .desktop-tab:hover .desktop-tab-select,
 .desktop-tab[data-active="true"] .desktop-tab-select {
   color: var(--fg);
+}
+.desktop-tab[data-active="true"] .desktop-tab-label {
+  font-weight: 600;
 }
 
 .desktop-tab-label {
@@ -569,15 +591,22 @@
 .desktop-tab-trailing > .badge-dot {
   transition: opacity 100ms ease;
 }
-.desktop-tab:hover .desktop-tab-trailing > .desktop-tab-busy,
-.desktop-tab:hover .desktop-tab-trailing > .badge-dot,
-.desktop-tab[data-active="true"] .desktop-tab-trailing > .desktop-tab-busy,
-.desktop-tab[data-active="true"] .desktop-tab-trailing > .badge-dot {
-  opacity: 0;
-}
+/* (Status glyphs LEAD the label inside .desktop-tab-select; the trailing
+   box holds only the hover-revealed ×.) */
 .desktop-tab-close {
+  /* A small centered square, NOT the trailing box's full height — a
+     full-height button's hover wash painted right up to the pill's top
+     edge, covering the active tab's accent rail. */
   position: absolute;
-  inset: 0;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 18px;
+  height: 18px;
+  /* Kill the UA button padding — 6px per side leaves a 6px content box
+     in an 18px button, and the svg (a shrinkable flex item) collapses
+     into it, rendering the × at a fraction of its nominal size. */
+  padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -589,9 +618,18 @@
   opacity: 0;
   transition: opacity 100ms ease, color 100ms ease, background 100ms ease;
 }
-.desktop-tab:hover .desktop-tab-close,
-.desktop-tab[data-active="true"] .desktop-tab-close {
+/* Hover-reveal only (the active tab included) — status leads the label, so
+   the trailing slot stays quiet until pointed at. Touch has no hover: keep
+   the ACTIVE tab's × always visible there, or a wide touch device (tablet
+   landscape, touchscreen laptop — too wide for the mobile layout) has no
+   way to close a pane from the strip. */
+.desktop-tab:hover .desktop-tab-close {
   opacity: 1;
+}
+@media (hover: none) {
+  .desktop-tab[data-active="true"] .desktop-tab-close {
+    opacity: 1;
+  }
 }
 .desktop-tab-close:hover {
   color: var(--danger);
@@ -600,19 +638,40 @@
 
 .desktop-tab-add {
   flex: 0 0 auto;
-  width: 34px;
-  height: 100%;
+  align-self: center;
+  height: 22px;
+  padding: 0 10px;
   background: transparent;
-  border: none;
-  border-radius: 7px 7px 0 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
   color: var(--fg-dim);
-  font-size: 17px;
+  font-size: var(--chrome-size-sm, 12px);
   line-height: 1;
+  white-space: nowrap;
   cursor: pointer;
 }
 .desktop-tab-add:hover {
-  color: var(--fg);
-  background: var(--bg-hover);
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+/* At rest the strip shows only the browser-standard lone "+" — a compact
+   square chip. Clicking swaps it in place for the Terminal/Agent choices. */
+.desktop-tab-add-plus {
+  width: 24px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 20px;
+  /* A step further from the last pill than the pills are from each other,
+     so "+" reads as the strip's action, not part of the tab. */
+  margin-left: 4px;
+}
+.desktop-tab-add-choices {
+  flex: 0 0 auto;
+  align-self: center;
+  display: flex;
+  gap: 4px;
+  margin-left: 4px;
 }
 
 .desktop-tab-strip-actions {
@@ -881,4 +940,46 @@
 .pane-chrome-btn-inline svg {
   width: 14px;
   height: 14px;
+}
+
+/* Face switch LEADING the ACTIVE strip tab: the bare current-face glyph
+   in an 18px square — the pane's identity icon, like the sidebar's leading
+   tab emoji. The full variant's tinted pill, caret and pulse dot were the
+   loudest thing in the tab; here the only surviving emphasis is an
+   accent-tinted glyph when a detected app is waiting to be viewed. */
+.desktop-tab .pane-web-switch {
+  height: auto;
+  align-self: center;
+  margin-left: 10px;
+}
+/* The glyph supplies the leading inset on active tabs — the select's own
+   12px would double it. */
+.desktop-tab[data-active="true"] .desktop-tab-select {
+  padding-left: 5px;
+}
+.desktop-tab .pane-web-switch-main {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--fg-faint);
+}
+.desktop-tab .pane-web-switch-main:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+.desktop-tab .pane-web-switch-main.is-web {
+  color: var(--fg-faint);
+}
+.desktop-tab .pane-web-switch-main.is-web:hover {
+  color: var(--fg);
+}
+.desktop-tab .pane-web-switch-main.is-available {
+  color: var(--accent);
+  background: transparent;
+  font-weight: 400;
+}
+.desktop-tab .pane-web-switch-main.is-available:hover {
+  background: var(--bg-hover);
 }

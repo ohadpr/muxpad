@@ -4,6 +4,7 @@ import { subscribe } from '../events';
 import { probeUrl, requestFace } from '../lib/face-switch';
 import { normalizePaneUrl, usePaneFace } from '../lib/pane-face';
 import { addUrlRecent, getUrlRecents } from '../lib/url-recents';
+import { useDismissable } from '../lib/use-dismissable';
 import './PaneWebSwitch.css';
 
 /**
@@ -12,9 +13,10 @@ import './PaneWebSwitch.css';
  * serving URL, recently-typed URLs, or a manually entered one.
  *
  * Selection dispatches a muxpad:set-face request that the pane's mounted
- * ShellPaneBody executes; every switch is a pure view flip (the old TUI
- * driver hand-off is gone — TUI panes get a one-way "Continue in Agent tab"
- * handoff instead). Two triggers render this list: PaneWebSwitch below
+ * ShellPaneBody executes; every switch is a pure view flip (both the old
+ * TUI driver hand-off and the later "Continue in Agent tab" handoff are
+ * gone — agent tabs are simply created fresh). Two triggers render this
+ * list: PaneWebSwitch below
  * (mobile bar + tabbed strip) and the desktop mosaic chrome's
  * PaneSurfaceSwitch (which appends its pane-KIND conversion items as
  * children).
@@ -134,13 +136,12 @@ export function PaneFaceMenuList({
       style={{ top: at.top, left: at.left }}
       onMouseDown={(e) => e.stopPropagation()}
     >
-      <div className="pane-web-switch-head">View</div>
       {(() => {
         // Every face is a VIEW over the same pane — nothing is lost by
         // switching. Chat exists only on agent panes (their runner is the
-        // one chat driver); a TUI session pane instead offers a one-way
-        // handoff into a fresh agent tab. Items that invite doubt explain
-        // themselves in a second line.
+        // one chat driver). Explanations live in tooltips;
+        // inline copy earns its place only when a consequence must be
+        // visible before hovering (the right-aligned notes).
         const terminalItem = (
           <button
             key="face-terminal"
@@ -148,18 +149,14 @@ export function PaneFaceMenuList({
             role="menuitem"
             className={`pane-web-switch-item${face === 'terminal' ? ' is-active' : ''}`}
             onClick={() => pick('terminal')}
+            title={
+              isAgent
+                ? 'Read-only view of the agent’s raw output — the chat keeps running'
+                : undefined
+            }
           >
             <SvgTerminalGlyph />
-            <span className="pane-web-switch-item-text">
-              <span className="pane-web-switch-item-label">
-                {isAgent ? 'Agent log' : 'Terminal'}
-              </span>
-              {isAgent ? (
-                <span className="pane-web-switch-item-desc">
-                  Peek at the agent’s raw output — the chat keeps running
-                </span>
-              ) : null}
-            </span>
+            <span className="pane-web-switch-item-label">{isAgent ? 'Agent log' : 'Terminal'}</span>
           </button>
         );
         const chatItem = showChat ? (
@@ -170,42 +167,12 @@ export function PaneFaceMenuList({
             className={`pane-web-switch-item${face === 'chat' ? ' is-active' : ''}`}
             onClick={() => pick('chat')}
           >
-            <span className="pane-web-switch-glyph" aria-hidden="true">
-              ✳
-            </span>
+            <SvgAgentGlyph />
             <span className="pane-web-switch-item-label">Chat</span>
             {session?.running ? <span className="pane-web-switch-dot" aria-hidden="true" /> : null}
           </button>
         ) : null;
-        // A tracked TUI session: offer the handoff instead of a chat face.
-        const handoffItem =
-          !isAgent && session !== null ? (
-            <button
-              key="handoff"
-              type="button"
-              role="menuitem"
-              className="pane-web-switch-item"
-              onClick={() => {
-                window.dispatchEvent(
-                  new CustomEvent('muxpad:handoff-to-agent', { detail: { paneId } }),
-                );
-                onClose();
-              }}
-            >
-              <span className="pane-web-switch-glyph" aria-hidden="true">
-                ✳
-              </span>
-              <span className="pane-web-switch-item-text">
-                <span className="pane-web-switch-item-label">Continue in Agent tab</span>
-                <span className="pane-web-switch-item-desc">
-                  The running Claude writes its context to a handoff file, a new agent tab picks it
-                  up, and this terminal closes itself
-                </span>
-              </span>
-            </button>
-          ) : null;
-        // Chat is an agent pane's home face — it sorts first there.
-        return isAgent ? [chatItem, terminalItem] : [terminalItem, chatItem, handoffItem];
+        return isAgent ? [chatItem, terminalItem] : [terminalItem];
       })()}
       {appUrls.length > 0 ? (
         <div className="pane-web-switch-head">
@@ -263,10 +230,14 @@ export function PaneWebSwitch({
   paneId,
   appUrls,
   startupCmd,
+  compact = false,
 }: {
   paneId: string;
   appUrls: AppUrl[];
   startupCmd?: string | null | undefined;
+  /** Icon + caret only — for hosts that already show the pane's name
+   *  (the active strip tab). */
+  compact?: boolean;
 }) {
   const { face, url } = usePaneFace(paneId);
   const [menuAt, setMenuAt] = useState<{ top: number; left: number } | null>(null);
@@ -297,23 +268,14 @@ export function PaneWebSwitch({
     };
   }, [paneId]);
 
+  useDismissable(menuAt !== null, wrapRef, () => setMenuAt(null));
   useEffect(() => {
     if (!menuAt) return;
-    const close = () => setMenuAt(null);
-    const onDown = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) close();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close();
-    };
-    document.addEventListener('mousedown', onDown, true);
-    document.addEventListener('keydown', onKey);
     // Fixed coords go stale on any scroll/resize — just close.
+    const close = () => setMenuAt(null);
     window.addEventListener('scroll', close, true);
     window.addEventListener('resize', close);
     return () => {
-      document.removeEventListener('mousedown', onDown, true);
-      document.removeEventListener('keydown', onKey);
       window.removeEventListener('scroll', close, true);
       window.removeEventListener('resize', close);
     };
@@ -348,22 +310,23 @@ export function PaneWebSwitch({
         aria-expanded={menuAt !== null}
         onClick={toggle}
       >
-        {showChat ? (
-          <span className="pane-web-switch-glyph" aria-hidden="true">
-            ✳
-          </span>
-        ) : showWeb ? (
-          <SvgGlobe />
-        ) : (
-          <SvgTerminalGlyph />
+        {showChat ? <SvgAgentGlyph /> : showWeb ? <SvgGlobe /> : <SvgTerminalGlyph />}
+        {/* Compact (in the strip tab) is the bare face glyph — one quiet
+            18px square matching the × next to it. The label, pulse dot and
+            caret are the full (mobile-bar) form; in the pill they made the
+            trigger the loudest thing there. "App detected" survives as an
+            accent tint on the glyph (CSS .is-available). */}
+        {compact ? null : (
+          <>
+            <span className="pane-web-switch-label">
+              {showChat ? 'Chat' : showWeb ? 'Web' : 'Terminal'}
+            </span>
+            {available ? <span className="pane-web-switch-dot" aria-hidden="true" /> : null}
+            <span className="pane-web-switch-chevron" aria-hidden="true">
+              ▾
+            </span>
+          </>
         )}
-        <span className="pane-web-switch-label">
-          {showChat ? 'Chat' : showWeb ? 'Web' : 'Terminal'}
-        </span>
-        {available ? <span className="pane-web-switch-dot" aria-hidden="true" /> : null}
-        <span className="pane-web-switch-chevron" aria-hidden="true">
-          ▾
-        </span>
       </button>
       {menuAt ? (
         <PaneFaceMenuList
@@ -411,6 +374,23 @@ function SvgGlobe() {
         strokeWidth="1.0"
       />
       <line x1="1.8" y1="7" x2="12.2" y2="7" stroke="currentColor" strokeWidth="1.0" />
+    </svg>
+  );
+}
+
+/** Agent-chat face: a drawn four-point sparkle in the same stroke language
+ *  as the terminal/globe glyphs — the old ✳ text char read as line noise.
+ *  Exported for the mosaic chrome's PaneSurfaceSwitch, the other trigger. */
+export function SvgAgentGlyph() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+      <path
+        d="M7 1.6 C7.6 4.5 9.5 6.4 12.4 7 C9.5 7.6 7.6 9.5 7 12.4 C6.4 9.5 4.5 7.6 1.6 7 C4.5 6.4 6.4 4.5 7 1.6 Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.1"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }

@@ -234,6 +234,14 @@
   box-shadow: inset 0 0 0 1px var(--accent);
   border-radius: 4px;
 }
+/* "Drop INTO this tab" — a dragged pane (whole row) or a dragged tab over
+   the row's middle band (merge). Same accent ring language as the
+   workspace rows' move-tab-here affordance. */
+.navtree-tab-row[data-drop-into="true"] {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  border-radius: var(--nt-pill);
+}
 .navtree-ws-name:hover {
   text-decoration: none;
 }
@@ -427,7 +435,10 @@
   flex: 0 0 0;
   width: 0;
   margin-left: -4px;
-  height: var(--nt-hit);
+  /* 18px square when revealed — the exact box the strip tabs' × uses; the
+     row is taller, so it centers as an inset square (not a full-height slab). */
+  height: 18px;
+  align-self: center;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -449,6 +460,7 @@
 .navtree[data-variant="sheet"] .navtree-close {
   flex-basis: var(--nt-hit);
   width: var(--nt-hit);
+  height: var(--nt-hit); /* touch needs the full hit square */
   margin-left: 0;
   opacity: 0.35;
 }
@@ -457,14 +469,16 @@
 .navtree-tab-row:hover .navtree-close,
 .navtree-tab-row:focus-within .navtree-close,
 .navtree-close:focus-visible {
-  flex-basis: var(--nt-hit);
-  width: var(--nt-hit);
+  flex-basis: 18px;
+  width: 18px;
   margin-left: 0;
   opacity: 1;
 }
+/* Same hover grammar as the strip tabs' ×: quiet hover square, danger-red
+   glyph — "this deletes", consistent everywhere a close lives. */
 .navtree-close:hover {
-  background: var(--border-strong);
-  color: var(--fg);
+  background: var(--bg-hover);
+  color: var(--danger);
   opacity: 1;
 }
 
@@ -492,7 +506,10 @@
 .navtree-menu-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  /* Above the mobile nav sheet (z 1101) — the menu opens from rows INSIDE
+     that sheet on touch (long-press); at 1000 it rendered underneath it,
+     invisible and untappable. */
+  z-index: 1200;
 }
 .navtree-menu {
   position: fixed;
@@ -597,7 +614,8 @@
    surface, shadow, and search UI). */
 .navtree-emoji-popover {
   position: fixed;
-  z-index: 1001;
+  /* Above the menu backdrop (1200) — the picker opens FROM the menu. */
+  z-index: 1201;
 }
 .navtree-emoji-loading {
   padding: 16px;
@@ -785,4 +803,30 @@ body.sidenav-resizing iframe {
   border-bottom: none;
   border-radius: 6px 6px 6px 0;
   box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.22);
+}
+
+/* The transient Terminal/Agent choice row — appears in place of the quiet
+   "+ New tab" action only while choosing. Equal-width ghost-chip BUTTONS
+   (bordered, centered, identical) so both read as flavors of one action. */
+.navtree-new-row {
+  display: flex;
+  gap: 6px;
+  padding: 4px 8px 6px;
+}
+.navtree-new-row .navtree-add {
+  flex: 1 1 0;
+  padding: 5px 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: var(--chrome-size-sm, 12px);
+  text-align: center;
+  cursor: pointer;
+  transition: color 80ms ease, border-color 80ms ease, background 80ms ease;
+}
+.navtree-new-row .navtree-add:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }

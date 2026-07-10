@@ -53,9 +53,9 @@ export function ShellPaneBody({
   // Executes face switches requested by the chrome's face menu
   // (muxpad:set-face). Every switch is a pure VIEW flip — chat exists only
   // on agent panes (their runner is always the driver), the terminal is
-  // never typed at, and web is an overlay. The old TUI driver hand-off
-  // (takeover / `--resume` relaunch) was dropped in favor of the one-way
-  // agent handoff (lib/agent-handoff.ts).
+  // never typed at, and web is an overlay. (The old TUI driver hand-off and
+  // the later one-way agent handoff were both dropped — agent tabs are
+  // created fresh.)
   const switchTo = (target: 'terminal' | 'web' | 'chat', targetUrl?: string) => {
     // setPaneFace persists server-side (PATCH); the resulting pane.updated
     // event flips every other device's view too.

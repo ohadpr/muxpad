@@ -5,6 +5,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import type { AgentBridge } from './agent-bridge.js';
 import {
   type AgentQuestion,
+  CLOSE_RUNNER_DISPLACED,
   type RunnerFrame,
   type ServerFrame,
   type SubagentProgress,
@@ -15,6 +16,7 @@ import type { EventBus } from './events.js';
 import { type PtydCache, decoratePane } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { proxyAttach } from './ptyd-client/proxyAttach.js';
+import type { PaneNotifier } from './push.js';
 import { safeCwd } from './safe-cwd.js';
 import { AgentSessionStore } from './store/AgentSessionStore.js';
 import { PaneStore } from './store/PaneStore.js';
@@ -30,6 +32,11 @@ export interface WsServerHandle {
 // backed by a tens-of-MB transcript stays instant.
 const CHAT_HISTORY_TAIL_BYTES = 128 * 1024;
 
+// A turn completing within this window of the user's own chat send is an
+// interactive conversation — its turn-done must not push-notify (the user
+// is right there). Longer turns and autonomous wakeup/cron turns do push.
+const INTERACTIVE_PUSH_SUPPRESS_MS = 2 * 60_000;
+
 export function attachWsServer(deps: {
   http: Server;
   db: Database.Database;
@@ -40,6 +47,12 @@ export function attachWsServer(deps: {
   heartbeatMs?: number;
   /** When provided, gets its `send` bound to the live runner registry. */
   agentBridge?: AgentBridge;
+  /**
+   * Web Push sender for chat-runner events that never touch the terminal
+   * BEL/attention path: turn-done and agent questions. Optional — tests
+   * and push-less deployments omit it.
+   */
+  notifyPane?: PaneNotifier;
 }): WsServerHandle {
   const wss = new WebSocketServer({ noServer: true });
   const panes = new PaneStore(deps.db);
@@ -132,6 +145,8 @@ export function attachWsServer(deps: {
     subagents: Map<string, SubagentProgress>;
     /** Latest session status (model, context fill, model list) for hellos. */
     status: (RunnerFrame & { t: 'status' }) | null;
+    /** When the last chat send was relayed — see the stop handler's gate. */
+    lastSendAt: number;
   }
   const agentRunners = new Map<string, AgentRunnerConn>();
   const sendToRunner = (paneId: string, frame: ServerFrame): boolean => {
@@ -235,16 +250,29 @@ export function attachWsServer(deps: {
           live.isAlive = true;
         });
         // Newest runner wins: a respawn (pane reload, crashed process) may
-        // connect before the old socket's close fires. Terminate the old one
-        // so its close handler can't tear down the new registration.
+        // connect before the old socket's close fires. Close the old one
+        // with 4001 — a DISPLACED runner that is still a live process (an
+        // orphaned pty duplicate) must exit rather than reconnect, or the
+        // two processes trade the registration forever, strobing the chat's
+        // status/busy on every steal. A dead peer never completes the close
+        // handshake, so force-terminate after a grace; the teardown handler
+        // guards on registration, so late close events from it are inert.
         const prev = agentRunners.get(paneId);
         if (prev) {
           agentRunners.delete(paneId);
+          const stale = prev.ws;
           try {
-            prev.ws.terminate();
+            stale.close(CLOSE_RUNNER_DISPLACED, 'replaced by a newer runner for this pane');
           } catch {
             // already dead
           }
+          setTimeout(() => {
+            try {
+              stale.terminate();
+            } catch {
+              // already dead
+            }
+          }, 5_000).unref?.();
         }
         const conn: AgentRunnerConn = {
           ws,
@@ -253,19 +281,20 @@ export function attachWsServer(deps: {
           pendingQuestion: null,
           subagents: new Map(),
           status: null,
+          lastSendAt: 0,
         };
         agentRunners.set(paneId, conn);
         const bcast = (obj: unknown) => bcastToPane(paneId, obj);
         const emitChange = () =>
           deps.events.emit({ type: 'agent_session.updated', pane_id: paneId });
         ws.on('message', (data) => {
+          // A displaced socket can still deliver in-flight frames during the
+          // close handshake — a stale runner's state must not leak into the
+          // pane (busy flips, status strobing) once a successor registered.
+          if (agentRunners.get(paneId) !== conn) return;
           const frame = parseFrame<RunnerFrame>(data);
           if (!frame) return;
           if (frame.t === 'hello') {
-            // A (re)hello means new runner process or new session id — the
-            // cached status may describe the OLD session; the runner re-sends
-            // its current status right after hello.
-            conn.status = null;
             // The sid ends up in a startup_cmd that PaneRuntime TYPES INTO A
             // SHELL on respawn — constrain its charset (same rule as the
             // HTTP register/hook routes) so a crafted hello can't smuggle
@@ -278,6 +307,11 @@ export function attachWsServer(deps: {
             ) {
               return;
             }
+            // ACCEPTED (re)hello = new runner process or new session id — the
+            // cached status may describe the OLD session; the runner re-sends
+            // its current status right after hello. (After validation: a
+            // rejected hello must not wipe a status nothing will re-send.)
+            conn.status = null;
             conn.sid = frame.sid;
             conn.turnActive = frame.turnActive === true;
             agents.attachRunner({ pane_id: paneId, cwd: frame.cwd, session_id: frame.sid });
@@ -327,10 +361,28 @@ export function attachWsServer(deps: {
               ok: frame.ok !== false,
               ...(frame.error ? { error: frame.error } : {}),
             });
+            // Chat-native agents never ring BEL, so the attention-push path
+            // can't see them — notify turn completion here instead. Gated on
+            // interactivity: a turn answered within the suppress window of
+            // the user's own chat send is a conversation they're actively
+            // driving (every reply would buzz their phone mid-chat).
+            // Long-running turns (the user walked away) and autonomous
+            // wakeup/cron turns (no recent send) do push.
+            if (Date.now() - conn.lastSendAt > INTERACTIVE_PUSH_SUPPRESS_MS) {
+              deps.notifyPane?.(
+                paneId,
+                frame.ok !== false ? 'agent finished its turn' : 'agent turn failed',
+              );
+            }
           } else if (frame.t === 'question') {
             if (typeof frame.qid !== 'string' || !Array.isArray(frame.questions)) return;
             conn.pendingQuestion = { qid: frame.qid, questions: frame.questions };
             bcast({ t: 'question', qid: frame.qid, questions: frame.questions });
+            const q = frame.questions[0]?.question;
+            deps.notifyPane?.(
+              paneId,
+              q ? `agent asks: ${q.slice(0, 140)}` : 'agent has a question',
+            );
           } else if (frame.t === 'question-done') {
             if (conn.pendingQuestion?.qid === frame.qid) conn.pendingQuestion = null;
             bcast({ t: 'question-done', qid: frame.qid });
@@ -507,23 +559,31 @@ export function attachWsServer(deps: {
             return;
           }
           if (msg.t === 'stop') {
-            // Only relay when a turn is actually active. Otherwise answer
+            // Relay when a turn is active OR a send was just relayed —
+            // turnActive lags a fresh send by a full round trip, and
+            // "send, then immediately Stop (oops)" is the most common stop
+            // pattern; the runner cancels the queued send. Otherwise answer
             // THIS socket with a turn-done resync: a stray Stop proves this
             // client thinks a turn is running, and a per-socket reply heals
-            // it without wiping other clients' in-flight sends (a runner-side
-            // broadcast used to) — and it works even with the runner gone.
+            // it without wiping other clients' in-flight sends — and works
+            // even with the runner gone.
             const conn = agentRunners.get(chatPaneId);
-            if (conn?.turnActive) {
+            const sendInFlight = conn ? Date.now() - conn.lastSendAt < 15_000 : false;
+            if (conn && (conn.turnActive || sendInFlight)) {
               sendToRunner(chatPaneId, { t: 'stop' });
             } else {
               send({ t: 'turn-done', ok: true });
             }
             return;
           }
+          // Control-relay failures reply with `notice`, NOT `error`: the
+          // client's error handler treats errors as a rejected SEND and
+          // resets sending/optimistic state — wrong for a menu action that
+          // failed while a turn may be streaming.
           if (msg.t === 'set-model') {
             if (typeof msg.model === 'string' && msg.model.length <= 128) {
               if (!sendToRunner(chatPaneId, { t: 'set-model', model: msg.model })) {
-                send({ t: 'error', message: 'agent is reconnecting — try again in a moment' });
+                send({ t: 'notice', message: 'agent is reconnecting — try again in a moment' });
               }
             }
             return;
@@ -531,7 +591,7 @@ export function attachWsServer(deps: {
           if (msg.t === 'slash') {
             if (msg.cmd === 'compact' || msg.cmd === 'clear') {
               if (!sendToRunner(chatPaneId, { t: 'slash', cmd: msg.cmd })) {
-                send({ t: 'error', message: 'agent is reconnecting — try again in a moment' });
+                send({ t: 'notice', message: 'agent is reconnecting — try again in a moment' });
               }
             }
             return;
@@ -573,7 +633,10 @@ export function attachWsServer(deps: {
           // guards) was dropped; see PR "drop terminal⇄chat session
           // switching" for the capability's record.
           if (agentRunners.has(chatPaneId)) {
-            if (!sendToRunner(chatPaneId, { t: 'send', text: msg.text })) {
+            if (sendToRunner(chatPaneId, { t: 'send', text: msg.text })) {
+              const conn = agentRunners.get(chatPaneId);
+              if (conn) conn.lastSendAt = Date.now();
+            } else {
               send({ t: 'error', message: 'agent is reconnecting — try again' });
             }
             return;

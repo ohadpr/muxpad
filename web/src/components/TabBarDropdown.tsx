@@ -2,6 +2,7 @@ import type { Tab } from '@muxpad/shared';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
+import { useDismissable } from '../lib/use-dismissable';
 import { refreshTabs } from '../tabs';
 import { openInNewTab, useLongPress } from '../use-long-press';
 import { SvgClose } from './icons';
@@ -41,21 +42,7 @@ export function TabBarDropdown({
     0,
   );
 
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', onClick);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onClick);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
+  useDismissable(open, ref, () => setOpen(false));
 
   return (
     <div className="ws-tabbar-dropdown" ref={ref}>

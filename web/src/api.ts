@@ -1,6 +1,8 @@
 import type { LayoutNode, PaneSpec, Tab, Workspace } from '@muxpad/shared';
 
-async function req<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
+/** The one JSON fetch wrapper — exported so feature libs (push, …) don't
+ *  grow divergent copies of the same content-type/error/204 handling. */
+export async function req<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   const res = await fetch(input, {
     ...init,
     headers: {
@@ -20,6 +22,8 @@ export interface TabWithPanes extends Tab {
 export interface MovePaneResult {
   pane: PaneSpec | null;
   from_tab_id: string;
+  /** Source workspace — may differ from the destination's (cross-ws moves). */
+  from_workspace_id?: string;
   to_tab: Tab;
   /** True if the source tab was deleted because the pane was its last one. */
   from_tab_removed: boolean;
@@ -130,13 +134,21 @@ export const api = {
 
   deletePane: (id: string) => req<void>(`/api/panes/${id}`, { method: 'DELETE' }),
 
-  // Move a pane to another tab in the same workspace. `toTabId` targets an
+  // Move a pane to another tab (any workspace). `toTabId` targets an
   // existing tab; `newTab` extracts it into a fresh tab. The PTY keeps
   // running — only the pane's parent tab + both tabs' layouts change.
   movePane: (id: string, dest: { toTabId?: string; newTab?: boolean }) =>
     req<MovePaneResult>(`/api/panes/${id}/move`, {
       method: 'POST',
       body: JSON.stringify({ to_tab_id: dest.toTabId, new_tab: dest.newTab }),
+    }),
+
+  // Merge a whole tab into another: every pane moves over (keeping strip
+  // order), the emptied source tab is deleted. Panes keep running.
+  mergeTab: (id: string, intoTabId: string) =>
+    req<{ to_tab: Tab; from_tab_id: string; moved_pane_ids: string[] }>(`/api/tabs/${id}/merge`, {
+      method: 'POST',
+      body: JSON.stringify({ into_tab_id: intoTabId }),
     }),
 
   // Move a whole tab (and its panes) to a different workspace.
