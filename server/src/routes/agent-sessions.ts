@@ -79,19 +79,6 @@ export function agentSessionsRoutes(deps: {
     return c.json(res, res.ok ? 202 : 409);
   });
 
-  // Live foreground of the pane — the handoff-to-agent flow uses this to
-  // verify a Claude TUI is actually running before typing the handoff
-  // instruction at the pane.
-  app.get('/:paneId/foreground', async (c) => {
-    let fg: string | null = null;
-    try {
-      fg = await deps.ptyd.getForegroundCommand(c.req.param('paneId'));
-    } catch {
-      fg = null;
-    }
-    return c.json({ foreground: fg, isClaude: !!fg && /\bclaude\b/i.test(fg) });
-  });
-
   app.post('/register', async (c) => {
     const body = RegisterSchema.parse(await c.req.json().catch(() => ({})));
     const session = store.register(body);

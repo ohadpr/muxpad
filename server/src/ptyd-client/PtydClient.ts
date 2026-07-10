@@ -93,6 +93,13 @@ export class PtydClient extends EventEmitter {
     await this.call('killPane', { id });
   }
 
+  /** Live pane ids in ptyd (throws on pre-listPanes ptyd builds). */
+  async listPanes(): Promise<string[]> {
+    const r = await this.call('listPanes', {});
+    const ids = (r as { ids?: unknown }).ids;
+    return Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string') : [];
+  }
+
   /**
    * @throws Error('ptyd disconnected') if the socket isn't OPEN.
    */

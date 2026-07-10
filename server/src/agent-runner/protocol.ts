@@ -76,6 +76,17 @@ export type ServerFrame =
       answers: Array<{ question: string; answers: string[] }>;
     };
 
+/**
+ * WS close code sent to a runner socket displaced by a NEWER runner for the
+ * same pane — the displaced process must EXIT, not reconnect (two live
+ * processes would trade the registration forever). 4001 is also used
+ * elsewhere in the project for unrelated closes (pane kind flips to browser
+ * attach sockets); this named constant exists so the runner's exit-on-close
+ * coupling is to the displacement CONTRACT, not to a bare number a future
+ * path might reuse by accident.
+ */
+export const CLOSE_RUNNER_DISPLACED = 4001;
+
 export function parseFrame<T>(data: unknown): T | null {
   try {
     return JSON.parse(String(data)) as T;
