@@ -344,6 +344,8 @@ export function ChatPane({
   // running-subagents indicator (a background task that's gone silent past
   // it reads as done, not running; its tool_result may never stream here).
   const subagentSeenAt = useRef(new Map<string, number>());
+  // Expanded action-run blocks, keyed by the run's first event id.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   // Runner-pushed session status: model, context fill, available models.
   // null = no runner status yet (TUI-view chats never get one).
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
@@ -1111,6 +1113,67 @@ export function ChatPane({
         const r = resultFor.get(e.toolUseId);
         if (r) consumed.add(r.id);
       }
+    const renderEvent = (e: ChatEvent) => {
+      if (e.kind === 'tool_use')
+        return (
+          <ToolRow
+            key={e.id}
+            use={e}
+            result={resultFor.get(e.toolUseId)}
+            progress={resultFor.has(e.toolUseId) ? undefined : subagents[e.toolUseId]}
+            onOpen={setOpenTool}
+          />
+        );
+      if (e.kind === 'tool_result') return <ToolRow key={e.id} result={e} onOpen={setOpenTool} />;
+      return <ChatRow key={e.id} event={e} onOpenImage={setOpenImage} />;
+    };
+
+    // A long agentic stretch renders as ONE collapsed block instead of a
+    // wall of per-action rows: consecutive tool/thinking events (an
+    // "action run") fold behind a count + tool summary, expandable in
+    // place. Real prose — user and assistant text — always breaks a run
+    // and renders as normal messages. The TRAILING run of an in-flight
+    // turn stays unfolded: that's the live view you watch working.
+    const renderable = events.filter((e) => !(e.kind === 'tool_result' && consumed.has(e.id)));
+    const isAction = (e: ChatEvent) =>
+      e.kind === 'tool_use' || e.kind === 'tool_result' || e.kind === 'thinking';
+    const MIN_GROUP = 4;
+    const items: React.ReactNode[] = [];
+    for (let i = 0; i < renderable.length; ) {
+      const e = renderable[i] as ChatEvent;
+      if (!isAction(e)) {
+        items.push(renderEvent(e));
+        i++;
+        continue;
+      }
+      let j = i;
+      while (j < renderable.length && isAction(renderable[j] as ChatEvent)) j++;
+      const run = renderable.slice(i, j) as ChatEvent[];
+      const trailingLive = sending && j === renderable.length;
+      if (run.length < MIN_GROUP || trailingLive) {
+        items.push(...run.map(renderEvent));
+      } else {
+        const id = (run[0] as ChatEvent).id;
+        items.push(
+          <ActionGroup
+            key={`group-${id}`}
+            events={run}
+            expanded={expandedGroups.has(id)}
+            onToggle={() =>
+              setExpandedGroups((prev) => {
+                const next = new Set(prev);
+                if (next.has(id)) next.delete(id);
+                else next.add(id);
+                return next;
+              })
+            }
+            renderEvent={renderEvent}
+          />,
+        );
+      }
+      i = j;
+    }
+
     return (
       <>
         {loadingOlder ? (
@@ -1118,26 +1181,20 @@ export function ChatPane({
             <div className="chat-empty-spinner" />
           </div>
         ) : null}
-        {events.map((e) => {
-          if (e.kind === 'tool_use')
-            return (
-              <ToolRow
-                key={e.id}
-                use={e}
-                result={resultFor.get(e.toolUseId)}
-                progress={resultFor.has(e.toolUseId) ? undefined : subagents[e.toolUseId]}
-                onOpen={setOpenTool}
-              />
-            );
-          // Result already shown by its tool_use row above.
-          if (e.kind === 'tool_result' && consumed.has(e.id)) return null;
-          if (e.kind === 'tool_result')
-            return <ToolRow key={e.id} result={e} onOpen={setOpenTool} />;
-          return <ChatRow key={e.id} event={e} onOpenImage={setOpenImage} />;
-        })}
+        {items}
       </>
     );
-  }, [session, connected, events, stale, optimisticUser, sending, loadingOlder, subagents]);
+  }, [
+    session,
+    connected,
+    events,
+    stale,
+    optimisticUser,
+    sending,
+    loadingOlder,
+    subagents,
+    expandedGroups,
+  ]);
 
   // ONE tool-resolution index for everything below (and one place for the
   // "a tool_use is resolved when a tool_result shares its toolUseId" rule —
@@ -1377,6 +1434,61 @@ export function ChatPane({
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * A folded run of consecutive actions (tool calls + thinking) — long
+ * agentic stretches read as one summarizable step, not a wall of rows.
+ * The header names the mix ("14 actions · Bash ×6 · Edit ×4"), flags
+ * failures, and expands in place to the ordinary per-action rows.
+ */
+function ActionGroup({
+  events,
+  expanded,
+  onToggle,
+  renderEvent,
+}: {
+  events: ChatEvent[];
+  expanded: boolean;
+  onToggle: () => void;
+  renderEvent: (e: ChatEvent) => React.ReactNode;
+}) {
+  const counts = new Map<string, number>();
+  let failed = 0;
+  for (const e of events) {
+    const name = e.kind === 'tool_use' ? e.name : e.kind === 'thinking' ? 'thinking' : null;
+    if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+    if (e.kind === 'tool_result' && !e.ok) failed++;
+  }
+  const actions = [...counts.values()].reduce((a, b) => a + b, 0);
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+  const summary = top.map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(' · ');
+  return (
+    <div className="chat-turn chat-turn-assistant">
+      <div className="chat-msg chat-action-group">
+        <button
+          type="button"
+          className="chat-action-group-head"
+          aria-expanded={expanded}
+          onClick={onToggle}
+        >
+          <span className={`chat-action-group-chevron${expanded ? ' is-open' : ''}`} aria-hidden="true">
+            ›
+          </span>
+          <span className="chat-action-group-count">
+            {actions} action{actions === 1 ? '' : 's'}
+          </span>
+          <span className="chat-action-group-summary">{summary}</span>
+          {failed > 0 ? (
+            <span className="chat-action-group-failed">
+              {failed} failed
+            </span>
+          ) : null}
+        </button>
+        {expanded ? <div className="chat-action-group-body">{events.map(renderEvent)}</div> : null}
+      </div>
     </div>
   );
 }

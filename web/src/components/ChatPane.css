@@ -470,6 +470,54 @@
   white-space: nowrap;
 }
 
+/* Folded action-run block: one quiet summarizable row for a long agentic
+   stretch; expanding reveals the ordinary per-action rows under a rail. */
+.chat-action-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  max-width: 100%;
+  padding: 2px 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: var(--chrome-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
+  color: var(--chat-faint);
+}
+.chat-action-group-head:hover {
+  color: var(--chat-dim);
+}
+.chat-action-group-chevron {
+  display: inline-block;
+  transition: transform 120ms ease;
+}
+.chat-action-group-chevron.is-open {
+  transform: rotate(90deg);
+}
+.chat-action-group-count {
+  color: var(--chat-dim);
+  font-weight: 550;
+  white-space: nowrap;
+}
+.chat-action-group-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-action-group-failed {
+  color: var(--chat-danger);
+  white-space: nowrap;
+}
+.chat-action-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 10px;
+  padding-left: 12px;
+  border-left: 2px solid var(--chat-border);
+}
+
 /* Reasoning aside: dimmed, italic, smaller, quiet left rail. */
 .chat-thinking {
   flex: 1 1 auto;
