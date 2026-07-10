@@ -275,10 +275,17 @@
 .mobile-tab-strip {
   display: flex;
   align-items: center;
+  gap: 8px;
+  padding: 0 10px;
   background: var(--bg-tabbar);
   border-bottom: 1px solid var(--border);
   height: 40px;
   flex: 0 0 auto;
+}
+/* Leading face switch (single-pane mode): flush left, no extra inset —
+   it's the bar's anchor, not a floating control. */
+.mobile-strip-webswitch.-lead {
+  margin-left: -6px; /* PaneWebSwitch carries its own inner padding */
 }
 
 .mobile-tab-strip-scroll {
@@ -326,14 +333,14 @@
 
 .mobile-tab-close {
   flex: 0 0 auto;
-  width: 36px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   background: transparent;
   border: none;
-  border-left: 1px solid var(--border);
+  border-radius: 7px;
   color: var(--fg-dim);
   cursor: pointer;
   transition: color 80ms ease;
