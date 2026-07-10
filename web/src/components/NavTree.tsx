@@ -363,6 +363,7 @@ function WorkspaceNode({
   // this never trips on desktop, where double-click does it).
   const { pressing, handlers: pressHandlers } = useLongPress({
     onLongPress: () => setEditing({ kind: 'workspace', id: workspace.id }),
+    fireOnTimer: true, // in-page rename — see the hook's iOS note
   });
 
   // Accept a tab dragged from ANOTHER workspace, dropped anywhere on this
@@ -942,6 +943,7 @@ function TabRow({
   const touchPoint = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const { pressing, handlers: longPressHandlers } = useLongPress({
     onLongPress: () => setMenu({ x: touchPoint.current.x, y: touchPoint.current.y }),
+    fireOnTimer: true, // in-page menu — see the hook's iOS note
   });
   const pressHandlers = {
     ...longPressHandlers,
@@ -1196,37 +1198,15 @@ function TabRow({
           ) : null}
         </Link>
       )}
-      {variant === 'sheet' ? (
-        // Touch: one visible ⋯ opens the full tab menu (rename, icon, new
-        // pane, move, close). Long-press is unreliable on iOS (the armed
-        // click never arrives after a long hold), and a bare × next to the
-        // name was a mis-tap magnet — destructive close now lives in the
-        // menu instead.
-        <button
-          type="button"
-          className="navtree-more"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-            setMenu({ x: r.right, y: r.bottom + 4 });
-          }}
-          aria-haspopup="menu"
-          aria-label={`Tab options for ${tab.name}`}
-        >
-          ⋯
-        </button>
-      ) : (
-        <button
-          type="button"
-          className="navtree-close"
-          onClick={onClose}
-          title="Close tab"
-          aria-label={`Close tab ${tab.name}`}
-        >
-          <SvgClose size={13} />
-        </button>
-      )}
+      <button
+        type="button"
+        className="navtree-close"
+        onClick={onClose}
+        title="Close tab"
+        aria-label={`Close tab ${tab.name}`}
+      >
+        <SvgClose size={13} />
+      </button>
       {menu && (
         <NavContextMenu
           x={menu.x}
