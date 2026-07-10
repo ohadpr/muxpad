@@ -1306,6 +1306,18 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                     />
                   ) : (
                     <>
+                      {/* The face switch LEADS the pill (active tab only) —
+                          it's the pane's identity glyph (terminal/chat/web),
+                          so it reads like the sidebar's leading tab icon;
+                          next to the × it read as a stray control. */}
+                      {isActiveTab && p?.kind === 'shell' ? (
+                        <PaneWebSwitch
+                          paneId={p.id}
+                          appUrls={p.app_urls ?? []}
+                          startupCmd={p.startup_cmd}
+                          compact
+                        />
+                      ) : null}
                       <button
                         type="button"
                         role="tab"
@@ -1328,19 +1340,6 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                         ) : null}
                         <span className="desktop-tab-label">{paneLabel(paneId)}</span>
                       </button>
-                      {/* The face switch lives ON the active tab — it
-                          describes THIS pane's view (terminal/chat/web), so
-                          parking it at the strip's edge read as global
-                          chrome, disconnected from its subject. Compact
-                          (icon + caret): the tab already carries the name. */}
-                      {isActiveTab && p?.kind === 'shell' ? (
-                        <PaneWebSwitch
-                          paneId={p.id}
-                          appUrls={p.app_urls ?? []}
-                          startupCmd={p.startup_cmd}
-                          compact
-                        />
-                      ) : null}
                       {/* Trailing slot holds only the hover-revealed × now —
                           status moved to LEAD the label. */}
                       <span className="desktop-tab-trailing">
