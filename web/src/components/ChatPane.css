@@ -424,6 +424,51 @@
     animation: none;
   }
 }
+/* Context next to the dots — names the tool during long silent calls. */
+.chat-working-label {
+  margin-left: 10px;
+  font-size: 12px;
+  color: var(--chat-faint);
+}
+
+/* Running-subagents indicator — one row per live Task, visible even after
+   the turn ends (background tasks). The ticking step count is the pulse. */
+.chat-subagents {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.chat-subagent-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--chat-faint);
+}
+.chat-subagent-glyph {
+  color: var(--accent);
+  animation: chat-subagent-pulse 2s ease-in-out infinite;
+}
+@keyframes chat-subagent-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-subagent-glyph {
+    animation: none;
+  }
+}
+.chat-subagent-label {
+  color: color-mix(in srgb, var(--chat-fg) 78%, transparent);
+}
+.chat-subagent-meta {
+  white-space: nowrap;
+}
 
 /* Reasoning aside: dimmed, italic, smaller, quiet left rail. */
 .chat-thinking {
@@ -1192,7 +1237,20 @@
 .chat-session-row {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
   padding: 0 6px 4px;
+}
+/* Always-on-screen activity cue beside the session chip. */
+.chat-composer-working {
+  font-size: 11px;
+  color: var(--chat-faint);
+  animation: chat-subagent-pulse 2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-composer-working {
+    animation: none;
+  }
 }
 .chat-session {
   position: relative;
