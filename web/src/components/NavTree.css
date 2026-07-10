@@ -482,6 +482,73 @@
   opacity: 1;
 }
 
+/* ─── Sheet pane list (mobile: tab row expands into its panes) ───────── */
+
+/* Expander chevron on sheet tab rows — same rotation grammar as the
+   workspace disclosure. */
+.navtree-pane-expander {
+  flex: 0 0 var(--nt-hit);
+  height: var(--nt-hit);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--fg-faint);
+  cursor: pointer;
+  border-radius: 4px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.navtree-pane-expander svg {
+  transition: transform 120ms ease;
+}
+.navtree-pane-expander[data-open="true"] svg {
+  transform: rotate(90deg);
+}
+
+/* The expanded pane rows — one hierarchy step deeper than tab rows. */
+.navtree-pane-list {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 8px 6px calc(var(--nt-indent) + 16px);
+}
+.navtree-pane-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: calc(var(--nt-row-tab) - 4px);
+  padding: 0 8px;
+  background: transparent;
+  border: none;
+  border-radius: var(--nt-pill);
+  color: var(--fg-dim);
+  font-family: inherit;
+  font-size: 0.95em;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.navtree-pane-row:active {
+  background: var(--bg-hover);
+}
+.navtree-pane-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.navtree-pane-loading {
+  padding: 4px 8px;
+  color: var(--fg-faint);
+}
+.navtree-new-pane {
+  margin: 2px 0 0;
+}
+
 /* ─── Inline rename (sidebar) ────────────────────────────────────────── */
 
 .navtree-rename {
