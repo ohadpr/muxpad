@@ -2,6 +2,7 @@ import { RouterProvider } from '@tanstack/react-router';
 import { createRoot } from 'react-dom/client';
 import { startEvents, subscribe, subscribeReconnect } from './events';
 import { pushOpen } from './lib/external-open-store';
+import { registerServiceWorker } from './lib/push';
 import { router } from './router';
 import { refreshTabs } from './tabs';
 import { refreshWorkspaces } from './workspaces';
@@ -36,6 +37,10 @@ const selfEmbedded = isSelfEmbedded();
 if (!selfEmbedded) {
   startEvents();
   subscribeReconnect(() => void refreshWorkspaces());
+  // Keep the push service worker registered/updated. No-op over plain
+  // http (no secure context → no navigator.serviceWorker) and harmless
+  // where push was never enabled — the SW has no fetch handler.
+  registerServiceWorker();
 }
 
 // Global router: forward structural events into the right module caches.

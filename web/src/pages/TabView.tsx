@@ -24,7 +24,6 @@ import { ShellPaneBody } from '../components/ShellPaneBody';
 import { UrlPane } from '../components/UrlPane';
 import { SvgClose } from '../components/icons';
 import { subscribe, subscribeReconnect } from '../events';
-import { handoffToAgent } from '../lib/agent-handoff';
 import { consumeFollowTarget } from '../lib/follow-tab';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
@@ -283,42 +282,6 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     window.addEventListener('muxpad:add-pane', onAddPane);
     return () => window.removeEventListener('muxpad:add-pane', onAddPane);
   }, []);
-
-  // "Continue in Agent tab" from a TUI pane's face menu: orchestrate the
-  // one-way handoff (TUI writes its context file and retires itself; a fresh
-  // agent tab absorbs it — lib/agent-handoff.ts). Lives here because the
-  // menu knows only paneId; this component holds the workspace + pane cwd
-  // and can navigate. The async flow survives the navigation-triggered
-  // remount — it's just fetches in a closure.
-  useEffect(() => {
-    const onHandoff = (e: Event) => {
-      const d = (e as CustomEvent<{ paneId?: string }>).detail;
-      const p = d?.paneId ? tab?.panes.find((x) => x.id === d.paneId) : undefined;
-      if (!p || !workspace) return;
-      void handoffToAgent({
-        paneId: p.id,
-        workspaceId: workspace.id,
-        cwd: p.cwd,
-        // Retire the whole tab when this is its only pane — a bare
-        // pane-delete would leave an empty tab shell in the sidebar.
-        closeCmd:
-          tab && tab.panes.length === 1
-            ? `muxpad tab delete ${tab.id}`
-            : `muxpad pane delete ${p.id}`,
-        onTabCreated: (tabSlug) => {
-          // Refresh the tabs list FIRST — navigating to a slug the client
-          // hasn't loaded yet trips the dead-tab redirect and bounces back.
-          void refreshTabs(workspace.id)
-            .catch(() => {})
-            .then(() => navigate({ to: '/w/$wsSlug/t/$tabSlug', params: { wsSlug, tabSlug } }));
-        },
-      }).then((res) => {
-        if (!res.ok && res.error) window.alert(res.error);
-      });
-    };
-    window.addEventListener('muxpad:handoff-to-agent', onHandoff);
-    return () => window.removeEventListener('muxpad:handoff-to-agent', onHandoff);
-  }, [tab, workspace, navigate, wsSlug]);
 
   // Persist the active pane on every focus event from any XtermPane
   // in the current tab. Desktop has no "active pane" in component
@@ -1267,9 +1230,14 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         ...(target ? { inherit_cwd_from: target } : {}),
         ...(kind === 'agent' ? { startup_cmd: 'muxpad agent', face: 'chat' as const } : {}),
       });
-      const newLayout: Layout = target
-        ? splitAtPane(layoutRef.current, target, created.id, 'row')
-        : created.id;
+      // The strip's "+" appends at the END (browser-tab convention).
+      // Splitting at the active pane put the newcomer mid-strip whenever a
+      // middle tab was active — cwd inheritance still follows the active
+      // pane above.
+      const newLayout: Layout =
+        layoutRef.current == null
+          ? created.id
+          : { direction: 'row', first: layoutRef.current, second: created.id };
       layoutRef.current = newLayout;
       setTab((prev) =>
         prev
@@ -1347,6 +1315,17 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                         onDoubleClick={() => startPaneRename(paneId)}
                         title={p?.name ? p.name : 'Double-click to rename'}
                       >
+                        {/* Status LEADS the name (spinner while working, dot
+                            when it wants you) — sharing the trailing slot
+                            with the × read as two unrelated controls mashed
+                            together. Priority mirrors the navigator. */}
+                        {p?.busy ? (
+                          <span className="desktop-tab-busy" aria-hidden="true" title="Working…">
+                            <SvgSpinner />
+                          </span>
+                        ) : p?.attention ? (
+                          <span className="badge-dot -inline" aria-label="needs attention" />
+                        ) : null}
                         <span className="desktop-tab-label">{paneLabel(paneId)}</span>
                       </button>
                       {/* The face switch lives ON the active tab — it
@@ -1362,25 +1341,9 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                           compact
                         />
                       ) : null}
-                      {/* Trailing slot: the status glyph and the close × share
-                          ONE fixed-width box — the × fades in over the status on
-                          hover. So the label's available width is the same
-                          whether or not a status shows, and the two never
-                          collide even at the min tab width. Status priority
-                          mirrors the navigator: WORKING (spinner) → WANTS YOU
-                          (dot) → idle. The spinner shows on the ACTIVE tab too —
-                          an agent pane works quietly for minutes on its chat
-                          face, and a glance at the strip should answer "is
-                          anything still running here?" (the dot still
-                          self-clears on view). */}
+                      {/* Trailing slot holds only the hover-revealed × now —
+                          status moved to LEAD the label. */}
                       <span className="desktop-tab-trailing">
-                        {p?.busy ? (
-                          <span className="desktop-tab-busy" aria-hidden="true" title="Working…">
-                            <SvgSpinner />
-                          </span>
-                        ) : p?.attention ? (
-                          <span className="badge-dot -inline" aria-label="needs attention" />
-                        ) : null}
                         <button
                           type="button"
                           className="desktop-tab-close"

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { type PushState, disablePush, enablePush, getPushState, sendTestPush } from '../lib/push';
 import { useDismissable } from '../lib/use-dismissable';
 import {
   FONT_FAMILIES,
@@ -90,6 +91,66 @@ export function SettingsMenu() {
               ))}
             </select>
           </div>
+
+          <PushRow />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Push-notification toggle. Web Push needs https + (on iOS) the installed
+ * PWA; where those don't hold the row says why instead of offering a
+ * button that can't work. Enable must run inside the click handler —
+ * iOS auto-denies permission prompts that don't come from a gesture.
+ */
+function PushRow() {
+  const [state, setState] = useState<PushState | 'loading'>('loading');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void getPushState().then(setState);
+  }, []);
+
+  const toggle = async () => {
+    setBusy(true);
+    try {
+      setState(state === 'enabled' ? await disablePush() : await enablePush());
+    } catch (err) {
+      console.error('push toggle failed', err);
+      setState(await getPushState());
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="settings-row">
+      <label htmlFor="push-toggle">Notifications</label>
+      {state === 'unsupported' ? (
+        <span className="settings-note">needs https</span>
+      ) : state === 'denied' ? (
+        <span className="settings-note">denied in browser settings</span>
+      ) : (
+        <div className="settings-push-actions">
+          <button
+            id="push-toggle"
+            type="button"
+            disabled={busy || state === 'loading'}
+            onClick={() => void toggle()}
+          >
+            {state === 'enabled' ? 'Disable' : 'Enable'}
+          </button>
+          {state === 'enabled' && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void sendTestPush().catch((err) => console.error(err))}
+            >
+              Test
+            </button>
+          )}
         </div>
       )}
     </div>

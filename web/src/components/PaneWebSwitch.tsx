@@ -13,9 +13,10 @@ import './PaneWebSwitch.css';
  * serving URL, recently-typed URLs, or a manually entered one.
  *
  * Selection dispatches a muxpad:set-face request that the pane's mounted
- * ShellPaneBody executes; every switch is a pure view flip (the old TUI
- * driver hand-off is gone — TUI panes get a one-way "Continue in Agent tab"
- * handoff instead). Two triggers render this list: PaneWebSwitch below
+ * ShellPaneBody executes; every switch is a pure view flip (both the old
+ * TUI driver hand-off and the later "Continue in Agent tab" handoff are
+ * gone — agent tabs are simply created fresh). Two triggers render this
+ * list: PaneWebSwitch below
  * (mobile bar + tabbed strip) and the desktop mosaic chrome's
  * PaneSurfaceSwitch (which appends its pane-KIND conversion items as
  * children).
@@ -138,8 +139,7 @@ export function PaneFaceMenuList({
       {(() => {
         // Every face is a VIEW over the same pane — nothing is lost by
         // switching. Chat exists only on agent panes (their runner is the
-        // one chat driver); a TUI session pane instead offers a one-way
-        // handoff into a fresh agent tab. Explanations live in tooltips;
+        // one chat driver). Explanations live in tooltips;
         // inline copy earns its place only when a consequence must be
         // visible before hovering (the right-aligned notes).
         const terminalItem = (
@@ -167,38 +167,12 @@ export function PaneFaceMenuList({
             className={`pane-web-switch-item${face === 'chat' ? ' is-active' : ''}`}
             onClick={() => pick('chat')}
           >
-            <span className="pane-web-switch-glyph" aria-hidden="true">
-              ✳
-            </span>
+            <SvgAgentGlyph />
             <span className="pane-web-switch-item-label">Chat</span>
             {session?.running ? <span className="pane-web-switch-dot" aria-hidden="true" /> : null}
           </button>
         ) : null;
-        // A tracked TUI session: offer the handoff instead of a chat face.
-        const handoffItem =
-          !isAgent && session !== null ? (
-            <button
-              key="handoff"
-              type="button"
-              role="menuitem"
-              className="pane-web-switch-item"
-              onClick={() => {
-                window.dispatchEvent(
-                  new CustomEvent('muxpad:handoff-to-agent', { detail: { paneId } }),
-                );
-                onClose();
-              }}
-              title="The running Claude writes its context to a handoff file, a new agent tab picks it up, and this terminal closes itself"
-            >
-              <span className="pane-web-switch-glyph" aria-hidden="true">
-                ✳
-              </span>
-              <span className="pane-web-switch-item-label">Continue in Agent tab</span>
-              <span className="pane-web-switch-note">closes terminal</span>
-            </button>
-          ) : null;
-        // Chat is an agent pane's home face — it sorts first there.
-        return isAgent ? [chatItem, terminalItem] : [terminalItem, chatItem, handoffItem];
+        return isAgent ? [chatItem, terminalItem] : [terminalItem];
       })()}
       {appUrls.length > 0 ? (
         <div className="pane-web-switch-head">
@@ -336,15 +310,7 @@ export function PaneWebSwitch({
         aria-expanded={menuAt !== null}
         onClick={toggle}
       >
-        {showChat ? (
-          <span className="pane-web-switch-glyph" aria-hidden="true">
-            ✳
-          </span>
-        ) : showWeb ? (
-          <SvgGlobe />
-        ) : (
-          <SvgTerminalGlyph />
-        )}
+        {showChat ? <SvgAgentGlyph /> : showWeb ? <SvgGlobe /> : <SvgTerminalGlyph />}
         {/* Compact (in the strip tab) is the bare face glyph — one quiet
             18px square matching the × next to it. The label, pulse dot and
             caret are the full (mobile-bar) form; in the pill they made the
@@ -408,6 +374,22 @@ function SvgGlobe() {
         strokeWidth="1.0"
       />
       <line x1="1.8" y1="7" x2="12.2" y2="7" stroke="currentColor" strokeWidth="1.0" />
+    </svg>
+  );
+}
+
+/** Agent-chat face: a drawn four-point sparkle in the same stroke language
+ *  as the terminal/globe glyphs — the old ✳ text char read as line noise. */
+function SvgAgentGlyph() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+      <path
+        d="M7 1.6 C7.6 4.5 9.5 6.4 12.4 7 C9.5 7.6 7.6 9.5 7 12.4 C6.4 9.5 4.5 7.6 1.6 7 C4.5 6.4 6.4 4.5 7 1.6 Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.1"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
