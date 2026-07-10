@@ -1187,6 +1187,10 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           // threshold; single-pane tabs used to have NO way to add one).
           return (
             <nav className="mobile-tab-strip" aria-label="Panes">
+              {/* LEADING anchor in every mode: the pane picker when there's
+                  a choice, else the face switch — the bar always opens with
+                  the thing that names what you're looking at. Trailing:
+                  actions (+, ×), right-aligned as a group. */}
               {paneIds.length > 1 ? (
                 <PaneSelector
                   paneIds={paneIds}
@@ -1196,9 +1200,12 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                   onSelect={setMobileActiveId}
                 />
               ) : (
-                <span className="mobile-strip-spacer" aria-hidden="true" />
+                webSwitch && <div className="mobile-strip-webswitch -lead">{webSwitch}</div>
               )}
-              {webSwitch && <div className="mobile-strip-webswitch">{webSwitch}</div>}
+              <span className="mobile-strip-spacer" aria-hidden="true" />
+              {paneIds.length > 1 && webSwitch ? (
+                <div className="mobile-strip-webswitch">{webSwitch}</div>
+              ) : null}
               <NewTabChooser
                 idleLabel="+"
                 idleTitle="New pane"
