@@ -5,6 +5,15 @@ interface UseLongPressOpts {
   onLongPress: () => void;
   ms?: number;
   moveThreshold?: number;
+  /**
+   * Fire `onLongPress` directly when the hold timer elapses, instead of
+   * arming the SUBSEQUENT click. The click-deferral exists only for
+   * consumers that window.open (iOS blocks popups outside an active user
+   * gesture) — but iOS frequently never DELIVERS a click after a long
+   * hold, so click-armed long-presses silently no-op. In-page consumers
+   * (menus, rename) must set this or the gesture is unreliable on iOS.
+   */
+  fireOnTimer?: boolean;
 }
 
 interface UseLongPressResult {
@@ -34,11 +43,15 @@ export function useLongPress({
   onLongPress,
   ms = 500,
   moveThreshold = 8,
+  fireOnTimer = false,
 }: UseLongPressOpts): UseLongPressResult {
   const [pressing, setPressing] = useState(false);
   const timer = useRef<number | null>(null);
   const start = useRef<{ x: number; y: number } | null>(null);
   const armed = useRef(false);
+  // fireOnTimer mode: the hold already acted; the trailing click (if iOS
+  // sends one at all) must be swallowed, not re-fired.
+  const suppressClick = useRef(false);
   // Tracks whether the most recent pointer interaction was touch, so the
   // contextmenu handler only suppresses the platform menu for touch
   // long-press (Android) and lets desktop right-click open the NATIVE menu.
@@ -69,8 +82,13 @@ export function useLongPress({
         timer.current = window.setTimeout(() => {
           timer.current = null;
           setPressing(false);
-          armed.current = true;
           navigator.vibrate?.(10);
+          if (fireOnTimer) {
+            suppressClick.current = true;
+            cb.current();
+          } else {
+            armed.current = true;
+          }
         }, ms);
       },
       onPointerMove: (e) => {
@@ -99,6 +117,12 @@ export function useLongPress({
         if (lastWasTouch.current) e.preventDefault();
       },
       onClick: (e) => {
+        if (suppressClick.current) {
+          suppressClick.current = false;
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
         // Fire the callback inside the click handler so window.open runs
         // within the active user gesture — iOS Safari blocks popups from
         // delayed (setTimeout) contexts.

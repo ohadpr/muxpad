@@ -357,20 +357,6 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
         >
           ^C
         </button>
-        {/* Pane action, not a keystroke — pushed to the far end and
-            accent-tinted to read apart from the key chips. This is the
-            only always-available "new pane" affordance on mobile: the
-            pane strip (which also carries a "+") only renders once a
-            tab has two panes. */}
-        <button
-          type="button"
-          className="mobile-input-key mobile-input-key-pane"
-          onClick={() => window.dispatchEvent(new CustomEvent('muxpad:add-pane'))}
-          title="New pane"
-          aria-label="New pane"
-        >
-          ⊞
-        </button>
       </div>
       <div className="mobile-input-row">
         {/* Photo/camera attach. The hidden input does the work; the button is
