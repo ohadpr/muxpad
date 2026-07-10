@@ -484,22 +484,28 @@
 
 /* ─── Sheet pane list (mobile: tab row expands into its panes) ───────── */
 
-/* Expander chevron on sheet tab rows — same rotation grammar as the
-   workspace disclosure. */
+/* Expander chevron LEADING sheet tab rows — same left-edge grammar and
+   rotation as the workspace disclosure, full row height so the thumb
+   target is generous and clearly separated from the name (navigate) and
+   the × (close) on the right. */
 .navtree-pane-expander {
-  flex: 0 0 var(--nt-hit);
-  height: var(--nt-hit);
+  flex: 0 0 40px;
+  align-self: stretch;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   background: transparent;
   border: none;
   padding: 0;
+  margin-left: -6px; /* claw back some of the tab indent for the target */
   color: var(--fg-faint);
   cursor: pointer;
   border-radius: 4px;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
+}
+.navtree-pane-expander:active {
+  background: var(--bg-hover);
 }
 .navtree-pane-expander svg {
   transition: transform 120ms ease;
