@@ -10,7 +10,6 @@ import {
 } from '@muxpad/shared';
 import {
   type ChangeEvent,
-  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -21,6 +20,7 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api } from '../api';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
+import { splitMessageAttachments } from '../lib/attachments';
 import { isMobileLayout } from '../lib/mobile-layout';
 import './ChatPane.css';
 
@@ -364,6 +364,8 @@ export function ChatPane({
   // Tool calls collapse to a one-line summary; tapping opens this modal with the
   // full command + output. null = closed.
   const [openTool, setOpenTool] = useState<ToolDetail | null>(null);
+  // A pasted image opened full-size in a lightbox from history. null = closed.
+  const [openImage, setOpenImage] = useState<{ url: string; name: string } | null>(null);
   // Floating "jump to latest" arrow — shown only when scrolled up off the bottom.
   const [showScrollDown, setShowScrollDown] = useState(false);
   // The floating composer overlaps the scroll area, so we reserve its exact
@@ -794,6 +796,7 @@ export function ChatPane({
       try {
         const { path } = await api.uploadAttachment(paneId, f, f.name || 'image.png');
         paths.push(path);
+        addChip(path, f);
       } catch {
         // drop this one; the rest still upload
       }
@@ -804,27 +807,35 @@ export function ChatPane({
     inputRef.current?.focus();
   };
 
-  // Pasting an image into the composer — same contract as the terminal face:
-  // upload to the pane's attachment dir, append the returned path to the
-  // message, and confirm with a preview toast (Claude renders the path, not
-  // the pixels, so the toast is how you know the right image went in).
-  const [pasteToast, setPasteToast] = useState<{ previewUrl: string; path: string } | null>(null);
-  const pasteToastTimer = useRef<number | undefined>(undefined);
-  const pasteToastUrl = useRef<string | null>(null);
-  const dismissPasteToast = useCallback(() => {
-    window.clearTimeout(pasteToastTimer.current);
-    if (pasteToastUrl.current) URL.revokeObjectURL(pasteToastUrl.current);
-    pasteToastUrl.current = null;
-    setPasteToast(null);
-  }, []);
-  useEffect(() => dismissPasteToast, [dismissPasteToast]);
-  const showPasteToast = (blob: Blob, path: string) => {
-    dismissPasteToast();
-    const previewUrl = URL.createObjectURL(blob);
-    pasteToastUrl.current = previewUrl;
-    setPasteToast({ previewUrl, path });
-    pasteToastTimer.current = window.setTimeout(dismissPasteToast, 3000);
+  // Pasting/picking an image uploads it to the pane's attachment dir and
+  // appends the returned path to the message (Claude reads the path, not the
+  // pixels). Each upload also leaves a persistent preview chip beside the
+  // composer, so you can see the image that went in for as long as its path is
+  // still in the draft. The blob URL gives an instant thumbnail without a
+  // round-trip; it is revoked when the chip drops.
+  const [chips, setChips] = useState<{ path: string; name: string; previewUrl: string }[]>([]);
+  const chipsRef = useRef(chips);
+  chipsRef.current = chips;
+  const addChip = (path: string, blob: Blob) => {
+    const name = path.split('/').pop() ?? path;
+    setChips((prev) => [...prev, { path, name, previewUrl: URL.createObjectURL(blob) }]);
   };
+  // Drop chips whose path the user has deleted from the draft (and after send,
+  // when the draft clears), revoking their blob URLs.
+  useEffect(() => {
+    setChips((prev) => {
+      const keep = prev.filter((ch) => input.includes(ch.path));
+      if (keep.length === prev.length) return prev;
+      for (const ch of prev) if (!keep.includes(ch)) URL.revokeObjectURL(ch.previewUrl);
+      return keep;
+    });
+  }, [input]);
+  useEffect(
+    () => () => {
+      for (const ch of chipsRef.current) URL.revokeObjectURL(ch.previewUrl);
+    },
+    [],
+  );
   const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const data = e.clipboardData;
     if (!data) return;
@@ -840,13 +851,12 @@ export function ChatPane({
     void (async () => {
       setUploading(true);
       const paths: string[] = [];
-      let previewBlob: Blob | null = null;
       for (const blob of blobs) {
-        if (!previewBlob) previewBlob = blob;
         const ext = blob.type.split('/')[1] ?? 'png';
         try {
           const { path } = await api.uploadAttachment(paneId, blob, `pasted.${ext}`);
           paths.push(path);
+          addChip(path, blob);
         } catch {
           setNotice({ text: 'image upload failed', tone: 'danger' });
         }
@@ -855,7 +865,6 @@ export function ChatPane({
       if (paths.length === 0 && !text) return;
       const insert = [paths.join(' '), text.trim()].filter(Boolean).join(' ');
       setInput((prev) => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${insert} `);
-      if (previewBlob && paths.length) showPasteToast(previewBlob, paths.join(' '));
       inputRef.current?.focus();
     })();
   };
@@ -908,7 +917,7 @@ export function ChatPane({
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
-      if (openTool) return;
+      if (openTool || openImage) return;
       const input = inputRef.current;
       if (!input || document.activeElement === input) return;
       const ae = document.activeElement as HTMLElement | null;
@@ -918,7 +927,7 @@ export function ChatPane({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [active, openTool]);
+  }, [active, openTool, openImage]);
 
   // Restore the remembered scroll once per activation, after the replayed
   // history has rendered. Runs BEFORE the follow-the-bottom effect (layout
@@ -1141,7 +1150,7 @@ export function ChatPane({
           if (e.kind === 'tool_result' && consumed.has(e.id)) return null;
           if (e.kind === 'tool_result')
             return <ToolRow key={e.id} result={e} onOpen={setOpenTool} />;
-          return <ChatRow key={e.id} event={e} />;
+          return <ChatRow key={e.id} event={e} onOpenImage={setOpenImage} />;
         })}
       </>
     );
@@ -1258,19 +1267,12 @@ export function ChatPane({
         </button>
       ) : null}
       {openTool ? <ToolModal detail={openTool} onClose={() => setOpenTool(null)} /> : null}
-      {pasteToast ? (
-        <div
-          className="chat-paste-toast"
-          style={composerH ? { bottom: `${composerH + 12}px` } : undefined}
-          title={pasteToast.path}
-        >
-          <img
-            className="chat-paste-toast-preview"
-            src={pasteToast.previewUrl}
-            alt="Pasted screenshot"
-          />
-          <span className="chat-paste-toast-path">{pasteToast.path}</span>
-        </div>
+      {openImage ? (
+        <ImageModal
+          url={openImage.url}
+          name={openImage.name}
+          onClose={() => setOpenImage(null)}
+        />
       ) : null}
       {session?.current_sid ? (
         <div className="chat-composer-wrap" ref={composerRef}>
@@ -1305,6 +1307,16 @@ export function ChatPane({
                   sock.send(JSON.stringify(obj));
                 }}
               />
+            </div>
+          ) : null}
+          {chips.length > 0 ? (
+            <div className="chat-chips">
+              {chips.map((ch) => (
+                <span key={ch.path} className="chat-chip" title={ch.path}>
+                  <img className="chat-chip-thumb" src={ch.previewUrl} alt="" />
+                  <span className="chat-chip-name">{ch.name}</span>
+                </span>
+              ))}
             </div>
           ) : null}
           <div className="chat-composer">
@@ -1375,12 +1387,20 @@ export function ChatPane({
   );
 }
 
-function ChatRow({ event }: { event: ChatEvent }) {
+function ChatRow({
+  event,
+  onOpenImage,
+}: {
+  event: ChatEvent;
+  onOpenImage?: ((img: { url: string; name: string }) => void) | undefined;
+}) {
   switch (event.kind) {
     case 'user':
       return (
         <div className="chat-turn chat-turn-user">
-          <div className="chat-bubble">{event.text}</div>
+          <div className="chat-bubble">
+            <UserText text={event.text} onOpenImage={onOpenImage} />
+          </div>
         </div>
       );
     case 'assistant':
@@ -1404,6 +1424,67 @@ function ChatRow({ event }: { event: ChatEvent }) {
     default:
       return null;
   }
+}
+
+// A user message may embed absolute paths to pasted/picked images. Render each
+// as a clickable thumbnail (loaded over HTTP so it works from any device) while
+// keeping the surrounding prose; the raw path stays in the title for reference.
+function UserText({
+  text,
+  onOpenImage,
+}: {
+  text: string;
+  onOpenImage?: ((img: { url: string; name: string }) => void) | undefined;
+}) {
+  const parts = splitMessageAttachments(text);
+  if (parts.length === 1 && parts[0]?.kind === 'text') return <>{text}</>;
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.kind === 'text' ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: parts are positional
+          <span key={i}>{part.text}</span>
+        ) : (
+          <button
+            // biome-ignore lint/suspicious/noArrayIndexKey: parts are positional
+            key={i}
+            type="button"
+            className="chat-img-thumb"
+            title={part.path}
+            onClick={() => onOpenImage?.({ url: part.url, name: part.name })}
+          >
+            <img src={part.url} alt={part.name} loading="lazy" />
+          </button>
+        ),
+      )}
+    </>
+  );
+}
+
+// Full-size pasted image in a lightbox; mirrors ToolModal's dismiss behaviour
+// (Escape, backdrop scrim, close button).
+function ImageModal({
+  url,
+  name,
+  onClose,
+}: {
+  url: string;
+  name: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div className="chat-modal-backdrop chat-img-backdrop">
+      <button type="button" className="chat-modal-scrim" aria-label="Close" onClick={onClose} />
+      <img className="chat-img-full" src={url} alt={name} />
+    </div>
+  );
 }
 
 // Icon per notice variant — a task update vs a session reminder.
