@@ -289,6 +289,18 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     return () => window.removeEventListener('muxpad:add-pane', onAddPane);
   }, []);
 
+  // Pane selection from OUTSIDE the pane views (the mobile sheet's pane
+  // rows). A mounted TabView switches immediately; an unmounted one reads
+  // the sheet's setLastPaneId on mount instead.
+  useEffect(() => {
+    const onSelectPane = (e: Event) => {
+      const d = (e as CustomEvent<{ tabId?: string; paneId?: string }>).detail;
+      if (d?.tabId === tab?.id && d.paneId) setMobileActiveId(d.paneId);
+    };
+    window.addEventListener('muxpad:select-pane', onSelectPane);
+    return () => window.removeEventListener('muxpad:select-pane', onSelectPane);
+  }, [tab?.id]);
+
   // Push-notification deep link: a tap targets a specific PANE, and the SW
   // message handler (main.tsx) broadcasts muxpad:show-pane after routing to
   // the owning tab. Every mounted TabView hears it; only the one that owns

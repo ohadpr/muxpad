@@ -1,9 +1,10 @@
-import { DEFAULT_TAB_ICON, type Tab, type Workspace } from '@muxpad/shared';
+import { DEFAULT_TAB_ICON, type PaneSpec, type Tab, type Workspace } from '@muxpad/shared';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { createDragOrigin } from '../lib/drag-origin';
 import { clearFollowTarget, setFollowTarget } from '../lib/follow-tab';
+import { setLastPaneId } from '../lib/last-visited';
 import { useDismissable } from '../lib/use-dismissable';
 import { pushUndo } from '../lib/move-undo-store';
 import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansion';
@@ -776,6 +777,116 @@ function TabList({
   );
 }
 
+/** Best-effort pane label for the sheet's pane rows — mirrors TabView's
+ *  paneLabel priority (pinned name → url host → live title → fg cmd). */
+function sheetPaneLabel(p: PaneSpec, i: number): string {
+  const custom = p.name?.trim();
+  if (custom) return custom;
+  if (p.kind === 'url' && p.url) {
+    try {
+      return new URL(p.url).hostname;
+    } catch {
+      return p.url;
+    }
+  }
+  return p.title?.trim() || p.foreground_cmd?.trim() || `Pane ${i + 1}`;
+}
+
+/**
+ * Sheet-only: a tab's pane list, expanded in place under its row — direct
+ * pane navigation (tap = open that pane) plus the mobile "New pane" home.
+ * The pane strip inside a tab only appears once a tab has 2+ panes, and
+ * agent-chat tabs have no key row, so this is the one add-pane affordance
+ * that exists for EVERY mobile tab.
+ */
+function SheetPaneList({
+  tab,
+  workspace,
+  onNavigate,
+}: {
+  tab: Tab;
+  workspace: Workspace;
+  onNavigate?: (() => void) | undefined;
+}) {
+  const navigate = useNavigate();
+  const [panes, setPanes] = useState<PaneSpec[] | null>(null);
+  const [creating, setCreating] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    api
+      .getTab(tab.id)
+      .then((detail) => {
+        if (alive) setPanes(detail.panes);
+      })
+      .catch(() => {
+        if (alive) setPanes([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [tab.id]);
+
+  const openPane = (paneId: string) => {
+    // Persist first: a not-yet-mounted TabView reads the stored pane on
+    // mount; a mounted one reacts to the event below.
+    setLastPaneId(tab.id, paneId);
+    window.dispatchEvent(
+      new CustomEvent('muxpad:select-pane', { detail: { tabId: tab.id, paneId } }),
+    );
+    onNavigate?.();
+    void navigate({
+      to: '/w/$wsSlug/t/$tabSlug',
+      params: { wsSlug: workspace.slug, tabSlug: tab.slug },
+    });
+  };
+
+  const addPane = async (kind: 'terminal' | 'agent') => {
+    if (creating) return;
+    setCreating(true);
+    try {
+      const created = await api.createPane(tab.id, {
+        append_to_layout: true,
+        ...(kind === 'agent' ? { startup_cmd: 'muxpad agent', face: 'chat' as const } : {}),
+      });
+      await refreshTabs(workspace.id);
+      openPane(created.id);
+    } catch (err) {
+      console.error('add pane failed', err);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <div className="navtree-pane-list">
+      {panes === null ? (
+        <div className="navtree-pane-loading">…</div>
+      ) : (
+        panes.map((p, i) => (
+          <button
+            key={p.id}
+            type="button"
+            className="navtree-pane-row"
+            onClick={() => openPane(p.id)}
+          >
+            <span className="navtree-pane-label">{sheetPaneLabel(p, i)}</span>
+            {p.attention ? <span className="badge-dot -inline" aria-label="needs attention" /> : null}
+          </button>
+        ))
+      )}
+      <NewTabChooser
+        idleLabel={creating ? 'Creating…' : '+ New pane'}
+        idleTitle="New pane"
+        idleClassName="navtree-add navtree-new-pane"
+        choicesClassName="navtree-new-row"
+        choiceClassName="navtree-add"
+        disabled={creating}
+        onCreate={(kind) => void addPane(kind)}
+      />
+    </div>
+  );
+}
+
 interface TabRowProps {
   tab: Tab;
   workspace: Workspace;
@@ -839,6 +950,10 @@ function TabRow({
   // menu targets and the legal drop targets for the drag gesture.
   const { workspaces } = useWorkspaces();
   const otherWorkspaces = workspaces.filter((w) => w.id !== workspace.id);
+
+  // Sheet-only: expand the row into its pane list (direct pane nav + the
+  // mobile "New pane" home).
+  const [panesOpen, setPanesOpen] = useState(false);
 
   // "Drop INTO this tab" affordance — lit for a pane dragged from the tab
   // strip (whole row) or another tab dragged over the row's middle band
@@ -931,6 +1046,7 @@ function TabRow({
         }
       : tabRowDnd;
   return (
+    <>
     <div
       className="navtree-tab-row"
       data-active={isActiveTab ? 'true' : undefined}
@@ -1037,6 +1153,22 @@ function TabRow({
           ) : null}
         </Link>
       )}
+      {variant === 'sheet' ? (
+        <button
+          type="button"
+          className="navtree-pane-expander"
+          data-open={panesOpen ? 'true' : undefined}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setPanesOpen((o) => !o);
+          }}
+          aria-expanded={panesOpen}
+          aria-label={panesOpen ? `Hide panes of ${tab.name}` : `Show panes of ${tab.name}`}
+        >
+          <SvgChevronRight />
+        </button>
+      ) : null}
       <button
         type="button"
         className="navtree-close"
@@ -1104,6 +1236,10 @@ function TabRow({
         />
       )}
     </div>
+      {variant === 'sheet' && panesOpen ? (
+        <SheetPaneList tab={tab} workspace={workspace} onNavigate={onNavigate} />
+      ) : null}
+    </>
   );
 }
 
