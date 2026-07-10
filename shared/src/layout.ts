@@ -118,3 +118,14 @@ export function appendLeafToLayout(
   if (layout === '' || layout == null) return paneId;
   return { direction, first: layout, second: paneId };
 }
+
+/**
+ * All leaf pane ids of the tree, in visual (left-to-right / top-to-bottom)
+ * order. Used by the tab-merge endpoint to enumerate the panes being
+ * re-homed; order matters so merged panes keep their strip order.
+ */
+export function collectLayoutLeaves(layout: LayoutNode): string[] {
+  if (layout === '' || layout == null) return [];
+  if (typeof layout === 'string') return [layout];
+  return [...collectLayoutLeaves(layout.first), ...collectLayoutLeaves(layout.second)];
+}

@@ -499,16 +499,9 @@ export function panesScopedRoutes(deps: {
       const t = tabs.getById(body.to_tab_id);
       if (!t)
         return c.json({ error: { code: 'not_found', message: 'destination tab not found' } }, 404);
-      if (tabs.getWorkspaceId(t.id) !== workspaceId)
-        return c.json(
-          {
-            error: {
-              code: 'bad_request',
-              message: 'destination tab is in a different workspace',
-            },
-          },
-          400,
-        );
+      // Cross-workspace moves are allowed — a pane's home is pure metadata
+      // (ptys and agent runners key by pane id, so nothing running notices),
+      // and the sidebar drop targets naturally span workspaces.
       destTab = t;
     }
 
