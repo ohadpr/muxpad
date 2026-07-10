@@ -9,13 +9,18 @@ import {
 } from 'react-mosaic-component';
 import 'react-mosaic-component/react-mosaic-component.css';
 import type { AppUrl, LayoutNode, PaneSpec, Tab } from '@muxpad/shared';
-import { spliceLayoutAtTarget } from '@muxpad/shared';
+import { collectLayoutLeaves, spliceLayoutAtTarget } from '@muxpad/shared';
 import { type TabWithPanes, api } from '../api';
 import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
 import { MobileInputBar } from '../components/MobileInputBar';
-import { NewKindMenu, type NewKind as NewPaneKind } from '../components/NewKindMenu';
+import { NewTabChooser } from '../components/NewTabChooser';
 import { PaneSelector } from '../components/PaneSelector';
-import { PaneFaceMenuList, PaneWebSwitch, clampMenuLeft } from '../components/PaneWebSwitch';
+import {
+  PaneFaceMenuList,
+  PaneWebSwitch,
+  SvgAgentGlyph,
+  clampMenuLeft,
+} from '../components/PaneWebSwitch';
 // PaneSurfaceSwitch (below) reuses the .pane-web-switch-* menu classes, so
 // depend on that stylesheet explicitly rather than relying on the mobile
 // PaneWebSwitch mount to pull it into the bundle.
@@ -24,15 +29,20 @@ import { ShellPaneBody } from '../components/ShellPaneBody';
 import { UrlPane } from '../components/UrlPane';
 import { SvgClose } from '../components/icons';
 import { subscribe, subscribeReconnect } from '../events';
-import { handoffToAgent } from '../lib/agent-handoff';
+import { consumeFollowTarget } from '../lib/follow-tab';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { pushUndo } from '../lib/move-undo-store';
+import { PANE_DRAG_MIME, paneDragOrigin } from '../lib/pane-drag';
 import { usePaneFace } from '../lib/pane-face';
 import { setTabViewMode, useTabViewMode } from '../lib/tab-view-mode';
 import { refreshTabs, useTabs } from '../tabs';
+import { useDismissable } from '../lib/use-dismissable';
 import { useMediaQuery } from '../use-media-query';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
+
+// What a "+" creates: a plain terminal pane or a chat-native agent pane.
+type NewPaneKind = 'terminal' | 'agent';
 import './tab.css';
 
 type Layout = MosaicNode<string> | null;
@@ -96,11 +106,11 @@ function removePane(layout: Layout, paneId: string): Layout {
   return { ...layout, first, second };
 }
 
-/** Walk the binary tree, returning all pane ids in tree order. */
+/** Walk the binary tree, returning all pane ids in tree order. Delegates to
+ *  the shared walker (one traversal, one set of empty-leaf semantics — the
+ *  old local copy returned [''] for an empty-string leaf). */
 function collectPaneIds(layout: Layout): string[] {
-  if (layout == null) return [];
-  if (typeof layout === 'string') return [layout];
-  return [...collectPaneIds(layout.first as Layout), ...collectPaneIds(layout.second as Layout)];
+  return collectLayoutLeaves((layout ?? '') as LayoutNode);
 }
 
 /**
@@ -123,8 +133,6 @@ function buildRowLayout(ids: string[]): Layout {
   if (second == null) return first;
   return { direction: 'row', first, second };
 }
-
-const PANE_DRAG_MIME = 'application/x-muxpad-pane-id';
 
 export interface TabViewProps {
   /** Stable slug for this instance — one TabView per tab in WorkspaceLayout. */
@@ -182,6 +190,9 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   // optimistic split ("flashes then nothing"). Our own patch echo (carrying
   // the new layout) reconciles once the window closes.
   const pendingLayoutWrites = useRef(0);
+  // True when a tab.updated's layout was skipped mid-write — triggers a
+  // refetch once writes settle (see persistLayout).
+  const skippedTabUpdate = useRef(false);
   const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
   // Desktop 'tabbed' mode renders the same single-pane-at-a-time UI mobile is
   // forced into, so both share the "active pane" machinery below via
@@ -278,41 +289,21 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     return () => window.removeEventListener('muxpad:add-pane', onAddPane);
   }, []);
 
-  // "Continue in Agent tab" from a TUI pane's face menu: orchestrate the
-  // one-way handoff (TUI writes its context file and retires itself; a fresh
-  // agent tab absorbs it — lib/agent-handoff.ts). Lives here because the
-  // menu knows only paneId; this component holds the workspace + pane cwd
-  // and can navigate. The async flow survives the navigation-triggered
-  // remount — it's just fetches in a closure.
+  // Push-notification deep link: a tap targets a specific PANE, and the SW
+  // message handler (main.tsx) broadcasts muxpad:show-pane after routing to
+  // the owning tab. Every mounted TabView hears it; only the one that owns
+  // the pane reacts. Single-pane views flip their active pane to it; the
+  // split mosaic shows every pane anyway, so there it's a no-op.
   useEffect(() => {
-    const onHandoff = (e: Event) => {
-      const d = (e as CustomEvent<{ paneId?: string }>).detail;
-      const p = d?.paneId ? tab?.panes.find((x) => x.id === d.paneId) : undefined;
-      if (!p || !workspace) return;
-      void handoffToAgent({
-        paneId: p.id,
-        workspaceId: workspace.id,
-        cwd: p.cwd,
-        // Retire the whole tab when this is its only pane — a bare
-        // pane-delete would leave an empty tab shell in the sidebar.
-        closeCmd:
-          tab && tab.panes.length === 1
-            ? `muxpad tab delete ${tab.id}`
-            : `muxpad pane delete ${p.id}`,
-        onTabCreated: (tabSlug) => {
-          // Refresh the tabs list FIRST — navigating to a slug the client
-          // hasn't loaded yet trips the dead-tab redirect and bounces back.
-          void refreshTabs(workspace.id)
-            .catch(() => {})
-            .then(() => navigate({ to: '/w/$wsSlug/t/$tabSlug', params: { wsSlug, tabSlug } }));
-        },
-      }).then((res) => {
-        if (!res.ok && res.error) window.alert(res.error);
-      });
+    const onShowPane = (e: Event) => {
+      const paneId = (e as CustomEvent<{ paneId?: string }>).detail?.paneId;
+      if (!paneId || !tab) return;
+      if (!collectPaneIds(toMosaic(tab.layout)).includes(paneId)) return;
+      setMobileActiveId(paneId);
     };
-    window.addEventListener('muxpad:handoff-to-agent', onHandoff);
-    return () => window.removeEventListener('muxpad:handoff-to-agent', onHandoff);
-  }, [tab, workspace, navigate, wsSlug]);
+    window.addEventListener('muxpad:show-pane', onShowPane);
+    return () => window.removeEventListener('muxpad:show-pane', onShowPane);
+  }, [tab]);
 
   // Persist the active pane on every focus event from any XtermPane
   // in the current tab. Desktop has no "active pane" in component
@@ -527,6 +518,14 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         console.error('failed to persist layout', e);
       } finally {
         pendingLayoutWrites.current -= 1;
+        // A tab.updated arrived while we were writing and its layout was
+        // skipped (it may have carried a concurrent merge/move into this
+        // tab). Our own optimistic layout can't know about those panes, so
+        // refetch the server's truth now that the write settled.
+        if (pendingLayoutWrites.current === 0 && skippedTabUpdate.current) {
+          skippedTabUpdate.current = false;
+          setLoadNonce((n) => n + 1);
+        }
       }
     },
     [tab],
@@ -876,8 +875,13 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         );
       } else if (e.type === 'tab.updated' && e.tab.id === tabId) {
         // Skip the layout if we have a local layout write in flight — this
-        // snapshot may predate it and would revert an optimistic split.
+        // snapshot may predate it and would revert an optimistic split. But
+        // REMEMBER the skip: the frame may also carry someone else's change
+        // (a merge landing panes into this tab), and dropping it silently
+        // would leave those panes in state but never in the mosaic. When the
+        // write settles, persistLayout refetches the server truth.
         const applyLayout = pendingLayoutWrites.current === 0;
+        if (!applyLayout) skippedTabUpdate.current = true;
         setTab((prev) =>
           prev
             ? {
@@ -904,7 +908,18 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         // the user off the tab they're actually viewing. (last-visited used to
         // paper over this with a redirect bounce; the guard makes it clean.)
         if (isActiveRef.current) {
-          void navigate({ to: '/w/$wsSlug', params: { wsSlug } });
+          // A gather gesture (merge / last-pane move) that dissolved THIS tab
+          // recorded where its panes went — follow them there instead of
+          // dumping the user on the workspace root.
+          const follow = consumeFollowTarget(tabId);
+          if (follow) {
+            void navigate({
+              to: '/w/$wsSlug/t/$tabSlug',
+              params: { wsSlug: follow.wsSlug, tabSlug: follow.tabSlug },
+            });
+          } else {
+            void navigate({ to: '/w/$wsSlug', params: { wsSlug } });
+          }
         }
       }
     });
@@ -1050,6 +1065,9 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     e.dataTransfer.setData(PANE_DRAG_MIME, id);
     e.dataTransfer.effectAllowed = 'move';
     setPaneDragId(id);
+    // Mirror the origin so sidebar tab rows can gate their move-here drop
+    // affordance during dragover (when the payload itself is unreadable).
+    if (tab) paneDragOrigin.set({ paneId: id, fromTabId: tab.id });
   };
   const onPaneDragOver = (e: ReactDragEvent, id: string) => {
     if (!paneDragId || paneDragId === id) return;
@@ -1061,6 +1079,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     setPaneDropSide(side);
   };
   const onPaneDragEnd = () => {
+    paneDragOrigin.set(null);
     setPaneDragId(null);
     setPaneDropTargetId(null);
   };
@@ -1233,9 +1252,14 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         ...(target ? { inherit_cwd_from: target } : {}),
         ...(kind === 'agent' ? { startup_cmd: 'muxpad agent', face: 'chat' as const } : {}),
       });
-      const newLayout: Layout = target
-        ? splitAtPane(layoutRef.current, target, created.id, 'row')
-        : created.id;
+      // The strip's "+" appends at the END (browser-tab convention).
+      // Splitting at the active pane put the newcomer mid-strip whenever a
+      // middle tab was active — cwd inheritance still follows the active
+      // pane above.
+      const newLayout: Layout =
+        layoutRef.current == null
+          ? created.id
+          : { direction: 'row', first: layoutRef.current, second: created.id };
       layoutRef.current = newLayout;
       setTab((prev) =>
         prev
@@ -1260,16 +1284,6 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
       }
       void killPane(paneId);
     };
-
-    const activePane = activeId ? tab.panes.find((p) => p.id === activeId) : undefined;
-    const activeWebSwitch =
-      activePane && activePane.kind === 'shell' ? (
-        <PaneWebSwitch
-          paneId={activePane.id}
-          appUrls={activePane.app_urls ?? []}
-          startupCmd={activePane.startup_cmd}
-        />
-      ) : null;
 
     return (
       <div className="workspace-root">
@@ -1314,6 +1328,18 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                     />
                   ) : (
                     <>
+                      {/* The face switch LEADS the pill (active tab only) —
+                          it's the pane's identity glyph (terminal/chat/web),
+                          so it reads like the sidebar's leading tab icon;
+                          next to the × it read as a stray control. */}
+                      {isActiveTab && p?.kind === 'shell' ? (
+                        <PaneWebSwitch
+                          paneId={p.id}
+                          appUrls={p.app_urls ?? []}
+                          startupCmd={p.startup_cmd}
+                          compact
+                        />
+                      ) : null}
                       <button
                         type="button"
                         role="tab"
@@ -1323,24 +1349,22 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                         onDoubleClick={() => startPaneRename(paneId)}
                         title={p?.name ? p.name : 'Double-click to rename'}
                       >
-                        <span className="desktop-tab-label">{paneLabel(paneId)}</span>
-                      </button>
-                      {/* Trailing slot: the status glyph and the close × share
-                          ONE fixed-width box — the × fades in over the status on
-                          hover/active. So the label's available width is the
-                          same whether or not a status shows, and the two never
-                          collide even at the min tab width. Status priority
-                          mirrors the navigator: WORKING (spinner) → WANTS YOU
-                          (dot) → idle. Busy is hidden on the active tab (its
-                          output is right there); the dot self-clears on view. */}
-                      <span className="desktop-tab-trailing">
-                        {!isActiveTab && p?.busy ? (
+                        {/* Status LEADS the name (spinner while working, dot
+                            when it wants you) — sharing the trailing slot
+                            with the × read as two unrelated controls mashed
+                            together. Priority mirrors the navigator. */}
+                        {p?.busy ? (
                           <span className="desktop-tab-busy" aria-hidden="true" title="Working…">
                             <SvgSpinner />
                           </span>
                         ) : p?.attention ? (
                           <span className="badge-dot -inline" aria-label="needs attention" />
                         ) : null}
+                        <span className="desktop-tab-label">{paneLabel(paneId)}</span>
+                      </button>
+                      {/* Trailing slot holds only the hover-revealed × now —
+                          status moved to LEAD the label. */}
+                      <span className="desktop-tab-trailing">
                         <button
                           type="button"
                           className="desktop-tab-close"
@@ -1348,7 +1372,10 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                           aria-label="Close pane"
                           onClick={() => closePane(paneId)}
                         >
-                          <SvgClose size={11} />
+                          {/* 13 → ~8px drawn X with a light stroke — reads
+                              as the face glyph's equal (a 16px X overpowered
+                              its thin 14px outline). */}
+                          <SvgClose size={13} />
                         </button>
                       </span>
                     </>
@@ -1356,15 +1383,19 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                 </div>
               );
             })}
-            <NewKindMenu
-              className="desktop-tab-add"
-              label="+"
-              title="New pane"
-              onPick={(k) => void addPane(k)}
+            {/* Browser-standard lone "+"; the Terminal/Agent choice expands
+                in place on click — see NewTabChooser for why the standing
+                two-chip pair lost. */}
+            <NewTabChooser
+              idleLabel="+"
+              idleTitle="New pane"
+              idleClassName="desktop-tab-add desktop-tab-add-plus"
+              choicesClassName="desktop-tab-add-choices"
+              choiceClassName="desktop-tab-add"
+              onCreate={(kind) => void addPane(kind)}
             />
           </div>
           <div className="desktop-tab-strip-actions">
-            {activeWebSwitch}
             <button
               type="button"
               className="pane-chrome-btn"
@@ -1442,13 +1473,13 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           <div className="workspace-empty">
             <p>This tab has no panes.</p>
             <button className="btn btn-primary" onClick={() => void splitFromPane(null, 'row')}>
-              + Terminal
+              New terminal
             </button>
             <button
               className="btn btn-primary"
               onClick={() => void splitFromPane(null, 'row', 'agent')}
             >
-              ✳ Agent
+              New agent
             </button>
             <button type="button" className="workspace-empty-close" onClick={() => void closeTab()}>
               or close this tab
@@ -1640,25 +1671,15 @@ function PaneSurfaceSwitch({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
+  useDismissable(menuAt !== null, wrapperRef, () => setMenuAt(null));
   useEffect(() => {
     if (!menuAt) return;
-    const close = () => setMenuAt(null);
-    const onDown = (e: MouseEvent) => {
-      if (wrapperRef.current?.contains(e.target as Node)) return;
-      close();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close();
-    };
-    document.addEventListener('mousedown', onDown, true);
-    document.addEventListener('keydown', onKey);
     // The menu is position:fixed (measured from the trigger) — coords go
     // stale on scroll/resize, so just close.
+    const close = () => setMenuAt(null);
     window.addEventListener('scroll', close, true);
     window.addEventListener('resize', close);
     return () => {
-      document.removeEventListener('mousedown', onDown, true);
-      document.removeEventListener('keydown', onKey);
       window.removeEventListener('scroll', close, true);
       window.removeEventListener('resize', close);
     };
@@ -1706,13 +1727,7 @@ function PaneSurfaceSwitch({
         }}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        {onChat ? (
-          <span className="pane-web-switch-glyph" aria-hidden="true">
-            ✳
-          </span>
-        ) : (
-          <Icon />
-        )}
+        {onChat ? <SvgAgentGlyph /> : <Icon />}
         {loading && <span className="pane-chrome-typeswitch-spinner" aria-hidden="true" />}
         {available && <span className="pane-surface-dot" aria-hidden="true" />}
         <SvgChevron />

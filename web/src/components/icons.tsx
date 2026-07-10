@@ -9,7 +9,16 @@
 export function SvgClose({ size = 12 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 12 12" aria-hidden="true">
-      <path stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" d="M3 3l6 6M9 3l-6 6" />
+      {/* Inset 2.25 (not 3): the drawn X spans ~62% of the nominal size.
+          The old half-size span made every × read far smaller than
+          same-`size` icons beside it (their strokes run nearly edge to
+          edge of the viewbox). */}
+      <path
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        d="M2.25 2.25l7.5 7.5M9.75 2.25l-7.5 7.5"
+      />
     </svg>
   );
 }

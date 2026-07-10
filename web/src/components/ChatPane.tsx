@@ -6,11 +6,13 @@ import {
   type SubagentProgress,
   type ToolResultEvent,
   type ToolUseEvent,
+  IMAGE_MIME_BY_EXT,
+  imageExtForMime,
   summarizeToolInput,
 } from '@muxpad/shared';
 import {
   type ChangeEvent,
-  useCallback,
+  memo,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -20,8 +22,11 @@ import {
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api } from '../api';
+import { splitMessageAttachments } from '../lib/attachments';
+import { recallChatScroll, rememberChatScroll } from '../lib/chat-scroll';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
 import { isMobileLayout } from '../lib/mobile-layout';
+import { useDismissable } from '../lib/use-dismissable';
 import './ChatPane.css';
 
 // Assistant + streaming text is rendered as GitHub-flavored markdown. No raw
@@ -75,27 +80,20 @@ function SessionMenu({
   const [open, setOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
+  useDismissable(open, wrapRef, () => setOpen(false));
   useEffect(() => {
-    if (!open) {
-      setConfirmClear(false);
-      return;
-    }
-    const onDown = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', onDown, true);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown, true);
-      document.removeEventListener('keydown', onKey);
-    };
+    if (!open) setConfirmClear(false);
   }, [open]);
-  const current = status.models?.find(
-    (m) => m.value === status.model || m.resolvedModel === status.model,
-  );
+  // Match the reported model to a list row. Order matters: several rows can
+  // RESOLVE to the same wire model (e.g. "Default" resolves to the same id as
+  // "Opus"), and a naive first-match made a switch to Opus label itself
+  // "Default". Exact value first, then a resolved match on a specific row,
+  // and the default row only as a last resort.
+  const list = status.models ?? [];
+  const current =
+    list.find((m) => m.value === status.model) ??
+    list.find((m) => m.value !== 'default' && m.resolvedModel === status.model) ??
+    list.find((m) => m.resolvedModel === status.model);
   const modelLabel = current?.displayName ?? status.model;
   const kTokens = (n: number) => `${Math.round(n / 1000)}k`;
   return (
@@ -219,7 +217,13 @@ type ServerMsg =
   | { t: 'question-done'; qid: string }
   | { t: 'subagent'; progress: SubagentProgress }
   | ({ t: 'status' } & AgentStatus)
-  | { t: 'error'; message: string };
+  | { t: 'error'; message: string }
+  | {
+      /** Non-fatal server notice (e.g. a menu action while the runner is
+       * reconnecting). Display only — never touches send/turn state. */
+      t: 'notice';
+      message: string;
+    };
 
 /**
  * Drop transcript-confirmed assistant text from the head of the streaming
@@ -237,6 +241,19 @@ function consumeStreamedText(preview: string, landed: string[]): string {
     else if (t && text.startsWith(t.trimEnd())) p = ''; // preview lagged behind — it's all stale
   }
   return p;
+}
+
+/** A running subagent that has sent no progress for this long reads as done
+ *  — its completing tool_result may never stream into an idle pane. */
+const SUBAGENT_STALE_MS = 10 * 60_000;
+
+/** '.ext' when the filename carries a renderable image extension — the
+ *  picker's fallback for providers that report an empty MIME type (mirrors
+ *  the server upload route's accept rule). */
+function imageExtFromName(name: string): string | null {
+  const m = /\.[a-z0-9]+$/i.exec(name);
+  const ext = m ? m[0].toLowerCase() : '';
+  return ext && ext in IMAGE_MIME_BY_EXT ? ext : null;
 }
 
 /**
@@ -297,7 +314,11 @@ export function ChatPane({
   }, [input, draftKey]);
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  // tone 'info' = transient connection chatter (reconnecting, not connected
+  // yet) — rendered as a quiet muted line and auto-cleared when the socket
+  // recovers. tone 'danger' = a real failure (turn failed, send rejected)
+  // that keeps the loud styling and sticks until the next turn.
+  const [notice, setNotice] = useState<{ text: string; tone: 'info' | 'danger' } | null>(null);
   // Older-history pagination: the server opens with just the recent tail; we
   // page earlier messages in on scroll-up. `hasMoreOlder` starts true and is
   // corrected by the server's `older-done`; `olderAnchor` preserves the scroll
@@ -313,6 +334,8 @@ export function ChatPane({
   // Tool calls collapse to a one-line summary; tapping opens this modal with the
   // full command + output. null = closed.
   const [openTool, setOpenTool] = useState<ToolDetail | null>(null);
+  // A pasted image opened full-size in a lightbox from history. null = closed.
+  const [openImage, setOpenImage] = useState<{ url: string; name: string } | null>(null);
   // Floating "jump to latest" arrow — shown only when scrolled up off the bottom.
   const [showScrollDown, setShowScrollDown] = useState(false);
   // The floating composer overlaps the scroll area, so we reserve its exact
@@ -335,6 +358,12 @@ export function ChatPane({
   const [question, setQuestion] = useState<PendingQuestion | null>(null);
   // Live per-task subagent progress, keyed by the Task tool-use id.
   const [subagents, setSubagents] = useState<Record<string, SubagentProgress>>({});
+  // Last progress-frame arrival per task — the staleness horizon for the
+  // running-subagents indicator (a background task that's gone silent past
+  // it reads as done, not running; its tool_result may never stream here).
+  const subagentSeenAt = useRef(new Map<string, number>());
+  // Expanded action-run blocks, keyed by the run's first event id.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   // Runner-pushed session status: model, context fill, available models.
   // null = no runner status yet (TUI-view chats never get one).
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
@@ -450,10 +479,27 @@ export function ChatPane({
         // a stale chip would keep offering controls that go nowhere.
         setAgentStatus(msg.status ?? null);
         if (msg.subagents) {
+          const now = Date.now();
+          // Full snapshot — REBUILD the seen-at map too (a plain set would
+          // leak entries for tasks the snapshot no longer carries).
+          subagentSeenAt.current = new Map(msg.subagents.map((p) => [p.toolUseId, now]));
           setSubagents(Object.fromEntries(msg.subagents.map((p) => [p.toolUseId, p])));
         }
       } else if (msg.t === 'events') {
         const fresh = msg.events.filter((e) => !byId.current.has(e.id));
+        // A landed tool_result ends its subagent — drop the progress entry so
+        // the map doesn't grow monotonically across a long-lived pane (the
+        // indicator itself filters on results, but the entries lingered).
+        const resolvedNow = fresh.filter((e) => e.kind === 'tool_result').map((e) => e.toolUseId);
+        if (resolvedNow.length) {
+          for (const id of resolvedNow) subagentSeenAt.current.delete(id);
+          setSubagents((m) => {
+            if (!resolvedNow.some((id) => id in m)) return m;
+            const next = { ...m };
+            for (const id of resolvedNow) delete next[id];
+            return next;
+          });
+        }
         if (fresh.length) {
           for (const e of fresh) byId.current.add(e.id);
           // Assistant text that just landed in the transcript leaves the
@@ -510,13 +556,18 @@ export function ChatPane({
         setStreamingText('');
         setOptimisticUser(null);
         setQuestion(null);
-        setSubagents({});
-        setNotice(msg.ok ? null : (msg.error ?? 'turn failed'));
+        // BACKGROUND subagents outlive the turn — keep their progress so the
+        // running-subagents indicator stays honest (each entry hides when its
+        // tool_result lands). A failed/stopped turn kills subagents with it
+        // (live-verified: Stop interrupts background tasks too) — clear.
+        if (msg.ok === false) setSubagents({});
+        setNotice(msg.ok ? null : { text: msg.error ?? 'turn failed', tone: 'danger' });
       } else if (msg.t === 'question') {
         setQuestion({ qid: msg.qid, questions: msg.questions });
       } else if (msg.t === 'question-done') {
         setQuestion((q) => (q?.qid === msg.qid ? null : q));
       } else if (msg.t === 'subagent') {
+        subagentSeenAt.current.set(msg.progress.toolUseId, Date.now());
         setSubagents((m) => ({ ...m, [msg.progress.toolUseId]: msg.progress }));
       } else if (msg.t === 'status') {
         setAgentStatus((prev) => {
@@ -530,6 +581,8 @@ export function ChatPane({
           // the client-side belt to its braces).
           return prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
         });
+      } else if (msg.t === 'notice') {
+        setNotice({ text: msg.message, tone: 'info' });
       } else if (msg.t === 'error') {
         acked.current = true;
         window.clearTimeout(sendWatchdog.current);
@@ -538,7 +591,7 @@ export function ChatPane({
         // so the optimistic bubble would otherwise stick around forever.
         setOptimisticUser(null);
         pendingText.current = '';
-        setNotice(msg.message);
+        setNotice({ text: msg.message, tone: 'danger' });
       }
     };
 
@@ -550,6 +603,9 @@ export function ChatPane({
       ws.onopen = () => {
         attempt = 0;
         setConnected(true);
+        // A recovered socket makes "reconnecting…" chatter stale — clear it
+        // (real failures stay until the next turn resolves them).
+        setNotice((n) => (n?.tone === 'info' ? null : n));
       };
       ws.onmessage = onMessage;
       ws.onerror = () => {
@@ -578,7 +634,10 @@ export function ChatPane({
           setOptimisticUser(null);
           if (lost) {
             setInput((prev) => prev || lost);
-            setNotice('Connection dropped before the message was sent — try again.');
+            setNotice({
+              text: 'Connection dropped before the message was sent — try again.',
+              tone: 'info',
+            });
           }
         }
         if (cancelled) return;
@@ -665,7 +724,7 @@ export function ChatPane({
       setSending(false);
       setOptimisticUser(null);
       setInput((prev) => prev || text);
-      setNotice('Message not delivered — reconnecting. Try again.');
+      setNotice({ text: 'Message not delivered — reconnecting. Try again.', tone: 'info' });
       try {
         wsRef.current?.close();
       } catch {
@@ -693,7 +752,7 @@ export function ChatPane({
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       // Don't fire into a dead socket (the browser would drop it silently).
       // Keep the text in the composer, kick a reconnect, let the user retry.
-      setNotice('Reconnecting — try again in a moment.');
+      setNotice({ text: 'Reconnecting — try again in a moment.', tone: 'info' });
       reconnectNow.current();
       return;
     }
@@ -720,9 +779,21 @@ export function ChatPane({
   // camera. Empty-type files (HEIC / some Android providers) are kept.
   const onPickImages = async (e: ChangeEvent<HTMLInputElement>) => {
     const el = e.target;
-    const files = Array.from(el.files ?? []).filter(
-      (f) => f.type === '' || f.type.startsWith('image/'),
+    // Accept exactly what the server upload route accepts: a renderable
+    // MIME, or a renderable filename extension when the provider reports no
+    // type (HEIC pickers / some Android providers hand over type='').
+    // Dropping anything is LOUD — a silently-swallowed pick reads as "the
+    // app is broken".
+    const all = Array.from(el.files ?? []);
+    const files = all.filter(
+      (f) => imageExtForMime(f.type) !== null || imageExtFromName(f.name) !== null,
     );
+    if (files.length < all.length) {
+      setNotice({
+        text: `some files were skipped — unsupported image type`,
+        tone: 'danger',
+      });
+    }
     el.value = ''; // reset so re-picking the same file still fires onChange
     if (files.length === 0) return;
     setUploading(true);
@@ -731,6 +802,7 @@ export function ChatPane({
       try {
         const { path } = await api.uploadAttachment(paneId, f, f.name || 'image.png');
         paths.push(path);
+        addChip(path, f);
       } catch {
         // drop this one; the rest still upload
       }
@@ -741,27 +813,35 @@ export function ChatPane({
     inputRef.current?.focus();
   };
 
-  // Pasting an image into the composer — same contract as the terminal face:
-  // upload to the pane's attachment dir, append the returned path to the
-  // message, and confirm with a preview toast (Claude renders the path, not
-  // the pixels, so the toast is how you know the right image went in).
-  const [pasteToast, setPasteToast] = useState<{ previewUrl: string; path: string } | null>(null);
-  const pasteToastTimer = useRef<number | undefined>(undefined);
-  const pasteToastUrl = useRef<string | null>(null);
-  const dismissPasteToast = useCallback(() => {
-    window.clearTimeout(pasteToastTimer.current);
-    if (pasteToastUrl.current) URL.revokeObjectURL(pasteToastUrl.current);
-    pasteToastUrl.current = null;
-    setPasteToast(null);
-  }, []);
-  useEffect(() => dismissPasteToast, [dismissPasteToast]);
-  const showPasteToast = (blob: Blob, path: string) => {
-    dismissPasteToast();
-    const previewUrl = URL.createObjectURL(blob);
-    pasteToastUrl.current = previewUrl;
-    setPasteToast({ previewUrl, path });
-    pasteToastTimer.current = window.setTimeout(dismissPasteToast, 3000);
+  // Pasting/picking an image uploads it to the pane's attachment dir and
+  // appends the returned path to the message (Claude reads the path, not the
+  // pixels). Each upload also leaves a persistent preview chip beside the
+  // composer, so you can see the image that went in for as long as its path is
+  // still in the draft. The blob URL gives an instant thumbnail without a
+  // round-trip; it is revoked when the chip drops.
+  const [chips, setChips] = useState<{ path: string; name: string; previewUrl: string }[]>([]);
+  const chipsRef = useRef(chips);
+  chipsRef.current = chips;
+  const addChip = (path: string, blob: Blob) => {
+    const name = path.split('/').pop() ?? path;
+    setChips((prev) => [...prev, { path, name, previewUrl: URL.createObjectURL(blob) }]);
   };
+  // Drop chips whose path the user has deleted from the draft (and after send,
+  // when the draft clears), revoking their blob URLs.
+  useEffect(() => {
+    setChips((prev) => {
+      const keep = prev.filter((ch) => input.includes(ch.path));
+      if (keep.length === prev.length) return prev;
+      for (const ch of prev) if (!keep.includes(ch)) URL.revokeObjectURL(ch.previewUrl);
+      return keep;
+    });
+  }, [input]);
+  useEffect(
+    () => () => {
+      for (const ch of chipsRef.current) URL.revokeObjectURL(ch.previewUrl);
+    },
+    [],
+  );
   const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const data = e.clipboardData;
     if (!data) return;
@@ -777,22 +857,26 @@ export function ChatPane({
     void (async () => {
       setUploading(true);
       const paths: string[] = [];
-      let previewBlob: Blob | null = null;
       for (const blob of blobs) {
-        if (!previewBlob) previewBlob = blob;
-        const ext = blob.type.split('/')[1] ?? 'png';
+        const ext = imageExtForMime(blob.type);
+        if (!ext) {
+          // A format the pipeline can't render end-to-end (e.g. image/heic) —
+          // uploading it would leave a raw-path message and a 400ing GET.
+          setNotice({ text: `unsupported image type: ${blob.type}`, tone: 'danger' });
+          continue;
+        }
         try {
-          const { path } = await api.uploadAttachment(paneId, blob, `pasted.${ext}`);
+          const { path } = await api.uploadAttachment(paneId, blob, `pasted${ext}`);
           paths.push(path);
+          addChip(path, blob);
         } catch {
-          setNotice('image upload failed');
+          setNotice({ text: 'image upload failed', tone: 'danger' });
         }
       }
       setUploading(false);
       if (paths.length === 0 && !text) return;
       const insert = [paths.join(' '), text.trim()].filter(Boolean).join(' ');
       setInput((prev) => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${insert} `);
-      if (previewBlob && paths.length) showPasteToast(previewBlob, paths.join(' '));
       inputRef.current?.focus();
     })();
   };
@@ -800,11 +884,15 @@ export function ChatPane({
   // Keep pinned to the bottom as new events arrive, unless the user scrolled up.
   // `events` is a deliberate trigger dependency (we re-scroll on new events)
   // even though the body reads it only via the DOM.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: events/streamingText/optimisticUser/question are the scroll triggers
+  // The subagent trigger is the COUNT, not the map: progress ticks replace
+  // the map object every ~500ms without changing content height, and each
+  // firing costs a forced reflow (scrollHeight read). Rows appear/disappear
+  // only when the count moves.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: events/streamingText/optimisticUser/question/subagent-count are the scroll triggers
   useEffect(() => {
     const el = scrollRef.current;
     if (el && active && pinnedToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [events, streamingText, optimisticUser, question, active]);
+  }, [events, streamingText, optimisticUser, question, Object.keys(subagents).length, active]);
 
   // Auto-grow the composer like ChatGPT: reset to content height, capped by CSS
   // max-height (the textarea keeps scrolling past that). `input` is the trigger
@@ -845,7 +933,7 @@ export function ChatPane({
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
-      if (openTool) return;
+      if (openTool || openImage) return;
       const input = inputRef.current;
       if (!input || document.activeElement === input) return;
       const ae = document.activeElement as HTMLElement | null;
@@ -855,7 +943,31 @@ export function ChatPane({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [active, openTool]);
+  }, [active, openTool, openImage]);
+
+  // Restore the remembered scroll once per activation, after the replayed
+  // history has rendered. Runs BEFORE the follow-the-bottom effect (layout
+  // effects fire first) so setting pinned=false here stops it from snapping
+  // a returning reader to the bottom. Pinned/unknown memory keeps the
+  // existing behavior; a sid mismatch (cleared session) is stale — ignore.
+  const restoredScroll = useRef(false);
+  useLayoutEffect(() => {
+    if (!active) {
+      restoredScroll.current = false; // hidden panes lose scrollTop — re-restore on return
+      return;
+    }
+    if (restoredScroll.current || events.length === 0) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    restoredScroll.current = true;
+    const mem = recallChatScroll(paneId);
+    if (mem && !mem.pinned && mem.sid === renderedSid.current) {
+      pinnedToBottom.current = false;
+      // Ratio, not absolute: content height may have changed while away
+      // (lazy thumbnails) — a fraction of the range degrades gracefully.
+      el.scrollTop = mem.ratio * (el.scrollHeight - el.clientHeight);
+    }
+  }, [active, events, paneId]);
 
   // After an older-history batch prepends, content grew above the viewport;
   // restore the scroll so the messages the user was looking at stay put (runs
@@ -869,6 +981,23 @@ export function ChatPane({
       olderAnchor.current = null;
     }
   }, [events]);
+
+  // Fill the viewport: the initial history window is a byte tail, and a few
+  // huge records (base64 image pastes run to hundreds of KB per line) can
+  // eat the whole window — rendering less than a screenful of chat. With no
+  // overflow there are no scroll events, so the scroll-up pager could never
+  // fire and the rest of the conversation was unreachable. Keep paging older
+  // batches until the content overflows (or history is exhausted): requests
+  // are single-flight, and every server call moves the byte cursor back, so
+  // this terminates even when a batch renders nothing new.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: events/loadingOlder are the re-check triggers; requestOlder is stable enough per render
+  useEffect(() => {
+    if (!active || loadingOlder || !hasMoreOlder) return;
+    if (!session?.current_sid) return; // history baseline not bound yet
+    const el = scrollRef.current;
+    if (!el || el.clientHeight < 40) return; // hidden/collapsed — don't page blind
+    if (el.scrollHeight <= el.clientHeight + 1) requestOlder();
+  }, [active, events, loadingOlder, hasMoreOlder, session?.current_sid]);
 
   const requestOlder = () => {
     if (loadingOlderRef.current || !hasMoreOlder) return;
@@ -894,6 +1023,11 @@ export function ChatPane({
     if (!el) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     pinnedToBottom.current = nearBottom;
+    rememberChatScroll(paneId, {
+      ratio: el.scrollTop / Math.max(1, el.scrollHeight - el.clientHeight),
+      pinned: nearBottom,
+      sid: renderedSid.current,
+    });
     // Hysteresis: only reveal the arrow once meaningfully scrolled up, so it
     // doesn't flicker on tiny nudges near the bottom.
     setShowScrollDown(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
@@ -907,6 +1041,9 @@ export function ChatPane({
     if (!el) return;
     pinnedToBottom.current = true;
     setShowScrollDown(false);
+    // Record the re-pin immediately — the smooth scroll's own onScroll
+    // events lag, and switching away mid-glide must not save a stale spot.
+    rememberChatScroll(paneId, { ratio: 1, pinned: true, sid: renderedSid.current });
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   };
 
@@ -928,6 +1065,30 @@ export function ChatPane({
       setOptimisticUser(null);
     }
   }, [events, optimisticUser]);
+
+  // ONE tool-resolution index for everything below (and one place for the
+  // "a tool_use is resolved when a tool_result shares its toolUseId" rule).
+  // resultFor pairs each call with its result (the collapsed row opens both
+  // in one modal; the standalone result row is then suppressed via
+  // `consumed`). unresolvedTools is in event order, so its head is the
+  // OLDEST still-running call — with parallel tool calls the last event is
+  // often a sibling's result, which used to blank the working label.
+  const toolIndex = useMemo(() => {
+    const resultFor = new Map<string, ToolResultEvent>();
+    for (const e of events) if (e.kind === 'tool_result') resultFor.set(e.toolUseId, e);
+    const consumed = new Set<string>();
+    const unresolvedTools: ToolUseEvent[] = [];
+    const taskDescriptions = new Map<string, string>();
+    for (const e of events) {
+      if (e.kind !== 'tool_use') continue;
+      const r = resultFor.get(e.toolUseId);
+      if (r) consumed.add(r.id);
+      else unresolvedTools.push(e);
+      const input = e.input as { description?: string } | null;
+      if (input?.description) taskDescriptions.set(e.toolUseId, input.description);
+    }
+    return { resultFor, consumed, unresolvedTools, taskDescriptions };
+  }, [events]);
 
   const body = useMemo(() => {
     if (session === undefined)
@@ -997,17 +1158,74 @@ export function ChatPane({
         </div>
       );
     }
-    // Pair each tool_use with its tool_result (by id) so the collapsed row can
-    // open both in one modal; the standalone result row is then suppressed.
-    const resultFor = new Map<string, ToolResultEvent>();
-    for (const e of events)
-      if (e.kind === 'tool_result' && e.toolUseId) resultFor.set(e.toolUseId, e);
-    const consumed = new Set<string>();
-    for (const e of events)
-      if (e.kind === 'tool_use') {
-        const r = resultFor.get(e.toolUseId);
-        if (r) consumed.add(r.id);
+    const { resultFor, consumed } = toolIndex;
+    const renderEvent = (e: ChatEvent) => {
+      if (e.kind === 'tool_use')
+        return (
+          <ToolRow
+            key={e.id}
+            use={e}
+            result={resultFor.get(e.toolUseId)}
+            progress={resultFor.has(e.toolUseId) ? undefined : subagents[e.toolUseId]}
+            onOpen={setOpenTool}
+          />
+        );
+      if (e.kind === 'tool_result') return <ToolRow key={e.id} result={e} onOpen={setOpenTool} />;
+      return <ChatRow key={e.id} event={e} onOpenImage={setOpenImage} />;
+    };
+
+    // A long agentic stretch renders as ONE collapsed block instead of a
+    // wall of per-action rows: consecutive tool/thinking events (an
+    // "action run") fold behind a count + tool summary, expandable in
+    // place. Real prose — user and assistant text — always breaks a run
+    // and renders as normal messages. The TRAILING run of an in-flight
+    // turn stays unfolded: that's the live view you watch working.
+    const renderable = events.filter((e) => !(e.kind === 'tool_result' && consumed.has(e.id)));
+    const isAction = (e: ChatEvent) =>
+      e.kind === 'tool_use' || e.kind === 'tool_result' || e.kind === 'thinking';
+    // Fold from TWO actions up — real transcripts are full of 2-3 action
+    // stretches between prose, and leaving those inline read as "folding
+    // doesn't work". A lone action stays inline.
+    const MIN_GROUP = 2;
+    const items: React.ReactNode[] = [];
+    for (let i = 0; i < renderable.length; ) {
+      const e = renderable[i] as ChatEvent;
+      if (!isAction(e)) {
+        items.push(renderEvent(e));
+        i++;
+        continue;
       }
+      let j = i;
+      while (j < renderable.length && isAction(renderable[j] as ChatEvent)) j++;
+      const run = renderable.slice(i, j) as ChatEvent[];
+      const trailingLive = sending && j === renderable.length;
+      if (run.length < MIN_GROUP || trailingLive) {
+        items.push(...run.map(renderEvent));
+      } else {
+        // Keyed by the run's LAST event: older-history prepends can extend
+        // a run at its head (changing the first id), which would orphan the
+        // expansion state; a closed run never grows at its tail.
+        const id = (run[run.length - 1] as ChatEvent).id;
+        items.push(
+          <ActionGroup
+            key={`group-${id}`}
+            events={run}
+            expanded={expandedGroups.has(id)}
+            onToggle={() =>
+              setExpandedGroups((prev) => {
+                const next = new Set(prev);
+                if (next.has(id)) next.delete(id);
+                else next.add(id);
+                return next;
+              })
+            }
+            renderEvent={renderEvent}
+          />,
+        );
+      }
+      i = j;
+    }
+
     return (
       <>
         {loadingOlder ? (
@@ -1015,26 +1233,21 @@ export function ChatPane({
             <div className="chat-empty-spinner" />
           </div>
         ) : null}
-        {events.map((e) => {
-          if (e.kind === 'tool_use')
-            return (
-              <ToolRow
-                key={e.id}
-                use={e}
-                result={resultFor.get(e.toolUseId)}
-                progress={resultFor.has(e.toolUseId) ? undefined : subagents[e.toolUseId]}
-                onOpen={setOpenTool}
-              />
-            );
-          // Result already shown by its tool_use row above.
-          if (e.kind === 'tool_result' && consumed.has(e.id)) return null;
-          if (e.kind === 'tool_result')
-            return <ToolRow key={e.id} result={e} onOpen={setOpenTool} />;
-          return <ChatRow key={e.id} event={e} />;
-        })}
+        {items}
       </>
     );
-  }, [session, connected, events, stale, optimisticUser, sending, loadingOlder, subagents]);
+  }, [
+    session,
+    connected,
+    events,
+    stale,
+    optimisticUser,
+    sending,
+    loadingOlder,
+    subagents,
+    expandedGroups,
+    toolIndex,
+  ]);
 
   // The agent is working when: we're driving a turn (`sending`), tokens are
   // streaming, OR — for sessions WITHOUT a runner (legacy/TUI views) — the
@@ -1047,10 +1260,37 @@ export function ChatPane({
   // used to re-arm the heuristic on exactly the panes it was disabled for.
   const lastEvent = events[events.length - 1];
   const pendingTool =
-    !agentNative &&
-    lastEvent?.kind === 'tool_use' &&
-    !events.some((e) => e.kind === 'tool_result' && e.toolUseId === lastEvent.toolUseId);
+    !agentNative && lastEvent?.kind === 'tool_use' && !toolIndex.resultFor.has(lastEvent.toolUseId);
   const agentWorking = Boolean((sending || streamingText || pendingTool) && session?.current_sid);
+
+  // What the working row says. Bare dots read as "maybe stuck" during a long
+  // silent tool call — name the OLDEST still-unresolved tool.
+  const unresolvedTool = agentWorking ? (toolIndex.unresolvedTools[0] ?? null) : null;
+  const workingLabel = unresolvedTool ? `Running ${unresolvedTool.name}…` : 'Working…';
+
+  // Subagents still running = progress entries whose Task call has no result
+  // yet. Rendered as their own indicator (not just the buried Task-row chip):
+  // they can outlive the turn (background tasks), which is exactly the
+  // "something is working with no visible sign" case. The staleness horizon
+  // keeps the indicator honest when a background task's completing
+  // tool_result never streams into this pane (it can land in the transcript
+  // only on the next turn/reconnect) — silence past the horizon reads as
+  // done, not running.
+  const runningSubagents = Object.values(subagents).filter(
+    (p) =>
+      !toolIndex.resultFor.has(p.toolUseId) &&
+      Date.now() - (subagentSeenAt.current.get(p.toolUseId) ?? 0) < SUBAGENT_STALE_MS,
+  );
+  // The staleness horizon is evaluated at render time — with a silent
+  // background task nothing else triggers a re-render, so the indicator
+  // would linger past the horizon forever. Tick while any rows show.
+  const [, forceStaleCheck] = useState(0);
+  useEffect(() => {
+    if (runningSubagents.length === 0) return;
+    const t = window.setTimeout(() => forceStaleCheck((n) => n + 1), 60_000);
+    return () => window.clearTimeout(t);
+  });
+  const subagentLabel = (id: string): string => toolIndex.taskDescriptions.get(id) ?? 'subagent';
 
   return (
     <div className="chat-pane">
@@ -1079,8 +1319,27 @@ export function ChatPane({
                     <i />
                     <i />
                   </span>
+                  <span className="chat-working-label">{workingLabel}</span>
                 </div>
               )}
+            </div>
+          ) : null}
+          {runningSubagents.length > 0 && !question ? (
+            <div className="chat-turn chat-turn-assistant">
+              <div className="chat-msg chat-subagents" aria-label="Subagents running">
+                {runningSubagents.map((p) => (
+                  <div key={p.toolUseId} className="chat-subagent-row">
+                    <span className="chat-subagent-glyph" aria-hidden="true">
+                      ✳
+                    </span>
+                    <span className="chat-subagent-label">{subagentLabel(p.toolUseId)}</span>
+                    <span className="chat-subagent-meta">
+                      {p.steps} step{p.steps === 1 ? '' : 's'}
+                      {p.lastTool ? ` · ${p.lastTool}` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           ) : null}
           {question ? (
@@ -1105,25 +1364,28 @@ export function ChatPane({
         </button>
       ) : null}
       {openTool ? <ToolModal detail={openTool} onClose={() => setOpenTool(null)} /> : null}
-      {pasteToast ? (
-        <div
-          className="chat-paste-toast"
-          style={composerH ? { bottom: `${composerH + 12}px` } : undefined}
-          title={pasteToast.path}
-        >
-          <img
-            className="chat-paste-toast-preview"
-            src={pasteToast.previewUrl}
-            alt="Pasted screenshot"
-          />
-          <span className="chat-paste-toast-path">{pasteToast.path}</span>
-        </div>
+      {openImage ? (
+        <ImageModal url={openImage.url} name={openImage.name} onClose={() => setOpenImage(null)} />
       ) : null}
       {session?.current_sid ? (
         <div className="chat-composer-wrap" ref={composerRef}>
-          {notice ? <div className="chat-notice">{notice}</div> : null}
+          {notice ? (
+            <div className={`chat-notice${notice.tone === 'danger' ? ' -danger' : ''}`}>
+              {notice.text}
+            </div>
+          ) : null}
           {agentStatus ? (
             <div className="chat-session-row">
+              {/* Always-visible activity cue: the in-list working row lives at
+                  the list bottom, which a reader parked mid-history never
+                  sees. The composer is on screen no matter what. */}
+              {agentWorking || runningSubagents.length > 0 ? (
+                <output className="chat-composer-working">
+                  {agentWorking
+                    ? workingLabel
+                    : `✳ ${runningSubagents.length} subagent${runningSubagents.length === 1 ? '' : 's'} running`}
+                </output>
+              ) : null}
               <SessionMenu
                 status={agentStatus}
                 send={(obj) => {
@@ -1132,12 +1394,22 @@ export function ChatPane({
                   // CLOSED one (silent drop) — fail loudly instead.
                   const sock = wsRef.current;
                   if (!sock || sock.readyState !== WebSocket.OPEN) {
-                    setNotice('Not connected — try again in a moment.');
+                    setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
                     return;
                   }
                   sock.send(JSON.stringify(obj));
                 }}
               />
+            </div>
+          ) : null}
+          {chips.length > 0 ? (
+            <div className="chat-chips">
+              {chips.map((ch) => (
+                <span key={ch.path} className="chat-chip" title={ch.path}>
+                  <img className="chat-chip-thumb" src={ch.previewUrl} alt="" />
+                  <span className="chat-chip-name">{ch.name}</span>
+                </span>
+              ))}
             </div>
           ) : null}
           <div className="chat-composer">
@@ -1208,12 +1480,84 @@ export function ChatPane({
   );
 }
 
-function ChatRow({ event }: { event: ChatEvent }) {
+/**
+ * A folded run of consecutive actions (tool calls + thinking) — long
+ * agentic stretches read as one summarizable step, not a wall of rows.
+ * The header names the mix ("14 actions · Bash ×6 · Edit ×4"), flags
+ * failures, and expands in place to the ordinary per-action rows.
+ */
+function ActionGroup({
+  events,
+  expanded,
+  onToggle,
+  renderEvent,
+}: {
+  events: ChatEvent[];
+  expanded: boolean;
+  onToggle: () => void;
+  renderEvent: (e: ChatEvent) => React.ReactNode;
+}) {
+  const counts = new Map<string, number>();
+  let failed = 0;
+  for (const e of events) {
+    // Orphan tool_results (their tool_use never reached this pane) count as
+    // actions too — a run of only results must not label itself '0 actions'.
+    const name =
+      e.kind === 'tool_use' ? e.name : e.kind === 'thinking' ? 'thinking' : 'result';
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+    if (e.kind === 'tool_result' && !e.ok) failed++;
+  }
+  // Paired results ride their tool_use row, so only orphans reach this run —
+  // but a tool_use + its paired result never co-occur here (consumed results
+  // are filtered before grouping), making every event one visible action.
+  const actions = events.length;
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+  const summary = top.map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(' · ');
+  return (
+    <div className="chat-turn chat-turn-assistant">
+      <div className="chat-msg chat-action-group">
+        <button
+          type="button"
+          className="chat-action-group-head"
+          aria-expanded={expanded}
+          onClick={onToggle}
+        >
+          <span className={`chat-action-group-chevron${expanded ? ' is-open' : ''}`} aria-hidden="true">
+            ›
+          </span>
+          <span className="chat-action-group-count">
+            {actions} action{actions === 1 ? '' : 's'}
+          </span>
+          <span className="chat-action-group-summary">{summary}</span>
+          {failed > 0 ? (
+            <span className="chat-action-group-failed">
+              {failed} failed
+            </span>
+          ) : null}
+        </button>
+        {expanded ? <div className="chat-action-group-body">{events.map(renderEvent)}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+/** Memoized: the chat body rebuilds its element list on every subagent
+ *  progress frame (~2/s during turns); stable props must skip re-rendering
+ *  (and re-parsing Markdown for) the entire transcript. */
+const ChatRow = memo(function ChatRow({
+  event,
+  onOpenImage,
+}: {
+  event: ChatEvent;
+  onOpenImage?: ((img: { url: string; name: string }) => void) | undefined;
+}) {
   switch (event.kind) {
     case 'user':
       return (
         <div className="chat-turn chat-turn-user">
-          <div className="chat-bubble">{event.text}</div>
+          <div className="chat-bubble">
+            <UserText text={event.text} onOpenImage={onOpenImage} />
+          </div>
         </div>
       );
     case 'assistant':
@@ -1237,6 +1581,67 @@ function ChatRow({ event }: { event: ChatEvent }) {
     default:
       return null;
   }
+});
+
+// A user message may embed absolute paths to pasted/picked images. Render each
+// as a clickable thumbnail (loaded over HTTP so it works from any device) while
+// keeping the surrounding prose; the raw path stays in the title for reference.
+function UserText({
+  text,
+  onOpenImage,
+}: {
+  text: string;
+  onOpenImage?: ((img: { url: string; name: string }) => void) | undefined;
+}) {
+  const parts = splitMessageAttachments(text);
+  if (parts.length === 1 && parts[0]?.kind === 'text') return <>{text}</>;
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.kind === 'text' ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: parts are positional
+          <span key={i}>{part.text}</span>
+        ) : (
+          <button
+            // biome-ignore lint/suspicious/noArrayIndexKey: parts are positional
+            key={i}
+            type="button"
+            className="chat-img-thumb"
+            title={part.path}
+            onClick={() => onOpenImage?.({ url: part.url, name: part.name })}
+          >
+            <img src={part.url} alt={part.name} loading="lazy" />
+          </button>
+        ),
+      )}
+    </>
+  );
+}
+
+// Full-size pasted image in a lightbox; mirrors ToolModal's dismiss behaviour
+// (Escape, backdrop scrim, close button).
+function ImageModal({
+  url,
+  name,
+  onClose,
+}: {
+  url: string;
+  name: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div className="chat-modal-backdrop chat-img-backdrop">
+      <button type="button" className="chat-modal-scrim" aria-label="Close" onClick={onClose} />
+      <img className="chat-img-full" src={url} alt={name} />
+    </div>
+  );
 }
 
 // Icon per notice variant — a task update vs a session reminder.
@@ -1302,7 +1707,8 @@ function diffStat(diff?: ToolResultEvent['diff']): { add: number; del: number } 
 }
 
 /** Collapsed one-line tool call — muted, taps open the ToolModal. */
-function ToolRow({
+/** Memoized for the same reason as ChatRow — see there. */
+const ToolRow = memo(function ToolRow({
   use,
   result,
   progress,
@@ -1351,7 +1757,7 @@ function ToolRow({
       ) : null}
     </div>
   );
-}
+});
 
 /**
  * An agent question (the runner's ask_user tool) rendered as tappable option
