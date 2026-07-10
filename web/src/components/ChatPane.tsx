@@ -1178,8 +1178,10 @@ export function ChatPane({
     // wall of per-action rows: consecutive tool/thinking events (an
     // "action run") fold behind a count + tool summary, expandable in
     // place. Real prose — user and assistant text — always breaks a run
-    // and renders as normal messages. The TRAILING run of an in-flight
-    // turn stays unfolded: that's the live view you watch working.
+    // and renders as normal messages. The in-flight run folds too (the
+    // count ticks live; the working label names the running tool) —
+    // rendering it unfolded made blocks visibly "merge" when the turn
+    // closed, which read as a glitch.
     const renderable = events.filter((e) => !(e.kind === 'tool_result' && consumed.has(e.id)));
     const isAction = (e: ChatEvent) =>
       e.kind === 'tool_use' || e.kind === 'tool_result' || e.kind === 'thinking';
@@ -1198,14 +1200,16 @@ export function ChatPane({
       let j = i;
       while (j < renderable.length && isAction(renderable[j] as ChatEvent)) j++;
       const run = renderable.slice(i, j) as ChatEvent[];
-      const trailingLive = sending && j === renderable.length;
-      if (run.length < MIN_GROUP || trailingLive) {
+      if (run.length < MIN_GROUP) {
         items.push(...run.map(renderEvent));
       } else {
-        // Keyed by the run's LAST event: older-history prepends can extend
-        // a run at its head (changing the first id), which would orphan the
-        // expansion state; a closed run never grows at its tail.
-        const id = (run[run.length - 1] as ChatEvent).id;
+        // Key stability differs by position: a CLOSED run never grows at
+        // its tail but older-history prepends can extend its head — key by
+        // LAST event. The TRAILING (possibly still growing) run gains
+        // events at its tail but its head is fixed — key by FIRST event,
+        // or every new action would reset the expansion.
+        const trailing = j === renderable.length;
+        const id = (run[trailing ? 0 : run.length - 1] as ChatEvent).id;
         items.push(
           <ActionGroup
             key={`group-${id}`}
