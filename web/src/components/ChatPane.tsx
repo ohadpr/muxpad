@@ -561,7 +561,11 @@ export function ChatPane({
         setStreamingText('');
         setOptimisticUser(null);
         setQuestion(null);
-        setSubagents({});
+        // BACKGROUND subagents outlive the turn — keep their progress so the
+        // running-subagents indicator stays honest (each entry hides when its
+        // tool_result lands). A failed/stopped turn kills subagents with it
+        // (live-verified: Stop interrupts background tasks too) — clear.
+        if (msg.ok === false) setSubagents({});
         setNotice(msg.ok ? null : { text: msg.error ?? 'turn failed', tone: 'danger' });
       } else if (msg.t === 'question') {
         setQuestion({ qid: msg.qid, questions: msg.questions });
@@ -859,11 +863,11 @@ export function ChatPane({
   // Keep pinned to the bottom as new events arrive, unless the user scrolled up.
   // `events` is a deliberate trigger dependency (we re-scroll on new events)
   // even though the body reads it only via the DOM.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: events/streamingText/optimisticUser/question are the scroll triggers
+  // biome-ignore lint/correctness/useExhaustiveDependencies: events/streamingText/optimisticUser/question/subagents are the scroll triggers
   useEffect(() => {
     const el = scrollRef.current;
     if (el && active && pinnedToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [events, streamingText, optimisticUser, question, active]);
+  }, [events, streamingText, optimisticUser, question, subagents, active]);
 
   // Auto-grow the composer like ChatGPT: reset to content height, capped by CSS
   // max-height (the textarea keeps scrolling past that). `input` is the trigger
@@ -1159,6 +1163,29 @@ export function ChatPane({
     !events.some((e) => e.kind === 'tool_result' && e.toolUseId === lastEvent.toolUseId);
   const agentWorking = Boolean((sending || streamingText || pendingTool) && session?.current_sid);
 
+  // What the working row says. Bare dots read as "maybe stuck" during a long
+  // silent tool call — name the tool being run when we know it.
+  const unresolvedTool =
+    agentWorking && lastEvent?.kind === 'tool_use'
+      ? events.some((e) => e.kind === 'tool_result' && e.toolUseId === lastEvent.toolUseId)
+        ? null
+        : lastEvent
+      : null;
+  const workingLabel = unresolvedTool ? `Running ${unresolvedTool.name}…` : 'Working…';
+
+  // Subagents still running = progress entries whose Task call has no result
+  // yet. Rendered as their own indicator (not just the buried Task-row chip):
+  // they can outlive the turn (background tasks), which is exactly the
+  // "something is working with no visible sign" case.
+  const runningSubagents = Object.values(subagents).filter(
+    (p) => !events.some((e) => e.kind === 'tool_result' && e.toolUseId === p.toolUseId),
+  );
+  const subagentLabel = (id: string): string => {
+    const e = events.find((x) => x.kind === 'tool_use' && x.toolUseId === id);
+    const input = e?.kind === 'tool_use' ? (e.input as { description?: string } | null) : null;
+    return input?.description ?? 'subagent';
+  };
+
   return (
     <div className="chat-pane">
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
@@ -1186,8 +1213,27 @@ export function ChatPane({
                     <i />
                     <i />
                   </span>
+                  <span className="chat-working-label">{workingLabel}</span>
                 </div>
               )}
+            </div>
+          ) : null}
+          {runningSubagents.length > 0 && !question ? (
+            <div className="chat-turn chat-turn-assistant">
+              <div className="chat-msg chat-subagents" aria-label="Subagents running">
+                {runningSubagents.map((p) => (
+                  <div key={p.toolUseId} className="chat-subagent-row">
+                    <span className="chat-subagent-glyph" aria-hidden="true">
+                      ✳
+                    </span>
+                    <span className="chat-subagent-label">{subagentLabel(p.toolUseId)}</span>
+                    <span className="chat-subagent-meta">
+                      {p.steps} step{p.steps === 1 ? '' : 's'}
+                      {p.lastTool ? ` · ${p.lastTool}` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           ) : null}
           {question ? (
@@ -1235,6 +1281,16 @@ export function ChatPane({
           ) : null}
           {agentStatus ? (
             <div className="chat-session-row">
+              {/* Always-visible activity cue: the in-list working row lives at
+                  the list bottom, which a reader parked mid-history never
+                  sees. The composer is on screen no matter what. */}
+              {agentWorking || runningSubagents.length > 0 ? (
+                <span className="chat-composer-working" role="status">
+                  {agentWorking
+                    ? workingLabel
+                    : `✳ ${runningSubagents.length} subagent${runningSubagents.length === 1 ? '' : 's'} running`}
+                </span>
+              ) : null}
               <SessionMenu
                 status={agentStatus}
                 send={(obj) => {
