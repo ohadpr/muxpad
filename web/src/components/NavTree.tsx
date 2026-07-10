@@ -824,22 +824,19 @@ function sheetPaneLabel(p: PaneSpec, i: number): string {
 }
 
 /**
- * Sheet-only: a tab's pane list, expanded in place under its row — direct
- * pane navigation (tap = open that pane) plus the mobile "New pane" home.
- * The pane strip inside a tab only appears once a tab has 2+ panes, and
- * agent-chat tabs have no key row, so this is the one add-pane affordance
- * that exists for EVERY mobile tab.
+ * Sheet-only: a tab's pane list, expanded in place under its row — PURE
+ * pane navigation (tap = open that pane). Creation lives in the row's ⋯
+ * menu, the one home for tab actions on every tab regardless of pane
+ * count.
  */
 function SheetPaneList({
   tab,
   workspace,
   onNavigate,
-  onAddPane,
 }: {
   tab: Tab;
   workspace: Workspace;
   onNavigate?: (() => void) | undefined;
-  onAddPane: (kind: 'terminal' | 'agent') => void;
 }) {
   const navigate = useNavigate();
   const [panes, setPanes] = useState<PaneSpec[] | null>(null);
@@ -889,14 +886,6 @@ function SheetPaneList({
           </button>
         ))
       )}
-      <NewTabChooser
-        idleLabel="+ New pane"
-        idleTitle="New pane"
-        idleClassName="navtree-add navtree-new-pane"
-        choicesClassName="navtree-new-row"
-        choiceClassName="navtree-add"
-        onCreate={onAddPane}
-      />
     </div>
   );
 }
@@ -1299,12 +1288,7 @@ function TabRow({
       )}
     </div>
       {variant === 'sheet' && sheetPicksPane && panesOpen ? (
-        <SheetPaneList
-          tab={tab}
-          workspace={workspace}
-          onNavigate={onNavigate}
-          onAddPane={onAddPane}
-        />
+        <SheetPaneList tab={tab} workspace={workspace} onNavigate={onNavigate} />
       ) : null}
     </>
   );
