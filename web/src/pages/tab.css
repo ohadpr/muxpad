@@ -939,17 +939,20 @@
   height: 14px;
 }
 
-/* Face switch embedded in the ACTIVE strip tab: the bare current-face
-   glyph in an 18px square — the same quiet grammar as the × beside it
-   (monochrome at rest, hover reveals). The full variant's tinted pill,
-   caret and pulse dot were the loudest thing in the tab; here the only
-   surviving emphasis is an accent-tinted glyph when a detected app is
-   waiting to be viewed. */
+/* Face switch LEADING the ACTIVE strip tab: the bare current-face glyph
+   in an 18px square — the pane's identity icon, like the sidebar's leading
+   tab emoji. The full variant's tinted pill, caret and pulse dot were the
+   loudest thing in the tab; here the only surviving emphasis is an
+   accent-tinted glyph when a detected app is waiting to be viewed. */
 .desktop-tab .pane-web-switch {
   height: auto;
   align-self: center;
-  /* Breathing room between the pill's controls (face glyph ↔ ×). */
-  margin-right: 4px;
+  margin-left: 10px;
+}
+/* The glyph supplies the leading inset on active tabs — the select's own
+   12px would double it. */
+.desktop-tab[data-active="true"] .desktop-tab-select {
+  padding-left: 5px;
 }
 .desktop-tab .pane-web-switch-main {
   width: 18px;
