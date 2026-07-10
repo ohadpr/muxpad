@@ -31,6 +31,7 @@ import {
   type ServerFrame,
   type SubagentProgress,
   parseFrame,
+  CLOSE_RUNNER_DISPLACED,
 } from './protocol.js';
 
 const paneId = process.env.MUXPAD_PANE_ID;
@@ -399,13 +400,13 @@ function connect(): void {
     // act on its close code) — only the CURRENT socket drives reconnects.
     if (ws !== sock) return;
     ws = null;
-    // 4001 = the server replaced this runner with a newer process for the
-    // same pane. Reconnecting would only steal the pane back — two live
+    // The server replaced this runner with a newer process for the same
+    // pane. Reconnecting would only steal the pane back — two live
     // processes would then trade the registration forever, strobing the
     // chat's status/busy on every steal (live-observed with orphaned
     // duplicate ptys). The loser's correct move is to exit; the pane and
     // its startup_cmd self-heal belong to the survivor.
-    if (code === 4001) {
+    if (code === CLOSE_RUNNER_DISPLACED) {
       log('another runner took over this pane — exiting');
       shutdown(0);
       return;

@@ -398,6 +398,15 @@
   padding: 4px 4px 0;
   overflow-x: auto;
   scrollbar-width: none;
+  /* Extend 1px over the strip's bottom hairline so the ACTIVE tab's fill can
+     cover it (children paint over an ancestor's border). The old approach — a
+     ::after cover strip hanging below the tab — was silently clipped by this
+     container's overflow-x, which is why a seam always showed between the
+     active tab and its pane. Inactive tabs stop 1px short (height below), so
+     the hairline still runs beneath them. */
+  margin-bottom: -1px;
+  position: relative;
+  z-index: 1;
 }
 .desktop-tab-strip-tabs::-webkit-scrollbar {
   display: none;
@@ -420,7 +429,9 @@
   max-width: 220px;
   display: flex;
   align-items: center;
-  height: 100%;
+  /* 1px short of the (border-overlapping) container: the bar's hairline runs
+     under inactive plates; the active plate overrides to 100% and covers it. */
+  height: calc(100% - 1px);
   /* Rounded top corners — a browser-tab plate. The gap on the strip separates
      neighbours, so no hairline divider is needed. */
   border-radius: 7px 7px 0 0;
@@ -445,7 +456,9 @@
      and the tab wouldn't fuse into the pane. */
   background: color-mix(in srgb, var(--accent) 5%, var(--bg));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 10%, transparent);
-  /* Sit above the strip so the connector below can paint over its bottom border. */
+  /* Full container height = over the strip's hairline: the open tab fuses
+     seamlessly into its pane, no dividing line. */
+  height: 100%;
   z-index: 1;
 }
 /* Accent top rail — the unmistakable "this one is open" cue (fill contrast
@@ -460,22 +473,6 @@
   border-radius: 7px 7px 0 0;
   background: var(--accent);
 }
-/* Connector: a strip of the pane background painted over the strip's bottom
-   hairline, directly under the active tab, so the tab fuses seamlessly into the
-   pane below it (browser-tab "the open tab IS the page" feel) — no dividing line
-   between the active tab and its content. */
-.desktop-tab[data-active="true"]::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 2px;
-  /* Same washed colour as the tab/pane so the seam over the strip border
-     vanishes and the tab reads as continuous with the pane. */
-  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
-}
-
 /* Drag-to-reorder. The dragged plate dims; the drop target shows an inset
    accent edge on the side the pane would land (inset box-shadow, not a
    pseudo-element, so it never collides with the active tab's ::after rail). */
@@ -587,10 +584,11 @@
 .desktop-tab-trailing > .badge-dot {
   transition: opacity 100ms ease;
 }
+/* The × takes the slot on HOVER only — the active tab keeps its status
+   visible at rest, so a working agent's spinner stays in view even on the
+   tab you're looking at. */
 .desktop-tab:hover .desktop-tab-trailing > .desktop-tab-busy,
-.desktop-tab:hover .desktop-tab-trailing > .badge-dot,
-.desktop-tab[data-active="true"] .desktop-tab-trailing > .desktop-tab-busy,
-.desktop-tab[data-active="true"] .desktop-tab-trailing > .badge-dot {
+.desktop-tab:hover .desktop-tab-trailing > .badge-dot {
   opacity: 0;
 }
 .desktop-tab-close {
@@ -618,8 +616,9 @@
   opacity: 0;
   transition: opacity 100ms ease, color 100ms ease, background 100ms ease;
 }
-.desktop-tab:hover .desktop-tab-close,
-.desktop-tab[data-active="true"] .desktop-tab-close {
+/* Hover-reveal only (the active tab included): at rest the slot belongs to
+   the status glyph — a busy spinner must stay visible on the active tab. */
+.desktop-tab:hover .desktop-tab-close {
   opacity: 1;
 }
 .desktop-tab-close:hover {
@@ -963,12 +962,13 @@
 .desktop-tab .pane-web-switch-main.is-web:hover {
   color: var(--fg);
 }
-.desktop-tab .pane-web-switch-main.is-available,
-.desktop-tab .pane-web-switch-main.is-available:hover {
+.desktop-tab .pane-web-switch-main.is-available {
   color: var(--accent);
   background: transparent;
   font-weight: 400;
 }
 .desktop-tab .pane-web-switch-main.is-available:hover {
+  color: var(--accent);
+  font-weight: 400;
   background: var(--bg-hover);
 }

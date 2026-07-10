@@ -554,6 +554,9 @@ export function panesScopedRoutes(deps: {
     return c.json({
       pane: decorated,
       from_tab_id: sourceTab.id,
+      // Movers need the SOURCE workspace to refresh its tab cache — with
+      // cross-workspace moves the caller only knows the destination's.
+      from_workspace_id: workspaceId,
       to_tab: finalDest,
       from_tab_removed: sourceEmpty,
     });

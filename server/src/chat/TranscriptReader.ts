@@ -58,6 +58,13 @@ export interface TranscriptTailOpts {
    * the whole file (the original behaviour).
    */
   tailBytes?: number;
+  /**
+   * Grow the initial tail window (up to 8× tailBytes) until it holds at
+   * least this many complete lines — a fixed byte window starves on
+   * image-heavy transcripts whose single lines run to hundreds of KB.
+   * Default 30; tests pin it lower to exercise pure byte-window paging.
+   */
+  minHistoryLines?: number;
 }
 
 const NL = 0x0a; // '\n' — newline byte, for line-boundary math on the raw buffer
@@ -147,36 +154,45 @@ export class TranscriptTail {
     if (this.closed || !this.path || this.historyStart <= 0) return false;
     const to = this.historyStart; // always a line boundary (byte after a '\n')
     const tb = this.opts.tailBytes ?? 65536;
-    // The window must contain at least one COMPLETE line or historyStart
-    // can't move. A single giant line (base64 image pastes run to hundreds
-    // of KB) can swallow the window two ways: no newline at all, or its
-    // terminating newline as the window's very last byte (`to - 1`) — the
-    // partial-line snap then lands exactly back on `to`, emitting nothing
-    // and making zero byte progress, so hasMore=true spins forever (the
-    // "chat shows one message and can't scroll" bug). Grow the window
-    // backward until a complete line fits or we reach the file start.
+    // The page must start on a COMPLETE line boundary before `to` or
+    // historyStart can't move. A single giant line (base64 image pastes run
+    // to hundreds of KB) can swallow a whole window two ways: no newline at
+    // all, or its terminating newline as the window's very last byte
+    // (`to - 1`) — the partial-line snap then lands exactly back on `to`,
+    // emitting nothing and spinning hasMore=true forever (the "chat shows
+    // one message and can't scroll" bug). Scan BACKWARD one window at a
+    // time, each iteration reading only the newly extended chunk — a line
+    // spanning k windows costs one pass over its bytes, not O(k²) re-reads
+    // of an ever-growing range.
     let from = Math.max(0, to - tb);
+    let chunkEnd = to;
+    let lineStart = -1;
     for (;;) {
-      const buf = this.readBytes(from, to);
-      if (!buf) return false;
       if (from === 0) {
-        this.historyStart = 0;
-        this.emit(buf.toString('utf8').split('\n'), 'older');
-        return false;
+        // Reached the file start — no partial leading line to snap past.
+        lineStart = 0;
+        break;
       }
-      // Snap past the partial leading line; its full copy arrives on the
-      // next loadOlder (this chunk's from = its to).
-      const nl = buf.indexOf(NL);
-      if (nl === -1 || nl + 1 >= buf.length) {
-        from = Math.max(0, from - tb);
-        continue;
+      const chunk = this.readBytes(from, chunkEnd);
+      if (!chunk) return false;
+      // First newline in this chunk, ignoring the boundary newline at
+      // `to - 1` itself (it yields lineStart === to: zero progress).
+      let nl = chunk.indexOf(NL);
+      if (chunkEnd === to && nl === chunk.length - 1) nl = -1;
+      if (nl !== -1) {
+        lineStart = from + nl + 1;
+        break;
       }
-      this.historyStart = from + nl + 1;
-      // buf ends at `to` (a line boundary), so the last split part is '' — no
-      // carry to manage here; emit() skips blank lines.
-      this.emit(buf.toString('utf8', nl + 1).split('\n'), 'older');
-      return this.historyStart > 0;
+      chunkEnd = from;
+      from = Math.max(0, from - tb);
     }
+    this.historyStart = lineStart;
+    const out = this.readBytes(lineStart, to);
+    if (!out) return false;
+    // The range ends at `to` (a line boundary), so the last split part is ''
+    // — no carry to manage here; emit() skips blank lines.
+    this.emit(out.toString('utf8').split('\n'), 'older');
+    return this.historyStart > 0;
   }
 
   private loadHistory(size: number): void {
@@ -195,17 +211,38 @@ export class TranscriptTail {
       this.emit(parts, 'history');
       return;
     }
-    // Tail only: read the last `tb` bytes, drop the partial leading line.
-    const from = size - tb;
-    const buf = this.readBytes(from, size);
-    if (!buf) {
-      this.initialized = false;
-      return;
+    // Tail only — but RECORD-count-aware, not a blind byte window: on
+    // image-heavy transcripts (single lines run to hundreds of KB) a fixed
+    // byte tail can hold under one screenful of records, forcing the client
+    // into a burst of older-pages on every open. Grow the window until it
+    // holds a reasonable number of complete lines, within a hard byte cap.
+    const MIN_HISTORY_LINES = this.opts.minHistoryLines ?? 30;
+    const maxWin = Math.min(size, tb * 8);
+    let win = tb;
+    let buf: Buffer | null = null;
+    let nl = -1;
+    for (;;) {
+      buf = this.readBytes(size - win, size);
+      if (!buf) {
+        this.initialized = false;
+        return;
+      }
+      nl = buf.indexOf(NL);
+      if (win >= maxWin) break;
+      if (nl !== -1) {
+        let lines = 0;
+        for (let i = nl; i !== -1 && lines < MIN_HISTORY_LINES; i = buf.indexOf(NL, i + 1)) {
+          lines++;
+        }
+        if (lines >= MIN_HISTORY_LINES) break;
+      }
+      win = Math.min(win * 2, maxWin);
     }
-    const nl = buf.indexOf(NL);
-    if (nl === -1) {
-      // The whole tail window is one unterminated line → fall back to full read.
-      const full = this.readBytes(0, size);
+    const from = size - win;
+    if (nl === -1 || win >= size) {
+      // Window reaches the file start (or is one unterminated line) →
+      // treat as a full read from 0.
+      const full = win >= size ? buf : this.readBytes(0, size);
       if (!full) {
         this.initialized = false;
         return;
