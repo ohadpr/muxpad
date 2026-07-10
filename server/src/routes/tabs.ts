@@ -1,4 +1,4 @@
-import { LayoutNodeSchema } from '@muxpad/shared';
+import { LayoutNodeSchema, appendLeafToLayout, collectLayoutLeaves } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -265,6 +265,59 @@ export function tabsRoutes(deps: {
     deps.events.emit({ type: 'tab.removed', workspace_id: fromWorkspace, tab_id: id });
     deps.events.emit({ type: 'tab.added', workspace_id: body.workspace_id, tab: updated });
     return c.json(updated);
+  });
+
+  // Merge this tab's panes into another tab, then delete the (now empty)
+  // source. The gather inverse of the pane-move "pop out" — turns N
+  // single-pane tabs into one tab with N pane-tabs. Pure metadata: ptys and
+  // agent runners key by pane id, so nothing running notices the move.
+  // Cross-workspace merges are allowed (the sidebar drop targets span
+  // workspaces).
+  app.post('/:id/merge', async (c) => {
+    const id = c.req.param('id');
+    const body = z.object({ into_tab_id: z.string() }).parse(await c.req.json().catch(() => ({})));
+    const source = tabs.getById(id);
+    if (!source) return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
+    if (body.into_tab_id === id)
+      return c.json({ error: { code: 'bad_request', message: 'cannot merge a tab into itself' } }, 400);
+    const dest = tabs.getById(body.into_tab_id);
+    if (!dest)
+      return c.json({ error: { code: 'not_found', message: 'destination tab not found' } }, 404);
+    const sourceWs = tabs.getWorkspaceId(id);
+    const destWs = tabs.getWorkspaceId(dest.id);
+    if (!sourceWs || !destWs)
+      return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
+
+    // Visual order (left-to-right) so merged panes keep their strip order.
+    const paneIds = collectLayoutLeaves(source.layout);
+
+    // Reparent every pane BEFORE deleting the source tab — panes cascade on
+    // tab delete, and rows already pointing at dest are out of blast radius.
+    const { finalDest } = deps.db.transaction(() => {
+      let layout = dest.layout;
+      for (const pid of paneIds) {
+        panes.setTab(pid, dest.id);
+        layout = appendLeafToLayout(layout, pid);
+      }
+      const fd = tabs.update(dest.id, { layout });
+      tabs.delete(id);
+      return { finalDest: fd };
+    })();
+
+    // Destination events first (same convention as the pane-move route): a
+    // client viewing dest must have the panes before the layout referencing
+    // them lands.
+    for (const pid of paneIds) {
+      const p = panes.getById(pid);
+      if (p) deps.events.emit({ type: 'pane.added', tab_id: dest.id, pane: decoratePane(deps.cache, p) });
+    }
+    deps.events.emit({ type: 'tab.updated', tab: finalDest });
+    for (const pid of paneIds) {
+      deps.events.emit({ type: 'pane.removed', tab_id: id, pane_id: pid });
+    }
+    deps.events.emit({ type: 'tab.removed', workspace_id: sourceWs, tab_id: id });
+
+    return c.json({ to_tab: finalDest, from_tab_id: id, moved_pane_ids: paneIds });
   });
 
   return app;
