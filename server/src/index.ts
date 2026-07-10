@@ -11,7 +11,7 @@ import { EventBus } from './events.js';
 import { startPaneReaper } from './pane-reaper.js';
 import { PtydCache, decoratePane } from './ptyd-cache.js';
 import { PtydClient } from './ptyd-client/PtydClient.js';
-import { PushService, attachAttentionPush } from './push.js';
+import { PushService, attachAttentionPush, createPaneNotifier } from './push.js';
 import { createApp } from './server.js';
 import { PaneStore } from './store/PaneStore.js';
 import { openDb } from './store/db.js';
@@ -156,7 +156,16 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
 });
 
 const httpServer = server as unknown as Server;
-const wsServer = attachWsServer({ http: httpServer, db, ptyd, cache, events, agentBridge });
+const wsServer = attachWsServer({
+  http: httpServer,
+  db,
+  ptyd,
+  cache,
+  events,
+  agentBridge,
+  // Chat-runner turn-done / question frames don't ring BEL — push them here.
+  notifyPane: createPaneNotifier(db, push),
+});
 
 // Straggler prevention: retry pane kills that failed in transit, and (once
 // ptyd supports listPanes) kill any live pty whose DB row is gone.

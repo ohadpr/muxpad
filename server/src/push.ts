@@ -4,6 +4,7 @@ import type { MuxpadEvent } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import webpush from 'web-push';
 import type { EventBus } from './events.js';
+import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
 
@@ -121,6 +122,31 @@ function loadOrCreateVapidKeys(dataDir: string): VapidKeys {
 }
 
 /**
+ * Pane-scoped notification sender: resolves the pane's owning tab +
+ * workspace into the "Tab — Workspace" title and the deep-link URL, so
+ * every pane-triggered notification (BEL attention, chat turn-done, agent
+ * question) lands the tap on the right tab. Callers supply only the body.
+ */
+export type PaneNotifier = (paneId: string, body: string) => void;
+
+export function createPaneNotifier(db: Database.Database, push: PushService): PaneNotifier {
+  const panes = new PaneStore(db);
+  const tabs = new TabStore(db);
+  const workspaces = new WorkspaceStore(db);
+  return (paneId, body) => {
+    const pane = panes.getById(paneId);
+    const tab = pane ? tabs.getById(pane.tab_id) : null;
+    const ws = tab ? workspaces.getById(tabs.getWorkspaceId(tab.id) ?? '') : null;
+    void push.send({
+      title: tab && ws ? `${tab.name} — ${ws.name}` : 'muxpad',
+      body,
+      url: tab && ws ? `/w/${ws.slug}/t/${tab.slug}` : '/',
+      tag: paneId,
+    });
+  };
+}
+
+/**
  * Bridge pane attention onto push: whenever a pane's attention flag rises
  * (BEL received — "this pane wants you"), notify every subscribed device
  * with a deep link to the owning workspace/tab.
@@ -144,8 +170,7 @@ export function attachAttentionPush(opts: {
   graceMs?: number;
 }): () => void {
   const { events, db, push, now = Date.now, graceMs = 15_000 } = opts;
-  const tabs = new TabStore(db);
-  const workspaces = new WorkspaceStore(db);
+  const notify = createPaneNotifier(db, push);
   const lastAttention = new Map<string, boolean>();
   const bootAt = now();
 
@@ -166,14 +191,7 @@ export function attachAttentionPush(opts: {
     if (prev === undefined && now() - bootAt < graceMs) return; // restart replay — baseline only
     if (prev === true || !attention) return; // not a rising edge
 
-    const tab = tabs.getById(e.tab_id);
-    const ws = tab ? workspaces.getById(tabs.getWorkspaceId(tab.id) ?? '') : null;
     const paneLabel = e.pane.name ?? e.pane.title ?? e.pane.foreground_cmd ?? 'a pane';
-    void push.send({
-      title: tab && ws ? `${tab.name} — ${ws.name}` : 'muxpad',
-      body: `${paneLabel} wants your attention`,
-      url: tab && ws ? `/w/${ws.slug}/t/${tab.slug}` : '/',
-      tag: e.pane.id,
-    });
+    notify(e.pane.id, `${paneLabel} wants your attention`);
   });
 }
