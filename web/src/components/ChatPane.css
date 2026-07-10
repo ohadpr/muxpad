@@ -1227,6 +1227,11 @@
 /* Clickable image thumbnail inline in a history bubble (opens the lightbox). */
 .chat-img-thumb {
   display: block;
+  /* Shrink-wrap the frame to the image — a block button otherwise
+     stretches to the bubble's full width and floats the thumbnail in a
+     field of dead space. */
+  width: fit-content;
+  max-width: 100%;
   margin: 4px 0;
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--chat-fg) 12%, transparent);

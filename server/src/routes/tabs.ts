@@ -288,11 +288,17 @@ export function tabsRoutes(deps: {
     if (!sourceWs || !destWs)
       return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
 
-    // Visual order (left-to-right) so merged panes keep their strip order.
-    const paneIds = collectLayoutLeaves(source.layout);
+    // Enumerate the source's pane ROWS, not its layout leaves: pane rows and
+    // the stored layout JSON can drift (row committed, layout write pending/
+    // failed), and any row missed here would be destroyed by the panes'
+    // ON DELETE CASCADE when the source tab is deleted below — silent pane
+    // loss. Layout order first (keeps strip order), stragglers appended.
+    const rows = panes.listByTab(id).map((p) => p.id);
+    const inLayout = collectLayoutLeaves(source.layout).filter((pid) => rows.includes(pid));
+    const paneIds = [...inLayout, ...rows.filter((pid) => !inLayout.includes(pid))];
 
-    // Reparent every pane BEFORE deleting the source tab — panes cascade on
-    // tab delete, and rows already pointing at dest are out of blast radius.
+    // Reparent every pane BEFORE deleting the source tab — rows already
+    // pointing at dest are out of the cascade's blast radius.
     const { finalDest } = deps.db.transaction(() => {
       let layout = dest.layout;
       for (const pid of paneIds) {

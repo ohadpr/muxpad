@@ -2,14 +2,16 @@ import { DEFAULT_TAB_ICON, type Tab, type Workspace } from '@muxpad/shared';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
+import { createDragOrigin } from '../lib/drag-origin';
+import { setFollowTarget } from '../lib/follow-tab';
 import { pushUndo } from '../lib/move-undo-store';
 import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansion';
+import { PANE_DRAG_MIME, paneDragOrigin } from '../lib/pane-drag';
 import { reorderByDrop } from '../lib/reorder';
 import { applyTabOrder, refreshTabs, useTabs } from '../tabs';
 import { useLongPress } from '../use-long-press';
 import { MAX_QUICK_SWITCH_TABS, useTabQuickSwitch } from '../use-tab-quickswitch';
 import { applyWorkspaceOrder, refreshWorkspaces, useWorkspaces } from '../workspaces';
-import { PANE_DRAG_MIME, getActivePaneDrag } from '../lib/pane-drag';
 import { NewTabChooser } from './NewTabChooser';
 import { SvgClose } from './icons';
 import './NavTree.css';
@@ -74,7 +76,7 @@ function inMergeBand(e: React.DragEvent): boolean {
 // This module-level mirror lets the drop target make that call during
 // dragover — used only to gate the cross-workspace drop affordance, never as
 // the source of truth for the move itself (the drop reads the real payload).
-let activeTabDrag: TabDragPayload | null = null;
+const tabDragOrigin = createDragOrigin<TabDragPayload>();
 
 /**
  * Move a tab to another workspace and offer an undo. Refreshes both
@@ -358,13 +360,14 @@ function WorkspaceNode({
   // Accept a tab dragged from ANOTHER workspace, dropped anywhere on this
   // group (header row OR — when expanded — the tab list below it; the handlers
   // live on the whole .navtree-group so an expanded workspace's body isn't a
-  // dead zone). Gated on `activeTabDrag` originating elsewhere, so dragging a
+  // dead zone). Gated on the tab-drag origin mirror originating elsewhere, so dragging a
   // tab to reorder it WITHIN its own workspace never lights this up or steals
   // the drop. Workspace-reorder dnd stays on the ws-row (rowDnd) and is a
   // different drag type, so it's unaffected.
   const [tabDropOver, setTabDropOver] = useState(false);
   const isCrossWsTabDrag = (e: React.DragEvent) =>
-    e.dataTransfer.types.includes(TAB_DRAG_MIME) && activeTabDrag?.fromWorkspaceId !== workspace.id;
+    e.dataTransfer.types.includes(TAB_DRAG_MIME) &&
+    tabDragOrigin.get()?.fromWorkspaceId !== workspace.id;
   const onGroupDragOver = (e: React.DragEvent) => {
     if (!isCrossWsTabDrag(e)) return; // workspace reorder / same-ws tab reorder
     e.preventDefault();
@@ -594,12 +597,13 @@ function TabList({
   );
 
   // Merge a dragged tab's panes into `dest` (the row it was dropped on).
-  // The source tab dissolves; if it was the one being viewed, follow the
-  // panes to their new home (otherwise its TabView's tab.removed redirect
-  // would dump the user on the workspace's first tab).
+  // The source tab dissolves; if it was the one being viewed, its TabView's
+  // tab.removed handler follows the panes via the follow-target hint —
+  // recorded BEFORE the call so the event can never race an explicit
+  // navigate (and so cross-workspace merges follow too, which a dest-list
+  // lookup here could never resolve).
   const mergeTabInto = async (payload: TabDragPayload, dest: Tab) => {
-    const sourceWasActive =
-      isActiveWorkspace && tabs.some((t) => t.id === payload.tabId && t.slug === activeTabSlug);
+    setFollowTarget(payload.tabId, workspace.slug, dest.slug);
     try {
       await api.mergeTab(payload.tabId, dest.id);
       await Promise.all([
@@ -607,24 +611,29 @@ function TabList({
         refreshTabs(workspace.id),
         refreshWorkspaces(),
       ]);
-      if (sourceWasActive) {
-        onNavigate?.();
-        void navigate({
-          to: '/w/$wsSlug/t/$tabSlug',
-          params: { wsSlug: workspace.slug, tabSlug: dest.slug },
-        });
-      }
     } catch (err) {
       console.error('merge tab failed', err);
     }
   };
 
-  // Move a single pane (dragged from the tab strip) into `dest`.
-  const movePaneHere = async (paneId: string, dest: Tab) => {
+  // Move a single pane (dragged from the tab strip) into `dest`. If it was
+  // the source tab's LAST pane, that tab dissolves — the follow hint makes
+  // its tab.removed redirect land on `dest` instead of the workspace root.
+  const movePaneHere = async (paneId: string, sourceTabId: string | null, dest: Tab) => {
+    if (sourceTabId) setFollowTarget(sourceTabId, workspace.slug, dest.slug);
     try {
       const res = await api.movePane(paneId, { toTabId: dest.id });
       if (res.to_tab.id === res.from_tab_id) return; // no-op (already here)
-      await Promise.all([refreshTabs(workspace.id), refreshWorkspaces()]);
+      await Promise.all([
+        refreshTabs(workspace.id),
+        // The source tab may live in ANOTHER workspace (cross-workspace
+        // moves) — refresh its tab-list cache too or it keeps referencing
+        // the moved-away pane until the next poll.
+        ...(res.from_workspace_id && res.from_workspace_id !== workspace.id
+          ? [refreshTabs(res.from_workspace_id)]
+          : []),
+        refreshWorkspaces(),
+      ]);
       // Undo only while the source tab still exists to receive it back.
       if (!res.from_tab_removed) {
         pushUndo({
@@ -738,7 +747,7 @@ function TabList({
           onSetUnread={(want) => void setTabUnread(t, want)}
           onSetIcon={(icon) => void setTabIcon(t, icon)}
           onMergeInto={(payload) => void mergeTabInto(payload, t)}
-          onMovePaneHere={(paneId) => void movePaneHere(paneId, t)}
+          onMovePaneHere={(paneId, sourceTabId) => void movePaneHere(paneId, sourceTabId, t)}
           rowDnd={variant === 'sidebar' ? tabDnd(t.id) : undefined}
         />
       ))}
@@ -775,8 +784,9 @@ interface TabRowProps {
   onSetIcon: (icon: string) => void;
   /** A dragged TAB was dropped on this row's merge band — absorb its panes. */
   onMergeInto: (payload: TabDragPayload) => void;
-  /** A pane dragged from the strip was dropped here — move it into this tab. */
-  onMovePaneHere: (paneId: string) => void;
+  /** A pane dragged from the strip was dropped here — move it into this tab.
+   *  sourceTabId (from the drag mirror) feeds the follow-navigation hint. */
+  onMovePaneHere: (paneId: string, sourceTabId: string | null) => void;
   rowDnd?: DragItemProps | undefined;
 }
 
@@ -826,9 +836,9 @@ function TabRow({
   // (merge; the edges stay with reorder via the hook's claimOver).
   const [dropInto, setDropInto] = useState(false);
   const isForeignPaneDrag = (e: React.DragEvent) =>
-    e.dataTransfer.types.includes(PANE_DRAG_MIME) && getActivePaneDrag()?.fromTabId !== tab.id;
+    e.dataTransfer.types.includes(PANE_DRAG_MIME) && paneDragOrigin.get()?.fromTabId !== tab.id;
   const isForeignTabDrag = (e: React.DragEvent) =>
-    e.dataTransfer.types.includes(TAB_DRAG_MIME) && activeTabDrag?.tabId !== tab.id;
+    e.dataTransfer.types.includes(TAB_DRAG_MIME) && tabDragOrigin.get()?.tabId !== tab.id;
 
   // Reuse the row's reorder dnd, but also stamp a typed payload on dragstart
   // so a workspace row can recognise this as a cross-workspace tab move.
@@ -845,7 +855,7 @@ function TabRow({
           };
           // Mirror the origin so workspace rows can gate their drop affordance
           // during dragover (when the payload itself is unreadable).
-          activeTabDrag = payload;
+          tabDragOrigin.set(payload);
           try {
             e.dataTransfer.setData(TAB_DRAG_MIME, JSON.stringify(payload));
           } catch {
@@ -854,7 +864,7 @@ function TabRow({
           }
         },
         onDragEnd: () => {
-          activeTabDrag = null;
+          tabDragOrigin.set(null);
           baseDnd.onDragEnd();
         },
       }
@@ -886,11 +896,11 @@ function TabRow({
           },
           onDrop: (e: React.DragEvent) => {
             const paneId = e.dataTransfer.getData(PANE_DRAG_MIME);
-            if (paneId && getActivePaneDrag()?.fromTabId !== tab.id) {
+            if (paneId && paneDragOrigin.get()?.fromTabId !== tab.id) {
               e.preventDefault();
               e.stopPropagation();
               setDropInto(false);
-              onMovePaneHere(paneId);
+              onMovePaneHere(paneId, paneDragOrigin.get()?.fromTabId ?? null);
               return;
             }
             const rawTab = e.dataTransfer.getData(TAB_DRAG_MIME);

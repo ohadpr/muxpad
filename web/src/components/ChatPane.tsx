@@ -6,22 +6,18 @@ import {
   type SubagentProgress,
   type ToolResultEvent,
   type ToolUseEvent,
+  imageExtForMime,
   summarizeToolInput,
 } from '@muxpad/shared';
-import {
-  type ChangeEvent,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { type ChangeEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api } from '../api';
-import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
 import { splitMessageAttachments } from '../lib/attachments';
+import { recallChatScroll, rememberChatScroll } from '../lib/chat-scroll';
+import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
 import { isMobileLayout } from '../lib/mobile-layout';
+import { useDismissable } from '../lib/use-dismissable';
 import './ChatPane.css';
 
 // Assistant + streaming text is rendered as GitHub-flavored markdown. No raw
@@ -75,23 +71,9 @@ function SessionMenu({
   const [open, setOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
+  useDismissable(open, wrapRef, () => setOpen(false));
   useEffect(() => {
-    if (!open) {
-      setConfirmClear(false);
-      return;
-    }
-    const onDown = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', onDown, true);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown, true);
-      document.removeEventListener('keydown', onKey);
-    };
+    if (!open) setConfirmClear(false);
   }, [open]);
   // Match the reported model to a list row. Order matters: several rows can
   // RESOLVE to the same wire model (e.g. "Default" resolves to the same id as
@@ -252,39 +234,9 @@ function consumeStreamedText(preview: string, landed: string[]): string {
   return p;
 }
 
-/**
- * Scroll positions per pane. A ChatPane loses its scroll constantly — tab
- * navigation unmounts it, and same-tab pane/face switches hide it with
- * display:none (which zeroes scrollTop) — so returning to a chat always
- * snapped to the bottom. Remember {top, pinned} per pane (module map,
- * write-through to sessionStorage so reloads keep it too) and restore on
- * the next activation: a reader parked mid-history lands back where they
- * were; a pinned-to-bottom reader keeps the follow-new-messages behavior.
- * The sid guards staleness — a cleared/rotated session forgets the spot.
- */
-type ChatScrollMem = { top: number; pinned: boolean; sid: string | null };
-const CHAT_SCROLL_KEY = 'muxpad:chat-scroll';
-const chatScrollMem: Map<string, ChatScrollMem> = (() => {
-  try {
-    const raw = sessionStorage.getItem(CHAT_SCROLL_KEY);
-    return new Map(raw ? (JSON.parse(raw) as [string, ChatScrollMem][]) : []);
-  } catch {
-    return new Map();
-  }
-})();
-let chatScrollFlush: number | undefined;
-function rememberChatScroll(paneId: string, mem: ChatScrollMem): void {
-  chatScrollMem.set(paneId, mem);
-  // Debounced write-through: onScroll fires per frame while scrolling.
-  window.clearTimeout(chatScrollFlush);
-  chatScrollFlush = window.setTimeout(() => {
-    try {
-      sessionStorage.setItem(CHAT_SCROLL_KEY, JSON.stringify([...chatScrollMem]));
-    } catch {
-      // quota / private mode — the in-memory map still covers this session
-    }
-  }, 250);
-}
+/** A running subagent that has sent no progress for this long reads as done
+ *  — its completing tool_result may never stream into an idle pane. */
+const SUBAGENT_STALE_MS = 10 * 60_000;
 
 /**
  * Chat view of the Claude session tracked in a pane. Connects to
@@ -388,6 +340,10 @@ export function ChatPane({
   const [question, setQuestion] = useState<PendingQuestion | null>(null);
   // Live per-task subagent progress, keyed by the Task tool-use id.
   const [subagents, setSubagents] = useState<Record<string, SubagentProgress>>({});
+  // Last progress-frame arrival per task — the staleness horizon for the
+  // running-subagents indicator (a background task that's gone silent past
+  // it reads as done, not running; its tool_result may never stream here).
+  const subagentSeenAt = useRef(new Map<string, number>());
   // Runner-pushed session status: model, context fill, available models.
   // null = no runner status yet (TUI-view chats never get one).
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
@@ -503,10 +459,24 @@ export function ChatPane({
         // a stale chip would keep offering controls that go nowhere.
         setAgentStatus(msg.status ?? null);
         if (msg.subagents) {
+          const now = Date.now();
+          for (const p of msg.subagents) subagentSeenAt.current.set(p.toolUseId, now);
           setSubagents(Object.fromEntries(msg.subagents.map((p) => [p.toolUseId, p])));
         }
       } else if (msg.t === 'events') {
         const fresh = msg.events.filter((e) => !byId.current.has(e.id));
+        // A landed tool_result ends its subagent — drop the progress entry so
+        // the map doesn't grow monotonically across a long-lived pane (the
+        // indicator itself filters on results, but the entries lingered).
+        const resolvedNow = fresh.filter((e) => e.kind === 'tool_result').map((e) => e.toolUseId);
+        if (resolvedNow.length) {
+          setSubagents((m) => {
+            if (!resolvedNow.some((id) => id in m)) return m;
+            const next = { ...m };
+            for (const id of resolvedNow) delete next[id];
+            return next;
+          });
+        }
         if (fresh.length) {
           for (const e of fresh) byId.current.add(e.id);
           // Assistant text that just landed in the transcript leaves the
@@ -574,6 +544,7 @@ export function ChatPane({
       } else if (msg.t === 'question-done') {
         setQuestion((q) => (q?.qid === msg.qid ? null : q));
       } else if (msg.t === 'subagent') {
+        subagentSeenAt.current.set(msg.progress.toolUseId, Date.now());
         setSubagents((m) => ({ ...m, [msg.progress.toolUseId]: msg.progress }));
       } else if (msg.t === 'status') {
         setAgentStatus((prev) => {
@@ -785,9 +756,10 @@ export function ChatPane({
   // camera. Empty-type files (HEIC / some Android providers) are kept.
   const onPickImages = async (e: ChangeEvent<HTMLInputElement>) => {
     const el = e.target;
-    const files = Array.from(el.files ?? []).filter(
-      (f) => f.type === '' || f.type.startsWith('image/'),
-    );
+    // Only formats the whole pipeline renders (shared IMAGE_MIME_BY_EXT) —
+    // an empty/unknown-type file (some HEIC providers) would upload fine but
+    // could never thumbnail, and the serve route would 400 it.
+    const files = Array.from(el.files ?? []).filter((f) => imageExtForMime(f.type) !== null);
     el.value = ''; // reset so re-picking the same file still fires onChange
     if (files.length === 0) return;
     setUploading(true);
@@ -852,9 +824,15 @@ export function ChatPane({
       setUploading(true);
       const paths: string[] = [];
       for (const blob of blobs) {
-        const ext = blob.type.split('/')[1] ?? 'png';
+        const ext = imageExtForMime(blob.type);
+        if (!ext) {
+          // A format the pipeline can't render end-to-end (e.g. image/heic) —
+          // uploading it would leave a raw-path message and a 400ing GET.
+          setNotice({ text: `unsupported image type: ${blob.type}`, tone: 'danger' });
+          continue;
+        }
         try {
-          const { path } = await api.uploadAttachment(paneId, blob, `pasted.${ext}`);
+          const { path } = await api.uploadAttachment(paneId, blob, `pasted${ext}`);
           paths.push(path);
           addChip(path, blob);
         } catch {
@@ -872,11 +850,15 @@ export function ChatPane({
   // Keep pinned to the bottom as new events arrive, unless the user scrolled up.
   // `events` is a deliberate trigger dependency (we re-scroll on new events)
   // even though the body reads it only via the DOM.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: events/streamingText/optimisticUser/question/subagents are the scroll triggers
+  // The subagent trigger is the COUNT, not the map: progress ticks replace
+  // the map object every ~500ms without changing content height, and each
+  // firing costs a forced reflow (scrollHeight read). Rows appear/disappear
+  // only when the count moves.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: events/streamingText/optimisticUser/question/subagent-count are the scroll triggers
   useEffect(() => {
     const el = scrollRef.current;
     if (el && active && pinnedToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [events, streamingText, optimisticUser, question, subagents, active]);
+  }, [events, streamingText, optimisticUser, question, Object.keys(subagents).length, active]);
 
   // Auto-grow the composer like ChatGPT: reset to content height, capped by CSS
   // max-height (the textarea keeps scrolling past that). `input` is the trigger
@@ -935,7 +917,6 @@ export function ChatPane({
   // a returning reader to the bottom. Pinned/unknown memory keeps the
   // existing behavior; a sid mismatch (cleared session) is stale — ignore.
   const restoredScroll = useRef(false);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: events is the "history rendered" trigger
   useLayoutEffect(() => {
     if (!active) {
       restoredScroll.current = false; // hidden panes lose scrollTop — re-restore on return
@@ -945,10 +926,12 @@ export function ChatPane({
     const el = scrollRef.current;
     if (!el) return;
     restoredScroll.current = true;
-    const mem = chatScrollMem.get(paneId);
+    const mem = recallChatScroll(paneId);
     if (mem && !mem.pinned && mem.sid === renderedSid.current) {
       pinnedToBottom.current = false;
-      el.scrollTop = mem.top;
+      // Ratio, not absolute: content height may have changed while away
+      // (lazy thumbnails) — a fraction of the range degrades gracefully.
+      el.scrollTop = mem.ratio * (el.scrollHeight - el.clientHeight);
     }
   }, [active, events, paneId]);
 
@@ -1007,7 +990,7 @@ export function ChatPane({
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     pinnedToBottom.current = nearBottom;
     rememberChatScroll(paneId, {
-      top: el.scrollTop,
+      ratio: el.scrollTop / Math.max(1, el.scrollHeight - el.clientHeight),
       pinned: nearBottom,
       sid: renderedSid.current,
     });
@@ -1026,7 +1009,7 @@ export function ChatPane({
     setShowScrollDown(false);
     // Record the re-pin immediately — the smooth scroll's own onScroll
     // events lag, and switching away mid-glide must not save a stale spot.
-    rememberChatScroll(paneId, { top: el.scrollHeight, pinned: true, sid: renderedSid.current });
+    rememberChatScroll(paneId, { ratio: 1, pinned: true, sid: renderedSid.current });
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   };
 
@@ -1156,6 +1139,26 @@ export function ChatPane({
     );
   }, [session, connected, events, stale, optimisticUser, sending, loadingOlder, subagents]);
 
+  // ONE tool-resolution index for everything below (and one place for the
+  // "a tool_use is resolved when a tool_result shares its toolUseId" rule —
+  // it used to be re-derived inline in four spots, each an O(events) scan
+  // re-run per streaming frame). unresolvedTools is in event order, so its
+  // head is the OLDEST still-running call — with parallel tool calls the
+  // last event is often a sibling's result, which used to blank the label.
+  const toolIndex = useMemo(() => {
+    const resolved = new Set<string>();
+    for (const e of events) if (e.kind === 'tool_result') resolved.add(e.toolUseId);
+    const unresolvedTools: ToolUseEvent[] = [];
+    const taskDescriptions = new Map<string, string>();
+    for (const e of events) {
+      if (e.kind !== 'tool_use') continue;
+      if (!resolved.has(e.toolUseId)) unresolvedTools.push(e);
+      const input = e.input as { description?: string } | null;
+      if (input?.description) taskDescriptions.set(e.toolUseId, input.description);
+    }
+    return { resolved, unresolvedTools, taskDescriptions };
+  }, [events]);
+
   // The agent is working when: we're driving a turn (`sending`), tokens are
   // streaming, OR — for sessions WITHOUT a runner (legacy/TUI views) — the
   // newest event is a tool_use still awaiting its result. That transcript
@@ -1167,33 +1170,28 @@ export function ChatPane({
   // used to re-arm the heuristic on exactly the panes it was disabled for.
   const lastEvent = events[events.length - 1];
   const pendingTool =
-    !agentNative &&
-    lastEvent?.kind === 'tool_use' &&
-    !events.some((e) => e.kind === 'tool_result' && e.toolUseId === lastEvent.toolUseId);
+    !agentNative && lastEvent?.kind === 'tool_use' && !toolIndex.resolved.has(lastEvent.toolUseId);
   const agentWorking = Boolean((sending || streamingText || pendingTool) && session?.current_sid);
 
   // What the working row says. Bare dots read as "maybe stuck" during a long
-  // silent tool call — name the tool being run when we know it.
-  const unresolvedTool =
-    agentWorking && lastEvent?.kind === 'tool_use'
-      ? events.some((e) => e.kind === 'tool_result' && e.toolUseId === lastEvent.toolUseId)
-        ? null
-        : lastEvent
-      : null;
+  // silent tool call — name the OLDEST still-unresolved tool.
+  const unresolvedTool = agentWorking ? (toolIndex.unresolvedTools[0] ?? null) : null;
   const workingLabel = unresolvedTool ? `Running ${unresolvedTool.name}…` : 'Working…';
 
   // Subagents still running = progress entries whose Task call has no result
   // yet. Rendered as their own indicator (not just the buried Task-row chip):
   // they can outlive the turn (background tasks), which is exactly the
-  // "something is working with no visible sign" case.
+  // "something is working with no visible sign" case. The staleness horizon
+  // keeps the indicator honest when a background task's completing
+  // tool_result never streams into this pane (it can land in the transcript
+  // only on the next turn/reconnect) — silence past the horizon reads as
+  // done, not running.
   const runningSubagents = Object.values(subagents).filter(
-    (p) => !events.some((e) => e.kind === 'tool_result' && e.toolUseId === p.toolUseId),
+    (p) =>
+      !toolIndex.resolved.has(p.toolUseId) &&
+      Date.now() - (subagentSeenAt.current.get(p.toolUseId) ?? 0) < SUBAGENT_STALE_MS,
   );
-  const subagentLabel = (id: string): string => {
-    const e = events.find((x) => x.kind === 'tool_use' && x.toolUseId === id);
-    const input = e?.kind === 'tool_use' ? (e.input as { description?: string } | null) : null;
-    return input?.description ?? 'subagent';
-  };
+  const subagentLabel = (id: string): string => toolIndex.taskDescriptions.get(id) ?? 'subagent';
 
   return (
     <div className="chat-pane">
@@ -1268,11 +1266,7 @@ export function ChatPane({
       ) : null}
       {openTool ? <ToolModal detail={openTool} onClose={() => setOpenTool(null)} /> : null}
       {openImage ? (
-        <ImageModal
-          url={openImage.url}
-          name={openImage.name}
-          onClose={() => setOpenImage(null)}
-        />
+        <ImageModal url={openImage.url} name={openImage.name} onClose={() => setOpenImage(null)} />
       ) : null}
       {session?.current_sid ? (
         <div className="chat-composer-wrap" ref={composerRef}>
@@ -1287,11 +1281,11 @@ export function ChatPane({
                   the list bottom, which a reader parked mid-history never
                   sees. The composer is on screen no matter what. */}
               {agentWorking || runningSubagents.length > 0 ? (
-                <span className="chat-composer-working" role="status">
+                <output className="chat-composer-working">
                   {agentWorking
                     ? workingLabel
                     : `✳ ${runningSubagents.length} subagent${runningSubagents.length === 1 ? '' : 's'} running`}
-                </span>
+                </output>
               ) : null}
               <SessionMenu
                 status={agentStatus}

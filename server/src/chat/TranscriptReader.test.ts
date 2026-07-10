@@ -75,6 +75,7 @@ describe('TranscriptReader', () => {
     const tail = new TranscriptTail(SID, {
       dir,
       tailBytes: 128,
+      minHistoryLines: 1, // window-boundary behavior under test
       onEvents: () => {},
       onTitle: (t) => titles.push(t),
     });
@@ -131,6 +132,7 @@ describe('TranscriptReader', () => {
     const tail = new TranscriptTail(SID, {
       dir,
       tailBytes: 120,
+      minHistoryLines: 1, // pure byte-window paging under test
       onEvents: (es, p) => {
         for (const e of es) (p === 'older' ? older : hist).push((e as { text: string }).text);
       },
@@ -168,6 +170,7 @@ describe('TranscriptReader', () => {
     const tail = new TranscriptTail(SID, {
       dir,
       tailBytes: 120,
+      minHistoryLines: 1, // pure byte-window paging under test
       onEvents: (es, p) => {
         for (const e of es) (p === 'older' ? older : hist).push((e as { text: string }).text);
       },
