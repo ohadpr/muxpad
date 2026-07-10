@@ -238,6 +238,40 @@
 
 /* Mobile single-pane view */
 
+.mobile-strip-spacer {
+  flex: 1;
+}
+/* The strip's + (and its expanded Terminal/Agent chips) — the desktop
+   strip's ghost-chip grammar at touch size. */
+.mobile-strip-add {
+  flex: 0 0 auto;
+  height: 28px;
+  min-width: 32px;
+  padding: 0 8px;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  color: var(--fg-dim);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.mobile-strip-add:active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.mobile-strip-choices {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.mobile-strip-choice {
+  font-size: 13px;
+  padding: 0 12px;
+}
+
 .mobile-tab-strip {
   display: flex;
   align-items: center;
