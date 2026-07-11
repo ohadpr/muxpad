@@ -1100,17 +1100,17 @@ cmd_claude() {
 # face; the terminal shows a compact activity log. The pane's startup command
 # is rewritten to `muxpad agent --resume <sid>` by the server, so a ptyd
 # restart or reboot springs the pane back into the same session from disk.
-# muxpad agent new [--workspace=<id>] [--cwd=<dir>] "first message"
+# muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] "first message"
 # One-shot launcher: creates an agent tab (chat-native Claude session), waits
 # for its runner to register, sends the first message so the session starts
 # processing immediately, and prints the tab's URL. The runner needs a couple
 # of seconds to boot inside the fresh pane, so the send polls until accepted.
 cmd_agent_new() {
-  reset_flags workspace cwd
-  parse_flags workspace cwd -- "$@"
+  reset_flags workspace cwd name model
+  parse_flags workspace cwd name model -- "$@"
   local message="${POSITIONAL[0]:-}"
   if [ -z "$message" ]; then
-    echo 'usage: muxpad agent new [--workspace=<id>] [--cwd=<dir>] "first message"' >&2
+    echo 'usage: muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] "first message"' >&2
     exit 1
   fi
   local workspace_id="${FLAG_workspace:-${MUXPAD_WORKSPACE_ID:-}}"
@@ -1120,7 +1120,14 @@ cmd_agent_new() {
   fi
   local cwd="${FLAG_cwd:-$PWD}"
   local body
-  body="{\"workspace_id\":$(json_string "$workspace_id"),\"bootstrap\":\"agent\",\"cwd\":$(json_string "$cwd")}"
+  body="{\"workspace_id\":$(json_string "$workspace_id"),\"bootstrap\":\"agent\",\"cwd\":$(json_string "$cwd")"
+  # A custom tab name survives the session's AI auto-rename (only the
+  # bootstrap default 'agent' gets renamed) — so launchers can label the tab.
+  [ -n "${FLAG_name:-}" ] && body+=",\"name\":$(json_string "$FLAG_name")"
+  # Model rides the pane's startup command (`muxpad agent --model <m>`), so it
+  # also survives ptyd restarts / resumes. Server-validated charset.
+  [ -n "${FLAG_model:-}" ] && body+=",\"model\":$(json_string "$FLAG_model")"
+  body+='}'
   local tab_json tab_id tab_slug
   tab_json="$(http_request POST /api/tabs "$body")"
   tab_id="$(printf '%s' "$tab_json" | jq -r '.id')"
@@ -1280,11 +1287,15 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      chat face; the terminal shows an activity
                                      log. Auto-resumes across ptyd restarts via
                                      the pane's saved startup command.
-  agent new [--workspace=<id>] [--cwd=<dir>] "message"
+  agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>]
+            [--model=<model>] "message"
                                      create an agent tab, send the first
                                      message so it starts working immediately,
                                      and print the tab's URL. cwd defaults to
                                      $PWD; workspace to MUXPAD_WORKSPACE_ID.
+                                     --name labels the tab (skips AI auto-
+                                     rename); --model pins the session model
+                                     (e.g. 'claude-opus-4-8[1m]').
   claude [claude args...]            launch Claude Code in THIS pane as a
                                      muxpad-tracked session so it can be viewed
                                      and driven from the web chat (and switched

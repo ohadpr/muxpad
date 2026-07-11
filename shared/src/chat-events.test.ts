@@ -57,6 +57,7 @@ describe('normalizeTranscriptLine', () => {
         variant: 'task',
         text: 'Agent "Restyle ChatPane" finished',
         detail: 'completed',
+        toolUseId: 'toolu_1',
       },
     ]);
   });

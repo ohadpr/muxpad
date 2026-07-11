@@ -21,6 +21,7 @@ import {
 } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { SvgAgentGlyph } from './PaneWebSwitch';
 import { api } from '../api';
 import { splitMessageAttachments } from '../lib/attachments';
 import { recallChatScroll, rememberChatScroll } from '../lib/chat-scroll';
@@ -226,26 +227,64 @@ type ServerMsg =
     };
 
 /**
- * Drop transcript-confirmed assistant text from the head of the streaming
- * preview. The preview accumulates every text delta of the turn; once a
- * message lands in the transcript (rendered as a real event), its copy must
- * leave the preview or it shows twice — the "every message doubled while a
- * turn runs" bug. Deltas always precede the transcript line (same ordered
- * stdout + tail poll lag), so the landed text is a prefix of the preview.
+ * Assistant texts of the CURRENT turn (everything after the last user
+ * message) that have already landed in the transcript. These render as real
+ * events, so they must be stripped from the live streaming preview.
  */
-function consumeStreamedText(preview: string, landed: string[]): string {
-  let p = preview;
-  for (const text of landed) {
-    const t = p.trimStart();
-    if (t.startsWith(text)) p = t.slice(text.length);
-    else if (t && text.startsWith(t.trimEnd())) p = ''; // preview lagged behind — it's all stale
+function landedThisTurn(ordered: readonly ChatEvent[]): string[] {
+  let lastUser = -1;
+  for (let i = ordered.length - 1; i >= 0; i--) {
+    if (ordered[i]?.kind === 'user') {
+      lastUser = i;
+      break;
+    }
   }
-  return p;
+  return ordered
+    .slice(lastUser + 1)
+    .filter((e): e is Extract<ChatEvent, { kind: 'assistant' }> => e.kind === 'assistant')
+    .map((e) => e.text);
 }
 
-/** A running subagent that has sent no progress for this long reads as done
- *  — its completing tool_result may never stream into an idle pane. */
-const SUBAGENT_STALE_MS = 10 * 60_000;
+/**
+ * Return the un-landed remainder of the streaming preview. The preview
+ * accumulates every text delta of the turn; once a block lands in the
+ * transcript (rendered as a real event) its copy must leave the preview or
+ * it shows twice — the "every message doubled while a turn runs" bug.
+ *
+ * We ANCHOR on the LAST landed block and keep only what follows it, rather
+ * than stripping each landed block off the head in sequence. Sequential
+ * head-stripping was a one-shot on a mid-turn reconnect (the hello resends
+ * the whole-turn buffer): a single byte of whitespace/normalization drift in
+ * ANY earlier block broke the prefix match, so nothing stripped and the
+ * entire turn re-rendered as a trailing message — and the re-replayed
+ * history deduped away, so it never self-healed. Tail-anchoring only needs
+ * the final block to match; earlier drift is irrelevant. If even the anchor
+ * isn't found (deeper drift, or a tail-sliced 256KB buffer that dropped it),
+ * trust the transcript over the buffer and hide the preview — the un-landed
+ * tail re-lands within a tail-poll, so nothing is lost for long. Never
+ * re-show landed text.
+ */
+function consumeStreamedText(preview: string, landed: string[]): string {
+  if (!landed.length) return preview;
+  const last = landed[landed.length - 1] as string;
+  const idx = preview.lastIndexOf(last);
+  return idx >= 0 ? preview.slice(idx + last.length) : '';
+}
+
+/** A Task/Agent tool call — a subagent LAUNCH. It gets its own notice bubble
+ *  (mirroring the finish notice the harness injects), so it is NEVER folded
+ *  into an action run and never rendered as a plain tool row. */
+function isAgentLaunch(e: ChatEvent): boolean {
+  return e.kind === 'tool_use' && (e.name === 'Agent' || e.name === 'Task');
+}
+function agentLaunchDescription(e: ToolUseEvent): string {
+  const desc = (e.input as { description?: string } | null)?.description?.trim();
+  return desc || 'subagent';
+}
+/** A BACKGROUND agent's tool_result is the immediate "launched" ack, NOT a
+ *  completion — so it must not be read as "this agent finished". A foreground
+ *  agent's result IS its completion. This tells them apart. */
+const LAUNCH_ACK_RE = /agent launched successfully|async agent launched/i;
 
 /** '.ext' when the filename carries a renderable image extension — the
  *  picker's fallback for providers that report an empty MIME type (mirrors
@@ -458,20 +497,10 @@ export function ChatPane({
             // same-socket-lifecycle reconnect those landed messages are
             // already rendered (and dedupe away from the history replay), so
             // consume them here or every text segment of the turn shows
-            // twice. The current turn's messages = everything after the last
-            // user message in the ordered log.
-            let lastUser = -1;
-            for (let i = ordered.current.length - 1; i >= 0; i--) {
-              if (ordered.current[i]?.kind === 'user') {
-                lastUser = i;
-                break;
-              }
-            }
-            const landed = ordered.current
-              .slice(lastUser + 1)
-              .filter((e): e is Extract<ChatEvent, { kind: 'assistant' }> => e.kind === 'assistant')
-              .map((e) => e.text);
-            setStreamingText(consumeStreamedText(msg.streamText, landed));
+            // twice. (On a fresh remount ordered is still empty → landed is
+            // [] → the whole buffer shows, then the history replay below
+            // strips block by block as it lands.)
+            setStreamingText(consumeStreamedText(msg.streamText, landedThisTurn(ordered.current)));
           }
         }
         setQuestion(msg.question ?? null);
@@ -487,16 +516,22 @@ export function ChatPane({
         }
       } else if (msg.t === 'events') {
         const fresh = msg.events.filter((e) => !byId.current.has(e.id));
-        // A landed tool_result ends its subagent — drop the progress entry so
-        // the map doesn't grow monotonically across a long-lived pane (the
-        // indicator itself filters on results, but the entries lingered).
-        const resolvedNow = fresh.filter((e) => e.kind === 'tool_result').map((e) => e.toolUseId);
-        if (resolvedNow.length) {
-          for (const id of resolvedNow) subagentSeenAt.current.delete(id);
+        // A subagent's FINISH notice (matched by tool-use-id) ends it — prune
+        // its live-detail entry so the map doesn't grow across a long session.
+        // (NOT its tool_result: for a background agent that's the immediate
+        // launch ack, which would wipe the detail the moment it launches.)
+        const finishedNow = fresh
+          .filter(
+            (e): e is Extract<ChatEvent, { kind: 'notice' }> =>
+              e.kind === 'notice' && e.variant === 'task' && !!e.toolUseId,
+          )
+          .map((e) => e.toolUseId as string);
+        if (finishedNow.length) {
+          for (const id of finishedNow) subagentSeenAt.current.delete(id);
           setSubagents((m) => {
-            if (!resolvedNow.some((id) => id in m)) return m;
+            if (!finishedNow.some((id) => id in m)) return m;
             const next = { ...m };
-            for (const id of resolvedNow) delete next[id];
+            for (const id of finishedNow) delete next[id];
             return next;
           });
         }
@@ -509,13 +544,12 @@ export function ChatPane({
           // the FULL stream buffer from the hello, while the turn's already-
           // landed messages replay as history. Without consuming those, every
           // text segment of the turn shows again, concatenated, until
-          // turn-done. Non-matching (older-turn) texts fall through the
-          // prefix check as no-ops. Only 'older' pages are excluded — back-
-          // scrolled ancient messages must never touch the live preview.
+          // turn-done. Scope to the CURRENT turn (landedThisTurn) so a prior
+          // turn's text can't become the tail anchor and wrongly clear the
+          // live first block. Only 'older' pages are excluded — back-scrolled
+          // ancient messages must never touch the live preview.
           if (msg.phase !== 'older') {
-            const landed = fresh
-              .filter((e): e is Extract<ChatEvent, { kind: 'assistant' }> => e.kind === 'assistant')
-              .map((e) => e.text);
+            const landed = landedThisTurn([...ordered.current, ...fresh]);
             if (landed.length) setStreamingText((s) => (s ? consumeStreamedText(s, landed) : s));
           }
           if (msg.phase === 'older') {
@@ -735,11 +769,15 @@ export function ChatPane({
 
   const sendMessage = () => {
     const text = input.trim();
-    if (!text) return;
+    // Attachment paths ride along at the END of the message — Claude reads
+    // the path, not the pixels. The draft box stays clean prose.
+    const attachmentPaths = chips.map((c) => c.path);
+    if (!text && attachmentPaths.length === 0) return;
     // While a question card is showing, the composer IS the free-text answer
     // — a normal send would silently queue behind the blocked turn and
     // vanish until it ends (the tool description promises typed answers).
     if (question) {
+      if (!text) return;
       answerQuestion(
         question.qid,
         question.questions.map((q) => ({ question: q.question, answers: [text] })),
@@ -751,18 +789,20 @@ export function ChatPane({
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       // Don't fire into a dead socket (the browser would drop it silently).
-      // Keep the text in the composer, kick a reconnect, let the user retry.
+      // Keep the text (and chips) in the composer, kick a reconnect, retry.
       setNotice({ text: 'Reconnecting — try again in a moment.', tone: 'info' });
       reconnectNow.current();
       return;
     }
-    pendingText.current = text;
-    setOptimisticUser(text); // show it immediately, don't wait for the transcript
-    ws.send(JSON.stringify({ t: 'send', text }));
+    const outgoing = [text, ...attachmentPaths].filter(Boolean).join(' ');
+    pendingText.current = outgoing;
+    setOptimisticUser(outgoing); // show it immediately, don't wait for the transcript
+    ws.send(JSON.stringify({ t: 'send', text: outgoing }));
     setInput('');
+    clearChips();
     setNotice(null);
     setSending(true);
-    armSendWatchdog(text);
+    armSendWatchdog(outgoing);
   };
   const stop = () => wsRef.current?.send(JSON.stringify({ t: 'stop' }));
 
@@ -826,16 +866,20 @@ export function ChatPane({
     const name = path.split('/').pop() ?? path;
     setChips((prev) => [...prev, { path, name, previewUrl: URL.createObjectURL(blob) }]);
   };
-  // Drop chips whose path the user has deleted from the draft (and after send,
-  // when the draft clears), revoking their blob URLs.
-  useEffect(() => {
+  // Attachments are managed independently of the draft text now (their paths
+  // are appended at send, not typed into the box): remove one via its × ,
+  // clear all after a send. Both revoke the blob URL so previews don't leak.
+  const removeChip = (path: string) => {
     setChips((prev) => {
-      const keep = prev.filter((ch) => input.includes(ch.path));
-      if (keep.length === prev.length) return prev;
-      for (const ch of prev) if (!keep.includes(ch)) URL.revokeObjectURL(ch.previewUrl);
-      return keep;
+      const ch = prev.find((c) => c.path === path);
+      if (ch) URL.revokeObjectURL(ch.previewUrl);
+      return prev.filter((c) => c.path !== path);
     });
-  }, [input]);
+  };
+  const clearChips = () => {
+    for (const ch of chipsRef.current) URL.revokeObjectURL(ch.previewUrl);
+    setChips([]);
+  };
   useEffect(
     () => () => {
       for (const ch of chipsRef.current) URL.revokeObjectURL(ch.previewUrl);
@@ -874,9 +918,12 @@ export function ChatPane({
         }
       }
       setUploading(false);
-      if (paths.length === 0 && !text) return;
-      const insert = [paths.join(' '), text.trim()].filter(Boolean).join(' ');
-      setInput((prev) => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${insert} `);
+      // Only companion text goes into the draft — the image path is NOT
+      // inserted. Attachments live as removable preview chips and are appended
+      // to the message at send time, so the composer stays clean prose.
+      if (text.trim()) {
+        setInput((prev) => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${text.trim()} `);
+      }
       inputRef.current?.focus();
     })();
   };
@@ -1160,16 +1207,15 @@ export function ChatPane({
     }
     const { resultFor, consumed } = toolIndex;
     const renderEvent = (e: ChatEvent) => {
-      if (e.kind === 'tool_use')
+      if (e.kind === 'tool_use') {
+        // A subagent launch reads as an event ("agent X launched"), not a
+        // tool call — its own bubble, mirroring the finish notice.
+        if (isAgentLaunch(e))
+          return <AgentLaunchCard key={e.id} description={agentLaunchDescription(e)} />;
         return (
-          <ToolRow
-            key={e.id}
-            use={e}
-            result={resultFor.get(e.toolUseId)}
-            progress={resultFor.has(e.toolUseId) ? undefined : subagents[e.toolUseId]}
-            onOpen={setOpenTool}
-          />
+          <ToolRow key={e.id} use={e} result={resultFor.get(e.toolUseId)} onOpen={setOpenTool} />
         );
+      }
       if (e.kind === 'tool_result') return <ToolRow key={e.id} result={e} onOpen={setOpenTool} />;
       return <ChatRow key={e.id} event={e} onOpenImage={setOpenImage} />;
     };
@@ -1183,8 +1229,11 @@ export function ChatPane({
     // rendering it unfolded made blocks visibly "merge" when the turn
     // closed, which read as a glitch.
     const renderable = events.filter((e) => !(e.kind === 'tool_result' && consumed.has(e.id)));
+    // Agent launches break runs (like prose) so each renders as its own
+    // launch bubble — never buried inside a "5 actions · Agent ×5" fold.
     const isAction = (e: ChatEvent) =>
-      e.kind === 'tool_use' || e.kind === 'tool_result' || e.kind === 'thinking';
+      !isAgentLaunch(e) &&
+      (e.kind === 'tool_use' || e.kind === 'tool_result' || e.kind === 'thinking');
     // Fold from TWO actions up — real transcripts are full of 2-3 action
     // stretches between prose, and leaving those inline read as "folding
     // doesn't work". A lone action stays inline.
@@ -1248,7 +1297,6 @@ export function ChatPane({
     optimisticUser,
     sending,
     loadingOlder,
-    subagents,
     expandedGroups,
     toolIndex,
   ]);
@@ -1272,29 +1320,70 @@ export function ChatPane({
   const unresolvedTool = agentWorking ? (toolIndex.unresolvedTools[0] ?? null) : null;
   const workingLabel = unresolvedTool ? `Running ${unresolvedTool.name}…` : 'Working…';
 
-  // Subagents still running = progress entries whose Task call has no result
-  // yet. Rendered as their own indicator (not just the buried Task-row chip):
-  // they can outlive the turn (background tasks), which is exactly the
-  // "something is working with no visible sign" case. The staleness horizon
-  // keeps the indicator honest when a background task's completing
-  // tool_result never streams into this pane (it can land in the transcript
-  // only on the next turn/reconnect) — silence past the horizon reads as
-  // done, not running.
-  const runningSubagents = Object.values(subagents).filter(
-    (p) =>
-      !toolIndex.resultFor.has(p.toolUseId) &&
-      Date.now() - (subagentSeenAt.current.get(p.toolUseId) ?? 0) < SUBAGENT_STALE_MS,
-  );
-  // The staleness horizon is evaluated at render time — with a silent
-  // background task nothing else triggers a re-render, so the indicator
-  // would linger past the horizon forever. Tick while any rows show.
+  // The live roster is TRANSCRIPT-driven: every Agent/Task LAUNCH, minus the
+  // ones whose FINISH task-notification has landed (matched by tool-use-id).
+  // A background agent's own tool_result is only the IMMEDIATE launch ack, so
+  // it cannot gate "running" (that dropped every agent seconds after launch);
+  // the finish notice is the reliable end signal, and being transcript-based
+  // this survives reconnects. The `subagents` map only supplies live detail
+  // (steps / last tool) and the busy dot.
+  const now = Date.now();
+  // Collect FINISH task-notifications. Prefer the exact tool-use-id, but fall
+  // back to the description embedded in the summary (`Agent "<desc>" finished`)
+  // — the SERVER parses notices, and a server process predating the
+  // tool-use-id change sends notices WITHOUT it, so id-only matching would
+  // silently never remove anything (the roster accretes across rounds).
+  // Description matches are counted so repeated names across rounds pair
+  // launch↔finish FIFO.
+  const finishedIds = new Set<string>();
+  const finishByDesc = new Map<string, number>();
+  for (const e of events) {
+    if (e.kind !== 'notice' || e.variant !== 'task') continue;
+    if (e.toolUseId) {
+      finishedIds.add(e.toolUseId);
+    } else {
+      const m = /"([^"]+)"/.exec(e.text);
+      if (m?.[1]) finishByDesc.set(m[1], (finishByDesc.get(m[1]) ?? 0) + 1);
+    }
+  }
+  const seenAgentIds = new Set<string>();
+  const rosterAgents: RosterAgent[] = [];
+  for (const e of events) {
+    if (e.kind !== 'tool_use' || !isAgentLaunch(e)) continue;
+    const id = e.toolUseId;
+    if (!id || seenAgentIds.has(id)) continue;
+    // Finished if its FINISH notice landed (background), OR it has a real
+    // (non-launch-ack) result (foreground). A background launch-ack does not
+    // count — that was the bug that dropped every agent right after launch.
+    const result = toolIndex.resultFor.get(id);
+    const finishedByResult = !!result && !LAUNCH_ACK_RE.test(result.text ?? '');
+    if (finishedIds.has(id) || finishedByResult) continue;
+    const desc = agentLaunchDescription(e);
+    // Consume a description-matched finish (only when no tool-use-id was sent).
+    const descFinishes = finishByDesc.get(desc) ?? 0;
+    if (descFinishes > 0) {
+      finishByDesc.set(desc, descFinishes - 1);
+      continue;
+    }
+    seenAgentIds.add(id);
+    const p = subagents[id];
+    rosterAgents.push({
+      id,
+      label: desc,
+      steps: p?.steps ?? 0,
+      busy: now - (subagentSeenAt.current.get(id) ?? 0) < 6_000,
+    });
+  }
+  // Each agent's busy/quiet dot is evaluated at render time — with a silent
+  // background task nothing else triggers a re-render, so tick a few seconds
+  // apart while any rows show to keep the dots honest.
   const [, forceStaleCheck] = useState(0);
   useEffect(() => {
-    if (runningSubagents.length === 0) return;
-    const t = window.setTimeout(() => forceStaleCheck((n) => n + 1), 60_000);
+    if (rosterAgents.length === 0) return;
+    const t = window.setTimeout(() => forceStaleCheck((n) => n + 1), 3_000);
     return () => window.clearTimeout(t);
   });
-  const subagentLabel = (id: string): string => toolIndex.taskDescriptions.get(id) ?? 'subagent';
+  const [rosterOpen, setRosterOpen] = useState(true);
 
   return (
     <div className="chat-pane">
@@ -1306,7 +1395,9 @@ export function ChatPane({
           {body}
           {optimisticUser ? (
             <div className="chat-turn chat-turn-user">
-              <div className="chat-bubble">{optimisticUser}</div>
+              <div className="chat-bubble">
+                <UserText text={optimisticUser} onOpenImage={setOpenImage} />
+              </div>
             </div>
           ) : null}
           {agentWorking && !question ? (
@@ -1326,24 +1417,6 @@ export function ChatPane({
                   <span className="chat-working-label">{workingLabel}</span>
                 </div>
               )}
-            </div>
-          ) : null}
-          {runningSubagents.length > 0 && !question ? (
-            <div className="chat-turn chat-turn-assistant">
-              <div className="chat-msg chat-subagents" aria-label="Subagents running">
-                {runningSubagents.map((p) => (
-                  <div key={p.toolUseId} className="chat-subagent-row">
-                    <span className="chat-subagent-glyph" aria-hidden="true">
-                      ✳
-                    </span>
-                    <span className="chat-subagent-label">{subagentLabel(p.toolUseId)}</span>
-                    <span className="chat-subagent-meta">
-                      {p.steps} step{p.steps === 1 ? '' : 's'}
-                      {p.lastTool ? ` · ${p.lastTool}` : ''}
-                    </span>
-                  </div>
-                ))}
-              </div>
             </div>
           ) : null}
           {question ? (
@@ -1378,18 +1451,20 @@ export function ChatPane({
               {notice.text}
             </div>
           ) : null}
+          {/* Live subagent roster — persistent, composer-adjacent, NEVER in
+              the scroll. History is a timeline of things that happened (agent
+              launched / finished boxes); what's running right now lives here
+              and self-removes as agents finish. Its OWN right-aligned, width-
+              capped block — kept out of the session-chip's width-linked column
+              so a long "last tool" string truncates instead of ballooning the
+              row off-screen. */}
+          <SubagentRoster
+            agents={rosterAgents}
+            open={rosterOpen}
+            onToggle={() => setRosterOpen((o) => !o)}
+          />
           {agentStatus ? (
             <div className="chat-session-row">
-              {/* Always-visible activity cue: the in-list working row lives at
-                  the list bottom, which a reader parked mid-history never
-                  sees. The composer is on screen no matter what. */}
-              {agentWorking || runningSubagents.length > 0 ? (
-                <output className="chat-composer-working">
-                  {agentWorking
-                    ? workingLabel
-                    : `✳ ${runningSubagents.length} subagent${runningSubagents.length === 1 ? '' : 's'} running`}
-                </output>
-              ) : null}
               <SessionMenu
                 status={agentStatus}
                 send={(obj) => {
@@ -1406,16 +1481,6 @@ export function ChatPane({
               />
             </div>
           ) : null}
-          {chips.length > 0 ? (
-            <div className="chat-chips">
-              {chips.map((ch) => (
-                <span key={ch.path} className="chat-chip" title={ch.path}>
-                  <img className="chat-chip-thumb" src={ch.previewUrl} alt="" />
-                  <span className="chat-chip-name">{ch.name}</span>
-                </span>
-              ))}
-            </div>
-          ) : null}
           <div className="chat-composer">
             <input
               ref={fileInputRef}
@@ -1425,58 +1490,84 @@ export function ChatPane({
               hidden
               onChange={onPickImages}
             />
-            <button
-              type="button"
-              className="chat-attach"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
-              aria-label="Add photo"
-              title="Add photo"
-            >
-              {uploading ? <span className="chat-attach-spin" aria-hidden="true" /> : <SvgCamera />}
-            </button>
-            <textarea
-              ref={inputRef}
-              className="chat-input"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onPaste={onPaste}
-              onKeyDown={(e) => {
-                // Desktop: Enter sends, Shift+Enter = newline. Mobile: the
-                // on-screen Return key inserts a newline (send is the button) —
-                // otherwise every line break fires off a message.
-                if (e.key === 'Enter' && !e.shiftKey && !isMobileLayout()) {
-                  e.preventDefault();
-                  sendMessage();
-                }
-              }}
-              placeholder={question ? 'Type an answer, or tap an option…' : 'Message Claude…'}
-              rows={1}
-            />
-            {sending && !question ? (
+            <div className="chat-composer-main">
               <button
                 type="button"
-                className="chat-send is-stop"
-                onClick={stop}
-                aria-label="Stop"
-                title="Stop"
+                className="chat-attach"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                aria-label="Add photo"
+                title="Add photo"
               >
-                <span className="chat-send-glyph" aria-hidden="true" />
+                {uploading ? (
+                  <span className="chat-attach-spin" aria-hidden="true" />
+                ) : (
+                  <SvgCamera />
+                )}
               </button>
-            ) : (
-              <button
-                type="button"
-                className="chat-send"
-                onClick={sendMessage}
-                disabled={!input.trim()}
-                aria-label="Send"
-                title="Send"
-              >
-                <span className="chat-send-glyph" aria-hidden="true">
-                  ↑
-                </span>
-              </button>
-            )}
+              <textarea
+                ref={inputRef}
+                className="chat-input"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onPaste={onPaste}
+                onKeyDown={(e) => {
+                  // Desktop: Enter sends, Shift+Enter = newline. Mobile: the
+                  // on-screen Return key inserts a newline (send is the button) —
+                  // otherwise every line break fires off a message.
+                  if (e.key === 'Enter' && !e.shiftKey && !isMobileLayout()) {
+                    e.preventDefault();
+                    sendMessage();
+                  }
+                }}
+                placeholder={question ? 'Type an answer, or tap an option…' : 'Message Claude…'}
+                rows={1}
+              />
+              {sending && !question ? (
+                <button
+                  type="button"
+                  className="chat-send is-stop"
+                  onClick={stop}
+                  aria-label="Stop"
+                  title="Stop"
+                >
+                  <span className="chat-send-glyph" aria-hidden="true" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="chat-send"
+                  onClick={sendMessage}
+                  disabled={!input.trim() && chips.length === 0}
+                  aria-label="Send"
+                  title="Send"
+                >
+                  <span className="chat-send-glyph" aria-hidden="true">
+                    ↑
+                  </span>
+                </button>
+              )}
+            </div>
+            {/* Attachment previews live INSIDE the composer pill, as a row
+                under the input — not a floating strip above it. */}
+            {chips.length > 0 ? (
+              <div className="chat-chips">
+                {chips.map((ch) => (
+                  <div key={ch.path} className="chat-chip" title={ch.name}>
+                    <img className="chat-chip-thumb" src={ch.previewUrl} alt={ch.name} />
+                    <button
+                      type="button"
+                      className="chat-chip-remove"
+                      onClick={() => removeChip(ch.path)}
+                      aria-label={`Remove ${ch.name}`}
+                      title="Remove"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -1669,6 +1760,24 @@ function NoticeCard({ event }: { event: NoticeEvent }) {
   );
 }
 
+/** Subagent LAUNCH bubble — the counterpart to the harness "…finished"
+ *  notice, so a dispatch reads as one discrete event instead of folding into
+ *  a "5 actions · Agent ×5" run. Same pill family as NoticeCard. */
+function AgentLaunchCard({ description }: { description: string }) {
+  const text = `Agent "${description}" launched`;
+  return (
+    <div className="chat-turn chat-turn-notice">
+      <div className="chat-sysnote chat-sysnote-task chat-sysnote-launch" title={text}>
+        <span className="chat-sysnote-icon" aria-hidden="true">
+          <SvgAgentGlyph />
+        </span>
+        <span className="chat-sysnote-text">{text}</span>
+        <span className="chat-sysnote-detail">started</span>
+      </div>
+    </div>
+  );
+}
+
 // A collapsed tool call + its result, opened together in the ToolModal.
 type ToolDetail = { use?: ToolUseEvent | undefined; result?: ToolResultEvent | undefined };
 
@@ -1715,13 +1824,10 @@ function diffStat(diff?: ToolResultEvent['diff']): { add: number; del: number } 
 const ToolRow = memo(function ToolRow({
   use,
   result,
-  progress,
   onOpen,
 }: {
   use?: ToolUseEvent | undefined;
   result?: ToolResultEvent | undefined;
-  /** Live subagent progress for a still-running Task call. */
-  progress?: SubagentProgress | undefined;
   onOpen: (d: ToolDetail) => void;
 }) {
   const verb = use
@@ -1750,18 +1856,76 @@ const ToolRow = memo(function ToolRow({
           ›
         </span>
       </button>
-      {progress && !result ? (
-        <div className="chat-toolrow-progress">
-          <span className="chat-toolrow-spinner" aria-hidden="true" />
-          {progress.steps} step{progress.steps === 1 ? '' : 's'}
-          {progress.lastTool ? (
-            <span className="chat-toolrow-progress-tool"> · {progress.lastTool}</span>
-          ) : null}
-        </div>
-      ) : null}
     </div>
   );
 });
+
+interface RosterAgent {
+  id: string;
+  label: string;
+  steps: number;
+  busy: boolean;
+}
+
+/**
+ * Persistent live roster of the subagents running RIGHT NOW — pinned by the
+ * composer's session chip, never in the transcript. The scroll is a timeline
+ * of what happened; this is ephemeral live state, so it self-removes as
+ * agents finish (their launch/finish boxes stay behind in history). The
+ * header count is always visible; the list expands to per-agent name, a
+ * busy/quiet dot, and cheap detail (steps · last tool).
+ */
+function SubagentRoster({
+  agents,
+  open,
+  onToggle,
+}: {
+  agents: RosterAgent[];
+  open: boolean;
+  onToggle: () => void;
+}) {
+  if (agents.length === 0) return null;
+  return (
+    <div className="chat-roster" data-open={open || undefined}>
+      <button
+        type="button"
+        className="chat-roster-head"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-label={`${agents.length} subagent${agents.length === 1 ? '' : 's'} running`}
+      >
+        <span className="chat-roster-glyph" aria-hidden="true">
+          <SvgAgentGlyph />
+        </span>
+        <span className="chat-roster-count">
+          {agents.length} subagent{agents.length === 1 ? '' : 's'}
+        </span>
+        <span className="chat-roster-chevron" aria-hidden="true">
+          {open ? '▾' : '▸'}
+        </span>
+      </button>
+      {open ? (
+        <ul className="chat-roster-list">
+          {agents.map((a) => (
+            <li key={a.id} className="chat-roster-item" data-busy={a.busy || undefined}>
+              <span className="chat-roster-dot" aria-hidden="true" />
+              <span className="chat-roster-name">{a.label}</span>
+              {/* Name + a compact step count once it has any (steps only
+                  increase, so this stays put — gating on `busy` made it flicker
+                  in and out). The dot alone shows busy/quiet. Never the
+                  command — it blows the row wide. */}
+              {a.steps > 0 ? (
+                <span className="chat-roster-meta">
+                  {a.steps} step{a.steps === 1 ? '' : 's'}
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * An agent question (the runner's ask_user tool) rendered as tappable option
