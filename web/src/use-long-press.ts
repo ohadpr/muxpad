@@ -76,6 +76,10 @@ export function useLongPress({
       onPointerDown: (e) => {
         lastWasTouch.current = e.pointerType === 'touch';
         if (e.pointerType !== 'touch') return;
+        // A fresh gesture never inherits a stale suppress: in fireOnTimer
+        // mode iOS often drops the trailing click that would have cleared
+        // this, so without resetting here the NEXT genuine tap gets eaten.
+        suppressClick.current = false;
         armed.current = false;
         start.current = { x: e.clientX, y: e.clientY };
         setPressing(true);
