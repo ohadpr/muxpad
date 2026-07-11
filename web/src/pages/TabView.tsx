@@ -1187,10 +1187,12 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           // threshold; single-pane tabs used to have NO way to add one).
           return (
             <nav className="mobile-tab-strip" aria-label="Panes">
-              {/* LEADING anchor in every mode: the pane picker when there's
-                  a choice, else the face switch — the bar always opens with
-                  the thing that names what you're looking at. Trailing:
-                  actions (+, ×), right-aligned as a group. */}
+              {/* LEADING anchor names what you're looking at in EVERY mode:
+                  multi-pane → the pane picker; single-pane → a static label
+                  of the one pane (no chevron — nothing to pick). Both are
+                  flex:1, so the trailing action group (face switch, +, ×)
+                  sits right-aligned identically whether or not there's a
+                  choice — no layout flip between modes. */}
               {paneIds.length > 1 ? (
                 <PaneSelector
                   paneIds={paneIds}
@@ -1200,12 +1202,14 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                   onSelect={setMobileActiveId}
                 />
               ) : (
-                webSwitch && <div className="mobile-strip-webswitch -lead">{webSwitch}</div>
+                <span
+                  className="mobile-strip-pane-name"
+                  title={activeId ? paneLabel(activeId) : undefined}
+                >
+                  {activeId ? paneLabel(activeId) : '—'}
+                </span>
               )}
-              <span className="mobile-strip-spacer" aria-hidden="true" />
-              {paneIds.length > 1 && webSwitch ? (
-                <div className="mobile-strip-webswitch">{webSwitch}</div>
-              ) : null}
+              {webSwitch ? <div className="mobile-strip-webswitch">{webSwitch}</div> : null}
               <NewTabChooser
                 idleLabel="+"
                 idleTitle="New pane"

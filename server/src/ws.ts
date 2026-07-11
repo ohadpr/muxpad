@@ -170,11 +170,107 @@ export function attachWsServer(deps: {
           : { ok: false, reason: 'agent is reconnecting — retry' };
       }
       if (pane.startup_cmd?.startsWith('muxpad agent')) {
+        if (respawns.get(paneId)?.gaveUp) {
+          return { ok: false, reason: agentExitedMessage(paneId) };
+        }
         return { ok: false, reason: 'agent is starting — retry' };
       }
       return { ok: false, reason: 'pane has no agent runner' };
     };
   }
+
+  // -------------------------------------------------------------------------
+  // Dead-runner supervision. The runner is a node process typed into the
+  // pane's shell; when it dies the shell prompt returns, the pty stays alive,
+  // and ptyd sees nothing wrong — but the pane's chat face would say "agent
+  // is reconnecting" forever. Sweep the runner-owned panes (startup_cmd is
+  // the durable marker): no registered runner AND no agent-runner process in
+  // the pty foreground ⇒ the process is dead. Respawn by bouncing the pane —
+  // killPane + ensurePane retypes the startup_cmd, whose `--resume <sid>`
+  // brings the same session back from disk. Bounded: a cooldown between
+  // attempts (a booting runner takes seconds to register) and a give-up cap
+  // so a crash-looping runner (broken build, bad model) converges to a
+  // visible "agent exited" instead of an infinite kill/spawn loop. A runner
+  // registering (hello) resets its pane's record.
+  const RESPAWN_SWEEP_MS = 20_000;
+  const RESPAWN_COOLDOWN_MS = 45_000;
+  const RESPAWN_MAX_ATTEMPTS = 3;
+  interface RespawnState {
+    attempts: number;
+    lastAt: number;
+    gaveUp: boolean;
+  }
+  const respawns = new Map<string, RespawnState>();
+  const agentExitedMessage = (paneId: string) =>
+    `agent exited — automatic restarts failed; see ~/.muxpad/agent-logs/${paneId}.log, then rerun \`muxpad agent\` from the pane's terminal face`;
+  // Single-flight: a slow ptyd must not stack overlapping sweeps.
+  let sweepInFlight = false;
+  const sweepDeadRunners = async () => {
+    if (sweepInFlight) return;
+    sweepInFlight = true;
+    try {
+      const agentPanes = panes.listAgentPanes();
+      // Prune records of panes that are gone or no longer runner-owned.
+      const liveIds = new Set(agentPanes.map((p) => p.id));
+      for (const id of respawns.keys()) if (!liveIds.has(id)) respawns.delete(id);
+      for (const pane of agentPanes) {
+        if (agentRunners.get(pane.id)) continue;
+        // A just-created pane may not have typed its startup command yet —
+        // the foreground probe would misread the bare shell as a dead
+        // runner and bounce a healthy boot.
+        if (Date.now() - pane.created_at < 30_000) continue;
+        const st = respawns.get(pane.id) ?? { attempts: 0, lastAt: 0, gaveUp: false };
+        if (st.gaveUp) continue;
+        if (Date.now() - st.lastAt < RESPAWN_COOLDOWN_MS) continue;
+        // Foreground probe: a live-but-disconnected runner (ws blip mid-
+        // reconnect) still owns the pty foreground — leave it alone, it
+        // re-registers on its own. Only a shell prompt (or a pane ptyd
+        // doesn't even have) is a dead runner.
+        let fg: string | null = null;
+        try {
+          fg = await deps.ptyd.getForegroundCommand(pane.id);
+        } catch {
+          fg = null; // ptyd unreachable or pane unknown — treat as dead
+        }
+        if (fg?.includes('agent-runner')) continue;
+        st.lastAt = Date.now();
+        st.attempts += 1;
+        respawns.set(pane.id, st);
+        if (st.attempts > RESPAWN_MAX_ATTEMPTS) {
+          st.gaveUp = true;
+          bcastToPane(pane.id, { t: 'error', message: agentExitedMessage(pane.id) });
+          continue;
+        }
+        bcastToPane(pane.id, {
+          t: 'notice',
+          message: `agent process died — restarting (attempt ${st.attempts}/${RESPAWN_MAX_ATTEMPTS})…`,
+        });
+        try {
+          try {
+            await deps.ptyd.killPane(pane.id);
+          } catch {
+            // pane not in ptyd (reboot-orphaned) — ensurePane spawns it fresh
+          }
+          const workspaceId = tabs.getWorkspaceId(pane.tab_id);
+          await deps.ptyd.ensurePane({
+            id: pane.id,
+            shell: pane.shell ?? process.env.SHELL ?? '/bin/zsh',
+            startup_cmd: pane.startup_cmd,
+            cwd: safeCwd(pane.cwd),
+            env: pane.env,
+            tab_id: pane.tab_id,
+            ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
+          });
+        } catch {
+          // ptyd unreachable — the attempt is spent; the next sweep retries
+          // after the cooldown.
+        }
+      }
+    } finally {
+      sweepInFlight = false;
+    }
+  };
+  const respawnSweep = setInterval(() => void sweepDeadRunners(), RESPAWN_SWEEP_MS);
 
   // Server-side liveness detection. A WebSocket severed abruptly (browser
   // hard-reload, crashed tab, network blip) does NOT fire 'close' until the
@@ -314,6 +410,10 @@ export function attachWsServer(deps: {
             conn.status = null;
             conn.sid = frame.sid;
             conn.turnActive = frame.turnActive === true;
+            // A registered runner is proof of recovery — forget any respawn
+            // attempts (including a give-up: the user restarting it by hand
+            // re-arms supervision).
+            respawns.delete(paneId);
             agents.attachRunner({ pane_id: paneId, cwd: frame.cwd, session_id: frame.sid });
             if (conn.turnActive) agents.setStatus(paneId, 'running');
             deps.cache.setAgentBusy(paneId, conn.turnActive);
@@ -322,8 +422,16 @@ export function attachWsServer(deps: {
             // the persisted face on every device. A RECONNECT of the same
             // session (server restart, ws blip) must NOT: the user may have
             // deliberately switched to the terminal face since.
-            const selfHealCmd = `muxpad agent --resume ${frame.sid}`;
-            const isReconnect = panes.getById(paneId)?.startup_cmd === selfHealCmd;
+            // Preserve a launch-time --model pin across the rewrite. The
+            // value is read back from the startup_cmd the server itself wrote
+            // (tabs route or a previous rewrite) — never from the ws frame —
+            // so no new injection surface; the single-quoted form is the
+            // tabs-route shape, the bare form a hand-typed `muxpad agent`.
+            const prevCmd = panes.getById(paneId)?.startup_cmd ?? '';
+            const modelMatch = prevCmd.match(/--model ('[^']*'|[^\s']+)/);
+            const modelPart = modelMatch ? ` --model ${modelMatch[1]}` : '';
+            const selfHealCmd = `muxpad agent${modelPart} --resume ${frame.sid}`;
+            const isReconnect = prevCmd === selfHealCmd;
             // Self-heal: the pane's startup command now resumes THIS session,
             // so the pane survives ptyd restarts and reboots.
             panes.setStartupCmd(paneId, selfHealCmd);
@@ -642,11 +750,18 @@ export function attachWsServer(deps: {
             return;
           }
           // Runner-owned pane whose runner is between connections (server
-          // just restarted; ws blip): the startup_cmd marker is the durable
-          // sign of runner ownership — tell the user to retry, never fall
-          // back to another writer.
+          // just restarted; ws blip; dead process): the startup_cmd marker is
+          // the durable sign of runner ownership — never fall back to another
+          // writer. If supervision already gave up, say so plainly; otherwise
+          // kick a sweep now (a user send is the best "is it back?" moment)
+          // and tell them to retry.
           if (panes.getById(chatPaneId)?.startup_cmd?.startsWith('muxpad agent')) {
-            send({ t: 'error', message: 'agent is reconnecting — try again in a few seconds' });
+            if (respawns.get(chatPaneId)?.gaveUp) {
+              send({ t: 'error', message: agentExitedMessage(chatPaneId) });
+            } else {
+              void sweepDeadRunners();
+              send({ t: 'error', message: 'agent is reconnecting — try again in a few seconds' });
+            }
             return;
           }
           send({
@@ -735,6 +850,7 @@ export function attachWsServer(deps: {
     close: () =>
       new Promise<void>((resolve) => {
         clearInterval(heartbeat);
+        clearInterval(respawnSweep);
         for (const client of wss.clients) {
           try {
             client.terminate();

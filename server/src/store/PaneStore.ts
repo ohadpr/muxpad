@@ -89,6 +89,19 @@ export class PaneStore {
   }
 
   /**
+   * Every runner-owned pane: startup_cmd is the durable ownership marker
+   * (`muxpad agent`, possibly with --model/--resume args). Used by the
+   * dead-runner sweep in ws.ts to find panes whose runner process should
+   * be alive but isn't registered.
+   */
+  listAgentPanes(): PaneSpec[] {
+    const rows = this.db
+      .prepare("SELECT * FROM panes WHERE startup_cmd LIKE 'muxpad agent%'")
+      .all() as PaneRow[];
+    return rows.map((r) => this.row(r) as PaneSpec);
+  }
+
+  /**
    * Reparent a pane to a different tab. Used by the pane-move endpoint; the
    * pane's runtime/PTY is keyed by pane id and is unaffected (it keeps
    * running). Caller is responsible for fixing up the source and destination
