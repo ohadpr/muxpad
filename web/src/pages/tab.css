@@ -238,8 +238,19 @@
 
 /* Mobile single-pane view */
 
-.mobile-strip-spacer {
+/* Single-pane leading anchor: a static pane name (no chevron — nothing to
+   pick). Mirrors the multi-pane PaneSelector's flex:1 + ellipsis so the
+   trailing action group right-aligns identically in both modes, and long
+   names truncate instead of shoving the actions off the row. */
+.mobile-strip-pane-name {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 4px;
+  font-size: 13px;
+  color: var(--fg);
 }
 /* The strip's + (and its expanded Terminal/Agent chips) — the desktop
    strip's ghost-chip grammar at touch size. */
@@ -282,12 +293,6 @@
   height: 40px;
   flex: 0 0 auto;
 }
-/* Leading face switch (single-pane mode): flush left, no extra inset —
-   it's the bar's anchor, not a floating control. */
-.mobile-strip-webswitch.-lead {
-  margin-left: -6px; /* PaneWebSwitch carries its own inner padding */
-}
-
 .mobile-tab-strip-scroll {
   flex: 1;
   display: flex;

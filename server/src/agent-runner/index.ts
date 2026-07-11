@@ -14,6 +14,9 @@
 // verified for SDK sessions); this process only drives turns and streams the
 // live-typing preview.
 import { randomUUID } from 'node:crypto';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import {
   type Options,
   type SDKUserMessage,
@@ -46,10 +49,16 @@ if (!paneId || !apiUrl) {
 // --resume <sid> (written into the pane's startup_cmd by the server once the
 // session exists, so a respawned pane resumes instead of minting a session).
 let requestedSid: string | null = null;
+// --model <id> (written into the startup_cmd by the tabs route when the tab
+// was created with a model, and preserved across the --resume rewrite) pins
+// the session model instead of the settings default.
+let requestedModel: string | null = null;
 {
   const args = process.argv.slice(2);
   const i = args.indexOf('--resume');
   if (i !== -1 && args[i + 1]) requestedSid = args[i + 1] as string;
+  const m = args.indexOf('--model');
+  if (m !== -1 && args[m + 1]) requestedModel = args[m + 1] as string;
 }
 // The self-heal startup_cmd is written on hello — BEFORE any turn — so a pane
 // can respawn with `--resume <sid>` for a session that never wrote a
@@ -65,7 +74,57 @@ const sid = requestedSid ?? randomUUID();
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 const ts = () => dim(new Date().toLocaleTimeString('en-GB'));
-const log = (line: string) => console.log(`${ts()} ${line}`);
+
+// ---------------------------------------------------------------------------
+// File log. The pty scrollback dies with the pane (and a crashed runner's
+// last words are exactly what you need after it's gone), so every log line is
+// mirrored — ANSI stripped, ISO-timestamped — to an append-only per-pane file
+// under ~/.muxpad/agent-logs/. Best-effort: a failed write disables the
+// mirror rather than ever breaking the session.
+// ---------------------------------------------------------------------------
+// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping ANSI SGR codes
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+let logFile: string | null = null;
+try {
+  const dir = join(process.env.MUXPAD_DATA_DIR ?? join(homedir(), '.muxpad'), 'agent-logs');
+  mkdirSync(dir, { recursive: true });
+  logFile = join(dir, `${paneId}.log`);
+} catch {
+  logFile = null;
+}
+const fileLog = (line: string) => {
+  if (!logFile) return;
+  try {
+    appendFileSync(logFile, `${new Date().toISOString()} ${line.replace(ANSI_RE, '')}\n`);
+  } catch {
+    logFile = null; // disk gone/unwritable — don't retry per line
+  }
+};
+const log = (line: string) => {
+  console.log(`${ts()} ${line}`);
+  fileLog(line);
+};
+
+// Last-resort crash visibility: an uncaught throw or rejection kills the
+// process after node prints to the pty — which vanishes with the pane. Record
+// it in the file first, then let the process die (exit nonzero; the
+// supervisor's dead-runner sweep respawns the pane).
+process.on('uncaughtException', (e) => {
+  fileLog(`FATAL uncaughtException: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`);
+  console.error(e);
+  process.exit(1);
+});
+process.on('unhandledRejection', (e) => {
+  fileLog(`FATAL unhandledRejection: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`);
+  console.error(e);
+  process.exit(1);
+});
+process.on('exit', (code) => {
+  fileLog(`process exit · code=${code}`);
+});
+fileLog(
+  `boot · pid=${process.pid} · sid=${sid}${resumeSid ? ' (resume)' : ' (fresh)'} · cwd=${process.cwd()} · argv: ${process.argv.slice(2).join(' ') || '(none)'}`,
+);
 
 // ---------------------------------------------------------------------------
 // Turn queue. Sends arriving from chat are serialized: one user turn in
@@ -438,6 +497,9 @@ const options: Options = {
   permissionMode: 'bypassPermissions',
   allowDangerouslySkipPermissions: true,
   includePartialMessages: true,
+  // Launch-time model pin (`muxpad agent --model <m>`); without it the
+  // session runs the settings default. Still switchable later via set-model.
+  ...(requestedModel ? { model: requestedModel } : {}),
   // The chat-native question tool (Claude Code's own AskUserQuestion is not
   // offered to SDK sessions). alwaysLoad keeps it in the prompt rather than
   // behind tool search — it must be discoverable at the moment of doubt.
@@ -672,7 +734,10 @@ function shutdown(code: number): void {
   process.exit(code);
 }
 
-process.on('SIGTERM', () => shutdown(0));
+process.on('SIGTERM', () => {
+  fileLog('SIGTERM');
+  shutdown(0);
+});
 process.on('SIGINT', () => {
   log(dim('bye')); // Ctrl-C in the pane ends the runner (the session resumes via startup_cmd)
   shutdown(0);
