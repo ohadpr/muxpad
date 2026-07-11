@@ -40,6 +40,14 @@ export function tabsRoutes(deps: {
         bootstrap: z.enum(['shell', 'agent']).optional(),
         // Optional cwd for the bootstrapped pane.
         cwd: z.string().optional(),
+        // Optional model for an agent bootstrap. Lands in the pane's
+        // startup_cmd (which runs through a shell), so the charset is
+        // strictly gated: model ids like 'claude-opus-4-8[1m]' pass, shell
+        // metacharacters cannot.
+        model: z
+          .string()
+          .regex(/^[A-Za-z0-9._[\]-]{1,64}$/)
+          .optional(),
       })
       .parse(await c.req.json().catch(() => ({})));
     // Agent tabs get a deliberate name + mark (auto-renamed to the session's
@@ -62,7 +70,14 @@ export function tabsRoutes(deps: {
         tab_id: tab.id,
         shell: process.env.SHELL ?? '/bin/zsh',
         cwd: safeCwd(body.cwd),
-        startup_cmd: agent ? 'muxpad agent' : null,
+        // Single-quoted model so zsh's nomatch can't glob-error on ids with
+        // brackets ('claude-opus-4-8[1m]'); the charset gate above makes the
+        // quoting safe.
+        startup_cmd: agent
+          ? body.model
+            ? `muxpad agent --model '${body.model}'`
+            : 'muxpad agent'
+          : null,
         // Agent tabs land directly on the chat face; the (hidden) terminal
         // face spawns the pty underneath, which runs the startup command.
         face: agent ? 'chat' : 'terminal',

@@ -63,6 +63,10 @@ export interface NoticeEvent extends Base {
   text: string;
   /** Secondary line, e.g. a task-notification's status. */
   detail?: string;
+  /** For a task-notification: the parent Task/Agent tool-use id it reports on.
+   *  Lets the live roster match a subagent's FINISH to its launch reliably —
+   *  a background agent's own tool_result is only the immediate launch ack. */
+  toolUseId?: string;
 }
 
 export type ChatEvent =
@@ -205,6 +209,7 @@ function parseNotice(content: string, id: string, ts: number | null): NoticeEven
   const task = wholeTagContent(content, 'task-notification');
   if (task !== null) {
     const status = extractTag(task, 'status');
+    const toolUseId = extractTag(task, 'tool-use-id');
     return {
       kind: 'notice',
       id,
@@ -212,6 +217,7 @@ function parseNotice(content: string, id: string, ts: number | null): NoticeEven
       variant: 'task',
       text: extractTag(task, 'summary') || 'Background task update',
       ...(status ? { detail: status } : {}),
+      ...(toolUseId ? { toolUseId } : {}),
     };
   }
   const reminder = wholeTagContent(content, 'system-reminder');
