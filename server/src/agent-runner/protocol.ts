@@ -21,7 +21,7 @@ export type RunnerFrame =
     }
   | { t: 'turn-start' }
   | { t: 'stream'; delta: string }
-  | { t: 'turn-done'; ok: boolean; error?: string }
+  | { t: 'turn-done'; ok: boolean; error?: string; summary?: string }
   | {
       /** The session is blocked on the user: render these as tappable chips. */
       t: 'question';

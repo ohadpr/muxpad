@@ -126,7 +126,7 @@
 /* Pane header — the same plate language as the top chrome, one level down.
    Shorter (28px), darker shelf (--bg-chrome). The bottom-rail accent
    marks the focused pane ("keyboard input is here"). Per-pane attention
-   surfaces in the mobile PaneSelector and tab-level rollups; the pane
+   surfaces in the nav sheet's pane list and tab-level rollups; the pane
    header itself doesn't paint a dot. */
 .workspace-body .mosaic-window-toolbar {
   position: relative;
@@ -236,24 +236,9 @@
   border: 1px solid var(--accent);
 }
 
-/* Mobile single-pane view */
-
-/* Single-pane leading anchor: a static pane name (no chevron — nothing to
-   pick). Mirrors the multi-pane PaneSelector's flex:1 + ellipsis so the
-   trailing action group right-aligns identically in both modes, and long
-   names truncate instead of shoving the actions off the row. */
-.mobile-strip-pane-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 0 4px;
-  font-size: 13px;
-  color: var(--fg);
-}
-/* The strip's + (and its expanded Terminal/Agent chips) — the desktop
-   strip's ghost-chip grammar at touch size. */
+/* The mobile new-pane + (and its expanded Terminal/Agent chips) — the desktop
+   strip's ghost-chip grammar at touch size. Lives in the top bar's
+   .mobile-pane-chrome slot (see AppLayout / TabView MobilePaneChrome). */
 .mobile-strip-add {
   flex: 0 0 auto;
   height: 28px;
@@ -283,77 +268,6 @@
   padding: 0 12px;
 }
 
-.mobile-tab-strip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px;
-  background: var(--bg-tabbar);
-  border-bottom: 1px solid var(--border);
-  height: 40px;
-  flex: 0 0 auto;
-}
-.mobile-tab-strip-scroll {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 8px;
-  overflow-x: auto;
-  scrollbar-width: none;
-  -webkit-overflow-scrolling: touch;
-}
-.mobile-tab-strip-scroll::-webkit-scrollbar {
-  display: none;
-}
-
-.mobile-tab {
-  flex: 0 0 auto;
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--fg-dim);
-  padding: 6px 12px;
-  border-radius: 6px;
-  font-size: 13px;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: color 80ms ease, background 80ms ease, border-color 80ms ease;
-}
-.mobile-tab:hover {
-  color: var(--fg);
-  background: var(--bg-hover);
-}
-.mobile-tab[data-active="true"] {
-  background: var(--accent);
-  color: var(--accent-fg);
-  border-color: var(--accent);
-}
-
-.mobile-tab-add {
-  font-size: 18px;
-  line-height: 1;
-  padding: 4px 12px;
-  font-weight: 600;
-}
-
-.mobile-tab-close {
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  border-radius: 7px;
-  color: var(--fg-dim);
-  cursor: pointer;
-  transition: color 80ms ease;
-}
-.mobile-tab-close:hover {
-  color: var(--danger);
-}
-
 .workspace-body-mobile {
   flex: 1;
   min-height: 0;
@@ -361,25 +275,9 @@
   flex-direction: column;
 }
 
-/* Contextual web-switch bar above the active mobile pane. Collapses to
-   nothing when the switch has nothing to offer (PaneWebSwitch returns null
-   → wrapper is :empty). Height matches the mobile-tab-strip for rhythm. */
-.mobile-web-switch-bar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: stretch;
-  height: 36px;
-  padding: 0 6px;
-  background: var(--bg-tabbar);
-  border-bottom: 1px solid var(--border);
-}
-.mobile-web-switch-bar:empty {
-  display: none;
-}
-
-/* The terminal/web switch when it rides inside the multi-pane strip (instead
-   of its own bar). Sits between the truncating chooser and the +/× buttons;
-   collapses when PaneWebSwitch has nothing to offer. */
+/* The terminal/web face switch as it rides in the top bar's
+   .mobile-pane-chrome slot, before the + and the gear. Collapses when
+   PaneWebSwitch has nothing to offer (returns null → wrapper is :empty). */
 .mobile-strip-webswitch {
   flex: 0 0 auto;
   display: flex;

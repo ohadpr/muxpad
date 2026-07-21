@@ -1,6 +1,7 @@
-import { useNavigate, useParams } from '@tanstack/react-router';
+import { useNavigate, useParams, useRouterState } from '@tanstack/react-router';
 import type { DragEvent as ReactDragEvent } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Mosaic,
   type MosaicDirection,
@@ -14,7 +15,6 @@ import { type TabWithPanes, api } from '../api';
 import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
 import { MobileInputBar } from '../components/MobileInputBar';
 import { NewTabChooser } from '../components/NewTabChooser';
-import { PaneSelector } from '../components/PaneSelector';
 import {
   PaneFaceMenuList,
   PaneWebSwitch,
@@ -141,6 +141,21 @@ export interface TabViewProps {
   isActive: boolean;
 }
 
+/**
+ * Paints the active tab's pane-level controls (face switch + new-pane +) into
+ * the mobile top-bar slot (`#mobile-pane-chrome`, rendered by AppLayout) via a
+ * portal, so mobile chrome collapses to a single row. The slot is an ancestor
+ * committed before this mounts, so it's in the DOM by the time the effect runs;
+ * renders nothing if it's ever absent (desktop / no active workspace).
+ */
+function MobilePaneChrome({ children }: { children: React.ReactNode }) {
+  const [host, setHost] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setHost(document.getElementById('mobile-pane-chrome'));
+  }, []);
+  return host ? createPortal(children, host) : null;
+}
+
 export function TabView({ tabSlug, isActive }: TabViewProps) {
   const { wsSlug } = useParams({ from: '/_app/w/$wsSlug' });
   const navigate = useNavigate();
@@ -221,6 +236,46 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     setLastPaneId(tab.id, mobileActiveId);
   }, [singlePane, tab, mobileActiveId]);
 
+  // The active pane the URL names (`?pane=<id>`). Reflected only in single-pane
+  // modes; split ignores it.
+  const urlPane = useRouterState({
+    select: (s) => (s.location.search as { pane?: string }).pane,
+  });
+
+  // Seed the active pane from the URL the first time this tab is active in a
+  // single-pane view — a refresh / shared link / back button lands on the pane
+  // the URL names (priority over last-visited storage). Once set, mobileActiveId
+  // is the source of truth and the URL just follows it (next effect).
+  useEffect(() => {
+    if (!isActive || !singlePane || !tab || mobileActiveId) return;
+    if (urlPane && tab.panes.some((p) => p.id === urlPane)) setMobileActiveId(urlPane);
+  }, [isActive, singlePane, tab, urlPane, mobileActiveId]);
+
+  // Keep `?pane` in step with the active pane — ONLY for the active tab in a
+  // single-pane view, so hidden TabViews never fight over the shared URL.
+  // Resolution mirrors the render branches (state → a still-valid URL pane →
+  // last-visited → first); honoring a valid urlPane before state catches up
+  // stops the seed above from being clobbered on load. Replace, not push: it
+  // reflects state, it isn't a history entry per pane tap.
+  useEffect(() => {
+    if (!isActive || !singlePane || !tab) return;
+    const ids = tab.panes.map((p) => p.id);
+    if (ids.length === 0) return;
+    const stored = getLastPaneId(tab.id);
+    const activeId =
+      (mobileActiveId && ids.includes(mobileActiveId) && mobileActiveId) ||
+      (urlPane && ids.includes(urlPane) && urlPane) ||
+      (stored && ids.includes(stored) && stored) ||
+      ids[0];
+    if (!activeId || activeId === urlPane) return;
+    navigate({
+      to: '/w/$wsSlug/t/$tabSlug',
+      params: { wsSlug, tabSlug },
+      search: (prev) => ({ ...prev, pane: activeId }),
+      replace: true,
+    });
+  }, [isActive, singlePane, tab, mobileActiveId, urlPane, navigate, wsSlug, tabSlug]);
+
   // Mobile pane slots stay mounted when hidden (scroll position preserved).
   // Focus the active pane's terminal when the active pane CHANGES (switch /
   // tab entry) — NOT on every render. `tab` gets a new reference on every
@@ -281,7 +336,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   // Forward the "+" tap from the chrome bar's TabBar (which lives in
   // AppLayout and can't reach into this component tree) to whatever
   // addPane the mobile branch most recently rendered. The same event
-  // is also dispatched by the row-2 "+" rendered next to PaneSelector
+  // is also dispatched by the mobile top-bar "+" (MobilePaneChrome)
   // — one listener, two emitters.
   useEffect(() => {
     const onAddPane = () => addPaneRef.current?.();
@@ -501,8 +556,8 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         viewedTabId = found.id;
         // Mark-seen on mount is deliberately NOT done here anymore — a
         // bulk tab-seen on mount would clear every pane's attention
-        // before the user could see which pane was BELing in the
-        // PaneSelector dropdown. The per-pane / per-mode seen happens
+        // before the user could see which pane was BELing in the nav
+        // sheet's pane list. The per-pane / per-mode seen happens
         // in the dedicated effect below; the bulk seen on unmount still
         // runs (tab-level dot still clears when you actually leave).
       } catch (e) {
@@ -1150,88 +1205,46 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     };
     addPaneRef.current = isActive ? () => void addPane() : null;
 
-    const closeActivePane = () => {
-      if (!activeId) return;
-      const idx = paneIds.indexOf(activeId);
-      const next = paneIds[idx + 1] ?? paneIds[idx - 1] ?? null;
-      setMobileActiveId(next);
-      void killPane(activeId);
-    };
-
     return (
       <div className="workspace-root workspace-mobile">
         {/* Pane row only renders when there's more than one pane to
             choose between. The "+" inside it dispatches muxpad:add-pane;
             TabView listens at the window level and forwards to the
             mobile branch's addPane closure. */}
-        {/* Mobile pane header. With >1 pane it's a single row: chooser
-            (truncates), the terminal/web switch, then add + close — instead of
-            wasting a second line on the switch. With one pane there's no
-            chooser, so the switch gets its own slim bar (which collapses to
-            nothing when there's no web view to offer). The switch sits at the
-            top either way so its dropdown opens downward into the pane area. */}
-        {(() => {
-          const ap = activeId ? tab.panes.find((p) => p.id === activeId) : undefined;
-          const webSwitch =
-            ap && ap.kind === 'shell' ? (
-              <PaneWebSwitch
-                paneId={ap.id}
-                appUrls={ap.app_urls ?? []}
-                startupCmd={ap.startup_cmd}
-              />
-            ) : null;
-          // The bar renders for EVERY tab — it's the one predictable home
-          // for pane-level controls on mobile, mirroring the desktop strip:
-          // picker (only when there's a choice), face switch, and a visible
-          // + (creation must never hide behind a gesture or a pane-count
-          // threshold; single-pane tabs used to have NO way to add one).
-          return (
-            <nav className="mobile-tab-strip" aria-label="Panes">
-              {/* LEADING anchor names what you're looking at in EVERY mode:
-                  multi-pane → the pane picker; single-pane → a static label
-                  of the one pane (no chevron — nothing to pick). Both are
-                  flex:1, so the trailing action group (face switch, +, ×)
-                  sits right-aligned identically whether or not there's a
-                  choice — no layout flip between modes. */}
-              {paneIds.length > 1 ? (
-                <PaneSelector
-                  paneIds={paneIds}
-                  activeId={activeId}
-                  paneLabel={paneLabel}
-                  paneAttention={(id) => tab.panes.find((p) => p.id === id)?.attention ?? false}
-                  onSelect={setMobileActiveId}
-                />
-              ) : (
-                <span
-                  className="mobile-strip-pane-name"
-                  title={activeId ? paneLabel(activeId) : undefined}
-                >
-                  {activeId ? paneLabel(activeId) : '—'}
-                </span>
-              )}
-              {webSwitch ? <div className="mobile-strip-webswitch">{webSwitch}</div> : null}
-              <NewTabChooser
-                idleLabel="+"
-                idleTitle="New pane"
-                idleClassName="mobile-strip-add"
-                choicesClassName="mobile-strip-choices"
-                choiceClassName="mobile-strip-add mobile-strip-choice"
-                onCreate={(kind) => void addPane(kind)}
-              />
-              {activeId && paneIds.length > 1 && (
-                <button
-                  type="button"
-                  className="mobile-tab-close"
-                  onClick={closeActivePane}
-                  title="Close active pane"
-                  aria-label="Close active pane"
-                >
-                  <SvgClose size={12} />
-                </button>
-              )}
-            </nav>
-          );
-        })()}
+        {/* Pane-level controls now live in the TOP bar (line 1), not a second
+            strip: mobile spends no whole row on chrome. The nav sheet owns pane
+            SWITCH + CLOSE (the old picker & ×), leaving just the face switch
+            (what am I looking at) and an always-visible + (new pane). Portalled
+            up because the top bar (AppLayout) has no pane context; gated on
+            isActive so kept-mounted hidden tabs don't paint duplicates. */}
+        {isActive
+          ? (() => {
+              const ap = activeId ? tab.panes.find((p) => p.id === activeId) : undefined;
+              const webSwitch =
+                ap && ap.kind === 'shell' ? (
+                  <PaneWebSwitch
+                    paneId={ap.id}
+                    appUrls={ap.app_urls ?? []}
+                    startupCmd={ap.startup_cmd}
+                  />
+                ) : null;
+              return (
+                <MobilePaneChrome>
+                  {webSwitch ? (
+                    <div className="mobile-strip-webswitch">{webSwitch}</div>
+                  ) : null}
+                  <NewTabChooser
+                    idleLabel="+"
+                    idleTitle="New pane"
+                    idleClassName="mobile-strip-add"
+                    choicesClassName="mobile-strip-choices"
+                    choiceClassName="mobile-strip-add mobile-strip-choice"
+                    onCreate={(kind) => void addPane(kind)}
+                  />
+                </MobilePaneChrome>
+              );
+            })()
+          : null}
         <main className="workspace-body workspace-body-mobile">
           {paneIds.map((paneId) => {
             const pane = tab.panes.find((p) => p.id === paneId);

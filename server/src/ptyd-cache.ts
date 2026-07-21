@@ -4,6 +4,13 @@ import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { AppUrlDetector } from './runtime/app-url-detector.js';
 import type { AppUrlMarker } from './runtime/pty-scanner.js';
 
+// How long a pane stays "busy" after the last background-subagent progress
+// frame. Active subagents emit progress every ≤500ms, so this only has to
+// outlast a subagent's silent tool call; kept generous so the spinner doesn't
+// flicker between steps, at the cost of lingering ~this long after a background
+// subagent actually finishes (the roster, transcript-driven, drops it sooner).
+const SUBAGENT_BUSY_MS = 15_000;
+
 /**
  * Per-pane decoration state cached on the main server from ptyd push events.
  *
@@ -94,9 +101,21 @@ export class PtydCache extends EventEmitter {
   // OUTSIDE PaneState so PTY lifecycle (paneExit dropping the entry) can't
   // clear a turn that's still running.
   private readonly agentBusy = new Set<string>();
+  // Panes with a BACKGROUND subagent still working after the parent turn ended.
+  // A run_in_background Task keeps streaming progress once `turn-done` has
+  // already cleared agentBusy — so the tab/pane spinner would go dark while a
+  // subagent is plainly still running. The ws layer pokes this on each such
+  // out-of-turn subagent frame; getBusy() ORs it in. Decay-timer based (map =
+  // paneId → timer) because there's no clean per-subagent "finished" signal
+  // here (that lives in the transcript, read client-side): an active subagent
+  // emits progress every ≤500ms, so the window just has to outlast a silent
+  // tool call. Only poked OUT of turn, so synchronous subagents (which finish
+  // inside the turn) never make the spinner linger past turn-done.
+  private readonly subagentBusy = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly busyQuietMs: number;
   private readonly busyWarmupMs: number;
   private readonly busyInputGraceMs: number;
+  private readonly subagentBusyMs: number;
 
   /**
    * @param opts.busyQuietMs How long a pane may go without an activity tick
@@ -120,12 +139,18 @@ export class PtydCache extends EventEmitter {
    *   and still trips busy. Default 500ms.
    */
   constructor(
-    opts: { busyQuietMs?: number; busyWarmupMs?: number; busyInputGraceMs?: number } = {},
+    opts: {
+      busyQuietMs?: number;
+      busyWarmupMs?: number;
+      busyInputGraceMs?: number;
+      subagentBusyMs?: number;
+    } = {},
   ) {
     super();
     this.busyQuietMs = opts.busyQuietMs ?? 1500;
     this.busyWarmupMs = opts.busyWarmupMs ?? 600;
     this.busyInputGraceMs = opts.busyInputGraceMs ?? 500;
+    this.subagentBusyMs = opts.subagentBusyMs ?? SUBAGENT_BUSY_MS;
   }
 
   /**
@@ -325,7 +350,42 @@ export class PtydCache extends EventEmitter {
    * setAgentBusy) — both mean "this pane's agent is working".
    */
   getBusy(id: string): boolean {
-    return (this.state.get(id)?.busy ?? false) || this.agentBusy.has(id);
+    return (
+      (this.state.get(id)?.busy ?? false) || this.agentBusy.has(id) || this.subagentBusy.has(id)
+    );
+  }
+
+  /**
+   * Keep a pane busy while a BACKGROUND subagent works past the parent turn.
+   * Called by the ws layer on each out-of-turn subagent progress frame; each
+   * poke (re)arms a decay timer, so an actively-working subagent (progress
+   * every ≤500ms) holds the spinner and it clears ~SUBAGENT_BUSY_MS after the
+   * last frame. Emits paneChange only when the EFFECTIVE busy value flips, same
+   * edge-triggered contract as setAgentBusy.
+   */
+  pokeSubagentBusy(id: string): void {
+    const wasBusy = this.getBusy(id);
+    const existing = this.subagentBusy.get(id);
+    if (existing) clearTimeout(existing);
+    const t = setTimeout(() => {
+      this.subagentBusy.delete(id);
+      // Only fan the idle transition if nothing else still holds busy.
+      if (!this.getBusy(id)) this.emit('paneChange', id);
+    }, this.subagentBusyMs);
+    t.unref?.();
+    this.subagentBusy.set(id, t);
+    if (!wasBusy) this.emit('paneChange', id);
+  }
+
+  /** Drop any background-subagent busy immediately (e.g. the runner socket
+   *  disconnected) so the spinner doesn't linger the full decay window after
+   *  the agent is gone. Emits paneChange only if the effective busy dropped. */
+  clearSubagentBusy(id: string): void {
+    const t = this.subagentBusy.get(id);
+    if (!t) return;
+    clearTimeout(t);
+    this.subagentBusy.delete(id);
+    if (!this.getBusy(id)) this.emit('paneChange', id);
   }
 
   /**
@@ -357,6 +417,11 @@ export class PtydCache extends EventEmitter {
   forget(id: string): void {
     this.clearBusyTimer(id);
     this.agentBusy.delete(id);
+    const sub = this.subagentBusy.get(id);
+    if (sub) {
+      clearTimeout(sub);
+      this.subagentBusy.delete(id);
+    }
     this.detector.forget(id);
     if (this.state.delete(id)) {
       this.emit('paneRemoved', id);

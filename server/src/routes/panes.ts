@@ -402,8 +402,22 @@ export function panesScopedRoutes(deps: {
   // every pane simultaneously and "seen" applies to all of them.
   app.post('/:id/seen', async (c) => {
     const id = c.req.param('id');
-    if (!panes.getById(id))
+    const pane = panes.getById(id);
+    if (!pane)
       return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    // Viewing clears both read-state flags: the "done, unreviewed" bold
+    // (persisted) and the BEL red dot (ptyd runtime). Emit pane.updated so the
+    // bold drops immediately instead of waiting for the next nav poll.
+    if (pane.unread) {
+      panes.setUnread(id, false);
+      const refreshed = panes.getById(id);
+      if (refreshed)
+        deps.events.emit({
+          type: 'pane.updated',
+          tab_id: refreshed.tab_id,
+          pane: decoratePane(deps.cache, refreshed),
+        });
+    }
     try {
       await deps.ptyd.markSeen(id);
     } catch {

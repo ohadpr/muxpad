@@ -68,6 +68,13 @@ export function AppLayout() {
             // navigation on mobile now — desktop lives in the sidebar.
             <MobileNavSwitcher activeWorkspaceSlug={activeWorkspace.slug} />
           )}
+          {/* Slot the active tab's pane-level controls (face switch + new pane)
+              paint into via portal — see TabView. Keeps them in the top bar so
+              mobile spends no second row on chrome; the nav sheet owns pane
+              switch/close. Empty (display:none) until a pane fills it. */}
+          {activeWorkspace && isMobile && (
+            <div className="mobile-pane-chrome" id="mobile-pane-chrome" />
+          )}
           {!activeWorkspace && <span className="ws-tabbar-spacer" />}
           <a
             className="brand-text-side"

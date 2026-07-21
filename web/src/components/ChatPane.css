@@ -292,7 +292,13 @@
 .chat-md ul,
 .chat-md ol {
   margin: 0.6em 0;
-  padding-left: 1.5em;
+  /* Outside marker in a logical gutter → hanging indent (wrapped lines align
+     under the text), on the reading side (right for RTL). This positions
+     correctly now that the whole message has ONE consistent direction (dir on
+     .chat-md); the earlier clipping/escape was from a mixed direction where
+     the <li> was LTR but its text RTL. */
+  list-style-position: outside;
+  padding-inline-start: 1.5em;
 }
 .chat-md li {
   margin: 0.25em 0;
@@ -301,21 +307,26 @@
 .chat-md li > ol {
   margin: 0.2em 0;
 }
+/* list-style-TYPE (not the `list-style` shorthand, which would reset
+   list-style-position back to outside). */
 .chat-md ul {
-  list-style: disc;
+  list-style-type: disc;
 }
 .chat-md ul ul {
-  list-style: circle;
+  list-style-type: circle;
 }
 .chat-md ol {
-  list-style: decimal;
+  list-style-type: decimal;
 }
 
 /* Blockquote — dim, left rule. */
 .chat-md blockquote {
   margin: 0.7em 0;
-  padding: 0.1em 0 0.1em 0.9em;
-  border-left: 3px solid var(--chat-border-strong);
+  /* Logical: the accent bar + inset sit on the reading side — left for LTR,
+     RIGHT for RTL (Hebrew) instead of on the wrong edge. */
+  padding-block: 0.1em;
+  padding-inline: 0.9em 0;
+  border-inline-start: 3px solid var(--chat-border-strong);
   color: var(--chat-dim);
 }
 .chat-md blockquote p {
@@ -343,7 +354,8 @@
 .chat-md td {
   padding: 6px 11px;
   border: 1px solid var(--chat-border);
-  text-align: left;
+  /* Logical, so RTL table cells align to the reading edge. */
+  text-align: start;
 }
 .chat-md th {
   background: color-mix(in srgb, var(--chat-fg) 5%, var(--chat-panel));
@@ -864,9 +876,10 @@
   gap: 4px;
   max-width: 768px;
   margin: 0 auto;
-  /* Tighter on the right so the send button hugs the edge (the primary action
-     reads as anchored right), a touch more room on the left for the camera. */
-  padding: 5px 3px 5px 8px;
+  /* Symmetric side insets: the filled send circle carries more visual weight
+     than the small camera glyph, so equal padding reads balanced rather than
+     edge-hugging. */
+  padding: 5px 8px 5px 8px;
   background: color-mix(in srgb, var(--chat-elev) 92%, var(--chat-fg));
   border: 1px solid color-mix(in srgb, var(--chat-fg) 12%, var(--chat-border));
   border-radius: 26px;
@@ -1015,6 +1028,75 @@
   height: 12px;
   border-radius: 3px;
   background: currentColor;
+}
+/* Queue button: an OUTLINE accent circle — distinct from the filled Send and
+   the dark Stop, so "this queues, it doesn't send now" reads at a glance. */
+.chat-send.is-queue {
+  background: transparent;
+  color: var(--chat-accent);
+  border: 1.5px solid color-mix(in srgb, var(--chat-accent) 55%, transparent);
+  box-shadow: none;
+}
+.chat-send.is-queue:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--chat-accent) 12%, transparent);
+}
+
+/* ── Queued messages ───────────────────────────────────────────────────
+   A message composed while the agent is busy: it rides at the bottom of the
+   chat as a PENDING user bubble (right-aligned like a real send, but dashed +
+   muted = "not sent yet"), scrolling with the log. Sends itself when the turn
+   ends; the restore button pulls it back to the composer to edit first. */
+.chat-turn-queued {
+  align-items: center;
+  gap: 8px;
+}
+.chat-bubble-queued {
+  /* Same shape as a sent user bubble, restyled as pending. */
+  max-width: 82%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 10px 16px;
+  border-radius: 20px;
+  border: 1px dashed color-mix(in srgb, var(--chat-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--chat-accent) 8%, transparent);
+  color: color-mix(in srgb, var(--chat-fg) 80%, transparent);
+}
+/* Attachment thumbnails inside a queued bubble (blob previews carried over from
+   the composer chips) — shown so a queued image reads as what it is. */
+.chat-queued-atts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chat-queued-thumb {
+  display: block;
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 10px;
+}
+.chat-queued-atts + .chat-queued-text {
+  margin-top: 8px;
+}
+/* Restore/edit — a quiet round button to the LEFT of the pending bubble. */
+.chat-queued-edit {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--chat-faint);
+  cursor: pointer;
+  transition: background 100ms ease, color 100ms ease;
+}
+.chat-queued-edit:hover {
+  background: color-mix(in srgb, var(--chat-fg) 8%, transparent);
+  color: var(--chat-fg);
 }
 
 /* ── Footer status strip ───────────────────────────────────────────────── */
@@ -1281,6 +1363,111 @@
 .chat-img-thumb:hover {
   border-color: var(--chat-accent);
 }
+/* A single video shares the image-thumb frame; cap it the same way. */
+.chat-img-thumb video {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 240px;
+  max-height: 240px;
+}
+/* Play glyph overlaid on video thumbnails (single or gallery tile). */
+.chat-img-thumb.-video,
+.chat-gallery-item.-video {
+  position: relative;
+}
+.chat-media-play {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+.chat-media-play::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 9px 0 9px 15px;
+  border-color: transparent transparent transparent #fff;
+  transform: translateX(2px);
+}
+
+/* Gallery: 2+ visual artifacts collapse into a square thumbnail grid so a
+   batch of screenshots/clips can't add a screenful per item. Click → lightbox. */
+.chat-gallery {
+  display: grid;
+  grid-template-columns: repeat(var(--n, 3), 1fr);
+  gap: 4px;
+  margin: 6px 0;
+  max-width: min(360px, 100%);
+}
+.chat-gallery-item {
+  position: relative;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--chat-fg) 12%, transparent);
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+  overflow: hidden;
+  line-height: 0;
+}
+.chat-gallery-item img,
+.chat-gallery-item video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.chat-gallery-item:hover {
+  border-color: var(--chat-accent);
+}
+
+/* File chip: non-visual attachment (pdf/csv/txt/…) → click-to-open pill. */
+.chat-filechip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  margin: 4px 0;
+  padding: 6px 10px 6px 6px;
+  border: 1px solid color-mix(in srgb, var(--chat-fg) 12%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--chat-fg) 4%, transparent);
+  color: inherit;
+  text-decoration: none;
+  vertical-align: top;
+}
+.chat-filechip:hover {
+  border-color: var(--chat-accent);
+}
+.chat-filechip-ext {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 28px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--chat-accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+.chat-filechip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
 
 /* Lightbox: reuse the modal backdrop/scrim but center a bare full-size image. */
 .chat-img-backdrop {
@@ -1384,17 +1571,32 @@
   font-size: 11px;
   color: var(--chat-faint);
 }
-.chat-roster-dot {
-  flex: 0 0 auto;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--chat-fg) 35%, transparent);
+/* Per-agent (and header) spinner — a row exists only while its subagent runs,
+   so it always spins ("present = working"). Brighter when progress is fresh
+   (data-busy), softer accent when quiet-but-still-running. */
+@keyframes chat-roster-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
-/* Busy = fresh progress; a quiet dot means still running, no recent signal. */
-.chat-roster-item[data-busy] .chat-roster-dot {
-  background: var(--accent);
-  animation: chat-subagent-pulse 1.4s ease-in-out infinite;
+.chat-roster-spin {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  color: color-mix(in srgb, var(--accent) 55%, transparent);
+  animation: chat-roster-spin 0.8s linear infinite;
+}
+.chat-roster-item[data-busy] .chat-roster-spin {
+  color: var(--accent);
+}
+.chat-roster-spin svg {
+  width: 11px;
+  height: 11px;
+}
+/* Header spinner sits right after the count; the chevron keeps its own
+   margin-left:auto and stays pinned far right. */
+.chat-roster-spin.-head {
+  color: var(--accent);
 }
 /* The name is the row — it truncates rather than widening the card. */
 .chat-roster-name {
@@ -1415,7 +1617,7 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .chat-roster-glyph,
-  .chat-roster-item[data-busy] .chat-roster-dot {
+  .chat-roster-spin {
     animation: none;
   }
 }
