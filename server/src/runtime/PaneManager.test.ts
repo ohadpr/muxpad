@@ -67,6 +67,47 @@ describe('PaneManager', () => {
     expect(mgr.snapshotCwds()).toEqual([]);
     return mgr.killAll();
   });
+
+  it('a replaced runtime’s late exit does not evict the replacement (ghost-shell regression)', async () => {
+    // Reproduces the orphan-session leak observed in production: kill() on a
+    // slow-dying shell times out, force-deletes the map entry and resolves; a
+    // new runtime for the same pane id is created (ensurePane on reconnect);
+    // then the OLD runtime's exit event finally fires. Before the guard, that
+    // handler deleted the map entry unconditionally — evicting the NEW
+    // runtime while its shell kept running, so ptyd re-spawned yet another
+    // shell on the next ensurePane. Each cycle leaked one live shell.
+    const exits: Array<{ id: string; cause: string }> = [];
+    const mgr = new PaneManager({
+      onPaneExit: (id, _code, cause) => exits.push({ id, cause }),
+    });
+    // The shell ignores SIGHUP, so kill() must take the 2s SIGKILL-fallback
+    // path — the only path that evicts the entry before the exit event.
+    const a = mgr.getOrCreate({
+      id: 'race1',
+      shell: '/bin/sh',
+      startup_cmd: `trap '' HUP; sleep 30`,
+      cwd: '/tmp',
+    });
+    // Give the shell time to install the trap before we send SIGHUP.
+    await new Promise((r) => setTimeout(r, 300));
+    await mgr.kill('race1'); // resolves via the 2s fallback; exit not yet fired
+    // Synchronously re-create — mirrors ensurePane racing the slow death.
+    // The old runtime's SIGKILL exit event lands AFTER this.
+    const b = mgr.getOrCreate({ id: 'race1', shell: '/bin/sh', startup_cmd: 'sleep 30', cwd: '/tmp' });
+    expect(b).not.toBe(a);
+    try {
+      // Let the old runtime's exit event arrive and (before the fix) do damage.
+      await new Promise((r) => setTimeout(r, 500));
+      // The replacement must still be the runtime of record...
+      expect(mgr.get('race1')).toBe(b);
+      expect(b.isExited()).toBe(false);
+      // ...and the stale exit must not have fired onPaneExit for the pane id
+      // (it would tell the main server the fresh pane died).
+      expect(exits.filter((e) => e.id === 'race1')).toHaveLength(0);
+    } finally {
+      await mgr.killAll();
+    }
+  }, 10_000);
 });
 
 describe('PaneManager → raw change callbacks (no PaneStore)', () => {

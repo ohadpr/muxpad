@@ -5,6 +5,7 @@ import { pushOpen } from './lib/external-open-store';
 import { setLastPaneId } from './lib/last-visited';
 import { registerServiceWorker } from './lib/push';
 import { router } from './router';
+import { startPresence } from './lib/presence';
 import { refreshTabs } from './tabs';
 import { refreshWorkspaces } from './workspaces';
 import './styles.css';
@@ -164,5 +165,8 @@ if (selfEmbedded) {
     </div>,
   );
 } else {
+  // Report active-device presence so the server holds push notifications while
+  // we're here (resumes once every device goes quiet).
+  startPresence();
   root.render(<RouterProvider router={router} />);
 }

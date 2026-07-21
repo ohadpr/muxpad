@@ -477,10 +477,18 @@ export function attachWsServer(deps: {
             // Long-running turns (the user walked away) and autonomous
             // wakeup/cron turns (no recent send) do push.
             if (Date.now() - conn.lastSendAt > INTERACTIVE_PUSH_SUPPRESS_MS) {
+              // Prefer a snippet of what the agent actually said over the
+              // generic "finished its turn".
               deps.notifyPane?.(
                 paneId,
-                frame.ok !== false ? 'agent finished its turn' : 'agent turn failed',
+                frame.ok !== false ? frame.summary?.trim() || 'finished its turn' : 'turn failed',
               );
+              // Bold the pane "done, unreviewed" in the nav until it's viewed.
+              // Same interactivity gate as the push: a turn you're actively
+              // driving isn't "unread" (you're watching it). If you're looking
+              // but not typing, the chat client clears this on turn-done.
+              panes.setUnread(paneId, true);
+              emitPaneUpdated(paneId);
             }
           } else if (frame.t === 'question') {
             if (typeof frame.qid !== 'string' || !Array.isArray(frame.questions)) return;
@@ -489,7 +497,7 @@ export function attachWsServer(deps: {
             const q = frame.questions[0]?.question;
             deps.notifyPane?.(
               paneId,
-              q ? `agent asks: ${q.slice(0, 140)}` : 'agent has a question',
+              q ? `asks: ${q.length > 80 ? `${q.slice(0, 80)}…` : q}` : 'has a question',
             );
           } else if (frame.t === 'question-done') {
             if (conn.pendingQuestion?.qid === frame.qid) conn.pendingQuestion = null;
@@ -497,6 +505,11 @@ export function attachWsServer(deps: {
           } else if (frame.t === 'subagent') {
             if (!frame.progress || typeof frame.progress.toolUseId !== 'string') return;
             conn.subagents.set(frame.progress.toolUseId, frame.progress);
+            // Keep the nav spinner lit while a BACKGROUND subagent works past
+            // the parent turn. Only out of turn: during a turn the turn's own
+            // busy already covers it, and poking then would make the spinner
+            // linger after every synchronous-subagent turn (see pokeSubagentBusy).
+            if (!conn.turnActive) deps.cache.pokeSubagentBusy(paneId);
             bcast({ t: 'subagent', progress: frame.progress });
           } else if (frame.t === 'status') {
             // Validate off the wire — version-skewed runners are NORMAL
@@ -530,6 +543,9 @@ export function attachWsServer(deps: {
           agentRunners.delete(paneId);
           agents.detachRunner(paneId);
           deps.cache.setAgentBusy(paneId, false);
+          // Runner gone → drop any lingering background-subagent busy now
+          // rather than letting its decay timer hold the spinner ~15s.
+          deps.cache.clearSubagentBusy(paneId);
           streamBufs.delete(paneId);
           if (conn.turnActive) {
             bcast({ t: 'turn-done', ok: false, error: 'agent disconnected' });

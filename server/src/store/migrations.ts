@@ -246,6 +246,14 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    // Per-pane "done, unreviewed" flag (bold name, like unread mail). Set when
+    // an agent turn finishes here unobserved, or manually; cleared when the
+    // pane is viewed. Distinct from the runtime BEL attention (red dot).
+    // Persisted so results found while you were away survive a restart.
+    version: 17,
+    sql: 'ALTER TABLE panes ADD COLUMN unread INTEGER NOT NULL DEFAULT 0;',
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

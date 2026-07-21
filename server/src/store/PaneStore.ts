@@ -16,6 +16,7 @@ interface PaneRow {
   name: string | null;
   face: 'terminal' | 'web' | 'chat';
   face_url: string | null;
+  unread: number;
   created_at: number;
 }
 
@@ -69,6 +70,7 @@ export class PaneStore {
       name: null,
       face,
       face_url: null,
+      unread: false,
       created_at: now,
     };
   }
@@ -221,7 +223,18 @@ export class PaneStore {
       name: x.name ?? null,
       face: x.face ?? 'terminal',
       face_url: x.face_url ?? null,
+      unread: !!x.unread,
       created_at: x.created_at,
     };
+  }
+
+  /**
+   * "Done, unreviewed" flag (bold name). Set true when an agent turn finishes
+   * here unobserved (or manually); cleared when the pane is viewed. Persisted,
+   * so results found while you were away survive a restart. Distinct from the
+   * runtime BEL attention (red dot), which lives in the ptyd cache.
+   */
+  setUnread(id: string, unread: boolean): void {
+    this.db.prepare('UPDATE panes SET unread = ? WHERE id = ?').run(unread ? 1 : 0, id);
   }
 }

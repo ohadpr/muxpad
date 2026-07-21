@@ -10,7 +10,7 @@ import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { createDragOrigin } from '../lib/drag-origin';
 import { clearFollowTarget, setFollowTarget } from '../lib/follow-tab';
-import { setLastPaneId } from '../lib/last-visited';
+import { getLastPaneId, setLastPaneId } from '../lib/last-visited';
 import { useDismissable } from '../lib/use-dismissable';
 import { pushUndo } from '../lib/move-undo-store';
 import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansion';
@@ -53,6 +53,13 @@ function pickerTheme(): 'light' | 'dark' {
 }
 
 export type NavTreeVariant = 'sidebar' | 'sheet';
+
+// Which sheet tabs the user has expanded/collapsed into their pane list, kept
+// at module scope so it SURVIVES the sheet closing (which unmounts the tree).
+// Reopening the navigator then restores exactly what you had open, instead of
+// snapping every tab shut again. Explicit entry wins; tabs with no entry fall
+// back to the auto-expand-active-tab default. Session-lived (reset on reload).
+const sheetTabExpanded = new Map<string, boolean>();
 
 type Editing = { kind: 'workspace' | 'tab'; id: string } | null;
 
@@ -448,6 +455,7 @@ function WorkspaceNode({
       <div
         className="navtree-ws-row"
         data-active={isActive ? 'true' : undefined}
+        data-unread={workspace.unread ? 'true' : undefined}
         data-pressing={pressing ? 'true' : undefined}
         data-tab-drop={tabDropOver ? 'true' : undefined}
         {...(rowDnd && !isEditing ? rowDnd : {})}
@@ -834,25 +842,35 @@ function SheetPaneList({
   tab,
   workspace,
   onNavigate,
+  isActiveTab,
 }: {
   tab: Tab;
   workspace: Workspace;
   onNavigate?: (() => void) | undefined;
+  isActiveTab: boolean;
 }) {
   const navigate = useNavigate();
   const [panes, setPanes] = useState<PaneSpec[] | null>(null);
   useEffect(() => {
     let alive = true;
-    api
-      .getTab(tab.id)
-      .then((detail) => {
-        if (alive) setPanes(detail.panes);
-      })
-      .catch(() => {
-        if (alive) setPanes([]);
-      });
+    const load = () =>
+      api
+        .getTab(tab.id)
+        .then((detail) => {
+          if (alive) setPanes(detail.panes);
+        })
+        .catch(() => {
+          // Keep the current list on a transient poll failure; only show empty
+          // if we never loaded.
+          if (alive) setPanes((prev) => prev ?? []);
+        });
+    load();
+    // Poll while the list is open so each pane's busy/attention indicator
+    // stays live (the tab list has its own poll; this fetch is separate).
+    const t = window.setInterval(load, 2500);
     return () => {
       alive = false;
+      window.clearInterval(t);
     };
   }, [tab.id]);
 
@@ -870,22 +888,77 @@ function SheetPaneList({
     });
   };
 
+  // The pane you're currently looking at — same resolution TabView uses
+  // (stored last pane, else the first). Only meaningful for the active tab.
+  const activePaneId = isActiveTab ? (getLastPaneId(tab.id) ?? panes?.[0]?.id) : undefined;
+
+  // Close a pane from the list — parity with the tab × (tap = delete, no
+  // confirm). Optimistic removal; the 2.5s poll reconciles on failure.
+  const closePane = async (e: React.MouseEvent, pane: PaneSpec, label: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const wasLast = (panes?.length ?? 0) <= 1;
+    setPanes((prev) => (prev ? prev.filter((x) => x.id !== pane.id) : prev));
+    try {
+      await api.deletePane(pane.id);
+      // Server doesn't cascade; the client does (mirrors TabView's last-pane
+      // → closeTab). An emptied tab would otherwise linger with no panes.
+      if (wasLast) await api.deleteTab(tab.id);
+    } catch (err) {
+      console.error('deletePane failed', err);
+      window.alert(`Failed to close pane ${label}: ${String(err)}`);
+      api
+        .getTab(tab.id)
+        .then((d) => setPanes(d.panes))
+        .catch(() => {});
+    }
+  };
+
   return (
     <div className="navtree-pane-list">
       {panes === null ? (
         <div className="navtree-pane-loading">…</div>
       ) : (
-        panes.map((p, i) => (
-          <button
-            key={p.id}
-            type="button"
-            className="navtree-pane-row"
-            onClick={() => openPane(p.id)}
-          >
-            <span className="navtree-pane-label">{sheetPaneLabel(p, i)}</span>
-            {p.attention ? <span className="badge-dot -inline" aria-label="needs attention" /> : null}
-          </button>
-        ))
+        panes.map((p, i) => {
+          const label = sheetPaneLabel(p, i);
+          const active = p.id === activePaneId;
+          return (
+            <div
+              key={p.id}
+              className="navtree-pane-row-wrap"
+              data-active={active ? 'true' : undefined}
+            >
+              <button
+                type="button"
+                className="navtree-pane-row"
+                data-active={active ? 'true' : undefined}
+                data-unread={p.unread ? 'true' : undefined}
+                onClick={() => openPane(p.id)}
+              >
+                <span className="navtree-pane-label">{label}</span>
+                {/* Per-pane status, same priority as the tab row: WORKING
+                    (spinner) → WANTS YOU (dot) → nothing. Tab-level only
+                    aggregates; a glance at the list should say which is running. */}
+                {p.busy ? (
+                  <span className="navtree-busy" aria-hidden="true" title="Working…">
+                    <SvgSpinner />
+                  </span>
+                ) : p.attention ? (
+                  <span className="badge-dot -inline" aria-label="needs attention" />
+                ) : null}
+              </button>
+              <button
+                type="button"
+                className="navtree-close"
+                onClick={(e) => void closePane(e, p, label)}
+                title="Close pane"
+                aria-label={`Close pane ${label}`}
+              >
+                <SvgClose size={13} />
+              </button>
+            </div>
+          );
+        })
       )}
     </div>
   );
@@ -962,9 +1035,23 @@ function TabRow({
   // Sheet-only: expand the row into its pane list (direct pane nav + the
   // mobile "New pane" home). Single-pane tabs skip all of it — tapping
   // them just opens the tab (there's nothing to pick), so no chevron.
-  const [panesOpen, setPanesOpen] = useState(false);
   const paneCount = collectLayoutLeaves(tab.layout).length;
   const sheetPicksPane = variant === 'sheet' && paneCount > 1;
+  // Auto-expand the ACTIVE multi-pane tab so its panes are visible the moment
+  // the navigator opens — you land already looking at where you can go. Any tab
+  // the user has since explicitly toggled keeps that state across reopens (see
+  // sheetTabExpanded), instead of snapping shut every time.
+  const [panesOpen, setPanesOpen] = useState(() =>
+    sheetTabExpanded.has(tab.id)
+      ? (sheetTabExpanded.get(tab.id) ?? false)
+      : sheetPicksPane && isActiveTab,
+  );
+  const togglePanes = () =>
+    setPanesOpen((o) => {
+      const next = !o;
+      sheetTabExpanded.set(tab.id, next);
+      return next;
+    });
 
   // "Drop INTO this tab" affordance — lit for a pane dragged from the tab
   // strip (whole row) or another tab dragged over the row's middle band
@@ -1061,6 +1148,7 @@ function TabRow({
     <div
       className="navtree-tab-row"
       data-active={isActiveTab ? 'true' : undefined}
+      data-unread={tab.unread ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
       data-drop-into={dropInto ? 'true' : undefined}
       {...(variant === 'sidebar' && !isEditing
@@ -1086,7 +1174,7 @@ function TabRow({
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            setPanesOpen((o) => !o);
+            togglePanes();
           }}
           aria-expanded={panesOpen}
           aria-label={panesOpen ? `Hide panes of ${tab.name}` : `Show panes of ${tab.name}`}
@@ -1141,7 +1229,7 @@ function TabRow({
             // pane happened to be active".
             if (sheetPicksPane) {
               e.preventDefault();
-              setPanesOpen((o) => !o);
+              togglePanes();
               return;
             }
             onNavigate?.();
@@ -1213,7 +1301,7 @@ function TabRow({
           y={menu.y}
           onDismiss={() => setMenu(null)}
           items={[
-            tab.attention
+            tab.unread
               ? { label: 'Mark as read', onSelect: () => onSetUnread(false) }
               : { label: 'Mark as unread', onSelect: () => onSetUnread(true) },
             {
@@ -1268,7 +1356,12 @@ function TabRow({
       )}
     </div>
       {variant === 'sheet' && sheetPicksPane && panesOpen ? (
-        <SheetPaneList tab={tab} workspace={workspace} onNavigate={onNavigate} />
+        <SheetPaneList
+          tab={tab}
+          workspace={workspace}
+          onNavigate={onNavigate}
+          isActiveTab={isActiveTab}
+        />
       ) : null}
     </>
   );

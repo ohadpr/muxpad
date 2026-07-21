@@ -39,9 +39,6 @@
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 26%, transparent);
 }
-.pane-web-switch-label {
-  font-weight: 500;
-}
 
 /* Live "a server is up here" pulse — draws the eye to a freshly detected app. */
 .pane-web-switch-dot {
@@ -107,7 +104,10 @@
   position: fixed;
   top: auto;
   left: auto;
-  z-index: 1000;
+  /* Above the mobile nav sheet (scrim 1100 / panel 1101): overlays are made
+     mutually exclusive in JS, but this keeps the menu on top during the sheet's
+     ~160ms close animation so it never flashes underneath. */
+  z-index: 1200;
 }
 
 /* Quiet section label so the popup reads as a deliberate menu, not a tooltip. */

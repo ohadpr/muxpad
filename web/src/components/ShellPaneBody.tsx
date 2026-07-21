@@ -1,6 +1,6 @@
 import type { PaneSpec } from '@muxpad/shared';
 import { useEffect, useRef, useState } from 'react';
-import { probeUrl } from '../lib/face-switch';
+import { isMixedContentUrl, probeUrl } from '../lib/face-switch';
 import { isSelfOriginUrl, setPaneFace, usePaneFace } from '../lib/pane-face';
 import { ChatPane } from './ChatPane';
 import { XtermPane } from './XtermPane';
@@ -87,8 +87,28 @@ export function ShellPaneBody({
   // showing; when nothing answers, swap in a notice with a way out. Re-probes
   // on an interval so restarting the server heals the view by itself.
   const [webDead, setWebDead] = useState(false);
+  // Bumped to force the web iframe to reload (chrome's "Reload page" item /
+  // PaneWebSwitch / PaneSurfaceSwitch dispatch `muxpad:reload-url-pane`). The
+  // url-keyed iframe otherwise only reloads when the URL itself changes — so a
+  // flaky local muxpad-serve app couldn't be reloaded from the web face at all.
+  const [reloadNonce, setReloadNonce] = useState(0);
   useEffect(() => {
-    if (!showWeb || !url || isSelfOriginUrl(url)) {
+    const onReload = (e: Event) => {
+      const d = (e as CustomEvent<{ paneId: string }>).detail;
+      if (d?.paneId !== pane.id) return;
+      setWebDead(false); // give the iframe a fresh chance if it was showing dead
+      setReloadNonce((n) => n + 1);
+    };
+    window.addEventListener('muxpad:reload-url-pane', onReload);
+    return () => window.removeEventListener('muxpad:reload-url-pane', onReload);
+  }, [pane.id]);
+  // Mixed content is a distinct failure from a dead server: an https muxpad
+  // page can't embed (or even probe) a plain-http URL, so probing would
+  // misdiagnose a healthy server as stopped. Branch before the probe and
+  // render a notice that names the real problem.
+  const webBlocked = showWeb && !!url && isMixedContentUrl(url);
+  useEffect(() => {
+    if (!showWeb || !url || isSelfOriginUrl(url) || isMixedContentUrl(url)) {
       setWebDead(false);
       return;
     }
@@ -122,7 +142,29 @@ export function ShellPaneBody({
       </div>
       {url && !isSelfOriginUrl(url) ? (
         <div className="shell-pane-face" hidden={!showWeb}>
-          {webDead ? (
+          {webBlocked ? (
+            <div className="shell-pane-web-blocked">
+              <div>
+                This muxpad page is https, so the browser refuses to embed plain-http {url}. Serve
+                the app over https (e.g. tailscale serve) to view it here, or open it in its own
+                tab.
+              </div>
+              <button
+                type="button"
+                className="shell-pane-web-back"
+                onClick={() => window.open(url, '_blank', 'noopener')}
+              >
+                Open in browser tab
+              </button>
+              <button
+                type="button"
+                className="shell-pane-web-back"
+                onClick={() => switchTo('terminal')}
+              >
+                Back to terminal
+              </button>
+            </div>
+          ) : webDead ? (
             <div className="shell-pane-web-blocked">
               <div>Nothing is responding at {url} — the server may have stopped.</div>
               <button
@@ -136,8 +178,9 @@ export function ShellPaneBody({
           ) : (
             <iframe
               // Keying on the url means picking a different app reloads the
-              // iframe; toggling face (same url) does not.
-              key={url}
+              // iframe; toggling face (same url) does not. The nonce lets an
+              // explicit "Reload page" remount it without changing the url.
+              key={`${url}#${reloadNonce}`}
               className="shell-pane-web"
               src={url}
               sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"

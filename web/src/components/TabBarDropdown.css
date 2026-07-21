@@ -193,6 +193,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Unread ("done, unreviewed") = bold, like unread mail — mirrors the nav tree.
+   Orthogonal to the red attention dot. */
+.ws-tabbar-dropdown-item[data-unread="true"] .ws-tabbar-dropdown-item-label-text {
+  font-weight: 700;
+}
 
 /* Beefier touch targets in the dropdown on mobile (was in TabBar.css's
    @media block). 40px gives a comfortable thumb hit area. */
