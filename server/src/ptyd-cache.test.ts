@@ -252,4 +252,42 @@ describe('PtydCache', () => {
     cache.setAgentBusy('p1', true);
     expect(decoratePane(cache, pane).busy).toBe(true);
   });
+
+  it('keeps busy while a background subagent pokes, then decays', async () => {
+    const cache = new PtydCache({ subagentBusyMs: 60 });
+    const events: string[] = [];
+    cache.on('paneChange', (id: string) => events.push(id));
+
+    // First poke → busy rises (one paneChange).
+    cache.pokeSubagentBusy('p1');
+    expect(cache.getBusy('p1')).toBe(true);
+    expect(events).toEqual(['p1']);
+
+    // A second poke within the window re-arms the timer without re-firing
+    // (already busy) and keeps it lit.
+    await new Promise((r) => setTimeout(r, 40));
+    cache.pokeSubagentBusy('p1');
+    expect(cache.getBusy('p1')).toBe(true);
+    expect(events).toEqual(['p1']); // no duplicate rise
+
+    // No more pokes → decays after the window, firing the idle transition once.
+    await new Promise((r) => setTimeout(r, 90));
+    expect(cache.getBusy('p1')).toBe(false);
+    expect(events).toEqual(['p1', 'p1']);
+  });
+
+  it('subagent-busy ORs with agent-turn busy and forget clears its timer', async () => {
+    const cache = new PtydCache({ subagentBusyMs: 40 });
+    cache.setAgentBusy('p1', true);
+    cache.pokeSubagentBusy('p1');
+    expect(cache.getBusy('p1')).toBe(true);
+    // Turn ends but the background subagent still holds it busy.
+    cache.setAgentBusy('p1', false);
+    expect(cache.getBusy('p1')).toBe(true);
+    // forget() cancels the pending decay timer (no post-delete resurrection).
+    cache.forget('p1');
+    expect(cache.getBusy('p1')).toBe(false);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(cache.getBusy('p1')).toBe(false);
+  });
 });

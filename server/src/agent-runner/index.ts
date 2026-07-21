@@ -16,7 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import {
   type Options,
   type SDKUserMessage,
@@ -228,6 +228,56 @@ const askUserTool = tool(
   },
 );
 
+// Let the agent SHOW files in the chat: screenshots, videos, or documents.
+// Each local path is copied (server-side, disk-to-disk) into the pane's
+// served attachment dir; the returned served paths go verbatim into the
+// agent's reply, where muxpad renders them by type — images/videos inline
+// (multiple → a gallery), other files as a click-to-open chip. No server to
+// start, no Linear round-trip.
+const showFilesTool = tool(
+  'show_files',
+  'Show files to the user directly in THIS chat: screenshots, images, videos (mp4/webm), or documents (pdf, csv, txt, json, …). Save the file(s) locally first (e.g. `screencapture`, an ffmpeg/webm recording, or write a report), then pass their ABSOLUTE paths. Each is served and a path returned; include those returned paths in your reply — one per line, bare paths (not markdown links) — and they render inline: images/videos as thumbnails (several → a gallery), other files as a download chip. Use whenever the user asks to see/be shown something, or when a file is the best way to share output.',
+  {
+    paths: z
+      .array(z.string())
+      .min(1)
+      .describe('Absolute paths of local files to show (images, videos, or documents).'),
+  },
+  async (args) => {
+    const served: string[] = [];
+    const failed: string[] = [];
+    for (const p of args.paths) {
+      try {
+        const res = await fetch(`${apiUrl}/api/panes/${paneId}/attachments/by-path`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path: p }),
+        });
+        if (!res.ok) {
+          failed.push(`${basename(p)} (${res.status}: ${(await res.text()).slice(0, 120)})`);
+          continue;
+        }
+        const { path } = (await res.json()) as { path: string };
+        served.push(path);
+      } catch (err) {
+        failed.push(`${basename(p)} (${(err as Error).message})`);
+      }
+    }
+    log(`${bold('▸ show_files')} ${dim(`${served.length} shown${failed.length ? `, ${failed.length} failed` : ''}`)}`);
+    if (served.length === 0)
+      return {
+        content: [{ type: 'text' as const, text: `Could not show any file: ${failed.join('; ')}` }],
+        isError: true,
+      };
+    const lines = [
+      'Displayed to the user. Include these exact paths in your reply — one per line, bare paths (not markdown links) — so they render inline:',
+      ...served,
+    ];
+    if (failed.length) lines.push(`(Failed: ${failed.join('; ')})`);
+    return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+  },
+);
+
 // ---------------------------------------------------------------------------
 // Subagent progress. Subagent messages arrive on the same stream with
 // parent_tool_use_id set; count them per task and forward a throttled live
@@ -276,6 +326,25 @@ function flushSubagents(): void {
 let firstUserText: string | null = null;
 let firstAssistantText = '';
 let titleGenerated = false;
+// The current turn's most recent assistant prose — rides along on turn-done so
+// the push notification can say WHAT the agent finished with, not just "done".
+let lastAssistantText = '';
+
+/** One-line snippet of assistant prose for a push body — strip the loudest
+ *  markdown, collapse whitespace, truncate. Empty → undefined (caller falls
+ *  back to a generic line). */
+function notifySnippet(text: string): string | undefined {
+  const s = text
+    .replace(/```[\s\S]*?```/g, ' ') // fenced code
+    .replace(/`([^`]+)`/g, '$1') // inline code
+    .replace(/\*\*|__|\*|_/g, '') // emphasis
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '') // heading markers
+    .replace(/^\s*[-*>]\s+/gm, '') // list / quote markers
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return undefined;
+  return s.length > 120 ? `${s.slice(0, 120)}…` : s;
+}
 
 async function generateTitle(): Promise<void> {
   if (titleGenerated || !firstUserText) return;
@@ -323,6 +392,7 @@ async function* userMessages(): AsyncGenerator<SDKUserMessage> {
       if (firstUserText === null) firstUserText = text;
       inTurn = true;
       interruptRequested = false;
+      lastAssistantText = '';
       sendFrame({ t: 'turn-start' });
       log(`${bold('▸ user')} ${text.length > 200 ? `${text.slice(0, 200)}…` : text}`);
       yield {
@@ -488,6 +558,14 @@ function connect(): void {
 // context) survives between chat messages, which per-turn `claude -p` spawns
 // structurally could not.
 // ---------------------------------------------------------------------------
+// Default model for a FRESH agent chat with no explicit `--model` pin: muxpad
+// starts new chats on Opus rather than the account/settings default. A resume
+// deliberately gets NO default (undefined) so an existing session keeps the
+// model it was running — this only steers brand-new chats. Still switchable
+// per-session via the model picker (set-model).
+const DEFAULT_AGENT_MODEL = 'opus';
+const startModel = requestedModel ?? (resumeSid ? null : DEFAULT_AGENT_MODEL);
+
 const options: Options = {
   cwd: process.cwd(),
   ...(resumeSid ? { resume: resumeSid } : { sessionId: sid }),
@@ -497,14 +575,18 @@ const options: Options = {
   permissionMode: 'bypassPermissions',
   allowDangerouslySkipPermissions: true,
   includePartialMessages: true,
-  // Launch-time model pin (`muxpad agent --model <m>`); without it the
-  // session runs the settings default. Still switchable later via set-model.
-  ...(requestedModel ? { model: requestedModel } : {}),
+  // Model: an explicit `--model <m>` pin wins; else a fresh chat gets
+  // DEFAULT_AGENT_MODEL (Opus) and a resume keeps its own model.
+  ...(startModel ? { model: startModel } : {}),
   // The chat-native question tool (Claude Code's own AskUserQuestion is not
   // offered to SDK sessions). alwaysLoad keeps it in the prompt rather than
   // behind tool search — it must be discoverable at the moment of doubt.
   mcpServers: {
-    muxpad: createSdkMcpServer({ name: 'muxpad', tools: [askUserTool], alwaysLoad: true }),
+    muxpad: createSdkMcpServer({
+      name: 'muxpad',
+      tools: [askUserTool, showFilesTool],
+      alwaysLoad: true,
+    }),
   },
   // No settingSources override: default = user+project+local settings,
   // CLAUDE.md, skills, MCP — same session the terminal TUI would run.
@@ -626,6 +708,7 @@ async function main(): Promise<void> {
     if (inTurn) return;
     inTurn = true;
     interruptRequested = false;
+    lastAssistantText = '';
     sendFrame({ t: 'turn-start' });
     log(dim('▸ autonomous turn (wakeup/cron/background)'));
   };
@@ -662,8 +745,10 @@ async function main(): Promise<void> {
       }
     } else if (msg.type === 'assistant' && msg.parent_tool_use_id === null) {
       noteAutonomousTurn();
+      let msgText = '';
       for (const block of msg.message.content ?? []) {
         if (block.type === 'text' && block.text.trim()) {
+          msgText += (msgText ? '\n' : '') + block.text.trim();
           if (!titleGenerated && firstAssistantText.length < 500) {
             firstAssistantText += `${block.text.trim()}\n`;
           }
@@ -673,6 +758,8 @@ async function main(): Promise<void> {
           log(`${dim('⚙')} ${block.name}${arg ? dim(` ${arg}`) : ''}`);
         }
       }
+      // Keep the LATEST prose-bearing assistant message as the turn's summary.
+      if (msgText) lastAssistantText = msgText;
     } else if (
       (msg.type === 'assistant' || msg.type === 'user') &&
       typeof msg.parent_tool_use_id === 'string'
@@ -696,12 +783,13 @@ async function main(): Promise<void> {
       flushSubagents();
       const ok = msg.subtype === 'success' || interruptRequested;
       const secs = (msg.duration_ms / 1000).toFixed(1);
+      const summary = notifySnippet(lastAssistantText);
       if (interruptRequested) {
         log(dim(`⏹ stopped after ${secs}s`));
-        sendFrame({ t: 'turn-done', ok: true });
+        sendFrame({ t: 'turn-done', ok: true, ...(summary ? { summary } : {}) });
       } else if (msg.subtype === 'success') {
         log(dim(`✓ turn done · ${secs}s · $${msg.total_cost_usd.toFixed(2)}`));
-        sendFrame({ t: 'turn-done', ok: true });
+        sendFrame({ t: 'turn-done', ok: true, ...(summary ? { summary } : {}) });
         // First completed turn of a fresh session: self-title (resumed
         // sessions keep whatever name their pane/tab already carries).
         if (!resumeSid && !titleGenerated) void generateTitle();
