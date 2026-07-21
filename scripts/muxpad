@@ -747,8 +747,8 @@ cmd_tab() {
 # ─── pane ───────────────────────────────────────────────────────────────────
 
 cmd_pane_new() {
-  reset_flags tab cmd cwd direction target
-  parse_flags tab cmd cwd direction target -- "$@"
+  reset_flags tab cmd cwd direction target name
+  parse_flags tab cmd cwd direction target name -- "$@"
   local tab_id="${FLAG_tab:-${MUXPAD_TAB_ID:-}}"
   if [ -z "$tab_id" ]; then
     echo "muxpad: --tab=<id> required (no MUXPAD_TAB_ID in env)" >&2
@@ -786,7 +786,38 @@ cmd_pane_new() {
   body+='}'
   local res
   res="$(http_request POST "/api/tabs/$tab_id/panes" "$body")"
+  # --name is applied as a follow-up PATCH (create doesn't take a name);
+  # use the PATCH response for printing so the caller sees the final row.
+  if [ -n "${FLAG_name:-}" ]; then
+    local id
+    id="$(printf '%s' "$res" | jq -r .id)"
+    res="$(http_request PATCH "/api/panes/$id" "{\"name\":$(json_string "$FLAG_name")}")"
+  fi
   print_created pane "$res"
+}
+
+cmd_pane_rename() {
+  reset_flags
+  parse_flags -- "$@"
+  local id name
+  if [ "${#POSITIONAL[@]}" -ge 2 ]; then
+    id="${POSITIONAL[0]}"
+    name="${POSITIONAL[1]}"
+  elif [ "${#POSITIONAL[@]}" -eq 1 ] && [ -n "${MUXPAD_PANE_ID:-}" ]; then
+    # Inside a pane, `muxpad pane rename <name>` renames the current pane.
+    id="$MUXPAD_PANE_ID"
+    name="${POSITIONAL[0]}"
+  else
+    echo "usage: muxpad pane rename [<id>] <name>   (id defaults to MUXPAD_PANE_ID)" >&2
+    exit 1
+  fi
+  local res
+  res="$(http_request PATCH "/api/panes/$id" "{\"name\":$(json_string "$name")}")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$res"
+  else
+    printf '%s✓%s pane renamed (%s → %s)\n' "$C_GREEN" "$C_RESET" "$id" "$name"
+  fi
 }
 
 cmd_pane_list() {
@@ -868,7 +899,7 @@ cmd_pane_open() {
 cmd_pane() {
   local verb="${1:-}"
   if [ -z "$verb" ]; then
-    echo "usage: muxpad pane {new|list|delete|open}" >&2
+    echo "usage: muxpad pane {new|list|delete|open|rename}" >&2
     exit 1
   fi
   shift
@@ -877,9 +908,10 @@ cmd_pane() {
     list) cmd_pane_list "$@" ;;
     delete) cmd_pane_delete "$@" ;;
     open) cmd_pane_open "$@" ;;
+    rename) cmd_pane_rename "$@" ;;
     *)
       echo "muxpad: unknown pane verb '$verb'" >&2
-      echo "usage: muxpad pane {new|list|delete|open}" >&2
+      echo "usage: muxpad pane {new|list|delete|open|rename}" >&2
       exit 1
       ;;
   esac
@@ -1248,7 +1280,7 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
   tab list      [--workspace=<id>]
   tab delete    <id>
 
-  pane new      [--tab=<id>] [--cmd=<cmd>] [--cwd=<cwd>]
+  pane new      [--tab=<id>] [--cmd=<cmd>] [--cwd=<cwd>] [--name=<name>]
                 [--direction=right|left|above|below] [--target=<id>]
                                               shell pane. Placement is
                                               spatial: direction defaults to
@@ -1260,6 +1292,7 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                               iframe pane, same placement rules
   pane list     [--tab=<id>]
   pane delete   <id>
+  pane rename   [<id>] <name>                 id defaults to MUXPAD_PANE_ID
 
   open <url>                         open <url> in a new real browser tab
                                      (like macOS `open` / Linux `xdg-open`).

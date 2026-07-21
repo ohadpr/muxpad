@@ -266,6 +266,17 @@ export class PaneManager {
       });
     }
     r.on('exit', (code) => {
+      // A late exit from a REPLACED runtime must be a no-op. Scenario: kill()
+      // times out (slow-dying shell), force-deletes the map entry, and a new
+      // runtime for the same pane id is created; when the old shell finally
+      // dies, this handler fires for the OLD runtime. Deleting unconditionally
+      // here would evict the NEW runtime from the map while its shell keeps
+      // running — an untracked ghost that ptyd re-spawns on the next
+      // ensurePane (observed in the wild as N live shells for one pane). It
+      // would also fire onPaneExit for the pane id, telling the main server
+      // the fresh pane died. So: only clean up if we are still the runtime
+      // of record for this id.
+      if (this.runtimes.get(spec.id) !== r) return;
       // Keep it referenced so post-exit consumers can still query snapshot/exitCode,
       // but unhook from the live map so a new spec for the same id can take over.
       this.runtimes.delete(spec.id);
@@ -315,11 +326,14 @@ export class PaneManager {
       r.once('exit', finish);
       r.kill(signal);
       setTimeout(() => {
-        if (this.runtimes.has(id)) {
+        // Only evict if `r` is still the runtime of record — by now the
+        // entry may already belong to a replacement runtime (kill raced a
+        // re-ensure), and deleting that would orphan a live shell.
+        if (this.runtimes.get(id) === r) {
           r.kill('SIGKILL');
           this.runtimes.delete(id);
-          finish();
         }
+        finish();
       }, 2000);
     });
   }

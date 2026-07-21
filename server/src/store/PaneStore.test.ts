@@ -137,4 +137,26 @@ describe('PaneStore', () => {
     store.updateUrl(p.id, 'https://b');
     expect(store.getById(p.id)!.url).toBe('https://b');
   });
+
+  it('tracks the unread flag: defaults false, set and clear', () => {
+    const db = new Database(':memory:');
+    runMigrations(db);
+    db.prepare(`INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES ('w', 'w', 'w', 0, 0, 0)`).run();
+    db.prepare(`INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at) VALUES ('t', 't', 't', '', 'w', 0, 0, 0)`).run();
+    const store = new PaneStore(db);
+    const a = store.create({ tab_id: 't', shell: '/bin/zsh' });
+    const b = store.create({ tab_id: 't', shell: '/bin/zsh' });
+
+    // Defaults to not-unread.
+    expect(store.getById(a.id)!.unread).toBe(false);
+
+    // Set one → reflected in getById; the other stays clean.
+    store.setUnread(a.id, true);
+    expect(store.getById(a.id)!.unread).toBe(true);
+    expect(store.getById(b.id)!.unread).toBe(false);
+
+    // Clear.
+    store.setUnread(a.id, false);
+    expect(store.getById(a.id)!.unread).toBe(false);
+  });
 });

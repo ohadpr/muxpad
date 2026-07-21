@@ -70,6 +70,12 @@ export const PaneSpecSchema = z.object({
   // (the foreground app is working, not idling at a prompt). Decorated at
   // the route layer from the ptyd cache; same source as Tab.busy.
   busy: z.boolean().optional(),
+  // "Done, unreviewed" — an agent turn finished here while you weren't
+  // looking (or you manually marked it). Orthogonal to `attention` ("wants
+  // you NOW", a red dot): unread is the calm "there are results to read",
+  // rendered as a BOLD name (like unread mail), and cleared when you view the
+  // pane. DB-persisted (survives restart), not a runtime cache flag.
+  unread: z.boolean().optional(),
   // Runtime-only. Web apps muxpad detected this (shell) pane is serving,
   // confirmed listening. Decorated at the route layer from the ptyd cache.
   // Empty/absent for url panes and shells that aren't serving anything.
@@ -108,6 +114,11 @@ export const TabSchema = z.object({
   // the navigator. Distinct from `attention` ("wants you"): busy says
   // "working", and clears on its own when the work goes quiet.
   busy: z.boolean().optional(),
+  // "Done, unreviewed" rollup (bold name). True iff this tab was manually
+  // marked unread OR any of its panes is unread (an agent finished a turn
+  // there unobserved). Distinct from `attention` (red dot / wants-you);
+  // cleared when the tab is viewed.
+  unread: z.boolean().optional(),
 });
 export type Tab = z.infer<typeof TabSchema>;
 
@@ -128,6 +139,9 @@ export const WorkspaceSchema = z.object({
   // has rung BEL since the user last interacted with it. The list
   // endpoint folds this in from PaneManager state.
   attention: z.boolean().optional(),
+  // "Done, unreviewed" rollup (bold name). True iff any tab in this
+  // workspace is unread. Distinct from `attention` (red dot).
+  unread: z.boolean().optional(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 

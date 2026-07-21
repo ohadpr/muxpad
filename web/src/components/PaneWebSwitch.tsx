@@ -1,9 +1,9 @@
 import type { AppUrl } from '@muxpad/shared';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { subscribe } from '../events';
-import { probeUrl, requestFace } from '../lib/face-switch';
+import { isMixedContentUrl, probeUrl, requestFace } from '../lib/face-switch';
+import { announceOverlayOpen, onOtherOverlayOpen } from '../lib/overlays';
 import { normalizePaneUrl, usePaneFace } from '../lib/pane-face';
-import { addUrlRecent, getUrlRecents } from '../lib/url-recents';
 import { useDismissable } from '../lib/use-dismissable';
 import './PaneWebSwitch.css';
 
@@ -71,15 +71,15 @@ export function PaneFaceMenuList({
 
   // Reachability, checked once per open for every URL on offer. true = alive,
   // false = nothing answered, undefined = still checking (rendered neutral).
-  const recents = useMemo(
-    () => getUrlRecents(paneId).filter((u) => !appUrls.some((a) => a.url === u)),
-    [paneId, appUrls],
-  );
   const [alive, setAlive] = useState<Record<string, boolean>>({});
   useEffect(() => {
     let on = true;
-    const targets = [...new Set([...appUrls.map((a) => a.url), ...recents])];
+    const targets = [...new Set(appUrls.map((a) => a.url))];
     for (const target of targets) {
+      // Mixed-content URLs are skipped: the probe fetch is itself blocked by
+      // the browser, so its failure means "blocked", not "offline" — they
+      // get their own badge in urlItem instead of a liveness verdict.
+      if (isMixedContentUrl(target)) continue;
       void probeUrl(target).then((ok) => {
         if (on) setAlive((m) => ({ ...m, [target]: ok }));
       });
@@ -87,7 +87,7 @@ export function PaneFaceMenuList({
     return () => {
       on = false;
     };
-  }, [appUrls, recents]);
+  }, [appUrls]);
 
   const pick = (nextFace: 'terminal' | 'web' | 'chat', nextUrl?: string) => {
     requestFace({ paneId, face: nextFace, url: nextUrl ?? null });
@@ -96,7 +96,6 @@ export function PaneFaceMenuList({
   const commitDraft = () => {
     const next = normalizePaneUrl(draft);
     if (!next) return;
-    addUrlRecent(paneId, next);
     pick('web', next);
   };
 
@@ -105,22 +104,34 @@ export function PaneFaceMenuList({
   const showChat = isAgent;
   const urlItem = (target: string, label: string, sub?: string, badge?: string) => {
     const active = face === 'web' && url === target;
-    const dead = alive[target] === false;
+    // Blocked ≠ dead: a plain-http URL inside an https muxpad page is
+    // refused by the browser (mixed content) even when the server is fine.
+    // Say so — "offline" would send the user debugging a healthy server.
+    const blocked = isMixedContentUrl(target);
+    const dead = !blocked && alive[target] === false;
     return (
       <button
         key={target}
         type="button"
         role="menuitem"
-        className={`pane-web-switch-item${active ? ' is-active' : ''}${dead ? ' is-dead' : ''}`}
+        className={`pane-web-switch-item${active ? ' is-active' : ''}${dead || blocked ? ' is-dead' : ''}`}
         onClick={() => pick('web', target)}
-        title={dead ? `${target} — nothing is responding here right now` : target}
+        title={
+          blocked
+            ? `${target} — this muxpad page is https, so the browser blocks embedding plain-http URLs. Serve it over https (e.g. tailscale serve) to embed it.`
+            : dead
+              ? `${target} — nothing is responding here right now`
+              : target
+        }
       >
         <SvgGlobe />
         <span className="pane-web-switch-item-label">
           {label}
           {sub ? <span className="pane-web-switch-item-sub"> {sub}</span> : null}
         </span>
-        {dead ? (
+        {blocked ? (
+          <span className="pane-web-switch-note">http · blocked</span>
+        ) : dead ? (
           <span className="pane-web-switch-note">offline</span>
         ) : badge ? (
           <span className="pane-web-switch-badge">{badge}</span>
@@ -187,8 +198,22 @@ export function PaneFaceMenuList({
           a.source === 'marker' ? 'app' : undefined,
         ),
       )}
-      {recents.length > 0 ? <div className="pane-web-switch-head">Recent</div> : null}
-      {recents.map((u) => urlItem(u, hostLabel(u)))}
+      {face === 'web' && url ? (
+        <button
+          type="button"
+          role="menuitem"
+          className="pane-web-switch-item"
+          onClick={() => {
+            window.dispatchEvent(
+              new CustomEvent('muxpad:reload-url-pane', { detail: { paneId } }),
+            );
+            onClose();
+          }}
+        >
+          <SvgReload />
+          <span className="pane-web-switch-item-label">Reload page</span>
+        </button>
+      ) : null}
       {typing ? (
         <input
           ref={inputRef}
@@ -280,6 +305,13 @@ export function PaneWebSwitch({
       window.removeEventListener('resize', close);
     };
   }, [menuAt]);
+  // Mutually exclusive with the nav sheet (and any other top-bar overlay):
+  // announce on open so the sheet closes, and close if the sheet opens.
+  useEffect(() => {
+    if (!menuAt) return;
+    announceOverlayOpen('pane-face');
+    return onOtherOverlayOpen('pane-face', () => setMenuAt(null));
+  }, [menuAt]);
 
   // Nothing to offer: no faces beyond the terminal itself.
   if (appUrls.length === 0 && !url && !isAgent && !hasSession && face === 'terminal') return null;
@@ -311,16 +343,13 @@ export function PaneWebSwitch({
         onClick={toggle}
       >
         {showChat ? <SvgAgentGlyph /> : showWeb ? <SvgGlobe /> : <SvgTerminalGlyph />}
-        {/* Compact (in the strip tab) is the bare face glyph — one quiet
-            18px square matching the × next to it. The label, pulse dot and
-            caret are the full (mobile-bar) form; in the pill they made the
-            trigger the loudest thing there. "App detected" survives as an
-            accent tint on the glyph (CSS .is-available). */}
+        {/* Compact (in the strip tab) is the bare face glyph — one quiet 18px
+            square matching the × next to it. The full (mobile-bar) form adds
+            just a caret (so it reads as a dropdown) + the "app detected" pulse
+            dot — NO face word: the glyph already says which face, and the label
+            only made the trigger wide and loud. */}
         {compact ? null : (
           <>
-            <span className="pane-web-switch-label">
-              {showChat ? 'Chat' : showWeb ? 'Web' : 'Terminal'}
-            </span>
             {available ? <span className="pane-web-switch-dot" aria-hidden="true" /> : null}
             <span className="pane-web-switch-chevron" aria-hidden="true">
               ▾
@@ -374,6 +403,21 @@ function SvgGlobe() {
         strokeWidth="1.0"
       />
       <line x1="1.8" y1="7" x2="12.2" y2="7" stroke="currentColor" strokeWidth="1.0" />
+    </svg>
+  );
+}
+
+function SvgReload() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+      <path
+        d="M11.5 7a4.5 4.5 0 1 1-1.32-3.18M11.5 2v2.5h-2.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }

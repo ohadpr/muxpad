@@ -36,3 +36,24 @@ export async function probeUrl(url: string, timeoutMs = 1500): Promise<boolean> 
     clearTimeout(timer);
   }
 }
+
+/**
+ * True when THIS page is https but `raw` is plain http on a non-loopback
+ * host — the browser then blocks both the iframe embed and the probeUrl
+ * fetch as mixed content, no matter how alive the server is. Callers must
+ * branch BEFORE probing: for these URLs a failed probe means "blocked",
+ * not "offline", and showing "offline" sends the user debugging a server
+ * that is actually fine (observed with tailscale-served https muxpad +
+ * http dev-server app URLs). Loopback hosts are exempt — browsers treat
+ * http://localhost as potentially trustworthy even from secure contexts.
+ */
+export function isMixedContentUrl(raw: string): boolean {
+  if (window.location.protocol !== 'https:') return false;
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'http:') return false;
+    return !['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+  } catch {
+    return false;
+  }
+}

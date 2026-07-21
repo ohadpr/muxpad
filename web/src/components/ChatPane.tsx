@@ -12,6 +12,8 @@ import {
 } from '@muxpad/shared';
 import {
   type ChangeEvent,
+  type ReactNode,
+  isValidElement,
   memo,
   useEffect,
   useLayoutEffect,
@@ -23,7 +25,10 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { SvgAgentGlyph } from './PaneWebSwitch';
 import { api } from '../api';
-import { splitMessageAttachments } from '../lib/attachments';
+import { type MessagePart, splitMessageAttachments } from '../lib/attachments';
+
+/** Open a media item in the lightbox (image or video). */
+type OpenMedia = (m: { url: string; name: string; video: boolean }) => void;
 import { recallChatScroll, rememberChatScroll } from '../lib/chat-scroll';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
 import { isMobileLayout } from '../lib/mobile-layout';
@@ -34,14 +39,95 @@ import './ChatPane.css';
 // HTML is allowed through (no rehype-raw) so user/model content can't inject
 // markup — react-markdown escapes everything by default. Links open safely in
 // a new tab; everything else is styled from the .chat-md-* rules in the CSS.
+// Per-block base direction, computed in JS from the block's first strong
+// character over its (possibly nested) children. This is dir="auto" done
+// right: native dir="auto" on a <li> fails because react-markdown wraps
+// loose-list text in a <p> — the <li> then has no DIRECT text and defaults
+// LTR, flipping the bullet to the wrong side; and dir="auto" on the whole
+// message mis-directs a Hebrew body under an English intro line. Computing
+// from the real text sidesteps both — each paragraph/list-item/quote gets its
+// own correct direction. Code stays LTR.
+const RTL_CHAR = /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB1D-\uFB4F\uFB50-\uFDFF\uFE70-\uFEFF]/; // Hebrew, Arabic (+ presentation forms)
+const LTR_CHAR = /[a-z\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF]/i; // Latin, Greek, Cyrillic
+function textOf(node: ReactNode): string {
+  if (node == null || typeof node === 'boolean') return '';
+  if (typeof node === 'string') return node;
+  if (typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join('');
+  if (isValidElement(node)) return textOf((node.props as { children?: ReactNode }).children);
+  return '';
+}
+function baseDir(children: ReactNode): 'rtl' | 'ltr' | undefined {
+  for (const ch of textOf(children)) {
+    if (RTL_CHAR.test(ch)) return 'rtl';
+    if (LTR_CHAR.test(ch)) return 'ltr';
+  }
+  return undefined;
+}
 const MD_COMPONENTS: Components = {
   a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" />,
+  p: ({ node: _node, children, ...props }) => (
+    <p dir={baseDir(children)} {...props}>
+      {children}
+    </p>
+  ),
+  ul: ({ node: _node, children, ...props }) => (
+    <ul dir={baseDir(children)} {...props}>
+      {children}
+    </ul>
+  ),
+  ol: ({ node: _node, children, ...props }) => (
+    <ol dir={baseDir(children)} {...props}>
+      {children}
+    </ol>
+  ),
+  li: ({ node: _node, children, ...props }) => (
+    <li dir={baseDir(children)} {...props}>
+      {children}
+    </li>
+  ),
+  h1: ({ node: _node, children, ...props }) => (
+    <h1 dir={baseDir(children)} {...props}>
+      {children}
+    </h1>
+  ),
+  h2: ({ node: _node, children, ...props }) => (
+    <h2 dir={baseDir(children)} {...props}>
+      {children}
+    </h2>
+  ),
+  h3: ({ node: _node, children, ...props }) => (
+    <h3 dir={baseDir(children)} {...props}>
+      {children}
+    </h3>
+  ),
+  h4: ({ node: _node, children, ...props }) => (
+    <h4 dir={baseDir(children)} {...props}>
+      {children}
+    </h4>
+  ),
+  h5: ({ node: _node, children, ...props }) => (
+    <h5 dir={baseDir(children)} {...props}>
+      {children}
+    </h5>
+  ),
+  h6: ({ node: _node, children, ...props }) => (
+    <h6 dir={baseDir(children)} {...props}>
+      {children}
+    </h6>
+  ),
+  blockquote: ({ node: _node, children, ...props }) => (
+    <blockquote dir={baseDir(children)} {...props}>
+      {children}
+    </blockquote>
+  ),
+  pre: ({ node: _node, ...props }) => <pre dir="ltr" {...props} />,
 };
 
 /** Renders (possibly partial/streaming) markdown for assistant messages. */
 function Markdown({ text }: { text: string }) {
   return (
-    <div className="chat-md">
+    <div className="chat-md" dir="auto">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
         {text}
       </ReactMarkdown>
@@ -60,6 +146,44 @@ function SvgCamera() {
         strokeLinejoin="round"
       />
       <circle cx="12" cy="13" r="3.2" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  );
+}
+
+/** Queue glyph — an arrow settling onto a baseline ("send it in later"). */
+function SvgQueue() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" fill="none">
+      <path
+        d="M12 4v10m0 0 4-4m-4 4-4-4"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M5 19h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Restore glyph — a curved back-arrow ("pull it back to the composer"). */
+function SvgRestore() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" fill="none">
+      <path
+        d="M9 10H5V6"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M5 10a8 8 0 1 1 2 5.3"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -328,6 +452,10 @@ export function ChatPane({
   const renderedSid = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
+  // Live mirror of `active` for the WS message handler's closures (which
+  // capture it at subscription time) — see the turn-done seen-clear.
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const wsRef = useRef<WebSocket | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -374,7 +502,11 @@ export function ChatPane({
   // full command + output. null = closed.
   const [openTool, setOpenTool] = useState<ToolDetail | null>(null);
   // A pasted image opened full-size in a lightbox from history. null = closed.
-  const [openImage, setOpenImage] = useState<{ url: string; name: string } | null>(null);
+  const [openImage, setOpenImage] = useState<{
+    url: string;
+    name: string;
+    video: boolean;
+  } | null>(null);
   // Floating "jump to latest" arrow — shown only when scrolled up off the bottom.
   const [showScrollDown, setShowScrollDown] = useState(false);
   // The floating composer overlaps the scroll area, so we reserve its exact
@@ -596,6 +728,12 @@ export function ChatPane({
         // (live-verified: Stop interrupts background tasks too) — clear.
         if (msg.ok === false) setSubagents({});
         setNotice(msg.ok ? null : { text: msg.error ?? 'turn failed', tone: 'danger' });
+        // If you're looking at this pane when the turn finishes, it's already
+        // "read" — clear the server's "done, unreviewed" bold immediately so
+        // the nav never flickers unread for the pane you're actively watching.
+        // (The server marks unread on every unobserved turn-done; being here IS
+        // observing.) No-op when the pane already isn't unread.
+        if (activeRef.current) void api.markPaneSeen(paneId).catch(() => {});
       } else if (msg.t === 'question') {
         setQuestion({ qid: msg.qid, questions: msg.questions });
       } else if (msg.t === 'question-done') {
@@ -767,6 +905,69 @@ export function ChatPane({
     }, 6000);
   };
 
+  // Queued messages: composed while the agent is busy, held here, and flushed
+  // one at a time the moment a turn finishes (the effect below). Each keeps its
+  // prose + attachment previews so it can be restored into the composer to edit
+  // before it ever runs. The blob preview URLs are TRANSFERRED into the queued
+  // item (not revoked) so the thumbnails survive the trip; revoked on send.
+  const [queued, setQueued] = useState<
+    { id: number; text: string; attachments: { path: string; name: string; previewUrl: string }[] }[]
+  >([]);
+  const queuedIdRef = useRef(0);
+  const queuedRef = useRef(queued);
+  queuedRef.current = queued;
+  useEffect(
+    () => () => {
+      for (const q of queuedRef.current)
+        for (const a of q.attachments) URL.revokeObjectURL(a.previewUrl);
+    },
+    [],
+  );
+
+  // Fire a composed message onto the live socket. Returns false (and leaves the
+  // caller's draft intact) when the socket isn't open, so the queue flusher can
+  // retry on reconnect. Shared by a direct send and a queued flush.
+  const dispatchSend = (outgoing: string): boolean => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    pendingText.current = outgoing;
+    setOptimisticUser(outgoing); // show it immediately, don't wait for the transcript
+    ws.send(JSON.stringify({ t: 'send', text: outgoing }));
+    setNotice(null);
+    setSending(true);
+    armSendWatchdog(outgoing);
+    return true;
+  };
+
+  // Stash the composed message to auto-send when the current turn ends. Keeps
+  // the prose + attachment previews; clears the composer WITHOUT revoking the
+  // blob URLs (the queued item now owns them, so its thumbnail stays live).
+  const queueMessage = () => {
+    const text = input.trim();
+    const attachments = chipsRef.current.map((c) => ({
+      path: c.path,
+      name: c.name,
+      previewUrl: c.previewUrl,
+    }));
+    if (!text && attachments.length === 0) return;
+    setQueued((q) => [...q, { id: (queuedIdRef.current += 1), text, attachments }]);
+    setInput('');
+    setChips([]); // ownership transferred to the queued item — do NOT revoke
+  };
+
+  // Pull a queued message back into the composer to edit before it runs.
+  const restoreQueued = (id: number) => {
+    const item = queuedRef.current.find((q) => q.id === id);
+    if (!item) return;
+    setQueued((q) => q.filter((x) => x.id !== id));
+    setInput((cur) => (cur.trim() ? `${item.text}\n${cur}` : item.text));
+    setChips((prev) => [
+      ...prev,
+      ...item.attachments.map((a) => ({ path: a.path, name: a.name, previewUrl: a.previewUrl })),
+    ]);
+    inputRef.current?.focus();
+  };
+
   const sendMessage = () => {
     const text = input.trim();
     // Attachment paths ride along at the END of the message — Claude reads
@@ -785,26 +986,42 @@ export function ChatPane({
       setInput('');
       return;
     }
-    if (sending) return;
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+    // Agent busy → queue it instead of blocking; the flusher sends it when the
+    // turn ends. (Previously this was a silent no-op.)
+    if (sending) {
+      queueMessage();
+      return;
+    }
+    const outgoing = [text, ...attachmentPaths].filter(Boolean).join(' ');
+    if (!dispatchSend(outgoing)) {
       // Don't fire into a dead socket (the browser would drop it silently).
       // Keep the text (and chips) in the composer, kick a reconnect, retry.
       setNotice({ text: 'Reconnecting — try again in a moment.', tone: 'info' });
       reconnectNow.current();
       return;
     }
-    const outgoing = [text, ...attachmentPaths].filter(Boolean).join(' ');
-    pendingText.current = outgoing;
-    setOptimisticUser(outgoing); // show it immediately, don't wait for the transcript
-    ws.send(JSON.stringify({ t: 'send', text: outgoing }));
     setInput('');
     clearChips();
-    setNotice(null);
-    setSending(true);
-    armSendWatchdog(outgoing);
   };
   const stop = () => wsRef.current?.send(JSON.stringify({ t: 'stop' }));
+
+  // Flush the queue one message per turn: when the socket is idle (not sending)
+  // and connected, dequeue the oldest and send it. Sending flips `sending`
+  // true, so the next flush waits for that turn's turn-done — the messages run
+  // in order, never piling into one turn.
+  useEffect(() => {
+    if (sending || queued.length === 0 || !connected) return;
+    const [next, ...rest] = queued;
+    if (!next) return;
+    const outgoing = [next.text, ...next.attachments.map((a) => a.path)].filter(Boolean).join(' ');
+    if (dispatchSend(outgoing)) {
+      setQueued(rest);
+      for (const a of next.attachments) URL.revokeObjectURL(a.previewUrl);
+    }
+    // dispatchSend false (socket not open) → keep the queue; retry when
+    // `connected` flips true again.
+    // biome-ignore lint/correctness/useExhaustiveDependencies: dispatchSend is re-created each render; the send triggers are sending/queued/connected.
+  }, [sending, queued, connected]);
 
   const answerQuestion = (qid: string, answers: Array<{ question: string; answers: string[] }>) => {
     wsRef.current?.send(JSON.stringify({ t: 'answer', qid, answers }));
@@ -886,6 +1103,8 @@ export function ChatPane({
     },
     [],
   );
+
+
   const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const data = e.clipboardData;
     if (!data) return;
@@ -935,11 +1154,19 @@ export function ChatPane({
   // the map object every ~500ms without changing content height, and each
   // firing costs a forced reflow (scrollHeight read). Rows appear/disappear
   // only when the count moves.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: events/streamingText/optimisticUser/question/subagent-count are the scroll triggers
+  // biome-ignore lint/correctness/useExhaustiveDependencies: events/streamingText/optimisticUser/question/subagent-count/queued-count are the scroll triggers
   useEffect(() => {
     const el = scrollRef.current;
     if (el && active && pinnedToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [events, streamingText, optimisticUser, question, Object.keys(subagents).length, active]);
+  }, [
+    events,
+    streamingText,
+    optimisticUser,
+    question,
+    Object.keys(subagents).length,
+    queued.length,
+    active,
+  ]);
 
   // Auto-grow the composer like ChatGPT: reset to content height, capped by CSS
   // max-height (the textarea keeps scrolling past that). `input` is the trigger
@@ -992,29 +1219,53 @@ export function ChatPane({
     return () => window.removeEventListener('keydown', onKey);
   }, [active, openTool, openImage]);
 
-  // Restore the remembered scroll once per activation, after the replayed
-  // history has rendered. Runs BEFORE the follow-the-bottom effect (layout
-  // effects fire first) so setting pinned=false here stops it from snapping
-  // a returning reader to the bottom. Pinned/unknown memory keeps the
-  // existing behavior; a sid mismatch (cleared session) is stale — ignore.
-  const restoredScroll = useRef(false);
+  // Restore & HOLD the remembered scroll on (re)activation. A ChatPane's
+  // scroll height is NOT final when the first events render: the fill-viewport
+  // pager keeps prepending older batches, image thumbnails load, and the sid
+  // (staleness guard) may not be bound yet. A one-shot restore lands against a
+  // partial height and drifts (the "doesn't always remember" bug). Instead,
+  // re-apply the remembered RATIO each frame for a short settling window — it
+  // converges as content arrives, and stops the instant the reader scrolls.
+  const userScrolled = useRef(false);
+  const lastProgrammaticTop = useRef(-1);
   useLayoutEffect(() => {
     if (!active) {
-      restoredScroll.current = false; // hidden panes lose scrollTop — re-restore on return
+      userScrolled.current = false; // hidden panes lose scrollTop — re-restore on return
       return;
     }
-    if (restoredScroll.current || events.length === 0) return;
-    const el = scrollRef.current;
-    if (!el) return;
-    restoredScroll.current = true;
-    const mem = recallChatScroll(paneId);
-    if (mem && !mem.pinned && mem.sid === renderedSid.current) {
-      pinnedToBottom.current = false;
-      // Ratio, not absolute: content height may have changed while away
-      // (lazy thumbnails) — a fraction of the range degrades gracefully.
-      el.scrollTop = mem.ratio * (el.scrollHeight - el.clientHeight);
-    }
-  }, [active, events, paneId]);
+    userScrolled.current = false;
+    // Un-pin up front for a non-bottom memory so the follow-the-bottom effect
+    // can't snap the reader down before the restore lands.
+    const mem0 = recallChatScroll(paneId);
+    if (mem0 && !mem0.pinned) pinnedToBottom.current = false;
+    let raf = 0;
+    const deadline = Date.now() + 1500;
+    const apply = () => {
+      raf = 0;
+      const el = scrollRef.current;
+      if (el && !userScrolled.current) {
+        const mem = recallChatScroll(paneId);
+        if (
+          mem &&
+          !mem.pinned &&
+          mem.sid === renderedSid.current &&
+          el.scrollHeight > el.clientHeight
+        ) {
+          pinnedToBottom.current = false;
+          const target = Math.round(mem.ratio * (el.scrollHeight - el.clientHeight));
+          if (Math.abs(el.scrollTop - target) > 1) {
+            lastProgrammaticTop.current = target;
+            el.scrollTop = target;
+          }
+        }
+      }
+      if (Date.now() < deadline && !userScrolled.current) raf = requestAnimationFrame(apply);
+    };
+    apply(); // first pass runs before paint — no flash
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [active, paneId]);
 
   // After an older-history batch prepends, content grew above the viewport;
   // restore the scroll so the messages the user was looking at stay put (runs
@@ -1068,6 +1319,9 @@ export function ChatPane({
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
+    // The settling restore above fires this too; a scroll AWAY from its last
+    // programmatic target is the reader taking control — stop re-restoring.
+    if (Math.abs(el.scrollTop - lastProgrammaticTop.current) > 1) userScrolled.current = true;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     pinnedToBottom.current = nearBottom;
     rememberChatScroll(paneId, {
@@ -1383,7 +1637,9 @@ export function ChatPane({
     const t = window.setTimeout(() => forceStaleCheck((n) => n + 1), 3_000);
     return () => window.clearTimeout(t);
   });
-  const [rosterOpen, setRosterOpen] = useState(true);
+  // Minimized by default: the header (count + spinner) already says "subagents
+  // are working"; expand to see per-agent detail. Tap toggles.
+  const [rosterOpen, setRosterOpen] = useState(false);
 
   return (
     <div className="chat-pane">
@@ -1395,7 +1651,7 @@ export function ChatPane({
           {body}
           {optimisticUser ? (
             <div className="chat-turn chat-turn-user">
-              <div className="chat-bubble">
+              <div className="chat-bubble" dir="auto">
                 <UserText text={optimisticUser} onOpenImage={setOpenImage} />
               </div>
             </div>
@@ -1426,6 +1682,38 @@ export function ChatPane({
               onAnswer={(answers) => answerQuestion(question.qid, answers)}
             />
           ) : null}
+          {/* Queued messages ride at the BOTTOM of the chat — pending user
+              bubbles under the latest message + working indicator, scrolling
+              with the log (not pinned to the composer). Dashed + muted = "not
+              sent yet"; the restore button pulls it back to edit. */}
+          {queued.map((q) => (
+            <div key={q.id} className="chat-turn chat-turn-user chat-turn-queued">
+              <button
+                type="button"
+                className="chat-queued-edit"
+                onClick={() => restoreQueued(q.id)}
+                aria-label="Edit — restore to the composer"
+                title="Queued — tap to edit before it sends"
+              >
+                <SvgRestore />
+              </button>
+              <div className="chat-bubble chat-bubble-queued" dir="auto">
+                {q.attachments.length > 0 ? (
+                  <div className="chat-queued-atts">
+                    {q.attachments.map((a) => (
+                      <img
+                        key={a.path}
+                        className="chat-queued-thumb"
+                        src={a.previewUrl}
+                        alt={a.name}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+                {q.text ? <div className="chat-queued-text">{q.text}</div> : null}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
       {showScrollDown ? (
@@ -1442,7 +1730,12 @@ export function ChatPane({
       ) : null}
       {openTool ? <ToolModal detail={openTool} onClose={() => setOpenTool(null)} /> : null}
       {openImage ? (
-        <ImageModal url={openImage.url} name={openImage.name} onClose={() => setOpenImage(null)} />
+        <ImageModal
+          url={openImage.url}
+          name={openImage.name}
+          video={openImage.video}
+          onClose={() => setOpenImage(null)}
+        />
       ) : null}
       {session?.current_sid ? (
         <div className="chat-composer-wrap" ref={composerRef}>
@@ -1524,15 +1817,31 @@ export function ChatPane({
                 rows={1}
               />
               {sending && !question ? (
-                <button
-                  type="button"
-                  className="chat-send is-stop"
-                  onClick={stop}
-                  aria-label="Stop"
-                  title="Stop"
-                >
-                  <span className="chat-send-glyph" aria-hidden="true" />
-                </button>
+                <>
+                  {/* Busy + composed text → offer Queue (sends when the turn
+                      ends) alongside Stop, instead of the old dead-end where a
+                      typed message just wouldn't send. */}
+                  {input.trim() || chips.length > 0 ? (
+                    <button
+                      type="button"
+                      className="chat-send is-queue"
+                      onClick={queueMessage}
+                      aria-label="Queue message — sends when the agent is free"
+                      title="Queue — sends when the agent is free"
+                    >
+                      <SvgQueue />
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="chat-send is-stop"
+                    onClick={stop}
+                    aria-label="Stop"
+                    title="Stop"
+                  >
+                    <span className="chat-send-glyph" aria-hidden="true" />
+                  </button>
+                </>
               ) : (
                 <button
                   type="button"
@@ -1644,13 +1953,13 @@ const ChatRow = memo(function ChatRow({
   onOpenImage,
 }: {
   event: ChatEvent;
-  onOpenImage?: ((img: { url: string; name: string }) => void) | undefined;
+  onOpenImage?: OpenMedia | undefined;
 }) {
   switch (event.kind) {
     case 'user':
       return (
         <div className="chat-turn chat-turn-user">
-          <div className="chat-bubble">
+          <div className="chat-bubble" dir="auto">
             <UserText text={event.text} onOpenImage={onOpenImage} />
           </div>
         </div>
@@ -1659,14 +1968,14 @@ const ChatRow = memo(function ChatRow({
       return (
         <div className="chat-turn chat-turn-assistant">
           <div className="chat-msg">
-            <Markdown text={event.text} />
+            <AssistantText text={event.text} onOpenImage={onOpenImage} />
           </div>
         </div>
       );
     case 'thinking':
       return (
         <div className="chat-turn chat-turn-assistant">
-          <div className="chat-thinking">{event.text}</div>
+          <div className="chat-thinking" dir="auto">{event.text}</div>
         </div>
       );
     case 'notice':
@@ -1686,28 +1995,40 @@ function UserText({
   onOpenImage,
 }: {
   text: string;
-  onOpenImage?: ((img: { url: string; name: string }) => void) | undefined;
+  onOpenImage?: OpenMedia | undefined;
 }) {
   const parts = splitMessageAttachments(text);
   if (parts.length === 1 && parts[0]?.kind === 'text') return <>{text}</>;
   return (
     <>
-      {parts.map((part, i) =>
-        part.kind === 'text' ? (
-          // biome-ignore lint/suspicious/noArrayIndexKey: parts are positional
-          <span key={i}>{part.text}</span>
-        ) : (
-          <button
-            // biome-ignore lint/suspicious/noArrayIndexKey: parts are positional
-            key={i}
-            type="button"
-            className="chat-img-thumb"
-            title={part.path}
-            onClick={() => onOpenImage?.({ url: part.url, name: part.name })}
-          >
-            <img src={part.url} alt={part.name} loading="lazy" />
-          </button>
-        ),
+      {renderMessageParts(
+        parts,
+        (t, key) => <span key={key}>{t}</span>,
+        (m) => onOpenImage?.(m),
+      )}
+    </>
+  );
+}
+
+// Assistant messages render as markdown, but the agent can SHOW files by
+// including attachment paths (from the `show_files` tool) — same host-served
+// bytes as pasted user images. Images/videos become an inline gallery, other
+// files a click-to-open chip; prose runs render as markdown around them.
+function AssistantText({
+  text,
+  onOpenImage,
+}: {
+  text: string;
+  onOpenImage?: OpenMedia | undefined;
+}) {
+  const parts = splitMessageAttachments(text);
+  if (parts.length === 1 && parts[0]?.kind === 'text') return <Markdown text={text} />;
+  return (
+    <>
+      {renderMessageParts(
+        parts,
+        (t, key) => <Markdown key={key} text={t} />,
+        (m) => onOpenImage?.(m),
       )}
     </>
   );
@@ -1718,10 +2039,12 @@ function UserText({
 function ImageModal({
   url,
   name,
+  video,
   onClose,
 }: {
   url: string;
   name: string;
+  video: boolean;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -1734,9 +2057,114 @@ function ImageModal({
   return (
     <div className="chat-modal-backdrop chat-img-backdrop">
       <button type="button" className="chat-modal-scrim" aria-label="Close" onClick={onClose} />
-      <img className="chat-img-full" src={url} alt={name} />
+      {video ? (
+        // biome-ignore lint/a11y/useMediaCaption: user-shared clip, no track available
+        <video className="chat-img-full" src={url} controls autoPlay playsInline />
+      ) : (
+        <img className="chat-img-full" src={url} alt={name} />
+      )}
     </div>
   );
+}
+
+/** Media (image/video) attachments rendered inline. One shows large; several
+ *  collapse into a thumbnail grid (click → lightbox) so the chat doesn't grow a
+ *  screenful per artifact. */
+function MediaGallery({
+  items,
+  onOpen,
+}: {
+  items: { media: 'image' | 'video'; url: string; name: string }[];
+  onOpen: (m: { url: string; name: string; video: boolean }) => void;
+}) {
+  if (items.length === 1) {
+    const it = items[0];
+    if (!it) return null;
+    const video = it.media === 'video';
+    return (
+      <button
+        type="button"
+        className={`chat-img-thumb${video ? ' -video' : ''}`}
+        title={it.name}
+        onClick={() => onOpen({ url: it.url, name: it.name, video })}
+      >
+        {video ? (
+          // biome-ignore lint/a11y/useMediaCaption: user-shared clip
+          <video src={it.url} preload="metadata" muted playsInline />
+        ) : (
+          <img src={it.url} alt={it.name} loading="lazy" />
+        )}
+        {video ? <span className="chat-media-play" aria-hidden="true" /> : null}
+      </button>
+    );
+  }
+  return (
+    <div className="chat-gallery" style={{ '--n': Math.min(items.length, 3) } as React.CSSProperties}>
+      {items.map((it, i) => {
+        const video = it.media === 'video';
+        return (
+          <button
+            // Index-suffixed: the same attachment can legitimately appear twice
+            // in one message, so the url alone isn't a unique key.
+            // biome-ignore lint/suspicious/noArrayIndexKey: order is stable within a message
+            key={`${it.url}-${i}`}
+            type="button"
+            className={`chat-gallery-item${video ? ' -video' : ''}`}
+            title={it.name}
+            onClick={() => onOpen({ url: it.url, name: it.name, video })}
+          >
+            {video ? (
+              // biome-ignore lint/a11y/useMediaCaption: user-shared clip
+              <video src={it.url} preload="metadata" muted playsInline />
+            ) : (
+              <img src={it.url} alt={it.name} loading="lazy" />
+            )}
+            {video ? <span className="chat-media-play" aria-hidden="true" /> : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Non-visual attachment (pdf/csv/txt/…) — a compact click-to-open chip. */
+function FileChip({ name, url }: { name: string; url: string }) {
+  const ext = name.slice(name.lastIndexOf('.') + 1).toUpperCase();
+  return (
+    <a className="chat-filechip" href={url} target="_blank" rel="noreferrer noopener" title={name}>
+      <span className="chat-filechip-ext" aria-hidden="true">
+        {ext.slice(0, 4) || 'FILE'}
+      </span>
+      <span className="chat-filechip-name">{name}</span>
+    </a>
+  );
+}
+
+/** Render message parts: prose via `renderText`, consecutive image/video parts
+ *  grouped into one gallery, other files as chips. */
+function renderMessageParts(
+  parts: MessagePart[],
+  renderText: (text: string, key: string) => React.ReactNode,
+  onOpen: (m: { url: string; name: string; video: boolean }) => void,
+): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  let media: { media: 'image' | 'video'; url: string; name: string }[] = [];
+  const flush = () => {
+    if (media.length === 0) return;
+    out.push(<MediaGallery key={`gal-${out.length}`} items={media} onOpen={onOpen} />);
+    media = [];
+  };
+  for (const [i, part] of parts.entries()) {
+    if (part.kind === 'media') {
+      media.push({ media: part.media, url: part.url, name: part.name });
+    } else {
+      flush();
+      if (part.kind === 'file') out.push(<FileChip key={`f-${i}`} name={part.name} url={part.url} />);
+      else out.push(renderText(part.text, `t-${i}`));
+    }
+  }
+  flush();
+  return out;
 }
 
 // Icon per notice variant — a task update vs a session reminder.
@@ -1867,6 +2295,22 @@ interface RosterAgent {
   busy: boolean;
 }
 
+/** Small ring spinner for the subagent roster (CSS spins the wrapper). */
+function RosterSpinner() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2" fill="none" opacity="0.25" />
+      <path
+        d="M8 2 a6 6 0 0 1 6 6"
+        stroke="currentColor"
+        strokeWidth="2"
+        fill="none"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 /**
  * Persistent live roster of the subagents running RIGHT NOW — pinned by the
  * composer's session chip, never in the transcript. The scroll is a timeline
@@ -1900,6 +2344,11 @@ function SubagentRoster({
         <span className="chat-roster-count">
           {agents.length} subagent{agents.length === 1 ? '' : 's'}
         </span>
+        {/* Header spinner: keeps "work is happening" visible even collapsed,
+            without expanding the list. */}
+        <span className="chat-roster-spin -head" aria-hidden="true">
+          <RosterSpinner />
+        </span>
         <span className="chat-roster-chevron" aria-hidden="true">
           {open ? '▾' : '▸'}
         </span>
@@ -1908,7 +2357,13 @@ function SubagentRoster({
         <ul className="chat-roster-list">
           {agents.map((a) => (
             <li key={a.id} className="chat-roster-item" data-busy={a.busy || undefined}>
-              <span className="chat-roster-dot" aria-hidden="true" />
+              {/* A spinner, not a dot: a row only exists while the subagent is
+                  running (it self-removes on finish), so "present = working" —
+                  a spinner says that unambiguously and kills the "is it stuck?"
+                  doubt. data-busy just brightens it when progress is fresh. */}
+              <span className="chat-roster-spin" aria-hidden="true">
+                <RosterSpinner />
+              </span>
               <span className="chat-roster-name">{a.label}</span>
               {/* Name + a compact step count once it has any (steps only
                   increase, so this stays put — gating on `busy` made it flicker
