@@ -42,6 +42,13 @@ const workspaceLayoutRoute = createRoute({
 const tabRoute = createRoute({
   getParentRoute: () => workspaceLayoutRoute,
   path: 't/$tabSlug',
+  // `?pane=<id>` reflects the ACTIVE pane in single-pane modes (mobile + the
+  // desktop 'tabbed' view, where panes read as tabs) so a refresh / shared
+  // link / back button lands on the same pane. The split mosaic shows every
+  // pane at once, so it ignores this. TabView owns reading + syncing it.
+  validateSearch: (search: Record<string, unknown>): { pane?: string | undefined } => ({
+    pane: typeof search.pane === 'string' && search.pane ? search.pane : undefined,
+  }),
   component: () => null,
 });
 

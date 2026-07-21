@@ -120,19 +120,23 @@ export function tabsRoutes(deps: {
       );
     }
     const list = tabs.listByWorkspace(workspaceId);
-    // Fold in per-tab attention flag. A tab flags as needing attention if
-    // it was manually marked unread, OR any of its panes has rung BEL
-    // since the user last interacted with it. Panes whose runtime isn't
-    // running (lazy-spawn, no client connected) contribute false.
-    const unreadIds = tabs.unreadIdsByWorkspace(workspaceId);
+    // Fold in the two independent per-tab signals:
+    //   attention (red dot, "wants you NOW") = any pane rang BEL since you
+    //     last interacted. Purely runtime.
+    //   unread (bold name, "done, unreviewed") = the tab was manually marked
+    //     unread, OR any pane is unread (an agent finished a turn there while
+    //     you weren't looking). DB-persisted.
+    // Panes whose runtime isn't running (lazy-spawn, no client) contribute
+    // false to attention/busy; their persisted `unread` still counts.
+    const manualUnreadIds = tabs.unreadIdsByWorkspace(workspaceId);
     const decorated = list.map((t) => {
       const tabPanes = panes.listByTab(t.id);
-      const attention = unreadIds.has(t.id) || tabPanes.some((p) => deps.cache.getAttention(p.id));
-      // Busy = any pane in the tab is actively producing output. Unlike
-      // attention this is purely runtime (never manual/persisted) and clears
-      // itself when the work goes quiet.
+      const attention = tabPanes.some((p) => deps.cache.getAttention(p.id));
+      const unread = manualUnreadIds.has(t.id) || tabPanes.some((p) => p.unread);
+      // Busy = any pane in the tab is actively producing output. Purely
+      // runtime (never persisted) and clears itself when the work goes quiet.
       const busy = tabPanes.some((p) => deps.cache.getBusy(p.id));
-      return { ...t, attention, busy };
+      return { ...t, attention, unread, busy };
     });
     return c.json(decorated);
   });
@@ -142,15 +146,30 @@ export function tabsRoutes(deps: {
   // attention dot doesn't reappear if they leave without typing.
   app.post('/:id/seen', async (c) => {
     const id = c.req.param('id');
-    // Viewing the tab also clears any manual "unread" mark — seeing it is
-    // the read action. Synchronous DB write, independent of ptyd.
+    // Viewing the tab clears the read-state flags — seeing it is the read
+    // action: the manual tab "unread" mark AND every pane's "done, unreviewed"
+    // bold. Synchronous DB writes, independent of ptyd.
     tabs.setUnread(id, false);
-    // Issue markSeen against ptyd in parallel; swallow per-pane failures
-    // (idempotent — markSeen on a missing id is a no-op on ptyd's side).
-    // No response payload, so the round-trip latency only blocks the 204
-    // response — clients don't wait on it before navigating.
+    const tabPanes = panes.listByTab(id);
+    for (const p of tabPanes) {
+      if (!p.unread) continue;
+      panes.setUnread(p.id, false);
+      // Emit so OTHER connected clients drop the bold immediately instead of
+      // waiting for their next nav poll (parity with the pane /seen route).
+      const fresh = panes.getById(p.id);
+      if (fresh)
+        deps.events.emit({
+          type: 'pane.updated',
+          tab_id: fresh.tab_id,
+          pane: decoratePane(deps.cache, fresh),
+        });
+    }
+    // Issue markSeen (BEL/red-dot clear) against ptyd in parallel; swallow
+    // per-pane failures (idempotent — markSeen on a missing id is a no-op on
+    // ptyd's side). No response payload, so the round-trip latency only blocks
+    // the 204 response — clients don't wait on it before navigating.
     await Promise.all(
-      panes.listByTab(id).map((p) =>
+      tabPanes.map((p) =>
         deps.ptyd.markSeen(p.id).catch(() => {
           // ignore — markSeen is best-effort
         }),

@@ -2,6 +2,7 @@ import type { PaneSpec } from '@muxpad/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from './events.js';
 import {
+  Presence,
   type PushPayload,
   type PushService,
   attachAttentionPush,
@@ -41,13 +42,34 @@ describe('createPaneNotifier', () => {
 
     createPaneNotifier(db, push)(pane.id, 'agent finished its turn');
     expect(sent[0]).toMatchObject({
-      title: `${tab.name} — ${ws.name}`,
+      title: tab.name,
       body: 'agent finished its turn',
       url: `/w/${ws.slug}/t/${tab.slug}?ptab=${tab.id}&pane=${pane.id}`,
       tab_id: tab.id,
       pane_id: pane.id,
       tag: pane.id,
     });
+  });
+
+  it('holds the push while a device is active, sends once presence lapses', () => {
+    const db = openDb(':memory:');
+    const ws = new WorkspaceStore(db).create({ name: 'Dev' });
+    const tab = new TabStore(db).create({ name: 'muxpad', layout: '', workspace_id: ws.id });
+    const pane = new PaneStore(db).create({ tab_id: tab.id, shell: '/bin/zsh', cwd: '/tmp' });
+    const sent: PushPayload[] = [];
+    const push = { send: async (p: PushPayload) => void sent.push(p) } as unknown as PushService;
+    const presence = new Presence();
+    const notify = createPaneNotifier(db, push, presence);
+
+    presence.mark(); // a device just pinged
+    notify(pane.id, 'finished its turn');
+    expect(sent).toHaveLength(0); // held — user is active
+
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 120_000); // 2 min later, no heartbeat
+    notify(pane.id, 'finished its turn');
+    vi.useRealTimers();
+    expect(sent).toHaveLength(1); // presence lapsed — push goes out
   });
 
   it('falls back to the root when the pane is unknown', () => {

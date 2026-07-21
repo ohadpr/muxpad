@@ -24,25 +24,31 @@ export function workspacesRoutes(deps: {
   const panes = new PaneStore(deps.db);
 
   /**
-   * Returns true iff any tab in `workspaceId` flags attention — either
-   * manually marked unread, or any of its panes has rung BEL since last
-   * seen. Mirrors the per-tab fold in routes/tabs.ts so the workspace
-   * rollup dot and the tab dots never disagree.
+   * The two rollup signals for a workspace, mirroring the per-tab fold in
+   * routes/tabs.ts so the workspace-level and tab-level indicators never
+   * disagree:
+   *   attention (red dot) = any pane rang BEL since last seen. Runtime.
+   *   unread (bold name)  = any tab manually marked unread, OR any pane is
+   *     unread (an agent finished a turn there unobserved). Persisted.
    */
-  const workspaceAttention = (workspaceId: string): boolean => {
-    const unreadIds = tabs.unreadIdsByWorkspace(workspaceId);
+  const workspaceFlags = (workspaceId: string): { attention: boolean; unread: boolean } => {
+    const manualUnreadIds = tabs.unreadIdsByWorkspace(workspaceId);
+    let attention = false;
+    let unread = false;
     for (const t of tabs.listByWorkspace(workspaceId)) {
-      if (unreadIds.has(t.id)) return true;
+      if (manualUnreadIds.has(t.id)) unread = true;
       for (const p of panes.listByTab(t.id)) {
-        if (deps.cache.getAttention(p.id)) return true;
+        if (deps.cache.getAttention(p.id)) attention = true;
+        if (p.unread) unread = true;
       }
+      if (attention && unread) break; // both known — no need to scan further
     }
-    return false;
+    return { attention, unread };
   };
 
   app.get('/', (c) => {
     const list = workspaces.list();
-    const decorated = list.map((w) => ({ ...w, attention: workspaceAttention(w.id) }));
+    const decorated = list.map((w) => ({ ...w, ...workspaceFlags(w.id) }));
     return c.json(decorated);
   });
 
@@ -59,7 +65,7 @@ export function workspacesRoutes(deps: {
   app.get('/:id', (c) => {
     const w = workspaces.getById(c.req.param('id'));
     if (!w) return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
-    return c.json({ ...w, attention: workspaceAttention(w.id) });
+    return c.json({ ...w, ...workspaceFlags(w.id) });
   });
 
   app.patch('/:id', async (c) => {

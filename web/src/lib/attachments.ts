@@ -1,15 +1,16 @@
-// Chat messages carry a host-local absolute path to a pasted/picked image
-// (…/attachments/<hash>.<ext>); the pixels live on the server host, so every
-// device loads them through the serve route, keyed by bare filename.
+// Chat messages carry host-local absolute paths to shared attachments
+// (…/attachments/<hash>.<ext>) — pasted user images, or files the agent shows
+// via show_files (images, videos, docs). The bytes live on the server host, so
+// every device loads them through the serve route keyed by bare filename.
 
-import { IMAGE_EXT_ALTERNATION } from '@muxpad/shared';
+import { ATTACHMENT_EXT_ALTERNATION, type AttachmentKind, attachmentKind } from '@muxpad/shared';
 
 // Match an attachments-dir path token: any non-space run ending in
-// `/attachments/<file>.<img-ext>`. Absolute paths never contain spaces, so a
-// greedy \S* cleanly captures the whole path while the group grabs the name.
-// The extension set is the shared pipeline-wide map — never a local list.
+// `/attachments/<file>.<ext>` for a known attachment type. Absolute paths never
+// contain spaces, so a greedy \S* captures the whole path while the group grabs
+// the name. The extension set is the shared pipeline-wide map — never local.
 const ATTACHMENT_PATH_RE = new RegExp(
-  `\\S*/attachments/([\\w.-]+\\.(?:${IMAGE_EXT_ALTERNATION}))`,
+  `\\S*/attachments/([\\w.-]+\\.(?:${ATTACHMENT_EXT_ALTERNATION}))`,
   'gi',
 );
 
@@ -19,9 +20,13 @@ export function attachmentUrl(name: string): string {
 
 export type MessagePart =
   | { kind: 'text'; text: string }
-  | { kind: 'image'; path: string; name: string; url: string };
+  // `media` = image | video (rendered inline, grouped into a gallery when
+  // several are adjacent); `file` = everything else (a click-to-open chip).
+  | { kind: 'media'; media: Exclude<AttachmentKind, 'file'>; path: string; name: string; url: string }
+  | { kind: 'file'; path: string; name: string; url: string };
 
-/** Split user-message text into plain runs and image-attachment references. */
+/** Split message text into plain runs and attachment references (classified
+ *  by type), preserving order. */
 export function splitMessageAttachments(text: string): MessagePart[] {
   const parts: MessagePart[] = [];
   let last = 0;
@@ -30,7 +35,13 @@ export function splitMessageAttachments(text: string): MessagePart[] {
     if (!name) continue;
     const start = m.index ?? 0;
     if (start > last) parts.push({ kind: 'text', text: text.slice(last, start) });
-    parts.push({ kind: 'image', path: m[0], name, url: attachmentUrl(name) });
+    const url = attachmentUrl(name);
+    const kind = attachmentKind(name);
+    parts.push(
+      kind === 'file'
+        ? { kind: 'file', path: m[0], name, url }
+        : { kind: 'media', media: kind, path: m[0], name, url },
+    );
     last = start + m[0].length;
   }
   if (last < text.length) parts.push({ kind: 'text', text: text.slice(last) });

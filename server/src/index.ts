@@ -11,7 +11,7 @@ import { EventBus } from './events.js';
 import { startPaneReaper } from './pane-reaper.js';
 import { PtydCache, decoratePane } from './ptyd-cache.js';
 import { PtydClient } from './ptyd-client/PtydClient.js';
-import { PushService, attachAttentionPush, createPaneNotifier } from './push.js';
+import { Presence, PushService, attachAttentionPush, createPaneNotifier } from './push.js';
 import { createApp } from './server.js';
 import { PaneStore } from './store/PaneStore.js';
 import { openDb } from './store/db.js';
@@ -89,7 +89,10 @@ const agentBridge = createAgentBridge();
 // `tailscale serve`) — over plain http the client never subscribes and
 // this sits dormant.
 const push = new PushService(db, config.dataDir);
-attachAttentionPush({ events, db, push });
+// Active-device presence: /api/presence heartbeats mark it; notifiers hold
+// pushes while any device is active (see Presence / createPaneNotifier).
+const presence = new Presence();
+attachAttentionPush({ events, db, push, presence });
 
 const app = createApp({
   db,
@@ -99,6 +102,7 @@ const app = createApp({
   events,
   agentBridge,
   push,
+  presence,
 });
 
 // Static asset serving (CSS, JS, images, etc.) from the built web bundle.
@@ -164,7 +168,7 @@ const wsServer = attachWsServer({
   events,
   agentBridge,
   // Chat-runner turn-done / question frames don't ring BEL — push them here.
-  notifyPane: createPaneNotifier(db, push),
+  notifyPane: createPaneNotifier(db, push, presence),
 });
 
 // Straggler prevention: retry pane kills that failed in transit, and (once
