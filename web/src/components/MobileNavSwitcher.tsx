@@ -1,5 +1,6 @@
 import { useRouterState } from '@tanstack/react-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { announceOverlayOpen, onOtherOverlayOpen } from '../lib/overlays';
 import { useTabs } from '../tabs';
 import { useWorkspaces } from '../workspaces';
 import { NavTree } from './NavTree';
@@ -26,6 +27,7 @@ interface Props {
 export function MobileNavSwitcher({ activeWorkspaceSlug }: Props) {
   const [open, setOpen] = useState(false);
   const [closing, setClosing] = useState(false);
+  const panelRef = useRef<HTMLDivElement | null>(null);
 
   const { workspaces } = useWorkspaces();
   const activeWorkspace = workspaces.find((w) => w.slug === activeWorkspaceSlug);
@@ -55,6 +57,37 @@ export function MobileNavSwitcher({ activeWorkspaceSlug }: Props) {
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [open, close]);
+
+  // Top-bar overlays are mutually exclusive: announce when we open (closing any
+  // other, e.g. the pane face menu) and close if a different one opens. Stops
+  // the two dropdowns from ever stacking / hiding under each other.
+  useEffect(() => {
+    if (!open) return;
+    announceOverlayOpen('nav-sheet');
+    return onOtherOverlayOpen('nav-sheet', close);
+  }, [open, close]);
+
+  // On open, focus the tree on where you ARE: scroll the active tab into view
+  // (its workspace expands by default), falling back to the active workspace
+  // row if its tabs are collapsed. Two rAFs so the panel has mounted and laid
+  // out; instant scroll so it doesn't fight the slide-in animation.
+  useEffect(() => {
+    if (!open) return;
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        const panel = panelRef.current;
+        const target =
+          panel?.querySelector('.navtree-tab-row[data-active="true"]') ??
+          panel?.querySelector('[data-active="true"]');
+        target?.scrollIntoView({ block: 'center', behavior: 'auto' });
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [open]);
 
   const anyOtherWorkspaceAttention = workspaces.some(
     (w) => w.attention && w.slug !== activeWorkspaceSlug,
@@ -111,6 +144,7 @@ export function MobileNavSwitcher({ activeWorkspaceSlug }: Props) {
               just a disclosure surface dismissed via scrim or Escape. */}
           <div
             className="mns-panel"
+            ref={panelRef}
             data-closing={closing ? 'true' : undefined}
             onAnimationEnd={(e) => {
               if (closing && e.target === e.currentTarget) {

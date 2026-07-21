@@ -366,20 +366,20 @@
   color: var(--fg);
   background: var(--bg-hover);
 }
-/* Active TAB is the one strong anchor in the list: a clear accent-TINT
-   pill with dark bold text. A tint (not a solid fill) so emoji in tab
-   names render naturally — full-color glyphs clash on a saturated fill —
-   while still reading as an unmistakable "you are here". */
+/* Active TAB = the CONTAINER of the pane you're in: a SOFT accent-tint pill
+   with accent-tinted name text ("this branch is open"). Deliberately lighter
+   than the active PANE's pill below, so the leaf you're actually viewing stays
+   the dominant anchor and the two levels never read as identical (they used
+   to). No left-rail (it floated disconnected in the indent); no bold (weight
+   now means unread and nothing else). */
 .navtree-tab-row[data-active="true"] {
-  color: var(--fg);
-  font-weight: 600;
-  /* A clean tint pill, nudged a touch stronger so "active" holds its own
-     next to the red attention dots. Derived from --accent / --bg, so it
-     works across every theme. No left edge — just the pill. */
-  background: color-mix(in srgb, var(--accent) 32%, var(--bg));
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+}
+.navtree-tab-row[data-active="true"] .navtree-name-text {
+  color: color-mix(in srgb, var(--accent) 75%, var(--fg));
 }
 .navtree-tab-row[data-active="true"]:hover {
-  background: color-mix(in srgb, var(--accent) 38%, var(--bg));
+  background: color-mix(in srgb, var(--accent) 20%, var(--bg));
 }
 
 .navtree-tab-link {
@@ -470,12 +470,23 @@
   width: var(--nt-hit);
   height: var(--nt-hit); /* touch needs the full hit square */
   margin-left: 0;
-  opacity: 0.35;
+  /* Kept faint so the always-on column of ×'s recedes to a hint instead of a
+     heavy stripe down the edge — the full hit-square is still there, it's just
+     quiet until you reach for it (press → full below). */
+  opacity: 0.16;
+}
+/* The row you're on gets a slightly more present × — it's the one you're most
+   likely to close, so it shouldn't need hunting. */
+.navtree[data-variant="sheet"] .navtree-tab-row[data-active="true"] .navtree-close,
+.navtree[data-variant="sheet"] .navtree-ws-row[data-active="true"] .navtree-close,
+.navtree[data-variant="sheet"] .navtree-pane-row-wrap[data-active="true"] .navtree-close {
+  opacity: 0.4;
 }
 .navtree-ws-row:hover .navtree-close,
 .navtree-ws-row:focus-within .navtree-close,
 .navtree-tab-row:hover .navtree-close,
 .navtree-tab-row:focus-within .navtree-close,
+.navtree-close:active,
 .navtree-close:focus-visible {
   flex-basis: 18px;
   width: 18px;
@@ -531,13 +542,31 @@
   display: flex;
   flex-direction: column;
   /* One hierarchy step DEEPER than the tab name — children must never
-     sit left of their parent. */
-  padding: 2px 8px 6px 64px;
+     sit left of their parent. Right padding matches the tab row's (4px) so
+     the pane × lands in the SAME column as the tab ×. */
+  padding: 2px 4px 6px 64px;
+}
+/* Pane row = navigable pill + trailing × sibling (can't nest the × in the
+   row's own <button>). The wrap owns the flex row + the hover-reveal. */
+.navtree-pane-row-wrap {
+  display: flex;
+  align-items: center;
+}
+.navtree-pane-row-wrap .navtree-pane-row {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.navtree-pane-row-wrap:hover .navtree-close,
+.navtree-pane-row-wrap:focus-within .navtree-close {
+  flex-basis: 18px;
+  width: 18px;
+  margin-left: 0;
+  opacity: 1;
 }
 .navtree-pane-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
   height: calc(var(--nt-row-tab) - 4px);
   padding: 0 8px;
   background: transparent;
@@ -554,8 +583,36 @@
 .navtree-pane-row:active {
   background: var(--bg-hover);
 }
+/* The pane you're currently viewing shares the active TAB's exact language — a
+   full-row soft accent pill + accent-tinted text — just one indent deeper, so
+   the relationship reads from POSITION (parent tab, child pane below it), not
+   from a different colour or shape. The pill lives on the WRAP so it spans the
+   whole row, × included, exactly like the tab (an inset chip that stopped short
+   of the × was what made them feel like two different things). A hair stronger
+   than the tab since it's the actual focus. No bold — weight means unread. */
+.navtree-pane-row-wrap[data-active="true"] {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg));
+  border-radius: var(--nt-pill);
+}
+.navtree-pane-row[data-active="true"] .navtree-pane-label {
+  color: color-mix(in srgb, var(--accent) 75%, var(--fg));
+}
+
+/* Unread = "done, unreviewed" — an agent finished a turn here while you weren't
+   looking, or you marked it. A BOLD name, like unread mail: orthogonal to the
+   red attention dot and the active pill, and the ONE thing weight now means. */
+.navtree-tab-row[data-unread="true"] .navtree-name-text,
+.navtree-pane-row[data-unread="true"] .navtree-pane-label {
+  font-weight: 700;
+}
+.navtree-ws-row[data-unread="true"] .navtree-name-text {
+  font-weight: 700;
+}
 .navtree-pane-label {
-  flex: 1;
+  /* Shrink-to-content (not flex:1) so the working/attention indicator sits
+     right AFTER the name — same as the tab row — instead of being flung to
+     the sidebar's right edge. */
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

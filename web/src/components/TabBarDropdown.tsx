@@ -145,6 +145,7 @@ function TabDropdownItem({
       type="button"
       className="ws-tabbar-dropdown-item"
       data-active={isActive ? 'true' : undefined}
+      data-unread={tab.unread ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
       {...handlers}
       onClick={(e) => {

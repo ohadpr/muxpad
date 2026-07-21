@@ -4,7 +4,7 @@ import type { AgentBridge } from './agent-bridge.js';
 import { EventBus } from './events.js';
 import type { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
-import type { PushService } from './push.js';
+import type { Presence, PushService } from './push.js';
 import { agentSessionsRoutes } from './routes/agent-sessions.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { openRoutes } from './routes/open.js';
@@ -48,6 +48,12 @@ export interface AppDeps {
    * simply aren't mounted then.
    */
   push?: PushService;
+  /**
+   * Client active-device heartbeat sink. POST /api/presence marks it; the
+   * pane notifier holds pushes while it reads active. Optional (tests / no
+   * push).
+   */
+  presence?: Presence;
 }
 
 export function createApp(deps: AppDeps): Hono {
@@ -57,6 +63,12 @@ export function createApp(deps: AppDeps): Hono {
   // test harness (or the WS-less HTTP smoke tests) to construct one.
   const resolved = { ...deps, events: deps.events ?? new EventBus() };
   app.get('/api/health', (c) => c.json({ ok: true }));
+  // Active-device heartbeat: the web app POSTs this while foregrounded and
+  // interacted-with, so push notifications hold off while you're at a device.
+  app.post('/api/presence', (c) => {
+    resolved.presence?.mark();
+    return c.body(null, 204);
+  });
   app.route('/api/workspaces', workspacesRoutes(resolved));
   app.route('/api/tabs', tabsRoutes(resolved));
   app.route('/api/tabs', panesTabScopedRoutes(resolved));

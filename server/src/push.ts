@@ -142,16 +142,43 @@ function loadOrCreateVapidKeys(dataDir: string): VapidKeys {
  */
 export type PaneNotifier = (paneId: string, body: string) => void;
 
-export function createPaneNotifier(db: Database.Database, push: PushService): PaneNotifier {
+/**
+ * "Is the user actively at a device right now?" — fed by a client-side
+ * heartbeat (foreground + user interaction) POSTed to /api/presence. Push
+ * notifications are HELD while active on any device: the in-app UI already
+ * shows the update, so a buzz is just noise. When every device goes quiet
+ * (backgrounded, asleep, away) past the window, notifications resume.
+ */
+export class Presence {
+  private lastActiveAt = 0;
+  /** Default window: a heartbeat within this long ago counts as "active". */
+  constructor(private readonly windowMs = 75_000) {}
+  mark(): void {
+    this.lastActiveAt = Date.now();
+  }
+  isActive(): boolean {
+    return Date.now() - this.lastActiveAt < this.windowMs;
+  }
+}
+
+export function createPaneNotifier(
+  db: Database.Database,
+  push: PushService,
+  presence?: Presence,
+): PaneNotifier {
   const panes = new PaneStore(db);
   const tabs = new TabStore(db);
   const workspaces = new WorkspaceStore(db);
   return (paneId, body) => {
+    // Hold the push while the user is active on any device — they can see it.
+    if (presence?.isActive()) return;
     const pane = panes.getById(paneId);
     const tab = pane ? tabs.getById(pane.tab_id) : null;
     const ws = tab ? workspaces.getById(tabs.getWorkspaceId(tab.id) ?? '') : null;
     void push.send({
-      title: tab && ws ? `${tab.name} — ${ws.name}` : 'muxpad',
+      // Title is just the tab name — the workspace ("— Personal") was noise on
+      // a phone's one line; ws is still resolved below for the deep-link slug.
+      title: tab ? tab.name : 'muxpad',
       body,
       url:
         tab && ws
@@ -182,12 +209,14 @@ export function attachAttentionPush(opts: {
   events: EventBus;
   db: Database.Database;
   push: PushService;
+  /** Held while the user is active on any device (see Presence). */
+  presence?: Presence;
   /** Injectable clock for tests. */
   now?: () => number;
   graceMs?: number;
 }): () => void {
-  const { events, db, push, now = Date.now, graceMs = 15_000 } = opts;
-  const notify = createPaneNotifier(db, push);
+  const { events, db, push, presence, now = Date.now, graceMs = 15_000 } = opts;
+  const notify = createPaneNotifier(db, push, presence);
   const lastAttention = new Map<string, boolean>();
   const bootAt = now();
 
