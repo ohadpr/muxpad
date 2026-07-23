@@ -1473,6 +1473,9 @@
 .chat-img-backdrop {
   align-items: center;
   padding: 24px;
+  /* A zoomed image is bigger than the viewport — clip the overflow instead of
+     letting it spill / add scrollbars. */
+  overflow: hidden;
 }
 .chat-img-full {
   position: relative;
@@ -1483,6 +1486,45 @@
   border-radius: 8px;
   box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.7);
   animation: chat-fade 140ms ease both;
+}
+/* Zoomable image: `touch-action: none` hands every touch gesture to the JS
+   zoom handler (native page zoom is disabled app-wide via the viewport meta,
+   so pinch would otherwise do nothing). */
+.chat-img-zoom {
+  touch-action: none;
+  transform-origin: center center;
+  will-change: transform;
+  cursor: zoom-in;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+}
+.chat-img-zoom.-zoomed {
+  cursor: grab;
+}
+/* Explicit close — the scrim gets thin behind a large/zoomed image, so give a
+   reliable tap target (also nicer on touch than hunting for the backdrop). */
+.chat-img-close {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  right: 14px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.chat-img-close:hover {
+  background: rgba(0, 0, 0, 0.7);
 }
 
 /* Session chip + menu: model / context% / compact / clear. Sits in a slim
