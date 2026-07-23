@@ -241,6 +241,15 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   const urlPane = useRouterState({
     select: (s) => (s.location.search as { pane?: string }).pane,
   });
+  // The tab slug the URL is ACTUALLY on right now (straight from pathname, no
+  // fallback). `isActive` can briefly lag the URL during a switch (it derives
+  // from shownTabSlug, which falls back to the LAST tab when urlTabSlug is
+  // momentarily null) — and a stale isActive would let this tab's ?pane-sync
+  // fire mid-switch and navigate the URL back to itself, bouncing you home
+  // instead of switching. Gating the sync on this exact match kills that race.
+  const urlTabSlug = useRouterState({
+    select: (s) => s.location.pathname.match(/\/t\/([^/?]+)/)?.[1] ?? null,
+  });
 
   // Seed the active pane from the URL the first time this tab is active in a
   // single-pane view — a refresh / shared link / back button lands on the pane
@@ -251,30 +260,82 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     if (urlPane && tab.panes.some((p) => p.id === urlPane)) setMobileActiveId(urlPane);
   }, [isActive, singlePane, tab, urlPane, mobileActiveId]);
 
+  // Stable inputs for the ?pane sync effect below. Derived in render off the
+  // pane-id SET (not the whole `tab` object) so the effect DOESN'T re-fire on
+  // every pane.updated churn — title/busy/attention updates give `tab` a new
+  // reference constantly on a busy agent workspace, and re-running the sync each
+  // time could land a stale replace() right as the user clicks a cross-tab /
+  // cross-workspace link, bouncing them straight back ("navigation does
+  // nothing"). The pane-id key changes only on real structural edits.
+  const syncPaneIds = tab ? tab.panes.map((p) => p.id) : [];
+  const syncPaneIdsKey = syncPaneIds.join(',');
+  const syncActiveId = (() => {
+    if (!tab || !singlePane) return null;
+    const stored = getLastPaneId(tab.id);
+    return (
+      (mobileActiveId && syncPaneIds.includes(mobileActiveId) && mobileActiveId) ||
+      (urlPane && syncPaneIds.includes(urlPane) && urlPane) ||
+      (stored && syncPaneIds.includes(stored) && stored) ||
+      syncPaneIds[0] ||
+      null
+    );
+  })();
+
   // Keep `?pane` in step with the active pane — ONLY for the active tab in a
   // single-pane view, so hidden TabViews never fight over the shared URL.
   // Resolution mirrors the render branches (state → a still-valid URL pane →
   // last-visited → first); honoring a valid urlPane before state catches up
   // stops the seed above from being clobbered on load. Replace, not push: it
   // reflects state, it isn't a history entry per pane tap.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `tab` is intentionally excluded (see syncPaneIdsKey above) — the id-set key + syncActiveId are the real triggers, not every pane.updated churn.
   useEffect(() => {
-    if (!isActive || !singlePane || !tab) return;
-    const ids = tab.panes.map((p) => p.id);
-    if (ids.length === 0) return;
-    const stored = getLastPaneId(tab.id);
-    const activeId =
-      (mobileActiveId && ids.includes(mobileActiveId) && mobileActiveId) ||
-      (urlPane && ids.includes(urlPane) && urlPane) ||
-      (stored && ids.includes(stored) && stored) ||
-      ids[0];
-    if (!activeId || activeId === urlPane) return;
+    // Only the tab the URL is actually on manages its ?pane — never a tab
+    // that's merely still-isActive mid-switch (that's the bounce, see urlTabSlug).
+    if (!isActive || !tab || urlTabSlug !== tabSlug) return;
+    // Live re-check against the ACTUAL address bar: the urlTabSlug/isActive we
+    // captured in this render can lag a cross-tab / cross-workspace navigation
+    // the user JUST triggered, and a stale replace() here would clobber it and
+    // bounce them back where they came from. Bail if the URL has already moved
+    // off this tab. This is the belt to urlTabSlug's braces — a synchronous read
+    // that can't be stale.
+    const live = window.location.pathname.match(/^\/w\/([^/]+)\/t\/([^/?]+)/);
+    const liveTab = live?.[2] ? decodeURIComponent(live[2]) : null;
+    if (!live || live[1] !== wsSlug || liveTab !== tabSlug) return;
+    // Split view shows every pane at once — it has no single active pane. Just
+    // strip a foreign/stale ?pane that leaked in: TanStack carries + re-validates
+    // search across navigations, so a single-pane tab's ?pane rides along into
+    // whatever tab you click next. Left in a split URL it's dead weight (and it's
+    // another tab's pane id); clear it.
+    if (!singlePane) {
+      if (urlPane) {
+        navigate({
+          to: '/w/$wsSlug/t/$tabSlug',
+          params: { wsSlug, tabSlug },
+          search: (prev) => ({ ...prev, pane: undefined }),
+          replace: true,
+        });
+      }
+      return;
+    }
+    if (!syncActiveId || syncActiveId === urlPane) return;
     navigate({
       to: '/w/$wsSlug/t/$tabSlug',
       params: { wsSlug, tabSlug },
-      search: (prev) => ({ ...prev, pane: activeId }),
+      search: (prev) => ({ ...prev, pane: syncActiveId }),
       replace: true,
     });
-  }, [isActive, singlePane, tab, mobileActiveId, urlPane, navigate, wsSlug, tabSlug]);
+  }, [
+    isActive,
+    singlePane,
+    tab?.id,
+    syncPaneIdsKey,
+    syncActiveId,
+    urlPane,
+    urlTabSlug,
+    navigate,
+    wsSlug,
+    tabSlug,
+  ]);
 
   // Mobile pane slots stay mounted when hidden (scroll position preserved).
   // Focus the active pane's terminal when the active pane CHANGES (switch /
