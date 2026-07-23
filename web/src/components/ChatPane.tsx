@@ -410,6 +410,18 @@ function agentLaunchDescription(e: ToolUseEvent): string {
  *  agent's result IS its completion. This tells them apart. */
 const LAUNCH_ACK_RE = /agent launched successfully|async agent launched/i;
 
+/** How long a rostered subagent may go without a progress frame — while no
+ *  parent turn is driving — before we treat it as finished. A LIVE background
+ *  subagent pings progress every ≤500ms; prolonged quiet while the pane is idle
+ *  means it completed/was killed even when no finish-notice ever lands (a
+ *  stopped/failed turn, a subagent that finished while idle with no next turn to
+ *  inject the notice, or a post-compaction ghost launch event). This is the
+ *  backstop that keeps the bottom-right roster from accreting stale rows; the
+ *  finish-notice path still clears the clean case instantly. Generous so a
+ *  single long silent tool call inside a background subagent doesn't blink it
+ *  out (it re-appears on its next progress frame if still alive). */
+const STALE_ROSTER_MS = 30_000;
+
 /** '.ext' when the filename carries a renderable image extension — the
  *  picker's fallback for providers that report an empty MIME type (mirrors
  *  the server upload route's accept rule). */
@@ -725,8 +737,14 @@ export function ChatPane({
         // BACKGROUND subagents outlive the turn — keep their progress so the
         // running-subagents indicator stays honest (each entry hides when its
         // tool_result lands). A failed/stopped turn kills subagents with it
-        // (live-verified: Stop interrupts background tasks too) — clear.
-        if (msg.ok === false) setSubagents({});
+        // (live-verified: Stop interrupts background tasks too) — clear the live
+        // detail AND the seen-at clocks, so the transcript-driven roster evicts
+        // their now-orphaned launches on the next render (they'll read as stale
+        // immediately rather than lingering the full STALE_ROSTER_MS).
+        if (msg.ok === false) {
+          setSubagents({});
+          subagentSeenAt.current.clear();
+        }
         setNotice(msg.ok ? null : { text: msg.error ?? 'turn failed', tone: 'danger' });
         // If you're looking at this pane when the turn finishes, it's already
         // "read" — clear the server's "done, unreviewed" bold immediately so
@@ -1619,6 +1637,12 @@ export function ChatPane({
       finishByDesc.set(desc, descFinishes - 1);
       continue;
     }
+    // Backstop against roster accretion: drop a launch that's gone quiet with
+    // no parent turn driving it (see STALE_ROSTER_MS). During a turn we keep it
+    // — a just-launched or long-silent-tool subagent legitimately has no recent
+    // frame — and finish notices above still clear the clean case immediately.
+    const seenAt = subagentSeenAt.current.get(id) ?? 0;
+    if (!agentWorking && now - seenAt > STALE_ROSTER_MS) continue;
     seenAgentIds.add(id);
     const p = subagents[id];
     rosterAgents.push({
@@ -2061,9 +2085,220 @@ function ImageModal({
         // biome-ignore lint/a11y/useMediaCaption: user-shared clip, no track available
         <video className="chat-img-full" src={url} controls autoPlay playsInline />
       ) : (
-        <img className="chat-img-full" src={url} alt={name} />
+        <ZoomableImage url={url} name={name} />
       )}
+      <button type="button" className="chat-img-close" onClick={onClose} aria-label="Close" title="Close">
+        ×
+      </button>
     </div>
+  );
+}
+
+/**
+ * The lightbox image with self-contained zoom — pinch + double-tap + drag on
+ * touch, double-click + drag on desktop. Needed because muxpad's viewport meta
+ * disables native page zoom (user-scalable=no) app-wide, so the OS pinch never
+ * reaches the image. `touch-action: none` (CSS) hands every touch to us.
+ *
+ * Zoom is driven by the image's RENDERED SIZE (width/height), not a CSS
+ * transform: a transform scales the already-downscaled bitmap on the GPU (soft
+ * when you zoom in), whereas resizing the element makes the browser
+ * re-rasterize from the full-resolution source — sharp up to the image's real
+ * pixels. Pan still rides `transform: translate` (translation never blurs).
+ */
+function ZoomableImage({ url, name }: { url: string; name: string }) {
+  const [scale, setScale] = useState(1);
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  // The contained fit size at scale 1 (px), computed from the natural size and
+  // the viewport — the base the zoom multiplies. null until the image loads.
+  const [fit, setFit] = useState<{ w: number; h: number } | null>(null);
+  const sRef = useRef(scale);
+  sRef.current = scale;
+  const pRef = useRef(pos);
+  pRef.current = pos;
+  const fitRef = useRef(fit);
+  fitRef.current = fit;
+  const imgRef = useRef<HTMLImageElement>(null);
+  const g = useRef({
+    mode: 'none' as 'none' | 'pan' | 'pinch',
+    startDist: 0,
+    startScale: 1,
+    startX: 0,
+    startY: 0,
+    startCX: 0,
+    startCY: 0,
+    lastTap: 0,
+  });
+  const MAX = 5;
+
+  const computeFit = () => {
+    const img = imgRef.current;
+    if (!img || !img.naturalWidth) return;
+    const pad = 48;
+    const r = Math.min(
+      (window.innerWidth - pad) / img.naturalWidth,
+      (window.innerHeight - pad) / img.naturalHeight,
+      1,
+    );
+    setFit({ w: Math.round(img.naturalWidth * r), h: Math.round(img.naturalHeight * r) });
+  };
+  useEffect(() => {
+    computeFit();
+    window.addEventListener('resize', computeFit);
+    return () => window.removeEventListener('resize', computeFit);
+    // biome-ignore lint/correctness/useExhaustiveDependencies: one-time listener; reads live refs
+  }, []);
+
+  const clampScale = (s: number) => Math.min(MAX, Math.max(1, s));
+  // Pan bound: how far the (scaled) image can move before its edge enters the
+  // viewport — i.e. the overflow beyond the viewport, per axis.
+  const clampXY = (x: number, y: number, s: number) => {
+    const f = fitRef.current;
+    if (!f) return { x: 0, y: 0 };
+    const maxX = Math.max(0, (f.w * s - window.innerWidth) / 2);
+    const maxY = Math.max(0, (f.h * s - window.innerHeight) / 2);
+    return { x: Math.max(-maxX, Math.min(maxX, x)), y: Math.max(-maxY, Math.min(maxY, y)) };
+  };
+  const apply = (s: number, x: number, y: number) => {
+    const c = clampXY(x, y, s);
+    setScale(s);
+    setPos(c);
+  };
+  // Toggle 1x ⇄ 2.5x, keeping the tapped/clicked point under the finger.
+  const toggleZoom = (clientX: number, clientY: number) => {
+    if (sRef.current > 1) {
+      setScale(1);
+      setPos({ x: 0, y: 0 });
+      return;
+    }
+    const img = imgRef.current;
+    if (!img) return;
+    const r = img.getBoundingClientRect();
+    const s = 2.5;
+    const ox = clientX - (r.left + r.width / 2);
+    const oy = clientY - (r.top + r.height / 2);
+    apply(s, ox * (1 - s), oy * (1 - s));
+  };
+
+  const dist = (a: React.Touch, b: React.Touch) =>
+    Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    const gs = g.current;
+    if (e.touches.length === 2) {
+      const [a, b] = [e.touches[0], e.touches[1]];
+      if (!a || !b) return;
+      gs.mode = 'pinch';
+      gs.startDist = dist(a, b) || 1;
+      gs.startScale = sRef.current;
+      gs.startX = pRef.current.x;
+      gs.startY = pRef.current.y;
+      gs.startCX = (a.clientX + b.clientX) / 2;
+      gs.startCY = (a.clientY + b.clientY) / 2;
+    } else if (e.touches.length === 1) {
+      const a = e.touches[0];
+      if (!a) return;
+      const now = Date.now();
+      if (now - gs.lastTap < 300) {
+        gs.lastTap = 0;
+        gs.mode = 'none';
+        toggleZoom(a.clientX, a.clientY);
+        return;
+      }
+      gs.lastTap = now;
+      gs.mode = sRef.current > 1 ? 'pan' : 'none';
+      gs.startX = pRef.current.x;
+      gs.startY = pRef.current.y;
+      gs.startCX = a.clientX;
+      gs.startCY = a.clientY;
+    }
+  };
+  const onTouchMove = (e: React.TouchEvent) => {
+    const gs = g.current;
+    if (gs.mode === 'pinch' && e.touches.length === 2) {
+      const [a, b] = [e.touches[0], e.touches[1]];
+      if (!a || !b) return;
+      const scale = clampScale(gs.startScale * (dist(a, b) / gs.startDist));
+      const cx = (a.clientX + b.clientX) / 2;
+      const cy = (a.clientY + b.clientY) / 2;
+      apply(scale, gs.startX + (cx - gs.startCX), gs.startY + (cy - gs.startCY));
+    } else if (gs.mode === 'pan' && e.touches.length === 1) {
+      const a = e.touches[0];
+      if (!a) return;
+      apply(sRef.current, gs.startX + (a.clientX - gs.startCX), gs.startY + (a.clientY - gs.startCY));
+    }
+  };
+  const onTouchEnd = (e: React.TouchEvent) => {
+    if (e.touches.length === 0) g.current.mode = 'none';
+    // Pinched back to 1 → snap the pan to center.
+    if (sRef.current <= 1 && (pRef.current.x !== 0 || pRef.current.y !== 0)) {
+      setPos({ x: 0, y: 0 });
+    }
+  };
+
+  // Desktop: drag to pan when zoomed.
+  const drag = useRef<{ on: boolean; sx: number; sy: number; ox: number; oy: number }>({
+    on: false,
+    sx: 0,
+    sy: 0,
+    ox: 0,
+    oy: 0,
+  });
+  const onMouseDown = (e: React.MouseEvent) => {
+    if (sRef.current <= 1) return;
+    e.preventDefault();
+    drag.current = { on: true, sx: e.clientX, sy: e.clientY, ox: pRef.current.x, oy: pRef.current.y };
+  };
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!drag.current.on) return;
+      apply(
+        sRef.current,
+        drag.current.ox + (e.clientX - drag.current.sx),
+        drag.current.oy + (e.clientY - drag.current.sy),
+      );
+    };
+    const onUp = () => {
+      drag.current.on = false;
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    // biome-ignore lint/correctness/useExhaustiveDependencies: stable listeners driven by refs
+  }, []);
+
+  return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: image zoom surface; keyboard users close via Escape/× and don't need pan/zoom
+    <img
+      ref={imgRef}
+      className={`chat-img-full chat-img-zoom${scale > 1 ? ' -zoomed' : ''}`}
+      src={url}
+      alt={name}
+      draggable={false}
+      onLoad={computeFit}
+      // Size drives the zoom (browser re-rasterizes from source = sharp);
+      // translate only pans. Before the image loads, fall back to the CSS
+      // fit (max 100%). transform-origin stays center so pan math holds.
+      style={
+        fit
+          ? {
+              width: `${fit.w * scale}px`,
+              height: `${fit.h * scale}px`,
+              maxWidth: 'none',
+              maxHeight: 'none',
+              transform: `translate(${pos.x}px, ${pos.y}px)`,
+            }
+          : { transform: `translate(${pos.x}px, ${pos.y}px)` }
+      }
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
+      onDoubleClick={(e) => toggleZoom(e.clientX, e.clientY)}
+      onMouseDown={onMouseDown}
+    />
   );
 }
 
