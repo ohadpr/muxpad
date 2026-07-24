@@ -680,6 +680,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
 
   function shutdown(): void {
     clearInterval(statusInterval);
+    if (interruptFailTimer !== null) clearTimeout(interruptFailTimer); // no spurious post-shutdown turn-done
     resolveAllQuestions('shutdown');
     try {
       session.close();

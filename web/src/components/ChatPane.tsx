@@ -198,10 +198,16 @@ function SvgRestore() {
 function SessionMenu({
   status,
   send,
+  assistant,
 }: {
   status: AgentStatus;
   send: (obj: unknown) => void;
+  assistant?: string;
 }) {
+  // Compact/Clear are Claude-session commands; Codex/Cursor don't implement them
+  // (the runner no-ops the slash), so hiding them avoids a dead action — and
+  // keeps them from being buried under Cursor's very long model list.
+  const supportsSlash = assistant !== 'codex' && assistant !== 'cursor';
   const [open, setOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -215,10 +221,13 @@ function SessionMenu({
   // "Default". Exact value first, then a resolved match on a specific row,
   // and the default row only as a last resort.
   const list = status.models ?? [];
+  const modelLc = status.model.toLowerCase();
   const current =
     list.find((m) => m.value === status.model) ??
     list.find((m) => m.value !== 'default' && m.resolvedModel === status.model) ??
-    list.find((m) => m.resolvedModel === status.model);
+    list.find((m) => m.resolvedModel === status.model) ??
+    // Case-insensitive fallback: Cursor reports e.g. 'Auto' but lists 'auto'.
+    list.find((m) => m.value.toLowerCase() === modelLc);
   const modelLabel = current?.displayName ?? status.model;
   const kTokens = (n: number) => `${Math.round(n / 1000)}k`;
   // Context is optional — backends without a context-window (Codex/Cursor)
@@ -270,39 +279,43 @@ function SessionMenu({
               <span className="chat-session-item-label">{m.displayName}</span>
             </button>
           ))}
-          <div className="chat-session-head">Session</div>
-          <button
-            type="button"
-            role="menuitem"
-            className="chat-session-item"
-            onClick={() => {
-              send({ t: 'slash', cmd: 'compact' });
-              setOpen(false);
-            }}
-          >
-            <span className="chat-session-item-label">Compact conversation</span>
-            <span className="chat-session-item-desc">Summarize history to free context</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className={`chat-session-item${confirmClear ? ' is-danger' : ''}`}
-            onClick={() => {
-              if (!confirmClear) {
-                setConfirmClear(true);
-                return;
-              }
-              send({ t: 'slash', cmd: 'clear' });
-              setOpen(false);
-            }}
-          >
-            <span className="chat-session-item-label">
-              {confirmClear ? 'Tap again to clear everything' : 'Clear conversation'}
-            </span>
-            {!confirmClear ? (
-              <span className="chat-session-item-desc">Wipes the conversation — starts fresh</span>
-            ) : null}
-          </button>
+          {supportsSlash ? (
+            <>
+              <div className="chat-session-head">Session</div>
+              <button
+                type="button"
+                role="menuitem"
+                className="chat-session-item"
+                onClick={() => {
+                  send({ t: 'slash', cmd: 'compact' });
+                  setOpen(false);
+                }}
+              >
+                <span className="chat-session-item-label">Compact conversation</span>
+                <span className="chat-session-item-desc">Summarize history to free context</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className={`chat-session-item${confirmClear ? ' is-danger' : ''}`}
+                onClick={() => {
+                  if (!confirmClear) {
+                    setConfirmClear(true);
+                    return;
+                  }
+                  send({ t: 'slash', cmd: 'clear' });
+                  setOpen(false);
+                }}
+              >
+                <span className="chat-session-item-label">
+                  {confirmClear ? 'Tap again to clear everything' : 'Clear conversation'}
+                </span>
+                {!confirmClear ? (
+                  <span className="chat-session-item-desc">Wipes the conversation — starts fresh</span>
+                ) : null}
+              </button>
+            </>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -1802,6 +1815,7 @@ export function ChatPane({
             <div className="chat-session-row">
               <SessionMenu
                 status={agentStatus}
+                {...(session?.assistant ? { assistant: session.assistant } : {})}
                 send={(obj) => {
                   // Same guard as the composer: during the reconnect window
                   // wsRef can hold a CONNECTING socket (send throws) or a

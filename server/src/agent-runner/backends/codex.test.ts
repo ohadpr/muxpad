@@ -182,7 +182,7 @@ describe('codex backend', () => {
     expect(readLog('thr-new').map((e) => e.kind)).toEqual(['user', 'assistant']);
   });
 
-  it('stop kills the child and closes the turn as not-ok', async () => {
+  it('stop kills the child and closes the turn CLEANLY (ok:true, mirrors Claude)', async () => {
     const { b, frames, calls } = await boot();
     b.send('long task');
     await tick();
@@ -193,8 +193,53 @@ describe('codex backend', () => {
     closeChild(turn, 143); // killed
     await tick();
     const done = frames.filter((f) => f.t === 'turn-done').at(-1) as { ok: boolean; error?: string };
-    expect(done.ok).toBe(false);
-    expect(done.error).toBe('stopped');
+    expect(done.ok).toBe(true); // a deliberate Stop is not a red error
+    expect(done.error).toBeUndefined();
+  });
+
+  it('two sends racing the auth check spawn exactly ONE turn child', async () => {
+    const { host, frames } = makeHost();
+    const { spawn, calls } = fakeSpawner();
+    const b = createCodexBackend(host, { requestedSid: null, requestedModel: null }, {
+      spawn,
+      listModels: noModels,
+    });
+    b.start();
+    // Two sends arrive BEFORE the boot auth-check resolves.
+    b.send('a');
+    b.send('b');
+    await tick();
+    // Resolve every pending `codex login status` (boot's + the turn's).
+    for (const c of calls) if (c.args.includes('login')) closeChild(c.child, 0);
+    await tick();
+    const turnSpawns = calls.filter((c) => c.args[0] === 'exec');
+    expect(turnSpawns.length).toBe(1); // NOT two children for one session
+  });
+
+  it('migrates prior history to a fresh thread id on resume-fallback (no orphan)', async () => {
+    const { b, calls } = await boot('old-thread');
+    // Seed a prior conversation under the stale resume id.
+    const { appendTranscriptEvent } = await import('../../chat/TranscriptReader.js');
+    appendTranscriptEvent('old-thread', { kind: 'user', id: 'p1', ts: 1, text: 'earlier question' });
+    appendTranscriptEvent('old-thread', { kind: 'assistant', id: 'p2', ts: 2, text: 'earlier answer' });
+    b.send('next');
+    await tick();
+    closeChild(calls[1]!.child, 1); // resume fails → fresh fallback
+    await tick();
+    const fresh = calls[2]!.child;
+    line(fresh, { type: 'thread.started', thread_id: 'thr-fresh' });
+    line(fresh, { type: 'item.completed', item: { type: 'agent_message', text: 'new answer' } });
+    line(fresh, { type: 'turn.completed' });
+    closeChild(fresh, 0);
+    await tick();
+    // The new id's log carries the OLD conversation + the new turn.
+    expect(readLog('thr-fresh').map((e) => (e as { text?: string }).text)).toEqual([
+      'earlier question',
+      'earlier answer',
+      'next',
+      'new answer',
+    ]);
+    expect(readLog('old-thread')).toEqual([]); // old file migrated away
   });
 
   it('advertises its model list + default in the status frame (the picker)', async () => {

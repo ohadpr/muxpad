@@ -1,4 +1,15 @@
-import { appendFileSync, closeSync, mkdirSync, openSync, readSync, readdirSync, statSync } from 'node:fs';
+import {
+  appendFileSync,
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { type ChatEvent, normalizeTranscriptLine } from '@muxpad/shared';
@@ -33,6 +44,41 @@ export function appendTranscriptEvent(sid: string, event: ChatEvent): void {
   const p = muxpadTranscriptPath(sid);
   mkdirSync(muxpadTranscriptDir(), { recursive: true });
   appendFileSync(p, `${JSON.stringify(event)}\n`);
+}
+
+/**
+ * Move a session's accumulated log to a new id. Codex/Cursor mint a fresh
+ * provider id when a resume re-mints or falls back to a new session; the log is
+ * keyed by that id and the server tails whatever id the runner hellos, so
+ * without this the pre-change conversation would orphan under the old filename.
+ * Best-effort: prepends the old history to the (usually empty) new file, then
+ * removes the old one. No-op if there's no old log or the ids match.
+ */
+export function migrateTranscript(oldSid: string, newSid: string): void {
+  if (!oldSid || oldSid === newSid) return;
+  const oldPath = muxpadTranscriptPath(oldSid);
+  let prior: Buffer;
+  try {
+    if (!statSync(oldPath).isFile()) return;
+    prior = readFileSync(oldPath);
+  } catch {
+    return; // no prior log to carry over
+  }
+  try {
+    mkdirSync(muxpadTranscriptDir(), { recursive: true });
+    const newPath = muxpadTranscriptPath(newSid);
+    let existing: Buffer | null = null;
+    try {
+      existing = readFileSync(newPath);
+    } catch {
+      // new file doesn't exist yet — the common case
+    }
+    // Old history first, then anything already under the new id.
+    writeFileSync(newPath, existing ? Buffer.concat([prior, existing]) : prior);
+    rmSync(oldPath, { force: true });
+  } catch {
+    // best-effort — leave both files rather than lose data
+  }
 }
 
 /** ~/.claude/projects (or $CLAUDE_CONFIG_DIR/projects). */
