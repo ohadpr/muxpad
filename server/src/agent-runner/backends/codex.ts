@@ -14,8 +14,14 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import type { ChatEvent } from '@muxpad/shared';
-import { appendTranscriptEvent } from '../../chat/TranscriptReader.js';
+import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptReader.js';
+
+// Provider ids we adopt as the transcript-log filename + hello sid must satisfy
+// the server's charset gate, or the hello is rejected and the pane goes dark.
+// Reject a non-conforming id rather than silently breaking the pane.
+const SID_RE = /^[A-Za-z0-9._-]{1,128}$/;
 import { bold, dim } from '../ansi.js';
 import type { RunnerFrame } from '../protocol.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
@@ -164,16 +170,21 @@ export function createCodexBackend(
     const type = ev.type as string | undefined;
     if (type === 'thread.started') {
       const tid = ev.thread_id;
-      if (typeof tid === 'string' && tid) {
+      if (typeof tid === 'string' && SID_RE.test(tid)) {
         // Adopt codex's authoritative thread id: future turns resume it, and
         // the self-heal startup_cmd + transcript log re-point to it via
         // re-hello. This is where the turn's buffered events settle onto the
         // final <threadId>.jsonl.
         sessionRef = tid;
         if (liveSid !== tid) {
+          // Carry any prior conversation to the new id's log so a resume that
+          // re-mints (or a fresh fallback) doesn't orphan history.
+          migrateTranscript(liveSid, tid);
           liveSid = tid;
           emit(hello());
         }
+      } else if (typeof tid === 'string') {
+        log(dim(`ignoring codex thread id with unexpected charset: ${tid.slice(0, 40)}`));
       }
       commitTurnLog();
     } else if (type === 'item.completed') {
@@ -215,9 +226,15 @@ export function createCodexBackend(
 
   async function runTurn(): Promise<void> {
     if (turnActive || queue.length === 0 || closed) return;
+    // Claim the turn slot BEFORE any await — checkAuth() suspends, and without
+    // this a second send arriving in that window passes the guard again and
+    // spawns a second child for the same session (leaking the first, wiping its
+    // transcript buffer).
+    turnActive = true;
     if (!authOk) {
       authOk = await checkAuth();
       if (!authOk) {
+        turnActive = false;
         queue.shift();
         emit({ t: 'turn-start' });
         emit({
@@ -225,11 +242,11 @@ export function createCodexBackend(
           ok: false,
           error: 'codex is not logged in — run `codex login` in this pane’s terminal face',
         });
+        if (!closed && queue.length > 0) void runTurn(); // drain the rest
         return;
       }
     }
     const prompt = queue.shift() as string;
-    turnActive = true;
     interrupted = false;
     // Reset the per-turn transcript buffer; it flushes to the final thread id
     // once `thread.started` lands (or at turn end if it never does).
@@ -259,8 +276,11 @@ export function createCodexBackend(
       });
       child = proc;
       let buf = '';
+      // StringDecoder so a multibyte UTF-8 codepoint split across two chunks
+      // isn't corrupted (a plain d.toString() per chunk mangles it).
+      const decoder = new StringDecoder('utf8');
       proc.stdout?.on('data', (d: Buffer) => {
-        buf += d.toString();
+        buf += decoder.write(d);
         let nl: number;
         // biome-ignore lint/suspicious/noAssignInExpressions: line-split loop
         while ((nl = buf.indexOf('\n')) !== -1) {
@@ -291,8 +311,11 @@ export function createCodexBackend(
         }
       });
       proc.on('close', (code) => {
-        if (interrupted) {
-          if (turnActive) finishTurn(false, 'stopped');
+        if (interrupted || closed) {
+          // User Stop (or shutdown): mirror Claude — a deliberate interrupt is a
+          // CLEAN finish (ok:true), not a red error. `closed` also blocks the
+          // fresh-fallback respawn below from resurrecting a child post-shutdown.
+          if (turnActive) finishTurn(true);
           return;
         }
         if (!finished && !gotThread && useResume && !triedFresh) {
@@ -370,6 +393,7 @@ export function createCodexBackend(
     hello,
     shutdown: () => {
       closed = true;
+      interrupted = true; // the child's close handler must not fresh-fallback-respawn
       if (child) {
         try {
           child.kill('SIGTERM');

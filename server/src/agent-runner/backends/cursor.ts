@@ -11,14 +11,18 @@
 // is best-effort (falls back to a fresh session on failure).
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { StringDecoder } from 'node:string_decoder';
 import type { ChatEvent } from '@muxpad/shared';
-import { appendTranscriptEvent } from '../../chat/TranscriptReader.js';
+import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
 import type { RunnerFrame } from '../protocol.js';
 import type { BackendDeps, ModelFetch } from './codex.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
 const CURSOR_BIN = process.env.MUXPAD_CURSOR_BIN || 'cursor-agent';
+// Adopted session ids must satisfy the server's sid charset gate or the pane
+// goes dark on hello — reject a non-conforming id instead.
+const SID_RE = /^[A-Za-z0-9._-]{1,128}$/;
 
 /** Parse `cursor-agent --list-models` — lines are `slug - Display Name`, with
  *  the active one marked `(current, default)`. Best-effort. */
@@ -141,12 +145,15 @@ export function createCursorBackend(
     const type = ev.type as string | undefined;
     if (type === 'system' && ev.subtype === 'init') {
       const sid = ev.session_id;
-      if (typeof sid === 'string' && sid) {
+      if (typeof sid === 'string' && SID_RE.test(sid)) {
         sessionRef = sid;
         if (liveSid !== sid) {
+          migrateTranscript(liveSid, sid); // carry history across a re-mint/fallback
           liveSid = sid;
           emit(hello());
         }
+      } else if (typeof sid === 'string') {
+        log(dim(`ignoring cursor session id with unexpected charset: ${sid.slice(0, 40)}`));
       }
       if (typeof ev.model === 'string' && !model) model = ev.model;
       commitTurnLog();
@@ -184,9 +191,13 @@ export function createCursorBackend(
 
   async function runTurn(): Promise<void> {
     if (turnActive || queue.length === 0 || closed) return;
+    // Claim the slot before the checkAuth() await so a second send in that
+    // window can't spawn a second child for the same session (see codex).
+    turnActive = true;
     if (!authOk) {
       authOk = await checkAuth();
       if (!authOk) {
+        turnActive = false;
         queue.shift();
         emit({ t: 'turn-start' });
         emit({
@@ -194,11 +205,11 @@ export function createCursorBackend(
           ok: false,
           error: 'cursor-agent is not logged in — run `cursor-agent login` in this pane’s terminal face',
         });
+        if (!closed && queue.length > 0) void runTurn();
         return;
       }
     }
     const prompt = queue.shift() as string;
-    turnActive = true;
     interrupted = false;
     turnLog = [];
     turnCommitted = false;
@@ -219,8 +230,9 @@ export function createCursorBackend(
       });
       child = proc;
       let buf = '';
+      const decoder = new StringDecoder('utf8'); // avoid multibyte corruption across chunks
       proc.stdout?.on('data', (d: Buffer) => {
-        buf += d.toString();
+        buf += decoder.write(d);
         let nl: number;
         // biome-ignore lint/suspicious/noAssignInExpressions: line-split loop
         while ((nl = buf.indexOf('\n')) !== -1) {
@@ -251,8 +263,10 @@ export function createCursorBackend(
         }
       });
       proc.on('close', (code) => {
-        if (interrupted) {
-          if (turnActive) finishTurn(false, 'stopped');
+        if (interrupted || closed) {
+          // Deliberate Stop/shutdown → clean finish (ok:true), mirror Claude;
+          // `closed` also blocks a post-shutdown fresh-fallback respawn.
+          if (turnActive) finishTurn(true);
           return;
         }
         if (!finished && !gotInit && useResume && !triedFresh) {
@@ -322,6 +336,7 @@ export function createCursorBackend(
     hello,
     shutdown: () => {
       closed = true;
+      interrupted = true; // block the child close handler's fresh-fallback respawn
       if (child) {
         try {
           child.kill('SIGTERM');
