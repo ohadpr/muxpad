@@ -4,6 +4,7 @@
 import type { BackendId } from '../protocol.js';
 import { createClaudeBackend } from './claude.js';
 import { createCodexBackend } from './codex.js';
+import { createCursorBackend } from './cursor.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
 export function createBackend(
@@ -16,7 +17,8 @@ export function createBackend(
       return createClaudeBackend(host, opts);
     case 'codex':
       return createCodexBackend(host, opts);
-    // cursor lands here in Phase 2.
+    case 'cursor':
+      return createCursorBackend(host, opts);
     default:
       throw new Error(`unknown backend: ${id}`);
   }
