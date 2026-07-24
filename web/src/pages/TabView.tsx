@@ -29,6 +29,7 @@ import { ShellPaneBody } from '../components/ShellPaneBody';
 import { UrlPane } from '../components/UrlPane';
 import { SvgClose } from '../components/icons';
 import { subscribe, subscribeReconnect } from '../events';
+import { type AgentBackendId, agentStartupCmd } from '../lib/agent-backend';
 import { consumeFollowTarget } from '../lib/follow-tab';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
@@ -702,13 +703,16 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
       sourcePaneId: string | null,
       direction: MosaicDirection,
       kind: NewPaneKind = 'terminal',
+      backend?: AgentBackendId,
     ) => {
       if (!tab) return;
       const created = await api.createPane(tab.id, {
         ...(sourcePaneId ? { inherit_cwd_from: sourcePaneId } : {}),
-        // Agent pane: a chat-native Claude session (`muxpad agent` runs in
+        // Agent pane: a chat-native agent session (the chosen backend runs in
         // the pty underneath; the face lands on chat immediately).
-        ...(kind === 'agent' ? { startup_cmd: 'muxpad agent', face: 'chat' as const } : {}),
+        ...(kind === 'agent'
+          ? { startup_cmd: agentStartupCmd(backend), face: 'chat' as const }
+          : {}),
       });
       const newLayout =
         sourcePaneId == null
@@ -1234,12 +1238,14 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           ? stored
           : (paneIds[0] ?? null);
 
-    const addPane = async (kind: NewPaneKind = 'terminal') => {
+    const addPane = async (kind: NewPaneKind = 'terminal', backend?: AgentBackendId) => {
       if (!tab) return;
       const target = activeId ?? paneIds[paneIds.length - 1];
       const created = await api.createPane(tab.id, {
         ...(target ? { inherit_cwd_from: target } : {}),
-        ...(kind === 'agent' ? { startup_cmd: 'muxpad agent', face: 'chat' as const } : {}),
+        ...(kind === 'agent'
+          ? { startup_cmd: agentStartupCmd(backend), face: 'chat' as const }
+          : {}),
       });
       // Append at the END — same convention as the desktop strip's +.
       const newLayout: Layout =
@@ -1300,7 +1306,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                     idleClassName="mobile-strip-add"
                     choicesClassName="mobile-strip-choices"
                     choiceClassName="mobile-strip-add mobile-strip-choice"
-                    onCreate={(kind) => void addPane(kind)}
+                    onCreate={(kind, backend) => void addPane(kind, backend)}
                   />
                 </MobilePaneChrome>
               );
@@ -1353,11 +1359,13 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           ? stored
           : (paneIds[0] ?? null);
 
-    const addPane = async (kind: NewPaneKind = 'terminal') => {
+    const addPane = async (kind: NewPaneKind = 'terminal', backend?: AgentBackendId) => {
       const target = activeId ?? paneIds[paneIds.length - 1];
       const created = await api.createPane(tab.id, {
         ...(target ? { inherit_cwd_from: target } : {}),
-        ...(kind === 'agent' ? { startup_cmd: 'muxpad agent', face: 'chat' as const } : {}),
+        ...(kind === 'agent'
+          ? { startup_cmd: agentStartupCmd(backend), face: 'chat' as const }
+          : {}),
       });
       // The strip's "+" appends at the END (browser-tab convention).
       // Splitting at the active pane put the newcomer mid-strip whenever a
@@ -1456,10 +1464,13 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                         onDoubleClick={() => startPaneRename(paneId)}
                         title={p?.name ? p.name : 'Double-click to rename'}
                       >
-                        {/* Status LEADS the name (spinner while working, dot
-                            when it wants you) — sharing the trailing slot
-                            with the × read as two unrelated controls mashed
-                            together. Priority mirrors the navigator. */}
+                        <span className="desktop-tab-label">{paneLabel(paneId)}</span>
+                        {/* Status sits just RIGHT of the name (spinner while
+                            working, dot when it wants you) — the label doesn't
+                            grow, so it hugs the text rather than the pill edge.
+                            Kept out of the trailing × box so the two never read
+                            as one mashed-together control. Priority mirrors the
+                            navigator. */}
                         {p?.busy ? (
                           <span className="desktop-tab-busy" aria-hidden="true" title="Working…">
                             <SvgSpinner />
@@ -1467,7 +1478,6 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                         ) : p?.attention ? (
                           <span className="badge-dot -inline" aria-label="needs attention" />
                         ) : null}
-                        <span className="desktop-tab-label">{paneLabel(paneId)}</span>
                       </button>
                       {/* Trailing slot holds only the hover-revealed × now —
                           status moved to LEAD the label. */}

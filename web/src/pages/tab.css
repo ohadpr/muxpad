@@ -488,7 +488,7 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 6px; /* leading status glyph ↔ label */
+  gap: 6px; /* label ↔ trailing status glyph */
   height: 100%;
   padding: 0 2px 0 12px;
   background: transparent;
@@ -535,8 +535,8 @@
 .desktop-tab-trailing > .badge-dot {
   transition: opacity 100ms ease;
 }
-/* (Status glyphs LEAD the label inside .desktop-tab-select; the trailing
-   box holds only the hover-revealed ×.) */
+/* (Status glyphs TRAIL the label inside .desktop-tab-select — just right of
+   the name; the trailing box holds only the hover-revealed ×.) */
 .desktop-tab-close {
   /* A small centered square, NOT the trailing box's full height — a
      full-height button's hover wash painted right up to the pill's top

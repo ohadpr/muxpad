@@ -20,6 +20,7 @@ import { applyTabOrder, refreshTabs, useTabs } from '../tabs';
 import { useLongPress } from '../use-long-press';
 import { MAX_QUICK_SWITCH_TABS, useTabQuickSwitch } from '../use-tab-quickswitch';
 import { applyWorkspaceOrder, refreshWorkspaces, useWorkspaces } from '../workspaces';
+import type { AgentBackendId } from '../lib/agent-backend';
 import { NewTabChooser } from './NewTabChooser';
 import { SvgClose } from './icons';
 import './NavTree.css';
@@ -758,11 +759,14 @@ function TabList({
   // Tabs-first creation: one server call makes the tab AND its single
   // full-size pane atomically. 'shell' = terminal; 'agent' = a chat-native
   // Claude session (`muxpad agent`) that lands directly on the chat face.
-  const createTab = async (bootstrap: 'shell' | 'agent' = 'shell') => {
+  const createTab = async (bootstrap: 'shell' | 'agent' = 'shell', backend?: AgentBackendId) => {
     if (creating) return;
     setCreating(true);
     try {
-      const t = await api.createTab(workspace.id, { bootstrap });
+      const t = await api.createTab(workspace.id, {
+        bootstrap,
+        ...(backend && backend !== 'claude' ? { backend } : {}),
+      });
       await refreshTabs(workspace.id);
       await refreshWorkspaces();
       onNavigate?.();
@@ -811,7 +815,7 @@ function TabList({
         choicesClassName="navtree-new-row"
         choiceClassName="navtree-add"
         disabled={creating}
-        onCreate={(kind) => void createTab(kind === 'agent' ? 'agent' : 'shell')}
+        onCreate={(kind, backend) => void createTab(kind === 'agent' ? 'agent' : 'shell', backend)}
       />
     </div>
   );

@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { AGENT_BACKENDS, type AgentBackendId } from '../lib/agent-backend';
 import { useDismissable } from '../lib/use-dismissable';
 
 /**
@@ -31,7 +32,7 @@ export function NewTabChooser({
   choicesClassName: string;
   choiceClassName: string;
   disabled?: boolean;
-  onCreate: (kind: 'terminal' | 'agent') => void;
+  onCreate: (kind: 'terminal' | 'agent', backend?: AgentBackendId) => void;
 }) {
   const [choosing, setChoosing] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -49,10 +50,11 @@ export function NewTabChooser({
       </button>
     );
   }
-  const pick = (kind: 'terminal' | 'agent') => {
+  const pick = (kind: 'terminal' | 'agent', backend?: AgentBackendId) => {
     setChoosing(false);
-    onCreate(kind);
+    onCreate(kind, backend);
   };
+  // Terminal, then one choice per agent backend (Claude / Codex / Cursor).
   return (
     <div className={choicesClassName} ref={ref}>
       <button
@@ -63,14 +65,17 @@ export function NewTabChooser({
       >
         Terminal
       </button>
-      <button
-        type="button"
-        className={choiceClassName}
-        disabled={disabled}
-        onClick={() => pick('agent')}
-      >
-        Agent
-      </button>
+      {AGENT_BACKENDS.map((b) => (
+        <button
+          key={b.id}
+          type="button"
+          className={choiceClassName}
+          disabled={disabled}
+          onClick={() => pick('agent', b.id)}
+        >
+          {b.label}
+        </button>
+      ))}
     </div>
   );
 }
