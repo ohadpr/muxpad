@@ -12,7 +12,7 @@ import {
   isBackendId,
   parseFrame,
 } from './agent-runner/protocol.js';
-import { TranscriptTail } from './chat/TranscriptReader.js';
+import { TranscriptTail, identityNormalize, muxpadLocate } from './chat/TranscriptReader.js';
 import type { EventBus } from './events.js';
 import { type PtydCache, decoratePane } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
@@ -657,10 +657,16 @@ export function attachWsServer(deps: {
             // MB); the client pages older history in via `load-older`. The
             // client dedupes by event id, so a rebind re-emitting overlapping
             // history is harmless.
+            // Non-Claude backends (codex/cursor) don't write a Claude-format
+            // transcript — the runner writes a muxpad-owned normalized log
+            // instead. Point the tail at that log with the identity normalizer;
+            // Claude keeps its ~/.claude file + schema translation unchanged.
+            const nonClaude = session?.assistant && session.assistant !== 'claude';
             tail = new TranscriptTail(sid, {
               tailBytes: CHAT_HISTORY_TAIL_BYTES,
               onEvents: (events, phase) => send({ t: 'events', phase, events }),
               onTitle: (title) => applyAiTitle(chatPaneId, title),
+              ...(nonClaude ? { locate: muxpadLocate, normalize: identityNormalize } : {}),
             });
             tail.start();
           }

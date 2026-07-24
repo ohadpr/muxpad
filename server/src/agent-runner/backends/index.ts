@@ -3,6 +3,7 @@
 // provider-neutral interface.
 import type { BackendId } from '../protocol.js';
 import { createClaudeBackend } from './claude.js';
+import { createCodexBackend } from './codex.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
 export function createBackend(
@@ -13,7 +14,9 @@ export function createBackend(
   switch (id) {
     case 'claude':
       return createClaudeBackend(host, opts);
-    // codex / cursor land here in Phase 1 / Phase 2.
+    case 'codex':
+      return createCodexBackend(host, opts);
+    // cursor lands here in Phase 2.
     default:
       throw new Error(`unknown backend: ${id}`);
   }
