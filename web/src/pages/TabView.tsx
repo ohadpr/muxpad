@@ -29,7 +29,8 @@ import { ShellPaneBody } from '../components/ShellPaneBody';
 import { UrlPane } from '../components/UrlPane';
 import { SvgClose } from '../components/icons';
 import { subscribe, subscribeReconnect } from '../events';
-import { type AgentBackendId, agentStartupCmd } from '../lib/agent-backend';
+import { AgentBackendLogo } from '../components/AgentLogos';
+import { AGENT_BACKENDS, type AgentBackendId, agentStartupCmd } from '../lib/agent-backend';
 import { consumeFollowTarget } from '../lib/follow-tab';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
@@ -1592,12 +1593,18 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
             <button className="btn btn-primary" onClick={() => void splitFromPane(null, 'row')}>
               New terminal
             </button>
-            <button
-              className="btn btn-primary"
-              onClick={() => void splitFromPane(null, 'row', 'agent')}
-            >
-              New agent
-            </button>
+            {AGENT_BACKENDS.map((b) => (
+              <button
+                key={b.id}
+                type="button"
+                className="btn btn-primary"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                onClick={() => void splitFromPane(null, 'row', 'agent', b.id)}
+              >
+                <AgentBackendLogo backend={b.id} size={14} />
+                {b.label}
+              </button>
+            ))}
             <button type="button" className="workspace-empty-close" onClick={() => void closeTab()}>
               or close this tab
             </button>
