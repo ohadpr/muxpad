@@ -8,8 +8,7 @@ export const AGENT_BACKENDS: ReadonlyArray<{ id: AgentBackendId; label: string }
   { id: 'cursor', label: 'Cursor' },
 ];
 
-/** The pane startup command for an agent backend. Claude stays implicit
- *  (`muxpad agent`) so its command is unchanged; others get `--backend <id>`. */
-export function agentStartupCmd(backend: AgentBackendId = 'claude'): string {
-  return backend === 'claude' ? 'muxpad agent' : `muxpad agent --backend ${backend}`;
-}
+/** Startup command for a NEW agent pane: no harness chosen yet. The pane idles
+ *  and the chat face shows the harness picker; picking one rewrites this to the
+ *  real backend + respawns (POST /panes/:id/agent-backend). */
+export const PENDING_AGENT_STARTUP = 'muxpad agent --pick';

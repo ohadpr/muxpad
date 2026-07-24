@@ -1758,3 +1758,66 @@
   font-size: 10.5px;
   line-height: 1.35;
 }
+
+/* Harness picker — shown full-page in an agent chat created without a harness
+   chosen yet (`muxpad agent --pick`). */
+.chat-harness-pick {
+  gap: 6px;
+}
+.chat-harness-choices {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.chat-harness-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elev);
+  color: var(--fg);
+  font-family: var(--chrome-font);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.chat-harness-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-elev));
+}
+.chat-harness-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.chat-harness-btn[aria-busy='true'] {
+  opacity: 1;
+  border-color: var(--accent);
+}
+.chat-harness-spin {
+  width: 12px;
+  height: 12px;
+  border: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: chat-harness-spin 0.7s linear infinite;
+}
+@keyframes chat-harness-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-harness-spin {
+    animation: none;
+  }
+}
+.chat-harness-error {
+  margin-top: 10px;
+  color: var(--danger, #d9534f);
+  font-size: 13px;
+}
