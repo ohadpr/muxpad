@@ -173,7 +173,7 @@ describe('cursor backend', () => {
     expect(readLog('cur-new').map((e) => e.kind)).toEqual(['user', 'assistant']);
   });
 
-  it('stop kills the child and closes the turn as not-ok', async () => {
+  it('stop kills the child and closes the turn CLEANLY (ok:true, mirrors Claude)', async () => {
     const { b, frames, calls } = await boot();
     b.send('long');
     await tick();
@@ -184,8 +184,50 @@ describe('cursor backend', () => {
     closeChild(turn, 143);
     await tick();
     const done = frames.filter((f) => f.t === 'turn-done').at(-1) as { ok: boolean; error?: string };
-    expect(done.ok).toBe(false);
-    expect(done.error).toBe('stopped');
+    expect(done.ok).toBe(true);
+    expect(done.error).toBeUndefined();
+  });
+
+  it('two sends racing the auth check spawn exactly ONE turn child', async () => {
+    const { host } = makeHost();
+    const { spawn, calls } = fakeSpawner();
+    const b = createCursorBackend(host, { requestedSid: null, requestedModel: null }, {
+      spawn,
+      listModels: noModels,
+    });
+    b.start();
+    b.send('a');
+    b.send('b');
+    await tick();
+    // Resolve every pending `cursor-agent status` (boot's + the turn's).
+    for (const c of calls) if (c.args[0] === 'status') closeChild(c.child, 0);
+    await tick();
+    const turnSpawns = calls.filter((c) => c.args[0] === '-p');
+    expect(turnSpawns.length).toBe(1);
+  });
+
+  it('migrates prior history to a fresh session id on resume-fallback', async () => {
+    const { b, calls } = await boot('old-cloud');
+    const { appendTranscriptEvent } = await import('../../chat/TranscriptReader.js');
+    appendTranscriptEvent('old-cloud', { kind: 'user', id: 'p1', ts: 1, text: 'earlier q' });
+    appendTranscriptEvent('old-cloud', { kind: 'assistant', id: 'p2', ts: 2, text: 'earlier a' });
+    b.send('next');
+    await tick();
+    closeChild(calls[1]!.child, 1); // resume fails → fresh
+    await tick();
+    const fresh = calls[2]!.child;
+    line(fresh, { type: 'system', subtype: 'init', session_id: 'cur-fresh' });
+    line(fresh, { type: 'assistant', message: { content: [{ type: 'text', text: 'new a' }] } });
+    line(fresh, { type: 'result', subtype: 'success' });
+    closeChild(fresh, 0);
+    await tick();
+    expect(readLog('cur-fresh').map((e) => (e as { text?: string }).text)).toEqual([
+      'earlier q',
+      'earlier a',
+      'next',
+      'new a',
+    ]);
+    expect(readLog('old-cloud')).toEqual([]);
   });
 
   it('advertises its model list + default in the status frame (the picker)', async () => {

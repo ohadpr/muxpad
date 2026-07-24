@@ -79,7 +79,9 @@ export class AgentSessionStore {
     // is slow, fails, or the resume itself dies before it fires.
     return this.upsert(existing, {
       pane_id: input.pane_id,
-      assistant: input.assistant ?? 'claude',
+      // Coalesce through the existing row (mirrors attachRunner) so a re-register
+      // that omits `assistant` can't silently flip a codex/cursor pane to claude.
+      assistant: input.assistant ?? existing?.assistant ?? 'claude',
       cwd: input.cwd ?? null,
       current_sid: input.session_id ?? existing?.current_sid ?? null,
       // A fresh launch RESETS the lineage to the minted id (it's a new
