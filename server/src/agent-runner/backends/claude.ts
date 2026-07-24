@@ -424,8 +424,8 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         const changed =
           !lastStatus ||
           lastStatus.model !== frame.model ||
-          lastStatus.context.pct !== frame.context.pct ||
-          lastStatus.context.tokens !== frame.context.tokens ||
+          lastStatus.context?.pct !== frame.context?.pct ||
+          lastStatus.context?.tokens !== frame.context?.tokens ||
           freshModels;
         // The CACHE always carries the model list (a reconnect re-delivers
         // lastStatus as the server's whole snapshot — without the list the
@@ -460,6 +460,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       cwd: process.cwd(),
       pid: process.pid,
       turnActive: inTurn,
+      backend: 'claude',
     };
   }
 
@@ -687,5 +688,5 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     }
   }
 
-  return { start, send, slash, stop, setModel, answer, onConnected, hello, shutdown };
+  return { id: 'claude', start, send, slash, stop, setModel, answer, onConnected, hello, shutdown };
 }

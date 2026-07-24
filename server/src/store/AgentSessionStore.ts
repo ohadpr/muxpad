@@ -136,6 +136,9 @@ export class AgentSessionStore {
     pane_id: string;
     cwd?: string | null;
     session_id?: string | null;
+    /** Which backend drives this session (claude|codex|cursor). Default claude
+     *  keeps legacy runners (which don't declare it) labelled correctly. */
+    assistant?: string;
   }): AgentSession {
     const existing = this.getByPane(input.pane_id);
     const sid = input.session_id ?? existing?.current_sid ?? null;
@@ -143,7 +146,7 @@ export class AgentSessionStore {
     if (sid && !lineage.includes(sid)) lineage.push(sid);
     return this.upsert(existing, {
       pane_id: input.pane_id,
-      assistant: 'claude',
+      assistant: input.assistant ?? existing?.assistant ?? 'claude',
       cwd: input.cwd ?? existing?.cwd ?? null,
       current_sid: sid,
       lineage,

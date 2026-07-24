@@ -18,9 +18,15 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import WebSocket from 'ws';
 import { dim } from './ansi.js';
-import { createClaudeBackend } from './backends/claude.js';
+import { createBackend } from './backends/index.js';
 import type { AgentBackend, RunnerHost } from './backends/types.js';
-import { CLOSE_RUNNER_DISPLACED, type RunnerFrame, type ServerFrame, parseFrame } from './protocol.js';
+import {
+  CLOSE_RUNNER_DISPLACED,
+  type RunnerFrame,
+  type ServerFrame,
+  isBackendId,
+  parseFrame,
+} from './protocol.js';
 
 const paneId = process.env.MUXPAD_PANE_ID;
 const apiUrl = process.env.MUXPAD_API_URL;
@@ -37,12 +43,17 @@ if (!paneId || !apiUrl) {
 // --resume rewrite). Both are opaque here — the backend interprets them.
 let requestedSid: string | null = null;
 let requestedModel: string | null = null;
+// --backend <id> selects the agent CLI/SDK (default claude). Baked into the
+// pane's startup_cmd by the tabs route + the server's self-heal rewrite.
+let requestedBackend: 'claude' | 'codex' | 'cursor' = 'claude';
 {
   const args = process.argv.slice(2);
   const i = args.indexOf('--resume');
   if (i !== -1 && args[i + 1]) requestedSid = args[i + 1] as string;
   const m = args.indexOf('--model');
   if (m !== -1 && args[m + 1]) requestedModel = args[m + 1] as string;
+  const b = args.indexOf('--backend');
+  if (b !== -1 && isBackendId(args[b + 1])) requestedBackend = args[b + 1] as typeof requestedBackend;
 }
 
 const ts = () => dim(new Date().toLocaleTimeString('en-GB'));
@@ -120,7 +131,7 @@ const host: RunnerHost = {
   apiUrl,
 };
 
-const backend: AgentBackend = createClaudeBackend(host, { requestedSid, requestedModel });
+const backend: AgentBackend = createBackend(requestedBackend, host, { requestedSid, requestedModel });
 
 function connect(): void {
   if (closed) return;

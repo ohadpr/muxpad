@@ -9,6 +9,7 @@ import {
   type RunnerFrame,
   type ServerFrame,
   type SubagentProgress,
+  isBackendId,
   parseFrame,
 } from './agent-runner/protocol.js';
 import { TranscriptTail } from './chat/TranscriptReader.js';
@@ -410,11 +411,20 @@ export function attachWsServer(deps: {
             conn.status = null;
             conn.sid = frame.sid;
             conn.turnActive = frame.turnActive === true;
+            // Which backend drives this pane (claude|codex|cursor). Absent =
+            // legacy runner = claude. Validated against the allowlist so it's
+            // safe both as a DB label AND baked into the self-heal shell cmd.
+            const backendId = isBackendId(frame.backend) ? frame.backend : 'claude';
             // A registered runner is proof of recovery — forget any respawn
             // attempts (including a give-up: the user restarting it by hand
             // re-arms supervision).
             respawns.delete(paneId);
-            agents.attachRunner({ pane_id: paneId, cwd: frame.cwd, session_id: frame.sid });
+            agents.attachRunner({
+              pane_id: paneId,
+              cwd: frame.cwd,
+              session_id: frame.sid,
+              assistant: backendId,
+            });
             if (conn.turnActive) agents.setStatus(paneId, 'running');
             deps.cache.setAgentBusy(paneId, conn.turnActive);
             // A NEW runner attaching (fresh `muxpad agent`, or a resume under
@@ -430,7 +440,11 @@ export function attachWsServer(deps: {
             const prevCmd = panes.getById(paneId)?.startup_cmd ?? '';
             const modelMatch = prevCmd.match(/--model ('[^']*'|[^\s']+)/);
             const modelPart = modelMatch ? ` --model ${modelMatch[1]}` : '';
-            const selfHealCmd = `muxpad agent${modelPart} --resume ${frame.sid}`;
+            // Preserve the backend selector across the rewrite. Claude stays
+            // implicit (bare `muxpad agent …`) so existing panes' startup_cmd
+            // never churns; codex/cursor get an explicit, allowlist-safe flag.
+            const backendPart = backendId === 'claude' ? '' : ` --backend ${backendId}`;
+            const selfHealCmd = `muxpad agent${backendPart}${modelPart} --resume ${frame.sid}`;
             const isReconnect = prevCmd === selfHealCmd;
             // Self-heal: the pane's startup command now resumes THIS session,
             // so the pane survives ptyd restarts and reboots.
