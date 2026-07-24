@@ -394,6 +394,56 @@ export function panesScopedRoutes(deps: {
     return c.body(null, 204);
   });
 
+  // Choose the agent harness for a pending ('muxpad agent --pick') pane. The
+  // harness picker lives in the chat page; picking one lands here, which rewrites
+  // the pane's startup_cmd to the chosen backend and respawns it so the real
+  // runner starts. Backend is an allowlisted enum → safe in the shell string.
+  app.post('/:id/agent-backend', async (c) => {
+    const id = c.req.param('id');
+    const p = panes.getById(id);
+    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    const body = z
+      .object({ backend: z.enum(['claude', 'codex', 'cursor']) })
+      .safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success)
+      return c.json({ error: { code: 'bad_request', message: 'backend must be claude|codex|cursor' } }, 400);
+    const backend = body.data.backend;
+    const startupCmd = `muxpad agent${backend === 'claude' ? '' : ` --backend ${backend}`}`;
+    panes.setStartupCmd(id, startupCmd);
+    panes.setFace(id, 'chat');
+    const workspaceId = tabs.getWorkspaceId(p.tab_id);
+    try {
+      await deps.ptyd.killPane(id);
+    } catch {
+      // proceed; ensurePane surfaces the failure if ptyd is down
+    }
+    deps.cache.forget(id);
+    try {
+      await deps.ptyd.ensurePane({
+        id: p.id,
+        shell: p.shell ?? defaultShell,
+        startup_cmd: startupCmd,
+        cwd: safeCwd(p.cwd),
+        env: p.env,
+        tab_id: p.tab_id,
+        ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
+      });
+    } catch {
+      return c.json(
+        { error: { code: 'ptyd_unavailable', message: 'ptyd is unreachable; cannot start the agent' } },
+        503,
+      );
+    }
+    const refreshed = panes.getById(id);
+    if (refreshed)
+      deps.events.emit({
+        type: 'pane.updated',
+        tab_id: refreshed.tab_id,
+        pane: decoratePane(deps.cache, refreshed),
+      });
+    return c.body(null, 204);
+  });
+
   // Mark a single pane as "seen". Counterpart to /tabs/:id/seen but
   // surgical — mobile uses it on tab mount / pane switch to clear
   // attention for just the pane the user is actually looking at, so

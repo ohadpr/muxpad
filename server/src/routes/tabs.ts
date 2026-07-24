@@ -50,7 +50,8 @@ export function tabsRoutes(deps: {
           .optional(),
         // Which agent backend an 'agent' bootstrap runs (default claude).
         // Allowlisted enum → safe to bake into the startup_cmd shell string.
-        backend: z.enum(['claude', 'codex', 'cursor']).optional(),
+        // 'pick' = created pending, harness chosen later in the chat page.
+        backend: z.enum(['claude', 'codex', 'cursor', 'pick']).optional(),
       })
       .parse(await c.req.json().catch(() => ({})));
     // Agent tabs get a deliberate name + mark (auto-renamed to the session's
@@ -78,7 +79,9 @@ export function tabsRoutes(deps: {
         // quoting safe. Claude stays implicit (no --backend) so its cmd is
         // unchanged; codex/cursor get an explicit, allowlisted flag.
         startup_cmd: agent
-          ? `muxpad agent${body.backend && body.backend !== 'claude' ? ` --backend ${body.backend}` : ''}${body.model ? ` --model '${body.model}'` : ''}`
+          ? body.backend === 'pick'
+            ? 'muxpad agent --pick'
+            : `muxpad agent${body.backend && body.backend !== 'claude' ? ` --backend ${body.backend}` : ''}${body.model ? ` --model '${body.model}'` : ''}`
           : null,
         // Agent tabs land directly on the chat face; the (hidden) terminal
         // face spawns the pty underneath, which runs the startup command.

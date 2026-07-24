@@ -70,8 +70,9 @@ export const api = {
       // full-size terminal, 'agent' = a chat-native agent session.
       bootstrap?: 'shell' | 'agent';
       cwd?: string;
-      // Which agent backend an 'agent' bootstrap runs (default claude).
-      backend?: 'claude' | 'codex' | 'cursor';
+      // Which agent backend an 'agent' bootstrap runs. 'pick' creates it pending
+      // (harness chosen in the chat page); default claude.
+      backend?: 'claude' | 'codex' | 'cursor' | 'pick';
     } = {},
   ) =>
     req<Tab>('/api/tabs', {
@@ -138,6 +139,14 @@ export const api = {
     }),
 
   deletePane: (id: string) => req<void>(`/api/panes/${id}`, { method: 'DELETE' }),
+
+  /** Choose the harness for a pending ('muxpad agent --pick') agent pane —
+   *  sets the backend + respawns the runner. */
+  setAgentBackend: (paneId: string, backend: 'claude' | 'codex' | 'cursor') =>
+    req<void>(`/api/panes/${paneId}/agent-backend`, {
+      method: 'POST',
+      body: JSON.stringify({ backend }),
+    }),
 
   // Move a pane to another tab (any workspace). `toTabId` targets an
   // existing tab; `newTab` extracts it into a fresh tab. The PTY keeps

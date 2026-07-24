@@ -15,6 +15,7 @@ import {
   type ReactNode,
   isValidElement,
   memo,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -25,6 +26,8 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { SvgAgentGlyph } from './PaneWebSwitch';
 import { api } from '../api';
+import { AGENT_BACKENDS, type AgentBackendId } from '../lib/agent-backend';
+import { AgentBackendLogo } from './AgentLogos';
 import { type MessagePart, splitMessageAttachments } from '../lib/attachments';
 
 /** Open a media item in the lightbox (image or video). */
@@ -472,11 +475,15 @@ export function ChatPane({
   paneId,
   active,
   agentNative = false,
+  pendingPick = false,
 }: {
   paneId: string;
   active: boolean;
   /** Pane runs `muxpad agent` (durable startup_cmd marker). */
   agentNative?: boolean;
+  /** Pane was created "Agent" with no harness chosen yet (`--pick`) — the chat
+   *  shows the harness picker instead of a session. */
+  pendingPick?: boolean;
 }) {
   // undefined = still connecting; null = connected but no agent session.
   const [session, setSession] = useState<SessionMeta | null | undefined>(undefined);
@@ -1692,6 +1699,55 @@ export function ChatPane({
   // Minimized by default: the header (count + spinner) already says "subagents
   // are working"; expand to see per-agent detail. Tap toggles.
   const [rosterOpen, setRosterOpen] = useState(false);
+
+  // Harness pick: a `--pick` pane shows the picker here (not the tab bar);
+  // choosing one sets the backend + respawns the runner, which flips the pane's
+  // startup_cmd so pendingPick clears and the real session renders.
+  const [pickBusy, setPickBusy] = useState<string | null>(null);
+  const [pickError, setPickError] = useState<string | null>(null);
+  const choosePick = useCallback(
+    async (backend: AgentBackendId) => {
+      setPickBusy(backend);
+      setPickError(null);
+      try {
+        await api.setAgentBackend(paneId, backend);
+        // The pane.updated (new startup_cmd) clears pendingPick; keep the spinner
+        // until this unmounts/re-renders without it.
+      } catch (e) {
+        setPickBusy(null);
+        setPickError(e instanceof Error ? e.message : 'could not start the agent');
+      }
+    },
+    [paneId],
+  );
+
+  if (pendingPick) {
+    return (
+      <div className="chat-pane">
+        <div className="chat-empty chat-harness-pick">
+          <p className="chat-empty-title">Choose an agent</p>
+          <p className="chat-empty-hint">Which harness should drive this chat?</p>
+          <div className="chat-harness-choices">
+            {AGENT_BACKENDS.map((b) => (
+              <button
+                key={b.id}
+                type="button"
+                className="chat-harness-btn"
+                disabled={pickBusy !== null}
+                aria-busy={pickBusy === b.id}
+                onClick={() => void choosePick(b.id)}
+              >
+                <AgentBackendLogo backend={b.id} size={22} />
+                <span>{b.label}</span>
+                {pickBusy === b.id ? <span className="chat-harness-spin" aria-hidden="true" /> : null}
+              </button>
+            ))}
+          </div>
+          {pickError ? <p className="chat-harness-error">{pickError}</p> : null}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="chat-pane">

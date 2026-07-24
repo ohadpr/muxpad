@@ -29,8 +29,7 @@ import { ShellPaneBody } from '../components/ShellPaneBody';
 import { UrlPane } from '../components/UrlPane';
 import { SvgClose } from '../components/icons';
 import { subscribe, subscribeReconnect } from '../events';
-import { AgentBackendLogo } from '../components/AgentLogos';
-import { AGENT_BACKENDS, type AgentBackendId, agentStartupCmd } from '../lib/agent-backend';
+import { PENDING_AGENT_STARTUP } from '../lib/agent-backend';
 import { consumeFollowTarget } from '../lib/follow-tab';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
@@ -704,7 +703,6 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
       sourcePaneId: string | null,
       direction: MosaicDirection,
       kind: NewPaneKind = 'terminal',
-      backend?: AgentBackendId,
     ) => {
       if (!tab) return;
       const created = await api.createPane(tab.id, {
@@ -712,7 +710,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         // Agent pane: a chat-native agent session (the chosen backend runs in
         // the pty underneath; the face lands on chat immediately).
         ...(kind === 'agent'
-          ? { startup_cmd: agentStartupCmd(backend), face: 'chat' as const }
+          ? { startup_cmd: PENDING_AGENT_STARTUP, face: 'chat' as const }
           : {}),
       });
       const newLayout =
@@ -1239,13 +1237,13 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           ? stored
           : (paneIds[0] ?? null);
 
-    const addPane = async (kind: NewPaneKind = 'terminal', backend?: AgentBackendId) => {
+    const addPane = async (kind: NewPaneKind = 'terminal') => {
       if (!tab) return;
       const target = activeId ?? paneIds[paneIds.length - 1];
       const created = await api.createPane(tab.id, {
         ...(target ? { inherit_cwd_from: target } : {}),
         ...(kind === 'agent'
-          ? { startup_cmd: agentStartupCmd(backend), face: 'chat' as const }
+          ? { startup_cmd: PENDING_AGENT_STARTUP, face: 'chat' as const }
           : {}),
       });
       // Append at the END — same convention as the desktop strip's +.
@@ -1307,7 +1305,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                     idleClassName="mobile-strip-add"
                     choicesClassName="mobile-strip-choices"
                     choiceClassName="mobile-strip-add mobile-strip-choice"
-                    onCreate={(kind, backend) => void addPane(kind, backend)}
+                    onCreate={(kind) => void addPane(kind)}
                   />
                 </MobilePaneChrome>
               );
@@ -1360,12 +1358,12 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           ? stored
           : (paneIds[0] ?? null);
 
-    const addPane = async (kind: NewPaneKind = 'terminal', backend?: AgentBackendId) => {
+    const addPane = async (kind: NewPaneKind = 'terminal') => {
       const target = activeId ?? paneIds[paneIds.length - 1];
       const created = await api.createPane(tab.id, {
         ...(target ? { inherit_cwd_from: target } : {}),
         ...(kind === 'agent'
-          ? { startup_cmd: agentStartupCmd(backend), face: 'chat' as const }
+          ? { startup_cmd: PENDING_AGENT_STARTUP, face: 'chat' as const }
           : {}),
       });
       // The strip's "+" appends at the END (browser-tab convention).
@@ -1510,7 +1508,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
               idleClassName="desktop-tab-add desktop-tab-add-plus"
               choicesClassName="desktop-tab-add-choices"
               choiceClassName="desktop-tab-add"
-              onCreate={(kind, backend) => void addPane(kind, backend)}
+              onCreate={(kind) => void addPane(kind)}
             />
           </div>
           <div className="desktop-tab-strip-actions">
@@ -1593,18 +1591,13 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
             <button className="btn btn-primary" onClick={() => void splitFromPane(null, 'row')}>
               New terminal
             </button>
-            {AGENT_BACKENDS.map((b) => (
-              <button
-                key={b.id}
-                type="button"
-                className="btn btn-primary"
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-                onClick={() => void splitFromPane(null, 'row', 'agent', b.id)}
-              >
-                <AgentBackendLogo backend={b.id} size={14} />
-                {b.label}
-              </button>
-            ))}
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void splitFromPane(null, 'row', 'agent')}
+            >
+              New agent
+            </button>
             <button type="button" className="workspace-empty-close" onClick={() => void closeTab()}>
               or close this tab
             </button>

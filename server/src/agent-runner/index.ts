@@ -55,6 +55,11 @@ let requestedBackend: 'claude' | 'codex' | 'cursor' = 'claude';
   const b = args.indexOf('--backend');
   if (b !== -1 && isBackendId(args[b + 1])) requestedBackend = args[b + 1] as typeof requestedBackend;
 }
+// --pick: the pane was created "Agent" without a harness chosen yet. Start NO
+// session — just idle so the chat face can show its harness picker; picking one
+// hits POST /panes/:id/agent-backend, which rewrites startup_cmd + respawns us
+// with a real --backend.
+const pickMode = process.argv.slice(2).includes('--pick');
 
 const ts = () => dim(new Date().toLocaleTimeString('en-GB'));
 
@@ -131,32 +136,35 @@ const host: RunnerHost = {
   apiUrl,
 };
 
-const backend: AgentBackend = createBackend(requestedBackend, host, { requestedSid, requestedModel });
+const backend: AgentBackend | null = pickMode
+  ? null
+  : createBackend(requestedBackend, host, { requestedSid, requestedModel });
 
 function connect(): void {
-  if (closed) return;
+  if (closed || !backend) return;
+  const b = backend;
   const sock = new WebSocket(wsUrl);
   ws = sock;
   sock.on('open', () => {
     log(dim('connected to muxpad'));
-    sendFrame(backend.hello());
+    sendFrame(b.hello());
     // Re-deliver anything the server's per-connection state lost across the
     // blip (a pending question, the last status) so chat clients recover.
-    backend.onConnected();
+    b.onConnected();
   });
   sock.on('message', (data) => {
     const frame = parseFrame<ServerFrame>(data);
     if (!frame) return;
     if (frame.t === 'send' && typeof frame.text === 'string' && frame.text.trim()) {
-      backend.send(frame.text);
+      b.send(frame.text);
     } else if (frame.t === 'set-model') {
-      if (typeof frame.model === 'string' && frame.model) backend.setModel(frame.model);
+      if (typeof frame.model === 'string' && frame.model) b.setModel(frame.model);
     } else if (frame.t === 'slash') {
-      if (frame.cmd === 'compact' || frame.cmd === 'clear') backend.slash(frame.cmd);
+      if (frame.cmd === 'compact' || frame.cmd === 'clear') b.slash(frame.cmd);
     } else if (frame.t === 'stop') {
-      backend.stop();
+      b.stop();
     } else if (frame.t === 'answer') {
-      backend.answer(frame.qid, frame.answers);
+      b.answer(frame.qid, frame.answers);
     }
   });
   const retry = (code?: number) => {
@@ -189,6 +197,16 @@ function connect(): void {
 }
 
 async function main(): Promise<void> {
+  if (pickMode || !backend) {
+    // No harness chosen yet. Stay alive (keep the pane's agent-runner process so
+    // the supervisor's dead-runner sweep doesn't churn it) and start no session;
+    // the chat face shows the harness picker. Picking rewrites startup_cmd and
+    // respawns us, killing this idle process.
+    process.stdout.write('\x1b]0;✳ agent\x07');
+    log(dim('choose a harness in the chat face to start a session…'));
+    await new Promise<void>(() => {});
+    return;
+  }
   connect();
   await backend.start();
 }
@@ -196,7 +214,7 @@ async function main(): Promise<void> {
 function shutdown(code: number): void {
   if (closed) return;
   closed = true;
-  backend.shutdown();
+  backend?.shutdown();
   try {
     ws?.close();
   } catch {
