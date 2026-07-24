@@ -202,10 +202,17 @@ describe('agent-runner relay', () => {
     const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
     await fromChat.next((f) => f.t === 'session');
 
-    // Malformed status (no context) must be dropped, not cached or bcast.
-    runner.send(JSON.stringify({ t: 'status', model: 'skewed-runner' }));
+    // A truly invalid status (no model) must be dropped, not cached or bcast.
+    runner.send(JSON.stringify({ t: 'status', context: { pct: 1, tokens: 1, max: 2 } }));
     await new Promise((r) => setTimeout(r, 150));
     expect(fromChat.frames.some((f) => f.t === 'status')).toBe(false);
+
+    // A context-LESS status (Codex/Cursor have no context window) is VALID now
+    // and flows through carrying just the model.
+    runner.send(JSON.stringify({ t: 'status', model: 'ctxless-model' }));
+    const stCtxless = await fromChat.next((f) => f.t === 'status');
+    expect((stCtxless as { model: string }).model).toBe('ctxless-model');
+    expect((stCtxless as { context?: unknown }).context).toBeUndefined();
 
     // Valid status with models flows through.
     runner.send(
@@ -216,7 +223,7 @@ describe('agent-runner relay', () => {
         models: [{ value: 'x', displayName: 'X' }],
       }),
     );
-    const st1 = await fromChat.next((f) => f.t === 'status');
+    const st1 = await fromChat.next((f) => f.t === 'status' && f.model === 'claude-x');
     expect((st1.models as unknown[]).length).toBe(1);
 
     // A later frame WITHOUT models keeps the last known list (merged).
@@ -228,7 +235,7 @@ describe('agent-runner relay', () => {
       }),
     );
     const st2 = await fromChat.next(
-      (f) => f.t === 'status' && (f.context as { pct: number }).pct === 13,
+      (f) => f.t === 'status' && (f.context as { pct?: number } | undefined)?.pct === 13,
     );
     expect((st2.models as unknown[]).length).toBe(1);
 

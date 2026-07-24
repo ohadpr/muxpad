@@ -4,7 +4,7 @@
 // server→runner control frames into method calls; the backend owns the session
 // and emits runner→server frames via the host. Nothing in the harness knows
 // which backend is running.
-import type { RunnerFrame } from '../protocol.js';
+import type { BackendId, RunnerFrame } from '../protocol.js';
 
 /** Services the harness provides to a backend. */
 export interface RunnerHost {
@@ -38,6 +38,8 @@ export interface BackendOptions {
  * subagent/status/title/fatal) through {@link RunnerHost.emit}.
  */
 export interface AgentBackend {
+  /** Which backend this is — stamped into the hello frame + used for logging. */
+  readonly id: BackendId;
   /** Begin the session loop. Resolves only when the session ends. */
   start(): Promise<void>;
   /** A user turn from chat. */

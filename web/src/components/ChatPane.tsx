@@ -221,6 +221,9 @@ function SessionMenu({
     list.find((m) => m.resolvedModel === status.model);
   const modelLabel = current?.displayName ?? status.model;
   const kTokens = (n: number) => `${Math.round(n / 1000)}k`;
+  // Context is optional — backends without a context-window (Codex/Cursor)
+  // omit it, and the meter chip/section simply don't render.
+  const ctx = status.context;
   return (
     <div className="chat-session" ref={wrapRef}>
       <button
@@ -231,23 +234,27 @@ function SessionMenu({
         aria-expanded={open}
         title="Session — model, context, compact, clear"
       >
-        {modelLabel} · {status.context.pct}%
+        {modelLabel}
+        {ctx ? ` · ${ctx.pct}%` : ''}
       </button>
       {open ? (
         <div className="chat-session-menu" role="menu">
-          <div className="chat-session-head">Context</div>
-          <div className="chat-session-context">
-            <div className="chat-session-bar">
-              <div
-                className="chat-session-bar-fill"
-                style={{ width: `${Math.min(100, status.context.pct)}%` }}
-              />
-            </div>
-            <span className="chat-session-context-label">
-              {status.context.pct}% · {kTokens(status.context.tokens)} /{' '}
-              {kTokens(status.context.max)} tokens
-            </span>
-          </div>
+          {ctx ? (
+            <>
+              <div className="chat-session-head">Context</div>
+              <div className="chat-session-context">
+                <div className="chat-session-bar">
+                  <div
+                    className="chat-session-bar-fill"
+                    style={{ width: `${Math.min(100, ctx.pct)}%` }}
+                  />
+                </div>
+                <span className="chat-session-context-label">
+                  {ctx.pct}% · {kTokens(ctx.tokens)} / {kTokens(ctx.max)} tokens
+                </span>
+              </div>
+            </>
+          ) : null}
           {status.models?.length ? <div className="chat-session-head">Model</div> : null}
           {status.models?.map((m) => (
             <button
@@ -307,6 +314,14 @@ interface SessionMeta {
   writer: string;
   view_mode: string;
   assistant: string;
+}
+
+/** Display name for the pane's agent backend — used in composer/working copy
+ *  so a Codex/Cursor pane doesn't say "Claude". */
+function assistantLabel(a: string | null | undefined): string {
+  if (a === 'codex') return 'Codex';
+  if (a === 'cursor') return 'Cursor';
+  return 'Claude';
 }
 
 type PendingQuestion = { qid: string; questions: AgentQuestion[] };
@@ -763,7 +778,7 @@ export function ChatPane({
         setAgentStatus((prev) => {
           const next: AgentStatus = {
             model: msg.model,
-            context: msg.context,
+            ...(msg.context ? { context: msg.context } : {}),
             ...(msg.models ? { models: msg.models } : {}),
           };
           // Identical payload → keep the previous object so React skips the
@@ -1433,7 +1448,7 @@ export function ChatPane({
           <div className="chat-empty-mark" aria-hidden="true">
             ✳
           </div>
-          <p className="chat-empty-title">No Claude session here yet</p>
+          <p className="chat-empty-title">No agent session here yet</p>
           <p className="chat-empty-hint">
             Start one with <code>muxpad agent</code> (chat-native) or <code>muxpad claude</code> in
             the terminal.
@@ -1688,7 +1703,10 @@ export function ChatPane({
                   <span className="chat-cursor" aria-hidden="true" />
                 </div>
               ) : (
-                <div className="chat-msg chat-working" aria-label="Claude is working">
+                <div
+                  className="chat-msg chat-working"
+                  aria-label={`${assistantLabel(session?.assistant)} is working`}
+                >
                   <span className="chat-typing" aria-hidden="true">
                     <i />
                     <i />
@@ -1837,7 +1855,11 @@ export function ChatPane({
                     sendMessage();
                   }
                 }}
-                placeholder={question ? 'Type an answer, or tap an option…' : 'Message Claude…'}
+                placeholder={
+                  question
+                    ? 'Type an answer, or tap an option…'
+                    : `Message ${assistantLabel(session?.assistant)}…`
+                }
                 rows={1}
               />
               {sending && !question ? (
