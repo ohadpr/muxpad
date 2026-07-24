@@ -35,6 +35,7 @@ function fakeSpawner() {
 const line = (c: FakeChild, obj: unknown) => c.stdout.emit('data', Buffer.from(`${JSON.stringify(obj)}\n`));
 const closeChild = (c: FakeChild, code = 0) => c.emit('close', code);
 const tick = () => new Promise((r) => setTimeout(r, 0));
+const noModels = async () => ({ models: [], defaultModel: null });
 
 function makeHost() {
   const frames: RunnerFrame[] = [];
@@ -75,7 +76,7 @@ describe('codex backend', () => {
   async function boot(requestedSid: string | null = null) {
     const { host, frames } = makeHost();
     const { spawn, calls } = fakeSpawner();
-    const b = createCodexBackend(host, { requestedSid, requestedModel: null }, { spawn });
+    const b = createCodexBackend(host, { requestedSid, requestedModel: null }, { spawn, listModels: noModels });
     b.start();
     await tick();
     closeChild(calls[0]!.child, 0); // auth: `codex login status` exits 0
@@ -146,7 +147,7 @@ describe('codex backend', () => {
   it('surfaces a logged-out backend as a clear turn-done, not a crash-loop', async () => {
     const { host, frames } = makeHost();
     const { spawn, calls } = fakeSpawner();
-    const b = createCodexBackend(host, { requestedSid: null, requestedModel: null }, { spawn });
+    const b = createCodexBackend(host, { requestedSid: null, requestedModel: null }, { spawn, listModels: noModels });
     b.start();
     await tick();
     closeChild(calls[0]!.child, 1); // auth FAILS at boot
@@ -194,5 +195,30 @@ describe('codex backend', () => {
     const done = frames.filter((f) => f.t === 'turn-done').at(-1) as { ok: boolean; error?: string };
     expect(done.ok).toBe(false);
     expect(done.error).toBe('stopped');
+  });
+
+  it('advertises its model list + default in the status frame (the picker)', async () => {
+    const { host, frames } = makeHost();
+    const { spawn, calls } = fakeSpawner();
+    const b = createCodexBackend(host, { requestedSid: null, requestedModel: null }, {
+      spawn,
+      listModels: async () => ({
+        models: [
+          { value: 'gpt-5.6-sol', displayName: 'GPT-5.6-Sol' },
+          { value: 'gpt-5.5', displayName: 'GPT-5.5' },
+        ],
+        defaultModel: 'gpt-5.6-sol',
+      }),
+    });
+    b.start();
+    await tick();
+    closeChild(calls[0]!.child, 0);
+    await tick();
+    const status = frames.find((f) => f.t === 'status') as {
+      model: string;
+      models?: Array<{ value: string }>;
+    };
+    expect(status.model).toBe('gpt-5.6-sol'); // highlights the current row
+    expect(status.models?.map((m) => m.value)).toEqual(['gpt-5.6-sol', 'gpt-5.5']);
   });
 });

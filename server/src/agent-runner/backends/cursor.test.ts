@@ -34,6 +34,7 @@ function fakeSpawner() {
 const line = (c: FakeChild, obj: unknown) => c.stdout.emit('data', Buffer.from(`${JSON.stringify(obj)}\n`));
 const closeChild = (c: FakeChild, code = 0) => c.emit('close', code);
 const tick = () => new Promise((r) => setTimeout(r, 0));
+const noModels = async () => ({ models: [], defaultModel: null });
 function makeHost() {
   const frames: RunnerFrame[] = [];
   const host: RunnerHost = {
@@ -73,7 +74,7 @@ describe('cursor backend', () => {
   async function boot(requestedSid: string | null = null) {
     const { host, frames } = makeHost();
     const { spawn, calls } = fakeSpawner();
-    const b = createCursorBackend(host, { requestedSid, requestedModel: null }, { spawn });
+    const b = createCursorBackend(host, { requestedSid, requestedModel: null }, { spawn, listModels: noModels });
     b.start();
     await tick();
     closeChild(calls[0]!.child, 0); // auth: `cursor-agent status` exits 0
@@ -140,7 +141,7 @@ describe('cursor backend', () => {
   it('surfaces a logged-out backend as a clear turn-done', async () => {
     const { host, frames } = makeHost();
     const { spawn, calls } = fakeSpawner();
-    const b = createCursorBackend(host, { requestedSid: null, requestedModel: null }, { spawn });
+    const b = createCursorBackend(host, { requestedSid: null, requestedModel: null }, { spawn, listModels: noModels });
     b.start();
     await tick();
     closeChild(calls[0]!.child, 1);
@@ -185,5 +186,30 @@ describe('cursor backend', () => {
     const done = frames.filter((f) => f.t === 'turn-done').at(-1) as { ok: boolean; error?: string };
     expect(done.ok).toBe(false);
     expect(done.error).toBe('stopped');
+  });
+
+  it('advertises its model list + default in the status frame (the picker)', async () => {
+    const { host, frames } = makeHost();
+    const { spawn, calls } = fakeSpawner();
+    const b = createCursorBackend(host, { requestedSid: null, requestedModel: null }, {
+      spawn,
+      listModels: async () => ({
+        models: [
+          { value: 'auto', displayName: 'Auto' },
+          { value: 'composer-2.5', displayName: 'Composer 2.5' },
+        ],
+        defaultModel: 'auto',
+      }),
+    });
+    b.start();
+    await tick();
+    closeChild(calls[0]!.child, 0);
+    await tick();
+    const status = frames.find((f) => f.t === 'status') as {
+      model: string;
+      models?: Array<{ value: string }>;
+    };
+    expect(status.model).toBe('auto');
+    expect(status.models?.map((m) => m.value)).toEqual(['auto', 'composer-2.5']);
   });
 });

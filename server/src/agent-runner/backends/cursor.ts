@@ -15,10 +15,36 @@ import type { ChatEvent } from '@muxpad/shared';
 import { appendTranscriptEvent } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
 import type { RunnerFrame } from '../protocol.js';
-import type { BackendDeps } from './codex.js';
+import type { BackendDeps, ModelFetch } from './codex.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
 const CURSOR_BIN = process.env.MUXPAD_CURSOR_BIN || 'cursor-agent';
+
+/** Parse `cursor-agent --list-models` — lines are `slug - Display Name`, with
+ *  the active one marked `(current, default)`. Best-effort. */
+function cursorModelFetch(spawnFn: typeof spawn): ReturnType<ModelFetch> {
+  return new Promise((resolve) => {
+    const p = spawnFn(CURSOR_BIN, ['--list-models'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    p.stdout?.on('data', (d: Buffer) => {
+      out += d.toString();
+    });
+    p.on('error', () => resolve({ models: [], defaultModel: null }));
+    p.on('close', () => {
+      const models: Array<{ value: string; displayName: string }> = [];
+      let defaultModel: string | null = null;
+      for (const raw of out.split('\n')) {
+        const m = raw.match(/^(\S+)\s+-\s+(.+)$/);
+        if (!m) continue;
+        const value = m[1] as string;
+        if (/\(current, default\)/.test(m[2] as string)) defaultModel = value;
+        const displayName = (m[2] as string).replace(/\s*\(current, default\)\s*/, '').trim();
+        models.push({ value, displayName });
+      }
+      resolve({ models, defaultModel });
+    });
+  });
+}
 
 export function createCursorBackend(
   host: RunnerHost,
@@ -27,6 +53,7 @@ export function createCursorBackend(
 ): AgentBackend {
   const { emit, log } = host;
   const spawnFn = deps.spawn ?? spawn;
+  const listModels: ModelFetch = deps.listModels ?? (() => cursorModelFetch(spawnFn));
   let sessionRef: string | null = opts.requestedSid;
   let liveSid = opts.requestedSid ?? randomUUID();
   let model = opts.requestedModel;
@@ -39,6 +66,7 @@ export function createCursorBackend(
   let authOk = false;
   let resolveDone: (() => void) | null = null;
   let lastStatus: (RunnerFrame & { t: 'status' }) | null = null;
+  let modelList: Array<{ value: string; displayName: string }> | null = null;
 
   // Per-turn transcript buffer — flushed to the final <sessionId>.jsonl once
   // system/init settles the id (see the Codex backend for the rationale).
@@ -62,7 +90,11 @@ export function createCursorBackend(
   }
 
   function emitStatus(): void {
-    const frame: RunnerFrame & { t: 'status' } = { t: 'status', model: model ?? 'cursor' };
+    const frame: RunnerFrame & { t: 'status' } = {
+      t: 'status',
+      model: model ?? 'cursor',
+      ...(modelList && modelList.length > 0 ? { models: modelList } : {}),
+    };
     lastStatus = frame;
     emit(frame);
   }
@@ -249,6 +281,13 @@ export function createCursorBackend(
     log(dim(`pane ${host.paneId} · ${process.cwd()}`));
     authOk = await checkAuth();
     if (!authOk) log(dim('cursor-agent not logged in — run `cursor-agent login` in the terminal face'));
+    try {
+      const { models, defaultModel } = await listModels();
+      modelList = models;
+      if (!model && defaultModel) model = defaultModel;
+    } catch {
+      // best-effort
+    }
     emitStatus();
     await new Promise<void>((r) => {
       resolveDone = r;
