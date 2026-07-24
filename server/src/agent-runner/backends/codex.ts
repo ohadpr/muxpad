@@ -9,7 +9,7 @@
 // agent_message arrives whole), no interactive tool approvals (runs under a
 // fixed sandbox policy), no subagents, no autonomous turns, and no context
 // meter (Codex's exec stream carries usage but not the window size).
-import { spawn } from 'node:child_process';
+import { type spawn as nodeSpawn, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { ChatEvent } from '@muxpad/shared';
 import { appendTranscriptEvent } from '../../chat/TranscriptReader.js';
@@ -19,8 +19,18 @@ import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
 const CODEX_BIN = process.env.MUXPAD_CODEX_BIN || 'codex';
 
-export function createCodexBackend(host: RunnerHost, opts: BackendOptions): AgentBackend {
+/** Injectable child spawner — production uses node's; tests feed a fake. */
+export interface BackendDeps {
+  spawn?: typeof nodeSpawn;
+}
+
+export function createCodexBackend(
+  host: RunnerHost,
+  opts: BackendOptions,
+  deps: BackendDeps = {},
+): AgentBackend {
   const { emit, log } = host;
+  const spawnFn = deps.spawn ?? spawn;
   // The codex thread id we resume. Starts from --resume (may be a placeholder
   // minted before the first turn ever ran — see the resume-with-fallback in
   // runTurn) and becomes the real thread_id after `thread.started`.
@@ -74,7 +84,7 @@ export function createCodexBackend(host: RunnerHost, opts: BackendOptions): Agen
 
   function checkAuth(): Promise<boolean> {
     return new Promise((resolve) => {
-      const p = spawn(CODEX_BIN, ['login', 'status'], { stdio: 'ignore' });
+      const p = spawnFn(CODEX_BIN, ['login', 'status'], { stdio: 'ignore' });
       p.on('error', () => resolve(false));
       p.on('close', (code) => resolve(code === 0));
     });
@@ -201,7 +211,7 @@ export function createCodexBackend(host: RunnerHost, opts: BackendOptions): Agen
       // its positional arg, but if stdin is an open pipe it ALSO waits on it
       // ("Reading additional input from stdin…") and hangs forever. /dev/null
       // gives it an immediate EOF so it runs the positional prompt.
-      const proc = spawn(CODEX_BIN, args, {
+      const proc = spawnFn(CODEX_BIN, args, {
         cwd: process.cwd(),
         env: process.env,
         stdio: ['ignore', 'pipe', 'pipe'],
