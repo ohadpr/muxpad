@@ -226,3 +226,48 @@ describe('TranscriptReader', () => {
     tail.close();
   });
 });
+
+describe('TranscriptReader — muxpad-owned log (codex/cursor backends)', () => {
+  let dataDir: string;
+  let prevDataDir: string | undefined;
+  const CSID = 'codex-thread-1234';
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'muxlog-'));
+    prevDataDir = process.env.MUXPAD_DATA_DIR;
+    process.env.MUXPAD_DATA_DIR = dataDir;
+  });
+  afterEach(() => {
+    // biome-ignore lint/performance/noDelete: restoring an env var that wasn't set
+    if (prevDataDir === undefined) delete process.env.MUXPAD_DATA_DIR;
+    else process.env.MUXPAD_DATA_DIR = prevDataDir;
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('locate returns null until the log exists, then appendTranscriptEvent + identity tail replay it', async () => {
+    const { appendTranscriptEvent, identityNormalize, muxpadLocate } = await import(
+      './TranscriptReader.js'
+    );
+    // No log yet → locate null → tail emits nothing.
+    expect(muxpadLocate(CSID)).toBeNull();
+    const seen: ChatEvent[] = [];
+    const tail = new TranscriptTail(CSID, {
+      locate: muxpadLocate,
+      normalize: identityNormalize,
+      onEvents: (e) => seen.push(...e),
+    });
+    tail.tick();
+    expect(seen).toEqual([]);
+
+    // Runner writes ready-made ChatEvents; the identity tail replays them 1:1.
+    appendTranscriptEvent(CSID, { kind: 'user', id: 'u1', ts: 1, text: 'hi' });
+    appendTranscriptEvent(CSID, { kind: 'assistant', id: 'a1', ts: 2, text: 'yo', model: 'codex' });
+    expect(muxpadLocate(CSID)).not.toBeNull();
+    tail.tick();
+    expect(seen).toEqual([
+      { kind: 'user', id: 'u1', ts: 1, text: 'hi' },
+      { kind: 'assistant', id: 'a1', ts: 2, text: 'yo', model: 'codex' },
+    ]);
+    tail.close();
+  });
+});

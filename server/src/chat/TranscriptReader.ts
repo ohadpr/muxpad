@@ -1,7 +1,39 @@
-import { closeSync, openSync, readSync, readdirSync, statSync } from 'node:fs';
+import { appendFileSync, closeSync, mkdirSync, openSync, readSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { type ChatEvent, normalizeTranscriptLine } from '@muxpad/shared';
+
+/**
+ * muxpad-owned normalized transcript log — used by backends (Codex/Cursor) that
+ * don't write a Claude-format JSONL file. The runner appends ready-made
+ * ChatEvents here as it streams a turn; the server tails it with the identity
+ * normalizer below. Keyed by the backend's session ref (stable across resume).
+ */
+export function muxpadTranscriptDir(): string {
+  return join(process.env.MUXPAD_DATA_DIR ?? join(homedir(), '.muxpad'), 'agent-transcripts');
+}
+export function muxpadTranscriptPath(sid: string): string {
+  return join(muxpadTranscriptDir(), `${sid}.jsonl`);
+}
+/** Locator for a muxpad log (mirrors findTranscript's null-until-exists shape). */
+export function muxpadLocate(sid: string): string | null {
+  const p = muxpadTranscriptPath(sid);
+  try {
+    return statSync(p).isFile() ? p : null;
+  } catch {
+    return null;
+  }
+}
+/** Our own log lines already ARE ChatEvents — no schema translation. */
+export function identityNormalize(obj: unknown): ChatEvent[] {
+  return obj && typeof obj === 'object' ? [obj as ChatEvent] : [];
+}
+/** Append one ChatEvent to a session's muxpad log (best-effort, creates dir). */
+export function appendTranscriptEvent(sid: string, event: ChatEvent): void {
+  const p = muxpadTranscriptPath(sid);
+  mkdirSync(muxpadTranscriptDir(), { recursive: true });
+  appendFileSync(p, `${JSON.stringify(event)}\n`);
+}
 
 /** ~/.claude/projects (or $CLAUDE_CONFIG_DIR/projects). */
 export function projectsDir(): string {
@@ -48,6 +80,18 @@ export interface TranscriptTailOpts {
   onTitle?: (title: string) => void;
   /** Override the projects dir (tests). */
   dir?: string;
+  /**
+   * How to find the session's transcript file. Default: Claude's
+   * `findTranscript` (scan ~/.claude/projects for `<sid>.jsonl`). Non-Claude
+   * backends pass {@link muxpadLocate} to read the runner-written normalized log.
+   */
+  locate?: (sid: string) => string | null;
+  /**
+   * How to turn one raw JSONL line-object into ChatEvents. Default: Claude's
+   * `normalizeTranscriptLine`. Non-Claude backends pass {@link identityNormalize}
+   * (their log lines already ARE ChatEvents).
+   */
+  normalize?: (obj: unknown) => ChatEvent[];
   /** Poll interval for `start()`. Tests drive `tick()` directly instead. */
   pollMs?: number;
   /**
@@ -108,7 +152,8 @@ export class TranscriptTail {
   tick(): void {
     if (this.closed) return;
     if (!this.path) {
-      this.path = findTranscript(this.sid, this.opts.dir ?? projectsDir());
+      const locate = this.opts.locate ?? ((sid) => findTranscript(sid, this.opts.dir ?? projectsDir()));
+      this.path = locate(this.sid);
       if (!this.path) return; // file not created yet (no first prompt)
     }
     let size: number;
@@ -303,7 +348,7 @@ export class TranscriptTail {
       ) {
         this.opts.onTitle((obj as { aiTitle: string }).aiTitle);
       }
-      events.push(...normalizeTranscriptLine(obj));
+      events.push(...(this.opts.normalize ?? normalizeTranscriptLine)(obj));
     }
     if (events.length) this.opts.onEvents(events, phase);
   }
