@@ -15,12 +15,18 @@ import type { ChatEvent } from '@muxpad/shared';
 import { appendTranscriptEvent } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
 import type { RunnerFrame } from '../protocol.js';
+import type { BackendDeps } from './codex.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
 const CURSOR_BIN = process.env.MUXPAD_CURSOR_BIN || 'cursor-agent';
 
-export function createCursorBackend(host: RunnerHost, opts: BackendOptions): AgentBackend {
+export function createCursorBackend(
+  host: RunnerHost,
+  opts: BackendOptions,
+  deps: BackendDeps = {},
+): AgentBackend {
   const { emit, log } = host;
+  const spawnFn = deps.spawn ?? spawn;
   let sessionRef: string | null = opts.requestedSid;
   let liveSid = opts.requestedSid ?? randomUUID();
   let model = opts.requestedModel;
@@ -63,7 +69,7 @@ export function createCursorBackend(host: RunnerHost, opts: BackendOptions): Age
 
   function checkAuth(): Promise<boolean> {
     return new Promise((resolve) => {
-      const p = spawn(CURSOR_BIN, ['status'], { stdio: 'ignore' });
+      const p = spawnFn(CURSOR_BIN, ['status'], { stdio: 'ignore' });
       p.on('error', () => resolve(false));
       p.on('close', (code) => resolve(code === 0));
     });
@@ -174,7 +180,7 @@ export function createCursorBackend(host: RunnerHost, opts: BackendOptions): Age
 
     const spawnCursor = (useResume: boolean) => {
       const args = buildArgs(prompt, useResume);
-      const proc = spawn(CURSOR_BIN, args, {
+      const proc = spawnFn(CURSOR_BIN, args, {
         cwd: process.cwd(),
         env: process.env,
         stdio: ['ignore', 'pipe', 'pipe'],
