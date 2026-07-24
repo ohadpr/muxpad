@@ -11,6 +11,9 @@
 // meter (Codex's exec stream carries usage but not the window size).
 import { type spawn as nodeSpawn, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { ChatEvent } from '@muxpad/shared';
 import { appendTranscriptEvent } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
@@ -19,9 +22,41 @@ import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
 const CODEX_BIN = process.env.MUXPAD_CODEX_BIN || 'codex';
 
-/** Injectable child spawner — production uses node's; tests feed a fake. */
+/** Model list + the backend's current default, for the chat model picker. */
+export type ModelFetch = () => Promise<{
+  models: Array<{ value: string; displayName: string }>;
+  defaultModel: string | null;
+}>;
+
+/** Injectable deps — production uses the real spawner / model fetch; tests
+ *  inject fakes so no real CLI, filesystem, or subprocess is touched. */
 export interface BackendDeps {
   spawn?: typeof nodeSpawn;
+  listModels?: ModelFetch;
+}
+
+/** Read Codex's cached model catalog (+ config default) — best-effort. */
+function codexModelFetch(): { models: Array<{ value: string; displayName: string }>; defaultModel: string | null } {
+  const home = process.env.CODEX_HOME || join(homedir(), '.codex');
+  let models: Array<{ value: string; displayName: string }> = [];
+  let defaultModel: string | null = null;
+  try {
+    const cache = JSON.parse(readFileSync(join(home, 'models_cache.json'), 'utf8')) as {
+      models?: Array<{ slug?: string; display_name?: string; visibility?: string; supported_in_api?: boolean }>;
+    };
+    models = (cache.models ?? [])
+      .filter((m) => m.visibility === 'list' && m.supported_in_api !== false && typeof m.slug === 'string')
+      .map((m) => ({ value: m.slug as string, displayName: m.display_name || (m.slug as string) }));
+  } catch {
+    // no cache / unreadable — picker just won't show
+  }
+  try {
+    const match = readFileSync(join(home, 'config.toml'), 'utf8').match(/^\s*model\s*=\s*"([^"]+)"/m);
+    defaultModel = match?.[1] ?? null;
+  } catch {
+    // no config — leave default null
+  }
+  return { models, defaultModel };
 }
 
 export function createCodexBackend(
@@ -31,6 +66,7 @@ export function createCodexBackend(
 ): AgentBackend {
   const { emit, log } = host;
   const spawnFn = deps.spawn ?? spawn;
+  const listModels: ModelFetch = deps.listModels ?? (async () => codexModelFetch());
   // The codex thread id we resume. Starts from --resume (may be a placeholder
   // minted before the first turn ever ran — see the resume-with-fallback in
   // runTurn) and becomes the real thread_id after `thread.started`.
@@ -49,6 +85,7 @@ export function createCodexBackend(
   let resolveDone: (() => void) | null = null;
 
   let lastStatus: (RunnerFrame & { t: 'status' }) | null = null;
+  let modelList: Array<{ value: string; displayName: string }> | null = null;
 
   // Per-turn transcript buffer. A fresh turn's real thread id isn't known until
   // `thread.started` arrives (and a failed resume changes it again mid-turn), so
@@ -76,8 +113,12 @@ export function createCodexBackend(
 
   function emitStatus(): void {
     // Codex exposes per-turn token usage but not the model's context window, so
-    // we advertise the model only — the chat header hides the meter chip.
-    const frame: RunnerFrame & { t: 'status' } = { t: 'status', model: model ?? 'codex' };
+    // we advertise the model (+ the switchable list) but no context meter.
+    const frame: RunnerFrame & { t: 'status' } = {
+      t: 'status',
+      model: model ?? 'codex',
+      ...(modelList && modelList.length > 0 ? { models: modelList } : {}),
+    };
     lastStatus = frame;
     emit(frame);
   }
@@ -282,6 +323,13 @@ export function createCodexBackend(
     authOk = await checkAuth();
     if (!authOk) {
       log(dim('codex not logged in — run `codex login` in this pane’s terminal face'));
+    }
+    try {
+      const { models, defaultModel } = await listModels();
+      modelList = models;
+      if (!model && defaultModel) model = defaultModel; // highlight the picker's current row
+    } catch {
+      // best-effort — no picker if the catalog can't be read
     }
     emitStatus();
     // Spawn-per-turn: nothing to loop. Stay alive until shutdown.
