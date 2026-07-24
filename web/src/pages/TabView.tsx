@@ -1509,7 +1509,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
               idleClassName="desktop-tab-add desktop-tab-add-plus"
               choicesClassName="desktop-tab-add-choices"
               choiceClassName="desktop-tab-add"
-              onCreate={(kind) => void addPane(kind)}
+              onCreate={(kind, backend) => void addPane(kind, backend)}
             />
           </div>
           <div className="desktop-tab-strip-actions">
