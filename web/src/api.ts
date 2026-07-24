@@ -67,9 +67,11 @@ export const api = {
       name?: string;
       layout?: LayoutNode;
       // Atomic tab-with-pane creation (the tabs-first default): 'shell' =
-      // full-size terminal, 'agent' = chat-native Claude session.
+      // full-size terminal, 'agent' = a chat-native agent session.
       bootstrap?: 'shell' | 'agent';
       cwd?: string;
+      // Which agent backend an 'agent' bootstrap runs (default claude).
+      backend?: 'claude' | 'codex' | 'cursor';
     } = {},
   ) =>
     req<Tab>('/api/tabs', {
