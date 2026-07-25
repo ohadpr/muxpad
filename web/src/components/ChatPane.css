@@ -1168,6 +1168,24 @@
   .chat-input {
     font-size: 17px;
   }
+  /* The folder (cwd) switcher card is ~320px, but its segment sits mid-screen
+     in a narrow right-aligned bar — anchoring to that segment overflows an edge
+     whichever side it opens. Break it out of the segment (static wrapper →
+     the menu resolves to the full-width composer-wrap) and pin it to the
+     viewport with side margins so it always fits. Only while it's open. */
+  .chat-status-seg-wrap:has(> .chat-folder-menu) {
+    position: static;
+  }
+  .chat-folder-menu {
+    left: 12px;
+    right: 12px;
+    width: auto;
+    max-width: none;
+  }
+  /* ≥16px stops iOS auto-zooming the viewport when the path field takes focus. */
+  .chat-folder-input {
+    font-size: 16px;
+  }
 }
 
 /* ── Subagent live progress (under a running Task row) ─────────────────── */
@@ -1532,7 +1550,8 @@
   align-items: stretch;
   width: fit-content;
   max-width: min(92vw, 420px);
-  margin: 0 6px 4px auto;
+  /* Clear the composer pill below — 4px read as crammed against it. */
+  margin: 0 6px 10px auto;
   border: 1px solid color-mix(in srgb, var(--border-strong, #3b4261) 70%, transparent);
   border-radius: 10px;
   /* Menus escape via position:absolute on .chat-status-menu; segment buttons
