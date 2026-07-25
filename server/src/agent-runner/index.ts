@@ -204,6 +204,11 @@ async function main(): Promise<void> {
     // respawns us, killing this idle process.
     process.stdout.write('\x1b]0;✳ agent\x07');
     log(dim('choose a harness in the chat face to start a session…'));
+    // A bare `await new Promise(() => {})` is NOT enough: an unresolved promise
+    // isn't a libuv handle, so with no ws/timer the event loop drains and Node
+    // exits immediately. A ref'd interval keeps it alive; shutdown()'s
+    // process.exit tears it down on SIGTERM/SIGINT.
+    setInterval(() => {}, 1 << 30);
     await new Promise<void>(() => {});
     return;
   }

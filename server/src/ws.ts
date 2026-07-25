@@ -217,6 +217,12 @@ export function attachWsServer(deps: {
       for (const id of respawns.keys()) if (!liveIds.has(id)) respawns.delete(id);
       for (const pane of agentPanes) {
         if (agentRunners.get(pane.id)) continue;
+        // A PENDING agent ('muxpad agent --pick') has no session/runner to
+        // supervise — it idles waiting for the user to pick a harness. It never
+        // registers, so the fg probe is its only guard; skip it outright rather
+        // than rely on that string match (a flaky probe would wrongly respawn a
+        // pane whose only "fault" is waiting to be picked).
+        if (pane.startup_cmd === 'muxpad agent --pick') continue;
         // A just-created pane may not have typed its startup command yet —
         // the foreground probe would misread the bare shell as a dead
         // runner and bounce a healthy boot.
