@@ -9,15 +9,18 @@ import {
   type RunnerFrame,
   type ServerFrame,
   type SubagentProgress,
+  isBackendId,
   parseFrame,
 } from './agent-runner/protocol.js';
-import { TranscriptTail } from './chat/TranscriptReader.js';
+import { TranscriptTail, identityNormalize, muxpadLocate } from './chat/TranscriptReader.js';
 import type { EventBus } from './events.js';
+import { hasProjectContext } from './project-root.js';
 import { type PtydCache, decoratePane } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { proxyAttach } from './ptyd-client/proxyAttach.js';
 import type { PaneNotifier } from './push.js';
 import { safeCwd } from './safe-cwd.js';
+import { AgentQueueStore } from './store/AgentQueueStore.js';
 import { AgentSessionStore } from './store/AgentSessionStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
@@ -36,6 +39,11 @@ const CHAT_HISTORY_TAIL_BYTES = 128 * 1024;
 // interactive conversation — its turn-done must not push-notify (the user
 // is right there). Longer turns and autonomous wakeup/cron turns do push.
 const INTERACTIVE_PUSH_SUPPRESS_MS = 2 * 60_000;
+
+// Upper bound on a pane's pending send queue. Generous for real batches (queue a
+// dozen follow-ups) but a hard stop against unbounded growth from a wedged turn
+// or a runaway client / HTTP caller.
+const MAX_QUEUED_SENDS = 200;
 
 export function attachWsServer(deps: {
   http: Server;
@@ -58,6 +66,11 @@ export function attachWsServer(deps: {
   const panes = new PaneStore(deps.db);
   const tabs = new TabStore(deps.db);
   const agents = new AgentSessionStore(deps.db);
+  // Server-owned queue of user messages waiting for a busy/reconnecting agent.
+  // The server drains it one message per turn (see drainQueue), so a queue keeps
+  // feeding the agent even with no browser open; chat clients render the pending
+  // bubbles from here, so they survive reloads and follow the user across devices.
+  const queue = new AgentQueueStore(deps.db);
   // Any headless writer / running status persisted by a previous process is a
   // turn that died with it (restart mid-turn) — clear it or panes look stuck.
   agents.reconcileStartup();
@@ -159,23 +172,13 @@ export function attachWsServer(deps: {
   // :paneId/send) to the live registry. Runner-owned panes only — the
   // headless-spawn path with its guard cascade stays chat-socket-only.
   if (deps.agentBridge) {
+    // Route external HTTP sends through the same queue path as chat: a message
+    // that can't run right now is persisted and drained later, never dropped.
     deps.agentBridge.send = (paneId, text) => {
-      const t = text.trim();
-      if (!t) return { ok: false, reason: 'empty message' };
-      const pane = panes.getById(paneId);
-      if (!pane) return { ok: false, reason: 'pane not found' };
-      if (agentRunners.has(paneId)) {
-        return sendToRunner(paneId, { t: 'send', text: t })
-          ? { ok: true }
-          : { ok: false, reason: 'agent is reconnecting — retry' };
-      }
-      if (pane.startup_cmd?.startsWith('muxpad agent')) {
-        if (respawns.get(paneId)?.gaveUp) {
-          return { ok: false, reason: agentExitedMessage(paneId) };
-        }
-        return { ok: false, reason: 'agent is starting — retry' };
-      }
-      return { ok: false, reason: 'pane has no agent runner' };
+      const r = submitSend(paneId, text);
+      return r.status === 'rejected'
+        ? { ok: false, reason: r.reason ?? 'could not send' }
+        : { ok: true };
     };
   }
 
@@ -215,6 +218,12 @@ export function attachWsServer(deps: {
       for (const id of respawns.keys()) if (!liveIds.has(id)) respawns.delete(id);
       for (const pane of agentPanes) {
         if (agentRunners.get(pane.id)) continue;
+        // A PENDING agent ('muxpad agent --pick') has no session/runner to
+        // supervise — it idles waiting for the user to pick a harness. It never
+        // registers, so the fg probe is its only guard; skip it outright rather
+        // than rely on that string match (a flaky probe would wrongly respawn a
+        // pane whose only "fault" is waiting to be picked).
+        if (pane.startup_cmd === 'muxpad agent --pick') continue;
         // A just-created pane may not have typed its startup command yet —
         // the foreground probe would misread the bare shell as a dead
         // runner and bounce a healthy boot.
@@ -239,6 +248,10 @@ export function attachWsServer(deps: {
         if (st.attempts > RESPAWN_MAX_ATTEMPTS) {
           st.gaveUp = true;
           bcastToPane(pane.id, { t: 'error', message: agentExitedMessage(pane.id) });
+          // The agent is dead for good — drop its orphaned queue so the pending
+          // bubbles don't linger, and a much-later hand-restart (a fresh session)
+          // doesn't suddenly flood them all in. New sends are already rejected.
+          if (queue.clear(pane.id) > 0) broadcastQueue(pane.id);
           continue;
         }
         bcastToPane(pane.id, {
@@ -271,6 +284,84 @@ export function attachWsServer(deps: {
     }
   };
   const respawnSweep = setInterval(() => void sweepDeadRunners(), RESPAWN_SWEEP_MS);
+
+  // -------------------------------------------------------------------------
+  // Server-owned send queue. A user message that can't run right now (agent
+  // mid-turn, or its runner between connections) is persisted to `queue` and
+  // fed to the runner one turn at a time — on turn-done and on runner
+  // (re)connect — so a batch of 20 keeps draining into the agent even after
+  // every browser tab is closed. Chat clients render the pending bubbles from
+  // this queue (broadcastQueue), so the view survives reloads and follows the
+  // user across devices.
+  const broadcastQueue = (paneId: string) => {
+    bcastToPane(paneId, {
+      t: 'queue',
+      items: queue.list(paneId).map((r) => ({ id: r.id, text: r.text })),
+    });
+  };
+  // Relay the oldest queued message to the runner if it's idle and connected.
+  // Runs one message per call; the next drains when this message's turn-done
+  // arrives (or when the runner reconnects), keeping the batch strictly serial
+  // and each pending bubble visible until its own turn actually starts.
+  const drainQueue = (paneId: string) => {
+    const conn = agentRunners.get(paneId);
+    if (!conn || conn.turnActive) return; // no runner, or busy → wait
+    const next = queue.peek(paneId);
+    if (!next) return;
+    if (sendToRunner(paneId, { t: 'send', text: next.text })) {
+      // Claim busy immediately: the runner's turn-start reaffirms it, but a
+      // second drain must not fire before it echoes back.
+      conn.turnActive = true;
+      conn.lastSendAt = Date.now();
+      queue.remove(next.id, paneId);
+      broadcastQueue(paneId);
+    }
+    // Relay failed (socket mid-close) → leave it queued; hello/turn-done retry.
+  };
+  // Submit a user message. Idle + connected + nothing already waiting → start
+  // the turn now. Otherwise persist to the queue (the drain loop feeds it when
+  // the agent frees up / the runner returns). Only runner-owned agent panes
+  // have a drainer; a read-only TUI-driven pane is rejected. Returns what
+  // happened so the caller can ack the sending socket.
+  const submitSend = (
+    paneId: string,
+    text: string,
+  ): { status: 'sent' | 'queued' | 'rejected'; id?: string; reason?: string } => {
+    const t = text.trim();
+    if (!t) return { status: 'rejected', reason: 'empty message' };
+    const pane = panes.getById(paneId);
+    if (!pane) return { status: 'rejected', reason: 'pane not found' };
+    const conn = agentRunners.get(paneId);
+    // Fast path: agent free and nothing queued ahead of it → run immediately.
+    if (conn && !conn.turnActive && queue.count(paneId) === 0) {
+      if (sendToRunner(paneId, { t: 'send', text: t })) {
+        conn.turnActive = true; // optimistic; runner's turn-start reaffirms
+        conn.lastSendAt = Date.now();
+        return { status: 'sent' };
+      }
+      // Relay lost a race with the socket close → fall through and queue it.
+    }
+    const runnerOwned = pane.startup_cmd?.startsWith('muxpad agent') ?? false;
+    if (!runnerOwned) return { status: 'rejected', reason: 'pane has no agent runner' };
+    // A runner whose automatic restarts were exhausted will never drain — don't
+    // let messages pile into a dead agent; surface the same guidance as a send.
+    if (respawns.get(paneId)?.gaveUp)
+      return { status: 'rejected', reason: agentExitedMessage(paneId) };
+    // Cap the backlog so a stuck turn + a spammy client (or the HTTP send path)
+    // can't grow the queue without bound.
+    if (queue.count(paneId) >= MAX_QUEUED_SENDS)
+      return {
+        status: 'rejected',
+        reason: `too many queued messages (max ${MAX_QUEUED_SENDS}) — wait for some to run`,
+      };
+    const row = queue.enqueue(paneId, t);
+    broadcastQueue(paneId);
+    // Nudge delivery: if the runner is idle we lost a relay race (drain now);
+    // if it's absent, a sweep is the best "is it back yet?" probe.
+    if (conn) drainQueue(paneId);
+    else void sweepDeadRunners();
+    return { status: 'queued', id: row.id };
+  };
 
   // Server-side liveness detection. A WebSocket severed abruptly (browser
   // hard-reload, crashed tab, network blip) does NOT fire 'close' until the
@@ -410,11 +501,20 @@ export function attachWsServer(deps: {
             conn.status = null;
             conn.sid = frame.sid;
             conn.turnActive = frame.turnActive === true;
+            // Which backend drives this pane (claude|codex|cursor). Absent =
+            // legacy runner = claude. Validated against the allowlist so it's
+            // safe both as a DB label AND baked into the self-heal shell cmd.
+            const backendId = isBackendId(frame.backend) ? frame.backend : 'claude';
             // A registered runner is proof of recovery — forget any respawn
             // attempts (including a give-up: the user restarting it by hand
             // re-arms supervision).
             respawns.delete(paneId);
-            agents.attachRunner({ pane_id: paneId, cwd: frame.cwd, session_id: frame.sid });
+            agents.attachRunner({
+              pane_id: paneId,
+              cwd: frame.cwd,
+              session_id: frame.sid,
+              assistant: backendId,
+            });
             if (conn.turnActive) agents.setStatus(paneId, 'running');
             deps.cache.setAgentBusy(paneId, conn.turnActive);
             // A NEW runner attaching (fresh `muxpad agent`, or a resume under
@@ -430,7 +530,11 @@ export function attachWsServer(deps: {
             const prevCmd = panes.getById(paneId)?.startup_cmd ?? '';
             const modelMatch = prevCmd.match(/--model ('[^']*'|[^\s']+)/);
             const modelPart = modelMatch ? ` --model ${modelMatch[1]}` : '';
-            const selfHealCmd = `muxpad agent${modelPart} --resume ${frame.sid}`;
+            // Preserve the backend selector across the rewrite. Claude stays
+            // implicit (bare `muxpad agent …`) so existing panes' startup_cmd
+            // never churns; codex/cursor get an explicit, allowlist-safe flag.
+            const backendPart = backendId === 'claude' ? '' : ` --backend ${backendId}`;
+            const selfHealCmd = `muxpad agent${backendPart}${modelPart} --resume ${frame.sid}`;
             const isReconnect = prevCmd === selfHealCmd;
             // Self-heal: the pane's startup command now resumes THIS session,
             // so the pane survives ptyd restarts and reboots.
@@ -444,6 +548,10 @@ export function attachWsServer(deps: {
             // re-broadcast the running state — idempotent client-side.
             if (conn.turnActive) bcast({ t: 'turn-start' });
             emitChange();
+            // Runner is back — resume feeding any queue that was waiting for it
+            // (server restart, ws blip, crash+respawn). No-op if it reconnected
+            // mid-turn (turnActive) or the queue is empty.
+            drainQueue(paneId);
           } else if (frame.t === 'turn-start') {
             conn.turnActive = true;
             streamBufs.set(paneId, '');
@@ -490,6 +598,10 @@ export function attachWsServer(deps: {
               panes.setUnread(paneId, true);
               emitPaneUpdated(paneId);
             }
+            // Turn finished → feed the next queued message. This is the loop
+            // that drains a batch with no browser open: turn-done → drain →
+            // turn-start → … until the queue empties.
+            drainQueue(paneId);
           } else if (frame.t === 'question') {
             if (typeof frame.qid !== 'string' || !Array.isArray(frame.questions)) return;
             conn.pendingQuestion = { qid: frame.qid, questions: frame.questions };
@@ -613,16 +725,25 @@ export function attachWsServer(deps: {
             sid: session?.current_sid ?? null,
             writer: session?.writer ?? null,
             view: session?.view_mode ?? null,
+            // Re-send when the working dir changes (folder switch → respawn →
+            // re-hello) so the chat header's folder chip updates.
+            cwd: deps.cache.getCwd(chatPaneId) ?? session?.cwd ?? null,
           });
           if (first || hello !== lastHello) {
             lastHello = hello;
             const runner = agentRunners.get(chatPaneId);
             const turnRunning = runner?.turnActive === true;
             const streamText = streamBufs.get(chatPaneId);
+            const cwd = deps.cache.getCwd(chatPaneId) ?? session?.cwd ?? null;
             send({
               t: 'session',
               session,
               turnRunning,
+              // Server-owned pending queue so a (re)connecting or reloaded
+              // client renders the same bubbles — the queue is authoritative
+              // state, not this socket's local memory.
+              queue: queue.list(chatPaneId).map((r) => ({ id: r.id, text: r.text })),
+              ...(cwd ? { cwd, hasProject: hasProjectContext(cwd) } : {}),
               ...(turnRunning && streamText ? { streamText } : {}),
               // Mid-turn (re)connect extras: a question awaiting the user and
               // live subagent progress would otherwise be lost to this socket.
@@ -643,10 +764,16 @@ export function attachWsServer(deps: {
             // MB); the client pages older history in via `load-older`. The
             // client dedupes by event id, so a rebind re-emitting overlapping
             // history is harmless.
+            // Non-Claude backends (codex/cursor) don't write a Claude-format
+            // transcript — the runner writes a muxpad-owned normalized log
+            // instead. Point the tail at that log with the identity normalizer;
+            // Claude keeps its ~/.claude file + schema translation unchanged.
+            const nonClaude = session?.assistant && session.assistant !== 'claude';
             tail = new TranscriptTail(sid, {
               tailBytes: CHAT_HISTORY_TAIL_BYTES,
               onEvents: (events, phase) => send({ t: 'events', phase, events }),
               onTitle: (title) => applyAiTitle(chatPaneId, title),
+              ...(nonClaude ? { locate: muxpadLocate, normalize: identityNormalize } : {}),
             });
             tail.start();
           }
@@ -670,6 +797,7 @@ export function attachWsServer(deps: {
             t?: string;
             text?: string;
             qid?: string;
+            id?: string;
             model?: string;
             cmd?: string;
             answers?: Array<{ question: string; answers: string[] }>;
@@ -745,46 +873,43 @@ export function attachWsServer(deps: {
             send({ t: 'older-done', hasMore });
             return;
           }
+          if (msg.t === 'queue-cancel') {
+            // Drop a still-pending message before it runs. Broadcast the new
+            // queue to every view (this cancel followed the user across devices).
+            if (typeof msg.id === 'string' && queue.remove(msg.id, chatPaneId))
+              broadcastQueue(chatPaneId);
+            return;
+          }
+          if (msg.t === 'queue-clear') {
+            if (queue.clear(chatPaneId) > 0) broadcastQueue(chatPaneId);
+            return;
+          }
           if (msg.t !== 'send' || typeof msg.text !== 'string' || !msg.text.trim()) return;
           // Ack receipt immediately. The client arms a watchdog on send: with
           // no ack/error/turn-start coming back it knows the socket was dead
           // and restores the composer instead of spinning forever.
           send({ t: 'send-ack' });
-          // Chat drives exactly one thing: the pane's agent runner. TUI
-          // sessions (`muxpad claude`) are terminal-driven and chat is a live
-          // read-only view of their transcript — the old terminal⇄chat driver
-          // hand-off (headless per-turn `claude -p`, takeover, dual-writer
-          // guards) was dropped; see PR "drop terminal⇄chat session
-          // switching" for the capability's record.
-          if (agentRunners.has(chatPaneId)) {
-            if (sendToRunner(chatPaneId, { t: 'send', text: msg.text })) {
-              const conn = agentRunners.get(chatPaneId);
-              if (conn) conn.lastSendAt = Date.now();
-            } else {
-              send({ t: 'error', message: 'agent is reconnecting — try again' });
-            }
-            return;
+          // Chat drives exactly one thing: the pane's agent runner. The server
+          // decides whether this runs now or waits in the queue — a busy or
+          // reconnecting agent enqueues instead of dropping, and the server
+          // drains it later even with no browser open. (TUI sessions are
+          // terminal-driven; chat is a read-only view and submitSend rejects.)
+          const outcome = submitSend(chatPaneId, msg.text);
+          if (outcome.status === 'rejected') {
+            send({
+              t: 'error',
+              message:
+                outcome.reason === 'pane has no agent runner'
+                  ? 'This session is driven from its terminal — chat is a read-only view. Start an ✳ Agent tab for a chat-native session.'
+                  : (outcome.reason ?? 'could not send'),
+            });
+          } else if (outcome.status === 'queued') {
+            // Tell the sending socket its message was parked so it can drop the
+            // optimistic turn state; the pending bubble arrives via the queue
+            // broadcast (which every view, including this one, already got).
+            send({ t: 'queued', id: outcome.id, text: msg.text.trim() });
           }
-          // Runner-owned pane whose runner is between connections (server
-          // just restarted; ws blip; dead process): the startup_cmd marker is
-          // the durable sign of runner ownership — never fall back to another
-          // writer. If supervision already gave up, say so plainly; otherwise
-          // kick a sweep now (a user send is the best "is it back?" moment)
-          // and tell them to retry.
-          if (panes.getById(chatPaneId)?.startup_cmd?.startsWith('muxpad agent')) {
-            if (respawns.get(chatPaneId)?.gaveUp) {
-              send({ t: 'error', message: agentExitedMessage(chatPaneId) });
-            } else {
-              void sweepDeadRunners();
-              send({ t: 'error', message: 'agent is reconnecting — try again in a few seconds' });
-            }
-            return;
-          }
-          send({
-            t: 'error',
-            message:
-              'This session is driven from its terminal — chat is a read-only view. Start an ✳ Agent tab for a chat-native session.',
-          });
+          // 'sent' → the runner's turn-start broadcasts the working state.
         });
       });
       return;

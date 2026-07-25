@@ -5,17 +5,106 @@
   background: var(--pane-bg, #111);
 }
 
-/* Pane was just type-switched from shell; no URL yet. The body stays blank
-   while UrlPaneTitle auto-enters edit mode waiting for the user's input. */
-.url-pane-blank {
-  flex: 1;
+.url-pane-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border, #292e42);
+  background: color-mix(in srgb, var(--bg-chrome, #16161e) 88%, transparent);
+}
+
+.url-pane-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--accent, #7aa2f7);
+  border-radius: 8px;
+  background: var(--bg-active, rgba(0, 0, 0, 0.35));
+  color: var(--fg, #c0caf5);
+  font-family: var(--chrome-font, ui-sans-serif, system-ui, sans-serif);
+  font-size: 13px;
+  outline: none;
+}
+
+.url-pane-display {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-dim, #a9b1d6);
+  font-family: var(--chrome-font, ui-sans-serif, system-ui, sans-serif);
+  font-size: 13px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: text;
+}
+.url-pane-display:hover {
+  background: color-mix(in srgb, var(--fg, #c0caf5) 5%, transparent);
+  color: var(--fg, #c0caf5);
+}
+
+.url-pane-reload {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-faint, #565f89);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.url-pane-reload:hover {
+  color: var(--fg, #c0caf5);
+  background: color-mix(in srgb, var(--fg, #c0caf5) 6%, transparent);
+}
+
+.url-pane-error {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 4px 12px 6px;
+  color: var(--danger, #f7768e);
+  font-size: 12px;
+}
+
+.url-pane-empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 24px;
   background: var(--pane-bg, #0a0a0a);
+}
+.url-pane-empty-title {
+  margin: 0;
+  color: var(--fg-dim, #a9b1d6);
+  font-size: 15px;
+  font-weight: 600;
+}
+.url-pane-empty-hint {
+  margin: 0;
+  color: var(--fg-faint, #565f89);
+  font-size: 13px;
 }
 
 .url-pane iframe {
   flex: 1;
   border: 0;
   width: 100%;
+  min-height: 0;
 }
 
 /* While a mosaic splitter is being dragged, prevent the iframe from
