@@ -8,6 +8,7 @@ import { type PtydCache, decoratePane } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { randomWorkspaceName } from '../random-name.js';
 import { safeCwd } from '../safe-cwd.js';
+import { agentCwd, hasProjectContext } from '../project-root.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { pruneDeadPanes } from '../store/migrations.js';
@@ -73,7 +74,8 @@ export function tabsRoutes(deps: {
       const pane = panes.create({
         tab_id: tab.id,
         shell: process.env.SHELL ?? '/bin/zsh',
-        cwd: safeCwd(body.cwd),
+        // Agent panes snap up to the git root so they start with project context.
+        cwd: agent ? agentCwd(safeCwd(body.cwd)) : safeCwd(body.cwd),
         // Single-quoted model so zsh's nomatch can't glob-error on ids with
         // brackets ('claude-opus-4-8[1m]'); the charset gate above makes the
         // quoting safe. Claude stays implicit (no --backend) so its cmd is

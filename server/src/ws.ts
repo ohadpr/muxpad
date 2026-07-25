@@ -19,6 +19,7 @@ import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { proxyAttach } from './ptyd-client/proxyAttach.js';
 import type { PaneNotifier } from './push.js';
 import { safeCwd } from './safe-cwd.js';
+import { hasProjectContext } from './project-root.js';
 import { AgentSessionStore } from './store/AgentSessionStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
@@ -627,16 +628,21 @@ export function attachWsServer(deps: {
             sid: session?.current_sid ?? null,
             writer: session?.writer ?? null,
             view: session?.view_mode ?? null,
+            // Re-send when the working dir changes (folder switch → respawn →
+            // re-hello) so the chat header's folder chip updates.
+            cwd: deps.cache.getCwd(chatPaneId) ?? session?.cwd ?? null,
           });
           if (first || hello !== lastHello) {
             lastHello = hello;
             const runner = agentRunners.get(chatPaneId);
             const turnRunning = runner?.turnActive === true;
             const streamText = streamBufs.get(chatPaneId);
+            const cwd = deps.cache.getCwd(chatPaneId) ?? session?.cwd ?? null;
             send({
               t: 'session',
               session,
               turnRunning,
+              ...(cwd ? { cwd, hasProject: hasProjectContext(cwd) } : {}),
               ...(turnRunning && streamText ? { streamText } : {}),
               // Mid-turn (re)connect extras: a question awaiting the user and
               // live subagent progress would otherwise be lost to this socket.
