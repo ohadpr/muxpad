@@ -148,6 +148,10 @@ export const api = {
       body: JSON.stringify({ backend }),
     }),
 
+  /** Change a pane's working directory and respawn it there. */
+  setPaneCwd: (paneId: string, cwd: string) =>
+    req<void>(`/api/panes/${paneId}/cwd`, { method: 'POST', body: JSON.stringify({ cwd }) }),
+
   // Move a pane to another tab (any workspace). `toTabId` targets an
   // existing tab; `newTab` extracts it into a fresh tab. The PTY keeps
   // running — only the pane's parent tab + both tabs' layouts change.
