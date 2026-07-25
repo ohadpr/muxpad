@@ -207,6 +207,7 @@ export function ShellPaneBody({
             paneId={pane.id}
             active={showChat}
             agentNative={pane.startup_cmd?.startsWith('muxpad agent') ?? false}
+            pendingPick={/(^|\s)--pick(\s|$)/.test(pane.startup_cmd ?? '')}
           />
         </div>
       ) : null}

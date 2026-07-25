@@ -20,6 +20,7 @@ import { applyTabOrder, refreshTabs, useTabs } from '../tabs';
 import { useLongPress } from '../use-long-press';
 import { MAX_QUICK_SWITCH_TABS, useTabQuickSwitch } from '../use-tab-quickswitch';
 import { applyWorkspaceOrder, refreshWorkspaces, useWorkspaces } from '../workspaces';
+import { PENDING_AGENT_STARTUP } from '../lib/agent-backend';
 import { NewTabChooser } from './NewTabChooser';
 import { SvgClose } from './icons';
 import './NavTree.css';
@@ -637,13 +638,14 @@ function TabList({
   };
 
   // Create a pane in `t` and land on it. Shared by the sheet pane list's
-  // chooser and the tab context menu's "New … pane" items (the only
-  // add-pane path for single-pane tabs on mobile, which show no expander).
-  const addPaneToTab = async (t: Tab, kind: 'terminal' | 'agent') => {
+  // chooser and the tab context menu. Always opens the harness picker
+  // (Claude / Codex / Cursor + Terminal / Web view below).
+  const addPaneToTab = async (t: Tab) => {
     try {
       const created = await api.createPane(t.id, {
         append_to_layout: true,
-        ...(kind === 'agent' ? { startup_cmd: 'muxpad agent', face: 'chat' as const } : {}),
+        startup_cmd: PENDING_AGENT_STARTUP,
+        face: 'chat',
       });
       await refreshTabs(workspace.id);
       setLastPaneId(t.id, created.id);
@@ -756,13 +758,15 @@ function TabList({
   };
 
   // Tabs-first creation: one server call makes the tab AND its single
-  // full-size pane atomically. 'shell' = terminal; 'agent' = a chat-native
-  // Claude session (`muxpad agent`) that lands directly on the chat face.
-  const createTab = async (bootstrap: 'shell' | 'agent' = 'shell') => {
+  // full-size pane atomically. Always lands on the harness picker.
+  const createTab = async () => {
     if (creating) return;
     setCreating(true);
     try {
-      const t = await api.createTab(workspace.id, { bootstrap });
+      const t = await api.createTab(workspace.id, {
+        bootstrap: 'agent',
+        backend: 'pick',
+      });
       await refreshTabs(workspace.id);
       await refreshWorkspaces();
       onNavigate?.();
@@ -796,22 +800,17 @@ function TabList({
           onSetUnread={(want) => void setTabUnread(t, want)}
           onSetIcon={(icon) => void setTabIcon(t, icon)}
           onMergeInto={(payload) => void mergeTabInto(payload, t)}
-          onAddPane={(kind) => void addPaneToTab(t, kind)}
+          onAddPane={() => void addPaneToTab(t)}
           onMovePaneHere={(paneId, sourceTabId) => void movePaneHere(paneId, sourceTabId, t)}
           rowDnd={variant === 'sidebar' ? tabDnd(t.id) : undefined}
         />
       ))}
-      {/* One quiet action at rest (mirrors "+ New workspace"); the kind
-          choice appears in place only after intent is declared — see
-          NewTabChooser for why the standing alternatives lost. */}
       <NewTabChooser
         idleLabel={creating ? 'Creating…' : '+ New tab'}
         idleTitle="New tab"
         idleClassName="navtree-add navtree-new-tab"
-        choicesClassName="navtree-new-row"
-        choiceClassName="navtree-add"
         disabled={creating}
-        onCreate={(kind) => void createTab(kind === 'agent' ? 'agent' : 'shell')}
+        onCreate={() => void createTab()}
       />
     </div>
   );
@@ -981,8 +980,8 @@ interface TabRowProps {
   onSetIcon: (icon: string) => void;
   /** A dragged TAB was dropped on this row's merge band — absorb its panes. */
   onMergeInto: (payload: TabDragPayload) => void;
-  /** Create a pane in this tab and land on it. */
-  onAddPane: (kind: 'terminal' | 'agent') => void;
+  /** Create a pane in this tab and land on it (opens the harness picker). */
+  onAddPane: () => void;
   /** A pane dragged from the strip was dropped here — move it into this tab.
    *  sourceTabId (from the drag mirror) feeds the follow-navigation hint. */
   onMovePaneHere: (paneId: string, sourceTabId: string | null) => void;
@@ -1309,8 +1308,7 @@ function TabRow({
               onSelect: () => setPicker({ x: menu.x, y: menu.y }),
             },
             { label: 'Rename', onSelect: () => setEditing({ kind: 'tab', id: tab.id }) },
-            { label: 'New terminal pane', onSelect: () => onAddPane('terminal') },
-            { label: 'New agent pane', onSelect: () => onAddPane('agent') },
+            { label: 'New pane', onSelect: () => onAddPane() },
             // "Move to workspace ▸" with the workspaces in a hover flyout, so
             // the main menu stays short. Omitted entirely when there's nowhere
             // to move to. (Dragging the tab onto a workspace row also works.)

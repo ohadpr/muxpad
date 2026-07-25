@@ -1,7 +1,91 @@
-import { closeSync, openSync, readSync, readdirSync, statSync } from 'node:fs';
+import {
+  appendFileSync,
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { type ChatEvent, normalizeTranscriptLine } from '@muxpad/shared';
+
+/**
+ * muxpad-owned normalized transcript log — used by backends (Codex/Cursor) that
+ * don't write a Claude-format JSONL file. The runner appends ready-made
+ * ChatEvents here as it streams a turn; the server tails it with the identity
+ * normalizer below. Keyed by the backend's session ref (stable across resume).
+ */
+export function muxpadTranscriptDir(): string {
+  return join(process.env.MUXPAD_DATA_DIR ?? join(homedir(), '.muxpad'), 'agent-transcripts');
+}
+export function muxpadTranscriptPath(sid: string): string {
+  return join(muxpadTranscriptDir(), `${sid}.jsonl`);
+}
+/** Locator for a muxpad log (mirrors findTranscript's null-until-exists shape). */
+export function muxpadLocate(sid: string): string | null {
+  const p = muxpadTranscriptPath(sid);
+  try {
+    return statSync(p).isFile() ? p : null;
+  } catch {
+    return null;
+  }
+}
+/** Our own log lines already ARE ChatEvents — no schema translation. */
+export function identityNormalize(obj: unknown): ChatEvent[] {
+  return obj && typeof obj === 'object' ? [obj as ChatEvent] : [];
+}
+/** Append one ChatEvent to a session's muxpad log (best-effort, creates dir). */
+export function appendTranscriptEvent(sid: string, event: ChatEvent): void {
+  const p = muxpadTranscriptPath(sid);
+  mkdirSync(muxpadTranscriptDir(), { recursive: true });
+  appendFileSync(p, `${JSON.stringify(event)}\n`);
+}
+
+/**
+ * Move a session's accumulated log to a new id. Codex/Cursor mint a fresh
+ * provider id when a resume re-mints or falls back to a new session; the log is
+ * keyed by that id and the server tails whatever id the runner hellos, so
+ * without this the pre-change conversation would orphan under the old filename.
+ * Best-effort: prepends the old history to the (usually empty) new file, then
+ * removes the old one. No-op if there's no old log or the ids match.
+ */
+export function migrateTranscript(oldSid: string, newSid: string): void {
+  if (!oldSid || oldSid === newSid) return;
+  const oldPath = muxpadTranscriptPath(oldSid);
+  let prior: Buffer;
+  try {
+    if (!statSync(oldPath).isFile()) return;
+    prior = readFileSync(oldPath);
+  } catch {
+    return; // no prior log to carry over
+  }
+  try {
+    mkdirSync(muxpadTranscriptDir(), { recursive: true });
+    const newPath = muxpadTranscriptPath(newSid);
+    let existing: Buffer | null = null;
+    try {
+      existing = readFileSync(newPath);
+    } catch {
+      // new file doesn't exist yet — the common case
+    }
+    // Old history first, then anything already under the new id. Write to a
+    // temp file + atomic rename so a crash mid-write can't truncate/lose an
+    // existing new-id log.
+    const combined = existing ? Buffer.concat([prior, existing]) : prior;
+    const tmp = `${newPath}.migrating`;
+    writeFileSync(tmp, combined);
+    renameSync(tmp, newPath);
+    rmSync(oldPath, { force: true });
+  } catch {
+    // best-effort — leave both files rather than lose data
+  }
+}
 
 /** ~/.claude/projects (or $CLAUDE_CONFIG_DIR/projects). */
 export function projectsDir(): string {
@@ -24,15 +108,24 @@ export function findTranscript(sid: string, dir = projectsDir()): string | null 
   } catch {
     return null;
   }
+  // A session can have MORE than one `<sid>.jsonl` — Claude keys the transcript
+  // dir by cwd, so switching an agent's folder makes it write a fresh file under
+  // the new cwd's project dir while the old one lingers. Return the MOST RECENTLY
+  // MODIFIED match so the tail follows the file Claude is actually appending to,
+  // not a stale one (first-dir-wins would silently freeze the chat post-switch).
+  let best: { path: string; mtime: number } | null = null;
   for (const d of entries) {
     const candidate = join(dir, d, `${sid}.jsonl`);
     try {
-      if (statSync(candidate).isFile()) return candidate;
+      const st = statSync(candidate);
+      if (st.isFile() && (!best || st.mtimeMs > best.mtime)) {
+        best = { path: candidate, mtime: st.mtimeMs };
+      }
     } catch {
       // not this dir
     }
   }
-  return null;
+  return best?.path ?? null;
 }
 
 export type TailPhase = 'history' | 'live' | 'older';
@@ -48,6 +141,18 @@ export interface TranscriptTailOpts {
   onTitle?: (title: string) => void;
   /** Override the projects dir (tests). */
   dir?: string;
+  /**
+   * How to find the session's transcript file. Default: Claude's
+   * `findTranscript` (scan ~/.claude/projects for `<sid>.jsonl`). Non-Claude
+   * backends pass {@link muxpadLocate} to read the runner-written normalized log.
+   */
+  locate?: (sid: string) => string | null;
+  /**
+   * How to turn one raw JSONL line-object into ChatEvents. Default: Claude's
+   * `normalizeTranscriptLine`. Non-Claude backends pass {@link identityNormalize}
+   * (their log lines already ARE ChatEvents).
+   */
+  normalize?: (obj: unknown) => ChatEvent[];
   /** Poll interval for `start()`. Tests drive `tick()` directly instead. */
   pollMs?: number;
   /**
@@ -108,7 +213,8 @@ export class TranscriptTail {
   tick(): void {
     if (this.closed) return;
     if (!this.path) {
-      this.path = findTranscript(this.sid, this.opts.dir ?? projectsDir());
+      const locate = this.opts.locate ?? ((sid) => findTranscript(sid, this.opts.dir ?? projectsDir()));
+      this.path = locate(this.sid);
       if (!this.path) return; // file not created yet (no first prompt)
     }
     let size: number;
@@ -303,7 +409,7 @@ export class TranscriptTail {
       ) {
         this.opts.onTitle((obj as { aiTitle: string }).aiTitle);
       }
-      events.push(...normalizeTranscriptLine(obj));
+      events.push(...(this.opts.normalize ?? normalizeTranscriptLine)(obj));
     }
     if (events.length) this.opts.onEvents(events, phase);
   }

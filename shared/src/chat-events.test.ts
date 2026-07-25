@@ -236,13 +236,16 @@ describe('sanitizeAgentStatus', () => {
     });
   });
 
-  it('rejects frames missing model or context fields', () => {
+  it('requires a model but treats context as optional', () => {
     expect(sanitizeAgentStatus(null)).toBeNull();
-    expect(sanitizeAgentStatus({ model: 'x' })).toBeNull();
+    // Model is mandatory; a frame without one is dropped.
+    expect(sanitizeAgentStatus({ context: { pct: 1, tokens: 1, max: 2 } })).toBeNull();
+    // No context (Codex/Cursor backends) → valid, context simply omitted.
+    expect(sanitizeAgentStatus({ model: 'x' })).toEqual({ model: 'x' });
+    // Malformed context is dropped, not fatal — the model still surfaces.
     expect(
       sanitizeAgentStatus({ model: 'x', context: { pct: '12', tokens: 1, max: 2 } }),
-    ).toBeNull();
-    expect(sanitizeAgentStatus({ context: { pct: 1, tokens: 1, max: 2 } })).toBeNull();
+    ).toEqual({ model: 'x' });
   });
 
   it('omits models when the array sanitizes to empty', () => {

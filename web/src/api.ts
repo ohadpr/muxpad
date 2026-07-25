@@ -67,9 +67,12 @@ export const api = {
       name?: string;
       layout?: LayoutNode;
       // Atomic tab-with-pane creation (the tabs-first default): 'shell' =
-      // full-size terminal, 'agent' = chat-native Claude session.
+      // full-size terminal, 'agent' = a chat-native agent session.
       bootstrap?: 'shell' | 'agent';
       cwd?: string;
+      // Which agent backend an 'agent' bootstrap runs. 'pick' creates it pending
+      // (harness chosen in the chat page); default claude.
+      backend?: 'claude' | 'codex' | 'cursor' | 'pick';
     } = {},
   ) =>
     req<Tab>('/api/tabs', {
@@ -136,6 +139,26 @@ export const api = {
     }),
 
   deletePane: (id: string) => req<void>(`/api/panes/${id}`, { method: 'DELETE' }),
+
+  /** Choose the harness for a pending ('muxpad agent --pick') agent pane —
+   *  sets the backend + respawns the runner. */
+  setAgentBackend: (paneId: string, backend: 'claude' | 'codex' | 'cursor') =>
+    req<void>(`/api/panes/${paneId}/agent-backend`, {
+      method: 'POST',
+      body: JSON.stringify({ backend }),
+    }),
+
+  /** Convert a pending harness-pick pane into a plain terminal. */
+  convertPickToTerminal: (paneId: string) =>
+    req<void>(`/api/panes/${paneId}/as-terminal`, { method: 'POST' }),
+
+  /** Convert a pending harness-pick pane into a blank URL pane (URL chrome focused). */
+  convertPickToWeb: (paneId: string) =>
+    req<void>(`/api/panes/${paneId}/as-web`, { method: 'POST' }),
+
+  /** Change a pane's working directory and respawn it there. */
+  setPaneCwd: (paneId: string, cwd: string) =>
+    req<void>(`/api/panes/${paneId}/cwd`, { method: 'POST', body: JSON.stringify({ cwd }) }),
 
   // Move a pane to another tab (any workspace). `toTabId` targets an
   // existing tab; `newTab` extracts it into a fresh tab. The PTY keeps

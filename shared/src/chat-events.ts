@@ -108,7 +108,14 @@ export interface SubagentProgress {
  */
 export interface AgentSessionStatus {
   model: string;
-  context: { pct: number; tokens: number; max: number };
+  /** The CONCRETE model actually running (e.g. 'claude-opus-4-8'), when the
+   *  backend can report it. `model` may be a friendly alias ('opus'); this is
+   *  the exact version, so the UI can show precisely which model is live. */
+  activeModel?: string;
+  /** Context-window fill. OPTIONAL: backends without a context-window notion
+   *  (or that don't expose one in their stream — Codex/Cursor) omit it and the
+   *  chat header simply hides the meter chip. */
+  context?: { pct: number; tokens: number; max: number };
   models?: Array<{ value: string; displayName: string; resolvedModel?: string }>;
 }
 
@@ -121,17 +128,16 @@ export interface AgentSessionStatus {
 export function sanitizeAgentStatus(raw: unknown): AgentSessionStatus | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const o = raw as Record<string, unknown>;
+  if (typeof o.model !== 'string') return null;
+  // Context is optional (Codex/Cursor don't stream a window). When present it
+  // must be fully-formed numbers; a malformed context is dropped, not fatal.
   const ctx = o.context as Record<string, unknown> | undefined;
-  if (
-    typeof o.model !== 'string' ||
-    typeof ctx !== 'object' ||
-    ctx === null ||
-    typeof ctx.pct !== 'number' ||
-    typeof ctx.tokens !== 'number' ||
-    typeof ctx.max !== 'number'
-  ) {
-    return null;
-  }
+  const validContext =
+    typeof ctx === 'object' &&
+    ctx !== null &&
+    typeof ctx.pct === 'number' &&
+    typeof ctx.tokens === 'number' &&
+    typeof ctx.max === 'number';
   const models = Array.isArray(o.models)
     ? o.models
         .filter(
@@ -149,7 +155,16 @@ export function sanitizeAgentStatus(raw: unknown): AgentSessionStatus | null {
     : undefined;
   return {
     model: o.model,
-    context: { pct: ctx.pct, tokens: ctx.tokens, max: ctx.max },
+    ...(typeof o.activeModel === 'string' && o.activeModel ? { activeModel: o.activeModel } : {}),
+    ...(validContext
+      ? {
+          context: {
+            pct: ctx.pct as number,
+            tokens: ctx.tokens as number,
+            max: ctx.max as number,
+          },
+        }
+      : {}),
     ...(models && models.length > 0 ? { models } : {}),
   };
 }

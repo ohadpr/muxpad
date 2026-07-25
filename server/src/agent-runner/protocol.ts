@@ -8,6 +8,16 @@ import type { AgentQuestion, AgentSessionStatus, SubagentProgress } from '@muxpa
 
 export type { AgentQuestion, AgentSessionStatus, SubagentProgress };
 
+/** Which agent CLI/SDK drives a pane's session. The runner declares it in its
+ *  hello; the server stores it (AgentSession.assistant) and preserves it in the
+ *  self-heal startup_cmd. The allowlist makes the value safe to bake into a
+ *  shell command (only these literals can ever appear). */
+export type BackendId = 'claude' | 'codex' | 'cursor';
+export const KNOWN_BACKENDS: readonly BackendId[] = ['claude', 'codex', 'cursor'];
+export function isBackendId(v: unknown): v is BackendId {
+  return typeof v === 'string' && (KNOWN_BACKENDS as readonly string[]).includes(v);
+}
+
 /** runner → server */
 export type RunnerFrame =
   | {
@@ -18,6 +28,8 @@ export type RunnerFrame =
       pid: number;
       /** True when a turn is mid-flight (a reconnect during a turn). */
       turnActive: boolean;
+      /** Which backend drives this session (absent = legacy runner = claude). */
+      backend?: BackendId;
     }
   | { t: 'turn-start' }
   | { t: 'stream'; delta: string }
