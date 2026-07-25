@@ -228,10 +228,12 @@ function FolderChip({
       setErr(null);
     }
   }, [open, cwd]);
-  const base = cwd.replace(/\/+$/, '').split('/').pop() || cwd;
+  const norm = (s: string) => s.replace(/\/+$/, '');
+  const base = norm(cwd).split('/').pop() || cwd;
   const submit = async () => {
+    if (busy) return; // Enter while a switch is in flight would double-respawn
     const next = draft.trim();
-    if (!next || next === cwd) {
+    if (!next || norm(next) === norm(cwd)) {
       setOpen(false);
       return;
     }
@@ -250,7 +252,7 @@ function FolderChip({
     <div className="chat-folder" ref={wrapRef}>
       <button
         type="button"
-        className={`chat-folder-chip${hasProject ? '' : ' -nowarn'}`}
+        className={`chat-folder-chip${hasProject ? '' : ' -warn'}`}
         onClick={() => setOpen((o) => !o)}
         title={hasProject ? cwd : `${cwd} — no project context (no git/AGENTS.md/.mcp.json)`}
       >
@@ -272,7 +274,7 @@ function FolderChip({
             </div>
           ) : null}
           <label className="chat-folder-lbl" htmlFor={`fld-${paneId}`}>
-            Switch folder (restarts the agent)
+            Switch folder — starts a fresh agent here
           </label>
           <input
             id={`fld-${paneId}`}
@@ -293,7 +295,7 @@ function FolderChip({
           />
           {err ? <div className="chat-folder-error">{err}</div> : null}
           <button type="button" className="chat-folder-go" disabled={busy} onClick={() => void submit()}>
-            {busy ? 'Switching…' : 'Switch & restart'}
+            {busy ? 'Switching…' : 'Switch & start fresh'}
           </button>
         </div>
       ) : null}
@@ -1826,8 +1828,15 @@ export function ChatPane({
       setPickError(null);
       try {
         await api.setAgentBackend(paneId, backend);
-        // The pane.updated (new startup_cmd) clears pendingPick; keep the spinner
-        // until this unmounts/re-renders without it.
+        // On success the pane.updated (new startup_cmd) clears pendingPick and
+        // this branch unmounts. Watchdog: if that frame never lands (a ws blip
+        // right after the respawn), recover so the picker isn't stuck disabled
+        // forever — re-enable + let the user retry. (Harmless no-op once the
+        // branch has already unmounted.)
+        window.setTimeout(() => {
+          setPickBusy(null);
+          setPickError('still starting — tap a harness to retry');
+        }, 12_000);
       } catch (e) {
         setPickBusy(null);
         setPickError(e instanceof Error ? e.message : 'could not start the agent');

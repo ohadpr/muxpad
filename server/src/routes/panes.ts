@@ -408,6 +408,14 @@ export function panesScopedRoutes(deps: {
     const id = c.req.param('id');
     const p = panes.getById(id);
     if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    // Only a PENDING agent pane ('muxpad agent --pick') can be assigned a
+    // harness — otherwise this could nuke a running terminal or restart an
+    // already-live agent under a fresh session.
+    if (p.kind !== 'shell' || p.startup_cmd !== 'muxpad agent --pick')
+      return c.json(
+        { error: { code: 'conflict', message: 'pane is not awaiting a harness choice' } },
+        409,
+      );
     const body = z
       .object({ backend: z.enum(['claude', 'codex', 'cursor']) })
       .safeParse(await c.req.json().catch(() => ({})));
@@ -457,17 +465,33 @@ export function panesScopedRoutes(deps: {
     const id = c.req.param('id');
     const p = panes.getById(id);
     if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (p.kind !== 'shell')
+      return c.json({ error: { code: 'bad_request', message: 'not a shell pane' } }, 400);
     const body = z.object({ cwd: z.string().min(1) }).safeParse(await c.req.json().catch(() => ({})));
     if (!body.success)
       return c.json({ error: { code: 'bad_request', message: 'cwd required' } }, 400);
     let dir = body.data.cwd.replace(/^~(?=\/|$)/, homedir()); // expand a leading ~
+    // Require an ABSOLUTE path: a relative one would resolve against the server
+    // process cwd here but ptyd's cwd at spawn — different dirs.
+    if (!dir.startsWith('/'))
+      return c.json({ error: { code: 'bad_request', message: 'cwd must be an absolute path' } }, 400);
     try {
       if (!statSync(dir).isDirectory()) throw new Error('not a dir');
     } catch {
       return c.json({ error: { code: 'bad_request', message: `not a directory: ${dir}` } }, 400);
     }
     const isAgent = p.face === 'chat' || (p.startup_cmd?.startsWith('muxpad agent') ?? false);
-    if (isAgent) dir = agentCwd(dir);
+    let startupCmd = p.startup_cmd;
+    if (isAgent) {
+      dir = agentCwd(dir);
+      // Start a FRESH session in the new folder: resuming the old session in a
+      // different cwd fails for Claude (its transcript is cwd-keyed) and is
+      // semantically wrong — a new folder is a new project. Drop --resume/--pick,
+      // keep the chosen --backend; the runner re-hellos a new sid and self-heals.
+      const backendMatch = p.startup_cmd?.match(/--backend (claude|codex|cursor)/);
+      startupCmd = `muxpad agent${backendMatch ? ` --backend ${backendMatch[1]}` : ''}`;
+      panes.setStartupCmd(id, startupCmd);
+    }
     panes.updateCwd(id, dir);
     const workspaceId = tabs.getWorkspaceId(p.tab_id);
     try {
@@ -480,7 +504,7 @@ export function panesScopedRoutes(deps: {
       await deps.ptyd.ensurePane({
         id: p.id,
         shell: p.shell ?? defaultShell,
-        startup_cmd: p.startup_cmd,
+        startup_cmd: startupCmd,
         cwd: dir,
         env: p.env,
         tab_id: p.tab_id,

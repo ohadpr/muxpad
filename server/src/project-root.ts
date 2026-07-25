@@ -21,21 +21,27 @@ export function gitRoot(cwd: string): string | null {
   return null;
 }
 
-/** True if `cwd` (or any ancestor) carries a project marker. */
-export function hasProjectContext(cwd: string): boolean {
+/** Walk up to the nearest ancestor carrying ANY project marker (git, agent
+ *  rules, or MCP config), or null. This is the root an agent should snap to. */
+export function projectRoot(cwd: string): string | null {
   let dir = cwd;
   for (let i = 0; i < 64; i++) {
-    if (PROJECT_MARKERS.some((m) => existsSync(join(dir, m)))) return true;
+    if (PROJECT_MARKERS.some((m) => existsSync(join(dir, m)))) return dir;
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
-  return false;
+  return null;
 }
 
-/** The cwd a NEW AGENT pane should start in: snap up to the git worktree root
- *  (where AGENTS.md/.mcp.json live) so the agent gets its project context, not
- *  a random subdir. Falls back to the folder as-is when there's no repo. */
+/** True if `cwd` (or any ancestor) carries a project marker. */
+export function hasProjectContext(cwd: string): boolean {
+  return projectRoot(cwd) !== null;
+}
+
+/** The cwd a NEW AGENT pane should start in: snap up to the nearest project
+ *  root (where .git/AGENTS.md/.mcp.json live) so the agent gets its project
+ *  context, not a random subdir. Falls back to the folder as-is when none. */
 export function agentCwd(cwd: string): string {
-  return gitRoot(cwd) ?? cwd;
+  return projectRoot(cwd) ?? cwd;
 }

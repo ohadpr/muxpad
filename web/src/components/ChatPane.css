@@ -1845,7 +1845,7 @@
   color: var(--fg);
   border-color: var(--accent);
 }
-.chat-folder-chip.-nowarn {
+.chat-folder-chip.-warn {
   color: color-mix(in srgb, var(--danger, #d9534f) 70%, var(--fg-dim));
   border-color: color-mix(in srgb, var(--danger, #d9534f) 35%, var(--border));
 }

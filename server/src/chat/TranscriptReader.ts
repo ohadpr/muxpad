@@ -6,6 +6,7 @@ import {
   readFileSync,
   readSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -73,8 +74,13 @@ export function migrateTranscript(oldSid: string, newSid: string): void {
     } catch {
       // new file doesn't exist yet — the common case
     }
-    // Old history first, then anything already under the new id.
-    writeFileSync(newPath, existing ? Buffer.concat([prior, existing]) : prior);
+    // Old history first, then anything already under the new id. Write to a
+    // temp file + atomic rename so a crash mid-write can't truncate/lose an
+    // existing new-id log.
+    const combined = existing ? Buffer.concat([prior, existing]) : prior;
+    const tmp = `${newPath}.migrating`;
+    writeFileSync(tmp, combined);
+    renameSync(tmp, newPath);
     rmSync(oldPath, { force: true });
   } catch {
     // best-effort — leave both files rather than lose data
@@ -102,15 +108,24 @@ export function findTranscript(sid: string, dir = projectsDir()): string | null 
   } catch {
     return null;
   }
+  // A session can have MORE than one `<sid>.jsonl` — Claude keys the transcript
+  // dir by cwd, so switching an agent's folder makes it write a fresh file under
+  // the new cwd's project dir while the old one lingers. Return the MOST RECENTLY
+  // MODIFIED match so the tail follows the file Claude is actually appending to,
+  // not a stale one (first-dir-wins would silently freeze the chat post-switch).
+  let best: { path: string; mtime: number } | null = null;
   for (const d of entries) {
     const candidate = join(dir, d, `${sid}.jsonl`);
     try {
-      if (statSync(candidate).isFile()) return candidate;
+      const st = statSync(candidate);
+      if (st.isFile() && (!best || st.mtimeMs > best.mtime)) {
+        best = { path: candidate, mtime: st.mtimeMs };
+      }
     } catch {
       // not this dir
     }
   }
-  return null;
+  return best?.path ?? null;
 }
 
 export type TailPhase = 'history' | 'live' | 'older';
