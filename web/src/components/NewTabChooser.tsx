@@ -1,17 +1,7 @@
-import { useRef, useState } from 'react';
-import { useDismissable } from '../lib/use-dismissable';
-
 /**
- * The "create a tab/pane" control: ONE quiet trigger at rest that expands
- * IN PLACE into two identically-styled kind choices (Terminal / Agent).
- *
- * This shape survived several rejected iterations: a floating popup menu
- * (extra hop, mixed icon/no-icon rows), bare +/✳ glyphs (cryptic), and a
- * standing pair of labeled chips (two controls under every workspace, and
- * the mismatched icons made them read as unrelated actions). One control
- * at rest keeps the chrome quiet; the kind labels exist only for the
- * moment of choice, styled the same, so both clearly read as flavors of
- * the same "new" action. Escape or clicking elsewhere collapses.
+ * The "create a tab/pane" control: one quiet "+" that always opens the
+ * in-pane chooser (Claude / Codex / Cursor, with Terminal + Web view below).
+ * Kind is no longer picked in the menubar.
  *
  * Styling is the caller's: both homes (sidebar tree, desktop tab strip)
  * pass their own class names so the control inherits the local chrome.
@@ -20,57 +10,27 @@ export function NewTabChooser({
   idleLabel,
   idleTitle,
   idleClassName,
-  choicesClassName,
-  choiceClassName,
   disabled,
   onCreate,
 }: {
   idleLabel: string;
   idleTitle: string;
   idleClassName: string;
-  choicesClassName: string;
-  choiceClassName: string;
+  /** Kept for call-site compatibility; unused now that choices don't expand. */
+  choicesClassName?: string;
+  choiceClassName?: string;
   disabled?: boolean;
-  onCreate: (kind: 'terminal' | 'agent') => void;
+  onCreate: () => void;
 }) {
-  const [choosing, setChoosing] = useState(false);
-  const ref = useRef<HTMLDivElement | null>(null);
-  useDismissable(choosing, ref, () => setChoosing(false));
-  if (!choosing) {
-    return (
-      <button
-        type="button"
-        className={idleClassName}
-        title={idleTitle}
-        disabled={disabled}
-        onClick={() => setChoosing(true)}
-      >
-        {idleLabel}
-      </button>
-    );
-  }
-  const pick = (kind: 'terminal' | 'agent') => {
-    setChoosing(false);
-    onCreate(kind);
-  };
   return (
-    <div className={choicesClassName} ref={ref}>
-      <button
-        type="button"
-        className={choiceClassName}
-        disabled={disabled}
-        onClick={() => pick('terminal')}
-      >
-        Terminal
-      </button>
-      <button
-        type="button"
-        className={choiceClassName}
-        disabled={disabled}
-        onClick={() => pick('agent')}
-      >
-        Agent
-      </button>
-    </div>
+    <button
+      type="button"
+      className={idleClassName}
+      title={idleTitle}
+      disabled={disabled}
+      onClick={() => onCreate()}
+    >
+      {idleLabel}
+    </button>
   );
 }
