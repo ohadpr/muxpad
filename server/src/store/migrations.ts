@@ -254,6 +254,27 @@ const MIGRATIONS: Migration[] = [
     version: 17,
     sql: 'ALTER TABLE panes ADD COLUMN unread INTEGER NOT NULL DEFAULT 0;',
   },
+  {
+    // Server-owned queue of user messages waiting for a busy/reconnecting agent.
+    // Previously the queue lived only in the browser's React state, so closing
+    // the tab (or a server restart mid-reconnect) silently dropped every pending
+    // message. Persisting it server-side means the queue survives reloads,
+    // follows the user across devices, and — crucially — the server keeps
+    // feeding messages to the agent one turn at a time even with no browser open.
+    // `seq` is a monotonic per-pane order key (ties broken by it); rows are
+    // deleted as each is relayed to the runner or cancelled by the user.
+    version: 18,
+    sql: `
+      CREATE TABLE agent_queue (
+        id          TEXT PRIMARY KEY,
+        pane_id     TEXT NOT NULL REFERENCES panes(id) ON DELETE CASCADE,
+        seq         INTEGER NOT NULL,
+        text        TEXT NOT NULL,
+        created_at  INTEGER NOT NULL
+      );
+      CREATE INDEX agent_queue_pane ON agent_queue(pane_id, seq);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

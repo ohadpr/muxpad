@@ -359,22 +359,124 @@ describe('agent-runner relay', () => {
     chat.close();
   });
 
-  it('refuses chat sends while a runner-owned pane is between connections', async () => {
+  it('queues a chat send while a runner-owned pane is between connections, then drains on reconnect', async () => {
     const { port, paneId } = await boot();
-    const { sock: runner } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    const { sock: runner, rx: fromRunner } = await openSock(
+      `ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`,
+    );
     runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: false }));
     await new Promise((r) => setTimeout(r, 150));
-    // Runner drops (server restart / ws blip). Its SDK process is still
-    // alive in the pty — a send must NOT fall through to the headless
-    // `claude -p` path (second writer on a live session).
+    // Runner drops (server restart / ws blip). Its SDK process is still alive in
+    // the pty; a send must NOT be dropped nor fall through to a second writer —
+    // it's parked in the server-owned queue and delivered when the runner is back.
     runner.close();
     await new Promise((r) => setTimeout(r, 100));
 
     const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
     await fromChat.next((f) => f.t === 'session');
-    chat.send(JSON.stringify({ t: 'send', text: 'hi' }));
-    const err = await fromChat.next((f) => f.t === 'error');
-    expect(String(err.message)).toContain('reconnecting');
+    chat.send(JSON.stringify({ t: 'send', text: 'while gone' }));
+    // No error — it's queued (client is told, and the pending bubble broadcasts).
+    const queued = await fromChat.next((f) => f.t === 'queued');
+    expect(queued.text).toBe('while gone');
+    const q = await fromChat.next((f) => f.t === 'queue');
+    expect((q.items as { text: string }[]).map((i) => i.text)).toEqual(['while gone']);
+    expect(fromChat.frames.some((f) => f.t === 'error')).toBe(false);
+
+    // Runner reconnects → the queue drains into it, then the pending bubble clears.
+    const { sock: runner2, rx: fromRunner2 } = await openSock(
+      `ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`,
+    );
+    runner2.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 2, turnActive: false }));
+    const delivered = await fromRunner2.next((f) => f.t === 'send');
+    expect(delivered.text).toBe('while gone');
+    const emptied = await fromChat.next(
+      (f) => f.t === 'queue' && (f.items as unknown[]).length === 0,
+    );
+    expect((emptied.items as unknown[]).length).toBe(0);
+    void fromRunner;
+    runner2.close();
+    chat.close();
+  });
+
+  it('queues sends while the agent is busy and drains them one turn at a time', async () => {
+    const { port, paneId } = await boot();
+    const { sock: runner, rx: fromRunner } = await openSock(
+      `ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`,
+    );
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: false }));
+    const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
+    await fromChat.next((f) => f.t === 'session');
+
+    // First send runs immediately.
+    chat.send(JSON.stringify({ t: 'send', text: 'one' }));
+    const first = await fromRunner.next((f) => f.t === 'send');
+    expect(first.text).toBe('one');
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await fromChat.next((f) => f.t === 'turn-start');
+
+    // Two more arrive while busy → queued (not relayed yet), in order.
+    chat.send(JSON.stringify({ t: 'send', text: 'two' }));
+    chat.send(JSON.stringify({ t: 'send', text: 'three' }));
+    await fromChat.next(
+      (f) =>
+        f.t === 'queue' &&
+        (f.items as { text: string }[]).map((i) => i.text).join() === 'two,three',
+    );
+    // Nothing but the first send has reached the runner.
+    expect(fromRunner.frames.filter((f) => f.t === 'send')).toHaveLength(1);
+
+    // Close the browser — the server must keep draining with no client open.
+    chat.close();
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Turn 1 ends → 'two' drains.
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true }));
+    const second = await fromRunner.next((f) => f.t === 'send' && f.text === 'two');
+    expect(second.text).toBe('two');
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true }));
+    // Turn 2 ends → 'three' drains.
+    const third = await fromRunner.next((f) => f.t === 'send' && f.text === 'three');
+    expect(third.text).toBe('three');
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true }));
+
+    // Queue empty; a reconnecting client sees no pending bubbles.
+    await new Promise((r) => setTimeout(r, 50));
+    const { sock: chat2, rx: fromChat2 } = await openSock(
+      `ws://127.0.0.1:${port}/ws/chat/${paneId}`,
+    );
+    const hello = await fromChat2.next((f) => f.t === 'session');
+    expect((hello.queue as unknown[]).length).toBe(0);
+    runner.close();
+    chat2.close();
+  });
+
+  it('cancels a queued message before it runs', async () => {
+    const { port, paneId } = await boot();
+    const { sock: runner, rx: fromRunner } = await openSock(
+      `ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`,
+    );
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: false }));
+    const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
+    await fromChat.next((f) => f.t === 'session');
+
+    chat.send(JSON.stringify({ t: 'send', text: 'one' }));
+    await fromRunner.next((f) => f.t === 'send');
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await fromChat.next((f) => f.t === 'turn-start');
+
+    chat.send(JSON.stringify({ t: 'send', text: 'cancel me' }));
+    const q = await fromChat.next((f) => f.t === 'queue' && (f.items as unknown[]).length === 1);
+    const id = (q.items as { id: string }[])[0]?.id;
+    chat.send(JSON.stringify({ t: 'queue-cancel', id }));
+    await fromChat.next((f) => f.t === 'queue' && (f.items as unknown[]).length === 0);
+
+    // Turn ends — the cancelled message must NOT drain into the runner.
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true }));
+    await new Promise((r) => setTimeout(r, 150));
+    expect(fromRunner.frames.filter((f) => f.t === 'send')).toHaveLength(1);
+    runner.close();
     chat.close();
   });
 

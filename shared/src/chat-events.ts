@@ -108,6 +108,10 @@ export interface SubagentProgress {
  */
 export interface AgentSessionStatus {
   model: string;
+  /** The CONCRETE model actually running (e.g. 'claude-opus-4-8'), when the
+   *  backend can report it. `model` may be a friendly alias ('opus'); this is
+   *  the exact version, so the UI can show precisely which model is live. */
+  activeModel?: string;
   /** Context-window fill. OPTIONAL: backends without a context-window notion
    *  (or that don't expose one in their stream — Codex/Cursor) omit it and the
    *  chat header simply hides the meter chip. */
@@ -151,6 +155,7 @@ export function sanitizeAgentStatus(raw: unknown): AgentSessionStatus | null {
     : undefined;
   return {
     model: o.model,
+    ...(typeof o.activeModel === 'string' && o.activeModel ? { activeModel: o.activeModel } : {}),
     ...(validContext
       ? {
           context: {
