@@ -8,6 +8,7 @@ import { type PtydCache, decoratePane } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { randomWorkspaceName } from '../random-name.js';
 import { safeCwd } from '../safe-cwd.js';
+import { agentCwd, hasProjectContext } from '../project-root.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { pruneDeadPanes } from '../store/migrations.js';
@@ -48,6 +49,10 @@ export function tabsRoutes(deps: {
           .string()
           .regex(/^[A-Za-z0-9._[\]-]{1,64}$/)
           .optional(),
+        // Which agent backend an 'agent' bootstrap runs (default claude).
+        // Allowlisted enum → safe to bake into the startup_cmd shell string.
+        // 'pick' = created pending, harness chosen later in the chat page.
+        backend: z.enum(['claude', 'codex', 'cursor', 'pick']).optional(),
       })
       .parse(await c.req.json().catch(() => ({})));
     // Agent tabs get a deliberate name + mark (auto-renamed to the session's
@@ -69,14 +74,16 @@ export function tabsRoutes(deps: {
       const pane = panes.create({
         tab_id: tab.id,
         shell: process.env.SHELL ?? '/bin/zsh',
-        cwd: safeCwd(body.cwd),
+        // Agent panes snap up to the git root so they start with project context.
+        cwd: agent ? agentCwd(safeCwd(body.cwd)) : safeCwd(body.cwd),
         // Single-quoted model so zsh's nomatch can't glob-error on ids with
         // brackets ('claude-opus-4-8[1m]'); the charset gate above makes the
-        // quoting safe.
+        // quoting safe. Claude stays implicit (no --backend) so its cmd is
+        // unchanged; codex/cursor get an explicit, allowlisted flag.
         startup_cmd: agent
-          ? body.model
-            ? `muxpad agent --model '${body.model}'`
-            : 'muxpad agent'
+          ? body.backend === 'pick'
+            ? 'muxpad agent --pick'
+            : `muxpad agent${body.backend && body.backend !== 'claude' ? ` --backend ${body.backend}` : ''}${body.model ? ` --model '${body.model}'` : ''}`
           : null,
         // Agent tabs land directly on the chat face; the (hidden) terminal
         // face spawns the pty underneath, which runs the startup command.

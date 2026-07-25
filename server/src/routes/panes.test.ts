@@ -638,4 +638,72 @@ describe('panes routes', () => {
       await local.cleanup();
     }
   });
+
+  it('as-terminal converts a --pick pane into a plain terminal', async () => {
+    const p = (await (
+      await test.app.request(`/api/tabs/${tabId}/panes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ startup_cmd: 'muxpad agent --pick', face: 'chat' }),
+      })
+    ).json()) as { id: string; startup_cmd: string; face: string };
+    expect(p.startup_cmd).toBe('muxpad agent --pick');
+    expect(p.face).toBe('chat');
+
+    const res = await test.app.request(`/api/panes/${p.id}/as-terminal`, { method: 'POST' });
+    expect(res.status).toBe(204);
+
+    const got = (await (await test.app.request(`/api/panes/${p.id}`)).json()) as {
+      startup_cmd: string | null;
+      face: string;
+    };
+    expect(got.startup_cmd).toBeNull();
+    expect(got.face).toBe('terminal');
+  });
+
+  it('as-terminal rejects non-pick panes with 409', async () => {
+    const p = (await (
+      await test.app.request(`/api/tabs/${tabId}/panes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      })
+    ).json()) as { id: string };
+    const res = await test.app.request(`/api/panes/${p.id}/as-terminal`, { method: 'POST' });
+    expect(res.status).toBe(409);
+  });
+
+  it('as-web converts a --pick pane into a blank URL pane', async () => {
+    const p = (await (
+      await test.app.request(`/api/tabs/${tabId}/panes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ startup_cmd: 'muxpad agent --pick', face: 'chat' }),
+      })
+    ).json()) as { id: string };
+
+    const res = await test.app.request(`/api/panes/${p.id}/as-web`, { method: 'POST' });
+    expect(res.status).toBe(204);
+
+    const got = (await (await test.app.request(`/api/panes/${p.id}`)).json()) as {
+      kind: string;
+      url: string | null;
+      startup_cmd: string | null;
+    };
+    expect(got.kind).toBe('url');
+    expect(got.url).toBeNull();
+    expect(got.startup_cmd).toBeNull();
+  });
+
+  it('as-web rejects non-pick panes with 409', async () => {
+    const p = (await (
+      await test.app.request(`/api/tabs/${tabId}/panes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      })
+    ).json()) as { id: string };
+    const res = await test.app.request(`/api/panes/${p.id}/as-web`, { method: 'POST' });
+    expect(res.status).toBe(409);
+  });
 });
