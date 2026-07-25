@@ -42,8 +42,8 @@ import { useDismissable } from '../lib/use-dismissable';
 import { useMediaQuery } from '../use-media-query';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
 
-// What a "+" creates: a plain terminal pane or a chat-native agent pane.
-type NewPaneKind = 'terminal' | 'agent';
+// All "+" creates open the harness picker (agents + terminal + web view).
+
 import './tab.css';
 
 type Layout = MosaicNode<string> | null;
@@ -699,19 +699,14 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   );
 
   const splitFromPane = useCallback(
-    async (
-      sourcePaneId: string | null,
-      direction: MosaicDirection,
-      kind: NewPaneKind = 'terminal',
-    ) => {
+    async (sourcePaneId: string | null, direction: MosaicDirection) => {
       if (!tab) return;
       const created = await api.createPane(tab.id, {
         ...(sourcePaneId ? { inherit_cwd_from: sourcePaneId } : {}),
-        // Agent pane: a chat-native agent session (the chosen backend runs in
-        // the pty underneath; the face lands on chat immediately).
-        ...(kind === 'agent'
-          ? { startup_cmd: PENDING_AGENT_STARTUP, face: 'chat' as const }
-          : {}),
+        // Always land on the harness picker (Claude / Codex / Cursor /
+        // Terminal). Kind is chosen there — not in the chrome.
+        startup_cmd: PENDING_AGENT_STARTUP,
+        face: 'chat',
       });
       const newLayout =
         sourcePaneId == null
@@ -1237,14 +1232,13 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           ? stored
           : (paneIds[0] ?? null);
 
-    const addPane = async (kind: NewPaneKind = 'terminal') => {
+    const addPane = async () => {
       if (!tab) return;
       const target = activeId ?? paneIds[paneIds.length - 1];
       const created = await api.createPane(tab.id, {
         ...(target ? { inherit_cwd_from: target } : {}),
-        ...(kind === 'agent'
-          ? { startup_cmd: PENDING_AGENT_STARTUP, face: 'chat' as const }
-          : {}),
+        startup_cmd: PENDING_AGENT_STARTUP,
+        face: 'chat',
       });
       // Append at the END — same convention as the desktop strip's +.
       const newLayout: Layout =
@@ -1287,7 +1281,9 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           ? (() => {
               const ap = activeId ? tab.panes.find((p) => p.id === activeId) : undefined;
               const webSwitch =
-                ap && ap.kind === 'shell' ? (
+                ap &&
+                ap.kind === 'shell' &&
+                !(ap.startup_cmd?.startsWith('muxpad agent') ?? false) ? (
                   <PaneWebSwitch
                     paneId={ap.id}
                     appUrls={ap.app_urls ?? []}
@@ -1303,9 +1299,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                     idleLabel="+"
                     idleTitle="New pane"
                     idleClassName="mobile-strip-add"
-                    choicesClassName="mobile-strip-choices"
-                    choiceClassName="mobile-strip-add mobile-strip-choice"
-                    onCreate={(kind) => void addPane(kind)}
+                    onCreate={() => void addPane()}
                   />
                 </MobilePaneChrome>
               );
@@ -1358,13 +1352,12 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           ? stored
           : (paneIds[0] ?? null);
 
-    const addPane = async (kind: NewPaneKind = 'terminal') => {
+    const addPane = async () => {
       const target = activeId ?? paneIds[paneIds.length - 1];
       const created = await api.createPane(tab.id, {
         ...(target ? { inherit_cwd_from: target } : {}),
-        ...(kind === 'agent'
-          ? { startup_cmd: PENDING_AGENT_STARTUP, face: 'chat' as const }
-          : {}),
+        startup_cmd: PENDING_AGENT_STARTUP,
+        face: 'chat',
       });
       // The strip's "+" appends at the END (browser-tab convention).
       // Splitting at the active pane put the newcomer mid-strip whenever a
@@ -1442,18 +1435,6 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                     />
                   ) : (
                     <>
-                      {/* The face switch LEADS the pill (active tab only) —
-                          it's the pane's identity glyph (terminal/chat/web),
-                          so it reads like the sidebar's leading tab icon;
-                          next to the × it read as a stray control. */}
-                      {isActiveTab && p?.kind === 'shell' ? (
-                        <PaneWebSwitch
-                          paneId={p.id}
-                          appUrls={p.app_urls ?? []}
-                          startupCmd={p.startup_cmd}
-                          compact
-                        />
-                      ) : null}
                       <button
                         type="button"
                         role="tab"
@@ -1463,6 +1444,13 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                         onDoubleClick={() => startPaneRename(paneId)}
                         title={p?.name ? p.name : 'Double-click to rename'}
                       >
+                        <span
+                          className="desktop-tab-kind"
+                          title={paneSurfaceLabel(p)}
+                          aria-label={paneSurfaceLabel(p)}
+                        >
+                          {paneSurfaceIcon(p)}
+                        </span>
                         <span className="desktop-tab-label">{paneLabel(paneId)}</span>
                         {/* Status sits just RIGHT of the name (spinner while
                             working, dot when it wants you) — the label doesn't
@@ -1499,16 +1487,13 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                 </div>
               );
             })}
-            {/* Browser-standard lone "+"; the Terminal/Agent choice expands
-                in place on click — see NewTabChooser for why the standing
-                two-chip pair lost. */}
+            {/* Browser-standard lone "+"; always opens the harness picker
+                (Claude / Codex / Cursor + Terminal below). */}
             <NewTabChooser
               idleLabel="+"
               idleTitle="New pane"
               idleClassName="desktop-tab-add desktop-tab-add-plus"
-              choicesClassName="desktop-tab-add-choices"
-              choiceClassName="desktop-tab-add"
-              onCreate={(kind) => void addPane(kind)}
+              onCreate={() => void addPane()}
             />
           </div>
           <div className="desktop-tab-strip-actions">
@@ -1589,14 +1574,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           <div className="workspace-empty">
             <p>This tab has no panes.</p>
             <button className="btn btn-primary" onClick={() => void splitFromPane(null, 'row')}>
-              New terminal
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => void splitFromPane(null, 'row', 'agent')}
-            >
-              New agent
+              New pane
             </button>
             <button type="button" className="workspace-empty-close" onClick={() => void closeTab()}>
               or close this tab
@@ -1615,11 +1593,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                   renderToolbar={() => (
                     <div className="pane-chrome">
                       {isUrl ? (
-                        <UrlPaneTitle
-                          paneId={paneId}
-                          url={tilePane?.url ?? null}
-                          onKindToggled={onKindToggled}
-                        />
+                        <UrlPaneTitle paneId={paneId} onKindToggled={onKindToggled} />
                       ) : (
                         <ShellPaneTitle
                           paneId={paneId}
@@ -1940,43 +1914,43 @@ function SvgChevron() {
   );
 }
 
+/** Fixed (non-interactive) surface mark for a pane tab: agent / web / terminal. */
+function paneSurfaceKind(p: PaneSpec | undefined): 'agent' | 'web' | 'terminal' {
+  if (!p) return 'terminal';
+  if (p.kind === 'url') return 'web';
+  if (p.startup_cmd?.startsWith('muxpad agent') || p.face === 'chat') return 'agent';
+  if (p.face === 'web' && p.face_url) return 'web';
+  return 'terminal';
+}
+
+function paneSurfaceLabel(p: PaneSpec | undefined): string {
+  const k = paneSurfaceKind(p);
+  if (k === 'agent') return 'Agent';
+  if (k === 'web') return 'Web view';
+  return 'Terminal';
+}
+
+function paneSurfaceIcon(p: PaneSpec | undefined) {
+  const k = paneSurfaceKind(p);
+  if (k === 'agent') return <SvgAgentGlyph />;
+  if (k === 'web') return <SvgGlobe />;
+  return <SvgTerminal />;
+}
+
 /**
- * Pane chrome title for URL panes. URL renders as an anchor whose
- * native cmd/ctrl/shift/middle-click opens in a new tab/window. Double-click
- * swaps to an input for editing (Enter saves via PATCH, Esc/blur cancels).
- * Plain click is preventDefault'd so it doesn't navigate the whole window.
- *
- * Leftmost: a PaneSurfaceSwitch that doubles as the loading spinner. When `url`
- * is null (the pane was just type-switched from shell) we auto-enter edit
- * mode with an empty input focused, so the user can type a URL immediately.
+ * Mosaic chrome for a URL pane: kind switch (+ load spinner). The address
+ * bar lives inside UrlPane so tabbed/mobile (no mosaic toolbar) can set and
+ * change the URL too.
  */
 function UrlPaneTitle({
   paneId,
-  url,
   onKindToggled,
 }: {
   paneId: string;
-  url: string | null;
   onKindToggled: (updated: PaneSpec) => void;
 }) {
-  // When url is null, default to editing — there's nothing to display.
-  const [editing, setEditing] = useState(url == null);
-  const [draft, setDraft] = useState(url ?? '');
-  const [loading, setLoading] = useState(url != null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    setDraft(url ?? '');
-    if (url == null) setEditing(true);
-  }, [url]);
-  useEffect(() => {
-    if (editing && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
-    }
-  }, [editing]);
-
-  // Sync with UrlPane's load-state events for our paneId.
   useEffect(() => {
     const onLoading = (e: Event) => {
       const detail = (e as CustomEvent).detail;
@@ -1986,38 +1960,6 @@ function UrlPaneTitle({
     window.addEventListener('muxpad:url-pane-loading', onLoading);
     return () => window.removeEventListener('muxpad:url-pane-loading', onLoading);
   }, [paneId]);
-
-  const commit = async () => {
-    const next = normalizeUrl(draft);
-    if (!next || next === url) {
-      // No-op submission: only exit edit mode if there's an existing url
-      // to show. With url=null we'd render nothing — keep editing so the
-      // input stays visible for another try.
-      if (url != null) setEditing(false);
-      setDraft(url ?? '');
-      return;
-    }
-    setEditing(false);
-    try {
-      await api.patchPane(paneId, { url: next });
-      // Show loading immediately — without this the spinner doesn't fire
-      // until the pane.updated event arrives via /ws/events and the new
-      // url prop reaches UrlPane, by which time the iframe may already
-      // be partway through its load. Setting it here means the spinner
-      // covers the full "user pressed enter → iframe done" window.
-      setLoading(true);
-    } catch (e) {
-      console.error('patchPane failed', e);
-      setDraft(url ?? '');
-    }
-  };
-
-  const cancel = () => {
-    setDraft(url ?? '');
-    // url=null → no URL to fall back to displaying. Stay in edit mode so
-    // the chrome doesn't render an empty link.
-    if (url != null) setEditing(false);
-  };
 
   const handleSwitch = async (next: 'shell' | 'url') => {
     try {
@@ -2029,51 +1971,12 @@ function UrlPaneTitle({
   };
 
   return (
-    <>
-      <PaneSurfaceSwitch
-        paneId={paneId}
-        currentKind="url"
-        loading={loading}
-        onSelect={handleSwitch}
-      />
-      {editing ? (
-        <input
-          ref={inputRef}
-          className="pane-chrome-title-input"
-          value={draft}
-          spellCheck={false}
-          autoComplete="off"
-          placeholder={url == null ? 'https://…' : undefined}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') void commit();
-            else if (e.key === 'Escape') cancel();
-          }}
-          onBlur={cancel}
-          // Don't let the editing area act as a mosaic drag handle.
-          onMouseDown={(e) => e.stopPropagation()}
-          onDoubleClick={(e) => e.stopPropagation()}
-        />
-      ) : (
-        <a
-          href={url ?? '#'}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="pane-chrome-title-link"
-          title={url ? `${url} — double-click to edit` : 'Double-click to edit'}
-          onClick={(e) => {
-            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-            e.preventDefault();
-          }}
-          onDoubleClick={(e) => {
-            e.preventDefault();
-            setEditing(true);
-          }}
-        >
-          <span className="pane-chrome-title">{url}</span>
-        </a>
-      )}
-    </>
+    <PaneSurfaceSwitch
+      paneId={paneId}
+      currentKind="url"
+      loading={loading}
+      onSelect={handleSwitch}
+    />
   );
 }
 
@@ -2126,14 +2029,6 @@ function ShellPaneTitle({
       </a>
     </>
   );
-}
-
-function normalizeUrl(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  // Bare hostname/path → assume https.
-  return `https://${trimmed}`;
 }
 
 function SvgReload() {

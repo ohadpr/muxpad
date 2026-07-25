@@ -1,13 +1,13 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { api } from '../api';
+import { normalizeUrl } from '../lib/normalize-url';
 import './UrlPane.css';
 
 interface UrlPaneProps {
   paneId: string;
   /**
-   * The pane's URL, or null when this pane was just type-switched from
-   * shell and the user hasn't entered a URL yet. In the null case we
-   * render a blank body — the chrome's URL field auto-enters edit mode
-   * so the user can type.
+   * The pane's URL, or null when this pane was just opened as a web view
+   * and the user hasn't entered a URL yet.
    */
   url: string | null;
 }
@@ -25,16 +25,30 @@ function emitLoading(paneId: string, loading: boolean): void {
 }
 
 /**
- * Pure iframe pane. All chrome (title-as-address-bar, reload button,
- * edit-on-double-click) lives in TabView's renderToolbar — this component
- * has no UI of its own beyond the iframe itself. Listens for a
- * `muxpad:reload-url-pane` window event so the chrome reload button can
- * force a reload without prop drilling a ref. Emits a
- * `muxpad:url-pane-loading` window event whenever load state changes so
- * the chrome can show a spinner.
+ * URL pane with its own address bar — required in tabbed/mobile where there
+ * is no mosaic UrlPaneTitle. Split view still has a toolbar kind-switch;
+ * the address bar here is the one place to set/change the URL in every mode.
  */
 export function UrlPane({ paneId, url }: UrlPaneProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [editing, setEditing] = useState(url == null);
+  const [draft, setDraft] = useState(url ?? '');
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDraft(url ?? '');
+    if (url == null) setEditing(true);
+    else setEditing(false);
+  }, [url]);
+
+  useEffect(() => {
+    if (!editing) return;
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    el.select();
+  }, [editing, url]);
 
   // Mark loading=true on every src change. `iframe.onLoad` flips it to
   // false. The load event fires even when X-Frame-Options blocks the
@@ -62,21 +76,118 @@ export function UrlPane({ paneId, url }: UrlPaneProps) {
     return () => window.removeEventListener('muxpad:reload-url-pane', onReload);
   }, [paneId, url]);
 
-  if (url == null) {
-    // Blank body — chrome's UrlPaneTitle is in edit mode waiting for input.
-    return <div className="url-pane url-pane-blank" />;
-  }
+  const commit = async () => {
+    const next = normalizeUrl(draft);
+    if (!next) {
+      setErr('Enter a URL');
+      if (url == null) return;
+      setDraft(url);
+      setEditing(false);
+      return;
+    }
+    if (next === url) {
+      setEditing(false);
+      setErr(null);
+      return;
+    }
+    setErr(null);
+    try {
+      await api.patchPane(paneId, { url: next });
+      setEditing(false);
+      emitLoading(paneId, true);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'could not set URL');
+      setDraft(url ?? '');
+    }
+  };
+
+  const cancel = () => {
+    setDraft(url ?? '');
+    setErr(null);
+    if (url != null) setEditing(false);
+  };
 
   return (
-    <div className="url-pane">
-      <iframe
-        ref={iframeRef}
-        src={url}
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
-        referrerPolicy="no-referrer"
-        title={url}
-        onLoad={() => emitLoading(paneId, false)}
-      />
+    <div className={`url-pane${url == null ? ' url-pane-blank' : ''}`}>
+      <form
+        className="url-pane-bar"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void commit();
+        }}
+      >
+        {editing ? (
+          <input
+            ref={inputRef}
+            className="url-pane-input"
+            value={draft}
+            spellCheck={false}
+            autoComplete="off"
+            inputMode="url"
+            placeholder="https://…"
+            aria-label="Page URL"
+            onChange={(e) => {
+              setDraft(e.target.value);
+              if (err) setErr(null);
+            }}
+            onBlur={() => {
+              // Keep focus while still blank so the field doesn't vanish
+              // into an empty chrome state with nothing to click.
+              if (url == null) return;
+              // Revert on blur (standard address-bar behavior): clicking away
+              // with a half-typed/garbage draft must NOT commit and navigate the
+              // iframe. Commit happens only on Enter (form submit).
+              cancel();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                cancel();
+              }
+            }}
+          />
+        ) : (
+          <button
+            type="button"
+            className="url-pane-display"
+            title="Edit URL"
+            onClick={() => setEditing(true)}
+          >
+            {url}
+          </button>
+        )}
+        {url != null ? (
+          <button
+            type="button"
+            className="url-pane-reload"
+            title="Reload"
+            aria-label="Reload"
+            onClick={() =>
+              window.dispatchEvent(
+                new CustomEvent('muxpad:reload-url-pane', { detail: { paneId } }),
+              )
+            }
+          >
+            ↻
+          </button>
+        ) : null}
+      </form>
+      {err ? <p className="url-pane-error">{err}</p> : null}
+      {url == null ? (
+        <div className="url-pane-empty">
+          <p className="url-pane-empty-title">Open a web view</p>
+          <p className="url-pane-empty-hint">Type a URL above and press Enter</p>
+        </div>
+      ) : (
+        <iframe
+          ref={iframeRef}
+          src={url}
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+          referrerPolicy="no-referrer"
+          title={url}
+          onLoad={() => emitLoading(paneId, false)}
+        />
+      )}
     </div>
   );
 }

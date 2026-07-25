@@ -373,6 +373,12 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   let lastStatus: (RunnerFrame & { t: 'status' }) | null = null;
   let modelList: Array<{ value: string; displayName: string; resolvedModel?: string }> | null =
     null;
+  // The CONCRETE model the session is actually running (e.g. 'claude-opus-4-8'),
+  // captured from the init frame and every assistant message. getContextUsage()
+  // reports only the ALIAS ('opus'), so this is the sole reliable source of the
+  // exact version — the chat's own self-report is unreliable. Rides the status
+  // frame so the picker/chip can show precisely which model is live.
+  let activeModel: string | null = null;
 
   // Single-flight across ALL callers (init, turn-done, interval, set-model,
   // boot) — concurrent control requests buy nothing and race lastStatus.
@@ -410,6 +416,8 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         const frame: RunnerFrame & { t: 'status' } = {
           t: 'status',
           model: usage.model,
+          // The exact concrete model (getContextUsage reports only the alias).
+          ...(activeModel ? { activeModel } : {}),
           context: {
             pct: Math.round(usage.percentage),
             tokens: usage.totalTokens,
@@ -424,6 +432,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         const changed =
           !lastStatus ||
           lastStatus.model !== frame.model ||
+          lastStatus.activeModel !== frame.activeModel ||
           lastStatus.context?.pct !== frame.context?.pct ||
           lastStatus.context?.tokens !== frame.context?.tokens ||
           freshModels;
@@ -590,6 +599,8 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       lastSessionActivityAt = Date.now();
       if (msg.type === 'system' && msg.subtype === 'init') {
         log(dim(`ready · ${msg.model} · ${msg.tools.length} tools`));
+        // Init reports the concrete resolved model (e.g. 'claude-opus-4-8').
+        if (typeof msg.model === 'string' && msg.model) activeModel = msg.model;
         void refreshStatus(true);
         if (msg.session_id !== liveSid) {
           // Session-id drift (resume minted a new id, /clear started fresh).
@@ -618,6 +629,13 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         }
       } else if (msg.type === 'assistant' && msg.parent_tool_use_id === null) {
         noteAutonomousTurn();
+        // Track the concrete model per assistant message so a mid-session switch
+        // (setModel) is reflected; refresh the status when it actually changes.
+        const m = msg.message.model;
+        if (typeof m === 'string' && m && m !== activeModel) {
+          activeModel = m;
+          void refreshStatus(false);
+        }
         let msgText = '';
         for (const block of msg.message.content ?? []) {
           if (block.type === 'text' && block.text.trim()) {

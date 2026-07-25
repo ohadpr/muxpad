@@ -12,11 +12,12 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { EventBus } from '../events.js';
 import { queuePaneKill } from '../pane-reaper.js';
+import { agentCwd, hasProjectContext } from '../project-root.js';
 import { type PtydCache, decoratePane } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { randomWorkspaceName } from '../random-name.js';
 import { safeCwd } from '../safe-cwd.js';
-import { agentCwd, hasProjectContext } from '../project-root.js';
+import { AgentQueueStore } from '../store/AgentQueueStore.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 
@@ -420,7 +421,10 @@ export function panesScopedRoutes(deps: {
       .object({ backend: z.enum(['claude', 'codex', 'cursor']) })
       .safeParse(await c.req.json().catch(() => ({})));
     if (!body.success)
-      return c.json({ error: { code: 'bad_request', message: 'backend must be claude|codex|cursor' } }, 400);
+      return c.json(
+        { error: { code: 'bad_request', message: 'backend must be claude|codex|cursor' } },
+        400,
+      );
     const backend = body.data.backend;
     const startupCmd = `muxpad agent${backend === 'claude' ? '' : ` --backend ${backend}`}`;
     panes.setStartupCmd(id, startupCmd);
@@ -444,10 +448,102 @@ export function panesScopedRoutes(deps: {
       });
     } catch {
       return c.json(
-        { error: { code: 'ptyd_unavailable', message: 'ptyd is unreachable; cannot start the agent' } },
+        {
+          error: {
+            code: 'ptyd_unavailable',
+            message: 'ptyd is unreachable; cannot start the agent',
+          },
+        },
         503,
       );
     }
+    const refreshed = panes.getById(id);
+    if (refreshed)
+      deps.events.emit({
+        type: 'pane.updated',
+        tab_id: refreshed.tab_id,
+        pane: decoratePane(deps.cache, refreshed),
+      });
+    return c.body(null, 204);
+  });
+
+  // Convert a pending harness-pick pane into a plain terminal. Same gate as
+  // agent-backend: only `--pick` panes, so we never wipe a live agent or
+  // an already-running shell. Clears startup_cmd, flips face to terminal,
+  // respawns so the user lands on a normal PTY.
+  app.post('/:id/as-terminal', async (c) => {
+    const id = c.req.param('id');
+    const p = panes.getById(id);
+    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (p.kind !== 'shell' || p.startup_cmd !== 'muxpad agent --pick')
+      return c.json(
+        { error: { code: 'conflict', message: 'pane is not awaiting a harness choice' } },
+        409,
+      );
+    panes.setStartupCmd(id, null);
+    panes.setFace(id, 'terminal');
+    const workspaceId = tabs.getWorkspaceId(p.tab_id);
+    try {
+      await deps.ptyd.killPane(id);
+    } catch {
+      // proceed; ensurePane surfaces the failure if ptyd is down
+    }
+    deps.cache.forget(id);
+    try {
+      await deps.ptyd.ensurePane({
+        id: p.id,
+        shell: p.shell ?? defaultShell,
+        startup_cmd: null,
+        cwd: safeCwd(p.cwd),
+        env: p.env,
+        tab_id: p.tab_id,
+        ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
+      });
+    } catch {
+      return c.json(
+        {
+          error: {
+            code: 'ptyd_unavailable',
+            message: 'ptyd is unreachable; cannot start the terminal',
+          },
+        },
+        503,
+      );
+    }
+    const refreshed = panes.getById(id);
+    if (refreshed)
+      deps.events.emit({
+        type: 'pane.updated',
+        tab_id: refreshed.tab_id,
+        pane: decoratePane(deps.cache, refreshed),
+      });
+    return c.body(null, 204);
+  });
+
+  // Convert a pending harness-pick pane into a blank URL pane. UrlPaneTitle
+  // auto-focuses an empty URL field when url is null — option (2) from the
+  // picker design. Same --pick gate as as-terminal / agent-backend.
+  app.post('/:id/as-web', async (c) => {
+    const id = c.req.param('id');
+    const p = panes.getById(id);
+    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (p.kind !== 'shell' || p.startup_cmd !== 'muxpad agent --pick')
+      return c.json(
+        { error: { code: 'conflict', message: 'pane is not awaiting a harness choice' } },
+        409,
+      );
+    try {
+      await deps.ptyd.closePtyClients(id);
+    } catch {
+      // ptyd disconnected; proceed with the kind flip in the DB.
+    }
+    try {
+      await deps.ptyd.killPane(id);
+    } catch {
+      queuePaneKill(deps.db, id);
+    }
+    deps.cache.forget(id);
+    panes.updateKind(id, { kind: 'url', url: null, startup_cmd: null });
     const refreshed = panes.getById(id);
     if (refreshed)
       deps.events.emit({
@@ -467,14 +563,19 @@ export function panesScopedRoutes(deps: {
     if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
     if (p.kind !== 'shell')
       return c.json({ error: { code: 'bad_request', message: 'not a shell pane' } }, 400);
-    const body = z.object({ cwd: z.string().min(1) }).safeParse(await c.req.json().catch(() => ({})));
+    const body = z
+      .object({ cwd: z.string().min(1) })
+      .safeParse(await c.req.json().catch(() => ({})));
     if (!body.success)
       return c.json({ error: { code: 'bad_request', message: 'cwd required' } }, 400);
     let dir = body.data.cwd.replace(/^~(?=\/|$)/, homedir()); // expand a leading ~
     // Require an ABSOLUTE path: a relative one would resolve against the server
     // process cwd here but ptyd's cwd at spawn — different dirs.
     if (!dir.startsWith('/'))
-      return c.json({ error: { code: 'bad_request', message: 'cwd must be an absolute path' } }, 400);
+      return c.json(
+        { error: { code: 'bad_request', message: 'cwd must be an absolute path' } },
+        400,
+      );
     try {
       if (!statSync(dir).isDirectory()) throw new Error('not a dir');
     } catch {
@@ -491,6 +592,11 @@ export function panesScopedRoutes(deps: {
       const backendMatch = p.startup_cmd?.match(/--backend (claude|codex|cursor)/);
       startupCmd = `muxpad agent${backendMatch ? ` --backend ${backendMatch[1]}` : ''}`;
       panes.setStartupCmd(id, startupCmd);
+      // Switching folders starts a fresh session in a NEW project context —
+      // messages queued against the old folder must not drain into it. Drop
+      // them; the respawn's re-hello re-broadcasts the (now empty) queue to
+      // open chat views via the refreshed session frame.
+      new AgentQueueStore(deps.db).clear(id);
     }
     panes.updateCwd(id, dir);
     const workspaceId = tabs.getWorkspaceId(p.tab_id);
@@ -512,7 +618,9 @@ export function panesScopedRoutes(deps: {
       });
     } catch {
       return c.json(
-        { error: { code: 'ptyd_unavailable', message: 'ptyd is unreachable; cannot switch folder' } },
+        {
+          error: { code: 'ptyd_unavailable', message: 'ptyd is unreachable; cannot switch folder' },
+        },
         503,
       );
     }
@@ -535,8 +643,7 @@ export function panesScopedRoutes(deps: {
   app.post('/:id/seen', async (c) => {
     const id = c.req.param('id');
     const pane = panes.getById(id);
-    if (!pane)
-      return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!pane) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
     // Viewing clears both read-state flags: the "done, unreviewed" bold
     // (persisted) and the BEL red dot (ptyd runtime). Emit pane.updated so the
     // bold drops immediately instead of waiting for the next nav poll.
