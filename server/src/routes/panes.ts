@@ -1,3 +1,5 @@
+import { statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import type { LayoutNode } from '@muxpad/shared';
 import {
   appendLeafToLayout,
@@ -14,6 +16,7 @@ import { type PtydCache, decoratePane } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { randomWorkspaceName } from '../random-name.js';
 import { safeCwd } from '../safe-cwd.js';
+import { agentCwd, hasProjectContext } from '../project-root.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 
@@ -156,13 +159,16 @@ export function panesTabScopedRoutes(deps: {
         400,
       );
     }
+    // Fall back to home if the resolved cwd (often an inherited sibling cwd) no
+    // longer exists — a deleted dir makes the shell spawn fail + the pane
+    // cascade-delete itself (see safeCwd). For an AGENT pane, snap up to the git
+    // root so it starts with project context (rules/MCP), not a random subdir.
+    const isAgent = body.face === 'chat' || (body.startup_cmd?.startsWith('muxpad agent') ?? false);
+    const resolvedCwd = isAgent ? agentCwd(safeCwd(cwd)) : safeCwd(cwd);
     const pane = panes.create({
       tab_id: tabId,
       shell: body.shell ?? defaultShell,
-      // Fall back to home if the resolved cwd (often an inherited sibling cwd)
-      // no longer exists — a deleted dir makes the shell spawn fail + the pane
-      // cascade-delete itself (see safeCwd).
-      cwd: safeCwd(cwd),
+      cwd: resolvedCwd,
       startup_cmd: body.startup_cmd ?? null,
       env: body.env ?? null,
       ...(body.face ? { face: body.face } : {}),
@@ -431,6 +437,58 @@ export function panesScopedRoutes(deps: {
     } catch {
       return c.json(
         { error: { code: 'ptyd_unavailable', message: 'ptyd is unreachable; cannot start the agent' } },
+        503,
+      );
+    }
+    const refreshed = panes.getById(id);
+    if (refreshed)
+      deps.events.emit({
+        type: 'pane.updated',
+        tab_id: refreshed.tab_id,
+        pane: decoratePane(deps.cache, refreshed),
+      });
+    return c.body(null, 204);
+  });
+
+  // Change a pane's working directory and respawn it there (the folder switcher
+  // in the chat header). For an agent pane we snap to the git root so it lands
+  // with project context. Restarts the process — the caller expects that.
+  app.post('/:id/cwd', async (c) => {
+    const id = c.req.param('id');
+    const p = panes.getById(id);
+    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    const body = z.object({ cwd: z.string().min(1) }).safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success)
+      return c.json({ error: { code: 'bad_request', message: 'cwd required' } }, 400);
+    let dir = body.data.cwd.replace(/^~(?=\/|$)/, homedir()); // expand a leading ~
+    try {
+      if (!statSync(dir).isDirectory()) throw new Error('not a dir');
+    } catch {
+      return c.json({ error: { code: 'bad_request', message: `not a directory: ${dir}` } }, 400);
+    }
+    const isAgent = p.face === 'chat' || (p.startup_cmd?.startsWith('muxpad agent') ?? false);
+    if (isAgent) dir = agentCwd(dir);
+    panes.updateCwd(id, dir);
+    const workspaceId = tabs.getWorkspaceId(p.tab_id);
+    try {
+      await deps.ptyd.killPane(id);
+    } catch {
+      // proceed; ensurePane surfaces the failure
+    }
+    deps.cache.forget(id);
+    try {
+      await deps.ptyd.ensurePane({
+        id: p.id,
+        shell: p.shell ?? defaultShell,
+        startup_cmd: p.startup_cmd,
+        cwd: dir,
+        env: p.env,
+        tab_id: p.tab_id,
+        ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
+      });
+    } catch {
+      return c.json(
+        { error: { code: 'ptyd_unavailable', message: 'ptyd is unreachable; cannot switch folder' } },
         503,
       );
     }

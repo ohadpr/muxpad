@@ -1821,3 +1821,107 @@
   color: var(--danger, #d9534f);
   font-size: 13px;
 }
+
+/* Working-directory chip in the chat header + its switcher popover. */
+.chat-folder {
+  position: relative;
+  display: inline-flex;
+}
+.chat-folder-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 220px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  color: var(--fg-dim);
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size);
+  cursor: pointer;
+}
+.chat-folder-chip:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+.chat-folder-chip.-nowarn {
+  color: color-mix(in srgb, var(--danger, #d9534f) 70%, var(--fg-dim));
+  border-color: color-mix(in srgb, var(--danger, #d9534f) 35%, var(--border));
+}
+.chat-folder-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-folder-warn {
+  flex: 0 0 auto;
+  font-weight: 800;
+  color: var(--danger, #d9534f);
+}
+.chat-folder-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: 320px;
+  max-width: 78vw;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.chat-folder-path {
+  font-family: var(--mono-font, monospace);
+  font-size: 12px;
+  color: var(--fg-dim);
+  word-break: break-all;
+}
+.chat-folder-nocontext {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--danger, #d9534f);
+  background: color-mix(in srgb, var(--danger, #d9534f) 10%, transparent);
+  border-radius: 5px;
+  padding: 6px 8px;
+}
+.chat-folder-lbl {
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+.chat-folder-input {
+  font-family: var(--mono-font, monospace);
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg);
+  outline: none;
+}
+.chat-folder-input:focus {
+  border-color: var(--accent);
+}
+.chat-folder-error {
+  font-size: 12px;
+  color: var(--danger, #d9534f);
+}
+.chat-folder-go {
+  align-self: flex-end;
+  padding: 5px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.chat-folder-go:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

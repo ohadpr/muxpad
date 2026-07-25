@@ -191,6 +191,116 @@ function SvgRestore() {
   );
 }
 
+function SvgFolder({ size = 13 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" fill="none">
+      <path
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+        d="M2 4.5C2 3.7 2.7 3 3.5 3h2.6c.5 0 .9.2 1.2.6l.6.8h4.6c.8 0 1.5.7 1.5 1.5v5.1c0 .8-.7 1.5-1.5 1.5h-9C2.7 13 2 12.3 2 11.5v-7Z"
+      />
+    </svg>
+  );
+}
+
+/** The chat header's working-directory chip: shows the folder + a warning when
+ *  it has no project context (git/rules/MCP), and opens a switcher that respawns
+ *  the agent in a new folder. */
+function FolderChip({
+  cwd,
+  hasProject,
+  paneId,
+}: {
+  cwd: string;
+  hasProject: boolean;
+  paneId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(cwd);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useDismissable(open, wrapRef, () => setOpen(false));
+  useEffect(() => {
+    if (open) {
+      setDraft(cwd);
+      setErr(null);
+    }
+  }, [open, cwd]);
+  const base = cwd.replace(/\/+$/, '').split('/').pop() || cwd;
+  const submit = async () => {
+    const next = draft.trim();
+    if (!next || next === cwd) {
+      setOpen(false);
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.setPaneCwd(paneId, next);
+      setOpen(false);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'could not switch folder');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="chat-folder" ref={wrapRef}>
+      <button
+        type="button"
+        className={`chat-folder-chip${hasProject ? '' : ' -nowarn'}`}
+        onClick={() => setOpen((o) => !o)}
+        title={hasProject ? cwd : `${cwd} — no project context (no git/AGENTS.md/.mcp.json)`}
+      >
+        <SvgFolder />
+        <span className="chat-folder-name">{base}</span>
+        {!hasProject ? (
+          <span className="chat-folder-warn" aria-label="no project context">
+            !
+          </span>
+        ) : null}
+      </button>
+      {open ? (
+        <div className="chat-folder-menu" role="dialog">
+          <div className="chat-folder-path">{cwd}</div>
+          {!hasProject ? (
+            <div className="chat-folder-nocontext">
+              No project context here — no git repo, AGENTS.md, or .mcp.json up the tree, so the
+              agent has no project rules or MCP.
+            </div>
+          ) : null}
+          <label className="chat-folder-lbl" htmlFor={`fld-${paneId}`}>
+            Switch folder (restarts the agent)
+          </label>
+          <input
+            id={`fld-${paneId}`}
+            className="chat-folder-input"
+            value={draft}
+            spellCheck={false}
+            // biome-ignore lint/a11y/noAutofocus: opened by an explicit user click
+            autoFocus
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                void submit();
+              } else if (e.key === 'Escape') {
+                setOpen(false);
+              }
+            }}
+          />
+          {err ? <div className="chat-folder-error">{err}</div> : null}
+          <button type="button" className="chat-folder-go" disabled={busy} onClick={() => void submit()}>
+            {busy ? 'Switching…' : 'Switch & restart'}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * Composer chip + dropdown for session management: shows "model · ctx%",
  * opens a menu with the context meter, a model picker (SDK setModel), and
@@ -361,6 +471,9 @@ type ServerMsg =
       question?: PendingQuestion;
       subagents?: SubagentProgress[];
       status?: AgentStatus;
+      /** The pane's working dir + whether it has project context (git/rules/MCP). */
+      cwd?: string;
+      hasProject?: boolean;
     }
   | { t: 'events'; phase: 'history' | 'live' | 'older'; events: ChatEvent[] }
   | { t: 'older-done'; hasMore: boolean }
@@ -585,6 +698,7 @@ export function ChatPane({
   // Runner-pushed session status: model, context fill, available models.
   // null = no runner status yet (TUI-view chats never get one).
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
+  const [folder, setFolder] = useState<{ cwd: string; hasProject: boolean } | null>(null);
   // The text of the in-flight send, held so a socket death before the ack
   // can restore it into the composer instead of losing it.
   const pendingText = useRef('');
@@ -686,6 +800,7 @@ export function ChatPane({
         // Mirror the hello exactly: no status means no live runner status —
         // a stale chip would keep offering controls that go nowhere.
         setAgentStatus(msg.status ?? null);
+        setFolder(msg.cwd ? { cwd: msg.cwd, hasProject: msg.hasProject ?? false } : null);
         if (msg.subagents) {
           const now = Date.now();
           // Full snapshot — REBUILD the seen-at map too (a plain set would
@@ -1867,8 +1982,12 @@ export function ChatPane({
             open={rosterOpen}
             onToggle={() => setRosterOpen((o) => !o)}
           />
-          {agentStatus ? (
+          {agentStatus || folder ? (
             <div className="chat-session-row">
+              {folder ? (
+                <FolderChip cwd={folder.cwd} hasProject={folder.hasProject} paneId={paneId} />
+              ) : null}
+              {agentStatus ? (
               <SessionMenu
                 status={agentStatus}
                 {...(session?.assistant ? { assistant: session.assistant } : {})}
@@ -1884,6 +2003,7 @@ export function ChatPane({
                   sock.send(JSON.stringify(obj));
                 }}
               />
+              ) : null}
             </div>
           ) : null}
           <div className="chat-composer">
