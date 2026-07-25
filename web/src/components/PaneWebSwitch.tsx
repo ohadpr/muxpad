@@ -389,7 +389,7 @@ export function hostLabel(raw: string): string {
   }
 }
 
-function SvgGlobe() {
+export function SvgGlobe() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
       <circle cx="7" cy="7" r="5.2" fill="none" stroke="currentColor" strokeWidth="1.2" />
@@ -439,7 +439,7 @@ export function SvgAgentGlyph() {
   );
 }
 
-function SvgTerminalGlyph() {
+export function SvgTerminalGlyph() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
       <rect

@@ -148,6 +148,14 @@ export const api = {
       body: JSON.stringify({ backend }),
     }),
 
+  /** Convert a pending harness-pick pane into a plain terminal. */
+  convertPickToTerminal: (paneId: string) =>
+    req<void>(`/api/panes/${paneId}/as-terminal`, { method: 'POST' }),
+
+  /** Convert a pending harness-pick pane into a blank URL pane (URL chrome focused). */
+  convertPickToWeb: (paneId: string) =>
+    req<void>(`/api/panes/${paneId}/as-web`, { method: 'POST' }),
+
   /** Change a pane's working directory and respawn it there. */
   setPaneCwd: (paneId: string, cwd: string) =>
     req<void>(`/api/panes/${paneId}/cwd`, { method: 'POST', body: JSON.stringify({ cwd }) }),

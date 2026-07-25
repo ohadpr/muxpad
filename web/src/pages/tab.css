@@ -488,9 +488,9 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 6px; /* label ↔ trailing status glyph */
+  gap: 7px; /* kind icon ↔ label ↔ status */
   height: 100%;
-  padding: 0 2px 0 12px;
+  padding: 0 2px 0 11px;
   background: transparent;
   border: none;
   color: var(--fg-dim);
@@ -509,6 +509,25 @@
 }
 .desktop-tab[data-active="true"] .desktop-tab-label {
   font-weight: 600;
+}
+
+/* Fixed surface mark (agent / terminal / web) — identity only, not a control. */
+.desktop-tab-kind {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--fg-faint);
+  line-height: 0;
+}
+.desktop-tab:hover .desktop-tab-kind,
+.desktop-tab[data-active="true"] .desktop-tab-kind {
+  color: var(--fg-dim);
+}
+.desktop-tab-kind svg {
+  display: block;
 }
 
 .desktop-tab-label {
@@ -886,20 +905,13 @@
   height: 14px;
 }
 
-/* Face switch LEADING the ACTIVE strip tab: the bare current-face glyph
-   in an 18px square — the pane's identity icon, like the sidebar's leading
-   tab emoji. The full variant's tinted pill, caret and pulse dot were the
-   loudest thing in the tab; here the only surviving emphasis is an
-   accent-tinted glyph when a detected app is waiting to be viewed. */
+/* Legacy face-switch styles — the strip now uses a fixed .desktop-tab-kind
+   mark instead of an interactive PaneWebSwitch. Kept only if a compact
+   switch is reintroduced elsewhere in a tab host. */
 .desktop-tab .pane-web-switch {
   height: auto;
   align-self: center;
   margin-left: 10px;
-}
-/* The glyph supplies the leading inset on active tabs — the select's own
-   12px would double it. */
-.desktop-tab[data-active="true"] .desktop-tab-select {
-  padding-left: 5px;
 }
 .desktop-tab .pane-web-switch-main {
   width: 18px;
@@ -908,22 +920,4 @@
   justify-content: center;
   border-radius: 4px;
   color: var(--fg-faint);
-}
-.desktop-tab .pane-web-switch-main:hover {
-  color: var(--fg);
-  background: var(--bg-hover);
-}
-.desktop-tab .pane-web-switch-main.is-web {
-  color: var(--fg-faint);
-}
-.desktop-tab .pane-web-switch-main.is-web:hover {
-  color: var(--fg);
-}
-.desktop-tab .pane-web-switch-main.is-available {
-  color: var(--accent);
-  background: transparent;
-  font-weight: 400;
-}
-.desktop-tab .pane-web-switch-main.is-available:hover {
-  background: var(--bg-hover);
 }
