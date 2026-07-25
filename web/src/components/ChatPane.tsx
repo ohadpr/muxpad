@@ -15,6 +15,7 @@ import {
   type ReactNode,
   isValidElement,
   memo,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -23,14 +24,25 @@ import {
 } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { SvgAgentGlyph } from './PaneWebSwitch';
+import { SvgAgentGlyph, SvgGlobe, SvgTerminalGlyph } from './PaneWebSwitch';
 import { api } from '../api';
+import { AGENT_BACKENDS, type AgentBackendId } from '../lib/agent-backend';
+import { AgentBackendLogo, backendFromAssistant } from './AgentLogos';
 import { type MessagePart, splitMessageAttachments } from '../lib/attachments';
 
 /** Open a media item in the lightbox (image or video). */
 type OpenMedia = (m: { url: string; name: string; video: boolean }) => void;
-import { recallChatScroll, rememberChatScroll } from '../lib/chat-scroll';
+import {
+  maxScrollTop,
+  pinnedFromMemory,
+  recallChatScroll,
+  rememberChatScroll,
+  scrollMemorySidMatches,
+  scrollTopAfterOlderPrepend,
+  shouldPersistChatScroll,
+} from '../lib/chat-scroll';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
+import { liveStatusLabel } from '../lib/live-status';
 import { isMobileLayout } from '../lib/mobile-layout';
 import { useDismissable } from '../lib/use-dismissable';
 import './ChatPane.css';
@@ -188,114 +200,333 @@ function SvgRestore() {
   );
 }
 
-/**
- * Composer chip + dropdown for session management: shows "model · ctx%",
- * opens a menu with the context meter, a model picker (SDK setModel), and
- * Compact / Clear (relayed to the runner as /compact and /clear through the
- * normal turn queue). Renders only when a runner has pushed status — chat
- * views without a live agent runner have nothing to manage.
- */
-function SessionMenu({
-  status,
-  send,
-}: {
-  status: AgentStatus;
-  send: (obj: unknown) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [confirmClear, setConfirmClear] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  useDismissable(open, wrapRef, () => setOpen(false));
-  useEffect(() => {
-    if (!open) setConfirmClear(false);
-  }, [open]);
-  // Match the reported model to a list row. Order matters: several rows can
-  // RESOLVE to the same wire model (e.g. "Default" resolves to the same id as
-  // "Opus"), and a naive first-match made a switch to Opus label itself
-  // "Default". Exact value first, then a resolved match on a specific row,
-  // and the default row only as a last resort.
-  const list = status.models ?? [];
-  const current =
-    list.find((m) => m.value === status.model) ??
-    list.find((m) => m.value !== 'default' && m.resolvedModel === status.model) ??
-    list.find((m) => m.resolvedModel === status.model);
-  const modelLabel = current?.displayName ?? status.model;
-  const kTokens = (n: number) => `${Math.round(n / 1000)}k`;
+function SvgFolder({ size = 13 }: { size?: number }) {
   return (
-    <div className="chat-session" ref={wrapRef}>
-      <button
-        type="button"
-        className="chat-session-chip"
-        onClick={() => setOpen((o) => !o)}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title="Session — model, context, compact, clear"
-      >
-        {modelLabel} · {status.context.pct}%
-      </button>
-      {open ? (
-        <div className="chat-session-menu" role="menu">
-          <div className="chat-session-head">Context</div>
-          <div className="chat-session-context">
-            <div className="chat-session-bar">
-              <div
-                className="chat-session-bar-fill"
-                style={{ width: `${Math.min(100, status.context.pct)}%` }}
-              />
-            </div>
-            <span className="chat-session-context-label">
-              {status.context.pct}% · {kTokens(status.context.tokens)} /{' '}
-              {kTokens(status.context.max)} tokens
-            </span>
-          </div>
-          {status.models?.length ? <div className="chat-session-head">Model</div> : null}
-          {status.models?.map((m) => (
-            <button
-              key={m.value}
-              type="button"
-              role="menuitem"
-              className={`chat-session-item${m === current ? ' is-active' : ''}`}
-              onClick={() => {
-                if (m !== current) send({ t: 'set-model', model: m.value });
-                setOpen(false);
-              }}
-            >
-              <span className="chat-session-item-label">{m.displayName}</span>
-            </button>
-          ))}
-          <div className="chat-session-head">Session</div>
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" fill="none">
+      <path
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+        d="M2 4.5C2 3.7 2.7 3 3.5 3h2.6c.5 0 .9.2 1.2.6l.6.8h4.6c.8 0 1.5.7 1.5 1.5v5.1c0 .8-.7 1.5-1.5 1.5h-9C2.7 13 2 12.3 2 11.5v-7Z"
+      />
+    </svg>
+  );
+}
+
+type StatusPanel = 'folder' | 'model' | 'live' | null;
+
+interface RosterAgent {
+  id: string;
+  label: string;
+  steps: number;
+  busy: boolean;
+}
+
+/**
+ * Status bar: one segmented strip above the composer —
+ * folder | model · ctx | agents (when any). Each segment opens its own
+ * upward panel; only one panel at a time. Parent-turn busy state stays in
+ * the transcript Working… row; this agents cell is subagents only.
+ */
+function SessionBar({
+  paneId,
+  folder,
+  status,
+  assistant,
+  send,
+  liveLabel,
+  agents,
+}: {
+  paneId: string;
+  folder: { cwd: string; hasProject: boolean } | null;
+  status: AgentStatus | null;
+  assistant?: string;
+  send: (obj: unknown) => void;
+  liveLabel: string | null;
+  agents: RosterAgent[];
+}) {
+  const [panel, setPanel] = useState<StatusPanel>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useDismissable(panel !== null, wrapRef, () => setPanel(null));
+  const toggle = (p: Exclude<StatusPanel, null>) =>
+    setPanel((cur) => (cur === p ? null : p));
+  // If the open segment's data goes away (turn ends, status drop, folder
+  // cleared), close the panel — otherwise it auto-reopens next time that
+  // segment remounts with stale panel === 'live'|'model'|'folder'.
+  useEffect(() => {
+    if (panel === 'live' && !liveLabel) setPanel(null);
+    else if (panel === 'model' && !status) setPanel(null);
+    else if (panel === 'folder' && !folder) setPanel(null);
+  }, [panel, liveLabel, status, folder]);
+
+  // ── Folder switcher state ────────────────────────────────────────────
+  const [draft, setDraft] = useState(folder?.cwd ?? '');
+  const [folderBusy, setFolderBusy] = useState(false);
+  const [folderErr, setFolderErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (panel === 'folder' && folder) {
+      setDraft(folder.cwd);
+      setFolderErr(null);
+    }
+  }, [panel, folder]);
+  const norm = (s: string) => s.replace(/\/+$/, '');
+  const folderBase = folder ? norm(folder.cwd).split('/').pop() || folder.cwd : '';
+  const submitFolder = async () => {
+    if (!folder || folderBusy) return;
+    const next = draft.trim();
+    if (!next || norm(next) === norm(folder.cwd)) {
+      setPanel(null);
+      return;
+    }
+    setFolderBusy(true);
+    setFolderErr(null);
+    try {
+      await api.setPaneCwd(paneId, next);
+      setPanel(null);
+    } catch (e) {
+      setFolderErr(e instanceof Error ? e.message : 'could not switch folder');
+    } finally {
+      setFolderBusy(false);
+    }
+  };
+
+  // ── Model / session menu ─────────────────────────────────────────────
+  const supportsSlash = assistant !== 'codex' && assistant !== 'cursor';
+  const [confirmClear, setConfirmClear] = useState(false);
+  useEffect(() => {
+    if (panel !== 'model') setConfirmClear(false);
+  }, [panel]);
+  const list = status?.models ?? [];
+  const modelLc = status?.model.toLowerCase() ?? '';
+  const current = status
+    ? (list.find((m) => m.value === status.model) ??
+      list.find((m) => m.value !== 'default' && m.resolvedModel === status.model) ??
+      list.find((m) => m.resolvedModel === status.model) ??
+      list.find((m) => m.value.toLowerCase() === modelLc))
+    : undefined;
+  const modelLabel = current?.displayName ?? status?.model ?? '';
+  const ctx = status?.context;
+  const kTokens = (n: number) => `${Math.round(n / 1000)}k`;
+
+  if (!folder && !status && !liveLabel && !assistant) return null;
+
+  return (
+    <div className="chat-status-bar" ref={wrapRef}>
+      {folder ? (
+        <div className="chat-status-seg-wrap">
           <button
             type="button"
-            role="menuitem"
-            className="chat-session-item"
-            onClick={() => {
-              send({ t: 'slash', cmd: 'compact' });
-              setOpen(false);
-            }}
+            className={`chat-status-seg${folder.hasProject ? '' : ' -warn'}${panel === 'folder' ? ' is-open' : ''}`}
+            onClick={() => toggle('folder')}
+            aria-expanded={panel === 'folder'}
+            title={
+              folder.hasProject
+                ? folder.cwd
+                : `${folder.cwd} — no project context (no git/AGENTS.md/.mcp.json)`
+            }
           >
-            <span className="chat-session-item-label">Compact conversation</span>
-            <span className="chat-session-item-desc">Summarize history to free context</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className={`chat-session-item${confirmClear ? ' is-danger' : ''}`}
-            onClick={() => {
-              if (!confirmClear) {
-                setConfirmClear(true);
-                return;
-              }
-              send({ t: 'slash', cmd: 'clear' });
-              setOpen(false);
-            }}
-          >
-            <span className="chat-session-item-label">
-              {confirmClear ? 'Tap again to clear everything' : 'Clear conversation'}
-            </span>
-            {!confirmClear ? (
-              <span className="chat-session-item-desc">Wipes the conversation — starts fresh</span>
+            <SvgFolder />
+            <span className="chat-status-seg-label">{folderBase}</span>
+            {!folder.hasProject ? (
+              <span className="chat-status-warn" aria-label="no project context">
+                !
+              </span>
             ) : null}
           </button>
+          {panel === 'folder' ? (
+            <div className="chat-status-menu chat-folder-menu" role="dialog">
+              <div className="chat-folder-path">{folder.cwd}</div>
+              {!folder.hasProject ? (
+                <div className="chat-folder-nocontext">
+                  No project context here — no git repo, AGENTS.md, or .mcp.json up the tree, so the
+                  agent has no project rules or MCP.
+                </div>
+              ) : null}
+              <label className="chat-folder-lbl" htmlFor={`fld-${paneId}`}>
+                Switch folder — starts a fresh agent here
+              </label>
+              <input
+                id={`fld-${paneId}`}
+                className="chat-folder-input"
+                value={draft}
+                spellCheck={false}
+                // biome-ignore lint/a11y/noAutofocus: opened by an explicit user click
+                autoFocus
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void submitFolder();
+                  } else if (e.key === 'Escape') {
+                    setPanel(null);
+                  }
+                }}
+              />
+              {folderErr ? <div className="chat-folder-error">{folderErr}</div> : null}
+              <button
+                type="button"
+                className="chat-folder-go"
+                disabled={folderBusy}
+                onClick={() => void submitFolder()}
+              >
+                {folderBusy ? 'Switching…' : 'Switch & start fresh'}
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {status || assistant ? (
+        <div className="chat-status-seg-wrap">
+          <button
+            type="button"
+            className={`chat-status-seg${panel === 'model' ? ' is-open' : ''}`}
+            onClick={() => (status ? toggle('model') : undefined)}
+            aria-haspopup={status ? 'menu' : undefined}
+            aria-expanded={status ? panel === 'model' : undefined}
+            title={
+              status
+                ? `${assistantLabel(assistant)}${status.activeModel || status.model ? ` · ${status.activeModel ?? status.model}` : ''} — model, context, compact, clear`
+                : assistantLabel(assistant)
+            }
+          >
+            <AgentBackendLogo backend={backendFromAssistant(assistant)} size={12} />
+            <span className="chat-status-seg-label">
+              {status
+                ? `${modelLabel}${ctx ? ` · ${ctx.pct}%` : ''}`
+                : assistantLabel(assistant)}
+            </span>
+          </button>
+          {panel === 'model' && status ? (
+            <div className="chat-status-menu chat-session-menu" role="menu">
+              {ctx ? (
+                <>
+                  <div className="chat-session-head">Context</div>
+                  <div className="chat-session-context">
+                    <div className="chat-session-bar">
+                      <div
+                        className="chat-session-bar-fill"
+                        style={{ width: `${Math.min(100, ctx.pct)}%` }}
+                      />
+                    </div>
+                    <span className="chat-session-context-label">
+                      {ctx.pct}% · {kTokens(ctx.tokens)} / {kTokens(ctx.max)} tokens
+                    </span>
+                  </div>
+                </>
+              ) : null}
+              {status.models?.length ? <div className="chat-session-head">Model</div> : null}
+              {status.models?.map((m) => {
+                // Show the CONCRETE id an alias resolves to (e.g. Opus →
+                // claude-opus-4-8) so "which model exactly" is unambiguous. For
+                // the active row prefer the live model the last turn actually ran
+                // (status.model) over the alias's advertised resolution.
+                const concrete =
+                  m === current ? (status.activeModel ?? m.resolvedModel) : m.resolvedModel;
+                const showConcrete = concrete && concrete !== m.value && concrete !== m.displayName;
+                return (
+                  <button
+                    key={m.value}
+                    type="button"
+                    role="menuitem"
+                    className={`chat-session-item${m === current ? ' is-active' : ''}`}
+                    onClick={() => {
+                      if (m !== current) send({ t: 'set-model', model: m.value });
+                      setPanel(null);
+                    }}
+                  >
+                    <span className="chat-session-item-label">{m.displayName}</span>
+                    {showConcrete ? (
+                      <span className="chat-session-item-desc chat-model-id">{concrete}</span>
+                    ) : null}
+                  </button>
+                );
+              })}
+              {supportsSlash ? (
+                <>
+                  <div className="chat-session-head">Session</div>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="chat-session-item"
+                    onClick={() => {
+                      send({ t: 'slash', cmd: 'compact' });
+                      setPanel(null);
+                    }}
+                  >
+                    <span className="chat-session-item-label">Compact conversation</span>
+                    <span className="chat-session-item-desc">Summarize history to free context</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={`chat-session-item${confirmClear ? ' is-danger' : ''}`}
+                    onClick={() => {
+                      if (!confirmClear) {
+                        setConfirmClear(true);
+                        return;
+                      }
+                      send({ t: 'slash', cmd: 'clear' });
+                      setPanel(null);
+                    }}
+                  >
+                    <span className="chat-session-item-label">
+                      {confirmClear ? 'Tap again to clear everything' : 'Clear conversation'}
+                    </span>
+                    {!confirmClear ? (
+                      <span className="chat-session-item-desc">
+                        Wipes the conversation — starts fresh
+                      </span>
+                    ) : null}
+                  </button>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {liveLabel ? (
+        <div className="chat-status-seg-wrap">
+          <button
+            type="button"
+            className={`chat-status-seg -live${panel === 'live' ? ' is-open' : ''}`}
+            onClick={() => toggle('live')}
+            aria-expanded={panel === 'live'}
+            aria-label={liveLabel}
+            title={liveLabel}
+          >
+            <span className="chat-roster-spin -head" aria-hidden="true">
+              <RosterSpinner />
+            </span>
+            <span className="chat-status-seg-label">{liveLabel}</span>
+          </button>
+          {panel === 'live' && agents.length > 0 ? (
+            <div className="chat-status-menu chat-live-menu" role="dialog">
+              <div className="chat-session-head">
+                Subagent{agents.length === 1 ? '' : 's'}
+              </div>
+              <ul className="chat-roster-list">
+                {agents.map((a) => (
+                  <li
+                    key={a.id}
+                    className="chat-roster-item"
+                    data-busy={a.busy || undefined}
+                  >
+                    <span className="chat-roster-spin" aria-hidden="true">
+                      <RosterSpinner />
+                    </span>
+                    <span className="chat-roster-name">{a.label}</span>
+                    {a.steps > 0 ? (
+                      <span className="chat-roster-meta">
+                        {a.steps} step{a.steps === 1 ? '' : 's'}
+                      </span>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -309,11 +540,26 @@ interface SessionMeta {
   assistant: string;
 }
 
+/** Display name for the pane's agent backend — used in composer/working copy
+ *  so a Codex/Cursor pane doesn't say "Claude". */
+function assistantLabel(a: string | null | undefined): string {
+  if (a === 'codex') return 'Codex';
+  if (a === 'cursor') return 'Cursor';
+  return 'Claude';
+}
+
 type PendingQuestion = { qid: string; questions: AgentQuestion[] };
 
 /** Session status pushed by the agent runner — shape shared with the server
  * pipeline via @muxpad/shared so the two ends can't drift apart. */
 type AgentStatus = AgentSessionStatus;
+
+/** One entry of the server-owned pending send queue. `text` is the full
+ *  message (prose + any attachment paths appended), same as a delivered send. */
+interface QueuedItem {
+  id: string;
+  text: string;
+}
 
 type ServerMsg =
   | {
@@ -330,6 +576,11 @@ type ServerMsg =
       question?: PendingQuestion;
       subagents?: SubagentProgress[];
       status?: AgentStatus;
+      /** The pane's working dir + whether it has project context (git/rules/MCP). */
+      cwd?: string;
+      hasProject?: boolean;
+      /** Server-owned pending send queue (messages waiting for a busy agent). */
+      queue?: QueuedItem[];
     }
   | { t: 'events'; phase: 'history' | 'live' | 'older'; events: ChatEvent[] }
   | { t: 'older-done'; hasMore: boolean }
@@ -340,6 +591,10 @@ type ServerMsg =
   | { t: 'turn-done'; ok: boolean; error?: string }
   | { t: 'question'; qid: string; questions: AgentQuestion[] }
   | { t: 'question-done'; qid: string }
+  // Server-owned queue: the full pending list broadcast on every change, plus a
+  // per-socket ack that THIS send was parked (so it drops its optimistic state).
+  | { t: 'queue'; items: QueuedItem[] }
+  | { t: 'queued'; id: string; text: string }
   | { t: 'subagent'; progress: SubagentProgress }
   | ({ t: 'status' } & AgentStatus)
   | { t: 'error'; message: string }
@@ -444,11 +699,15 @@ export function ChatPane({
   paneId,
   active,
   agentNative = false,
+  pendingPick = false,
 }: {
   paneId: string;
   active: boolean;
   /** Pane runs `muxpad agent` (durable startup_cmd marker). */
   agentNative?: boolean;
+  /** Pane was created "Agent" with no harness chosen yet (`--pick`) — the chat
+   *  shows the harness picker instead of a session. */
+  pendingPick?: boolean;
 }) {
   // undefined = still connecting; null = connected but no agent session.
   const [session, setSession] = useState<SessionMeta | null | undefined>(undefined);
@@ -464,6 +723,11 @@ export function ChatPane({
   const renderedSid = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
+  // Programmatic scrollTop writes stamp this BEFORE assigning so onScroll
+  // can tell reader-driven motion from restore / pin / older-prepend adjusts.
+  const lastProgrammaticTop = useRef(-1);
+  // Settling restore stops the moment the reader scrolls; reset on hide.
+  const userScrolled = useRef(false);
   // Live mirror of `active` for the WS message handler's closures (which
   // capture it at subscription time) — see the turn-done seen-clear.
   const activeRef = useRef(active);
@@ -550,6 +814,7 @@ export function ChatPane({
   // Runner-pushed session status: model, context fill, available models.
   // null = no runner status yet (TUI-view chats never get one).
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
+  const [folder, setFolder] = useState<{ cwd: string; hasProject: boolean } | null>(null);
   // The text of the in-flight send, held so a socket death before the ack
   // can restore it into the composer instead of losing it.
   const pendingText = useRef('');
@@ -651,6 +916,9 @@ export function ChatPane({
         // Mirror the hello exactly: no status means no live runner status —
         // a stale chip would keep offering controls that go nowhere.
         setAgentStatus(msg.status ?? null);
+        setFolder(msg.cwd ? { cwd: msg.cwd, hasProject: msg.hasProject ?? false } : null);
+        // Server-owned pending queue: authoritative on every (re)connect.
+        setQueue(msg.queue ?? []);
         if (msg.subagents) {
           const now = Date.now();
           // Full snapshot — REBUILD the seen-at map too (a plain set would
@@ -756,6 +1024,30 @@ export function ChatPane({
         setQuestion({ qid: msg.qid, questions: msg.questions });
       } else if (msg.t === 'question-done') {
         setQuestion((q) => (q?.qid === msg.qid ? null : q));
+      } else if (msg.t === 'queue') {
+        // The server-owned pending queue changed (a send parked, drained, or was
+        // cancelled — possibly from another device). Render it verbatim.
+        setQueue(msg.items);
+      } else if (msg.t === 'queued') {
+        // Our just-sent message was parked (agent busy / reconnecting). It's now
+        // a pending bubble via the `queue` broadcast, so drop only the optimistic
+        // echo we showed for the idle-send race — NOT `sending`: the server
+        // queued it because a turn is running (or about to, from the drain), so
+        // the working state stays honest. The normal busy path set no optimism,
+        // so the guard skips it there.
+        // Was this the send we optimistically echoed (idle-send race)? Capture
+        // before clearing the recovery slot below.
+        const wasOurOptimistic = pendingText.current === msg.text;
+        acked.current = true;
+        window.clearTimeout(sendWatchdog.current);
+        // The server has this message persisted now, so it must NOT be restored
+        // into the composer on a later socket close — clear the recovery slot
+        // unconditionally (safe: acked is already true, so onclose won't restore
+        // anyway). Only drop the OPTIMISTIC bubble when it's ours, so we never
+        // wipe a still-running turn's echo — NOT `sending` either (the server
+        // queued this because a turn is running/about to drain).
+        pendingText.current = '';
+        if (wasOurOptimistic) setOptimisticUser(null);
       } else if (msg.t === 'subagent') {
         subagentSeenAt.current.set(msg.progress.toolUseId, Date.now());
         setSubagents((m) => ({ ...m, [msg.progress.toolUseId]: msg.progress }));
@@ -763,7 +1055,8 @@ export function ChatPane({
         setAgentStatus((prev) => {
           const next: AgentStatus = {
             model: msg.model,
-            context: msg.context,
+            ...(msg.activeModel ? { activeModel: msg.activeModel } : {}),
+            ...(msg.context ? { context: msg.context } : {}),
             ...(msg.models ? { models: msg.models } : {}),
           };
           // Identical payload → keep the previous object so React skips the
@@ -923,28 +1216,17 @@ export function ChatPane({
     }, 6000);
   };
 
-  // Queued messages: composed while the agent is busy, held here, and flushed
-  // one at a time the moment a turn finishes (the effect below). Each keeps its
-  // prose + attachment previews so it can be restored into the composer to edit
-  // before it ever runs. The blob preview URLs are TRANSFERRED into the queued
-  // item (not revoked) so the thumbnails survive the trip; revoked on send.
-  const [queued, setQueued] = useState<
-    { id: number; text: string; attachments: { path: string; name: string; previewUrl: string }[] }[]
-  >([]);
-  const queuedIdRef = useRef(0);
-  const queuedRef = useRef(queued);
-  queuedRef.current = queued;
-  useEffect(
-    () => () => {
-      for (const q of queuedRef.current)
-        for (const a of q.attachments) URL.revokeObjectURL(a.previewUrl);
-    },
-    [],
-  );
+  // The pending send queue is owned by the SERVER now, not this component: the
+  // server persists it, drains it one message per turn (even with no browser
+  // open), and broadcasts the full list on every change. We just render what it
+  // sends — so the queue survives a reload, follows the user across devices, and
+  // can never be dropped in transit. Populated from `session`/`queue` frames.
+  const [queue, setQueue] = useState<QueuedItem[]>([]);
 
-  // Fire a composed message onto the live socket. Returns false (and leaves the
-  // caller's draft intact) when the socket isn't open, so the queue flusher can
-  // retry on reconnect. Shared by a direct send and a queued flush.
+  // Fire a composed message onto the live socket with optimistic echo. The
+  // server decides whether it runs now or is queued; a `queued` frame comes
+  // back for the latter and clears this optimism (the pending bubble takes
+  // over). Returns false (leaving the draft intact) if the socket isn't open.
   const dispatchSend = (outgoing: string): boolean => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
@@ -957,38 +1239,48 @@ export function ChatPane({
     return true;
   };
 
-  // Stash the composed message to auto-send when the current turn ends. Keeps
-  // the prose + attachment previews; clears the composer WITHOUT revoking the
-  // blob URLs (the queued item now owns them, so its thumbnail stays live).
-  const queueMessage = () => {
-    const text = input.trim();
-    const attachments = chipsRef.current.map((c) => ({
-      path: c.path,
-      name: c.name,
-      previewUrl: c.previewUrl,
-    }));
-    if (!text && attachments.length === 0) return;
-    setQueued((q) => [...q, { id: (queuedIdRef.current += 1), text, attachments }]);
-    setInput('');
-    setChips([]); // ownership transferred to the queued item — do NOT revoke
+  // Cancel a still-pending message before it runs. Only acts on a live socket:
+  // the server owns the queue, so optimistically hiding a bubble whose cancel
+  // never reached the server would show it as gone while it still runs. Returns
+  // whether the cancel was actually sent. The server's `queue` broadcast is the
+  // authoritative confirmation (and re-adds the bubble if we were wrong).
+  const cancelQueued = (id: string): boolean => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setNotice({ text: 'Reconnecting — try again in a moment.', tone: 'info' });
+      reconnectNow.current();
+      return false;
+    }
+    ws.send(JSON.stringify({ t: 'queue-cancel', id }));
+    setQueue((q) => q.filter((x) => x.id !== id));
+    return true;
   };
 
-  // Pull a queued message back into the composer to edit before it runs.
-  const restoreQueued = (id: number) => {
-    const item = queuedRef.current.find((q) => q.id === id);
-    if (!item) return;
-    setQueued((q) => q.filter((x) => x.id !== id));
-    setInput((cur) => (cur.trim() ? `${item.text}\n${cur}` : item.text));
-    setChips((prev) => [
-      ...prev,
-      ...item.attachments.map((a) => ({ path: a.path, name: a.name, previewUrl: a.previewUrl })),
-    ]);
+  // Edit a queued message: cancel it and pull its text + attachments back into
+  // the composer. Attachment thumbnails are re-derived from their served URLs
+  // (the bytes live on the server), so this works even on a fresh reload where
+  // no local blob preview exists. Only repopulate the composer if the cancel
+  // actually went out — otherwise the item still runs server-side AND sits in
+  // the composer, inviting a duplicate send.
+  const editQueued = (item: QueuedItem) => {
+    if (!cancelQueued(item.id)) return;
+    const parts = splitMessageAttachments(item.text);
+    const prose = parts
+      .filter((p): p is Extract<MessagePart, { kind: 'text' }> => p.kind === 'text')
+      .map((p) => p.text)
+      .join('')
+      .trim();
+    const atts = parts
+      .filter((p): p is Exclude<MessagePart, { kind: 'text' }> => p.kind !== 'text')
+      .map((p) => ({ path: p.path, name: p.name, previewUrl: p.url }));
+    setInput((cur) => (cur.trim() ? `${prose}\n${cur}` : prose));
+    if (atts.length) setChips((prev) => [...prev, ...atts]);
     inputRef.current?.focus();
   };
 
   const sendMessage = () => {
     const text = input.trim();
-    // Attachment paths ride along at the END of the message — Claude reads
+    // Attachment paths ride along at the END of the message — the agent reads
     // the path, not the pixels. The draft box stays clean prose.
     const attachmentPaths = chips.map((c) => c.path);
     if (!text && attachmentPaths.length === 0) return;
@@ -1004,42 +1296,35 @@ export function ChatPane({
       setInput('');
       return;
     }
-    // Agent busy → queue it instead of blocking; the flusher sends it when the
-    // turn ends. (Previously this was a silent no-op.)
-    if (sending) {
-      queueMessage();
-      return;
-    }
     const outgoing = [text, ...attachmentPaths].filter(Boolean).join(' ');
-    if (!dispatchSend(outgoing)) {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
       // Don't fire into a dead socket (the browser would drop it silently).
       // Keep the text (and chips) in the composer, kick a reconnect, retry.
       setNotice({ text: 'Reconnecting — try again in a moment.', tone: 'info' });
       reconnectNow.current();
       return;
     }
+    if (sending) {
+      // Agent busy → hand it to the server to queue. No optimistic turn state;
+      // the server's `queue` broadcast renders the pending bubble. The message
+      // is persisted server-side, so it's safe even if we close the tab now.
+      // Track it as the pending send so BOTH the watchdog and a hard `onclose`
+      // can restore it if no ack comes back — without this, a socket that closes
+      // before `send-ack` drops the message silently (onclose reads pendingText).
+      // send-ack (fired for queued sends too) clears both on a live socket.
+      pendingText.current = outgoing;
+      ws.send(JSON.stringify({ t: 'send', text: outgoing }));
+      armSendWatchdog(outgoing);
+    } else {
+      // Idle → optimistic send (instant echo + working state). If the server
+      // turns out to be busy (reconnect race), its `queued` frame reconciles.
+      dispatchSend(outgoing);
+    }
     setInput('');
     clearChips();
   };
   const stop = () => wsRef.current?.send(JSON.stringify({ t: 'stop' }));
-
-  // Flush the queue one message per turn: when the socket is idle (not sending)
-  // and connected, dequeue the oldest and send it. Sending flips `sending`
-  // true, so the next flush waits for that turn's turn-done — the messages run
-  // in order, never piling into one turn.
-  useEffect(() => {
-    if (sending || queued.length === 0 || !connected) return;
-    const [next, ...rest] = queued;
-    if (!next) return;
-    const outgoing = [next.text, ...next.attachments.map((a) => a.path)].filter(Boolean).join(' ');
-    if (dispatchSend(outgoing)) {
-      setQueued(rest);
-      for (const a of next.attachments) URL.revokeObjectURL(a.previewUrl);
-    }
-    // dispatchSend false (socket not open) → keep the queue; retry when
-    // `connected` flips true again.
-    // biome-ignore lint/correctness/useExhaustiveDependencies: dispatchSend is re-created each render; the send triggers are sending/queued/connected.
-  }, [sending, queued, connected]);
 
   const answerQuestion = (qid: string, answers: Array<{ question: string; answers: string[] }>) => {
     wsRef.current?.send(JSON.stringify({ t: 'answer', qid, answers }));
@@ -1172,17 +1457,23 @@ export function ChatPane({
   // the map object every ~500ms without changing content height, and each
   // firing costs a forced reflow (scrollHeight read). Rows appear/disappear
   // only when the count moves.
+  // Set lastProgrammaticTop BEFORE scrollTop so the synchronous onScroll
+  // doesn't treat this as the reader taking control.
   // biome-ignore lint/correctness/useExhaustiveDependencies: events/streamingText/optimisticUser/question/subagent-count/queued-count are the scroll triggers
   useEffect(() => {
     const el = scrollRef.current;
-    if (el && active && pinnedToBottom.current) el.scrollTop = el.scrollHeight;
+    if (el && active && pinnedToBottom.current) {
+      const target = maxScrollTop(el.scrollHeight, el.clientHeight);
+      lastProgrammaticTop.current = target;
+      el.scrollTop = target;
+    }
   }, [
     events,
     streamingText,
     optimisticUser,
     question,
     Object.keys(subagents).length,
-    queued.length,
+    queue.length,
     active,
   ]);
 
@@ -1244,36 +1535,46 @@ export function ChatPane({
   // partial height and drifts (the "doesn't always remember" bug). Instead,
   // re-apply the remembered RATIO each frame for a short settling window — it
   // converges as content arrives, and stops the instant the reader scrolls.
-  const userScrolled = useRef(false);
-  const lastProgrammaticTop = useRef(-1);
+  //
+  // Sid matching is soft: memory may be saved before the hello binds
+  // renderedSid (or remount starts with sid=null). Requiring equality then
+  // skipped every restore for the whole window and left unpinned readers at
+  // scrollTop 0 — "scroll is totally not remembered". Only skip on a REAL
+  // mismatch (both set, different) for /clear / resume rotation.
   useLayoutEffect(() => {
     if (!active) {
       userScrolled.current = false; // hidden panes lose scrollTop — re-restore on return
       return;
     }
     userScrolled.current = false;
-    // Un-pin up front for a non-bottom memory so the follow-the-bottom effect
-    // can't snap the reader down before the restore lands.
     const mem0 = recallChatScroll(paneId);
-    if (mem0 && !mem0.pinned) pinnedToBottom.current = false;
+    pinnedToBottom.current = pinnedFromMemory(mem0);
     let raf = 0;
-    const deadline = Date.now() + 1500;
+    const deadline = Date.now() + 2500;
+    const sidOk = (mem: NonNullable<ReturnType<typeof recallChatScroll>>) =>
+      scrollMemorySidMatches(mem.sid, renderedSid.current);
     const apply = () => {
       raf = 0;
       const el = scrollRef.current;
       if (el && !userScrolled.current) {
         const mem = recallChatScroll(paneId);
-        if (
-          mem &&
-          !mem.pinned &&
-          mem.sid === renderedSid.current &&
-          el.scrollHeight > el.clientHeight
-        ) {
-          pinnedToBottom.current = false;
-          const target = Math.round(mem.ratio * (el.scrollHeight - el.clientHeight));
-          if (Math.abs(el.scrollTop - target) > 1) {
-            lastProgrammaticTop.current = target;
-            el.scrollTop = target;
+        if (el.scrollHeight > el.clientHeight) {
+          if (!mem || mem.pinned) {
+            // Pinned / no memory → hold the bottom while content streams in
+            // (follow-bottom effect also does this; settle covers the gap
+            // before the first events commit).
+            const target = maxScrollTop(el.scrollHeight, el.clientHeight);
+            if (Math.abs(el.scrollTop - target) > 1) {
+              lastProgrammaticTop.current = target;
+              el.scrollTop = target;
+            }
+          } else if (sidOk(mem)) {
+            pinnedToBottom.current = false;
+            const target = Math.round(mem.ratio * (el.scrollHeight - el.clientHeight));
+            if (Math.abs(el.scrollTop - target) > 1) {
+              lastProgrammaticTop.current = target;
+              el.scrollTop = target;
+            }
           }
         }
       }
@@ -1285,15 +1586,25 @@ export function ChatPane({
     };
   }, [active, paneId]);
 
-  // After an older-history batch prepends, content grew above the viewport;
-  // restore the scroll so the messages the user was looking at stay put (runs
-  // before paint, so there's no visible jump).
+  // After an older-history batch prepends, content grew above the viewport.
+  // Pinned readers stay at the bottom (fill-viewport paging must not yank
+  // them into older history). Unpinned readers keep the messages they were
+  // looking at. Always stamp lastProgrammaticTop first so onScroll doesn't
+  // treat the adjust as a user scroll and corrupt pin/memory.
   // biome-ignore lint/correctness/useExhaustiveDependencies: events is the trigger — the effect fires after the prepend renders.
   useLayoutEffect(() => {
     const el = scrollRef.current;
     const a = olderAnchor.current;
     if (el && a) {
-      el.scrollTop = el.scrollHeight - a.height + a.top;
+      const target = scrollTopAfterOlderPrepend({
+        pinned: pinnedToBottom.current,
+        newScrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+        anchorHeight: a.height,
+        anchorTop: a.top,
+      });
+      lastProgrammaticTop.current = target;
+      el.scrollTop = target;
       olderAnchor.current = null;
     }
   }, [events]);
@@ -1337,8 +1648,13 @@ export function ChatPane({
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
+    // display:none (face/tab hide) zeroes clientHeight/scrollTop — persisting
+    // that writes ratio 0 / unpinned and the next open lands in older history.
+    if (!shouldPersistChatScroll({ active, clientHeight: el.clientHeight })) return;
     // The settling restore above fires this too; a scroll AWAY from its last
     // programmatic target is the reader taking control — stop re-restoring.
+    // Programmatic paths stamp lastProgrammaticTop BEFORE assigning scrollTop
+    // so this check sees them as non-user.
     if (Math.abs(el.scrollTop - lastProgrammaticTop.current) > 1) userScrolled.current = true;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     pinnedToBottom.current = nearBottom;
@@ -1363,7 +1679,9 @@ export function ChatPane({
     // Record the re-pin immediately — the smooth scroll's own onScroll
     // events lag, and switching away mid-glide must not save a stale spot.
     rememberChatScroll(paneId, { ratio: 1, pinned: true, sid: renderedSid.current });
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    const target = maxScrollTop(el.scrollHeight, el.clientHeight);
+    lastProgrammaticTop.current = target;
+    el.scrollTo({ top: target, behavior: 'smooth' });
   };
 
   // Grace timer: connected but still nothing to show after a while — either a
@@ -1433,7 +1751,7 @@ export function ChatPane({
           <div className="chat-empty-mark" aria-hidden="true">
             ✳
           </div>
-          <p className="chat-empty-title">No Claude session here yet</p>
+          <p className="chat-empty-title">No agent session here yet</p>
           <p className="chat-empty-hint">
             Start one with <code>muxpad agent</code> (chat-native) or <code>muxpad claude</code> in
             the terminal.
@@ -1661,9 +1979,122 @@ export function ChatPane({
     const t = window.setTimeout(() => forceStaleCheck((n) => n + 1), 3_000);
     return () => window.clearTimeout(t);
   });
-  // Minimized by default: the header (count + spinner) already says "subagents
-  // are working"; expand to see per-agent detail. Tap toggles.
-  const [rosterOpen, setRosterOpen] = useState(false);
+
+  const liveLabel = liveStatusLabel({ agentCount: rosterAgents.length });
+
+  // Harness pick: a `--pick` pane shows the picker here (not the tab bar).
+  // Agents start a runner; Terminal / Web view convert the pane (URL chrome
+  // auto-focuses when url is null).
+  const [pickBusy, setPickBusy] = useState<AgentBackendId | 'terminal' | 'web' | null>(null);
+  const [pickError, setPickError] = useState<string | null>(null);
+  const choosePick = useCallback(
+    async (backend: AgentBackendId) => {
+      setPickBusy(backend);
+      setPickError(null);
+      try {
+        await api.setAgentBackend(paneId, backend);
+        // On success the pane.updated (new startup_cmd) clears pendingPick and
+        // this branch unmounts. Watchdog: if that frame never lands (a ws blip
+        // right after the respawn), recover so the picker isn't stuck disabled
+        // forever — re-enable + let the user retry. (Harmless no-op once the
+        // branch has already unmounted.)
+        window.setTimeout(() => {
+          setPickBusy(null);
+          setPickError('still starting — tap a harness to retry');
+        }, 12_000);
+      } catch (e) {
+        setPickBusy(null);
+        setPickError(e instanceof Error ? e.message : 'could not start the agent');
+      }
+    },
+    [paneId],
+  );
+  const chooseTerminal = useCallback(async () => {
+    setPickBusy('terminal');
+    setPickError(null);
+    try {
+      await api.convertPickToTerminal(paneId);
+      window.setTimeout(() => {
+        setPickBusy(null);
+        setPickError('still starting — tap Terminal to retry');
+      }, 12_000);
+    } catch (e) {
+      setPickBusy(null);
+      setPickError(e instanceof Error ? e.message : 'could not open the terminal');
+    }
+  }, [paneId]);
+  const chooseWeb = useCallback(async () => {
+    setPickBusy('web');
+    setPickError(null);
+    try {
+      await api.convertPickToWeb(paneId);
+      window.setTimeout(() => {
+        setPickBusy(null);
+        setPickError('still starting — tap Web view to retry');
+      }, 12_000);
+    } catch (e) {
+      setPickBusy(null);
+      setPickError(e instanceof Error ? e.message : 'could not open the web view');
+    }
+  }, [paneId]);
+
+  if (pendingPick) {
+    return (
+      <div className="chat-pane">
+        <div className="chat-empty chat-harness-pick">
+          <p className="chat-empty-title">What do you want to open?</p>
+          <p className="chat-empty-hint">Pick an agent, or open a terminal / web view</p>
+          <div className="chat-harness-choices">
+            {AGENT_BACKENDS.map((b) => (
+              <button
+                key={b.id}
+                type="button"
+                className="chat-harness-btn"
+                disabled={pickBusy !== null}
+                aria-busy={pickBusy === b.id}
+                onClick={() => void choosePick(b.id)}
+              >
+                <AgentBackendLogo backend={b.id} size={22} />
+                <span>{b.label}</span>
+                {pickBusy === b.id ? <span className="chat-harness-spin" aria-hidden="true" /> : null}
+              </button>
+            ))}
+          </div>
+          <div className="chat-harness-or">
+            <button
+              type="button"
+              className="chat-harness-quiet"
+              disabled={pickBusy !== null}
+              aria-busy={pickBusy === 'terminal'}
+              onClick={() => void chooseTerminal()}
+            >
+              {pickBusy === 'terminal' ? (
+                <span className="chat-harness-spin" aria-hidden="true" />
+              ) : (
+                <SvgTerminalGlyph />
+              )}
+              <span>Terminal</span>
+            </button>
+            <button
+              type="button"
+              className="chat-harness-quiet"
+              disabled={pickBusy !== null}
+              aria-busy={pickBusy === 'web'}
+              onClick={() => void chooseWeb()}
+            >
+              {pickBusy === 'web' ? (
+                <span className="chat-harness-spin" aria-hidden="true" />
+              ) : (
+                <SvgGlobe />
+              )}
+              <span>Web view</span>
+            </button>
+          </div>
+          {pickError ? <p className="chat-harness-error">{pickError}</p> : null}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="chat-pane">
@@ -1688,7 +2119,10 @@ export function ChatPane({
                   <span className="chat-cursor" aria-hidden="true" />
                 </div>
               ) : (
-                <div className="chat-msg chat-working" aria-label="Claude is working">
+                <div
+                  className="chat-msg chat-working"
+                  aria-label={`${assistantLabel(session?.assistant)} is working`}
+                >
                   <span className="chat-typing" aria-hidden="true">
                     <i />
                     <i />
@@ -1706,35 +2140,35 @@ export function ChatPane({
               onAnswer={(answers) => answerQuestion(question.qid, answers)}
             />
           ) : null}
-          {/* Queued messages ride at the BOTTOM of the chat — pending user
-              bubbles under the latest message + working indicator, scrolling
-              with the log (not pinned to the composer). Dashed + muted = "not
-              sent yet"; the restore button pulls it back to edit. */}
-          {queued.map((q) => (
+          {/* Server-owned pending queue rides at the BOTTOM of the chat —
+              pending user bubbles under the latest message + working indicator,
+              scrolling with the log. Dashed + muted = "waiting its turn"; edit
+              pulls it back to the composer, cancel drops it before it runs. Both
+              act on the server, so the change follows you across devices. */}
+          {queue.map((q) => (
             <div key={q.id} className="chat-turn chat-turn-user chat-turn-queued">
-              <button
-                type="button"
-                className="chat-queued-edit"
-                onClick={() => restoreQueued(q.id)}
-                aria-label="Edit — restore to the composer"
-                title="Queued — tap to edit before it sends"
-              >
-                <SvgRestore />
-              </button>
+              <div className="chat-queued-actions">
+                <button
+                  type="button"
+                  className="chat-queued-edit"
+                  onClick={() => editQueued(q)}
+                  aria-label="Edit — restore to the composer"
+                  title="Queued — tap to edit before it sends"
+                >
+                  <SvgRestore />
+                </button>
+                <button
+                  type="button"
+                  className="chat-queued-cancel"
+                  onClick={() => cancelQueued(q.id)}
+                  aria-label="Cancel this queued message"
+                  title="Cancel — remove before it sends"
+                >
+                  ✕
+                </button>
+              </div>
               <div className="chat-bubble chat-bubble-queued" dir="auto">
-                {q.attachments.length > 0 ? (
-                  <div className="chat-queued-atts">
-                    {q.attachments.map((a) => (
-                      <img
-                        key={a.path}
-                        className="chat-queued-thumb"
-                        src={a.previewUrl}
-                        alt={a.name}
-                      />
-                    ))}
-                  </div>
-                ) : null}
-                {q.text ? <div className="chat-queued-text">{q.text}</div> : null}
+                <UserText text={q.text} onOpenImage={setOpenImage} />
               </div>
             </div>
           ))}
@@ -1768,36 +2202,22 @@ export function ChatPane({
               {notice.text}
             </div>
           ) : null}
-          {/* Live subagent roster — persistent, composer-adjacent, NEVER in
-              the scroll. History is a timeline of things that happened (agent
-              launched / finished boxes); what's running right now lives here
-              and self-removes as agents finish. Its OWN right-aligned, width-
-              capped block — kept out of the session-chip's width-linked column
-              so a long "last tool" string truncates instead of ballooning the
-              row off-screen. */}
-          <SubagentRoster
+          <SessionBar
+            paneId={paneId}
+            folder={folder}
+            status={agentStatus}
+            {...(session?.assistant ? { assistant: session.assistant } : {})}
+            liveLabel={liveLabel}
             agents={rosterAgents}
-            open={rosterOpen}
-            onToggle={() => setRosterOpen((o) => !o)}
+            send={(obj) => {
+              const sock = wsRef.current;
+              if (!sock || sock.readyState !== WebSocket.OPEN) {
+                setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
+                return;
+              }
+              sock.send(JSON.stringify(obj));
+            }}
           />
-          {agentStatus ? (
-            <div className="chat-session-row">
-              <SessionMenu
-                status={agentStatus}
-                send={(obj) => {
-                  // Same guard as the composer: during the reconnect window
-                  // wsRef can hold a CONNECTING socket (send throws) or a
-                  // CLOSED one (silent drop) — fail loudly instead.
-                  const sock = wsRef.current;
-                  if (!sock || sock.readyState !== WebSocket.OPEN) {
-                    setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
-                    return;
-                  }
-                  sock.send(JSON.stringify(obj));
-                }}
-              />
-            </div>
-          ) : null}
           <div className="chat-composer">
             <input
               ref={fileInputRef}
@@ -1837,19 +2257,23 @@ export function ChatPane({
                     sendMessage();
                   }
                 }}
-                placeholder={question ? 'Type an answer, or tap an option…' : 'Message Claude…'}
+                placeholder={
+                  question
+                    ? 'Type an answer, or tap an option…'
+                    : `Message ${assistantLabel(session?.assistant)}…`
+                }
                 rows={1}
               />
               {sending && !question ? (
                 <>
-                  {/* Busy + composed text → offer Queue (sends when the turn
-                      ends) alongside Stop, instead of the old dead-end where a
-                      typed message just wouldn't send. */}
+                  {/* Busy + composed text → Queue it (the server holds it and
+                      feeds it when the agent frees up) alongside Stop, instead
+                      of the old dead-end where a typed message wouldn't send. */}
                   {input.trim() || chips.length > 0 ? (
                     <button
                       type="button"
                       className="chat-send is-queue"
-                      onClick={queueMessage}
+                      onClick={sendMessage}
                       aria-label="Queue message — sends when the agent is free"
                       title="Queue — sends when the agent is free"
                     >
@@ -2523,13 +2947,6 @@ const ToolRow = memo(function ToolRow({
   );
 });
 
-interface RosterAgent {
-  id: string;
-  label: string;
-  steps: number;
-  busy: boolean;
-}
-
 /** Small ring spinner for the subagent roster (CSS spins the wrapper). */
 function RosterSpinner() {
   return (
@@ -2543,77 +2960,6 @@ function RosterSpinner() {
         strokeLinecap="round"
       />
     </svg>
-  );
-}
-
-/**
- * Persistent live roster of the subagents running RIGHT NOW — pinned by the
- * composer's session chip, never in the transcript. The scroll is a timeline
- * of what happened; this is ephemeral live state, so it self-removes as
- * agents finish (their launch/finish boxes stay behind in history). The
- * header count is always visible; the list expands to per-agent name, a
- * busy/quiet dot, and cheap detail (steps · last tool).
- */
-function SubagentRoster({
-  agents,
-  open,
-  onToggle,
-}: {
-  agents: RosterAgent[];
-  open: boolean;
-  onToggle: () => void;
-}) {
-  if (agents.length === 0) return null;
-  return (
-    <div className="chat-roster" data-open={open || undefined}>
-      <button
-        type="button"
-        className="chat-roster-head"
-        onClick={onToggle}
-        aria-expanded={open}
-        aria-label={`${agents.length} subagent${agents.length === 1 ? '' : 's'} running`}
-      >
-        <span className="chat-roster-glyph" aria-hidden="true">
-          <SvgAgentGlyph />
-        </span>
-        <span className="chat-roster-count">
-          {agents.length} subagent{agents.length === 1 ? '' : 's'}
-        </span>
-        {/* Header spinner: keeps "work is happening" visible even collapsed,
-            without expanding the list. */}
-        <span className="chat-roster-spin -head" aria-hidden="true">
-          <RosterSpinner />
-        </span>
-        <span className="chat-roster-chevron" aria-hidden="true">
-          {open ? '▾' : '▸'}
-        </span>
-      </button>
-      {open ? (
-        <ul className="chat-roster-list">
-          {agents.map((a) => (
-            <li key={a.id} className="chat-roster-item" data-busy={a.busy || undefined}>
-              {/* A spinner, not a dot: a row only exists while the subagent is
-                  running (it self-removes on finish), so "present = working" —
-                  a spinner says that unambiguously and kills the "is it stuck?"
-                  doubt. data-busy just brightens it when progress is fresh. */}
-              <span className="chat-roster-spin" aria-hidden="true">
-                <RosterSpinner />
-              </span>
-              <span className="chat-roster-name">{a.label}</span>
-              {/* Name + a compact step count once it has any (steps only
-                  increase, so this stays put — gating on `busy` made it flicker
-                  in and out). The dot alone shows busy/quiet. Never the
-                  command — it blows the row wide. */}
-              {a.steps > 0 ? (
-                <span className="chat-roster-meta">
-                  {a.steps} step{a.steps === 1 ? '' : 's'}
-                </span>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </div>
   );
 }
 
