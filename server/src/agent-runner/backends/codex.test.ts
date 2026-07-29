@@ -1,5 +1,5 @@
-import { EventEmitter } from 'node:events';
 import type { spawn as nodeSpawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,8 +7,8 @@ import type { ChatEvent } from '@muxpad/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { muxpadTranscriptPath } from '../../chat/TranscriptReader.js';
 import type { RunnerFrame } from '../protocol.js';
-import type { RunnerHost } from './types.js';
 import { createCodexBackend } from './codex.js';
+import type { RunnerHost } from './types.js';
 
 // ── fake spawn ──────────────────────────────────────────────────────────────
 interface FakeChild extends EventEmitter {
@@ -32,7 +32,8 @@ function fakeSpawner() {
   }) as unknown as typeof nodeSpawn;
   return { spawn, calls };
 }
-const line = (c: FakeChild, obj: unknown) => c.stdout.emit('data', Buffer.from(`${JSON.stringify(obj)}\n`));
+const line = (c: FakeChild, obj: unknown) =>
+  c.stdout.emit('data', Buffer.from(`${JSON.stringify(obj)}\n`));
 const closeChild = (c: FakeChild, code = 0) => c.emit('close', code);
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const noModels = async () => ({ models: [], defaultModel: null });
@@ -76,7 +77,11 @@ describe('codex backend', () => {
   async function boot(requestedSid: string | null = null) {
     const { host, frames } = makeHost();
     const { spawn, calls } = fakeSpawner();
-    const b = createCodexBackend(host, { requestedSid, requestedModel: null }, { spawn, listModels: noModels });
+    const b = createCodexBackend(
+      host,
+      { requestedSid, requestedModel: null },
+      { spawn, listModels: noModels },
+    );
     b.start();
     await tick();
     closeChild(calls[0]!.child, 0); // auth: `codex login status` exits 0
@@ -90,6 +95,8 @@ describe('codex backend', () => {
     await tick();
     const turn = calls[1]!.child;
     expect(calls[1]!.args.slice(0, 2)).toEqual(['exec', '--json']); // fresh, no resume
+    // Network must be enabled or git/gh/fetch hang under workspace-write.
+    expect(calls[1]!.args).toContain('sandbox_workspace_write.network_access=true');
     line(turn, { type: 'thread.started', thread_id: 'thr-1' });
     line(turn, { type: 'item.completed', item: { type: 'agent_message', text: 'hello world' } });
     line(turn, { type: 'turn.completed', usage: { output_tokens: 2 } });
@@ -147,7 +154,11 @@ describe('codex backend', () => {
   it('surfaces a logged-out backend as a clear turn-done, not a crash-loop', async () => {
     const { host, frames } = makeHost();
     const { spawn, calls } = fakeSpawner();
-    const b = createCodexBackend(host, { requestedSid: null, requestedModel: null }, { spawn, listModels: noModels });
+    const b = createCodexBackend(
+      host,
+      { requestedSid: null, requestedModel: null },
+      { spawn, listModels: noModels },
+    );
     b.start();
     await tick();
     closeChild(calls[0]!.child, 1); // auth FAILS at boot
@@ -192,7 +203,10 @@ describe('codex backend', () => {
     expect(turn.killed).toBe(true);
     closeChild(turn, 143); // killed
     await tick();
-    const done = frames.filter((f) => f.t === 'turn-done').at(-1) as { ok: boolean; error?: string };
+    const done = frames.filter((f) => f.t === 'turn-done').at(-1) as {
+      ok: boolean;
+      error?: string;
+    };
     expect(done.ok).toBe(true); // a deliberate Stop is not a red error
     expect(done.error).toBeUndefined();
   });
@@ -200,10 +214,14 @@ describe('codex backend', () => {
   it('two sends racing the auth check spawn exactly ONE turn child', async () => {
     const { host, frames } = makeHost();
     const { spawn, calls } = fakeSpawner();
-    const b = createCodexBackend(host, { requestedSid: null, requestedModel: null }, {
-      spawn,
-      listModels: noModels,
-    });
+    const b = createCodexBackend(
+      host,
+      { requestedSid: null, requestedModel: null },
+      {
+        spawn,
+        listModels: noModels,
+      },
+    );
     b.start();
     // Two sends arrive BEFORE the boot auth-check resolves.
     b.send('a');
@@ -220,8 +238,18 @@ describe('codex backend', () => {
     const { b, calls } = await boot('old-thread');
     // Seed a prior conversation under the stale resume id.
     const { appendTranscriptEvent } = await import('../../chat/TranscriptReader.js');
-    appendTranscriptEvent('old-thread', { kind: 'user', id: 'p1', ts: 1, text: 'earlier question' });
-    appendTranscriptEvent('old-thread', { kind: 'assistant', id: 'p2', ts: 2, text: 'earlier answer' });
+    appendTranscriptEvent('old-thread', {
+      kind: 'user',
+      id: 'p1',
+      ts: 1,
+      text: 'earlier question',
+    });
+    appendTranscriptEvent('old-thread', {
+      kind: 'assistant',
+      id: 'p2',
+      ts: 2,
+      text: 'earlier answer',
+    });
     b.send('next');
     await tick();
     closeChild(calls[1]!.child, 1); // resume fails → fresh fallback
@@ -245,16 +273,20 @@ describe('codex backend', () => {
   it('advertises its model list + default in the status frame (the picker)', async () => {
     const { host, frames } = makeHost();
     const { spawn, calls } = fakeSpawner();
-    const b = createCodexBackend(host, { requestedSid: null, requestedModel: null }, {
-      spawn,
-      listModels: async () => ({
-        models: [
-          { value: 'gpt-5.6-sol', displayName: 'GPT-5.6-Sol' },
-          { value: 'gpt-5.5', displayName: 'GPT-5.5' },
-        ],
-        defaultModel: 'gpt-5.6-sol',
-      }),
-    });
+    const b = createCodexBackend(
+      host,
+      { requestedSid: null, requestedModel: null },
+      {
+        spawn,
+        listModels: async () => ({
+          models: [
+            { value: 'gpt-5.6-sol', displayName: 'GPT-5.6-Sol' },
+            { value: 'gpt-5.5', displayName: 'GPT-5.5' },
+          ],
+          defaultModel: 'gpt-5.6-sol',
+        }),
+      },
+    );
     b.start();
     await tick();
     closeChild(calls[0]!.child, 0);
