@@ -9,11 +9,11 @@
 // agent_message arrives whole), no interactive tool approvals (runs under a
 // fixed sandbox policy), no subagents, no autonomous turns, and no context
 // meter (Codex's exec stream carries usage but not the window size).
-import { type spawn as nodeSpawn, spawn } from 'node:child_process';
+import { execFileSync, type spawn as nodeSpawn, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { ChatEvent } from '@muxpad/shared';
 import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptReader.js';
@@ -27,6 +27,64 @@ import type { RunnerFrame } from '../protocol.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
 const CODEX_BIN = process.env.MUXPAD_CODEX_BIN || 'codex';
+
+// When the pane's cwd is a git WORKTREE, the real git metadata lives in the main
+// repo's `.git` (outside the worktree). Codex's `workspace-write` sandbox makes
+// only the cwd writable, so that external `.git` is read-only and `git add` /
+// `git commit` fail from the worktree. Grant write access to the git common dir
+// via `--add-dir`. A normal checkout keeps `.git` inside the cwd (already
+// writable), so nothing is added. Best-effort — any git failure yields nothing.
+function gitWorktreeExtraDirs(cwd: string): string[] {
+  try {
+    const out = execFileSync('git', ['-C', cwd, 'rev-parse', '--git-common-dir'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 3000, // never let a wedged git shim block backend startup
+    }).trim();
+    if (!out) return [];
+    const abs = isAbsolute(out) ? out : resolve(cwd, out);
+    // Inside the cwd → already covered by workspace-write; only add when external.
+    if (abs === cwd || abs.startsWith(cwd + sep)) return [];
+    return [abs];
+  } catch {
+    return []; // not a git repo, git missing, etc.
+  }
+}
+
+// Kill a spawned agent child's DESCENDANTS — the shell commands it ran and, the
+// reason this exists, the long-lived dev servers (`vite`, `pnpm dev`) they start.
+// Those block the turn, then survive it: when the child exits they reparent to
+// launchd and pile up as leaked servers holding ports. The blocking case always
+// reaches a kill point (Stop / stall watchdog / pane close) while the child is
+// still alive, so its ppid tree is intact — we walk it with `pgrep -P` (macOS +
+// Linux) BEFORE signalling the child, and SIGKILL leaves-first. Best-effort; the
+// caller signals the child (codex/cursor) itself so it can still exit cleanly.
+export function killDescendants(pid: number): void {
+  const descendants: number[] = [];
+  const walk = (p: number) => {
+    let kids: number[];
+    try {
+      kids = execFileSync('pgrep', ['-P', String(p)], { encoding: 'utf8', timeout: 2000 })
+        .split('\n')
+        .map((s) => Number(s.trim()))
+        .filter((n) => Number.isInteger(n) && n > 0);
+    } catch {
+      return; // no children, or pgrep unavailable
+    }
+    for (const k of kids) {
+      descendants.push(k);
+      walk(k);
+    }
+  };
+  walk(pid);
+  for (const p of descendants.reverse()) {
+    try {
+      process.kill(p, 'SIGKILL'); // leaves before their parents
+    } catch {
+      // already gone
+    }
+  }
+}
 
 /** Model list + the backend's current default, for the chat model picker. */
 export type ModelFetch = () => Promise<{
@@ -42,22 +100,35 @@ export interface BackendDeps {
 }
 
 /** Read Codex's cached model catalog (+ config default) — best-effort. */
-function codexModelFetch(): { models: Array<{ value: string; displayName: string }>; defaultModel: string | null } {
+function codexModelFetch(): {
+  models: Array<{ value: string; displayName: string }>;
+  defaultModel: string | null;
+} {
   const home = process.env.CODEX_HOME || join(homedir(), '.codex');
   let models: Array<{ value: string; displayName: string }> = [];
   let defaultModel: string | null = null;
   try {
     const cache = JSON.parse(readFileSync(join(home, 'models_cache.json'), 'utf8')) as {
-      models?: Array<{ slug?: string; display_name?: string; visibility?: string; supported_in_api?: boolean }>;
+      models?: Array<{
+        slug?: string;
+        display_name?: string;
+        visibility?: string;
+        supported_in_api?: boolean;
+      }>;
     };
     models = (cache.models ?? [])
-      .filter((m) => m.visibility === 'list' && m.supported_in_api !== false && typeof m.slug === 'string')
+      .filter(
+        (m) =>
+          m.visibility === 'list' && m.supported_in_api !== false && typeof m.slug === 'string',
+      )
       .map((m) => ({ value: m.slug as string, displayName: m.display_name || (m.slug as string) }));
   } catch {
     // no cache / unreadable — picker just won't show
   }
   try {
-    const match = readFileSync(join(home, 'config.toml'), 'utf8').match(/^\s*model\s*=\s*"([^"]+)"/m);
+    const match = readFileSync(join(home, 'config.toml'), 'utf8').match(
+      /^\s*model\s*=\s*"([^"]+)"/m,
+    );
     defaultModel = match?.[1] ?? null;
   } catch {
     // no config — leave default null
@@ -81,6 +152,13 @@ export function createCodexBackend(
   // stable so history survives even before codex mints its own thread id.
   let liveSid = opts.requestedSid ?? randomUUID();
   let model = opts.requestedModel;
+
+  // Extra writable roots for the sandbox (the worktree's external git dir, if
+  // any) — computed once; the cwd is fixed for a runner's lifetime.
+  const extraWritableDirs = gitWorktreeExtraDirs(process.cwd());
+  if (extraWritableDirs.length) {
+    log(dim(`codex: granting git write access → ${extraWritableDirs.join(', ')}`));
+  }
 
   const queue: string[] = [];
   let turnActive = false;
@@ -143,12 +221,18 @@ export function createCodexBackend(
       '--json',
       '--skip-git-repo-check',
       // No interactive approval channel in exec — pick a policy up front. The
-      // pane's cwd is a dev workspace, so allow writes there but nothing wider.
+      // pane's cwd is a trusted dev workspace: allow writes there, plus network
+      // (so git/gh/fetch work — off by default under workspace-write, which
+      // otherwise leaves the agent unable to reach github and hanging on curl).
       '-c',
       'sandbox_mode="workspace-write"',
       '-c',
+      'sandbox_workspace_write.network_access=true',
+      '-c',
       'approval_policy="never"',
     ];
+    // Make the worktree's external git dir writable so commits work in-place.
+    for (const dir of extraWritableDirs) common.push('--add-dir', dir);
     if (model) common.push('-m', model);
     return [...head, ...common, prompt];
   }
@@ -198,7 +282,13 @@ export function createCodexBackend(
           // for the live view, and land it in the transcript log for history.
           emit({ t: 'stream', delta: text });
           log(`${bold('codex')} ${text}`);
-          logEvent({ kind: 'assistant', id: randomUUID(), ts: Date.now(), text, ...(model ? { model } : {}) });
+          logEvent({
+            kind: 'assistant',
+            id: randomUUID(),
+            ts: Date.now(),
+            text,
+            ...(model ? { model } : {}),
+          });
         }
       } else if (itype === 'command_execution') {
         const command = typeof item.command === 'string' ? item.command : '';
@@ -206,7 +296,14 @@ export function createCodexBackend(
         const exit = typeof item.exit_code === 'number' ? item.exit_code : null;
         const toolUseId = randomUUID();
         log(`${dim('⚙')} ${dim(command)}`);
-        logEvent({ kind: 'tool_use', id: randomUUID(), ts: Date.now(), toolUseId, name: 'shell', input: { command } });
+        logEvent({
+          kind: 'tool_use',
+          id: randomUUID(),
+          ts: Date.now(),
+          toolUseId,
+          name: 'shell',
+          input: { command },
+        });
         logEvent({
           kind: 'tool_result',
           id: randomUUID(),
@@ -336,7 +433,14 @@ export function createCodexBackend(
   }
 
   function hello(): RunnerFrame {
-    return { t: 'hello', sid: liveSid, cwd: process.cwd(), pid: process.pid, turnActive, backend: 'codex' };
+    return {
+      t: 'hello',
+      sid: liveSid,
+      cwd: process.cwd(),
+      pid: process.pid,
+      turnActive,
+      backend: 'codex',
+    };
   }
 
   async function start(): Promise<void> {
@@ -371,6 +475,7 @@ export function createCodexBackend(
     if (turnActive && child) {
       interrupted = true;
       log(dim('⏹ interrupt — killing codex'));
+      if (child.pid) killDescendants(child.pid); // take down any dev server it started
       child.kill('SIGTERM');
     }
   }
@@ -396,6 +501,7 @@ export function createCodexBackend(
       interrupted = true; // the child's close handler must not fresh-fallback-respawn
       if (child) {
         try {
+          if (child.pid) killDescendants(child.pid); // don't leak its dev servers
           child.kill('SIGTERM');
         } catch {
           // already gone

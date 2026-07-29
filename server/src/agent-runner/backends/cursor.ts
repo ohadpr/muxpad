@@ -16,7 +16,7 @@ import type { ChatEvent } from '@muxpad/shared';
 import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
 import type { RunnerFrame } from '../protocol.js';
-import type { BackendDeps, ModelFetch } from './codex.js';
+import { type BackendDeps, type ModelFetch, killDescendants } from './codex.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
 const CURSOR_BIN = process.env.MUXPAD_CURSOR_BIN || 'cursor-agent';
@@ -71,11 +71,19 @@ export function createCursorBackend(
   let resolveDone: (() => void) | null = null;
   let lastStatus: (RunnerFrame & { t: 'status' }) | null = null;
   let modelList: Array<{ value: string; displayName: string }> | null = null;
+  // Quiet-period watchdog: Cursor sometimes finishes its last tool and then
+  // never emits `result` (live-verified: 20+ minute hangs with Stop still
+  // armed). If NDJSON goes silent this long mid-turn, end the turn so the
+  // chat stops looking stuck. Model think gaps in the wild top out ~90s.
+  const STALL_MS = 3 * 60_000;
+  let stallTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Per-turn transcript buffer — flushed to the final <sessionId>.jsonl once
   // system/init settles the id (see the Codex backend for the rationale).
   let turnLog: ChatEvent[] = [];
   let turnCommitted = false;
+  // toolCallId → already emitted a tool_use (so completed only needs a result).
+  const startedToolIds = new Set<string>();
   function writeEvent(event: ChatEvent): void {
     try {
       appendTranscriptEvent(liveSid, event);
@@ -91,6 +99,33 @@ export function createCursorBackend(
     turnCommitted = true;
     for (const ev of turnLog) writeEvent(ev);
     turnLog = [];
+  }
+
+  function clearStallWatch(): void {
+    if (stallTimer) {
+      clearTimeout(stallTimer);
+      stallTimer = null;
+    }
+  }
+  function armStallWatch(): void {
+    clearStallWatch();
+    if (!turnActive || closed) return;
+    stallTimer = setTimeout(() => {
+      if (!turnActive || closed || interrupted) return;
+      log(dim(`cursor-agent silent for ${STALL_MS / 1000}s — ending turn`));
+      const proc = child;
+      interrupted = true; // block close-handler fresh-fallback
+      try {
+        if (proc?.pid) killDescendants(proc.pid); // reap a blocking dev server
+        proc?.kill('SIGTERM');
+      } catch {
+        // already gone
+      }
+      finishTurn(
+        false,
+        'cursor-agent stopped responding — tap Stop was not needed; send again to continue',
+      );
+    }, STALL_MS);
   }
 
   function emitStatus(): void {
@@ -112,7 +147,20 @@ export function createCursorBackend(
   }
 
   function buildArgs(prompt: string, useResume: boolean): string[] {
-    const args = ['-p', '--output-format', 'stream-json', '--trust', '--force'];
+    // `--sandbox disabled`: cursor-agent otherwise inherits a sandbox from
+    // config that restricts network (and writes), so a command that reaches the
+    // network — curl, git, gh — silently blocks and the turn hangs on "Working…".
+    // We already run fully trusted here (--force --trust), matching Claude's
+    // bypassPermissions in this cockpit, so the sandbox only adds friction.
+    const args = [
+      '-p',
+      '--output-format',
+      'stream-json',
+      '--trust',
+      '--force',
+      '--sandbox',
+      'disabled',
+    ];
     if (useResume && sessionRef) args.push('--resume', sessionRef);
     if (model) args.push('--model', model);
     args.push(prompt);
@@ -122,10 +170,24 @@ export function createCursorBackend(
   function finishTurn(ok: boolean, error?: string): void {
     if (!turnActive) return;
     turnActive = false;
+    clearStallWatch();
+    startedToolIds.clear();
+    const proc = child;
     child = null;
     if (!turnCommitted) commitTurnLog();
     emit({ t: 'turn-done', ok, ...(error ? { error } : {}) });
     emitStatus();
+    // Reap — stream-json CLIs (Claude + Cursor) can hang after emitting
+    // `result`; don't leave a zombie holding the session.
+    if (proc && !proc.killed) {
+      setTimeout(() => {
+        try {
+          proc.kill('SIGTERM');
+        } catch {
+          // already gone
+        }
+      }, 2_000);
+    }
     if (!closed && queue.length > 0) void runTurn();
   }
 
@@ -139,6 +201,27 @@ export function createCursorBackend(
     const denied = result.permissionDenied as Record<string, unknown> | undefined;
     if (denied && typeof denied.error === 'string') return denied.error;
     return '';
+  }
+
+  function toolNameFromCall(
+    tc: Record<string, unknown>,
+  ): { name: string; wrap: Record<string, unknown> } | null {
+    // Prefer the *ToolCall payload key over metadata siblings (toolCallId,
+    // hookAdditionalContexts, startedAtMs, …).
+    for (const key of Object.keys(tc)) {
+      if (!key.endsWith('ToolCall')) continue;
+      const wrap = tc[key];
+      if (wrap && typeof wrap === 'object') {
+        return { name: key.replace(/ToolCall$/, ''), wrap: wrap as Record<string, unknown> };
+      }
+    }
+    return null;
+  }
+
+  function toolCallIdOf(ev: Record<string, unknown>, tc: Record<string, unknown>): string {
+    if (typeof ev.call_id === 'string' && ev.call_id) return ev.call_id;
+    if (typeof tc.toolCallId === 'string' && tc.toolCallId) return tc.toolCallId;
+    return randomUUID();
   }
 
   function handleEvent(ev: Record<string, unknown>): void {
@@ -167,25 +250,66 @@ export function createCursorBackend(
       if (text) {
         emit({ t: 'stream', delta: text });
         log(`${bold('cursor')} ${text}`);
-        logEvent({ kind: 'assistant', id: randomUUID(), ts: Date.now(), text, ...(model ? { model } : {}) });
+        logEvent({
+          kind: 'assistant',
+          id: randomUUID(),
+          ts: Date.now(),
+          text,
+          ...(model ? { model } : {}),
+        });
       }
-    } else if (type === 'tool_call' && ev.subtype === 'completed') {
+    } else if (type === 'tool_call') {
       const tc = ev.tool_call as Record<string, unknown> | undefined;
-      const key = tc ? Object.keys(tc)[0] : undefined;
-      const wrap = key ? (tc?.[key] as Record<string, unknown> | undefined) : undefined;
-      if (key && wrap) {
-        const name = key.replace(/ToolCall$/, '');
+      if (!tc) return;
+      const parsed = toolNameFromCall(tc);
+      if (!parsed) return;
+      const { name, wrap } = parsed;
+      const toolUseId = toolCallIdOf(ev, tc);
+      if (ev.subtype === 'started') {
+        if (startedToolIds.has(toolUseId)) return;
+        startedToolIds.add(toolUseId);
+        log(`${dim('⚙')} ${dim(name)}…`);
+        logEvent({
+          kind: 'tool_use',
+          id: randomUUID(),
+          ts: Date.now(),
+          toolUseId,
+          name,
+          input: wrap.args ?? {},
+        });
+      } else if (ev.subtype === 'completed') {
         const result = wrap.result as Record<string, unknown> | undefined;
         const ok = !!result?.success;
         const text = extractResultText(result);
-        const toolUseId = randomUUID();
+        if (!startedToolIds.has(toolUseId)) {
+          // Started event missed (or filtered) — still record the use so the
+          // result has something to pair with.
+          startedToolIds.add(toolUseId);
+          logEvent({
+            kind: 'tool_use',
+            id: randomUUID(),
+            ts: Date.now(),
+            toolUseId,
+            name,
+            input: wrap.args ?? {},
+          });
+        }
         log(`${dim('⚙')} ${dim(name)}`);
-        logEvent({ kind: 'tool_use', id: randomUUID(), ts: Date.now(), toolUseId, name, input: wrap.args ?? {} });
-        logEvent({ kind: 'tool_result', id: randomUUID(), ts: Date.now(), toolUseId, ok, ...(text ? { text } : {}) });
+        logEvent({
+          kind: 'tool_result',
+          id: randomUUID(),
+          ts: Date.now(),
+          toolUseId,
+          ok,
+          ...(text ? { text } : {}),
+        });
       }
     } else if (type === 'result') {
       const ok = ev.subtype === 'success' && ev.is_error !== true;
-      finishTurn(ok, ok ? undefined : (typeof ev.result === 'string' ? ev.result : 'cursor turn failed'));
+      finishTurn(
+        ok,
+        ok ? undefined : typeof ev.result === 'string' ? ev.result : 'cursor turn failed',
+      );
     }
   }
 
@@ -203,7 +327,8 @@ export function createCursorBackend(
         emit({
           t: 'turn-done',
           ok: false,
-          error: 'cursor-agent is not logged in — run `cursor-agent login` in this pane’s terminal face',
+          error:
+            'cursor-agent is not logged in — run `cursor-agent login` in this pane’s terminal face',
         });
         if (!closed && queue.length > 0) void runTurn();
         return;
@@ -213,7 +338,9 @@ export function createCursorBackend(
     interrupted = false;
     turnLog = [];
     turnCommitted = false;
+    startedToolIds.clear();
     emit({ t: 'turn-start' });
+    armStallWatch();
     log(`${bold('▸ user')} ${prompt.length > 200 ? `${prompt.slice(0, 200)}…` : prompt}`);
     logEvent({ kind: 'user', id: randomUUID(), ts: Date.now(), text: prompt });
 
@@ -232,6 +359,7 @@ export function createCursorBackend(
       let buf = '';
       const decoder = new StringDecoder('utf8'); // avoid multibyte corruption across chunks
       proc.stdout?.on('data', (d: Buffer) => {
+        armStallWatch(); // any NDJSON activity resets the quiet-period timer
         buf += decoder.write(d);
         let nl: number;
         // biome-ignore lint/suspicious/noAssignInExpressions: line-split loop
@@ -286,7 +414,14 @@ export function createCursorBackend(
   }
 
   function hello(): RunnerFrame {
-    return { t: 'hello', sid: liveSid, cwd: process.cwd(), pid: process.pid, turnActive, backend: 'cursor' };
+    return {
+      t: 'hello',
+      sid: liveSid,
+      cwd: process.cwd(),
+      pid: process.pid,
+      turnActive,
+      backend: 'cursor',
+    };
   }
 
   async function start(): Promise<void> {
@@ -294,7 +429,8 @@ export function createCursorBackend(
     log(`${bold('muxpad agent')} — cursor backend · session ${liveSid}`);
     log(dim(`pane ${host.paneId} · ${process.cwd()}`));
     authOk = await checkAuth();
-    if (!authOk) log(dim('cursor-agent not logged in — run `cursor-agent login` in the terminal face'));
+    if (!authOk)
+      log(dim('cursor-agent not logged in — run `cursor-agent login` in the terminal face'));
     try {
       const { models, defaultModel } = await listModels();
       modelList = models;
@@ -321,6 +457,7 @@ export function createCursorBackend(
       if (turnActive && child) {
         interrupted = true;
         log(dim('⏹ interrupt — killing cursor-agent'));
+        if (child.pid) killDescendants(child.pid); // take down any dev server it started
         child.kill('SIGTERM');
       }
     },
@@ -337,8 +474,10 @@ export function createCursorBackend(
     shutdown: () => {
       closed = true;
       interrupted = true; // block the child close handler's fresh-fallback respawn
+      clearStallWatch();
       if (child) {
         try {
+          if (child.pid) killDescendants(child.pid); // don't leak its dev servers
           child.kill('SIGTERM');
         } catch {
           // already gone
