@@ -3,9 +3,9 @@ import { createRoot } from 'react-dom/client';
 import { startEvents, subscribe, subscribeReconnect } from './events';
 import { pushOpen } from './lib/external-open-store';
 import { setLastPaneId } from './lib/last-visited';
+import { startPresence } from './lib/presence';
 import { registerServiceWorker } from './lib/push';
 import { router } from './router';
-import { startPresence } from './lib/presence';
 import { refreshTabs } from './tabs';
 import { refreshWorkspaces } from './workspaces';
 import './styles.css';
@@ -77,14 +77,31 @@ if (!selfEmbedded) {
     } | null;
     if (d?.type !== 'muxpad:push-navigate' || !d.url) return;
     if (d.tab_id && d.pane_id) setLastPaneId(d.tab_id, d.pane_id);
-    // Push the clean path — the ?ptab=&pane= params are only for cold boots.
-    router.history.push(d.url.split('?')[0] ?? d.url);
+    // Navigate to the OWNING tab through the router (not a raw history.push of
+    // the clean path, which could stay on the current tab), carrying ?pane so a
+    // freshly-mounting TabView seeds the right pane.
+    const m = d.url.match(/^\/w\/([^/]+)\/t\/([^/?]+)/);
+    if (m?.[1] && m[2]) {
+      void router.navigate({
+        to: '/w/$wsSlug/t/$tabSlug',
+        params: { wsSlug: m[1], tabSlug: m[2] },
+        ...(d.pane_id ? { search: { pane: d.pane_id } } : {}),
+      });
+    } else {
+      router.history.push(d.url.split('?')[0] ?? d.url);
+    }
+    // Flip the active pane on the target TabView. An ALREADY-mounted tab ignores
+    // ?pane once it has an active pane, so this event is the only thing that can
+    // switch it — and a single fixed delay raced the mount / workspace switch.
+    // Retry for ~1s; setMobileActiveId to the same id is idempotent.
     if (d.pane_id) {
       const paneId = d.pane_id;
-      // Give the route transition a beat so the target TabView is mounted.
-      setTimeout(() => {
+      let tries = 0;
+      const fire = () => {
         window.dispatchEvent(new CustomEvent('muxpad:show-pane', { detail: { paneId } }));
-      }, 150);
+        if (++tries < 8) setTimeout(fire, 110);
+      };
+      setTimeout(fire, 60);
     }
   });
 }
