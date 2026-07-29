@@ -62,6 +62,44 @@ stop_pid_file() {
   echo "$label: stopped"
 }
 
+# Spawn a daemon in its own session, append its output to a log, and echo
+# its pid.
+#
+# `nohup cmd & disown` is NOT enough. It only protects against SIGHUP when a
+# terminal closes — the daemon stays in the *caller's* process group. Agent
+# CLIs and IDE shells (Cursor, Claude Code, VS Code tasks) routinely reap
+# their shell's whole process group with SIGKILL when a tool call or session
+# ends, which takes the daemon with it. That kill can't be caught, so the
+# server dies with no "shutting down…" in the log and nothing restarts it
+# (there's no supervisor by design). Setting detached:true makes node call
+# setsid(2) in the child, so it lands in a fresh session that no group-kill
+# aimed at the caller can reach. `muxpad stop` is unaffected — it signals the
+# pid from the pid file directly.
+spawn_detached() {
+  local log="$1"
+  shift
+  node -e '
+const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+const [log, ...cmd] = process.argv.slice(1);
+const out = fs.openSync(log, "a");
+const child = spawn(cmd[0], cmd.slice(1), {
+  detached: true,
+  stdio: ["ignore", out, out],
+});
+// A failed exec (bad path) fires async error and leaves pid undefined; log it
+// and exit nonzero WITHOUT printing a pid, so the caller never writes a bogus
+// "undefined" into the pid file.
+child.on("error", (e) => {
+  try { fs.writeSync(out, `spawn_detached failed: ${e.message}\n`); } catch {}
+  process.exit(1);
+});
+if (typeof child.pid !== "number") process.exit(1);
+child.unref();
+process.stdout.write(`${child.pid}\n`);
+' "$log" "$@"
+}
+
 resolve_host() {
   if [ -n "${MUXPAD_HOST:-}" ]; then
     echo "$MUXPAD_HOST"
@@ -132,14 +170,13 @@ cmd_start() {
   fi
 
   echo "starting on http://$host:$port"
-  MUXPAD_HOST="$host" \
-  MUXPAD_PORT="$port" \
-  MUXPAD_DATA_DIR="$DATA_DIR" \
-  MUXPAD_PTYD_SOCKET="$PTYD_SOCKET" \
-    nohup node "$ROOT/server/dist/index.js" \
-    >> "$LOG_FILE" 2>&1 &
-  echo $! > "$PID_FILE"
-  disown $! 2>/dev/null || true
+  spawn_detached "$LOG_FILE" env \
+    MUXPAD_HOST="$host" \
+    MUXPAD_PORT="$port" \
+    MUXPAD_DATA_DIR="$DATA_DIR" \
+    MUXPAD_PTYD_SOCKET="$PTYD_SOCKET" \
+    node "$ROOT/server/dist/index.js" \
+    > "$PID_FILE"
   sleep 0.4
 
   if [ "${MUXPAD_TAILSCALE_SERVE:-0}" = "1" ]; then
@@ -156,14 +193,13 @@ start_ptyd() {
   # Remove it only when we know no ptyd is currently using it.
   [ -S "$PTYD_SOCKET" ] && rm -f "$PTYD_SOCKET"
   echo "starting ptyd (socket: $PTYD_SOCKET)"
-  MUXPAD_HOST="$host" \
-  MUXPAD_PORT="$port" \
-  MUXPAD_DATA_DIR="$DATA_DIR" \
-  MUXPAD_PTYD_SOCKET="$PTYD_SOCKET" \
-    nohup node "$ROOT/server/dist/ptyd/index.js" \
-    >> "$LOG_FILE_PTYD" 2>&1 &
-  echo $! > "$PID_FILE_PTYD"
-  disown $! 2>/dev/null || true
+  spawn_detached "$LOG_FILE_PTYD" env \
+    MUXPAD_HOST="$host" \
+    MUXPAD_PORT="$port" \
+    MUXPAD_DATA_DIR="$DATA_DIR" \
+    MUXPAD_PTYD_SOCKET="$PTYD_SOCKET" \
+    node "$ROOT/server/dist/ptyd/index.js" \
+    > "$PID_FILE_PTYD"
   # Wait for the socket to appear (up to ~5s).
   local i
   for i in $(seq 1 50); do
