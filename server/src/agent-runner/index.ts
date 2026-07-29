@@ -13,6 +13,7 @@
 // link + frame dispatch, and shutdown. The actual session lives behind an
 // AgentBackend (backends/*.ts) — Claude today, dispatched on `--backend`. The
 // harness never learns which backend runs; it only relays frames.
+import { execFileSync } from 'node:child_process';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -53,7 +54,8 @@ let requestedBackend: 'claude' | 'codex' | 'cursor' = 'claude';
   const m = args.indexOf('--model');
   if (m !== -1 && args[m + 1]) requestedModel = args[m + 1] as string;
   const b = args.indexOf('--backend');
-  if (b !== -1 && isBackendId(args[b + 1])) requestedBackend = args[b + 1] as typeof requestedBackend;
+  if (b !== -1 && isBackendId(args[b + 1]))
+    requestedBackend = args[b + 1] as typeof requestedBackend;
 }
 // --pick: the pane was created "Agent" without a harness chosen yet. Start NO
 // session — just idle so the chat face can show its harness picker; picking one
@@ -107,8 +109,53 @@ process.on('unhandledRejection', (e) => {
   console.error(e);
   process.exit(1);
 });
+// Reap orphaned descendants (dev servers etc.) when the runner exits. Agents
+// routinely start long-lived processes — `vite`, `pnpm dev` — that outlive both
+// the turn (spawn-per-turn backends exit, reparenting the server to launchd) AND
+// the pane, piling up as leaked servers holding ports. A reparented process
+// keeps its process-group id, so if WE are the group leader (a foreground shell
+// job — the normal pane case), every descendant still shares our pgid and we can
+// take the whole group down. Guarded to the leader case so we never signal the
+// parent shell's group; best-effort (skips if `ps` is unavailable). Runs from
+// the `exit` handler so it fires on EVERY exit path (signals, crash, normal).
+let reaped = false;
+function reapProcessGroup(): void {
+  if (reaped) return;
+  reaped = true;
+  try {
+    const rows = execFileSync('ps', ['-A', '-o', 'pid=,pgid='], {
+      encoding: 'utf8',
+      timeout: 3000,
+    });
+    const parsed: Array<[number, number]> = [];
+    let myPgid: number | null = null;
+    for (const row of rows.split('\n')) {
+      const m = row.trim().match(/^(\d+)\s+(\d+)$/);
+      if (!m) continue;
+      const pid = Number(m[1]);
+      const pgid = Number(m[2]);
+      parsed.push([pid, pgid]);
+      if (pid === process.pid) myPgid = pgid;
+    }
+    // Only reap when we lead our own group — otherwise `-pgid` would reach the
+    // parent shell and its other jobs.
+    if (myPgid == null || myPgid !== process.pid) return;
+    for (const [pid, pgid] of parsed) {
+      if (pgid === myPgid && pid !== process.pid) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // already gone
+        }
+      }
+    }
+  } catch {
+    // `ps` missing / no permission — nothing we can safely do.
+  }
+}
 process.on('exit', (code) => {
   fileLog(`process exit · code=${code}`);
+  reapProcessGroup();
 });
 fileLog(
   `boot · pid=${process.pid} · cwd=${process.cwd()} · argv: ${process.argv.slice(2).join(' ') || '(none)'}`,
