@@ -41,25 +41,31 @@ self.addEventListener('notificationclick', (event) => {
   const url = data.url || '/';
   event.waitUntil(
     (async () => {
-      // Reuse an open window (the installed PWA) when there is one. Don't
-      // use WindowClient.navigate(): it hard-reloads the whole app and iOS
-      // rejects it outright for uncontrolled clients (the original "tap
-      // does nothing" bug). Instead hand the deep link to the page's JS,
-      // which routes through the SPA router — instant, state-preserving.
+      // Reuse an open window (the installed PWA) when there is one.
       const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       const win = wins.find((w) => 'focus' in w);
       if (win) {
         await win.focus();
-        win.postMessage({
-          type: 'muxpad:push-navigate',
-          url,
-          tab_id: data.tab_id || null,
-          pane_id: data.pane_id || null,
-        });
+        // FORCE a load of the deep-link URL so the page boots on the cold path
+        // (?ptab=&pane= read at startup, before the router mounts) — the only
+        // reliable pane focus on iOS standalone PWAs, where the in-page
+        // postMessage route the running instance was meant to handle silently
+        // does nothing (message dropped, or a different active pane already set).
+        // navigate() is preferred (no new window) but rejects for an
+        // uncontrolled client; openWindow() then forces the same URL load.
+        if ('navigate' in win) {
+          try {
+            await win.navigate(url);
+            return;
+          } catch {
+            // fall through to openWindow
+          }
+        }
+        await self.clients.openWindow(url);
         return;
       }
       // Cold start: the URL itself carries the pane focus (?ptab=&pane=),
-      // read at boot — a postMessage would race the page's listener setup.
+      // read at boot.
       await self.clients.openWindow(url);
     })(),
   );
