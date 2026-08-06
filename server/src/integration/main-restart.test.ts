@@ -217,5 +217,10 @@ describe('main-server restart with persistent ptyd', () => {
     // Explicit close to avoid a stray async warning at process exit. The
     // afterEach hook will also clean up main2 + ptyd + tmpdir.
     db.close();
-  });
+    // This test spawns a real ptyd + two full main-server incarnations and
+    // waits on ~5 real byte-stream round-trips. Under a parallel full-suite run
+    // it starves against the 5s default and flakes on a 10s cap; 30s gives the
+    // machine room without masking a genuine hang (a real regression still
+    // fails its inner 2s polling deadlines with a clear assertion).
+  }, 30_000);
 });

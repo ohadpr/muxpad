@@ -19,6 +19,20 @@ afterEach(async () => {
   cleanup = null;
 });
 
+// Poll until `pred()` holds or the deadline passes. A real byte-stream
+// round-trip (browser WS → server → ptyd → cat → back) has no completion
+// signal, so tests must wait for the bytes to actually surface. A fixed
+// setTimeout guess is what made these flake under a parallel full-suite run:
+// on a loaded machine the echo lands after the guessed delay and the one-shot
+// assertion fires against an empty buffer. Polling waits only as long as needed
+// and tolerates a slow machine without inflating the happy-path runtime.
+async function waitUntil(pred: () => boolean, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && !pred()) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
 async function bootServer(opts?: { heartbeatMs?: number }) {
   const db = openDb(':memory:');
   const ptyd = await spawnPtyd();
@@ -60,7 +74,7 @@ describe('WS server', () => {
     // (proxyAttach drops browser messages before ptyd's WS is OPEN).
     await new Promise((r) => setTimeout(r, 100));
     sock.send(encodeInput('hello-cat\n'));
-    await new Promise((r) => setTimeout(r, 400));
+    await waitUntil(() => received.join('').includes('hello-cat'));
     sock.close();
     expect(received.join('')).toContain('hello-cat');
   });
@@ -80,7 +94,7 @@ describe('WS server', () => {
       if (msg.kind === 'output') received.push(msg.data);
     });
     await new Promise<void>((r) => b.once('open', () => r()));
-    await new Promise((r) => setTimeout(r, 300));
+    await waitUntil(() => received.join('').includes('first-line'));
     a.close();
     b.close();
     expect(received.join('')).toContain('first-line');
