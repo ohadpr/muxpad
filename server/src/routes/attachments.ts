@@ -1,11 +1,11 @@
-import { IMAGE_MIME_BY_EXT, attachmentMime, imageExtForMime } from '@muxpad/shared';
-import { Hono } from 'hono';
-import { ulid } from 'ulid';
-import type Database from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import { copyFileSync, createReadStream, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { Readable } from 'node:stream';
+import { IMAGE_MIME_BY_EXT, attachmentKind, attachmentMime, imageExtForMime } from '@muxpad/shared';
+import type Database from 'better-sqlite3';
+import { Hono } from 'hono';
+import { ulid } from 'ulid';
 import { PaneStore } from '../store/PaneStore.js';
 
 export function attachmentsRoutes(deps: {
@@ -18,8 +18,7 @@ export function attachmentsRoutes(deps: {
   app.post('/:paneId/attachments', async (c) => {
     const paneId = c.req.param('paneId');
     const pane = panes.getById(paneId);
-    if (!pane)
-      return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    if (!pane) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
 
     const form = await c.req.formData();
     const file = form.get('file');
@@ -34,7 +33,12 @@ export function attachmentsRoutes(deps: {
       imageExtForMime(file.type) ?? (extFromName in IMAGE_MIME_BY_EXT ? extFromName : null);
     if (!ext)
       return c.json(
-        { error: { code: 'bad_request', message: `unsupported image type: ${file.type || file.name}` } },
+        {
+          error: {
+            code: 'bad_request',
+            message: `unsupported image type: ${file.type || file.name}`,
+          },
+        },
         400,
       );
     // Flat directory + short hex name keeps paths readable when the
@@ -77,7 +81,9 @@ export function attachmentsRoutes(deps: {
     const mime = attachmentMime(base);
     if (!mime)
       return c.json(
-        { error: { code: 'bad_request', message: `unsupported file type: ${extname(src) || src}` } },
+        {
+          error: { code: 'bad_request', message: `unsupported file type: ${extname(src) || src}` },
+        },
         400,
       );
     let stat: ReturnType<typeof statSync>;
@@ -94,7 +100,9 @@ export function attachmentsRoutes(deps: {
     const dest = join(dir, `${randomBytes(4).toString('hex')}${ext}`);
     copyFileSync(src, dest);
     deps.db
-      .prepare('INSERT INTO attachments (id, pane_id, mime, path, created_at) VALUES (?, ?, ?, ?, ?)')
+      .prepare(
+        'INSERT INTO attachments (id, pane_id, mime, path, created_at) VALUES (?, ?, ?, ?, ?)',
+      )
       .run(ulid(), paneId, mime, dest, Date.now());
     return c.json({ path: dest }, 201);
   });
@@ -109,8 +117,7 @@ export function attachmentsRoutes(deps: {
     if (name !== basename(name) || name.includes('\0'))
       return c.json({ error: { code: 'bad_request', message: 'bad name' } }, 400);
     const mime = attachmentMime(name);
-    if (!mime)
-      return c.json({ error: { code: 'bad_request', message: 'unsupported type' } }, 400);
+    if (!mime) return c.json({ error: { code: 'bad_request', message: 'unsupported type' } }, 400);
     const path = join(deps.dataDir, 'attachments', name);
     let size: number;
     try {
@@ -119,6 +126,14 @@ export function attachmentsRoutes(deps: {
       return c.json({ error: { code: 'not_found', message: 'attachment not found' } }, 404);
     }
     const cache = 'private, max-age=31536000, immutable';
+    // Served from muxpad's OWN origin, so an active type (e.g. text/html) would
+    // execute same-origin script if opened directly — a stored XSS. Images and
+    // videos must render inline (<img>/<video src>), so only NON-inline "file"
+    // types are forced to download; every response also gets nosniff so a
+    // browser can't re-interpret the bytes as something executable.
+    const isFile = attachmentKind(name) === 'file';
+    const secHeaders: Record<string, string> = { 'x-content-type-options': 'nosniff' };
+    if (isFile) secHeaders['content-disposition'] = `attachment; filename="${name}"`;
     const toWeb = (start?: number, end?: number) =>
       Readable.toWeb(createReadStream(path, start != null ? { start, end } : {})) as ReadableStream;
 
@@ -149,6 +164,7 @@ export function attachmentsRoutes(deps: {
           'content-range': `bytes ${start}-${end}/${size}`,
           'accept-ranges': 'bytes',
           'cache-control': cache,
+          ...secHeaders,
         },
       });
     }
@@ -158,6 +174,7 @@ export function attachmentsRoutes(deps: {
         'content-length': String(size),
         'accept-ranges': 'bytes',
         'cache-control': cache,
+        ...secHeaders,
       },
     });
   });
