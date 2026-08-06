@@ -162,6 +162,43 @@ describe('panes routes', () => {
     expect(body.shell).toBeNull();
   });
 
+  it('rejects non-http(s) pane URLs (javascript:/data:/file:) on create and patch', async () => {
+    // These schemes pass z.string().url() but land in an allow-scripts iframe —
+    // the http(s) allowlist is what keeps a script/local-file payload out.
+    for (const url of [
+      'javascript:alert(1)',
+      'data:text/html,<script>1</script>',
+      'file:///etc/passwd',
+    ]) {
+      const res = await test.app.request(`/api/tabs/${tabId}/panes`, {
+        method: 'POST',
+        body: JSON.stringify({ kind: 'url', url }),
+        headers: { 'content-type': 'application/json' },
+      });
+      expect(res.status, url).toBe(400);
+    }
+    // PATCH face_url is the same iframe sink — same gate, but '' still clears it.
+    const shell = (await (
+      await test.app.request(`/api/tabs/${tabId}/panes`, {
+        method: 'POST',
+        body: '{}',
+        headers: { 'content-type': 'application/json' },
+      })
+    ).json()) as { id: string };
+    const bad = await test.app.request(`/api/panes/${shell.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ face: 'web', face_url: 'javascript:alert(1)' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(bad.status).toBe(400);
+    const clear = await test.app.request(`/api/panes/${shell.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ face_url: '' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(clear.status).toBe(200);
+  });
+
   it('rejects kind=url without url', async () => {
     const res = await test.app.request(`/api/tabs/${tabId}/panes`, {
       method: 'POST',

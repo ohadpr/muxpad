@@ -23,6 +23,15 @@ import { TabStore } from '../store/TabStore.js';
 
 const defaultShell = process.env.SHELL ?? '/bin/zsh';
 
+// A pane URL lands in an <iframe src> with `allow-scripts allow-same-origin`.
+// z.string().url() alone accepts `javascript:`/`data:`/`file:` schemes, so pin
+// to http(s): the only schemes a web-face pane is ever meant to load, and the
+// ones that can't smuggle an inline-script or local-file payload into the frame.
+const httpUrl = z
+  .string()
+  .url()
+  .refine((u) => /^https?:\/\//i.test(u), { message: 'url must be http(s)' });
+
 /**
  * Place `newId` in the layout as a `direction`-split of `sourceId`. If
  * `sourceId` isn't in the tree (CLI run outside a pane, or stale id),
@@ -77,10 +86,10 @@ export function panesTabScopedRoutes(deps: {
     const tabId = c.req.param('id');
     const t = tabs.getById(tabId);
     if (!t) return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
-    const body = z
+    const parsed = z
       .object({
         kind: z.enum(['shell', 'url']).optional(),
-        url: z.string().url().nullable().optional(),
+        url: httpUrl.nullable().optional(),
         shell: z.string().optional(),
         startup_cmd: z.string().nullable().optional(),
         cwd: z.string().optional(),
@@ -99,7 +108,20 @@ export function panesTabScopedRoutes(deps: {
         direction: z.enum(['row', 'column']).optional(),
         position: z.enum(['after', 'before']).optional(),
       })
-      .parse(await c.req.json().catch(() => ({})));
+      // safeParse (not parse): a rejected field — notably a non-http(s) url —
+      // must surface as a clean 400, not bubble to Hono's default 500.
+      .safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success)
+      return c.json(
+        {
+          error: {
+            code: 'bad_request',
+            message: parsed.error.issues[0]?.message ?? 'invalid body',
+          },
+        },
+        400,
+      );
+    const body = parsed.data;
 
     const kind = body.kind ?? 'shell';
     if (kind === 'url') {
@@ -242,7 +264,7 @@ export function panesScopedRoutes(deps: {
     const body = z
       .object({
         kind: z.enum(['shell', 'url']).optional(),
-        url: z.string().url().nullable().optional(),
+        url: httpUrl.nullable().optional(),
         // User-given pane name for the tab-strip label. '' or null clears it
         // back to the live-derived title. Independent of kind/url edits.
         name: z.string().nullable().optional(),
@@ -250,29 +272,40 @@ export function panesScopedRoutes(deps: {
         // URL. Server-persisted so it survives reloads and follows the user
         // across devices; the emitted pane.updated syncs other clients live.
         face: z.enum(['terminal', 'web', 'chat']).optional(),
-        face_url: z.string().nullable().optional(),
+        // Same iframe sink as `url`, so same http(s) gate — but '' / null are
+        // the legitimate "clear the web face" signals and must pass through.
+        face_url: httpUrl.or(z.literal('')).nullable().optional(),
       })
-      .parse(await c.req.json().catch(() => ({})));
+      // safeParse (not parse): a rejected url/face_url must 400, not 500.
+      .safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success)
+      return c.json(
+        {
+          error: { code: 'bad_request', message: body.error.issues[0]?.message ?? 'invalid body' },
+        },
+        400,
+      );
+    const patch = body.data;
 
     // Rename is orthogonal to the kind/url mutations below and never touches
     // ptyd, so apply it up front regardless of which branch runs next.
-    if (body.name !== undefined) panes.setName(id, body.name);
+    if (patch.name !== undefined) panes.setName(id, patch.name);
     // Face flips likewise never touch ptyd — the terminal keeps running
     // underneath whatever face is showing.
-    if (body.face !== undefined) {
+    if (patch.face !== undefined) {
       // Chat face is agent-pane-only — see the create-path guard above.
-      if (body.face === 'chat' && !p.startup_cmd?.startsWith('muxpad agent')) {
+      if (patch.face === 'chat' && !p.startup_cmd?.startsWith('muxpad agent')) {
         return c.json(
           { error: { code: 'bad_request', message: 'the chat face requires an agent pane' } },
           400,
         );
       }
-      panes.setFace(id, body.face, body.face_url);
-    } else if (body.face_url !== undefined) {
-      panes.setFace(id, p.face, body.face_url);
+      panes.setFace(id, patch.face, patch.face_url);
+    } else if (patch.face_url !== undefined) {
+      panes.setFace(id, p.face, patch.face_url);
     }
 
-    if (body.kind && body.kind !== p.kind) {
+    if (patch.kind && patch.kind !== p.kind) {
       // Kind flip: close ptyd-attached clients FIRST (with code 4001) so
       // they don't see the PTY-exit close (code 1000) that killPane would
       // otherwise race ahead and emit. Then kill the PTY on ptyd. Lossy
@@ -294,8 +327,8 @@ export function panesScopedRoutes(deps: {
         queuePaneKill(deps.db, id);
       }
       deps.cache.forget(id);
-      if (body.kind === 'url') {
-        panes.updateKind(id, { kind: 'url', url: body.url ?? null });
+      if (patch.kind === 'url') {
+        panes.updateKind(id, { kind: 'url', url: patch.url ?? null });
       } else {
         // Default shell pane: pick the host's $SHELL + $HOME so the new
         // pane is usable on next WS attach. Lazy-spawn happens on connect.
@@ -305,14 +338,14 @@ export function panesScopedRoutes(deps: {
           cwd: process.env.HOME ?? '/',
         });
       }
-    } else if (body.url !== undefined) {
+    } else if (patch.url !== undefined) {
       if (p.kind !== 'url') {
         return c.json(
           { error: { code: 'bad_request', message: 'url can only be set on kind=url panes' } },
           400,
         );
       }
-      panes.updateUrl(id, body.url ?? '');
+      panes.updateUrl(id, patch.url ?? '');
     }
     const refreshed = panes.getById(id);
     if (refreshed) {
