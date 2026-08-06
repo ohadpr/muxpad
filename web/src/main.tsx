@@ -5,6 +5,7 @@ import { pushOpen } from './lib/external-open-store';
 import { setLastPaneId } from './lib/last-visited';
 import { startPresence } from './lib/presence';
 import { registerServiceWorker } from './lib/push';
+import { setPushFocusPane } from './lib/push-focus';
 import { router } from './router';
 import { refreshTabs } from './tabs';
 import { refreshWorkspaces } from './workspaces';
@@ -62,12 +63,14 @@ if (!selfEmbedded) {
     }
   }
 
-  // Notification-tap deep links, warm path: the service worker focused this
-  // already-running window and hands us the target instead of hard-reloading
-  // (WindowClient.navigate() reloads the app and iOS rejects it for
-  // uncontrolled clients). Route through the SPA router and point the tab
-  // at the right pane — TabView listens for muxpad:show-pane when mounted;
-  // the last-visited store covers it when it mounts after navigation.
+  // Notification-tap deep links, warm path (FALLBACK): the service worker
+  // prefers a real navigate() to the deep link (reliable, reloads onto the cold
+  // path), but when that's rejected — an uncontrolled client on iOS — it focuses
+  // this window and postMessages the target here instead, avoiding a reload.
+  // Route through the SPA router and point the tab at the right pane three ways,
+  // for robustness: ?pane seeds a freshly-mounting TabView, the push-focus store
+  // is consumed deterministically on mount/activate, and muxpad:show-pane flips
+  // an already-mounted tab.
   navigator.serviceWorker?.addEventListener('message', (e) => {
     const d = e.data as {
       type?: string;
@@ -76,7 +79,12 @@ if (!selfEmbedded) {
       pane_id?: string | null;
     } | null;
     if (d?.type !== 'muxpad:push-navigate' || !d.url) return;
-    if (d.tab_id && d.pane_id) setLastPaneId(d.tab_id, d.pane_id);
+    if (d.tab_id && d.pane_id) {
+      setLastPaneId(d.tab_id, d.pane_id);
+      // Deterministic focus: the owning TabView consumes this on mount/activate,
+      // covering the case where the show-pane event below fires before it exists.
+      setPushFocusPane(d.tab_id, d.pane_id);
+    }
     // Navigate to the OWNING tab through the router (not a raw history.push of
     // the clean path, which could stay on the current tab), carrying ?pane so a
     // freshly-mounting TabView seeds the right pane.
