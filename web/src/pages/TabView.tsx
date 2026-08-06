@@ -32,6 +32,7 @@ import { subscribe, subscribeReconnect } from '../events';
 import { PENDING_AGENT_STARTUP } from '../lib/agent-backend';
 import { consumeFollowTarget } from '../lib/follow-tab';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
+import { consumePushFocusPane } from '../lib/push-focus';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { pushUndo } from '../lib/move-undo-store';
 import { PANE_DRAG_MIME, paneDragOrigin } from '../lib/pane-drag';
@@ -433,6 +434,18 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     window.addEventListener('muxpad:show-pane', onShowPane);
     return () => window.removeEventListener('muxpad:show-pane', onShowPane);
   }, [tab]);
+
+  // Deterministic backstop for the above: a push tap stashes its target pane in
+  // a module store; consume it here whenever THIS tab renders/activates. Covers
+  // the show-pane event firing before this TabView existed (late cross-workspace
+  // mount) — it consumes exactly once, and setting the active pane on a not-yet-
+  // visible tab is fine (it shows the pane when it becomes active).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `isActive` is an intentional re-run trigger (consume on activation), not read in the body.
+  useEffect(() => {
+    if (!tab) return;
+    const forced = consumePushFocusPane(tab.id);
+    if (forced && tab.panes.some((p) => p.id === forced)) setMobileActiveId(forced);
+  }, [tab, isActive]);
 
   // Persist the active pane on every focus event from any XtermPane
   // in the current tab. Desktop has no "active pane" in component

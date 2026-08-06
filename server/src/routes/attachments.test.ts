@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { openDb } from '../store/db.js';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createTestApp, type TestApp } from '../test-helpers/createTestApp.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { openDb } from '../store/db.js';
+import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
 
 describe('attachments', () => {
   let test: TestApp;
@@ -117,6 +117,26 @@ describe('attachments', () => {
     expect(res.headers.get('content-length')).toBe('1000');
     expect(res.headers.get('accept-ranges')).toBe('bytes');
     expect(Buffer.from(await res.arrayBuffer())).toEqual(bytes);
+  });
+
+  it('neuters same-origin XSS: an .html attachment is forced to download, never rendered', async () => {
+    // The serve route is same-origin with the app, so an .html served as
+    // text/html would run script in muxpad's origin. It must download instead.
+    const name = await share(Buffer.from('<script>alert(document.cookie)</script>'), '.html');
+    const res = await test.app.request(`/api/panes/attachments/${name}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-disposition')).toMatch(/^attachment/);
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+  });
+
+  it('serves images inline (no forced download) but still with nosniff', async () => {
+    // Images render via <img src>, so they must NOT carry an attachment
+    // disposition — only the sniff guard.
+    const name = await share(Buffer.from([0x89, 0x50, 0x4e, 0x47]), '.png');
+    const res = await test.app.request(`/api/panes/attachments/${name}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-disposition')).toBeNull();
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
   });
 
   it('honors byte ranges: normal, suffix, open-ended, over-long, unsatisfiable', async () => {
