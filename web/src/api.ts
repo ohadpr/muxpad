@@ -201,6 +201,14 @@ export const api = {
 
   respawnPane: (id: string) => req<void>(`/api/panes/${id}/respawn`, { method: 'POST' }),
 
+  /** Summarize an agent pane's conversation to its deliverable (document
+   *  surface's collapse-to-summary). Best-effort — returns empty strings if the
+   *  transcript/session isn't available yet. */
+  summarizePane: (paneId: string) =>
+    req<{ summary: string; title: string; artifacts: string[] }>(`/api/panes/${paneId}/summarize`, {
+      method: 'POST',
+    }),
+
   uploadAttachment: async (paneId: string, blob: Blob, name: string): Promise<{ path: string }> => {
     const fd = new FormData();
     fd.append('file', blob, name);
