@@ -1,10 +1,40 @@
+import { closeSync, openSync, readSync, statSync } from 'node:fs';
+import { type ChatEvent, normalizeTranscriptLine } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AgentBridge } from '../agent-bridge.js';
+import { findTranscript, identityNormalize, muxpadLocate } from '../chat/TranscriptReader.js';
 import type { EventBus } from '../events.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
+
+// How much of a transcript's tail to read when serving /transcript. Bounds
+// the read on multi-GB transcripts; comfortably holds the max `tail` events
+// (image-heavy lines run to hundreds of KB, hence the generous window).
+const TRANSCRIPT_TAIL_BYTES = 4 * 1024 * 1024;
+
+/** Complete lines from the last `maxBytes` of a file (partial first line dropped). */
+function readTailLines(path: string, maxBytes: number): string[] {
+  const size = statSync(path).size;
+  const from = Math.max(0, size - maxBytes);
+  const len = size - from;
+  if (len <= 0) return [];
+  const fd = openSync(path, 'r');
+  const buf = Buffer.allocUnsafe(len);
+  try {
+    readSync(fd, buf, 0, len, from);
+  } finally {
+    closeSync(fd);
+  }
+  let text = buf.toString('utf8');
+  if (from > 0) {
+    // Snap past the (possibly partial) first line so we never parse a torn one.
+    const nl = text.indexOf('\n');
+    text = nl === -1 ? '' : text.slice(nl + 1);
+  }
+  return text.split('\n');
+}
 
 // Session ids become a filename (`<sid>.jsonl`) that the tail resolves by
 // scanning project dirs — so constrain the charset to prevent a crafted id
@@ -97,6 +127,48 @@ export function agentSessionsRoutes(deps: {
   });
 
   app.get('/', (c) => c.json(store.list()));
+
+  // Last N normalized transcript events for a pane's session, as JSONL —
+  // role/text/tool-use ChatEvents, whatever the backend. CLI consumers must
+  // never have to parse raw backend formats (Claude's projects JSONL vs the
+  // muxpad-normalized log); the same TranscriptReader machinery the chat
+  // socket uses does the translation here.
+  app.get('/:paneId/transcript', (c) => {
+    const paneId = c.req.param('paneId');
+    const sess = store.getByPane(paneId);
+    if (!sess) return c.json({ error: 'no agent session for pane' }, 404);
+    const sid = sess.current_sid;
+    if (!sid) return c.json({ error: 'session has no transcript yet' }, 404);
+    // Claude writes ~/.claude/projects/**/<sid>.jsonl; codex/cursor write the
+    // muxpad-normalized log. Same locator cascade as the summarize route.
+    const path = (sess.assistant === 'claude' ? findTranscript(sid) : null) ?? muxpadLocate(sid);
+    if (!path) return c.json({ error: 'transcript not found' }, 404);
+    const tailQ = Number(c.req.query('tail') ?? 100);
+    const tail = Number.isInteger(tailQ) && tailQ > 0 ? Math.min(tailQ, 1000) : 100;
+    const normalize = sess.assistant === 'claude' ? normalizeTranscriptLine : identityNormalize;
+    let lines: string[];
+    try {
+      lines = readTailLines(path, TRANSCRIPT_TAIL_BYTES);
+    } catch {
+      return c.json({ error: 'transcript unreadable' }, 404);
+    }
+    const events: ChatEvent[] = [];
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let obj: unknown;
+      try {
+        obj = JSON.parse(line);
+      } catch {
+        continue; // torn/garbage line — skip, never break the feed
+      }
+      events.push(...normalize(obj));
+    }
+    const body = events
+      .slice(-tail)
+      .map((e) => JSON.stringify(e))
+      .join('\n');
+    return c.text(body ? `${body}\n` : '', 200, { 'content-type': 'application/x-ndjson' });
+  });
 
   app.get('/by-pane/:paneId', (c) => {
     const session = store.getByPane(c.req.param('paneId'));
