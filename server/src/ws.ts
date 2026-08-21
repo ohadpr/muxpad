@@ -178,7 +178,7 @@ export function attachWsServer(deps: {
       const r = submitSend(paneId, text);
       return r.status === 'rejected'
         ? { ok: false, reason: r.reason ?? 'could not send' }
-        : { ok: true };
+        : { ok: true, queued: r.status === 'queued' };
     };
   }
 
