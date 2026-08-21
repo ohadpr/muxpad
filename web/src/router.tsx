@@ -1,13 +1,9 @@
-import {
-  createRootRoute,
-  createRoute,
-  createRouter,
-  Outlet,
-} from '@tanstack/react-router';
-import { RootRedirect } from './pages/RootRedirect';
-import { PopoutView } from './pages/PopoutView';
+import { Outlet, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
 import { AppLayout } from './components/AppLayout';
 import { WorkspaceLayout } from './components/WorkspaceLayout';
+import { DocView } from './pages/DocView';
+import { PopoutView } from './pages/PopoutView';
+import { RootRedirect } from './pages/RootRedirect';
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
@@ -59,12 +55,19 @@ const popoutPaneRoute = createRoute({
   component: PopoutView,
 });
 
+// Document surface — a note where AI conversations are collapsible blocks.
+// Outside the app layout (its own full-screen chrome); theme vars still apply
+// since they live on :root in styles.css.
+const docRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/doc',
+  component: DocView,
+});
+
 const routeTree = rootRoute.addChildren([
-  appLayoutRoute.addChildren([
-    rootRedirectRoute,
-    workspaceLayoutRoute.addChildren([tabRoute]),
-  ]),
+  appLayoutRoute.addChildren([rootRedirectRoute, workspaceLayoutRoute.addChildren([tabRoute])]),
   popoutPaneRoute,
+  docRoute,
 ]);
 
 export const router = createRouter({ routeTree });
