@@ -99,8 +99,17 @@ rare), do it deliberately, knowing it will kill every running PTY:
 launchctl kickstart -k gui/$UID/dev.muxpad.ptyd
 ```
 
-Not using launchd? `./scripts/muxpad restart` (without `--all`) does the same
-thing: restart main, leave ptyd alone.
+`./scripts/muxpad` detects the jobs and routes itself through launchctl, so
+you don't have to remember which mode you're in:
+
+| command | launchd-managed | hand-started |
+|---|---|---|
+| `muxpad status` | reads the job's pid, prints `owner: launchd` | reads the pid file |
+| `muxpad start` | `kickstart` (never spawns a rival copy) | `spawn_detached` |
+| `muxpad restart [--all]` | `kickstart -k` in place | stop + start |
+| `muxpad stop [--all]` | `bootout` (a SIGTERM would just be undone by KeepAlive) | SIGTERM → SIGKILL |
+
+A booted-out job stays down until `muxpad start` or the next login (RunAtLoad).
 
 ## Stop / remove
 
