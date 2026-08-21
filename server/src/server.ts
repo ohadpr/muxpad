@@ -8,6 +8,7 @@ import type { Presence, PushService } from './push.js';
 import { agentSessionsRoutes } from './routes/agent-sessions.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { openRoutes } from './routes/open.js';
+import { paneIoRoutes } from './routes/pane-io.js';
 import { panesScopedRoutes, panesTabScopedRoutes } from './routes/panes.js';
 import { pushRoutes } from './routes/push.js';
 import { summaryRoutes } from './routes/summary.js';
@@ -74,6 +75,7 @@ export function createApp(deps: AppDeps): Hono {
   app.route('/api/tabs', tabsRoutes(resolved));
   app.route('/api/tabs', panesTabScopedRoutes(resolved));
   app.route('/api/panes', panesScopedRoutes(resolved));
+  app.route('/api/panes', paneIoRoutes(resolved));
   app.route('/api/panes', attachmentsRoutes(resolved));
   app.route('/api/panes', summaryRoutes(resolved));
   app.route('/api/open', openRoutes(resolved));
