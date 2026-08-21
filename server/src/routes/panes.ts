@@ -242,6 +242,54 @@ export function panesScopedRoutes(deps: {
   const panes = new PaneStore(deps.db);
   const tabs = new TabStore(deps.db);
 
+  // Flat enumeration: every pane across all workspaces, decorated, each row
+  // joined with its tab/workspace id+name. A supervisor's "org chart" view —
+  // without this a caller must fan out over workspaces → tabs → panes.
+  app.get('/', async (c) => {
+    const rows = deps.db
+      .prepare(
+        `SELECT p.id AS pane_id, t.id AS tab_id, t.name AS tab_name,
+                w.id AS workspace_id, w.name AS workspace_name
+         FROM panes p
+         JOIN tabs t ON t.id = p.tab_id
+         JOIN workspaces w ON w.id = t.workspace_id
+         ORDER BY w.position ASC, w.created_at ASC,
+                  t.position ASC, t.created_at ASC,
+                  p.created_at ASC`,
+      )
+      .all() as Array<{
+      pane_id: string;
+      tab_id: string;
+      tab_name: string;
+      workspace_id: string;
+      workspace_name: string;
+    }>;
+    // One listPanes RPC instead of a hasPane per row; if ptyd is unreachable
+    // every pane reads as not running — the rows themselves are still useful.
+    let live: Set<string>;
+    try {
+      live = new Set(await deps.ptyd.listPanes());
+    } catch {
+      live = new Set();
+    }
+    const out = [];
+    for (const r of rows) {
+      const p = panes.getById(r.pane_id);
+      if (!p) continue; // raced a delete between the join and the fetch
+      out.push({
+        ...decoratePane(deps.cache, p),
+        // Live shell cwd when ptyd has reported one; else the spawn cwd row.
+        cwd: deps.cache.getCwd(p.id) ?? p.cwd,
+        isRunning: live.has(p.id),
+        tab_id: r.tab_id,
+        tab_name: r.tab_name,
+        workspace_id: r.workspace_id,
+        workspace_name: r.workspace_name,
+      });
+    }
+    return c.json(out);
+  });
+
   app.get('/:id', async (c) => {
     const p = panes.getById(c.req.param('id'));
     if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
