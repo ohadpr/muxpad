@@ -744,3 +744,70 @@ describe('panes routes', () => {
     expect(res.status).toBe(409);
   });
 });
+
+describe('flat pane enumeration (GET /api/panes)', () => {
+  let test: TestApp;
+  let tmp: string;
+
+  beforeEach(async () => {
+    tmp = mkdtempSync(join(tmpdir(), 'muxpad-panes-flat-'));
+    test = await createTestApp({ db: openDb(':memory:'), dataDir: tmp });
+  });
+
+  afterEach(async () => {
+    await test.cleanup();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const post = async (path: string, body: unknown) =>
+    (await (
+      await test.app.request(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    ).json()) as { id: string };
+
+  it('lists every pane across workspaces with tab/workspace joins', async () => {
+    const wsA = await post('/api/workspaces', { name: 'Alpha' });
+    const wsB = await post('/api/workspaces', { name: 'Beta' });
+    const tabA = await post('/api/tabs', { name: 'ta', workspace_id: wsA.id });
+    const tabB = await post('/api/tabs', { name: 'tb', workspace_id: wsB.id });
+    const p1 = await post(`/api/tabs/${tabA.id}/panes`, { shell: '/bin/sh' });
+    const p2 = await post(`/api/tabs/${tabB.id}/panes`, {
+      kind: 'url',
+      url: 'http://example.com',
+    });
+
+    const res = await test.app.request('/api/panes');
+    expect(res.status).toBe(200);
+    const list = (await res.json()) as Array<{
+      id: string;
+      tab_id: string;
+      tab_name: string;
+      workspace_id: string;
+      workspace_name: string;
+      isRunning: boolean;
+      busy: boolean;
+      face: string;
+    }>;
+    expect(list.map((p) => p.id).sort()).toEqual([p1.id, p2.id].sort());
+    const row1 = list.find((p) => p.id === p1.id);
+    expect(row1?.workspace_name).toBe('Alpha');
+    expect(row1?.tab_name).toBe('ta');
+    expect(row1?.tab_id).toBe(tabA.id);
+    expect(row1?.workspace_id).toBe(wsA.id);
+    expect(typeof row1?.busy).toBe('boolean');
+    // Shell panes are eagerly spawned on create → running; url panes never.
+    expect(row1?.isRunning).toBe(true);
+    const row2 = list.find((p) => p.id === p2.id);
+    expect(row2?.workspace_name).toBe('Beta');
+    expect(row2?.isRunning).toBe(false);
+  });
+
+  it('returns an empty array with no panes', async () => {
+    const res = await test.app.request('/api/panes');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual([]);
+  });
+});
