@@ -937,6 +937,29 @@ cmd_pane_rename() {
 }
 
 cmd_pane_list() {
+  # --all: flat list of every pane across all workspaces (the supervisor's
+  # "org chart"), one line each:
+  #   <pane-id>  <ws>/<tab>  <face>  <busy|idle>  <title|foreground_cmd>
+  local a rest=()
+  local all=0
+  for a in "$@"; do
+    case "$a" in
+      --all) all=1 ;;
+      *) rest+=("$a") ;;
+    esac
+  done
+  if [ "$all" = "1" ]; then
+    local res
+    res="$(http_request GET /api/panes)"
+    if [ "$JSON_OUTPUT" = "1" ]; then
+      printf '%s\n' "$res"
+      return
+    fi
+    printf '%s' "$res" | jq -r '.[] |
+      "\(.id)  \(.workspace_name)/\(.tab_name)  \(.face)  \(if .busy then "busy" else "idle" end)  \(.name // .title // .foreground_cmd // .url // "")"'
+    return
+  fi
+  set -- ${rest[@]+"${rest[@]}"}
   reset_flags tab
   parse_flags tab -- "$@"
   local tab_id="${FLAG_tab:-${MUXPAD_TAB_ID:-}}"
@@ -1012,22 +1035,132 @@ cmd_pane_open() {
   print_created pane "$res"
 }
 
+# `muxpad pane read [<id>]` — print a terminal pane's scrollback (the ring
+# buffer a fresh attach would replay), ANSI-stripped so it's grep-able.
+# --raw keeps the escape sequences; --lines=N trims to the last N lines.
+cmd_pane_read() {
+  local id='' lines='' raw=0 a
+  for a in "$@"; do
+    case "$a" in
+      --lines=*) lines="${a#--lines=}" ;;
+      --raw) raw=1 ;;
+      --*) echo "muxpad: unknown flag '$a'" >&2; exit 1 ;;
+      *) id="$a" ;;
+    esac
+  done
+  id="${id:-${MUXPAD_PANE_ID:-}}"
+  if [ -z "$id" ]; then
+    echo "usage: muxpad pane read [<id>] [--lines=N] [--raw]   (id defaults to MUXPAD_PANE_ID)" >&2
+    exit 1
+  fi
+  local qs=''
+  [ -n "$lines" ] && qs="?lines=$lines"
+  if [ "$raw" = "1" ]; then
+    if [ -n "$qs" ]; then qs+='&raw=1'; else qs='?raw=1'; fi
+  fi
+  http_request GET "/api/panes/$id/scrollback$qs"
+}
+
+# `muxpad pane send <id> "text"` — type into a terminal pane's live pty.
+# Appends Enter by default (the dominant use is "run this command");
+# --no-enter inverts. --key=<name> (repeatable) sends named keys instead:
+# enter, esc, tab, up, down, left, right, ctrl-a … ctrl-z. Refused (400)
+# by the server when the pane has no live pty.
+cmd_pane_send() {
+  local id='' text='' have_text=0 enter=1 a
+  local keys=()
+  for a in "$@"; do
+    case "$a" in
+      --no-enter) enter=0 ;;
+      --key=*) keys+=("${a#--key=}") ;;
+      --*) echo "muxpad: unknown flag '$a'" >&2; exit 1 ;;
+      *)
+        if [ -z "$id" ]; then
+          id="$a"
+        elif [ "$have_text" = "0" ]; then
+          text="$a"; have_text=1
+        else
+          echo "muxpad pane send: too many arguments" >&2
+          exit 1
+        fi
+        ;;
+    esac
+  done
+  if [ -z "$id" ] || { [ "$have_text" = "0" ] && [ "${#keys[@]}" = "0" ]; }; then
+    echo 'usage: muxpad pane send <id> "text" [--no-enter]' >&2
+    echo '       muxpad pane send <id> --key=<name> [--key=<name>…]' >&2
+    exit 1
+  fi
+  if [ "$have_text" = "1" ] && [ "${#keys[@]}" -gt 0 ]; then
+    echo "muxpad pane send: text and --key are mutually exclusive" >&2
+    exit 1
+  fi
+  local body
+  if [ "${#keys[@]}" -gt 0 ]; then
+    local keys_json
+    keys_json="$(printf '%s\n' "${keys[@]}" | jq -R . | jq -sc .)"
+    body="{\"keys\":$keys_json}"
+  else
+    local enter_json=false
+    [ "$enter" = "1" ] && enter_json=true
+    body="{\"text\":$(json_string "$text"),\"enter\":$enter_json}"
+  fi
+  http_request POST "/api/panes/$id/input" "$body" >/dev/null
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '{"sent":"%s"}\n' "$id"
+  else
+    printf '%s✓%s input sent to %s\n' "$C_GREEN" "$C_RESET" "$id"
+  fi
+}
+
+# `muxpad pane summarize [<id>]` — 1–2 sentence deliverable summary of an
+# agent pane's conversation (the same summary the doc surface's collapsed
+# agent block shows). Best-effort server-side; empty when there's nothing.
+cmd_pane_summarize() {
+  reset_flags
+  parse_flags -- "$@"
+  local id="${POSITIONAL[0]:-${MUXPAD_PANE_ID:-}}"
+  if [ -z "$id" ]; then
+    echo "usage: muxpad pane summarize [<id>]   (id defaults to MUXPAD_PANE_ID)" >&2
+    exit 1
+  fi
+  local res
+  res="$(http_request POST "/api/panes/$id/summarize")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$res"
+    return
+  fi
+  local title summary
+  title="$(printf '%s' "$res" | jq -r '.title // empty')"
+  summary="$(printf '%s' "$res" | jq -r '.summary // empty')"
+  [ -n "$title" ] && printf '%s%s%s\n' "$C_BOLD" "$title" "$C_RESET"
+  if [ -n "$summary" ]; then
+    printf '%s\n' "$summary"
+  else
+    printf '%s(no summary — pane has no agent conversation yet)%s\n' "$C_DIM" "$C_RESET"
+  fi
+  printf '%s' "$res" | jq -r '.artifacts[]? | "  artifact: \(.)"'
+}
+
 cmd_pane() {
   local verb="${1:-}"
   if [ -z "$verb" ]; then
-    echo "usage: muxpad pane {new|list|delete|open|rename}" >&2
+    echo "usage: muxpad pane {new|list|read|send|delete|open|rename|summarize}" >&2
     exit 1
   fi
   shift
   case "$verb" in
     new) cmd_pane_new "$@" ;;
     list) cmd_pane_list "$@" ;;
+    read) cmd_pane_read "$@" ;;
+    send) cmd_pane_send "$@" ;;
     delete) cmd_pane_delete "$@" ;;
     open) cmd_pane_open "$@" ;;
     rename) cmd_pane_rename "$@" ;;
+    summarize) cmd_pane_summarize "$@" ;;
     *)
       echo "muxpad: unknown pane verb '$verb'" >&2
-      echo "usage: muxpad pane {new|list|delete|open|rename}" >&2
+      echo "usage: muxpad pane {new|list|read|send|delete|open|rename|summarize}" >&2
       exit 1
       ;;
   esac
@@ -1323,14 +1456,88 @@ cmd_agent_new() {
   fi
 }
 
-cmd_agent() {
-  # `muxpad agent new …` is the HTTP launcher; anything else is the in-pane
-  # runner itself (including the server-written `muxpad agent --resume <sid>`).
-  if [ "${1:-}" = "new" ]; then
-    shift
-    cmd_agent_new "$@"
-    return
+# `muxpad agent list` — every tracked agent session across all panes.
+cmd_agent_list() {
+  local res
+  res="$(http_request GET /api/agent-sessions)"
+  print_table "$res" \
+    'PANE:.pane_id' \
+    'BACKEND:.assistant' \
+    'STATUS:.status' \
+    'VIEW:.view_mode' \
+    'SID:(.current_sid // "-")'
+}
+
+# `muxpad agent send <paneId> "message"` — deliver a message to the pane's
+# agent runner via the server-side queue. Exit codes: 0 sent, 0 queued
+# (behind an in-flight turn; noted on stderr), 1 rejected (reason printed).
+cmd_agent_send() {
+  reset_flags
+  parse_flags -- "$@"
+  if [ "${#POSITIONAL[@]}" -lt 2 ]; then
+    echo 'usage: muxpad agent send <paneId> "message"' >&2
+    exit 1
   fi
+  require_api_url
+  local pane_id="${POSITIONAL[0]}"
+  local message="${POSITIONAL[1]}"
+  # Drive curl directly (not http_request): a 409 rejection carries
+  # {ok:false, reason} — we want the reason on stderr + exit 1, not the
+  # generic HTTP-error dump.
+  local tmp status
+  tmp="$(mktemp)"
+  status="$(curl -sS -o "$tmp" -w '%{http_code}' \
+    -X POST -H 'content-type: application/json' \
+    --data "{\"text\":$(json_string "$message")}" \
+    "${MUXPAD_API_URL%/}/api/agent-sessions/$pane_id/send" || echo 000)"
+  if [ "$status" = "202" ]; then
+    local queued
+    queued="$(jq -r '.queued // false' "$tmp" 2>/dev/null || echo false)"
+    rm -f "$tmp"
+    if [ "$queued" = "true" ]; then
+      echo "muxpad: agent busy — message queued, will run after the current turn" >&2
+    fi
+    if [ "$JSON_OUTPUT" = "1" ]; then
+      printf '{"ok":true,"queued":%s}\n' "$queued"
+    else
+      printf '%s✓%s message %s to %s\n' "$C_GREEN" "$C_RESET" \
+        "$([ "$queued" = "true" ] && echo queued || echo sent)" "$pane_id"
+    fi
+    return 0
+  fi
+  local reason
+  reason="$(jq -r '.reason // empty' "$tmp" 2>/dev/null || true)"
+  rm -f "$tmp"
+  printf '%smuxpad: agent send rejected (HTTP %s)%s%s\n' \
+    "$C_RED" "$status" "${reason:+ — $reason}" "$C_RESET" >&2
+  exit 1
+}
+
+# `muxpad agent transcript <paneId> [--tail=N]` — last N normalized transcript
+# events as JSONL (role, text, tool-use summaries), whatever the backend.
+cmd_agent_transcript() {
+  reset_flags tail
+  parse_flags tail -- "$@"
+  local pane_id="${POSITIONAL[0]:-}"
+  if [ -z "$pane_id" ]; then
+    echo 'usage: muxpad agent transcript <paneId> [--tail=N]' >&2
+    exit 1
+  fi
+  local qs=''
+  [ -n "${FLAG_tail:-}" ] && qs="?tail=$FLAG_tail"
+  http_request GET "/api/agent-sessions/$pane_id/transcript$qs"
+}
+
+cmd_agent() {
+  # `muxpad agent new|list|send|transcript …` are HTTP verbs; anything else is
+  # the in-pane runner itself (including the server-written
+  # `muxpad agent --resume <sid>`).
+  case "${1:-}" in
+    new) shift; cmd_agent_new "$@"; return ;;
+    list) shift; require_jq; cmd_agent_list "$@"; return ;;
+    send) shift; require_jq; cmd_agent_send "$@"; return ;;
+    transcript) shift; require_jq; cmd_agent_transcript "$@"; return ;;
+  esac
   if [ -z "${MUXPAD_PANE_ID:-}" ]; then
     echo "muxpad agent: must be run inside a muxpad pane (no MUXPAD_PANE_ID)" >&2
     exit 1
@@ -1406,7 +1613,24 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                               at the root.
   pane open     [--tab=<id>] [--direction=…] [--target=<id>] <url>
                                               iframe pane, same placement rules
-  pane list     [--tab=<id>]
+  pane list     [--tab=<id>] | --all          --all: every pane across all
+                                              workspaces, one line each:
+                                              <id> <ws>/<tab> <face> <busy|idle> <title>
+  pane read     [<id>] [--lines=N] [--raw]    print a terminal pane's scrollback,
+                                              ANSI-stripped (grep-able); --raw
+                                              keeps escapes, --lines trims to the
+                                              last N lines. id defaults to
+                                              MUXPAD_PANE_ID.
+  pane send     <id> "text" [--no-enter]      type into a terminal pane's live
+                                              pty; appends Enter unless
+                                              --no-enter. Refused if the pane
+                                              has no running pty.
+  pane send     <id> --key=<name> [...]       send named keys instead of text
+                                              (repeatable): enter esc tab up
+                                              down left right ctrl-a…ctrl-z
+                                              e.g. --key=ctrl-c
+  pane summarize [<id>]                       1–2 sentence deliverable summary
+                                              of an agent pane's conversation
   pane delete   <id>
   pane rename   [<id>] <name>                 id defaults to MUXPAD_PANE_ID
 
@@ -1445,6 +1669,16 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      --name labels the tab (skips AI auto-
                                      rename); --model pins the session model
                                      (e.g. 'claude-opus-4-8[1m]').
+  agent list                         every tracked agent session (pane id,
+                                     backend, status, view, session id)
+  agent send <paneId> "message"      deliver a message to a pane's agent via
+                                     the server queue. exit 0 = sent/queued
+                                     (queued noted on stderr), 1 = rejected
+                                     (reason printed).
+  agent transcript <paneId> [--tail=N]
+                                     last N normalized transcript events as
+                                     JSONL (role, text, tool-use summaries) —
+                                     same shape for every backend.
   claude [claude args...]            launch Claude Code in THIS pane as a
                                      muxpad-tracked session so it can be viewed
                                      and driven from the web chat (and switched
