@@ -194,16 +194,51 @@ export function attachWsServer(deps: {
   // attempts (a booting runner takes seconds to register) and a give-up cap
   // so a crash-looping runner (broken build, bad model) converges to a
   // visible "agent exited" instead of an infinite kill/spawn loop. A runner
-  // registering (hello) resets its pane's record.
+  // that registers (hello) AND then stays up for the probation window resets
+  // its pane's record.
+  //
+  // Probation, not the bare hello, is what makes the cap bite. A runner whose
+  // session can't start (`--resume` of a sid the harness no longer has) still
+  // connects and says hello before it dies a second later — clearing the record
+  // there re-armed the counter on every cycle, so a pane crash-looped on the
+  // sweep interval forever, attempts stuck at 1. Recovery means STAYING alive.
   const RESPAWN_SWEEP_MS = 20_000;
   const RESPAWN_COOLDOWN_MS = 45_000;
   const RESPAWN_MAX_ATTEMPTS = 3;
+  const RESPAWN_PROBATION_MS = 60_000;
+  // A resume against a session id the harness can't find is not a transient
+  // crash — retrying the same command is guaranteed to fail identically. The
+  // sweep drops `--resume` once and brings the pane back as a fresh session in
+  // the same cwd instead of burning the attempt budget on a certainty.
+  const DEAD_SESSION_RE = /No conversation found with session ID/i;
   interface RespawnState {
     attempts: number;
     lastAt: number;
     gaveUp: boolean;
+    /** Last fatal frame from this pane's runner (cleared once acted on). */
+    fatal?: string | undefined;
+    /** We already dropped a dead `--resume` from this pane's startup_cmd. */
+    healed?: boolean;
   }
   const respawns = new Map<string, RespawnState>();
+  // Pending "the runner survived probation" timers, keyed by pane.
+  const probation = new Map<string, ReturnType<typeof setTimeout>>();
+  const clearProbation = (paneId: string) => {
+    const t = probation.get(paneId);
+    if (t) {
+      clearTimeout(t);
+      probation.delete(paneId);
+    }
+  };
+  const armProbation = (paneId: string) => {
+    clearProbation(paneId);
+    const t = setTimeout(() => {
+      probation.delete(paneId);
+      respawns.delete(paneId);
+    }, RESPAWN_PROBATION_MS);
+    t.unref?.();
+    probation.set(paneId, t);
+  };
   const agentExitedMessage = (paneId: string) =>
     `agent exited — automatic restarts failed; see ~/.muxpad/agent-logs/${paneId}.log, then rerun \`muxpad agent\` from the pane's terminal face`;
   // Single-flight: a slow ptyd must not stack overlapping sweeps.
@@ -230,6 +265,30 @@ export function attachWsServer(deps: {
         if (Date.now() - pane.created_at < 30_000) continue;
         const st = respawns.get(pane.id) ?? { attempts: 0, lastAt: 0, gaveUp: false };
         if (st.gaveUp) continue;
+        // Dead-session self-heal: the runner told us (fatal) that its resume
+        // target is gone from the harness's store — a bridged session, a
+        // pruned transcript, a sid that never got a message. Strip `--resume`
+        // so the respawn lands a NEW session in the same cwd/backend/model,
+        // and let it use the normal attempt budget from there. The old sid
+        // stays in the agent session's lineage; nothing is deleted.
+        const deadSid = st.fatal !== undefined && DEAD_SESSION_RE.test(st.fatal);
+        if (deadSid && !st.healed) {
+          st.fatal = undefined;
+          const cmd = pane.startup_cmd ?? '';
+          const fresh = cmd.replace(/\s--resume\s+[A-Za-z0-9._-]+/, '');
+          if (fresh !== cmd) {
+            st.healed = true;
+            st.attempts = 0;
+            respawns.set(pane.id, st);
+            panes.setStartupCmd(pane.id, fresh);
+            emitPaneUpdated(pane.id);
+            bcastToPane(pane.id, {
+              t: 'notice',
+              message:
+                'previous session not found on disk — starting a fresh one in the same folder…',
+            });
+          }
+        }
         if (Date.now() - st.lastAt < RESPAWN_COOLDOWN_MS) continue;
         // Foreground probe: a live-but-disconnected runner (ws blip mid-
         // reconnect) still owns the pty foreground — leave it alone, it
@@ -268,7 +327,9 @@ export function attachWsServer(deps: {
           await deps.ptyd.ensurePane({
             id: pane.id,
             shell: pane.shell ?? process.env.SHELL ?? '/bin/zsh',
-            startup_cmd: pane.startup_cmd,
+            // Re-read: the dead-session heal above may have just rewritten it,
+            // and typing the stale `--resume` would reproduce the same fatal.
+            startup_cmd: panes.getById(pane.id)?.startup_cmd ?? pane.startup_cmd,
             cwd: safeCwd(pane.cwd),
             env: pane.env,
             tab_id: pane.tab_id,
@@ -505,10 +566,14 @@ export function attachWsServer(deps: {
             // legacy runner = claude. Validated against the allowlist so it's
             // safe both as a DB label AND baked into the self-heal shell cmd.
             const backendId = isBackendId(frame.backend) ? frame.backend : 'claude';
-            // A registered runner is proof of recovery — forget any respawn
-            // attempts (including a give-up: the user restarting it by hand
-            // re-arms supervision).
-            respawns.delete(paneId);
+            // Registering is a claim of recovery, not proof of it: a runner
+            // that can't resume its session says hello and dies seconds later.
+            // Clear the respawn record only after it has held the pane for the
+            // probation window (the close handler cancels the timer). A pane
+            // that had already given up is the exception — a hand-restart is a
+            // deliberate act by the user, so re-arm supervision immediately.
+            if (respawns.get(paneId)?.gaveUp) respawns.delete(paneId);
+            else armProbation(paneId);
             agents.attachRunner({
               pane_id: paneId,
               cwd: frame.cwd,
@@ -645,6 +710,14 @@ export function attachWsServer(deps: {
             // transcript-tail path: user-given names always win.
             if (typeof frame.title === 'string') applyAiTitle(paneId, frame.title);
           } else if (frame.t === 'fatal') {
+            // A fatal means this runner is on its way out — it never survives
+            // probation, so cancel the pending "recovered" timer and hand the
+            // reason to the sweep, which decides between a plain retry and the
+            // dead-session heal.
+            clearProbation(paneId);
+            const st = respawns.get(paneId) ?? { attempts: 0, lastAt: 0, gaveUp: false };
+            st.fatal = typeof frame.error === 'string' ? frame.error : '';
+            respawns.set(paneId, st);
             bcast({ t: 'error', message: `agent exited: ${frame.error}` });
           }
         });
@@ -652,6 +725,9 @@ export function attachWsServer(deps: {
           // Only tear down if this socket is still the registered runner —
           // a replaced (old) socket must not detach its successor.
           if (agentRunners.get(paneId) !== conn) return;
+          // It didn't hold the pane for the probation window — leave the
+          // respawn record standing so the attempt budget keeps counting.
+          clearProbation(paneId);
           agentRunners.delete(paneId);
           agents.detachRunner(paneId);
           deps.cache.setAgentBusy(paneId, false);
@@ -992,6 +1068,7 @@ export function attachWsServer(deps: {
       new Promise<void>((resolve) => {
         clearInterval(heartbeat);
         clearInterval(respawnSweep);
+        for (const paneId of [...probation.keys()]) clearProbation(paneId);
         for (const client of wss.clients) {
           try {
             client.terminate();

@@ -26,12 +26,45 @@ PTYD_SOCKET="${MUXPAD_PTYD_SOCKET:-$DATA_DIR/ptyd.sock}"
 
 mkdir -p "$DATA_DIR"
 
+# ─── launchd awareness ───────────────────────────────────────────────────────
+# When the daemons run as launchd jobs (docs/launchd.md), launchd owns the
+# processes and there are no pid files. A pid-file-only check then reports
+# "not running" for a daemon that has been up for days — and `start` happily
+# spawns a SECOND one to fight over :7777 and the ptyd socket. Ask launchctl
+# first, and route stop/restart through it so we never race KeepAlive (which
+# would just resurrect whatever we killed).
+LAUNCHD_MAIN="dev.muxpad"
+LAUNCHD_PTYD="dev.muxpad.ptyd"
+
+launchd_loaded() {
+  launchctl print "gui/$UID/$1" >/dev/null 2>&1
+}
+
+# Echo the job's pid; empty when the job isn't loaded or isn't running.
+launchd_pid() {
+  launchctl print "gui/$UID/$1" 2>/dev/null |
+    awk -F'= ' '/^[[:space:]]*pid = /{gsub(/[^0-9]/, "", $2); print $2; exit}'
+}
+
 is_running() {
+  [ -n "$(launchd_pid "$LAUNCHD_MAIN")" ] && return 0
   [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
 }
 
 is_ptyd_running() {
+  [ -n "$(launchd_pid "$LAUNCHD_PTYD")" ] && return 0
   [ -f "$PID_FILE_PTYD" ] && kill -0 "$(cat "$PID_FILE_PTYD")" 2>/dev/null
+}
+
+# Which pid to show/signal for a daemon: launchd's if it owns it, else ours.
+running_pid() {
+  local label="$1" pid_file="$2" pid
+  pid="$(launchd_pid "$label")"
+  if [ -n "$pid" ]; then
+    echo "$pid"
+    return
+  fi
+  [ -f "$pid_file" ] && cat "$pid_file"
 }
 
 # Send SIGTERM, wait, escalate to SIGKILL. Removes the pid file at the end.
@@ -118,7 +151,18 @@ resolve_host() {
 
 cmd_start() {
   if is_running; then
-    echo "already running (PID $(cat "$PID_FILE"))"
+    echo "already running (PID $(running_pid "$LAUNCHD_MAIN" "$PID_FILE"))"
+    cmd_status
+    return
+  fi
+
+  # Loaded-but-stopped launchd jobs: hand the start back to launchd instead of
+  # spawning a rival copy it doesn't supervise.
+  if launchd_loaded "$LAUNCHD_MAIN"; then
+    echo "launchd-managed — kickstarting the jobs"
+    launchd_loaded "$LAUNCHD_PTYD" && launchctl kickstart "gui/$UID/$LAUNCHD_PTYD" >/dev/null 2>&1 || true
+    launchctl kickstart "gui/$UID/$LAUNCHD_MAIN" >/dev/null 2>&1 || true
+    sleep 0.6
     cmd_status
     return
   fi
@@ -267,6 +311,25 @@ cmd_stop() {
   if [ "$stop_all" = "1" ]; then
     teardown_tailscale_serve
   fi
+
+  # Under launchd, KeepAlive respawns anything we SIGTERM — a plain kill would
+  # look like it worked and the daemon would be back a second later. Booting
+  # the job out is the real stop; it stays down until `muxpad start` (kickstart
+  # via the bootstrap below) or the next login.
+  if launchd_loaded "$LAUNCHD_MAIN"; then
+    echo "muxpad: launchd job $LAUNCHD_MAIN — booting out"
+    launchctl bootout "gui/$UID/$LAUNCHD_MAIN" 2>/dev/null || true
+    if [ "$stop_all" = "1" ] && launchd_loaded "$LAUNCHD_PTYD"; then
+      echo "ptyd: launchd job $LAUNCHD_PTYD — booting out (this kills every pane)"
+      launchctl bootout "gui/$UID/$LAUNCHD_PTYD" 2>/dev/null || true
+      [ -S "$PTYD_SOCKET" ] && rm -f "$PTYD_SOCKET"
+    elif is_ptyd_running; then
+      echo "ptyd: still running (PID $(running_pid "$LAUNCHD_PTYD" "$PID_FILE_PTYD")) — use 'muxpad stop --all' to stop it too"
+    fi
+    echo "note: both jobs come back at next login (RunAtLoad); re-arm now with 'muxpad start'"
+    return
+  fi
+
   stop_pid_file "muxpad" "$PID_FILE"
 
   if [ "$stop_all" = "1" ]; then
@@ -275,7 +338,7 @@ cmd_stop() {
     [ -S "$PTYD_SOCKET" ] && rm -f "$PTYD_SOCKET"
   else
     if is_ptyd_running; then
-      echo "ptyd: still running (PID $(cat "$PID_FILE_PTYD")) — use 'muxpad stop --all' to stop it too"
+      echo "ptyd: still running (PID $(running_pid "$LAUNCHD_PTYD" "$PID_FILE_PTYD")) — use 'muxpad stop --all' to stop it too"
     fi
   fi
 }
@@ -288,6 +351,21 @@ cmd_restart() {
       *) echo "muxpad restart: unknown flag '$a'" >&2; exit 1 ;;
     esac
   done
+
+  # launchd restarts a job in place (`kickstart -k`) without ever leaving it
+  # stopped, so there's no window for KeepAlive to race a manual start. Same
+  # rule as by hand: main only, unless --all — bouncing ptyd kills every pane.
+  if launchd_loaded "$LAUNCHD_MAIN"; then
+    if [ "$restart_all" = "1" ] && launchd_loaded "$LAUNCHD_PTYD"; then
+      echo "restarting $LAUNCHD_PTYD (kills every pane)"
+      launchctl kickstart -k "gui/$UID/$LAUNCHD_PTYD" >/dev/null
+    fi
+    echo "restarting $LAUNCHD_MAIN"
+    launchctl kickstart -k "gui/$UID/$LAUNCHD_MAIN" >/dev/null
+    sleep 0.6
+    cmd_status
+    return
+  fi
 
   if [ "$restart_all" = "1" ]; then
     cmd_stop --all || true
@@ -302,10 +380,11 @@ cmd_status() {
   # muxpad
   if is_running; then
     local pid url
-    pid="$(cat "$PID_FILE")"
+    pid="$(running_pid "$LAUNCHD_MAIN" "$PID_FILE")"
     url="$(grep -oE 'http://[^[:space:]]+' "$LOG_FILE" 2>/dev/null | tail -1 || true)"
     echo "muxpad:"
     echo "  running (PID $pid)"
+    launchd_loaded "$LAUNCHD_MAIN" && echo "  owner: launchd ($LAUNCHD_MAIN, KeepAlive)"
     [ -n "$url" ] && echo "  url:  $url"
     echo "  log:  $LOG_FILE"
     echo "  data: $DATA_DIR"
@@ -316,9 +395,10 @@ cmd_status() {
   # ptyd
   if is_ptyd_running; then
     local pid
-    pid="$(cat "$PID_FILE_PTYD")"
+    pid="$(running_pid "$LAUNCHD_PTYD" "$PID_FILE_PTYD")"
     echo "ptyd:"
     echo "  running (PID $pid)"
+    launchd_loaded "$LAUNCHD_PTYD" && echo "  owner:  launchd ($LAUNCHD_PTYD, KeepAlive)"
     echo "  socket: $PTYD_SOCKET"
     echo "  log:    $LOG_FILE_PTYD"
   else
