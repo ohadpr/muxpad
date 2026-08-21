@@ -10,6 +10,7 @@ import { attachmentsRoutes } from './routes/attachments.js';
 import { openRoutes } from './routes/open.js';
 import { panesScopedRoutes, panesTabScopedRoutes } from './routes/panes.js';
 import { pushRoutes } from './routes/push.js';
+import { summaryRoutes } from './routes/summary.js';
 import { tabsRoutes } from './routes/tabs.js';
 import { workspacesRoutes } from './routes/workspaces.js';
 
@@ -74,6 +75,7 @@ export function createApp(deps: AppDeps): Hono {
   app.route('/api/tabs', panesTabScopedRoutes(resolved));
   app.route('/api/panes', panesScopedRoutes(resolved));
   app.route('/api/panes', attachmentsRoutes(resolved));
+  app.route('/api/panes', summaryRoutes(resolved));
   app.route('/api/open', openRoutes(resolved));
   app.route('/api/agent-sessions', agentSessionsRoutes(resolved));
   if (resolved.push) app.route('/api/push', pushRoutes(resolved.push));
