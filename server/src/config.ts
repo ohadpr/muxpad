@@ -13,6 +13,23 @@ export interface Config {
    * the database. Override via MUXPAD_PTYD_SOCKET for split deployments.
    */
   ptydSocketPath: string;
+  /**
+   * Second listener serving ONLY `<dataDir>/public/` — the internet-facing
+   * artifact host behind Tailscale Funnel (see public-server.ts). Kept on a
+   * dedicated port precisely so the funnel never touches the main
+   * unauthenticated UI port.
+   */
+  publicPort: number;
+  /**
+   * Bind address for the public static server. 127.0.0.1 by default — the
+   * funnel proxies to loopback, so nothing else needs to reach it directly.
+   */
+  publicHost: string;
+  /**
+   * MUXPAD_NO_FUNNEL=1 disables all tailscale exec on publish (isolated /
+   * test instances). Publishes then return the local URL + a warning.
+   */
+  funnelEnabled: boolean;
 }
 
 export function loadConfig(): Config {
@@ -46,5 +63,8 @@ export function loadConfig(): Config {
     port: Number(process.env.MUXPAD_PORT ?? 7777),
     dataDir,
     ptydSocketPath: process.env.MUXPAD_PTYD_SOCKET ?? join(dataDir, 'ptyd.sock'),
+    publicPort: Number(process.env.MUXPAD_PUBLIC_PORT ?? 7778),
+    publicHost: process.env.MUXPAD_PUBLIC_HOST ?? '127.0.0.1',
+    funnelEnabled: process.env.MUXPAD_NO_FUNNEL !== '1',
   };
 }

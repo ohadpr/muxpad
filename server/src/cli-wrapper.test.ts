@@ -1,18 +1,18 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { serve, type ServerType } from '@hono/node-server';
 import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { dirname, resolve } from 'node:path';
 import { join } from 'node:path';
-import { createApp } from './server.js';
-import { openDb } from './store/db.js';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import { type ServerType, serve } from '@hono/node-server';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { EventBus } from './events.js';
-import { WorkspaceStore } from './store/WorkspaceStore.js';
-import { spawnPtyd, type SpawnedPtyd } from './test-helpers/spawnPtyd.js';
 import { PtydCache } from './ptyd-cache.js';
+import { createApp } from './server.js';
+import { WorkspaceStore } from './store/WorkspaceStore.js';
+import { openDb } from './store/db.js';
+import { type SpawnedPtyd, spawnPtyd } from './test-helpers/spawnPtyd.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -94,5 +94,48 @@ describe('scripts/muxpad HTTP wrapper', () => {
     expect(parsed.id).toMatch(/[0-9A-HJKMNP-TV-Z]{26}/);
     expect(parsed.name).toBe('json-cli');
     expect(workspaces.getById(parsed.id)).not.toBeNull();
+  });
+
+  it('publish discovers the base url via a STUBBED tailscale, then falls back to the persisted value', async () => {
+    // The stub stands in for the real binary via MUXPAD_TAILSCALE_BIN —
+    // tests must NEVER run the real tailscale (a funnel exec would expose
+    // content publicly). It logs its argv and answers `status --json`.
+    const stub = join(tmp, 'tailscale-stub.sh');
+    const stubLog = join(tmp, 'tailscale-stub.log');
+    writeFileSync(
+      stub,
+      `#!/bin/sh\necho "$@" >> "${stubLog}"\nif [ "$1" = "status" ]; then printf '%s' '{"Self":{"DNSName":"stub-host.ts.net."}}'; fi\nexit 0\n`,
+      { mode: 0o755 },
+    );
+    const srcFile = join(tmp, 'artifact.html');
+    writeFileSync(srcFile, '<html>cli</html>');
+
+    // Phase 1: stubbed tailscale present — the CLI ensures the funnel,
+    // reads Self.DNSName, and the server uses + persists the hint.
+    const env = {
+      ...process.env,
+      MUXPAD_API_URL: `http://127.0.0.1:${port}`,
+      MUXPAD_TAILSCALE_BIN: stub,
+      MUXPAD_PUBLIC_PORT: '7799',
+    };
+    const first = await execFileAsync(MUXPAD_BIN, ['publish', srcFile, '--name=cli-hint'], {
+      env,
+      encoding: 'utf-8',
+    });
+    expect(first.stdout.trim()).toBe('https://stub-host.ts.net:8443/cli-hint/');
+    expect(first.stderr).toBe(''); // no warning — the URL is public
+    const logged = readFileSync(stubLog, 'utf-8');
+    expect(logged).toContain('funnel --bg --https=8443 http://127.0.0.1:7799');
+    expect(logged).toContain('status --json');
+
+    // Phase 2: tailscale "unavailable" (launchd-shaped failure) — the hint
+    // is silently skipped and the server serves the PERSISTED base url,
+    // still without a warning.
+    const second = await execFileAsync(MUXPAD_BIN, ['publish', srcFile, '--name=cli-fallback'], {
+      env: { ...env, MUXPAD_TAILSCALE_BIN: join(tmp, 'does-not-exist') },
+      encoding: 'utf-8',
+    });
+    expect(second.stdout.trim()).toBe('https://stub-host.ts.net:8443/cli-fallback/');
+    expect(second.stderr).toBe('');
   });
 });
