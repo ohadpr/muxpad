@@ -96,9 +96,9 @@ export function AppLayout() {
               ref={sidenavRef}
               style={{ flexBasis: `${settings.sidebarWidth}px` }}
             >
-              <div className="sidenav-brand">
-                <Brand asLink={true} responsive={false} />
-              </div>
+              {/* No separate brand plate: the pinned "muxpad" row at the top
+                  of the NavTree IS the brand entry (and opens the resident
+                  agent tab). Build + settings live in the footer below. */}
               <NavTree
                 variant="sidebar"
                 activeWorkspaceSlug={wsSlug}

@@ -13,18 +13,12 @@ interface BrandProps {
   markOnly?: boolean;
 }
 
-export function Brand({
-  asLink = true,
-  responsive = true,
-  markOnly = false,
-}: BrandProps) {
+export function Brand({ asLink = true, responsive = true, markOnly = false }: BrandProps) {
   const inner = (
     <>
       <BrandMark />
       {!markOnly && (
-        <span className={`brand-text${responsive ? ' brand-text-responsive' : ''}`}>
-          muxpad
-        </span>
+        <span className={`brand-text${responsive ? ' brand-text-responsive' : ''}`}>muxpad</span>
       )}
     </>
   );
@@ -39,15 +33,11 @@ export function Brand({
   return <span className={`${className} brand-static`}>{inner}</span>;
 }
 
-function BrandMark() {
+/** The bare logo mark — exported for the sidebar's pinned "muxpad" row
+ *  (NavTree), which doubles as the brand entry. */
+export function BrandMark() {
   return (
-    <svg
-      className="brand-mark"
-      width="18"
-      height="18"
-      viewBox="0 0 32 32"
-      aria-hidden="true"
-    >
+    <svg className="brand-mark" width="18" height="18" viewBox="0 0 32 32" aria-hidden="true">
       <rect x="2" y="2" width="14" height="28" rx="3" fill="#334155" />
       <rect x="18" y="2" width="12" height="13" rx="3" fill="#f59e0b" />
       <rect x="18" y="17" width="12" height="13" rx="3" fill="#475569" />

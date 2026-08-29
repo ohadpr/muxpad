@@ -93,7 +93,13 @@ export function MobileNavSwitcher({ activeWorkspaceSlug }: Props) {
     (w) => w.attention && w.slug !== activeWorkspaceSlug,
   );
 
-  const triggerLabel = activeWorkspace ? (
+  // The hidden system workspace hosts exactly one thing — the resident
+  // "muxpad" agent (internally the CEO) — so the breadcrumb says that, not
+  // the internal "· system · › ceo" plumbing. The panel below still lists
+  // the normal workspaces to switch back to.
+  const triggerLabel = activeWorkspace?.hidden ? (
+    <span className="mns-trigger-ws">muxpad</span>
+  ) : activeWorkspace ? (
     <>
       <span className="mns-trigger-ws">{activeWorkspace.name}</span>
       <span className="mns-trigger-sep" aria-hidden="true">

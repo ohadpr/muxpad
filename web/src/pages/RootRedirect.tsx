@@ -2,7 +2,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef } from 'react';
 import { api } from '../api';
 import { useDocumentTitle } from '../use-document-title';
-import { refreshWorkspaces } from '../workspaces';
+import { refreshWorkspaces, visibleWorkspaces } from '../workspaces';
 
 // Module-level so two RootRedirect mounts (StrictMode double-invoke,
 // route remounts, etc.) don't both fire workspace-bootstrap and create
@@ -38,7 +38,9 @@ export function RootRedirect() {
 
     let cancelled = false;
     const run = async () => {
-      const workspaces = await refreshWorkspaces();
+      // Visible only: the hidden system workspace (the CEO's) must never be
+      // the default landing spot — with only it present, bootstrap a real one.
+      const workspaces = visibleWorkspaces(await refreshWorkspaces());
       if (cancelled) return;
       if (workspaces.length > 0) {
         const first = workspaces[0]!;

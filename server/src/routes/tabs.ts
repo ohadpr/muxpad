@@ -2,13 +2,14 @@ import { LayoutNodeSchema, appendLeafToLayout, collectLayoutLeaves } from '@muxp
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { ceoLocation } from '../ceo.js';
 import type { EventBus } from '../events.js';
 import { queuePaneKill } from '../pane-reaper.js';
+import { agentCwd, hasProjectContext } from '../project-root.js';
 import { type PtydCache, decoratePane } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { randomWorkspaceName } from '../random-name.js';
 import { safeCwd } from '../safe-cwd.js';
-import { agentCwd, hasProjectContext } from '../project-root.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { pruneDeadPanes } from '../store/migrations.js';
@@ -249,6 +250,15 @@ export function tabsRoutes(deps: {
     const id = c.req.param('id');
     const t = tabs.getById(id);
     if (!t) return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
+    // A tab holding the CEO pane cannot be deleted — the delete would
+    // cascade-kill the server-owned singleton. See ceo.ts.
+    if (ceoLocation(deps.db)?.tabId === id)
+      return c.json(
+        {
+          error: { code: 'conflict', message: 'this tab holds the CEO pane and cannot be deleted' },
+        },
+        409,
+      );
     // TabStore.getById doesn't surface workspace_id (the shared Tab type
     // omits it). Pull it via the dedicated helper so the emitted event
     // carries the right workspace context for clients.
@@ -320,7 +330,10 @@ export function tabsRoutes(deps: {
     const source = tabs.getById(id);
     if (!source) return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
     if (body.into_tab_id === id)
-      return c.json({ error: { code: 'bad_request', message: 'cannot merge a tab into itself' } }, 400);
+      return c.json(
+        { error: { code: 'bad_request', message: 'cannot merge a tab into itself' } },
+        400,
+      );
     const dest = tabs.getById(body.into_tab_id);
     if (!dest)
       return c.json({ error: { code: 'not_found', message: 'destination tab not found' } }, 404);
@@ -358,7 +371,12 @@ export function tabsRoutes(deps: {
     // them lands.
     for (const pid of paneIds) {
       const p = panes.getById(pid);
-      if (p) deps.events.emit({ type: 'pane.added', tab_id: dest.id, pane: decoratePane(deps.cache, p) });
+      if (p)
+        deps.events.emit({
+          type: 'pane.added',
+          tab_id: dest.id,
+          pane: decoratePane(deps.cache, p),
+        });
     }
     deps.events.emit({ type: 'tab.updated', tab: finalDest });
     for (const pid of paneIds) {

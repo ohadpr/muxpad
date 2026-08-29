@@ -889,25 +889,6 @@ body.sidenav-resizing iframe {
   pointer-events: none;
 }
 
-.sidenav-brand {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: stretch;
-  /* Match the pane tab-strip height (--chrome-h) so the brand's bottom
-     hairline lines up exactly with the tab strip's bottom line at the top
-     of the workspace, in both split and tabbed views. */
-  height: var(--chrome-h);
-  border-bottom: 1px solid var(--border);
-}
-.sidenav-brand .brand {
-  flex: 1;
-  height: var(--chrome-h);
-  border-right: none;
-  /* Center the wordmark+mark so the brand reads as a title plate, set apart
-     from the left-aligned workspace/tab rows below it. */
-  justify-content: center;
-}
-
 .sidenav-footer {
   position: relative;
   flex: 0 0 auto;
@@ -973,4 +954,82 @@ body.sidenav-resizing iframe {
   color: var(--accent);
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+/* ─── Pinned "muxpad" row (the brand entry / resident agent) ────────────
+   The one slot above the scrolling tree (both variants): brand mark +
+   wordmark, opening the singleton resident-agent pane (internally the CEO —
+   see server/src/ceo.ts). It replaced the old separate brand plate at the
+   sidebar's head. Same row grammar as a tab row — icon, name, one status
+   slot (spinner while busy, else attention dot), bold name when unread —
+   but pinned: no close ×, no drag, no disclosure. A bottom hairline
+   separates it from the tree the same way workspace groups separate. */
+.navtree-ceo {
+  flex: 0 0 auto;
+  margin: 6px 8px 0 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.navtree[data-variant="sheet"] .navtree-ceo {
+  margin: 6px 8px 0;
+}
+.navtree-ceo-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: var(--nt-row-tab);
+  padding: 0 6px 0 4px;
+  border-radius: var(--nt-pill);
+  color: var(--fg-dim);
+  font-weight: 500;
+  text-decoration: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.navtree-ceo-row:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+  text-decoration: none;
+}
+/* Active = you're on the CEO's workspace-tab route — the same soft
+   accent-tint pill grammar as the active tab row. */
+.navtree-ceo-row[data-active="true"] {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+}
+.navtree-ceo-row[data-active="true"] .navtree-name-text {
+  color: color-mix(in srgb, var(--accent) 75%, var(--fg));
+}
+.navtree-ceo-row[data-active="true"]:hover {
+  background: color-mix(in srgb, var(--accent) 20%, var(--bg));
+}
+.navtree-ceo-row[data-unread="true"] .navtree-name-text {
+  font-weight: 700;
+}
+/* Brand-entry treatment: the quiet logotype tracking the old brand plate's
+   wordmark had (weight still flips to 700 for unread, which wins below). */
+.navtree-ceo-row .navtree-name-text {
+  font-weight: 400;
+  letter-spacing: 0.06em;
+}
+/* The mark rests muted (grayscale via .brand-mark in styles.css); hovering
+   the row restores its full colors — same grammar as the old brand plate. */
+.navtree-ceo-row:hover .brand-mark {
+  filter: none;
+  opacity: 1;
+}
+/* The icon is not a picker here — no hover chip, default cursor. */
+.navtree-ceo-icon {
+  cursor: inherit;
+}
+.navtree-ceo-icon:hover {
+  background: none;
+}
+/* Status slot: same optical nudge as the tab rows' inline dot/spinner. */
+.navtree-ceo-row .badge-dot.-inline {
+  position: relative;
+  top: 1px;
+  right: auto;
+  margin-left: 4px;
 }
