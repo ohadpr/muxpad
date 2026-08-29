@@ -253,6 +253,48 @@ describe('agent-runner relay', () => {
     chat2.close();
   });
 
+  it('emits agent_turn lifecycle on the global bus and fans it out to /ws/events', async () => {
+    const { port, paneId } = await boot();
+    // A supervisor holds ONE /ws/events socket, not a chat socket per pane —
+    // turn lifecycle must reach it (spec A4). Subscribe before the runner
+    // acts so every phase is observable.
+    const { sock: evSock, rx: fromEvents } = await openSock(`ws://127.0.0.1:${port}/ws/events`);
+    const { sock: runner } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    runner.send(
+      JSON.stringify({
+        t: 'hello',
+        sid: SID,
+        cwd: '/tmp',
+        pid: 1,
+        turnActive: false,
+        backend: 'codex',
+      }),
+    );
+
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    const start = await fromEvents.next((f) => f.type === 'agent_turn' && f.phase === 'start');
+    expect(start).toMatchObject({
+      type: 'agent_turn',
+      pane_id: paneId,
+      phase: 'start',
+      sid: SID,
+      backend: 'codex',
+    });
+
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true }));
+    const done = await fromEvents.next((f) => f.type === 'agent_turn' && f.phase === 'done');
+    expect(done).toMatchObject({ pane_id: paneId, sid: SID, backend: 'codex' });
+
+    // A dying runner's fatal reaches the bus too — a supervisor must learn
+    // about dead workers, not just finished ones.
+    runner.send(JSON.stringify({ t: 'fatal', error: 'boom' }));
+    const fatal = await fromEvents.next((f) => f.type === 'agent_turn' && f.phase === 'fatal');
+    expect(fatal).toMatchObject({ pane_id: paneId, phase: 'fatal' });
+
+    runner.close();
+    evSock.close();
+  });
+
   it('answers set-model/slash with a notice frame when no runner is connected', async () => {
     const { port, paneId } = await boot();
     const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
