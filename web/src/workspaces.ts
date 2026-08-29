@@ -1,13 +1,18 @@
-import { useEffect, useState } from 'react';
 import type { Workspace } from '@muxpad/shared';
+import { useEffect, useState } from 'react';
 import { api } from './api';
 
 /**
- * Hook returning the list of top-level workspaces. Backed by a module-
- * level cache so the picker, the chrome switcher, and any other consumers
- * all see the same data. Refreshes on mount, visibility, focus, on a
- * BroadcastChannel ping from another same-browser tab, and on a 5s poll
- * while the tab is visible.
+ * Hook returning the list of top-level workspaces — INCLUDING hidden system
+ * workspaces (fetched with ?all=1) so slug lookups resolve for the CEO's
+ * workspace-tab route. User-facing enumerations (the nav tree, redirects,
+ * move-to targets) must go through visibleWorkspaces(); hidden workspaces
+ * are only ever reached via the pinned CEO row or a direct URL.
+ *
+ * Backed by a module-level cache so the chrome switcher and any other
+ * consumers all see the same data. Refreshes on mount, visibility, focus,
+ * on a BroadcastChannel ping from another same-browser tab, and on a 5s
+ * poll while the tab is visible.
  *
  * The poll is what surfaces per-workspace attention rollups (used by the
  * favicon and the switcher trigger badge) when a background workspace
@@ -35,7 +40,7 @@ const channel: BroadcastChannel | null =
 export async function refreshWorkspaces(opts?: { broadcast?: boolean }): Promise<Workspace[]> {
   const shouldBroadcast = opts?.broadcast !== false;
   const myVersion = ++version;
-  const next = await api.listWorkspaces();
+  const next = await api.listWorkspaces({ all: true });
   if (myVersion < version) return next;
   cache = next;
   for (const fn of listeners) fn(cache);
@@ -43,19 +48,31 @@ export async function refreshWorkspaces(opts?: { broadcast?: boolean }): Promise
   return next;
 }
 
+/** The workspaces user-facing UI may enumerate — hidden system workspaces
+ *  (the CEO's) are excluded; they're reachable only via the pinned CEO row
+ *  or a direct URL. */
+export function visibleWorkspaces(all: Workspace[]): Workspace[] {
+  return all.filter((w) => !w.hidden);
+}
+
 /**
  * Optimistically reorder the cached workspaces so the sidebar moves the row
  * immediately, before the reorder round-trip. Bumps `version` so an in-flight
  * poll-refresh (with the old order) is discarded rather than clobbering this;
  * the caller's own refreshWorkspaces() afterwards reconciles with server truth.
- * No-op if `ids` doesn't exactly cover the current set.
+ * `ids` covers the VISIBLE set only (the sidebar can't drag what it can't
+ * see); hidden workspaces keep their relative order after it. No-op if `ids`
+ * doesn't exactly cover the current visible set.
  */
 export function applyWorkspaceOrder(ids: string[]): void {
   const byId = new Map(cache.map((w) => [w.id, w]));
-  const next = ids.map((id) => byId.get(id)).filter((w): w is Workspace => w !== undefined);
-  if (next.length !== cache.length) return;
+  const picked = ids.map((id) => byId.get(id)).filter((w): w is Workspace => w !== undefined);
+  if (picked.length !== ids.length) return; // unknown id — stale drag
+  const idSet = new Set(ids);
+  const rest = cache.filter((w) => !idSet.has(w.id));
+  if (rest.some((w) => !w.hidden)) return; // ids didn't cover the visible set
   version++;
-  cache = next;
+  cache = [...picked, ...rest];
   for (const fn of listeners) fn(cache);
 }
 

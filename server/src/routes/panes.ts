@@ -10,6 +10,7 @@ import {
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { ceoLocation } from '../ceo.js';
 import type { EventBus } from '../events.js';
 import { queuePaneKill } from '../pane-reaper.js';
 import { agentCwd, hasProjectContext } from '../project-root.js';
@@ -302,7 +303,9 @@ export function panesScopedRoutes(deps: {
     } catch {
       isRunning = false;
     }
-    return c.json({ ...p, isRunning });
+    // Decorated (title/fg/attention/busy/app_urls) like the flat list — the
+    // web's pinned CEO row seeds its badges from this single-pane GET.
+    return c.json({ ...decoratePane(deps.cache, p), isRunning });
   });
 
   app.patch('/:id', async (c) => {
@@ -412,6 +415,13 @@ export function panesScopedRoutes(deps: {
     const id = c.req.param('id');
     const p = panes.getById(id);
     if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    // The CEO pane is a server-owned singleton — it cannot be deleted
+    // (respawn stays allowed). See ceo.ts.
+    if (ceoLocation(deps.db)?.paneId === id)
+      return c.json(
+        { error: { code: 'conflict', message: 'the CEO pane cannot be deleted' } },
+        409,
+      );
     // Capture tab_id BEFORE the delete so the event still carries it.
     const tabId = p.tab_id;
     // ptyd holds runtime state; SQLite is the source of truth. If ptyd

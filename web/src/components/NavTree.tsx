@@ -8,19 +8,26 @@ import {
 import { Link, useNavigate } from '@tanstack/react-router';
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
+import { PENDING_AGENT_STARTUP } from '../lib/agent-backend';
+import { useCeoIds, useCeoPane } from '../lib/ceo';
 import { createDragOrigin } from '../lib/drag-origin';
 import { clearFollowTarget, setFollowTarget } from '../lib/follow-tab';
 import { getLastPaneId, setLastPaneId } from '../lib/last-visited';
-import { useDismissable } from '../lib/use-dismissable';
 import { pushUndo } from '../lib/move-undo-store';
 import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansion';
 import { PANE_DRAG_MIME, paneDragOrigin } from '../lib/pane-drag';
 import { reorderByDrop } from '../lib/reorder';
+import { useDismissable } from '../lib/use-dismissable';
 import { applyTabOrder, refreshTabs, useTabs } from '../tabs';
 import { useLongPress } from '../use-long-press';
 import { MAX_QUICK_SWITCH_TABS, useTabQuickSwitch } from '../use-tab-quickswitch';
-import { applyWorkspaceOrder, refreshWorkspaces, useWorkspaces } from '../workspaces';
-import { PENDING_AGENT_STARTUP } from '../lib/agent-backend';
+import {
+  applyWorkspaceOrder,
+  refreshWorkspaces,
+  useWorkspaces,
+  visibleWorkspaces,
+} from '../workspaces';
+import { BrandMark } from './Brand';
 import { NewTabChooser } from './NewTabChooser';
 import { SvgClose } from './icons';
 import './NavTree.css';
@@ -258,7 +265,10 @@ interface NavTreeProps {
  */
 export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigate }: NavTreeProps) {
   const navigate = useNavigate();
-  const { workspaces } = useWorkspaces();
+  // The tree lists VISIBLE workspaces only — the hidden system workspace is
+  // represented by the pinned CEO row above, never as a tree node.
+  const { workspaces: allWorkspaces } = useWorkspaces();
+  const workspaces = visibleWorkspaces(allWorkspaces);
   const expansion = useNavExpansion();
   // Single edit slot hoisted here so only one rename can be in flight
   // across the whole tree.
@@ -302,6 +312,15 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
 
   return (
     <nav className="navtree" data-variant={variant} aria-label="Workspaces and tabs">
+      {/* Pinned "muxpad" row — the brand entry, one slot above the scrolling
+          tree, present in both variants. Opens the resident agent tab. Not
+          reorderable, not closeable: the pane behind it is a server-owned
+          singleton (see server/src/ceo.ts). */}
+      <CeoRow
+        onNavigate={onNavigate}
+        activeWorkspaceSlug={activeWorkspaceSlug}
+        activeTabSlug={activeTabSlug}
+      />
       {/* The label is the mobile sheet's only title, so keep it there. On
           desktop the brand plate above the tree already names the app and
           the tree is the only section — the label is redundant, so drop it. */}
@@ -337,6 +356,65 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
         </button>
       </div>
     </nav>
+  );
+}
+
+/**
+ * The pinned "muxpad" row above the tree — the brand entry AND the door to
+ * the resident agent (internally the CEO pane; see server/src/ceo.ts). It
+ * replaces the old separate brand plate at the sidebar's head: brand mark +
+ * wordmark, but clicking it navigates to the agent's workspace-tab route
+ * (resolved via /api/ceo — the tab renders with the standard chrome like
+ * any other tab); until the resolve lands it falls back to /ceo, whose
+ * redirect resolves server-side. Shows the same busy/attention/unread
+ * grammar as TabRow (spinner → dot → nothing; bold name = unread), driven
+ * by the decorated CEO pane kept live via pane.updated events (useCeoPane).
+ * No close button, no drag — the pane can't be deleted and the row can't be
+ * reordered.
+ */
+function CeoRow({
+  onNavigate,
+  activeWorkspaceSlug,
+  activeTabSlug,
+}: {
+  onNavigate?: (() => void) | undefined;
+  activeWorkspaceSlug: string;
+  activeTabSlug: string | null;
+}) {
+  const pane = useCeoPane();
+  const ids = useCeoIds();
+  const isActive =
+    ids !== null &&
+    ids.workspace_slug === activeWorkspaceSlug &&
+    (activeTabSlug === null || ids.tab_slug === activeTabSlug);
+  return (
+    <div className="navtree-ceo">
+      <Link
+        {...(ids
+          ? {
+              to: '/w/$wsSlug/t/$tabSlug' as const,
+              params: { wsSlug: ids.workspace_slug, tabSlug: ids.tab_slug },
+            }
+          : { to: '/ceo' as const })}
+        className="navtree-ceo-row"
+        draggable={false}
+        data-active={isActive ? 'true' : undefined}
+        data-unread={pane?.unread ? 'true' : undefined}
+        onClick={() => onNavigate?.()}
+      >
+        <span className="navtree-tab-icon navtree-ceo-icon" aria-hidden="true">
+          <BrandMark />
+        </span>
+        <span className="navtree-name-text">muxpad</span>
+        {pane?.busy ? (
+          <span className="navtree-busy" aria-hidden="true" title="Working…">
+            <SvgSpinner />
+          </span>
+        ) : pane?.attention ? (
+          <span className="badge-dot -inline" aria-label="needs attention" />
+        ) : null}
+      </Link>
+    </div>
   );
 }
 
@@ -1027,9 +1105,10 @@ function TabRow({
   // Icon picker, anchored under the clicked icon.
   const [picker, setPicker] = useState<{ x: number; y: number } | null>(null);
   // Workspaces other than this tab's own — both the "Move to workspace…"
-  // menu targets and the legal drop targets for the drag gesture.
+  // menu targets and the legal drop targets for the drag gesture. Visible
+  // only: the hidden system workspace is never a move target.
   const { workspaces } = useWorkspaces();
-  const otherWorkspaces = workspaces.filter((w) => w.id !== workspace.id);
+  const otherWorkspaces = visibleWorkspaces(workspaces).filter((w) => w.id !== workspace.id);
 
   // Sheet-only: expand the row into its pane list (direct pane nav + the
   // mobile "New pane" home). Single-pane tabs skip all of it — tapping
@@ -1144,128 +1223,128 @@ function TabRow({
       : tabRowDnd;
   return (
     <>
-    <div
-      className="navtree-tab-row"
-      data-active={isActiveTab ? 'true' : undefined}
-      data-unread={tab.unread ? 'true' : undefined}
-      data-pressing={pressing ? 'true' : undefined}
-      data-drop-into={dropInto ? 'true' : undefined}
-      {...(variant === 'sidebar' && !isEditing
-        ? {
-            onContextMenu: (e: React.MouseEvent) => {
-              e.preventDefault();
-              setMenu({ x: e.clientX, y: e.clientY });
-            },
-          }
-        : {})}
-      {...dropDnd}
-    >
-      {/* Sheet: the pane disclosure LEADS the row — the same left-edge
+      <div
+        className="navtree-tab-row"
+        data-active={isActiveTab ? 'true' : undefined}
+        data-unread={tab.unread ? 'true' : undefined}
+        data-pressing={pressing ? 'true' : undefined}
+        data-drop-into={dropInto ? 'true' : undefined}
+        {...(variant === 'sidebar' && !isEditing
+          ? {
+              onContextMenu: (e: React.MouseEvent) => {
+                e.preventDefault();
+                setMenu({ x: e.clientX, y: e.clientY });
+              },
+            }
+          : {})}
+        {...dropDnd}
+      >
+        {/* Sheet: the pane disclosure LEADS the row — the same left-edge
           grammar as the workspace rows, so thumbs already know where it
           lives. Full row height; squeezing it between the name and the ×
           made every tap a coin-flip between expand/navigate/close. Only
           multi-pane tabs get it — with one pane there's nothing to pick. */}
-      {sheetPicksPane && !isEditing ? (
-        <button
-          type="button"
-          className="navtree-pane-expander"
-          data-open={panesOpen ? 'true' : undefined}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            togglePanes();
-          }}
-          aria-expanded={panesOpen}
-          aria-label={panesOpen ? `Hide panes of ${tab.name}` : `Show panes of ${tab.name}`}
-        >
-          <SvgChevronRight />
-        </button>
-      ) : variant === 'sheet' && !isEditing ? (
-        // The expander column doubles as the tab indent — chevron-less
-        // (single-pane) rows keep an identical-width spacer so every tab
-        // name sits on the same grid line.
-        <span className="navtree-pane-expander -spacer" aria-hidden="true" />
-      ) : null}
-      {isEditing ? (
-        <RenameInput
-          initial={tab.name}
-          onCommit={async (name) => {
-            setEditing(null);
-            if (!name || name === tab.name) return;
-            try {
-              await api.patchTab(tab.id, { name });
-            } catch (err) {
-              console.error('rename tab failed', err);
-            }
-            await refreshTabs(workspace.id);
-          }}
-          onCancel={() => setEditing(null)}
-        />
-      ) : (
-        <Link
-          to="/w/$wsSlug/t/$tabSlug"
-          params={{ wsSlug: workspace.slug, tabSlug: tab.slug }}
-          className="navtree-tab-link"
-          // The row owns drag-to-reorder; don't let the anchor drag its URL.
-          draggable={false}
-          title={variant === 'sidebar' && isActiveTab ? 'Double-click to rename' : tab.name}
-          onDoubleClick={
-            variant === 'sidebar' && isActiveTab
-              ? (e) => {
-                  e.preventDefault();
-                  setEditing({ kind: 'tab', id: tab.id });
-                }
-              : undefined
-          }
-          {...pressHandlers}
-          onClick={(e) => {
-            // Long-press consumes the tap (opens the menu, not navigate).
-            pressHandlers.onClick(e);
-            if (e.defaultPrevented) return;
-            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-            // Multi-pane tab on the sheet: the tab name itself TOGGLES the
-            // pane list — you pick an actual pane, never land on "whichever
-            // pane happened to be active".
-            if (sheetPicksPane) {
-              e.preventDefault();
-              togglePanes();
-              return;
-            }
-            onNavigate?.();
-          }}
-        >
-          {/* Leading icon — click to open the picker. A span (not a button)
-              since it lives inside the anchor; stop+prevent so the click
-              picks an icon instead of navigating. Mouse-only by design — the
-              keyboard-accessible path is the row context menu "Change icon…". */}
-          {/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard path is the context menu's "Change icon…" item */}
-          <span
-            className="navtree-tab-icon"
-            title="Change icon"
+        {sheetPicksPane && !isEditing ? (
+          <button
+            type="button"
+            className="navtree-pane-expander"
+            data-open={panesOpen ? 'true' : undefined}
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-              setPicker({ x: r.left, y: r.bottom + 4 });
+              togglePanes();
             }}
-            onDoubleClick={(e) => {
-              // Don't let a fast double-click on the icon trip the row's
-              // rename-on-doubleclick.
-              e.preventDefault();
-              e.stopPropagation();
+            aria-expanded={panesOpen}
+            aria-label={panesOpen ? `Hide panes of ${tab.name}` : `Show panes of ${tab.name}`}
+          >
+            <SvgChevronRight />
+          </button>
+        ) : variant === 'sheet' && !isEditing ? (
+          // The expander column doubles as the tab indent — chevron-less
+          // (single-pane) rows keep an identical-width spacer so every tab
+          // name sits on the same grid line.
+          <span className="navtree-pane-expander -spacer" aria-hidden="true" />
+        ) : null}
+        {isEditing ? (
+          <RenameInput
+            initial={tab.name}
+            onCommit={async (name) => {
+              setEditing(null);
+              if (!name || name === tab.name) return;
+              try {
+                await api.patchTab(tab.id, { name });
+              } catch (err) {
+                console.error('rename tab failed', err);
+              }
+              await refreshTabs(workspace.id);
+            }}
+            onCancel={() => setEditing(null)}
+          />
+        ) : (
+          <Link
+            to="/w/$wsSlug/t/$tabSlug"
+            params={{ wsSlug: workspace.slug, tabSlug: tab.slug }}
+            className="navtree-tab-link"
+            // The row owns drag-to-reorder; don't let the anchor drag its URL.
+            draggable={false}
+            title={variant === 'sidebar' && isActiveTab ? 'Double-click to rename' : tab.name}
+            onDoubleClick={
+              variant === 'sidebar' && isActiveTab
+                ? (e) => {
+                    e.preventDefault();
+                    setEditing({ kind: 'tab', id: tab.id });
+                  }
+                : undefined
+            }
+            {...pressHandlers}
+            onClick={(e) => {
+              // Long-press consumes the tap (opens the menu, not navigate).
+              pressHandlers.onClick(e);
+              if (e.defaultPrevented) return;
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+              // Multi-pane tab on the sheet: the tab name itself TOGGLES the
+              // pane list — you pick an actual pane, never land on "whichever
+              // pane happened to be active".
+              if (sheetPicksPane) {
+                e.preventDefault();
+                togglePanes();
+                return;
+              }
+              onNavigate?.();
             }}
           >
-            {tab.icon ?? DEFAULT_TAB_ICON}
-          </span>
-          {quickNumber !== undefined && (
-            <span className="navtree-quicknum" aria-hidden="true">
-              {quickNumber}
+            {/* Leading icon — click to open the picker. A span (not a button)
+              since it lives inside the anchor; stop+prevent so the click
+              picks an icon instead of navigating. Mouse-only by design — the
+              keyboard-accessible path is the row context menu "Change icon…". */}
+            {/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard path is the context menu's "Change icon…" item */}
+            <span
+              className="navtree-tab-icon"
+              title="Change icon"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                setPicker({ x: r.left, y: r.bottom + 4 });
+              }}
+              onDoubleClick={(e) => {
+                // Don't let a fast double-click on the icon trip the row's
+                // rename-on-doubleclick.
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+            >
+              {tab.icon ?? DEFAULT_TAB_ICON}
             </span>
-          )}
-          <span className="navtree-name-text" title={tab.name}>
-            {tab.name}
-          </span>
-          {/* One status slot per row — never two glyphs competing. The states
+            {quickNumber !== undefined && (
+              <span className="navtree-quicknum" aria-hidden="true">
+                {quickNumber}
+              </span>
+            )}
+            <span className="navtree-name-text" title={tab.name}>
+              {tab.name}
+            </span>
+            {/* One status slot per row — never two glyphs competing. The states
               are really a progression: a tab is WORKING (spinner), then maybe
               DONE & WANTING YOU (dot), then idle. So show by priority: spinner
               while busy, else the dot if it wants you, else nothing. The
@@ -1273,86 +1352,86 @@ function TabRow({
               for minutes on their chat face, and even in a terminal a glance
               at the sidebar should answer "is anything still running here?"
               (the dot still self-hides on the active tab via markSeen). */}
-          {tab.busy ? (
-            // Decorative: aria-hidden so this fast-toggling glyph doesn't churn
-            // the link's accessible name ("Home busy" → "Home" → …). title is
-            // the mouse affordance.
-            <span className="navtree-busy" aria-hidden="true" title="Working…">
-              <SvgSpinner />
-            </span>
-          ) : tab.attention ? (
-            <span className="badge-dot -inline" aria-label="needs attention" />
-          ) : null}
-        </Link>
-      )}
-      <button
-        type="button"
-        className="navtree-close"
-        onClick={onClose}
-        title="Close tab"
-        aria-label={`Close tab ${tab.name}`}
-      >
-        <SvgClose size={13} />
-      </button>
-      {menu && (
-        <NavContextMenu
-          x={menu.x}
-          y={menu.y}
-          onDismiss={() => setMenu(null)}
-          items={[
-            tab.unread
-              ? { label: 'Mark as read', onSelect: () => onSetUnread(false) }
-              : { label: 'Mark as unread', onSelect: () => onSetUnread(true) },
-            {
-              label: 'Change icon…',
-              onSelect: () => setPicker({ x: menu.x, y: menu.y }),
-            },
-            { label: 'Rename', onSelect: () => setEditing({ kind: 'tab', id: tab.id }) },
-            { label: 'New pane', onSelect: () => onAddPane() },
-            // "Move to workspace ▸" with the workspaces in a hover flyout, so
-            // the main menu stays short. Omitted entirely when there's nowhere
-            // to move to. (Dragging the tab onto a workspace row also works.)
-            ...(otherWorkspaces.length > 0
-              ? [
-                  {
-                    label: 'Move to workspace',
-                    submenu: otherWorkspaces.map((w) => ({
-                      label: w.name,
-                      onSelect: () =>
-                        void moveTabToWorkspace({
-                          tabId: tab.id,
-                          tabName: tab.name,
-                          fromWorkspaceId: workspace.id,
-                          toWorkspaceId: w.id,
-                          toWorkspaceName: w.name,
-                        }),
-                    })),
-                  },
-                ]
-              : []),
-            {
-              label: 'Close tab',
-              danger: true,
-              // onClose expects a MouseEvent for stopPropagation; the menu
-              // already dismissed, so a lightweight stub is enough.
-              onSelect: () =>
-                onClose({ stopPropagation() {}, preventDefault() {} } as React.MouseEvent),
-            },
-          ]}
-        />
-      )}
-      {picker && (
-        <IconPicker
-          x={picker.x}
-          y={picker.y}
-          onPick={(icon) => {
-            setPicker(null);
-            onSetIcon(icon);
-          }}
-          onDismiss={() => setPicker(null)}
-        />
-      )}
-    </div>
+            {tab.busy ? (
+              // Decorative: aria-hidden so this fast-toggling glyph doesn't churn
+              // the link's accessible name ("Home busy" → "Home" → …). title is
+              // the mouse affordance.
+              <span className="navtree-busy" aria-hidden="true" title="Working…">
+                <SvgSpinner />
+              </span>
+            ) : tab.attention ? (
+              <span className="badge-dot -inline" aria-label="needs attention" />
+            ) : null}
+          </Link>
+        )}
+        <button
+          type="button"
+          className="navtree-close"
+          onClick={onClose}
+          title="Close tab"
+          aria-label={`Close tab ${tab.name}`}
+        >
+          <SvgClose size={13} />
+        </button>
+        {menu && (
+          <NavContextMenu
+            x={menu.x}
+            y={menu.y}
+            onDismiss={() => setMenu(null)}
+            items={[
+              tab.unread
+                ? { label: 'Mark as read', onSelect: () => onSetUnread(false) }
+                : { label: 'Mark as unread', onSelect: () => onSetUnread(true) },
+              {
+                label: 'Change icon…',
+                onSelect: () => setPicker({ x: menu.x, y: menu.y }),
+              },
+              { label: 'Rename', onSelect: () => setEditing({ kind: 'tab', id: tab.id }) },
+              { label: 'New pane', onSelect: () => onAddPane() },
+              // "Move to workspace ▸" with the workspaces in a hover flyout, so
+              // the main menu stays short. Omitted entirely when there's nowhere
+              // to move to. (Dragging the tab onto a workspace row also works.)
+              ...(otherWorkspaces.length > 0
+                ? [
+                    {
+                      label: 'Move to workspace',
+                      submenu: otherWorkspaces.map((w) => ({
+                        label: w.name,
+                        onSelect: () =>
+                          void moveTabToWorkspace({
+                            tabId: tab.id,
+                            tabName: tab.name,
+                            fromWorkspaceId: workspace.id,
+                            toWorkspaceId: w.id,
+                            toWorkspaceName: w.name,
+                          }),
+                      })),
+                    },
+                  ]
+                : []),
+              {
+                label: 'Close tab',
+                danger: true,
+                // onClose expects a MouseEvent for stopPropagation; the menu
+                // already dismissed, so a lightweight stub is enough.
+                onSelect: () =>
+                  onClose({ stopPropagation() {}, preventDefault() {} } as React.MouseEvent),
+              },
+            ]}
+          />
+        )}
+        {picker && (
+          <IconPicker
+            x={picker.x}
+            y={picker.y}
+            onPick={(icon) => {
+              setPicker(null);
+              onSetIcon(icon);
+            }}
+            onDismiss={() => setPicker(null)}
+          />
+        )}
+      </div>
       {variant === 'sheet' && sheetPicksPane && panesOpen ? (
         <SheetPaneList
           tab={tab}
