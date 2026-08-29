@@ -135,6 +135,10 @@ export const WorkspaceSchema = z.object({
   updated_at: z.number(),
   // Derived at read time; not stored in the DB.
   tab_count: z.number().int().nonnegative(),
+  // System container flag (e.g. the workspace holding the CEO pane).
+  // Hidden workspaces are excluded from GET /api/workspaces (and thus the
+  // sidebar tree) unless ?all=1. Optional for servers predating the column.
+  hidden: z.boolean().optional(),
   // Runtime-only flag. True iff any pane in any tab in this workspace
   // has rung BEL since the user last interacted with it. The list
   // endpoint folds this in from PaneManager state.
@@ -216,11 +220,27 @@ export const AgentSessionUpdatedEventSchema = z.object({
   pane_id: z.string(),
 });
 
+// An agent turn's lifecycle on the global bus, so a supervisor watching N
+// worker panes holds ONE /ws/events (or /api/events SSE) subscription
+// instead of N chat sockets. Ids only — no content payload; a subscriber
+// that wants the words pulls the transcript. `fatal` means the pane's
+// runner reported it is dying (dead workers matter as much as finished
+// ones). `sid` is null only for a runner that reached a turn before its
+// hello was accepted (defensive — hello always comes first).
+export const AgentTurnEventSchema = z.object({
+  type: z.literal('agent_turn'),
+  pane_id: z.string(),
+  phase: z.enum(['start', 'done', 'fatal']),
+  sid: z.string().nullable(),
+  backend: z.string(),
+});
+
 export const MuxpadEventSchema = z.discriminatedUnion('type', [
   PaneAddedEventSchema,
   PaneRemovedEventSchema,
   PaneUpdatedEventSchema,
   AgentSessionUpdatedEventSchema,
+  AgentTurnEventSchema,
   TabAddedEventSchema,
   TabUpdatedEventSchema,
   TabRemovedEventSchema,

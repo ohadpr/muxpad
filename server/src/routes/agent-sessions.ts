@@ -126,7 +126,15 @@ export function agentSessionsRoutes(deps: {
     return c.json(session);
   });
 
-  app.get('/', (c) => c.json(store.list()));
+  // `turn_active`: the runner registry's real turn state (true mid-turn,
+  // false idle, false when no runner is connected). Deliberately NOT the
+  // pane `busy` flag — busy also trips on pty output activity, so a worker
+  // whose terminal streams (dev-server logs) would read busy forever.
+  const turnActive = (paneId: string): boolean => deps.agentBridge?.turnActive(paneId) === true;
+
+  app.get('/', (c) =>
+    c.json(store.list().map((s) => ({ ...s, turn_active: turnActive(s.pane_id) }))),
+  );
 
   // Last N normalized transcript events for a pane's session, as JSONL —
   // role/text/tool-use ChatEvents, whatever the backend. CLI consumers must
@@ -171,9 +179,10 @@ export function agentSessionsRoutes(deps: {
   });
 
   app.get('/by-pane/:paneId', (c) => {
-    const session = store.getByPane(c.req.param('paneId'));
+    const paneId = c.req.param('paneId');
+    const session = store.getByPane(paneId);
     if (!session) return c.json({ error: 'not found' }, 404);
-    return c.json(session);
+    return c.json({ ...session, turn_active: turnActive(paneId) });
   });
 
   return app;
