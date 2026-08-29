@@ -110,6 +110,7 @@ export class AgentSessionStore {
         'UPDATE agent_sessions SET current_sid = ?, lineage = ?, updated_at = ? WHERE pane_id = ?',
       )
       .run(session_id, JSON.stringify(lineage), Date.now(), pane_id);
+    this.recordHistory(session_id, pane_id, existing.assistant, existing.cwd);
     return this.getByPane(pane_id);
   }
 
@@ -214,7 +215,35 @@ export class AgentSessionStore {
           now,
         );
     }
+    this.recordHistory(next.current_sid, next.pane_id, next.assistant, next.cwd);
     return this.getByPane(next.pane_id) as AgentSession;
+  }
+
+  /**
+   * Append-only `session_history` registry (migration 20): upsert on sid from
+   * every place a sid becomes known, never deleted. `agent_sessions` is live
+   * state — lineage resets on fresh launch and the row cascade-deletes with
+   * its pane — so this is the durable pane↔sid record the archive joins on.
+   */
+  private recordHistory(
+    sid: string | null,
+    pane_id: string,
+    assistant: string | null,
+    cwd: string | null,
+  ): void {
+    if (!sid) return;
+    const now = Date.now();
+    this.db
+      .prepare(
+        `INSERT INTO session_history (sid, pane_id, assistant, cwd, first_seen, last_seen)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(sid) DO UPDATE SET
+           pane_id   = excluded.pane_id,
+           assistant = COALESCE(excluded.assistant, session_history.assistant),
+           cwd       = COALESCE(excluded.cwd, session_history.cwd),
+           last_seen = excluded.last_seen`,
+      )
+      .run(sid, pane_id, assistant, cwd, now, now);
   }
 
   /** The pane's runner disconnected — release the single-writer token (only if a runner holds it). */
