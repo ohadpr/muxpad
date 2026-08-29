@@ -118,4 +118,88 @@ describe('agent-sessions transcript route', () => {
     const noFile = await register('sid-without-file');
     expect((await test.app.request(`/api/agent-sessions/${noFile}/transcript`)).status).toBe(404);
   });
+
+  it('by-pane and the list carry turn_active=false when no runner bridge is wired', async () => {
+    // createTestApp passes no agentBridge → turnActive() is null → false.
+    const paneId = await register('sid-turnless');
+    const byPane = (await (
+      await test.app.request(`/api/agent-sessions/by-pane/${paneId}`)
+    ).json()) as { pane_id: string; turn_active: boolean };
+    expect(byPane.pane_id).toBe(paneId);
+    expect(byPane.turn_active).toBe(false);
+    const list = (await (await test.app.request('/api/agent-sessions')).json()) as Array<{
+      pane_id: string;
+      turn_active: boolean;
+    }>;
+    expect(list.find((s) => s.pane_id === paneId)?.turn_active).toBe(false);
+  });
+});
+
+describe('agent-sessions turn_active (bridge-wired)', () => {
+  let test: TestApp;
+  let tmp: string;
+  // The registry's REAL turn state, late-bound like ws.ts does in prod.
+  const midTurn = new Set<string>();
+
+  beforeEach(async () => {
+    tmp = mkdtempSync(join(tmpdir(), 'muxpad-turnactive-'));
+    test = await createTestApp({
+      db: openDb(':memory:'),
+      dataDir: tmp,
+      agentBridge: {
+        send: () => ({ ok: false, reason: 'test bridge' }),
+        turnActive: (paneId) => (midTurn.has(paneId) ? true : null),
+      },
+    });
+  });
+
+  afterEach(async () => {
+    midTurn.clear();
+    await test.cleanup();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('reflects the runner registry turn state, not pane busy', async () => {
+    const ws = (await (
+      await test.app.request('/api/workspaces', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'W' }),
+      })
+    ).json()) as { id: string };
+    const t = (await (
+      await test.app.request('/api/tabs', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'T', workspace_id: ws.id }),
+      })
+    ).json()) as { id: string };
+    const pane = (await (
+      await test.app.request(`/api/tabs/${t.id}/panes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ shell: '/bin/sh' }),
+      })
+    ).json()) as { id: string };
+    await test.app.request('/api/agent-sessions/register', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pane_id: pane.id, assistant: 'claude' }),
+    });
+
+    // Simulate a streaming terminal: pane `busy` is true while the agent is
+    // NOT mid-turn. turn_active must stay false — this is the exact signal
+    // `muxpad agent wait` keys on (pty activity must not read as a turn).
+    test.cache.setAgentBusy(pane.id, true);
+    const idle = (await (
+      await test.app.request(`/api/agent-sessions/by-pane/${pane.id}`)
+    ).json()) as { turn_active: boolean };
+    expect(idle.turn_active).toBe(false);
+
+    midTurn.add(pane.id);
+    const busy = (await (
+      await test.app.request(`/api/agent-sessions/by-pane/${pane.id}`)
+    ).json()) as { turn_active: boolean };
+    expect(busy.turn_active).toBe(true);
+  });
 });
