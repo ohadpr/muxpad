@@ -1,6 +1,6 @@
 import type { spawn as nodeSpawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatEvent } from '@muxpad/shared';
@@ -332,6 +332,36 @@ describe('cursor backend', () => {
       'new a',
     ]);
     expect(readLog('old-cloud')).toEqual([]);
+  });
+
+  it('prepends muxpad instructions to the FIRST message of a NEW session only', async () => {
+    writeFileSync(join(dataDir, 'agent-instructions.md'), 'use muxpad publish\n');
+    const { b, calls } = await boot();
+    b.send('hi');
+    await tick();
+    // Fresh session → delimited instructions ride the prompt arg…
+    expect(calls[1]!.args.at(-1)).toBe(
+      '<muxpad-instructions>\nuse muxpad publish\n</muxpad-instructions>\n\nhi',
+    );
+    const turn = calls[1]!.child;
+    line(turn, { type: 'system', subtype: 'init', session_id: 'cur-instr' });
+    line(turn, { type: 'result', subtype: 'success' });
+    closeChild(turn, 0);
+    await tick();
+    // …but the muxpad transcript records the RAW prompt (chat stays clean).
+    expect((readLog('cur-instr')[0] as { text: string }).text).toBe('hi');
+    // The next turn RESUMES the session → no re-injection.
+    b.send('again');
+    await tick();
+    expect(calls[2]!.args).toContain('--resume');
+    expect(calls[2]!.args.at(-1)).toBe('again');
+  });
+
+  it('missing instructions file → raw prompt, no error', async () => {
+    const { b, calls } = await boot();
+    b.send('plain');
+    await tick();
+    expect(calls[1]!.args.at(-1)).toBe('plain');
   });
 
   it('advertises its model list + default in the status frame (the picker)', async () => {

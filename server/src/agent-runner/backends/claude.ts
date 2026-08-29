@@ -15,6 +15,7 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import { summarizeToolInput } from '@muxpad/shared';
 import { z } from 'zod';
+import { readAgentInstructions } from '../../agent-instructions.js';
 import { findTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
 import type { AgentQuestion, RunnerFrame, SubagentProgress } from '../protocol.js';
@@ -26,6 +27,23 @@ import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 // model it was running — this only steers brand-new chats. Still switchable
 // per-session via the model picker (set-model).
 const DEFAULT_AGENT_MODEL = 'opus';
+
+/**
+ * The universal muxpad instructions (<dataDir>/agent-instructions.md) as an
+ * SDK `systemPrompt` option. Injection mechanism for the CLAUDE backend: the
+ * Agent SDK's NATIVE preset+append — the default claude_code system prompt
+ * (with CLAUDE.md, settings, skills all loading exactly as before) plus our
+ * file appended. Missing/empty file → undefined, and the option is omitted
+ * entirely (inject nothing, no error).
+ *
+ * Exported for tests: constructing the backend spawns a real SDK session, so
+ * the option-building is the testable seam.
+ */
+export function claudeSystemPromptOption(
+  instructions: string | null,
+): Options['systemPrompt'] | undefined {
+  return instructions ? { type: 'preset', preset: 'claude_code', append: instructions } : undefined;
+}
 
 export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): AgentBackend {
   const { emit, log } = host;
@@ -337,6 +355,11 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // -------------------------------------------------------------------------
   const startModel = requestedModel ?? (resumeSid ? null : DEFAULT_AGENT_MODEL);
 
+  // Universal muxpad instructions, read at injection time (session
+  // construction). Applies to fresh AND resumed sessions alike — it's
+  // session-level system-prompt material, not a message.
+  const muxpadSystemPrompt = claudeSystemPromptOption(readAgentInstructions());
+
   const options: Options = {
     cwd: process.cwd(),
     ...(resumeSid ? { resume: resumeSid } : { sessionId: sid }),
@@ -359,6 +382,9 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         alwaysLoad: true,
       }),
     },
+    // Universal agent instructions (<dataDir>/agent-instructions.md) appended
+    // to the DEFAULT claude_code system prompt — see claudeSystemPromptOption.
+    ...(muxpadSystemPrompt ? { systemPrompt: muxpadSystemPrompt } : {}),
     // No settingSources override: default = user+project+local settings,
     // CLAUDE.md, skills, MCP — same session the terminal TUI would run.
   };

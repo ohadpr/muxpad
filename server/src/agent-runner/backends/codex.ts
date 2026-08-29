@@ -16,6 +16,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { ChatEvent } from '@muxpad/shared';
+import { readAgentInstructions, wrapAgentInstructions } from '../../agent-instructions.js';
 import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptReader.js';
 
 // Provider ids we adopt as the transcript-log filename + hello sid must satisfy
@@ -216,7 +217,22 @@ export function createCodexBackend(
   }
 
   function buildArgs(prompt: string, useResume: boolean): string[] {
-    const head = useResume && sessionRef ? ['exec', 'resume', sessionRef] : ['exec'];
+    const resuming = useResume && !!sessionRef;
+    // Universal muxpad instructions — CODEX injection mechanism: `codex exec`
+    // has NO append-instructions surface (its only hook, `-c
+    // experimental_instructions_file`, REPLACES the base prompt, and AGENTS.md
+    // lives in user-owned dirs muxpad must not write), so fall back to
+    // prepending the delimited file content to the FIRST user message of each
+    // NEW session — fresh spawns only; a resume already carries it in-thread.
+    // Read at spawn time; missing file → nothing injected, no error. The
+    // muxpad transcript records the RAW prompt (logEvent runs before this),
+    // so rendered chat history stays clean.
+    let finalPrompt = prompt;
+    if (!resuming) {
+      const instructions = readAgentInstructions();
+      if (instructions) finalPrompt = `${wrapAgentInstructions(instructions)}\n\n${prompt}`;
+    }
+    const head = resuming ? ['exec', 'resume', sessionRef as string] : ['exec'];
     const common = [
       '--json',
       '--skip-git-repo-check',
@@ -234,7 +250,7 @@ export function createCodexBackend(
     // Make the worktree's external git dir writable so commits work in-place.
     for (const dir of extraWritableDirs) common.push('--add-dir', dir);
     if (model) common.push('-m', model);
-    return [...head, ...common, prompt];
+    return [...head, ...common, finalPrompt];
   }
 
   function finishTurn(ok: boolean, error?: string): void {
