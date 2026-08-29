@@ -13,6 +13,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import type { ChatEvent } from '@muxpad/shared';
+import { readAgentInstructions, wrapAgentInstructions } from '../../agent-instructions.js';
 import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
 import type { RunnerFrame } from '../protocol.js';
@@ -161,9 +162,23 @@ export function createCursorBackend(
       '--sandbox',
       'disabled',
     ];
-    if (useResume && sessionRef) args.push('--resume', sessionRef);
+    const resuming = useResume && !!sessionRef;
+    // Universal muxpad instructions — CURSOR injection mechanism: cursor-agent
+    // has NO system-prompt/instructions flag (checked `--help`; its rules live
+    // in user-owned .cursor/rules dirs muxpad must not write), so — same
+    // fallback as codex — prepend the delimited file content to the FIRST user
+    // message of each NEW session (fresh spawns only; resumes carry it
+    // in-thread). Read at spawn time; missing file → nothing injected, no
+    // error. The muxpad transcript records the RAW prompt (logEvent runs
+    // before this), so rendered chat history stays clean.
+    let finalPrompt = prompt;
+    if (!resuming) {
+      const instructions = readAgentInstructions();
+      if (instructions) finalPrompt = `${wrapAgentInstructions(instructions)}\n\n${prompt}`;
+    }
+    if (resuming) args.push('--resume', sessionRef as string);
     if (model) args.push('--model', model);
-    args.push(prompt);
+    args.push(finalPrompt);
     return args;
   }
 
