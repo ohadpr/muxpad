@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
 import Database from 'better-sqlite3';
+import { describe, expect, it } from 'vitest';
 import { runMigrations } from './migrations.js';
 
 describe('migrations', () => {
@@ -11,13 +11,7 @@ describe('migrations', () => {
       .all() as { name: string }[];
     const names = tables.map((t) => t.name);
     expect(names).toEqual(
-      expect.arrayContaining([
-        'workspaces',
-        'tabs',
-        'panes',
-        'attachments',
-        'schema_version',
-      ]),
+      expect.arrayContaining(['workspaces', 'tabs', 'panes', 'attachments', 'schema_version']),
     );
   });
 
@@ -44,9 +38,13 @@ describe('migrations', () => {
     db.prepare(
       'INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     ).run('t1', 'tslug1aa', 'T', '"p1"', 'w1', 0, 0, 0);
-    db.prepare(
-      'INSERT INTO panes (id, tab_id, shell, cwd, created_at) VALUES (?, ?, ?, ?, ?)',
-    ).run('p1', 't1', '/bin/sh', '/tmp', 0);
+    db.prepare('INSERT INTO panes (id, tab_id, shell, cwd, created_at) VALUES (?, ?, ?, ?, ?)').run(
+      'p1',
+      't1',
+      '/bin/sh',
+      '/tmp',
+      0,
+    );
     db.prepare("DELETE FROM tabs WHERE id = 't1'").run();
     const remaining = db.prepare('SELECT count(*) as c FROM panes').get() as { c: number };
     expect(remaining.c).toBe(0);
@@ -68,6 +66,35 @@ describe('migrations', () => {
   });
 });
 
+describe('migrations v19 — globals KV + hidden workspaces', () => {
+  it('creates the globals table with key/value semantics', () => {
+    const db = new Database(':memory:');
+    runMigrations(db);
+    db.prepare("INSERT INTO globals (key, value) VALUES ('ceo_pane_id', 'p1')").run();
+    const row = db.prepare("SELECT value FROM globals WHERE key = 'ceo_pane_id'").get() as {
+      value: string;
+    };
+    expect(row.value).toBe('p1');
+    // key is the primary key — a second insert of the same key must fail.
+    expect(() =>
+      db.prepare("INSERT INTO globals (key, value) VALUES ('ceo_pane_id', 'p2')").run(),
+    ).toThrow();
+  });
+
+  it('adds workspaces.hidden defaulting to 0', () => {
+    const db = new Database(':memory:');
+    runMigrations(db);
+    db.prepare(
+      `INSERT INTO workspaces (id, slug, name, position, created_at, updated_at)
+       VALUES ('w1', 'w', 'w', 0, 0, 0)`,
+    ).run();
+    const row = db.prepare('SELECT hidden FROM workspaces WHERE id = ?').get('w1') as {
+      hidden: number;
+    };
+    expect(row.hidden).toBe(0);
+  });
+});
+
 describe('migrations v6 — url panes', () => {
   it('adds kind defaulting to shell and a nullable url column', () => {
     const db = new Database(':memory:');
@@ -81,9 +108,10 @@ describe('migrations v6 — url panes', () => {
       `INSERT INTO panes (id, tab_id, shell, startup_cmd, cwd, env, created_at)
        VALUES ('p1', 't1', '/bin/zsh', null, '/tmp', null, 0)`,
     ).run();
-    const row = db
-      .prepare('SELECT kind, url FROM panes WHERE id = ?')
-      .get('p1') as { kind: string; url: string | null };
+    const row = db.prepare('SELECT kind, url FROM panes WHERE id = ?').get('p1') as {
+      kind: string;
+      url: string | null;
+    };
     expect(row.kind).toBe('shell');
     expect(row.url).toBeNull();
   });
@@ -104,14 +132,36 @@ describe('migrations v6 — url panes', () => {
       `INSERT INTO panes (id, tab_id, kind, url, shell, cwd, created_at)
        VALUES ('p2', 't1', 'url', 'https://example.com', null, null, 0)`,
     ).run();
-    const row = db
-      .prepare('SELECT kind, url, shell, cwd FROM panes WHERE id = ?')
-      .get('p2') as { kind: string; url: string; shell: string | null; cwd: string | null };
+    const row = db.prepare('SELECT kind, url, shell, cwd FROM panes WHERE id = ?').get('p2') as {
+      kind: string;
+      url: string;
+      shell: string | null;
+      cwd: string | null;
+    };
     expect(row).toEqual({
       kind: 'url',
       url: 'https://example.com',
       shell: null,
       cwd: null,
     });
+  });
+
+  it('v20: session_history exists, keyed by sid, with no pane FK', () => {
+    const db = new Database(':memory:');
+    db.pragma('foreign_keys = ON');
+    runMigrations(db);
+    // Insert with a pane_id that references no pane — must NOT be rejected:
+    // history has to survive pane deletion, so there is deliberately no FK.
+    db.prepare(
+      `INSERT INTO session_history (sid, pane_id, assistant, cwd, first_seen, last_seen)
+       VALUES ('sid-1', 'ghost-pane', 'claude', '/tmp', 1, 2)`,
+    ).run();
+    const row = db.prepare('SELECT * FROM session_history WHERE sid = ?').get('sid-1') as {
+      sid: string;
+      pane_id: string;
+    };
+    expect(row.pane_id).toBe('ghost-pane');
+    // sid is the primary key: a second insert of the same sid conflicts.
+    expect(() => db.prepare('INSERT INTO session_history (sid) VALUES (?)').run('sid-1')).toThrow();
   });
 });
