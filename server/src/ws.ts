@@ -151,6 +151,8 @@ export function attachWsServer(deps: {
   interface AgentRunnerConn {
     ws: WebSocket;
     sid: string | null;
+    /** Which harness drives this pane (claude|codex|cursor); set at hello. */
+    backend: string;
     turnActive: boolean;
     /** Question awaiting the user, so a (re)connecting chat client can render it. */
     pendingQuestion: { qid: string; questions: AgentQuestion[] } | null;
@@ -180,6 +182,9 @@ export function attachWsServer(deps: {
         ? { ok: false, reason: r.reason ?? 'could not send' }
         : { ok: true, queued: r.status === 'queued' };
     };
+    // Real turn state for the HTTP layer (`agent wait`): the registry's
+    // turnActive, not pty-output `busy`.
+    deps.agentBridge.turnActive = (paneId) => agentRunners.get(paneId)?.turnActive ?? null;
   }
 
   // -------------------------------------------------------------------------
@@ -525,6 +530,7 @@ export function attachWsServer(deps: {
         const conn: AgentRunnerConn = {
           ws,
           sid: null,
+          backend: 'claude',
           turnActive: false,
           pendingQuestion: null,
           subagents: new Map(),
@@ -535,6 +541,17 @@ export function attachWsServer(deps: {
         const bcast = (obj: unknown) => bcastToPane(paneId, obj);
         const emitChange = () =>
           deps.events.emit({ type: 'agent_session.updated', pane_id: paneId });
+        // Turn lifecycle on the GLOBAL bus (spec A4): a supervisor watching N
+        // workers holds one /ws/events (or /api/events SSE) subscription
+        // instead of N chat sockets. Ids only — content stays off the bus.
+        const emitTurn = (phase: 'start' | 'done' | 'fatal') =>
+          deps.events.emit({
+            type: 'agent_turn',
+            pane_id: paneId,
+            phase,
+            sid: conn.sid,
+            backend: conn.backend,
+          });
         ws.on('message', (data) => {
           // A displaced socket can still deliver in-flight frames during the
           // close handshake — a stale runner's state must not leak into the
@@ -566,6 +583,7 @@ export function attachWsServer(deps: {
             // legacy runner = claude. Validated against the allowlist so it's
             // safe both as a DB label AND baked into the self-heal shell cmd.
             const backendId = isBackendId(frame.backend) ? frame.backend : 'claude';
+            conn.backend = backendId;
             // Registering is a claim of recovery, not proof of it: a runner
             // that can't resume its session says hello and dies seconds later.
             // Clear the respawn record only after it has held the pane for the
@@ -626,6 +644,7 @@ export function attachWsServer(deps: {
             // every open view refetch the session twice per turn.
             deps.cache.setAgentBusy(paneId, true);
             bcast({ t: 'turn-start' });
+            emitTurn('start');
           } else if (frame.t === 'stream') {
             if (typeof frame.delta !== 'string') return;
             appendStreamBuf(paneId, frame.delta);
@@ -642,6 +661,9 @@ export function attachWsServer(deps: {
               ok: frame.ok !== false,
               ...(frame.error ? { error: frame.error } : {}),
             });
+            // `done` regardless of ok — the turn ENDED (an errored turn is
+            // still a finished wait); a dying runner reports `fatal` below.
+            emitTurn('done');
             // Chat-native agents never ring BEL, so the attention-push path
             // can't see them — notify turn completion here instead. Gated on
             // interactivity: a turn answered within the suppress window of
@@ -719,6 +741,7 @@ export function attachWsServer(deps: {
             st.fatal = typeof frame.error === 'string' ? frame.error : '';
             respawns.set(paneId, st);
             bcast({ t: 'error', message: `agent exited: ${frame.error}` });
+            emitTurn('fatal');
           }
         });
         const teardown = () => {

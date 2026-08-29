@@ -19,10 +19,19 @@ export interface AgentBridge {
     paneId: string,
     text: string,
   ) => { ok: true; queued: boolean } | { ok: false; reason: string };
+  /**
+   * Real turn state for the pane's connected runner: true mid-turn, false
+   * idle, null when no runner is connected right now. This is the registry's
+   * `turnActive` — NOT the pane `busy` flag, which also trips on raw pty
+   * output activity (a worker tailing a dev server reads busy forever).
+   * `muxpad agent wait` keys on this via GET /api/agent-sessions/by-pane.
+   */
+  turnActive: (paneId: string) => boolean | null;
 }
 
 export function createAgentBridge(): AgentBridge {
   return {
     send: () => ({ ok: false, reason: 'server starting — try again' }),
+    turnActive: () => null,
   };
 }
