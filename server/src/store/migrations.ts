@@ -114,7 +114,7 @@ const MIGRATIONS: Migration[] = [
     // in the DB (not ptyd's runtime) so it survives restarts and needs no
     // ptyd round-trip; cleared when the tab is next viewed (markSeen).
     version: 7,
-    sql: `ALTER TABLE tabs ADD COLUMN unread INTEGER NOT NULL DEFAULT 0;`,
+    sql: 'ALTER TABLE tabs ADD COLUMN unread INTEGER NOT NULL DEFAULT 0;',
   },
   {
     // Per-tab icon. Adds the column, then backfills: lift a leading emoji
@@ -122,7 +122,7 @@ const MIGRATIONS: Migration[] = [
     // convention) so the navigator's icon column is consistent and we
     // don't double up; tabs without a leading emoji get a random icon.
     version: 8,
-    sql: `ALTER TABLE tabs ADD COLUMN icon TEXT;`,
+    sql: 'ALTER TABLE tabs ADD COLUMN icon TEXT;',
     apply: (db) => {
       const rows = db.prepare('SELECT id, name FROM tabs').all() as {
         id: string;
@@ -273,6 +273,45 @@ const MIGRATIONS: Migration[] = [
         created_at  INTEGER NOT NULL
       );
       CREATE INDEX agent_queue_pane ON agent_queue(pane_id, seq);
+    `,
+  },
+  {
+    // CEO pane storage (see docs/plans/2026-08-21-ceo-pane.md §B2). Two
+    // additive pieces:
+    //   globals — a tiny server-side KV for singleton pointers
+    //     (ceo_pane_id / ceo_tab_id). Server-side, not localStorage: the
+    //     CEO must resolve to the SAME pane from every browser.
+    //   workspaces.hidden — system-container flag. The CEO pane needs a
+    //     backing tab (panes.tab_id is NOT NULL) and tabs need a workspace;
+    //     rather than relaxing FKs (SQLite table rebuild) the pane lives in
+    //     a hidden '· system ·' workspace excluded from the sidebar tree.
+    version: 19,
+    sql: `
+      CREATE TABLE globals (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      ALTER TABLE workspaces ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
+  {
+    // Append-only session registry (docs/plans/2026-08-28-session-archive.md
+    // §1). `agent_sessions` is a LIVE table — lineage resets on fresh launch
+    // and the row cascade-deletes with its pane — so the pane↔sid history was
+    // being lost even where the transcript survives. Every place a sid becomes
+    // known (register / recordSessionId / attachRunner) upserts here; rows are
+    // never deleted. Deliberately no pane FK: history must survive pane
+    // deletion.
+    version: 20,
+    sql: `
+      CREATE TABLE session_history (
+        sid        TEXT PRIMARY KEY,
+        pane_id    TEXT,
+        assistant  TEXT,
+        cwd        TEXT,
+        first_seen INTEGER,
+        last_seen  INTEGER
+      );
     `,
   },
 ];

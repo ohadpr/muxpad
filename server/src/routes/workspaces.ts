@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { ceoLocation } from '../ceo.js';
 import type { EventBus } from '../events.js';
 import type { PtydCache } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
@@ -47,7 +48,9 @@ export function workspacesRoutes(deps: {
   };
 
   app.get('/', (c) => {
-    const list = workspaces.list();
+    // Hidden system workspaces (the CEO's container) are excluded from the
+    // default list — and thus the sidebar tree — unless ?all=1.
+    const list = workspaces.list({ all: c.req.query('all') === '1' });
     const decorated = list.map((w) => ({ ...w, ...workspaceFlags(w.id) }));
     return c.json(decorated);
   });
@@ -91,6 +94,18 @@ export function workspacesRoutes(deps: {
     const id = c.req.param('id');
     const w = workspaces.getById(id);
     if (!w) return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
+    // A workspace containing the CEO pane cannot be deleted — the cascade
+    // would kill the server-owned singleton. See ceo.ts.
+    if (ceoLocation(deps.db)?.workspaceId === id)
+      return c.json(
+        {
+          error: {
+            code: 'conflict',
+            message: 'this workspace holds the CEO pane and cannot be deleted',
+          },
+        },
+        409,
+      );
     // Cascade: kill panes, drop tabs, then drop the workspace. Pane
     // rows fall out via the ON DELETE CASCADE FK on tabs; the explicit
     // tabs.delete() per tab is what lets us emit a per-tab tab.removed

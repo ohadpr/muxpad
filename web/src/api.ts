@@ -30,9 +30,23 @@ export interface MovePaneResult {
 }
 
 export const api = {
+  // ── CEO (the pinned singleton agent pane) ──────────────────────────────
+
+  /** Resolve (ensuring, server-side) the singleton CEO pane's ids + the
+   *  workspace/tab slugs that route to it. */
+  getCeo: () =>
+    req<{ pane_id: string; tab_id: string; workspace_slug: string; tab_slug: string }>('/api/ceo'),
+
+  /** One pane, decorated (title/attention/busy/…) + isRunning. */
+  getPane: (id: string) =>
+    req<PaneSpec & { isRunning: boolean }>(`/api/panes/${encodeURIComponent(id)}`),
+
   // ── Workspaces (the new top-level concept) ─────────────────────────────
 
-  listWorkspaces: () => req<Workspace[]>('/api/workspaces'),
+  /** `all: true` includes hidden system workspaces (e.g. the CEO's) — the
+   *  caller is responsible for keeping them out of user-facing lists. */
+  listWorkspaces: (opts?: { all?: boolean }) =>
+    req<Workspace[]>(`/api/workspaces${opts?.all ? '?all=1' : ''}`),
 
   createWorkspace: (name?: string) =>
     req<Workspace>('/api/workspaces', {

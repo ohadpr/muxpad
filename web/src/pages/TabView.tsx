@@ -504,11 +504,15 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   }, [tab?.id, mobileActiveResolved, isMobile, workspace?.id, isActive]);
 
   // Title pulls the live name from the shared tabs list so renames in
-  // the tab bar update the document title without a refetch here.
+  // the tab bar update the document title without a refetch here. The
+  // hidden system workspace's internal name ("· system ·") never surfaces —
+  // its one tab is the resident "muxpad" agent, so the title is the plain
+  // brand.
   const liveName = allTabs.find((t) => t.slug === tabSlug)?.name ?? tab?.name;
   const liveWorkspaceName = workspace?.name;
-  const documentTitle =
-    liveWorkspaceName && liveName
+  const documentTitle = workspace?.hidden
+    ? 'muxpad'
+    : liveWorkspaceName && liveName
       ? `${liveWorkspaceName} ⋅ ${liveName}`
       : (liveName ?? liveWorkspaceName ?? 'muxpad');
 
