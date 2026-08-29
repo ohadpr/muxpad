@@ -1,6 +1,6 @@
 import type { spawn as nodeSpawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatEvent } from '@muxpad/shared';
@@ -268,6 +268,37 @@ describe('codex backend', () => {
       'new answer',
     ]);
     expect(readLog('old-thread')).toEqual([]); // old file migrated away
+  });
+
+  it('prepends muxpad instructions to the FIRST message of a NEW session only', async () => {
+    writeFileSync(join(dataDir, 'agent-instructions.md'), 'use muxpad publish\n');
+    const { b, calls } = await boot();
+    b.send('hi');
+    await tick();
+    // Fresh session → delimited instructions ride the prompt arg…
+    expect(calls[1]!.args.at(-1)).toBe(
+      '<muxpad-instructions>\nuse muxpad publish\n</muxpad-instructions>\n\nhi',
+    );
+    const turn = calls[1]!.child;
+    line(turn, { type: 'thread.started', thread_id: 'thr-instr' });
+    line(turn, { type: 'item.completed', item: { type: 'agent_message', text: 'ok' } });
+    line(turn, { type: 'turn.completed' });
+    closeChild(turn, 0);
+    await tick();
+    // …but the muxpad transcript records the RAW prompt (chat stays clean).
+    expect((readLog('thr-instr')[0] as { text: string }).text).toBe('hi');
+    // The next turn RESUMES the thread → no re-injection.
+    b.send('again');
+    await tick();
+    expect(calls[2]!.args.slice(0, 3)).toEqual(['exec', 'resume', 'thr-instr']);
+    expect(calls[2]!.args.at(-1)).toBe('again');
+  });
+
+  it('missing instructions file → raw prompt, no error', async () => {
+    const { b, calls } = await boot();
+    b.send('plain');
+    await tick();
+    expect(calls[1]!.args.at(-1)).toBe('plain');
   });
 
   it('advertises its model list + default in the status frame (the picker)', async () => {
