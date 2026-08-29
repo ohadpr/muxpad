@@ -1,13 +1,12 @@
-import { Outlet, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
+import { createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
 import { AppLayout } from './components/AppLayout';
 import { WorkspaceLayout } from './components/WorkspaceLayout';
+import { CeoRedirect } from './pages/CeoRedirect';
 import { DocView } from './pages/DocView';
 import { PopoutView } from './pages/PopoutView';
 import { RootRedirect } from './pages/RootRedirect';
 
-const rootRoute = createRootRoute({
-  component: () => <Outlet />,
-});
+const rootRoute = createRootRoute();
 
 // Pathless layout: persistent chrome (brand + actions + the tab bar
 // when inside a workspace).
@@ -55,6 +54,15 @@ const popoutPaneRoute = createRoute({
   component: PopoutView,
 });
 
+// Legacy /ceo link — the CEO is a real tab in the hidden system workspace
+// and renders through the standard chrome; this just resolves + redirects
+// to its /w/:ws/t/:tab route (see pages/CeoRedirect.tsx).
+const ceoRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/ceo',
+  component: CeoRedirect,
+});
+
 // Document surface — a note where AI conversations are collapsible blocks.
 // Outside the app layout (its own full-screen chrome); theme vars still apply
 // since they live on :root in styles.css.
@@ -67,6 +75,7 @@ const docRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   appLayoutRoute.addChildren([rootRedirectRoute, workspaceLayoutRoute.addChildren([tabRoute])]),
   popoutPaneRoute,
+  ceoRoute,
   docRoute,
 ]);
 
