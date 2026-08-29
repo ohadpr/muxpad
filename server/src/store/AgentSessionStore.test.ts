@@ -6,11 +6,12 @@ import { WorkspaceStore } from './WorkspaceStore.js';
 import { openDb } from './db.js';
 
 describe('AgentSessionStore', () => {
+  let db: ReturnType<typeof openDb>;
   let agents: AgentSessionStore;
   let paneId: string;
 
   beforeEach(() => {
-    const db = openDb(':memory:');
+    db = openDb(':memory:');
     agents = new AgentSessionStore(db);
     const panes = new PaneStore(db);
     const tabs = new TabStore(db);
@@ -86,5 +87,57 @@ describe('AgentSessionStore', () => {
     const s = agents.getByPane(paneId);
     expect(s?.writer).toBe('none');
     expect(s?.status).toBe('idle');
+  });
+
+  describe('session_history (append-only registry)', () => {
+    const history = (sid: string) =>
+      db.prepare('SELECT * FROM session_history WHERE sid = ?').get(sid) as
+        | {
+            sid: string;
+            pane_id: string | null;
+            assistant: string | null;
+            cwd: string | null;
+            first_seen: number;
+            last_seen: number;
+          }
+        | undefined;
+
+    it('records every sid from register / recordSessionId / attachRunner', () => {
+      agents.register({ pane_id: paneId, cwd: '/tmp/x', session_id: 'sid-1' });
+      agents.recordSessionId(paneId, 'sid-2');
+      agents.attachRunner({ pane_id: paneId, session_id: 'sid-3', assistant: 'codex' });
+      expect(history('sid-1')?.pane_id).toBe(paneId);
+      expect(history('sid-1')?.cwd).toBe('/tmp/x');
+      expect(history('sid-2')?.pane_id).toBe(paneId);
+      expect(history('sid-3')?.assistant).toBe('codex');
+    });
+
+    it('survives a lineage reset — old sids are never deleted', () => {
+      agents.register({ pane_id: paneId, session_id: 'sid-1' });
+      // Fresh launch resets agent_sessions.lineage to just sid-2…
+      agents.register({ pane_id: paneId, session_id: 'sid-2' });
+      expect(agents.getByPane(paneId)?.lineage).toEqual(['sid-2']);
+      // …but the registry keeps both.
+      expect(history('sid-1')).toBeDefined();
+      expect(history('sid-2')).toBeDefined();
+    });
+
+    it('survives pane deletion (no FK cascade)', () => {
+      agents.register({ pane_id: paneId, session_id: 'sid-1' });
+      db.prepare('DELETE FROM panes WHERE id = ?').run(paneId);
+      expect(agents.getByPane(paneId)).toBeNull(); // live row cascaded
+      expect(history('sid-1')?.pane_id).toBe(paneId); // registry survives
+    });
+
+    it('upserts on sid: last_seen advances, first_seen and cwd stick', () => {
+      agents.register({ pane_id: paneId, cwd: '/tmp/x', session_id: 'sid-1' });
+      const first = history('sid-1');
+      // Re-report with no cwd → cwd must not be wiped to null.
+      agents.recordSessionId(paneId, 'sid-1');
+      const second = history('sid-1');
+      expect(second?.first_seen).toBe(first?.first_seen);
+      expect(second?.cwd).toBe('/tmp/x');
+      expect(second?.last_seen).toBeGreaterThanOrEqual(first?.last_seen ?? 0);
+    });
   });
 });
