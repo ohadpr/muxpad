@@ -1,16 +1,22 @@
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import type { AgentBridge } from './agent-bridge.js';
+import type { ArchiveDb } from './archive/ArchiveDb.js';
 import { EventBus } from './events.js';
+import { type Funnel, localFunnel } from './funnel.js';
 import type { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import type { Presence, PushService } from './push.js';
 import { agentSessionsRoutes } from './routes/agent-sessions.js';
 import { attachmentsRoutes } from './routes/attachments.js';
+import { ceoRoutes } from './routes/ceo.js';
+import { eventsRoutes } from './routes/events.js';
 import { openRoutes } from './routes/open.js';
 import { paneIoRoutes } from './routes/pane-io.js';
 import { panesScopedRoutes, panesTabScopedRoutes } from './routes/panes.js';
+import { publishRoutes } from './routes/publish.js';
 import { pushRoutes } from './routes/push.js';
+import { archiveRoutes, searchRoutes } from './routes/search.js';
 import { summaryRoutes } from './routes/summary.js';
 import { tabsRoutes } from './routes/tabs.js';
 import { workspacesRoutes } from './routes/workspaces.js';
@@ -56,6 +62,19 @@ export interface AppDeps {
    * push).
    */
   presence?: Presence;
+  /**
+   * Session-archive index (`archive.sqlite`, see archive/). Optional so
+   * tests that don't exercise search can omit it — /api/search and
+   * /api/archive simply aren't mounted then.
+   */
+  archive?: ArchiveDb;
+  /**
+   * Publish deps (routes/publish.ts): the funnel manager that ensures the
+   * public Tailscale Funnel on publish. Optional so tests can omit it — the
+   * routes are still mounted, backed by a localFunnel that NEVER execs
+   * tailscale (nothing a test does can expose content publicly).
+   */
+  publish?: { funnel: Funnel; publicPort?: number };
 }
 
 export function createApp(deps: AppDeps): Hono {
@@ -79,7 +98,28 @@ export function createApp(deps: AppDeps): Hono {
   app.route('/api/panes', attachmentsRoutes(resolved));
   app.route('/api/panes', summaryRoutes(resolved));
   app.route('/api/open', openRoutes(resolved));
+  // SSE mirror of /ws/events — curl-able subscription for scripts/agents.
+  app.route('/api/events', eventsRoutes(resolved));
+  // The singleton CEO pane — ensure + resolve its ids.
+  app.route('/api/ceo', ceoRoutes(resolved));
   app.route('/api/agent-sessions', agentSessionsRoutes(resolved));
+  // Artifact publishing (copies into <dataDir>/public, served by the separate
+  // public-port app). Default funnel is exec-free — see AppDeps.publish.
+  app.route(
+    '/api/publish',
+    publishRoutes({
+      db: resolved.db,
+      dataDir: resolved.dataDir,
+      funnel:
+        resolved.publish?.funnel ??
+        localFunnel(resolved.publish?.publicPort ?? 7778, 'funnel not configured'),
+    }),
+  );
   if (resolved.push) app.route('/api/push', pushRoutes(resolved.push));
+  if (resolved.archive) {
+    const archiveDeps = { db: resolved.db, archive: resolved.archive };
+    app.route('/api/search', searchRoutes(archiveDeps));
+    app.route('/api/archive', archiveRoutes(archiveDeps));
+  }
   return app;
 }

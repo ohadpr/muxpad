@@ -1,8 +1,11 @@
-import { createApp } from '../server.js';
-import { PtydCache } from '../ptyd-cache.js';
-import { spawnPtyd, type SpawnedPtyd } from './spawnPtyd.js';
 import type Database from 'better-sqlite3';
+import type { AgentBridge } from '../agent-bridge.js';
+import type { ArchiveDb } from '../archive/ArchiveDb.js';
 import type { EventBus } from '../events.js';
+import type { Funnel } from '../funnel.js';
+import { PtydCache } from '../ptyd-cache.js';
+import { createApp } from '../server.js';
+import { type SpawnedPtyd, spawnPtyd } from './spawnPtyd.js';
 
 export interface TestApp {
   app: ReturnType<typeof createApp>;
@@ -21,6 +24,11 @@ export async function createTestApp(opts: {
   db: Database.Database;
   dataDir: string;
   events?: EventBus;
+  agentBridge?: AgentBridge;
+  /** Mounts /api/search + /api/archive when provided (archive e2e tests). */
+  archive?: ArchiveDb;
+  /** Funnel stub for /api/publish tests — never a real tailscale exec. */
+  publish?: { funnel: Funnel };
 }): Promise<TestApp> {
   const ptyd = await spawnPtyd();
   const cache = new PtydCache();
@@ -31,6 +39,9 @@ export async function createTestApp(opts: {
     cache,
     dataDir: opts.dataDir,
     ...(opts.events ? { events: opts.events } : {}),
+    ...(opts.agentBridge ? { agentBridge: opts.agentBridge } : {}),
+    ...(opts.archive ? { archive: opts.archive } : {}),
+    ...(opts.publish ? { publish: opts.publish } : {}),
   });
   return {
     app,
