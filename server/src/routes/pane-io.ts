@@ -117,7 +117,10 @@ function captureReplay(opts: {
       if (quietTimer) clearTimeout(quietTimer);
       if (maxTimer) clearTimeout(maxTimer);
       try {
-        ws.close(1000);
+        // close() on a still-CONNECTING ws throws; terminate() is the only
+        // way to abandon a wedged handshake.
+        if (ws.readyState === WebSocket.CONNECTING) ws.terminate();
+        else ws.close(1000);
       } catch {
         // already closing; ignore
       }
@@ -130,11 +133,19 @@ function captureReplay(opts: {
       quietTimer = setTimeout(() => finish(), ms);
     };
 
+    // Armed BEFORE (and independent of) the ws 'open' event: a wedged
+    // CONNECTING socket never fires 'open', and without this cap the request
+    // would hang until the caller gave up. A capture that never got past the
+    // handshake is an error, not an empty scrollback.
+    maxTimer = setTimeout(() => {
+      if (ws.readyState === WebSocket.CONNECTING) finish(new Error('timed out connecting to ptyd'));
+      else finish();
+    }, maxMs);
+
     ws.on('open', () => {
       // No frame yet → wait the (longer) first-frame window; an empty ring
       // sends nothing at all and this is the only way to conclude "empty".
       armQuiet(firstFrameMs);
-      maxTimer = setTimeout(() => finish(), maxMs);
     });
     ws.on('message', (data: WebSocket.RawData) => {
       const buf = Buffer.isBuffer(data)
