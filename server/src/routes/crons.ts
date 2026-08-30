@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { CronScheduler } from '../cron/CronScheduler.js';
-import { emitCronTabUpdate } from '../cron/CronScheduler.js';
+import { MAX_ENABLED_CRONS, emitCronTabUpdate } from '../cron/CronScheduler.js';
 import {
   ScheduleError,
   compileSchedule,
@@ -118,6 +118,19 @@ export function cronsRoutes(deps: {
         return c.json(bad(`workspace ${body.workspace_id} not found`), 400);
     }
 
+    // Runaway guard. We deliberately do NOT copy the harnesses' 7-day
+    // auto-expiry — silent expiry is one of the failure modes this replaces —
+    // so the bound has to come from somewhere that ISN'T time. A ceiling on
+    // ENABLED crons is that: it can't lose you a job you're still using, and a
+    // hundred live schedules is already far past "someone lost track".
+    if (s.countEnabled() >= MAX_ENABLED_CRONS)
+      return c.json(
+        bad(
+          `too many enabled crons (max ${MAX_ENABLED_CRONS}) — pause or remove some (\`muxpad cron list\`)`,
+        ),
+        400,
+      );
+
     const now = Date.now();
     const cron = s.create({
       name: body.name,
@@ -183,23 +196,22 @@ export function cronsRoutes(deps: {
     const tz = body.tz ?? cron.tz;
     if (!isValidTimezone(tz)) return c.json(bad(`unknown timezone "${tz}"`), 400);
     if (body.prompt !== undefined || body.schedule !== undefined || body.tz !== undefined) {
-      deps.db
-        .prepare('UPDATE crons SET prompt = ?, schedule = ?, tz = ? WHERE id = ?')
-        .run(body.prompt ?? cron.prompt, schedule, tz, cron.id);
-      // A schedule/zone edit invalidates the persisted anchor; re-anchor from
-      // NOW so the change takes effect at the next real slot rather than
+      // Re-anchors (and recomputes the jitter, whose cap depends on the
+      // interval), so an edit takes effect at the next real slot instead of
       // firing immediately off a stale next_due_at.
-      if (body.schedule !== undefined || body.tz !== undefined)
-        s.setNextDue(cron.id, nextAfter(schedule, tz, Date.now()));
+      s.reschedule(cron.id, {
+        schedule,
+        tz,
+        prompt: body.prompt ?? cron.prompt,
+        from: Date.now(),
+      });
     }
     if (body.enabled !== undefined) {
       // RESUMING re-anchors: a cron paused for a week must not wake up to a
       // week of catch-up it was deliberately not meant to run.
-      s.setEnabled(
-        cron.id,
-        body.enabled,
-        body.enabled ? nextAfter(schedule, tz, Date.now()) : undefined,
-      );
+      if (body.enabled && s.countEnabled() >= MAX_ENABLED_CRONS && !cron.enabled)
+        return c.json(bad(`too many enabled crons (max ${MAX_ENABLED_CRONS})`), 400);
+      s.setEnabled(cron.id, body.enabled, body.enabled ? Date.now() : undefined);
       emitCronTabUpdate(deps, cron.target_pane);
     }
     return c.json(s.getById(cron.id));

@@ -1,16 +1,15 @@
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
-import { serveStatic } from '@hono/node-server/serve-static';
-import type { Context } from 'hono';
 import { createAgentBridge } from './agent-bridge.js';
 import { seedAgentInstructions } from './agent-instructions.js';
 import { seedDoMode } from './agent-modes.js';
 import { ArchiveDb } from './archive/ArchiveDb.js';
 import { Archiver } from './archive/Archiver.js';
 import { projectsDir } from './chat/TranscriptReader.js';
+import { paneCarryover } from './chat/summarize.js';
 import { loadConfig } from './config.js';
 import { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
@@ -22,6 +21,7 @@ import { createPublicApp } from './public-server.js';
 import { Presence, PushService, attachAttentionPush, createPaneNotifier } from './push.js';
 import { releaseResidentPane } from './resident-release.js';
 import { startServeSupervisor } from './serve-supervisor.js';
+import { mountStaticWeb } from './static-assets.js';
 import { createApp } from './server.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
@@ -203,6 +203,10 @@ const cronScheduler = new CronScheduler({
   notify: (title, body) => {
     void push.send({ title, body, url: '/', tag: 'cron' });
   },
+  // Rotation handoff: summarize the pane whose window filled up, so the fresh
+  // tab starts briefed instead of amnesiac. Swappable by design — a future
+  // per-chat dossier replaces this one line.
+  carryover: (paneId) => paneCarryover(db, paneId),
 });
 
 const app = createApp({
@@ -220,55 +224,10 @@ const app = createApp({
   publish: { funnel },
 });
 
-// Static asset serving (CSS, JS, images, etc.) from the built web bundle.
+// Static asset serving (CSS, JS, fonts, images) from the built web bundle,
+// plus the SPA fallback. Caching/compression policy lives in static-assets.ts.
 const here = dirname(fileURLToPath(import.meta.url));
-const webRoot = join(here, '..', '..', 'web', 'dist');
-
-// The HTML shell must be served `no-cache` so the browser ALWAYS revalidates it
-// and picks up a rebuilt bundle's new hashed asset names. Assets themselves are
-// content-hashed (immutable) and keep serveStatic's cacheable headers — only the
-// index.html entrypoint is the stale-after-rebuild trap. Without this, a reload
-// can keep serving an old index.html that references the pre-rebuild CSS/JS.
-const serveIndexHtml = (c: Context) => {
-  c.header('Cache-Control', 'no-cache');
-  try {
-    return c.html(readFileSync(join(webRoot, 'index.html'), 'utf-8'));
-  } catch {
-    return c.text('not found', 404);
-  }
-};
-app.get('/', serveIndexHtml);
-// Direct /index.html requests must not slip through to serveStatic either —
-// that would hand the shell back with cacheable headers, the exact trap the
-// no-cache route exists to close.
-app.get('/index.html', serveIndexHtml);
-
-app.use('/*', serveStatic({ root: webRoot }));
-
-// Anything that fell through both API routes and static files lands here.
-// API/WS paths return JSON 404 so the client can parse them; everything else
-// is treated as a client-side SPA route and gets index.html.
-//
-// Read index.html fresh on each fallback request — caching it in memory means
-// a rebuild that produces a new hashed bundle name still serves the old HTML,
-// which then 404s on its asset references. The file is ~1KB and the SPA
-// fallback is rare relative to static-asset hits, so the cost is negligible.
-//
-// Asset paths (/assets/*) and any path with a file extension must NEVER fall
-// back to index.html — serving HTML with a JS or CSS Content-Type triggers
-// the browser's MIME-type sniffing and breaks module loading. Those return
-// a real 404 instead.
-app.notFound((c) => {
-  const path = c.req.path;
-  if (path.startsWith('/api/') || path.startsWith('/ws/')) {
-    return c.json({ error: { code: 'not_found', message: 'route not found' } }, 404);
-  }
-  if (path.startsWith('/assets/') || /\.[a-zA-Z0-9]+$/.test(path)) {
-    return c.text('not found', 404);
-  }
-  // SPA client route (e.g. /w/:ws/t/:tab) → the no-cache HTML shell.
-  return serveIndexHtml(c);
-});
+mountStaticWeb(app, join(here, '..', '..', 'web', 'dist'));
 
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
   console.log(`muxpad listening on http://${info.address}:${info.port}`);

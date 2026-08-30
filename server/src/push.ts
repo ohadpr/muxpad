@@ -37,6 +37,39 @@ export interface PushPayload {
   tag?: string;
 }
 
+/**
+ * How long the push service holds an undelivered message for a device it
+ * can't currently reach.
+ *
+ * Was 300s, which quietly made push useless for the case it exists to serve:
+ * a phone asleep in a pocket, on a flaky cell, or simply off for a bit misses
+ * the window and the "your agent is waiting on you" ping is dropped with no
+ * retry and no trace. An hour is the point where the notification stops being
+ * useful and starts being archaeology — an agent that asked a question 90
+ * minutes ago is either finished or long stalled, and buzzing then is noise.
+ *
+ * An hour of holding is only safe because of `topicFor()` below: without
+ * collapsing, a device that comes back after 30 minutes would get every
+ * queued ping at once.
+ */
+const PUSH_TTL_SECONDS = 3600;
+
+/**
+ * Collapse key. The push service keeps only the LATEST undelivered message
+ * per (subscription, topic) — so a pane that rang five times while the phone
+ * was unreachable delivers one current notification instead of a five-deep
+ * stack of stale ones. We reuse the payload's `tag` (the pane id for pane
+ * notifications), which is already the client-side collapse key, so the
+ * server-side and client-side coalescing agree.
+ *
+ * The Topic header is constrained to <=32 base64url characters; anything that
+ * doesn't fit is dropped rather than risking a 400 from the push service.
+ */
+function topicFor(tag: string | undefined): string | undefined {
+  if (!tag) return undefined;
+  return /^[A-Za-z0-9_-]{1,32}$/.test(tag) ? tag : undefined;
+}
+
 interface VapidKeys {
   publicKey: string;
   privateKey: string;
@@ -106,10 +139,20 @@ export class PushService {
       .prepare('SELECT endpoint, subscription FROM push_subscriptions')
       .all() as SubscriptionRow[];
     const body = JSON.stringify(payload);
+    const topic = topicFor(payload.tag);
     await Promise.all(
       rows.map(async (row) => {
         try {
-          await webpush.sendNotification(JSON.parse(row.subscription), body, { TTL: 300 });
+          await webpush.sendNotification(JSON.parse(row.subscription), body, {
+            TTL: PUSH_TTL_SECONDS,
+            // Every push muxpad sends is "a human is being waited on" — the
+            // notifier already suppresses anything the user can see for
+            // themselves (see Presence). `normal` lets a dozing device defer
+            // delivery to its next wake-up, which is exactly the latency this
+            // whole path exists to avoid.
+            urgency: 'high',
+            ...(topic ? { topic } : {}),
+          });
         } catch (err) {
           const status = (err as { statusCode?: number }).statusCode;
           if (status === 404 || status === 410 || status === 401 || status === 403) {
