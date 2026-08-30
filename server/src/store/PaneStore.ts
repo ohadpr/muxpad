@@ -122,10 +122,25 @@ export class PaneStore {
    *
    * `kind = 'shell'` is a hard filter, not decoration: ensurePane on a URL pane
    * (shell = NULL) crashes node-pty.
+   *
+   * Registered APPS are serve panes too — that reuse is the whole design (see
+   * apps/AppRegistry.ts) — so they are swept by exactly this query, and get the
+   * ptyd-restart recovery for free. The ONE exception is an app the user has
+   * STOPPED: `enabled = 0` means "I turned this off", and a supervisor that
+   * helpfully brought it back two seconds later would be overriding an explicit
+   * decision, which is the same line this sweep already refuses to cross for a
+   * Ctrl-C'd serve loop.
    */
   listServePanes(): PaneSpec[] {
     const rows = this.db
-      .prepare("SELECT * FROM panes WHERE kind = 'shell' AND startup_cmd LIKE 'muxpad serve%'")
+      .prepare(
+        `SELECT * FROM panes p
+           WHERE p.kind = 'shell'
+             AND p.startup_cmd LIKE 'muxpad serve%'
+             AND NOT EXISTS (
+               SELECT 1 FROM apps a WHERE a.pane_id = p.id AND a.enabled = 0
+             )`,
+      )
       .all() as PaneRow[];
     return rows.map((r) => this.row(r) as PaneSpec);
   }

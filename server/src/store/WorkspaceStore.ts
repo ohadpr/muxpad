@@ -23,15 +23,40 @@ export class WorkspaceStore {
   constructor(private readonly db: Database.Database) {}
 
   /**
-   * A workspace is always created VISIBLE. `hidden` is not a parameter because
-   * nothing may create a hidden workspace any more: the only hidden row that
-   * ever existed was the retired resident-pane container, and the one-time
-   * release (resident-release.ts) exists precisely to get rid of it. The
-   * read-side filters stay — a legacy DB can still hold one, and it must keep
-   * being excluded from the sidebar — but the WRITER is gone so no new code
-   * path can strand a workspace where no surface lists it.
+   * A workspace created through `create` is always VISIBLE — `hidden` is not a
+   * parameter here, so no ordinary code path can strand a user's workspace
+   * where no surface lists it. The one legitimate hidden container has its own
+   * explicit door: {@link createHidden}.
+   *
+   * (History: the first hidden row was the retired resident-pane container,
+   * and resident-release.ts exists to get rid of it. The read-side filters
+   * stayed because a legacy DB can still hold one. The Hosted apps container
+   * is the deliberate second — see createHidden.)
    */
   create(input: { name: string }): Workspace {
+    return this.insert(input.name, false);
+  }
+
+  /**
+   * Create a HIDDEN system container — a workspace excluded from `list()` and
+   * therefore from the sidebar tree.
+   *
+   * The one caller is the app registry (apps/AppRegistry.ts). An app is a
+   * supervised pane with no presence in the tab tree, and this is what "no
+   * presence" is built from: a real workspace holding real tabs holding real
+   * panes, so every existing mechanism (PaneRuntime env injection, the ptyd
+   * lifecycle, `/p/:id` terminal attach, the serve supervisor's sweep) applies
+   * unchanged — while `visibleWorkspaces()` keeps the whole container out of
+   * the navigator.
+   *
+   * Named separately from `create` rather than added as a flag so that the
+   * grep for "who can hide a workspace" stays a one-line answer.
+   */
+  createHidden(input: { name: string }): Workspace {
+    return this.insert(input.name, true);
+  }
+
+  private insert(name: string, hidden: boolean): Workspace {
     const id = ulid();
     const slug = this.uniqueSlug();
     const now = Date.now();
@@ -45,13 +70,13 @@ export class WorkspaceStore {
       .prepare(
         'INSERT INTO workspaces (id, slug, name, position, hidden, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(id, slug, input.name, maxPos + 1, 0, now, now);
+      .run(id, slug, name, maxPos + 1, hidden ? 1 : 0, now, now);
     return {
       id,
       slug,
-      name: input.name,
+      name,
       position: maxPos + 1,
-      hidden: false,
+      hidden,
       created_at: now,
       updated_at: now,
       tab_count: 0,
