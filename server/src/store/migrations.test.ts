@@ -263,6 +263,60 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
     expect(db.prepare('SELECT * FROM tabs WHERE id = ?').get('t1')).toEqual(tab);
   });
 
+  it('upgrades a REAL populated v21 database to v22, adding the cron tables', () => {
+    // A genuine v21 → v22 upgrade: rows are written against the pre-cron
+    // schema, and the second runMigrations is the step under test.
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 21 });
+    const tables = () =>
+      (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+        name: string;
+      }[]).map((t) => t.name);
+    expect(tables()).not.toContain('crons');
+
+    db.prepare(
+      `INSERT INTO workspaces (id, slug, name, position, created_at, updated_at)
+       VALUES ('w1', 'w', 'W', 0, 1, 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at)
+       VALUES ('t1', 't', 'T', '""', 'w1', 0, 1, 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO panes (id, tab_id, kind, shell, startup_cmd, cwd, created_at)
+       VALUES ('p1', 't1', 'shell', '/bin/zsh', 'muxpad agent', '/tmp', 1)`,
+    ).run();
+
+    runMigrations(db);
+    expect(tables()).toContain('crons');
+    expect(tables()).toContain('cron_runs');
+    // Existing rows survive untouched.
+    expect(db.prepare('SELECT name FROM tabs WHERE id = ?').get('t1')).toEqual({ name: 'T' });
+
+    // A cron can be written and read with the documented defaults.
+    db.prepare(
+      `INSERT INTO crons (id, name, schedule, tz, prompt, target_kind, target_pane, next_due_at, created_at)
+       VALUES ('c1', 'job', '0 9 * * *', 'UTC', 'go', 'pane', 'p1', 999, 1)`,
+    ).run();
+    const cron = db.prepare('SELECT * FROM crons WHERE id = ?').get('c1') as Record<string, unknown>;
+    expect(cron.enabled).toBe(1);
+    expect(cron.catchup).toBe('once');
+    expect(cron.overlap).toBe('skip');
+    expect(cron.on_context).toBe('fire');
+    expect(cron.fail_streak).toBe(0);
+    expect(cron.jitter_ms).toBe(0);
+
+    // Deliberately NO foreign key on target_pane: deleting the pane must not
+    // silently delete the schedule the user wrote (the scheduler disables it,
+    // with a push), and the run history has to outlive the pane it ran in.
+    db.prepare('DELETE FROM panes WHERE id = ?').run('p1');
+    expect(db.prepare('SELECT id FROM crons WHERE id = ?').get('c1')).toEqual({ id: 'c1' });
+
+    // Idempotent.
+    runMigrations(db);
+    expect(db.prepare('SELECT id FROM crons WHERE id = ?').get('c1')).toEqual({ id: 'c1' });
+  });
+
   it('records the latest schema version', () => {
     const db = new Database(':memory:');
     runMigrations(db);

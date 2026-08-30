@@ -409,7 +409,7 @@
      presentation so it matches the rest of the row's monochrome chrome. */
   font-variant-emoji: text;
 }
-.navtree-tab-row[data-active='true'] .navtree-cron {
+.navtree-tab-row[data-active="true"] .navtree-cron {
   opacity: 0.9;
 }
 

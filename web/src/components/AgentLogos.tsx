@@ -43,7 +43,10 @@ export function CursorLogo({ size = 15 }: { size?: number }) {
   );
 }
 
-export function AgentBackendLogo({ backend, size = 15 }: { backend: AgentBackendId; size?: number }) {
+export function AgentBackendLogo({
+  backend,
+  size = 15,
+}: { backend: AgentBackendId; size?: number }) {
   if (backend === 'codex') return <CodexLogo size={size} />;
   if (backend === 'cursor') return <CursorLogo size={size} />;
   return <ClaudeLogo size={size} />;

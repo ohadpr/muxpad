@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { startPtyd, type PtydOptions, type PtydHandle } from '../ptyd/index.js';
 import { PtydClient } from '../ptyd-client/PtydClient.js';
+import { type PtydHandle, type PtydOptions, startPtyd } from '../ptyd/index.js';
 
 export interface SpawnedPtyd {
   socketPath: string;
@@ -21,9 +21,7 @@ export interface SpawnedPtyd {
  * Fast poll intervals by default (50ms each) so periodic events fire inside
  * test timeouts. Callers can override individual options.
  */
-export async function spawnPtyd(
-  options: Partial<PtydOptions> = {},
-): Promise<SpawnedPtyd> {
+export async function spawnPtyd(options: Partial<PtydOptions> = {}): Promise<SpawnedPtyd> {
   const dir = mkdtempSync(join(tmpdir(), 'spawn-ptyd-'));
   const socketPath = join(dir, 'ptyd.sock');
   const handle = await startPtyd({

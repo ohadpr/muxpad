@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { appendLeafToLayout, removeLeafFromLayout, spliceLayoutAtTarget } from './layout.js';
 
 describe('spliceLayoutAtTarget', () => {
@@ -32,12 +32,7 @@ describe('spliceLayoutAtTarget', () => {
       first: 'left',
       second: { direction: 'column' as const, first: 'top', second: 'bottom' },
     };
-    const { layout: next, placed } = spliceLayoutAtTarget(
-      layout,
-      'top',
-      'new',
-      'row',
-    );
+    const { layout: next, placed } = spliceLayoutAtTarget(layout, 'top', 'new', 'row');
     expect(placed).toBe(true);
     expect(next).toEqual({
       direction: 'row',
@@ -56,29 +51,30 @@ describe('spliceLayoutAtTarget', () => {
       first: 'a',
       second: 'b',
     };
-    const { layout: next, placed } = spliceLayoutAtTarget(
-      layout,
-      'nope',
-      'new',
-      'row',
-    );
+    const { layout: next, placed } = spliceLayoutAtTarget(layout, 'nope', 'new', 'row');
     expect(placed).toBe(false);
     expect(next).toEqual(layout);
   });
 
   it('honors the direction arg', () => {
-    expect(
-      spliceLayoutAtTarget('a', 'a', 'new', 'column').layout,
-    ).toEqual({ direction: 'column', first: 'a', second: 'new' });
+    expect(spliceLayoutAtTarget('a', 'a', 'new', 'column').layout).toEqual({
+      direction: 'column',
+      first: 'a',
+      second: 'new',
+    });
   });
 
   it('position=before puts the new pane on the first side', () => {
-    expect(
-      spliceLayoutAtTarget('a', 'a', 'new', 'row', 'before').layout,
-    ).toEqual({ direction: 'row', first: 'new', second: 'a' });
-    expect(
-      spliceLayoutAtTarget('a', 'a', 'new', 'column', 'before').layout,
-    ).toEqual({ direction: 'column', first: 'new', second: 'a' });
+    expect(spliceLayoutAtTarget('a', 'a', 'new', 'row', 'before').layout).toEqual({
+      direction: 'row',
+      first: 'new',
+      second: 'a',
+    });
+    expect(spliceLayoutAtTarget('a', 'a', 'new', 'column', 'before').layout).toEqual({
+      direction: 'column',
+      first: 'new',
+      second: 'a',
+    });
   });
 
   it('position=before works inside a nested tree', () => {
@@ -87,13 +83,7 @@ describe('spliceLayoutAtTarget', () => {
       first: 'left',
       second: { direction: 'column' as const, first: 'top', second: 'bottom' },
     };
-    const { layout: next, placed } = spliceLayoutAtTarget(
-      layout,
-      'top',
-      'new',
-      'column',
-      'before',
-    );
+    const { layout: next, placed } = spliceLayoutAtTarget(layout, 'top', 'new', 'column', 'before');
     expect(placed).toBe(true);
     expect(next).toEqual({
       direction: 'row',

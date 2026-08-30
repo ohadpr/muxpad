@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
-import { openDb } from './db.js';
-import { runMigrations } from './migrations.js';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { PaneStore } from './PaneStore.js';
 import { TabStore } from './TabStore.js';
 import { WorkspaceStore } from './WorkspaceStore.js';
+import { openDb } from './db.js';
+import { runMigrations } from './migrations.js';
 
 describe('PaneStore', () => {
   let panes: PaneStore;
@@ -63,8 +63,12 @@ describe('PaneStore', () => {
     const db = new Database(':memory:');
     runMigrations(db);
     // FK rows
-    db.prepare(`INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES ('w', 'w', 'w', 0, 0, 0)`).run();
-    db.prepare(`INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at) VALUES ('t', 't', 't', '', 'w', 0, 0, 0)`).run();
+    db.prepare(
+      `INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES ('w', 'w', 'w', 0, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at) VALUES ('t', 't', 't', '', 'w', 0, 0, 0)`,
+    ).run();
 
     const store = new PaneStore(db);
     const pane = store.create({
@@ -130,8 +134,12 @@ describe('PaneStore', () => {
   it('updates a pane url via updateUrl', () => {
     const db = new Database(':memory:');
     runMigrations(db);
-    db.prepare(`INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES ('w', 'w', 'w', 0, 0, 0)`).run();
-    db.prepare(`INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at) VALUES ('t', 't', 't', '', 'w', 0, 0, 0)`).run();
+    db.prepare(
+      `INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES ('w', 'w', 'w', 0, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at) VALUES ('t', 't', 't', '', 'w', 0, 0, 0)`,
+    ).run();
     const store = new PaneStore(db);
     const p = store.create({ tab_id: 't', kind: 'url', url: 'https://a' });
     store.updateUrl(p.id, 'https://b');
@@ -141,8 +149,12 @@ describe('PaneStore', () => {
   it('tracks the unread flag: defaults false, set and clear', () => {
     const db = new Database(':memory:');
     runMigrations(db);
-    db.prepare(`INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES ('w', 'w', 'w', 0, 0, 0)`).run();
-    db.prepare(`INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at) VALUES ('t', 't', 't', '', 'w', 0, 0, 0)`).run();
+    db.prepare(
+      `INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES ('w', 'w', 'w', 0, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at) VALUES ('t', 't', 't', '', 'w', 0, 0, 0)`,
+    ).run();
     const store = new PaneStore(db);
     const a = store.create({ tab_id: 't', shell: '/bin/zsh' });
     const b = store.create({ tab_id: 't', shell: '/bin/zsh' });
