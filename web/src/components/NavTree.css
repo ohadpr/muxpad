@@ -64,6 +64,12 @@
      not the flex row it used to be: in flex, every trailing element's position
      was the sum of everything before it. */
   --nt-col-icon: 22px;
+  /* The icon's BOX HEIGHT, pinned to one line of title text. It is the width
+     that has to be a fixed track; the height must not exceed the text line, or
+     a one-line row becomes icon-driven and its single line floats with more
+     space above it than a two-line row's first line gets — which is the
+     ragged rhythm, measured as 14px of leading against 11px. */
+  --nt-icon-h: 18px;
   --nt-col-status: 22px;
   /* Floor for the meta cell, wide enough that `◷ 07:00` and `◷ Sun 09:00`
      right-align on the same digits instead of jittering row to row. A FLOOR,
@@ -98,6 +104,7 @@
   --nt-disc: 24px;
   --nt-indent: 28px;
   --nt-col-icon: 26px;
+  --nt-icon-h: 20px;
   --nt-col-meta: 52px;
   --nt-gutter: 10px;
   /* What a swiped row slides over — see SwipeRow.css. */
@@ -313,6 +320,16 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  /* Carries dir="auto" (see NavTree.tsx), which gives an RTL name the correct
+     glyph order and puts its ellipsis at the correct end. But `dir` also sets
+     the inline base direction, and an RTL block's text would then sit flush
+     against the RIGHT edge of its track — so "בנימינה" started 39px to the
+     right of every Latin name in the list, measured. Alignment is the one
+     thing that must NOT follow the text's direction here: this is a nav list,
+     and a reader scans its left edge regardless of what any individual name is
+     written in. So direction is automatic and alignment is pinned left, which
+     is what every mixed-direction sidebar (Slack, Telegram, WhatsApp) does. */
+  text-align: left;
 }
 
 /* ─── Status rail ───────────────────────────────────────────────────────
@@ -338,6 +355,14 @@
 .navtree-tab-row > .navtree-status,
 .navtree-ws-row > .navtree-status {
   grid-column: -2 / -1;
+  /* The WIDTH is the scan column and stays fixed. The HEIGHT drops to the
+     glyph's own 18px box: at 22px the mark was the tallest thing in a
+     one-line row, so that row's height was mark-driven (46px, not the 44px
+     its text and padding asked for) and its single line picked up an extra
+     pixel of leading that a two-line row never got. Nothing clips — the mark
+     is an 18px SVG. Scoped to nav rows so the Hosted list and the tab-bar
+     dropdown keep their own metrics. */
+  height: 18px;
   /* Flush to the track's right edge, which is the row's content edge. The
      track is one gutter wider than the mark so the separation lives INSIDE
      it — no margin on the mark, nothing in front of it that can shift it. */
@@ -446,7 +471,9 @@
   /* The indent that steps a tab under its workspace name used to be the
      link's padding-left. In the grid it has to be the ROW's, or the icon
      column starts at the pill edge and the hierarchy step disappears. */
-  padding: 5px 4px 5px calc(4px + var(--nt-indent));
+  /* 8px: a one-line row is then 8 + 18 + 8 = 34px, exactly --nt-row-tab, so
+     it is NOT floor-clamped and its leading matches a two-line row's. */
+  padding: 8px 4px 8px calc(4px + var(--nt-indent));
   border-radius: var(--nt-pill);
   color: var(--fg-dim);
   font-weight: 500;
@@ -457,7 +484,25 @@
    rows carry no permanent buttons at all. */
 .navtree[data-variant="sheet"] .navtree-tab-row {
   grid-template-columns: var(--nt-disc) var(--nt-col-icon) minmax(0, 1fr) auto var(--nt-rail);
+  /* COLLAPSING, not reserving: a row with no headline is a genuinely shorter
+     one-line row, because most rows have no headline until the generator has
+     run and a column of empty reserved lines reads as broken.
+
+     The rhythm comes from ONE padding rule serving both shapes. Before, the
+     46px floor was doing the work: a single-line row (30px of content) sat in
+     a 46px box — 13px of space above and below its text — while a two-line row
+     used its declared 5px. Every gap in the list was therefore a different
+     size depending on its neighbours' shapes, which is the ragged rhythm.
+     Now both shapes pay the same 11px, and the floor only guarantees the touch
+     target: one line lands on 44px (the floor, 2px of slack), two lines on
+     59px. Two heights, both deterministic, and the difference is exactly one
+     line of headline — which is what makes it read as deliberate. */
+  /* 12px: a one-line row is then 12 + 20 + 12 = 44px, exactly the touch floor,
+     so it is not floor-clamped and both shapes lead identically. */
+  padding-top: 12px;
+  padding-bottom: 12px;
   padding-left: 4px;
+  min-height: 44px;
 }
 /* Renaming collapses the row to icon + input: the meta, controls and status
    all stand down, and a 5-track template would strand the input in one narrow
@@ -537,6 +582,8 @@
    placeholder and no error state here by design (see the schema note on
    `headline`). */
 .navtree-tab-headline {
+  /* Same bidi treatment as the name — automatic direction, pinned alignment. */
+  text-align: left;
   font-size: 11.5px;
   line-height: 15px;
   color: var(--fg-faint);
@@ -1001,18 +1048,29 @@
    wildly by platform and family — several render well past their nominal em
    box — and an icon that overflows its track lands on the first letter of the
    name. (It did: 🪐 sat on the R of "Reading List" on the sheet, where the
-   glyph is 26px in a 22px track.) */
+   glyph is 26px in a 22px track.)
+
+   The BOX being fixed is not enough on its own. Emoji also differ hugely in
+   how much of their em they fill: a full-bleed tile like ✳️ or 🛜 paints
+   corner to corner, while 🗝 and 🩺 are narrow glyphs floating in the middle
+   of theirs. Centred in the same box, the tile's painted edge sits ~4px left
+   of the narrow glyph's — so a column of mixed emoji reads as if the text
+   after them is wobbling, even when every name box starts on the identical
+   pixel (measured: it does). Pinning the font-size in PX rather than an `em`
+   that inherits the row's font, plus line-height 1, makes the rendered size
+   one number for every glyph and every variant. */
 .navtree-tab-icon {
   flex: 0 0 auto;
   width: var(--nt-col-icon);
-  height: var(--nt-col-icon);
+  height: var(--nt-icon-h);
   overflow: hidden;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  /* A hair larger than the label so the emoji reads as a proper icon,
-     not shrunk-down text. */
-  font-size: 1.2em;
+  /* A hair larger than the label so the emoji reads as a proper icon, not
+     shrunk-down text — but an absolute size, so it cannot scale with an
+     inherited font and cannot exceed the box it has to sit inside. */
+  font-size: 15px;
   line-height: 1;
   border-radius: 4px;
   cursor: pointer;
@@ -1020,7 +1078,9 @@
   user-select: none;
 }
 .navtree[data-variant="sheet"] .navtree-tab-icon {
-  font-size: 1.25em;
+  /* Comfortably inside the sheet's 26 × 20 icon box, so even a full-bleed
+     tile has margin on every side and cannot touch the name or grow the row. */
+  font-size: 18px;
 }
 .navtree-tab-icon:hover {
   background: color-mix(in srgb, var(--fg) 12%, transparent);
