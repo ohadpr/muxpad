@@ -269,14 +269,32 @@ export const TabSchema = z.object({
   last_activity_at: z.number().nullable().optional(),
   // How many ENABLED crons target a pane in this tab. A schedule is a
   // PROPERTY of a chat, not a status, so it deliberately does NOT ride the
-  // status rail (which is transient, right-aligned, and mutually exclusive by
-  // construction) — the nav renders a quiet ⏱ on the NAME side instead. 0 or
-  // absent = no schedule. Folded in by decorateTab off ONE pre-read map per
-  // list, never a query per row.
+  // status rail (which is transient and mutually exclusive by construction) —
+  // it gets the nav row's own META column instead, between the name and the
+  // rail. 0 or absent = no schedule. Folded in by decorateTab off ONE
+  // pre-read map per list, never a query per row.
   crons: z.number().int().nonnegative().optional(),
-  // The soonest-due of those crons — the ⏱ glyph's tooltip ("pr-sweep · next
-  // Mon 09:00", localized client-side from the epoch). Absent when `crons` is 0.
+  // The soonest-due of those crons — rendered in the meta column as
+  // `◷ 07:00` / `◷ Sun 09:00`, localized client-side from the epoch, with the
+  // cron's name and full date in the tooltip. Absent when `crons` is 0.
   next_cron: z.object({ name: z.string(), next_due_at: z.number() }).optional(),
+  // ONE LINE saying what this chat is currently about — the nav row's second
+  // line, under the name. Machine-written from the transcript by a cheap
+  // model, DB-persisted, and deliberately sticky: regenerated only when the
+  // topic has materially moved, never on every turn (see
+  // server/src/chat/headline.ts). Absent is a normal, permanent state — a
+  // chat with no agent session never gets one, and the rail simply renders a
+  // one-line row. Never a placeholder and never an error string: the rail is
+  // a signal surface, and "couldn't summarise" is not a signal.
+  headline: z.string().nullable().optional(),
+  // True once the USER has named this tab by hand. Permanent, and the
+  // auto-namer's hard stop: it may fill an empty or bootstrap name, but once
+  // you have chosen one it never touches the name (or the icon) again. This
+  // used to be an in-memory Map in ws.ts, which meant every server restart
+  // forgot who had named what — the guard held only by the accident that a
+  // manual name matched neither the bootstrap sentinel nor the last
+  // auto-title.
+  name_sticky: z.boolean().optional(),
 });
 export type Tab = z.infer<typeof TabSchema>;
 
