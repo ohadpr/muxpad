@@ -2233,8 +2233,8 @@ cmd_publish() {
       *) rest+=("$a") ;;
     esac
   done
-  reset_flags name rm
-  parse_flags name rm -- "${rest[@]+"${rest[@]}"}"
+  reset_flags name rm update
+  parse_flags name rm update -- "${rest[@]+"${rest[@]}"}"
 
   if [ "$mode" = "list" ]; then
     local res
@@ -2247,6 +2247,7 @@ cmd_publish() {
       'SLUG:.slug' \
       'FILES:(.files | tostring)' \
       'BYTES:(.bytes | tostring)' \
+      'VERS:((.versions // []) | length | tostring)' \
       'CREATED:(.created / 1000 | strflocaltime("%Y-%m-%d %H:%M"))'
     return
   fi
@@ -2257,9 +2258,20 @@ cmd_publish() {
     return
   fi
 
+  # `--update <slug>` is `--name` with the create path CLOSED: the slug must
+  # already exist. That is the whole point — `--name` creates-or-replaces, so a
+  # typo quietly mints a NEW artifact (this is how six near-identical
+  # `acme-creative*` slugs came to exist instead of six versions of one), while
+  # --update turns the same typo into a readable 404.
+  local update_slug="${FLAG_update:-}"
+  if [ -n "$update_slug" ] && [ -n "$FLAG_name" ] && [ "$update_slug" != "$FLAG_name" ]; then
+    echo 'muxpad publish: --update and --name disagree; pass just one' >&2
+    exit 1
+  fi
+
   local src="${POSITIONAL[0]:-}"
   if [ -z "$src" ]; then
-    echo 'usage: muxpad publish <file-or-dir> [--name=slug] | --list | --rm <slug>' >&2
+    echo 'usage: muxpad publish <file-or-dir> [--name=slug | --update=slug] | --list | --rm <slug>' >&2
     exit 1
   fi
   # The server requires an absolute path — resolve relative ones here.
@@ -2267,10 +2279,12 @@ cmd_publish() {
     /*) ;;
     *) src="$PWD/$src" ;;
   esac
-  local body base_url
+  local body base_url slug
   base_url="$(publish_base_url)"
+  slug="${update_slug:-$FLAG_name}"
   body="{\"path\":$(json_string "$src")"
-  [ -n "$FLAG_name" ] && body="$body,\"name\":$(json_string "$FLAG_name")"
+  [ -n "$slug" ] && body="$body,\"name\":$(json_string "$slug")"
+  [ -n "$update_slug" ] && body="$body,\"update\":true"
   [ -n "$base_url" ] && body="$body,\"public_base_url\":$(json_string "$base_url")"
   body="$body}"
   local res
@@ -2284,6 +2298,208 @@ cmd_publish() {
   [ -n "$warning" ] && printf '%smuxpad: %s%s\n' "$C_DIM" "$warning" "$C_RESET" >&2
   # stdout is JUST the URL — script-friendly.
   printf '%s' "$res" | jq -r '.url'
+}
+
+# ─── muxpad app — registered local web servers ───────────────────────────────
+#
+# An APP is a long-running local web server muxpad supervises WITHOUT it
+# occupying a tab. Under the hood it is a `muxpad serve` pane in a hidden
+# workspace: ptyd owns the process (so it survives a main-server restart), the
+# serve wrapper restarts a crashing command, and the serve supervisor rebuilds
+# the pty after a ptyd restart.
+#
+# `muxpad app` and `muxpad publish` are deliberately SEPARATE verbs. An app is a
+# private process; an artifact is public bytes. They share the Hosted view, not
+# a primitive.
+
+cmd_app_add() {
+  # Bare mode flags are pre-stripped: parse_flags treats `--foo` (no '=') as
+  # taking the NEXT argument as its value, and `FLAG_no-start` is not a legal
+  # shell variable name anyway. Same shape as `cron new`.
+  local rest=() start_flag='' autostart_flag='' a
+  for a in "$@"; do
+    case "$a" in
+      --no-start) start_flag=false ;;
+      --no-autostart) autostart_flag=false ;;
+      *) rest+=("$a") ;;
+    esac
+  done
+  reset_flags name cwd url slug
+  parse_flags name cwd url slug -- "${rest[@]+"${rest[@]}"}"
+  local url="${FLAG_url:-}"
+  # Everything after the flags (or after a bare --) is the command, verbatim.
+  local cmdv=("${POSITIONAL[@]:-}")
+  if [ -z "$url" ] || [ "${#POSITIONAL[@]}" -lt 1 ]; then
+    cat >&2 <<'USAGE'
+usage: muxpad app add --url=<url> [--name=<name>] [--slug=<slug>] [--cwd=<dir>]
+                      [--no-start] [--no-autostart] -- <command...>
+
+  e.g. muxpad app add --name=Notes --url=https://host.ts.net:4322 \
+         --cwd=~/notes -- ./start
+USAGE
+    exit 1
+  fi
+  local cwd="${FLAG_cwd:-$PWD}"
+  case "$cwd" in
+    /*) ;;
+    *) cwd="$PWD/$cwd" ;;
+  esac
+  local name="${FLAG_name:-$(basename "$cwd")}"
+  # The command is re-joined into one line, which is exactly what the server
+  # stores and the pane runs. Multi-word arguments keep their quoting.
+  local command_str=''
+  local a
+  for a in "${cmdv[@]}"; do
+    [ -n "$command_str" ] && command_str+=' '
+    command_str+="$a"
+  done
+
+  local body
+  body="{\"name\":$(json_string "$name"),\"cwd\":$(json_string "$cwd")"
+  body="$body,\"command\":$(json_string "$command_str"),\"url\":$(json_string "$url")"
+  [ -n "$FLAG_slug" ] && body="$body,\"slug\":$(json_string "$FLAG_slug")"
+  [ -n "$start_flag" ] && body="$body,\"start\":false"
+  [ -n "$autostart_flag" ] && body="$body,\"autostart\":false"
+  body="$body}"
+
+  local res
+  res="$(http_request POST /api/apps "$body")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$res"
+    return
+  fi
+  printf '%s✓%s app registered\n' "$C_GREEN" "$C_RESET"
+  printf '  %sslug:%s   %s\n' "$C_DIM" "$C_RESET" "$(printf '%s' "$res" | jq -r '.slug')"
+  printf '  %sstate:%s  %s\n' "$C_DIM" "$C_RESET" "$(printf '%s' "$res" | jq -r '.state')"
+  printf '  %surl:%s    %s\n' "$C_DIM" "$C_RESET" "$(printf '%s' "$res" | jq -r '.url')"
+}
+
+cmd_app_list() {
+  local res
+  res="$(http_request GET /api/apps)"
+  print_table "$(printf '%s' "$res" | jq '.apps')" \
+    'SLUG:.slug' \
+    'STATE:.state' \
+    'URL:.url' \
+    'WHY:((.health.reason // "-") | if . == "ok" then "-" else . end)' \
+    'CWD:.cwd' \
+    'NAME:.name'
+}
+
+cmd_app_show() {
+  local ref="${1:-}"
+  if [ -z "$ref" ]; then
+    echo 'usage: muxpad app show <slug|id>' >&2
+    exit 1
+  fi
+  local res
+  res="$(http_request GET "/api/apps/$ref")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$res"
+    return
+  fi
+  printf '%s\n' "$res" | jq -r '
+    "  slug:      \(.slug)",
+    "  name:      \(.name)",
+    "  state:     \(.state)",
+    "  url:       \(.url)",
+    "  cwd:       \(.cwd)",
+    "  command:   \(.command)",
+    "  autostart: \(.autostart)",
+    "  pty:       \(if .pty == null then "unknown (ptyd unreachable)" else .pty end)",
+    "  health:    \(if .health == null then "not probed" else "\(.health.reason) \(.health.status // "")" end)",
+    "  pane:      \(.pane_id // "-")"
+  '
+}
+
+# start | stop share a shape: POST /api/apps/<ref>/<verb>, print the new state.
+app_lifecycle() {
+  local verb="$1" ref="${2:-}"
+  if [ -z "$ref" ]; then
+    echo "usage: muxpad app $verb <slug|id>" >&2
+    exit 1
+  fi
+  local res
+  res="$(http_request POST "/api/apps/$ref/$verb")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$res"
+    return
+  fi
+  printf '%s✓%s %s → %s\n' "$C_GREEN" "$C_RESET" \
+    "$(printf '%s' "$res" | jq -r '.slug')" "$(printf '%s' "$res" | jq -r '.state')"
+}
+
+cmd_app_rm() {
+  local ref="${1:-}"
+  if [ -z "$ref" ]; then
+    echo 'usage: muxpad app rm <slug|id>' >&2
+    exit 1
+  fi
+  http_request DELETE "/api/apps/$ref" >/dev/null
+  printf '%s✓%s app %s removed\n' "$C_GREEN" "$C_RESET" "$ref"
+}
+
+# `app logs` prints the app's pane scrollback — the app IS a pane, so its logs
+# are that pane's terminal. Reuses `pane read` rather than growing a second
+# scrollback path.
+cmd_app_logs() {
+  # `--raw` is bare — pre-strip it (see cmd_app_add).
+  local rest=() raw='' a
+  for a in "$@"; do
+    case "$a" in
+      --raw) raw=1 ;;
+      *) rest+=("$a") ;;
+    esac
+  done
+  reset_flags lines
+  parse_flags lines -- "${rest[@]+"${rest[@]}"}"
+  local ref="${POSITIONAL[0]:-}"
+  if [ -z "$ref" ]; then
+    echo 'usage: muxpad app logs <slug|id> [--lines=N] [--raw]' >&2
+    exit 1
+  fi
+  local pane
+  pane="$(http_request GET "/api/apps/$ref" | jq -r '.pane_id // empty')"
+  if [ -z "$pane" ]; then
+    echo "muxpad: $ref is not running — no logs (start it first)" >&2
+    exit 1
+  fi
+  local args=("$pane")
+  [ -n "$FLAG_lines" ] && args+=("--lines=$FLAG_lines")
+  [ -n "$raw" ] && args+=(--raw)
+  cmd_pane_read "${args[@]}"
+}
+
+cmd_app() {
+  require_jq
+  case "${1:-}" in
+    add|new) shift; cmd_app_add "$@" ;;
+    list|ls) shift; cmd_app_list "$@" ;;
+    show) shift; cmd_app_show "$@" ;;
+    start) shift; app_lifecycle start "${1:-}" ;;
+    stop) shift; app_lifecycle stop "${1:-}" ;;
+    restart) shift; app_lifecycle stop "${1:-}" >/dev/null; app_lifecycle start "${1:-}" ;;
+    logs) shift; cmd_app_logs "$@" ;;
+    rm|delete) shift; cmd_app_rm "$@" ;;
+    *)
+      cat >&2 <<'USAGE'
+usage: muxpad app <command>
+
+  add      register a local web server muxpad keeps running, with NO tab
+  list     every app: slug, state, url, why-not-reachable, cwd, name
+  show     one app in full, including the measured pty + health signals
+  start    bring it up (and keep it up)
+  stop     take it down and leave it down
+  restart  stop then start
+  logs     the app's pane scrollback — an app IS a pane underneath
+  rm       unregister it and take it down
+
+`muxpad publish` is the other verb: static bytes at a PUBLIC url. An app is a
+private process; they share the Hosted view, not a primitive.
+USAGE
+      exit 1
+      ;;
+  esac
 }
 
 # Internal: SessionStart hook target installed by `muxpad claude`. Reads the
@@ -2457,6 +2673,29 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
   cron pause|resume <id|name>        stop/start firing (resume re-anchors, so a
                                      long pause doesn't replay)
   cron rm <id|name>                  delete it
+  app add --url=<url> [--name=<n>] [--slug=<s>] [--cwd=<dir>]
+          [--no-start] [--no-autostart] -- <command...>
+                                     register a local web server muxpad keeps
+                                     running WITHOUT it occupying a tab. It runs
+                                     as a supervised pane in a hidden workspace:
+                                     ptyd owns the process (survives a server
+                                     restart), the command is restarted on
+                                     crash, and the pty is rebuilt after a ptyd
+                                     restart. Private — tailnet only.
+                                     e.g. muxpad app add --name=Notes \
+                                            --url=https://host.ts.net:4322 \
+                                            --cwd=~/notes -- ./start
+  app list                           slug, state, url, why-not-reachable, cwd.
+                                     state is MEASURED: starting | running |
+                                     unreachable | stopped | gave up.
+  app show <slug>                    one app in full, with the raw pty and
+                                     health signals behind its state
+  app start|stop|restart <slug>      stop leaves it down until you start it
+  app logs <slug> [--lines=N] [--raw]
+                                     the app's pane scrollback — an app IS a
+                                     pane underneath
+  app rm <slug>                      unregister and take it down
+
   publish <file-or-dir> [--name=slug]
                                      host a copy of the file/dir at a PUBLIC
                                      internet URL (Tailscale Funnel, no
@@ -2464,11 +2703,20 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      URL on stdout. A lone .html file becomes
                                      the slug's index page. --name pins the
                                      slug ([a-z0-9-]); republishing a named
-                                     slug overwrites it. Random slugs are
-                                     unguessable (8 hex chars).
+                                     slug replaces it and rotates the previous
+                                     copy to /<slug>@2/ (3 kept). Random slugs
+                                     are unguessable (8 hex chars).
+  publish --update=<slug> <file-or-dir>
+                                     replace an EXISTING artifact. Unlike
+                                     --name it refuses to create, so a typo is
+                                     an error instead of a seventh near-
+                                     identical slug. Run `publish --list` first
+                                     and reuse the slug when updating the same
+                                     thing.
   publish --list                     list published artifacts (slug, files,
-                                     bytes, created)
-  publish --rm <slug>                unpublish (the funnel stays up; run
+                                     bytes, versions, created)
+  publish --rm <slug>                unpublish, versions included (the funnel
+                                     stays up; run
                                      `tailscale funnel --https=8443 off` to
                                      close it entirely)
   search "query" [--limit=N] [--sid=SID] [--role=ROLE]
@@ -2509,7 +2757,7 @@ USAGE
 # into the HTTP branch.
 needs_http() {
   case "$1" in
-    workspace|tab|pane|open|watch|search|publish) return 0 ;;
+    workspace|tab|pane|open|watch|search|publish|app) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -2536,6 +2784,7 @@ case "$VERB" in
   open) cmd_open "${ARGS[@]:1}" ;;
   watch) cmd_watch "${ARGS[@]:1}" ;;
   app-url) cmd_app_url "${ARGS[@]:1}" ;;
+  app) cmd_app "${ARGS[@]:1}" ;;
   serve) cmd_serve "${ARGS[@]:1}" ;;
   claude) cmd_claude "${ARGS[@]:1}" ;;
   agent) cmd_agent "${ARGS[@]:1}" ;;
