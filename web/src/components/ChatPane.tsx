@@ -30,7 +30,11 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ApiError, api } from '../api';
 import { AGENT_BACKENDS, type AgentBackendId } from '../lib/agent-backend';
-import { type MessagePart, splitMessageAttachments } from '../lib/attachments';
+import {
+  type MessagePart,
+  composeOutgoingMessage,
+  splitMessageAttachments,
+} from '../lib/attachments';
 import { showFolderChip } from '../lib/nav-row-affordances';
 import { AgentBackendLogo, backendFromAssistant } from './AgentLogos';
 import { SvgAgentGlyph, SvgGlobe, SvgTerminalGlyph } from './PaneWebSwitch';
@@ -1476,7 +1480,7 @@ export function ChatPane({
       setInput('');
       return;
     }
-    const outgoing = [text, ...attachmentPaths].filter(Boolean).join(' ');
+    const outgoing = composeOutgoingMessage(text, attachmentPaths);
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       // Don't fire into a dead socket (the browser would drop it silently).
@@ -1514,9 +1518,11 @@ export function ChatPane({
   };
 
   // Photo picker → upload via the same attachments endpoint the TUI composer
-  // uses, then append the returned path(s) to the message so Claude reads the
-  // image. accept="image/*" with no `capture` → the OS sheet offers library +
-  // camera. Empty-type files (HEIC / some Android providers) are kept.
+  // uses; each upload becomes a composer chip whose path is appended at send
+  // (exactly like paste — the path is NEVER spliced into the draft, or it would
+  // ride out twice and render the image twice). accept="image/*" with no
+  // `capture` → the OS sheet offers library + camera. Empty-type files
+  // (HEIC / some Android providers) are kept.
   const onPickImages = async (e: ChangeEvent<HTMLInputElement>) => {
     const el = e.target;
     // Accept exactly what the server upload route accepts: a renderable
@@ -1537,19 +1543,15 @@ export function ChatPane({
     el.value = ''; // reset so re-picking the same file still fires onChange
     if (files.length === 0) return;
     setUploading(true);
-    const paths: string[] = [];
     for (const f of files) {
       try {
         const { path } = await api.uploadAttachment(paneId, f, f.name || 'image.png');
-        paths.push(path);
         addChip(path, f);
       } catch {
         // drop this one; the rest still upload
       }
     }
     setUploading(false);
-    if (paths.length === 0) return;
-    setInput((prev) => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${paths.join(' ')} `);
     inputRef.current?.focus();
   };
 
