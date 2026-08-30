@@ -406,6 +406,63 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
       .get() as { version: number };
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
-    expect(LATEST_SCHEMA_VERSION).toBe(23);
+    expect(LATEST_SCHEMA_VERSION).toBe(24);
+  });
+});
+
+describe("migrations v24 — the nav row's second line", () => {
+  const seedTab = (db: Database.Database) => {
+    db.prepare(
+      `INSERT INTO workspaces (id, slug, name, position, created_at, updated_at)
+       VALUES ('w1', 'w-one', 'W', 0, 1, 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at)
+       VALUES ('t1', 't-one', 'agent', 'p1', 'w1', 0, 1, 1)`,
+    ).run();
+  };
+
+  it('adds the three columns with the right nullability', () => {
+    const db = new Database(':memory:');
+    runMigrations(db);
+    seedTab(db);
+    const row = db.prepare('SELECT headline, headline_at, name_sticky FROM tabs').get() as {
+      headline: string | null;
+      headline_at: number | null;
+      name_sticky: number;
+    };
+    // headline and its clock are NULLABLE with no backfill: "never summarised"
+    // is a real, permanent state for any tab without an agent session, and an
+    // empty string would be the different (and false) claim that we tried.
+    expect(row.headline).toBeNull();
+    expect(row.headline_at).toBeNull();
+    // name_sticky backfills to 0 — the safe direction. A tab wrongly marked
+    // not-sticky is re-stickied by renaming it once; a tab wrongly marked
+    // sticky could never be auto-named again.
+    expect(row.name_sticky).toBe(0);
+  });
+
+  it('backfills EXISTING tabs rather than failing on the NOT NULL default', () => {
+    // Migrate to v23, write a tab the old way, then take the last step —
+    // the case a real upgrade actually hits.
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 23 });
+    seedTab(db);
+    runMigrations(db);
+    expect(db.prepare('SELECT name_sticky FROM tabs WHERE id = ?').get('t1')).toEqual({
+      name_sticky: 0,
+    });
+  });
+
+  it('is idempotent', () => {
+    const db = new Database(':memory:');
+    runMigrations(db);
+    seedTab(db);
+    db.prepare('UPDATE tabs SET headline = ?, name_sticky = 1 WHERE id = ?').run('a line', 't1');
+    runMigrations(db);
+    expect(db.prepare('SELECT headline, name_sticky FROM tabs WHERE id = ?').get('t1')).toEqual({
+      headline: 'a line',
+      name_sticky: 1,
+    });
   });
 });

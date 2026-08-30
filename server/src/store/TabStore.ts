@@ -29,6 +29,9 @@ interface TabRow {
   workspace_id: string;
   pinned: number;
   last_activity_at: number | null;
+  headline: string | null;
+  headline_at: number | null;
+  name_sticky: number;
   created_at: number;
   updated_at: number;
 }
@@ -276,6 +279,44 @@ export class TabStore {
     this.db.prepare('UPDATE tabs SET last_activity_at = ? WHERE id = ?').run(at, id);
   }
 
+  /**
+   * Write the nav row's second line, stamping the rate limiter's clock in the
+   * same statement so the two can never disagree.
+   *
+   * Its own method rather than a field on `update()` for the reason
+   * `touchActivity` is: `update()` bumps `updated_at`, which clients key cache
+   * invalidation off, and a headline is not a structural edit to the tab.
+   */
+  setHeadline(id: string, headline: string, at: number = Date.now()): void {
+    this.db
+      .prepare('UPDATE tabs SET headline = ?, headline_at = ? WHERE id = ?')
+      .run(headline, at, id);
+  }
+
+  /** When this tab's headline was last written; null if never. */
+  headlineAt(id: string): number | null {
+    const r = this.db.prepare('SELECT headline_at FROM tabs WHERE id = ?').get(id) as
+      | { headline_at: number | null }
+      | undefined;
+    return r?.headline_at ?? null;
+  }
+
+  /**
+   * "The user named this one." One-way by design: there is no unset. A tab
+   * you have deliberately named should never be renamed out from under you,
+   * and no plausible flow wants to hand that authority back to the machine.
+   */
+  setNameSticky(id: string): void {
+    this.db.prepare('UPDATE tabs SET name_sticky = 1 WHERE id = ?').run(id);
+  }
+
+  isNameSticky(id: string): boolean {
+    const r = this.db.prepare('SELECT name_sticky FROM tabs WHERE id = ?').get(id) as
+      | { name_sticky: number }
+      | undefined;
+    return !!r?.name_sticky;
+  }
+
   private row(r: unknown): Tab | null {
     if (!r) return null;
     const x = r as TabRow;
@@ -290,6 +331,12 @@ export class TabStore {
       // Null (never observed) is a real state and stays null — see the
       // migration note; the ordering sinks nulls rather than faking a time.
       last_activity_at: x.last_activity_at ?? null,
+      // Same rule: null means "never summarised", which is permanent for any
+      // tab without an agent session. Only present when non-null, so a chat
+      // that has no headline adds nothing to the payload — and nothing to the
+      // client's change-dedup signature.
+      ...(x.headline ? { headline: x.headline } : {}),
+      ...(x.name_sticky ? { name_sticky: true } : {}),
       created_at: x.created_at,
       updated_at: x.updated_at,
     };
