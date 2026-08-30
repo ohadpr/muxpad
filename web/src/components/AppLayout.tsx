@@ -96,9 +96,9 @@ export function AppLayout() {
               ref={sidenavRef}
               style={{ flexBasis: `${settings.sidebarWidth}px` }}
             >
-              {/* No separate brand plate: the pinned "muxpad" row at the top
-                  of the NavTree IS the brand entry (and opens the resident
-                  agent tab). Build + settings live in the footer below. */}
+              <div className="sidenav-brand">
+                <Brand asLink={true} responsive={false} />
+              </div>
               <NavTree
                 variant="sidebar"
                 activeWorkspaceSlug={wsSlug}
@@ -246,16 +246,29 @@ function measureSidenavContentWidth(aside: HTMLElement): number {
   for (const el of aside.querySelectorAll<HTMLElement>('.navtree-name-text')) {
     const nameRect = el.getBoundingClientRect();
     const left = nameRect.left - asideLeft;
-    // A status dot/spinner (or the workspace tab-count) sits just after the
-    // name, inside the same link. Its right edge minus the name's right edge
-    // is exactly margin + glyph width — and that delta holds even when the
-    // name is currently ellipsis-truncated, since the glyph trails the box.
-    const status = el.parentElement?.querySelector<HTMLElement>(
-      '.navtree-busy, .badge-dot, .navtree-ws-count',
+    // The status rail (and the workspace tab-count) trails the name. The rail
+    // now lives OUTSIDE the link — it's a fixed 16px column on the ROW, which
+    // is what gives it a constant x — so search the row, not just the link's
+    // own parent, or every measurement would come up 16-20px short and the
+    // auto-fit width would clip the column off the right edge.
+    //
+    // Measuring by right-edge delta (rather than adding a constant) still
+    // holds: the delta is margin + glyph width, and it survives the name being
+    // ellipsis-truncated, since the column trails the name's box either way.
+    const row = el.closest<HTMLElement>('.navtree-tab-row, .navtree-ws-row, .navtree-pane-row');
+    const scope = row ?? el.parentElement;
+    // Take the RIGHTMOST trailing element, not the first match. `querySelector`
+    // returns document order, and a collapsed workspace row renders its
+    // tab-count chip BEFORE the status column — so a plain query stopped at the
+    // chip and came up ~20px short on exactly the rows that have both, clipping
+    // the rail off the auto-fit width.
+    const trailing = scope
+      ? [...scope.querySelectorAll<HTMLElement>('.navtree-status, .navtree-ws-count')]
+      : [];
+    const statusExtra = trailing.reduce(
+      (max, node) => Math.max(max, node.getBoundingClientRect().right - nameRect.right),
+      0,
     );
-    const statusExtra = status
-      ? Math.max(0, status.getBoundingClientRect().right - nameRect.right)
-      : 0;
     const needed = left + el.scrollWidth + statusExtra + fixedTrailing;
     if (needed > max) max = needed;
   }

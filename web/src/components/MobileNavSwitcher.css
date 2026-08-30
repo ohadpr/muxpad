@@ -40,13 +40,13 @@
   text-align: left;
 }
 .mns-trigger:hover,
-.mns-trigger[aria-expanded='true'] {
+.mns-trigger[aria-expanded="true"] {
   background: var(--bg-hover);
 }
 .mns-trigger-chevron svg {
   transition: transform 160ms ease;
 }
-.mns-trigger[aria-expanded='true'] .mns-trigger-chevron svg {
+.mns-trigger[aria-expanded="true"] .mns-trigger-chevron svg {
   transform: rotate(180deg);
 }
 .mns-trigger-label {
@@ -82,8 +82,15 @@
   align-items: center;
   color: var(--fg-faint);
 }
-.mns-trigger[data-attention="true"] .mns-trigger-chevron {
-  color: var(--accent);
+/* The rollup mark for everything folded behind this breadcrumb. Replaces the
+   chevron recolour, which could only ever encode one bit ("attention
+   elsewhere") in a channel nothing else in the app used — so mobile chrome
+   could not report that anything was WORKING. The chevron is a chevron again. */
+.mns-trigger-status {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: 2px;
 }
 
 /* ─── Drop-down panel ────────────────────────────────────────────────── */
