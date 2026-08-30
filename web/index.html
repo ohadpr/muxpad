@@ -14,12 +14,12 @@
     <meta name="apple-mobile-web-app-title" content="muxpad" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="theme-color" content="#1e1e2e" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&family=Source+Code+Pro:wght@400;500;700&display=swap"
-    />
+    <!-- No <link> to fonts.googleapis.com. It was render-blocking on EVERY
+         load (cross-origin DNS + TLS to the public internet before first
+         paint, ~128ms wired and far worse on cellular) to fetch four families
+         that are only ever used if the user picks one as their TERMINAL font.
+         They are self-hosted now — see web/src/fonts.css — so they cost zero
+         bytes until selected. -->
   </head>
   <body>
     <div id="root"></div>

@@ -349,6 +349,12 @@ const MIGRATIONS: Migration[] = [
     //     a record. Trimmed to the newest CRON_RUNS_KEEP rows per cron on
     //     every insert, so a 30-minute cron can't grow it without bound.
     //
+    // `jitter_ms` is a per-cron offset (deterministic, derived from the id)
+    // added to every nominal slot, so a dozen daily crons don't all fire in
+    // the same second. It is STORED rather than recomputed because
+    // `next_due_at` carries it: the nominal slot is recovered exactly as
+    // next_due_at - jitter_ms, with no re-derivation to drift.
+    //
     // Deliberately NO foreign key on `target_pane`: a deleted pane must
     // DISABLE its cron (with a push), not silently delete the schedule the
     // user wrote — and the run history has to outlive the pane it ran in, the
@@ -373,6 +379,7 @@ const MIGRATIONS: Migration[] = [
         overlap          TEXT NOT NULL DEFAULT 'skip',
         on_context       TEXT NOT NULL DEFAULT 'fire',
         quiet_mins       INTEGER NOT NULL DEFAULT 0,
+        jitter_ms        INTEGER NOT NULL DEFAULT 0,
         max_open         INTEGER NOT NULL DEFAULT 1,
         close_when_done  INTEGER NOT NULL DEFAULT 0,
         open_tabs        TEXT NOT NULL DEFAULT '[]',

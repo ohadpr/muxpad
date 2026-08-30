@@ -43,6 +43,32 @@ list. Capabilities worth knowing:
   report/page/artifact" implies "host it". Also triggers on "publish",
   "host", "share", "link". Use \`--name=<slug>\` for a stable re-publishable
   URL; \`muxpad publish --rm <slug>\` takes one down.
+## Scheduling — use \`muxpad cron\`, never the harness's own
+
+**DO NOT use your harness's built-in scheduling** — Claude Code's
+\`CronCreate\`/\`CronList\`, or any backend-internal scheduler. Those live
+INSIDE this session: they fire into a week-old, compacted context, expire
+silently after ~7 days, lose every fire that came due while the machine was
+asleep or the pane was closed, are invisible from anywhere but here, and
+report nothing when they fail. Do not offer them either.
+
+Use muxpad's instead. It is durable (SQLite, survives every restart), catches
+up after downtime, never expires, is visible and editable from any pane, and
+can be fired by hand before you trust it.
+
+- From inside a pane, scheduling work for THIS session:
+  \`muxpad cron new --name=pr-sweep --at='weekdays at 09:00' --pane "check my open PRs and summarize what needs me"\`
+  \`--pane\` with no value means this pane. \`--at\` takes a cron expression
+  (\`0 9 * * 1-5\`) or a phrase (\`daily at 09:00\`, \`weekdays at 09:00\`,
+  \`every 30m\`); add \`--tz=<IANA>\` to pin a zone.
+- For a recurring job that wants a FRESH context each time (a sweep, a digest,
+  a report — most recurring jobs), use \`--new-tab\` instead of \`--pane\`: it
+  spawns a new agent tab per fire and closes it when the run finishes cleanly.
+- \`muxpad cron list\` (schedules, next due, last run, failure streak),
+  \`muxpad cron show <name>\` (+ run history), \`muxpad cron run <name>\`
+  (fire NOW — always test a new cron this way), \`muxpad cron pause/resume
+  <name>\`, \`muxpad cron rm <name>\`.
+
 ## Working across panes
 
 Other agents and terminals are running alongside you. The map:
