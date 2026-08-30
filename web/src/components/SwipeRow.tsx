@@ -47,6 +47,10 @@ import './SwipeRow.css';
 let openRowId: string | null = null;
 const listeners = new Set<() => void>();
 
+/** How far the list must actually move before a scroll dismisses the tray.
+ *  See the scroll effect below for why "any scroll event" is the wrong rule. */
+const SCROLL_DISMISS_PX = 6;
+
 export function closeAllSwipeRows(): void {
   if (openRowId === null) return;
   openRowId = null;
@@ -105,11 +109,31 @@ export function SwipeRow({ id, children, onPin, onClose, pinned, label }: SwipeR
     };
   }, [id, close]);
 
-  // Any scroll of the enclosing list closes the tray. Capture phase, passive:
-  // this must not be able to delay or cancel a scroll.
+  // A REAL scroll of the enclosing list closes the tray — but only a real one.
+  //
+  // The naive version (close on any scroll event) is worse than no rule at
+  // all: browsers scroll for reasons the user didn't ask for — bringing a
+  // focused element into view, settling momentum, adjusting for the keyboard —
+  // and the commonest one is the scroll-into-view a browser performs when you
+  // reach for a button. So tapping Close could dismiss the tray a frame before
+  // the tap landed, and the tap would fall through to the row underneath and
+  // OPEN the chat. That is precisely the mis-tap class this whole affordance
+  // exists to remove, reintroduced by its own dismissal rule.
+  //
+  // So: remember where the scroller was when the tray opened, and close only
+  // once it has actually moved. The threshold is a few pixels — under a
+  // thumb's own wobble, over the sub-pixel adjustments the browser makes.
   useEffect(() => {
     if (!isOpen) return;
-    const onScroll = () => setOpenRow(null);
+    const scroller = document.querySelector('.navtree-scroll');
+    const from = scroller?.scrollTop ?? 0;
+    const onScroll = (e: Event) => {
+      const el = e.target as HTMLElement | Document | null;
+      const top = el && 'scrollTop' in el ? (el as HTMLElement).scrollTop : 0;
+      if (Math.abs(top - from) < SCROLL_DISMISS_PX) return;
+      setOpenRow(null);
+    };
+    // Capture phase, passive: this must never delay or cancel a scroll.
     window.addEventListener('scroll', onScroll, { capture: true, passive: true });
     return () => window.removeEventListener('scroll', onScroll, { capture: true });
   }, [isOpen]);

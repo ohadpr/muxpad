@@ -16,7 +16,14 @@
 .swiperow-face {
   position: relative;
   touch-action: pan-y;
-  background: var(--bg);
+  /* The face must be OPAQUE and must match the surface it slides over, or the
+     row reads as text floating above the actions rather than as a card
+     sliding off them. It takes the colour from its host rather than naming a
+     token, because a component that hardcodes its parent's background is
+     wrong the first time it's mounted somewhere else — measured: the sheet
+     sits on --bg-chrome, not --bg, so a hardcoded --bg left the swiped row a
+     visibly different shade from every row around it. */
+  background: var(--swipe-surface, var(--bg));
   /* The face slides over the tray, so it must be opaque and above it. */
   z-index: 1;
   transition: transform 180ms cubic-bezier(0.22, 0.61, 0.36, 1);
