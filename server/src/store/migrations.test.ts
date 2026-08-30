@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { runMigrations } from './migrations.js';
+import { LATEST_SCHEMA_VERSION, runMigrations } from './migrations.js';
 
 describe('migrations', () => {
   it('creates the v1 baseline tables on a fresh db', () => {
@@ -163,5 +163,113 @@ describe('migrations v6 — url panes', () => {
     expect(row.pane_id).toBe('ghost-pane');
     // sid is the primary key: a second insert of the same sid conflicts.
     expect(() => db.prepare('INSERT INTO session_history (sid) VALUES (?)').run('sid-1')).toThrow();
+  });
+});
+
+describe('migrations v21 — agent modes + the living sidebar', () => {
+  it('adds panes.mode defaulting to deep (= exactly the pre-migration behavior)', () => {
+    const db = new Database(':memory:');
+    db.pragma('foreign_keys = OFF');
+    runMigrations(db);
+    // Insert with the PRE-v21 column set — a row written by old code must
+    // still land on 'deep' rather than NULL or 'do'.
+    db.prepare(
+      `INSERT INTO panes (id, tab_id, shell, startup_cmd, cwd, env, created_at)
+       VALUES ('p1', 't1', '/bin/zsh', 'muxpad agent', '/tmp', null, 0)`,
+    ).run();
+    const row = db.prepare('SELECT mode FROM panes WHERE id = ?').get('p1') as { mode: string };
+    expect(row.mode).toBe('deep');
+  });
+
+  it('adds tabs.pinned defaulting to 0 and tabs.last_activity_at nullable (no backfill)', () => {
+    const db = new Database(':memory:');
+    runMigrations(db);
+    db.prepare(
+      `INSERT INTO workspaces (id, slug, name, position, created_at, updated_at)
+       VALUES ('w1', 'w', 'w', 0, 0, 0)`,
+    ).run();
+    // Pre-v21 insert shape: no pinned, no last_activity_at.
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at)
+       VALUES ('t1', 't', 't', '""', 'w1', 0, 111, 111)`,
+    ).run();
+    const row = db.prepare('SELECT pinned, last_activity_at FROM tabs WHERE id = ?').get('t1') as {
+      pinned: number;
+      last_activity_at: number | null;
+    };
+    expect(row.pinned).toBe(0);
+    // Deliberately NOT backfilled from created_at: "never observed" is a
+    // real state and must stay distinguishable (it sorts last).
+    expect(row.last_activity_at).toBeNull();
+  });
+
+  it('upgrades a REAL populated v20 database to v21 without data loss', () => {
+    // A genuine v20 → v21 upgrade. This test used to run every migration
+    // first and then insert rows, so it exercised a v21 database pretending
+    // to be old — it could not have caught a broken v21 step at all. `upTo`
+    // stops the walk at 20, so the rows below really are written against the
+    // pre-v21 schema, and the second runMigrations is the upgrade under test.
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 20 });
+    expect(
+      (
+        db.prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1').get() as {
+          version: number;
+        }
+      ).version,
+    ).toBe(20);
+    // The v21 columns must genuinely not exist yet, or the "upgrade" is fake.
+    const colsBefore = (db.prepare('PRAGMA table_info(tabs)').all() as { name: string }[]).map(
+      (c) => c.name,
+    );
+    expect(colsBefore).not.toContain('pinned');
+    expect(colsBefore).not.toContain('last_activity_at');
+    expect(
+      (db.prepare('PRAGMA table_info(panes)').all() as { name: string }[]).map((c) => c.name),
+    ).not.toContain('mode');
+
+    db.prepare(
+      `INSERT INTO workspaces (id, slug, name, position, created_at, updated_at)
+       VALUES ('w1', 'w', 'w', 0, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at)
+       VALUES ('t1', 'tslug', 'My Tab', '"p1"', 'w1', 3, 5, 6)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO panes (id, tab_id, shell, startup_cmd, cwd, created_at)
+       VALUES ('p1', 't1', '/bin/zsh', 'muxpad agent', '/tmp', 7)`,
+    ).run();
+
+    runMigrations(db); // the upgrade
+
+    const tab = db.prepare('SELECT * FROM tabs WHERE id = ?').get('t1') as Record<string, unknown>;
+    expect(tab.name).toBe('My Tab');
+    expect(tab.slug).toBe('tslug');
+    expect(tab.position).toBe(3);
+    // Defaults land on the pre-existing row: pinned 0 (auto-sorted block),
+    // last_activity_at NULL (never observed — deliberately not backfilled).
+    expect(tab.pinned).toBe(0);
+    expect(tab.last_activity_at).toBeNull();
+    const pane = db.prepare('SELECT * FROM panes WHERE id = ?').get('p1') as Record<
+      string,
+      unknown
+    >;
+    expect(pane.startup_cmd).toBe('muxpad agent');
+    expect(pane.mode).toBe('deep');
+
+    // Idempotent: re-running on the now-current DB changes nothing.
+    runMigrations(db);
+    expect(db.prepare('SELECT * FROM tabs WHERE id = ?').get('t1')).toEqual(tab);
+  });
+
+  it('records the latest schema version', () => {
+    const db = new Database(':memory:');
+    runMigrations(db);
+    const v = db
+      .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
+      .get() as { version: number };
+    expect(v.version).toBe(LATEST_SCHEMA_VERSION);
+    expect(LATEST_SCHEMA_VERSION).toBe(21);
   });
 });

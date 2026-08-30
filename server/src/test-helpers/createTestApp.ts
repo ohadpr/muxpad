@@ -5,6 +5,7 @@ import type { EventBus } from '../events.js';
 import type { Funnel } from '../funnel.js';
 import { PtydCache } from '../ptyd-cache.js';
 import { createApp } from '../server.js';
+import type { TabActivity } from '../tab-activity.js';
 import { type SpawnedPtyd, spawnPtyd } from './spawnPtyd.js';
 
 export interface TestApp {
@@ -29,6 +30,8 @@ export async function createTestApp(opts: {
   archive?: ArchiveDb;
   /** Funnel stub for /api/publish tests — never a real tailscale exec. */
   publish?: { funnel: Funnel };
+  /** Shared per-tab activity recorder (the living sidebar's recency signal). */
+  tabActivity?: TabActivity;
 }): Promise<TestApp> {
   const ptyd = await spawnPtyd();
   const cache = new PtydCache();
@@ -42,6 +45,7 @@ export async function createTestApp(opts: {
     ...(opts.agentBridge ? { agentBridge: opts.agentBridge } : {}),
     ...(opts.archive ? { archive: opts.archive } : {}),
     ...(opts.publish ? { publish: opts.publish } : {}),
+    ...(opts.tabActivity ? { tabActivity: opts.tabActivity } : {}),
   });
   return {
     app,

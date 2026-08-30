@@ -149,6 +149,7 @@ describe('agent-sessions turn_active (bridge-wired)', () => {
       agentBridge: {
         send: () => ({ ok: false, reason: 'test bridge' }),
         turnActive: (paneId) => (midTurn.has(paneId) ? true : null),
+        setMode: () => false,
       },
     });
   });

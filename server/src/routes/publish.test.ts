@@ -1,9 +1,11 @@
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -122,6 +124,61 @@ describe('publish routes', () => {
     const res = await post({ path: src, name: 'page' });
     expect(res.status).toBe(201);
     expect(readFileSync(join(dataDir, 'public', 'page', 'index.html'), 'utf-8')).toBe('v2 longer');
+  });
+
+  it('a failed republish leaves the previous version intact and complete', async () => {
+    // Staging + atomic rename. Before it, republish `rmSync`'d the live
+    // destination and copied straight in, so ANY failure (disk full, perms,
+    // the source vanishing) destroyed the last good artifact and left a
+    // partial one. Simulate the failure by making the source unreadable
+    // between the two publishes.
+    const dir = join(srcDir, 'site');
+    mkdirSync(dir);
+    writeFileSync(join(dir, 'index.html'), 'v1');
+    expect((await post({ path: dir, name: 'page' })).status).toBe(201);
+
+    const sub = join(dir, 'deep');
+    mkdirSync(sub);
+    writeFileSync(join(sub, 'a.html'), 'v2');
+    writeFileSync(join(dir, 'index.html'), 'v2');
+    chmodSync(sub, 0o000); // copyDereferenced will throw on readdirSync
+    let res: Response;
+    try {
+      res = await post({ path: dir, name: 'page' });
+    } finally {
+      chmodSync(sub, 0o755);
+    }
+    expect(res.status).toBe(500);
+    // v1 is still there, whole, and there is no half-written replacement.
+    expect(readFileSync(join(dataDir, 'public', 'page', 'index.html'), 'utf-8')).toBe('v1');
+    expect(existsSync(join(dataDir, 'public', 'page', 'deep'))).toBe(false);
+    // The staging dir is cleaned up, and never shows up as a publish.
+    const listed = (await (await test.app.request('/api/publish')).json()) as {
+      publishes: Array<{ slug: string }>;
+    };
+    expect(listed.publishes.map((p) => p.slug)).toEqual(['page']);
+    expect(readdirSync(join(dataDir, 'public')).filter((e) => e.startsWith('.'))).toEqual([]);
+  });
+
+  it('skips a nested symlink pointing INSIDE the public dir (the recursion hole)', async () => {
+    // The nested guard rejected the public dir and its ANCESTORS but not its
+    // DESCENDANTS. Publishing a source containing `loop -> <public>/site` to
+    // slug `site` created the destination and then copied it into itself,
+    // site/loop/loop/… down to the depth cap: huge amplification,
+    // ENAMETOOLONG, disk exhaustion and a long synchronous event-loop stall.
+    const publicDir = join(dataDir, 'public');
+    mkdirSync(publicDir, { recursive: true });
+    const dir = join(srcDir, 'site');
+    mkdirSync(dir);
+    writeFileSync(join(dir, 'index.html'), 'ok');
+    symlinkSync(join(publicDir, 'site'), join(dir, 'loop'));
+    // First publish creates <public>/site so the link resolves on the second.
+    expect((await post({ path: dir, name: 'site' })).status).toBe(201);
+    const res = await post({ path: dir, name: 'site' });
+    expect(res.status).toBe(201);
+    expect(readFileSync(join(publicDir, 'site', 'index.html'), 'utf-8')).toBe('ok');
+    expect(existsSync(join(publicDir, 'site', 'loop'))).toBe(false);
+    expect((await res.json()) as { files: number }).toMatchObject({ files: 1 });
   });
 
   it('rejects invalid names', async () => {
