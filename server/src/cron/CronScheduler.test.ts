@@ -400,6 +400,21 @@ describe('CronScheduler', () => {
 
   // ── Rotation must carry context ───────────────────────────────────────
 
+  it("rotate lands in the PANE's workspace when the cron row carries none", async () => {
+    // A pane cron has no workspace column of its own; the rotated session
+    // belongs next to the conversation it replaced, not nowhere.
+    const s = scheduler({
+      contextPct: () => 95,
+      carryover: async () => 'briefing',
+    });
+    const cron = makeCron(s, { on_context: 'rotate' }); // workspace_id: null
+    runAt(cron);
+    await s.tick();
+    expect(sent).toHaveLength(1);
+    const tabId = s.store.runs(cron.id)[0]?.target_tab as string;
+    expect(new TabStore(db).getWorkspaceId(tabId)).toBe(wsId);
+  });
+
   it('on_context=rotate carries a handoff briefing into the fresh tab', async () => {
     // A rotation that spawned a clean-context agent knowing nothing about the
     // conversation it just left would produce confidently amnesiac output —
