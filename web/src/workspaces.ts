@@ -4,10 +4,9 @@ import { api } from './api';
 
 /**
  * Hook returning the list of top-level workspaces — INCLUDING hidden system
- * workspaces (fetched with ?all=1) so slug lookups resolve for the CEO's
- * workspace-tab route. User-facing enumerations (the nav tree, redirects,
- * move-to targets) must go through visibleWorkspaces(); hidden workspaces
- * are only ever reached via the pinned CEO row or a direct URL.
+ * workspaces (fetched with ?all=1) so a slug lookup still resolves if one is
+ * reached by a direct URL. User-facing enumerations (the nav tree, redirects,
+ * move-to targets) must go through visibleWorkspaces().
  *
  * Backed by a module-level cache so the chrome switcher and any other
  * consumers all see the same data. Refreshes on mount, visibility, focus,
@@ -49,8 +48,7 @@ export async function refreshWorkspaces(opts?: { broadcast?: boolean }): Promise
 }
 
 /** The workspaces user-facing UI may enumerate — hidden system workspaces
- *  (the CEO's) are excluded; they're reachable only via the pinned CEO row
- *  or a direct URL. */
+ *  are excluded; they're reachable only via a direct URL. */
 export function visibleWorkspaces(all: Workspace[]): Workspace[] {
   return all.filter((w) => !w.hidden);
 }
@@ -76,6 +74,84 @@ export function applyWorkspaceOrder(ids: string[]): void {
   for (const fn of listeners) fn(cache);
 }
 
+/**
+ * ONE poll for the whole document, not one per subscriber.
+ *
+ * The timer, the focus/visibility handlers and the BroadcastChannel handler
+ * used to be installed inside `useWorkspaces`'s effect, so they scaled with
+ * MOUNTED COMPONENTS: every sidebar TabRow has a `useWorkspaces()`, and so does
+ * every visited (permanently mounted) TabView. Fifty sidebar rows plus twenty
+ * visited tabs meant ~70 full `GET /api/workspaces?all=1` every five seconds,
+ * and a burst of ~70 on every focus and every cross-tab broadcast. Each of
+ * those synchronously walks workspaces → tabs → panes through better-sqlite3,
+ * so ordinary use could stall the server's event loop. The module cache
+ * de-duplicated the RESULT but never the REQUEST.
+ *
+ * Now the subscriber count only decides whether the single shared driver is
+ * running: first subscriber arms it, last one tears it down.
+ */
+let driverRefs = 0;
+let pollTimer: number | null = null;
+
+/**
+ * Mount-time refresh, shared across every component mounting in the same tick.
+ * Deliberately NOT applied to the exported `refreshWorkspaces`: callers use
+ * that right after a mutation and must not be handed a reply from a request
+ * that was already in flight before their write landed.
+ */
+let inFlightMount: Promise<Workspace[]> | null = null;
+function refreshOnMount(): void {
+  if (inFlightMount) return;
+  inFlightMount = refreshWorkspaces().finally(() => {
+    inFlightMount = null;
+  });
+  inFlightMount.catch(() => {
+    // a failed refresh just leaves the cache as it was; the poll retries
+  });
+}
+
+function startPolling(): void {
+  if (pollTimer !== null) return;
+  pollTimer = window.setInterval(() => void refreshWorkspaces(), VISIBLE_POLL_MS);
+}
+function stopPolling(): void {
+  if (pollTimer === null) return;
+  window.clearInterval(pollTimer);
+  pollTimer = null;
+}
+const onVisible = () => {
+  if (document.visibilityState === 'visible') {
+    void refreshWorkspaces();
+    startPolling();
+  } else {
+    stopPolling();
+  }
+};
+const onFocus = () => void refreshWorkspaces();
+const onChannel = (e: MessageEvent) => {
+  // Receiver refreshes silently — broadcast: false — so we don't loop.
+  if (e.data?.type === 'refreshed') void refreshWorkspaces({ broadcast: false });
+};
+
+function acquireDriver(): void {
+  driverRefs += 1;
+  if (driverRefs > 1) return;
+  document.addEventListener('visibilitychange', onVisible);
+  window.addEventListener('focus', onFocus);
+  channel?.addEventListener('message', onChannel);
+  if (typeof document !== 'undefined' && document.visibilityState === 'visible') startPolling();
+}
+
+function releaseDriver(): void {
+  driverRefs -= 1;
+  if (driverRefs > 0) return;
+  driverRefs = 0;
+  document.removeEventListener('visibilitychange', onVisible);
+  window.removeEventListener('focus', onFocus);
+  channel?.removeEventListener('message', onChannel);
+  stopPolling();
+}
+
 export function useWorkspaces(): {
   workspaces: Workspace[];
   refresh: () => Promise<Workspace[]>;
@@ -83,43 +159,13 @@ export function useWorkspaces(): {
   const [state, setState] = useState<Workspace[]>(cache);
   useEffect(() => {
     listeners.add(setState);
-    void refreshWorkspaces();
-
-    let timer: number | null = null;
-    const startPolling = () => {
-      if (timer !== null) return;
-      timer = window.setInterval(() => void refreshWorkspaces(), VISIBLE_POLL_MS);
-    };
-    const stopPolling = () => {
-      if (timer === null) return;
-      window.clearInterval(timer);
-      timer = null;
-    };
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') {
-        void refreshWorkspaces();
-        startPolling();
-      } else {
-        stopPolling();
-      }
-    };
-    const onFocus = () => void refreshWorkspaces();
-    const onChannel = (e: MessageEvent) => {
-      // Receiver refreshes silently — broadcast: false — so we don't loop.
-      if (e.data?.type === 'refreshed') void refreshWorkspaces({ broadcast: false });
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    window.addEventListener('focus', onFocus);
-    channel?.addEventListener('message', onChannel);
-    if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-      startPolling();
-    }
+    // Mount-time refresh is also coalesced: N components mounting in the same
+    // tick share one in-flight request.
+    refreshOnMount();
+    acquireDriver();
     return () => {
       listeners.delete(setState);
-      document.removeEventListener('visibilitychange', onVisible);
-      window.removeEventListener('focus', onFocus);
-      channel?.removeEventListener('message', onChannel);
-      stopPolling();
+      releaseDriver();
     };
   }, []);
   return { workspaces: state, refresh: refreshWorkspaces };

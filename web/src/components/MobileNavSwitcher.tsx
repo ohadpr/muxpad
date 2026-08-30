@@ -1,9 +1,11 @@
+import { type PaneStatus, rollupStatus } from '@muxpad/shared';
 import { useRouterState } from '@tanstack/react-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { announceOverlayOpen, onOtherOverlayOpen } from '../lib/overlays';
 import { useTabs } from '../tabs';
 import { useWorkspaces } from '../workspaces';
 import { NavTree } from './NavTree';
+import { StatusMark } from './StatusMark';
 import './MobileNavSwitcher.css';
 
 interface Props {
@@ -89,16 +91,54 @@ export function MobileNavSwitcher({ activeWorkspaceSlug }: Props) {
     };
   }, [open]);
 
-  const anyOtherWorkspaceAttention = workspaces.some(
-    (w) => w.attention && w.slug !== activeWorkspaceSlug,
+  // What the CLOSED trigger says about everything it's hiding. It used to carry
+  // exactly one bit — "attention in some OTHER workspace" — rendered as a
+  // chevron recolour, so mobile chrome could not tell you that anything was
+  // working anywhere (D10). It now shows the same status rail as every other
+  // surface, rolled up across other workspaces AND the other tabs of this one
+  // (both are folded away behind this single control).
+  //
+  // Server-computed `status` is what makes this possible at all: a collapsed
+  // workspace has nothing mounted to observe its tabs, which is precisely why
+  // the old signal was limited to the one flag the workspace list carried.
+  //
+  // FIVE states, not three. This used to test for 'blocked' and 'working' by
+  // hand and let everything else fall through to 'idle' — so a DEAD runner
+  // (restarts exhausted) and a DONE-but-unread turn both rendered as "nothing
+  // happening", and the trigger showed no mark at all for a pane that had
+  // crashed. Fold through the shared rollup instead, so this control speaks
+  // the same vocabulary as every other surface and can never silently
+  // re-collapse when a status is added.
+  const elsewhere = [
+    ...workspaces.filter((w) => w.slug !== activeWorkspaceSlug),
+    ...activeWorkspaceTabs.filter((t) => t.slug !== activeTabSlug),
+  ];
+  const triggerStatus = rollupStatus(
+    elsewhere.map(
+      (x): PaneStatus =>
+        // `attention` is the raw BEL bit an older server sends without `status`.
+        x.attention === true ? 'blocked' : (x.status ?? 'idle'),
+    ),
   );
+  const counts = (s: PaneStatus) =>
+    elsewhere.filter((x) => (x.attention === true ? 'blocked' : (x.status ?? 'idle')) === s).length;
+  const triggerTitle =
+    triggerStatus === 'blocked'
+      ? `${counts('blocked')} elsewhere waiting on you`
+      : triggerStatus === 'working'
+        ? `${counts('working')} working elsewhere`
+        : triggerStatus === 'dead'
+          ? `${counts('dead')} elsewhere stopped`
+          : triggerStatus === 'done'
+            ? `${counts('done')} elsewhere finished`
+            : 'Switch workspace / tab';
 
-  // The hidden system workspace hosts exactly one thing — the resident
-  // "muxpad" agent (internally the CEO) — so the breadcrumb says that, not
-  // the internal "· system · › ceo" plumbing. The panel below still lists
-  // the normal workspaces to switch back to.
+  // A hidden workspace has no user-facing name worth showing in the
+  // breadcrumb (it's plumbing), so fall back to the tab alone. Nothing
+  // routes there by default any more — the resident-pane primitive is gone —
+  // but a direct URL can still land on one.
   const triggerLabel = activeWorkspace?.hidden ? (
-    <span className="mns-trigger-ws">muxpad</span>
+    <span className="mns-trigger-tab">{activeTab?.name ?? '—'}</span>
   ) : activeWorkspace ? (
     <>
       <span className="mns-trigger-ws">{activeWorkspace.name}</span>
@@ -117,11 +157,15 @@ export function MobileNavSwitcher({ activeWorkspaceSlug }: Props) {
         type="button"
         className="mns-trigger"
         onClick={() => (open ? close() : setOpen(true))}
-        data-attention={anyOtherWorkspaceAttention ? 'true' : undefined}
-        title="Switch workspace / tab"
+        title={triggerTitle}
         aria-expanded={open}
       >
         <span className="mns-trigger-label">{triggerLabel}</span>
+        {triggerStatus !== 'idle' && (
+          <span className="mns-trigger-status" role="img" aria-label={triggerTitle}>
+            <StatusMark status={triggerStatus} />
+          </span>
+        )}
         <span className="mns-trigger-chevron">
           <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
             <path

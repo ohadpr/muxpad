@@ -24,16 +24,6 @@
   background: var(--bg);
 }
 
-.workspace-slug {
-  font-size: 12px;
-  color: var(--fg-dim);
-  font-family: ui-monospace, monospace;
-}
-
-.workspace-spacer {
-  flex: 1;
-}
-
 .workspace-body {
   flex: 1;
   position: relative;
@@ -258,16 +248,6 @@
   color: var(--accent);
   border-color: var(--accent);
 }
-.mobile-strip-choices {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-.mobile-strip-choice {
-  font-size: 13px;
-  padding: 0 12px;
-}
-
 .workspace-body-mobile {
   flex: 1;
   min-height: 0;
@@ -403,9 +383,8 @@
      line across the tab's bottom edge, exactly the seam the height
      overlap below exists to remove (the top edge is under the accent
      rail, so it needs no line either). */
-  box-shadow:
-    inset 1px 0 0 color-mix(in srgb, var(--fg) 10%, transparent),
-    inset -1px 0 0 color-mix(in srgb, var(--fg) 10%, transparent);
+  box-shadow: inset 1px 0 0 color-mix(in srgb, var(--fg) 10%, transparent), inset -1px 0 0
+    color-mix(in srgb, var(--fg) 10%, transparent);
   /* Full container height = over the strip's hairline: the open tab fuses
      seamlessly into its pane, no dividing line. */
   height: 100%;
@@ -436,31 +415,14 @@
   box-shadow: inset -3px 0 0 0 var(--accent);
 }
 
-/* Busy spinner in a pane header — same treatment as the navigator's
-   .navtree-busy: a muted-accent thin ring that spins, sharing the status slot
-   with the attention dot (shown by priority in the JSX). */
-.desktop-tab-busy {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 0;
-  color: color-mix(in srgb, var(--accent) 60%, var(--fg-dim));
-}
-.desktop-tab-busy svg {
-  animation: desktop-tab-spin 0.8s linear infinite;
-  transform-origin: center;
-}
-@keyframes desktop-tab-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .desktop-tab-busy svg {
-    animation: none;
-    opacity: 0.7;
-  }
+/* The pane header's status is the shared rail (StatusMark), so the strip and
+   the navigator are literally the same component and cannot drift. The old
+   local copy — a second 11px spinner with its own keyframes, its own
+   accent-mixed-toward-grey colour, and a reduced-motion branch that just
+   dimmed it — is gone. All that belongs here is how the column sits in a
+   plate. */
+.desktop-tab-select > .navtree-status {
+  margin-left: 2px;
 }
 
 /* Inline rename input — replaces the select/close buttons while editing a
@@ -548,12 +510,6 @@
   align-items: center;
   justify-content: center;
 }
-/* Status (spinner/dot) fades out as the × fades in — they occupy the same
-   spot, so hover/active swaps one for the other in place. */
-.desktop-tab-trailing > .desktop-tab-busy,
-.desktop-tab-trailing > .badge-dot {
-  transition: opacity 100ms ease;
-}
 /* (Status glyphs TRAIL the label inside .desktop-tab-select — just right of
    the name; the trailing box holds only the hover-revealed ×.) */
 .desktop-tab-close {
@@ -629,14 +585,6 @@
      so "+" reads as the strip's action, not part of the tab. */
   margin-left: 4px;
 }
-.desktop-tab-add-choices {
-  flex: 0 0 auto;
-  align-self: center;
-  display: flex;
-  gap: 4px;
-  margin-left: 4px;
-}
-
 .desktop-tab-strip-actions {
   flex: 0 0 auto;
   display: flex;
@@ -814,34 +762,6 @@
   .pane-surface-dot {
     animation: none;
   }
-}
-
-/* In-place editing of a URL pane's title. Box geometry matches
-   .pane-chrome-title-link + .pane-chrome-title exactly so the text
-   doesn't jump on swap: same height, same padding, same font.
-   Focus ring uses outline-offset: -1px so it sits INSIDE the box
-   without nudging surrounding layout. */
-.pane-chrome-title-input {
-  display: inline-flex;
-  align-items: center;
-  height: 100%;
-  /* Match the link's max-width and let the input grow to fill it
-     (default input flex shrinks to intrinsic width — tiny). */
-  flex: 1 1 auto;
-  min-width: 0;
-  max-width: 70%;
-  padding: 0 6px;
-  margin: 0;
-  /* Strong contrast in edit mode: bright fg + subtle bg tint vs the
-     chrome-fg-faint that the idle title link uses. */
-  background: var(--bg-active, rgba(0, 0, 0, 0.35));
-  border: 0;
-  color: var(--fg);
-  font-family: var(--chrome-font);
-  font-size: var(--chrome-size-sm);
-  letter-spacing: 0.01em;
-  outline: 1px solid var(--accent, #4a9eff);
-  outline-offset: -1px;
 }
 
 .pane-chrome-spacer {

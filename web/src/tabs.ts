@@ -31,15 +31,20 @@ export async function refreshTabs(workspaceId: string): Promise<void> {
 }
 
 // ── Live decoration refresh ──────────────────────────────────────────────
-// The 5s poll surfaces attention/busy on tabs you're not looking at, but a
-// busy spinner that lags 5s reads as broken. `pane.updated` lets us refresh
-// promptly. BUT pane.updated also fires on title/fg/cwd churn — only `busy` and
-// `attention` actually affect the tab/workspace lists, so we gate on those: a
-// per-pane (busy,attention) signature, and we ignore events that don't change
-// it. Without this gate a title-churning pane (vim, a clock, a streaming
-// session) would drive /tabs + /workspaces refetches at the debounce rate for
-// its whole lifetime. We also only refetch a workspace whose cached tab list
-// contains the changed tab.
+// The 5s poll surfaces status on tabs you're not looking at, but a working
+// ring that lags 5s reads as broken. `pane.updated` lets us refresh promptly.
+// BUT pane.updated also fires on title/fg/cwd churn — only the status channel
+// affects the tab/workspace lists, so we gate on a per-pane signature and
+// ignore events that don't change it. Without this gate a title-churning pane
+// (vim, a clock, a streaming session) would drive /tabs + /workspaces refetches
+// at the debounce rate for its whole lifetime. We also only refetch a workspace
+// whose cached tab list contains the changed tab.
+//
+// The signature MUST cover every field the lists render. It keyed on
+// (busy, attention) alone, which quietly swallowed two things once the status
+// model landed: a second subagent starting (`agents` 1→2 — the badge shows the
+// number) and a question arriving mid-turn (`status` working→blocked while
+// `busy` stayed true). Both edges went dark until the 5s poll happened along.
 let liveRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 const pendingWorkspaceRefresh = new Set<string>();
 const lastPaneStatus = new Map<string, string>();
@@ -50,7 +55,16 @@ const unsubLiveRefresh = subscribe((e) => {
     return;
   }
   if (e.type !== 'pane.updated') return;
-  const status = `${e.pane.busy ?? false}|${e.pane.attention ?? false}`;
+  const status = [
+    e.pane.status ?? '',
+    e.pane.agents ?? 0,
+    // Kept alongside `status` rather than replaced by it: `unread` feeds the
+    // bold name independently of the rolled-up status, and `attention`/`busy`
+    // are what an older server sends.
+    e.pane.unread ?? false,
+    e.pane.attention ?? false,
+    e.pane.busy ?? false,
+  ].join('|');
   if (lastPaneStatus.get(e.pane.id) === status) return; // title/fg-only → no list change
   lastPaneStatus.set(e.pane.id, status);
   for (const [wsId, list] of caches) {
@@ -68,10 +82,16 @@ const unsubLiveRefresh = subscribe((e) => {
 });
 // Events don't replay across a reconnect, and pane.updated only fires on busy
 // edges — so a transition missed during a disconnect would stay deduped in
-// lastPaneStatus forever (the spinner would wait for the 5s poll). The baseline
-// refetch on reconnect fixes the display; clear the dedup cache so the next
-// live edge schedules a refresh again.
-subscribeReconnect(() => lastPaneStatus.clear());
+// lastPaneStatus forever (the spinner would wait for the 5s poll). Clear the
+// dedup cache so the next live edge schedules a refresh again, AND take the
+// baseline refetch this comment always promised: without it the display itself
+// stays stale for up to a poll interval (and indefinitely for a workspace whose
+// poll is stopped because it's collapsed / the document is hidden).
+// (The workspace list's own reconnect refetch is wired in main.tsx.)
+subscribeReconnect(() => {
+  lastPaneStatus.clear();
+  for (const wsId of caches.keys()) void refreshTabs(wsId);
+});
 
 // Vite HMR: dispose the subscription (and any pending debounce) so editing this
 // module in dev doesn't stack duplicate handlers or fire a stale timer. No-op
@@ -101,6 +121,80 @@ export function applyTabOrder(workspaceId: string, ids: string[]): void {
   if (subs) for (const fn of subs) fn(next);
 }
 
+// ── One driver PER WORKSPACE, not per subscriber ─────────────────────────
+// Same lesson as workspaces.ts: the interval and the focus/visibility handlers
+// used to live inside useTabs's effect, so a workspace with N mounted
+// consumers (the tab bar, the sidebar's tab list, every visited TabView) ran
+// N intervals hitting the same endpoint every 5s and N refetches on every
+// focus. The module cache de-duplicated the answer, never the request. Now the
+// subscriber count only decides whether the workspace's single driver runs.
+interface TabsDriver {
+  refs: number;
+  timer: number | null;
+  onVisible: () => void;
+  onFocus: () => void;
+}
+const drivers = new Map<string, TabsDriver>();
+
+/** Mount-time refetch shared by everything mounting in the same tick. NOT
+ *  applied to the exported refreshTabs, which post-mutation callers rely on
+ *  to actually re-read after their write. */
+const inFlightMount = new Map<string, Promise<void>>();
+function refreshOnMount(workspaceId: string): void {
+  if (inFlightMount.has(workspaceId)) return;
+  const p = refreshTabs(workspaceId).finally(() => inFlightMount.delete(workspaceId));
+  inFlightMount.set(workspaceId, p);
+  p.catch(() => {
+    // a failed refresh leaves the cache as it was; the poll retries
+  });
+}
+
+function acquireDriver(workspaceId: string): void {
+  const existing = drivers.get(workspaceId);
+  if (existing) {
+    existing.refs += 1;
+    return;
+  }
+  const d: TabsDriver = {
+    refs: 1,
+    timer: null,
+    onVisible: () => {},
+    onFocus: () => void refreshTabs(workspaceId),
+  };
+  const start = () => {
+    if (d.timer !== null) return;
+    d.timer = window.setInterval(() => void refreshTabs(workspaceId), VISIBLE_POLL_MS);
+  };
+  const stop = () => {
+    if (d.timer === null) return;
+    window.clearInterval(d.timer);
+    d.timer = null;
+  };
+  d.onVisible = () => {
+    if (document.visibilityState === 'visible') {
+      void refreshTabs(workspaceId);
+      start();
+    } else {
+      stop();
+    }
+  };
+  drivers.set(workspaceId, d);
+  document.addEventListener('visibilitychange', d.onVisible);
+  window.addEventListener('focus', d.onFocus);
+  if (typeof document !== 'undefined' && document.visibilityState === 'visible') start();
+}
+
+function releaseDriver(workspaceId: string): void {
+  const d = drivers.get(workspaceId);
+  if (!d) return;
+  d.refs -= 1;
+  if (d.refs > 0) return;
+  drivers.delete(workspaceId);
+  document.removeEventListener('visibilitychange', d.onVisible);
+  window.removeEventListener('focus', d.onFocus);
+  if (d.timer !== null) window.clearInterval(d.timer);
+}
+
 export function useTabs(workspaceId: string): {
   tabs: Tab[];
   refresh: () => Promise<void>;
@@ -124,37 +218,11 @@ export function useTabs(workspaceId: string): {
       listenersByWs.set(workspaceId, subs);
     }
     subs.add(setState);
-    void refreshTabs(workspaceId);
-
-    let timer: number | null = null;
-    const startPolling = () => {
-      if (timer !== null) return;
-      timer = window.setInterval(() => void refreshTabs(workspaceId), VISIBLE_POLL_MS);
-    };
-    const stopPolling = () => {
-      if (timer === null) return;
-      window.clearInterval(timer);
-      timer = null;
-    };
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') {
-        void refreshTabs(workspaceId);
-        startPolling();
-      } else {
-        stopPolling();
-      }
-    };
-    const onFocus = () => void refreshTabs(workspaceId);
-    document.addEventListener('visibilitychange', onVisible);
-    window.addEventListener('focus', onFocus);
-    if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-      startPolling();
-    }
+    refreshOnMount(workspaceId);
+    acquireDriver(workspaceId);
     return () => {
       subs!.delete(setState);
-      document.removeEventListener('visibilitychange', onVisible);
-      window.removeEventListener('focus', onFocus);
-      stopPolling();
+      releaseDriver(workspaceId);
     };
   }, [workspaceId]);
 
