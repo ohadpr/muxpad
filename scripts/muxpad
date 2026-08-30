@@ -2377,11 +2377,15 @@ USAGE
 cmd_app_list() {
   local res
   res="$(http_request GET /api/apps)"
+  # WHY carries the url-health reason, but ONLY where it is a diagnosis. For a
+  # stopped app nothing is supposed to answer, so echoing "unreachable" there
+  # reads as a fault the user just caused on purpose; for a running one the
+  # reason is "ok", which is noise beside STATE.
   print_table "$(printf '%s' "$res" | jq '.apps')" \
     'SLUG:.slug' \
     'STATE:.state' \
     'URL:.url' \
-    'WHY:((.health.reason // "-") | if . == "ok" then "-" else . end)' \
+    'WHY:(if (.state == "stopped" or .state == "running") then "-" else (.health.reason // "-") end)' \
     'CWD:.cwd' \
     'NAME:.name'
 }
