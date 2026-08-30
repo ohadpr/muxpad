@@ -258,6 +258,16 @@ export const TabSchema = z.object({
   // output. Drives the recency ordering of the unpinned block. Null on rows
   // migrated in before the column existed — those sort last.
   last_activity_at: z.number().nullable().optional(),
+  // How many ENABLED crons target a pane in this tab. A schedule is a
+  // PROPERTY of a chat, not a status, so it deliberately does NOT ride the
+  // status rail (which is transient, right-aligned, and mutually exclusive by
+  // construction) — the nav renders a quiet ⏱ on the NAME side instead. 0 or
+  // absent = no schedule. Folded in by decorateTab off ONE pre-read map per
+  // list, never a query per row.
+  crons: z.number().int().nonnegative().optional(),
+  // The soonest-due of those crons — the ⏱ glyph's tooltip ("pr-sweep · next
+  // Mon 09:00", localized client-side from the epoch). Absent when `crons` is 0.
+  next_cron: z.object({ name: z.string(), next_due_at: z.number() }).optional(),
 });
 export type Tab = z.infer<typeof TabSchema>;
 

@@ -13,7 +13,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { type ChatEvent, normalizeTranscriptLine } from '@muxpad/shared';
+import { type ChatEvent, expandChatEvent, normalizeTranscriptLine } from '@muxpad/shared';
 
 /**
  * muxpad-owned normalized transcript log — used by backends (Codex/Cursor) that
@@ -36,9 +36,12 @@ export function muxpadLocate(sid: string): string | null {
     return null;
   }
 }
-/** Our own log lines already ARE ChatEvents — no schema translation. */
+/** Our own log lines already ARE ChatEvents — no schema translation. Still
+ *  passed through `expandChatEvent`, which splits a cron fire's marker off its
+ *  prompt exactly as the Claude path does, so every backend renders a fire the
+ *  same way. */
 export function identityNormalize(obj: unknown): ChatEvent[] {
-  return obj && typeof obj === 'object' ? [obj as ChatEvent] : [];
+  return obj && typeof obj === 'object' ? expandChatEvent(obj as ChatEvent) : [];
 }
 /** Append one ChatEvent to a session's muxpad log (best-effort, creates dir). */
 export function appendTranscriptEvent(sid: string, event: ChatEvent): void {
@@ -213,7 +216,8 @@ export class TranscriptTail {
   tick(): void {
     if (this.closed) return;
     if (!this.path) {
-      const locate = this.opts.locate ?? ((sid) => findTranscript(sid, this.opts.dir ?? projectsDir()));
+      const locate =
+        this.opts.locate ?? ((sid) => findTranscript(sid, this.opts.dir ?? projectsDir()));
       this.path = locate(this.sid);
       if (!this.path) return; // file not created yet (no first prompt)
     }
