@@ -183,7 +183,69 @@ function loadOrCreateVapidKeys(dataDir: string): VapidKeys {
  * every pane-triggered notification (BEL attention, chat turn-done, agent
  * question) lands the tap on the right tab. Callers supply only the body.
  */
-export type PaneNotifier = (paneId: string, body: string) => void;
+export type PaneNotifier = (
+  paneId: string,
+  body: string,
+  /** A live label for the pane, when the caller has a better one than the DB
+   *  row can give (the pty title/foreground command). */
+  opts?: { label?: string | undefined },
+) => void;
+
+/**
+ * The name a HUMAN would call this pane, mirroring the web's `paneLabel`
+ * (TabView.tsx): pinned name → url host → live pty title → foreground command.
+ * `live` supplies the two runtime fields, which sit in the ptyd cache rather
+ * than on the row.
+ *
+ * Returns null when nothing but a POSITION is available. The web falls back to
+ * "Pane N" there, but in a notification title that token is pure noise unless
+ * it's actually disambiguating something — the caller decides.
+ */
+export function paneLabel(
+  // Read-only structural view of a pane row. Fields are optional so callers can
+  // pass either a decorated PaneSpec or a hand-built stub; `| undefined` on each
+  // is required under exactOptionalPropertyTypes, since a full pane row declares
+  // these as present-but-possibly-undefined rather than absent.
+  pane: {
+    name?: string | null | undefined;
+    kind?: string | undefined;
+    url?: string | null | undefined;
+  },
+  live?: { title?: string | null; fg?: string | null },
+): string | null {
+  const custom = pane.name?.trim();
+  if (custom) return custom;
+  if (pane.kind === 'url' && pane.url) {
+    try {
+      return new URL(pane.url).hostname;
+    } catch {
+      return pane.url;
+    }
+  }
+  return live?.title?.trim() || live?.fg?.trim() || null;
+}
+
+/**
+ * The notification title: "<pane> · <tab>", or just "<tab>".
+ *
+ * Pulled out as a pure function because the rule is the whole point and it is
+ * easy to get subtly wrong. Qualify with the pane when it says something the
+ * tab name doesn't; fall back to a position ONLY when there are siblings to
+ * disambiguate from (a lone "Pane 1 · muxpad" is noise on a phone's one line).
+ */
+export function notificationTitle(input: {
+  tabName: string | null;
+  label: string | null;
+  position: number;
+  siblings: number;
+}): string {
+  const { tabName, label, position, siblings } = input;
+  if (!tabName) return 'muxpad';
+  const named = label?.trim() || (siblings > 1 ? `Pane ${position + 1}` : null);
+  if (!named) return tabName;
+  if (named.toLowerCase() === tabName.trim().toLowerCase()) return tabName;
+  return `${named} · ${tabName}`;
+}
 
 /**
  * "Is the user actively at a device right now?" — fed by a client-side
@@ -208,24 +270,37 @@ export function createPaneNotifier(
   db: Database.Database,
   push: PushService,
   presence?: Presence,
+  /** Live pty title / foreground command for a pane (the ptyd cache). */
+  liveLabel?: (paneId: string) => { title?: string | null; fg?: string | null },
 ): PaneNotifier {
   const panes = new PaneStore(db);
   const tabs = new TabStore(db);
   const workspaces = new WorkspaceStore(db);
-  return (paneId, body) => {
+  return (paneId, body, opts) => {
     // Hold the push while the user is active on any device — they can see it.
     if (presence?.isActive()) return;
     const pane = panes.getById(paneId);
     const tab = pane ? tabs.getById(pane.tab_id) : null;
     const ws = tab ? workspaces.getById(tabs.getWorkspaceId(tab.id) ?? '') : null;
+    // Which pane rang, in the TITLE. A tab with three agent panes produced
+    // three notifications titled identically ("muxpad", "muxpad", "muxpad")
+    // with bodies like "finished its turn" that named nothing — the user could
+    // not tell which pane wanted them without tapping each.
+    const siblings = tab ? panes.listByTab(tab.id) : [];
+    const idx = siblings.findIndex((p) => p.id === paneId);
     void push.send({
-      // Title is just the tab name — the workspace ("— Personal") was noise on
-      // a phone's one line; ws is still resolved below for the deep-link slug.
-      title: tab ? tab.name : 'muxpad',
+      // "pane · tab" — the workspace ("— Personal") was noise on a phone's one
+      // line; ws is still resolved below for the deep-link slug.
+      title: notificationTitle({
+        tabName: tab ? tab.name : null,
+        label: pane ? opts?.label?.trim() || paneLabel(pane, liveLabel?.(paneId)) : null,
+        position: idx < 0 ? siblings.length : idx,
+        siblings: siblings.length,
+      }),
       body,
       url:
         tab && ws
-          ? `/w/${ws.slug}/t/${tab.slug}?ptab=${encodeURIComponent(tab.id)}&pane=${encodeURIComponent(paneId)}`
+          ? `/w/${encodeURIComponent(ws.slug)}/t/${encodeURIComponent(tab.slug)}?ptab=${encodeURIComponent(tab.id)}&pane=${encodeURIComponent(paneId)}`
           : '/',
       ...(tab ? { tab_id: tab.id, pane_id: paneId } : {}),
       tag: paneId,
@@ -257,9 +332,11 @@ export function attachAttentionPush(opts: {
   /** Injectable clock for tests. */
   now?: () => number;
   graceMs?: number;
+  /** Live pty title / foreground command (the ptyd cache). */
+  liveLabel?: (paneId: string) => { title?: string | null; fg?: string | null };
 }): () => void {
-  const { events, db, push, presence, now = Date.now, graceMs = 15_000 } = opts;
-  const notify = createPaneNotifier(db, push, presence);
+  const { events, db, push, presence, now = Date.now, graceMs = 15_000, liveLabel } = opts;
+  const notify = createPaneNotifier(db, push, presence, liveLabel);
   const lastAttention = new Map<string, boolean>();
   const bootAt = now();
 
@@ -280,7 +357,10 @@ export function attachAttentionPush(opts: {
     if (prev === undefined && now() - bootAt < graceMs) return; // restart replay — baseline only
     if (prev === true || !attention) return; // not a rising edge
 
-    const paneLabel = e.pane.name ?? e.pane.title ?? e.pane.foreground_cmd ?? 'a pane';
-    notify(e.pane.id, `${paneLabel} wants your attention`);
+    // The live label beats anything the notifier can read off the row alone;
+    // it rides `opts` into the TITLE rather than being spliced into the body,
+    // so it isn't repeated when the notifier already qualifies the title.
+    const label = e.pane.name ?? e.pane.title ?? e.pane.foreground_cmd ?? undefined;
+    notify(e.pane.id, 'wants your attention', { label });
   });
 }
