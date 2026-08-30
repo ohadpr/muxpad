@@ -5,6 +5,7 @@ import {
   type PushTargetDeps,
   alreadyApplied,
   applyPushTarget,
+  createPushTargetSink,
   isFresh,
   parsePushTarget,
   resetAppliedPushTargets,
@@ -149,7 +150,100 @@ describe('applyPushTarget', () => {
   it('falls back to a plain path push when the url is not a tab deep link', () => {
     const { deps, calls } = spyDeps();
     applyPushTarget(target({ url: '/?x=1', tab_id: null, pane_id: null }), deps);
-    expect(calls).toEqual(['path:/']);
+    expect(calls).toEqual(['path:/?x=1']);
+  });
+
+  it('keeps the query on a non-tab deep link — it is the destination', () => {
+    // `/hosted/a/<slug>?logs=true` is where an app-server notification points,
+    // and `?logs=true` is the half that opens the terminal that explains the
+    // failure. Stripping it landed the user on the app's web view instead.
+    const { deps, calls } = spyDeps();
+    applyPushTarget(
+      target({ url: '/hosted/a/notes?logs=true', tab_id: null, pane_id: null }),
+      deps,
+    );
+    expect(calls).toEqual(['path:/hosted/a/notes?logs=true']);
+  });
+
+  it('does NOT burn the tap id when routing throws', () => {
+    // A swallowed id would make the service worker's forced reload — the only
+    // remaining recovery — land on the current page instead of the target.
+    const { deps } = spyDeps();
+    const boom: PushTargetDeps = {
+      ...deps,
+      navigateToTab: () => {
+        throw new Error('router not mounted');
+      },
+    };
+    expect(() => applyPushTarget(target(), boom)).toThrow('router not mounted');
+    expect(alreadyApplied('tap-1')).toBe(false);
+    // …and the retry through a healthy path still works.
+    const retry = spyDeps();
+    expect(applyPushTarget(target(), retry.deps)).toBe(true);
+    expect(retry.calls).toContain('nav:dev/tab-slug#P1');
+  });
+});
+
+describe('createPushTargetSink', () => {
+  it('HOLDS a tap that arrives before the router is mounted, then applies it', () => {
+    // The boot drain of the service worker's dead-drop resolves inside the
+    // window between root.render() and React's first commit. Routing there is
+    // a no-op, which is precisely "the app came forward on the wrong pane".
+    const { deps, calls } = spyDeps();
+    const sink = createPushTargetSink(deps);
+    expect(sink.deliver(target())).toBe('held');
+    expect(calls).toEqual([]);
+    sink.ready();
+    expect(calls.slice(0, 3)).toEqual(['remember:T1/P1', 'force:T1/P1', 'nav:dev/tab-slug#P1']);
+  });
+
+  it('applies immediately once ready, and ready() is idempotent', () => {
+    const { deps, calls } = spyDeps();
+    const sink = createPushTargetSink(deps);
+    sink.ready();
+    sink.ready();
+    expect(calls).toEqual([]);
+    expect(sink.deliver(target())).toBe('applied');
+    expect(calls).toContain('nav:dev/tab-slug#P1');
+    sink.ready(); // must not replay
+    expect(calls.filter((c) => c.startsWith('nav:')).length).toBe(1);
+  });
+
+  it('applies only the MOST RECENT of several taps held at once', () => {
+    // Notifications stack (or collapse under one tag) while the app is away.
+    // Two navigations in a row means the first was never seen; the user tapped
+    // the second one because that is the pane they care about.
+    const { deps, calls } = spyDeps();
+    const sink = createPushTargetSink(deps);
+    sink.deliver(target({ id: 'tap-a', url: '/w/dev/t/one', tab_id: 'T1', pane_id: 'P1' }));
+    sink.deliver(target({ id: 'tap-b', url: '/w/dev/t/two', tab_id: 'T2', pane_id: 'P2' }));
+    expect(sink.held()?.id).toBe('tap-b');
+    sink.ready();
+    expect(calls.filter((c) => c.startsWith('nav:'))).toEqual(['nav:dev/two#P2']);
+    // The superseded tap is retired, so its dead-drop twin can't resurrect it
+    // and yank the user back a moment later.
+    expect(alreadyApplied('tap-a')).toBe(true);
+    sink.deliver(target({ id: 'tap-a', url: '/w/dev/t/one', tab_id: 'T1', pane_id: 'P1' }));
+    expect(calls.filter((c) => c.startsWith('nav:'))).toEqual(['nav:dev/two#P2']);
+  });
+
+  it('reports a duplicate rather than re-routing (both channels deliver one tap)', () => {
+    const { deps } = spyDeps();
+    const sink = createPushTargetSink(deps);
+    sink.ready();
+    expect(sink.deliver(target())).toBe('applied');
+    expect(sink.deliver(target())).toBe('duplicate');
+  });
+
+  it('holds across the whole boot, not just the first tap', () => {
+    // A held tap must survive an intervening duplicate delivery of itself
+    // (postMessage + dead-drop for the SAME tap, both pre-mount).
+    const { deps, calls } = spyDeps();
+    const sink = createPushTargetSink(deps);
+    expect(sink.deliver(target())).toBe('held');
+    expect(sink.deliver(target())).toBe('held');
+    sink.ready();
+    expect(calls.filter((c) => c.startsWith('nav:')).length).toBe(1);
   });
 
   it('still navigates when the payload carries no pane hint', () => {

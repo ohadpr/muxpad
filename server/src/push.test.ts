@@ -8,8 +8,10 @@ import {
   attachAttentionPush,
   createPaneNotifier,
   notificationTitle,
+  paneDeepLink,
   paneLabel,
 } from './push.js';
+import { AppStore } from './store/AppStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
@@ -134,6 +136,101 @@ describe('createPaneNotifier', () => {
     createPaneNotifier(db, push)(pane.id, 'hi');
     // An unescaped '/' would make the URL point at a DIFFERENT route entirely.
     expect(sent[0]?.url).toContain('/t/a%20b%2Fc?');
+  });
+
+  it('sends an APP pane to the Hosted view, never into the hidden container', () => {
+    // An app registered with `muxpad app` runs in a pane inside the hidden
+    // `· apps ·` workspace. `/w/<hidden>/t/<tab>` is a route the navigator
+    // refuses to show, so tapping "could not be restarted" bounced the user to
+    // a list and made them find the app again. And the pane hints armed the
+    // once-only focus store for a tab that will never render, which then
+    // ambushes whatever tab that id later belongs to.
+    const db = openDb(':memory:');
+    const ws = new WorkspaceStore(db).createHidden({ name: '· apps ·' });
+    const tab = new TabStore(db).create({ name: 'Notes', layout: '', workspace_id: ws.id });
+    const pane = new PaneStore(db).create({ tab_id: tab.id, shell: '/bin/zsh', cwd: '/tmp' });
+    const app = new AppStore(db).create({
+      slug: 'notes',
+      name: 'Notes',
+      cwd: '/tmp',
+      command: 'node server.js',
+      url: 'http://127.0.0.1:9999',
+    });
+    new AppStore(db).setPane(app.id, pane.id);
+    const sent: PushPayload[] = [];
+    const push = { send: async (p: PushPayload) => void sent.push(p) } as unknown as PushService;
+
+    createPaneNotifier(db, push)(pane.id, 'could not be restarted');
+    expect(sent[0]?.url).toBe('/hosted/a/notes?logs=true');
+    expect(sent[0]?.tab_id).toBeUndefined();
+    expect(sent[0]?.pane_id).toBeUndefined();
+    // Still tagged by pane, so repeats from the same app still collapse.
+    expect(sent[0]?.tag).toBe(pane.id);
+  });
+
+  it('sends a hidden-container pane with NO app row to Hosted rather than limbo', () => {
+    const db = openDb(':memory:');
+    const ws = new WorkspaceStore(db).createHidden({ name: '· apps ·' });
+    const tab = new TabStore(db).create({ name: 'Orphan', layout: '', workspace_id: ws.id });
+    const pane = new PaneStore(db).create({ tab_id: tab.id, shell: '/bin/zsh', cwd: '/tmp' });
+    const sent: PushPayload[] = [];
+    const push = { send: async (p: PushPayload) => void sent.push(p) } as unknown as PushService;
+    createPaneNotifier(db, push)(pane.id, 'wants your attention');
+    expect(sent[0]?.url).toBe('/hosted');
+    expect(sent[0]?.pane_id).toBeUndefined();
+  });
+});
+
+describe('paneDeepLink', () => {
+  const base = { wsSlug: 'dev', tabSlug: 'muxpad', tabId: 'T1', paneId: 'P1' };
+
+  it('builds the workspace deep link plus the warm-path hints', () => {
+    expect(paneDeepLink({ ...base, hiddenWorkspace: false, appSlug: null })).toEqual({
+      url: '/w/dev/t/muxpad?ptab=T1&pane=P1',
+      tab_id: 'T1',
+      pane_id: 'P1',
+    });
+  });
+
+  it('addresses an app directly, on its logs tab', () => {
+    // The notification is always about the process; the pane terminal IS the
+    // log, so `?logs=true` is the screen that answers "why".
+    expect(paneDeepLink({ ...base, hiddenWorkspace: true, appSlug: 'my app' })).toEqual({
+      url: '/hosted/a/my%20app?logs=true',
+    });
+  });
+
+  it('prefers the app route even for a pane that also has a visible tab', () => {
+    expect(paneDeepLink({ ...base, hiddenWorkspace: false, appSlug: 'notes' }).url).toBe(
+      '/hosted/a/notes?logs=true',
+    );
+  });
+
+  it('drops the pane hints whenever the tap does not land on a tab', () => {
+    // A tab_id the client can't place still ARMS the once-only pane-focus
+    // store, which then fires on some unrelated later visit.
+    for (const t of [
+      paneDeepLink({ ...base, hiddenWorkspace: true, appSlug: null }),
+      paneDeepLink({ ...base, tabSlug: null, hiddenWorkspace: false, appSlug: null }),
+      paneDeepLink({ ...base, wsSlug: null, hiddenWorkspace: false, appSlug: null }),
+      paneDeepLink({ ...base, tabId: null, hiddenWorkspace: false, appSlug: null }),
+    ]) {
+      expect(t.tab_id).toBeUndefined();
+      expect(t.pane_id).toBeUndefined();
+    }
+  });
+
+  it('degrades to the root when nothing resolves', () => {
+    expect(
+      paneDeepLink({
+        wsSlug: null,
+        tabSlug: null,
+        tabId: null,
+        paneId: 'P1',
+        hiddenWorkspace: false,
+        appSlug: null,
+      }),
+    ).toEqual({ url: '/' });
   });
 });
 

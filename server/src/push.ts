@@ -4,6 +4,7 @@ import type { MuxpadEvent } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import webpush from 'web-push';
 import type { EventBus } from './events.js';
+import { AppStore } from './store/AppStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
@@ -248,6 +249,48 @@ export function notificationTitle(input: {
 }
 
 /**
+ * Where a notification about `paneId` should LAND.
+ *
+ * Pure, because the rule is the whole feature and every branch of it is a
+ * user-visible bug when it is wrong:
+ *
+ *   APP PANE      An app registered with `muxpad app` runs in a pane inside the
+ *                 HIDDEN `· apps ·` container. `/w/<hidden>/t/<tab>` is a route
+ *                 the navigator refuses to show — WorkspaceShell detects it and
+ *                 bounces to `/hosted`, so the user who tapped "could not be
+ *                 restarted" got dumped on a LIST and had to find the app
+ *                 again. Address the app directly instead, on its logs tab:
+ *                 that pane's terminal IS the log, and the notification is
+ *                 always about the process failing.
+ *   HIDDEN, NO    Shouldn't exist (the apps container is the only hidden one),
+ *   APP ROW       but a dangling pane must not deep-link into limbo either.
+ *   NORMAL        `/w/<ws>/t/<tab>?ptab=&pane=` plus the warm-path hints.
+ *   UNRESOLVABLE  the root. No hints — a tab_id the client can't place would
+ *                 arm the pane-focus store for a tab it will never show, and
+ *                 that store then ambushes the next visit to it.
+ */
+export function paneDeepLink(input: {
+  wsSlug: string | null;
+  tabSlug: string | null;
+  tabId: string | null;
+  paneId: string;
+  /** The pane's workspace is a hidden system container. */
+  hiddenWorkspace: boolean;
+  /** Slug of the registered app this pane serves, if any. */
+  appSlug: string | null;
+}): { url: string; tab_id?: string; pane_id?: string } {
+  if (input.appSlug) {
+    return { url: `/hosted/a/${encodeURIComponent(input.appSlug)}?logs=true` };
+  }
+  if (input.hiddenWorkspace) return { url: '/hosted' };
+  if (!input.wsSlug || !input.tabSlug || !input.tabId) return { url: '/' };
+  const url =
+    `/w/${encodeURIComponent(input.wsSlug)}/t/${encodeURIComponent(input.tabSlug)}` +
+    `?ptab=${encodeURIComponent(input.tabId)}&pane=${encodeURIComponent(input.paneId)}`;
+  return { url, tab_id: input.tabId, pane_id: input.paneId };
+}
+
+/**
  * "Is the user actively at a device right now?" — fed by a client-side
  * heartbeat (foreground + user interaction) POSTed to /api/presence. Push
  * notifications are HELD while active on any device: the in-app UI already
@@ -276,6 +319,7 @@ export function createPaneNotifier(
   const panes = new PaneStore(db);
   const tabs = new TabStore(db);
   const workspaces = new WorkspaceStore(db);
+  const apps = new AppStore(db);
   return (paneId, body, opts) => {
     // Hold the push while the user is active on any device — they can see it.
     if (presence?.isActive()) return;
@@ -288,6 +332,15 @@ export function createPaneNotifier(
     // not tell which pane wanted them without tapping each.
     const siblings = tab ? panes.listByTab(tab.id) : [];
     const idx = siblings.findIndex((p) => p.id === paneId);
+    // Where the tap lands. Not always the owning tab — see paneDeepLink.
+    const target = paneDeepLink({
+      wsSlug: ws ? ws.slug : null,
+      tabSlug: tab ? tab.slug : null,
+      tabId: tab ? tab.id : null,
+      paneId,
+      hiddenWorkspace: !!ws?.hidden,
+      appSlug: apps.getByPane(paneId)?.slug ?? null,
+    });
     void push.send({
       // "pane · tab" — the workspace ("— Personal") was noise on a phone's one
       // line; ws is still resolved below for the deep-link slug.
@@ -298,11 +351,7 @@ export function createPaneNotifier(
         siblings: siblings.length,
       }),
       body,
-      url:
-        tab && ws
-          ? `/w/${encodeURIComponent(ws.slug)}/t/${encodeURIComponent(tab.slug)}?ptab=${encodeURIComponent(tab.id)}&pane=${encodeURIComponent(paneId)}`
-          : '/',
-      ...(tab ? { tab_id: tab.id, pane_id: paneId } : {}),
+      ...target,
       tag: paneId,
     });
   };
