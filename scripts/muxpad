@@ -1843,6 +1843,270 @@ cmd_agent() {
   exec node "$runner" "$@"
 }
 
+
+# ─── cron ──────────────────────────────────────────────────────────────────
+# `muxpad cron` — durable, server-owned schedules
+# (docs/plans/2026-08-14-muxpad-cron.md). Unlike a harness's built-in cron,
+# these survive restarts, catch up after downtime, never expire, are visible
+# from anywhere, and can be fired by hand before you trust them.
+
+# Resolve a --pane value to a pane id. Accepts an id verbatim, the pane's
+# `name`, or empty (= this pane, $MUXPAD_PANE_ID) — typing a ulid is miserable,
+# and the natural gesture is running `muxpad cron new` from inside the pane you
+# mean.
+cron_resolve_pane() {
+  local ref="$1"
+  if [ -z "$ref" ]; then
+    if [ -z "${MUXPAD_PANE_ID:-}" ]; then
+      echo "muxpad: --pane with no value means THIS pane, but MUXPAD_PANE_ID is unset (not inside a muxpad pane)" >&2
+      exit 1
+    fi
+    printf '%s' "$MUXPAD_PANE_ID"
+    return
+  fi
+  local panes match
+  panes="$(http_request GET /api/panes)"
+  match="$(printf '%s' "$panes" | jq -r --arg r "$ref" \
+    '[.[] | select(.id == $r)] | .[0].id // empty')"
+  if [ -z "$match" ]; then
+    match="$(printf '%s' "$panes" | jq -r --arg r "$ref" \
+      '[.[] | select((.name // "") == $r)] | .[0].id // empty')"
+  fi
+  if [ -z "$match" ]; then
+    echo "muxpad: no pane with id or name '$ref' (try: muxpad pane list --all)" >&2
+    exit 1
+  fi
+  printf '%s' "$match"
+}
+
+cmd_cron_new() {
+  # `--pane` and `--new-tab` are BARE mode flags (parse_flags would eat the
+  # next argument as their value), so pre-strip them the way cmd_search does
+  # with --sessions. `--pane=<id|name>` still comes through parse_flags.
+  # Pre-strip the flags parse_flags can't take: BARE mode flags (it would eat
+  # the next argument as their value) and hyphenated names (it evals
+  # FLAG_<name>=, and `FLAG_on-context` is not a legal shell variable).
+  local a rest=() target='' pane_ref='' close_flag='' on_context='' max_open=''
+  for a in "$@"; do
+    case "$a" in
+      --pane) target=pane ;;
+      --pane=*) target=pane; pane_ref="${a#--pane=}" ;;
+      --new-tab) target=new-tab ;;
+      --no-close) close_flag=false ;;
+      --close) close_flag=true ;;
+      --on-context=*) on_context="${a#--on-context=}" ;;
+      --max-open=*) max_open="${a#--max-open=}" ;;
+      *) rest+=("$a") ;;
+    esac
+  done
+  set -- ${rest[@]+"${rest[@]}"}
+  reset_flags name at tz workspace cwd model backend mode catchup overlap quiet
+  parse_flags name at tz workspace cwd model backend mode catchup overlap quiet -- "$@"
+  local prompt="${POSITIONAL[0]:-}"
+  if [ -z "$target" ] || [ -z "${FLAG_at:-}" ] || [ -z "$prompt" ]; then
+    cat >&2 <<'USAGE'
+usage: muxpad cron new --name=<name> --at='<cron expr | daily at 09:00 | every 30m>'
+         (--pane[=<id|name>] | --new-tab [--workspace=<id>])
+         [--tz=America/Los_Angeles] [--cwd=<dir>] [--model=<m>] [--backend=claude|codex|cursor]
+         [--mode=do|deep] [--catchup=once|skip|all] [--overlap=skip|queue]
+         [--on-context=fire|compact-first|rotate|skip] [--quiet=<mins>]
+         [--max-open=<n>] [--no-close] "prompt"
+
+  --pane with no value targets THIS pane ($MUXPAD_PANE_ID) — the usual gesture.
+  --new-tab spawns a fresh agent tab per fire (clean context, no drift) and
+  closes it when the run finishes cleanly; --no-close keeps it.
+USAGE
+    exit 1
+  fi
+  local name="${FLAG_name:-}"
+  if [ -z "$name" ]; then
+    echo "muxpad: --name=<name> required" >&2
+    exit 1
+  fi
+  local body
+  body="{\"name\":$(json_string "$name"),\"schedule\":$(json_string "$FLAG_at"),\"prompt\":$(json_string "$prompt")"
+  if [ "$target" = "pane" ]; then
+    local pane_id
+    pane_id="$(cron_resolve_pane "$pane_ref")"
+    body+=",\"target_kind\":\"pane\",\"target_pane\":$(json_string "$pane_id")"
+  else
+    local workspace_id="${FLAG_workspace:-${MUXPAD_WORKSPACE_ID:-}}"
+    if [ -z "$workspace_id" ]; then
+      echo "muxpad: --workspace=<id> required for --new-tab (no MUXPAD_WORKSPACE_ID in env)" >&2
+      exit 1
+    fi
+    body+=",\"target_kind\":\"new-tab\",\"workspace_id\":$(json_string "$workspace_id")"
+    body+=",\"cwd\":$(json_string "${FLAG_cwd:-$PWD}")"
+  fi
+  [ -n "${FLAG_tz:-}" ] && body+=",\"tz\":$(json_string "$FLAG_tz")"
+  [ -n "${FLAG_model:-}" ] && body+=",\"model\":$(json_string "$FLAG_model")"
+  [ -n "${FLAG_backend:-}" ] && body+=",\"backend\":$(json_string "$FLAG_backend")"
+  [ -n "${FLAG_mode:-}" ] && body+=",\"mode\":$(json_string "$FLAG_mode")"
+  [ -n "${FLAG_catchup:-}" ] && body+=",\"catchup\":$(json_string "$FLAG_catchup")"
+  [ -n "${FLAG_overlap:-}" ] && body+=",\"overlap\":$(json_string "$FLAG_overlap")"
+  [ -n "$on_context" ] && body+=",\"on_context\":$(json_string "$on_context")"
+  # Numeric fields go in unquoted — validate here so a typo is a CLI error
+  # rather than a 400 from the server.
+  if [ -n "${FLAG_quiet:-}" ]; then
+    case "$FLAG_quiet" in (*[!0-9]*|'') echo "muxpad: --quiet must be a whole number of minutes" >&2; exit 1 ;; esac
+    body+=",\"quiet_mins\":$FLAG_quiet"
+  fi
+  if [ -n "$max_open" ]; then
+    case "$max_open" in (*[!0-9]*|'') echo "muxpad: --max-open must be a whole number" >&2; exit 1 ;; esac
+    body+=",\"max_open\":$max_open"
+  fi
+  [ -n "$close_flag" ] && body+=",\"close_when_done\":$close_flag"
+  body+='}'
+  local res
+  res="$(http_request POST /api/crons "$body")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$res"
+    return
+  fi
+  printf '%s✓%s cron created\n' "$C_GREEN" "$C_RESET"
+  printf '  %sid:%s       %s\n' "$C_DIM" "$C_RESET" "$(printf '%s' "$res" | jq -r '.id')"
+  printf '  %sschedule:%s %s (%s)\n' "$C_DIM" "$C_RESET" \
+    "$(printf '%s' "$res" | jq -r '.schedule')" "$(printf '%s' "$res" | jq -r '.tz')"
+  printf '  %snext:%s     %s\n' "$C_DIM" "$C_RESET" \
+    "$(printf '%s' "$res" | jq -r '.next_due_at | (. / 1000 | strflocaltime("%a %d %b %H:%M"))')"
+  printf '  %stest it:%s  muxpad cron run %s\n' "$C_DIM" "$C_RESET" "$name"
+}
+
+cmd_cron_list() {
+  local res
+  res="$(http_request GET /api/crons)"
+  print_table "$res" \
+    'NAME:.name' \
+    'SCHEDULE:.schedule' \
+    'TZ:.tz' \
+    'TARGET:(if .target_kind == "pane" then "pane " + (.target_pane // "?") else "new-tab" end)' \
+    'ON:(if .enabled then "yes" else "no" end)' \
+    'NEXT:(.next_due_at / 1000 | strflocaltime("%a %d %b %H:%M"))' \
+    'LAST:(if .last_fire_at then (.last_fire_at / 1000 | strflocaltime("%d %b %H:%M")) else "-" end)' \
+    'STATUS:(.last_status // "-")' \
+    'FAILS:(.fail_streak | tostring)' \
+    'ID:.id'
+}
+
+cmd_cron_show() {
+  local ref="${1:-}"
+  if [ -z "$ref" ]; then
+    echo 'usage: muxpad cron show <id|name>' >&2
+    exit 1
+  fi
+  local res
+  res="$(http_request GET "/api/crons/$ref")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$res"
+    return
+  fi
+  printf '%s' "$res" | jq -r '
+    "name:      \(.name)",
+    "id:        \(.id)",
+    "schedule:  \(.schedule)  (\(.tz))",
+    "target:    \(if .target_kind == "pane" then "pane " + (.target_pane // "?") else "new-tab in workspace " + (.workspace_id // "?") end)",
+    "enabled:   \(.enabled)",
+    "policies:  catchup=\(.catchup) overlap=\(.overlap) on_context=\(.on_context) quiet=\(.quiet_mins)m" +
+      (if .target_kind == "new-tab" then " max_open=\(.max_open) close_when_done=\(.close_when_done)" else "" end),
+    "next due:  \(.next_due_at / 1000 | strflocaltime("%a %d %b %Y %H:%M"))",
+    "last:      \(if .last_fire_at then (.last_fire_at / 1000 | strflocaltime("%a %d %b %H:%M")) + "  " + (.last_status // "") else "never" end)",
+    "fails:     \(.fail_streak)",
+    "",
+    "prompt:",
+    (.prompt | split("\n") | map("  " + .) | join("\n")),
+    "",
+    "runs:"'
+  printf '%s' "$res" | jq -r '.runs // [] |
+    if length == 0 then "  (none yet)"
+    else .[] | "  \(.fired_at / 1000 | strflocaltime("%d %b %H:%M"))  \(.outcome)\(if .detail then "  — " + .detail else "" end)"
+    end'
+}
+
+cmd_cron_run() {
+  local ref="${1:-}"
+  if [ -z "$ref" ]; then
+    echo 'usage: muxpad cron run <id|name>' >&2
+    exit 1
+  fi
+  local res
+  res="$(http_request POST "/api/crons/$ref/run" '{}')"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$res"
+    return
+  fi
+  local outcome detail
+  outcome="$(printf '%s' "$res" | jq -r '.outcome // "?"')"
+  detail="$(printf '%s' "$res" | jq -r '.detail // empty')"
+  case "$outcome" in
+    sent|queued)
+      printf '%s✓%s fired — %s%s\n' "$C_GREEN" "$C_RESET" "$outcome" "${detail:+ ($detail)}"
+      ;;
+    *)
+      printf '%s✗%s not delivered — %s%s\n' "$C_RED" "$C_RESET" "$outcome" "${detail:+ ($detail)}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+cron_set_enabled() {
+  local ref="$1" enabled="$2" verb="$3"
+  if [ -z "$ref" ]; then
+    echo "usage: muxpad cron $verb <id|name>" >&2
+    exit 1
+  fi
+  local res
+  res="$(http_request PATCH "/api/crons/$ref" "{\"enabled\":$enabled}")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$res"
+    return
+  fi
+  local cron_name state
+  cron_name="$(printf '%s' "$res" | jq -r '.name')"
+  if [ "$enabled" = true ]; then
+    state="resumed — next $(printf '%s' "$res" | jq -r '.next_due_at / 1000 | strflocaltime("%a %d %b %H:%M")')"
+  else
+    state='paused'
+  fi
+  printf '%s✓%s %s %s\n' "$C_GREEN" "$C_RESET" "$cron_name" "$state"
+}
+
+cmd_cron_rm() {
+  local ref="${1:-}"
+  if [ -z "$ref" ]; then
+    echo 'usage: muxpad cron rm <id|name>' >&2
+    exit 1
+  fi
+  http_request DELETE "/api/crons/$ref" >/dev/null
+  printf '%s✓%s cron %s removed\n' "$C_GREEN" "$C_RESET" "$ref"
+}
+
+cmd_cron() {
+  require_jq
+  case "${1:-}" in
+    new) shift; cmd_cron_new "$@" ;;
+    list|ls) shift; cmd_cron_list "$@" ;;
+    show) shift; cmd_cron_show "$@" ;;
+    run) shift; cmd_cron_run "$@" ;;
+    pause) shift; cron_set_enabled "${1:-}" false pause ;;
+    resume) shift; cron_set_enabled "${1:-}" true resume ;;
+    rm|delete) shift; cmd_cron_rm "$@" ;;
+    *)
+      cat >&2 <<'USAGE'
+usage: muxpad cron <command>
+
+  new     create a schedule (see `muxpad cron new` for flags)
+  list    every schedule: target, next due, last run, failure streak
+  show    one schedule in full, with its run history
+  run     fire it NOW — test it before you trust it
+  pause   stop firing (keeps the schedule)
+  resume  start firing again, re-anchored to the next slot
+  rm      delete it
+USAGE
+      exit 1
+      ;;
+  esac
+}
+
 # `muxpad search "query" [--limit=N]` — full-text search across every
 # archived agent session (the muxpad-owned raw transcript mirrors, see
 # docs/plans/2026-08-28-session-archive.md). The query is a raw FTS5 MATCH
@@ -2171,6 +2435,28 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      not pty output. exit 0 = done or already
                                      idle, 1 = not an agent pane, 2 = agent
                                      fatal, 3 = timeout.
+  cron new --name=<n> --at='<schedule>' (--pane[=<id|name>] | --new-tab)
+           [--tz=<IANA>] [--cwd=<dir>] [--model=<m>] [--backend=<b>]
+           [--mode=do|deep] [--catchup=once|skip|all] [--overlap=skip|queue]
+           [--on-context=fire|compact-first|rotate|skip] [--quiet=<mins>]
+           [--max-open=<n>] [--no-close] "prompt"
+                                     a DURABLE schedule owned by muxpad, not by
+                                     an agent session: survives restarts,
+                                     catches up after downtime, never expires,
+                                     visible and editable from anywhere.
+                                     --at takes a cron expression ('0 9 * * 1-5')
+                                     or a phrase ('daily at 09:00', 'weekdays
+                                     at 09:00', 'every 30m'). --pane with no
+                                     value = THIS pane. --new-tab spawns a
+                                     fresh agent tab per fire (clean context)
+                                     and closes it when the run finishes.
+  cron list                          name, schedule, target, next due, last run,
+                                     last status, failure streak
+  cron show <id|name>                one schedule in full + its run history
+  cron run <id|name>                 fire it NOW — test before you trust it
+  cron pause|resume <id|name>        stop/start firing (resume re-anchors, so a
+                                     long pause doesn't replay)
+  cron rm <id|name>                  delete it
   publish <file-or-dir> [--name=slug]
                                      host a copy of the file/dir at a PUBLIC
                                      internet URL (Tailscale Funnel, no
@@ -2253,6 +2539,7 @@ case "$VERB" in
   serve) cmd_serve "${ARGS[@]:1}" ;;
   claude) cmd_claude "${ARGS[@]:1}" ;;
   agent) cmd_agent "${ARGS[@]:1}" ;;
+  cron) cmd_cron "${ARGS[@]:1}" ;;
   search) cmd_search "${ARGS[@]:1}" ;;
   publish) cmd_publish "${ARGS[@]:1}" ;;
   _agent-hook) cmd_agent_hook ;;

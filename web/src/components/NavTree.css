@@ -391,6 +391,28 @@
   line-height: 1;
 }
 
+/* ─── Schedule mark (⏱) ─────────────────────────────────────────────────
+   "This chat runs on a schedule" — a PROPERTY of the tab, so it sits with the
+   other facts about it (icon, name, pane count) rather than in the status
+   rail, which holds one transient state in a fixed column meant to be scanned
+   vertically. Sized and toned like the pane-count chip: legible on purpose,
+   quiet on purpose. `flex: 0 0 auto` so an ellipsized name shrinks around it
+   instead of pushing it out of the row. */
+.navtree-cron {
+  flex: 0 0 auto;
+  margin-left: 4px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--nt-dim, var(--dim));
+  opacity: 0.75;
+  /* The glyph renders as coloured emoji on some platforms; force the text
+     presentation so it matches the rest of the row's monochrome chrome. */
+  font-variant-emoji: text;
+}
+.navtree-tab-row[data-active='true'] .navtree-cron {
+  opacity: 0.9;
+}
+
 /* ─── Close affordance (per-row) ─────────────────────────────────────── */
 
 .navtree-close {
