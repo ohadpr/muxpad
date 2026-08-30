@@ -105,8 +105,15 @@ export interface AppRegistryDeps {
  * typed it, so there is no privilege boundary here to breach.
  */
 export function appStartupCmd(app: Pick<App, 'url' | 'name' | 'command'>): string {
-  const label = app.name.replace(/['\n\r;]/g, '').slice(0, 64);
-  return `muxpad serve --url '${app.url}' --label '${label}' -- ${app.command}`;
+  // Both interpolated values are stripped of the quote character HERE, at the
+  // single choke point, rather than trusting that whoever wrote the row
+  // validated it. routes/apps.ts does validate — but adoption
+  // (apps/adopt-serve-panes.ts) reads a url out of a command the user typed by
+  // hand, and a row can also be edited directly in SQLite. A quote reaching
+  // this line escapes its own quoting and the rest of the string becomes shell.
+  const clean = (s: string) => s.replace(/['\n\r;]/g, '');
+  const label = clean(app.name).slice(0, 64);
+  return `muxpad serve --url '${clean(app.url)}' --label '${label}' -- ${app.command}`;
 }
 
 export interface AppRegistry {
@@ -208,24 +215,43 @@ export function createAppRegistry(deps: AppRegistryDeps): AppRegistry {
    * side: a kill lost in transit is queued for the reaper rather than aborting
    * the teardown, or we would leave a pty running with no row and no surface
    * that could ever reach it.
+   *
+   * ORDERING IS LOAD-BEARING, and the obvious order is wrong.
+   *
+   * The supervisor's skip rule (PaneStore.listServePanes) needs BOTH halves of
+   * `enabled = 0 AND pane_id = P`. Clearing the pointer first — which is what
+   * this function used to do — makes the second half false for the entire
+   * `await killPane`, so the rule matches nothing and the pane is swept as an
+   * ordinary serve pane. A sweep landing in that window sees no pty (we just
+   * killed it), re-reads the still-present row, and calls `ensurePane` — then
+   * we delete the row underneath it. The result is a live pty with no pane row,
+   * no app pointer, and no surface that can reach it, still holding the app's
+   * port; `Start` then crash-loops forever on EADDRINUSE with nothing on screen
+   * explaining why. The window needs a slow `killPane`, and a slow `killPane`
+   * is exactly what a RECONNECTING ptyd produces — which is also what triggers
+   * the sweep.
+   *
+   * So: kill and delete the pane FIRST, and clear `pane_id` only once there is
+   * nothing left for the supervisor to resurrect.
    */
   const teardown = async (app: App): Promise<void> => {
     if (!app.pane_id) return;
     const pane = panes.getById(app.pane_id);
+    if (pane) {
+      try {
+        await deps.ptyd.killPane(pane.id);
+      } catch {
+        queuePaneKill(deps.db, pane.id);
+      }
+      // Delete the whole tab: an app's tab holds exactly one pane, and leaving
+      // an empty tab behind in the hidden container is litter nothing would
+      // collect. Guarded anyway — if something else moved a pane in, keep it.
+      const siblings = panes.listByTab(pane.tab_id).filter((p) => p.id !== pane.id);
+      panes.delete(pane.id);
+      if (siblings.length === 0) tabs.delete(pane.tab_id);
+    }
     apps.setPane(app.id, null);
     lastMaterializeAt.delete(app.id);
-    if (!pane) return;
-    try {
-      await deps.ptyd.killPane(pane.id);
-    } catch {
-      queuePaneKill(deps.db, pane.id);
-    }
-    // Delete the whole tab: an app's tab holds exactly one pane, and leaving an
-    // empty tab behind in the hidden container is litter nothing would collect.
-    // Guarded anyway — if something else moved a pane in, keep the tab.
-    const siblings = panes.listByTab(pane.tab_id).filter((p) => p.id !== pane.id);
-    panes.delete(pane.id);
-    if (siblings.length === 0) tabs.delete(pane.tab_id);
   };
 
   const start = async (appId: string): Promise<App | null> => {
@@ -253,9 +279,9 @@ export function createAppRegistry(deps: AppRegistryDeps): AppRegistry {
     const app = apps.getById(appId);
     if (!app) return false;
     // Disable first for the same race as stop(), then tear down, then delete.
-    // Deleting the row first would strand the pane: `disabledPaneIds()` would
-    // no longer name it, so the supervisor would adopt it as an ordinary serve
-    // pane and keep it alive forever with nothing pointing at it.
+    // Deleting the ROW first would strand the pane: the supervisor's skip rule
+    // matches on the app row, so with no row the pane is just an ordinary serve
+    // pane and gets kept alive forever with nothing pointing at it.
     apps.update(app.id, { enabled: false });
     await teardown(app);
     apps.delete(app.id);
@@ -301,6 +327,20 @@ export function createAppRegistry(deps: AppRegistryDeps): AppRegistry {
           log(`[apps] ${app.slug}: pane row is gone — rebuilding`);
         }
         await materialize(app.id);
+      }
+      // Collect empty tabs in the container. `materialize` commits its tab and
+      // its pane in ONE transaction, so a tab here with no panes is always
+      // litter — most often the tab whose pane vanished, since the rebuild
+      // above makes a fresh one rather than reusing it. Without this, every
+      // rebuild leaves one more invisible empty tab, forever.
+      const container = globals.get(APPS_WORKSPACE_KEY);
+      if (container && workspaces.getById(container)) {
+        for (const t of tabs.listByWorkspace(container)) {
+          if (panes.listByTab(t.id).length === 0) {
+            tabs.delete(t.id);
+            log(`[apps] collected an empty tab in the apps container (${t.id})`);
+          }
+        }
       }
     } finally {
       reconciling = false;

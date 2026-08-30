@@ -130,8 +130,11 @@ export const ArtifactVersionSchema = z.object({
   files: z.number().int().nonnegative(),
   bytes: z.number().int().nonnegative(),
   created: z.number(),
-  /** Public URL of this exact version. */
-  url: z.string(),
+  /** Public URL of this exact version — null until a public base is known,
+   *  exactly like ArtifactSchema.url. (It was declared non-nullable while the
+   *  route already returned null; nothing parses this schema, so the lie was
+   *  inert, but it made the client's `?? '#'` fallback read as dead code.) */
+  url: z.string().nullable(),
 });
 export type ArtifactVersion = z.infer<typeof ArtifactVersionSchema>;
 

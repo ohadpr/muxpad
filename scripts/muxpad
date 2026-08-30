@@ -2340,18 +2340,32 @@ USAGE
     exit 1
   fi
   local cwd="${FLAG_cwd:-$PWD}"
+  # `--cwd=~/notes` does NOT tilde-expand: neither bash nor zsh expands `~`
+  # after an `=` in a non-assignment word, so the shell hands us the literal
+  # string and the naive relative-path branch below would turn it into
+  # `$PWD/~/notes`, which the server rejects as "no such directory". Expand a
+  # leading `~/` ourselves — it is the form every example uses.
+  case "$cwd" in
+    '~') cwd="$HOME" ;;
+    '~/'*) cwd="$HOME/${cwd#'~/'}" ;;
+  esac
   case "$cwd" in
     /*) ;;
     *) cwd="$PWD/$cwd" ;;
   esac
   local name="${FLAG_name:-$(basename "$cwd")}"
-  # The command is re-joined into one line, which is exactly what the server
-  # stores and the pane runs. Multi-word arguments keep their quoting.
+  # Re-join the command into ONE line, which is what the server stores and the
+  # pane's shell runs. Each word is re-quoted with %q: the words arrived here
+  # already split by the caller's shell, so pasting them back together raw
+  # would silently destroy the original quoting —
+  #   `-- node app.js --msg "hello world"`  became  `node app.js --msg hello world`
+  # and anything containing a space, `;`, `$` or `*` was re-interpreted inside
+  # the pane. %q is the only way to rebuild a line that means what was typed.
   local command_str=''
   local a
   for a in "${cmdv[@]}"; do
     [ -n "$command_str" ] && command_str+=' '
-    command_str+="$a"
+    command_str+="$(printf '%q' "$a")"
   done
 
   local body
