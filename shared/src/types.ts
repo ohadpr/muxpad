@@ -90,11 +90,20 @@ export const DEFAULT_AGENT_MODE: AgentMode = 'deep';
  *            pane this is the runner registry, never pty output. For a pane
  *            with no runner it is the pty-output heuristic.
  *   dead     the runner gave up — automatic restarts exhausted.
- *   done     finished, unseen (the persisted `unread` flag).
+ *   ready    finished, waiting for YOU (the persisted `unread` flag).
  *   idle     none of the above.
  *
  * Listed in PRECEDENCE order (STATUS_ORDER below), which is why `dead` sits
- * above `done`: "it crashed" must not be masked by "it finished".
+ * above `ready`: "it crashed" must not be masked by "it finished".
+ *
+ * `ready`, not `done`: the state is about the READER, not the machine. "done"
+ * describes what the agent did and invites the reading "nothing left here";
+ * this row is in fact the one with something waiting on it. Renamed wholesale
+ * rather than aliased — `status` is decorated fresh on every row the server
+ * emits, never persisted, so there is no stored value to migrate. The one
+ * cross-version case is a stale cached client seeing `ready`: `rank()` below
+ * clamps an unknown status to the bottom and StatusMark draws nothing, so it
+ * degrades to a blank (reserved) column rather than throwing.
  *
  * Replaces three physically different conditions previously ORed into one
  * `busy` boolean. `busy` remains a DEPRECATED ALIAS on the same rows for one
@@ -112,7 +121,7 @@ export const DEFAULT_AGENT_MODE: AgentMode = 'deep';
  * workspace's is the highest among its tabs — computed on the server, ALWAYS,
  * collapsed or not (a collapsed workspace used to have no busy signal at all).
  */
-export const PaneStatusSchema = z.enum(['blocked', 'working', 'done', 'dead', 'idle']);
+export const PaneStatusSchema = z.enum(['blocked', 'working', 'ready', 'dead', 'idle']);
 export type PaneStatus = z.infer<typeof PaneStatusSchema>;
 
 /**
@@ -121,12 +130,12 @@ export type PaneStatus = z.infer<typeof PaneStatusSchema>;
  * re-deriving the priority in each renderer (which is how the sidebar and the
  * tab strip came to disagree in the first place).
  *
- * `dead` outranks `done`: a runner that gave up needs the user's attention
+ * `dead` outranks `ready`: a runner that gave up needs the user's attention
  * more than an unread-but-fine turn does — "it finished" must not mask "it
  * crashed". (The audit's literal order had these two swapped; deliberate
  * deviation.)
  */
-export const STATUS_ORDER: readonly PaneStatus[] = ['blocked', 'working', 'dead', 'done', 'idle'];
+export const STATUS_ORDER: readonly PaneStatus[] = ['blocked', 'working', 'dead', 'ready', 'idle'];
 
 /**
  * The higher-precedence of two statuses. The single rollup primitive.

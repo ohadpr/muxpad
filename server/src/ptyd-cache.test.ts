@@ -323,9 +323,9 @@ describe('the five-state status model', () => {
     expect(cache.getStatus('p1', false)).toBe('idle');
 
     // done ← the persisted unread flag
-    expect(cache.getStatus('p1', true)).toBe('done');
+    expect(cache.getStatus('p1', true)).toBe('ready');
 
-    // dead outranks done (see STATUS_ORDER's note): a crash must not be
+    // dead outranks ready (see STATUS_ORDER's note): a crash must not be
     // masked by an unread turn
     cache.setDead('p1', true);
     expect(cache.getStatus('p1', false)).toBe('dead');
@@ -454,7 +454,7 @@ describe('the five-state status model', () => {
     expect(working.agents).toBe(2);
 
     cache.setSubagentCount('p1', 0);
-    expect(decoratePane(cache, pane({ unread: true })).status).toBe('done');
+    expect(decoratePane(cache, pane({ unread: true })).status).toBe('ready');
 
     // `attention` keeps its ORIGINAL meaning (raw BEL), deliberately — a
     // question-blocked pane must not re-trigger the attention push.

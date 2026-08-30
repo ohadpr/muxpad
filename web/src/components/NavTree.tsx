@@ -724,7 +724,7 @@ function WorkspaceNode({
             Collapsed-ONLY, for the same reason the tab-count chip is: once the
             tabs are listed they carry their own marks, and a rollup on top of
             them would just double-signal. */}
-        {!expanded && <StatusMark status={workspace.status} agents={workspace.agents} />}
+        {!expanded && <StatusMark status={workspace.status} />}
         <button
           type="button"
           className="navtree-close"
@@ -1256,7 +1256,7 @@ function SheetPaneList({
                 {/* Per-pane status, same rail, same column. The tab level only
                     aggregates; a glance at the list should say WHICH pane is
                     running (or blocked). */}
-                <StatusMark status={p.status} agents={p.agents} />
+                <StatusMark status={p.status} />
               </button>
               <button
                 type="button"
@@ -1657,7 +1657,7 @@ function TabRow({
             right. Shown on the ACTIVE row too — agent panes work quietly for
             minutes on their chat face, and a glance should always answer "is
             anything still running here?" */}
-        {!isEditing && <StatusMark status={tab.status} agents={tab.agents} />}
+        {!isEditing && <StatusMark status={tab.status} />}
         {/* Pin affordance — DESKTOP ONLY. It rides the close ×'s reveal
             machinery (zero-width until the row is hovered/focused), and a
             pinned tab keeps it lit so the pin doubles as the "this is pinned"
