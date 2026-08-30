@@ -61,6 +61,35 @@ const INTERACTIVE_PUSH_SUPPRESS_MS = 2 * 60_000;
 // or a runaway client / HTTP caller.
 const MAX_QUEUED_SENDS = 200;
 
+/**
+ * Hard bound on the SERVER's mirror of a pane's subagent roster. The runner
+ * enforces its own cap (SubagentRoster.MAX_ROSTER_ENTRIES) — this is the
+ * independent one, because runners are version-skewed by design: a pane keeps
+ * its old runner process until it respawns, and a pre-durable runner never
+ * emits a terminal frame, so this map only ever grew. Deliberately the same
+ * number, so the two agree about what "absurd" means.
+ */
+export const MAX_PANE_SUBAGENTS = 32;
+
+/** Rate limit for the roster-overflow warning, per pane. */
+const OVERFLOW_WARN_MS = 60_000;
+
+/**
+ * Keep a pane's server-side roster under {@link MAX_PANE_SUBAGENTS} by dropping
+ * the oldest INSERTIONS (Map iteration order). Returns the ids evicted so the
+ * caller can log; empty in every healthy case.
+ */
+export function evictOverflowEntries(subagents: Map<string, unknown>): string[] {
+  const dropped: string[] = [];
+  while (subagents.size > MAX_PANE_SUBAGENTS) {
+    const oldest = subagents.keys().next();
+    if (oldest.done) break;
+    subagents.delete(oldest.value);
+    dropped.push(oldest.value);
+  }
+  return dropped;
+}
+
 export function attachWsServer(deps: {
   http: Server;
   db: Database.Database;
@@ -184,6 +213,8 @@ export function attachWsServer(deps: {
     pendingQuestion: { qid: string; questions: AgentQuestion[] } | null;
     /** Latest per-task subagent progress for mid-turn (re)connects. */
     subagents: Map<string, SubagentProgress>;
+    /** Rate limit for the roster-overflow warning (see MAX_PANE_SUBAGENTS). */
+    lastOverflowWarnAt: number;
     /** Latest session status (model, context fill, model list) for hellos. */
     status: (RunnerFrame & { t: 'status' }) | null;
     /** When the last chat send was relayed — see the stop handler's gate. */
@@ -669,6 +700,7 @@ export function attachWsServer(deps: {
           turnActive: false,
           pendingQuestion: null,
           subagents: new Map(),
+          lastOverflowWarnAt: 0,
           status: null,
           lastSendAt: 0,
           lastHumanSendAt: 0,
@@ -894,6 +926,22 @@ export function attachWsServer(deps: {
             if (!frame.progress || typeof frame.progress.toolUseId !== 'string') return;
             if (frame.progress.done) conn.subagents.delete(frame.progress.toolUseId);
             else conn.subagents.set(frame.progress.toolUseId, frame.progress);
+            // Independent backstop on the SERVER's copy. The runner caps its own
+            // roster, but runners are version-skewed by design — they only pick
+            // up new code when their pane respawns, and a pre-durable runner
+            // never sends a `done` frame at all, so this map grew for the life
+            // of the process (live pane, 2026-08: 19 entries, 7 real). The cap
+            // is a bound, never a policy: it drops the OLDEST insertion, so a
+            // leak can no longer render an absurd number in the status rail.
+            const evicted = evictOverflowEntries(conn.subagents);
+            // Loud, but once a minute per pane: a leaking runner sends one of
+            // these per frame, and the log must stay readable.
+            if (evicted.length > 0 && Date.now() - conn.lastOverflowWarnAt > OVERFLOW_WARN_MS) {
+              conn.lastOverflowWarnAt = Date.now();
+              console.warn(
+                `[ws] pane ${paneId}: subagent roster over ${MAX_PANE_SUBAGENTS} — evicting the oldest entries. A runner end-path is leaking (stale runner build?).`,
+              );
+            }
             // The roster is a status SOURCE, not a decaying hint: a non-empty
             // roster means "work is running here" whether or not a turn is.
             // setSubagentCount is edge-triggered on the COUNT, so the runner's
