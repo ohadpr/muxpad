@@ -3,6 +3,7 @@ import {
   APP_STATE_STATUS,
   type AppWithStatus,
   type Artifact,
+  type PublicBaseInfo,
 } from '@muxpad/shared';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import { useState } from 'react';
@@ -34,7 +35,7 @@ import './HostedView.css';
  * something already visible.
  */
 export function HostedView() {
-  const { apps, artifacts, loading, error, refresh } = useHosted();
+  const { apps, artifacts, base, loading, error, refresh } = useHosted();
   useDocumentTitle('muxpad — hosted');
 
   return (
@@ -96,6 +97,11 @@ export function HostedView() {
               Artifacts
             </h2>
             <span className="hosted-section-note hosted-section-note-public">public</span>
+            {/* The base every link below is built from. Worth a permanent line
+                because its failure is otherwise SILENT: a tunnel whose process
+                died, or one on a port the recipient's network blocks, makes
+                every link on this page useless while the page looks fine. */}
+            {base && <BaseNote base={base} />}
           </div>
           {loading && artifacts.length === 0 ? (
             <p className="hosted-empty">Loading…</p>
@@ -117,6 +123,36 @@ export function HostedView() {
   );
 }
 
+function BaseNote({ base }: { base: PublicBaseInfo }) {
+  if (!base.url) {
+    return (
+      <span className="hosted-base hosted-base-bad" title={base.warning}>
+        no public URL — links are local-only
+      </span>
+    );
+  }
+  const host = (() => {
+    try {
+      return new URL(base.url).host;
+    } catch {
+      return base.url;
+    }
+  })();
+  // `reachable === false` is the loud case: something IS configured and it is
+  // not answering, so every Copy link on this page is handing out a dead URL.
+  const bad = base.reachable === false;
+  return (
+    <span
+      className={`hosted-base${bad ? ' hosted-base-bad' : ''}`}
+      title={base.warning ?? `Links are built from ${base.url} (${base.source})`}
+    >
+      {bad ? '⚠ ' : ''}
+      {host}
+      {bad ? ' not answering' : ''}
+    </span>
+  );
+}
+
 function EmptyState({ line, hint }: { line: string; hint: string }) {
   return (
     <div className="hosted-empty">
@@ -131,6 +167,8 @@ function EmptyState({ line, hint }: { line: string; hint: string }) {
 
 function AppRow({ app, onChanged }: { app: AppWithStatus; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
+  // The chip carries the STATE; this carries only what the chip cannot say.
+  const detail = appDetail(app);
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     try {
@@ -154,7 +192,7 @@ function AppRow({ app, onChanged }: { app: AppWithStatus; onChanged: () => void 
               {APP_STATE_LABEL[app.state]}
             </span>
           </div>
-          <div className="hosted-row-meta">{appDetail(app)}</div>
+          {detail && <div className="hosted-row-meta">{detail}</div>}
           <div className="hosted-row-meta hosted-row-mono">{app.url}</div>
         </div>
       </div>
@@ -195,6 +233,10 @@ function AppRow({ app, onChanged }: { app: AppWithStatus; onChanged: () => void 
             Start
           </button>
         )}
+        {/* Ghost treatment AND pushed to its own end of the row: it used to sit
+            immediately beside Stop with identical weight, which on a phone is
+            one mis-tap from destroying an app. Everything else here is
+            one-tap; this one is quiet, separated, and confirmed. */}
         <button
           type="button"
           className="hosted-btn hosted-btn-danger"
@@ -392,7 +434,9 @@ export function HostedAppView() {
             <iframe className="hosted-app-frame" src={app.url} title={app.name} />
           ) : (
             <div className="hosted-empty">
-              <p className="hosted-empty-line">{appDetail(app)}</p>
+              <p className="hosted-empty-line">
+                {appDetail(app) ?? `This app is ${APP_STATE_LABEL[app.state]}.`}
+              </p>
               <code className="hosted-empty-hint">{app.url}</code>
             </div>
           )

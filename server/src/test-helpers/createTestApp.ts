@@ -33,8 +33,17 @@ export async function createTestApp(opts: {
   agentBridge?: AgentBridge;
   /** Mounts /api/search + /api/archive when provided (archive e2e tests). */
   archive?: ArchiveDb;
-  /** Funnel stub for /api/publish tests — never a real tailscale exec. */
-  publish?: { funnel: Funnel };
+  /**
+   * Funnel stub for /api/publish tests — never a real tailscale exec.
+   * `baseProbe` overrides the base-url reachability check; it defaults to
+   * "everything answers" so a test about the RESOLUTION CHAIN never depends on
+   * DNS resolving a fake `example.ts.net`.
+   */
+  publish?: {
+    funnel: Funnel;
+    publicBaseUrl?: string;
+    baseProbe?: (url: string) => Promise<UrlHealth>;
+  };
   /** Shared per-tab activity recorder (the living sidebar's recency signal). */
   tabActivity?: TabActivity;
   /**
@@ -68,7 +77,20 @@ export async function createTestApp(opts: {
     ...(opts.events ? { events: opts.events } : {}),
     ...(opts.agentBridge ? { agentBridge: opts.agentBridge } : {}),
     ...(opts.archive ? { archive: opts.archive } : {}),
-    ...(opts.publish ? { publish: opts.publish } : {}),
+    ...(opts.publish
+      ? {
+          publish: {
+            funnel: opts.publish.funnel,
+            ...(opts.publish.publicBaseUrl ? { publicBaseUrl: opts.publish.publicBaseUrl } : {}),
+            baseProbe:
+              opts.publish.baseProbe ??
+              (async () => ({ alive: true, status: 404, reason: 'client_error', elapsedMs: 1 })),
+            // No probe cache in tests: a test that flips reachability
+            // mid-scenario must observe the flip, not a 30s-old reading.
+            baseProbeTtlMs: 0,
+          },
+        }
+      : {}),
     ...(opts.tabActivity ? { tabActivity: opts.tabActivity } : {}),
     ...(registry ? { apps: { registry, ...(status ? { status } : {}) } } : {}),
   });

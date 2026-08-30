@@ -246,7 +246,11 @@ const app = createApp({
   presence,
   cronScheduler,
   ...(archiveDb ? { archive: archiveDb } : {}),
-  publish: { funnel },
+  publish: {
+    funnel,
+    publicPort: config.publicPort,
+    ...(config.publicBaseUrl ? { publicBaseUrl: config.publicBaseUrl } : {}),
+  },
   apps: { registry: appRegistry, status: appStatus },
 });
 

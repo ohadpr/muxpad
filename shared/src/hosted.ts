@@ -148,3 +148,22 @@ export const ArtifactSchema = z.object({
   versions: z.array(ArtifactVersionSchema),
 });
 export type Artifact = z.infer<typeof ArtifactSchema>;
+
+/**
+ * Where every published link is being built from, and whether it answers.
+ *
+ * Surfaced because the failure it describes is silent otherwise: a tunnel whose
+ * process died, or a base pointing at a port the recipient's network blocks,
+ * makes EVERY link on the page useless while the page itself looks perfectly
+ * healthy. `source` names which rung of the precedence chain won, so "why is my
+ * link wrong" is answerable from the UI.
+ */
+export const PublicBaseInfoSchema = z.object({
+  /** null = no shareable base; links would be loopback-only. */
+  url: z.string().nullable(),
+  source: z.enum(['env', 'pinned', 'hint', 'funnel', 'persisted', 'local']),
+  /** null = not checked. */
+  reachable: z.boolean().nullable(),
+  warning: z.string().optional(),
+});
+export type PublicBaseInfo = z.infer<typeof PublicBaseInfoSchema>;
