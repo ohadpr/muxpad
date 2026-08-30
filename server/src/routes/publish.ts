@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
 } from 'node:fs';
@@ -41,8 +42,13 @@ import { GlobalsStore } from '../store/GlobalsStore.js';
  *   4. else the local URL + a warning.
  *
  * Source paths must be absolute; any path the server can read is fair game
- * (personal tool). The one refusal is publishing the public dir into itself
- * (or an ancestor of it), which would recurse forever.
+ * (personal tool). The one refusal is publishing the public dir into itself —
+ * as the source, as an ancestor of the source, or (via a nested symlink) as a
+ * descendant reached from inside it — all of which recurse into our own
+ * output. See copyDereferenced.
+ *
+ * A named republish STAGES into a sibling temp dir and promotes by rename, so
+ * a failed publish never destroys the version that was already live.
  */
 
 const SLUG_RE = /^[a-z0-9-]{1,64}$/;
@@ -84,6 +90,9 @@ function publicDirOf(dataDir: string): string {
  */
 const MAX_COPY_DEPTH = 32;
 
+/** Age past which a leftover `.staging-*` / `.retired-*` dir is crash debris. */
+const STALE_STAGING_MS = 60 * 60 * 1000;
+
 function copyDereferenced(src: string, dest: string, forbidden: string, depth = 0): void {
   if (depth > MAX_COPY_DEPTH) return; // symlink-cycle / pathological nesting cap
   let st: ReturnType<typeof statSync>;
@@ -94,11 +103,22 @@ function copyDereferenced(src: string, dest: string, forbidden: string, depth = 
   } catch {
     return; // broken symlink / vanished mid-copy — skip
   }
-  // A NESTED symlink can point at the public dir itself (or an ancestor of
-  // it, like $HOME or /): copying would re-enter our own output for an
-  // unbounded blow-up and mirror sensitive trees to the internet. The
-  // top-level guard in the route can't see nested links — enforce here too.
-  if (real === forbidden || forbidden.startsWith(real.endsWith(sep) ? real : real + sep)) return;
+  // A NESTED symlink can point at the public dir itself, an ANCESTOR of it
+  // (like $HOME or /), or — just as bad — a DESCENDANT of it (another
+  // publish, or the very destination we are writing into). Any of those makes
+  // the copy re-enter our own output for an unbounded blow-up and mirrors
+  // sensitive trees to the internet. The top-level guard in the route can't
+  // see nested links — enforce all three directions here.
+  //
+  // The descendant case was the live hole: publishing a source containing
+  // `loop -> <dataDir>/public/site` to slug `site` created the destination and
+  // then copied it into itself, `site/loop/loop/…` down to MAX_COPY_DEPTH.
+  // The cap bounded it but still allowed huge amplification, ENAMETOOLONG,
+  // disk exhaustion and a long synchronous event-loop stall.
+  const realPrefix = real.endsWith(sep) ? real : real + sep;
+  const forbiddenPrefix = forbidden.endsWith(sep) ? forbidden : forbidden + sep;
+  if (real === forbidden || forbidden.startsWith(realPrefix) || real.startsWith(forbiddenPrefix))
+    return;
   if (st.isDirectory()) {
     mkdirSync(dest, { recursive: true });
     for (const name of readdirSync(src))
@@ -213,18 +233,94 @@ export function publishRoutes(deps: {
         slug = randomBytes(4).toString('hex');
       } while (existsSync(join(publicDir, slug)));
     }
+    // STAGE THEN SWAP. A republish used to `rmSync(dest)` and copy straight
+    // into the live path: any failure part-way (disk full, permissions,
+    // ENAMETOOLONG, the source changing under us) left a half-published
+    // artifact AND had already destroyed the last known-good one, with no way
+    // back. Now the new tree is built in a sibling temp dir on the same
+    // filesystem, and only a successful build gets promoted by rename — so a
+    // failure leaves the previous publish exactly as it was, and a reader
+    // never sees a partial tree.
+    //
+    // The staging/retired names start with '.', which SLUG_RE cannot produce,
+    // so they can never collide with a real slug; GET / filters them out, and
+    // a crash between the two renames leaves at worst one `.retired-*` dir
+    // that the sweep below removes on the next publish.
     const dest = join(publicDir, slug);
-    rmSync(dest, { recursive: true, force: true });
-    mkdirSync(dest);
-    if (st.isDirectory()) {
-      copyDereferenced(srcPath, dest, realPub);
-    } else {
-      // A lone HTML file becomes the slug's index so the URL is just /<slug>/.
-      const fname = /\.html?$/i.test(srcPath) ? 'index.html' : basename(srcPath);
-      copyFileSync(srcPath, join(dest, fname));
+    const staging = join(publicDir, `.staging-${randomBytes(6).toString('hex')}`);
+    for (const e of readdirSync(publicDir)) {
+      if (!e.startsWith('.staging-') && !e.startsWith('.retired-')) continue;
+      const stale = join(publicDir, e);
+      try {
+        // Age-gated so a concurrent publish's live staging dir is never the
+        // one we sweep; anything this old is debris from a crash.
+        //
+        // btime is not universally available — libuv reports 0 where the
+        // filesystem has none, which would make EVERY scratch dir look ancient
+        // and let this delete a concurrent publish's live staging tree. Take
+        // the NEWEST of the timestamps we have, so an unknown btime falls back
+        // to mtime rather than to the epoch.
+        const st = statSync(stale);
+        const age = Date.now() - Math.max(st.birthtimeMs || 0, st.mtimeMs, st.ctimeMs);
+        if (age < STALE_STAGING_MS) continue;
+      } catch {
+        continue;
+      }
+      rmSync(stale, { recursive: true, force: true });
+    }
+    mkdirSync(staging);
+    try {
+      if (st.isDirectory()) {
+        copyDereferenced(srcPath, staging, realPub);
+      } else {
+        // A lone HTML file becomes the slug's index so the URL is just /<slug>/.
+        const fname = /\.html?$/i.test(srcPath) ? 'index.html' : basename(srcPath);
+        copyFileSync(srcPath, join(staging, fname));
+      }
+    } catch (err) {
+      rmSync(staging, { recursive: true, force: true });
+      return c.json(
+        {
+          error: {
+            code: 'internal',
+            message: `publish failed, previous version left intact: ${(err as Error).message}`,
+          },
+        },
+        500,
+      );
     }
 
-    const { files, bytes } = dirStats(dest);
+    const { files, bytes } = dirStats(staging);
+    // Promote. Retire the old tree by rename (instant, reversible until the
+    // final rm) rather than deleting it before the new one is in place.
+    const retired = existsSync(dest)
+      ? join(publicDir, `.retired-${randomBytes(6).toString('hex')}`)
+      : null;
+    try {
+      if (retired) renameSync(dest, retired);
+      renameSync(staging, dest);
+    } catch (err) {
+      // Put the old tree back if we managed to move it aside but not to swap
+      // the new one in — better a stale publish than a missing one.
+      if (retired && !existsSync(dest)) {
+        try {
+          renameSync(retired, dest);
+        } catch {
+          // nothing more we can do; the retired copy stays on disk for a human
+        }
+      }
+      rmSync(staging, { recursive: true, force: true });
+      return c.json(
+        {
+          error: {
+            code: 'internal',
+            message: `publish failed, previous version left intact: ${(err as Error).message}`,
+          },
+        },
+        500,
+      );
+    }
+    if (retired) rmSync(retired, { recursive: true, force: true });
     const resolved = await resolveBaseUrl(hint);
     return c.json(
       {
@@ -247,7 +343,10 @@ export function publishRoutes(deps: {
       return c.json({ publishes: [] });
     }
     const publishes = entries
-      .filter((e) => e.isDirectory())
+      // `.staging-*` / `.retired-*` are a republish's in-flight scratch dirs
+      // (see POST); SLUG_RE can't produce a leading dot, so filtering by it
+      // keeps them — and any other stray dotfile — out of the listing.
+      .filter((e) => e.isDirectory() && SLUG_RE.test(e.name))
       .map((e) => {
         const dir = join(publicDir, e.name);
         const { files, bytes } = dirStats(dir);

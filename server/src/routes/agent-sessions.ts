@@ -1,40 +1,19 @@
-import { closeSync, openSync, readSync, statSync } from 'node:fs';
 import { type ChatEvent, normalizeTranscriptLine } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AgentBridge } from '../agent-bridge.js';
 import { findTranscript, identityNormalize, muxpadLocate } from '../chat/TranscriptReader.js';
+import { readTailLines } from '../chat/has-messages.js';
 import type { EventBus } from '../events.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
+import { PaneStore } from '../store/PaneStore.js';
 
 // How much of a transcript's tail to read when serving /transcript. Bounds
 // the read on multi-GB transcripts; comfortably holds the max `tail` events
 // (image-heavy lines run to hundreds of KB, hence the generous window).
 const TRANSCRIPT_TAIL_BYTES = 4 * 1024 * 1024;
-
-/** Complete lines from the last `maxBytes` of a file (partial first line dropped). */
-function readTailLines(path: string, maxBytes: number): string[] {
-  const size = statSync(path).size;
-  const from = Math.max(0, size - maxBytes);
-  const len = size - from;
-  if (len <= 0) return [];
-  const fd = openSync(path, 'r');
-  const buf = Buffer.allocUnsafe(len);
-  try {
-    readSync(fd, buf, 0, len, from);
-  } finally {
-    closeSync(fd);
-  }
-  let text = buf.toString('utf8');
-  if (from > 0) {
-    // Snap past the (possibly partial) first line so we never parse a torn one.
-    const nl = text.indexOf('\n');
-    text = nl === -1 ? '' : text.slice(nl + 1);
-  }
-  return text.split('\n');
-}
 
 // Session ids become a filename (`<sid>.jsonl`) that the tail resolves by
 // scanning project dirs — so constrain the charset to prevent a crafted id
@@ -128,13 +107,25 @@ export function agentSessionsRoutes(deps: {
 
   // `turn_active`: the runner registry's real turn state (true mid-turn,
   // false idle, false when no runner is connected). Deliberately NOT the
-  // pane `busy` flag — busy also trips on pty output activity, so a worker
-  // whose terminal streams (dev-server logs) would read busy forever.
+  // pane's `status`/`busy`, which is broader by design — it stays `working`
+  // while a background subagent outlives the turn that launched it, and on a
+  // runner-LESS pane it tracks raw pty output. This is the narrow "is a turn
+  // in flight right now" that `muxpad agent wait` needs.
   const turnActive = (paneId: string): boolean => deps.agentBridge?.turnActive(paneId) === true;
 
-  app.get('/', (c) =>
-    c.json(store.list().map((s) => ({ ...s, turn_active: turnActive(s.pane_id) }))),
-  );
+  // Every tracked session. `mode` is joined in from the PANE row (the source
+  // of truth for ⚡ do / 🧠 deep) rather than duplicated onto agent_sessions:
+  // the mode belongs to the pane and must survive a session being re-minted.
+  app.get('/', (c) => {
+    const panes = new PaneStore(deps.db);
+    return c.json(
+      store.list().map((s) => ({
+        ...s,
+        mode: panes.getById(s.pane_id)?.mode ?? 'deep',
+        turn_active: turnActive(s.pane_id),
+      })),
+    );
+  });
 
   // Last N normalized transcript events for a pane's session, as JSONL —
   // role/text/tool-use ChatEvents, whatever the backend. CLI consumers must

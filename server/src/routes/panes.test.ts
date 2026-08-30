@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { MuxpadEvent } from '@muxpad/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../events.js';
+import { PaneStore } from '../store/PaneStore.js';
 import { openDb } from '../store/db.js';
 import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
 
@@ -12,10 +13,12 @@ describe('panes routes', () => {
   let wsId: string;
   let tabId: string;
   let tmp: string;
+  let db: ReturnType<typeof openDb>;
 
   beforeEach(async () => {
     tmp = mkdtempSync(join(tmpdir(), 'muxpad-panes-'));
-    test = await createTestApp({ db: openDb(':memory:'), dataDir: tmp });
+    db = openDb(':memory:');
+    test = await createTestApp({ db, dataDir: tmp });
     // Bootstrap a workspace + tab to scope panes under.
     const ws = (await (
       await test.app.request('/api/workspaces', {
@@ -290,6 +293,29 @@ describe('panes routes', () => {
     expect(patchOk.status).toBe(200);
   });
 
+  it('a rejected PATCH commits NOTHING — not even the fields it liked', async () => {
+    // `{name, mode}` against a non-agent pane used to persist the rename and
+    // THEN 400 on the mode, so the caller saw a failure while half its patch
+    // had landed and no pane.updated told anyone. A PATCH is one edit.
+    const shell = (await (
+      await test.app.request(`/api/tabs/${tabId}/panes`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+        headers: { 'content-type': 'application/json' },
+      })
+    ).json()) as { id: string; name: string | null };
+    const res = await test.app.request(`/api/panes/${shell.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'renamed', mode: 'do' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(res.status).toBe(400);
+    const after = (await (await test.app.request(`/api/panes/${shell.id}`)).json()) as {
+      name: string | null;
+    };
+    expect(after.name).toBe(shell.name);
+  });
+
   it('PATCH flips shell → url, killing the PTY and updating the row', async () => {
     const created = (await (
       await test.app.request(`/api/tabs/${tabId}/panes`, {
@@ -450,6 +476,108 @@ describe('panes routes', () => {
     }
   });
 
+  it('PATCH /panes emits a DECORATED pane.updated — a face switch mid-turn keeps busy', async () => {
+    // D1: the PATCH route used to hand-build the event payload with only
+    // attention + app_urls. `busy` came back undefined, which the sidebar reads
+    // as "not working" — so face-switching a pane while its agent worked killed
+    // the spinner until the next busy EDGE (i.e. turn-done).
+    const events = new EventBus();
+    const local = await createTestApp({ db: openDb(':memory:'), dataDir: tmp, events });
+    try {
+      const ws = (await (
+        await local.app.request('/api/workspaces', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'W' }),
+        })
+      ).json()) as { id: string };
+      const t = (await (
+        await local.app.request('/api/tabs', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'T', workspace_id: ws.id }),
+        })
+      ).json()) as { id: string };
+      const created = (await (
+        await local.app.request(`/api/tabs/${t.id}/panes`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ startup_cmd: 'muxpad agent', face: 'chat' }),
+        })
+      ).json()) as { id: string };
+
+      // An agent turn is in flight on this pane.
+      local.cache.setAgentBusy(created.id, true);
+
+      const received: MuxpadEvent[] = [];
+      events.subscribe((e) => received.push(e));
+
+      // The single most common thing to do mid-turn: flip the pane's face.
+      const res = await local.app.request(`/api/panes/${created.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ face: 'terminal' }),
+      });
+      expect(res.status).toBe(200);
+
+      const updated = received.find((e) => e.type === 'pane.updated');
+      expect(updated).toBeDefined();
+      if (updated?.type === 'pane.updated') {
+        expect(updated.pane.busy).toBe(true);
+        expect(updated.pane.face).toBe('terminal');
+        // The rest of decoratePane's fields are present too (not undefined).
+        expect(updated.pane.attention).toBe(false);
+        expect(updated.pane.app_urls).toEqual([]);
+      }
+      // …and the response body agrees with the event.
+      expect(((await res.json()) as { busy?: boolean }).busy).toBe(true);
+    } finally {
+      await local.cleanup();
+    }
+  });
+
+  it("a per-pane seen clears the TAB's manual unread once nothing is unread (D12)", async () => {
+    // `unread` was unclearable from mobile: mobile marks the ACTIVE PANE seen
+    // (so its siblings keep flagging in the pane list), and that route never
+    // touched the tab's own manual mark — so a "Mark as unread" from the sheet
+    // ⋯ menu survived until you next opened the tab on a desktop.
+    const a = (await (
+      await test.app.request(`/api/tabs/${tabId}/panes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      })
+    ).json()) as { id: string };
+    const b = (await (
+      await test.app.request(`/api/tabs/${tabId}/panes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      })
+    ).json()) as { id: string };
+
+    const tabUnread = async () =>
+      (
+        (await (await test.app.request(`/api/tabs?workspaceId=${wsId}`)).json()) as Array<{
+          id: string;
+          unread?: boolean;
+        }>
+      ).find((t) => t.id === tabId)?.unread;
+
+    await test.app.request(`/api/tabs/${tabId}/unread`, { method: 'POST' });
+    expect(await tabUnread()).toBe(true);
+
+    // Seeing one pane is not enough while another pane is still unread…
+    const panesStore = new PaneStore(db);
+    panesStore.setUnread(b.id, true);
+    await test.app.request(`/api/panes/${a.id}/seen`, { method: 'POST' });
+    expect(await tabUnread()).toBe(true);
+
+    // …seeing the last one clears the tab mark too.
+    await test.app.request(`/api/panes/${b.id}/seen`, { method: 'POST' });
+    expect(await tabUnread()).toBe(false);
+  });
+
   // ── pane move (POST /api/panes/:id/move) ──────────────────────────────
 
   /** Make a pane in `tab`, returning its id. */
@@ -578,6 +706,72 @@ describe('panes routes', () => {
     expect(body.from_workspace_id).toBe(wsId);
     expect(body.from_tab_removed).toBe(true); // `a` was the source's only pane
     expect(await getLayout(foreignTab)).toBe(a);
+  });
+
+  it('new_tab lands in to_workspace_id — the drag-a-pane-onto-a-workspace drop', async () => {
+    const a = await makePane(tabId);
+    const b = await makePane(tabId);
+    await setLayout(tabId, { direction: 'row', first: a, second: b });
+    const otherWs = (await (
+      await test.app.request('/api/workspaces', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Elsewhere' }),
+      })
+    ).json()) as { id: string };
+
+    const res = await move(a, { new_tab: true, to_workspace_id: otherWs.id });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      to_tab: { id: string };
+      from_workspace_id: string;
+      from_tab_removed: boolean;
+    };
+    expect(body.from_workspace_id).toBe(wsId);
+    expect(body.from_tab_removed).toBe(false); // b is still there
+    expect(await getLayout(body.to_tab.id)).toBe(a);
+    expect(await getLayout(tabId)).toBe(b);
+    // The new tab belongs to the DESTINATION workspace, and only to it.
+    const there = (await (
+      await test.app.request(`/api/tabs?workspaceId=${otherWs.id}`)
+    ).json()) as { id: string }[];
+    expect(there.map((t) => t.id)).toContain(body.to_tab.id);
+    const here = (await (await test.app.request(`/api/tabs?workspaceId=${wsId}`)).json()) as {
+      id: string;
+    }[];
+    expect(here.map((t) => t.id)).not.toContain(body.to_tab.id);
+  });
+
+  it('a SOLE pane may still be dropped on another workspace (not identity churn)', async () => {
+    // Extracting a tab's only pane into a new tab in the SAME workspace is
+    // refused as churn; sending it to another workspace is a real move, so
+    // the source tab dissolves and the pane arrives with a tab of its own.
+    const only = await makePane(tabId);
+    await setLayout(tabId, only);
+    const otherWs = (await (
+      await test.app.request('/api/workspaces', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Elsewhere' }),
+      })
+    ).json()) as { id: string };
+
+    const res = await move(only, { new_tab: true, to_workspace_id: otherWs.id });
+    const body = (await res.json()) as { to_tab: { id: string }; from_tab_removed: boolean };
+    expect(body.to_tab.id).not.toBe(tabId);
+    expect(body.from_tab_removed).toBe(true);
+    expect((await test.app.request(`/api/tabs/${tabId}`)).status).toBe(404);
+    expect(await getLayout(body.to_tab.id)).toBe(only);
+  });
+
+  it('rejects new_tab into a workspace that does not exist', async () => {
+    const a = await makePane(tabId);
+    const b = await makePane(tabId);
+    await setLayout(tabId, { direction: 'row', first: a, second: b });
+    const res = await move(a, { new_tab: true, to_workspace_id: 'nope' });
+    expect(res.status).toBe(404);
+    // Nothing moved.
+    expect(await getLayout(tabId)).toMatchObject({ direction: 'row', first: a, second: b });
   });
 
   it('move emits dest pane.added + source pane.removed', async () => {

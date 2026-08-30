@@ -1,7 +1,7 @@
-import type Database from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
-import { monotonicFactory } from 'ulid';
 import { type LayoutNode, type Tab, randomTabIcon } from '@muxpad/shared';
+import type Database from 'better-sqlite3';
+import { monotonicFactory } from 'ulid';
 
 const ulid = monotonicFactory();
 
@@ -27,6 +27,8 @@ interface TabRow {
   layout: string;
   view_mode: string;
   workspace_id: string;
+  pinned: number;
+  last_activity_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -48,9 +50,7 @@ export class TabStore {
     const maxPos =
       (
         this.db
-          .prepare(
-            'SELECT COALESCE(MAX(position), -1) AS m FROM tabs WHERE workspace_id = ?',
-          )
+          .prepare('SELECT COALESCE(MAX(position), -1) AS m FROM tabs WHERE workspace_id = ?')
           .get(input.workspace_id) as { m: number } | undefined
       )?.m ?? -1;
     // NEW tabs default to the tabbed presentation: a tab is primarily "one
@@ -62,7 +62,7 @@ export class TabStore {
     const view_mode = 'tabbed' as const;
     this.db
       .prepare(
-        'INSERT INTO tabs (id, slug, name, icon, layout, workspace_id, view_mode, created_at, updated_at, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO tabs (id, slug, name, icon, layout, workspace_id, view_mode, created_at, updated_at, position, last_activity_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         id,
@@ -75,6 +75,7 @@ export class TabStore {
         now,
         now,
         maxPos + 1,
+        now,
       );
     return {
       id,
@@ -83,12 +84,23 @@ export class TabStore {
       icon,
       layout: input.layout,
       view_mode,
+      pinned: false,
+      // A brand-new tab has had nothing happen in it yet — but it IS the most
+      // recent thing the user did, and sorting it last (null = never) would
+      // bury a just-created tab at the bottom of its workspace. Stamp it.
+      last_activity_at: now,
       created_at: now,
       updated_at: now,
     };
   }
 
-  /** Replace tab ordering across the listed ids within a workspace. */
+  /**
+   * Replace tab ordering across the listed ids within a workspace. Only the
+   * PINNED block is manually ordered in the sidebar (unpinned tabs are
+   * auto-sorted at read time), so in practice `ids` is the pinned set — but
+   * `position` is still written for every id passed, and remains the final
+   * deterministic tiebreak for unpinned tabs.
+   */
   reorder(ids: string[]): void {
     const update = this.db.prepare('UPDATE tabs SET position = ? WHERE id = ?');
     this.db.transaction(() => {
@@ -117,9 +129,9 @@ export class TabStore {
    * events. Returns undefined for an unknown id.
    */
   getWorkspaceId(id: string): string | undefined {
-    const row = this.db
-      .prepare('SELECT workspace_id FROM tabs WHERE id = ?')
-      .get(id) as { workspace_id: string } | undefined;
+    const row = this.db.prepare('SELECT workspace_id FROM tabs WHERE id = ?').get(id) as
+      | { workspace_id: string }
+      | undefined;
     return row?.workspace_id;
   }
 
@@ -217,6 +229,20 @@ export class TabStore {
   }
 
   /**
+   * Is this ONE tab manually flagged unread? A dedicated read because `row()`
+   * deliberately doesn't hydrate the flag onto `Tab` (the list routes compute
+   * the rolled-up `unread` themselves, and a half-populated field on getById
+   * would be a trap — it silently reads `undefined`, which is exactly how the
+   * per-pane /seen route's tab-clearing check failed the first time).
+   */
+  isUnread(id: string): boolean {
+    const row = this.db.prepare('SELECT unread FROM tabs WHERE id = ?').get(id) as
+      | { unread: number }
+      | undefined;
+    return !!row?.unread;
+  }
+
+  /**
    * Ids of the tabs in a workspace currently flagged unread, as one query
    * so the list/rollup routes can fold the flag without an N+1 of reads.
    */
@@ -225,6 +251,29 @@ export class TabStore {
       .prepare('SELECT id FROM tabs WHERE workspace_id = ? AND unread = 1')
       .all(workspaceId) as { id: string }[];
     return new Set(rows.map((r) => r.id));
+  }
+
+  /**
+   * Pin (or unpin) a tab. Pinned tabs hold the top of their workspace's
+   * sidebar block in the user's manual drag order; unpinned tabs below the
+   * divider are auto-sorted by blocked/attention → recency (busy was dropped
+   * from the sort: a working tab is not more urgent than a recent one, and
+   * churning the order under a spinner made the list unreadable). Pinning is
+   * therefore the way to opt a tab OUT of the shuffling. Best-effort: a
+   * missing id is a silent no-op (same contract as setUnread).
+   */
+  setPinned(id: string, pinned: boolean): void {
+    this.db.prepare('UPDATE tabs SET pinned = ? WHERE id = ?').run(pinned ? 1 : 0, id);
+  }
+
+  /**
+   * Stamp the tab's last-activity time. Deliberately NOT touching
+   * `updated_at`: that tracks structural edits (name/layout/icon) and clients
+   * key cache invalidation off it — an every-minute pty bump would churn it.
+   * Callers throttle (see tab-activity.ts); this is the raw write.
+   */
+  touchActivity(id: string, at: number = Date.now()): void {
+    this.db.prepare('UPDATE tabs SET last_activity_at = ? WHERE id = ?').run(at, id);
   }
 
   private row(r: unknown): Tab | null {
@@ -237,6 +286,10 @@ export class TabStore {
       ...(x.icon ? { icon: x.icon } : {}),
       layout: JSON.parse(x.layout),
       view_mode: x.view_mode === 'tabbed' ? 'tabbed' : 'split',
+      pinned: !!x.pinned,
+      // Null (never observed) is a real state and stays null — see the
+      // migration note; the ordering sinks nulls rather than faking a time.
+      last_activity_at: x.last_activity_at ?? null,
       created_at: x.created_at,
       updated_at: x.updated_at,
     };

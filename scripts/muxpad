@@ -746,8 +746,10 @@ cmd_workspace_list() {
   res="$(http_request GET /api/workspaces)"
   print_table "$res" \
     'ID:.id' \
-    'NAME:.name' \
-    'TABS:.tab_count'
+    'STATUS:(.status // "idle")' \
+    'AGENTS:(.agents // 0)' \
+    'TABS:.tab_count' \
+    'NAME:.name'
 }
 
 cmd_workspace_delete() {
@@ -820,8 +822,14 @@ cmd_tab_list() {
   fi
   local res
   res="$(http_request GET "/api/tabs?workspaceId=$workspace_id")"
+  # STATUS/AGENTS/PIN are what the living sidebar shows; the CLI listed only
+  # id + name, so a scripted or terminal-only view of a workspace could not
+  # tell a tab waiting on an answer from an empty one.
   print_table "$res" \
     'ID:.id' \
+    'PIN:(if .pinned then "*" else "" end)' \
+    'STATUS:(.status // (if .busy then "working" else "idle" end))' \
+    'AGENTS:(.agents // 0)' \
     'NAME:.name'
 }
 
@@ -862,7 +870,7 @@ cmd_tab() {
 
 # ─── pane ───────────────────────────────────────────────────────────────────
 
-# Refuse to DEFAULT new panes into the hidden system tab (the CEO's home):
+# Refuse to DEFAULT new panes into a hidden system tab:
 # its layout is never shown in any sidebar, so a pane grafted there silently
 # vanishes. Fires only when --tab came from the MUXPAD_TAB_ID env default —
 # an explicit --tab is always honored. The check keys on the sibling
@@ -962,7 +970,15 @@ cmd_pane_rename() {
 cmd_pane_list() {
   # --all: flat list of every pane across all workspaces (the supervisor's
   # "org chart"), one line each:
-  #   <pane-id>  <ws>/<tab>  <face>  <busy|idle>  <title|foreground_cmd>
+  #   <pane-id>  <ws>/<tab>  <face>  <status>  <title|foreground_cmd>
+  #
+  # <status> is the pane's FULL five-state status (blocked|working|dead|done|
+  # idle), not the old busy/idle pair. `busy` is a deprecated alias for exactly
+  # one of those five (working), so printing it collapsed "waiting on you",
+  # "the runner died" and "finished, unreviewed" all into "idle" — the three
+  # states a supervisor most needs to see. The `// (if .busy …)` fallback is for
+  # an older server that ships `busy` but no `status`: its working panes still
+  # read "working", everything else "idle".
   local a rest=()
   local all=0
   for a in "$@"; do
@@ -978,8 +994,15 @@ cmd_pane_list() {
       printf '%s\n' "$res"
       return
     fi
+    # Match print_table's empty-result behaviour — this branch hand-rolls its
+    # output (one line per pane, no columns) and used to print nothing at all,
+    # which reads as "the command broke" rather than "no panes".
+    if [ "$(printf '%s' "$res" | jq 'length')" = "0" ]; then
+      printf '%s(none)%s\n' "$C_DIM" "$C_RESET"
+      return
+    fi
     printf '%s' "$res" | jq -r '.[] |
-      "\(.id)  \(.workspace_name)/\(.tab_name)  \(.face)  \(if .busy then "busy" else "idle" end)  \(.name // .title // .foreground_cmd // .url // "")"'
+      "\(.id)  \(.workspace_name)/\(.tab_name)  \(.face)  \(.status // (if .busy then "working" else "idle" end))  \(.name // .title // .foreground_cmd // .url // "")"'
     return
   fi
   set -- ${rest[@]+"${rest[@]}"}
@@ -1431,8 +1454,28 @@ cmd_claude() {
   # --append-system-prompt — works for the interactive TUI too. Skipped when
   # the user passed any system-prompt flag of their own, or when the file is
   # missing/empty (never an error).
-  if [ "$user_has_sysprompt" = "0" ] && [ -s "$DATA_DIR/agent-instructions.md" ]; then
-    extra+=(--append-system-prompt "$(cat "$DATA_DIR/agent-instructions.md")")
+  #
+  # ⚡ Do mode rides the SAME flag, appended after the instructions (behavior
+  # last, matching the SDK backend's append order). The pane's mode is read
+  # from the API with a tolerant grep — jq is NOT required for `muxpad claude`
+  # and adding a hard dependency here would break launching the TUI on a box
+  # without it. Every step is best-effort: a down server, an old server with
+  # no `mode` field, or a missing file all fall through to Deep, which is the
+  # historical behavior.
+  if [ "$user_has_sysprompt" = "0" ]; then
+    local sysprompt=""
+    [ -s "$DATA_DIR/agent-instructions.md" ] && sysprompt="$(cat "$DATA_DIR/agent-instructions.md")"
+    if [ -s "$DATA_DIR/do-mode.md" ] && [ -n "${MUXPAD_API_URL:-}" ]; then
+      local pane_mode
+      pane_mode="$(curl -sS --max-time 3 \
+        "${MUXPAD_API_URL%/}/api/panes/$MUXPAD_PANE_ID" 2>/dev/null \
+        | grep -o '"mode"[[:space:]]*:[[:space:]]*"[a-z]*"' \
+        | head -1 | grep -o '[a-z]*"$' | tr -d '"')" || pane_mode=""
+      if [ "$pane_mode" = "do" ]; then
+        sysprompt="${sysprompt:+$sysprompt$'\n\n'}$(cat "$DATA_DIR/do-mode.md")"
+      fi
+    fi
+    [ -n "$sysprompt" ] && extra+=(--append-system-prompt "$sysprompt")
   fi
 
   # Pre-register (best-effort; the launch must succeed even if the daemon is
@@ -1470,13 +1513,21 @@ cmd_claude() {
 # processing immediately, and prints the tab's URL. The runner needs a couple
 # of seconds to boot inside the fresh pane, so the send polls until accepted.
 cmd_agent_new() {
-  reset_flags workspace cwd name model
-  parse_flags workspace cwd name model -- "$@"
+  reset_flags workspace cwd name model mode
+  parse_flags workspace cwd name model mode -- "$@"
   local message="${POSITIONAL[0]:-}"
   if [ -z "$message" ]; then
-    echo 'usage: muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] "first message"' >&2
+    echo 'usage: muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] [--mode=do|deep] "first message"' >&2
     exit 1
   fi
+  # Agent behavior mode (see agent-modes.ts): 'do' overlays the terse,
+  # decisive contract; 'deep' (the default) is muxpad's historical behavior.
+  # Validated HERE as well as server-side so a typo fails loudly instead of
+  # silently spawning a deep-mode worker you asked to be fast.
+  case "${FLAG_mode:-deep}" in
+    do|deep) ;;
+    *) echo "muxpad: --mode must be 'do' or 'deep' (got '$FLAG_mode')" >&2; exit 1 ;;
+  esac
   local workspace_id="${FLAG_workspace:-}"
   if [ -z "$workspace_id" ]; then
     workspace_id="${MUXPAD_WORKSPACE_ID:-}"
@@ -1484,9 +1535,9 @@ cmd_agent_new() {
       echo "muxpad: --workspace=<id> required (no MUXPAD_WORKSPACE_ID in env)" >&2
       exit 1
     fi
-    # The CEO pane (and anything else living in the hidden system workspace)
-    # inherits a hidden MUXPAD_WORKSPACE_ID — a worker spawned there would be
-    # an invisible tab no sidebar ever shows. Only the CLI knows the id was a
+    # A pane living in a hidden system workspace inherits a hidden
+    # MUXPAD_WORKSPACE_ID — a worker spawned there would be an invisible tab
+    # no sidebar ever shows. Only the CLI knows the id was a
     # defaulted env value rather than an explicit --workspace, so the
     # fallback lives here, not on the server: delegation must just work,
     # while explicit targeting (even of a hidden workspace) stays untouched.
@@ -1512,6 +1563,8 @@ cmd_agent_new() {
   # Model rides the pane's startup command (`muxpad agent --model <m>`), so it
   # also survives ptyd restarts / resumes. Server-validated charset.
   [ -n "${FLAG_model:-}" ] && body+=",\"model\":$(json_string "$FLAG_model")"
+  # Mode rides the pane row AND its startup command, so a respawn keeps it.
+  [ -n "${FLAG_mode:-}" ] && body+=",\"mode\":$(json_string "$FLAG_mode")"
   body+='}'
   local tab_json tab_id tab_slug
   tab_json="$(http_request POST /api/tabs "$body")"
@@ -1566,10 +1619,16 @@ cmd_agent_new() {
 cmd_agent_list() {
   local res
   res="$(http_request GET /api/agent-sessions)"
+  # TURN, not STATUS. `agent_sessions.status` is running|idle — the session's
+  # TURN state — and is a different vocabulary from the pane/tab/workspace
+  # `status` (blocked|working|dead|done|idle) the other list commands print.
+  # Two meanings under one column header is how a supervisor misreads its own
+  # org chart, so the narrower one gets the narrower name.
   print_table "$res" \
     'PANE:.pane_id' \
     'BACKEND:.assistant' \
-    'STATUS:.status' \
+    'MODE:(.mode // "deep")' \
+    'TURN:.status' \
     'VIEW:.view_mode' \
     'SID:(.current_sid // "-")'
 }
@@ -2009,11 +2068,11 @@ daemon control:
 
 HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
   workspace new [--name=<name>]
-  workspace list
+  workspace list                              id, status, agents, tab count, name
   workspace delete <id>
 
   tab new       [--workspace=<id>] [--name=<name>] [--bootstrap=shell|agent] [--cwd=<dir>]
-  tab list      [--workspace=<id>]
+  tab list      [--workspace=<id>]            id, pin, status, agents, name
   tab delete    <id>
 
   pane new      [--tab=<id>] [--cmd=<cmd>] [--cwd=<cwd>] [--name=<name>]
@@ -2028,7 +2087,7 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                               iframe pane, same placement rules
   pane list     [--tab=<id>] | --all          --all: every pane across all
                                               workspaces, one line each:
-                                              <id> <ws>/<tab> <face> <busy|idle> <title>
+                                              <id> <ws>/<tab> <face> <status> <title>
   pane read     [<id>] [--lines=N] [--raw]    print a terminal pane's scrollback,
                                               ANSI-stripped (grep-able); --raw
                                               keeps escapes, --lines trims to the
@@ -2082,16 +2141,21 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      log. Auto-resumes across ptyd restarts via
                                      the pane's saved startup command.
   agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>]
-            [--model=<model>] "message"
+            [--model=<model>] [--mode=do|deep] "message"
                                      create an agent tab, send the first
                                      message so it starts working immediately,
                                      and print the tab's URL. cwd defaults to
                                      $PWD; workspace to MUXPAD_WORKSPACE_ID.
                                      --name labels the tab (skips AI auto-
                                      rename); --model pins the session model
-                                     (e.g. 'claude-opus-4-8[1m]').
+                                     (e.g. 'claude-opus-4-8[1m]'); --mode=do
+                                     starts it in Do mode (decisive, terse,
+                                     result-first) instead of the Deep default.
   agent list                         every tracked agent session (pane id,
-                                     backend, status, view, session id)
+                                     backend, mode, TURN, view, session id).
+                                     TURN is the session's running|idle turn
+                                     state — NOT the five-state pane/tab
+                                     `status` the list commands above print.
   agent send <paneId> "message"      deliver a message to a pane's agent via
                                      the server queue. exit 0 = sent/queued
                                      (queued noted on stderr), 1 = rejected

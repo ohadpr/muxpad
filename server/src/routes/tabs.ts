@@ -1,18 +1,25 @@
-import { LayoutNodeSchema, appendLeafToLayout, collectLayoutLeaves } from '@muxpad/shared';
+import type { Tab } from '@muxpad/shared';
+import {
+  AgentModeSchema,
+  LayoutNodeSchema,
+  appendLeafToLayout,
+  collectLayoutLeaves,
+  rollupStatus,
+} from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { ceoLocation } from '../ceo.js';
 import type { EventBus } from '../events.js';
 import { queuePaneKill } from '../pane-reaper.js';
 import { agentCwd, hasProjectContext } from '../project-root.js';
-import { type PtydCache, decoratePane } from '../ptyd-cache.js';
+import { type PtydCache, decoratePane, decorateTab } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { randomWorkspaceName } from '../random-name.js';
 import { safeCwd } from '../safe-cwd.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { pruneDeadPanes } from '../store/migrations.js';
+import { type TabActivity, compareUnpinnedTabs } from '../tab-activity.js';
 
 /**
  * CRUD for tabs (the things in the tab bar). Each tab belongs to a
@@ -23,6 +30,8 @@ export function tabsRoutes(deps: {
   ptyd: PtydClient;
   cache: PtydCache;
   events: EventBus;
+  /** Only used to drop a deleted tab's throttle memo — see TabActivity.forget. */
+  tabActivity?: TabActivity;
 }): Hono {
   const app = new Hono();
   const tabs = new TabStore(deps.db);
@@ -54,6 +63,11 @@ export function tabsRoutes(deps: {
         // Allowlisted enum → safe to bake into the startup_cmd shell string.
         // 'pick' = created pending, harness chosen later in the chat page.
         backend: z.enum(['claude', 'codex', 'cursor', 'pick']).optional(),
+        // Agent behavior mode for an 'agent' bootstrap (⚡ do / 🧠 deep;
+        // default deep = today's behavior). Rides the pane row AND the
+        // startup_cmd, so it survives respawns. Allowlisted enum → safe to
+        // bake into the shell string.
+        mode: AgentModeSchema.optional(),
       })
       .parse(await c.req.json().catch(() => ({})));
     // Agent tabs get a deliberate name + mark (auto-renamed to the session's
@@ -72,6 +86,10 @@ export function tabsRoutes(deps: {
       });
       if (!body.bootstrap) return { tab, pane: null };
       const agent = body.bootstrap === 'agent';
+      // 'deep' is the absence of the flag (never churn the historical command
+      // shape); the flag sits after --backend, matching the ws self-heal
+      // rewrite so a reconnect isn't misread as a new runner.
+      const modeFlag = agent && body.mode === 'do' ? ' --mode do' : '';
       const pane = panes.create({
         tab_id: tab.id,
         shell: process.env.SHELL ?? '/bin/zsh',
@@ -82,22 +100,39 @@ export function tabsRoutes(deps: {
         // quoting safe. Claude stays implicit (no --backend) so its cmd is
         // unchanged; codex/cursor get an explicit, allowlisted flag.
         startup_cmd: agent
-          ? body.backend === 'pick'
+          ? // A PENDING pane keeps the exact literal `muxpad agent --pick`:
+            // several call sites (the harness-choice routes' 409 gate, the
+            // dead-runner sweep's skip) compare against it verbatim. The mode
+            // lives on the pane ROW regardless, and the /agent-backend route
+            // re-applies it to the command when the harness is chosen.
+            body.backend === 'pick'
             ? 'muxpad agent --pick'
-            : `muxpad agent${body.backend && body.backend !== 'claude' ? ` --backend ${body.backend}` : ''}${body.model ? ` --model '${body.model}'` : ''}`
+            : `muxpad agent${body.backend && body.backend !== 'claude' ? ` --backend ${body.backend}` : ''}${modeFlag}${body.model ? ` --model '${body.model}'` : ''}`
           : null,
         // Agent tabs land directly on the chat face; the (hidden) terminal
         // face spawns the pty underneath, which runs the startup command.
         face: agent ? 'chat' : 'terminal',
+        ...(agent && body.mode ? { mode: body.mode } : {}),
       });
       tab = tabs.update(tab.id, { layout: pane.id }) ?? tab;
       return { tab, pane };
     })();
     const t = created.tab;
     const bootstrappedPane = created.pane;
-    deps.events.emit({ type: 'tab.added', workspace_id: body.workspace_id, tab: t });
+    deps.events.emit({
+      type: 'tab.added',
+      workspace_id: body.workspace_id,
+      tab: decorateTab(deps.cache, deps.db, t),
+    });
     if (bootstrappedPane) {
-      deps.events.emit({ type: 'pane.added', tab_id: t.id, pane: bootstrappedPane });
+      // Through decoratePane like every other pane payload — a raw row's
+      // absent status/agents fields read as undefined on the client and blank
+      // the new pane's status rail until the next poll.
+      deps.events.emit({
+        type: 'pane.added',
+        tab_id: t.id,
+        pane: decoratePane(deps.cache, bootstrappedPane),
+      });
       // Eager spawn (same as the panes route): an agent tab created from a
       // phone starts its runner immediately, before any terminal view ever
       // attaches.
@@ -136,17 +171,27 @@ export function tabsRoutes(deps: {
     //     you weren't looking). DB-persisted.
     // Panes whose runtime isn't running (lazy-spawn, no client) contribute
     // false to attention/busy; their persisted `unread` still counts.
+    // decorateTab is the ONE place this composition lives (mirroring
+    // decoratePane) — every tab.updated / tab.added emitter routes through it
+    // too, so the list and the live events can't describe a tab differently.
     const manualUnreadIds = tabs.unreadIdsByWorkspace(workspaceId);
-    const decorated = list.map((t) => {
-      const tabPanes = panes.listByTab(t.id);
-      const attention = tabPanes.some((p) => deps.cache.getAttention(p.id));
-      const unread = manualUnreadIds.has(t.id) || tabPanes.some((p) => p.unread);
-      // Busy = any pane in the tab is actively producing output. Purely
-      // runtime (never persisted) and clears itself when the work goes quiet.
-      const busy = tabPanes.some((p) => deps.cache.getBusy(p.id));
-      return { ...t, attention, unread, busy };
-    });
-    return c.json(decorated);
+    const decorated = list.map((t) => decorateTab(deps.cache, deps.db, t, manualUnreadIds));
+    // ── The living sidebar's order ────────────────────────────────────────
+    // PINNED tabs first, in the user's manual drag order (`list` already
+    // arrives position-sorted, so a stable partition preserves it). Then the
+    // rest, auto-sorted: needs-attention → most recently active, with
+    // position and id as the final tiebreaks so the order is TOTAL and can't
+    // jitter between two renders of identical data.
+    //
+    // Sorting here rather than in the client means every consumer (web,
+    // sheet, CLI, a future surface) sees one authoritative order, and the
+    // recency/attention inputs never have to be re-derived.
+    const positions = new Map(list.map((t, i) => [t.id, i]));
+    const pinned = decorated.filter((t) => t.pinned);
+    const rest = decorated
+      .filter((t) => !t.pinned)
+      .sort((a, b) => compareUnpinnedTabs(a, b, positions));
+    return c.json([...pinned, ...rest]);
   });
 
   // Mark every pane in a tab as "seen". Called by the web client when
@@ -225,7 +270,7 @@ export function tabsRoutes(deps: {
   });
 
   app.patch('/:id', async (c) => {
-    const body = z
+    const parsed = z
       .object({
         name: z.string().optional(),
         slug: z.string().optional(),
@@ -235,30 +280,78 @@ export function tabsRoutes(deps: {
         // follows the user across devices (the emitted tab.updated syncs
         // other connected clients live).
         view_mode: z.enum(['split', 'tabbed']).optional(),
+        // Living sidebar: pin this tab to the top of its workspace block, in
+        // the manual drag order. Handled outside TabStore.update because it
+        // is a flag, not one of the row's structural fields (and must not
+        // bump updated_at semantics for the others).
+        pinned: z.boolean().optional(),
       })
-      .parse(await c.req.json());
-    try {
-      const t = tabs.update(c.req.param('id'), body);
-      deps.events.emit({ type: 'tab.updated', tab: t });
-      return c.json(t);
-    } catch {
+      // safeParse, not parse: a malformed body is the caller's fault (400),
+      // not a 500 from an uncaught ZodError escaping the handler.
+      .safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success)
+      return c.json(
+        {
+          error: {
+            code: 'bad_request',
+            message: parsed.error.issues[0]?.message ?? 'invalid body',
+          },
+        },
+        400,
+      );
+    const body = parsed.data;
+    const id = c.req.param('id');
+
+    // ── VALIDATE, THEN MUTATE, IN ONE TRANSACTION ───────────────────────────
+    // This used to pin (and reposition) the tab, then call tabs.update(), then
+    // report 404 from a bare catch if that threw. So `{pinned:true, slug:'…'}`
+    // with a bad slug persisted the pin AND the position change, emitted
+    // nothing, and told the caller the tab didn't exist. Existence is checked
+    // once up front, and both writes now commit or roll back together.
+    if (!tabs.getById(id))
       return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
+    const { pinned, ...rowPatch } = body;
+    let updated: Tab;
+    try {
+      updated = deps.db.transaction((): Tab => {
+        if (pinned !== undefined) {
+          tabs.setPinned(id, pinned);
+          // Newly pinned tabs land at the END of the pinned block: appending is
+          // the only placement that can't silently displace an order the user
+          // already arranged. They can drag from there.
+          if (pinned) {
+            const maxPos = deps.db
+              .prepare(
+                'SELECT COALESCE(MAX(position), -1) AS m FROM tabs WHERE workspace_id = (SELECT workspace_id FROM tabs WHERE id = ?) AND pinned = 1 AND id != ?',
+              )
+              .get(id, id) as { m: number } | undefined;
+            deps.db
+              .prepare('UPDATE tabs SET position = ? WHERE id = ?')
+              .run((maxPos?.m ?? -1) + 1, id);
+          }
+        }
+        // With an all-undefined patch `update` rewrites every column to its
+        // current value and DOES bump `updated_at` — so a pin/unpin counts as a
+        // structural edit. That's deliberate (pinning is an explicit user act,
+        // unlike the pty-driven `touchActivity`, which avoids updated_at
+        // precisely because it fires on its own). We call it either way to get
+        // a freshly-read Tab to emit and return.
+        return tabs.update(id, rowPatch);
+      })();
+    } catch (err) {
+      // The tab exists (checked above), so a throw here is the patch itself
+      // being rejected — a duplicate slug, most likely. Say that, instead of
+      // the old misleading 404.
+      return c.json({ error: { code: 'conflict', message: (err as Error).message } }, 409);
     }
+    deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, updated) });
+    return c.json(updated);
   });
 
   app.delete('/:id', async (c) => {
     const id = c.req.param('id');
     const t = tabs.getById(id);
     if (!t) return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
-    // A tab holding the CEO pane cannot be deleted — the delete would
-    // cascade-kill the server-owned singleton. See ceo.ts.
-    if (ceoLocation(deps.db)?.tabId === id)
-      return c.json(
-        {
-          error: { code: 'conflict', message: 'this tab holds the CEO pane and cannot be deleted' },
-        },
-        409,
-      );
     // TabStore.getById doesn't surface workspace_id (the shared Tab type
     // omits it). Pull it via the dedicated helper so the emitted event
     // carries the right workspace context for clients.
@@ -266,7 +359,8 @@ export function tabsRoutes(deps: {
     // ptyd holds runtime state; SQLite is the source of truth. If ptyd
     // is unreachable, the DB cascade must still proceed — ptyd has no
     // persistent state, so when it reconnects it doesn't need cleanup.
-    for (const p of panes.listByTab(id)) {
+    const doomed = panes.listByTab(id);
+    for (const p of doomed) {
       try {
         await deps.ptyd.killPane(p.id);
       } catch {
@@ -275,9 +369,20 @@ export function tabsRoutes(deps: {
         // confirmed gone (otherwise it would run forever, invisible).
         queuePaneKill(deps.db, p.id);
       }
-      deps.cache.forget(p.id);
     }
+    // Rows FIRST (the cascade), caches second: `cache.forget` fires
+    // 'paneRemoved', whose subscriber emits a `pane.updated` for any pane whose
+    // row still exists — forgetting first announced one update per pane of a
+    // tab that was about to vanish. Clients infer the pane removals from
+    // tab.removed below.
     tabs.delete(id);
+    for (const p of doomed) {
+      deps.cache.forget(p.id);
+      deps.tabActivity?.forgetPane(p.id);
+    }
+    // Drop the in-memory activity memos for the tab and its (cascade-deleted)
+    // panes so the maps stay bounded by what still exists.
+    deps.tabActivity?.forget(id);
     if (workspaceId) {
       // Clients infer the cascade-pane removals from tab.removed; we
       // intentionally do not emit per-pane events here.
@@ -314,7 +419,11 @@ export function tabsRoutes(deps: {
       );
     }
     deps.events.emit({ type: 'tab.removed', workspace_id: fromWorkspace, tab_id: id });
-    deps.events.emit({ type: 'tab.added', workspace_id: body.workspace_id, tab: updated });
+    deps.events.emit({
+      type: 'tab.added',
+      workspace_id: body.workspace_id,
+      tab: decorateTab(deps.cache, deps.db, updated),
+    });
     return c.json(updated);
   });
 
@@ -365,6 +474,7 @@ export function tabsRoutes(deps: {
       tabs.delete(id);
       return { finalDest: fd };
     })();
+    deps.tabActivity?.forget(id); // source tab is gone — drop its memo
 
     // Destination events first (same convention as the pane-move route): a
     // client viewing dest must have the panes before the layout referencing
@@ -378,7 +488,7 @@ export function tabsRoutes(deps: {
           pane: decoratePane(deps.cache, p),
         });
     }
-    deps.events.emit({ type: 'tab.updated', tab: finalDest });
+    deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, finalDest) });
     for (const pid of paneIds) {
       deps.events.emit({ type: 'pane.removed', tab_id: id, pane_id: pid });
     }
