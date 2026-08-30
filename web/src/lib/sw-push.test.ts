@@ -21,7 +21,8 @@ const SW_PATH = ['public/sw.js', 'web/public/sw.js']
 if (!SW_PATH) throw new Error('could not locate sw.js');
 const SW_SRC = readFileSync(SW_PATH, 'utf-8');
 
-const KEY = 'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U';
+const KEY =
+  'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U';
 
 interface Harness {
   handlers: Map<string, (e: unknown) => void>;

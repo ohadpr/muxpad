@@ -51,7 +51,7 @@ describe('rendering a fire in the transcript', () => {
     message: { role: 'user', content: text },
   });
 
-  it("splits a Claude transcript fire into a chip AND the prompt (not raw XML)", () => {
+  it('splits a Claude transcript fire into a chip AND the prompt (not raw XML)', () => {
     const events = normalizeTranscriptLine(claudeLine(renderCronMarker(MARKER, 'check my PRs')));
     expect(events).toHaveLength(2);
     expect(events[0]).toMatchObject({ kind: 'notice', variant: 'cron', text: 'pr-sweep' });

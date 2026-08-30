@@ -34,17 +34,12 @@ beforeAll(() => {
 });
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-const get = (path: string, headers: Record<string, string> = {}) =>
-  app.request(path, { headers });
+const get = (path: string, headers: Record<string, string> = {}) => app.request(path, { headers });
 
 describe('cache policy', () => {
   it('pins content-hashed assets for a year and marks them immutable', () => {
-    expect(cachePolicy('/assets/index-abc123.js')).toBe(
-      'public, max-age=31536000, immutable',
-    );
-    expect(cachePolicy('/assets/mono-abc123.woff2')).toBe(
-      'public, max-age=31536000, immutable',
-    );
+    expect(cachePolicy('/assets/index-abc123.js')).toBe('public, max-age=31536000, immutable');
+    expect(cachePolicy('/assets/mono-abc123.woff2')).toBe('public, max-age=31536000, immutable');
   });
 
   it('never pins the documents that name the hashed assets', () => {
@@ -133,7 +128,8 @@ describe('serving', () => {
   it('keeps /api and /ws 404s machine-readable', async () => {
     const res = await get('/api/nope');
     expect(res.status).toBe(404);
-    expect((await res.json()).error.code).toBe('not_found');
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('not_found');
   });
 
   it('never lets a static path escape the web root', async () => {
