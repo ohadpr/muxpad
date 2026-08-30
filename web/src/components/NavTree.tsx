@@ -419,8 +419,45 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
         >
           {creatingWs ? 'Creating…' : '+ New workspace'}
         </button>
+        {/* Hosted lives BELOW the tree, past a hairline, because it is not part
+            of it: apps and artifacts belong to no workspace and occupy no tab —
+            that is the whole point. Rendered in both variants, so the mobile
+            sheet reaches it too. */}
+        <div className="navtree-foot">
+          <Link
+            className="navtree-foot-link"
+            to="/hosted"
+            activeProps={{ 'data-active': 'true' }}
+            onClick={() => onNavigate?.()}
+          >
+            <SvgHosted />
+            <span className="navtree-name-text">Hosted</span>
+          </Link>
+        </div>
       </div>
     </nav>
+  );
+}
+
+/** Stacked layers — "things I have put somewhere and can point a browser at".
+ *  Same 1.5px lucide-ish geometry as the rest of the nav's glyphs. */
+function SvgHosted() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 3 2 8l10 5 10-5-10-5z" />
+      <path d="M2 16l10 5 10-5" />
+      <path d="M2 12l10 5 10-5" />
+    </svg>
   );
 }
 
