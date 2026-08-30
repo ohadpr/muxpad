@@ -45,6 +45,23 @@ export const PUSH_TARGET_TTL_MS = 120_000;
 export const PUSH_CACHE = 'muxpad-push-v1';
 export const TARGET_CACHE_URL = '/__muxpad/push-target';
 
+/**
+ * May THIS window act on a notification tap?
+ *
+ * A pane popout (`/p/<id>`) and the doc surface are chromeless, single-purpose
+ * windows; routing one to a workspace deep link renders the entire app inside a
+ * window whose whole point was one pane, and leaves the app window the user
+ * meant untouched. The service worker already refuses to postMessage them
+ * (pickClient in sw.js) — but the Cache Storage dead-drop has no addressee at
+ * all: it is one global slot, and whichever window comes forward first drains
+ * and DELETES it. Without this check the doc window quietly eats taps meant for
+ * the app. Mirrors `isSecondaryWindow` in sw.js, which can't be imported (that
+ * file ships outside the bundle).
+ */
+export function windowMayRoutePushTargets(pathname: string): boolean {
+  return !(pathname.startsWith('/p/') || pathname === '/doc' || pathname.startsWith('/doc/'));
+}
+
 /** Validate an untrusted target (SW message payload / cache entry). */
 export function parsePushTarget(raw: unknown): PushTarget | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -223,9 +240,16 @@ export function createPushTargetSink(deps: PushTargetDeps): PushTargetSink {
       if (open) return applyPushTarget(target, deps) ? 'applied' : 'duplicate';
       if (alreadyApplied(target.id)) return 'duplicate';
       if (queued && queued.id !== target.id) {
-        // Superseded. Burn its id so the dead-drop / postMessage twin of the
-        // same tap can't apply it after the newer one has landed.
-        markApplied(queued.id);
+        // Newest wins, by the tap's own CLOCK — not by which channel got here
+        // first. The two channels race by design (the dead-drop is written
+        // before the postMessage but read whenever the app comes forward), so
+        // arrival order regularly inverts. Burn the loser's id so its twin on
+        // the other channel can't apply it a moment later.
+        const loser = target.ts < queued.ts ? target : queued;
+        const winner = loser === target ? queued : target;
+        markApplied(loser.id);
+        queued = winner;
+        return loser === target ? 'duplicate' : 'held';
       }
       queued = target;
       return 'held';
@@ -234,7 +258,16 @@ export function createPushTargetSink(deps: PushTargetDeps): PushTargetSink {
       open = true;
       const t = queued;
       queued = null;
-      if (t) applyPushTarget(t, deps);
+      if (!t) return;
+      try {
+        applyPushTarget(t, deps);
+      } catch (err) {
+        // This runs inside a React effect with no error boundary above it, so
+        // a throw here would unmount the whole app — trading one lost tap for
+        // a blank screen. `deliver` is guarded by its caller for the same
+        // reason; `ready` has no caller that can.
+        console.error('push-navigate failed', err);
+      }
     },
     held: () => queued,
   };
@@ -253,8 +286,11 @@ export async function takeStoredPushTarget(now = Date.now()): Promise<PushTarget
     const cache = await caches.open(PUSH_CACHE);
     const hit = await cache.match(TARGET_CACHE_URL);
     if (!hit) return null;
-    await cache.delete(TARGET_CACHE_URL);
+    // READ before DELETE. Deleting first meant a body that failed to parse took
+    // the tap with it; leaving the entry when we couldn't read it costs nothing
+    // (it is TTL-guarded and applied-once) and lets the next drain retry.
     const parsed = parsePushTarget(await hit.json());
+    await cache.delete(TARGET_CACHE_URL);
     if (!parsed || !isFresh(parsed, now)) return null;
     return parsed;
   } catch {
@@ -262,11 +298,23 @@ export async function takeStoredPushTarget(now = Date.now()): Promise<PushTarget
   }
 }
 
-/** Drop the dead-drop without reading it (the message channel got there first). */
-export async function clearStoredPushTarget(): Promise<void> {
+/**
+ * Retire the dead-drop for ONE tap (the message channel got there first).
+ *
+ * Scoped to the id on purpose. An unconditional delete raced the service
+ * worker: this call is fire-and-forget, so the delete for tap N could land
+ * after the worker had already written tap N+1, silently discarding the newer
+ * tap — the one the user is waiting on.
+ */
+export async function clearStoredPushTarget(id: string): Promise<void> {
   if (typeof caches === 'undefined') return;
   try {
-    await (await caches.open(PUSH_CACHE)).delete(TARGET_CACHE_URL);
+    const cache = await caches.open(PUSH_CACHE);
+    const hit = await cache.match(TARGET_CACHE_URL);
+    if (!hit) return;
+    const parsed = parsePushTarget(await hit.json());
+    if (parsed && parsed.id !== id) return; // a newer tap owns the slot now
+    await cache.delete(TARGET_CACHE_URL);
   } catch {
     // best effort — a stale entry is TTL-guarded and applied-once anyway
   }

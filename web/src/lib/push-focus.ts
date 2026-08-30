@@ -14,12 +14,13 @@ let pending: { tabId: string; paneId: string; at: number } | null = null;
  *
  * It is only ever consumed by the ONE tab it names, and there is no guarantee
  * that tab is ever rendered: a tap whose target tab was deleted from another
- * device, or a deep link into a workspace the navigator refuses to show,
- * leaves the slot loaded indefinitely. Weeks later, opening that tab for
- * ordinary reasons would silently yank the view to a pane the user last heard
- * about in a notification they've long forgotten. A tap is consumed within a
- * second or two of arriving, so anything past this window is stale by
- * definition. Matches PUSH_TARGET_TTL_MS — same event, same expiry.
+ * device leaves the slot loaded indefinitely, and it then fires on some
+ * unrelated later visit — this store FORCES the active pane, overriding both
+ * the URL and what the user last had open. (The tap also writes last-visited,
+ * which has no expiry; that one is a soft default the user's next pane switch
+ * overwrites, so it needs none.) A tap is consumed within a second or two of
+ * arriving, so anything past this window is stale by definition. Matches
+ * PUSH_TARGET_TTL_MS — same event, same expiry.
  */
 export const PUSH_FOCUS_TTL_MS = 120_000;
 
