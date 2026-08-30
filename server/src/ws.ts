@@ -934,6 +934,10 @@ export function attachWsServer(deps: {
             // is a bound, never a policy: it drops the OLDEST insertion, so a
             // leak can no longer render an absurd number in the status rail.
             const evicted = evictOverflowEntries(conn.subagents);
+            // An eviction must LOOK like an end to every client, or the rows
+            // linger until the next 10s session poll happens to notice.
+            for (const id of evicted)
+              bcast({ t: 'subagent', progress: { toolUseId: id, steps: 0, done: true } });
             // Loud, but once a minute per pane: a leaking runner sends one of
             // these per frame, and the log must stay readable.
             if (evicted.length > 0 && Date.now() - conn.lastOverflowWarnAt > OVERFLOW_WARN_MS) {

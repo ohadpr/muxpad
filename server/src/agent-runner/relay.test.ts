@@ -808,18 +808,30 @@ describe('subagent roster count, end to end', () => {
     // …and the pane still reads `working` off the roster alone.
     expect(cache.getStatus(paneId, false)).toBe('working');
 
-    // ── 4. A second turn is ABORTED with one more outstanding. The runner
-    //      retires the whole roster (Stop kills its background children) —
-    //      the server must land on exactly zero, not on a residue.
+    // ── 4. A second turn is ABORTED with one more outstanding. Retirement is
+    //      the RUNNER's call, not the server's — a failed turn-done alone must
+    //      NOT clear the roster, because a run_in_background Task that is still
+    //      alive outlives a turn that merely errored. (Clearing here is the
+    //      known past regression that made background agents vanish.)
     runner.send(JSON.stringify({ t: 'turn-start' }));
     runner.send(launch('tu_5', 'worker 5'));
     await fromChat.next(
       (f) => f.t === 'subagent' && (f.progress as { toolUseId: string }).toolUseId === 'tu_5',
     );
     expect(cache.getSubagentCount(paneId)).toBe(4);
-    for (const id of ['tu_2', 'tu_3', 'tu_4', 'tu_5']) runner.send(finish(id));
     runner.send(JSON.stringify({ t: 'turn-done', ok: false, error: 'stopped' }));
     await fromChat.next((f) => f.t === 'turn-done' && f.ok === false);
+    expect(cache.getSubagentCount(paneId)).toBe(4);
+
+    //      …and when the runner's own retireAll arrives (a Stop DOES kill its
+    //      background children), the server lands on exactly zero.
+    for (const id of ['tu_2', 'tu_3', 'tu_4', 'tu_5']) runner.send(finish(id));
+    await fromChat.next(
+      (f) =>
+        f.t === 'subagent' &&
+        (f.progress as { done?: boolean }).done === true &&
+        (f.progress as { toolUseId: string }).toolUseId === 'tu_5',
+    );
     expect(cache.getSubagentCount(paneId)).toBe(0);
 
     // ── 5. A live agent, then the runner DISCONNECTS. Its subagents die with
@@ -873,6 +885,14 @@ describe('subagent roster count, end to end', () => {
         (f.progress as { toolUseId: string }).toolUseId === `tu_${MAX_PANE_SUBAGENTS + 19}`,
     );
     expect(cache.getSubagentCount(paneId)).toBe(MAX_PANE_SUBAGENTS);
+
+    // An eviction must look like an END to open clients, or the rows linger
+    // until the 10s session poll happens to re-push a fresh snapshot.
+    const evicted = fromChat.frames.filter(
+      (f) => f.t === 'subagent' && (f.progress as { done?: boolean }).done === true,
+    );
+    expect(evicted).toHaveLength(20);
+    expect((evicted[0]?.progress as { toolUseId: string }).toolUseId).toBe('tu_0');
 
     runner.close();
     chat.close();
