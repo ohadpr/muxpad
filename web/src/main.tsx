@@ -14,6 +14,7 @@ import {
   createPushTargetSink,
   parsePushTarget,
   takeStoredPushTarget,
+  windowMayRoutePushTargets,
 } from './lib/push-target';
 import { router } from './router';
 import { refreshTabs } from './tabs';
@@ -119,13 +120,23 @@ if (!selfEmbedded) {
     }
   }
 
+  // A chromeless single-purpose window (a pane popout, the doc surface) takes
+  // NO part in tap routing. The service worker already won't postMessage one,
+  // but the Cache Storage dead-drop has no addressee: it is a single global
+  // slot, and whichever window comes forward first drains and deletes it. A
+  // doc window left to do that both hijacks itself into the full app and eats
+  // the tap the real app window was about to get.
+  // Read live rather than latched at boot: a window's kind is its route, and
+  // nothing stops a future route from being reachable both ways.
+  const mayRoute = () => windowMayRoutePushTargets(window.location.pathname);
+
   // WARM path.
   if (navigator.serviceWorker) {
     navigator.serviceWorker.addEventListener('message', (e) => {
       const d = e.data as { type?: string } | null;
       if (d?.type !== 'muxpad:push-navigate') return;
       const target = parsePushTarget(d);
-      if (!target) return;
+      if (!target || !mayRoute()) return; // no ack — let the SW open a real window
       let delivery: ReturnType<typeof sink.deliver>;
       try {
         delivery = sink.deliver(target);
@@ -143,7 +154,7 @@ if (!selfEmbedded) {
       // before the router mounts (the message landed mid-navigation, or the
       // bundle is still loading and the user reloads), the entry is the only
       // remaining copy and the next document drains it.
-      if (delivery !== 'held') void clearStoredPushTarget();
+      if (delivery !== 'held') void clearStoredPushTarget(target.id);
       // Acknowledge, so the SW knows it does NOT need to force a reload. Sent
       // even when the sink deduped or queued — the tap IS handled either way,
       // and a missing ack costs the user a full app reload.
@@ -162,7 +173,7 @@ if (!selfEmbedded) {
     // runs on every window focus.
     let draining = false;
     const drain = () => {
-      if (draining) return; // focus + visibilitychange fire together
+      if (draining || !mayRoute()) return; // focus + visibilitychange fire together
       draining = true;
       void takeStoredPushTarget()
         .then((t) => {

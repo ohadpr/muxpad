@@ -17,7 +17,7 @@
 //               drained BEFORE React has committed the router — the window in
 //               which a naive router.navigate() silently does nothing.
 //   3. SLOW     the target arrives while the workspace list is still in flight.
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -71,6 +71,16 @@ let browser: Browser | null = null;
 let noBrowser = '';
 
 beforeAll(async () => {
+  // This suite drives the BUILT client bundle, which `pnpm test` does not
+  // produce. Skip rather than fail seven cases with 20s navigation timeouts
+  // whose cause is "you didn't run pnpm build".
+  //
+  // Note that a STALE web/dist is not detectable here and will quietly test
+  // the previous bundle — run `pnpm -r build` before trusting a green run.
+  if (!existsSync(join(WEB_DIST, 'index.html'))) {
+    noBrowser = 'web/dist missing — run `pnpm -r build` first';
+    return;
+  }
   try {
     browser = await chromium.launch({ headless: true });
   } catch (err) {
@@ -171,13 +181,26 @@ async function startInstance(): Promise<Instance> {
   };
 }
 
-/** Wait for the service worker this page registered to be evaluable. */
+/**
+ * Wait for the service worker this page registered to be evaluable.
+ *
+ * Polls `ctx.serviceWorkers()` rather than awaiting the `serviceworker` event:
+ * that event fires ONCE per context, so a second call in the same context —
+ * every test here that taps twice — would wait 20s for an event that already
+ * happened. `controller` is not a usable readiness signal either: it is `null`
+ * until the worker claims the page, and `null !== undefined`.
+ */
 async function serviceWorker(ctx: BrowserContext, page: Page) {
-  await page.waitForFunction(() => navigator.serviceWorker?.controller !== undefined, undefined, {
+  await page.waitForFunction(() => navigator.serviceWorker?.controller !== null, undefined, {
     timeout: 20_000,
   });
-  const existing = ctx.serviceWorkers()[0];
-  return existing ?? (await ctx.waitForEvent('serviceworker', { timeout: 20_000 }));
+  const deadline = Date.now() + 20_000;
+  for (;;) {
+    const sw = ctx.serviceWorkers()[0];
+    if (sw) return sw;
+    if (Date.now() > deadline) throw new Error('no service worker registered');
+    await new Promise((r) => setTimeout(r, 50));
+  }
 }
 
 /**

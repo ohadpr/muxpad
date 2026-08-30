@@ -10,6 +10,9 @@
  */
 
 import { req } from '../api';
+// One definition per side of the service-worker boundary: this one for the
+// bundle, and a literal in sw.js, which ships outside it and can't import.
+import { PUSH_CACHE } from './push-target';
 
 export type PushState = 'unsupported' | 'denied' | 'enabled' | 'disabled';
 
@@ -29,7 +32,6 @@ export type PushState = 'unsupported' | 'denied' | 'enabled' | 'disabled';
  * Both window and worker contexts see the same Cache Storage, so the window
  * writes it at subscribe time and the worker reads it.
  */
-const PUSH_CACHE = 'muxpad-push-v1';
 const VAPID_CACHE_URL = '/api/push/vapid-public-key';
 
 /**
