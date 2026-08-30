@@ -293,6 +293,18 @@ export class TabStore {
       .run(headline, at, id);
   }
 
+  /**
+   * Advance the headline rate limiter WITHOUT writing a line.
+   *
+   * The clock must move on every ATTEMPT, not every success — otherwise a
+   * chat that keeps coming back "unchanged", and more importantly one whose
+   * model call keeps FAILING, is retried on every finished turn forever. The
+   * expensive thing is the call, so the call is what the limiter counts.
+   */
+  touchHeadlineAt(id: string, at: number = Date.now()): void {
+    this.db.prepare('UPDATE tabs SET headline_at = ? WHERE id = ?').run(at, id);
+  }
+
   /** When this tab's headline was last written; null if never. */
   headlineAt(id: string): number | null {
     const r = this.db.prepare('SELECT headline_at FROM tabs WHERE id = ?').get(id) as

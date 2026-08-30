@@ -51,12 +51,6 @@ const listeners = new Set<() => void>();
  *  See the scroll effect below for why "any scroll event" is the wrong rule. */
 const SCROLL_DISMISS_PX = 6;
 
-export function closeAllSwipeRows(): void {
-  if (openRowId === null) return;
-  openRowId = null;
-  for (const fn of listeners) fn();
-}
-
 function setOpenRow(id: string | null): void {
   if (openRowId === id) return;
   openRowId = id;
@@ -83,6 +77,8 @@ export function SwipeRow({ id, children, onPin, onClose, pinned, label }: SwipeR
   // dialog can be suppressed outright), which is exactly where this row lives.
   const [armed, setArmed] = useState(false);
   const gesture = useRef({ x: 0, y: 0, base: 0, axis: 'undecided' as SwipeAxis, dx: 0 });
+  /** The row's outer element — used to find the scroller it actually lives in. */
+  const shell = useRef<HTMLDivElement>(null);
   // Set while a horizontal drag is resolving, and read by the click handler to
   // swallow the click the browser fires at the end of a drag. Without it, a
   // swipe that started on the row's link also NAVIGATES on release.
@@ -125,11 +121,19 @@ export function SwipeRow({ id, children, onPin, onClose, pinned, label }: SwipeR
   // thumb's own wobble, over the sub-pixel adjustments the browser makes.
   useEffect(() => {
     if (!isOpen) return;
-    const scroller = document.querySelector('.navtree-scroll');
+    // THIS row's scroller, resolved by walking up from the row — not the first
+    // `.navtree-scroll` in the document. The tree mounts twice (sidebar and
+    // sheet), so a document-wide query baselines a sheet row against the
+    // sidebar's scrollTop, and then the first scroll event from anywhere
+    // exceeds the threshold and closes the tray — reintroducing the bug the
+    // threshold was added to fix, plus dismissal from unrelated scrollers
+    // (the chat pane behind the sheet).
+    const scroller = shell.current?.closest('.navtree-scroll') ?? null;
     const from = scroller?.scrollTop ?? 0;
     const onScroll = (e: Event) => {
-      const el = e.target as HTMLElement | Document | null;
-      const top = el && 'scrollTop' in el ? (el as HTMLElement).scrollTop : 0;
+      if (scroller && e.target !== scroller) return;
+      const el = e.target as HTMLElement | null;
+      const top = el && 'scrollTop' in el ? el.scrollTop : 0;
       if (Math.abs(top - from) < SCROLL_DISMISS_PX) return;
       setOpenRow(null);
     };
@@ -182,7 +186,7 @@ export function SwipeRow({ id, children, onPin, onClose, pinned, label }: SwipeR
   };
 
   return (
-    <div className="swiperow" data-open={isOpen ? 'true' : undefined}>
+    <div className="swiperow" ref={shell} data-open={isOpen ? 'true' : undefined}>
       {/* The tray sits UNDER the row and never moves — the row slides off it.
           Sliding the actions in instead would make them arrive from off-screen
           at a different speed from the finger, which reads as lag. */}
@@ -237,10 +241,20 @@ export function SwipeRow({ id, children, onPin, onClose, pinned, label }: SwipeR
           // the browser synthesises at the end of a drag, and a tap on an
           // already-open row (which should just put it away — the standard
           // list idiom, and the escape hatch if you opened one by accident).
-          if (swallowClick.current || isOpen) {
+          if (swallowClick.current) {
+            // The click the browser synthesises at the end of a drag. Swallow
+            // it and nothing more — treating it as a tap would slam the tray
+            // shut the same frame the swipe opened it.
             e.preventDefault();
             e.stopPropagation();
             swallowClick.current = false;
+            return;
+          }
+          if (isOpen) {
+            // A real tap on an already-open row: put it away. The standard
+            // list idiom, and the escape hatch if you opened one by accident.
+            e.preventDefault();
+            e.stopPropagation();
             setOpenRow(null);
           }
         }}
