@@ -27,10 +27,7 @@ export interface PaneSummary {
  * than throwing. Callers decide what an empty one means — the document falls
  * back to a raw snippet; the scheduler refuses to rotate.
  */
-export async function summarizePane(
-  db: Database.Database,
-  paneId: string,
-): Promise<PaneSummary> {
+export async function summarizePane(db: Database.Database, paneId: string): Promise<PaneSummary> {
   const empty: PaneSummary = { summary: '', title: '', artifacts: [] };
   const sessions = new AgentSessionStore(db);
   const sess = sessions.getByPane(paneId);
@@ -118,10 +115,7 @@ export async function summarizePane(
  * null when nothing usable could be produced — callers must treat that as
  * "don't proceed", never as "proceed with nothing".
  */
-export async function paneCarryover(
-  db: Database.Database,
-  paneId: string,
-): Promise<string | null> {
+export async function paneCarryover(db: Database.Database, paneId: string): Promise<string | null> {
   const { summary, title, artifacts } = await summarizePane(db, paneId);
   if (!summary) return null;
   const lines = [summary];

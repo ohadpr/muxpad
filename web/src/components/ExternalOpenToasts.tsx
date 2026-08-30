@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import {
+  type PendingOpen,
   dismissOpen,
   getOpens,
   subscribeOpens,
-  type PendingOpen,
 } from '../lib/external-open-store';
 import './ExternalOpenToasts.css';
 
@@ -51,9 +51,7 @@ export function ExternalOpenToasts({ currentTabId, paneLabel }: Props) {
 
   useEffect(() => subscribeOpens(setOpens), []);
 
-  const visible = opens.filter(
-    (o) => o.tab_id === null || o.tab_id === currentTabId,
-  );
+  const visible = opens.filter((o) => o.tab_id === null || o.tab_id === currentTabId);
 
   if (visible.length === 0) return null;
 
@@ -97,9 +95,7 @@ function ExternalOpenToast({
   return (
     <div className="external-open-toast" role="group">
       <div className="external-open-toast-body">
-        <div className="external-open-toast-origin">
-          {label ?? 'A pane'} requested to open:
-        </div>
+        <div className="external-open-toast-origin">{label ?? 'A pane'} requested to open:</div>
         <div className="external-open-toast-url" title={open.url}>
           {host}
         </div>

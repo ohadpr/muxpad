@@ -19,9 +19,7 @@ interface UrlPaneProps {
  * the chrome and the iframe live in independent component subtrees.
  */
 function emitLoading(paneId: string, loading: boolean): void {
-  window.dispatchEvent(
-    new CustomEvent('muxpad:url-pane-loading', { detail: { paneId, loading } }),
-  );
+  window.dispatchEvent(new CustomEvent('muxpad:url-pane-loading', { detail: { paneId, loading } }));
 }
 
 /**

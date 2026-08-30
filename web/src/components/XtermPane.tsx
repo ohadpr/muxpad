@@ -30,7 +30,7 @@ import {
   triggerWheelMouseEvent,
   wheelInputForPty,
 } from '../lib/xterm-internals';
-import { type Theme, getSettings, useSettings } from '../settings';
+import { type Theme, ensureTerminalFonts, getSettings, useSettings } from '../settings';
 import './XtermPane.css';
 
 // Debug logging: enable via URL flag (?debug=1) OR localStorage
@@ -367,8 +367,13 @@ export function XtermPane({
       requestAnimationFrame(initialFit);
     };
     tryOpenTermRef.current = openTerm;
-    void document.fonts
-      .load(`${fontSize}px ${fontFamily}`)
+    // ensureTerminalFonts first: the webfont families are declared in a CSS
+    // chunk that is only imported when one of them is selected, and asking
+    // document.fonts for a family with no @font-face yet resolves instantly
+    // with nothing — xterm would then measure Menlo's cell and re-measure
+    // (garbled) once the real font swapped in.
+    void ensureTerminalFonts(fontFamily)
+      .then(() => document.fonts.load(`${fontSize}px ${fontFamily}`))
       .catch(() => {
         // ignore — open anyway
       })
@@ -1677,27 +1682,29 @@ export function XtermPane({
     term.options.theme = themeFor(settings.theme);
     const timerIds: number[] = [];
     let disposed = false;
-    void document.fonts.load(`${settings.fontSize}px ${settings.fontFamily}`).finally(() => {
-      if (disposed) return;
-      const t = termRef.current;
-      if (!t) return;
-      t.refresh(0, t.rows - 1);
-      // Multi-step refit handles xterm's async cell-metric remeasurement
-      // after a font swap — the metrics settle a beat after document.fonts
-      // resolves, so one nudge isn't enough.
-      const steps = [0, 100, 250];
-      steps.forEach((delay) => {
-        const id = window.setTimeout(() => {
-          // Route through muxpad:layout-changed rather than calling fit()
-          // directly: the main effect's refit() both fits AND sends the new
-          // size to the server. A bare fit() resizes xterm's view but never
-          // SIGWINCHes the PTY, so a TUI like Claude Code keeps rendering at
-          // the old row count and doesn't fill the pane.
-          window.dispatchEvent(new Event('muxpad:layout-changed'));
-        }, delay);
-        timerIds.push(id);
+    void ensureTerminalFonts(settings.fontFamily)
+      .then(() => document.fonts.load(`${settings.fontSize}px ${settings.fontFamily}`))
+      .finally(() => {
+        if (disposed) return;
+        const t = termRef.current;
+        if (!t) return;
+        t.refresh(0, t.rows - 1);
+        // Multi-step refit handles xterm's async cell-metric remeasurement
+        // after a font swap — the metrics settle a beat after document.fonts
+        // resolves, so one nudge isn't enough.
+        const steps = [0, 100, 250];
+        steps.forEach((delay) => {
+          const id = window.setTimeout(() => {
+            // Route through muxpad:layout-changed rather than calling fit()
+            // directly: the main effect's refit() both fits AND sends the new
+            // size to the server. A bare fit() resizes xterm's view but never
+            // SIGWINCHes the PTY, so a TUI like Claude Code keeps rendering at
+            // the old row count and doesn't fill the pane.
+            window.dispatchEvent(new Event('muxpad:layout-changed'));
+          }, delay);
+          timerIds.push(id);
+        });
       });
-    });
     return () => {
       disposed = true;
       for (const id of timerIds) window.clearTimeout(id);

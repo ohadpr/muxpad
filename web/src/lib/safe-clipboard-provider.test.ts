@@ -1,4 +1,4 @@
-import { describe, expect, it, afterEach, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSafeClipboardProvider } from './safe-clipboard-provider';
 
 const SYSTEM = 'c' as never; // ClipboardSelectionType.SYSTEM — const enum, value is 'c'

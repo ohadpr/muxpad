@@ -79,22 +79,64 @@ function vapidKeyBytes(base64url) {
   return Uint8Array.from(raw, (c) => c.charCodeAt(0));
 }
 
+// The VAPID public key, stashed in Cache Storage by the page at subscribe
+// time (web/src/lib/push.ts). NOT a fetch-handling cache — nothing is
+// intercepted and no app asset is stored here; this is a key/value slot that
+// happens to live in the only storage a service worker can read synchronously
+// enough during `pushsubscriptionchange`.
+const PUSH_CACHE = 'muxpad-push-v1';
+const VAPID_CACHE_URL = '/api/push/vapid-public-key';
+
+async function cachedVapidKey() {
+  try {
+    const cache = await caches.open(PUSH_CACHE);
+    const hit = await cache.match(VAPID_CACHE_URL);
+    if (!hit) return null;
+    const { key } = await hit.json();
+    return typeof key === 'string' && key ? key : null;
+  } catch {
+    return null;
+  }
+}
+
 // The push service can rotate/expire a subscription. Best-effort
 // resubscribe with the same server key and re-register with the backend.
+//
+// Cache FIRST, network second. muxpad is reachable only over the tailnet, and
+// the browser picks the moment this event fires — typically while the device
+// is somewhere else entirely. The old handler fetched the key unconditionally,
+// so an off-tailnet rotation threw before ever calling subscribe() and push
+// died permanently: the event is one-shot, and the app had no path that would
+// ever notice. Re-subscribing offline still leaves the SERVER not knowing the
+// new endpoint, but that half self-heals — reconcilePush() re-registers on the
+// next load that reaches the server.
 self.addEventListener('pushsubscriptionchange', (event) => {
   event.waitUntil(
     (async () => {
-      const res = await fetch('/api/push/vapid-public-key');
-      const { key } = await res.json();
+      let key = await cachedVapidKey();
+      if (!key) {
+        try {
+          key = (await (await fetch(VAPID_CACHE_URL)).json()).key;
+        } catch {
+          // Off-network and nothing cached (push was enabled by a build that
+          // predates the cache). reconcilePush() on the next load re-subscribes.
+          return;
+        }
+      }
       const sub = await self.registration.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: vapidKeyBytes(key),
       });
-      await fetch('/api/push/subscriptions', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(sub.toJSON()),
-      });
+      // Best-effort: unreachable server just means the next load registers it.
+      try {
+        await fetch('/api/push/subscriptions', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(sub.toJSON()),
+        });
+      } catch {
+        // deliberately silent
+      }
     })(),
   );
 });

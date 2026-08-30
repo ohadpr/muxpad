@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { PtyScanner } from './pty-scanner.js';
 
 describe('PtyScanner — bell detection', () => {
@@ -113,7 +113,6 @@ describe('PtyScanner — title extraction', () => {
   });
 });
 
-
 describe('PtyScanner — plain-text URL extraction', () => {
   it('extracts a localhost URL printed on a line', () => {
     const ev = new PtyScanner().feed('  Local:   http://localhost:5173/\n');
@@ -153,7 +152,9 @@ describe('PtyScanner — plain-text URL extraction', () => {
 
 describe('PtyScanner — app-url marker (OSC 7771)', () => {
   it('parses a marker with url + label', () => {
-    const ev = new PtyScanner().feed('\x1b]7771;muxpad;app;url=http://localhost:5173;label=Web\x07');
+    const ev = new PtyScanner().feed(
+      '\x1b]7771;muxpad;app;url=http://localhost:5173;label=Web\x07',
+    );
     expect(ev.markers).toEqual([{ url: 'http://localhost:5173', label: 'Web' }]);
   });
 

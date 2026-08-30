@@ -106,8 +106,47 @@ export function updateSettings(patch: Partial<Settings>): void {
   current = { ...current, ...patch };
   localStorage.setItem(KEY, JSON.stringify(current));
   applyToDocument(current);
+  void ensureTerminalFonts(current.fontFamily);
   for (const fn of listeners) fn(current);
 }
+
+/**
+ * The terminal-font families that need a webfont downloaded. Menlo is a system
+ * font on every platform muxpad runs on, and MesloLGS NF is declared eagerly
+ * in fonts.css, so neither is here.
+ */
+const WEBFONT_FAMILIES = new Set([
+  '"JetBrains Mono", Menlo, monospace',
+  '"Fira Code", Menlo, monospace',
+  '"IBM Plex Mono", Menlo, monospace',
+]);
+
+let terminalFontsChunk: Promise<unknown> | null = null;
+
+/**
+ * Pull in the terminal-font @font-face declarations, once, and only if the
+ * selected family actually needs them. They are ~25 KB of render-blocking CSS
+ * (36 faces × unicode-range) that the default install never uses — see
+ * terminal-fonts.css.
+ *
+ * Resolves when the stylesheet is applied, so callers that measure glyphs
+ * (XtermPane, which sizes its grid from the font) can wait for the
+ * declarations to exist before asking document.fonts to load them. Awaiting a
+ * family we don't ship resolves immediately.
+ */
+export function ensureTerminalFonts(family: string): Promise<unknown> {
+  if (!WEBFONT_FAMILIES.has(family)) return Promise.resolve();
+  terminalFontsChunk ??= import('./terminal-fonts.css').catch(() => {
+    // Chunk fetch failed (offline, mid-deploy). The family falls back to
+    // Menlo; a later load retries because we keep no failed promise.
+    terminalFontsChunk = null;
+  });
+  return terminalFontsChunk;
+}
+
+// Start the fetch at boot for someone who already picked one of these, so the
+// stylesheet is usually in place before the first XtermPane measures anything.
+if (typeof window !== 'undefined') void ensureTerminalFonts(current.fontFamily);
 
 export function useSettings(): Settings {
   const [state, setState] = useState<Settings>(current);

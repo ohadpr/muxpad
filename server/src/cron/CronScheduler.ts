@@ -12,13 +12,7 @@
 // are all inherited for free, and its return value is the ONLY honest answer to
 // "did that land?". Ignoring that return value would rebuild silent failure one
 // layer up, which is the entire thing this replaces (§6 risk 1).
-import {
-  type Cron,
-  type CronRun,
-  type PaneStatus,
-  messageIsFromCron,
-  renderCronMarker,
-} from '@muxpad/shared';
+import { type Cron, type CronRun, messageIsFromCron, renderCronMarker } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { bootstrapTab, deleteTabCascade } from '../agent-tab.js';
 import { wrapCarryover } from '../chat/summarize.js';
@@ -364,11 +358,16 @@ export class CronScheduler {
       return { outcome: 'error', detail: 'target pane no longer exists' };
     }
     // FAIL FAST on a dead runner. `dead` means automatic restarts were
-    // exhausted — submitSend would reject anyway, but reading the status first
-    // makes the run history say WHY in one word instead of quoting a paragraph
-    // of restart guidance, and it costs no round trip.
-    const status: PaneStatus = this.deps.cache.getStatus(paneId, pane.unread === true);
-    if (status === 'dead') return { outcome: 'error', detail: 'dead', targetPane: paneId };
+    // exhausted — submitSend would reject anyway, but reading it first makes
+    // the run history say WHY in one word instead of quoting a paragraph of
+    // restart guidance, and it costs no round trip.
+    //
+    // The RAW bit, deliberately, not `getStatus`: that ranks `working` above
+    // `dead` (right for the nav — a spinner says more than a ×) and a dead
+    // pane whose pty is still dribbling output would therefore read `working`,
+    // silently disarming this guard in precisely the case it exists for.
+    if (this.deps.cache.isDead(paneId))
+      return { outcome: 'error', detail: 'dead', targetPane: paneId };
 
     // Don't barge into a live conversation. DEFER (not drop): a cron must not
     // be lost because you happened to be chatting when it came due.

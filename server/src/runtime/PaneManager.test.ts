@@ -93,7 +93,12 @@ describe('PaneManager', () => {
     await mgr.kill('race1'); // resolves via the 2s fallback; exit not yet fired
     // Synchronously re-create — mirrors ensurePane racing the slow death.
     // The old runtime's SIGKILL exit event lands AFTER this.
-    const b = mgr.getOrCreate({ id: 'race1', shell: '/bin/sh', startup_cmd: 'sleep 30', cwd: '/tmp' });
+    const b = mgr.getOrCreate({
+      id: 'race1',
+      shell: '/bin/sh',
+      startup_cmd: 'sleep 30',
+      cwd: '/tmp',
+    });
     expect(b).not.toBe(a);
     try {
       // Let the old runtime's exit event arrive and (before the fix) do damage.
