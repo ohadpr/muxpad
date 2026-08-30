@@ -84,6 +84,8 @@
   --nt-col-icon: 26px;
   --nt-col-meta: 52px;
   --nt-gutter: 10px;
+  /* What a swiped row slides over — see SwipeRow.css. */
+  --swipe-surface: var(--bg-chrome);
   font-size: 15px;
 }
 
@@ -325,9 +327,20 @@
      it — no margin on the mark, nothing in front of it that can shift it. */
   justify-self: end;
 }
+/* Meta is pinned too, and pinned INSIDE the controls — so its right edge is
+   the rail's left edge and nothing can move it.
+   Found by the layout pass: a PINNED tab keeps its pin lit at rest, which
+   gave that row's control cell 26px of width, which pushed its meta cell 26px
+   left of every other row's. `◷ 23:30` on a pinned row and `◷ Wed 09:00` on an
+   unpinned one then ended 26px apart — the exact misalignment the meta column
+   exists to prevent. Controls now expand into the NAME (which is elastic and
+   already ellipsises) instead of into the times (which are a column). */
+.navtree-tab-row > .navtree-tab-meta {
+  grid-column: -3 / -2;
+}
 .navtree-tab-row > .navtree-tab-controls,
 .navtree-ws-row > .navtree-tab-controls {
-  grid-column: -3 / -2;
+  grid-column: -4 / -3;
 }
 
 /* The hover-revealed control group. Zero-width at rest AND pulling back its
