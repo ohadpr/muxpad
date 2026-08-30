@@ -13,12 +13,21 @@ import {
   query,
   tool,
 } from '@anthropic-ai/claude-agent-sdk';
-import { summarizeToolInput } from '@muxpad/shared';
+import {
+  LAUNCH_ACK_RE,
+  blockText,
+  isAgentLaunchTool,
+  subagentLabel,
+  summarizeToolInput,
+  taskNotificationToolUseId,
+} from '@muxpad/shared';
 import { z } from 'zod';
 import { readAgentInstructions } from '../../agent-instructions.js';
+import { readDoModeOverlay, wrapModeNote } from '../../agent-modes.js';
 import { findTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
-import type { AgentQuestion, RunnerFrame, SubagentProgress } from '../protocol.js';
+import type { AgentMode, AgentQuestion, RunnerFrame } from '../protocol.js';
+import { SubagentRoster } from '../subagent-roster.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
 // Default model for a FRESH agent chat with no explicit `--model` pin: muxpad
@@ -29,25 +38,52 @@ import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 const DEFAULT_AGENT_MODEL = 'opus';
 
 /**
- * The universal muxpad instructions (<dataDir>/agent-instructions.md) as an
- * SDK `systemPrompt` option. Injection mechanism for the CLAUDE backend: the
+ * The universal muxpad instructions (<dataDir>/agent-instructions.md) PLUS —
+ * when the pane launched in ⚡ Do mode — the Do-mode overlay
+ * (<dataDir>/do-mode.md), as an SDK `systemPrompt` option.
+ *
+ * Injection mechanism for the CLAUDE backend, identical for both blocks: the
  * Agent SDK's NATIVE preset+append — the default claude_code system prompt
  * (with CLAUDE.md, settings, skills all loading exactly as before) plus our
- * file appended. Missing/empty file → undefined, and the option is omitted
- * entirely (inject nothing, no error).
+ * text appended. Both files missing/empty → undefined, and the option is
+ * omitted entirely (inject nothing, no error).
+ *
+ * Order matters: the standing instructions describe muxpad's CAPABILITIES,
+ * the mode overlay describes HOW to behave. Behavior last, so it reads as the
+ * most recent (and therefore governing) instruction.
  *
  * Exported for tests: constructing the backend spawns a real SDK session, so
  * the option-building is the testable seam.
  */
 export function claudeSystemPromptOption(
   instructions: string | null,
+  modeOverlay: string | null = null,
 ): Options['systemPrompt'] | undefined {
-  return instructions ? { type: 'preset', preset: 'claude_code', append: instructions } : undefined;
+  const append = [instructions, modeOverlay]
+    .filter((s): s is string => !!s?.trim())
+    .map((s) => s.trim())
+    .join('\n\n');
+  return append ? { type: 'preset', preset: 'claude_code', append } : undefined;
 }
 
 export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): AgentBackend {
   const { emit, log } = host;
   const { requestedSid, requestedModel } = opts;
+
+  // ── Agent mode (⚡ do / 🧠 deep) ──────────────────────────────────────────
+  // The LAUNCH mode is the only one that can reach the SDK as system-prompt
+  // material (systemPrompt is fixed at query() construction and the Query
+  // control surface has no prompt mutator — see agent-modes.ts). A later
+  // switch sets `pendingModeNote`, which rides the next user message as a
+  // delimited <muxpad-mode> block.
+  let currentMode: AgentMode = opts.mode;
+  let pendingModeNote: string | null = null;
+  function setMode(next: AgentMode): void {
+    if (next === currentMode) return;
+    currentMode = next;
+    pendingModeNote = wrapModeNote(next, readDoModeOverlay(next));
+    log(dim(`mode → ${next} (applies from the next message; the live system prompt is fixed)`));
+  }
 
   // The self-heal startup_cmd is written on hello — BEFORE any turn — so a pane
   // can respawn with `--resume <sid>` for a session that never wrote a
@@ -219,41 +255,27 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   );
 
   // -------------------------------------------------------------------------
-  // Subagent progress. Subagent messages arrive on the same stream with
-  // parent_tool_use_id set; count them per task and forward a throttled live
-  // status so the chat's Task row shows "running · N steps · lastTool" instead
-  // of sitting inert for minutes.
+  // Subagent roster. Subagent messages arrive on the same stream with
+  // parent_tool_use_id set; count them per task and forward throttled live
+  // progress so the chat's Task row shows "running · N steps · lastTool"
+  // instead of sitting inert for minutes.
+  //
+  // The lifecycle rules (durable, no decay window, and the three end-paths
+  // that make that safe) live in SubagentRoster — extracted so they are
+  // testable without spawning a real SDK session.
   // -------------------------------------------------------------------------
-  const subagents = new Map<string, SubagentProgress & { lastSentAt: number; dirty: boolean }>();
-
-  function noteSubagentActivity(parentToolUseId: string, lastTool?: string): void {
-    let p = subagents.get(parentToolUseId);
-    if (!p) {
-      p = { toolUseId: parentToolUseId, steps: 0, lastSentAt: 0, dirty: false };
-      subagents.set(parentToolUseId, p);
-    }
-    p.steps++;
-    if (lastTool) p.lastTool = lastTool;
-    p.dirty = true;
-    const now = Date.now();
-    if (now - p.lastSentAt >= 500) {
-      p.lastSentAt = now;
-      p.dirty = false;
-      const { lastSentAt, dirty, ...progress } = p;
-      emit({ t: 'subagent', progress });
-    }
-  }
-
-  /** Flush any throttled-but-unsent progress, then drop the counters. */
-  function flushSubagents(): void {
-    for (const p of subagents.values()) {
-      if (p.dirty) {
-        const { lastSentAt, dirty, ...progress } = p;
-        emit({ t: 'subagent', progress });
-      }
-    }
-    subagents.clear();
-  }
+  const subagents = new SubagentRoster(
+    (progress) => emit({ t: 'subagent', progress }),
+    (line) => log(dim(line)),
+  );
+  /** How often a live roster entry re-announces itself when the SDK is silent. */
+  const SUBAGENT_KEEPALIVE_MS = 5_000;
+  // Keepalive: re-announce every live entry on a fixed tick so the server's
+  // copy (and the per-row busy dot) stays fresh through the long silent tool
+  // calls the P1 experiment measured. Cheap — one small frame per live
+  // subagent per tick, and nothing at all when the roster is empty.
+  const subagentKeepalive = setInterval(() => subagents.announceAll(), SUBAGENT_KEEPALIVE_MS);
+  subagentKeepalive.unref?.();
 
   // -------------------------------------------------------------------------
   // Self-titling. Interactive Claude Code writes `ai-title` records into the
@@ -335,9 +357,18 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         lastAssistantText = '';
         emit({ t: 'turn-start' });
         log(`${bold('▸ user')} ${text.length > 200 ? `${text.slice(0, 200)}…` : text}`);
+        // A pending mode switch rides the next REAL message. Slash commands
+        // (`/compact`, `/clear`) are executed in-band by the CLI and must
+        // reach it as the bare command — prefixing one would turn it into
+        // ordinary prose — so the note stays pending past them.
+        let content = text;
+        if (pendingModeNote && !text.startsWith('/')) {
+          content = `${pendingModeNote}\n\n${text}`;
+          pendingModeNote = null;
+        }
         yield {
           type: 'user',
-          message: { role: 'user', content: text },
+          message: { role: 'user', content },
           parent_tool_use_id: null,
         };
       }
@@ -355,10 +386,15 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // -------------------------------------------------------------------------
   const startModel = requestedModel ?? (resumeSid ? null : DEFAULT_AGENT_MODEL);
 
-  // Universal muxpad instructions, read at injection time (session
-  // construction). Applies to fresh AND resumed sessions alike — it's
-  // session-level system-prompt material, not a message.
-  const muxpadSystemPrompt = claudeSystemPromptOption(readAgentInstructions());
+  // Universal muxpad instructions + the launch mode's overlay, read at
+  // injection time (session construction). Applies to fresh AND resumed
+  // sessions alike — it's session-level system-prompt material, not a
+  // message. 'deep' contributes nothing, so a deep pane's prompt is byte-for-
+  // byte what it was before modes existed.
+  const muxpadSystemPrompt = claudeSystemPromptOption(
+    readAgentInstructions(),
+    readDoModeOverlay(currentMode),
+  );
 
   const options: Options = {
     cwd: process.cwd(),
@@ -557,6 +593,10 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           if (inTurn && lastSessionActivityAt < failedAt) {
             log(dim('no session activity since failed interrupt — resetting turn state'));
             inTurn = false;
+            // This path ends the turn WITHOUT a `result`, so the retirement in
+            // the result branch never runs. Do it here too, or a Stop that
+            // needed the fallback leaves immortal roster entries.
+            subagents.retireAll('stop failed — turn state reset');
             emit({ t: 'turn-done', ok: false, error: 'stop failed — turn state reset' });
           }
         }, 10_000);
@@ -588,6 +628,11 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     // the next turn.
     for (const pq of pendingQuestions.values()) emit(pq.frame);
     if (lastStatus) emit(lastStatus);
+    // …and the live subagent roster. This is the piece that used to be missing:
+    // the server rebuilt questions and status on reconnect but not the roster,
+    // so a background subagent working through a server restart became
+    // permanently invisible — nothing would ever re-announce it.
+    subagents.announceAll();
   }
 
   async function start(): Promise<void> {
@@ -606,12 +651,23 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     process.stdout.write('\x1b]0;✳ agent\x07');
     log(`${bold('muxpad agent')} — session ${sid}${resumeSid ? ' (resumed)' : ''}`);
     log(dim(`pane ${host.paneId} · ${process.cwd()}`));
+    // Only announced for 'do': a deep pane's log stays byte-identical to the
+    // pre-modes output.
+    if (currentMode === 'do') log(dim('⚡ do mode — decisive, terse, result-first'));
     log(dim('drive this session from the pane’s Chat face; this log is the terminal face'));
 
     // A turn can also start WITHOUT a user send: scheduled wakeups and crons
     // fire autonomously inside the persistent session (live-verified). Emit
     // turn-start on the first activity so chat shows the typing indicator, the
     // busy dot lights, and Stop works for those turns too.
+    //
+    // D7: "first activity" used to mean the first assistant TEXT. A cron turn
+    // that opens with a 90-second Bash call produces no text at all, so no
+    // turn-start was emitted: agentBusy stayed unset, hello reported
+    // turnActive:false, and the runner's single log line never crossed the
+    // 600ms pty warmup. The pane read idle while genuinely working. It now
+    // fires on the first message of ANY kind that belongs to a turn — a tool
+    // call, a subagent's traffic, a stream delta — whichever lands first.
     const noteAutonomousTurn = () => {
       if (inTurn) return;
       inTurn = true;
@@ -644,14 +700,26 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           type?: string;
           delta?: { type?: string; text?: string };
         };
-        if (
-          evt.type === 'content_block_delta' &&
-          evt.delta?.type === 'text_delta' &&
-          typeof evt.delta.text === 'string' &&
-          msg.parent_tool_use_id === null
-        ) {
+        if (msg.parent_tool_use_id === null) {
+          // ANY main-thread stream event means a turn is under way — not just a
+          // text delta. A turn that opens with a tool call streams
+          // content_block_start for the tool_use long before its complete
+          // assistant message lands; waiting for text meant a Bash-first cron
+          // turn showed nothing at all (D7).
+          //
+          // Subagent stream events (parent_tool_use_id set) are deliberately
+          // NOT a turn signal: a background subagent legitimately emits them
+          // with no turn running (measured — see the roster note above), and
+          // treating those as a turn start would open a turn nothing ever
+          // closes. Their "working" comes from the durable roster instead.
           noteAutonomousTurn();
-          emit({ t: 'stream', delta: evt.delta.text });
+          if (
+            evt.type === 'content_block_delta' &&
+            evt.delta?.type === 'text_delta' &&
+            typeof evt.delta.text === 'string'
+          ) {
+            emit({ t: 'stream', delta: evt.delta.text });
+          }
         }
       } else if (msg.type === 'assistant' && msg.parent_tool_use_id === null) {
         noteAutonomousTurn();
@@ -673,6 +741,14 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           } else if (block.type === 'tool_use') {
             const arg = summarizeToolInput(block.name, block.input);
             log(`${dim('⚙')} ${block.name}${arg ? dim(` ${arg}`) : ''}`);
+            // A Task/Agent call is a subagent LAUNCH. Roster it here, at the
+            // parent's tool_use: this is the only message that carries the
+            // description, and a background subagent's first child message can
+            // arrive seconds later (or, for a very long first tool call, not
+            // for a minute — see the P1 note above).
+            if (isAgentLaunchTool(block.name) && typeof block.id === 'string') {
+              subagents.launch(block.id, subagentLabel(block.input) || 'subagent');
+            }
           }
         }
         // Keep the LATEST prose-bearing assistant message as the turn's summary.
@@ -691,13 +767,48 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
             }
           }
         }
-        noteSubagentActivity(msg.parent_tool_use_id, lastTool);
+        subagents.activity(msg.parent_tool_use_id, lastTool);
+      } else if (msg.type === 'user' && msg.parent_tool_use_id === null) {
+        // TOP-LEVEL user traffic is where a subagent's END shows up, in two
+        // shapes — both must retire the roster entry, or a finished agent
+        // lingers forever now that nothing expires it on a timer:
+        //  1. the parent's own tool_result for the Task call (a FOREGROUND
+        //     subagent's completion). A background launch's immediate
+        //     "agent launched successfully" ack is NOT a completion — reading
+        //     it as one is the bug that used to drop every background agent
+        //     one second after launch.
+        //  2. the `<task-notification>` the harness injects when a BACKGROUND
+        //     subagent finishes, which carries the launching tool-use-id.
+        const content = msg.message.content;
+        if (typeof content === 'string') {
+          const id = taskNotificationToolUseId(content);
+          if (id) subagents.done(id);
+        } else {
+          for (const block of content ?? []) {
+            if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+              if (!subagents.has(block.tool_use_id)) continue;
+              if (LAUNCH_ACK_RE.test(blockText(block.content))) continue;
+              subagents.done(block.tool_use_id);
+            } else if (block.type === 'text') {
+              const id = taskNotificationToolUseId(block.text);
+              if (id) subagents.done(id);
+            }
+          }
+        }
       } else if (msg.type === 'result') {
         inTurn = false;
-        // Belt-and-braces: no question outlives its turn, and subagent counters
-        // reset (their Task rows resolve via the transcript).
+        // Belt-and-braces: no question outlives its turn.
         resolveAllQuestions('interrupted');
-        flushSubagents();
+        // Push any throttled-but-unsent progress. Deliberately does NOT drop
+        // entries: a run_in_background Task routinely outlives the turn that
+        // launched it, and clearing here is what made those subagents vanish.
+        subagents.flush();
+        // …but a turn that was STOPPED or FAILED takes its background tasks
+        // down with it, and those deaths announce themselves nowhere: no
+        // tool_result, no finish notice. Retire them explicitly or they are
+        // immortal (there is no decay timer left to catch them).
+        if (interruptRequested) subagents.retireAll('stopped');
+        else if (msg.subtype !== 'success') subagents.retireAll('turn failed');
         const ok = msg.subtype === 'success' || interruptRequested;
         const secs = (msg.duration_ms / 1000).toFixed(1);
         const summary = notifySnippet(lastAssistantText);
@@ -724,6 +835,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
 
   function shutdown(): void {
     clearInterval(statusInterval);
+    clearInterval(subagentKeepalive);
     if (interruptFailTimer !== null) clearTimeout(interruptFailTimer); // no spurious post-shutdown turn-done
     resolveAllQuestions('shutdown');
     try {
@@ -733,5 +845,17 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     }
   }
 
-  return { id: 'claude', start, send, slash, stop, setModel, answer, onConnected, hello, shutdown };
+  return {
+    id: 'claude',
+    start,
+    send,
+    slash,
+    stop,
+    setModel,
+    setMode,
+    answer,
+    onConnected,
+    hello,
+    shutdown,
+  };
 }

@@ -77,7 +77,7 @@ describe('cursor backend', () => {
     const { spawn, calls } = fakeSpawner();
     const b = createCursorBackend(
       host,
-      { requestedSid, requestedModel: null },
+      { requestedSid, requestedModel: null, mode: 'deep' },
       { spawn, listModels: noModels },
     );
     b.start();
@@ -234,7 +234,7 @@ describe('cursor backend', () => {
     const { spawn, calls } = fakeSpawner();
     const b = createCursorBackend(
       host,
-      { requestedSid: null, requestedModel: null },
+      { requestedSid: null, requestedModel: null, mode: 'deep' },
       { spawn, listModels: noModels },
     );
     b.start();
@@ -293,7 +293,7 @@ describe('cursor backend', () => {
     const { spawn, calls } = fakeSpawner();
     const b = createCursorBackend(
       host,
-      { requestedSid: null, requestedModel: null },
+      { requestedSid: null, requestedModel: null, mode: 'deep' },
       {
         spawn,
         listModels: noModels,
@@ -364,12 +364,106 @@ describe('cursor backend', () => {
     expect(calls[1]!.args.at(-1)).toBe('plain');
   });
 
+  // ── ⚡ Do mode ────────────────────────────────────────────────────────────
+  // cursor-agent has no instructions flag either, so the overlay rides the
+  // same first-message preamble as the universal instructions.
+
+  async function bootMode(mode: 'do' | 'deep', requestedSid: string | null = null) {
+    const { host, frames } = makeHost();
+    const { spawn, calls } = fakeSpawner();
+    const b = createCursorBackend(
+      host,
+      { requestedSid, requestedModel: null, mode },
+      { spawn, listModels: noModels },
+    );
+    b.start();
+    await tick();
+    closeChild(calls[0]!.child, 0);
+    await tick();
+    return { b, host, frames, calls };
+  }
+
+  it('do mode prepends the overlay after the instructions on a NEW session', async () => {
+    writeFileSync(join(dataDir, 'agent-instructions.md'), 'use muxpad publish\n');
+    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
+    const { b, calls } = await bootMode('do');
+    b.send('hi');
+    await tick();
+    expect(calls[1]!.args.at(-1)).toBe(
+      '<muxpad-instructions>\nuse muxpad publish\n</muxpad-instructions>\n\n' +
+        '<muxpad-mode>\nbe terse\n</muxpad-mode>\n\nhi',
+    );
+  });
+
+  it('deep mode injects NOTHING extra — byte-identical to the pre-mode prompt', async () => {
+    writeFileSync(join(dataDir, 'agent-instructions.md'), 'use muxpad publish\n');
+    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
+    const { b, calls } = await bootMode('deep');
+    b.send('hi');
+    await tick();
+    expect(calls[1]!.args.at(-1)).toBe(
+      '<muxpad-instructions>\nuse muxpad publish\n</muxpad-instructions>\n\nhi',
+    );
+  });
+
+  it('do mode with no do-mode.md → nothing injected, no error', async () => {
+    const { b, calls } = await bootMode('do');
+    b.send('hi');
+    await tick();
+    expect(calls[1]!.args.at(-1)).toBe('hi');
+  });
+
+  it('a mid-session switch rides ONE <muxpad-mode> note on the next resumed turn', async () => {
+    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
+    const { b, calls } = await bootMode('deep');
+    b.send('first');
+    await tick();
+    const t1 = calls[1]!.child;
+    line(t1, { type: 'system', subtype: 'init', session_id: 'cur-mode' });
+    line(t1, { type: 'result', subtype: 'success' });
+    closeChild(t1, 0);
+    await tick();
+
+    b.setMode('do');
+    b.send('second');
+    await tick();
+    expect(calls[2]!.args).toContain('--resume');
+    expect(calls[2]!.args.at(-1)).toBe(
+      '<muxpad-mode>\nThe user switched this session to ⚡ Do mode. Follow this contract from now on:\n\nbe terse\n</muxpad-mode>\n\nsecond',
+    );
+    const t2 = calls[2]!.child;
+    line(t2, { type: 'result', subtype: 'success' });
+    closeChild(t2, 0);
+    await tick();
+
+    // ONE-TIME: the next turn is a bare prompt again.
+    b.send('third');
+    await tick();
+    expect(calls[3]!.args.at(-1)).toBe('third');
+  });
+
+  it('re-setting the SAME mode is a no-op (the server sends it on every hello)', async () => {
+    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
+    const { b, calls } = await bootMode('deep');
+    b.send('first');
+    await tick();
+    const t1 = calls[1]!.child;
+    line(t1, { type: 'system', subtype: 'init', session_id: 'cur-same' });
+    line(t1, { type: 'result', subtype: 'success' });
+    closeChild(t1, 0);
+    await tick();
+    b.setMode('deep');
+    b.send('second');
+    await tick();
+    expect(calls[2]!.args.at(-1)).toBe('second');
+  });
+
   it('advertises its model list + default in the status frame (the picker)', async () => {
     const { host, frames } = makeHost();
     const { spawn, calls } = fakeSpawner();
     const b = createCursorBackend(
       host,
-      { requestedSid: null, requestedModel: null },
+      { requestedSid: null, requestedModel: null, mode: 'deep' },
       {
         spawn,
         listModels: async () => ({
