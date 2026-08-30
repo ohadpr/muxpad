@@ -261,19 +261,25 @@ export async function maybeWriteHeadline(
   try {
     reply = await model(buildHeadlinePrompt(conversation, existing), abort.signal);
   } catch {
-    // Silent by contract. A model that timed out or a runner that wasn't
-    // there is not something to tell the user about in a nav rail.
+    // Silent by contract — a model that timed out is not something to tell
+    // the user about in a nav rail. But the clock STILL advances: a chat with
+    // no headline yet passes the gate unconditionally, so a persistent
+    // failure (no Claude login, a timeout, an SDK import error) would
+    // otherwise spawn a fresh CLI subprocess on every finished turn on every
+    // tab, indefinitely. A failure is an attempt, and attempts are what the
+    // limiter counts.
+    tabs.touchHeadlineAt(tabId, now);
     return null;
   } finally {
     clearTimeout(timer);
   }
 
-  // Stamp the clock even on a KEEP: the rate limit exists to bound CALLS, and
-  // a chat whose topic is stable would otherwise be re-asked on every turn
-  // forever — the single most expensive case, and the most pointless.
+  // Same rule for a KEEP, and for a first-run reply we couldn't parse: a chat
+  // whose topic is stable would otherwise be re-asked on every turn forever —
+  // the single most expensive case, and the most pointless.
   const next = parseHeadlineReply(reply, existing);
   if (next === null) {
-    if (existing) tabs.setHeadline(tabId, existing, now);
+    tabs.touchHeadlineAt(tabId, now);
     return null;
   }
   tabs.setHeadline(tabId, next, now);
