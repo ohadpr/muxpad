@@ -129,6 +129,20 @@ interface Instance {
   stop(): Promise<void>;
 }
 
+/**
+ * The value MUXPAD_DATA_DIR had before this suite ran, restored in afterAll.
+ * Vitest reuses worker processes across FILES, so leaving it pointed at a
+ * deleted tmpdir would follow whatever runs next in the same worker.
+ */
+const originalDataDir = process.env.MUXPAD_DATA_DIR;
+afterAll(() => {
+  // `delete`, not `= undefined`: assigning to process.env stringifies, so the
+  // suggested fix would leave the literal string "undefined" as the data dir.
+  // biome-ignore lint/performance/noDelete: process.env assignment stringifies
+  if (originalDataDir === undefined) delete process.env.MUXPAD_DATA_DIR;
+  else process.env.MUXPAD_DATA_DIR = originalDataDir;
+});
+
 /** An isolated muxpad: own free port, own data dir, own ptyd socket. */
 async function startInstance(padBytes = 4000): Promise<Instance> {
   const dataDir = mkdtempSync(join(tmpdir(), 'chat-scroll-'));
@@ -137,7 +151,31 @@ async function startInstance(padBytes = 4000): Promise<Instance> {
   // entirely off ~/.muxpad and ~/.claude.
   process.env.MUXPAD_DATA_DIR = dataDir;
   const db: Database.Database = openDb(join(dataDir, 'db.sqlite'));
+  // Everything from here on is a real resource. `afterEach` can only clean up
+  // through the returned handle, so a throw before we return would leak a ptyd
+  // process and its socket dir for the rest of the run.
   const ptyd: SpawnedPtyd = await spawnPtyd();
+  try {
+    return await buildInstance({ padBytes, dataDir, db, ptyd });
+  } catch (err) {
+    await ptyd.cleanup();
+    db.close();
+    rmSync(dataDir, { recursive: true, force: true });
+    throw err;
+  }
+}
+
+async function buildInstance({
+  padBytes,
+  dataDir,
+  db,
+  ptyd,
+}: {
+  padBytes: number;
+  dataDir: string;
+  db: Database.Database;
+  ptyd: SpawnedPtyd;
+}): Promise<Instance> {
   const cache = new PtydCache();
   cache.attach(ptyd.client);
   const events = new EventBus();
@@ -275,6 +313,30 @@ async function scrollState(page: Page) {
   });
 }
 
+/**
+ * Wait until the restore has finished moving the viewport.
+ *
+ * NOT a fixed sleep. The settling loop's base window is 2.5s, but a restore
+ * that has to PAGE its remembered message back in extends its own deadline per
+ * request — up to a 15s hard stop. A fixed 3.5s would sample the loop
+ * mid-convergence on exactly the cases that matter, and would do it only on
+ * slower machines: flaky by construction. So: poll the message under the
+ * viewport top until it holds still, with a ceiling past the hard stop.
+ */
+async function restoreSettled(page: Page): Promise<void> {
+  let last = '';
+  let stable = 0;
+  for (let i = 0; i < 130; i++) {
+    const now = JSON.stringify(await topMessage(page));
+    stable = now === last ? stable + 1 : 0;
+    last = now;
+    // ~1.2s of no movement, and never before the base settle window could have
+    // even started re-asserting.
+    if (stable >= 8 && i >= 12) return;
+    await sleep(150);
+  }
+}
+
 /** Wait until the chat has rendered rows and stopped growing for a beat. */
 async function chatSettled(page: Page): Promise<void> {
   try {
@@ -288,13 +350,21 @@ async function chatSettled(page: Page): Promise<void> {
     console.log('DOM at timeout:', (await page.content()).slice(0, 4000));
     throw err;
   }
+  // Two equal samples 150ms apart is SHORTER than one older-history round trip,
+  // so it can return in the gap between prepend batches. Require a run of them,
+  // and throw rather than falling through — a chat that never settles should
+  // fail here, naming the real problem, not downstream in an assertion about
+  // scroll position.
   let last = -1;
-  for (let i = 0; i < 60; i++) {
+  let stable = 0;
+  for (let i = 0; i < 200; i++) {
     const n = await rowCount(page);
-    if (n === last) return;
+    stable = n === last ? stable + 1 : 0;
     last = n;
+    if (stable >= 10) return;
     await sleep(150);
   }
+  throw new Error(`chat never stopped growing (last row count ${last})`);
 }
 
 /**
@@ -315,17 +385,13 @@ async function wheelUp(page: Page, notches: number): Promise<void> {
 /** Switch to the other tab and back — the display:none hide/show the report is about. */
 async function hideAndShow(page: Page, inst: Instance): Promise<void> {
   await page.click(`a[href="/w/${inst.ws}/t/${inst.otherTab.slug}"]`);
-  await page.waitForFunction(
-    () => document.querySelector('.chat-scroll') === null || true,
-    undefined,
-    { timeout: 10_000 },
-  );
+  // The chat pane stays MOUNTED behind display:none (the keep-alive stack), so
+  // there is no DOM signal for "hidden" to wait on — wait for the other tab's
+  // own surface to be on screen instead.
+  await page.waitForSelector('.xterm', { timeout: 15_000 });
   await sleep(700);
   await page.click(`a[href="/w/${inst.ws}/t/${inst.chatTab.slug}"]`);
-  // Generously past the 250ms show-settle window AND the 2500ms settling
-  // restore loop, so the assertion sees where the reader was LEFT, not a
-  // frame mid-convergence.
-  await sleep(3500);
+  await restoreSettled(page);
 }
 
 /**
@@ -383,7 +449,7 @@ describe('chat scroll position across a hide/show', () => {
     inst.appendMessages(12);
     await sleep(1500);
     await page.click(`a[href="/w/${inst.ws}/t/${inst.chatTab.slug}"]`);
-    await sleep(3500);
+    await restoreSettled(page);
 
     const returned = await topMessage(page);
     // eslint-disable-next-line no-console
@@ -402,7 +468,7 @@ describe('chat scroll position across a hide/show', () => {
 
     await page.reload();
     await chatSettled(page);
-    await sleep(3500);
+    await restoreSettled(page);
 
     const returned = await topMessage(page);
     // eslint-disable-next-line no-console
@@ -426,7 +492,7 @@ describe('chat scroll position across a hide/show', () => {
     await decoy.bringToFront();
     await sleep(1200);
     await page.bringToFront();
-    await sleep(3500);
+    await restoreSettled(page);
 
     const returned = await topMessage(page);
     // eslint-disable-next-line no-console
@@ -466,7 +532,7 @@ describe('chat scroll position across a hide/show', () => {
     // mounted with every paged-in batch still rendered, so nothing prepends.)
     await page.reload();
     await chatSettled(page);
-    await sleep(4000);
+    await restoreSettled(page);
 
     const returned = await topMessage(page);
     // eslint-disable-next-line no-console
@@ -489,8 +555,16 @@ describe('chat scroll position across a hide/show', () => {
     // hand-scrolled further back than the budget reaches therefore CANNOT be
     // put back exactly — so the property that matters is the direction of the
     // miss. Landing short (nearer the latest message) is a shrug; landing
-    // further back is the reported bug, and the pre-fix ratio produced exactly
-    // that, systematically, because R < 1.
+    // deeper is the reported symptom.
+    //
+    // Honest about what this proves: it is a REGRESSION GUARD, not a repro —
+    // the pre-fix code passes it too, because a reload's window only holds
+    // recent messages, so every pre-fix miss also happened to land toward the
+    // tail. What it guards is the seek's own fallback: eight prepended pages
+    // grow the document above the reader, and re-deriving position from the
+    // stored ratio each frame would drag them backward through every one of
+    // them — worse than pre-fix. That is why the fallback freezes onto a row
+    // after its first application.
     await instance!.stop();
     instance = await startInstance(30_000);
     const inst = instance;
@@ -502,7 +576,7 @@ describe('chat scroll position across a hide/show', () => {
 
     await page.reload();
     await chatSettled(page);
-    await sleep(4000);
+    await restoreSettled(page);
 
     const returned = await topMessage(page);
     // eslint-disable-next-line no-console
