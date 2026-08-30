@@ -338,9 +338,16 @@
 .navtree-tab-row > .navtree-tab-meta {
   grid-column: -3 / -2;
 }
-.navtree-tab-row > .navtree-tab-controls,
-.navtree-ws-row > .navtree-tab-controls {
+/* Tab rows put the controls in front of the meta cell (track 3 of 5); the
+   WORKSPACE row has no meta cell but does have an auto-placed count chip that
+   lands in track 3, so its controls go one further along. Pinning both to the
+   same line collided the controls with the chip and pushed the mark onto a
+   second grid row whenever a workspace was collapsed. */
+.navtree-tab-row > .navtree-tab-controls {
   grid-column: -4 / -3;
+}
+.navtree-ws-row > .navtree-tab-controls {
+  grid-column: -3 / -2;
 }
 
 /* The hover-revealed control group. Zero-width at rest AND pulling back its
@@ -432,8 +439,11 @@
 .navtree-tab-row:has(.navtree-rename) {
   grid-template-columns: var(--nt-col-icon) minmax(0, 1fr);
 }
+/* No --nt-disc track: while editing, neither the expander nor its spacer is
+   rendered (both are gated on !isEditing), so a leading disclosure track left
+   the icon in it and squeezed the input into 26px. */
 .navtree[data-variant="sheet"] .navtree-tab-row:has(.navtree-rename) {
-  grid-template-columns: var(--nt-disc) var(--nt-col-icon) minmax(0, 1fr);
+  grid-template-columns: var(--nt-col-icon) minmax(0, 1fr);
 }
 /* Gutters are applied to NAMED items, never blanket-adjacency. A `* + *` rule
    also charges the fixed 22px status track, whose item then overflows it and
@@ -535,6 +545,7 @@
 }
 .navtree-tab-meta:not(:empty) {
   min-width: var(--nt-col-meta);
+  margin-left: var(--nt-gutter);
 }
 /* No schedule: no width AND no gutter. Most rows are this one. */
 .navtree-tab-meta:empty {

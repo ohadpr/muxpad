@@ -7,6 +7,7 @@ import {
 } from '@muxpad/shared';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { Fragment, Suspense, lazy, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../api';
 import { HOUSE_CHAT_CREATE, HOUSE_CHAT_PANE_CREATE } from '../lib/agent-backend';
 import { createDragOrigin } from '../lib/drag-origin';
@@ -710,7 +711,12 @@ function WorkspaceNode({
             <span className="navtree-name-text">{workspace.name}</span>
           </Link>
         )}
-        {!expanded && workspace.tab_count > 0 && (
+        {/* Everything from here down stands down while the row is being
+            renamed — the same rule TabRow follows. The editing template is two
+            tracks wide, so a chip or a button left rendered resolves into an
+            IMPLICIT column and takes the width the input needs (measured: a
+            22px rename box). */}
+        {!isEditing && !expanded && workspace.tab_count > 0 && (
           // Collapsed rows surface what they're hiding — a quiet tab
           // count, file-navigator style.
           <span className="navtree-ws-count" aria-hidden="true">
@@ -726,17 +732,19 @@ function WorkspaceNode({
             Collapsed-ONLY, for the same reason the tab-count chip is: once the
             tabs are listed they carry their own marks, and a rollup on top of
             them would just double-signal. */}
-        <span className="navtree-tab-controls">
-          <button
-            type="button"
-            className="navtree-close"
-            onClick={(e) => void closeWorkspace(e)}
-            title="Close workspace"
-            aria-label={`Close workspace ${workspace.name}`}
-          >
-            <SvgClose size={13} />
-          </button>
-        </span>
+        {!isEditing && (
+          <span className="navtree-tab-controls">
+            <button
+              type="button"
+              className="navtree-close"
+              onClick={(e) => void closeWorkspace(e)}
+              title="Close workspace"
+              aria-label={`Close workspace ${workspace.name}`}
+            >
+              <SvgClose size={13} />
+            </button>
+          </span>
+        )}
         {/* LAST cell, always — same rule as the tab rows, which is what puts
             the workspace mark on the same vertical line as the tab marks
             beneath it instead of 4px off (the old flex order had the × after
@@ -745,7 +753,7 @@ function WorkspaceNode({
             a rollup on top would double-signal — but it still renders an
             `idle` StatusMark rather than nothing, so the column is reserved
             and expanding a workspace doesn't shift its own header. */}
-        <StatusMark status={expanded ? 'idle' : workspace.status} />
+        {!isEditing && <StatusMark status={expanded ? 'idle' : workspace.status} />}
       </div>
       {expanded && (
         <TabList
@@ -1684,23 +1692,25 @@ function TabRow({
           ) : null}
         </Link>
       )}
-      {/* META — the third grid track. Holds the schedule and nothing else.
-            The subagent count used to ride here (as an absolutely-positioned
-            chip hanging off the status mark) and is gone: it moved the mark
-            off the scan line, and "6 agents" is a number you act on inside
-            the chat, not from the rail. */}
-      {!isEditing ? (
-        <span className="navtree-tab-meta">{tab.crons ? <CronMark tab={tab} /> : null}</span>
-      ) : null}
       {/* Hover-revealed controls — DESKTOP ONLY, and deliberately placed
-            BEFORE the status mark. They expand from zero width on hover, and
+            BEFORE both the meta cell and the status mark. Two separate
+            reasons, and the second one is a hard constraint:
+            (a) they expand from zero width on hover, and
             anything that grows to the RIGHT of the rail drags the mark off the
             scan line for exactly the row you happen to be pointing at. In
             their own cell (which swallows its grid gap while collapsed) the
             status column stays the last, fixed track in the grid, so the marks
             hold their line under every condition — hover, focus, drag,
-            whatever. Touch renders none of this: the sheet's pin and close
-            live under the row, behind a left swipe. */}
+            whatever;
+            (b) DOM order among grid children with explicit `grid-column`
+            must be ASCENDING by track. Grid's placement cursor only moves
+            forward, so an item pinned to a track BEHIND the cursor starts a
+            new implicit ROW. This block sits in track 3 and meta in track 4;
+            emitting meta first put the controls and the status mark on a
+            second line underneath the name — measured, and invisible to an
+            x-only alignment check, since every row broke identically.
+            Touch renders none of this: the sheet's pin and close live under
+            the row, behind a left swipe. */}
       {affords.pinButton || affords.closeButton ? (
         <span className="navtree-tab-controls">
           {/* A pinned tab keeps its pin lit — that is the only "this is
@@ -1733,6 +1743,14 @@ function TabRow({
             </button>
           ) : null}
         </span>
+      ) : null}
+      {/* META — the third grid track. Holds the schedule and nothing else.
+            The subagent count used to ride here (as an absolutely-positioned
+            chip hanging off the status mark) and is gone: it moved the mark
+            off the scan line, and "6 agents" is a number you act on inside
+            the chat, not from the rail. */}
+      {!isEditing ? (
+        <span className="navtree-tab-meta">{tab.crons ? <CronMark tab={tab} /> : null}</span>
       ) : null}
       {/* The status rail — the LAST track, fixed width, so its x is a
             property of the row's right edge and nothing in front of it can
@@ -1841,6 +1859,22 @@ function TabRow({
   );
 }
 
+/**
+ * Portal target for the row overlays.
+ *
+ * The menu and the icon picker are viewport-positioned (`position: fixed`),
+ * and they are rendered as children of a nav ROW. On the sheet that row is
+ * wrapped in a SwipeRow whose face always carries a `transform` — a
+ * transformed element becomes the containing block for its fixed descendants,
+ * and the swipe shell's `overflow: hidden` then clips them to one 46px row.
+ * Measured: `fixed; inset: 0` resolved to the row's own box. Portalling to
+ * <body> puts them back in the viewport's coordinate space, which is what
+ * their arithmetic above already assumes.
+ */
+function Overlay({ children }: { children: React.ReactNode }) {
+  return createPortal(children, document.body);
+}
+
 /** One row in a NavContextMenu. With `submenu`, the row opens a flyout of
  *  child rows on hover instead of acting on click. */
 interface MenuItem {
@@ -1882,78 +1916,80 @@ function NavContextMenu({
   // viewport, so the submenu doesn't run off-screen.
   const flyoutLeft = left > window.innerWidth / 2;
   return (
-    <div
-      className="navtree-menu-backdrop"
-      onMouseDown={onDismiss}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        onDismiss();
-      }}
-    >
+    <Overlay>
       <div
-        ref={menuRef}
-        className="navtree-menu"
-        style={{ left, top }}
-        onMouseDown={(e) => e.stopPropagation()}
-        role="menu"
+        className="navtree-menu-backdrop"
+        onMouseDown={onDismiss}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onDismiss();
+        }}
       >
-        {items.map((it) =>
-          it.submenu ? (
-            <div
-              key={it.label}
-              className="navtree-menu-sub"
-              onMouseEnter={() => setOpenSub(it.label)}
-              onMouseLeave={() => setOpenSub(null)}
-            >
-              <button
-                type="button"
-                className="navtree-menu-item navtree-menu-item-parent"
-                role="menuitem"
-                aria-haspopup="menu"
-                aria-expanded={openSub === it.label}
-                onClick={() => setOpenSub((cur) => (cur === it.label ? null : it.label))}
+        <div
+          ref={menuRef}
+          className="navtree-menu"
+          style={{ left, top }}
+          onMouseDown={(e) => e.stopPropagation()}
+          role="menu"
+        >
+          {items.map((it) =>
+            it.submenu ? (
+              <div
+                key={it.label}
+                className="navtree-menu-sub"
+                onMouseEnter={() => setOpenSub(it.label)}
+                onMouseLeave={() => setOpenSub(null)}
               >
-                <span>{it.label}</span>
-                <span className="navtree-menu-caret" aria-hidden="true">
-                  ›
-                </span>
+                <button
+                  type="button"
+                  className="navtree-menu-item navtree-menu-item-parent"
+                  role="menuitem"
+                  aria-haspopup="menu"
+                  aria-expanded={openSub === it.label}
+                  onClick={() => setOpenSub((cur) => (cur === it.label ? null : it.label))}
+                >
+                  <span>{it.label}</span>
+                  <span className="navtree-menu-caret" aria-hidden="true">
+                    ›
+                  </span>
+                </button>
+                {openSub === it.label && (
+                  <div className={`navtree-submenu${flyoutLeft ? ' -left' : ''}`} role="menu">
+                    {it.submenu.map((sub) => (
+                      <button
+                        key={sub.label}
+                        type="button"
+                        className="navtree-menu-item"
+                        role="menuitem"
+                        onClick={() => {
+                          onDismiss();
+                          sub.onSelect();
+                        }}
+                      >
+                        {sub.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button
+                key={it.label}
+                type="button"
+                className={it.danger ? 'navtree-menu-item -danger' : 'navtree-menu-item'}
+                role="menuitem"
+                onClick={() => {
+                  onDismiss();
+                  it.onSelect?.();
+                }}
+              >
+                {it.label}
               </button>
-              {openSub === it.label && (
-                <div className={`navtree-submenu${flyoutLeft ? ' -left' : ''}`} role="menu">
-                  {it.submenu.map((sub) => (
-                    <button
-                      key={sub.label}
-                      type="button"
-                      className="navtree-menu-item"
-                      role="menuitem"
-                      onClick={() => {
-                        onDismiss();
-                        sub.onSelect();
-                      }}
-                    >
-                      {sub.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          ) : (
-            <button
-              key={it.label}
-              type="button"
-              className={it.danger ? 'navtree-menu-item -danger' : 'navtree-menu-item'}
-              role="menuitem"
-              onClick={() => {
-                onDismiss();
-                it.onSelect?.();
-              }}
-            >
-              {it.label}
-            </button>
-          ),
-        )}
+            ),
+          )}
+        </div>
       </div>
-    </div>
+    </Overlay>
   );
 }
 
@@ -1981,25 +2017,27 @@ function IconPicker({
   const left = Math.max(4, Math.min(x, window.innerWidth - W - 4));
   const top = Math.max(4, Math.min(y, window.innerHeight - H - 4));
   return (
-    <div
-      className="navtree-menu-backdrop"
-      onMouseDown={onDismiss}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        onDismiss();
-      }}
-    >
+    <Overlay>
       <div
-        ref={pickerRef}
-        className="navtree-emoji-popover"
-        style={{ left, top }}
-        onMouseDown={(e) => e.stopPropagation()}
+        className="navtree-menu-backdrop"
+        onMouseDown={onDismiss}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onDismiss();
+        }}
       >
-        <Suspense fallback={<div className="navtree-emoji-loading">Loading…</div>}>
-          <EmojiMartPicker theme={pickerTheme()} onPick={onPick} />
-        </Suspense>
+        <div
+          ref={pickerRef}
+          className="navtree-emoji-popover"
+          style={{ left, top }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <Suspense fallback={<div className="navtree-emoji-loading">Loading…</div>}>
+            <EmojiMartPicker theme={pickerTheme()} onPick={onPick} />
+          </Suspense>
+        </div>
       </div>
-    </div>
+    </Overlay>
   );
 }
 
