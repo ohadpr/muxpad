@@ -15,7 +15,7 @@ describe('tab row affordances — desktop sidebar', () => {
   it('offers the hover-revealed pin, and none of the touch controls', () => {
     expect(row({ variant: 'sidebar', paneCount: 3 })).toEqual({
       pinButton: true,
-      moreButton: false,
+      closeButton: true,
       paneExpander: false,
       paneCountChip: false,
       tapExpandsPanes: false,
@@ -28,21 +28,21 @@ describe('tab row affordances — desktop sidebar', () => {
 });
 
 describe('tab row affordances — mobile sheet', () => {
-  it('replaces the pin button with a ⋯ menu button', () => {
-    // Regression: the pin inherited the close button's sheet sizing, so it
-    // rendered as a second always-on 32px hit square at 16% opacity right
-    // where a thumb lands — a tap meant for the row silently toggled pinning,
-    // and a long-press meant for the menu hit a button with no press
-    // handlers. Pin/unpin lives in the ⋯ menu on touch.
+  it('renders NO permanent per-row control — not the pin, not the ×', () => {
+    // Every always-on hit square on a sheet row sits exactly where a thumb
+    // lands while scrolling, which made the two commonest mis-taps in the app
+    // "closed a chat I meant to open" and "opened a menu I meant to scroll
+    // past". Both controls moved under the row, behind a deliberate left
+    // swipe (see swipe-axis). Desktop is untouched.
     const a = row({ variant: 'sheet', paneCount: 1 });
     expect(a.pinButton).toBe(false);
-    expect(a.moreButton).toBe(true);
+    expect(a.closeButton).toBe(false);
   });
 
   it('a SINGLE-pane tab is a plain row: no chevron, no chip, tap opens it', () => {
     expect(row({ variant: 'sheet', paneCount: 1 })).toEqual({
       pinButton: false,
-      moreButton: true,
+      closeButton: false,
       paneExpander: false,
       paneCountChip: false,
       tapExpandsPanes: false,
@@ -52,7 +52,7 @@ describe('tab row affordances — mobile sheet', () => {
   it('a MULTI-pane tab announces itself: chevron + count, and tap expands', () => {
     expect(row({ variant: 'sheet', paneCount: 4 })).toEqual({
       pinButton: false,
-      moreButton: true,
+      closeButton: false,
       paneExpander: true,
       paneCountChip: true,
       tapExpandsPanes: true,
@@ -78,8 +78,13 @@ describe('tab row affordances — mobile sheet', () => {
 
   it('an inline rename stands every row control down', () => {
     const a = row({ variant: 'sheet', paneCount: 4, isEditing: true });
-    expect(a.moreButton).toBe(false);
+    expect(a.closeButton).toBe(false);
     expect(a.paneExpander).toBe(false);
+    // Desktop too: the × and pin would otherwise sit beside the input and
+    // steal the width the name needs while you're typing into it.
+    const d = row({ variant: 'sidebar', paneCount: 1, isEditing: true });
+    expect(d.pinButton).toBe(false);
+    expect(d.closeButton).toBe(false);
   });
 
   it('editing does not hide the count chip’s meaning for a collapsed row', () => {

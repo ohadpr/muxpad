@@ -8,13 +8,16 @@
  *    arrives. The pin lives there as a hover-revealed button and doubles as
  *    the "this is pinned" marker.
  *
- *  - The MOBILE sheet has no hover, so a hidden control is an invisible one.
- *    It also has no dependable long-press: the rows sit in a momentum-
- *    scrolling container (`.navtree-scroll`), and iOS hands that touch to the
- *    scroll recognizer, which reaches the page as `pointercancel` and kills
- *    the hold. So touch gets an explicit ⋯ button that opens the same menu on
- *    a plain tap, and does NOT get a second always-on pin square competing
- *    with the × for thumb space.
+ *  - The MOBILE sheet has no hover, and it no longer has ANY permanent
+ *    per-row control — no ×, no ⋯. Both were always-on hit squares parked
+ *    exactly where a thumb lands while scrolling, so the two most common
+ *    mis-taps in the whole app were "closed a chat I meant to open" and
+ *    "opened a menu I meant to scroll past". Pin and Close moved UNDER the
+ *    row, revealed by a left swipe (see lib/swipe-axis + NavTree's
+ *    SwipeRow) — the standard iOS list idiom, discoverable by muscle memory,
+ *    and impossible to hit by accident because it takes a deliberate
+ *    horizontal gesture. Long-press still opens the full context menu where
+ *    the OS lets it through; it is a bonus path, never the only one.
  *
  * The pane-count chip exists because a one-pane and a five-pane row looked
  * identical on the sheet yet behaved completely differently on tap (navigate
@@ -27,8 +30,8 @@ export type NavTreeVariantName = 'sidebar' | 'sheet';
 export interface TabRowAffordances {
   /** Hover-revealed pin/unpin button (desktop only). */
   pinButton: boolean;
-  /** ⋯ button opening the row's action menu (touch only). */
-  moreButton: boolean;
+  /** Hover-revealed close × (desktop only — touch swipes instead). */
+  closeButton: boolean;
   /** Leading chevron that expands the row into its pane list (touch only). */
   paneExpander: boolean;
   /** Subtle "N panes" chip — the one hint that a tap will expand, not navigate. */
@@ -51,8 +54,11 @@ export function tabRowAffordances(opts: {
   // just opens, which is the behavior that felt right all along.
   const picksPane = sheet && paneCount > 1;
   return {
-    pinButton: variant === 'sidebar',
-    moreButton: sheet && !isEditing,
+    pinButton: variant === 'sidebar' && !isEditing,
+    // Touch rows carry NO permanent controls at all now — see the swipe note
+    // above. Both the × and the ⋯ that preceded it are gone; pin and close
+    // live under the row, revealed by a left swipe.
+    closeButton: variant === 'sidebar' && !isEditing,
     paneExpander: picksPane && !isEditing,
     // Collapsed-only, mirroring the workspace chip: once the panes are listed
     // below, the count is right there and the chip would just double-signal.

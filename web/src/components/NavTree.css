@@ -27,7 +27,7 @@
 .navtree {
   /* Row metrics + surfaces are the only things the variants disagree on. */
   --nt-row-ws: 32px;
-  --nt-row-tab: 30px;
+  --nt-row-tab: 34px;
   --nt-hit: 24px; /* square hit target for the close button */
   --nt-disc: 18px; /* disclosure chevron column — narrow; the glyph is tiny */
   /* Tab leading-icon column. Tuned so a tab's icon lands directly under the
@@ -35,6 +35,31 @@
      hierarchy cue, so no extra text-column indent is spent. */
   --nt-indent: 12px;
   --nt-pill: 6px; /* selection/hover pill corner radius */
+
+  /* ─── The row grid ─────────────────────────────────────────────────────
+     Four tracks, and NOTHING absolutely positioned:
+
+       icon 22px │ name + headline (1fr, min-width 0) │ meta (auto) │ status 22px
+
+     The status column is LAST and fixed, so its x is a property of the row's
+     right edge alone — no name length, no revealed control, no chip in front
+     of it can move it, and every mark in the rail lands on one line you can
+     scan without reading a word. That is the whole reason this is a grid and
+     not the flex row it used to be: in flex, every trailing element's position
+     was the sum of everything before it. */
+  --nt-col-icon: 22px;
+  --nt-col-status: 22px;
+  /* Floor for the meta cell, wide enough that `◷ 07:00` and `◷ Sun 09:00`
+     right-align on the same digits instead of jittering row to row. A FLOOR,
+     not a reservation: rows with no schedule collapse it to zero (and swallow
+     its gutter), because a 240px rail cannot afford 62px of permanent blank. */
+  --nt-col-meta: 46px;
+  /* The status column plus the gutter that separates it from whatever
+     precedes it — one track, so the mark can sit flush right in it. */
+  --nt-rail: calc(var(--nt-col-status) + var(--nt-gutter));
+  /* 8px, not the prototype's 10px: that prototype's rail was 330px wide and
+     this one is 240px. At 10px the gutters alone ate 40px of a 207px row. */
+  --nt-gutter: 8px;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -49,10 +74,16 @@
 }
 .navtree[data-variant="sheet"] {
   --nt-row-ws: 44px;
-  --nt-row-tab: 42px;
+  /* Floor only — a row with a headline is ~58px. Never below 44px: that is
+     the smallest thing a thumb can hit reliably, and these rows ARE the
+     targets. */
+  --nt-row-tab: 46px;
   --nt-hit: 32px;
   --nt-disc: 24px;
   --nt-indent: 28px;
+  --nt-col-icon: 26px;
+  --nt-col-meta: 52px;
+  --nt-gutter: 10px;
   font-size: 15px;
 }
 
@@ -121,15 +152,27 @@
 
 /* ─── Workspace row (banded header) ──────────────────────────────────── */
 
+/* Same grid discipline as the tab rows, for the same reason and with the same
+   RIGHT edge: disclosure │ name (1fr) │ count │ controls │ status. Only then
+   does a collapsed workspace's mark land on the exact vertical line its tabs'
+   marks use. (In the old flex row the × came AFTER the mark, so hovering the
+   header shoved its mark 18px left, and the workspace mark sat 4px off every
+   tab mark below it even at rest — hence the pile of compensating margins
+   this replaces.) */
 .navtree-ws-row {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: var(--nt-disc) minmax(0, 1fr) auto auto var(--nt-rail);
   align-items: center;
+  column-gap: 4px;
   height: var(--nt-row-ws);
   padding: 0 4px;
   border-radius: var(--nt-pill);
   font-weight: 600;
   color: var(--fg);
+}
+.navtree-ws-row:has(.navtree-rename) {
+  grid-template-columns: var(--nt-disc) minmax(0, 1fr);
 }
 .navtree-ws-row:hover {
   background: var(--bg-hover);
@@ -266,23 +309,44 @@
    was no vertical line to scan. It was also ~1.4px of accent-mixed-with-grey
    over a 0.25-opacity track: about as quiet as a live indicator can be while
    still technically rendering. */
+/* Pinned to the LAST track by explicit line number (negative lines count from
+   the grid's end), not by DOM order. Half the items in front of it are
+   conditional — the pane-count chip, the workspace's tab count, the meta cell
+   — and with pure auto-placement a row that happened to be missing one would
+   shuffle its mark a track to the left. `-2 / -1` is the last column of
+   whatever template the variant declared, always.
+
+   Everything else auto-flows into the free tracks around these two. */
 .navtree-tab-row > .navtree-status,
-.navtree-ws-row > .navtree-status,
-.navtree-pane-row > .navtree-status {
-  /* Breathing room after the name (on top of the row's flex gap) — not jammed
-     against the text, not flung to the pill edge. */
-  margin-left: 4px;
-  margin-right: 2px;
-}
-/* Workspace rows carry NO flex `gap`, but `.navtree-close` still applies the
-   `margin-left: -4px` that exists to swallow one on tab rows. With nothing to
-   swallow, that -4px drags the whole trailing group 4px right — measured, the
-   workspace mark landed at x+4 relative to every tab mark below it, which is
-   precisely the vertical line this column exists to create. Pay the 4px back
-   here rather than adding a `gap` to the workspace row, which would also move
-   its disclosure, name and count chip. */
 .navtree-ws-row > .navtree-status {
-  margin-right: 6px;
+  grid-column: -2 / -1;
+  /* Flush to the track's right edge, which is the row's content edge. The
+     track is one gutter wider than the mark so the separation lives INSIDE
+     it — no margin on the mark, nothing in front of it that can shift it. */
+  justify-self: end;
+}
+.navtree-tab-row > .navtree-tab-controls,
+.navtree-ws-row > .navtree-tab-controls {
+  grid-column: -3 / -2;
+}
+
+/* The hover-revealed control group. Zero-width at rest AND pulling back its
+   own gutter, so a resting row measures exactly the four specified tracks and
+   the name keeps the width. On reveal it expands leftward — into the name, not
+   into the rail — which is why the status mark never moves. */
+.navtree-tab-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  /* Declines its gutter while it has no width to separate. */
+  margin-left: 0;
+}
+.navtree-tab-row:hover > .navtree-tab-controls,
+.navtree-tab-row:focus-within > .navtree-tab-controls,
+.navtree-tab-row:has(.navtree-pin.is-pinned) > .navtree-tab-controls,
+.navtree-ws-row:hover > .navtree-tab-controls,
+.navtree-ws-row:focus-within > .navtree-tab-controls {
+  margin-left: var(--nt-gutter);
 }
 
 /* Quiet tab-count chip on collapsed rows — says what's folded away. */
@@ -316,16 +380,54 @@
   padding-bottom: 2px;
 }
 
+/* THE grid (see --nt-col-* above for why). Column order is DOM order, and the
+   trailing `auto` track between meta and status is the hover-revealed control
+   group — it collapses to zero and swallows its own gutter, so at rest the row
+   is exactly the four specified tracks. */
 .navtree-tab-row {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: var(--nt-col-icon) minmax(0, 1fr) auto auto var(--nt-rail);
   align-items: center;
-  gap: 4px;
-  height: var(--nt-row-tab);
-  padding: 0 4px;
+  /* The gutter is an item MARGIN, not `column-gap`. A gap is charged between
+     every pair of adjacent tracks whether or not the track between them has
+     any content, so on a row with no schedule and no revealed control — which
+     is most rows — two dead 8px gutters were being billed against the name.
+     On a 207px row that is 8% of the width the name has to work with. As a
+     margin it belongs to the item, so an EMPTY item can decline to pay it. */
+  column-gap: 0;
+  min-height: var(--nt-row-tab);
+  /* The indent that steps a tab under its workspace name used to be the
+     link's padding-left. In the grid it has to be the ROW's, or the icon
+     column starts at the pill edge and the hierarchy step disappears. */
+  padding: 5px 4px 5px calc(4px + var(--nt-indent));
   border-radius: var(--nt-pill);
   color: var(--fg-dim);
   font-weight: 500;
+}
+/* Sheet: the pane-disclosure chevron LEADS the row, so it needs its own track
+   in front of the icon. Rendered (as a zero-content spacer) on every sheet row
+   so single- and multi-pane tabs share one grid. No control tracks — touch
+   rows carry no permanent buttons at all. */
+.navtree[data-variant="sheet"] .navtree-tab-row {
+  grid-template-columns: var(--nt-disc) var(--nt-col-icon) minmax(0, 1fr) auto var(--nt-rail);
+  padding-left: 4px;
+}
+/* Renaming collapses the row to icon + input: the meta, controls and status
+   all stand down, and a 5-track template would strand the input in one narrow
+   cell. */
+.navtree-tab-row:has(.navtree-rename) {
+  grid-template-columns: var(--nt-col-icon) minmax(0, 1fr);
+}
+.navtree[data-variant="sheet"] .navtree-tab-row:has(.navtree-rename) {
+  grid-template-columns: var(--nt-disc) var(--nt-col-icon) minmax(0, 1fr);
+}
+/* Gutters are applied to NAMED items, never blanket-adjacency. A `* + *` rule
+   also charges the fixed 22px status track, whose item then overflows it and
+   drags the mark off the scan line — measured 8px, which is exactly the kind
+   of drift this grid exists to prevent. */
+.navtree-tab-row > .navtree-tab-icon {
+  margin-right: var(--nt-gutter);
 }
 .navtree-tab-row:hover {
   color: var(--fg);
@@ -347,20 +449,16 @@
   background: color-mix(in srgb, var(--accent) 20%, var(--bg));
 }
 
+/* The 1fr cell: two stacked lines, both of which must be free to ellipsise.
+   `min-width: 0` is load-bearing — a grid item's default `min-width: auto` is
+   its min-CONTENT width, so without it a long chat name refuses to shrink and
+   pushes the meta and status tracks off the rail entirely. */
 .navtree-tab-link {
-  flex: 1;
   min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 100%;
-  /* Indent tab text past the workspace name, so the parent→child step
-     reads from alignment alone (replaces the old guide hairline). */
-  padding-left: var(--nt-indent);
-
-  /* Trailing gutter so the name never kisses the pill edge once the close
-     button collapses away — keeps a touch of breathing room on the right. */
-  padding-right: 6px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
   color: inherit;
   text-decoration: none;
   -webkit-touch-callout: none;
@@ -369,6 +467,65 @@
 }
 .navtree-tab-link:hover {
   text-decoration: none;
+}
+/* Line one — name, plus the chips that qualify it. */
+.navtree-tab-titleline {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  line-height: 18px;
+}
+
+/* ─── Headline (line two) ─────────────────────────────────────────────────
+   WHAT this chat is currently about. One line, dim, ellipsised, NEVER wrapped
+   — a rail whose rows changed height with the length of a summary would stop
+   being scannable, which is the only thing it is for. Two steps down from the
+   name in both size and colour so the eye still lands on the name first; this
+   is the answer to "which of these do I want", not the thing you read.
+
+   Absent renders nothing at all: the row is simply one line tall. There is no
+   placeholder and no error state here by design (see the schema note on
+   `headline`). */
+.navtree-tab-headline {
+  font-size: 11.5px;
+  line-height: 15px;
+  color: var(--fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.navtree[data-variant="sheet"] .navtree-tab-titleline {
+  line-height: 20px;
+}
+.navtree[data-variant="sheet"] .navtree-tab-headline {
+  font-size: 12px;
+  line-height: 16px;
+}
+/* On the active row the name goes accent; hold the headline back so the pair
+   keeps its hierarchy instead of both lighting up. */
+.navtree-tab-row[data-active="true"] .navtree-tab-headline {
+  color: var(--fg-dim);
+  opacity: 0.75;
+}
+
+/* ─── Meta column ─────────────────────────────────────────────────────────
+   The schedule, and nothing else. Right-aligned against the status rail so the
+   times form their own column. Collapses to nothing — gutter included — on the
+   rows that have no schedule, which is most of them. */
+.navtree-tab-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+}
+.navtree-tab-meta:not(:empty) {
+  min-width: var(--nt-col-meta);
+}
+/* No schedule: no width AND no gutter. Most rows are this one. */
+.navtree-tab-meta:empty {
+  margin-left: 0;
 }
 
 /* Ctrl-held quick-switch chip (sidebar only) — same accent chip language
@@ -391,38 +548,59 @@
   line-height: 1;
 }
 
-/* ─── Schedule mark (⏱) ─────────────────────────────────────────────────
-   "This chat runs on a schedule" — a PROPERTY of the tab, so it sits with the
-   other facts about it (icon, name, pane count) rather than in the status
-   rail, which holds one transient state in a fixed column meant to be scanned
-   vertically. Sized and toned like the pane-count chip: legible on purpose,
-   quiet on purpose. `flex: 0 0 auto` so an ellipsized name shrinks around it
-   instead of pushing it out of the row. */
+/* ─── Schedule mark (◷ 07:00) ─────────────────────────────────────────────
+   "This chat runs on a schedule, and next at —". A PROPERTY of the tab, so it
+   sits in its own meta column rather than in the status rail, which holds one
+   transient state (and which a cron would lose to the moment it actually
+   fired — precisely when you'd want to know a schedule exists).
+
+   MONOSPACE with tabular figures, and right-aligned, so `◷ 07:00` and
+   `◷ Sun 09:00` stack with their digits on the same vertical lines. A
+   proportional font would make every row's time a different width and the
+   column would read as noise. `baseline` alignment, not centre: the glyph and
+   the digits have very different cap heights.
+
+   `flex: 0 0 auto` so an ellipsised name shrinks around it rather than
+   pushing it out of the row. */
 .navtree-cron {
   flex: 0 0 auto;
-  margin-left: 4px;
-  font-size: 10px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  font-family: var(--chrome-font);
+  font-size: 10.5px;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+/* Set BACK from the digits: the glyph only says what KIND of number follows,
+   so it shouldn't compete with the number itself. */
+.navtree-cron-glyph {
+  font-size: 11px;
   line-height: 1;
-  color: var(--nt-dim, var(--dim));
-  opacity: 0.75;
+  opacity: 0.6;
   /* The glyph renders as coloured emoji on some platforms; force the text
      presentation so it matches the rest of the row's monochrome chrome. */
   font-variant-emoji: text;
 }
 .navtree-tab-row[data-active="true"] .navtree-cron {
-  opacity: 0.9;
+  color: var(--fg-dim);
+}
+.navtree[data-variant="sheet"] .navtree-cron {
+  font-size: 11.5px;
 }
 
 /* ─── Close affordance (per-row) ─────────────────────────────────────── */
 
 .navtree-close {
   /* Collapsed to zero width while hidden so it doesn't steal room from the
-     tab name; the negative margin swallows the row's flex gap so the name
-     gets the full width back. It only claims its hit-area on hover/focus
-     (below), where it visibly pushes the name in. */
+     tab name. It only claims its hit-area on hover/focus (below), where it
+     visibly pushes the name in — never the rail, which is why the whole group
+     sits in a track BEFORE the status column. */
   flex: 0 0 0;
   width: 0;
-  margin-left: -4px;
   /* 18px square when revealed — the exact box the strip tabs' × uses; the
      row is taller, so it centers as an inset square (not a full-height slab). */
   height: 18px;
@@ -444,19 +622,14 @@
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
-/* Touch has no hover — keep close faintly present (and sized) on the sheet. */
-/* Sheet: the leading pane-expander supplies the tab indent — adding the
-   text indent on top floated names mid-row and made pane children render
-   LEFT of their parent. */
-.navtree[data-variant="sheet"] .navtree-tab-link {
-  padding-left: 0;
-}
-
-.navtree[data-variant="sheet"] .navtree-close {
+/* Sheet: WORKSPACE and PANE rows keep their × (both are still flex rows and
+   neither is swipeable). TAB rows on the sheet render no × at all — pin and
+   close live under the row behind a left swipe. */
+.navtree[data-variant="sheet"] .navtree-ws-row .navtree-close,
+.navtree[data-variant="sheet"] .navtree-pane-row-wrap .navtree-close {
   flex-basis: var(--nt-hit);
   width: var(--nt-hit);
   height: var(--nt-hit); /* touch needs the full hit square */
-  margin-left: 0;
   /* Kept faint so the always-on column of ×'s recedes to a hint instead of a
      heavy stripe down the edge — the full hit-square is still there, it's just
      quiet until you reach for it (press → full below). */
@@ -464,7 +637,6 @@
 }
 /* The row you're on gets a slightly more present × — it's the one you're most
    likely to close, so it shouldn't need hunting. */
-.navtree[data-variant="sheet"] .navtree-tab-row[data-active="true"] .navtree-close,
 .navtree[data-variant="sheet"] .navtree-ws-row[data-active="true"] .navtree-close,
 .navtree[data-variant="sheet"] .navtree-pane-row-wrap[data-active="true"] .navtree-close {
   opacity: 0.4;
@@ -477,7 +649,6 @@
 .navtree-close:focus-visible {
   flex-basis: 18px;
   width: 18px;
-  margin-left: 0;
   opacity: 1;
 }
 /* Same hover grammar as the strip tabs' ×: quiet hover square, danger-red
@@ -493,8 +664,8 @@
    transition), then overrides only what must differ: pinning is not a
    destructive action, so it never goes danger-red, and a PINNED tab keeps its
    pin permanently visible — that lit pin is the only "this is pinned" signal
-   (no new badges by design). Touch never renders this button; the sheet's ⋯
-   menu owns pin/unpin there. */
+   (no new badges by design). Touch never renders this button; the sheet's
+   swipe tray owns pin/unpin there. */
 .navtree-pin:hover {
   background: var(--bg-hover);
   color: var(--accent);
@@ -502,7 +673,6 @@
 .navtree-pin.is-pinned {
   flex-basis: 18px;
   width: 18px;
-  margin-left: 0;
   /* Quiet by default: a column of bright pins would out-shout the attention
      dots, which are the signals that actually want you. It brightens with
      the rest of the row's controls on hover. */
@@ -515,29 +685,6 @@
   color: var(--accent);
 }
 
-/* ─── ⋯ tab actions (SHEET only) ─────────────────────────────────────── */
-/* The one reliable route to a tab's actions on touch. It reuses the close
-   button's box (same hit square, same collapse machinery) but NOT its
-   meaning: never danger-red, and noticeably more present than the ×'s 16%,
-   because unlike the × it is not a shortcut for something you can do another
-   way — it IS the way. */
-.navtree[data-variant="sheet"] .navtree-more {
-  opacity: 0.55;
-  color: var(--fg-dim);
-}
-.navtree[data-variant="sheet"] .navtree-tab-row[data-active="true"] .navtree-more {
-  opacity: 0.85;
-}
-/* Variant-scoped so these BEAT the resting rule above — an unscoped
-   `.navtree-more:active` (0,2,0) would lose to `.navtree[…] .navtree-more`
-   (0,3,0) and the button would never acknowledge the tap. */
-.navtree[data-variant="sheet"] .navtree-more:hover,
-.navtree[data-variant="sheet"] .navtree-more:active,
-.navtree[data-variant="sheet"] .navtree-more:focus-visible {
-  background: var(--bg-hover);
-  color: var(--fg);
-  opacity: 1;
-}
 
 /* Pane-count hint on a collapsed multi-pane row (sheet). Same chip as
    .navtree-ws-count on a collapsed workspace — reused verbatim so it carries
@@ -801,10 +948,16 @@
 /* ─── Tab leading icon + picker ──────────────────────────────────────── */
 
 /* Fixed leading column so every tab row has a glyph in the same place. */
+/* Exactly the width of its grid track, and it CLIPS. Emoji metrics vary
+   wildly by platform and family — several render well past their nominal em
+   box — and an icon that overflows its track lands on the first letter of the
+   name. (It did: 🪐 sat on the R of "Reading List" on the sheet, where the
+   glyph is 26px in a 22px track.) */
 .navtree-tab-icon {
   flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
+  width: var(--nt-col-icon);
+  height: var(--nt-col-icon);
+  overflow: hidden;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -818,8 +971,6 @@
   user-select: none;
 }
 .navtree[data-variant="sheet"] .navtree-tab-icon {
-  width: 26px;
-  height: 26px;
   font-size: 1.25em;
 }
 .navtree-tab-icon:hover {
