@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import type { AgentMode, PaneSpec } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createAgentBridge } from '../agent-bridge.js';
 import { openDb } from '../store/db.js';
 import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
 
@@ -30,8 +31,8 @@ describe('agent modes over HTTP', () => {
       db,
       dataDir: tmp,
       agentBridge: {
+        ...createAgentBridge(),
         send: () => ({ ok: false, reason: 'test bridge' }),
-        turnActive: () => null,
         setMode: (paneId, mode) => {
           if (!runnerConnected) return false;
           relayed.push({ paneId, mode });
