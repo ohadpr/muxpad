@@ -23,25 +23,78 @@ import type { SubagentProgress } from '@muxpad/shared';
  * evict a live agent, so liveness must never depend on the SDK pumping.
  *
  * ── The invariant that makes that safe ───────────────────────────────────
- * EVERY path that ends a subagent must say so. There are exactly three:
+ * EVERY path that ends a subagent must say so. There are exactly four:
  *   1. its non-launch-ack `tool_result`      (a foreground Task completing)
- *   2. its `<task-notification>`             (a background Task completing)
- *   3. {@link retireAll}                     (a Stop or a failed turn, which
+ *   2. its finish notice                     (a background Task completing:
+ *      the SDK's `system/task_notification`, or the `<task-notification>`
+ *      the harness injects into the conversation when no turn is open)
+ *   3. {@link reconcileBackground}           (the SDK's authoritative LEVEL
+ *      signal — `system/background_tasks_changed` carries the full set of
+ *      live background tasks, so an end whose edge we missed is still caught)
+ *   4. {@link retireAll}                     (a Stop or a failed turn, which
  *      take their background tasks down with them and announce it NOWHERE —
  *      no tool_result, no finish notice)
  * Miss one and the entry is immortal: the pane reads `working` until the
  * runner process dies, and the keepalive re-announces the ghost every tick.
+ *
+ * ── Membership: TOP-LEVEL launches only ──────────────────────────────────
+ * `activity()` used to ADOPT any `parent_tool_use_id` it had never seen
+ * launched. That is the over-counting bug (2026-08, live pane: 19 rostered,
+ * 7 real). A subagent can itself spawn subagents, and a NESTED agent's
+ * traffic arrives on the SAME top-level SDK stream carrying the nested
+ * tool_use id (SDK probe, 0.3.220 — see the roster tests). But its LAUNCH
+ * never appears at top level (it rides its parent's `parent_tool_use_id`),
+ * and neither does its END: the nested `tool_result` and finish notice are
+ * delivered to the PARENT agent's message stream. An adopted grandchild is
+ * therefore structurally immortal — no end-path can ever reach it, and every
+ * research fan-out permanently inflated the pane's `agents:` count.
+ *
+ * So: an entry exists IFF we saw its top-level `Task`/`Agent` `tool_use`.
+ * Unknown ids are ignored, and the pane counts what its chat can render.
  */
 export interface RosterEntry extends SubagentProgress {
   lastSentAt: number;
   dirty: boolean;
+  /** The SDK task id (`system/task_started`) behind this tool_use, once seen.
+   *  Only this lets the LEVEL signal — which speaks task ids, not tool_use
+   *  ids — reconcile against the roster. */
+  taskId?: string;
+  /** True once {@link taskId} has been observed in a live background-task
+   *  LEVEL payload. Reconciliation only ever retires entries it has actually
+   *  seen running in the background: a FOREGROUND Task never appears in that
+   *  payload, so it must not be swept by its absence. */
+  background?: boolean;
 }
 
 /** Minimum gap between two progress frames for the same subagent. */
 const PROGRESS_THROTTLE_MS = 500;
 
+/**
+ * Hard bound on roster size — a backstop, NOT a policy. Real fan-outs top out
+ * around a dozen concurrent top-level background agents; anything past this is
+ * a leak, and a leak must never again render an absurd number in the status
+ * rail. Exceeding it retires the least-recently-active entry and logs, so the
+ * count stays bounded and the cause stays visible.
+ */
+export const MAX_ROSTER_ENTRIES = 32;
+
+/** Rate limit for the cap warning. */
+const OVERFLOW_WARN_INTERVAL_MS = 60_000;
+
+/** The roster's own bookkeeping fields, stripped for the wire. */
+function wireProgress(p: RosterEntry): SubagentProgress {
+  const { lastSentAt, dirty, taskId, background, ...progress } = p;
+  return progress;
+}
+
 export class SubagentRoster {
   private readonly entries = new Map<string, RosterEntry>();
+  /** The most recent live background-task LEVEL payload (task ids). Kept so a
+   *  `task_started` that lands AFTER its level event can still mark its entry
+   *  as background — the SDK documents that ordering as unspecified. */
+  private lastLevel = new Set<string>();
+  /** Clock of the last cap warning (0 = never). */
+  private lastOverflowWarnAt = Number.NEGATIVE_INFINITY;
 
   /**
    * @param emit Sends one `subagent` frame to the server.
@@ -70,17 +123,20 @@ export class SubagentRoster {
   private send(p: RosterEntry): void {
     p.lastSentAt = this.now();
     p.dirty = false;
-    const { lastSentAt, dirty, ...progress } = p;
-    this.emit(progress);
+    this.emit(wireProgress(p));
   }
 
   /**
-   * Register a subagent at its LAUNCH (the parent's Task/Agent `tool_use`), so
-   * the roster knows about it before its first child message — and knows its
-   * description, which the child messages never carry. Idempotent.
+   * Register a subagent at its LAUNCH (the parent's TOP-LEVEL Task/Agent
+   * `tool_use`), so the roster knows about it before its first child message —
+   * and knows its description, which the child messages never carry.
+   *
+   * This is the ONLY way an entry is created: see the membership note above.
+   * Idempotent.
    */
   launch(toolUseId: string, label: string): void {
     if (this.entries.has(toolUseId)) return;
+    this.enforceCap();
     const p: RosterEntry = {
       toolUseId,
       steps: 0,
@@ -93,20 +149,56 @@ export class SubagentRoster {
     this.send(p);
   }
 
-  /** A message from this subagent. Throttled: an active one is chatty. */
+  /**
+   * A message from this subagent. Throttled: an active one is chatty.
+   *
+   * An id we never saw LAUNCHED is ignored — it belongs to a nested (grandchild)
+   * agent whose whole lifecycle is invisible at this level, so rostering it
+   * would be rostering something nothing can ever retire.
+   */
   activity(toolUseId: string, lastTool?: string): void {
-    let p = this.entries.get(toolUseId);
-    if (!p) {
-      // Child messages can outrun (or outlive) the launch we saw — a resumed
-      // session whose launch predates this process, for instance. Adopt the id.
-      p = { toolUseId, steps: 0, lastSentAt: 0, dirty: false };
-      this.entries.set(toolUseId, p);
-    }
+    const p = this.entries.get(toolUseId);
+    if (!p) return;
     p.steps++;
     if (lastTool) p.lastTool = lastTool;
     p.seenAt = this.now();
     p.dirty = true;
     if (this.now() - p.lastSentAt >= PROGRESS_THROTTLE_MS) this.send(p);
+  }
+
+  /**
+   * Bind the SDK task id (`system/task_started`) to the launching tool_use, so
+   * {@link reconcileBackground} — which speaks task ids — can find this entry.
+   * Ids we never launched (nested agents, background Bash) are ignored.
+   */
+  bindTask(toolUseId: string, taskId: string): void {
+    const p = this.entries.get(toolUseId);
+    if (!p) return;
+    p.taskId = taskId;
+    // The level payload may have arrived FIRST (the SDK documents the ordering
+    // as unspecified); if it named this task, it is already known-background.
+    if (this.lastLevel.has(taskId)) p.background = true;
+  }
+
+  /**
+   * The SDK's LEVEL signal: the complete set of live background task ids after
+   * a membership change. REPLACE semantics, so it is the one source of truth
+   * that a missed edge cannot wedge — an entry we have SEEN in this set and
+   * that has now left it is finished, whatever else did or didn't arrive.
+   *
+   * Only entries observed as background are eligible: a foreground Task never
+   * appears here, and sweeping it on absence would evict a live agent.
+   */
+  reconcileBackground(liveTaskIds: readonly string[]): void {
+    this.lastLevel = new Set(liveTaskIds);
+    for (const p of [...this.entries.values()]) {
+      if (!p.taskId) continue;
+      if (this.lastLevel.has(p.taskId)) {
+        p.background = true;
+      } else if (p.background) {
+        this.done(p.toolUseId);
+      }
+    }
   }
 
   /**
@@ -117,12 +209,35 @@ export class SubagentRoster {
     const p = this.entries.get(toolUseId);
     if (!p) return;
     this.entries.delete(toolUseId);
-    const { lastSentAt, dirty, ...progress } = p;
-    this.emit({ ...progress, done: true });
+    this.emit({ ...wireProgress(p), done: true });
   }
 
   /**
-   * Retire the WHOLE roster — the third end-path. A Stop or a failed turn kills
+   * Keep the roster under {@link MAX_ROSTER_ENTRIES} by retiring the
+   * least-recently-active entry. Reaching this means an end-path is leaking —
+   * the log says so — but the status rail stays bounded meanwhile.
+   */
+  private enforceCap(): void {
+    while (this.entries.size >= MAX_ROSTER_ENTRIES) {
+      let oldest: RosterEntry | undefined;
+      for (const p of this.entries.values()) {
+        if (!oldest || (p.seenAt ?? 0) < (oldest.seenAt ?? 0)) oldest = p;
+      }
+      if (!oldest) return;
+      // One line per overflow episode, not one per launch — a leaking roster
+      // would otherwise fill the pane's terminal face.
+      if (this.now() - this.lastOverflowWarnAt >= OVERFLOW_WARN_INTERVAL_MS) {
+        this.lastOverflowWarnAt = this.now();
+        this.log(
+          `⚠ subagent roster hit its ${MAX_ROSTER_ENTRIES}-entry cap — retiring the stalest entry (${oldest.label ?? oldest.toolUseId}). An end-path is leaking.`,
+        );
+      }
+      this.done(oldest.toolUseId);
+    }
+  }
+
+  /**
+   * Retire the WHOLE roster — the fourth end-path. A Stop or a failed turn kills
    * its background tasks (live-verified), and those deaths produce no
    * tool_result and no finish notice, so nothing else would ever remove them.
    */
