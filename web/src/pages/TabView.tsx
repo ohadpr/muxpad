@@ -40,7 +40,7 @@ import { usePaneFace } from '../lib/pane-face';
 import { consumePushFocusPane } from '../lib/push-focus';
 import { setTabViewMode, useTabViewMode } from '../lib/tab-view-mode';
 import { useDismissable } from '../lib/use-dismissable';
-import { refreshTabs, useTabs } from '../tabs';
+import { freshTabs, refreshTabs, useTabs } from '../tabs';
 import { useMediaQuery } from '../use-media-query';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
 
@@ -630,7 +630,12 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     let cancelled = false;
     (async () => {
       try {
-        const tabs = await api.listTabs(workspace.id);
+        // Go through the shared cache, not a raw api.listTabs(): this effect
+        // runs one mount-tick after useTabs() above already fetched the very
+        // same list, so a direct call was a guaranteed duplicate GET on every
+        // cold load. freshTabs() joins that request (or reuses its result if
+        // it just landed) and refetches otherwise.
+        const tabs = await freshTabs(workspace.id);
         const found = tabs.find((t) => t.slug === tabSlug);
         if (!found) {
           // The shared tabs cache said this slug exists but the fresh list

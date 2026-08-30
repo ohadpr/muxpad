@@ -40,6 +40,7 @@ export async function refreshWorkspaces(opts?: { broadcast?: boolean }): Promise
   const shouldBroadcast = opts?.broadcast !== false;
   const myVersion = ++version;
   const next = await api.listWorkspaces({ all: true });
+  settledAt = Date.now();
   if (myVersion < version) return next;
   cache = next;
   for (const fn of listeners) fn(cache);
@@ -100,8 +101,29 @@ let pollTimer: number | null = null;
  * that was already in flight before their write landed.
  */
 let inFlightMount: Promise<Workspace[]> | null = null;
-function refreshOnMount(): void {
+
+/**
+ * When the list last landed, and how long that counts as current.
+ *
+ * The in-flight coalescer above only catches CONCURRENT mounts, and boot is a
+ * staircase, not a burst: AppLayout fetches the workspaces, and only once they
+ * land does WorkspaceShell mount, and only once ITS tabs land does TabView
+ * mount — each asking for the same list a few milliseconds after the previous
+ * answer arrived, with nothing in flight to join. That is how a cold load came
+ * to issue five `GET /api/workspaces?all=1` in 200ms, each one synchronously
+ * walking workspaces → tabs → panes through better-sqlite3.
+ *
+ * 2s is comfortably under the 5s poll (so nothing gets less fresh than it was)
+ * and comfortably over the mount staircase. Deliberately NOT applied to the
+ * exported `refreshWorkspaces`, which post-mutation callers use to read back
+ * their own write.
+ */
+let settledAt = 0;
+const FRESH_MS = 2000;
+
+export function refreshWorkspacesOnMount(): void {
   if (inFlightMount) return;
+  if (Date.now() - settledAt < FRESH_MS) return; // another mount just fetched it
   inFlightMount = refreshWorkspaces().finally(() => {
     inFlightMount = null;
   });
@@ -161,7 +183,7 @@ export function useWorkspaces(): {
     listeners.add(setState);
     // Mount-time refresh is also coalesced: N components mounting in the same
     // tick share one in-flight request.
-    refreshOnMount();
+    refreshWorkspacesOnMount();
     acquireDriver();
     return () => {
       listeners.delete(setState);

@@ -1,7 +1,8 @@
 # `muxpad cron` — a server-owned scheduler that writes into the agent send queue
 
 **Date:** 2026-08-14
-**Status:** Design, unbuilt.
+**Status:** **Built** (2026-08-30, phases 1–3). See §7 for as-built deltas —
+the design below is the intent; where the implementation diverged, §7 wins.
 **Goal:** replace reliance on the Agent SDK's session-scoped `CronCreate` with a
 muxpad-owned scheduling primitive that is durable, visible, editable, testable,
 catches up after downtime, and works for every backend.
@@ -327,3 +328,151 @@ it doesn't remove it.
 **3. Some of this wants a trigger, not a schedule.** PR opened, file changed, mail
 arrived. A 5-minute poll is a crude trigger. The same table can grow
 `trigger_kind = 'schedule' | 'watch'` later — don't build it now.
+
+---
+
+## 7. As-built deltas (2026-08-30)
+
+Phases 1, 2 and 3 shipped. The design above held up; these are the places the
+implementation deliberately diverged, and why.
+
+### Schema and plumbing
+
+- **Migration is v22, not v19.** v19–v21 landed between the design and the
+  build (globals/hidden workspaces, session_history, agent modes + the living
+  sidebar). Versions 2–5 remain burned.
+- **Extra columns beyond §3.1:** `mode` (the new-tab fire's agent overlay),
+  `max_open`, `close_when_done`, `open_tabs` (JSON list of the tabs a new-tab
+  cron currently has open), and `jitter_ms` (below). `cron_runs` gained
+  `target_tab` so a new-tab run points at what it created.
+- **No FK on `target_pane`.** §3.3a asked for pane deletion to disable the
+  cron, not delete it — an `ON DELETE` cascade would do the opposite. The
+  scheduler handles it: a fire against a missing pane disables the cron once,
+  loudly, with a push.
+- **`cron_runs` is trimmed on every insert** (newest 50 per cron), not swept
+  later. A bound applied lazily is not a bound.
+
+### Scheduling
+
+- **Deterministic jitter (new).** Every cron carries an id-derived offset,
+  capped at `min(30 min, interval/2)`, folded into the persisted
+  `next_due_at`. Without it every daily cron fires at exactly :00 and a dozen
+  of them stampede the runner fleet and the model API in the same second.
+  Derived from the id rather than `Math.random()` so `next_due_at` stays
+  reproducible across restarts and testable at any point — the two properties
+  this scheduler exists for. Every surface (`cron list`, `cron show`, the
+  sidebar ⏱ tooltip) shows the **jittered** time, never the nominal one: the
+  displayed time is the truth, not the schedule's aspiration. The nominal slot
+  is recovered exactly as `next_due_at - jitter_ms`, so catch-up enumeration is
+  unaffected.
+- **A "missed" fire needs a grace.** §3.2's catch-up policies say nothing about
+  how late is late. A slot older than 3 ticks (90 s) is missed; anything newer
+  is simply this tick's fire arriving a beat late. Without it a punctual fire
+  could carry a spurious `[N missed]` marker — a lie to the agent.
+- **Catch-up enumeration is capped** at 1000 occurrences. A `* * * * *` cron
+  across a month of downtime is ~44k slots; under `catchup=all` that would be
+  an attempt to enqueue 44k messages.
+- **NO 7-day expiry, deliberately** — silent expiry is one of the failure modes
+  this replaces (§1.3). The runaway bound is a ceiling on *enabled* crons (100)
+  plus the run-log trim, both of which can only ever refuse a *new* thing,
+  never silently retire a working one.
+- **`quiet_mins` reads a new signal.** §3.3a proposed `conn.lastSendAt`, but
+  that is bumped by *any* relay including the cron's own — a 5-minute cron with
+  `quiet_mins` set would have deferred itself forever. `ws.ts` now tracks
+  `lastHumanSendAt` separately, with provenance read off the message itself (a
+  fire carries its marker), so it survives the durable queue and a restart. The
+  turn-done push gate moved to the same signal, which is what its comment
+  already claimed ("autonomous wakeup/cron turns do push").
+- **Fail-fast on `dead` reads the raw bit, not the rolled-up status.**
+  `getStatus` ranks `working` above `dead` (right for the nav — a spinner says
+  more than a ×), so a corpse still dribbling pty output read as `working` and
+  silently disarmed the guard in exactly the case it exists for. Added
+  `PtydCache.isDead()`.
+- **A manual `cron run` never counts toward the failure streak.** The user is
+  watching it fail; one bad hand-test must not retire a working nightly job.
+- **Resume and schedule edits re-anchor.** A cron paused for a week must not
+  wake up to a week of catch-up it was deliberately not meant to run.
+
+### §3.9 is dropped
+
+The runner MCP tool (`muxpad_cron_create`) is **unnecessary**. Every agent on
+every backend already receives `<dataDir>/agent-instructions.md` and has the
+`muxpad` CLI on PATH, so the migration path off `CronCreate` is a paragraph of
+prose, not 30 lines of MCP. The seed now says, in as many words: **do not use
+your harness's built-in scheduler** — session-scoped, drifting, silently
+expiring, no catch-up, invisible — use `muxpad cron new` instead, with the
+common `--pane` invocation and the list/run/pause/rm verbs. (Seed only; the
+user's live copy is user-owned and never overwritten.)
+
+### New-tab mode
+
+- **`close_when_done` defaults ON** for new-tab crons. §3.3 left it optional
+  because "tabs pile up" was the guardrail's whole job; since then every
+  session is archived and FTS-searchable (`server/src/archive/`), so closing a
+  finished cron tab loses nothing — the conversation is still findable with
+  `muxpad search`. Two things still hold a tab open, because both mean the
+  agent has something *for you* that a search won't surface: a pending question
+  (the pane is blocked) and an artifact (an attachment on the pane). A `fatal`
+  turn also keeps it — a crashed run is exactly what you want to look at.
+- **New-tab fires default to ⚡ Do mode** (`agent-modes.ts`). Terse and
+  result-first is exactly what a scheduled job's report should be. Pane mode
+  inherits the pane's existing mode; the column is ignored there.
+- **`max_open` is enforced against tabs that still exist**, pruned on each
+  fire, so a manually-closed tab frees the slot immediately.
+
+### `on_context=rotate` carries context (important)
+
+As designed, `rotate` spawned a **clean-context** agent — which, for a
+long-running domain chat, means a confidently amnesiac one whose output is
+indistinguishable from a good one. Rotation now takes a **handoff briefing**
+from the rotating pane (`chat/summarize.ts`, extracted from the summarize
+route) and injects it, delimited as `<muxpad-carryover>`, ahead of the cron
+prompt. If a briefing cannot be produced, we **do not rotate** — we record
+`skipped: carryover-failed`. Losing a fire is recoverable; silently amnesiac
+output is not. The briefing SOURCE is a single injected dependency
+(`CronSchedulerDeps.carryover`), so a future per-chat dossier replaces it
+without touching the scheduler.
+
+### Visual indication
+
+A cron is a **property** of a chat, not a status, so it deliberately does not
+touch the status rail (`StatusMark`: one transient, mutually-exclusive state,
+right-aligned in a fixed column meant to be scanned vertically — and it would
+lose to `working` at exactly the moment a fire happened). Instead a quiet ⏱
+sits on the **name** side of the nav row, in both the sidebar and the sheet
+(one `TabRow` component serves both), with the cron name and next-due time in
+the tooltip, localized client-side. When a cron fires, the existing `working`
+status covers the activity — the mark itself never changes.
+
+The association is folded into the tab row by `decorateTab` (`crons`,
+`next_cron`), sourced from **one** query per sidebar list (`cronsByTab`), never
+one per row — the tab list is polled every 5 s, so a per-row lookup would have
+been the hottest query in the app. A route test asserts the query count.
+
+In-transcript, a fire renders as the existing `notice` chat event with a new
+`cron` variant (`⏱ pr-sweep · 09:00`) above the prompt it delivered. The
+message is wrapped in a `<muxpad-cron …>` marker that is both the render hook
+and a real instruction to the model ("a scheduled job, not a human"); the split
+happens on both transcript roads — Claude's raw JSONL and the codex/cursor
+normalized log — so all three backends render a fire identically.
+
+### Confirmed, not built
+
+- **Fires land BETWEEN turns, never mid-response.** This is inherited, not
+  implemented: `submitSend` queues while a turn is in flight, and the queue
+  drains one message per turn on `turn-done`. There is an e2e test asserting it
+  so a future "just send it directly" shortcut can't quietly break it.
+- **§4's non-goals all stand.** No job runner, nothing in ptyd, no second
+  injection path, no sub-minute granularity, no distributed locking.
+- **§6 risk 2 (uptime) is unchanged and still real.** muxpad now runs under
+  launchd (`KeepAlive`), which is most of the mitigation, but a cron is still
+  only as reliable as its host; catch-up softens that, it doesn't remove it.
+
+### Extractions made along the way
+
+`bootstrapTab` / `deleteTabCascade` (`server/src/agent-tab.ts`) and
+`summarizePane` (`server/src/chat/summarize.ts`) were lifted out of
+`routes/tabs.ts` and `routes/summary.ts` unchanged, so a cron-created tab is
+built and torn down by the *same* code as a hand-created one. A second
+hand-written copy of "how you make an agent tab" is how the two would have
+drifted on the next change to the startup-command shape.

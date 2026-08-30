@@ -1,9 +1,9 @@
 import { execSync } from 'node:child_process';
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib';
-import { defineConfig, type Plugin } from 'vite';
+import { brotliCompressSync, gzipSync, constants as zlibConstants } from 'node:zlib';
 import react from '@vitejs/plugin-react';
+import { type Plugin, defineConfig } from 'vite';
 
 // Date-based version derived from HEAD's commit date (YYYY.MM.DD).
 // Surfaced in the chrome wordmark so users (and bug reporters) can tell
