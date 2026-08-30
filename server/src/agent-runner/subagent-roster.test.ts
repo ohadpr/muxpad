@@ -124,6 +124,30 @@ describe('SubagentRoster — every end-path announces itself', () => {
     expect(sent).toHaveLength(before);
   });
 
+  it('5: retireUnstarted clears a launch that never ran, and only that', () => {
+    // A `Task` tool_use can be delivered and then RETRACTED (a refused leg
+    // superseded by the fallback), or otherwise never execute: no task_started,
+    // no tool_result, no child traffic, never in the level set. Not one of the
+    // other end-paths can reach it, and on a SUCCESSFUL turn retireAll doesn't
+    // run — so without this it is immortal.
+    const { roster, sent, tick } = make();
+    roster.launch('tu_retracted', 'never ran');
+    roster.launch('tu_background', 'a real background agent');
+    roster.launch('tu_foreground', 'a real foreground agent');
+    roster.bindTask('tu_background', 'task_bg'); // it started
+    tick(600);
+    roster.activity('tu_foreground', 'Read: a.ts'); // it is working
+
+    roster.retireUnstarted();
+    expect(roster.values().map((p) => p.toolUseId)).toEqual(['tu_background', 'tu_foreground']);
+    expect(sent.at(-1)).toMatchObject({ toolUseId: 'tu_retracted', done: true });
+
+    // Emphatically NOT the turn-clearing regression: run it every turn for the
+    // life of a long-lived background agent and it never touches it.
+    for (let i = 0; i < 20; i++) roster.retireUnstarted();
+    expect(roster.size).toBe(2);
+  });
+
   it('retireAll on an empty roster is silent', () => {
     const { roster, sent } = make();
     roster.retireAll('turn failed');
