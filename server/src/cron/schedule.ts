@@ -232,23 +232,3 @@ export function firesDue(expr: string, tz: string, anchor: number, now: number):
   }
   return { fires, capped: fires.length >= MAX_CATCHUP_FIRES };
 }
-
-/**
- * Human, zone-correct rendering of an instant — used by `muxpad cron list`
- * so the next-due column reads in the cron's OWN zone, not the terminal's.
- */
-export function formatInZone(at: number, tz: string): string {
-  try {
-    return new Intl.DateTimeFormat('en-GB', {
-      timeZone: tz,
-      weekday: 'short',
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    }).format(new Date(at));
-  } catch {
-    return new Date(at).toISOString();
-  }
-}
