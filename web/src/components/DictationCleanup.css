@@ -1,0 +1,138 @@
+/* Dictation cleanup — the mobile-only "fix what the mic misheard" control.
+   Two variants, because the composers it lives in have different grammars:
+   `-terminal` matches MobileInputBar's squared-off keys, `-chat` matches
+   ChatPane's round ghost buttons. */
+
+.cleanup-btn {
+  flex: 0 0 auto;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  /* Kill iOS's double-tap-zoom delay so a quick tap isn't swallowed. */
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ≥44px touch target without a 44px-tall button.
+   The visible control matches its neighbours (32px in the terminal bar, 36px
+   in the chat pill) — growing it would leave the row visually lopsided — so the
+   HIT AREA is extended past the paint with a transparent overlay. The overlay
+   only grows vertically, into the composer's own padding and the 6-8px gap
+   above the row; horizontally it stays inside the button's column, so it can
+   never steal a tap from Send, the camera, or the Esc/Tab keys beside it. */
+.cleanup-btn::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -6px;
+  bottom: -6px;
+  /* min 44px total: 32 + 6 + 6 (terminal) / 36 + 6 + 6 (chat). */
+}
+
+.cleanup-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ── Terminal composer (MobileInputBar) ─────────────────────────────────── */
+.cleanup-btn.-terminal {
+  width: 36px;
+  height: 32px;
+  background: var(--bg-elev);
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.cleanup-btn.-terminal:active:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+.cleanup-btn.-terminal.-undo {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ── Chat composer (ChatPane pill) ──────────────────────────────────────── */
+.cleanup-btn.-chat {
+  align-self: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--chat-dim);
+  transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+}
+.cleanup-btn.-chat:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--chat-fg) 10%, transparent);
+  color: var(--chat-fg);
+}
+.cleanup-btn.-chat:active:not(:disabled) {
+  transform: scale(0.92);
+}
+.cleanup-btn.-chat:focus:not(:focus-visible) {
+  outline: none;
+}
+.cleanup-btn.-chat.-undo {
+  color: var(--chat-accent);
+  border: 1.5px solid color-mix(in srgb, var(--chat-accent) 55%, transparent);
+}
+
+/* Busy spinner — same construction as the chat attach spinner so the two read
+   as one system. */
+.cleanup-spin {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  opacity: 0.8;
+  animation: cleanup-spin 720ms linear infinite;
+}
+@keyframes cleanup-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cleanup-spin {
+    animation: none;
+  }
+  .cleanup-btn.-chat {
+    transition: none;
+  }
+}
+
+/* ── The "what changed" line ────────────────────────────────────────────── */
+.cleanup-hint {
+  font-size: 12px;
+  line-height: 1.35;
+  /* One glance, not a report: long substitution lists ellipsize rather than
+     pushing the composer up the screen. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cleanup-hint.-terminal {
+  padding: 0 2px 2px;
+  color: var(--fg-dim);
+  font-family: var(--chrome-font);
+}
+.cleanup-hint.-terminal.-error {
+  color: var(--danger);
+  white-space: normal;
+}
+.cleanup-hint.-chat {
+  padding: 2px 12px 0;
+  color: color-mix(in srgb, var(--chat-fg) 55%, transparent);
+}
+.cleanup-hint.-chat.-error {
+  color: color-mix(in srgb, var(--chat-danger, #e5484d) 82%, var(--chat-fg));
+  white-space: normal;
+}
