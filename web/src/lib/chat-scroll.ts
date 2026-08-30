@@ -102,9 +102,16 @@ export function scrollTopAfterOlderPrepend(opts: {
   anchorTop: number;
 }): number {
   if (opts.pinned) {
-    return Math.max(0, opts.newScrollHeight - opts.clientHeight);
+    return maxScrollTop(opts.newScrollHeight, opts.clientHeight);
   }
-  return opts.newScrollHeight - opts.anchorHeight + opts.anchorTop;
+  // CLAMPED. If clientHeight changed between capturing the anchor and
+  // applying it (a composer resize, a viewport change), the raw arithmetic
+  // can land outside the scrollable range. The browser would clamp the real
+  // scrollTop but the caller still stamps the UNCLAMPED value as
+  // `lastProgrammaticTop`, so the very next scroll event reads as "the
+  // reader took control" — unpinning them mid-history for no reason.
+  const raw = opts.newScrollHeight - opts.anchorHeight + opts.anchorTop;
+  return Math.min(Math.max(0, raw), maxScrollTop(opts.newScrollHeight, opts.clientHeight));
 }
 
 /** Pin policy on (re)activation: no memory → follow bottom (fresh / other device). */
@@ -117,14 +124,57 @@ export function pinnedFromMemory(mem: ChatScrollMem | null): boolean {
  * Soft match: either side unset is OK (hello hasn't bound yet / saved early).
  * Only a REAL mismatch (both set, different) blocks — /clear or resume.
  */
-export function scrollMemorySidMatches(
-  memSid: string | null,
-  renderedSid: string | null,
-): boolean {
+export function scrollMemorySidMatches(memSid: string | null, renderedSid: string | null): boolean {
   return !memSid || !renderedSid || memSid === renderedSid;
 }
 
 /** Max scrollTop for an element — browsers clamp assignments above this. */
 export function maxScrollTop(scrollHeight: number, clientHeight: number): number {
   return Math.max(0, scrollHeight - clientHeight);
+}
+
+/**
+ * How long after a pane becomes visible its scroll events are ignored for
+ * PIN/MEMORY purposes.
+ *
+ * A pane un-hidden from display:none delivers scroll events while its layout
+ * is still settling: `clientHeight` is back but `scrollTop` may still be the
+ * stale (or engine-zeroed) value, and the composer's height hasn't regrown.
+ * The first such event used to be read as "the reader scrolled": it set
+ * `userScrolled`, killed the settling restore, flipped `pinnedToBottom` to
+ * false and wrote that to memory — so a chat stopped following new messages
+ * while plainly visible, and stayed that way. That is what made the bug
+ * STICKY rather than a one-off jump.
+ *
+ * Two animation frames is the shortest window that reliably spans the
+ * relayout; we use a small wall-clock budget instead of counting frames so a
+ * throttled background tab can't leave the window open forever.
+ */
+export const SHOW_SETTLE_MS = 250;
+
+/**
+ * How long a smooth `scrollTo` glide is suppressed for. The animation emits a
+ * scroll event per frame, none of which is the reader: read as gestures they
+ * would unpin the chat the "jump to latest" button just pinned, and persist a
+ * mid-glide ratio if the pane is hidden before the glide finishes.
+ */
+export const SMOOTH_SCROLL_SETTLE_MS = 600;
+
+/**
+ * Should this scroll event be allowed to change pin state / scroll memory?
+ *
+ * `suppressedUntil` is a timestamp the component stamps when it starts moving
+ * the scroll itself (a show transition, a smooth jump-to-bottom); 0 means
+ * nothing is in flight. A REAL gesture clears it — distrusting scroll events
+ * for a moment is right, distrusting the reader never is, so the component
+ * zeroes this the instant a wheel/touch arrives.
+ *
+ * Pure so the rule is testable without a DOM: the component supplies clock
+ * readings (monotonic ones — see performance.now at the call site).
+ */
+export function scrollEventIsTrustworthy(opts: {
+  suppressedUntil: number;
+  now: number;
+}): boolean {
+  return opts.now >= opts.suppressedUntil;
 }
