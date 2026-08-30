@@ -103,6 +103,10 @@ function markApplied(id: string): void {
   }
 }
 
+function unmarkApplied(id: string): void {
+  applied.delete(id);
+}
+
 /** Test seam — reset the applied-once memory between cases. */
 export function resetAppliedPushTargets(): void {
   applied.clear();
@@ -144,30 +148,96 @@ const SHOW_PANE_DELAY_MS = 60;
  */
 export function applyPushTarget(target: PushTarget, deps: PushTargetDeps): boolean {
   if (alreadyApplied(target.id)) return false;
+  // Marked BEFORE the body so a second channel arriving mid-apply is deduped;
+  // rolled back on a throw, because a tap that blew up was not applied and the
+  // caller (main.tsx) must be free to let the service worker escalate to a
+  // real navigation instead of acking a tap that went nowhere.
   markApplied(target.id);
+  try {
+    if (target.tab_id && target.pane_id) {
+      deps.rememberPane(target.tab_id, target.pane_id);
+      deps.forceFocusPane(target.tab_id, target.pane_id);
+    }
 
-  if (target.tab_id && target.pane_id) {
-    deps.rememberPane(target.tab_id, target.pane_id);
-    deps.forceFocusPane(target.tab_id, target.pane_id);
-  }
+    const route = routeFromDeepLink(target.url);
+    if (route) {
+      deps.navigateToTab({ ...route, paneId: target.pane_id });
+    } else {
+      deps.navigateToPath(target.url);
+    }
 
-  const route = routeFromDeepLink(target.url);
-  if (route) {
-    deps.navigateToTab({ ...route, paneId: target.pane_id });
-  } else {
-    deps.navigateToPath(target.url.split('?')[0] ?? target.url);
-  }
-
-  if (target.pane_id) {
-    const paneId = target.pane_id;
-    let tries = 0;
-    const fire = () => {
-      deps.showPane(paneId);
-      if (++tries < SHOW_PANE_TRIES) deps.schedule(fire, SHOW_PANE_INTERVAL_MS);
-    };
-    deps.schedule(fire, SHOW_PANE_DELAY_MS);
+    if (target.pane_id) {
+      const paneId = target.pane_id;
+      let tries = 0;
+      const fire = () => {
+        deps.showPane(paneId);
+        if (++tries < SHOW_PANE_TRIES) deps.schedule(fire, SHOW_PANE_INTERVAL_MS);
+      };
+      deps.schedule(fire, SHOW_PANE_DELAY_MS);
+    }
+  } catch (err) {
+    unmarkApplied(target.id);
+    throw err;
   }
   return true;
+}
+
+/**
+ * The one door every tap goes through, with a HOLDING AREA in front of it.
+ *
+ * A tap can arrive before the app can act on it. The service worker's
+ * dead-drop is drained at module scope — before `createRoot().render()` has
+ * run, so before the router has committed a location — and `applyPushTarget`
+ * at that moment routes into a router that isn't listening yet. The tap is
+ * then simply gone: the app foregrounds on whatever it was showing, which is
+ * the exact complaint this whole path exists to fix.
+ *
+ * So: queue until `ready()`, then apply. And when several taps queue up, apply
+ * only the NEWEST — two navigations in a row means the first one was never
+ * seen, and the user tapped the second one because that's the one they care
+ * about. The losers are marked applied so the other delivery channel can't
+ * resurrect them a moment later.
+ */
+export type PushDelivery =
+  /** Routed. */
+  | 'applied'
+  /** Accepted but not routed yet — the router isn't mounted. */
+  | 'held'
+  /** Already routed through the other channel. */
+  | 'duplicate';
+
+export interface PushTargetSink {
+  /** Route now, or hold it until ready(). Throws only if applying throws. */
+  deliver: (target: PushTarget) => PushDelivery;
+  /** The app can route. Flushes anything held. Idempotent. */
+  ready: () => void;
+  /** Test seam: is a tap waiting? */
+  held: () => PushTarget | null;
+}
+
+export function createPushTargetSink(deps: PushTargetDeps): PushTargetSink {
+  let open = false;
+  let queued: PushTarget | null = null;
+  return {
+    deliver(target) {
+      if (open) return applyPushTarget(target, deps) ? 'applied' : 'duplicate';
+      if (alreadyApplied(target.id)) return 'duplicate';
+      if (queued && queued.id !== target.id) {
+        // Superseded. Burn its id so the dead-drop / postMessage twin of the
+        // same tap can't apply it after the newer one has landed.
+        markApplied(queued.id);
+      }
+      queued = target;
+      return 'held';
+    },
+    ready() {
+      open = true;
+      const t = queued;
+      queued = null;
+      if (t) applyPushTarget(t, deps);
+    },
+    held: () => queued,
+  };
 }
 
 /**
