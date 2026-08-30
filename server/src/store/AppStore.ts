@@ -135,12 +135,12 @@ export class AppStore {
   update(
     id: string,
     patch: {
-      name?: string;
-      cwd?: string;
-      command?: string;
-      url?: string;
-      autostart?: boolean;
-      enabled?: boolean;
+      name?: string | undefined;
+      cwd?: string | undefined;
+      command?: string | undefined;
+      url?: string | undefined;
+      autostart?: boolean | undefined;
+      enabled?: boolean | undefined;
     },
   ): App | null {
     const existing = this.getById(id);
