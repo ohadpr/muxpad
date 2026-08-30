@@ -309,3 +309,65 @@ export function createAppRegistry(deps: AppRegistryDeps): AppRegistry {
 
   return { containerId, materialize, start, stop, remove, reconcile };
 }
+
+/**
+ * How often the reconciler re-checks the registry against reality. Slow on
+ * purpose: reconcile is cheap but it is a REPAIR pass, not a supervisor — the
+ * per-pty work belongs to serve-supervisor.ts, which has its own rails.
+ */
+export const APP_RECONCILE_MS = 30_000;
+
+export interface AppReconcilerHandle {
+  stop(): void;
+  reconcile(): Promise<void>;
+}
+
+/**
+ * Wire the reconciler into a running server: a boot pass, a slow interval, and
+ * a pass on every ptyd (re)connect.
+ *
+ * THE INTERVAL IS NOT BELT-AND-BRACES. An app's pane can be destroyed by paths
+ * that know nothing about the registry — `DELETE /api/panes/:id`, a tab delete
+ * cascade, a hand-run SQL fix. `pane_id` then points at nothing, and until this
+ * runs the app is down while reporting `starting` forever. Reconciling only on
+ * ptyd's reconnect would mean waiting for the next daemon restart, which on a
+ * healthy machine is days.
+ *
+ * The reconnect pass still matters and is not redundant: it repairs in a beat
+ * rather than up to 30 seconds, at exactly the moment things are most likely to
+ * be broken.
+ */
+export function startAppReconciler(
+  deps: AppRegistryDeps & {
+    registry?: AppRegistry;
+    /** Ptyd's reconnect signal. Returns a detach fn so stop() can let go —
+     *  otherwise start/stop cycles accumulate listeners that outlive us and a
+     *  reconnect landing during shutdown materialises panes for the next boot
+     *  to adopt. Same lesson as startServeSupervisor. */
+    onPtydConnected?: (fn: () => void) => (() => void) | undefined;
+    intervalMs?: number;
+  },
+): AppReconcilerHandle {
+  const registry = deps.registry ?? createAppRegistry(deps);
+  let stopped = false;
+  // The BOOT pass is the one that honours autostart=0; every later pass is a
+  // plain repair, so it must not re-apply that translation.
+  void registry.reconcile({ boot: true });
+  const timer = setInterval(() => {
+    if (!stopped) void registry.reconcile();
+  }, deps.intervalMs ?? APP_RECONCILE_MS);
+  timer.unref?.();
+  const onConnected = () => {
+    if (stopped) return;
+    void registry.reconcile();
+  };
+  const detach = deps.onPtydConnected?.(onConnected);
+  return {
+    stop: () => {
+      stopped = true;
+      clearInterval(timer);
+      detach?.();
+    },
+    reconcile: () => registry.reconcile(),
+  };
+}
