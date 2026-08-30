@@ -205,7 +205,8 @@ async function click(
     notification: { close, data },
     waitUntil: (p: Promise<unknown>) => pending.push(p),
   });
-  // The no-ack path waits on a real 700ms timer; run it out rather than sleep.
+  // The no-ack path waits on a real ACK_TIMEOUT_MS timer; run it out rather
+  // than sleep.
   const settled = Promise.all(pending);
   await vi.advanceTimersByTimeAsync(2000);
   await settled;
@@ -367,6 +368,52 @@ describe('sw notificationclick', () => {
     await click(h);
     expect(app.postMessage).toHaveBeenCalled();
     expect(popout.postMessage).not.toHaveBeenCalled();
+  });
+
+  it('…not even when the popout is the FOCUSED window', async () => {
+    // The case that actually happens, and the one a weighted score got wrong:
+    // the popout is in front of you, so it scored `focused`, which outweighed
+    // the single point a real app window got for being a real app window.
+    const popout = ackingClient({
+      id: 'pop',
+      url: 'https://mux/p/P9',
+      focused: true,
+      visibilityState: 'visible',
+    });
+    const app = ackingClient({ id: 'app', url: 'https://mux/w/dev/t/one' });
+    const h = loadClickWorker([popout, app]);
+    await click(h);
+    expect(app.postMessage).toHaveBeenCalled();
+    expect(popout.postMessage).not.toHaveBeenCalled();
+  });
+
+  it('opens a real window rather than commandeering the only doc window', async () => {
+    const doc = ackingClient({ id: 'doc', url: 'https://mux/doc', focused: true });
+    const h = loadClickWorker([doc]);
+    await click(h);
+    expect(doc.postMessage).not.toHaveBeenCalled();
+    expect(h.openWindow).toHaveBeenCalledWith('/w/dev/t/tab?ptab=T1&pane=P1');
+  });
+
+  it('a TARGETLESS push only brings the app forward', async () => {
+    // The cron reporter and POST /api/push/test send `/` — "something
+    // happened", with no pane behind it. Routing that pulls a running app off
+    // whatever the user was doing and dumps it on the root redirect, and the
+    // dead-drop would sit there ready to do it again on the next focus.
+    const win = ackingClient({ id: 'a', url: 'https://mux/w/dev/t/one', focused: true });
+    const h = loadClickWorker([win]);
+    await click(h, { url: '/', tag: 'cron' });
+    expect(win.focus).toHaveBeenCalled();
+    expect(win.postMessage).not.toHaveBeenCalled();
+    expect(h.cachePut).not.toHaveBeenCalled();
+    expect(h.openWindow).not.toHaveBeenCalled();
+  });
+
+  it('a targetless push with NO window open still opens the app', async () => {
+    const h = loadClickWorker([]);
+    await click(h, { url: '/', tag: 'cron' });
+    expect(h.openWindow).toHaveBeenCalledWith('/');
+    expect(h.cachePut).not.toHaveBeenCalled();
   });
 
   it('ignores nested (iframe) clients — a pane web face is not the app window', async () => {

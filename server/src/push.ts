@@ -242,7 +242,10 @@ export function notificationTitle(input: {
 }): string {
   const { tabName, label, position, siblings } = input;
   if (!tabName) return 'muxpad';
-  const named = label?.trim() || (siblings > 1 ? `Pane ${position + 1}` : null);
+  // A negative position means "not in its own tab's list" — a row read while it
+  // was being deleted. Printing "Pane <siblings+1>" there names a pane that
+  // cannot exist; say nothing instead.
+  const named = label?.trim() || (siblings > 1 && position >= 0 ? `Pane ${position + 1}` : null);
   if (!named) return tabName;
   if (named.toLowerCase() === tabName.trim().toLowerCase()) return tabName;
   return `${named} · ${tabName}`;
@@ -343,11 +346,14 @@ export function createPaneNotifier(
     });
     void push.send({
       // "pane · tab" — the workspace ("— Personal") was noise on a phone's one
-      // line; ws is still resolved below for the deep-link slug.
+      // line; ws is resolved above for the deep-link slug and the hidden check.
       title: notificationTitle({
         tabName: tab ? tab.name : null,
         label: pane ? opts?.label?.trim() || paneLabel(pane, liveLabel?.(paneId)) : null,
-        position: idx < 0 ? siblings.length : idx,
+        // Negative when the pane is not in its own tab list (a row read mid-
+        // delete). notificationTitle reads that as "no position" rather than
+        // inventing a "Pane N+1" that cannot exist.
+        position: idx,
         siblings: siblings.length,
       }),
       body,
