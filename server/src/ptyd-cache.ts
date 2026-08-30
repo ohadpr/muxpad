@@ -578,6 +578,8 @@ export function decorateTab(
   /** Pre-read manual-unread set, when the caller already has one for the
    *  whole workspace (the list path) — saves a query per row. */
   manualUnreadIds?: ReadonlySet<string>,
+  /** Pre-read cron summary per tab, for the same reason (see cronsByTab). */
+  cronsByTabId?: ReadonlyMap<string, TabCronSummary>,
 ): Tab {
   const panes = new PaneStore(db);
   const tabs = new TabStore(db);
@@ -593,8 +595,103 @@ export function decorateTab(
     ...(manualUnread ? (['done'] as const) : []),
   ]);
   const agents = tabPanes.reduce((n, p) => n + cache.getSubagentCount(p.id), 0);
+  // A SCHEDULE, not a status: folded in here (rather than queried per row in
+  // the client or the renderer) so the sidebar costs ONE cron query per list,
+  // not one per tab. Absent when the tab has none, so the payload — and the
+  // client's change-dedup signature — is unchanged for every tab without a cron.
+  const cron = cronsByTabId ? cronsByTabId.get(tab.id) : cronsForTab(db, tab.id);
   // Deprecated alias, exact by construction (see PaneStatusSchema).
-  return { ...tab, attention, unread, busy: status === 'working', status, agents };
+  return {
+    ...tab,
+    attention,
+    unread,
+    busy: status === 'working',
+    status,
+    agents,
+    ...(cron ? { crons: cron.count, next_cron: cron.next } : {}),
+  };
+}
+
+/** Per-tab cron rollup: how many enabled crons target its panes, and which
+ *  fires soonest (the ⏱ tooltip). */
+export interface TabCronSummary {
+  count: number;
+  next: { name: string; next_due_at: number };
+}
+
+interface CronTabRow {
+  tab_id: string;
+  name: string;
+  next_due_at: number;
+}
+
+/**
+ * ONE query for a whole workspace's tabs: enabled pane-targeted crons joined
+ * through their pane to its tab. The sidebar renders dozens of rows on every
+ * 5s poll, so a per-row lookup here would be the most-executed query in the
+ * app; this is the same pre-read shape `unreadIdsByWorkspace` already uses.
+ *
+ * new-tab crons are deliberately absent: they belong to a WORKSPACE and have
+ * no tab until they fire, so there is no row to mark.
+ */
+export function cronsByTab(
+  db: Database.Database,
+  workspaceId?: string,
+): Map<string, TabCronSummary> {
+  const rows = (
+    workspaceId === undefined
+      ? db
+          .prepare(
+            `SELECT p.tab_id AS tab_id, c.name AS name, c.next_due_at AS next_due_at
+             FROM crons c JOIN panes p ON p.id = c.target_pane
+            WHERE c.enabled = 1 AND c.target_kind = 'pane'`,
+          )
+          .all()
+      : db
+          .prepare(
+            `SELECT p.tab_id AS tab_id, c.name AS name, c.next_due_at AS next_due_at
+               FROM crons c
+               JOIN panes p ON p.id = c.target_pane
+               JOIN tabs t ON t.id = p.tab_id
+              WHERE c.enabled = 1 AND c.target_kind = 'pane' AND t.workspace_id = ?`,
+          )
+          .all(workspaceId)
+  ) as CronTabRow[];
+  return foldCronRows(rows);
+}
+
+/** Single-tab variant, for the emit paths that decorate one row at a time. */
+function cronsForTab(db: Database.Database, tabId: string): TabCronSummary | undefined {
+  let rows: CronTabRow[];
+  try {
+    rows = db
+      .prepare(
+        `SELECT p.tab_id AS tab_id, c.name AS name, c.next_due_at AS next_due_at
+           FROM crons c JOIN panes p ON p.id = c.target_pane
+          WHERE c.enabled = 1 AND c.target_kind = 'pane' AND p.tab_id = ?`,
+      )
+      .all(tabId) as CronTabRow[];
+  } catch {
+    // A DB that predates the crons table (a test fixture built at an older
+    // migration) must not break tab decoration — the ⏱ is an accessory.
+    return undefined;
+  }
+  return foldCronRows(rows).get(tabId);
+}
+
+function foldCronRows(rows: CronTabRow[]): Map<string, TabCronSummary> {
+  const out = new Map<string, TabCronSummary>();
+  for (const r of rows) {
+    const cur = out.get(r.tab_id);
+    if (!cur) {
+      out.set(r.tab_id, { count: 1, next: { name: r.name, next_due_at: r.next_due_at } });
+    } else {
+      cur.count += 1;
+      if (r.next_due_at < cur.next.next_due_at)
+        cur.next = { name: r.name, next_due_at: r.next_due_at };
+    }
+  }
+  return out;
 }
 
 /**

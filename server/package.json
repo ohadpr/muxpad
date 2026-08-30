@@ -17,6 +17,7 @@
     "@hono/node-server": "^1.13.7",
     "@muxpad/shared": "workspace:*",
     "better-sqlite3": "^11.5.0",
+    "cron-parser": "^5.10.0",
     "hono": "^4.6.10",
     "node-pty": "^1.0.0",
     "ulid": "^2.3.0",

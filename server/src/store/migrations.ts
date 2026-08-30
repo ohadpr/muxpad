@@ -337,6 +337,66 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE tabs ADD COLUMN last_activity_at INTEGER;
     `,
   },
+  {
+    // `muxpad cron` — the server-owned scheduler
+    // (docs/plans/2026-08-14-muxpad-cron.md). Two tables:
+    //
+    //   crons     — the schedules themselves. `next_due_at` is PERSISTED, not
+    //     held in memory: that single choice is what makes the scheduler
+    //     restart-safe and catch-up capable, which is the whole reason this
+    //     exists rather than leaning on a harness's session-scoped cron.
+    //   cron_runs — the run log. Turns "it just didn't run" from silence into
+    //     a record. Trimmed to the newest CRON_RUNS_KEEP rows per cron on
+    //     every insert, so a 30-minute cron can't grow it without bound.
+    //
+    // Deliberately NO foreign key on `target_pane`: a deleted pane must
+    // DISABLE its cron (with a push), not silently delete the schedule the
+    // user wrote — and the run history has to outlive the pane it ran in, the
+    // same reasoning as session_history (v20).
+    version: 22,
+    sql: `
+      CREATE TABLE crons (
+        id               TEXT PRIMARY KEY,
+        name             TEXT NOT NULL,
+        schedule         TEXT NOT NULL,
+        tz               TEXT NOT NULL,
+        prompt           TEXT NOT NULL,
+        target_kind      TEXT NOT NULL,
+        target_pane      TEXT,
+        workspace_id     TEXT,
+        cwd              TEXT,
+        model            TEXT,
+        backend          TEXT,
+        mode             TEXT,
+        enabled          INTEGER NOT NULL DEFAULT 1,
+        catchup          TEXT NOT NULL DEFAULT 'once',
+        overlap          TEXT NOT NULL DEFAULT 'skip',
+        on_context       TEXT NOT NULL DEFAULT 'fire',
+        quiet_mins       INTEGER NOT NULL DEFAULT 0,
+        max_open         INTEGER NOT NULL DEFAULT 1,
+        close_when_done  INTEGER NOT NULL DEFAULT 0,
+        open_tabs        TEXT NOT NULL DEFAULT '[]',
+        next_due_at      INTEGER NOT NULL,
+        last_fire_at     INTEGER,
+        last_status      TEXT,
+        fail_streak      INTEGER NOT NULL DEFAULT 0,
+        created_at       INTEGER NOT NULL
+      );
+      CREATE INDEX crons_due ON crons(enabled, next_due_at);
+      CREATE INDEX crons_target_pane ON crons(target_pane);
+      CREATE TABLE cron_runs (
+        id           TEXT PRIMARY KEY,
+        cron_id      TEXT NOT NULL,
+        due_at       INTEGER NOT NULL,
+        fired_at     INTEGER NOT NULL,
+        target_pane  TEXT,
+        target_tab   TEXT,
+        outcome      TEXT NOT NULL,
+        detail       TEXT
+      );
+      CREATE INDEX cron_runs_cron ON cron_runs(cron_id, fired_at DESC);
+    `,
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the
