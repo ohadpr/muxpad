@@ -2224,17 +2224,79 @@ publish_base_url() {
 }
 
 cmd_publish() {
-  # --list is a bare mode flag (like `search --sessions`) — pre-strip it.
+  # Bare mode flags (like `search --sessions`) — pre-strip them.
+  # Bare mode flags AND the hyphenated `--set-base` are pre-stripped: parse_flags
+  # eval-assigns `FLAG_<name>`, and `FLAG_set-base` is not a legal shell
+  # identifier — `reset_flags` fails outright on it, taking every `publish`
+  # invocation down with it. Same trap the cron verbs pre-strip around.
   local mode=publish
   local rest=()
-  for a in "$@"; do
+  local set_base=''
+  local a
+  while [ $# -gt 0 ]; do
+    a="$1"
     case "$a" in
       --list) mode=list ;;
+      --base) mode=base ;;
+      --clear-base) mode=clear-base ;;
+      --set-base=*) set_base="${a#--set-base=}" ;;
+      --set-base)
+        shift
+        set_base="${1:-}"
+        [ -z "$set_base" ] && { echo 'muxpad publish: --set-base requires a url' >&2; exit 1; }
+        ;;
       *) rest+=("$a") ;;
     esac
+    shift
   done
   reset_flags name rm update
   parse_flags name rm update -- "${rest[@]+"${rest[@]}"}"
+
+  # `--set-base <url>` pins the origin every published link is built from.
+  #
+  # This exists because Tailscale Funnel's :8443 is blocked outbound on many
+  # real networks, so a discovered funnel url yields links that work for you and
+  # fail for whoever you send them to. Point this at a tunnel on standard :443
+  # (or a permanent domain) and every surface — publish output, `--list`, the
+  # Hosted UI — follows. A permanent domain is better set once in the daemon's
+  # MUXPAD_PUBLIC_BASE_URL, which outranks this pin.
+  if [ -n "$set_base" ]; then
+    local res
+    res="$(http_request PUT /api/publish/base "{\"url\":$(json_string "$set_base")}")"
+    if [ "$JSON_OUTPUT" = "1" ]; then printf '%s\n' "$res"; return; fi
+    printf '%s✓%s public base is now %s\n' "$C_GREEN" "$C_RESET" \
+      "$(printf '%s' "$res" | jq -r '.url')"
+    local w
+    w="$(printf '%s' "$res" | jq -r '.warning // empty')"
+    [ -n "$w" ] && printf '%smuxpad: %s%s\n' "$C_DIM" "$w" "$C_RESET" >&2
+    return
+  fi
+
+  if [ "$mode" = "clear-base" ]; then
+    local res
+    res="$(http_request DELETE /api/publish/base)"
+    printf '%s✓%s pin cleared; base is now %s\n' "$C_GREEN" "$C_RESET" \
+      "$(printf '%s' "$res" | jq -r '.url // "(none — links are local-only)"')"
+    return
+  fi
+
+  # `--base` shows what every link is being built from, and why.
+  if [ "$mode" = "base" ]; then
+    local res
+    res="$(http_request GET /api/publish/base)"
+    if [ "$JSON_OUTPUT" = "1" ]; then printf '%s\n' "$res"; return; fi
+    printf '%s' "$res" | jq -r '
+      "  base:      \(.url // "(none — links would be local-only)")",
+      "  from:      \(.source)",
+      "  reachable: \(if .reachable == null then "not checked" else .reachable end)"
+    '
+    local w
+    w="$(printf '%s' "$res" | jq -r '.warning // empty')"
+    [ -n "$w" ] && printf '  %swarning:   %s%s\n' "$C_DIM" "$w" "$C_RESET"
+    printf '  %scandidates (highest first):%s\n' "$C_DIM" "$C_RESET"
+    printf '%s' "$res" | jq -r '.candidates[] | "    \(.source)\t\(.url)"'
+    return
+  fi
 
   if [ "$mode" = "list" ]; then
     local res
@@ -2737,6 +2799,20 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      stays up; run
                                      `tailscale funnel --https=8443 off` to
                                      close it entirely)
+  publish --base                     show the origin every published link is
+                                     built from, whether it is answering, and
+                                     the full candidate list
+  publish --set-base=<https://…>     pin that origin. Tailscale Funnel's :8443
+                                     is blocked outbound on many real networks,
+                                     so a discovered funnel URL gives links that
+                                     work for YOU and fail for whoever you send
+                                     them to. Point this at a tunnel on standard
+                                     :443 (or a permanent domain) and publish
+                                     output, --list and the Hosted view all
+                                     follow. A permanent domain is better set
+                                     once as MUXPAD_PUBLIC_BASE_URL on the
+                                     daemon, which outranks this pin.
+  publish --clear-base               drop the pin and fall back to discovery
   search "query" [--limit=N] [--sid=SID] [--role=ROLE]
                                      full-text search across every archived
                                      agent session (FTS5 query syntax; falls
