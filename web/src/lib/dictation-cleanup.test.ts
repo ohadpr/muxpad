@@ -53,11 +53,10 @@ describe('describeChanges', () => {
     expect(describeChanges('', '')).toEqual([]);
   });
 
-  it('caps the number of pairs it reports', () => {
+  it('reports every substitution — trimming for display is the summary’s job', () => {
     const before = 'aa and bb and cc and dd and ee';
     const after = 'a1 and b1 and c1 and d1 and e1';
-    expect(describeChanges(before, after)).toHaveLength(4); // default limit
-    expect(describeChanges(before, after, 2)).toHaveLength(2);
+    expect(describeChanges(before, after)).toHaveLength(5);
   });
 });
 
@@ -77,6 +76,21 @@ describe('summarizeChanges', () => {
 
   it('falls back to a count when only insertions/deletions are in play', () => {
     expect(summarizeChanges([{ from: '', to: 'cron' }])).toBe('1 change');
-    expect(summarizeChanges([{ from: 'cron', to: '' }], 3)).toBe('3 changes');
+    expect(
+      summarizeChanges([
+        { from: 'cron', to: '' },
+        { from: '', to: 'job' },
+      ]),
+    ).toBe('2 changes');
+  });
+
+  it('says how many it left out rather than silently showing the first few', () => {
+    // The affordance's promise is "eyeball what changed" — four of nine
+    // corrections rendered as if they were all of them breaks that.
+    const nine = Array.from({ length: 9 }, (_, i) => ({ from: `a${i}`, to: `b${i}` }));
+    const line = summarizeChanges(nine);
+    expect(line).toContain('a0 → b0');
+    expect(line).toContain('+5 more');
+    expect(summarizeChanges(nine.slice(0, 4))).not.toContain('more');
   });
 });

@@ -46,10 +46,11 @@ function words(s: string): string[] {
  * "crown schedule → cron schedule" pair — which is how a mishearing actually
  * reads. Pure and synchronous so it's unit-testable without a DOM.
  *
- * Capped: the hint is a glance, not a report. Past `limit` pairs the caller
- * shows a count instead.
+ * Returns EVERY substitution. Trimming for display is `summarizeChanges`'s job,
+ * because it has to say how many it left out — a hint that shows four of nine
+ * corrections without saying so undercuts the whole eyeball-it property.
  */
-export function describeChanges(before: string, after: string, limit = 4): Change[] {
+export function describeChanges(before: string, after: string): Change[] {
   const a = words(before);
   const b = words(after);
   // LCS table. Bounded by MAX_TRANSCRIPT_CHARS on the server (2000 chars ⇒ a
@@ -97,18 +98,26 @@ export function describeChanges(before: string, after: string, limit = 4): Chang
   while (i < n) removed.push(a[i++] as string);
   while (j < m) added.push(b[j++] as string);
   flush();
-  return out.slice(0, limit);
+  return out;
 }
 
-/** A one-line summary of the pairs, for the hint under the composer. */
-export function summarizeChanges(changes: Change[], total = changes.length): string {
-  if (total === 0) return 'No changes';
-  const shown = changes
-    .filter((c) => c.from && c.to)
-    .map((c) => `${c.from} → ${c.to}`)
-    .join(' · ');
-  if (!shown) return total === 1 ? '1 change' : `${total} changes`;
-  return shown;
+/**
+ * A one-line summary of the pairs, for the hint beside the composer.
+ *
+ * Shows at most `limit` substitutions — the hint is a glance, not a report —
+ * and always accounts for the rest, so "four corrections" and "four of nine"
+ * never look the same.
+ *
+ * Pure insertions and deletions have no readable "x → y" form, so they fall
+ * back to being counted rather than rendered as an arrow from nothing.
+ */
+export function summarizeChanges(changes: Change[], limit = 4): string {
+  if (changes.length === 0) return 'No changes';
+  const named = changes.filter((c) => c.from && c.to).slice(0, limit);
+  const rest = changes.length - named.length;
+  if (named.length === 0) return rest === 1 ? '1 change' : `${rest} changes`;
+  const shown = named.map((c) => `${c.from} → ${c.to}`).join(' · ');
+  return rest > 0 ? `${shown} · +${rest} more` : shown;
 }
 
 // ── The hook ────────────────────────────────────────────────────────────────
@@ -147,6 +156,17 @@ export function useDictationCleanup(io: CleanupIo) {
   // state, because undo must restore what was actually replaced even if a
   // re-render raced the request.
   const originalRef = useRef<string | null>(null);
+  // Exactly what cleanup last wrote into the composer. `undo` refuses unless
+  // the composer still holds it — a backstop against any mutation path that
+  // forgot to call `reset()`, so the worst case is a dead button rather than
+  // undo overwriting text cleanup never produced.
+  const appliedRef = useRef<string | null>(null);
+  // Request generation. The model call takes seconds (a cold Agent SDK spawn
+  // was measured at ~18s), which is ample time for the user to send the
+  // message or keep typing. Anything that invalidates the composed text bumps
+  // this, and a resolved request whose generation is stale drops its result on
+  // the floor instead of repopulating a composer that has moved on.
+  const genRef = useRef(0);
   // The io callbacks are re-created every render by both call sites; pin them
   // so `run` is stable and an in-flight request writes to the live composer.
   const ioRef = useRef(io);
@@ -161,29 +181,39 @@ export function useDictationCleanup(io: CleanupIo) {
   }, []);
 
   const reset = useCallback(() => {
+    genRef.current++;
     originalRef.current = null;
+    appliedRef.current = null;
     setState((s) => (s.phase === 'idle' ? s : IDLE));
   }, []);
 
   const run = useCallback(async () => {
     const before = ioRef.current.read();
     if (!before.trim()) return;
+    // A second tap, a send, or a keystroke while this is in flight all bump the
+    // generation; this call's result is only allowed to land if it is still the
+    // current one AND the composer still holds the text it was asked about.
+    const gen = ++genRef.current;
+    const stale = () =>
+      !aliveRef.current || gen !== genRef.current || ioRef.current.read() !== before;
     setState({ phase: 'busy', changes: [], message: '' });
     try {
       const { text, changed } = await api.cleanTranscript(before);
-      if (!aliveRef.current) return;
+      if (stale()) return;
       if (!changed || text === before) {
         // Nothing to fix is a RESULT, not a no-op — say so rather than leaving
         // the button looking like it did nothing.
         originalRef.current = null;
+        appliedRef.current = null;
         setState({ phase: 'applied', changes: [], message: '' });
         return;
       }
       originalRef.current = before;
+      appliedRef.current = text;
       ioRef.current.write(text);
       setState({ phase: 'applied', changes: describeChanges(before, text), message: '' });
     } catch (err) {
-      if (!aliveRef.current) return;
+      if (stale()) return;
       // Loud, specific, and it leaves the composer exactly as the user left it.
       setState({
         phase: 'error',
@@ -196,10 +226,19 @@ export function useDictationCleanup(io: CleanupIo) {
   const undo = useCallback(() => {
     const original = originalRef.current;
     if (original === null) return;
+    // The composer moved on without telling us (a mutation path that skipped
+    // `reset`). Restoring here would clobber whatever is in there now, so stand
+    // down instead — losing the undo is recoverable, losing the text isn't.
+    if (appliedRef.current !== null && ioRef.current.read() !== appliedRef.current) {
+      reset();
+      return;
+    }
+    genRef.current++;
     ioRef.current.write(original);
     originalRef.current = null;
+    appliedRef.current = null;
     setState(IDLE);
-  }, []);
+  }, [reset]);
 
   return {
     state,
