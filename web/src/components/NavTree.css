@@ -1020,3 +1020,48 @@ body.sidenav-resizing iframe {
   border-radius: 6px 6px 6px 0;
   box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.22);
 }
+
+/* ─── Foot: Hosted ───────────────────────────────────────────────────── */
+
+/* Below the tree, past a hairline. Hosted is deliberately NOT a workspace
+   row: apps and artifacts belong to no workspace and occupy no tab, and
+   indenting them into the tree would imply a containment that doesn't
+   exist. The hairline + top margin says "different kind of destination",
+   the same way the group separators say "different workspace". */
+.navtree-foot {
+  margin: 14px 8px 0 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.navtree-foot-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--nt-row-tab);
+  padding: 0 8px;
+  border-radius: var(--nt-pill);
+  color: var(--fg-dim);
+  text-decoration: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.navtree-foot-link svg {
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+.navtree-foot-link:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+/* Same "you are here" anchor as the active tab — one grammar for selection
+   across the whole navigator. */
+.navtree-foot-link[data-active="true"] {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.navtree-foot-link[data-active="true"] svg {
+  opacity: 1;
+}
+.navtree-foot-link[data-active="true"]:hover {
+  background: var(--accent);
+}
