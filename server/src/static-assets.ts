@@ -25,8 +25,29 @@ import type { Context, Hono } from 'hono';
  *     in web/vite.config.ts. The main bundle goes 1,111,714 → 269,619 bytes.
  */
 
-/** Vite's content-hashed output. Safe to pin forever. */
+/** Where Vite writes its content-hashed output. */
 const HASHED_PREFIX = '/assets/';
+
+/**
+ * A Vite content hash as the final dash-delimited segment of the name:
+ * `index-Cgp7p3nE.js`, `MesloLGS-NF-Bold-LSOmEg34.woff2`.
+ *
+ * The /assets/ PREFIX alone is not enough to justify `immutable`, even though
+ * everything Vite emits there today is hashed. `web/public/**` is copied into
+ * the same dist root verbatim, so the day someone adds
+ * `web/public/assets/logo.svg`, that stable name — one a deploy CAN change in
+ * place — would inherit a year-long pin. That is precisely the trap rule (1)
+ * above exists to avoid, and it is unrecoverable without the user clearing
+ * site data. Requiring the hash to be visible in the NAME makes the rule
+ * self-enforcing.
+ *
+ * Exactly 8 base64url chars (Vite's default) plus at least one digit or
+ * capital, which is what separates a hash from a word like `logo-unhashed`.
+ * Every way this can be wrong is the SAFE way: an unrecognised name falls
+ * back to SHORT_MAX_AGE — a revalidation per hour, not a permanent pin. (So
+ * if someone reconfigures the hash length, assets get slower, never stale.)
+ */
+const CONTENT_HASHED = /-(?=[A-Za-z0-9_]*[A-Z0-9])[A-Za-z0-9_]{8}\.[A-Za-z0-9]+$/;
 
 /**
  * Paths that must never be pinned. The shell obviously; `sw.js` because a
@@ -46,7 +67,7 @@ const IMMUTABLE = 'public, max-age=31536000, immutable';
 
 export function cachePolicy(path: string): string {
   if (ALWAYS_REVALIDATE.has(path)) return 'no-cache';
-  if (path.startsWith(HASHED_PREFIX)) return IMMUTABLE;
+  if (path.startsWith(HASHED_PREFIX) && CONTENT_HASHED.test(path)) return IMMUTABLE;
   return SHORT_MAX_AGE;
 }
 

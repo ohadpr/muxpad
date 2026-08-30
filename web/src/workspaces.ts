@@ -40,8 +40,13 @@ export async function refreshWorkspaces(opts?: { broadcast?: boolean }): Promise
   const shouldBroadcast = opts?.broadcast !== false;
   const myVersion = ++version;
   const next = await api.listWorkspaces({ all: true });
-  settledAt = Date.now();
   if (myVersion < version) return next;
+  // Only a response that actually LANDS in the cache counts as "fresh".
+  // Marking the discarded ones too would let a superseded reply (one thrown
+  // away by applyWorkspaceOrder's version bump, say) suppress the next 2s of
+  // mount refreshes while the cache still holds older data than the reply
+  // that was dropped.
+  settledAt = Date.now();
   cache = next;
   for (const fn of listeners) fn(cache);
   if (shouldBroadcast) channel?.postMessage({ type: 'refreshed' });

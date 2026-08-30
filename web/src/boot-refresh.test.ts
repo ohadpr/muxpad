@@ -79,6 +79,42 @@ describe('workspaces mount refresh', () => {
     await mod.refreshWorkspaces();
     expect(listWorkspaces).toHaveBeenCalledTimes(3);
   });
+
+  it('does not let a DISCARDED reply mark the cache fresh', async () => {
+    // A reply superseded by a later refresh never reaches the cache, so it
+    // must not start the 2s freshness window either — otherwise a mount in
+    // that window is fobbed off with data older than the reply that was
+    // thrown away, and issues no request to correct it.
+    // The timing is the whole test: the discarded reply has to land LATER
+    // than the winner, then we probe the gap between the two would-be
+    // freshness windows — past the winner's, still inside the loser's.
+    vi.useFakeTimers();
+    try {
+      const mod = await import('./workspaces');
+      let release!: () => void;
+      listWorkspaces.mockImplementationOnce(
+        () =>
+          new Promise<never[]>((r) => {
+            release = () => r([]);
+          }),
+      );
+      const stale = mod.refreshWorkspaces(); // t=0, starts first, hangs
+      await mod.refreshWorkspaces(); // t=0, lands first, WINS (settledAt=0)
+      expect(listWorkspaces).toHaveBeenCalledTimes(2);
+
+      vi.advanceTimersByTime(1500);
+      release(); // t=1500: the superseded reply finally lands, discarded
+      await stale;
+
+      // t=2100: past the winner's window (2000), inside the loser's (3500).
+      vi.advanceTimersByTime(600);
+      mod.refreshWorkspacesOnMount();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(listWorkspaces).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('tabs mount refresh', () => {
