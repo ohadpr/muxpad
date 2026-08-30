@@ -130,7 +130,19 @@ function unwrap(reply: string): string {
 export function parseCleanupReply(raw: string, original: string): string {
   const out = unwrap(raw ?? '');
   if (!out) throw new CleanupError('unavailable', 'cleanup returned nothing');
-  const lo = Math.max(8, Math.floor(original.length * 0.5));
+  // `unwrap` trims, and the model is told to preserve spacing exactly. If the
+  // only difference is the surrounding whitespace we ate, hand back the user's
+  // string untouched — otherwise a verbatim echo is reported as a change and
+  // the composer silently loses a trailing newline.
+  if (out === original.trim()) return original;
+  // The bounds are a proxy for "the model did something other than what it was
+  // asked": half the length means content was dropped, triple means it answered
+  // the message. Both are refusals, not results.
+  //
+  // The floor is proportional with a few characters of slack, NOT an absolute
+  // minimum: "Max pad" → "muxpad" and "Ohio" → "ohados" are the motivating
+  // corrections, and any fixed floor above ~4 rejects them.
+  const lo = Math.max(1, Math.floor(original.length * 0.5) - 4);
   const hi = Math.ceil(original.length * 2) + 40;
   if (out.length < lo || out.length > hi) {
     throw new CleanupError('unavailable', 'cleanup returned an implausible rewrite');

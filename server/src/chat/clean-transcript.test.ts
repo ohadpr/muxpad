@@ -86,8 +86,26 @@ describe('parseCleanupReply', () => {
     expect(() => parseCleanupReply('ok', original)).toThrow(/implausible/);
   });
 
-  it('lets a short input grow — the floor is absolute, not proportional', () => {
-    expect(parseCleanupReply('muxpad cron', 'Max pad')).toBe('muxpad cron');
+  it('accepts corrections that SHORTEN a short message', () => {
+    // The motivating cases are all short and most get shorter. An absolute
+    // length floor rejected every one of them.
+    expect(parseCleanupReply('muxpad', 'Max pad')).toBe('muxpad');
+    expect(parseCleanupReply('cron', 'crown')).toBe('cron');
+    expect(parseCleanupReply('ohados', 'Ohio')).toBe('ohados');
+  });
+
+  it('accepts a verbatim echo of a short message', () => {
+    expect(parseCleanupReply('hi cron', 'hi cron')).toBe('hi cron');
+  });
+
+  it('hands back the original when the only difference is whitespace it trimmed', () => {
+    // Otherwise a verbatim echo is reported as a change and the composer
+    // silently loses the trailing newline the user dictated.
+    const withNewline = 'fix the cron job\n';
+    expect(parseCleanupReply(withNewline, withNewline)).toBe(withNewline);
+    expect(parseCleanupReply('  fix the cron job  ', 'fix the cron job\n')).toBe(
+      'fix the cron job\n',
+    );
   });
 });
 
