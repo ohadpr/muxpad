@@ -1,20 +1,21 @@
 import type { SubagentProgress } from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
-import { SubagentRoster } from './subagent-roster.js';
+import { MAX_ROSTER_ENTRIES, SubagentRoster } from './subagent-roster.js';
 
 /** Collects emitted frames and gives back a fresh roster wired to them. */
 function make(startAt = 1_000) {
   const sent: SubagentProgress[] = [];
+  const logs: string[] = [];
   let clock = startAt;
   const roster = new SubagentRoster(
     (p) => sent.push(p),
-    () => {},
+    (line) => logs.push(line),
     () => clock,
   );
   const tick = (ms: number): void => {
     clock += ms;
   };
-  return { roster, sent, tick };
+  return { roster, sent, logs, tick };
 }
 
 describe('SubagentRoster — durability', () => {
@@ -140,5 +141,156 @@ describe('SubagentRoster — every end-path announces itself', () => {
       roster.retireAll('stopped');
     }
     expect(roster.size).toBe(0);
+  });
+});
+
+describe('SubagentRoster — membership is TOP-LEVEL launches only', () => {
+  // The over-counting bug. A subagent can spawn its own subagents, and a
+  // NESTED agent's traffic arrives on the SAME top-level SDK stream carrying
+  // the NESTED tool_use id (probe-verified, SDK 0.3.220). Its launch and its
+  // end, though, both live inside its parent's stream — so an entry adopted
+  // from that traffic is structurally immortal.
+  //
+  // Live evidence (pane 01KX6GKF…, 2026-08): 19 rostered, 7 real. The other 12
+  // were depth-2/3 grandchildren of three research fan-outs that had all
+  // finished — every one of them adopted, none of them retirable.
+
+  it('ignores traffic from an id it never saw launched', () => {
+    const { roster, sent } = make();
+    roster.activity('tu_grandchild', 'WebFetch: https://example.com');
+    expect(roster.size).toBe(0);
+    expect(sent).toHaveLength(0);
+  });
+
+  it('a research fan-out does not inflate the count', () => {
+    // Two top-level background agents; each spawns five of its own. Only the
+    // two the chat can actually render belong in the roster.
+    const { roster, tick } = make();
+    roster.launch('tu_parent_a', 'strategy scout');
+    roster.launch('tu_parent_b', 'agent UX research');
+    for (let i = 0; i < 5; i++) {
+      tick(600);
+      roster.activity(`tu_nested_a${i}`, 'WebSearch: …');
+      roster.activity(`tu_nested_b${i}`, 'WebSearch: …');
+      // The parents' own traffic still counts.
+      roster.activity('tu_parent_a', 'Read: notes.md');
+    }
+    expect(roster.size).toBe(2);
+    expect(
+      roster
+        .values()
+        .map((p) => p.toolUseId)
+        .sort(),
+    ).toEqual(['tu_parent_a', 'tu_parent_b']);
+  });
+
+  it('a nested agent finishing cannot retire a top-level entry it shadows', () => {
+    // done() on an id we never launched is inert — no phantom terminal frames
+    // to the server, which would drop a REAL row.
+    const { roster, sent } = make();
+    roster.launch('tu_parent', 'parent');
+    const before = sent.length;
+    roster.done('tu_nested');
+    expect(roster.size).toBe(1);
+    expect(sent).toHaveLength(before);
+  });
+});
+
+describe('SubagentRoster — reconciliation against the SDK level signal', () => {
+  // `system/background_tasks_changed` carries the COMPLETE set of live
+  // background tasks after every membership change (REPLACE semantics). It is
+  // the only source of truth a missed edge cannot wedge.
+
+  it('retires an entry whose background task has left the live set', () => {
+    const { roster, sent } = make();
+    roster.launch('tu_1', 'worker');
+    roster.reconcileBackground(['task_1']); // level lands first…
+    roster.bindTask('tu_1', 'task_1'); // …then the edge that names it
+    expect(roster.size).toBe(1);
+
+    // Its finish edge never arrives (dropped frame, harness quirk, whatever).
+    // The next level payload is enough.
+    roster.reconcileBackground([]);
+    expect(roster.size).toBe(0);
+    expect(sent.at(-1)).toMatchObject({ toolUseId: 'tu_1', done: true });
+  });
+
+  it('reconciles when the edge lands BEFORE the level (ordering is unspecified)', () => {
+    const { roster } = make();
+    roster.launch('tu_1', 'worker');
+    roster.bindTask('tu_1', 'task_1');
+    roster.reconcileBackground(['task_1']);
+    expect(roster.size).toBe(1);
+    roster.reconcileBackground([]);
+    expect(roster.size).toBe(0);
+  });
+
+  it('never sweeps a FOREGROUND task, which is absent from that payload by design', () => {
+    // A foreground Task retires on its own tool_result. It never appears in the
+    // background level set, so its absence must mean nothing.
+    const { roster } = make();
+    roster.launch('tu_fg', 'foreground worker');
+    roster.bindTask('tu_fg', 'task_fg');
+    roster.reconcileBackground([]); // never seen live in the background set
+    roster.reconcileBackground(['task_other']);
+    expect(roster.size).toBe(1);
+    roster.done('tu_fg'); // its tool_result
+    expect(roster.size).toBe(0);
+  });
+
+  it('leaves entries with no bound task id alone', () => {
+    const { roster } = make();
+    roster.launch('tu_1', 'worker'); // task_started not seen yet
+    roster.reconcileBackground(['task_other']);
+    expect(roster.size).toBe(1);
+  });
+
+  it('keeps a still-live sibling while retiring the finished one', () => {
+    const { roster } = make();
+    roster.launch('tu_a', 'a');
+    roster.launch('tu_b', 'b');
+    roster.bindTask('tu_a', 'task_a');
+    roster.bindTask('tu_b', 'task_b');
+    roster.reconcileBackground(['task_a', 'task_b']);
+    roster.reconcileBackground(['task_b']);
+    expect(roster.values().map((p) => p.toolUseId)).toEqual(['tu_b']);
+  });
+
+  it('bindTask ignores ids it never launched (nested agents, background Bash)', () => {
+    const { roster } = make();
+    roster.bindTask('tu_nested', 'task_nested');
+    roster.reconcileBackground([]);
+    expect(roster.size).toBe(0);
+  });
+
+  it('never leaks its bookkeeping onto the wire', () => {
+    const { roster, sent } = make();
+    roster.launch('tu_1', 'worker');
+    roster.bindTask('tu_1', 'task_1');
+    roster.reconcileBackground(['task_1']);
+    roster.announceAll();
+    for (const p of sent) {
+      expect(p).not.toHaveProperty('taskId');
+      expect(p).not.toHaveProperty('background');
+      expect(p).not.toHaveProperty('lastSentAt');
+      expect(p).not.toHaveProperty('dirty');
+    }
+  });
+});
+
+describe('SubagentRoster — the cap is a bound, not a policy', () => {
+  it('never exceeds the cap, retiring the STALEST entry and logging once', () => {
+    const { roster, sent, logs, tick } = make();
+    for (let i = 0; i < MAX_ROSTER_ENTRIES + 5; i++) {
+      tick(1_000);
+      roster.launch(`tu_${i}`, `worker ${i}`);
+    }
+    expect(roster.size).toBe(MAX_ROSTER_ENTRIES);
+    // The five evicted are the five oldest, and each left with a terminal
+    // frame so the server's mirror agrees.
+    const retired = sent.filter((p) => p.done).map((p) => p.toolUseId);
+    expect(retired).toEqual(['tu_0', 'tu_1', 'tu_2', 'tu_3', 'tu_4']);
+    // Loud, but not once per launch.
+    expect(logs.filter((l) => l.includes('cap'))).toHaveLength(1);
   });
 });

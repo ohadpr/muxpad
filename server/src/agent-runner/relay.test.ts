@@ -10,7 +10,7 @@ import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { openDb } from '../store/db.js';
 import { type SpawnedPtyd, spawnPtyd } from '../test-helpers/spawnPtyd.js';
-import { attachWsServer } from '../ws.js';
+import { MAX_PANE_SUBAGENTS, attachWsServer, evictOverflowEntries } from '../ws.js';
 
 let cleanup: (() => Promise<void>) | null = null;
 
@@ -758,6 +758,139 @@ describe('agent-runner relay', () => {
       sock.once('error', () => resolve('closed'));
     });
     expect(result).toBe('closed');
+  });
+});
+
+/**
+ * The pane's `agents: N` — the durable subagent roster as the status rail
+ * renders it — end to end against a real server, with a FAKE runner socket
+ * standing in for the SDK. The live bug this pins: the count grew across a
+ * long session and never came back down (19 shown, 7 real).
+ */
+describe('subagent roster count, end to end', () => {
+  const launch = (id: string, label: string) =>
+    JSON.stringify({ t: 'subagent', progress: { toolUseId: id, steps: 0, label, seenAt: 1 } });
+  const finish = (id: string) =>
+    JSON.stringify({ t: 'subagent', progress: { toolUseId: id, steps: 9, done: true } });
+
+  it('counts launches, finishes, a turn abort, and a runner reconnect exactly', async () => {
+    const { port, paneId, cache } = await boot();
+    const { sock: runner } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: false }));
+    const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
+    await fromChat.next((f) => f.t === 'session');
+
+    // ── 1. Five background subagents launch inside one turn.
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    for (let i = 0; i < 5; i++) runner.send(launch(`tu_${i}`, `worker ${i}`));
+    await fromChat.next(
+      (f) => f.t === 'subagent' && (f.progress as { toolUseId: string }).toolUseId === 'tu_4',
+    );
+    expect(cache.getSubagentCount(paneId)).toBe(5);
+
+    // ── 2. Two finish. The count must fall — this is the step the pre-durable
+    //      runner never reported, which is how the real pane reached 19.
+    runner.send(finish('tu_0'));
+    runner.send(finish('tu_1'));
+    await fromChat.next(
+      (f) =>
+        f.t === 'subagent' &&
+        (f.progress as { done?: boolean }).done === true &&
+        (f.progress as { toolUseId: string }).toolUseId === 'tu_1',
+    );
+    expect(cache.getSubagentCount(paneId)).toBe(3);
+
+    // ── 3. The turn ends with three still outstanding. A background Task
+    //      outlives its turn, so the count must NOT drop here.
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true }));
+    await fromChat.next((f) => f.t === 'turn-done');
+    expect(cache.getSubagentCount(paneId)).toBe(3);
+    // …and the pane still reads `working` off the roster alone.
+    expect(cache.getStatus(paneId, false)).toBe('working');
+
+    // ── 4. A second turn is ABORTED with one more outstanding. The runner
+    //      retires the whole roster (Stop kills its background children) —
+    //      the server must land on exactly zero, not on a residue.
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    runner.send(launch('tu_5', 'worker 5'));
+    await fromChat.next(
+      (f) => f.t === 'subagent' && (f.progress as { toolUseId: string }).toolUseId === 'tu_5',
+    );
+    expect(cache.getSubagentCount(paneId)).toBe(4);
+    for (const id of ['tu_2', 'tu_3', 'tu_4', 'tu_5']) runner.send(finish(id));
+    runner.send(JSON.stringify({ t: 'turn-done', ok: false, error: 'stopped' }));
+    await fromChat.next((f) => f.t === 'turn-done' && f.ok === false);
+    expect(cache.getSubagentCount(paneId)).toBe(0);
+
+    // ── 5. A live agent, then the runner DISCONNECTS. Its subagents die with
+    //      the process, so the count zeroes.
+    runner.send(launch('tu_6', 'worker 6'));
+    await fromChat.next(
+      (f) => f.t === 'subagent' && (f.progress as { toolUseId: string }).toolUseId === 'tu_6',
+    );
+    expect(cache.getSubagentCount(paneId)).toBe(1);
+    runner.close();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(cache.getSubagentCount(paneId)).toBe(0);
+
+    // ── 6. It RECONNECTS and re-announces its live roster. The server rebuilds
+    //      from that announcement — it must not merge the pre-disconnect ids
+    //      back in, or every blip would double the count.
+    const { sock: runner2 } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    runner2.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 2, turnActive: false }));
+    runner2.send(launch('tu_6', 'worker 6'));
+    await new Promise((r) => setTimeout(r, 200));
+    expect(cache.getSubagentCount(paneId)).toBe(1);
+
+    // And a fresh chat socket sees exactly that one row.
+    const { rx: fromChat2, sock: chat2 } = await openSock(
+      `ws://127.0.0.1:${port}/ws/chat/${paneId}`,
+    );
+    const hello = await fromChat2.next((f) => f.t === 'session');
+    expect(
+      (hello.subagents as unknown[]).map((p) => (p as { toolUseId: string }).toolUseId),
+    ).toEqual(['tu_6']);
+
+    runner2.close();
+    chat.close();
+    chat2.close();
+  });
+
+  it('bounds the count when a version-skewed runner never reports an end', async () => {
+    // A pre-durable runner emits launches and NEVER a terminal frame — exactly
+    // the process that was live when this bug was found. The server cannot fix
+    // its accounting, but it must never render an absurd number.
+    const { port, paneId, cache } = await boot();
+    const { sock: runner } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: false }));
+    const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
+    await fromChat.next((f) => f.t === 'session');
+
+    for (let i = 0; i < MAX_PANE_SUBAGENTS + 20; i++) runner.send(launch(`tu_${i}`, `w${i}`));
+    await fromChat.next(
+      (f) =>
+        f.t === 'subagent' &&
+        (f.progress as { toolUseId: string }).toolUseId === `tu_${MAX_PANE_SUBAGENTS + 19}`,
+    );
+    expect(cache.getSubagentCount(paneId)).toBe(MAX_PANE_SUBAGENTS);
+
+    runner.close();
+    chat.close();
+  });
+});
+
+describe('evictOverflowEntries', () => {
+  it('is inert below the cap and drops the OLDEST insertions above it', () => {
+    const m = new Map<string, number>();
+    for (let i = 0; i < MAX_PANE_SUBAGENTS; i++) m.set(`k${i}`, i);
+    expect(evictOverflowEntries(m)).toEqual([]);
+    expect(m.size).toBe(MAX_PANE_SUBAGENTS);
+
+    m.set('k_new_a', 1);
+    m.set('k_new_b', 2);
+    expect(evictOverflowEntries(m)).toEqual(['k0', 'k1']);
+    expect(m.size).toBe(MAX_PANE_SUBAGENTS);
+    expect(m.has('k_new_b')).toBe(true);
   });
 });
 
