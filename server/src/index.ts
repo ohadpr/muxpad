@@ -11,6 +11,7 @@ import { createAppStatusProbe } from './apps/AppStatus.js';
 import { adoptServePanes } from './apps/adopt-serve-panes.js';
 import { ArchiveDb } from './archive/ArchiveDb.js';
 import { Archiver } from './archive/Archiver.js';
+import { HeadlineWriter } from './chat/HeadlineWriter.js';
 import { projectsDir } from './chat/TranscriptReader.js';
 import { paneCarryover } from './chat/summarize.js';
 import { loadConfig } from './config.js';
@@ -184,6 +185,13 @@ const archiver = archiveDb
       events,
     })
   : undefined;
+
+// The nav rail's second line. Subscribes to turn-end on the same bus the
+// archiver uses and hands each finished turn to a rate-limited haiku one-shot
+// (chat/headline.ts owns every decision about whether to spend a call).
+// Unconditional, unlike the archiver: it has no store of its own to fail to
+// open, and it degrades to "no second line" on every error by contract.
+const headlines = new HeadlineWriter({ db, events, cache });
 
 // Funnel manager for `POST /api/publish` — ensures the PUBLIC port (never
 // the main UI port, which is unauthenticated) is funneled to the internet.
@@ -368,6 +376,7 @@ cronScheduler.start();
 // 15-min re-sweep + near-realtime triggers off the event bus (turn-done,
 // sid changes). See docs/plans/2026-08-28-session-archive.md.
 archiver?.start();
+headlines.start();
 
 // The "resident pane" primitive is retired — muxpad no longer creates or
 // guards a singleton agent pane. An always-there chat is now just a chat you

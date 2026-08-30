@@ -161,10 +161,19 @@ export function attachWsServer(deps: {
   };
   // Auto-name agent panes/tabs from the session's AI title (the `ai-title`
   // records Claude appends to the transcript after the first turn and on topic
-  // shifts). A user-given name always wins: we only overwrite a null name or
-  // one WE set from an earlier title — tracked here in memory, so after a
-  // server restart an existing auto-name is treated as user-given (titles
-  // change rarely; losing one update beats clobbering a manual rename).
+  // shifts).
+  //
+  // A USER-GIVEN NAME WINS PERMANENTLY, and that is now a persisted fact
+  // (`tabs.name_sticky`, set by PATCH /api/tabs whenever a name is supplied)
+  // rather than the in-memory map it used to be. The map's own comment
+  // conceded the flaw: after a restart every existing auto-name was treated as
+  // user-given, so the guard held only by the accident that a manual name
+  // matched neither the bootstrap sentinel nor the last title — and a tab
+  // renamed BACK to something the namer had once produced was fair game again.
+  //
+  // The in-memory map survives for PANES (which have no sticky column and use
+  // `name === null` as their sentinel) and as the "we set this one" record for
+  // tabs within a process lifetime.
   const autoTitledPanes = new Map<string, string>();
   const autoTitledTabs = new Map<string, string>();
   const applyAiTitle = (paneId: string, rawTitle: string) => {
@@ -188,6 +197,8 @@ export function attachWsServer(deps: {
     // and the tab still wears the bootstrap default or our previous title.
     const tab = tabs.getById(pane.tab_id);
     if (!tab || panes.listByTab(tab.id).length !== 1) return;
+    // The one check that outranks everything else, restart included.
+    if (tabs.isNameSticky(tab.id)) return;
     if (tab.name === 'agent' || tab.name === autoTitledTabs.get(tab.id)) {
       if (tab.name !== title) {
         const updated = tabs.update(tab.id, { name: title });
