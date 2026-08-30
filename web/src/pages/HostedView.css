@@ -269,13 +269,38 @@
   border-color: var(--border);
   color: var(--fg-dim);
 }
-/* Delete is not painted red at rest: a destructive action that SHOUTS from
-   every row trains the eye to ignore it, and there is a confirm behind it.
-   It commits to danger on interaction, where the commitment is real. */
+/* Delete is the only DESTRUCTIVE action in the row, and it used to look
+   exactly like Logs and Stop and sit right next to them — on a phone, one
+   mis-tap from unregistering an app or unpublishing an artifact.
+
+   Two changes, both structural rather than decorative:
+     · GHOST — no border, faint text. It stops competing with the actions you
+       actually use, and the row's visual weight now matches its intent.
+     · SEPARATED — `margin-left: auto` pushes it to the far end of the row (and,
+       when the actions wrap on a phone, to the far end of its line), so there
+       is real distance between "Stop" and "Delete" instead of a 6px gap.
+   It is still confirmed, and it still commits to --danger on interaction,
+   where the commitment is real. Painting it red at rest would train the eye to
+   ignore the one colour that should mean "stop". */
+.hosted-btn-danger {
+  /* `auto` does the work on a phone, where the wrapped action row has slack to
+     absorb (measured: 67-106px of separation). On desktop the action group
+     shrinks to its content, so auto has nothing to give — hence the explicit
+     floor, which is what actually guarantees the gap exists at every width. */
+  margin-left: auto;
+  padding-left: 14px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--fg-faint);
+  font-weight: 400;
+}
 .hosted-btn-danger:hover {
   border-color: var(--danger);
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+.hosted-btn-danger:focus-visible {
+  color: var(--danger);
 }
 .hosted-btn-sm {
   min-height: 36px;
@@ -445,4 +470,21 @@
   .hosted-versions {
     flex: 1 0 100%;
   }
+}
+
+/* The public base, in the Artifacts header. Quiet by default — it is a fact,
+   not a warning — and only loud when the thing every link depends on has
+   stopped answering. */
+.hosted-base {
+  margin-left: auto;
+  font-family: var(--chrome-font);
+  font-size: 10.5px;
+  color: var(--fg-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 46%;
+}
+.hosted-base-bad {
+  color: var(--danger);
 }

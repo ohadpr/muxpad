@@ -13,7 +13,11 @@ import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import type { Funnel } from '../funnel.js';
-import { GlobalsStore } from '../store/GlobalsStore.js';
+import {
+  type PublicBaseResolver,
+  createPublicBaseResolver,
+  normalizeBaseUrl,
+} from '../public-base.js';
 
 /**
  * Publish API (docs/plans/2026-08-28-muxpad-publish.md §2) — mounted on the
@@ -85,28 +89,10 @@ export function versionDirName(slug: string, n: number): string {
   return `${slug}@${n}`;
 }
 
-/** globals-KV key holding the last known public base url (no trailing /). */
-export const PUBLIC_BASE_URL_KEY = 'public_base_url';
-
-/**
- * Validate + normalize a client-supplied base-url hint. Only well-formed
- * https origins (optionally with a port) are accepted — no path, query,
- * hash, or credentials — and the trailing slash is dropped so callers can
- * append `/<slug>/` uniformly. Returns null on anything else.
- */
-export function normalizeBaseUrl(hint: unknown): string | null {
-  if (typeof hint !== 'string' || hint.length === 0 || hint.length > 512) return null;
-  let url: URL;
-  try {
-    url = new URL(hint);
-  } catch {
-    return null;
-  }
-  if (url.protocol !== 'https:') return null;
-  if (url.username || url.password || url.search || url.hash) return null;
-  if (url.pathname !== '/' && url.pathname !== '') return null;
-  return url.origin;
-}
+// The base-url vocabulary moved to public-base.ts, which is now the SINGLE
+// resolver both this route's write path and its read path go through. Re-export
+// so existing importers keep working.
+export { PUBLIC_BASE_URL_KEY, normalizeBaseUrl } from '../public-base.js';
 
 function publicDirOf(dataDir: string): string {
   return join(dataDir, 'public');
@@ -211,29 +197,36 @@ export function publishRoutes(deps: {
   db: Database.Database;
   dataDir: string;
   funnel: Funnel;
+  publicPort?: number;
+  /** MUXPAD_PUBLIC_BASE_URL. Highest-precedence base — see public-base.ts. */
+  publicBaseUrl?: string | undefined;
+  /** Injectable so tests can drive reachability without real network calls. */
+  baseResolver?: PublicBaseResolver;
+  baseProbe?: ((url: string) => Promise<import('@muxpad/shared').UrlHealth>) | undefined;
+  baseProbeTtlMs?: number | undefined;
 }): Hono {
   const app = new Hono();
-  const globals = new GlobalsStore(deps.db);
+  // ONE resolver for every path in this file. The read path (GET /) and the
+  // write path (POST /) used to answer independently, which is how the Hosted
+  // UI and `muxpad publish` could print different urls for the same artifact.
+  const base =
+    deps.baseResolver ??
+    createPublicBaseResolver({
+      db: deps.db,
+      funnel: deps.funnel,
+      publicPort: deps.publicPort ?? 7778,
+      ...(deps.publicBaseUrl ? { configuredBaseUrl: deps.publicBaseUrl } : {}),
+      ...(deps.baseProbe ? { probe: deps.baseProbe } : {}),
+      ...(deps.baseProbeTtlMs !== undefined ? { probeTtlMs: deps.baseProbeTtlMs } : {}),
+    });
 
-  /** The tiered base-url resolution described in the module doc. */
-  async function resolveBaseUrl(hint: unknown): Promise<{ baseUrl: string; warning?: string }> {
-    if (hint !== undefined) {
-      // Callers only send hints they discovered themselves; validation
-      // happened (400) before any copying, so this cannot be null here.
-      const base = normalizeBaseUrl(hint) as string;
-      globals.set(PUBLIC_BASE_URL_KEY, base);
-      return { baseUrl: base };
-    }
-    const discovered = await deps.funnel.ensure();
-    if (!discovered.warning) {
-      globals.set(PUBLIC_BASE_URL_KEY, discovered.baseUrl);
-      return discovered;
-    }
-    const saved = globals.get(PUBLIC_BASE_URL_KEY);
-    // A persisted base is a KNOWN-public URL — no warning when we use it.
-    if (saved) return { baseUrl: saved };
-    return discovered; // local URL + warning
-  }
+  /**
+   * The write path: discovery is allowed (a user-shell CLI can exec tailscale
+   * where the daemon cannot) and reachability is checked, so `muxpad publish`
+   * warns at the moment of publishing if the link it just printed is dead.
+   */
+  const resolveForPublish = (hint: unknown) =>
+    base.resolve({ hint, allowDiscovery: true, probe: true });
 
   app.post('/', async (c) => {
     const body = (await c.req.json().catch(() => null)) as {
@@ -412,7 +405,7 @@ export function publishRoutes(deps: {
         500,
       );
     }
-    const resolved = await resolveBaseUrl(hint);
+    const resolved = await resolveForPublish(hint);
     return c.json(
       {
         slug,
@@ -429,20 +422,28 @@ export function publishRoutes(deps: {
     );
   });
 
-  app.get('/', (c) => {
+  app.get('/', async (c) => {
     const publicDir = publicDirOf(deps.dataDir);
     let entries: import('node:fs').Dirent[];
     try {
       entries = readdirSync(publicDir, { withFileTypes: true });
     } catch {
-      return c.json({ publishes: [] });
+      // Nothing published yet. The BASE still ships — a fresh instance whose
+      // tunnel is misconfigured should say so before the first publish, not
+      // after.
+      entries = [];
     }
-    // Read-only base resolution: the PERSISTED value only, never a fresh
-    // `tailscale` exec. A list is polled by the Hosted view; shelling out per
-    // poll would be absurd, and under launchd the exec fails anyway. No
-    // persisted base simply means `url: null` — the UI says "not public yet"
-    // rather than printing a localhost URL that looks shareable and isn't.
-    const base = globals.get(PUBLIC_BASE_URL_KEY);
+    // The SAME resolver the publish path uses, so a slug's url here and the url
+    // `muxpad publish` printed can never disagree. Two differences, both about
+    // this being a polled READ:
+    //   · no discovery — shelling out to `tailscale` per poll would be absurd,
+    //     and under launchd it fails anyway;
+    //   · reachability IS checked, because that result is cached for 30s and a
+    //     dead tunnel is precisely what the user needs to see here.
+    const resolved = await base.resolve({ probe: true });
+    // A loopback fallback is not a shareable link, so it is reported as no link
+    // at all rather than something that looks copyable and isn't.
+    const baseUrl = resolved.source === 'local' ? null : resolved.baseUrl;
     const publishes = entries
       // `.staging-*` / `.retired-*` are a republish's in-flight scratch dirs
       // (see POST); SLUG_RE can't produce a leading dot, so filtering by it
@@ -459,7 +460,7 @@ export function publishRoutes(deps: {
           files,
           bytes,
           created: Math.round(statSync(dir).birthtimeMs),
-          url: base ? `${base}/${e.name}/` : null,
+          url: baseUrl ? `${baseUrl}/${e.name}/` : null,
           versions: listVersionDirs(publicDir, e.name).map((n) => {
             const vdir = join(publicDir, versionDirName(e.name, n));
             const stats = dirStats(vdir);
@@ -468,13 +469,78 @@ export function publishRoutes(deps: {
               files: stats.files,
               bytes: stats.bytes,
               created: Math.round(statSync(vdir).birthtimeMs),
-              url: base ? `${base}/${versionDirName(e.name, n)}/` : null,
+              url: baseUrl ? `${baseUrl}/${versionDirName(e.name, n)}/` : null,
             };
           }),
         };
       })
       .sort((a, b) => b.created - a.created);
-    return c.json({ publishes });
+    // The base itself rides along so the Hosted view can name it and flag a
+    // tunnel that has stopped answering — the failure that makes every link on
+    // the page silently useless.
+    return c.json({
+      publishes,
+      base: {
+        url: baseUrl,
+        source: resolved.source,
+        reachable: resolved.health ? resolved.health.alive : null,
+        ...(resolved.warning ? { warning: resolved.warning } : {}),
+      },
+    });
+  });
+
+  /**
+   * The base url every published link is built from.
+   *
+   * GET  shows the whole ordered candidate list and which one won, so
+   *      "why is my link wrong" is answerable without reading code.
+   * PUT  pins one. This is the verb for an EPHEMERAL tunnel — a Cloudflare
+   *      quick tunnel mints a new name every restart, and re-pointing every
+   *      surface must be one command, not a deploy. A permanent domain belongs
+   *      in MUXPAD_PUBLIC_BASE_URL instead, which outranks this.
+   * DELETE clears the pin and falls back down the chain.
+   */
+  app.get('/base', async (c) => {
+    const resolved = await base.resolve({ probe: true });
+    return c.json({
+      url: resolved.source === 'local' ? null : resolved.baseUrl,
+      source: resolved.source,
+      reachable: resolved.health ? resolved.health.alive : null,
+      ...(resolved.warning ? { warning: resolved.warning } : {}),
+      candidates: base.candidates(),
+    });
+  });
+
+  app.put('/base', async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { url?: unknown } | null;
+    const url = normalizeBaseUrl(body?.url);
+    if (!url)
+      return c.json(
+        {
+          error: {
+            code: 'bad_request',
+            message: 'url must be a well-formed https origin (no path, query or hash)',
+          },
+        },
+        400,
+      );
+    base.setPinned(url);
+    const resolved = await base.resolve({ probe: true });
+    return c.json({
+      url: resolved.baseUrl,
+      source: resolved.source,
+      reachable: resolved.health ? resolved.health.alive : null,
+      ...(resolved.warning ? { warning: resolved.warning } : {}),
+    });
+  });
+
+  app.delete('/base', async (c) => {
+    base.setPinned(null);
+    const resolved = await base.resolve({ probe: true });
+    return c.json({
+      url: resolved.source === 'local' ? null : resolved.baseUrl,
+      source: resolved.source,
+    });
   });
 
   app.delete('/:slug', (c) => {

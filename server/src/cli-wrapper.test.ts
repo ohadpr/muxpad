@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { type ServerType, serve } from '@hono/node-server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { EventBus } from './events.js';
+import { localFunnel } from './funnel.js';
 import { PtydCache } from './ptyd-cache.js';
 import { createApp } from './server.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
@@ -50,6 +51,20 @@ describe('scripts/muxpad HTTP wrapper', () => {
       cache,
       dataDir: tmp,
       events: new EventBus(),
+      publish: {
+        // The real localFunnel (no tailscale exec — the CLI's own stub does the
+        // discovering here), plus a reachability probe that always answers.
+        // This test is about the HINT/PERSIST chain; without the stub it would
+        // depend on `stub-host.ts.net` resolving on the internet, and the
+        // base-url probe would correctly warn that it does not.
+        funnel: localFunnel(7799, 'funnel disabled in tests'),
+        baseProbe: async () => ({
+          alive: true,
+          status: 404,
+          reason: 'client_error' as const,
+          elapsedMs: 1,
+        }),
+      },
     });
     // serve() returns a node http server; bind to port 0 → kernel picks one.
     server = serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' });

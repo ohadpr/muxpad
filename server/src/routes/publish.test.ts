@@ -333,7 +333,13 @@ describe('publish routes', () => {
       // A persisted base is a known-public URL — the discovery warning is
       // NOT surfaced.
       expect(body.warning).toBeUndefined();
-      expect(downFunnel.calls).toBe(1);
+      // …and the funnel is not consulted AT ALL. Discovery is now a last
+      // resort, reached only when nothing is configured, pinned, hinted or
+      // persisted. It used to run first on every publish and overwrite the
+      // persisted base with the funnel's `:8443` url — which is how pinning a
+      // reachable base held only until the next `muxpad publish`.
+      expect(downFunnel.calls).toBe(0);
+      expect(new GlobalsStore(db).get(PUBLIC_BASE_URL_KEY)).toBe('https://saved.ts.net:8443');
     } finally {
       await down.cleanup();
     }
