@@ -4,33 +4,48 @@ import './StatusMark.css';
 /**
  * The status rail's one mark.
  *
- * Rendered in a FIXED 16px column that sits at the same x on every row —
- * workspace, tab and pane alike — so a vertical scan down the navigator
- * answers "what's running?" without reading a single word. That column is the
- * point: the old spinner sat immediately after an ellipsizable name
- * (`flex: 0 1 auto`), so its x differed on every row and there was no line to
- * scan.
+ * ONE FAMILY, four drawn marks. Every one is an 18px box on a 2.2px stroke,
+ * optically centred inside a FIXED 22px column that sits at the same x on
+ * every row — workspace, tab and pane alike — so a vertical scan down the
+ * navigator answers "what's running?" without reading a single word.
+ *
+ * The primary distinction is FILLED vs RING, not colour: red `blocked` and
+ * green `ready` are the classic colour-blindness pair, so they are separated
+ * by MOTION instead — blocked breathes slowly, ready is perfectly still.
+ * Blocked is the only mark in the whole rail that moves while at rest, which
+ * is defensible precisely because it is the only state that means "act now".
+ * Colour then reinforces what shape and motion already said.
+ *
+ *   blocked  filled circle, r=5.5, red   — breathing (2s)
+ *   working  ring r=6.5 + a 90° arc      — rotating (0.85s)
+ *   ready    filled circle, r=5.5, green — still
+ *   dead     ✕, round caps, grey         — still, and the only mark that
+ *                                          breaks the circle, because it is
+ *                                          the only terminal state
+ *   idle     nothing drawn; the column stays RESERVED so no row ever shifts
  *
  * One mark per row, never two — the five states are mutually exclusive by
  * construction (see PaneStatus), so precedence is resolved on the server and
- * this component simply draws what it is told. The column stays RESERVED when a
- * row is idle so nothing shifts as state changes under the cursor.
+ * this component simply draws what it is told.
  *
- * Colour rule, stated once and enforced here:
- *   --accent   the MACHINE is working
- *   --danger   it WANTS YOU
- *   --fg-dim   done / quiet
- * The three never share a hue, so "working" and "wants you" can't be confused
- * at a glance — which is exactly what happened when both were accent.
+ * Colour rule, stated once and enforced in StatusMark.css against the
+ * `--status-*` tokens (which are re-stepped for light surfaces, not reused
+ * from dark):
+ *   --status-blocked   it WANTS YOU
+ *   --status-working   the MACHINE is working
+ *   --status-ready     finished, waiting for you
+ *   --status-quiet     over, or the ring's track
+ *
+ * NOTE there is deliberately no subagent count here any more. It rode to the
+ * left of the ring as an absolutely-positioned chip, which is exactly the kind
+ * of out-of-grid element that made the rail unscannable; the count lives on
+ * the pane/chat surface, where there is room to say what those agents ARE.
  */
 export function StatusMark({
   status,
-  agents = 0,
   className,
 }: {
   status: PaneStatus | undefined;
-  /** Live background subagents. A NUMBER, not a state — rendered as a badge. */
-  agents?: number | undefined;
   className?: string | undefined;
 }) {
   const s = status ?? 'idle';
@@ -38,10 +53,8 @@ export function StatusMark({
   // the enclosing link's accessible name ("Home working" → "Home" → …) at
   // whatever rate the agent starts and stops. The STABLE, consequential states
   // get a real label — `blocked` above all, since "this one wants you now" is
-  // precisely the thing a screen-reader user must not have to hunt for. (The
-  // .badge-dot this replaced carried aria-label at every site; dropping it
-  // entirely would have made the whole rail silent.)
-  const announced = s === 'blocked' || s === 'dead' || s === 'done';
+  // precisely the thing a screen-reader user must not have to hunt for.
+  const announced = s === 'blocked' || s === 'dead' || s === 'ready';
   return (
     <span
       className={`navtree-status${className ? ` ${className}` : ''}`}
@@ -51,69 +64,47 @@ export function StatusMark({
         : { 'aria-hidden': 'true' as const })}
       title={TITLES[s]}
     >
-      {s === 'working' && agents > 0 ? (
-        // The subagent count rides to the LEFT of the ring, outside the fixed
-        // column, so the ring itself never leaves the scan line.
-        <span className="navtree-status-agents">{agents > 9 ? '9+' : agents}</span>
+      {s === 'blocked' ? (
+        <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+          <circle className="navtree-status-breath" cx="9" cy="9" r="5.5" fill="currentColor" />
+        </svg>
       ) : null}
-      {s === 'blocked' ? <span className="navtree-status-dot" /> : null}
       {s === 'working' ? (
-        <>
-          <svg
-            className="navtree-status-ring"
-            width="13"
-            height="13"
-            viewBox="0 0 16 16"
-            aria-hidden="true"
-          >
-            <circle
-              cx="8"
-              cy="8"
-              r="6"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              fill="none"
-              opacity="0.15"
-            />
-            <path
-              d="M8 2 a6 6 0 0 1 6 6"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              fill="none"
-              strokeLinecap="round"
-            />
-          </svg>
-          {/* Reduced-motion substitute: a 2px accent bar that SLIDES. Never an
-              opacity fade — dimming the only indicator you have is the one
-              thing a reduced-motion fallback must not do. */}
-          <span className="navtree-status-bar" />
-        </>
-      ) : null}
-      {s === 'done' ? (
         <svg
-          className="navtree-status-done"
-          width="6"
-          height="6"
-          viewBox="0 0 6 6"
+          width="18"
+          height="18"
+          viewBox="0 0 18 18"
+          fill="none"
+          strokeWidth="2.2"
           aria-hidden="true"
         >
-          <circle cx="3" cy="3" r="2.1" stroke="currentColor" strokeWidth="1.2" fill="none" />
+          {/* Faint track so the arc reads as ROTATION rather than a tick
+              floating in space. Same r as the arc, by construction. */}
+          <circle className="navtree-status-track" cx="9" cy="9" r="6.5" />
+          <path
+            className="navtree-status-arc"
+            d="M9 2.5 a6.5 6.5 0 0 1 6.5 6.5"
+            stroke="currentColor"
+            strokeLinecap="round"
+          />
+        </svg>
+      ) : null}
+      {s === 'ready' ? (
+        <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+          <circle cx="9" cy="9" r="5.5" fill="currentColor" />
         </svg>
       ) : null}
       {s === 'dead' ? (
         <svg
-          className="navtree-status-dead"
-          width="9"
-          height="9"
-          viewBox="0 0 10 10"
+          width="18"
+          height="18"
+          viewBox="0 0 18 18"
+          fill="none"
+          strokeWidth="2.2"
+          strokeLinecap="round"
           aria-hidden="true"
         >
-          <path
-            d="M2 2 L8 8 M8 2 L2 8"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-          />
+          <path d="M4.5 4.5 L13.5 13.5 M13.5 4.5 L4.5 13.5" stroke="currentColor" />
         </svg>
       ) : null}
       {/* idle renders nothing — the column stays reserved. */}
@@ -124,7 +115,7 @@ export function StatusMark({
 const TITLES: Record<PaneStatus, string | undefined> = {
   blocked: 'Waiting on you',
   working: 'Working…',
-  done: 'Finished — unread',
+  ready: 'Ready for you',
   dead: 'Agent exited',
   idle: undefined,
 };

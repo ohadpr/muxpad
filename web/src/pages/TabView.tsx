@@ -1523,7 +1523,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                         {/* The same status rail the navigator uses — one
                             component, so the strip and the sidebar can never
                             tell different stories about the same pane. */}
-                        <StatusMark status={p?.status} agents={p?.agents} />
+                        <StatusMark status={p?.status} />
                       </button>
                       {/* Trailing slot holds only the hover-revealed × now —
                           status moved to LEAD the label. */}

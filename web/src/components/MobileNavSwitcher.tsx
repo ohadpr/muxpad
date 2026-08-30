@@ -133,8 +133,8 @@ export function MobileNavSwitcher({ activeWorkspaceSlug }: Props) {
         ? `${counts('working')} working elsewhere`
         : triggerStatus === 'dead'
           ? `${counts('dead')} elsewhere stopped`
-          : triggerStatus === 'done'
-            ? `${counts('done')} elsewhere finished`
+          : triggerStatus === 'ready'
+            ? `${counts('ready')} elsewhere ready for you`
             : 'Switch workspace / tab';
 
   // A hidden workspace has no user-facing name worth showing in the

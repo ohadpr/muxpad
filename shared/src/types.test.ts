@@ -61,11 +61,11 @@ describe('domain schemas', () => {
 
   it('rolls statuses up in STATUS_ORDER precedence', () => {
     expect(rollupStatus([])).toBe('idle');
-    expect(rollupStatus(['idle', 'done', 'working'])).toBe('working');
+    expect(rollupStatus(['idle', 'ready', 'working'])).toBe('working');
     // dead outranks done: "it crashed" must not be masked by "it finished".
-    expect(rollupStatus(['done', 'dead'])).toBe('dead');
+    expect(rollupStatus(['ready', 'dead'])).toBe('dead');
     expect(rollupStatus(['dead', 'blocked', 'working'])).toBe('blocked');
-    expect(STATUS_ORDER.indexOf('dead')).toBeLessThan(STATUS_ORDER.indexOf('done'));
+    expect(STATUS_ORDER.indexOf('dead')).toBeLessThan(STATUS_ORDER.indexOf('ready'));
   });
 
   it('clamps an UNKNOWN status to the bottom instead of letting it win', () => {
