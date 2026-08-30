@@ -32,6 +32,23 @@
      and "this pane has keyboard focus". 3px reads decisively at a
      glance without dominating the chrome plate. */
   --chrome-rail: 3px;
+
+  /* ─── Status-rail colours ───────────────────────────────────────────────
+     The four state colours, deliberately NOT borrowed from --accent/--danger.
+     A status mark must mean the same thing on every theme: dracula's --danger
+     is pink and tokyo-night's is salmon, so "blocked" would change hue as you
+     changed theme, which is precisely the drift a scannable rail cannot
+     afford. See components/StatusMark.css.
+
+     These are the DARK-surface step; the light themes re-step them below
+     (same hues, taken down in luminance and up in chroma so they hold their
+     weight on cream/white — the dark values read washed-out and toy-like
+     against a light background). */
+  --status-blocked: #f0655f;
+  --status-working: #e8b34b;
+  --status-ready: #49c07d;
+  /* dead's ✕ and the working ring's track. */
+  --status-quiet: #45454e;
 }
 
 /* Tokyo Night — saturated deep navy with a vivid blue accent. */
@@ -90,6 +107,12 @@
   --danger: #cf222e;
   --accent: #0969da;
   --accent-fg: #ffffff;
+  /* Light re-step (see :root). Neutral --status-quiet here rather than the
+     warm one Trayo uses — this surface is a cool pure white. */
+  --status-blocked: #cf3b34;
+  --status-working: #b8801a;
+  --status-ready: #217a4b;
+  --status-quiet: #a2aab3;
 }
 
 /* Trayo — warm cream paper with a vivid violet brand accent. Inspired by
@@ -111,6 +134,12 @@
   --danger: #d83a5b;
   --accent: #6f55ff;
   --accent-fg: #ffffff;
+  /* Light re-step for the WARM CREAM surface — the values the design was
+     iterated against (see the reference prototype's `.theme.light` block). */
+  --status-blocked: #cf3b34;
+  --status-working: #b8801a;
+  --status-ready: #217a4b;
+  --status-quiet: #b3aa9a;
 }
 
 /* Trayo Dark — calm dark surfaces with a hint of violet, brand-violet
@@ -295,21 +324,21 @@ select:focus {
    Stated here, at the top of the shared stylesheet, because it is the rule
    the whole chrome now obeys — the marks themselves live in StatusMark.css:
 
-     --accent   the MACHINE is working  (the status rail's working ring)
-     --danger   it WANTS YOU            (the rail's blocked dot)
-     --fg-dim   done / quiet            (the rail's done ring)
+     --status-blocked   it WANTS YOU              (breathing red disc)
+     --status-working   the MACHINE is working    (turning amber ring)
+     --status-ready     finished, waiting for you (still green disc)
+     --status-quiet     over / the ring's track   (grey ✕)
 
    The old `.badge-dot` lived here and is GONE — every render site (nav tree,
    sheet pane list, tab-bar dropdown, desktop tab strip, mobile switcher) now
    draws a StatusMark instead, so there is exactly one component describing
    pane state and the surfaces cannot drift apart.
 
-   It is also why the two channels are no longer the same hue. The dot was
-   var(--accent), on the theory that "your turn isn't an error", and the busy
-   spinner was accent-mixed-toward-grey. On an ACTIVE row — itself a 14%
-   accent pill with the name at 75% accent — a glance could not tell "working"
-   from "wants you" at all. "Wants you" is now the only warm mark in the
-   chrome, and therefore findable. */
+   The four are their own tokens, not --accent/--danger, for two reasons. One:
+   the status channel must not change hue with the theme, and every theme
+   re-tunes --danger to fit its own palette. Two: on an ACTIVE row — itself a
+   14% accent pill with the name at 75% accent — an accent-coloured "working"
+   mark was indistinguishable from the row's own chrome. */
 
 /* App layout — persistent tab bar above an outlet that fills the rest. */
 
