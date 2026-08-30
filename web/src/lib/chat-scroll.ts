@@ -291,10 +291,20 @@ export const ANCHOR_SEEK_PAGE_BUDGET = 8;
 /**
  * How long the settling restore keeps trying.
  *
- * The base window covers layout settling (composer regrowth, thumbnails). A
- * restore that is SEEKING an off-screen anchor needs longer — each page is a
- * server round trip — so the component extends the deadline per page it asks
- * for, rather than raising the base for every restore.
+ * The base window covers layout settling (composer regrowth, thumbnails). Two
+ * things extend it rather than raising the base for every restore: a SEEK (each
+ * page is a server round trip) and a document that isn't scrollable yet (a cold
+ * mount whose transcript is still in flight — letting the window expire there
+ * left an unpinned reader at scrollTop 0, i.e. as deep in history as the
+ * document goes). Extensions are `max`, never assignment: assigning
+ * `now + ANCHOR_SEEK_PAGE_MS` to a window that still had 2500ms on it would
+ * SHORTEN a seeking restore, which is the opposite of the intent.
+ *
+ * `RESTORE_HARD_STOP_MS` is the ceiling on all of it: extensions must never
+ * keep an animation-frame loop alive indefinitely. It sits just above the worst
+ * case a full seek can legitimately need
+ * (ANCHOR_SEEK_PAGE_BUDGET × ANCHOR_SEEK_PAGE_MS).
  */
 export const RESTORE_SETTLE_MS = 2500;
 export const ANCHOR_SEEK_PAGE_MS = 1500;
+export const RESTORE_HARD_STOP_MS = 15_000;
