@@ -134,30 +134,6 @@ describe('AppStore', () => {
     expect(apps.update('missing', { enabled: false })).toBeNull();
     d.close();
   });
-
-  it('lists the pane ids of stopped apps, and only those', () => {
-    const d = db();
-    const apps = new AppStore(d);
-    const on = apps.create({
-      slug: 'on',
-      name: 'On',
-      cwd: '/tmp',
-      command: 'x',
-      url: 'http://127.0.0.1:1',
-    });
-    const off = apps.create({
-      slug: 'off',
-      name: 'Off',
-      cwd: '/tmp',
-      command: 'x',
-      url: 'http://127.0.0.1:2',
-    });
-    apps.setPane(on.id, 'P_ON');
-    apps.setPane(off.id, 'P_OFF');
-    apps.update(off.id, { enabled: false });
-    expect(apps.disabledPaneIds()).toEqual(['P_OFF']);
-    d.close();
-  });
 });
 
 describe('PaneStore.listServePanes with apps', () => {

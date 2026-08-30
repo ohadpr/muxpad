@@ -67,7 +67,18 @@ export function appsRoutes(deps: {
     };
   };
 
-  /** Validate a URL for both the probe and the iframe. */
+  /**
+   * Validate a URL for both the probe and the iframe.
+   *
+   * NOT an SSRF guard, despite using `classifyUrlHost`: the host CLASS is
+   * deliberately discarded, so an app may legitimately point at loopback (they
+   * nearly all do), a tailnet address, or anything else the user can reach.
+   * muxpad is a personal cockpit on a tailnet with no auth — a user who can
+   * register an app can already run the command that serves it. What this
+   * checks is that the string is a real http(s) URL (so the probe and the
+   * iframe both work) and carries no quote or whitespace (so it cannot escape
+   * the single quotes `appStartupCmd` wraps it in).
+   */
   function badUrl(url: string): string | null {
     if (/['"\s\0]/.test(url)) return 'url must not contain quotes or whitespace';
     if (classifyUrlHost(url) === null) return 'url must be a well-formed http(s) URL';

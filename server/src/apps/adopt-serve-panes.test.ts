@@ -228,3 +228,14 @@ describe('adoptServePanes', () => {
     expect(adoptServePanes({ db }).adopted).toEqual(['notes-2']);
   });
 });
+
+describe('adoption applies the same gates the API does', () => {
+  it('refuses a url carrying a quote, and a multi-line command', () => {
+    // Adoption writes a registry row WITHOUT going through routes/apps.ts, so
+    // its validators would not otherwise run. A quoted url would later be
+    // interpolated into `--url '<url>'` and escape its own quoting.
+    expect(parseServeCommand("muxpad serve --url http://x/';id;' -- ./start")).toBeNull();
+    expect(parseServeCommand('muxpad serve --url "http://x/\'" -- ./start')).toBeNull();
+    expect(parseServeCommand('muxpad serve --url http://x -- ./start\nrm -rf /')).toBeNull();
+  });
+});
