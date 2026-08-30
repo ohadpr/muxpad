@@ -6,6 +6,9 @@ import { serve } from '@hono/node-server';
 import { createAgentBridge } from './agent-bridge.js';
 import { seedAgentInstructions } from './agent-instructions.js';
 import { seedDoMode } from './agent-modes.js';
+import { createAppRegistry } from './apps/AppRegistry.js';
+import { createAppStatusProbe } from './apps/AppStatus.js';
+import { adoptServePanes } from './apps/adopt-serve-panes.js';
 import { ArchiveDb } from './archive/ArchiveDb.js';
 import { Archiver } from './archive/Archiver.js';
 import { projectsDir } from './chat/TranscriptReader.js';
@@ -149,7 +152,13 @@ const push = new PushService(db, config.dataDir);
 // Active-device presence: /api/presence heartbeats mark it; notifiers hold
 // pushes while any device is active (see Presence / createPaneNotifier).
 const presence = new Presence();
-attachAttentionPush({ events, db, push, presence });
+attachAttentionPush({
+  events,
+  db,
+  push,
+  presence,
+  liveLabel: (id) => ({ title: cache.getTitle(id), fg: cache.getFg(id) }),
+});
 
 // Session archive: raw transcript mirrors + FTS5 index in a SEPARATE
 // archive.sqlite (the index dwarfs the operational DB and FTS churn must not
@@ -209,6 +218,22 @@ const cronScheduler = new CronScheduler({
   carryover: (paneId) => paneCarryover(db, paneId),
 });
 
+// Hosted APPS (`muxpad app`): supervised `muxpad serve` panes in a hidden
+// workspace, so a long-running local web server stops costing a permanent tab.
+// The registry only creates/destroys the pane; keeping it ALIVE is the serve
+// supervisor's job below, which is why there is no second process supervisor
+// here — one dying with the main server would take every app down on deploy.
+const appRegistry = createAppRegistry({ db, ptyd, events });
+// Late-bound so the status probe can read the supervisor's give-up ledger:
+// the supervisor is constructed after the ws layer, and the probe is needed
+// before it, by createApp.
+let serveSupervisorRef: { gaveUp(paneId: string): boolean } | null = null;
+const appStatus = createAppStatusProbe({
+  db,
+  ptyd,
+  gaveUp: (paneId) => serveSupervisorRef?.gaveUp(paneId) ?? false,
+});
+
 const app = createApp({
   db,
   ptyd,
@@ -222,6 +247,7 @@ const app = createApp({
   cronScheduler,
   ...(archiveDb ? { archive: archiveDb } : {}),
   publish: { funnel },
+  apps: { registry: appRegistry, status: appStatus },
 });
 
 // Static asset serving (CSS, JS, fonts, images) from the built web bundle,
@@ -258,7 +284,13 @@ const httpServer = server as unknown as Server;
 // Chat-runner turn-done / question frames don't ring BEL — push them here.
 // Shared with the serve supervisor, which uses it to announce an app server
 // it has given up restarting.
-const notifyPane = createPaneNotifier(db, push, presence);
+// The live-label resolver lets the notification TITLE name the pane that rang
+// ("claude · muxpad"), not just its tab — the pty title/foreground command are
+// runtime-only, so they have to come from the cache.
+const notifyPane = createPaneNotifier(db, push, presence, (id) => ({
+  title: cache.getTitle(id),
+  fg: cache.getFg(id),
+}));
 const wsServer = attachWsServer({
   http: httpServer,
   db,
@@ -291,6 +323,28 @@ const serveSupervisor = startServeSupervisor({
       ptyd.off('connected', fn);
     };
   },
+});
+serveSupervisorRef = serveSupervisor;
+
+// One-shot: adopt the pre-registry `muxpad serve` panes (Notes, Reader) into
+// the app registry and free their tabs. Non-destructive and behind a globals
+// marker — see apps/adopt-serve-panes.ts. Best-effort: a failure here must not
+// stop the server booting.
+try {
+  const adopted = adoptServePanes({ db, events, cache });
+  for (const line of adopted.log) console.log(`[apps/adopt] ${line}`);
+} catch (err) {
+  console.error('[apps/adopt] one-time adoption failed (harmless; retried next boot)', err);
+}
+
+// Bring registered apps up. `boot: true` also honours autostart=0 by leaving
+// those apps honestly stopped rather than enabled-but-paneless. Reconciling
+// again on every ptyd (re)connect is what recovers an app whose pane row was
+// lost; the pty itself is the serve supervisor's job, and it is already wired
+// to the same signal.
+void appRegistry.reconcile({ boot: true });
+ptyd.on('connected', () => {
+  void appRegistry.reconcile();
 });
 
 // Durable schedules. The tick starts only now, with the ws layer attached and
