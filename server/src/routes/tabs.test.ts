@@ -144,6 +144,35 @@ describe('tabs routes', () => {
     expect(bad.status).toBeGreaterThanOrEqual(400);
   });
 
+  it('a PATCH that fails mid-way rolls the pin back, and 400s a junk body', async () => {
+    // `{pinned:true, slug:'<taken>'}` used to persist the pin AND the position
+    // change, then report 404 from a bare catch around tabs.update — a caller
+    // told "no such tab" about a tab that had just been half-edited.
+    const a = (await (await postTab({ name: 'A' })).json()) as { id: string; slug: string };
+    const b = (await (await postTab({ name: 'B' })).json()) as { id: string; pinned?: boolean };
+    const res = await test.app.request(`/api/tabs/${b.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pinned: true, slug: a.slug }),
+    });
+    expect(res.status).toBe(409); // not the old misleading 404
+    const after = (await (await test.app.request(`/api/tabs/${b.id}`)).json()) as {
+      pinned?: boolean;
+      slug: string;
+    };
+    expect(after.pinned).toBeFalsy();
+    expect(after.slug).not.toBe(a.slug);
+
+    // A malformed body is the caller's fault: 400, not a 500 from an uncaught
+    // ZodError (the handler used to call `.parse`).
+    const junk = await test.app.request(`/api/tabs/${b.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pinned: 'yes-please' }),
+    });
+    expect(junk.status).toBe(400);
+  });
+
   it('deletes a tab', async () => {
     const created = (await (await postTab({ name: 'Dev' })).json()) as { id: string };
     const res = await test.app.request(`/api/tabs/${created.id}`, { method: 'DELETE' });

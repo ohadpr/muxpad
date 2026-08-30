@@ -1,15 +1,12 @@
 import { EventEmitter } from 'node:events';
-import type { AppUrl, PaneSpec } from '@muxpad/shared';
+import type { AppUrl, PaneSpec, PaneStatus, Tab, Workspace } from '@muxpad/shared';
+import { rollupStatus } from '@muxpad/shared';
+import type Database from 'better-sqlite3';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { AppUrlDetector } from './runtime/app-url-detector.js';
 import type { AppUrlMarker } from './runtime/pty-scanner.js';
-
-// How long a pane stays "busy" after the last background-subagent progress
-// frame. Active subagents emit progress every ≤500ms, so this only has to
-// outlast a subagent's silent tool call; kept generous so the spinner doesn't
-// flicker between steps, at the cost of lingering ~this long after a background
-// subagent actually finishes (the roster, transcript-driven, drops it sooner).
-const SUBAGENT_BUSY_MS = 15_000;
+import { PaneStore } from './store/PaneStore.js';
+import { TabStore } from './store/TabStore.js';
 
 /**
  * Per-pane decoration state cached on the main server from ptyd push events.
@@ -80,7 +77,7 @@ export class PtydCache extends EventEmitter {
   // and writes the confirmed list back into the cache. It lives here so this
   // logic is a server-only restart away — never a ptyd bounce.
   private readonly detector = new AppUrlDetector((paneId, urls) => {
-    this.update(paneId, { appUrls: urls });
+    this.setAppUrls(paneId, urls);
   });
   // Per-pane decay timers for busy state. Armed/reset on each `paneActivity`
   // tick; on fire the pane goes idle. Cleared on pane removal so a pending
@@ -93,6 +90,10 @@ export class PtydCache extends EventEmitter {
   // Timestamp of the last user keystroke per pane (from proxyAttach's onInput).
   // Activity within busyInputGraceMs of this is treated as echo, not work.
   private readonly lastInputAt = new Map<string, number>();
+  // Timestamp of the last activity tick that was NOT echo, per pane. Bounds how
+  // long the user's own typing may keep an already-busy spell alive — see
+  // markBusy's echo block.
+  private readonly lastRealActivityAt = new Map<string, number>();
   // Panes with a headless (web-chat-driven) agent turn in flight. A chat turn
   // is a separate `claude -p` process writing the transcript FILE — it produces
   // zero PTY output, so the activity detector above never sees it. The ws chat
@@ -101,21 +102,37 @@ export class PtydCache extends EventEmitter {
   // OUTSIDE PaneState so PTY lifecycle (paneExit dropping the entry) can't
   // clear a turn that's still running.
   private readonly agentBusy = new Set<string>();
-  // Panes with a BACKGROUND subagent still working after the parent turn ended.
-  // A run_in_background Task keeps streaming progress once `turn-done` has
-  // already cleared agentBusy — so the tab/pane spinner would go dark while a
-  // subagent is plainly still running. The ws layer pokes this on each such
-  // out-of-turn subagent frame; getBusy() ORs it in. Decay-timer based (map =
-  // paneId → timer) because there's no clean per-subagent "finished" signal
-  // here (that lives in the transcript, read client-side): an active subagent
-  // emits progress every ≤500ms, so the window just has to outlast a silent
-  // tool call. Only poked OUT of turn, so synchronous subagents (which finish
-  // inside the turn) never make the spinner linger past turn-done.
-  private readonly subagentBusy = new Map<string, ReturnType<typeof setTimeout>>();
+  // How many live BACKGROUND subagents each pane has, mirrored from the ws
+  // layer's DURABLE server-owned roster (conn.subagents). A run_in_background
+  // Task routinely outlives the turn that launched it, so a pane with an empty
+  // turn and a non-empty roster is still working.
+  //
+  // This replaced a 15s decay timer poked by each out-of-turn subagent frame.
+  // The timer over-reported by a designed 15s (the sidebar and the in-pane
+  // roster disagreed by contract) and under-reported far worse: measured (P1,
+  // 2026-08) a live background subagent parked in one tool call emits nothing
+  // for 44s+, so the window expired under a running agent. The roster has real
+  // launch and finish edges — no window can be right, so there is no window.
+  private readonly subagentCounts = new Map<string, number>();
+  // Panes whose agent is BLOCKED on the user: a `question` frame is awaiting an
+  // answer. Previously the question frame reached chat sockets and a push
+  // notification and touched NOTHING else — so a chat parked on ask_user read
+  // as plain idle in the nav, the single highest-value missing state. Kept here
+  // (not in PaneState) for the same reason as agentBusy: pty lifecycle must not
+  // be able to clear it.
+  private readonly blocked = new Set<string>();
+  // Panes whose runner exhausted its automatic restarts (respawns.gaveUp) or
+  // reported a fatal it can't come back from. Mirrored from the ws layer.
+  private readonly dead = new Set<string>();
+  // Panes owned by a connected agent runner. THE gate for the pty heuristic:
+  // for these panes "working" is the runner registry and pty output is not a
+  // status source at all (a `tail -f` in an agent pane's terminal face used to
+  // spin forever, and a quietly-thinking agent read idle).
+  private readonly runnerOwned = new Set<string>();
   private readonly busyQuietMs: number;
   private readonly busyWarmupMs: number;
   private readonly busyInputGraceMs: number;
-  private readonly subagentBusyMs: number;
+  private readonly busyEchoSustainMs: number;
 
   /**
    * @param opts.busyQuietMs How long a pane may go without an activity tick
@@ -137,20 +154,27 @@ export class PtydCache extends EventEmitter {
    *   TUI that repaints its input on each key, like Claude's composer) doesn't
    *   light the spinner. A command's own output keeps streaming past the grace
    *   and still trips busy. Default 500ms.
+   * @param opts.busyEchoSustainMs How long the user's TYPING alone may keep an
+   *   already-busy pane busy, measured from the last non-echo tick. Activity
+   *   ticks can't be attributed at this layer, so a pane that is streaming
+   *   while you type looks identical to one that went quiet while you type.
+   *   This bounds the ambiguity in the safe direction: the real case (typing a
+   *   message at a working prompt) is seconds; beyond this the pane is allowed
+   *   to decay. Default 10s.
    */
   constructor(
     opts: {
       busyQuietMs?: number;
       busyWarmupMs?: number;
       busyInputGraceMs?: number;
-      subagentBusyMs?: number;
+      busyEchoSustainMs?: number;
     } = {},
   ) {
     super();
     this.busyQuietMs = opts.busyQuietMs ?? 1500;
     this.busyWarmupMs = opts.busyWarmupMs ?? 600;
     this.busyInputGraceMs = opts.busyInputGraceMs ?? 500;
-    this.subagentBusyMs = opts.subagentBusyMs ?? SUBAGENT_BUSY_MS;
+    this.busyEchoSustainMs = opts.busyEchoSustainMs ?? 10_000;
   }
 
   /**
@@ -241,12 +265,33 @@ export class PtydCache extends EventEmitter {
    */
   private markBusy(id: string): void {
     const now = Date.now();
-    // Echo of the user's own typing isn't "busy work". Ignore activity that
-    // lands within busyInputGraceMs of their last keystroke — don't accumulate
-    // warmup off it, and don't extend an existing busy spell. Genuine app
-    // output keeps streaming past the grace window and trips busy normally.
-    if (now - (this.lastInputAt.get(id) ?? 0) < this.busyInputGraceMs) return;
+    // Echo of the user's own typing isn't "busy work": activity within
+    // busyInputGraceMs of their last keystroke must not accumulate warmup, so a
+    // TUI repainting its composer on every key doesn't light the spinner.
+    //
+    // But echo must not SHORT-CIRCUIT. This used to `return` before the decay
+    // block below, so typing into an ALREADY-BUSY pane at sub-grace intervals
+    // starved the re-arm: busy expired busyQuietMs later while the app was
+    // plainly still streaming, and the spinner went dark mid-work purely
+    // because the user was typing. Echo suppresses the RISE; it may also SUSTAIN
+    // a spell that is already running.
+    //
+    // "Sustain" is bounded, though, and the bound matters. Ticks are
+    // indistinguishable at this layer — we only know one landed near a
+    // keystroke — so if echo could extend indefinitely, typing steadily into a
+    // pane that had gone quiet would hold it `working` forever. The extension
+    // is therefore capped at busyEchoSustainMs past the last NON-echo tick:
+    // long enough to cover the real case (composing a message while the app
+    // streams, seconds), far short of "typing keeps it lit all afternoon".
     const alreadyBusy = this.state.get(id)?.busy === true;
+    const isEcho = now - (this.lastInputAt.get(id) ?? 0) < this.busyInputGraceMs;
+    if (isEcho && !alreadyBusy) return;
+    if (isEcho) {
+      const lastReal = this.lastRealActivityAt.get(id) ?? 0;
+      if (now - lastReal > this.busyEchoSustainMs) return;
+    } else {
+      this.lastRealActivityAt.set(id, now);
+    }
     if (!alreadyBusy) {
       const firstAt = this.busyPending.get(id);
       if (firstAt === undefined) {
@@ -285,6 +330,7 @@ export class PtydCache extends EventEmitter {
     }
     this.busyPending.delete(id);
     this.lastInputAt.delete(id);
+    this.lastRealActivityAt.delete(id);
   }
 
   private update(id: string, patch: PaneState): void {
@@ -350,42 +396,87 @@ export class PtydCache extends EventEmitter {
    * setAgentBusy) — both mean "this pane's agent is working".
    */
   getBusy(id: string): boolean {
-    return (
-      (this.state.get(id)?.busy ?? false) || this.agentBusy.has(id) || this.subagentBusy.has(id)
-    );
+    return this.getStatus(id, false) === 'working';
   }
 
   /**
-   * Keep a pane busy while a BACKGROUND subagent works past the parent turn.
-   * Called by the ws layer on each out-of-turn subagent progress frame; each
-   * poke (re)arms a decay timer, so an actively-working subagent (progress
-   * every ≤500ms) holds the spinner and it clears ~SUBAGENT_BUSY_MS after the
-   * last frame. Emits paneChange only when the EFFECTIVE busy value flips, same
-   * edge-triggered contract as setAgentBusy.
+   * The pane's ONE status (see PaneStatus). Precedence, highest first:
+   *
+   *   blocked  a question awaits the user, or a BEL rang. Those two only — a
+   *            runner that gave up is `dead`, two lines down.
+   *   working  a turn is in flight, OR the durable subagent roster is non-empty,
+   *            OR — only for a pane with NO runner — the pty output heuristic
+   *   dead     the runner gave up (outranks done: a crash must not be masked
+   *            by an unread turn)
+   *   done     `unread` (passed in; it lives on the DB row, not here)
+   *   idle     otherwise
+   *
+   * The pty heuristic is gated to RUNNER-LESS panes on purpose. For a
+   * runner-owned pane the registry is authoritative and pty output is noise:
+   * the runner's own terminal log makes it "busy" while it idles, and a
+   * silently-thinking agent produces no output at all. Every other consumer in
+   * the codebase already says not to trust `busy` for turn state — this makes
+   * the sidebar agree with them.
    */
-  pokeSubagentBusy(id: string): void {
-    const wasBusy = this.getBusy(id);
-    const existing = this.subagentBusy.get(id);
-    if (existing) clearTimeout(existing);
-    const t = setTimeout(() => {
-      this.subagentBusy.delete(id);
-      // Only fan the idle transition if nothing else still holds busy.
-      if (!this.getBusy(id)) this.emit('paneChange', id);
-    }, this.subagentBusyMs);
-    t.unref?.();
-    this.subagentBusy.set(id, t);
-    if (!wasBusy) this.emit('paneChange', id);
+  getStatus(id: string, unread: boolean): PaneStatus {
+    if (this.blocked.has(id) || (this.state.get(id)?.attention ?? false)) return 'blocked';
+    const runnerWorking = this.agentBusy.has(id) || (this.subagentCounts.get(id) ?? 0) > 0;
+    const ptyWorking = !this.runnerOwned.has(id) && (this.state.get(id)?.busy ?? false);
+    if (runnerWorking || ptyWorking) return 'working';
+    if (this.dead.has(id)) return 'dead';
+    if (unread) return 'done';
+    return 'idle';
   }
 
-  /** Drop any background-subagent busy immediately (e.g. the runner socket
-   *  disconnected) so the spinner doesn't linger the full decay window after
-   *  the agent is gone. Emits paneChange only if the effective busy dropped. */
-  clearSubagentBusy(id: string): void {
-    const t = this.subagentBusy.get(id);
-    if (!t) return;
-    clearTimeout(t);
-    this.subagentBusy.delete(id);
-    if (!this.getBusy(id)) this.emit('paneChange', id);
+  /** The pane's agent is waiting on an answer (a `question` frame is open). */
+  setBlocked(id: string, on: boolean): void {
+    if (on === this.blocked.has(id)) return;
+    const before = this.getStatus(id, false);
+    if (on) this.blocked.add(id);
+    else this.blocked.delete(id);
+    if (this.getStatus(id, false) !== before) this.emit('paneChange', id);
+  }
+
+  /** The pane's runner gave up (automatic restarts exhausted). */
+  setDead(id: string, on: boolean): void {
+    if (on === this.dead.has(id)) return;
+    const before = this.getStatus(id, false);
+    if (on) this.dead.add(id);
+    else this.dead.delete(id);
+    if (this.getStatus(id, false) !== before) this.emit('paneChange', id);
+  }
+
+  /**
+   * Register/unregister the pane as runner-owned. Flipping this can change the
+   * pane's status on its own — a runner attaching disqualifies whatever pty
+   * output was holding `working` — so it is edge-checked like the others.
+   */
+  setRunnerOwned(id: string, on: boolean): void {
+    if (on === this.runnerOwned.has(id)) return;
+    const before = this.getStatus(id, false);
+    if (on) this.runnerOwned.add(id);
+    else this.runnerOwned.delete(id);
+    if (this.getStatus(id, false) !== before) this.emit('paneChange', id);
+  }
+
+  /** How many live background subagents this pane has (0 when none). Rendered
+   *  as a count badge on the working glyph — a number, not a state. */
+  getSubagentCount(id: string): number {
+    return this.subagentCounts.get(id) ?? 0;
+  }
+
+  /**
+   * Mirror the ws layer's durable subagent roster size onto the pane. Emits
+   * 'paneChange' when the COUNT changes — the badge shows the number, so a
+   * second subagent starting is a real visible change — but NOT when the runner
+   * merely re-announces the same roster on its keepalive tick.
+   */
+  setSubagentCount(id: string, n: number): void {
+    const prev = this.subagentCounts.get(id) ?? 0;
+    if (prev === n) return;
+    if (n > 0) this.subagentCounts.set(id, n);
+    else this.subagentCounts.delete(id);
+    this.emit('paneChange', id);
   }
 
   /**
@@ -397,15 +488,26 @@ export class PtydCache extends EventEmitter {
    */
   setAgentBusy(id: string, on: boolean): void {
     if (on === this.agentBusy.has(id)) return;
-    const before = this.getBusy(id);
+    const before = this.getStatus(id, false);
     if (on) this.agentBusy.add(id);
     else this.agentBusy.delete(id);
-    if (this.getBusy(id) !== before) this.emit('paneChange', id);
+    if (this.getStatus(id, false) !== before) this.emit('paneChange', id);
   }
 
   /** Synchronous read — empty array when no app urls have been reported. */
   getAppUrls(id: string): AppUrl[] {
     return this.state.get(id)?.appUrls ?? [];
+  }
+
+  /**
+   * The confirmed app-url list for a pane. The detector's own callback is the
+   * production writer; named and public (rather than an inline `update`) so
+   * the write side is as visible as `setDead`/`setBlocked`, and so a test can
+   * put the cache in the state a real detection produces without standing up
+   * sockets and DNS.
+   */
+  setAppUrls(id: string, urls: AppUrl[]): void {
+    this.update(id, { appUrls: urls });
   }
 
   /** Returns the full snapshot for the given pane, or undefined when unknown. */
@@ -417,11 +519,10 @@ export class PtydCache extends EventEmitter {
   forget(id: string): void {
     this.clearBusyTimer(id);
     this.agentBusy.delete(id);
-    const sub = this.subagentBusy.get(id);
-    if (sub) {
-      clearTimeout(sub);
-      this.subagentBusy.delete(id);
-    }
+    this.subagentCounts.delete(id);
+    this.blocked.delete(id);
+    this.dead.delete(id);
+    this.runnerOwned.delete(id);
     this.detector.forget(id);
     if (this.state.delete(id)) {
       this.emit('paneRemoved', id);
@@ -434,16 +535,100 @@ export class PtydCache extends EventEmitter {
  * command, attention/busy flags, detected app urls) from the cache. The single
  * place this composition lives: the tab GET, the pane-move endpoint, and the
  * ptyd→`pane.updated` forwarder all route through it, so a pane is described
- * identically however it's surfaced. (The PATCH-route event is deliberately
- * partial — it carries the raw row without these — so it does NOT use this.)
+ * identically however it's surfaced. EVERY `pane.updated` emitter routes
+ * through this — a hand-built partial payload silently blanks `busy` on the
+ * client and poisons the sidebar's change-dedup signature.
  */
 export function decoratePane(cache: PtydCache, pane: PaneSpec): PaneSpec {
+  const status = cache.getStatus(pane.id, pane.unread === true);
   return {
     ...pane,
     title: cache.getTitle(pane.id),
     foreground_cmd: cache.getFg(pane.id),
+    // `attention` keeps its ORIGINAL meaning — the raw BEL bit — deliberately.
+    // The new `blocked` state is a superset (BEL ∪ an open question), and
+    // widening this field would double-notify: attachAttentionPush
+    // fires on its rising edge, and the ws layer already pushes explicitly when
+    // a question arrives. Old clients keep exactly the behaviour they had.
     attention: cache.getAttention(pane.id),
-    busy: cache.getBusy(pane.id),
+    // Deprecated alias, exact by construction.
+    busy: status === 'working',
+    status,
+    agents: cache.getSubagentCount(pane.id),
     app_urls: cache.getAppUrls(pane.id),
   };
+}
+
+/**
+ * The tab-level equivalent of {@link decoratePane}: fold the live status of
+ * every pane in the tab (plus the tab's own manual unread mark) into the row.
+ *
+ * WHY THIS EXISTS. The tab LIST computed these fields inline while every
+ * `tab.updated` / `tab.added` emitter shipped the raw TabStore row — no
+ * `status`, no `agents`, no `attention`. Clients coalesce events onto their
+ * cached row, so an absent field reads as undefined and BLANKS the sidebar's
+ * status rail until the next 5s poll: rename a tab mid-turn and its spinner
+ * vanished. Same invariant decoratePane already enforces for panes — EVERY
+ * emitter routes through here.
+ */
+export function decorateTab(
+  cache: PtydCache,
+  db: Database.Database,
+  tab: Tab,
+  /** Pre-read manual-unread set, when the caller already has one for the
+   *  whole workspace (the list path) — saves a query per row. */
+  manualUnreadIds?: ReadonlySet<string>,
+): Tab {
+  const panes = new PaneStore(db);
+  const tabs = new TabStore(db);
+  const manualUnread = manualUnreadIds?.has(tab.id) ?? tabs.isUnread(tab.id);
+  const tabPanes = panes.listByTab(tab.id);
+  const attention = tabPanes.some((p) => cache.getAttention(p.id));
+  const unread = manualUnread || tabPanes.some((p) => p.unread);
+  // The tab's status is the highest-precedence status among its panes, and a
+  // manual "mark unread" counts as a done pane. One rollup primitive for every
+  // level, so the tab strip and the sidebar can't drift apart.
+  const status = rollupStatus([
+    ...tabPanes.map((p) => cache.getStatus(p.id, p.unread === true)),
+    ...(manualUnread ? (['done'] as const) : []),
+  ]);
+  const agents = tabPanes.reduce((n, p) => n + cache.getSubagentCount(p.id), 0);
+  // Deprecated alias, exact by construction (see PaneStatusSchema).
+  return { ...tab, attention, unread, busy: status === 'working', status, agents };
+}
+
+/**
+ * The workspace-level equivalent: the highest-precedence status across every
+ * pane in every tab, computed ALWAYS — collapsed or not. A collapsed workspace
+ * has nothing mounted to observe its tabs, which is exactly why it needs the
+ * server to answer "is something running in here?".
+ */
+export function decorateWorkspace(
+  cache: PtydCache,
+  db: Database.Database,
+  workspace: Workspace,
+): Workspace {
+  const panes = new PaneStore(db);
+  const tabs = new TabStore(db);
+  const manualUnreadIds = tabs.unreadIdsByWorkspace(workspace.id);
+  let attention = false;
+  let unread = false;
+  let agents = 0;
+  const statuses: PaneStatus[] = [];
+  for (const t of tabs.listByWorkspace(workspace.id)) {
+    if (manualUnreadIds.has(t.id)) {
+      unread = true;
+      statuses.push('done');
+    }
+    for (const p of panes.listByTab(t.id)) {
+      if (cache.getAttention(p.id)) attention = true;
+      if (p.unread) unread = true;
+      statuses.push(cache.getStatus(p.id, p.unread === true));
+      agents += cache.getSubagentCount(p.id);
+    }
+  }
+  // No `busy` alias here: WorkspaceSchema never carried one (the deprecated
+  // alias exists on panes and tabs only), and inventing it would ship a field
+  // no client reads.
+  return { ...workspace, attention, unread, status: rollupStatus(statuses), agents };
 }
