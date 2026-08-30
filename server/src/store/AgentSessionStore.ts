@@ -23,7 +23,7 @@ export interface AgentSession {
   /**
    * The session's TURN state: 'running' | 'idle'. A DIFFERENT vocabulary from
    * the `status` on panes/tabs/workspaces (PaneStatus: blocked | working |
-   * dead | done | idle) — two meanings, one word, and they are surfaced side
+   * dead | ready | idle) — two meanings, one word, and they are surfaced side
    * by side. The CLI resolves the collision by printing this column as
    * **TURN** (see `muxpad agent list`); nothing else may present it as
    * "status" without qualifying it. Read PaneStatus for what a pane IS;
