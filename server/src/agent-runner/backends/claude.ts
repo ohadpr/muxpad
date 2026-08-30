@@ -66,6 +66,69 @@ export function claudeSystemPromptOption(
   return append ? { type: 'preset', preset: 'claude_code', append } : undefined;
 }
 
+// ─── The SDK's task lifecycle → the subagent roster ─────────────────────────
+// The SDK reports background work on its own channel, independent of the
+// message stream: `task_started` / `task_notification` / `task_updated` edges
+// and `background_tasks_changed`, the full live-set LEVEL. That channel is the
+// roster's source of truth — the message-shape recognisers (a `Task` tool_use,
+// a `<task-notification>` text) only cover what the CONVERSATION happens to
+// show, and a background agent's end is routinely not in it.
+//
+// Split out of the session loop because constructing this backend spawns a real
+// SDK session: this is the only way the message SHAPES — every one of whose
+// id fields is optional — get a unit test.
+
+const TASK_LIFECYCLE_SUBTYPES = new Set([
+  'task_started',
+  'task_notification',
+  'task_updated',
+  'background_tasks_changed',
+]);
+
+export function isTaskLifecycle(subtype: string): boolean {
+  return TASK_LIFECYCLE_SUBTYPES.has(subtype);
+}
+
+/** The fields we read, all optional exactly as the SDK declares them. */
+export interface TaskLifecycleMessage {
+  subtype: string;
+  task_id?: string;
+  tool_use_id?: string;
+  tasks?: Array<{ task_id: string }>;
+  patch?: { status?: string };
+}
+
+/** Task ids whose `task_updated` means the task is OVER. */
+const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'killed']);
+
+export function applyTaskLifecycle(roster: SubagentRoster, msg: TaskLifecycleMessage): void {
+  switch (msg.subtype) {
+    case 'task_started':
+      // Binds task id ↔ launching tool_use. Ids we never launched (nested
+      // agents, background Bash) are ignored inside bindTask.
+      if (msg.tool_use_id && msg.task_id) roster.bindTask(msg.tool_use_id, msg.task_id);
+      break;
+    case 'task_notification':
+      // BOTH keys: `tool_use_id` is optional on this message and `task_id` is
+      // not, so keying only on the former would leave an entry with no edge
+      // end-path at all whenever the SDK omits it.
+      if (msg.tool_use_id) roster.done(msg.tool_use_id);
+      if (msg.task_id) roster.doneByTaskId(msg.task_id);
+      break;
+    case 'task_updated': {
+      if (!msg.task_id) break;
+      const status = msg.patch?.status;
+      if (status && TERMINAL_TASK_STATUSES.has(status)) roster.doneByTaskId(msg.task_id);
+      // A paused task may leave the live set without dying — see pauseTask.
+      else if (status === 'paused') roster.pauseTask(msg.task_id);
+      break;
+    }
+    case 'background_tasks_changed':
+      roster.reconcileBackground((msg.tasks ?? []).map((t) => t.task_id));
+      break;
+  }
+}
+
 export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): AgentBackend {
   const { emit, log } = host;
   const { requestedSid, requestedModel } = opts;
@@ -696,22 +759,8 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           statusEpoch++;
           emit(hello());
         }
-      } else if (msg.type === 'system' && msg.subtype === 'task_started') {
-        // The SDK's own launch edge. It carries the task id the LEVEL signal
-        // below speaks; bind it to the tool_use we already rostered. Ids we
-        // never launched (nested agents, background Bash) are ignored inside.
-        if (typeof msg.tool_use_id === 'string') subagents.bindTask(msg.tool_use_id, msg.task_id);
-      } else if (msg.type === 'system' && msg.subtype === 'task_notification') {
-        // The SDK's finish EDGE for a background task, carrying the launching
-        // tool_use id — the structured twin of the `<task-notification>` text
-        // the harness injects into the conversation when no turn is open. Both
-        // are handled: the text form is what a resumed/queued turn sees.
-        if (typeof msg.tool_use_id === 'string') subagents.done(msg.tool_use_id);
-      } else if (msg.type === 'system' && msg.subtype === 'background_tasks_changed') {
-        // The LEVEL signal: the complete live background-task set, REPLACE
-        // semantics. This is the reconciliation that makes a missed edge
-        // survivable — see SubagentRoster.reconcileBackground.
-        subagents.reconcileBackground(msg.tasks.map((t) => t.task_id));
+      } else if (msg.type === 'system' && isTaskLifecycle(msg.subtype)) {
+        applyTaskLifecycle(subagents, msg as TaskLifecycleMessage);
       } else if (msg.type === 'stream_event') {
         const evt = msg.event as {
           type?: string;
@@ -826,6 +875,11 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         // entries: a run_in_background Task routinely outlives the turn that
         // launched it, and clearing here is what made those subagents vanish.
         subagents.flush();
+        // A `Task` tool_use that never actually ran — a retracted refusal leg,
+        // a call the harness dropped — produces no task_started, no
+        // tool_result and no child traffic, so no end-path can reach it. The
+        // turn's end is where "it produced nothing at all" becomes decidable.
+        subagents.retireUnstarted();
         // …but a turn that was STOPPED or FAILED takes its background tasks
         // down with it, and those deaths announce themselves nowhere: no
         // tool_result, no finish notice. Retire them explicitly or they are
