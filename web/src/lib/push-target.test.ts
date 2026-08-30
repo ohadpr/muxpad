@@ -5,11 +5,14 @@ import {
   type PushTargetDeps,
   alreadyApplied,
   applyPushTarget,
+  clearStoredPushTarget,
   createPushTargetSink,
   isFresh,
   parsePushTarget,
   resetAppliedPushTargets,
   routeFromDeepLink,
+  takeStoredPushTarget,
+  windowMayRoutePushTargets,
 } from './push-target';
 
 function target(over: Partial<PushTarget> = {}): PushTarget {
@@ -182,6 +185,13 @@ describe('applyPushTarget', () => {
     expect(applyPushTarget(target(), retry.deps)).toBe(true);
     expect(retry.calls).toContain('nav:dev/tab-slug#P1');
   });
+
+  it('still navigates when the payload carries no pane hint', () => {
+    const { deps, calls, flush } = spyDeps();
+    applyPushTarget(target({ tab_id: null, pane_id: null }), deps);
+    flush();
+    expect(calls).toEqual(['nav:dev/tab-slug#-']);
+  });
 });
 
 describe('createPushTargetSink', () => {
@@ -215,16 +225,60 @@ describe('createPushTargetSink', () => {
     // the second one because that is the pane they care about.
     const { deps, calls } = spyDeps();
     const sink = createPushTargetSink(deps);
-    sink.deliver(target({ id: 'tap-a', url: '/w/dev/t/one', tab_id: 'T1', pane_id: 'P1' }));
-    sink.deliver(target({ id: 'tap-b', url: '/w/dev/t/two', tab_id: 'T2', pane_id: 'P2' }));
+    sink.deliver(
+      target({ id: 'tap-a', ts: 100, url: '/w/dev/t/one', tab_id: 'T1', pane_id: 'P1' }),
+    );
+    sink.deliver(
+      target({ id: 'tap-b', ts: 200, url: '/w/dev/t/two', tab_id: 'T2', pane_id: 'P2' }),
+    );
     expect(sink.held()?.id).toBe('tap-b');
     sink.ready();
     expect(calls.filter((c) => c.startsWith('nav:'))).toEqual(['nav:dev/two#P2']);
     // The superseded tap is retired, so its dead-drop twin can't resurrect it
     // and yank the user back a moment later.
     expect(alreadyApplied('tap-a')).toBe(true);
-    sink.deliver(target({ id: 'tap-a', url: '/w/dev/t/one', tab_id: 'T1', pane_id: 'P1' }));
+    sink.deliver(
+      target({ id: 'tap-a', ts: 100, url: '/w/dev/t/one', tab_id: 'T1', pane_id: 'P1' }),
+    );
     expect(calls.filter((c) => c.startsWith('nav:'))).toEqual(['nav:dev/two#P2']);
+  });
+
+  it('picks the newest by CLOCK, not by which channel arrived first', () => {
+    // The two channels race by design: the dead-drop is written before the
+    // postMessage but read whenever the app comes forward, so a tap's cached
+    // copy routinely overtakes an earlier tap's message. Ordering by arrival
+    // sent the user to the OLDER pane and permanently burned the newer one.
+    const { deps, calls } = spyDeps();
+    const sink = createPushTargetSink(deps);
+    expect(
+      sink.deliver(
+        target({ id: 'newer', ts: 200, url: '/w/dev/t/two', tab_id: 'T2', pane_id: 'P2' }),
+      ),
+    ).toBe('held');
+    expect(
+      sink.deliver(
+        target({ id: 'older', ts: 100, url: '/w/dev/t/one', tab_id: 'T1', pane_id: 'P1' }),
+      ),
+    ).toBe('duplicate');
+    expect(sink.held()?.id).toBe('newer');
+    sink.ready();
+    expect(calls.filter((c) => c.startsWith('nav:'))).toEqual(['nav:dev/two#P2']);
+    expect(alreadyApplied('older')).toBe(true);
+  });
+
+  it('never lets a throw out of ready() — it runs in an unguarded effect', () => {
+    // ready() is called from a React effect with no error boundary above it, so
+    // a throw would unmount the whole app: one lost tap traded for a blank
+    // screen.
+    const { deps } = spyDeps();
+    const sink = createPushTargetSink({
+      ...deps,
+      navigateToTab: () => {
+        throw new Error('router not mounted');
+      },
+    });
+    sink.deliver(target());
+    expect(() => sink.ready()).not.toThrow();
   });
 
   it('reports a duplicate rather than re-routing (both channels deliver one tap)', () => {
@@ -245,12 +299,20 @@ describe('createPushTargetSink', () => {
     sink.ready();
     expect(calls.filter((c) => c.startsWith('nav:')).length).toBe(1);
   });
+});
 
-  it('still navigates when the payload carries no pane hint', () => {
-    const { deps, calls, flush } = spyDeps();
-    applyPushTarget(target({ tab_id: null, pane_id: null }), deps);
-    flush();
-    expect(calls).toEqual(['nav:dev/tab-slug#-']);
+describe('windowMayRoutePushTargets', () => {
+  it('lets the full app route and refuses the single-purpose windows', () => {
+    // The dead-drop is ONE global slot with no addressee — whichever window
+    // comes forward first drains and DELETES it. A doc window or a pane popout
+    // left to do that both hijacks itself into the whole app and eats the tap
+    // the real app window was about to get.
+    expect(windowMayRoutePushTargets('/w/dev/t/one')).toBe(true);
+    expect(windowMayRoutePushTargets('/')).toBe(true);
+    expect(windowMayRoutePushTargets('/hosted/a/notes')).toBe(true);
+    expect(windowMayRoutePushTargets('/p/pane-1')).toBe(false);
+    expect(windowMayRoutePushTargets('/doc')).toBe(false);
+    expect(windowMayRoutePushTargets('/doc/notes')).toBe(false);
   });
 });
 
@@ -282,6 +344,65 @@ describe('takeStoredPushTarget', () => {
       },
     });
     expect(await takeStoredPushTarget()).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the entry when its body is unreadable, so the next drain retries', () => {
+    // Deleting first meant one bad read swallowed the tap outright.
+    const del = vi.fn(async () => true);
+    vi.stubGlobal('caches', {
+      open: async () => ({
+        match: async () => ({
+          json: async () => {
+            throw new SyntaxError('truncated');
+          },
+        }),
+        delete: del,
+      }),
+    });
+    return takeStoredPushTarget(1_000).then((t) => {
+      expect(t).toBeNull();
+      expect(del).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
+  });
+});
+
+describe('clearStoredPushTarget', () => {
+  function cacheHolding(entry: { id: string } | null) {
+    const del = vi.fn(async () => true);
+    vi.stubGlobal('caches', {
+      open: async () => ({
+        match: async () => (entry ? { json: async () => ({ url: '/w/a/t/b', ...entry }) } : null),
+        delete: del,
+      }),
+    });
+    return del;
+  }
+
+  it('retires only the tap it was given', async () => {
+    const del = cacheHolding({ id: 'tap-1' });
+    await clearStoredPushTarget('tap-1');
+    expect(del).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
+
+  it('leaves a NEWER tap alone', async () => {
+    // The call is fire-and-forget, so the delete for tap N can land after the
+    // service worker has already written tap N+1. An unconditional delete threw
+    // away the tap the user is actually waiting on.
+    const del = cacheHolding({ id: 'tap-2' });
+    await clearStoredPushTarget('tap-1');
+    expect(del).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('is silent with nothing stored or no Cache Storage', async () => {
+    const del = cacheHolding(null);
+    await clearStoredPushTarget('tap-1');
+    expect(del).not.toHaveBeenCalled();
+    vi.stubGlobal('caches', undefined);
+    await expect(clearStoredPushTarget('tap-1')).resolves.toBeUndefined();
     vi.unstubAllGlobals();
   });
 });

@@ -72,24 +72,58 @@ const ACK_TIMEOUT_MS = 1500;
  * unspecified list that includes every same-origin window, so the old
  * `wins.find(...)` happily picked a chromeless pane POPOUT (`/p/<id>`) or a
  * stale background browser tab and steered THAT to the deep link, leaving the
- * window in front of the user untouched. Score instead: focused beats visible
- * beats anything, and a full-app window always beats a single-purpose one.
- * Sort is stable, so equal scores keep the platform's own ordering.
+ * window in front of the user untouched.
+ *
+ * Single-purpose windows are EXCLUDED outright, not merely down-weighted. A
+ * weighted score got this wrong in the case that actually happens: the popout
+ * is the window in front of you, so it scores `focused`, and `focused` beat the
+ * one-point bonus a real app window got for being a real app window. Steering a
+ * popout renders the whole app inside a window whose entire point is one pane,
+ * and the app window the user meant is left untouched. If there is nothing but
+ * popouts, openWindow() gets a real one instead.
+ *
+ * Among what's left: focused beats visible beats anything. Sort is stable, so
+ * equal scores keep the platform's own ordering.
  */
 function pickClient(clients) {
-  const usable = clients.filter((c) => 'focus' in c && (c.frameType || 'top-level') !== 'nested');
-  const score = (c) =>
-    (c.focused ? 4 : 0) + (c.visibilityState === 'visible' ? 2 : 0) + (isSecondary(c.url) ? 0 : 1);
+  const usable = clients.filter(
+    (c) =>
+      'focus' in c && (c.frameType || 'top-level') !== 'nested' && !isSecondaryWindow(c.url || '/'),
+  );
+  const score = (c) => (c.focused ? 2 : 0) + (c.visibilityState === 'visible' ? 1 : 0);
   return usable.slice().sort((a, b) => score(b) - score(a))[0] || null;
 }
 
-/** Chromeless single-purpose windows: a pane popout and the doc surface. */
-function isSecondary(url) {
+/**
+ * Chromeless single-purpose windows: a pane popout and the doc surface.
+ *
+ * Duplicated in web/src/lib/push-target.ts, which is the page-side half of the
+ * same rule (those windows also refuse to drain the dead-drop). It can't be
+ * shared: this file ships verbatim, outside the bundle.
+ */
+function isSecondaryWindow(url) {
   try {
     // Client urls are absolute, so the base is only there to keep `new URL`
     // from throwing on an unexpected relative one.
     const p = new URL(url || '/', 'http://muxpad.invalid').pathname;
     return p.startsWith('/p/') || p === '/doc' || p.startsWith('/doc/');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Does this payload name somewhere to GO?
+ *
+ * Not every push does. The cron reporter and `POST /api/push/test` send `/` —
+ * "something happened", with no pane behind it. Routing those is actively
+ * hostile: tapping "push is working" would pull a running app off whatever the
+ * user was doing and dump it on the root redirect. Such a tap should bring the
+ * app forward and nothing else.
+ */
+function hasTarget(url) {
+  try {
+    return new URL(url || '/', 'http://muxpad.invalid').pathname !== '/';
   } catch {
     return false;
   }
@@ -106,20 +140,27 @@ function isSecondary(url) {
 function postWithAck(win, message) {
   return new Promise((resolve) => {
     let settled = false;
+    let timer = null;
+    let port = null;
     const finish = (ok) => {
       if (settled) return;
       settled = true;
+      // Release the channel and the timer: a worker kept alive by a pending
+      // 1.5s timeout on every tap is a worker that outlives its own work.
+      if (timer !== null) clearTimeout(timer);
+      port?.close();
       resolve(ok);
     };
     try {
       const ch = new MessageChannel();
+      port = ch.port1;
       ch.port1.onmessage = () => finish(true);
       win.postMessage(message, [ch.port2]);
     } catch {
       finish(false);
       return;
     }
-    setTimeout(() => finish(false), ACK_TIMEOUT_MS);
+    timer = setTimeout(() => finish(false), ACK_TIMEOUT_MS);
   });
 }
 
@@ -149,6 +190,11 @@ async function storePushTarget(target) {
 }
 
 async function routeNotificationClick(target) {
+  // A targetless push (cron report, the manual push test) only has to bring the
+  // app forward. No dead-drop, no navigate: both would yank a running app off
+  // the pane the user was on, and the dead-drop would sit there for its whole
+  // TTL waiting to do it again on the next focus.
+  const targeted = hasTarget(target.url);
   // Start the dead-drop, don't block on it. It is kept alive by the caller's
   // waitUntil either way, and every branch below that STARTS A PAGE awaits it
   // first — a page drains the dead-drop as it boots, so writing it afterwards
@@ -157,8 +203,12 @@ async function routeNotificationClick(target) {
   // window) doesn't need to wait at all, which keeps the async gap in front of
   // focus() as short as possible: focus() and openWindow() are gated on the
   // notificationclick's transient activation, and every await spends some.
-  const stored = storePushTarget(target);
-  const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  const stored = targeted ? storePushTarget(target) : Promise.resolve();
+  // matchAll can reject (a worker being torn down). An unhandled rejection out
+  // of waitUntil buys nothing over falling through to openWindow.
+  const wins = await self.clients
+    .matchAll({ type: 'window', includeUncontrolled: true })
+    .catch(() => []);
   const win = pickClient(wins);
   if (win) {
     try {
@@ -166,6 +216,8 @@ async function routeNotificationClick(target) {
     } catch {
       // focus can be refused; the routing below is what actually matters
     }
+    // Bringing it forward IS the whole job for a targetless push.
+    if (!targeted) return;
     // Let the running app route itself — instant and state-preserving. A
     // forced reload tears down every terminal, websocket and scrollback in the
     // window, so it is the fallback, not the first move.
