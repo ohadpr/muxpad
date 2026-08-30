@@ -13,6 +13,7 @@ import {
   MATERIALIZE_COOLDOWN_MS,
   appStartupCmd,
   createAppRegistry,
+  startAppReconciler,
 } from './AppRegistry.js';
 
 /** A ptyd that records what it was asked to do and can be told to fail. */
@@ -43,6 +44,7 @@ let tabs: TabStore;
 let workspaces: WorkspaceStore;
 let registry: AppRegistry;
 let clock: number;
+let connectedFns: Array<() => void>;
 
 function makeApp(over: Partial<Parameters<AppStore['create']>[0]> = {}) {
   return apps.create({
@@ -63,6 +65,7 @@ beforeEach(() => {
   tabs = new TabStore(db);
   workspaces = new WorkspaceStore(db);
   clock = 1_000_000;
+  connectedFns = [];
   registry = createAppRegistry({
     db,
     ptyd,
@@ -314,5 +317,85 @@ describe('reconcile', () => {
     expect(
       panes.listByTab(panes.getById(apps.getById(app.id)?.pane_id as string)?.tab_id as string),
     ).toHaveLength(1);
+  });
+});
+
+describe('startAppReconciler', () => {
+  it('repairs on an interval, not only when ptyd reconnects', async () => {
+    // The hole this closes: an app's pane can be destroyed by paths that know
+    // nothing about the registry (DELETE /api/panes/:id, a tab-delete cascade,
+    // a hand-run SQL fix). Reconciling only on ptyd's reconnect would leave the
+    // app down — while reporting `starting` — until the next daemon restart,
+    // which on a healthy machine is days.
+    const connected: Array<() => void> = [];
+    const app = makeApp();
+    const handle = startAppReconciler({
+      db,
+      ptyd,
+      registry,
+      intervalMs: 20,
+      onPtydConnected: (fn) => {
+        connected.push(fn);
+        return () => {};
+      },
+    });
+    // Boot pass materialised it.
+    await new Promise((r) => setTimeout(r, 30));
+    const first = apps.getById(app.id)?.pane_id as string;
+    expect(first).toBeTruthy();
+
+    // Something else deletes the pane. No ptyd event fires.
+    panes.delete(first);
+    clock += MATERIALIZE_COOLDOWN_MS;
+    await new Promise((r) => setTimeout(r, 80));
+
+    const second = apps.getById(app.id)?.pane_id;
+    expect(second).toBeTruthy();
+    expect(second).not.toBe(first);
+    handle.stop();
+  });
+
+  it('stops for real — no pass survives stop()', async () => {
+    const app = makeApp();
+    const detached: string[] = [];
+    const handle = startAppReconciler({
+      db,
+      ptyd,
+      registry,
+      intervalMs: 10,
+      onPtydConnected: (fn) => {
+        // Hand the listener back so we can prove a late reconnect is ignored.
+        connectedFns.push(fn);
+        return () => detached.push('detached');
+      },
+    });
+    await new Promise((r) => setTimeout(r, 25));
+    handle.stop();
+    expect(detached).toEqual(['detached']);
+
+    const paneId = apps.getById(app.id)?.pane_id as string;
+    panes.delete(paneId);
+    apps.setPane(app.id, null);
+    clock += MATERIALIZE_COOLDOWN_MS;
+    // A 'connected' emit already in flight when stop() ran must also be inert.
+    for (const fn of connectedFns) fn();
+    await new Promise((r) => setTimeout(r, 60));
+    expect(apps.getById(app.id)?.pane_id).toBeNull();
+  });
+
+  it('applies the autostart translation ONCE, at boot, not on every repair', async () => {
+    const app = makeApp({ autostart: false });
+    const handle = startAppReconciler({ db, ptyd, registry, intervalMs: 10 });
+    await new Promise((r) => setTimeout(r, 40));
+    // Boot left it honestly stopped…
+    expect(apps.getById(app.id)?.enabled).toBe(false);
+    // …and an explicit start is not undone by the next repair pass, which is
+    // what a `boot: true` on every tick would have done.
+    await registry.start(app.id);
+    expect(apps.getById(app.id)?.pane_id).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 60));
+    expect(apps.getById(app.id)?.enabled).toBe(true);
+    expect(apps.getById(app.id)?.pane_id).toBeTruthy();
+    handle.stop();
   });
 });
