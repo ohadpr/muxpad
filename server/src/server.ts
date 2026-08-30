@@ -4,6 +4,7 @@ import type { AgentBridge } from './agent-bridge.js';
 import type { AppRegistry } from './apps/AppRegistry.js';
 import type { AppStatusProbe } from './apps/AppStatus.js';
 import type { ArchiveDb } from './archive/ArchiveDb.js';
+import type { CleanupModel } from './chat/clean-transcript.js';
 import type { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
 import { type Funnel, localFunnel } from './funnel.js';
@@ -13,6 +14,7 @@ import type { Presence, PushService } from './push.js';
 import { agentSessionsRoutes } from './routes/agent-sessions.js';
 import { appsRoutes } from './routes/apps.js';
 import { attachmentsRoutes } from './routes/attachments.js';
+import { cleanTranscriptRoutes } from './routes/clean-transcript.js';
 import { cronsRoutes } from './routes/crons.js';
 import { eventsRoutes } from './routes/events.js';
 import { openRoutes } from './routes/open.js';
@@ -110,6 +112,12 @@ export interface AppDeps {
    * of inventing a status nothing measured.
    */
   apps?: { registry?: AppRegistry | undefined; status?: AppStatusProbe | undefined };
+  /**
+   * Test seam for POST /api/clean-transcript's model call. Production omits it
+   * and gets the Agent SDK Haiku completion; tests and browser-driven e2e
+   * supply a fake so no suite can ever reach the network.
+   */
+  cleanupModel?: CleanupModel;
 }
 
 export function createApp(deps: AppDeps): Hono {
@@ -133,6 +141,16 @@ export function createApp(deps: AppDeps): Hono {
   app.route('/api/panes', attachmentsRoutes(resolved));
   app.route('/api/panes', summaryRoutes(resolved));
   app.route('/api/open', openRoutes(resolved));
+  // Phone-dictation cleanup for the mobile composers. Read-only and
+  // side-effect-free: it hands corrected text back for the human to review.
+  app.route(
+    '/api/clean-transcript',
+    cleanTranscriptRoutes({
+      db: resolved.db,
+      dataDir: resolved.dataDir,
+      ...(resolved.cleanupModel ? { model: resolved.cleanupModel } : {}),
+    }),
+  );
   // SSE mirror of /ws/events — curl-able subscription for scripts/agents.
   app.route('/api/events', eventsRoutes(resolved));
   app.route('/api/agent-sessions', agentSessionsRoutes(resolved));
