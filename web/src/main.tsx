@@ -33,9 +33,11 @@ const selfEmbedded = isSelfEmbedded();
 
 // Open the app-level event stream as soon as the bundle boots. On every
 // reconnect, refetch the workspace list so we recover any events missed
-// while the socket was down. Per-workspace tab caches refresh via the
-// 5s poll in useTabs / useWorkspaces (also retriggered by tab/workspace
-// events below). The active TabView has its own subscribe() that merges
+// while the socket was down. The per-workspace tab caches take their own
+// baseline refetch on reconnect (see tabs.ts) — the 5s poll is only a
+// backstop, and it is STOPPED while the document is hidden, which is
+// exactly when a disconnect is most likely. The active TabView has its
+// own subscribe() that merges
 // pane-level events into local state without waiting for any poll.
 if (!selfEmbedded) {
   startEvents();

@@ -38,7 +38,7 @@ export function RootRedirect() {
 
     let cancelled = false;
     const run = async () => {
-      // Visible only: the hidden system workspace (the CEO's) must never be
+      // Visible only: a hidden system workspace must never be
       // the default landing spot — with only it present, bootstrap a real one.
       const workspaces = visibleWorkspaces(await refreshWorkspaces());
       if (cancelled) return;
