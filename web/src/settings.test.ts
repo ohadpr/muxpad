@@ -55,7 +55,7 @@ describe('settings', () => {
       fontSize: 14,
       fontFamily: 'Menlo, Monaco, monospace',
       theme: 'acme',
-      sidebarWidth: 240,
+      sidebarWidth: 280,
     });
   });
 });

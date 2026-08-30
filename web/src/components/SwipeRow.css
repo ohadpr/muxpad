@@ -49,6 +49,16 @@
   justify-content: flex-end;
   align-items: stretch;
 }
+/* Hidden until the row is actually open. The face covers the tray exactly, but
+   the shell is a rounded pill and the tray's buttons are square, so at fractional
+   device pixels a sliver of the red Close block bled through each row's rounded
+   corner — a column of tiny red ticks down the edge of a list where nothing was
+   swiped. `visibility` (not `display`) keeps the tray's box for the transform to
+   slide over, and it matches the `tabIndex={-1}` the buttons already carry when
+   closed: hidden from the pointer and hidden from the a11y tree together. */
+.swiperow:not([data-open="true"]) .swiperow-tray {
+  visibility: hidden;
+}
 
 .swiperow-action {
   /* FULL row height and 76px wide — comfortably past the 44px floor on both

@@ -31,6 +31,15 @@ export interface Settings {
   // Persisted width of the desktop sidebar. The upper bound is enforced live
   // while dragging (never wider than the longest tab name + its status/close
   // icon needs); this stored value is only sanity-clamped on read.
+  //
+  // The DEFAULT is 280, raised from 240 when the rail gained a second line and
+  // a meta column. Measured on the worst-case row (one carrying a schedule):
+  // icon 30 + meta 79 + rail 30 leaves the name 74px at 240px, and a
+  // 14-character name needs 96px in the nav font — which is why "Reading List"
+  // rendered as "Reading …". At 280 the same row gives the name 114px, and a
+  // row without a schedule gets 193px. Still narrower than the 330px rail the
+  // design was approved against. Users who dragged their own width keep it;
+  // this only moves the starting point.
   sidebarWidth: number;
 }
 
@@ -44,7 +53,7 @@ const DEFAULTS: Settings = {
   fontSize: 14,
   fontFamily: 'Menlo, Monaco, monospace',
   theme: 'acme',
-  sidebarWidth: 240,
+  sidebarWidth: 280,
 };
 
 const KEY = 'muxpad.settings.v1';
