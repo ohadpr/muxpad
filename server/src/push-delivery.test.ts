@@ -10,7 +10,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * phone wasn't reachable within five minutes, which is most of the time a
  * "your agent is waiting on you" notification actually matters.
  */
-const sendNotification = vi.fn(async () => ({}) as never);
+interface SendOpts {
+  TTL: number;
+  urgency?: string;
+  topic?: string;
+}
+const sendNotification = vi.fn(
+  async (_sub: unknown, _body: string, _opts: SendOpts) => ({}) as never,
+);
 vi.mock('web-push', () => ({
   default: {
     setVapidDetails: vi.fn(),
@@ -36,12 +43,10 @@ function serviceWithOneSub() {
   return push;
 }
 
-function optsOfLastSend() {
-  return sendNotification.mock.calls.at(-1)?.[2] as {
-    TTL: number;
-    urgency?: string;
-    topic?: string;
-  };
+function optsOfLastSend(): SendOpts {
+  const opts = sendNotification.mock.calls.at(-1)?.[2];
+  if (!opts) throw new Error('no send recorded');
+  return opts;
 }
 
 describe('PushService.send delivery options', () => {
