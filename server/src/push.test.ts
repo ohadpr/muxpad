@@ -7,6 +7,8 @@ import {
   type PushService,
   attachAttentionPush,
   createPaneNotifier,
+  notificationTitle,
+  paneLabel,
 } from './push.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
@@ -80,6 +82,97 @@ describe('createPaneNotifier', () => {
     createPaneNotifier(db, push)('nope', 'hello');
     expect(sent[0]).toMatchObject({ title: 'muxpad', url: '/' });
   });
+
+  it('names the PANE in the title when the tab has more than one', () => {
+    // The reported symptom: three agent panes in one tab produced three
+    // notifications with identical titles and bodies that named nothing.
+    const db = openDb(':memory:');
+    const ws = new WorkspaceStore(db).create({ name: 'Dev' });
+    const tab = new TabStore(db).create({ name: 'muxpad', layout: '', workspace_id: ws.id });
+    const panes = new PaneStore(db);
+    const a = panes.create({ tab_id: tab.id, shell: '/bin/zsh', cwd: '/tmp' });
+    const b = panes.create({ tab_id: tab.id, shell: '/bin/zsh', cwd: '/tmp' });
+    const sent: PushPayload[] = [];
+    const push = { send: async (p: PushPayload) => void sent.push(p) } as unknown as PushService;
+    const notify = createPaneNotifier(db, push, undefined, (id) =>
+      id === a.id ? { title: 'claude' } : { fg: 'vite' },
+    );
+
+    notify(a.id, 'finished its turn');
+    notify(b.id, 'finished its turn');
+    expect(sent[0]?.title).toBe('claude · muxpad');
+    expect(sent[1]?.title).toBe('vite · muxpad');
+    // …and each still points at ITS OWN pane.
+    expect(sent[0]?.pane_id).toBe(a.id);
+    expect(sent[1]?.pane_id).toBe(b.id);
+    expect(sent[0]?.tag).toBe(a.id);
+    expect(sent[1]?.tag).toBe(b.id);
+  });
+
+  it('falls back to a position when a sibling pane has no label at all', () => {
+    const db = openDb(':memory:');
+    const ws = new WorkspaceStore(db).create({ name: 'Dev' });
+    const tab = new TabStore(db).create({ name: 'muxpad', layout: '', workspace_id: ws.id });
+    const panes = new PaneStore(db);
+    panes.create({ tab_id: tab.id, shell: '/bin/zsh', cwd: '/tmp' });
+    const b = panes.create({ tab_id: tab.id, shell: '/bin/zsh', cwd: '/tmp' });
+    const sent: PushPayload[] = [];
+    const push = { send: async (p: PushPayload) => void sent.push(p) } as unknown as PushService;
+    createPaneNotifier(db, push)(b.id, 'wants your attention');
+    expect(sent[0]?.title).toBe('Pane 2 · muxpad');
+  });
+
+  it('percent-encodes slugs in the deep link', () => {
+    const db = openDb(':memory:');
+    const tabs = new TabStore(db);
+    const ws = new WorkspaceStore(db).create({ name: 'Dev' });
+    const tab = tabs.create({ name: 'muxpad', layout: '', workspace_id: ws.id });
+    tabs.update(tab.id, { slug: 'a b/c' });
+    const pane = new PaneStore(db).create({ tab_id: tab.id, shell: '/bin/zsh', cwd: '/tmp' });
+    const sent: PushPayload[] = [];
+    const push = { send: async (p: PushPayload) => void sent.push(p) } as unknown as PushService;
+    createPaneNotifier(db, push)(pane.id, 'hi');
+    // An unescaped '/' would make the URL point at a DIFFERENT route entirely.
+    expect(sent[0]?.url).toContain('/t/a%20b%2Fc?');
+  });
+});
+
+describe('paneLabel', () => {
+  it('prefers a pinned name over everything', () => {
+    expect(paneLabel({ name: 'runner' }, { title: 'zsh', fg: 'vite' })).toBe('runner');
+  });
+  it('uses the host for a url pane', () => {
+    expect(paneLabel({ kind: 'url', url: 'https://example.com/x' })).toBe('example.com');
+  });
+  it('keeps an unparseable url verbatim rather than dropping the label', () => {
+    expect(paneLabel({ kind: 'url', url: 'not a url' })).toBe('not a url');
+  });
+  it('falls back live title → foreground command → null', () => {
+    expect(paneLabel({}, { title: 'claude', fg: 'zsh' })).toBe('claude');
+    expect(paneLabel({}, { title: '  ', fg: 'zsh' })).toBe('zsh');
+    expect(paneLabel({}, {})).toBeNull();
+    expect(paneLabel({})).toBeNull();
+  });
+});
+
+describe('notificationTitle', () => {
+  const base = { tabName: 'muxpad', label: null, position: 0, siblings: 1 };
+  it('is the tab name alone for an unlabelled lone pane', () => {
+    expect(notificationTitle(base)).toBe('muxpad');
+  });
+  it('qualifies with a real label even on a lone pane', () => {
+    expect(notificationTitle({ ...base, label: 'claude' })).toBe('claude · muxpad');
+  });
+  it('does NOT invent a position for a lone pane', () => {
+    expect(notificationTitle({ ...base, siblings: 1 })).toBe('muxpad');
+    expect(notificationTitle({ ...base, siblings: 2, position: 1 })).toBe('Pane 2 · muxpad');
+  });
+  it('never stutters when the pane label equals the tab name', () => {
+    expect(notificationTitle({ ...base, label: 'MuxPad ' })).toBe('muxpad');
+  });
+  it('degrades to the app name with no tab', () => {
+    expect(notificationTitle({ ...base, tabName: null, label: 'claude' })).toBe('muxpad');
+  });
 });
 
 describe('attachAttentionPush', () => {
@@ -117,8 +210,10 @@ describe('attachAttentionPush', () => {
     expect(sent[0]).toMatchObject({
       url: `/w/${wsSlug}/t/${tabSlug}?ptab=${tabId}&pane=${paneId}`,
       tag: paneId,
+      // The live pane label rides the TITLE now; the body says what happened.
+      title: 'claude · muxpad',
+      body: 'wants your attention',
     });
-    expect(sent[0]?.body).toContain('claude');
   });
 
   it('does not re-notify while attention stays high, notifies again after clearing', () => {

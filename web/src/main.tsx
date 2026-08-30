@@ -6,6 +6,13 @@ import { setLastPaneId } from './lib/last-visited';
 import { startPresence } from './lib/presence';
 import { reconcilePush, registerServiceWorker } from './lib/push';
 import { setPushFocusPane } from './lib/push-focus';
+import {
+  type PushTargetDeps,
+  applyPushTarget,
+  clearStoredPushTarget,
+  parsePushTarget,
+  takeStoredPushTarget,
+} from './lib/push-target';
 import { router } from './router';
 import { refreshTabs } from './tabs';
 import { refreshWorkspaces } from './workspaces';
@@ -51,10 +58,38 @@ if (!selfEmbedded) {
   // user actually enabled push on this device. See lib/push.ts.
   void reconcilePush();
 
-  // Notification-tap deep links, cold-start path: a tap that BOOTS the PWA
-  // lands on the payload URL, whose ?ptab=&pane= params say which pane to
-  // focus. Record it as the tab's last-visited pane BEFORE the router
-  // mounts (TabView falls back to that store when it has no active pane),
+  // How a notification tap actually reaches the right pane. Three channels,
+  // because which one is available depends entirely on the platform:
+  //
+  //   COLD   the tap boots the PWA onto the payload URL — ?ptab=&pane= below.
+  //   WARM   the SW postMessages the target; we route through the SPA router
+  //          with no reload (every terminal + socket in the window survives).
+  //   OPAQUE the platform foregrounds the app and says nothing (installed iOS
+  //          PWA: no WindowClient.navigate, and openWindow on a live app just
+  //          focuses it). The SW leaves the target in Cache Storage; we drain
+  //          it at boot and on every visibility/focus change.
+  //
+  // All three converge on applyPushTarget(), which dedupes by tap id.
+  const pushTargetDeps: PushTargetDeps = {
+    navigateToTab: ({ wsSlug, tabSlug, paneId }) => {
+      // Through the ROUTER, not a raw history push of the clean path — the
+      // latter can leave us on the current tab.
+      void router.navigate({
+        to: '/w/$wsSlug/t/$tabSlug',
+        params: { wsSlug, tabSlug },
+        ...(paneId ? { search: { pane: paneId } } : {}),
+      });
+    },
+    navigateToPath: (path) => router.history.push(path),
+    rememberPane: setLastPaneId,
+    forceFocusPane: setPushFocusPane,
+    showPane: (paneId) =>
+      window.dispatchEvent(new CustomEvent('muxpad:show-pane', { detail: { paneId } })),
+    schedule: (fn, ms) => void setTimeout(fn, ms),
+  };
+
+  // COLD path. Record the pane as the tab's last-visited one AND in the
+  // once-only push-focus store BEFORE the router mounts (TabView reads both),
   // then strip the params so they don't linger in the address bar.
   {
     const params = new URLSearchParams(window.location.search);
@@ -62,6 +97,9 @@ if (!selfEmbedded) {
     const pane = params.get('pane');
     if (ptab && pane) {
       setLastPaneId(ptab, pane);
+      // Stripping ?pane below removes TabView's URL seed, so the deterministic
+      // store is what carries the target the rest of the way.
+      setPushFocusPane(ptab, pane);
       params.delete('ptab');
       params.delete('pane');
       const qs = params.toString();
@@ -69,55 +107,51 @@ if (!selfEmbedded) {
     }
   }
 
-  // Notification-tap deep links, warm path (FALLBACK): the service worker
-  // prefers a real navigate() to the deep link (reliable, reloads onto the cold
-  // path), but when that's rejected — an uncontrolled client on iOS — it focuses
-  // this window and postMessages the target here instead, avoiding a reload.
-  // Route through the SPA router and point the tab at the right pane three ways,
-  // for robustness: ?pane seeds a freshly-mounting TabView, the push-focus store
-  // is consumed deterministically on mount/activate, and muxpad:show-pane flips
-  // an already-mounted tab.
-  navigator.serviceWorker?.addEventListener('message', (e) => {
-    const d = e.data as {
-      type?: string;
-      url?: string;
-      tab_id?: string | null;
-      pane_id?: string | null;
-    } | null;
-    if (d?.type !== 'muxpad:push-navigate' || !d.url) return;
-    if (d.tab_id && d.pane_id) {
-      setLastPaneId(d.tab_id, d.pane_id);
-      // Deterministic focus: the owning TabView consumes this on mount/activate,
-      // covering the case where the show-pane event below fires before it exists.
-      setPushFocusPane(d.tab_id, d.pane_id);
-    }
-    // Navigate to the OWNING tab through the router (not a raw history.push of
-    // the clean path, which could stay on the current tab), carrying ?pane so a
-    // freshly-mounting TabView seeds the right pane.
-    const m = d.url.match(/^\/w\/([^/]+)\/t\/([^/?]+)/);
-    if (m?.[1] && m[2]) {
-      void router.navigate({
-        to: '/w/$wsSlug/t/$tabSlug',
-        params: { wsSlug: m[1], tabSlug: m[2] },
-        ...(d.pane_id ? { search: { pane: d.pane_id } } : {}),
-      });
-    } else {
-      router.history.push(d.url.split('?')[0] ?? d.url);
-    }
-    // Flip the active pane on the target TabView. An ALREADY-mounted tab ignores
-    // ?pane once it has an active pane, so this event is the only thing that can
-    // switch it — and a single fixed delay raced the mount / workspace switch.
-    // Retry for ~1s; setMobileActiveId to the same id is idempotent.
-    if (d.pane_id) {
-      const paneId = d.pane_id;
-      let tries = 0;
-      const fire = () => {
-        window.dispatchEvent(new CustomEvent('muxpad:show-pane', { detail: { paneId } }));
-        if (++tries < 8) setTimeout(fire, 110);
-      };
-      setTimeout(fire, 60);
-    }
-  });
+  // WARM path.
+  if (navigator.serviceWorker) {
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      const d = e.data as { type?: string } | null;
+      if (d?.type !== 'muxpad:push-navigate') return;
+      const target = parsePushTarget(d);
+      if (!target) return;
+      applyPushTarget(target, pushTargetDeps);
+      // The SW ALWAYS writes the dead-drop too; we just consumed the tap, so
+      // retire it rather than leave it to fire again on the next focus.
+      void clearStoredPushTarget();
+      // Acknowledge, so the SW knows it does NOT need to force a reload. Sent
+      // even when applyPushTarget deduped — the tap IS handled either way, and
+      // a missing ack costs the user a full app reload.
+      e.ports[0]?.postMessage({ ok: true });
+    });
+    // REQUIRED with addEventListener: the client's service-worker message
+    // queue starts DISABLED and is only released by setting `onmessage` or
+    // calling startMessages(). Without this the handler above is registered
+    // and never fires — which is precisely why the warm path "silently did
+    // nothing" and every tap had to fall back to a full reload (or, on iOS,
+    // where there is no navigate() at all, to nothing).
+    navigator.serviceWorker.startMessages?.();
+
+    // OPAQUE path: drain the SW's dead-drop now and whenever we come forward.
+    // Gated on serviceWorker existing at all — no SW, no depositor, and this
+    // runs on every window focus.
+    let draining = false;
+    const drain = () => {
+      if (draining) return; // focus + visibilitychange fire together
+      draining = true;
+      void takeStoredPushTarget()
+        .then((t) => {
+          if (t) applyPushTarget(t, pushTargetDeps);
+        })
+        .finally(() => {
+          draining = false;
+        });
+    };
+    drain();
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') drain();
+    });
+    window.addEventListener('focus', drain);
+  }
 }
 
 // Global router: forward structural events into the right module caches.
