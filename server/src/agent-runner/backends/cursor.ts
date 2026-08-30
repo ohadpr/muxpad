@@ -13,11 +13,17 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import type { ChatEvent } from '@muxpad/shared';
-import { readAgentInstructions, wrapAgentInstructions } from '../../agent-instructions.js';
+import { readAgentInstructions } from '../../agent-instructions.js';
+import { readDoModeOverlay, wrapModeNote } from '../../agent-modes.js';
 import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
-import type { RunnerFrame } from '../protocol.js';
-import { type BackendDeps, type ModelFetch, killDescendants } from './codex.js';
+import type { AgentMode, RunnerFrame } from '../protocol.js';
+import {
+  type BackendDeps,
+  type ModelFetch,
+  killDescendants,
+  withSessionPreamble,
+} from './codex.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
 const CURSOR_BIN = process.env.MUXPAD_CURSOR_BIN || 'cursor-agent';
@@ -62,6 +68,18 @@ export function createCursorBackend(
   let sessionRef: string | null = opts.requestedSid;
   let liveSid = opts.requestedSid ?? randomUUID();
   let model = opts.requestedModel;
+
+  // Agent mode — identical contract to codex (see agent-modes.ts): the
+  // overlay is prompt material only on a NEW session's first message; a
+  // mid-session switch is announced once, in-band, on the next message.
+  let currentMode: AgentMode = opts.mode;
+  let pendingModeNote: string | null = null;
+  function setMode(next: AgentMode): void {
+    if (next === currentMode) return;
+    currentMode = next;
+    pendingModeNote = wrapModeNote(next, readDoModeOverlay(next));
+    log(dim(`mode → ${next} (announced to the session on the next message)`));
+  }
 
   const queue: string[] = [];
   let turnActive = false;
@@ -163,18 +181,27 @@ export function createCursorBackend(
       'disabled',
     ];
     const resuming = useResume && !!sessionRef;
-    // Universal muxpad instructions — CURSOR injection mechanism: cursor-agent
-    // has NO system-prompt/instructions flag (checked `--help`; its rules live
-    // in user-owned .cursor/rules dirs muxpad must not write), so — same
-    // fallback as codex — prepend the delimited file content to the FIRST user
-    // message of each NEW session (fresh spawns only; resumes carry it
-    // in-thread). Read at spawn time; missing file → nothing injected, no
-    // error. The muxpad transcript records the RAW prompt (logEvent runs
-    // before this), so rendered chat history stays clean.
+    // Universal muxpad instructions + the ⚡ Do-mode overlay — CURSOR injection
+    // mechanism: cursor-agent has NO system-prompt/instructions flag (checked
+    // `--help`; its rules live in user-owned .cursor/rules dirs muxpad must
+    // not write), so — same fallback as codex — prepend the delimited file
+    // content to the FIRST user message of each NEW session (fresh spawns
+    // only; resumes carry it in-thread). Read at spawn time; missing file →
+    // nothing injected, no error. The muxpad transcript records the RAW
+    // prompt (logEvent runs before this), so rendered chat history stays clean.
     let finalPrompt = prompt;
-    if (!resuming) {
-      const instructions = readAgentInstructions();
-      if (instructions) finalPrompt = `${wrapAgentInstructions(instructions)}\n\n${prompt}`;
+    if (resuming) {
+      if (pendingModeNote) {
+        finalPrompt = `${pendingModeNote}\n\n${prompt}`;
+        pendingModeNote = null;
+      }
+    } else {
+      pendingModeNote = null; // the fresh preamble already states the contract
+      finalPrompt = withSessionPreamble(
+        prompt,
+        readAgentInstructions(),
+        readDoModeOverlay(currentMode),
+      );
     }
     if (resuming) args.push('--resume', sessionRef as string);
     if (model) args.push('--model', model);
@@ -443,6 +470,7 @@ export function createCursorBackend(
     process.stdout.write('\x1b]0;✳ cursor\x07');
     log(`${bold('muxpad agent')} — cursor backend · session ${liveSid}`);
     log(dim(`pane ${host.paneId} · ${process.cwd()}`));
+    if (currentMode === 'do') log(dim('⚡ do mode — decisive, terse, result-first'));
     authOk = await checkAuth();
     if (!authOk)
       log(dim('cursor-agent not logged in — run `cursor-agent login` in the terminal face'));
@@ -481,6 +509,7 @@ export function createCursorBackend(
       log(`${bold('model')} → ${m}`);
       emitStatus();
     },
+    setMode,
     answer: () => {},
     onConnected: () => {
       if (lastStatus) emit(lastStatus);

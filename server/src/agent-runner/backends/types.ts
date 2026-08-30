@@ -4,7 +4,7 @@
 // server→runner control frames into method calls; the backend owns the session
 // and emits runner→server frames via the host. Nothing in the harness knows
 // which backend is running.
-import type { BackendId, RunnerFrame } from '../protocol.js';
+import type { AgentMode, BackendId, RunnerFrame } from '../protocol.js';
 
 /** Services the harness provides to a backend. */
 export interface RunnerHost {
@@ -26,6 +26,14 @@ export interface BackendOptions {
   requestedSid: string | null;
   /** `--model <id>`: pin the session model (null = backend default). */
   requestedModel: string | null;
+  /**
+   * `--mode do|deep`: the pane's agent behavior mode at LAUNCH. This is the
+   * only point at which a mode can reach the session as real system-prompt
+   * material; a later switch arrives as a `mode` frame and can only be
+   * delivered in-conversation (see AgentBackend.setMode / agent-modes.ts).
+   * Absent flag = 'deep' = exactly the pre-mode behavior.
+   */
+  mode: AgentMode;
 }
 
 /**
@@ -50,6 +58,14 @@ export interface AgentBackend {
   stop(): void;
   /** Switch the session model. */
   setModel(model: string): void;
+  /**
+   * The pane's mode changed while this session is live. NO harness can
+   * rewrite a running session's system prompt, so the honest contract every
+   * backend implements is: remember the new mode, and prepend a one-time
+   * delimited `<muxpad-mode>` note to the NEXT user message. A frame carrying
+   * the mode already in effect is a no-op. See agent-modes.ts.
+   */
+  setMode(mode: AgentMode): void;
   /** Answer an outstanding ask_user question (answers validated by the backend). */
   answer(qid: string, answers: unknown): void;
   /** ws (re)connected: re-deliver anything the server lost (pending questions,
