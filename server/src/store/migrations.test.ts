@@ -269,9 +269,11 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
     const db = new Database(':memory:');
     runMigrations(db, { upTo: 21 });
     const tables = () =>
-      (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
-        name: string;
-      }[]).map((t) => t.name);
+      (
+        db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+          name: string;
+        }[]
+      ).map((t) => t.name);
     expect(tables()).not.toContain('crons');
 
     db.prepare(
@@ -298,7 +300,10 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       `INSERT INTO crons (id, name, schedule, tz, prompt, target_kind, target_pane, next_due_at, created_at)
        VALUES ('c1', 'job', '0 9 * * *', 'UTC', 'go', 'pane', 'p1', 999, 1)`,
     ).run();
-    const cron = db.prepare('SELECT * FROM crons WHERE id = ?').get('c1') as Record<string, unknown>;
+    const cron = db.prepare('SELECT * FROM crons WHERE id = ?').get('c1') as Record<
+      string,
+      unknown
+    >;
     expect(cron.enabled).toBe(1);
     expect(cron.catchup).toBe('once');
     expect(cron.overlap).toBe('skip');

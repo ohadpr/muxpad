@@ -19,15 +19,43 @@ const caches = new Map<string, Tab[]>();
 const listenersByWs = new Map<string, Set<(t: Tab[]) => void>>();
 const versions = new Map<string, number>();
 
+/**
+ * When each workspace's list last landed. See FRESH_MS in workspaces.ts for
+ * why an in-flight coalescer alone isn't enough at boot.
+ */
+const settledAt = new Map<string, number>();
+const FRESH_MS = 2000;
+function isFresh(workspaceId: string): boolean {
+  return Date.now() - (settledAt.get(workspaceId) ?? 0) < FRESH_MS;
+}
+
 export async function refreshTabs(workspaceId: string): Promise<void> {
   if (!workspaceId) return;
   const myVersion = (versions.get(workspaceId) ?? 0) + 1;
   versions.set(workspaceId, myVersion);
   const next = await api.listTabs(workspaceId);
+  settledAt.set(workspaceId, Date.now());
   if ((versions.get(workspaceId) ?? 0) > myVersion) return; // a newer call superseded us
   caches.set(workspaceId, next);
   const subs = listenersByWs.get(workspaceId);
   if (subs) for (const fn of subs) fn(next);
+}
+
+/**
+ * A tab list that is current "enough", without a guaranteed round trip.
+ *
+ * For callers that want to re-derive something from the server's list (e.g.
+ * resolving a slug on tab load) but have no write of their own to read back.
+ * Going through the shared cache means a cold boot doesn't issue a second
+ * identical GET a few milliseconds after the mount refresh — which is exactly
+ * what a raw `api.listTabs()` did.
+ */
+export async function freshTabs(workspaceId: string): Promise<Tab[]> {
+  if (!workspaceId) return [];
+  const inflight = inFlightMount.get(workspaceId);
+  if (inflight) await inflight.catch(() => {});
+  else if (!isFresh(workspaceId)) await refreshTabs(workspaceId);
+  return caches.get(workspaceId) ?? [];
 }
 
 // ── Live decoration refresh ──────────────────────────────────────────────
@@ -140,8 +168,9 @@ const drivers = new Map<string, TabsDriver>();
  *  applied to the exported refreshTabs, which post-mutation callers rely on
  *  to actually re-read after their write. */
 const inFlightMount = new Map<string, Promise<void>>();
-function refreshOnMount(workspaceId: string): void {
+export function refreshTabsOnMount(workspaceId: string): void {
   if (inFlightMount.has(workspaceId)) return;
+  if (isFresh(workspaceId)) return; // another mount just fetched this list
   const p = refreshTabs(workspaceId).finally(() => inFlightMount.delete(workspaceId));
   inFlightMount.set(workspaceId, p);
   p.catch(() => {
@@ -218,7 +247,7 @@ export function useTabs(workspaceId: string): {
       listenersByWs.set(workspaceId, subs);
     }
     subs.add(setState);
-    refreshOnMount(workspaceId);
+    refreshTabsOnMount(workspaceId);
     acquireDriver(workspaceId);
     return () => {
       subs!.delete(setState);
