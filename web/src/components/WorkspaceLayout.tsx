@@ -45,6 +45,21 @@ export function WorkspaceShell({ wsSlug, isActive }: WorkspaceShellProps) {
     });
   }, [urlTabSlug]);
 
+  // Recovery for a URL that points INSIDE a hidden system container.
+  //
+  // Hidden workspaces are filtered out of every navigator, so landing in one
+  // leaves the user in a workspace the sidebar cannot show, with no way back
+  // except the browser's back button. Nothing in the UI links there — but a
+  // PUSHED NOTIFICATION can: the pane notifier builds `/w/:ws/t/:tab` from the
+  // pane that rang, and an APP whose supervisor gave up is exactly such a pane
+  // (its pane lives in the hidden apps container). Tapping "could not be
+  // restarted" would have dropped the user into limbo instead of the one screen
+  // that can actually fix it. Send them to Hosted, which owns that app.
+  useEffect(() => {
+    if (!isActive || !workspace?.hidden) return;
+    void navigate({ to: '/hosted', replace: true });
+  }, [isActive, workspace, navigate]);
+
   // Recovery for a stale tab URL — a reload (or a PWA restoring its last
   // URL) can land on /w/:ws/t/:tab where the tab no longer exists (deleted
   // from another device). The tabs.map render below would then match

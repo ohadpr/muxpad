@@ -4,7 +4,7 @@ import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { SIDENAV_MIN_WIDTH, updateSettings, useSettings } from '../settings';
 import { useMediaQuery } from '../use-media-query';
 import { useWindowAttention } from '../use-window-attention';
-import { useWorkspaces } from '../workspaces';
+import { useWorkspaces, visibleWorkspaces } from '../workspaces';
 import { Brand } from './Brand';
 import { MobileNavSwitcher } from './MobileNavSwitcher';
 import { MoveUndoToast } from './MoveUndoToast';
@@ -33,7 +33,13 @@ export function AppLayout() {
   // Favicon is driven by the cross-workspace rollup, not by the current
   // workspace's tab list, so a browser tab parked on Workspace A still
   // shows the bell when Workspace B has activity.
-  useWindowAttention(workspaces);
+  //
+  // VISIBLE workspaces only. The hidden apps container holds long-lived server
+  // panes, and a server that writes a BEL byte (a build tool's "done" chime,
+  // an ANSI-heavy log) would otherwise pin the alert favicon permanently —
+  // with no surface in which to clear it, since clearing needs a tab the
+  // navigator can reach. An alert you cannot dismiss is worse than no alert.
+  useWindowAttention(visibleWorkspaces(workspaces));
   const activeWorkspace = wsSlug ? workspaces.find((w) => w.slug === wsSlug) : null;
   const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
   const settings = useSettings();
