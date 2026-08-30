@@ -44,6 +44,7 @@ type OpenMedia = (m: { url: string; name: string; video: boolean }) => void;
 import {
   ANCHOR_SEEK_PAGE_BUDGET,
   ANCHOR_SEEK_PAGE_MS,
+  RESTORE_HARD_STOP_MS,
   RESTORE_SETTLE_MS,
   SHOW_SETTLE_MS,
   SMOOTH_SCROLL_SETTLE_MS,
@@ -829,16 +830,24 @@ function imageExtFromName(name: string): string | null {
  */
 const ANCHOR_ATTR = 'data-eid';
 
-/** The anchored rows of a chat, in document order. */
+/**
+ * The anchored rows of a chat, in document order.
+ *
+ * DIRECT children of `.chat-list` only — a live HTMLCollection, no layout and no
+ * subtree walk. Everything here runs off scroll events or an animation-frame
+ * loop, and a long chat's rendered markdown is tens of thousands of nodes; a
+ * `querySelectorAll` over the whole tree would be a per-frame tax on a chat that
+ * is doing nothing wrong. Scanning the children also means an attribute that
+ * somehow ends up on a NESTED row can never be mistaken for a top-level one, so
+ * the monotonic-bottoms invariant holds structurally rather than by convention.
+ */
 function anchorRows(el: HTMLElement): HTMLElement[] {
   const list = el.querySelector('.chat-list');
   if (!list) return [];
-  // One pass over the list's DIRECT children (a live HTMLCollection, no layout
-  // and no subtree walk) rather than `querySelectorAll` over the whole tree:
-  // this runs off scroll events, and a long chat's rendered markdown is tens of
-  // thousands of nodes.
+  const kids = list.children;
   const out: HTMLElement[] = [];
-  for (const child of Array.from(list.children)) {
+  for (let i = 0; i < kids.length; i++) {
+    const child = kids[i];
     if (child instanceof HTMLElement && child.hasAttribute(ANCHOR_ATTR)) out.push(child);
   }
   return out;
@@ -850,7 +859,14 @@ function anchorRows(el: HTMLElement): HTMLElement[] {
  * hidden pane whose boxes have all collapsed).
  */
 function captureAnchor(el: HTMLElement): { anchorId: string; anchorOffset: number } | null {
-  const rows = anchorRows(el);
+  return anchorAt(el, anchorRows(el));
+}
+
+/** `captureAnchor` against an already-collected row list (saves a re-scan). */
+function anchorAt(
+  el: HTMLElement,
+  rows: HTMLElement[],
+): { anchorId: string; anchorOffset: number } | null {
   if (rows.length === 0) return null;
   const viewportTop = el.getBoundingClientRect().top;
   const i = firstVisibleRow(
@@ -860,27 +876,27 @@ function captureAnchor(el: HTMLElement): { anchorId: string; anchorOffset: numbe
   );
   // `firstVisibleRow` returns `count` when every row is above the line, which
   // only happens transiently mid-relayout — the last row is still the best
-  // description of where the reader is.
+  // available description of where the reader is.
   const row = rows[Math.min(i, rows.length - 1)];
   const anchorId = row?.getAttribute(ANCHOR_ATTR);
   if (!row || !anchorId) return null;
   return { anchorId, anchorOffset: Math.round(row.getBoundingClientRect().top - viewportTop) };
 }
 
-/** The rendered row for a remembered anchor id, or null if it isn't loaded. */
-function findAnchorRow(el: HTMLElement, anchorId: string): HTMLElement | null {
-  // Event ids carry '#' (Claude's `<uuid>#<block>`) and other selector
-  // metacharacters, so the value must be escaped — an unescaped '#' turns the
-  // attribute selector into a syntax error and throws out of the restore loop.
-  const escaped =
-    typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
-      ? CSS.escape(anchorId)
-      : anchorId.replace(/["\\]/g, '\\$&');
-  try {
-    return el.querySelector<HTMLElement>(`[${ANCHOR_ATTR}="${escaped}"]`);
-  } catch {
-    return null;
+/**
+ * The rendered row for a remembered anchor id, or null if it isn't loaded.
+ *
+ * A linear scan of the already-collected top-level rows, NOT
+ * `querySelector('[data-eid="…"]')`. The selector form walks the entire subtree
+ * — and walks ALL of it on the miss, which is exactly the case the restore loop
+ * hits every frame while it is paging the anchor back in. It also needed the id
+ * escaped as a CSS string, which this doesn't.
+ */
+function findAnchorRow(rows: HTMLElement[], anchorId: string): HTMLElement | null {
+  for (const row of rows) {
+    if (row.getAttribute(ANCHOR_ATTR) === anchorId) return row;
   }
+  return null;
 }
 
 /**
@@ -931,6 +947,14 @@ export function ChatPane({
   // real gesture clears it (see the wheel/touch listener): distrusting events
   // for a moment is right; distrusting the reader never is.
   const suppressPinUntil = useRef(0);
+  // True while the settling restore is still trying to reach a remembered
+  // MESSAGE it hasn't found yet. `onScroll` keeps recording pin + ratio (both
+  // describe the pane as it actually is) but must leave the stored anchor
+  // alone: the restore's own scrollTop writes would otherwise overwrite the
+  // reader's parked message with wherever the restore had got to, losing it for
+  // good. Cleared by the restore itself; a real gesture ends the restore, which
+  // clears it too.
+  const holdRememberedAnchor = useRef(false);
   // Live mirror of `active` for the WS message handler's closures (which
   // capture it at subscription time) — see the turn-done seen-clear.
   const activeRef = useRef(active);
@@ -1852,9 +1876,15 @@ export function ChatPane({
   // When the anchored message isn't rendered at all — a fresh mount opens on
   // the server's 128 KB tail, and anything older has to be paged back in — the
   // loop SEEKS it: up to ANCHOR_SEEK_PAGE_BUDGET older pages, extending its own
-  // deadline per request. Until it lands (or the budget runs out) the remembered
-  // ratio holds the reader roughly in place, which is the pre-fix behaviour and
-  // therefore a floor.
+  // deadline per request.
+  //
+  // The remembered ratio places the reader while that runs, but ONLY ONCE: the
+  // frame it is applied, the loop freezes the row it landed on and holds THAT
+  // for the rest of the window. Re-deriving from the ratio every frame would be
+  // the original bug in miniature — the seek's own prepends grow the document
+  // above the reader, and R·(range + g) walks them backward with every page, so
+  // a budget-exhausted restore would end up DEEPER in history than doing
+  // nothing at all. Frozen to a row, the fallback is merely imprecise.
   //
   // Sid matching is soft: memory may be saved before the hello binds
   // renderedSid (or remount starts with sid=null). Requiring equality then
@@ -1898,9 +1928,30 @@ export function ChatPane({
     // the first page even arrived.
     const goal = usable(recallChatScroll(paneId));
     pinnedToBottom.current = pinnedFromMemory(goal);
+    // While a goal ANCHOR is still outstanding, `onScroll` must not overwrite it
+    // in the store. Every scrollTop this loop writes produces a trustworthy
+    // scroll event once the 250ms show-settle window closes, and that event
+    // records the row the loop is currently sitting on — so a restore that has
+    // to PAGE its message back in would destroy the reader's real parked spot
+    // (permanently, and for every future open of the pane) before the first page
+    // landed. Cleared the moment the anchor is applied, the goal is retired, or
+    // the reader takes over.
+    holdRememberedAnchor.current = !!goal && !goal.pinned && !!goal.anchorId;
     let raf = 0;
-    let deadline = performance.now() + RESTORE_SETTLE_MS;
+    const startedAt = performance.now();
+    let deadline = startedAt + RESTORE_SETTLE_MS;
+    // Absolute ceiling. The seek extends `deadline` per page, and the
+    // not-scrollable-yet branch below extends it while the transcript is still
+    // in flight; neither may keep an animation frame loop alive indefinitely.
+    const hardStop = startedAt + RESTORE_HARD_STOP_MS;
     let seekPages = 0;
+    // Once the ratio fallback has placed the reader, we anchor to whatever row
+    // that landed on and hold THAT for the rest of the window. Re-deriving the
+    // position from the ratio every frame is the original bug in miniature: the
+    // seek's own prepends grow the document above the reader, and R·(range + g)
+    // walks them backward with every page — which would have made a
+    // budget-exhausted restore land DEEPER in history than doing nothing at all.
+    let held: { anchorId: string; anchorOffset: number } | null = null;
     const apply = () => {
       raf = 0;
       const el = scrollRef.current;
@@ -1912,61 +1963,89 @@ export function ChatPane({
         // `renderedSid` is null until the hello lands, and a rotation that
         // arrives mid-window must retire the goal (its conversation is gone).
         const mem = usable(goal);
-        if (el.scrollHeight > el.clientHeight) {
-          if (!mem || mem.pinned) {
-            // Pinned / no memory → hold the bottom while content streams in
-            // (follow-bottom effect also does this; settle covers the gap
-            // before the first events commit).
-            pinnedToBottom.current = true;
-            const target = maxScrollTop(el.scrollHeight, el.clientHeight);
-            if (Math.abs(el.scrollTop - target) > 1) {
-              lastProgrammaticTop.current = target;
-              el.scrollTop = target;
-            }
-          } else {
-            pinnedToBottom.current = false;
-            const row = mem.anchorId ? findAnchorRow(el, mem.anchorId) : null;
-            if (!row && mem.anchorId && hasMoreOlderRef.current) {
-              // The remembered message is older than the loaded window. Ask
-              // for the next page and give the loop time for the round trip —
-              // bounded, so a lost anchor can't drag a huge transcript over.
-              if (seekPages < ANCHOR_SEEK_PAGE_BUDGET && !loadingOlderRef.current) {
-                seekPages++;
-                deadline = performance.now() + ANCHOR_SEEK_PAGE_MS;
-                requestOlder();
-              }
-            }
-            const target = row
-              ? scrollTopForAnchor({
-                  scrollTop: el.scrollTop,
-                  rowTop: row.getBoundingClientRect().top - el.getBoundingClientRect().top,
-                  anchorOffset: mem.anchorOffset,
-                  scrollHeight: el.scrollHeight,
-                  clientHeight: el.clientHeight,
-                })
-              : // No anchor to hold (never captured, or still being paged in).
-                // Clamped: iOS rubber-band can persist a slightly negative
-                // ratio, and an out-of-range target never equals the scrollTop
-                // the browser clamps it to — so the loop would re-assign (and
-                // force a reflow) every frame for the full window.
-                Math.min(
-                  Math.max(
-                    0,
-                    Math.round(mem.ratio * maxScrollTop(el.scrollHeight, el.clientHeight)),
-                  ),
-                  maxScrollTop(el.scrollHeight, el.clientHeight),
-                );
-            if (Math.abs(el.scrollTop - target) > 1) {
-              lastProgrammaticTop.current = target;
-              el.scrollTop = target;
+        if (!mem || mem.pinned) holdRememberedAnchor.current = false;
+        if (el.scrollHeight <= el.clientHeight) {
+          // Nothing to scroll yet — the transcript hasn't arrived, or the
+          // "Loading conversation…" state is all there is. Don't spend the
+          // window waiting on an empty document: a first render slower than
+          // RESTORE_SETTLE_MS used to leave an unpinned reader at scrollTop 0,
+          // i.e. as deep in history as the document goes.
+          deadline = Math.min(hardStop, performance.now() + RESTORE_SETTLE_MS);
+        } else if (!mem || mem.pinned) {
+          // Pinned / no memory → hold the bottom while content streams in
+          // (follow-bottom effect also does this; settle covers the gap
+          // before the first events commit).
+          pinnedToBottom.current = true;
+          const target = maxScrollTop(el.scrollHeight, el.clientHeight);
+          if (Math.abs(el.scrollTop - target) > 1) {
+            lastProgrammaticTop.current = target;
+            el.scrollTop = target;
+          }
+        } else {
+          pinnedToBottom.current = false;
+          const rows = anchorRows(el);
+          const row = mem.anchorId ? findAnchorRow(rows, mem.anchorId) : null;
+          if (row) {
+            held = null; // the real thing beats whatever the fallback settled on
+            holdRememberedAnchor.current = false;
+          } else if (
+            mem.anchorId &&
+            hasMoreOlderRef.current &&
+            seekPages < ANCHOR_SEEK_PAGE_BUDGET
+          ) {
+            // The remembered message is older than the loaded window. Ask for
+            // the next page and give the loop time for the round trip. Bounded,
+            // so an anchor that no longer exists can't drag a transcript over.
+            // Count a page only when one is actually REQUESTED: `requestOlder`
+            // no-ops on a socket that isn't open (a chat opened while the
+            // reconnect backoff is still running — precisely the case this seek
+            // exists for), and counting those burned the whole budget in eight
+            // animation frames without sending anything.
+            if (requestOlder()) {
+              seekPages++;
+              // max(): the base window is already 2500ms, so assigning
+              // now + 1500 would SHORTEN a seeking restore — the opposite of
+              // the intent — and could kill it before the first page arrived.
+              deadline = Math.min(
+                hardStop,
+                Math.max(deadline, performance.now() + ANCHOR_SEEK_PAGE_MS),
+              );
             }
           }
+          const anchor = row ? { row, offset: mem.anchorOffset } : null;
+          const heldRow = !anchor && held ? findAnchorRow(rows, held.anchorId) : null;
+          const use =
+            anchor ?? (heldRow && held ? { row: heldRow, offset: held.anchorOffset } : null);
+          const range = maxScrollTop(el.scrollHeight, el.clientHeight);
+          const target = use
+            ? scrollTopForAnchor({
+                scrollTop: el.scrollTop,
+                rowTop: use.row.getBoundingClientRect().top - el.getBoundingClientRect().top,
+                anchorOffset: use.offset,
+                scrollHeight: el.scrollHeight,
+                clientHeight: el.clientHeight,
+              })
+            : // Nothing anchorable yet: place by the remembered ratio, ONCE.
+              // Clamped — iOS rubber-band can persist a slightly negative
+              // ratio, and an out-of-range target never equals the scrollTop
+              // the browser clamps it to, so the loop would re-assign (and
+              // force a reflow) every frame for the full window.
+              Math.min(Math.max(0, Math.round(mem.ratio * range)), range);
+          if (Math.abs(el.scrollTop - target) > 1) {
+            lastProgrammaticTop.current = target;
+            el.scrollTop = target;
+          }
+          // Freeze the fallback into a row identity so the next frame holds a
+          // MESSAGE rather than re-deriving from the ratio.
+          if (!use) held = anchorAt(el, rows);
         }
       }
       if (performance.now() < deadline && !userScrolled.current) raf = requestAnimationFrame(apply);
+      else holdRememberedAnchor.current = false;
     };
     apply(); // first pass runs before paint — no flash
     return () => {
+      holdRememberedAnchor.current = false;
       if (raf) cancelAnimationFrame(raf);
     };
   }, [active, paneId, showEpoch]);
@@ -2027,12 +2106,14 @@ export function ChatPane({
     if (el.scrollHeight <= el.clientHeight + 1) requestOlder();
   }, [active, events, loadingOlder, hasMoreOlder, session?.current_sid]);
 
-  const requestOlder = () => {
+  /** @returns whether a request actually went out — the anchor seek spends its
+   *  budget in REQUESTS, not attempts. */
+  const requestOlder = (): boolean => {
     // The ref, not the state: the restore effect's seek holds this closure
     // across many renders and must see the server's latest answer.
-    if (loadingOlderRef.current || !hasMoreOlderRef.current) return;
+    if (loadingOlderRef.current || !hasMoreOlderRef.current) return false;
     const ws = wsRef.current;
-    if (ws?.readyState !== WebSocket.OPEN) return;
+    if (ws?.readyState !== WebSocket.OPEN) return false;
     loadingOlderRef.current = true;
     setLoadingOlder(true);
     ws.send(JSON.stringify({ t: 'load-older' }));
@@ -2046,6 +2127,7 @@ export function ChatPane({
         setLoadingOlder(false);
       }
     }, 4000);
+    return true;
   };
 
   // Coming back from a browser-tab switch / app background / bfcache restore
@@ -2178,7 +2260,13 @@ export function ChatPane({
       // anchored message yet. Measured only for an UNPINNED reader: a reader at
       // the bottom is restored to the bottom, so the walk would be pure cost —
       // and the bottom is where chats sit almost all of the time.
-      const anchor = nearBottom ? null : captureAnchor(el);
+      // …unless a restore is still hunting for the anchor already stored: this
+      // event is almost certainly that restore's own scrollTop write, and
+      // recording where it has got to would erase the message the reader
+      // actually parked on — permanently, and for every future open of the pane.
+      // Keep the stored anchor; pin and ratio still track reality.
+      const prev = holdRememberedAnchor.current ? recallChatScroll(paneId) : null;
+      const anchor = prev ?? (nearBottom ? null : captureAnchor(el));
       rememberChatScroll(paneId, {
         anchorId: anchor?.anchorId ?? null,
         anchorOffset: anchor?.anchorOffset ?? 0,
@@ -2208,6 +2296,13 @@ export function ChatPane({
     if (!el) return;
     pinnedToBottom.current = true;
     setShowScrollDown(false);
+    // This IS the reader taking control, and it must end the settling restore
+    // exactly as a wheel spin does. The restore holds its goal as a snapshot,
+    // so without this it would spend the rest of its window re-asserting the
+    // old parked message against the glide this button just started — and no
+    // wheel/touch event is coming to stop it, because a tap is neither.
+    userScrolled.current = true;
+    holdRememberedAnchor.current = false;
     // Record the re-pin immediately — the smooth scroll's own onScroll
     // events lag, and switching away mid-glide must not save a stale spot.
     // No anchor: "the bottom" is not a message, and leaving a stale one here
@@ -2532,12 +2627,21 @@ export function ChatPane({
         // or every new action would reset the expansion.
         const trailing = j === renderable.length;
         const id = (run[trailing ? 0 : run.length - 1] as ChatEvent).id;
+        // The SCROLL ANCHOR deliberately does not follow that rule. The key
+        // flips from first-event to last-event the moment prose lands after a
+        // trailing run — routine, and it happens right where readers sit — and
+        // an anchor that flips is an anchor that can't be found, costing a full
+        // seek on the next restore. The run's FIRST event is stable across that
+        // transition and across the run growing at its tail; only a prepended
+        // batch whose own tail is contiguous actions can move it, which is rare
+        // and degrades to the ordinary "anchor not loaded" path.
+        const anchorId = (run[0] as ChatEvent).id;
         items.push(
           <ActionGroup
             key={`group-${id}`}
             events={run}
             expanded={expandedGroups.has(id)}
-            anchorId={id}
+            anchorId={anchorId}
             onToggle={() =>
               setExpandedGroups((prev) => {
                 const next = new Set(prev);
@@ -3062,7 +3166,16 @@ function ActionGroup({
           <span className="chat-action-group-summary">{summary}</span>
           {failed > 0 ? <span className="chat-action-group-failed">{failed} failed</span> : null}
         </button>
-        {expanded ? <div className="chat-action-group-body">{events.map(renderEvent)}</div> : null}
+        {expanded ? (
+          // Explicit arrow, NOT `.map(renderEvent)`: Array#map passes the index
+          // as the second argument, which `renderEvent` reads as the anchor id —
+          // so every row inside an expanded group would render `data-eid="0"`,
+          // `data-eid="1"`, … Harmless today (the anchor scan only walks
+          // .chat-list's direct children) but it falsifies the invariant the
+          // whole scheme rests on, and it is the exact trap the sibling call
+          // site is already guarded against.
+          <div className="chat-action-group-body">{events.map((ev) => renderEvent(ev))}</div>
+        ) : null}
       </div>
     </div>
   );
