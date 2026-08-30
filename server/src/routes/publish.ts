@@ -331,10 +331,12 @@ export function publishRoutes(deps: {
     // failure leaves the previous publish exactly as it was, and a reader
     // never sees a partial tree.
     //
-    // The staging/retired names start with '.', which SLUG_RE cannot produce,
-    // so they can never collide with a real slug; GET / filters them out, and
-    // a crash between the two renames leaves at worst one `.retired-*` dir
-    // that the sweep below removes on the next publish.
+    // The staging name starts with '.', which SLUG_RE cannot produce, so it can
+    // never collide with a real slug and GET / filters it out. (The old
+    // `.retired-*` scratch name is gone — the previous tree now rotates to
+    // `<slug>@2` and is KEPT.) A crash between the rotate and the promote
+    // leaves the live slug missing while its content sits at `@2`; that is
+    // recoverable by hand and, unlike the pre-staging behaviour, loses nothing.
     const dest = join(publicDir, slug);
     const staging = join(publicDir, `.staging-${randomBytes(6).toString('hex')}`);
     for (const e of readdirSync(publicDir)) {
@@ -495,8 +497,17 @@ export function publishRoutes(deps: {
     // Versions go with it. Leaving them would make `/slug@2/` outlive a delete
     // the user believed removed the artifact from the internet — the one kind
     // of surprise a public surface must never spring.
-    for (const n of listVersionDirs(publicDir, slug)) {
-      rmSync(join(publicDir, versionDirName(slug, n)), { recursive: true, force: true });
+    //
+    // A PREFIX SCAN, not listVersionDirs(): that helper only walks the current
+    // retention window, so a dir left by a larger historical
+    // PUBLISH_VERSIONS_KEEP would survive the delete and keep serving on the
+    // open internet. Deletion must be exhaustive even where rotation is not.
+    for (const e of readdirSync(publicDir, { withFileTypes: true })) {
+      if (!e.isDirectory() || !e.name.startsWith(`${slug}@`)) continue;
+      // Only `<slug>@<digits>` — never a different slug that merely shares a
+      // prefix (SLUG_RE has no '@', so this cannot match a real slug either).
+      if (!/^\d+$/.test(e.name.slice(slug.length + 1))) continue;
+      rmSync(join(publicDir, e.name), { recursive: true, force: true });
     }
     return c.body(null, 204);
   });

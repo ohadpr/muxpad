@@ -3,7 +3,7 @@ import { useRouterState } from '@tanstack/react-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { announceOverlayOpen, onOtherOverlayOpen } from '../lib/overlays';
 import { useTabs } from '../tabs';
-import { useWorkspaces } from '../workspaces';
+import { useWorkspaces, visibleWorkspaces } from '../workspaces';
 import { NavTree } from './NavTree';
 import { StatusMark } from './StatusMark';
 import './MobileNavSwitcher.css';
@@ -109,8 +109,12 @@ export function MobileNavSwitcher({ activeWorkspaceSlug }: Props) {
   // crashed. Fold through the shared rollup instead, so this control speaks
   // the same vocabulary as every other surface and can never silently
   // re-collapse when a status is added.
+  // Hidden system containers are excluded: the apps container holds long-lived
+  // server panes whose pty output makes them read as `working` forever, so the
+  // breadcrumb would announce "1 working elsewhere" while the panel it opens
+  // shows nothing — the tree it lists is already filtered.
   const elsewhere = [
-    ...workspaces.filter((w) => w.slug !== activeWorkspaceSlug),
+    ...visibleWorkspaces(workspaces).filter((w) => w.slug !== activeWorkspaceSlug),
     ...activeWorkspaceTabs.filter((t) => t.slug !== activeTabSlug),
   ];
   const triggerStatus = rollupStatus(

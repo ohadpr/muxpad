@@ -83,6 +83,15 @@ export function parseServeCommand(
 
   const url = readFlag('url');
   if (!url || !/^https?:\/\//.test(url)) return null;
+  // The SAME gates routes/apps.ts applies, because adoption writes a registry
+  // row without going through it. A url carrying a quote would later be
+  // interpolated into `--url '<url>'` and escape its own quoting; a command
+  // spanning lines would smuggle a second command past `muxpad serve` and out
+  // of its supervision. Neither can happen by accident — the string came from
+  // a `muxpad serve` line the user typed — but "we trust this row because of
+  // where it came from" is exactly the assumption that stops being true.
+  if (/['"\s\0]/.test(url)) return null;
+  if (/[\n\r\0]/.test(command)) return null;
   return { url, label: readFlag('label'), command };
 }
 

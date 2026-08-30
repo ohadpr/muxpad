@@ -18,6 +18,7 @@ import { randomWorkspaceName } from '../random-name.js';
 import { safeCwd } from '../safe-cwd.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
+import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { pruneDeadPanes } from '../store/migrations.js';
 import { type TabActivity, compareUnpinnedTabs } from '../tab-activity.js';
 
@@ -36,6 +37,8 @@ export function tabsRoutes(deps: {
   const app = new Hono();
   const tabs = new TabStore(deps.db);
   const panes = new PaneStore(deps.db);
+  // Only for refusing hidden system containers as a move/merge destination.
+  const workspaces = new WorkspaceStore(deps.db);
 
   app.post('/', async (c) => {
     const body = z
@@ -319,6 +322,18 @@ export function tabsRoutes(deps: {
       const t = tabs.getById(id);
       return c.json(t);
     }
+    // A HIDDEN workspace is a system container (the apps container), not a
+    // destination. A tab moved there vanishes from every navigator with no way
+    // back, and the app registry's teardown will happily delete whatever tab
+    // its pane is alone in. The pane-move route already refuses this for
+    // `new_tab` destinations (routes/panes.ts); this is the same refusal for
+    // whole tabs, and for the same reason.
+    //
+    // ONLY the hidden case is checked here. A workspace that does not exist at
+    // all keeps falling through to the FK failure below, which answers 400 —
+    // pre-existing contract, and not this change's business to alter.
+    if (workspaces.getById(body.workspace_id)?.hidden)
+      return c.json({ error: { code: 'not_found', message: 'target workspace not found' } }, 404);
     let updated: ReturnType<typeof tabs.setWorkspace>;
     try {
       updated = tabs.setWorkspace(id, body.workspace_id);
@@ -362,6 +377,12 @@ export function tabsRoutes(deps: {
     const destWs = tabs.getWorkspaceId(dest.id);
     if (!sourceWs || !destWs)
       return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
+    // Merging INTO a hidden container is the same one-way trip as moving there
+    // (see POST /:id/move) — the merged panes would land in a workspace no
+    // navigator lists. Merging OUT of one is fine and deliberate: it is a way
+    // back for anything stranded there.
+    if (workspaces.getById(destWs)?.hidden)
+      return c.json({ error: { code: 'not_found', message: 'destination tab not found' } }, 404);
 
     // Enumerate the source's pane ROWS, not its layout leaves: pane rows and
     // the stored layout JSON can drift (row committed, layout write pending/

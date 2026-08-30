@@ -5,6 +5,8 @@ import type { AppWithStatus, UrlHealth } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AppStore } from '../store/AppStore.js';
+import { PaneStore } from '../store/PaneStore.js';
+import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { openDb } from '../store/db.js';
 import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
@@ -315,5 +317,30 @@ describe('the hidden container does not leak', () => {
     await post('/api/apps', valid());
     expect(await (await req('/api/workspaces')).json()).toEqual([]);
     expect((await (await req('/api/workspaces?all=1')).json()) as unknown[]).toHaveLength(1);
+  });
+});
+
+describe('the container refuses to become a destination', () => {
+  it('rejects moving or merging a tab INTO the hidden apps container', async () => {
+    await post('/api/apps', valid()); // creates the container
+    const containerId = new WorkspaceStore(db).list({ all: true })[0]?.id as string;
+    // A visible workspace with a tab of its own, to try to move.
+    const ws = new WorkspaceStore(db).create({ name: 'Mine' });
+    const tab = (await (
+      await post('/api/tabs', { workspace_id: ws.id, bootstrap: 'shell' })
+    ).json()) as { id: string };
+
+    const moved = await post(`/api/tabs/${tab.id}/move`, { workspace_id: containerId });
+    expect(moved.status).toBe(404);
+    // Still where it was — a tab moved in there would vanish from every
+    // navigator with no way back.
+    expect(new TabStore(db).getWorkspaceId(tab.id)).toBe(ws.id);
+
+    const appTabId = new PaneStore(db).getById(
+      ((await (await req('/api/apps/notes')).json()) as AppWithStatus).pane_id as string,
+    )?.tab_id as string;
+    const merged = await post(`/api/tabs/${tab.id}/merge`, { into_tab_id: appTabId });
+    expect(merged.status).toBe(404);
+    expect(new TabStore(db).getWorkspaceId(tab.id)).toBe(ws.id);
   });
 });
