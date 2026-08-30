@@ -1,6 +1,7 @@
 import type { Cron, CronRun } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { monotonicFactory } from 'ulid';
+import { nextAfter, scheduleJitterMs } from './schedule.js';
 
 const ulid = monotonicFactory();
 
@@ -31,6 +32,7 @@ interface CronRow {
   overlap: string;
   on_context: string;
   quiet_mins: number;
+  jitter_ms: number;
   max_open: number;
   close_when_done: number;
   open_tabs: string;
@@ -59,6 +61,8 @@ export interface CronCreateInput {
   quiet_mins?: number;
   max_open?: number;
   close_when_done?: boolean;
+  /** The NOMINAL next slot. `create` adds this cron's deterministic jitter and
+   *  stores the sum — every reader sees when it will actually fire. */
   next_due_at: number;
 }
 
@@ -68,14 +72,19 @@ export class CronStore {
 
   create(input: CronCreateInput): Cron {
     const id = ulid();
+    // Deterministic, id-derived offset so N daily crons don't all fire in the
+    // same second. Stored alongside the jittered `next_due_at` so the nominal
+    // slot is recoverable exactly (next_due_at - jitter_ms) instead of being
+    // re-derived — a re-derivation would drift the moment the estimate moved.
+    const jitter = scheduleJitterMs(id, input.schedule, input.tz, input.next_due_at);
     this.db
       .prepare(
         `INSERT INTO crons (
            id, name, schedule, tz, prompt, target_kind, target_pane, workspace_id,
            cwd, model, backend, mode, enabled, catchup, overlap, on_context,
-           quiet_mins, max_open, close_when_done, open_tabs, next_due_at,
+           quiet_mins, jitter_ms, max_open, close_when_done, open_tabs, next_due_at,
            last_fire_at, last_status, fail_streak, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, '[]', ?, NULL, NULL, 0, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, '[]', ?, NULL, NULL, 0, ?)`,
       )
       .run(
         id,
@@ -94,9 +103,10 @@ export class CronStore {
         input.overlap ?? 'skip',
         input.on_context ?? 'fire',
         input.quiet_mins ?? 0,
+        jitter,
         input.max_open ?? 1,
         input.close_when_done ? 1 : 0,
-        input.next_due_at,
+        input.next_due_at + jitter,
         Date.now(),
       );
     return this.getById(id) as Cron;
@@ -156,16 +166,57 @@ export class CronStore {
     return n > 0;
   }
 
-  setEnabled(id: string, enabled: boolean, nextDueAt?: number): void {
-    if (nextDueAt !== undefined) {
+  setEnabled(id: string, enabled: boolean, reanchorFrom?: number): void {
+    if (reanchorFrom !== undefined) {
       // Re-anchoring on RESUME is what stops a paused-for-a-week cron waking up
       // to a week of catch-up it was deliberately not meant to run.
+      const at = this.nextFireAfter(id, reanchorFrom);
       this.db
         .prepare('UPDATE crons SET enabled = ?, next_due_at = ?, fail_streak = 0 WHERE id = ?')
-        .run(enabled ? 1 : 0, nextDueAt, id);
+        .run(enabled ? 1 : 0, at, id);
     } else {
       this.db.prepare('UPDATE crons SET enabled = ? WHERE id = ?').run(enabled ? 1 : 0, id);
     }
+  }
+
+  /**
+   * When this cron next FIRES after `from` — the nominal slot plus its stored
+   * jitter. ONE place computes it, so the tick's re-anchor, a resume and an
+   * edit can't disagree about what "next" means.
+   */
+  nextFireAfter(id: string, from: number): number {
+    const c = this.getById(id);
+    if (!c) return from;
+    return nextAfter(c.schedule, c.tz, from) + c.jitter_ms;
+  }
+
+  /** Apply an edit to the schedule/zone/prompt and re-anchor. The jitter is
+   *  recomputed because its CAP depends on the interval — a cron moved from
+   *  daily to every-2-minutes must not keep a 27-minute offset. */
+  reschedule(
+    id: string,
+    opts: { schedule: string; tz: string; prompt: string; from: number },
+  ): void {
+    const jitter = scheduleJitterMs(id, opts.schedule, opts.tz, opts.from);
+    this.db
+      .prepare(
+        'UPDATE crons SET prompt = ?, schedule = ?, tz = ?, jitter_ms = ?, next_due_at = ? WHERE id = ?',
+      )
+      .run(
+        opts.prompt,
+        opts.schedule,
+        opts.tz,
+        jitter,
+        nextAfter(opts.schedule, opts.tz, opts.from) + jitter,
+        id,
+      );
+  }
+
+  /** How many crons are currently enabled — the runaway guard's input. */
+  countEnabled(): number {
+    return (
+      this.db.prepare('SELECT COUNT(*) AS n FROM crons WHERE enabled = 1').get() as { n: number }
+    ).n;
   }
 
   setNextDue(id: string, at: number): void {
@@ -283,6 +334,7 @@ function rowToCron(r: CronRow): Cron {
         ? r.on_context
         : 'fire',
     quiet_mins: r.quiet_mins,
+    jitter_ms: r.jitter_ms,
     max_open: r.max_open,
     close_when_done: r.close_when_done === 1,
     next_due_at: r.next_due_at,

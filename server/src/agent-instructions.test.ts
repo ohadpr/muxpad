@@ -28,6 +28,18 @@ describe('agent-instructions', () => {
     expect(text).toContain('muxpad --help');
   });
 
+  it('tells every agent to schedule with muxpad, NOT with its own harness cron', () => {
+    // The whole point of shipping `muxpad cron` is that agents stop reaching
+    // for a session-scoped scheduler that silently expires and never catches
+    // up. If the seed stops SAYING so, the feature quietly stops being used.
+    expect(AGENT_INSTRUCTIONS_SEED).toContain('CronCreate');
+    expect(AGENT_INSTRUCTIONS_SEED).toContain('DO NOT use');
+    expect(AGENT_INSTRUCTIONS_SEED).toContain('muxpad cron new');
+    expect(AGENT_INSTRUCTIONS_SEED).toContain('--pane');
+    for (const verb of ['cron list', 'cron run', 'cron pause', 'cron rm'])
+      expect(AGENT_INSTRUCTIONS_SEED).toContain(`muxpad ${verb}`);
+  });
+
   it('never overwrites a user-owned file on re-seed', () => {
     seedAgentInstructions(dataDir);
     writeFileSync(agentInstructionsPath(dataDir), 'my own rules\n');

@@ -21,6 +21,7 @@ import {
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { bootstrapTab, deleteTabCascade } from '../agent-tab.js';
+import { wrapCarryover } from '../chat/summarize.js';
 import type { EventBus } from '../events.js';
 import { type PtydCache, decorateTab } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
@@ -29,7 +30,7 @@ import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import type { TabActivity } from '../tab-activity.js';
 import { CronStore } from './CronStore.js';
-import { firesDue, nextAfter } from './schedule.js';
+import { firesDue } from './schedule.js';
 
 /** Tick cadence. 30s granularity is ample for agent work and cheap: one
  *  indexed query per pass, nothing else, whether there are 0 crons or 200. */
@@ -59,6 +60,15 @@ export const CRON_FAIL_LIMIT = 3;
 /** Context fill above which `on_context` policies engage. */
 export const CRON_CONTEXT_HIGH_PCT = 80;
 
+/**
+ * Ceiling on ENABLED crons. We deliberately do NOT copy the harnesses' 7-day
+ * auto-expiry — a schedule that silently stops is the exact failure this
+ * feature exists to remove — so the runaway bound has to be something other
+ * than time. A count ceiling is: it can never lose you a job you are still
+ * using, and a hundred live schedules already means someone lost track.
+ */
+export const MAX_ENABLED_CRONS = 100;
+
 export interface CronSchedulerDeps {
   db: Database.Database;
   ptyd: PtydClient;
@@ -82,6 +92,17 @@ export interface CronSchedulerDeps {
   blocked?: ((paneId: string) => boolean) | undefined;
   /** Push a message to the user's devices (fail-streak auto-disable). */
   notify?: ((title: string, body: string) => void) | undefined;
+  /**
+   * A handoff briefing for a pane whose session is about to be ROTATED into a
+   * fresh tab (`on_context=rotate`) — "here is what the conversation you're
+   * taking over had established". null means one couldn't be produced, and
+   * the scheduler then refuses to rotate rather than firing blind.
+   *
+   * Injected as a dependency so the SOURCE is swappable: today it's an ad-hoc
+   * transcript summary (chat/summarize.ts); when muxpad grows a per-chat
+   * dossier this becomes a dossier read and nothing here changes.
+   */
+  carryover?: ((paneId: string) => Promise<string | null>) | undefined;
   /** Injectable clock — every test drives time, never sleeps. */
   now?: (() => number) | undefined;
 }
@@ -195,11 +216,23 @@ export class CronScheduler {
   // ── Due handling ─────────────────────────────────────────────────────────
 
   private async runDue(cron: Cron, now: number): Promise<void> {
-    const { fires, capped } = firesDue(cron.schedule, cron.tz, cron.next_due_at, now);
+    // Enumerate NOMINAL slots. `next_due_at` carries this cron's deterministic
+    // jitter, so the nominal anchor is exactly next_due_at - jitter_ms, and a
+    // nominal slot S is due once now >= S + jitter — i.e. S <= now - jitter.
+    // Doing the arithmetic here (rather than jittering inside the expression
+    // walker) keeps cron-parser answering the one question it is good at.
+    const jitter = cron.jitter_ms;
+    const { fires: nominal, capped } = firesDue(
+      cron.schedule,
+      cron.tz,
+      cron.next_due_at - jitter,
+      now - jitter,
+    );
+    const fires = nominal.map((t) => t + jitter);
     if (fires.length === 0) {
       // The anchor is due but the expression yields nothing at/before now —
       // only reachable if the schedule was edited under a stale anchor. Re-arm.
-      this.store.setNextDue(cron.id, nextAfter(cron.schedule, cron.tz, now));
+      this.store.setNextDue(cron.id, this.store.nextFireAfter(cron.id, now));
       return;
     }
     // Everything older than the grace is a MISSED fire; the newest slot is
@@ -237,7 +270,10 @@ export class CronScheduler {
       this.record(cron, current, now, r, { capped });
       if (r.defer) return; // quiet hours — leave the anchor alone
     }
-    this.store.setNextDue(cron.id, nextAfter(cron.schedule, cron.tz, now));
+    // Re-anchor from the nominal clock (now - jitter), so a jittered fire can't
+    // make the NEXT slot slip by another jitter each time — the offset is a
+    // constant shift of the schedule, never a compounding drift.
+    this.store.setNextDue(cron.id, this.store.nextFireAfter(cron.id, now - jitter));
   }
 
   /** Persist the verdict: a run row, the cron's last_status, the fail streak,
@@ -358,10 +394,28 @@ export class CronScheduler {
       if (cron.on_context === 'skip')
         return { outcome: 'skipped', detail: `context ${Math.round(pct)}%`, targetPane: paneId };
       if (cron.on_context === 'rotate') {
-        const r = await this.fireNewTab(cron, text, now);
+        // ROTATION MUST CARRY CONTEXT. A fresh tab that knows nothing about
+        // the conversation it just replaced doesn't produce a clean answer,
+        // it produces a confidently amnesiac one — and it looks identical to
+        // a good one. So take a handoff briefing from the pane first and
+        // inject it ahead of the prompt.
+        //
+        // If we can't produce one, DON'T rotate. Losing a fire is recoverable
+        // (the next slot comes around, and the run log says why this one
+        // didn't); silently amnesiac output is not.
+        const carry = await this.carryoverFor(paneId);
+        if (!carry)
+          return {
+            outcome: 'skipped',
+            detail: `carryover-failed (context ${Math.round(pct)}%) — refusing to rotate into a blank session`,
+            targetPane: paneId,
+          };
+        const r = await this.fireNewTab(cron, `${wrapCarryover(carry)}\n\n${text}`, now);
         return {
           ...r,
-          detail: [`rotated at ${Math.round(pct)}% context`, r.detail].filter(Boolean).join('; '),
+          detail: [`rotated at ${Math.round(pct)}% context with carryover`, r.detail]
+            .filter(Boolean)
+            .join('; '),
         };
       }
       if (cron.on_context === 'compact-first') {
@@ -380,6 +434,19 @@ export class CronScheduler {
       ...(res.reason ? { detail: res.reason } : {}),
       targetPane: paneId,
     };
+  }
+
+  /** The rotation handoff, guarded: a source that throws is a source that
+   *  produced nothing, never a crash inside the tick. */
+  private async carryoverFor(paneId: string): Promise<string | null> {
+    if (!this.deps.carryover) return null;
+    try {
+      const text = await this.deps.carryover(paneId);
+      return text?.trim() ? text.trim() : null;
+    } catch (err) {
+      console.error('[cron] carryover source failed', err);
+      return null;
+    }
   }
 
   private async fireNewTab(cron: Cron, text: string, _now: number): Promise<CronFireResult> {

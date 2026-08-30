@@ -1,5 +1,8 @@
 import { execSync } from 'node:child_process';
-import { defineConfig } from 'vite';
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 
 // Date-based version derived from HEAD's commit date (YYYY.MM.DD).
@@ -32,11 +35,71 @@ const apiProxy = {
   '/ws': { target: `ws://127.0.0.1:${serverPort}`, ws: true },
 };
 
+/**
+ * Emit `<file>.br` and `<file>.gz` next to every compressible build artifact.
+ *
+ * The server serves these via @hono/node-server's `serveStatic({ precompressed:
+ * true })`, which picks br > gzip off the request's Accept-Encoding. Doing it
+ * here rather than with a compression middleware buys two things: brotli at
+ * quality 11 (a middleware has to stay near q4-5 to keep per-request latency
+ * sane) and ZERO CPU per request — the phone on cellular is the bottleneck we
+ * care about, and the bundle is compressed exactly once per build.
+ *
+ * Only text-ish output is worth it. woff2 is already brotli-compressed
+ * internally and png/ico are already entropy-coded — re-compressing them
+ * wastes build time and can even grow the file, so they are skipped. (The
+ * serveStatic side agrees: it only looks for a precompressed sibling when the
+ * MIME type is on its compressible list, which excludes font/woff2.)
+ */
+const COMPRESSIBLE = /\.(js|mjs|css|html|json|webmanifest|svg|map|txt)$/;
+
+function precompressAssets(): Plugin {
+  return {
+    name: 'muxpad:precompress',
+    // `closeBundle` runs after every asset (including public/ copies) is on
+    // disk, which `writeBundle` does not guarantee.
+    closeBundle() {
+      const outDir = join(import.meta.dirname, 'dist');
+      let files = 0;
+      const walk = (dir: string): void => {
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const full = join(dir, entry.name);
+          if (entry.isDirectory()) {
+            walk(full);
+            continue;
+          }
+          if (!COMPRESSIBLE.test(entry.name)) continue;
+          // Below ~1KB the framing overhead eats the win and the extra round
+          // of file opens on the server isn't worth it.
+          if (statSync(full).size < 1024) continue;
+          const raw = readFileSync(full);
+          writeFileSync(
+            `${full}.br`,
+            brotliCompressSync(raw, {
+              params: {
+                [zlibConstants.BROTLI_PARAM_QUALITY]: 11,
+                [zlibConstants.BROTLI_PARAM_SIZE_HINT]: raw.length,
+              },
+            }),
+          );
+          // gzip fallback: Chrome historically advertises `br` only over
+          // secure origins, and muxpad is reachable over plain http on the
+          // LAN/loopback path. Cheap insurance.
+          writeFileSync(`${full}.gz`, gzipSync(raw, { level: 9 }));
+          files++;
+        }
+      };
+      walk(outDir);
+      console.log(`precompressed ${files} file(s) → .br + .gz`);
+    },
+  };
+}
+
 export default defineConfig({
   define: {
     __MUXPAD_VERSION__: JSON.stringify(muxpadVersion),
   },
-  plugins: [react()],
+  plugins: [react(), precompressAssets()],
   server: {
     port: webPort,
     // Tailscale MagicDNS hostnames (*.ts.net) otherwise hit vite's

@@ -1,35 +1,7 @@
-/* Self-hosted MesloLGS NF (the canonical Powerlevel10k Nerd Font). Chrome on
-   macOS often can't access user-installed fonts under ~/Library/Fonts/, so
-   we ship our own copy to make Nerd Font glyphs (powerline arrows, git icons,
-   etc.) reliably available. */
-@font-face {
-  font-family: "MesloLGS NF";
-  src: url("/fonts/MesloLGS-NF-Regular.ttf") format("truetype");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: "MesloLGS NF";
-  src: url("/fonts/MesloLGS-NF-Bold.ttf") format("truetype");
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: "MesloLGS NF";
-  src: url("/fonts/MesloLGS-NF-Italic.ttf") format("truetype");
-  font-weight: 400;
-  font-style: italic;
-  font-display: swap;
-}
-@font-face {
-  font-family: "MesloLGS NF";
-  src: url("/fonts/MesloLGS-NF-Bold-Italic.ttf") format("truetype");
-  font-weight: 700;
-  font-style: italic;
-  font-display: swap;
-}
+/* Every @font-face lives in fonts.css — see the header there for why the files
+   sit under src/ (content-hashed, hence safely immutable) and why none of them
+   costs anything on a cold load. */
+@import "./fonts.css";
 
 /* Default fallback values (also overridden per theme below). */
 :root {
