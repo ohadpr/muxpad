@@ -157,12 +157,25 @@ interface ClickHarness {
   handlers: Map<string, (e: unknown) => void>;
   openWindow: ReturnType<typeof vi.fn>;
   cachePut: ReturnType<typeof vi.fn>;
+  /** Every side effect, in the order it happened. */
+  order: string[];
 }
 
-function loadClickWorker(clients: FakeClient[]): ClickHarness {
+function loadClickWorker(
+  clients: FakeClient[],
+  opts: { putGate?: Promise<void> } = {},
+): ClickHarness {
   const handlers = new Map<string, (e: unknown) => void>();
-  const openWindow = vi.fn(async () => null);
-  const cachePut = vi.fn(async () => undefined);
+  const order: string[] = [];
+  const openWindow = vi.fn(async () => {
+    order.push('openWindow');
+    return null;
+  });
+  const cachePut = vi.fn(async () => {
+    if (opts.putGate) await opts.putGate;
+    order.push('cachePut');
+    return undefined;
+  });
   const self = {
     addEventListener: (type: string, fn: (e: unknown) => void) => handlers.set(type, fn),
     skipWaiting: vi.fn(),
@@ -178,7 +191,7 @@ function loadClickWorker(clients: FakeClient[]): ClickHarness {
   };
   // biome-ignore lint/security/noGlobalEval: loading the real sw.js source is the point
   new Function('self', 'caches', 'fetch', SW_SRC)(self, caches, vi.fn());
-  return { handlers, openWindow, cachePut };
+  return { handlers, openWindow, cachePut, order };
 }
 
 /** Fire a notification tap and settle everything it kicked off. */
@@ -229,7 +242,7 @@ describe('sw notificationclick', () => {
     expect(h.openWindow).toHaveBeenCalledWith('/w/dev/t/tab?ptab=T1&pane=P1');
   });
 
-  it('ALWAYS deposits the target in Cache Storage before doing anything else', async () => {
+  it('ALWAYS deposits the target in Cache Storage', async () => {
     // The only channel that survives an installed iOS PWA, where the platform
     // foregrounds the app and reports nothing back.
     const h = loadClickWorker([]);
@@ -239,6 +252,54 @@ describe('sw notificationclick', () => {
     expect(body).toMatchObject({ url: '/w/dev/t/tab?ptab=T1&pane=P1', pane_id: 'P1' });
     expect(typeof body.id).toBe('string');
     expect(body.ts).toBeGreaterThan(0);
+  });
+
+  it('finishes the deposit BEFORE starting a page that will read it', async () => {
+    // A booting page drains the dead-drop as it loads. Opening the window
+    // first races the write: either the new page misses the tap, or it misses
+    // it AND the entry lands behind it, to fire on some later focus.
+    const h = loadClickWorker([]);
+    await click(h);
+    expect(h.order).toEqual(['cachePut', 'openWindow']);
+  });
+
+  it('does NOT make a live page wait on the deposit before handing it the tap', async () => {
+    // focus() and openWindow() are gated on the notificationclick's transient
+    // activation, and every await in front of them spends some of it. A slow
+    // Cache Storage write must not sit between the tap and the window the user
+    // is looking at; the write only has to finish before we start a PAGE.
+    let release = () => {};
+    const blocked = new Promise<void>((r) => {
+      release = r;
+    });
+    const win = ackingClient({ id: 'a', url: 'https://mux/w/dev/t/other', focused: true });
+    const h = loadClickWorker([win], { putGate: blocked });
+    const done = click(h);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(win.focus).toHaveBeenCalled();
+    expect(win.postMessage).toHaveBeenCalled();
+    // …and the write still lands, because waitUntil holds the worker open.
+    release();
+    await done;
+    expect(h.cachePut).toHaveBeenCalledTimes(1);
+  });
+
+  it('finishes the deposit before FORCING a navigation too', async () => {
+    // Same race as the cold start: navigate() loads a document that drains the
+    // dead-drop on boot.
+    const navOrder: string[] = [];
+    const win = makeClient({ id: 'a', url: 'https://mux/w/dev/t/other', focused: true });
+    win.navigate = vi.fn(async () => {
+      navOrder.push('navigate');
+      return null;
+    });
+    const h = loadClickWorker([win]);
+    await click(h);
+    expect(h.order).toEqual(['cachePut']);
+    expect(navOrder).toEqual(['navigate']);
+    const nav = (win.navigate as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0] ?? 0;
+    const put = h.cachePut.mock.invocationCallOrder[0] ?? 0;
+    expect(put).toBeLessThan(nav);
   });
 
   it('hands a live page the target and does NOT reload it', async () => {

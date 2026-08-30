@@ -52,9 +52,18 @@ const VAPID_CACHE_URL = '/api/push/vapid-public-key';
 const TARGET_CACHE_URL = '/__muxpad/push-target';
 
 // How long to wait for the focused page to say "I routed myself" before
-// falling back to forcing a load. Long enough for a just-woken page to run a
-// message handler, short enough that the user doesn't watch a dead app.
-const ACK_TIMEOUT_MS = 700;
+// falling back to forcing a load.
+//
+// The two costs are wildly asymmetric. Waiting too long: the user stares at
+// the old view for the extra time. Not waiting long enough: we hard-load the
+// deep link into a page that WOULD have routed itself, tearing down every
+// terminal, websocket and scrollback in the window. The page we're waiting on
+// has usually just been un-frozen by the focus() above — a backgrounded tab
+// Chrome had frozen, or an iOS PWA the system just resumed — and unfreezing
+// plus running one message handler routinely takes longer than the 700ms this
+// used to allow. 1.5s is the point where the user starts to suspect the tap
+// did nothing.
+const ACK_TIMEOUT_MS = 1500;
 
 /**
  * Which open window a notification tap should land on.
@@ -140,29 +149,38 @@ async function storePushTarget(target) {
 }
 
 async function routeNotificationClick(target) {
-  // Deposit BEFORE anything that can steal the thread: focus()/navigate() may
-  // suspend this worker, and a target that never got written is a tap that
-  // silently does nothing.
-  await storePushTarget(target);
+  // Start the dead-drop, don't block on it. It is kept alive by the caller's
+  // waitUntil either way, and every branch below that STARTS A PAGE awaits it
+  // first — a page drains the dead-drop as it boots, so writing it afterwards
+  // would both lose that tap and leave a stale entry to fire on the next
+  // focus. The one branch that doesn't start a page (postMessage to a live
+  // window) doesn't need to wait at all, which keeps the async gap in front of
+  // focus() as short as possible: focus() and openWindow() are gated on the
+  // notificationclick's transient activation, and every await spends some.
+  const stored = storePushTarget(target);
   const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
   const win = pickClient(wins);
-  if (!win) {
-    // Cold start: the URL itself carries the pane focus (?ptab=&pane=).
-    await self.clients.openWindow(target.url);
-    return;
+  if (win) {
+    try {
+      await win.focus();
+    } catch {
+      // focus can be refused; the routing below is what actually matters
+    }
+    // Let the running app route itself — instant and state-preserving. A
+    // forced reload tears down every terminal, websocket and scrollback in the
+    // window, so it is the fallback, not the first move.
+    if (await postWithAck(win, { type: 'muxpad:push-navigate', ...target })) {
+      await stored;
+      return;
+    }
   }
-  try {
-    await win.focus();
-  } catch {
-    // focus can be refused; the routing below is what actually matters
-  }
-  // Let the running app route itself — instant and state-preserving. A forced
-  // reload tears down every terminal, websocket and scrollback in the window,
-  // so it is the fallback, not the first move.
-  if (await postWithAck(win, { type: 'muxpad:push-navigate', ...target })) return;
-  // No ack. Force a real load of the deep link, which boots the page on the
-  // cold path (?ptab=&pane= read before the router mounts).
-  if (typeof win.navigate === 'function') {
+  // Everything from here LOADS a page, and that page reads the dead-drop at
+  // boot. It has to be on disk first.
+  await stored;
+  // No ack (or no window at all). Force a real load of the deep link, which
+  // boots the page on the cold path (?ptab=&pane= read before the router
+  // mounts).
+  if (win && typeof win.navigate === 'function') {
     try {
       await win.navigate(target.url);
       return;
