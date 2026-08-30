@@ -86,7 +86,16 @@ export interface AppDeps {
    * routes are still mounted, backed by a localFunnel that NEVER execs
    * tailscale (nothing a test does can expose content publicly).
    */
-  publish?: { funnel: Funnel; publicPort?: number };
+  publish?: {
+    funnel: Funnel;
+    publicPort?: number;
+    /** MUXPAD_PUBLIC_BASE_URL — outranks every discovered base. See
+     *  public-base.ts for why discovery cannot be trusted for a SHAREABLE url. */
+    publicBaseUrl?: string | undefined;
+    /** Test-only override for the base reachability probe. */
+    baseProbe?: ((url: string) => Promise<import('@muxpad/shared').UrlHealth>) | undefined;
+    baseProbeTtlMs?: number | undefined;
+  };
   /**
    * The server-owned cron scheduler (cron/CronScheduler.ts). Optional so
    * HTTP-only tests can omit it — /api/crons is still mounted and answers
@@ -158,6 +167,12 @@ export function createApp(deps: AppDeps): Hono {
       funnel:
         resolved.publish?.funnel ??
         localFunnel(resolved.publish?.publicPort ?? 7778, 'funnel not configured'),
+      publicPort: resolved.publish?.publicPort ?? 7778,
+      ...(resolved.publish?.publicBaseUrl ? { publicBaseUrl: resolved.publish.publicBaseUrl } : {}),
+      ...(resolved.publish?.baseProbe ? { baseProbe: resolved.publish.baseProbe } : {}),
+      ...(resolved.publish?.baseProbeTtlMs !== undefined
+        ? { baseProbeTtlMs: resolved.publish.baseProbeTtlMs }
+        : {}),
     }),
   );
   if (resolved.push) app.route('/api/push', pushRoutes(resolved.push));
