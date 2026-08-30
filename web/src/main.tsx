@@ -1,4 +1,5 @@
 import { RouterProvider } from '@tanstack/react-router';
+import { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { startEvents, subscribe, subscribeReconnect } from './events';
 import { pushOpen } from './lib/external-open-store';
@@ -8,8 +9,9 @@ import { reconcilePush, registerServiceWorker } from './lib/push';
 import { setPushFocusPane } from './lib/push-focus';
 import {
   type PushTargetDeps,
-  applyPushTarget,
+  type PushTargetSink,
   clearStoredPushTarget,
+  createPushTargetSink,
   parsePushTarget,
   takeStoredPushTarget,
 } from './lib/push-target';
@@ -37,6 +39,12 @@ function isSelfEmbedded(): boolean {
   }
 }
 const selfEmbedded = isSelfEmbedded();
+
+/**
+ * Opened once the router is mounted; every notification tap routes through it.
+ * Null when the app never booted (self-embedded frame) — nothing to route.
+ */
+let pushSink: PushTargetSink | null = null;
 
 // Open the app-level event stream as soon as the bundle boots. On every
 // reconnect, refetch the workspace list so we recover any events missed
@@ -69,7 +77,9 @@ if (!selfEmbedded) {
   //          focuses it). The SW leaves the target in Cache Storage; we drain
   //          it at boot and on every visibility/focus change.
   //
-  // All three converge on applyPushTarget(), which dedupes by tap id.
+  // All three converge on ONE sink, which dedupes by tap id and holds a tap
+  // that arrives before the router is mounted (the boot drain below does
+  // exactly that) instead of routing into a router that isn't listening.
   const pushTargetDeps: PushTargetDeps = {
     navigateToTab: ({ wsSlug, tabSlug, paneId }) => {
       // Through the ROUTER, not a raw history push of the clean path — the
@@ -87,6 +97,8 @@ if (!selfEmbedded) {
       window.dispatchEvent(new CustomEvent('muxpad:show-pane', { detail: { paneId } })),
     schedule: (fn, ms) => void setTimeout(fn, ms),
   };
+  const sink = createPushTargetSink(pushTargetDeps);
+  pushSink = sink;
 
   // COLD path. Record the pane as the tab's last-visited one AND in the
   // once-only push-focus store BEFORE the router mounts (TabView reads both),
@@ -114,13 +126,27 @@ if (!selfEmbedded) {
       if (d?.type !== 'muxpad:push-navigate') return;
       const target = parsePushTarget(d);
       if (!target) return;
-      applyPushTarget(target, pushTargetDeps);
-      // The SW ALWAYS writes the dead-drop too; we just consumed the tap, so
-      // retire it rather than leave it to fire again on the next focus.
-      void clearStoredPushTarget();
+      let delivery: ReturnType<typeof sink.deliver>;
+      try {
+        delivery = sink.deliver(target);
+      } catch (err) {
+        // Routing itself blew up. Do NOT ack: an unanswered message is what
+        // makes the service worker escalate to a real navigation, and a hard
+        // load of the deep link is exactly the right recovery for an app whose
+        // router just threw.
+        console.error('push-navigate failed', err);
+        return;
+      }
+      // The SW ALWAYS writes the dead-drop too; once the tap has actually been
+      // ROUTED, retire it rather than leave it to fire again on the next focus.
+      // A merely HELD tap keeps its dead-drop: if this document is discarded
+      // before the router mounts (the message landed mid-navigation, or the
+      // bundle is still loading and the user reloads), the entry is the only
+      // remaining copy and the next document drains it.
+      if (delivery !== 'held') void clearStoredPushTarget();
       // Acknowledge, so the SW knows it does NOT need to force a reload. Sent
-      // even when applyPushTarget deduped — the tap IS handled either way, and
-      // a missing ack costs the user a full app reload.
+      // even when the sink deduped or queued — the tap IS handled either way,
+      // and a missing ack costs the user a full app reload.
       e.ports[0]?.postMessage({ ok: true });
     });
     // REQUIRED with addEventListener: the client's service-worker message
@@ -140,8 +166,9 @@ if (!selfEmbedded) {
       draining = true;
       void takeStoredPushTarget()
         .then((t) => {
-          if (t) applyPushTarget(t, pushTargetDeps);
+          if (t) sink.deliver(t);
         })
+        .catch((err) => console.error('push-target drain failed', err))
         .finally(() => {
           draining = false;
         });
@@ -222,6 +249,24 @@ window.addEventListener('vite:preloadError', (e) => {
   window.location.reload();
 });
 
+/**
+ * Releases held notification taps once the router is really mounted.
+ *
+ * `root.render()` only SCHEDULES the first commit (React 18 flushes it in a
+ * microtask), and `router.navigate()` before that commit goes nowhere — the
+ * provider hasn't subscribed yet. The boot drain of the service worker's
+ * dead-drop resolves inside exactly that window, so the tap that foregrounded
+ * the app was the one most likely to be dropped. A sibling effect is the
+ * cheapest deterministic "the tree is committed" signal: effects of an earlier
+ * sibling (RouterProvider) run first.
+ */
+function PushSinkGate() {
+  useEffect(() => {
+    pushSink?.ready();
+  }, []);
+  return null;
+}
+
 const root = createRoot(document.getElementById('root') as HTMLElement);
 if (selfEmbedded) {
   root.render(
@@ -233,5 +278,10 @@ if (selfEmbedded) {
   // Report active-device presence so the server holds push notifications while
   // we're here (resumes once every device goes quiet).
   startPresence();
-  root.render(<RouterProvider router={router} />);
+  root.render(
+    <>
+      <RouterProvider router={router} />
+      <PushSinkGate />
+    </>,
+  );
 }
