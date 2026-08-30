@@ -12,6 +12,14 @@ export const PANE_DRAG_MIME = 'application/x-muxpad-pane-id';
 export interface PaneDragOrigin {
   paneId: string;
   fromTabId: string;
+  /** Workspace the pane's tab lives in — lets a workspace row tell "into
+   *  somewhere else" from "back where it came from" during dragover. */
+  fromWorkspaceId?: string;
+  /** True when this pane is the only one in its tab. Such a pane IS its tab,
+   *  so "extract it into a new tab here" is a no-op at home (the server
+   *  refuses the identity churn) and a whole-tab move anywhere else. Drop
+   *  targets use it to avoid advertising a gesture that would do nothing. */
+  soloPane?: boolean;
 }
 
 export const paneDragOrigin = createDragOrigin<PaneDragOrigin>();
