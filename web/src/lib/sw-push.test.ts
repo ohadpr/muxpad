@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * The service worker ships as a raw file (web/public/sw.js) — it is not part
@@ -130,5 +130,237 @@ describe('sw is still push-only', () => {
       'push',
       'pushsubscriptionchange',
     ]);
+  });
+});
+
+/**
+ * The tap path. This is where "push notifications work, but clicking them
+ * almost never takes me to the pane that needs me" lived: the handler picked an
+ * arbitrary window and then relied on `WindowClient.navigate()` (absent in
+ * WebKit) with `clients.openWindow()` as the fallback (a no-op focus for an
+ * installed PWA that already has a window). Every assertion below pins one of
+ * those.
+ */
+
+interface FakeClient {
+  id: string;
+  url: string;
+  focused?: boolean;
+  visibilityState?: string;
+  frameType?: string;
+  focus: () => Promise<void>;
+  postMessage: (msg: unknown, transfer?: unknown[]) => void;
+  navigate?: (url: string) => Promise<unknown>;
+}
+
+interface ClickHarness {
+  handlers: Map<string, (e: unknown) => void>;
+  openWindow: ReturnType<typeof vi.fn>;
+  cachePut: ReturnType<typeof vi.fn>;
+}
+
+function loadClickWorker(clients: FakeClient[]): ClickHarness {
+  const handlers = new Map<string, (e: unknown) => void>();
+  const openWindow = vi.fn(async () => null);
+  const cachePut = vi.fn(async () => undefined);
+  const self = {
+    addEventListener: (type: string, fn: (e: unknown) => void) => handlers.set(type, fn),
+    skipWaiting: vi.fn(),
+    clients: {
+      claim: vi.fn(),
+      matchAll: vi.fn(async () => clients),
+      openWindow,
+    },
+    registration: { pushManager: { subscribe: vi.fn() }, showNotification: vi.fn() },
+  };
+  const caches = {
+    open: async () => ({ match: async () => undefined, put: cachePut, delete: async () => true }),
+  };
+  // biome-ignore lint/security/noGlobalEval: loading the real sw.js source is the point
+  new Function('self', 'caches', 'fetch', SW_SRC)(self, caches, vi.fn());
+  return { handlers, openWindow, cachePut };
+}
+
+/** Fire a notification tap and settle everything it kicked off. */
+async function click(
+  h: ClickHarness,
+  data: Record<string, unknown> = { url: '/w/dev/t/tab?ptab=T1&pane=P1', pane_id: 'P1' },
+): Promise<void> {
+  const pending: Promise<unknown>[] = [];
+  const close = vi.fn();
+  h.handlers.get('notificationclick')?.({
+    notification: { close, data },
+    waitUntil: (p: Promise<unknown>) => pending.push(p),
+  });
+  // The no-ack path waits on a real 700ms timer; run it out rather than sleep.
+  const settled = Promise.all(pending);
+  await vi.advanceTimersByTimeAsync(2000);
+  await settled;
+}
+
+function makeClient(over: Partial<FakeClient> & { id: string; url: string }): FakeClient {
+  return {
+    focus: vi.fn(async () => undefined),
+    postMessage: vi.fn(),
+    ...over,
+  };
+}
+
+/** A client that answers the SW's ack port, i.e. a live muxpad page. */
+function ackingClient(over: Partial<FakeClient> & { id: string; url: string }): FakeClient {
+  const c = makeClient(over);
+  c.postMessage = vi.fn((_msg: unknown, transfer?: unknown[]) => {
+    const port = (transfer?.[0] ?? null) as MessagePort | null;
+    port?.postMessage({ ok: true });
+  });
+  return c;
+}
+
+describe('sw notificationclick', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('opens a window when nothing is running (cold start)', async () => {
+    const h = loadClickWorker([]);
+    await click(h);
+    expect(h.openWindow).toHaveBeenCalledWith('/w/dev/t/tab?ptab=T1&pane=P1');
+  });
+
+  it('ALWAYS deposits the target in Cache Storage before doing anything else', async () => {
+    // The only channel that survives an installed iOS PWA, where the platform
+    // foregrounds the app and reports nothing back.
+    const h = loadClickWorker([]);
+    await click(h);
+    expect(h.cachePut).toHaveBeenCalledTimes(1);
+    const body = await (h.cachePut.mock.calls[0]?.[1] as Response).json();
+    expect(body).toMatchObject({ url: '/w/dev/t/tab?ptab=T1&pane=P1', pane_id: 'P1' });
+    expect(typeof body.id).toBe('string');
+    expect(body.ts).toBeGreaterThan(0);
+  });
+
+  it('hands a live page the target and does NOT reload it', async () => {
+    const win = ackingClient({ id: 'a', url: 'https://mux/w/dev/t/other', focused: true });
+    win.navigate = vi.fn(async () => null);
+    const h = loadClickWorker([win]);
+    await click(h);
+    expect(win.focus).toHaveBeenCalled();
+    expect(win.postMessage).toHaveBeenCalled();
+    const msg = (win.postMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+    expect(msg).toMatchObject({ type: 'muxpad:push-navigate', pane_id: 'P1' });
+    // A reload would tear down every terminal and socket in the window.
+    expect(win.navigate).not.toHaveBeenCalled();
+    expect(h.openWindow).not.toHaveBeenCalled();
+  });
+
+  it('forces a real navigation when the page never acks', async () => {
+    const win = makeClient({ id: 'a', url: 'https://mux/w/dev/t/other', focused: true });
+    win.navigate = vi.fn(async () => null);
+    const h = loadClickWorker([win]);
+    await click(h);
+    expect(win.navigate).toHaveBeenCalledWith('/w/dev/t/tab?ptab=T1&pane=P1');
+  });
+
+  it('falls back to openWindow where WindowClient.navigate does not exist (WebKit)', async () => {
+    const win = makeClient({ id: 'a', url: 'https://mux/w/dev/t/other', focused: true });
+    const h = loadClickWorker([win]);
+    await click(h);
+    expect(h.openWindow).toHaveBeenCalledWith('/w/dev/t/tab?ptab=T1&pane=P1');
+    // …and the cached target is what actually lands the pane there.
+    expect(h.cachePut).toHaveBeenCalledTimes(1);
+  });
+
+  it('escalates to openWindow when navigate rejects (uncontrolled client)', async () => {
+    const win = makeClient({ id: 'a', url: 'https://mux/w/dev/t/other' });
+    win.navigate = vi.fn(async () => {
+      throw new TypeError('uncontrolled');
+    });
+    const h = loadClickWorker([win]);
+    await click(h);
+    expect(h.openWindow).toHaveBeenCalled();
+  });
+
+  it('routes the FOCUSED window, not whichever one matchAll listed first', async () => {
+    const background = ackingClient({ id: 'bg', url: 'https://mux/w/dev/t/one' });
+    const foreground = ackingClient({
+      id: 'fg',
+      url: 'https://mux/w/dev/t/two',
+      focused: true,
+      visibilityState: 'visible',
+    });
+    const h = loadClickWorker([background, foreground]);
+    await click(h);
+    expect(foreground.postMessage).toHaveBeenCalled();
+    expect(background.postMessage).not.toHaveBeenCalled();
+  });
+
+  it('never hijacks a chromeless pane popout when a real app window exists', async () => {
+    // A popout is a legitimate same-origin window; steering it to a workspace
+    // deep link renders the whole app inside it and leaves the window the user
+    // is actually looking at untouched.
+    const popout = ackingClient({ id: 'pop', url: 'https://mux/p/P9' });
+    const app = ackingClient({ id: 'app', url: 'https://mux/w/dev/t/one' });
+    const h = loadClickWorker([popout, app]);
+    await click(h);
+    expect(app.postMessage).toHaveBeenCalled();
+    expect(popout.postMessage).not.toHaveBeenCalled();
+  });
+
+  it('ignores nested (iframe) clients — a pane web face is not the app window', async () => {
+    const iframe = ackingClient({ id: 'if', url: 'https://mux/w/dev/t/one', frameType: 'nested' });
+    const h = loadClickWorker([iframe]);
+    await click(h);
+    expect(iframe.postMessage).not.toHaveBeenCalled();
+    expect(h.openWindow).toHaveBeenCalled();
+  });
+
+  it('carries the LATEST tap when notifications collapse on one pane', async () => {
+    const win = ackingClient({ id: 'a', url: 'https://mux/w/dev/t/one', focused: true });
+    const h = loadClickWorker([win]);
+    await click(h, { url: '/w/dev/t/one?ptab=T1&pane=P1', tab_id: 'T1', pane_id: 'P1' });
+    await click(h, { url: '/w/dev/t/two?ptab=T2&pane=P2', tab_id: 'T2', pane_id: 'P2' });
+    const post = win.postMessage as ReturnType<typeof vi.fn>;
+    expect(post.mock.calls.at(-1)?.[0]).toMatchObject({ pane_id: 'P2', tab_id: 'T2' });
+    // Distinct tap ids, so the page applies both rather than deduping the second.
+    const first = post.mock.calls[0]?.[0] as { id: string };
+    const second = post.mock.calls[1]?.[0] as { id: string };
+    expect(first.id).not.toBe(second.id);
+  });
+
+  it('degrades to the root for a payload with no url', async () => {
+    const h = loadClickWorker([]);
+    await click(h, {});
+    expect(h.openWindow).toHaveBeenCalledWith('/');
+  });
+});
+
+describe('sw push', () => {
+  it('re-alerts on a collapsed repeat instead of landing mute', () => {
+    const handlers = new Map<string, (e: unknown) => void>();
+    const showNotification = vi.fn();
+    const self = {
+      addEventListener: (t: string, fn: (e: unknown) => void) => handlers.set(t, fn),
+      skipWaiting: vi.fn(),
+      clients: { claim: vi.fn(), matchAll: vi.fn(), openWindow: vi.fn() },
+      registration: { pushManager: { subscribe: vi.fn() }, showNotification },
+    };
+    // biome-ignore lint/security/noGlobalEval: loading the real sw.js source is the point
+    new Function('self', 'caches', 'fetch', SW_SRC)(self, { open: async () => ({}) }, vi.fn());
+    handlers.get('push')?.({
+      data: { json: () => ({ title: 'claude · muxpad', body: 'asks: ok?', tag: 'P1', url: '/x' }) },
+      waitUntil: () => undefined,
+    });
+    expect(showNotification).toHaveBeenCalledWith(
+      'claude · muxpad',
+      expect.objectContaining({ tag: 'P1', renotify: true, body: 'asks: ok?' }),
+    );
+    // renotify without a tag is a TypeError — never set one on an untagged push.
+    handlers.get('push')?.({
+      data: { json: () => ({ title: 'muxpad', body: 'hi' }) },
+      waitUntil: () => undefined,
+    });
+    expect(showNotification.mock.calls[1]?.[1]).not.toHaveProperty('renotify');
   });
 });
