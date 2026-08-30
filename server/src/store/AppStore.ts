@@ -189,17 +189,13 @@ export class AppStore {
     this.db.prepare('DELETE FROM apps WHERE id = ?').run(id);
   }
 
-  /**
-   * Pane ids currently claimed by a DISABLED app. The serve supervisor
-   * subtracts these from its sweep: a user who pressed Stop must not have the
-   * supervisor helpfully bring the app back two seconds later.
-   */
-  disabledPaneIds(): string[] {
-    const rows = this.db
-      .prepare('SELECT pane_id FROM apps WHERE enabled = 0 AND pane_id IS NOT NULL')
-      .all() as Array<{ pane_id: string }>;
-    return rows.map((r) => r.pane_id);
-  }
+  // NOTE: there is deliberately no `disabledPaneIds()` helper. An earlier draft
+  // had one, and it was dead code with a misleading doc comment: the supervisor
+  // never called it, because the skip is a NOT EXISTS subquery inside
+  // PaneStore.listServePanes' single statement. Keeping the rule in one place
+  // matters — two expressions of "which panes are a stopped app's" are free to
+  // disagree, and the one that loses is the one that keeps a killed server
+  // running.
 }
 
 function row(r: AppRow): App {

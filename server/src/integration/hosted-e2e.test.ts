@@ -18,7 +18,11 @@ import { join } from 'node:path';
 import type { AppWithStatus } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { type AppRegistry, createAppRegistry } from '../apps/AppRegistry.js';
+import {
+  type AppRegistry,
+  MATERIALIZE_COOLDOWN_MS,
+  createAppRegistry,
+} from '../apps/AppRegistry.js';
 import { createAppStatusProbe } from '../apps/AppStatus.js';
 import { EventBus } from '../events.js';
 import type { Funnel } from '../funnel.js';
@@ -261,9 +265,17 @@ describe('a registered app, end to end', () => {
 
     // The row vanishes (a hand-run DELETE, a cascade we did not anticipate).
     db.prepare('DELETE FROM panes WHERE id = ?').run(first);
-    // Past the materialise cooldown.
-    await new Promise((r) => setTimeout(r, 10));
-    const registry2 = createAppRegistry({ db, ptyd: ptyd.client, log: () => {} });
+    // A SECOND registry, with an injected clock pushed past the materialise
+    // cooldown. (An earlier version slept 10ms and claimed to be "past the
+    // cooldown" — it was not; it only passed because the fresh registry had an
+    // empty cooldown ledger, so the assertion proved nothing about the
+    // production path, where one long-lived registry handles the rebuild.)
+    const registry2 = createAppRegistry({
+      db,
+      ptyd: ptyd.client,
+      now: () => Date.now() + MATERIALIZE_COOLDOWN_MS * 2,
+      log: () => {},
+    });
     await registry2.reconcile();
 
     const second = apps.getById(app.id)?.pane_id as string;

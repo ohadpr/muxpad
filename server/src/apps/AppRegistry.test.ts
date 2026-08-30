@@ -172,17 +172,28 @@ describe('start / stop / remove', () => {
     const paneId = apps.getById(app.id)?.pane_id as string;
     const tabId = panes.getById(paneId)?.tab_id as string;
 
-    const order: string[] = [];
+    // The supervisor's skip rule needs BOTH halves of
+    // `enabled = 0 AND pane_id = P`. Assert BOTH at the only instant that
+    // matters — while the kill is in flight — because an earlier draft cleared
+    // `pane_id` first, which satisfied the assertion on `enabled` while making
+    // the rule match nothing, and a sweep in that window resurrected the pty we
+    // were killing into an unreachable orphan.
+    const seen: Array<{ enabled: boolean; pointer: string | null; swept: boolean }> = [];
     const spy = vi.spyOn(ptyd, 'killPane').mockImplementation(async (id: string) => {
-      // By the time the kill goes out, the row must already read disabled —
-      // otherwise a supervisor sweep in this window respawns what we just killed.
-      order.push(apps.getById(app.id)?.enabled ? 'enabled' : 'disabled');
+      const row = apps.getById(app.id);
+      seen.push({
+        enabled: row?.enabled === true,
+        pointer: row?.pane_id ?? null,
+        // The decisive check: is the supervisor's own query still offering this
+        // pane up for respawn right now?
+        swept: panes.listServePanes().some((p) => p.id === paneId),
+      });
       ptyd.killed.push(id);
     });
     await registry.stop(app.id);
     spy.mockRestore();
 
-    expect(order).toEqual(['disabled']);
+    expect(seen).toEqual([{ enabled: false, pointer: paneId, swept: false }]);
     expect(ptyd.killed).toEqual([paneId]);
     expect(apps.getById(app.id)?.enabled).toBe(false);
     expect(apps.getById(app.id)?.pane_id).toBeNull();
@@ -397,5 +408,38 @@ describe('startAppReconciler', () => {
     expect(apps.getById(app.id)?.enabled).toBe(true);
     expect(apps.getById(app.id)?.pane_id).toBeTruthy();
     handle.stop();
+  });
+});
+
+describe('appStartupCmd is the choke point, not a formality', () => {
+  it('strips a quote out of the URL even when the row was written around the API', () => {
+    // Rows can arrive from adoption or a hand-edited SQLite file. A quote here
+    // escapes its own quoting and turns the rest of the line into shell.
+    const cmd = appStartupCmd({
+      url: "http://x/';touch /tmp/pwned;'",
+      name: 'X',
+      command: './start',
+    });
+    expect(cmd).not.toContain("';");
+    expect(cmd).toBe("muxpad serve --url 'http://x/touch /tmp/pwned' --label 'X' -- ./start");
+  });
+});
+
+describe('the container does not accumulate empty tabs', () => {
+  it('collects the tab a vanished pane left behind', async () => {
+    const app = makeApp();
+    await registry.reconcile();
+    const first = apps.getById(app.id)?.pane_id as string;
+    const firstTab = panes.getById(first)?.tab_id as string;
+
+    // The pane row vanishes; the rebuild makes a FRESH tab, so without a
+    // collector the old one would linger invisibly in the container forever —
+    // one more per rebuild.
+    panes.delete(first);
+    clock += MATERIALIZE_COOLDOWN_MS;
+    await registry.reconcile();
+
+    expect(tabs.getById(firstTab)).toBeNull();
+    expect(tabs.listByWorkspace(registry.containerId())).toHaveLength(1);
   });
 });
