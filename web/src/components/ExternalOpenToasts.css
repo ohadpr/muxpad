@@ -42,7 +42,7 @@
 .external-open-toast-url {
   color: var(--fg);
   font-weight: 600;
-  font-family: 'MesloLGS NF', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: "MesloLGS NF", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

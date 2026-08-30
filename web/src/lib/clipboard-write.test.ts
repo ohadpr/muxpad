@@ -1,5 +1,5 @@
-import { describe, expect, it, afterEach, vi } from 'vitest';
-import { writeClipboard, readClipboard } from './clipboard-write';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readClipboard, writeClipboard } from './clipboard-write';
 
 describe('writeClipboard', () => {
   const originalClipboard = navigator.clipboard;

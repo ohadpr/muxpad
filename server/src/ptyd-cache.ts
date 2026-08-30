@@ -437,6 +437,18 @@ export class PtydCache extends EventEmitter {
     if (this.getStatus(id, false) !== before) this.emit('paneChange', id);
   }
 
+  /**
+   * Has this pane's runner given up (automatic restarts exhausted)? The RAW
+   * bit, not the rolled-up status — `getStatus` ranks `working` above `dead`,
+   * so a corpse whose pty is still dribbling output reads as `working` there.
+   * That precedence is right for the nav (a spinner is more informative than a
+   * ×) but wrong for a caller deciding "is it worth sending to this pane",
+   * which is exactly when the mask hurts most.
+   */
+  isDead(id: string): boolean {
+    return this.dead.has(id);
+  }
+
   /** The pane's runner gave up (automatic restarts exhausted). */
   setDead(id: string, on: boolean): void {
     if (on === this.dead.has(id)) return;

@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openDb } from '../store/db.js';
-import { EventBus } from '../events.js';
 import type { MuxpadEvent } from '@muxpad/shared';
-import { createTestApp, type TestApp } from '../test-helpers/createTestApp.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { EventBus } from '../events.js';
+import { openDb } from '../store/db.js';
+import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
 
 describe('open routes', () => {
   let test: TestApp;

@@ -139,9 +139,12 @@ export function mountStaticWeb(app: Hono, webRoot: string): void {
     c.header('Cache-Control', cachePolicy(c.req.path));
     c.header('ETag', v.etag);
     c.header('Last-Modified', v.lastModified);
-    // Any response here may be encoding-negotiated by serveStatic.
-    c.header('Vary', 'Accept-Encoding');
-    if (ifNoneMatchSatisfied(c.req.header('if-none-match'), v.etag)) return c.body(null, 304);
+    if (ifNoneMatchSatisfied(c.req.header('if-none-match'), v.etag)) {
+      // Only on the 304: serveStatic appends its own `Vary: Accept-Encoding`
+      // whenever it actually negotiates an encoding, and this path skips it.
+      c.header('Vary', 'Accept-Encoding');
+      return c.body(null, 304);
+    }
     return next();
   });
 

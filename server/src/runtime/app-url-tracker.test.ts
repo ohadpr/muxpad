@@ -150,9 +150,6 @@ describe('AppUrlTracker', () => {
     const t = new AppUrlTracker(local.deps);
     t.ingest({ urls: ['http://localhost:5173', 'http://10.0.0.9:5173'] });
     await t.refresh();
-    expect(t.list().map((u) => u.url)).toEqual([
-      'http://10.0.0.9:5173',
-      'http://localhost:5173',
-    ]);
+    expect(t.list().map((u) => u.url)).toEqual(['http://10.0.0.9:5173', 'http://localhost:5173']);
   });
 });

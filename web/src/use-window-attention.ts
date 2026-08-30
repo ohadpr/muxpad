@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
 import type { Workspace } from '@muxpad/shared';
+import { useEffect } from 'react';
 
 const FAVICON = '/favicon.svg';
 const FAVICON_ATTENTION = '/favicon-attention.svg';
