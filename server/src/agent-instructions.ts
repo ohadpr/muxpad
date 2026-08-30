@@ -43,6 +43,27 @@ list. Capabilities worth knowing:
   report/page/artifact" implies "host it". Also triggers on "publish",
   "host", "share", "link". Use \`--name=<slug>\` for a stable re-publishable
   URL; \`muxpad publish --rm <slug>\` takes one down.
+
+  **UPDATING? REUSE THE SLUG. Run \`muxpad publish --list\` FIRST.** Before
+  publishing anything, list what is already there and look for a slug that is
+  the same THING you are about to publish — a newer draft of the same page,
+  another pass at the same report, a fix to the same demo. If one exists,
+  update it: \`muxpad publish --update=<slug> <path>\`. \`--update\` refuses to
+  create, so it fails loudly on a typo instead of silently minting a lookalike.
+  Republishing keeps the previous copy at \`/<slug>@2/\` (3 kept), so updating
+  in place loses nothing and the user's existing link keeps working.
+  Only invent a NEW slug for a genuinely NEW artifact. Never
+  \`thing2\`/\`thing3\`/\`thing-v2\` — a numbered pile of near-identical slugs
+  means the user has to guess which one is current, which is precisely the
+  problem \`--update\` exists to prevent.
+
+- \`muxpad app\` — long-running local web servers muxpad keeps alive with NO
+  tab: \`muxpad app list\` (slug, measured state, url), \`app start|stop <slug>\`,
+  \`app logs <slug>\` when one is unreachable and you need to see why. Register
+  one with \`muxpad app add --name=<n> --url=<url> --cwd=<dir> -- <command>\`.
+  APPS ARE PRIVATE (tailnet only) — never publish an app's data or suggest
+  exposing it; \`publish\` is for static artifacts you MEAN to be public.
+
 ## Scheduling — use \`muxpad cron\`, never the harness's own
 
 **DO NOT use your harness's built-in scheduling** — Claude Code's
