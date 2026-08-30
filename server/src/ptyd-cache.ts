@@ -141,7 +141,7 @@ export class PtydCache extends EventEmitter {
    *   server-only restart. Must exceed ptyd's activity throttle AND the slowest
    *   steady output heartbeat we still want to read as busy — e.g. Claude's 1s
    *   elapsed-timer tick — so it doesn't flicker to idle mid-work. Default
-   *   1500ms: clears the 1s tick with margin, ~1.5s lag before "done" shows.
+   *   1500ms: clears the 1s tick with margin, ~1.5s lag before "ready" shows.
    * @param opts.busyWarmupMs How long output must be SUSTAINED before a pane is
    *   declared busy. Filters one-off bursts that aren't real work — chiefly the
    *   single redraw a foreground app emits when a tab is opened (the attach
@@ -406,9 +406,9 @@ export class PtydCache extends EventEmitter {
    *            runner that gave up is `dead`, two lines down.
    *   working  a turn is in flight, OR the durable subagent roster is non-empty,
    *            OR — only for a pane with NO runner — the pty output heuristic
-   *   dead     the runner gave up (outranks done: a crash must not be masked
+   *   dead     the runner gave up (outranks ready: a crash must not be masked
    *            by an unread turn)
-   *   done     `unread` (passed in; it lives on the DB row, not here)
+   *   ready    `unread` (passed in; it lives on the DB row, not here)
    *   idle     otherwise
    *
    * The pty heuristic is gated to RUNNER-LESS panes on purpose. For a
@@ -424,7 +424,7 @@ export class PtydCache extends EventEmitter {
     const ptyWorking = !this.runnerOwned.has(id) && (this.state.get(id)?.busy ?? false);
     if (runnerWorking || ptyWorking) return 'working';
     if (this.dead.has(id)) return 'dead';
-    if (unread) return 'done';
+    if (unread) return 'ready';
     return 'idle';
   }
 
@@ -600,11 +600,11 @@ export function decorateTab(
   const attention = tabPanes.some((p) => cache.getAttention(p.id));
   const unread = manualUnread || tabPanes.some((p) => p.unread);
   // The tab's status is the highest-precedence status among its panes, and a
-  // manual "mark unread" counts as a done pane. One rollup primitive for every
+  // manual "mark unread" counts as a ready pane. One rollup primitive for every
   // level, so the tab strip and the sidebar can't drift apart.
   const status = rollupStatus([
     ...tabPanes.map((p) => cache.getStatus(p.id, p.unread === true)),
-    ...(manualUnread ? (['done'] as const) : []),
+    ...(manualUnread ? (['ready'] as const) : []),
   ]);
   const agents = tabPanes.reduce((n, p) => n + cache.getSubagentCount(p.id), 0);
   // A SCHEDULE, not a status: folded in here (rather than queried per row in
@@ -727,7 +727,7 @@ export function decorateWorkspace(
   for (const t of tabs.listByWorkspace(workspace.id)) {
     if (manualUnreadIds.has(t.id)) {
       unread = true;
-      statuses.push('done');
+      statuses.push('ready');
     }
     for (const p of panes.listByTab(t.id)) {
       if (cache.getAttention(p.id)) attention = true;
