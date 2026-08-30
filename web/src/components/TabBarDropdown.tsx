@@ -44,7 +44,7 @@ export function TabBarDropdown({
   // state so the number means something ("3 waiting", not "3 tabs exist").
   //
   // FIVE states, not three: the hand-rolled blocked/working test dropped `dead`
-  // and `done` on the floor, so a crashed runner or a finished-but-unread turn
+  // and `ready` on the floor, so a crashed runner or a finished-but-unread turn
   // behind the overflow was indistinguishable from an empty tab bar. Fold
   // through the shared rollup so precedence lives in exactly one place.
   const others = tabs.filter((t) => t.slug !== activeSlug);
@@ -60,8 +60,8 @@ export function TabBarDropdown({
         ? `${triggerCount} other ${plural(triggerCount)} working`
         : triggerStatus === 'dead'
           ? `${triggerCount} other ${plural(triggerCount)} stopped`
-          : triggerStatus === 'done'
-            ? `${triggerCount} other ${plural(triggerCount)} finished`
+          : triggerStatus === 'ready'
+            ? `${triggerCount} other ${plural(triggerCount)} ready for you`
             : 'Switch tab';
 
   useDismissable(open, ref, () => setOpen(false));
@@ -173,7 +173,7 @@ function TabDropdownItem({
             overflow list had no working signal at all before (D10). Rendered on
             the active row too: visiting a tab doesn't auto-clear pane-level
             state, so its own mark is a real signal. */}
-        <StatusMark status={tab.status} agents={tab.agents} />
+        <StatusMark status={tab.status} />
       </span>
       {/* The close affordance is rendered as a sibling visual (a <span>
           with click) to avoid nested-button HTML. stopPropagation in
