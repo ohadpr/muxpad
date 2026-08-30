@@ -3,7 +3,7 @@
 // Capabilities like `muxpad search` and `muxpad publish` must be known to all
 // harnesses; CLAUDE.md only reaches Claude, so muxpad does the injecting.
 //
-// Lifecycle mirrors the CEO playbook (ceo.ts): seeded ONCE at server boot,
+// Lifecycle mirrors the agent-mode overlays (agent-modes.ts): seeded ONCE at server boot,
 // user-owned afterwards — never overwritten, so tuning what every agent knows
 // is editing the file, not a deploy. If the file is missing (or empty) at
 // injection time, backends inject nothing — no error.
@@ -43,8 +43,46 @@ list. Capabilities worth knowing:
   report/page/artifact" implies "host it". Also triggers on "publish",
   "host", "share", "link". Use \`--name=<slug>\` for a stable re-publishable
   URL; \`muxpad publish --rm <slug>\` takes one down.
-- Cross-pane work: \`muxpad pane list --all\`, \`muxpad pane read <id>\`,
-  \`muxpad agent send <paneId> "message"\`, and friends.
+## Working across panes
+
+Other agents and terminals are running alongside you. The map:
+\`muxpad pane list --all [--json]\` (every pane: id, workspace/tab, busy|idle,
+title) and \`muxpad agent list\` (every agent session: backend, mode, status).
+
+- Read before you act: \`muxpad pane read <id>\` (a terminal's scrollback),
+  \`muxpad agent transcript <paneId> [--tail=N]\` (normalized, any backend),
+  \`muxpad pane summarize <id>\` (a short summary — prefer this over pulling a
+  full transcript; keep your own context lean).
+- Talk to an agent pane with \`muxpad agent send <paneId> "message"\` — it
+  lands in that session and queues automatically if the agent is mid-turn.
+  Prefer it over \`muxpad pane send\` for agent panes: raw keystrokes fight
+  the TUI.
+- \`muxpad pane send <id> "cmd" [--no-enter] | --key=ctrl-c\` types into a
+  LIVE terminal. Never inject into a terminal a human may be typing in —
+  check \`foreground_cmd\` / recent activity (\`pane read\`) first.
+
+## Waiting without burning tokens
+
+- \`muxpad agent wait <paneId> --timeout=SEC\` blocks until that agent's turn
+  finishes (exit 0 done/already idle, 1 not an agent pane, 2 fatal, 3
+  timeout). Run it in the background from your Bash tool and you get woken
+  when the worker is done — no polling, no tokens spent waiting. ALWAYS pass
+  \`--timeout\` so a wedged worker can't park you forever.
+- \`muxpad watch [--types=a,b] [--json]\` streams the live event bus.
+- Read \`status\` in \`pane list\`, not \`busy\`. It is one of
+  \`blocked\` (wants you NOW — an agent question, or a BEL),
+  \`working\` (a turn or a background subagent is running),
+  \`done\` (finished, unread), \`dead\` (the runner gave up), \`idle\`.
+  \`agents\` alongside it counts live background subagents.
+  \`busy\` is a deprecated alias for \`status === 'working'\`.
+- For a RUNNER-OWNED pane, \`working\` is the runner registry — a turn or the
+  durable subagent roster — so it is trustworthy: tailing a dev server on its
+  terminal face no longer reads busy, and a silently-thinking agent no longer
+  reads idle. For a pane with NO runner it is still the PTY-output heuristic,
+  where both of those caveats DO apply.
+- To block on one specific turn, still prefer \`agent wait\` / \`turn_active\`:
+  \`working\` deliberately stays true while a background subagent outlives the
+  turn that launched it.
 `;
 
 export function agentInstructionsPath(dataDir: string): string {
@@ -52,7 +90,7 @@ export function agentInstructionsPath(dataDir: string): string {
 }
 
 /** Seed the file at server boot. Written ONCE — an existing file is the
- *  user's and is never touched (same policy as the CEO playbook). */
+ *  user's and is never touched (same policy as the mode overlays). */
 export function seedAgentInstructions(dataDir: string): void {
   const path = agentInstructionsPath(dataDir);
   if (!existsSync(path)) writeFileSync(path, AGENT_INSTRUCTIONS_SEED);

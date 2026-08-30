@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { EventBus } from '../events.js';
-import { PtydCache } from '../ptyd-cache.js';
+import { PtydCache, decoratePane } from '../ptyd-cache.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
@@ -31,14 +31,23 @@ async function boot() {
   const tab = tabs.create({ name: 'T', layout: 'p1', workspace_id: ws.id });
   const pane = panes.create({ tab_id: tab.id, shell: '/bin/cat', cwd: '/tmp' });
   const http = createServer();
-  attachWsServer({ http, db, ptyd: ptyd.client, cache: new PtydCache(), events });
+  const cache = new PtydCache();
+  // Mirror the production wiring in index.ts: the cache's single 'paneChange'
+  // per status edge becomes ONE decorated pane.updated on the bus. Without it
+  // these tests would silently pass on a server that emits nothing, and would
+  // hide a double-emit if ws.ts also emitted by hand.
+  cache.on('paneChange', (id: string) => {
+    const p = panes.getById(id);
+    if (p) events.emit({ type: 'pane.updated', tab_id: p.tab_id, pane: decoratePane(cache, p) });
+  });
+  attachWsServer({ http, db, ptyd: ptyd.client, cache, events });
   await new Promise<void>((r) => http.listen(0, r));
   const port = (http.address() as AddressInfo).port;
   cleanup = async () => {
     await ptyd.cleanup();
     await new Promise<void>((r) => http.close(() => r()));
   };
-  return { port, paneId: pane.id, panes, agents, events };
+  return { port, paneId: pane.id, panes, agents, events, cache };
 }
 
 /**
@@ -292,6 +301,210 @@ describe('agent-runner relay', () => {
     expect(fatal).toMatchObject({ pane_id: paneId, phase: 'fatal' });
 
     runner.close();
+    evSock.close();
+  });
+
+  it('a question BLOCKS the pane in the nav, and answering unblocks it (D5)', async () => {
+    // "Needs input" had no representation in the nav at all: the question frame
+    // reached chat sockets and a push and touched nothing else, so a chat
+    // parked on ask_user read as plain idle in the sidebar.
+    const { port, paneId, cache, events } = await boot();
+    const seen: string[] = [];
+    events.subscribe((e) => {
+      if (e.type === 'pane.updated' && e.pane.id === paneId) seen.push(e.pane.status ?? 'none');
+    });
+    const { sock: runner } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: false }));
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await new Promise((r) => setTimeout(r, 80));
+    expect(cache.getStatus(paneId, false)).toBe('working');
+
+    runner.send(
+      JSON.stringify({
+        t: 'question',
+        qid: 'q1',
+        questions: [{ question: 'Which?', header: 'Pick', multiSelect: false, options: [] }],
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 80));
+    // Blocked outranks working — the pane wants you NOW.
+    expect(cache.getStatus(paneId, false)).toBe('blocked');
+    // Exactly ONE pane.updated for the edge — the cache's paneChange is the
+    // single emitter. ws.ts used to also emit by hand, doubling every edge.
+    expect(seen.filter((s) => s === 'blocked')).toHaveLength(1);
+
+    runner.send(JSON.stringify({ t: 'question-done', qid: 'q1' }));
+    await new Promise((r) => setTimeout(r, 80));
+    expect(cache.getStatus(paneId, false)).toBe('working');
+
+    // A turn that ends with a question still open must not leave it stuck.
+    runner.send(
+      JSON.stringify({
+        t: 'question',
+        qid: 'q2',
+        questions: [{ question: 'Again?', header: 'Pick', multiSelect: false, options: [] }],
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 60));
+    expect(cache.getStatus(paneId, false)).toBe('blocked');
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true }));
+    await new Promise((r) => setTimeout(r, 80));
+    expect(cache.getStatus(paneId, false)).not.toBe('blocked');
+
+    runner.close();
+  });
+
+  it('a runner-owned pane takes its status from the REGISTRY, not pty output (D4)', async () => {
+    const { port, paneId, cache } = await boot();
+    const { sock: runner } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: false }));
+    await new Promise((r) => setTimeout(r, 80));
+    // Hello registered the pane as runner-owned; an idle runner reads idle even
+    // though its own terminal log is chattering.
+    expect(cache.getStatus(paneId, false)).toBe('idle');
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await new Promise((r) => setTimeout(r, 80));
+    expect(cache.getStatus(paneId, false)).toBe('working');
+    // The runner leaves → the pane goes back to pty-heuristic territory.
+    runner.terminate();
+    await new Promise((r) => setTimeout(r, 120));
+    expect(cache.getStatus(paneId, false)).toBe('idle');
+  });
+
+  it('the subagent roster is DURABLE: it survives turn-done and keeps the pane busy', async () => {
+    // D3, the reported symptom verbatim: a background subagent vanished from
+    // the sidebar and the in-pane list the instant the parent turn ended.
+    const { port, paneId, cache } = await boot();
+    const { sock: runner } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: false }));
+    const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
+    await fromChat.next((f) => f.t === 'session');
+
+    // A turn launches a background subagent, then ends.
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    runner.send(
+      JSON.stringify({
+        t: 'subagent',
+        progress: { toolUseId: 'tu_1', steps: 0, label: 'audit the pipeline' },
+      }),
+    );
+    await fromChat.next((f) => f.t === 'subagent');
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true }));
+    await fromChat.next((f) => f.t === 'turn-done');
+    await new Promise((r) => setTimeout(r, 100));
+
+    // The turn is over; the subagent is not. The pane is still WORKING, with
+    // no decay window involved.
+    expect(cache.getBusy(paneId)).toBe(true);
+    expect(cache.getSubagentCount(paneId)).toBe(1);
+
+    // A chat socket that connects AFTER turn-done still gets the roster — this
+    // is the path that used to hand back an empty list.
+    const { sock: chat2, rx: fromChat2 } = await openSock(
+      `ws://127.0.0.1:${port}/ws/chat/${paneId}`,
+    );
+    const hello2 = await fromChat2.next((f) => f.t === 'session');
+    const roster = hello2.subagents as Array<{ toolUseId: string; label?: string }>;
+    expect(roster.map((s) => s.toolUseId)).toEqual(['tu_1']);
+    expect(roster[0]?.label).toBe('audit the pipeline');
+
+    // Only an explicit finish retires it.
+    runner.send(
+      JSON.stringify({ t: 'subagent', progress: { toolUseId: 'tu_1', steps: 9, done: true } }),
+    );
+    await new Promise((r) => setTimeout(r, 100));
+    expect(cache.getSubagentCount(paneId)).toBe(0);
+    expect(cache.getBusy(paneId)).toBe(false);
+
+    runner.close();
+    chat.close();
+    chat2.close();
+  });
+
+  it('a roster that appears mid-socket re-pushes the session frame (hello fingerprint)', async () => {
+    // D3's fourth stacked failure: the hello signature omitted subagents, so
+    // the 10s sessionPoll could never push a later snapshot to an ALREADY-OPEN
+    // socket. Only a brand-new socket ever got one — and by then the server
+    // held nothing.
+    const { port, paneId } = await boot();
+    const { sock: runner } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: false }));
+    const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
+    const first = await fromChat.next((f) => f.t === 'session');
+    expect(first.subagents).toBeUndefined();
+
+    // The runner announces a subagent; the SIGNATURE changed, so the next poll
+    // (forced here by a session-shape re-sync) re-pushes the frame.
+    runner.send(
+      JSON.stringify({ t: 'subagent', progress: { toolUseId: 'tu_a', steps: 1, label: 'a' } }),
+    );
+    await fromChat.next((f) => f.t === 'subagent');
+    // Nudge syncSession without waiting the full 10s: any agent_session.updated
+    // for this pane re-runs it, and a turn-start emits one via setStatus.
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp2', pid: 1, turnActive: false }));
+    const second = await fromChat.next((f) => f.t === 'session' && f !== first);
+    expect((second.subagents as Array<{ toolUseId: string }>).map((s) => s.toolUseId)).toEqual([
+      'tu_a',
+    ]);
+
+    runner.close();
+    chat.close();
+  });
+
+  it('a runner death clears the roster; a reconnect re-announces it', async () => {
+    const { port, paneId, cache } = await boot();
+    const { sock: runner } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: false }));
+    runner.send(
+      JSON.stringify({ t: 'subagent', progress: { toolUseId: 'tu_x', steps: 3, label: 'x' } }),
+    );
+    await new Promise((r) => setTimeout(r, 120));
+    expect(cache.getSubagentCount(paneId)).toBe(1);
+
+    // The runner's subagents die with the process — nothing else will ever
+    // report them done, so this is the one other retirement edge.
+    runner.terminate();
+    await new Promise((r) => setTimeout(r, 150));
+    expect(cache.getSubagentCount(paneId)).toBe(0);
+    expect(cache.getBusy(paneId)).toBe(false);
+
+    // The runner comes back and re-announces its live roster (onConnected).
+    const { sock: again } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    again.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 2, turnActive: false }));
+    again.send(
+      JSON.stringify({ t: 'subagent', progress: { toolUseId: 'tu_x', steps: 4, label: 'x' } }),
+    );
+    await new Promise((r) => setTimeout(r, 120));
+    expect(cache.getSubagentCount(paneId)).toBe(1);
+    again.close();
+  });
+
+  it('agent_turn start/done pairs stay BALANCED across reconnect and teardown', async () => {
+    // D8: the hello mid-turn branch restored turnActive/agentBusy/chat state
+    // but never emitted `start`, and teardown broadcast turn-done to chat
+    // sockets without emitting `done`. So a supervisor (or `muxpad agent wait`)
+    // saw a start with no done on a SIGKILLed runner, and a done with no start
+    // after a server restart mid-turn.
+    const { port, paneId } = await boot();
+    const { sock: evSock, rx: fromEvents } = await openSock(`ws://127.0.0.1:${port}/ws/events`);
+
+    // 1) A runner that (re)hellos MID-TURN is an observable turn START.
+    const { sock: runner } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: true }));
+    const start = await fromEvents.next((f) => f.type === 'agent_turn' && f.phase === 'start');
+    expect(start).toMatchObject({ pane_id: paneId, phase: 'start', sid: SID });
+
+    // 2) …and its death closes that turn on the bus, not just on chat.
+    runner.terminate();
+    const done = await fromEvents.next((f) => f.type === 'agent_turn' && f.phase === 'done');
+    expect(done).toMatchObject({ pane_id: paneId, phase: 'done', sid: SID });
+
+    // Exactly one of each — teardown must not double-fire.
+    const phases = fromEvents.frames
+      .filter((f) => f.type === 'agent_turn')
+      .map((f) => f.phase as string);
+    expect(phases).toEqual(['start', 'done']);
+
     evSock.close();
   });
 

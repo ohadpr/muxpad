@@ -22,9 +22,11 @@ import { dim } from './ansi.js';
 import { createBackend } from './backends/index.js';
 import type { AgentBackend, RunnerHost } from './backends/types.js';
 import {
+  type AgentMode,
   CLOSE_RUNNER_DISPLACED,
   type RunnerFrame,
   type ServerFrame,
+  isAgentMode,
   isBackendId,
   parseFrame,
 } from './protocol.js';
@@ -47,6 +49,11 @@ let requestedModel: string | null = null;
 // --backend <id> selects the agent CLI/SDK (default claude). Baked into the
 // pane's startup_cmd by the tabs route + the server's self-heal rewrite.
 let requestedBackend: 'claude' | 'codex' | 'cursor' = 'claude';
+// --mode do|deep selects the agent behavior overlay at LAUNCH. Written into
+// the pane's startup_cmd by the tabs route + the server's self-heal rewrite,
+// so a respawn boots in the pane's current mode. Absent/invalid = 'deep' =
+// exactly the pre-mode behavior.
+let requestedMode: AgentMode = 'deep';
 {
   const args = process.argv.slice(2);
   const i = args.indexOf('--resume');
@@ -56,6 +63,8 @@ let requestedBackend: 'claude' | 'codex' | 'cursor' = 'claude';
   const b = args.indexOf('--backend');
   if (b !== -1 && isBackendId(args[b + 1]))
     requestedBackend = args[b + 1] as typeof requestedBackend;
+  const md = args.indexOf('--mode');
+  if (md !== -1 && isAgentMode(args[md + 1])) requestedMode = args[md + 1] as AgentMode;
 }
 // --pick: the pane was created "Agent" without a harness chosen yet. Start NO
 // session — just idle so the chat face can show its harness picker; picking one
@@ -185,7 +194,7 @@ const host: RunnerHost = {
 
 const backend: AgentBackend | null = pickMode
   ? null
-  : createBackend(requestedBackend, host, { requestedSid, requestedModel });
+  : createBackend(requestedBackend, host, { requestedSid, requestedModel, mode: requestedMode });
 
 function connect(): void {
   if (closed || !backend) return;
@@ -210,6 +219,10 @@ function connect(): void {
       if (frame.cmd === 'compact' || frame.cmd === 'clear') b.slash(frame.cmd);
     } else if (frame.t === 'stop') {
       b.stop();
+    } else if (frame.t === 'mode') {
+      // Validated here (not trusted off the wire) — the same value can end up
+      // in a shell-typed startup_cmd on the server side.
+      if (isAgentMode(frame.mode)) b.setMode(frame.mode);
     } else if (frame.t === 'answer') {
       b.answer(frame.qid, frame.answers);
     }
