@@ -7,11 +7,7 @@ import { createCodexBackend } from './codex.js';
 import { createCursorBackend } from './cursor.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
-export function createBackend(
-  id: BackendId,
-  host: RunnerHost,
-  opts: BackendOptions,
-): AgentBackend {
+export function createBackend(id: BackendId, host: RunnerHost, opts: BackendOptions): AgentBackend {
   switch (id) {
     case 'claude':
       return createClaudeBackend(host, opts);
