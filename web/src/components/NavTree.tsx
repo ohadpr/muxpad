@@ -1651,7 +1651,10 @@ function TabRow({
                 {quickNumber}
               </span>
             )}
-            <span className="navtree-name-text" title={tab.name}>
+            {/* dir="auto" on the TEXT, never on the row — see
+                .navtree-name-text in NavTree.css for why alignment stays
+                pinned left while direction follows the string. */}
+            <span className="navtree-name-text" dir="auto" title={tab.name}>
               {tab.name}
             </span>
             {/* Pane-count hint — SHEET ONLY, and only while the row is
@@ -1686,7 +1689,7 @@ function TabRow({
                 a rail that says "couldn't summarise" on ten rows is worse
                 than a rail that says nothing. */}
           {tab.headline ? (
-            <span className="navtree-tab-headline" title={tab.headline}>
+            <span className="navtree-tab-headline" dir="auto" title={tab.headline}>
               {tab.headline}
             </span>
           ) : null}
