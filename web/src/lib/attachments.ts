@@ -53,3 +53,31 @@ export function splitMessageAttachments(text: string): MessagePart[] {
   if (last < text.length) parts.push({ kind: 'text', text: text.slice(last) });
   return parts;
 }
+
+/**
+ * Build the message that goes out: trimmed prose, then the composer's
+ * attachment paths (the agent reads the path, not the pixels).
+ *
+ * A path the draft ALREADY references is not appended again. Attachments ride
+ * in the composer's chips, not the draft text — but a path can still reach the
+ * text (hand-typed, pasted as text, a draft left over from an older build), and
+ * a second reference to one attachment draws the same image twice in the sent
+ * bubble. Dedupe is by attachment FILENAME: the stored name is the identity,
+ * the leading directory is just the host's data dir.
+ */
+export function composeOutgoingMessage(text: string, attachmentPaths: string[]): string {
+  const prose = text.trim();
+  const seen = new Set(
+    splitMessageAttachments(prose)
+      .filter((p): p is Exclude<MessagePart, { kind: 'text' }> => p.kind !== 'text')
+      .map((p) => p.name),
+  );
+  const append: string[] = [];
+  for (const path of attachmentPaths) {
+    const name = path.split('/').pop() ?? path;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    append.push(path);
+  }
+  return [prose, ...append].filter(Boolean).join(' ');
+}
