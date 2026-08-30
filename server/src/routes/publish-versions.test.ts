@@ -219,3 +219,162 @@ describe('publish --update', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('the public base every link is built from', () => {
+  let test: TestApp;
+  let db: Database.Database;
+  let dataDir: string;
+  let srcDir: string;
+  /** Ephemeral by nature — a VALUE here, never a constant in src/. */
+  const TUNNEL = 'https://part-anonymous-brilliant-resume.trycloudflare.com';
+  const FUNNEL = 'https://dt-mac-mini.west-hydra.ts.net:8443';
+  let reachable: Set<string>;
+
+  beforeEach(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'muxpad-base-'));
+    srcDir = mkdtempSync(join(tmpdir(), 'muxpad-base-src-'));
+    db = openDb(':memory:');
+    reachable = new Set([TUNNEL, FUNNEL]);
+    test = await createTestApp({
+      db,
+      dataDir,
+      publish: {
+        funnel: {
+          async ensure() {
+            return { baseUrl: FUNNEL };
+          },
+        },
+        baseProbe: async (url) => ({
+          alive: reachable.has(url.replace(/\/$/, '')),
+          status: 404,
+          reason: 'client_error',
+          elapsedMs: 1,
+        }),
+      },
+    });
+    writeFileSync(join(srcDir, 'p.html'), 'x');
+  });
+
+  afterEach(async () => {
+    await test.cleanup();
+    db.close();
+    rmSync(dataDir, { recursive: true, force: true });
+    rmSync(srcDir, { recursive: true, force: true });
+  });
+
+  const req = (p: string, init?: RequestInit) => test.app.request(`http://local${p}`, init);
+  const setBase = (url: string) =>
+    req('/api/publish/base', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+  const publish = (body: unknown) =>
+    req('/api/publish', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('a pinned base wins over the funnel hint, on publish AND in the listing', async () => {
+    expect((await setBase(TUNNEL)).status).toBe(200);
+    // Every `muxpad publish` sends the funnel url as a hint — the exact input
+    // that used to overwrite a working base.
+    const body = (await (
+      await publish({ path: join(srcDir, 'p.html'), name: 'demo', public_base_url: FUNNEL })
+    ).json()) as PublishBody;
+    expect(body.url).toBe(`${TUNNEL}/demo/`);
+
+    // …and the listing agrees, because both go through one resolver. This is
+    // the property that stops the UI and the CLI printing different links.
+    const list = (await (await req('/api/publish')).json()) as ListBody & {
+      base: { url: string; source: string; reachable: boolean | null };
+    };
+    expect(list.publishes[0]?.url).toBe(`${TUNNEL}/demo/`);
+    expect(list.base).toMatchObject({ url: TUNNEL, source: 'pinned', reachable: true });
+  });
+
+  it('versions use the same base as their artifact', async () => {
+    await setBase(TUNNEL);
+    await publish({ path: join(srcDir, 'p.html'), name: 'demo' });
+    writeFileSync(join(srcDir, 'p.html'), 'y');
+    await publish({ path: join(srcDir, 'p.html'), name: 'demo', update: true });
+    const list = (await (await req('/api/publish')).json()) as ListBody;
+    const one = list.publishes[0];
+    expect(one?.url).toBe(`${TUNNEL}/demo/`);
+    expect(one?.versions[0]?.url).toBe(`${TUNNEL}/demo@2/`);
+  });
+
+  it('reports a base that has stopped answering instead of handing out dead links', async () => {
+    await setBase(TUNNEL);
+    reachable.clear(); // the quick tunnel's process exits
+    const list = (await (await req('/api/publish')).json()) as ListBody & {
+      base: { reachable: boolean | null; warning?: string };
+    };
+    expect(list.base.reachable).toBe(false);
+    expect(list.base.warning).toMatch(/not answering/);
+  });
+
+  it('falls through to the next candidate when the pin is dead but a fallback lives', async () => {
+    await setBase(TUNNEL);
+    await publish({ path: join(srcDir, 'p.html'), name: 'demo', public_base_url: FUNNEL });
+    reachable.delete(TUNNEL);
+    const list = (await (await req('/api/publish')).json()) as ListBody & {
+      base: { url: string; source: string };
+    };
+    expect(list.base).toMatchObject({ url: FUNNEL, source: 'persisted' });
+  });
+
+  it('GET /base explains the whole chain, and DELETE drops the pin', async () => {
+    await setBase(TUNNEL);
+    await publish({ path: join(srcDir, 'p.html'), name: 'demo', public_base_url: FUNNEL });
+    const shown = (await (await req('/api/publish/base')).json()) as {
+      url: string;
+      source: string;
+      candidates: { url: string; source: string }[];
+    };
+    expect(shown).toMatchObject({ url: TUNNEL, source: 'pinned' });
+    expect(shown.candidates).toEqual([
+      { url: TUNNEL, source: 'pinned' },
+      { url: FUNNEL, source: 'persisted' },
+    ]);
+
+    const cleared = (await (await req('/api/publish/base', { method: 'DELETE' })).json()) as {
+      url: string;
+      source: string;
+    };
+    expect(cleared).toMatchObject({ url: FUNNEL, source: 'persisted' });
+  });
+
+  it('refuses a malformed base rather than storing a link that cannot work', async () => {
+    for (const url of ['not a url', 'https://x.example/path', 'http://public.example', '']) {
+      const res = await setBase(url);
+      expect(res.status).toBe(400);
+    }
+    const shown = (await (await req('/api/publish/base')).json()) as { url: string | null };
+    expect(shown.url).toBeNull();
+  });
+
+  it('reports no url at all rather than a loopback one that looks copyable', async () => {
+    // Nothing configured, nothing pinned, funnel down.
+    const down = await createTestApp({
+      db: openDb(':memory:'),
+      dataDir,
+      publish: {
+        funnel: {
+          async ensure() {
+            return { baseUrl: 'http://127.0.0.1:7778', warning: 'funnel unavailable' };
+          },
+        },
+      },
+    });
+    try {
+      const list = (await (
+        await down.app.request('http://local/api/publish')
+      ).json()) as ListBody & { base: { url: string | null; source: string } };
+      expect(list.base).toMatchObject({ url: null, source: 'local' });
+    } finally {
+      await down.cleanup();
+    }
+  });
+});

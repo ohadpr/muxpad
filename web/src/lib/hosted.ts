@@ -1,4 +1,4 @@
-import type { AppWithStatus, Artifact } from '@muxpad/shared';
+import type { AppWithStatus, Artifact, PublicBaseInfo } from '@muxpad/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { req } from '../api';
 
@@ -23,7 +23,7 @@ export const hostedApi = {
     req<AppWithStatus>(`/api/apps/${encodeURIComponent(ref)}/stop`, { method: 'POST' }),
   removeApp: (ref: string) =>
     req<void>(`/api/apps/${encodeURIComponent(ref)}`, { method: 'DELETE' }),
-  listArtifacts: () => req<{ publishes: Artifact[] }>('/api/publish'),
+  listArtifacts: () => req<{ publishes: Artifact[]; base: PublicBaseInfo }>('/api/publish'),
   removeArtifact: (slug: string) =>
     req<void>(`/api/publish/${encodeURIComponent(slug)}`, { method: 'DELETE' }),
 };
@@ -31,6 +31,8 @@ export const hostedApi = {
 export interface HostedState {
   apps: AppWithStatus[];
   artifacts: Artifact[];
+  /** Where artifact links are built from. null until the first load lands. */
+  base: PublicBaseInfo | null;
   /** True only until the FIRST load resolves — a refresh must not blank the
    *  list back to a skeleton every three seconds. */
   loading: boolean;
@@ -43,6 +45,7 @@ const POLL_MS = 3000;
 export function useHosted(): HostedState {
   const [apps, setApps] = useState<AppWithStatus[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  const [base, setBase] = useState<PublicBaseInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const alive = useRef(true);
@@ -53,6 +56,7 @@ export function useHosted(): HostedState {
       if (!alive.current) return;
       setApps(a.apps);
       setArtifacts(p.publishes);
+      setBase(p.base ?? null);
       setError(null);
     } catch (err) {
       if (!alive.current) return;
@@ -93,7 +97,7 @@ export function useHosted(): HostedState {
     };
   }, [refresh]);
 
-  return { apps, artifacts, loading, error, refresh };
+  return { apps, artifacts, base, loading, error, refresh };
 }
 
 /** Human byte size. Kept tiny and local — one call site. */
@@ -112,20 +116,30 @@ export function formatDate(ms: number): string {
 }
 
 /**
- * The one-line explanation under an app's name.
+ * The DETAIL line under an app's name — never the state itself.
  *
- * `unreachable` is the state that has to earn its keep: "unreachable" alone
- * sends the user to the logs for something the server already knows. The
- * url-health reason IS the diagnosis, so it is spelled out.
+ * The state already has a home: the chip beside the name, and the StatusMark in
+ * the rail. This line said it a second time ("running" / "running · HTTP 200",
+ * "stopped" / "stopped") which is not just redundant — it teaches the eye that
+ * this line is a label rather than information, so the one row where it carries
+ * a real diagnosis gets skimmed past.
+ *
+ * Returns null where there is genuinely nothing to add; the row then renders no
+ * line at all rather than an empty one.
  */
-export function appDetail(app: AppWithStatus): string {
+export function appDetail(app: AppWithStatus): string | null {
   switch (app.state) {
     case 'stopped':
-      return 'stopped';
+      // Nothing to add: no process, no probe worth reporting. The chip and the
+      // Start button already say everything true about this row.
+      return null;
     case 'starting':
-      return app.pty === false ? 'waiting for its process' : 'starting…';
+      return app.pty === false ? 'waiting for its process' : 'not answering yet';
     case 'running':
-      return app.health?.status ? `running · HTTP ${app.health.status}` : 'running';
+      // The measurement behind the chip, not the chip again.
+      return app.health?.status
+        ? `HTTP ${app.health.status} in ${Math.round(app.health.elapsedMs)} ms`
+        : null;
     case 'gave_up':
       return 'could not be restarted — open the logs and start it by hand';
     case 'unreachable':
@@ -139,6 +153,6 @@ export function appDetail(app: AppWithStatus): string {
           return 'nothing is answering on its URL';
       }
     default:
-      return '';
+      return null;
   }
 }
