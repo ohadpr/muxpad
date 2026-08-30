@@ -2,6 +2,7 @@ import { createRootRoute, createRoute, createRouter } from '@tanstack/react-rout
 import { AppLayout } from './components/AppLayout';
 import { WorkspaceLayout } from './components/WorkspaceLayout';
 import { DocView } from './pages/DocView';
+import { HostedAppView, HostedView } from './pages/HostedView';
 import { PopoutView } from './pages/PopoutView';
 import { RootRedirect } from './pages/RootRedirect';
 
@@ -62,8 +63,38 @@ const docRoute = createRoute({
   component: DocView,
 });
 
+// /hosted — the Hosted surface (apps + published artifacts).
+//
+// A CHILD OF THE APP LAYOUT, not of a workspace. That placement is the
+// feature: AppLayout renders its <Outlet/> whenever the URL carries no
+// workspace, so Hosted inherits the brand/settings chrome while occupying no
+// tab and belonging to no workspace. An app you are looking at is a route you
+// can leave — closing it never touches the process, which is owned by ptyd.
+const hostedRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: '/hosted',
+  component: HostedView,
+});
+
+// /hosted/a/$slug — one app's web view, full screen. `?logs=true` opens
+// straight onto the app's pane terminal (an app IS a pane underneath), so
+// "why is this unreachable" is one tap from the list.
+const hostedAppRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: '/hosted/a/$slug',
+  validateSearch: (search: Record<string, unknown>): { logs?: boolean | undefined } => ({
+    logs: search.logs === true || search.logs === 'true' ? true : undefined,
+  }),
+  component: HostedAppView,
+});
+
 const routeTree = rootRoute.addChildren([
-  appLayoutRoute.addChildren([rootRedirectRoute, workspaceLayoutRoute.addChildren([tabRoute])]),
+  appLayoutRoute.addChildren([
+    rootRedirectRoute,
+    hostedRoute,
+    hostedAppRoute,
+    workspaceLayoutRoute.addChildren([tabRoute]),
+  ]),
   popoutPaneRoute,
   docRoute,
 ]);

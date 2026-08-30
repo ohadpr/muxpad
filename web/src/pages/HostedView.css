@@ -1,0 +1,427 @@
+/* ──────────────────────────────────────────────────────────────────────
+   Hosted — one list, two kinds.
+
+   Design grammar is the navigator's, deliberately: the same section label
+   (11px, uppercase, letterspaced, --fg-faint), the same 6px selection-pill
+   radius, the same colour rule (--accent = the machine is working,
+   --danger = it wants you, --fg-dim/--fg-faint = quiet). The status column
+   is literally StatusMark, so a mark means the same thing here as it does
+   in the sidebar.
+
+   MOBILE-FIRST. The base rules ARE the phone layout: rows stack, actions
+   wrap, and every control is 44px tall. The ≥720px media query is the
+   enhancement — it pulls the actions up beside the text and shrinks the
+   controls to desktop density, because a pointer does not need a thumb's
+   worth of target.
+
+   Nothing is revealed on hover. Hover only ever brightens something that
+   was already there, so the installed PWA (which has no hover at all) is
+   not a degraded version of this view — it is the same view.
+   ────────────────────────────────────────────────────────────────────── */
+
+.hosted {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--ui-font);
+  /* Bottom padding clears the iPhone home indicator in the installed PWA. */
+  padding: 0 0 calc(32px + env(safe-area-inset-bottom));
+}
+
+/* A measure, not a full-bleed sheet: these rows are read left-to-right and
+   past ~900px the eye loses the thread between a name and its buttons. */
+.hosted-inner {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 20px 16px 0;
+}
+
+.hosted-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+.hosted-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.hosted-sub {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg-dim);
+  max-width: 46ch;
+}
+.hosted-head .hosted-btn {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.hosted-error {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--fg);
+  font-size: 13px;
+}
+
+/* ─── Sections ───────────────────────────────────────────────────────── */
+
+.hosted-section + .hosted-section {
+  margin-top: 30px;
+}
+.hosted-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 2px 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 10px;
+}
+/* Same type treatment as .navtree-section-label — this is the same KIND of
+   thing (a quiet header over a list of navigable rows), so it reads the
+   same way. */
+.hosted-section-label {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+/* The exposure note is a standing fact about the whole section, so it lives
+   in the header rather than repeating on every row. */
+.hosted-section-note {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--fg-faint);
+}
+.hosted-section-note-public {
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+/* ─── Rows ───────────────────────────────────────────────────────────── */
+
+.hosted-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hosted-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev);
+}
+/* The two states worth catching from across the room get a 3px left edge —
+   the same --chrome-rail idea the tab chrome uses for "you are here". It is
+   an ADDITION to the StatusMark, never a replacement: colour alone would
+   fail for anyone who cannot distinguish it. */
+.hosted-row[data-state="gave_up"] {
+  border-left: 3px solid var(--danger);
+  padding-left: 10px;
+}
+.hosted-row[data-state="unreachable"] {
+  border-left: 3px solid var(--fg-faint);
+  padding-left: 10px;
+}
+
+.hosted-row-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+/* Nudge the mark onto the first text line rather than the box's centre. */
+.hosted-row-mark {
+  margin-top: 3px;
+}
+.hosted-row-text {
+  min-width: 0;
+  flex: 1;
+}
+.hosted-row-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.hosted-row-name {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.hosted-row-meta {
+  margin-top: 3px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--fg-dim);
+}
+/* URLs are read character-by-character (is that 4322 or 4323?), so they get
+   the mono face and tabular figures the rest of the chrome uses. */
+.hosted-row-mono {
+  font-family: var(--chrome-font);
+  font-size: 11.5px;
+  color: var(--fg-faint);
+  overflow-wrap: anywhere;
+}
+
+/* ─── State chip ─────────────────────────────────────────────────────── */
+
+.hosted-chip {
+  flex: 0 0 auto;
+  font-family: var(--chrome-font);
+  font-size: 10.5px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  padding: 4px 6px;
+  border-radius: 5px;
+  background: var(--bg-hover);
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.hosted-chip[data-state="running"] {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.hosted-chip[data-state="gave_up"] {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.hosted-chip[data-state="unreachable"] {
+  color: var(--fg-dim);
+}
+.hosted-chip[data-state="public"] {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* ─── Actions ────────────────────────────────────────────────────────── */
+
+.hosted-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.hosted-btn {
+  /* 44px is the floor Apple's HIG sets for a touch target, and this user is
+     mostly on iOS. The desktop breakpoint below shrinks it; the phone never
+     gets a control smaller than a thumb. */
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--ui-font);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.hosted-btn:hover {
+  background: var(--bg-hover);
+}
+.hosted-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.hosted-btn:disabled,
+.hosted-btn[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+.hosted-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+.hosted-btn-primary:hover {
+  background: color-mix(in srgb, var(--accent) 85%, var(--fg));
+}
+.hosted-btn-quiet {
+  border-color: var(--border);
+  color: var(--fg-dim);
+}
+/* Delete is not painted red at rest: a destructive action that SHOUTS from
+   every row trains the eye to ignore it, and there is a confirm behind it.
+   It commits to danger on interaction, where the commitment is real. */
+.hosted-btn-danger:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+.hosted-btn-sm {
+  min-height: 36px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+/* ─── Versions ───────────────────────────────────────────────────────── */
+
+.hosted-versions {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 10px 0 0;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hosted-version {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.hosted-version-n {
+  font-family: var(--chrome-font);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  background: var(--bg-hover);
+  border-radius: 4px;
+  padding: 3px 6px;
+}
+.hosted-version .hosted-row-meta {
+  margin: 0;
+  flex: 1;
+}
+.hosted-version-note {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--fg-faint);
+}
+
+/* ─── Empty states ───────────────────────────────────────────────────── */
+
+.hosted-empty {
+  padding: 18px 4px;
+  color: var(--fg-dim);
+  font-size: 13px;
+}
+.hosted-empty-line {
+  margin: 0 0 8px;
+}
+.hosted-empty-hint {
+  display: block;
+  font-family: var(--chrome-font);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--fg-faint);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* ─── The app viewer ─────────────────────────────────────────────────── */
+
+.hosted-app-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--ui-font);
+}
+.hosted-app-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-chrome);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.hosted-app-bar .hosted-btn {
+  min-height: 36px;
+  padding: 0 10px;
+  font-size: 12.5px;
+}
+.hosted-app-name {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.hosted-app-spacer {
+  flex: 1;
+}
+.hosted-app-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--xterm-bg);
+}
+.hosted-app-frame {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: #fff;
+}
+
+/* ─── Pointer / wider screens ────────────────────────────────────────── */
+
+@media (min-width: 720px) {
+  .hosted-inner {
+    padding: 28px 24px 0;
+  }
+  /* Actions move up beside the text instead of stacking under it. */
+  .hosted-row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    padding: 11px 14px;
+  }
+  .hosted-row-main {
+    flex: 1 1 320px;
+  }
+  .hosted-actions {
+    flex: 0 0 auto;
+  }
+  .hosted-btn {
+    min-height: 32px;
+    padding: 0 11px;
+    font-size: 12.5px;
+  }
+  .hosted-btn-sm {
+    min-height: 28px;
+  }
+  /* The versions list is a full-width row of its own under a wrapped row. */
+  .hosted-versions {
+    flex: 1 0 100%;
+  }
+}
