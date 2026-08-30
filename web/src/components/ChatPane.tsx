@@ -54,9 +54,12 @@ import {
   shouldPersistChatScroll,
 } from '../lib/chat-scroll';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
+import { useDictationCleanup } from '../lib/dictation-cleanup';
 import { liveStatusLabel } from '../lib/live-status';
-import { isMobileLayout } from '../lib/mobile-layout';
+import { MOBILE_BREAKPOINT, isMobileLayout } from '../lib/mobile-layout';
 import { useDismissable } from '../lib/use-dismissable';
+import { useMediaQuery } from '../use-media-query';
+import { CleanupButton, CleanupHint } from './DictationCleanup';
 import './ChatPane.css';
 
 // Assistant + streaming text is rendered as GitHub-flavored markdown. No raw
@@ -886,6 +889,22 @@ export function ChatPane({
       // storage unavailable (private mode / quota) — drafts just don't persist
     }
   }, [input, draftKey]);
+  // ── Dictation cleanup (mobile only) ──────────────────────────────────────
+  // Phone dictation can't learn muxpad's vocabulary, so a dictated message
+  // arrives as "check the crown schedule on Max pad". The button repairs it
+  // IN THE COMPOSER — this pane's messages drive an agent that runs tool
+  // calls, so the human reads the corrected text before it goes anywhere.
+  //
+  // Gated on the live viewport rather than `isMobileLayout()`: this composer
+  // renders on desktop too, and the desktop composer deliberately does not get
+  // the affordance (desktop input is typed, not dictated). A media-query hook
+  // rather than a one-shot read so rotating or resizing doesn't strand it.
+  const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
+  const cleanup = useDictationCleanup({
+    read: () => inputRef.current?.value ?? '',
+    write: (text) => setInput(text),
+  });
+  const { reset: resetCleanup } = cleanup;
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
   // tone 'info' = transient connection chatter (reconnecting, not connected
@@ -1464,6 +1483,9 @@ export function ChatPane({
 
   const sendMessage = () => {
     const text = input.trim();
+    // Whatever happens below, the composed text is leaving (or being answered
+    // with) — a lingering "undo cleanup" would offer to restore it afterwards.
+    resetCleanup();
     // Attachment paths ride along at the END of the message — the agent reads
     // the path, not the pixels. The draft box stays clean prose.
     const attachmentPaths = chips.map((c) => c.path);
@@ -2682,6 +2704,9 @@ export function ChatPane({
               hidden
               onChange={onPickImages}
             />
+            {/* Inside the pill, above the input line — the correction belongs to
+                the text it changed, not to the conversation behind it. */}
+            {isMobile ? <CleanupHint cleanup={cleanup} variant="chat" /> : null}
             <div className="chat-composer-main">
               <button
                 type="button"
@@ -2701,7 +2726,12 @@ export function ChatPane({
                 ref={inputRef}
                 className="chat-input"
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  // Editing retires the undo — the stashed original no longer
+                  // matches what's in the box.
+                  resetCleanup();
+                }}
                 onPaste={onPaste}
                 onKeyDown={(e) => {
                   // Desktop: Enter sends, Shift+Enter = newline. Mobile: the
@@ -2719,6 +2749,11 @@ export function ChatPane({
                 }
                 rows={1}
               />
+              {/* Mobile only, by explicit instruction: dictation is a phone
+                  problem. Left of Send because it is the step BEFORE sending. */}
+              {isMobile ? (
+                <CleanupButton cleanup={cleanup} variant="chat" hasText={input.trim().length > 0} />
+              ) : null}
               {sending && !question ? (
                 <>
                   {/* Busy + composed text → Queue it (the server holds it and

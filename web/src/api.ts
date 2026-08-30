@@ -298,6 +298,21 @@ export const api = {
       method: 'POST',
     }),
 
+  /**
+   * Repair phone-dictation mishearings in composed text ("crown schedule" →
+   * "cron schedule"). Returns the corrected text for the human to REVIEW — it
+   * sends nothing, and the caller must never treat it as send-ready.
+   *
+   * Throws `ApiError` on every failure (502 when the model is unreachable).
+   * There is no silent-success path: a caller that swallows the throw would
+   * teach the user that cleanup ran and found nothing wrong.
+   */
+  cleanTranscript: (text: string) =>
+    req<{ text: string; changed: boolean }>('/api/clean-transcript', {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
+
   uploadAttachment: async (paneId: string, blob: Blob, name: string): Promise<{ path: string }> => {
     const fd = new FormData();
     fd.append('file', blob, name);
