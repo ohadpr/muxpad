@@ -290,3 +290,30 @@ describe('without a registry (HTTP-only wiring)', () => {
     expect(body.apps[0]?.health).toBeNull();
   });
 });
+
+describe('the hidden container does not leak', () => {
+  it('keeps an app pane out of GET /api/panes — the map agents are pointed at', async () => {
+    const created = (await (await post('/api/apps', valid())).json()) as AppWithStatus;
+    // `muxpad pane list --all` reads this, and the universal agent
+    // instructions teach `muxpad pane send <id>` in the very next breath.
+    // Listing an app's pane here invites an agent to type keystrokes into a
+    // running web server it has no business touching.
+    const listed = (await (await req('/api/panes')).json()) as Array<{
+      id: string;
+      workspace_name: string;
+    }>;
+    expect(listed.map((p) => p.id)).not.toContain(created.pane_id);
+    expect(listed.map((p) => p.workspace_name)).not.toContain('· apps ·');
+
+    // …but ?all=1 still reaches it, for debugging a stuck pty. Same convention
+    // as GET /api/workspaces?all=1.
+    const all = (await (await req('/api/panes?all=1')).json()) as Array<{ id: string }>;
+    expect(all.map((p) => p.id)).toContain(created.pane_id);
+  });
+
+  it('keeps the container out of the workspace list the sidebar reads', async () => {
+    await post('/api/apps', valid());
+    expect(await (await req('/api/workspaces')).json()).toEqual([]);
+    expect((await (await req('/api/workspaces?all=1')).json()) as unknown[]).toHaveLength(1);
+  });
+});

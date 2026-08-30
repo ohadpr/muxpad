@@ -353,10 +353,20 @@ export function panesScopedRoutes(deps: {
   // Only for validating a `new_tab` move's destination workspace (below).
   const workspaces = new WorkspaceStore(deps.db);
 
-  // Flat enumeration: every pane across all workspaces, decorated, each row
-  // joined with its tab/workspace id+name. A supervisor's "org chart" view —
+  // Flat enumeration: every pane across all VISIBLE workspaces, decorated, each
+  // row joined with its tab/workspace id+name. A supervisor's "org chart" view —
   // without this a caller must fan out over workspaces → tabs → panes.
+  //
+  // Hidden system containers are excluded unless `?all=1`, the same convention
+  // (and the same reason) as GET /api/workspaces. This is not cosmetic: a
+  // registered app is a pane in the hidden apps container, the universal agent
+  // instructions point agents at `muxpad pane list --all` as "the map", and the
+  // very next verb they are taught is `muxpad pane send <id>`. Listing an app's
+  // pane here invites an agent to type keystrokes into a running web server —
+  // for something it has no business touching, since `muxpad app` is the verb
+  // for apps. `?all=1` keeps the escape hatch for debugging a stuck pty.
   app.get('/', async (c) => {
+    const includeHidden = c.req.query('all') === '1';
     const rows = deps.db
       .prepare(
         `SELECT p.id AS pane_id, t.id AS tab_id, t.name AS tab_name,
@@ -364,6 +374,7 @@ export function panesScopedRoutes(deps: {
          FROM panes p
          JOIN tabs t ON t.id = p.tab_id
          JOIN workspaces w ON w.id = t.workspace_id
+         ${includeHidden ? '' : 'WHERE w.hidden = 0'}
          ORDER BY w.position ASC, w.created_at ASC,
                   t.position ASC, t.created_at ASC,
                   p.created_at ASC`,

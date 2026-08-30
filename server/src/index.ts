@@ -6,7 +6,7 @@ import { serve } from '@hono/node-server';
 import { createAgentBridge } from './agent-bridge.js';
 import { seedAgentInstructions } from './agent-instructions.js';
 import { seedDoMode } from './agent-modes.js';
-import { createAppRegistry } from './apps/AppRegistry.js';
+import { createAppRegistry, startAppReconciler } from './apps/AppRegistry.js';
 import { createAppStatusProbe } from './apps/AppStatus.js';
 import { adoptServePanes } from './apps/adopt-serve-panes.js';
 import { ArchiveDb } from './archive/ArchiveDb.js';
@@ -337,14 +337,21 @@ try {
   console.error('[apps/adopt] one-time adoption failed (harmless; retried next boot)', err);
 }
 
-// Bring registered apps up. `boot: true` also honours autostart=0 by leaving
-// those apps honestly stopped rather than enabled-but-paneless. Reconciling
-// again on every ptyd (re)connect is what recovers an app whose pane row was
-// lost; the pty itself is the serve supervisor's job, and it is already wired
-// to the same signal.
-void appRegistry.reconcile({ boot: true });
-ptyd.on('connected', () => {
-  void appRegistry.reconcile();
+// Bring registered apps up: a boot pass (which honours autostart=0 by leaving
+// those apps honestly stopped rather than enabled-but-paneless), then a slow
+// repair interval plus a pass on every ptyd (re)connect. This only creates and
+// destroys PANES — keeping a pty alive is the serve supervisor's job above.
+const appReconciler = startAppReconciler({
+  db,
+  ptyd,
+  events,
+  registry: appRegistry,
+  onPtydConnected: (fn) => {
+    ptyd.on('connected', fn);
+    return () => {
+      ptyd.off('connected', fn);
+    };
+  },
 });
 
 // Durable schedules. The tick starts only now, with the ws layer attached and
@@ -388,6 +395,9 @@ const shutdown = async () => {
   // Stop respawning app servers — we're on our way out; anything we started
   // here would just be an orphan for the next boot's supervisor to adopt.
   serveSupervisor.stop();
+  // Same for the app reconciler: a pass landing now would materialise panes
+  // for a server that is going away.
+  appReconciler.stop();
   // Close browser-facing WSes first so they don't see ptyd's `close` (which
   // is going to follow as we disconnect the control channel) as a PTY-exit.
   //
