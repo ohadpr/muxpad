@@ -260,9 +260,10 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // progress so the chat's Task row shows "running · N steps · lastTool"
   // instead of sitting inert for minutes.
   //
-  // The lifecycle rules (durable, no decay window, and the three end-paths
-  // that make that safe) live in SubagentRoster — extracted so they are
-  // testable without spawning a real SDK session.
+  // The lifecycle rules (durable, no decay window, the four end-paths that
+  // make that safe, and why membership is top-level launches ONLY) live in
+  // SubagentRoster — extracted so they are testable without spawning a real
+  // SDK session.
   // -------------------------------------------------------------------------
   const subagents = new SubagentRoster(
     (progress) => emit({ t: 'subagent', progress }),
@@ -695,6 +696,22 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           statusEpoch++;
           emit(hello());
         }
+      } else if (msg.type === 'system' && msg.subtype === 'task_started') {
+        // The SDK's own launch edge. It carries the task id the LEVEL signal
+        // below speaks; bind it to the tool_use we already rostered. Ids we
+        // never launched (nested agents, background Bash) are ignored inside.
+        if (typeof msg.tool_use_id === 'string') subagents.bindTask(msg.tool_use_id, msg.task_id);
+      } else if (msg.type === 'system' && msg.subtype === 'task_notification') {
+        // The SDK's finish EDGE for a background task, carrying the launching
+        // tool_use id — the structured twin of the `<task-notification>` text
+        // the harness injects into the conversation when no turn is open. Both
+        // are handled: the text form is what a resumed/queued turn sees.
+        if (typeof msg.tool_use_id === 'string') subagents.done(msg.tool_use_id);
+      } else if (msg.type === 'system' && msg.subtype === 'background_tasks_changed') {
+        // The LEVEL signal: the complete live background-task set, REPLACE
+        // semantics. This is the reconciliation that makes a missed edge
+        // survivable — see SubagentRoster.reconcileBackground.
+        subagents.reconcileBackground(msg.tasks.map((t) => t.task_id));
       } else if (msg.type === 'stream_event') {
         const evt = msg.event as {
           type?: string;
@@ -758,6 +775,12 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         typeof msg.parent_tool_use_id === 'string'
       ) {
         // Subagent traffic: surface live progress on the parent Task row.
+        //
+        // NOTE this stream also carries NESTED agents' traffic, tagged with the
+        // nested tool_use id (SDK 0.3.220, probe-verified). Those ids are not in
+        // the roster and `activity` ignores them — a grandchild's launch and its
+        // end both live inside its parent's stream, so an adopted one could
+        // never be retired. That adoption is what made `agents:` climb forever.
         let lastTool: string | undefined;
         if (msg.type === 'assistant') {
           for (const block of msg.message.content ?? []) {
