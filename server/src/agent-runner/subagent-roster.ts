@@ -192,11 +192,58 @@ export class SubagentRoster {
   bindTask(toolUseId: string, taskId: string): void {
     const p = this.entries.get(toolUseId);
     if (!p) return;
+    // A REBIND (this tool_use now names a different task) must re-earn the
+    // background flag from scratch: carrying it over would let a level payload
+    // that predates the new binding sweep a live entry.
+    if (p.taskId !== taskId) p.background = false;
     p.taskId = taskId;
     // The level payload may have arrived FIRST (the SDK documents the ordering
     // as unspecified); if it named this task, it is already known-background.
     if (this.lastLevel.has(taskId)) p.background = true;
     this.remember(taskId, p);
+  }
+
+  /**
+   * Retire by TASK id. `tool_use_id` is optional on the SDK's task messages
+   * (`task_notification`, and absent entirely from `task_updated`) while
+   * `task_id` is not — so without this, a finish edge that omits it would leave
+   * the entry to the level signal alone, and an entry whose `task_started` also
+   * omitted it would have no edge end-path at all.
+   */
+  doneByTaskId(taskId: string): void {
+    for (const p of this.entries.values()) {
+      if (p.taskId === taskId) {
+        this.done(p.toolUseId);
+        return;
+      }
+    }
+  }
+
+  /**
+   * This task is PAUSED (`task_updated`, e.g. parked behind a rate limit). It
+   * may drop out of the live background set while still being a live agent —
+   * the level signal's documented membership changes don't mention pause either
+   * way — so make it ineligible for the level sweep until it is seen live
+   * again. Absence must never be the thing that kills a running subagent.
+   */
+  pauseTask(taskId: string): void {
+    for (const p of this.entries.values()) if (p.taskId === taskId) p.background = false;
+  }
+
+  /**
+   * Retire launches that never actually RAN. A `Task` tool_use can be delivered
+   * and then retracted (a refused leg superseded by the fallback), or simply
+   * never execute — no `task_started`, no `tool_result`, no child traffic, and
+   * never in the level set, so not one end-path can reach it. Called at the
+   * turn `result`, where "it produced nothing at all" is finally decidable.
+   *
+   * This is NOT the turn-clearing regression: an agent that actually started
+   * has a bound task id (background) or steps (foreground), and is untouched.
+   */
+  retireUnstarted(): void {
+    for (const p of [...this.entries.values()]) {
+      if (!p.taskId && p.steps === 0) this.done(p.toolUseId);
+    }
   }
 
   /** Record (or refresh) the launch behind a task id, for resurrection. */
@@ -274,16 +321,18 @@ export class SubagentRoster {
 
   /**
    * Keep the roster under {@link MAX_ROSTER_ENTRIES} by retiring the
-   * least-recently-active entry. Reaching this means an end-path is leaking —
-   * the log says so — but the status rail stays bounded meanwhile.
+   * EARLIEST-LAUNCHED entry. Reaching this means an end-path is leaking — the
+   * log says so — but the status rail stays bounded meanwhile.
+   *
+   * Deliberately launch order, not `seenAt`: evicting the longest-SILENT entry
+   * would be a decay window wearing a different hat, and P1 measured a live
+   * background subagent going 44s without a word.
    */
   private enforceCap(): void {
     while (this.entries.size >= MAX_ROSTER_ENTRIES) {
-      let oldest: RosterEntry | undefined;
-      for (const p of this.entries.values()) {
-        if (!oldest || (p.seenAt ?? 0) < (oldest.seenAt ?? 0)) oldest = p;
-      }
-      if (!oldest) return;
+      const first = this.entries.values().next();
+      if (first.done) return;
+      const oldest = first.value;
       // One line per overflow episode, not one per launch — a leaking roster
       // would otherwise fill the pane's terminal face.
       if (this.now() - this.lastOverflowWarnAt >= OVERFLOW_WARN_INTERVAL_MS) {
