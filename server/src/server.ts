@@ -1,6 +1,8 @@
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import type { AgentBridge } from './agent-bridge.js';
+import type { AppRegistry } from './apps/AppRegistry.js';
+import type { AppStatusProbe } from './apps/AppStatus.js';
 import type { ArchiveDb } from './archive/ArchiveDb.js';
 import type { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
@@ -9,6 +11,7 @@ import type { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import type { Presence, PushService } from './push.js';
 import { agentSessionsRoutes } from './routes/agent-sessions.js';
+import { appsRoutes } from './routes/apps.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { cronsRoutes } from './routes/crons.js';
 import { eventsRoutes } from './routes/events.js';
@@ -90,6 +93,14 @@ export interface AppDeps {
    * honestly (empty list, 503 on writes) rather than 404ing.
    */
   cronScheduler?: CronScheduler;
+  /**
+   * The app registry (apps/AppRegistry.ts) and its status probe. Optional so
+   * HTTP-only tests can omit them — /api/apps is still mounted and answers
+   * honestly: reads work against the DB, writes 503 rather than 404, and an
+   * app's `state` degrades to the enabled flag with `pty`/`health` null instead
+   * of inventing a status nothing measured.
+   */
+  apps?: { registry?: AppRegistry | undefined; status?: AppStatusProbe | undefined };
 }
 
 export function createApp(deps: AppDeps): Hono {
@@ -124,6 +135,17 @@ export function createApp(deps: AppDeps): Hono {
       cache: resolved.cache,
       events: resolved.events,
       ...(resolved.cronScheduler ? { scheduler: resolved.cronScheduler } : {}),
+    }),
+  );
+  // Hosted, kind one: supervised local app servers (`muxpad app`). Kind two —
+  // published artifacts — is /api/publish below. Two verbs, two kinds; they
+  // share a VIEW, never a primitive.
+  app.route(
+    '/api/apps',
+    appsRoutes({
+      db: resolved.db,
+      ...(resolved.apps?.registry ? { registry: resolved.apps.registry } : {}),
+      ...(resolved.apps?.status ? { status: resolved.apps.status } : {}),
     }),
   );
   // Artifact publishing (copies into <dataDir>/public, served by the separate
