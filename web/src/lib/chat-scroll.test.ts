@@ -1,12 +1,15 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  SHOW_SETTLE_MS,
+  SMOOTH_SCROLL_SETTLE_MS,
+  maxScrollTop,
   pinnedFromMemory,
   recallChatScroll,
   rememberChatScroll,
-  shouldPersistChatScroll,
-  scrollTopAfterOlderPrepend,
-  maxScrollTop,
+  scrollEventIsTrustworthy,
   scrollMemorySidMatches,
+  scrollTopAfterOlderPrepend,
+  shouldPersistChatScroll,
 } from './chat-scroll';
 
 describe('shouldPersistChatScroll', () => {
@@ -106,5 +109,104 @@ describe('rememberChatScroll hide corruption', () => {
       rememberChatScroll('pane-x', { ratio: 0, pinned: false, sid: 's1' });
     }
     expect(recallChatScroll('pane-x')).toBeNull();
+  });
+});
+
+describe('scrollEventIsTrustworthy — the pin-suppression window', () => {
+  it('distrusts scroll events in the first moments after a pane is shown', () => {
+    // Un-hiding from display:none delivers scroll events while layout is
+    // still settling: clientHeight is back but scrollTop (and the composer's
+    // height) are not. Acting on those used to unpin a visible chat and
+    // PERSIST that — which is what made the bug sticky rather than a jump.
+    const shownAt = 1_000;
+    const until = shownAt + SHOW_SETTLE_MS;
+    expect(scrollEventIsTrustworthy({ suppressedUntil: until, now: shownAt })).toBe(false);
+    expect(scrollEventIsTrustworthy({ suppressedUntil: until, now: shownAt + 100 })).toBe(false);
+  });
+
+  it('trusts them again once the window has passed', () => {
+    expect(scrollEventIsTrustworthy({ suppressedUntil: 1_250, now: 1_250 })).toBe(true);
+    expect(scrollEventIsTrustworthy({ suppressedUntil: 1_250, now: 9_000 })).toBe(true);
+  });
+
+  it('trusts everything when nothing is in flight (0)', () => {
+    // Also the shape a real gesture produces: the component zeroes the
+    // deadline on wheel/touch so the reader is never second-guessed.
+    expect(scrollEventIsTrustworthy({ suppressedUntil: 0, now: 0 })).toBe(true);
+    expect(scrollEventIsTrustworthy({ suppressedUntil: 0, now: 5 })).toBe(true);
+  });
+
+  it('is wall-clock, not frame-counted — a throttled tab still converges', () => {
+    // A background tab may deliver no frames at all; the window must still
+    // close on time rather than staying open forever.
+    expect(scrollEventIsTrustworthy({ suppressedUntil: 1_250, now: 60_000 })).toBe(true);
+  });
+
+  it('covers a smooth jump-to-bottom for longer than a show', () => {
+    // A smooth glide emits an event per frame for a few hundred ms; each one
+    // used to read as "the reader scrolled away from the target" and unpin
+    // the chat the button had just pinned.
+    expect(SMOOTH_SCROLL_SETTLE_MS).toBeGreaterThan(SHOW_SETTLE_MS);
+    const until = 1_000 + SMOOTH_SCROLL_SETTLE_MS;
+    expect(scrollEventIsTrustworthy({ suppressedUntil: until, now: 1_000 + SHOW_SETTLE_MS })).toBe(
+      false,
+    );
+    expect(scrollEventIsTrustworthy({ suppressedUntil: until, now: until })).toBe(true);
+  });
+});
+
+describe('scrollTopAfterOlderPrepend — clamping', () => {
+  it('never returns a target outside the scrollable range', () => {
+    // If clientHeight changed between capturing the anchor and applying it
+    // (composer resize, viewport change), the raw arithmetic can overshoot.
+    // The browser would clamp the real scrollTop while the caller stamped the
+    // UNCLAMPED value as lastProgrammaticTop — so the next scroll event read
+    // as "the reader took control" and unpinned them for no reason.
+    const target = scrollTopAfterOlderPrepend({
+      pinned: false,
+      newScrollHeight: 1000,
+      clientHeight: 900, // grew a lot since the anchor was taken
+      anchorHeight: 200,
+      anchorTop: 190,
+    });
+    expect(target).toBeLessThanOrEqual(maxScrollTop(1000, 900));
+    expect(target).toBeGreaterThanOrEqual(0);
+  });
+
+  it('never returns a negative target', () => {
+    const target = scrollTopAfterOlderPrepend({
+      pinned: false,
+      newScrollHeight: 500,
+      clientHeight: 100,
+      anchorHeight: 900,
+      anchorTop: 0,
+    });
+    expect(target).toBe(0);
+  });
+
+  it('still preserves the reader’s anchor in the normal case', () => {
+    // 400px of older content prepended: the message they were looking at
+    // must stay under their eyes, i.e. scrollTop moves down by exactly that.
+    expect(
+      scrollTopAfterOlderPrepend({
+        pinned: false,
+        newScrollHeight: 1400,
+        clientHeight: 500,
+        anchorHeight: 1000,
+        anchorTop: 120,
+      }),
+    ).toBe(520);
+  });
+
+  it('a pinned reader still lands exactly at the bottom', () => {
+    expect(
+      scrollTopAfterOlderPrepend({
+        pinned: true,
+        newScrollHeight: 1400,
+        clientHeight: 500,
+        anchorHeight: 1000,
+        anchorTop: 120,
+      }),
+    ).toBe(900);
   });
 });

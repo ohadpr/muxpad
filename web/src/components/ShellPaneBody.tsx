@@ -1,7 +1,9 @@
 import type { PaneSpec } from '@muxpad/shared';
 import { useEffect, useRef, useState } from 'react';
-import { isMixedContentUrl, probeUrl } from '../lib/face-switch';
+import { isPendingHarnessPick } from '../lib/agent-backend';
+import { type LivenessReason, isMixedContentUrl, probeUrlLive } from '../lib/face-switch';
 import { isSelfOriginUrl, setPaneFace, usePaneFace } from '../lib/pane-face';
+import { initialWebFaceHealth, stepWebFaceHealth, webDeadMessage } from '../lib/web-face-health';
 import { ChatPane } from './ChatPane';
 import { XtermPane } from './XtermPane';
 import './ShellPaneBody.css';
@@ -86,7 +88,14 @@ export function ShellPaneBody({
   // renders as an unexplained blank iframe. Probe while the web face is
   // showing; when nothing answers, swap in a notice with a way out. Re-probes
   // on an interval so restarting the server heals the view by itself.
-  const [webDead, setWebDead] = useState(false);
+  //
+  // The probe now goes through the SERVER (probeUrlLive): the page's own
+  // no-cors fetch can't read a status, so `tailscale serve` answering 502 for
+  // a dead backend read as healthy and this notice never fired. Policy —
+  // debounce, recovery remount, cadence — lives in web-face-health.ts.
+  const [webDead, setWebDead] = useState<{ reason: LivenessReason; status: number | null } | null>(
+    null,
+  );
   // Bumped to force the web iframe to reload (chrome's "Reload page" item /
   // PaneWebSwitch / PaneSurfaceSwitch dispatch `muxpad:reload-url-pane`). The
   // url-keyed iframe otherwise only reloads when the URL itself changes — so a
@@ -96,7 +105,7 @@ export function ShellPaneBody({
     const onReload = (e: Event) => {
       const d = (e as CustomEvent<{ paneId: string }>).detail;
       if (d?.paneId !== pane.id) return;
-      setWebDead(false); // give the iframe a fresh chance if it was showing dead
+      setWebDead(null); // give the iframe a fresh chance if it was showing dead
       setReloadNonce((n) => n + 1);
     };
     window.addEventListener('muxpad:reload-url-pane', onReload);
@@ -109,25 +118,32 @@ export function ShellPaneBody({
   const webBlocked = showWeb && !!url && isMixedContentUrl(url);
   useEffect(() => {
     if (!showWeb || !url || isSelfOriginUrl(url) || isMixedContentUrl(url)) {
-      setWebDead(false);
+      setWebDead(null);
       return;
     }
-    let alive = true;
+    let running = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // Per-URL health run. Reset on every (re)start so a URL change can't
+    // inherit the previous app's dead streak — or its recovery.
+    let health = initialWebFaceHealth;
     const check = async () => {
-      const ok = await probeUrl(url);
-      if (!alive) return;
-      setWebDead(!ok);
-      // Dead → retry every 3s so recovery is quick; alive → occasional
-      // re-check catches a server that dies while you look at it.
-      timer = setTimeout(() => void check(), ok ? 15000 : 3000);
+      const result = await probeUrlLive(pane.id, url);
+      if (!running) return;
+      const next = stepWebFaceHealth(health, result);
+      health = next.state;
+      setWebDead(next.deadReason ? { reason: next.deadReason, status: next.deadStatus } : null);
+      // The iframe is keyed by URL, which never changed while the backend was
+      // down — without this bump a recovered app keeps showing the proxy's
+      // stale 502 page.
+      if (next.reload) setReloadNonce((n) => n + 1);
+      timer = setTimeout(() => void check(), next.nextDelayMs);
     };
     void check();
     return () => {
-      alive = false;
+      running = false;
       clearTimeout(timer);
     };
-  }, [showWeb, url]);
+  }, [showWeb, url, pane.id]);
 
   return (
     <div className="shell-pane-body">
@@ -166,7 +182,7 @@ export function ShellPaneBody({
             </div>
           ) : webDead ? (
             <div className="shell-pane-web-blocked">
-              <div>Nothing is responding at {url} — the server may have stopped.</div>
+              <div>{webDeadMessage(webDead.reason, webDead.status, url)}</div>
               <button
                 type="button"
                 className="shell-pane-web-back"
@@ -205,9 +221,23 @@ export function ShellPaneBody({
         <div className="shell-pane-face" hidden={!showChat}>
           <ChatPane
             paneId={pane.id}
-            active={showChat}
+            // REAL visibility, not merely "the chat face is selected". The
+            // keep-alive stack hides this pane with display:none at four
+            // layers (app shell → workspace → tab → pane slot) without
+            // unmounting, and `showChat` alone stays true through all of
+            // them — so a hidden chat believed it was on screen. It then ran
+            // its follow-bottom effect against a zero-height element,
+            // stamped a bogus scroll target, and had nothing re-anchor it on
+            // return: the reader came back parked N messages up. XtermPane
+            // has always received the composed signal (`paneActive && …`);
+            // ChatPane was the one face that didn't.
+            //
+            // Knock-on, deliberate: a hidden chat no longer marks itself
+            // seen on turn-done, so background chats can finally show the
+            // unread bold — which is what that flag was for.
+            active={paneActive && showChat}
             agentNative={pane.startup_cmd?.startsWith('muxpad agent') ?? false}
-            pendingPick={/(^|\s)--pick(\s|$)/.test(pane.startup_cmd ?? '')}
+            pendingPick={isPendingHarnessPick(pane.startup_cmd)}
           />
         </div>
       ) : null}
