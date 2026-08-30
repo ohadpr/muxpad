@@ -1,7 +1,8 @@
 import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import type { LayoutNode } from '@muxpad/shared';
+import type { AgentMode, LayoutNode, PaneSpec } from '@muxpad/shared';
 import {
+  AgentModeSchema,
   appendLeafToLayout,
   removeLeafFromLayout,
   spliceLayoutAtTarget,
@@ -10,19 +11,111 @@ import {
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { ceoLocation } from '../ceo.js';
+import type { AgentBridge } from '../agent-bridge.js';
+import { applyModeToStartupCmd } from '../agent-modes.js';
+import { agentPaneHasMessages } from '../chat/has-messages.js';
 import type { EventBus } from '../events.js';
 import { queuePaneKill } from '../pane-reaper.js';
 import { agentCwd, hasProjectContext } from '../project-root.js';
-import { type PtydCache, decoratePane } from '../ptyd-cache.js';
+import { type PtydCache, decoratePane, decorateTab } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { randomWorkspaceName } from '../random-name.js';
 import { safeCwd } from '../safe-cwd.js';
 import { AgentQueueStore } from '../store/AgentQueueStore.js';
+import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
+import { WorkspaceStore } from '../store/WorkspaceStore.js';
+import type { TabActivity } from '../tab-activity.js';
+import { classifyUrlHost, probeUrlHealth } from '../url-health.js';
 
 const defaultShell = process.env.SHELL ?? '/bin/zsh';
+
+/**
+ * Same RESOURCE, allowing only for the cosmetic drift between how a URL was
+ * recorded and how the client asks about it (a trailing slash, a default port
+ * spelled out, host case).
+ *
+ * The query string IS part of the comparison. It used to be ignored "because it
+ * doesn't change which server answers" — true for liveness, false for safety:
+ * that let a declared `…/admin` authorize a probe of `…/admin?delete=true`,
+ * turning the health endpoint into a one-request side-effect trigger. The
+ * fragment is not compared because it is never sent on the wire.
+ *
+ * Falls back to exact string equality for anything unparseable.
+ */
+function sameUrl(a: string | null | undefined, b: string): boolean {
+  if (!a) return false;
+  if (a === b) return true;
+  try {
+    const x = new URL(a);
+    const y = new URL(b);
+    const path = (u: URL) => (u.pathname.endsWith('/') ? u.pathname.slice(0, -1) : u.pathname);
+    return x.origin === y.origin && path(x) === path(y) && x.search === y.search;
+  } catch {
+    return false;
+  }
+}
+
+/** Scheme + host + port, or null when unparseable. Case/default-port
+ *  normalization comes free from `URL.origin`. */
+function originOf(u: string | null | undefined): string | null {
+  if (!u) return null;
+  try {
+    return new URL(u).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * May this pane be converted into something else (a different harness, a
+ * plain terminal, a web view)? Returns null when it may, or the human reason
+ * it may not.
+ *
+ * THREE conditions, all enforced here rather than in the UI:
+ *
+ *  1. It must be an AGENT pane. The gate used to be the exact literal
+ *     `muxpad agent --pick`, because conversion existed only for the old
+ *     "What do you want to open?" chooser screen. That screen is gone — a new
+ *     tab opens straight into the house chat — so requiring `--pick` made the
+ *     "open instead: …" strip 409 on every click. Any `muxpad agent` pane
+ *     qualifies now; a terminal someone is working in still does not.
+ *
+ *  2. It must have NO MESSAGES. Conversion kills the runner and respawns, so
+ *     it is destructive to a real conversation. We do NOT delegate this to
+ *     the client: the strip only renders on a chat that LOOKS empty, but
+ *     history replays asynchronously, so an existing conversation reads as
+ *     empty for a beat on every reconnect. A click in that window must not be
+ *     able to destroy a session, and only the server can promise that.
+ *
+ *  3. NO TURN MAY BE IN FLIGHT. Condition 2 looks at the transcript, which the
+ *     harness writes only as the turn produces records — so between "user hits
+ *     send on their phone" and "the first user record is on disk" the chat is
+ *     message-free on paper while a real turn is running. A conversion landing
+ *     in that window (the same chat still open on the laptop, showing the empty
+ *     state and its strip) kills the runner mid-turn. `turnActive` is the live
+ *     registry's answer and `agent_sessions.status` is its persisted mirror;
+ *     either saying "running" is enough to refuse.
+ */
+function conversionRefusal(
+  db: Database.Database,
+  p: PaneSpec,
+  bridge?: AgentBridge | undefined,
+): string | null {
+  if (p.kind !== 'shell' || !(p.startup_cmd?.startsWith('muxpad agent') ?? false)) {
+    return 'only an agent chat can be converted';
+  }
+  if (agentPaneHasMessages(db, p.id)) {
+    return 'this chat already has messages — open a new tab instead';
+  }
+  const live = bridge?.turnActive(p.id) === true;
+  const persisted = new AgentSessionStore(db).getByPane(p.id)?.status === 'running';
+  if (live || persisted) {
+    return 'this chat is mid-turn — wait for it to finish, or open a new tab';
+  }
+  return null;
+}
 
 // A pane URL lands in an <iframe src> with `allow-scripts allow-same-origin`.
 // z.string().url() alone accepts `javascript:`/`data:`/`file:` schemes, so pin
@@ -98,6 +191,12 @@ export function panesTabScopedRoutes(deps: {
         inherit_cwd_from: z.string().optional(),
         // Which face the pane opens on — agent panes land directly on chat.
         face: z.enum(['terminal', 'web', 'chat']).optional(),
+        // Behavior overlay for an agent pane: 'do' = the house chat (carries
+        // the <dataDir>/do-mode.md contract), 'deep' = a raw session of the
+        // harness with capabilities injection only. Internal plumbing — the
+        // UI never names these; it offers "the house chat" vs "Claude /
+        // Codex / Cursor".
+        mode: AgentModeSchema.optional(),
         // Layout placement controls. Off by default — the UI patches the
         // tab's layout in a separate request after creating the pane. When
         // `append_to_layout` is true the server places the new pane atomically:
@@ -144,7 +243,7 @@ export function panesTabScopedRoutes(deps: {
         );
       }
       const pane = panes.create({ tab_id: tabId, kind: 'url', url: body.url });
-      deps.events.emit({ type: 'pane.added', tab_id: tabId, pane });
+      deps.events.emit({ type: 'pane.added', tab_id: tabId, pane: decoratePane(deps.cache, pane) });
       if (body.append_to_layout) {
         const nextLayout = appendPaneToLayout(
           t.layout,
@@ -154,7 +253,8 @@ export function panesTabScopedRoutes(deps: {
           body.position ?? 'after',
         );
         const updated = tabs.update(tabId, { layout: nextLayout });
-        if (updated) deps.events.emit({ type: 'tab.updated', tab: updated });
+        if (updated)
+          deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, updated) });
       }
       return c.json(pane, 201);
     }
@@ -196,8 +296,9 @@ export function panesTabScopedRoutes(deps: {
       startup_cmd: body.startup_cmd ?? null,
       env: body.env ?? null,
       ...(body.face ? { face: body.face } : {}),
+      ...(isAgent && body.mode ? { mode: body.mode } : {}),
     });
-    deps.events.emit({ type: 'pane.added', tab_id: tabId, pane });
+    deps.events.emit({ type: 'pane.added', tab_id: tabId, pane: decoratePane(deps.cache, pane) });
     if (body.append_to_layout) {
       const nextLayout = appendPaneToLayout(
         t.layout,
@@ -207,7 +308,8 @@ export function panesTabScopedRoutes(deps: {
         body.position ?? 'after',
       );
       const updated = tabs.update(tabId, { layout: nextLayout });
-      if (updated) deps.events.emit({ type: 'tab.updated', tab: updated });
+      if (updated)
+        deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, updated) });
     }
     // Eager spawn: otherwise the PTY only starts when the frontend mounts
     // the XtermPane (i.e. when the user navigates to its tab). A CLI-created
@@ -238,10 +340,18 @@ export function panesScopedRoutes(deps: {
   ptyd: PtydClient;
   cache: PtydCache;
   events: EventBus;
+  /** Late-bound relay into the live runner registry — used to tell a running
+   *  agent that its mode changed. Optional: without it a mode PATCH still
+   *  persists and still takes full effect on the next respawn. */
+  agentBridge?: AgentBridge;
+  /** Only used to drop a deleted/moved pane's activity memo. */
+  tabActivity?: TabActivity;
 }): Hono {
   const app = new Hono();
   const panes = new PaneStore(deps.db);
   const tabs = new TabStore(deps.db);
+  // Only for validating a `new_tab` move's destination workspace (below).
+  const workspaces = new WorkspaceStore(deps.db);
 
   // Flat enumeration: every pane across all workspaces, decorated, each row
   // joined with its tab/workspace id+name. A supervisor's "org chart" view —
@@ -304,7 +414,7 @@ export function panesScopedRoutes(deps: {
       isRunning = false;
     }
     // Decorated (title/fg/attention/busy/app_urls) like the flat list — the
-    // web's pinned CEO row seeds its badges from this single-pane GET.
+    // web's pinned rows seed their badges from this single-pane GET.
     return c.json({ ...decoratePane(deps.cache, p), isRunning });
   });
 
@@ -326,6 +436,9 @@ export function panesScopedRoutes(deps: {
         // Same iframe sink as `url`, so same http(s) gate — but '' / null are
         // the legitimate "clear the web face" signals and must pass through.
         face_url: httpUrl.or(z.literal('')).nullable().optional(),
+        // Agent behavior mode (⚡ do / 🧠 deep). See the handler below for the
+        // mid-session semantics — deliberately NOT a respawn.
+        mode: AgentModeSchema.optional(),
       })
       // safeParse (not parse): a rejected url/face_url must 400, not 500.
       .safeParse(await c.req.json().catch(() => ({})));
@@ -338,25 +451,39 @@ export function panesScopedRoutes(deps: {
       );
     const patch = body.data;
 
-    // Rename is orthogonal to the kind/url mutations below and never touches
-    // ptyd, so apply it up front regardless of which branch runs next.
-    if (patch.name !== undefined) panes.setName(id, patch.name);
-    // Face flips likewise never touch ptyd — the terminal keeps running
-    // underneath whatever face is showing.
-    if (patch.face !== undefined) {
+    // ── VALIDATE EVERYTHING FIRST, THEN MUTATE ──────────────────────────────
+    // This handler used to interleave the two: `{name:'renamed', mode:'do'}`
+    // against a non-agent pane persisted the rename and THEN returned 400, so
+    // the caller saw a failure while half its patch had landed and no
+    // pane.updated was emitted to tell anyone. A PATCH is one edit — it applies
+    // whole or not at all. Every semantic check runs here, before the first
+    // write; the writes themselves go in one transaction below.
+    const isAgentPane = p.face === 'chat' || (p.startup_cmd?.startsWith('muxpad agent') ?? false);
+    const modeChanged = patch.mode !== undefined && patch.mode !== p.mode;
+    if (modeChanged && !isAgentPane) {
+      return c.json(
+        { error: { code: 'bad_request', message: 'mode applies to agent panes only' } },
+        400,
+      );
+    }
+    if (patch.face === 'chat' && !p.startup_cmd?.startsWith('muxpad agent')) {
       // Chat face is agent-pane-only — see the create-path guard above.
-      if (patch.face === 'chat' && !p.startup_cmd?.startsWith('muxpad agent')) {
-        return c.json(
-          { error: { code: 'bad_request', message: 'the chat face requires an agent pane' } },
-          400,
-        );
-      }
-      panes.setFace(id, patch.face, patch.face_url);
-    } else if (patch.face_url !== undefined) {
-      panes.setFace(id, p.face, patch.face_url);
+      return c.json(
+        { error: { code: 'bad_request', message: 'the chat face requires an agent pane' } },
+        400,
+      );
+    }
+    const kindFlip = patch.kind !== undefined && patch.kind !== p.kind;
+    if (!kindFlip && patch.url !== undefined && p.kind !== 'url') {
+      return c.json(
+        { error: { code: 'bad_request', message: 'url can only be set on kind=url panes' } },
+        400,
+      );
     }
 
-    if (patch.kind && patch.kind !== p.kind) {
+    // ── ptyd side effects (async — a better-sqlite3 transaction is strictly
+    //    synchronous, so nothing that awaits may sit inside the commit below).
+    if (kindFlip) {
       // Kind flip: close ptyd-attached clients FIRST (with code 4001) so
       // they don't see the PTY-exit close (code 1000) that killPane would
       // otherwise race ahead and emit. Then kill the PTY on ptyd. Lossy
@@ -378,33 +505,63 @@ export function panesScopedRoutes(deps: {
         queuePaneKill(deps.db, id);
       }
       deps.cache.forget(id);
-      if (patch.kind === 'url') {
-        panes.updateKind(id, { kind: 'url', url: patch.url ?? null });
-      } else {
-        // Default shell pane: pick the host's $SHELL + $HOME so the new
-        // pane is usable on next WS attach. Lazy-spawn happens on connect.
-        panes.updateKind(id, {
-          kind: 'shell',
-          shell: process.env.SHELL ?? '/bin/zsh',
-          cwd: process.env.HOME ?? '/',
-        });
-      }
-    } else if (patch.url !== undefined) {
-      if (p.kind !== 'url') {
-        return c.json(
-          { error: { code: 'bad_request', message: 'url can only be set on kind=url panes' } },
-          400,
-        );
-      }
-      panes.updateUrl(id, patch.url ?? '');
     }
+
+    // ── COMMIT: all-or-nothing.
+    //
+    // MODE, MID-SESSION SEMANTICS, stated honestly (see agent-modes.ts for the
+    // harness-by-harness evidence): NO harness lets us rewrite a live
+    // session's system prompt. So this endpoint does exactly two things and
+    // does NOT respawn the pane (that would kill the conversation, background
+    // subagents and scheduled wakeups — far too violent for a toggle):
+    //   1. persists the mode and rewrites `startup_cmd`, so the very next
+    //      respawn boots with the real system-prompt-level overlay; and
+    //   2. relays a `mode` frame to the live runner (after the commit), which
+    //      prepends ONE delimited <muxpad-mode> note to the next user message.
+    // The live turn therefore gets an in-conversation instruction, not a new
+    // system prompt — weaker, and it can drift over a long session. That's
+    // the true behavior, so it's what we implement and document.
+    deps.db.transaction(() => {
+      if (patch.name !== undefined) panes.setName(id, patch.name);
+      if (modeChanged) {
+        const nextMode: AgentMode = patch.mode as AgentMode;
+        panes.setMode(id, nextMode);
+        const nextCmd = applyModeToStartupCmd(p.startup_cmd, nextMode);
+        if (nextCmd !== p.startup_cmd) panes.setStartupCmd(id, nextCmd);
+      }
+      // Face flips never touch ptyd — the terminal keeps running underneath
+      // whatever face is showing.
+      if (patch.face !== undefined) panes.setFace(id, patch.face, patch.face_url);
+      else if (patch.face_url !== undefined) panes.setFace(id, p.face, patch.face_url);
+      if (kindFlip) {
+        if (patch.kind === 'url') {
+          panes.updateKind(id, { kind: 'url', url: patch.url ?? null });
+        } else {
+          // Default shell pane: pick the host's $SHELL + $HOME so the new
+          // pane is usable on next WS attach. Lazy-spawn happens on connect.
+          panes.updateKind(id, {
+            kind: 'shell',
+            shell: process.env.SHELL ?? '/bin/zsh',
+            cwd: process.env.HOME ?? '/',
+          });
+        }
+      } else if (patch.url !== undefined) {
+        panes.updateUrl(id, patch.url ?? '');
+      }
+    })();
+    // Live relay only after the row is committed, so the runner is never told
+    // about a mode the DB rolled back.
+    if (modeChanged) deps.agentBridge?.setMode(id, patch.mode as AgentMode);
+
     const refreshed = panes.getById(id);
     if (refreshed) {
-      const decorated = {
-        ...refreshed,
-        attention: deps.cache.getAttention(refreshed.id),
-        app_urls: deps.cache.getAppUrls(refreshed.id),
-      };
+      // Every pane.updated goes through decoratePane — no route hand-builds
+      // the payload. A partial event here used to blank `busy` on the client
+      // (TabView coalesces from the previous row, and an absent field reads as
+      // undefined), so a face switch / rename mid-turn killed the spinner until
+      // the next busy EDGE. It also poisoned the sidebar's (busy,attention)
+      // dedup signature, swallowing the real busy→false edge afterwards.
+      const decorated = decoratePane(deps.cache, refreshed);
       deps.events.emit({ type: 'pane.updated', tab_id: refreshed.tab_id, pane: decorated });
       return c.json(decorated);
     }
@@ -415,13 +572,6 @@ export function panesScopedRoutes(deps: {
     const id = c.req.param('id');
     const p = panes.getById(id);
     if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
-    // The CEO pane is a server-owned singleton — it cannot be deleted
-    // (respawn stays allowed). See ceo.ts.
-    if (ceoLocation(deps.db)?.paneId === id)
-      return c.json(
-        { error: { code: 'conflict', message: 'the CEO pane cannot be deleted' } },
-        409,
-      );
     // Capture tab_id BEFORE the delete so the event still carries it.
     const tabId = p.tab_id;
     // ptyd holds runtime state; SQLite is the source of truth. If ptyd
@@ -435,8 +585,14 @@ export function panesScopedRoutes(deps: {
       queuePaneKill(deps.db, id);
       // (the runtime, if any, would otherwise run forever with no row.)
     }
-    deps.cache.forget(id);
+    // Row FIRST, cache second. `cache.forget` fires 'paneRemoved', whose
+    // subscriber emits a decorated `pane.updated` for any pane whose row still
+    // exists — so forgetting before the delete announced an update for a pane
+    // we were about to remove. Deleting first makes that lookup miss, and
+    // `pane.removed` below is the only event this path produces.
     panes.delete(id);
+    deps.cache.forget(id);
+    deps.tabActivity?.forgetPane(id);
     deps.events.emit({ type: 'pane.removed', tab_id: tabId, pane_id: id });
     return c.body(null, 204);
   });
@@ -492,6 +648,100 @@ export function panesScopedRoutes(deps: {
     return c.body(null, 204);
   });
 
+  /**
+   * Real health of a pane's web-face URL, probed FROM THE SERVER.
+   *
+   * The browser's own probe (`fetch(mode:'no-cors')`) can only tell "something
+   * accepted the connection" from "nothing did" — an opaque response has no
+   * readable status. Behind `tailscale serve` that is the wrong question: the
+   * public port stays open when the local backend dies and answers 502, so the
+   * browser sees "alive" and the user gets a silent blank iframe. The server
+   * shares a machine with the app, so it can read the status and say what is
+   * actually true. See url-health.ts.
+   *
+   * SSRF GUARD AND ITS RESIDUAL TRUST MODEL
+   * ---------------------------------------
+   * This endpoint makes the server issue a GET, so it must not become a blind
+   * proxy. The allowlist has TWO sources, and they are trusted differently:
+   *
+   *  A. DECLARED — the pane's own DB-persisted `url` / `face_url`. Someone had
+   *     to WRITE these. Match must be exact: origin + path + QUERY (sameUrl).
+   *     Query used to be ignored, which let a declared `…/admin` authorize
+   *     `…/admin?delete=true` — a probe is a real request, so an allowlist that
+   *     ignores the query allows side effects. The exact URL is probed.
+   *
+   *  B. DETECTED — app URLs muxpad scraped out of the pane's OUTPUT. No write
+   *     is needed to get a string in there: a pane prints whatever it prints
+   *     (an agent `cat`s a file, a `curl` echoes a hostile page), and the
+   *     scanner captures the full path AND query (runtime/pty-scanner.ts). So
+   *     these authorize by ORIGIN ONLY, and we probe `<origin>/` — never the
+   *     caller's path. Liveness is a property of the SERVER, not of a path;
+   *     "is anything answering on this origin, and is it a 502 from a proxy
+   *     whose backend died" is exactly the question, and the root answers it.
+   *     A planted `http://127.0.0.1:2019/config/apps/...` therefore buys a GET
+   *     of `http://127.0.0.1:2019/` and nothing more.
+   *
+   * On top of both:
+   *
+   *  C. Link-local and cloud-metadata targets (169.254.0.0/16 — including
+   *     169.254.169.254 — fe80::/10, metadata.google.internal, …) are refused
+   *     unconditionally. No muxpad pane legitimately faces one.
+   *  D. A PRIVATE target (RFC1918, CGNAT, .local/.internal, ULA, bare intranet
+   *     names) needs a DECLARED match — detection cannot authorize it. Loopback
+   *     and public origins may come from detection: those are the two shapes an
+   *     app URL really takes. NOTE loopback detected URLs must keep working and
+   *     so must PUBLIC ones — `toReachableUrl` rewrites every localhost app URL
+   *     to `https://<tailnet-name>:port` before it reaches the cache, so a
+   *     loopback-only rule silently 403'd every real install and put the web
+   *     face back on the browser's blind probe, i.e. back on the exact 502 bug
+   *     this endpoint exists to fix.
+   *
+   * What this does NOT claim: the API has no auth (tailnet-only is the access
+   * boundary, config.ts), and anyone who can PATCH a pane can also CREATE a
+   * shell pane that runs arbitrary commands — so against a caller who can
+   * write, an SSRF guard is not a boundary and pretending otherwise would be
+   * theatre. What these rules do contain is the READ-ONLY drive-by: a cross-
+   * origin page in the user's browser can emit a bare GET (no preflight) but
+   * cannot first perform the write that declares a target, cannot choose the
+   * path for a scraped one, and cannot read the response. Hostnames are not
+   * resolved, so a public name pointing at a private address is classified
+   * 'public'; it still has to be declared or detected.
+   */
+  app.get('/:id/url-health', async (c) => {
+    const id = c.req.param('id');
+    const p = panes.getById(id);
+    if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
+    const requested = c.req.query('url') ?? p.face_url ?? p.url;
+    if (!requested) {
+      return c.json({ error: { code: 'bad_request', message: 'pane has no url to probe' } }, 400);
+    }
+    const hostClass = classifyUrlHost(requested);
+    if (hostClass === null || hostClass === 'link_local') {
+      return c.json(
+        { error: { code: 'forbidden', message: 'refusing to probe this address' } },
+        403,
+      );
+    }
+    // (A) declared → probe exactly what was asked for.
+    let target: string | null = [p.url, p.face_url].some((k) => sameUrl(k, requested))
+      ? requested
+      : null;
+    // (B) detected → origin match, origin-root probe. Not for private targets (D).
+    if (target === null && hostClass !== 'private') {
+      const origin = originOf(requested);
+      if (origin && deps.cache.getAppUrls(id).some((a) => originOf(a.url) === origin)) {
+        target = `${origin}/`;
+      }
+    }
+    if (target === null) {
+      return c.json(
+        { error: { code: 'forbidden', message: 'url is not one of this pane’s urls' } },
+        403,
+      );
+    }
+    return c.json(await probeUrlHealth(target));
+  });
+
   // Choose the agent harness for a pending ('muxpad agent --pick') pane. The
   // harness picker lives in the chat page; picking one lands here, which rewrites
   // the pane's startup_cmd to the chosen backend and respawns it so the real
@@ -500,16 +750,21 @@ export function panesScopedRoutes(deps: {
     const id = c.req.param('id');
     const p = panes.getById(id);
     if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
-    // Only a PENDING agent pane ('muxpad agent --pick') can be assigned a
-    // harness — otherwise this could nuke a running terminal or restart an
-    // already-live agent under a fresh session.
-    if (p.kind !== 'shell' || p.startup_cmd !== 'muxpad agent --pick')
-      return c.json(
-        { error: { code: 'conflict', message: 'pane is not awaiting a harness choice' } },
-        409,
-      );
+    // Any EMPTY agent chat can be (re)assigned a harness — see
+    // conversionRefusal for the two conditions and why the zero-message one
+    // is enforced server-side rather than trusted from the UI.
+    const refusal = conversionRefusal(deps.db, p, deps.agentBridge);
+    if (refusal) return c.json({ error: { code: 'conflict', message: refusal } }, 409);
     const body = z
-      .object({ backend: z.enum(['claude', 'codex', 'cursor']) })
+      .object({
+        backend: z.enum(['claude', 'codex', 'cursor']),
+        // Which behavior overlay the new session runs. Omitted = keep the
+        // pane's current one (the legacy harness-picker path, where the pane
+        // was created with its mode already decided). The "open a RAW
+        // session instead" affordance passes 'deep' explicitly: a raw
+        // harness is exactly the harness, with no house contract on top.
+        mode: AgentModeSchema.optional(),
+      })
       .safeParse(await c.req.json().catch(() => ({})));
     if (!body.success)
       return c.json(
@@ -517,10 +772,17 @@ export function panesScopedRoutes(deps: {
         400,
       );
     const backend = body.data.backend;
-    const startupCmd = `muxpad agent${backend === 'claude' ? '' : ` --backend ${backend}`}`;
-    panes.setStartupCmd(id, startupCmd);
-    panes.setFace(id, 'chat');
+    const nextMode: AgentMode = body.data.mode ?? p.mode;
+    const base = `muxpad agent${backend === 'claude' ? '' : ` --backend ${backend}`}`;
+    const startupCmd = applyModeToStartupCmd(base, nextMode) ?? base;
     const workspaceId = tabs.getWorkspaceId(p.tab_id);
+    // SPAWN FIRST, PERSIST AFTER. The conversion used to be written to the DB
+    // before ensurePane, so a ptyd outage returned 503 with the row ALREADY
+    // converted and no `pane.updated` emitted: the client stayed on the old UI,
+    // the DB described something else, and retrying 409'd because the pane no
+    // longer matched the gate. Now a failed spawn leaves the pane exactly as it
+    // was — the sweep respawns it from its unchanged row — and the conversion
+    // only becomes true once the new runtime exists.
     try {
       await deps.ptyd.killPane(id);
     } catch {
@@ -548,6 +810,11 @@ export function panesScopedRoutes(deps: {
         503,
       );
     }
+    deps.db.transaction(() => {
+      if (nextMode !== p.mode) panes.setMode(id, nextMode);
+      panes.setStartupCmd(id, startupCmd);
+      panes.setFace(id, 'chat');
+    })();
     const refreshed = panes.getById(id);
     if (refreshed)
       deps.events.emit({
@@ -558,22 +825,20 @@ export function panesScopedRoutes(deps: {
     return c.body(null, 204);
   });
 
-  // Convert a pending harness-pick pane into a plain terminal. Same gate as
-  // agent-backend: only `--pick` panes, so we never wipe a live agent or
-  // an already-running shell. Clears startup_cmd, flips face to terminal,
+  // Convert an EMPTY agent chat into a plain terminal. Same gate as
+  // agent-backend (conversionRefusal), so we never wipe a conversation or a
+  // shell someone is working in. Clears startup_cmd, flips face to terminal,
   // respawns so the user lands on a normal PTY.
   app.post('/:id/as-terminal', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
     if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
-    if (p.kind !== 'shell' || p.startup_cmd !== 'muxpad agent --pick')
-      return c.json(
-        { error: { code: 'conflict', message: 'pane is not awaiting a harness choice' } },
-        409,
-      );
-    panes.setStartupCmd(id, null);
-    panes.setFace(id, 'terminal');
+    const refusal = conversionRefusal(deps.db, p, deps.agentBridge);
+    if (refusal) return c.json({ error: { code: 'conflict', message: refusal } }, 409);
     const workspaceId = tabs.getWorkspaceId(p.tab_id);
+    // Spawn first, persist after — see the note on /agent-backend. A 503 here
+    // must leave the pane an agent chat, not a half-converted row the client
+    // can't recover from without a reload.
     try {
       await deps.ptyd.killPane(id);
     } catch {
@@ -601,6 +866,10 @@ export function panesScopedRoutes(deps: {
         503,
       );
     }
+    deps.db.transaction(() => {
+      panes.setStartupCmd(id, null);
+      panes.setFace(id, 'terminal');
+    })();
     const refreshed = panes.getById(id);
     if (refreshed)
       deps.events.emit({
@@ -611,18 +880,15 @@ export function panesScopedRoutes(deps: {
     return c.body(null, 204);
   });
 
-  // Convert a pending harness-pick pane into a blank URL pane. UrlPaneTitle
-  // auto-focuses an empty URL field when url is null — option (2) from the
-  // picker design. Same --pick gate as as-terminal / agent-backend.
+  // Convert an EMPTY agent chat into a blank URL pane. UrlPaneTitle
+  // auto-focuses an empty URL field when url is null. Same gate as
+  // as-terminal / agent-backend (conversionRefusal).
   app.post('/:id/as-web', async (c) => {
     const id = c.req.param('id');
     const p = panes.getById(id);
     if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
-    if (p.kind !== 'shell' || p.startup_cmd !== 'muxpad agent --pick')
-      return c.json(
-        { error: { code: 'conflict', message: 'pane is not awaiting a harness choice' } },
-        409,
-      );
+    const refusal = conversionRefusal(deps.db, p, deps.agentBridge);
+    if (refusal) return c.json({ error: { code: 'conflict', message: refusal } }, 409);
     try {
       await deps.ptyd.closePtyClients(id);
     } catch {
@@ -681,7 +947,13 @@ export function panesScopedRoutes(deps: {
       // semantically wrong — a new folder is a new project. Drop --resume/--pick,
       // keep the chosen --backend; the runner re-hellos a new sid and self-heals.
       const backendMatch = p.startup_cmd?.match(/--backend (claude|codex|cursor)/);
-      startupCmd = `muxpad agent${backendMatch ? ` --backend ${backendMatch[1]}` : ''}`;
+      // The pane's MODE survives the folder switch — it's a property of how
+      // you want this pane to behave, not of the session being restarted.
+      startupCmd =
+        applyModeToStartupCmd(
+          `muxpad agent${backendMatch ? ` --backend ${backendMatch[1]}` : ''}`,
+          p.mode,
+        ) ?? `muxpad agent${backendMatch ? ` --backend ${backendMatch[1]}` : ''}`;
       panes.setStartupCmd(id, startupCmd);
       // Switching folders starts a fresh session in a NEW project context —
       // messages queued against the old folder must not drain into it. Drop
@@ -748,6 +1020,16 @@ export function panesScopedRoutes(deps: {
           pane: decoratePane(deps.cache, refreshed),
         });
     }
+    // D12: `unread` was UNCLEARABLE FROM MOBILE. Mobile takes this surgical
+    // per-pane route (so other panes can keep flagging in the pane list), and
+    // it never touched the TAB's own manual unread mark — so a "Mark as unread"
+    // from the sheet's ⋯ menu persisted until you next opened the tab on a
+    // desktop. Clear it once nothing in the tab is unread any more, which is
+    // exactly the moment the tab-level bold stops meaning anything.
+    if (tabs.isUnread(pane.tab_id)) {
+      const stillUnread = panes.listByTab(pane.tab_id).some((p) => p.unread);
+      if (!stillUnread) tabs.setUnread(pane.tab_id, false);
+    }
     try {
       await deps.ptyd.markSeen(id);
     } catch {
@@ -756,8 +1038,10 @@ export function panesScopedRoutes(deps: {
     return c.body(null, 204);
   });
 
-  // Move a pane to a different tab in the SAME workspace. Either to an
-  // existing tab (`to_tab_id`) or a freshly-created one (`new_tab: true`).
+  // Move a pane to a different tab. Either to an existing tab (`to_tab_id`,
+  // any workspace) or a freshly-created one (`new_tab: true`, in the source's
+  // workspace unless `to_workspace_id` names another — that's the sidebar's
+  // "drag a pane onto a workspace header" gesture).
   //
   // The pane's runtime/PTY is keyed by pane id and survives untouched — only
   // SQLite (the pane's tab_id) and the two tabs' layout trees change. The
@@ -776,6 +1060,8 @@ export function panesScopedRoutes(deps: {
       .object({
         to_tab_id: z.string().optional(),
         new_tab: z.boolean().optional(),
+        /** Only meaningful with `new_tab`: which workspace the new tab lands in. */
+        to_workspace_id: z.string().optional(),
       })
       .parse(await c.req.json().catch(() => ({})));
 
@@ -785,6 +1071,23 @@ export function panesScopedRoutes(deps: {
     const workspaceId = tabs.getWorkspaceId(pane.tab_id);
     if (!workspaceId)
       return c.json({ error: { code: 'not_found', message: 'source workspace not found' } }, 404);
+    // Where a `new_tab` lands. Defaults to the source's workspace (the old
+    // behaviour); an explicit id must exist and be a real, listed workspace,
+    // or the tab would be created somewhere nothing shows it. Only consulted
+    // on the new_tab path — a `to_tab_id` move already names its destination,
+    // and rejecting it over a stale companion field would refuse a legal move.
+    let destWorkspaceId = workspaceId;
+    if (body.new_tab && body.to_workspace_id && body.to_workspace_id !== workspaceId) {
+      const destWs = workspaces.getById(body.to_workspace_id);
+      // Hidden workspaces are plumbing (a system container) — no user surface
+      // lists them, so a tab parked there would simply disappear.
+      if (!destWs || destWs.hidden)
+        return c.json(
+          { error: { code: 'not_found', message: 'destination workspace not found' } },
+          404,
+        );
+      destWorkspaceId = destWs.id;
+    }
 
     const decorate = (paneId: string) => {
       const p = panes.getById(paneId);
@@ -798,7 +1101,15 @@ export function panesScopedRoutes(deps: {
     // identity by "extracting" its only pane. (Moving a sole pane to an
     // EXISTING tab is still allowed — that's the normal "last pane left, tab
     // closes" cascade, not identity churn.)
-    if (body.new_tab && panes.listByTab(pane.tab_id).length <= 1) {
+    //
+    // Landing in ANOTHER workspace is not churn, though: that's a genuine
+    // relocation with a visible result, so a sole pane may still make the
+    // trip.
+    if (
+      body.new_tab &&
+      destWorkspaceId === workspaceId &&
+      panes.listByTab(pane.tab_id).length <= 1
+    ) {
       return c.json({
         pane: decorate(id),
         from_tab_id: sourceTab.id,
@@ -807,9 +1118,12 @@ export function panesScopedRoutes(deps: {
       });
     }
 
-    // Resolve / create the destination tab.
-    let destTab: typeof sourceTab;
-    let createdNewTab = false;
+    // Resolve the destination tab. On the `new_tab` path we only PREPARE the
+    // seed here; the row itself is created inside the transaction below, so a
+    // failure part-way through the move can't leave an orphan tab behind.
+    let destTab: typeof sourceTab | null = null;
+    let newTabSeed: { name: string; icon?: string } | null = null;
+    const createdNewTab = body.new_tab === true;
     if (body.new_tab) {
       // Seed the new tab from the pane's live title / foreground command, so
       // an extracted pane lands in a tab that reads like its contents instead
@@ -826,14 +1140,10 @@ export function panesScopedRoutes(deps: {
         .replace(/[\p{Cc}\p{Co}]/gu, '')
         .trim();
       const { icon: leadingIcon, rest } = splitLeadingEmoji(rawTitle);
-      const seedName = rest.trim() || randomWorkspaceName();
-      destTab = tabs.create({
-        name: seedName,
-        layout: id,
-        workspace_id: workspaceId,
+      newTabSeed = {
+        name: rest.trim() || randomWorkspaceName(),
         ...(leadingIcon ? { icon: leadingIcon } : {}),
-      });
-      createdNewTab = true;
+      };
     } else {
       if (!body.to_tab_id)
         return c.json(
@@ -851,7 +1161,7 @@ export function panesScopedRoutes(deps: {
 
     // No-op move (same tab). For new_tab this can't happen; for an explicit
     // to_tab_id it can, so short-circuit before mutating anything.
-    if (destTab.id === sourceTab.id) {
+    if (destTab && destTab.id === sourceTab.id) {
       return c.json({
         pane: decorate(id),
         from_tab_id: sourceTab.id,
@@ -860,16 +1170,51 @@ export function panesScopedRoutes(deps: {
       });
     }
 
-    // Reparent the pane row, then fix up both layout trees.
-    panes.setTab(id, destTab.id);
-
-    let finalDest = destTab;
-    if (!createdNewTab) {
-      finalDest = tabs.update(destTab.id, { layout: appendLeafToLayout(destTab.layout, id) });
-    }
-
+    // ── ONE TRANSACTION FOR THE WHOLE MOVE ──────────────────────────────────
+    // Reparenting the pane, repairing the destination layout and repairing (or
+    // deleting) the source tab are three statements describing one change. Run
+    // loose, a crash or a write failure between them leaves the source layout
+    // pointing at a pane it no longer owns while the destination doesn't
+    // mention it — a pane visible in no layout at all. The adjacent tab-merge
+    // path already got this right; this now matches it.
     const sourceLayout = removeLeafFromLayout(sourceTab.layout, id);
     const sourceEmpty = sourceLayout === '' || sourceLayout == null;
+    const seed = newTabSeed;
+    const resolvedDest = destTab;
+    // Exactly one of the two is set by construction above (new_tab ⇒ seed,
+    // to_tab_id ⇒ resolvedDest); assert it rather than cast it away, so a
+    // future edit to the resolution block fails loudly instead of creating a
+    // nameless tab inside a transaction.
+    if (!resolvedDest && !seed)
+      return c.json({ error: { code: 'bad_request', message: 'no destination' } }, 400);
+    const committed = deps.db.transaction(() => {
+      const dest =
+        resolvedDest ??
+        tabs.create({
+          ...(seed as { name: string; icon?: string }),
+          layout: id,
+          workspace_id: destWorkspaceId,
+        });
+      panes.setTab(id, dest.id);
+      const finalDest = createdNewTab
+        ? dest
+        : tabs.update(dest.id, { layout: appendLeafToLayout(dest.layout, id) });
+      let updatedSource: typeof sourceTab | null = null;
+      if (sourceEmpty) {
+        // The pane already moved out (its tab_id points at dest), so the
+        // ON DELETE CASCADE won't touch it — only the now-empty source row goes.
+        tabs.delete(sourceTab.id);
+      } else {
+        updatedSource = tabs.update(sourceTab.id, { layout: sourceLayout });
+      }
+      return { dest, finalDest, updatedSource };
+    })();
+    destTab = committed.dest;
+    const finalDest = committed.finalDest;
+    // Drop the activity pre-filter memo: the pane now belongs to a different
+    // tab, and the next tick should bump the NEW one immediately rather than
+    // sit out the remainder of the old tab's throttle window.
+    deps.tabActivity?.forgetPane(id);
 
     // Emit destination events first so a client already viewing the dest tab
     // has the pane in its list before the layout referencing it lands.
@@ -877,22 +1222,28 @@ export function panesScopedRoutes(deps: {
     if (createdNewTab) {
       // tab.added carries the full tab (layout already = the moved pane), so
       // the dest is fully described in one event; no separate pane.added.
-      deps.events.emit({ type: 'tab.added', workspace_id: workspaceId, tab: finalDest });
+      // The workspace id is the DESTINATION's — a client listening on another
+      // workspace must not be told a tab appeared in its own.
+      deps.events.emit({
+        type: 'tab.added',
+        workspace_id: destWorkspaceId,
+        tab: decorateTab(deps.cache, deps.db, finalDest),
+      });
     } else {
       if (decorated) deps.events.emit({ type: 'pane.added', tab_id: destTab.id, pane: decorated });
-      deps.events.emit({ type: 'tab.updated', tab: finalDest });
+      deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, finalDest) });
     }
 
     // Then the source side.
     deps.events.emit({ type: 'pane.removed', tab_id: sourceTab.id, pane_id: id });
     if (sourceEmpty) {
-      // The pane already moved out (its tab_id points at dest), so the
-      // ON DELETE CASCADE won't touch it — only the now-empty source row goes.
-      tabs.delete(sourceTab.id);
+      deps.tabActivity?.forget(sourceTab.id); // emptied source tab is gone
       deps.events.emit({ type: 'tab.removed', workspace_id: workspaceId, tab_id: sourceTab.id });
-    } else {
-      const updatedSource = tabs.update(sourceTab.id, { layout: sourceLayout });
-      deps.events.emit({ type: 'tab.updated', tab: updatedSource });
+    } else if (committed.updatedSource) {
+      deps.events.emit({
+        type: 'tab.updated',
+        tab: decorateTab(deps.cache, deps.db, committed.updatedSource),
+      });
     }
 
     return c.json({

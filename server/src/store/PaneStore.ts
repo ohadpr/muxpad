@@ -1,4 +1,4 @@
-import type { PaneSpec } from '@muxpad/shared';
+import { type AgentMode, DEFAULT_AGENT_MODE, type PaneSpec } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { monotonicFactory } from 'ulid';
 
@@ -17,6 +17,7 @@ interface PaneRow {
   face: 'terminal' | 'web' | 'chat';
   face_url: string | null;
   unread: number;
+  mode: string | null;
   created_at: number;
 }
 
@@ -32,6 +33,7 @@ export class PaneStore {
     startup_cmd?: string | null;
     env?: Record<string, string> | null;
     face?: 'terminal' | 'web' | 'chat';
+    mode?: AgentMode;
   }): PaneSpec {
     const id = ulid();
     const now = Date.now();
@@ -42,9 +44,10 @@ export class PaneStore {
     const startup_cmd = input.startup_cmd ?? null;
     const env = input.env ?? null;
     const face = input.face ?? 'terminal';
+    const mode = input.mode ?? DEFAULT_AGENT_MODE;
     this.db
       .prepare(
-        'INSERT INTO panes (id, tab_id, kind, url, shell, startup_cmd, cwd, env, face, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO panes (id, tab_id, kind, url, shell, startup_cmd, cwd, env, face, mode, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         id,
@@ -56,6 +59,7 @@ export class PaneStore {
         cwd,
         env ? JSON.stringify(env) : null,
         face,
+        mode,
         now,
       );
     return {
@@ -71,6 +75,7 @@ export class PaneStore {
       face,
       face_url: null,
       unread: false,
+      mode,
       created_at: now,
     };
   }
@@ -99,6 +104,28 @@ export class PaneStore {
   listAgentPanes(): PaneSpec[] {
     const rows = this.db
       .prepare("SELECT * FROM panes WHERE startup_cmd LIKE 'muxpad agent%'")
+      .all() as PaneRow[];
+    return rows.map((r) => this.row(r) as PaneSpec);
+  }
+
+  /**
+   * Every supervised app-server pane: `muxpad serve --url … -- <command>`,
+   * which runs a local web server in the pane and declares its URL. Same
+   * durable marker idea as {@link listAgentPanes} — the startup_cmd is what
+   * survives a ptyd restart, a reboot, and a main-server restart.
+   *
+   * Used by the serve supervisor (serve-supervisor.ts). Agent panes came back
+   * after a ptyd restart because the dead-runner sweep rebuilt them; serve
+   * panes did not, because nothing swept them and their pty is only created
+   * lazily when a browser attaches to the TERMINAL face — which never happens
+   * for a pane the user watches through its web face. The app just stayed down.
+   *
+   * `kind = 'shell'` is a hard filter, not decoration: ensurePane on a URL pane
+   * (shell = NULL) crashes node-pty.
+   */
+  listServePanes(): PaneSpec[] {
+    const rows = this.db
+      .prepare("SELECT * FROM panes WHERE kind = 'shell' AND startup_cmd LIKE 'muxpad serve%'")
       .all() as PaneRow[];
     return rows.map((r) => this.row(r) as PaneSpec);
   }
@@ -224,8 +251,21 @@ export class PaneStore {
       face: x.face ?? 'terminal',
       face_url: x.face_url ?? null,
       unread: !!x.unread,
+      // Anything unrecognized (or a NULL from a row written before the
+      // column) reads as the safe default: 'deep' = today's behavior.
+      mode: x.mode === 'do' ? 'do' : DEFAULT_AGENT_MODE,
       created_at: x.created_at,
     };
+  }
+
+  /**
+   * Set the pane's agent behavior mode (⚡ do / 🧠 deep). Pure SQLite — the
+   * live session is told separately (a `mode` frame relayed to its runner);
+   * see agent-modes.ts for why a running session can only be NOTIFIED, not
+   * re-prompted.
+   */
+  setMode(id: string, mode: AgentMode): void {
+    this.db.prepare('UPDATE panes SET mode = ? WHERE id = ?').run(mode, id);
   }
 
   /**

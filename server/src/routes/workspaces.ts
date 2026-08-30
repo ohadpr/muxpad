@@ -1,9 +1,9 @@
+import { type PaneStatus, rollupStatus } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { ceoLocation } from '../ceo.js';
 import type { EventBus } from '../events.js';
-import type { PtydCache } from '../ptyd-cache.js';
+import { type PtydCache, decorateWorkspace } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
@@ -25,33 +25,32 @@ export function workspacesRoutes(deps: {
   const panes = new PaneStore(deps.db);
 
   /**
-   * The two rollup signals for a workspace, mirroring the per-tab fold in
+   * The rollup signals for a workspace, mirroring the per-tab fold in
    * routes/tabs.ts so the workspace-level and tab-level indicators never
    * disagree:
    *   attention (red dot) = any pane rang BEL since last seen. Runtime.
    *   unread (bold name)  = any tab manually marked unread, OR any pane is
    *     unread (an agent finished a turn there unobserved). Persisted.
+   *   status              = the highest-precedence status across every pane in
+   *     every tab, folded through the SAME rollupStatus primitive the tab level
+   *     uses. Computed ALWAYS.
+   *   agents              = live background subagents in the whole workspace.
+   *
+   * D2: `status` is the fix for the workspace that has no working signal of any
+   * kind. The per-tab spinners live in TabList, which mounts only while the
+   * workspace is EXPANDED — and the default expansion is active-workspace-only.
+   * So on a fresh profile every agent working in a collapsed workspace was
+   * invisible, its 5s poll was stopped, and the live-refresh path skipped it
+   * for want of a cache entry. This row is computed server-side on every list
+   * call, so a collapsed workspace can say "something is running in here"
+   * without mounting anything.
    */
-  const workspaceFlags = (workspaceId: string): { attention: boolean; unread: boolean } => {
-    const manualUnreadIds = tabs.unreadIdsByWorkspace(workspaceId);
-    let attention = false;
-    let unread = false;
-    for (const t of tabs.listByWorkspace(workspaceId)) {
-      if (manualUnreadIds.has(t.id)) unread = true;
-      for (const p of panes.listByTab(t.id)) {
-        if (deps.cache.getAttention(p.id)) attention = true;
-        if (p.unread) unread = true;
-      }
-      if (attention && unread) break; // both known — no need to scan further
-    }
-    return { attention, unread };
-  };
-
   app.get('/', (c) => {
-    // Hidden system workspaces (the CEO's container) are excluded from the
+    // Hidden system workspaces (the retired resident pane's container) are
+    // excluded from the
     // default list — and thus the sidebar tree — unless ?all=1.
     const list = workspaces.list({ all: c.req.query('all') === '1' });
-    const decorated = list.map((w) => ({ ...w, ...workspaceFlags(w.id) }));
+    const decorated = list.map((w) => decorateWorkspace(deps.cache, deps.db, w));
     return c.json(decorated);
   });
 
@@ -61,14 +60,17 @@ export function workspacesRoutes(deps: {
       .parse(await c.req.json().catch(() => ({})));
     const name = body.name?.trim() || nextDefaultName(workspaces.list());
     const created = workspaces.create({ name });
-    deps.events.emit({ type: 'workspace.added', workspace: created });
+    deps.events.emit({
+      type: 'workspace.added',
+      workspace: decorateWorkspace(deps.cache, deps.db, created),
+    });
     return c.json(created, 201);
   });
 
   app.get('/:id', (c) => {
     const w = workspaces.getById(c.req.param('id'));
     if (!w) return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
-    return c.json({ ...w, ...workspaceFlags(w.id) });
+    return c.json(decorateWorkspace(deps.cache, deps.db, w));
   });
 
   app.patch('/:id', async (c) => {
@@ -77,7 +79,10 @@ export function workspacesRoutes(deps: {
       .parse(await c.req.json());
     try {
       const updated = workspaces.update(c.req.param('id'), body);
-      deps.events.emit({ type: 'workspace.updated', workspace: updated });
+      deps.events.emit({
+        type: 'workspace.updated',
+        workspace: decorateWorkspace(deps.cache, deps.db, updated),
+      });
       return c.json(updated);
     } catch {
       return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
@@ -94,18 +99,6 @@ export function workspacesRoutes(deps: {
     const id = c.req.param('id');
     const w = workspaces.getById(id);
     if (!w) return c.json({ error: { code: 'not_found', message: 'workspace not found' } }, 404);
-    // A workspace containing the CEO pane cannot be deleted — the cascade
-    // would kill the server-owned singleton. See ceo.ts.
-    if (ceoLocation(deps.db)?.workspaceId === id)
-      return c.json(
-        {
-          error: {
-            code: 'conflict',
-            message: 'this workspace holds the CEO pane and cannot be deleted',
-          },
-        },
-        409,
-      );
     // Cascade: kill panes, drop tabs, then drop the workspace. Pane
     // rows fall out via the ON DELETE CASCADE FK on tabs; the explicit
     // tabs.delete() per tab is what lets us emit a per-tab tab.removed

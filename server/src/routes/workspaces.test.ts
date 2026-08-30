@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openDb } from '../store/db.js';
-import { EventBus } from '../events.js';
 import type { MuxpadEvent } from '@muxpad/shared';
-import { createTestApp, type TestApp } from '../test-helpers/createTestApp.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { EventBus } from '../events.js';
+import { openDb } from '../store/db.js';
+import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
 
 describe('workspaces routes', () => {
   let test: TestApp;
@@ -135,6 +135,55 @@ describe('workspaces routes', () => {
     } finally {
       await local.cleanup();
     }
+  });
+
+  it('a COLLAPSED workspace still reports status + agents (D2)', async () => {
+    // The per-tab spinners live in TabList, which mounts only while the
+    // workspace is expanded — and the default expansion is
+    // active-workspace-only. So on a fresh profile every agent working in a
+    // collapsed workspace was invisible, and that workspace's poll was
+    // stopped too. The workspace ROW now carries the rollup, computed
+    // server-side on every list call, so it needs nothing mounted.
+    const ws = (await (await post('/api/workspaces', { name: 'W' })).json()) as { id: string };
+    const tab = (await (await post('/api/tabs', { name: 'T', workspace_id: ws.id })).json()) as {
+      id: string;
+    };
+    const pane = (await (
+      await post(`/api/tabs/${tab.id}/panes`, { startup_cmd: 'muxpad agent', face: 'chat' })
+    ).json()) as { id: string };
+
+    const list = async () =>
+      (
+        (await (await test.app.request('/api/workspaces')).json()) as Array<{
+          id: string;
+          status?: string;
+          agents?: number;
+        }>
+      ).find((w) => w.id === ws.id);
+
+    expect(await list()).toMatchObject({ status: 'idle', agents: 0 });
+
+    // A turn starts in a pane nobody is looking at.
+    test.cache.setAgentBusy(pane.id, true);
+    expect(await list()).toMatchObject({ status: 'working' });
+
+    // …and a background subagent keeps it working past turn-done, with a count.
+    test.cache.setAgentBusy(pane.id, false);
+    test.cache.setSubagentCount(pane.id, 3);
+    expect(await list()).toMatchObject({ status: 'working', agents: 3 });
+
+    // A question outranks working.
+    test.cache.setBlocked(pane.id, true);
+    expect(await list()).toMatchObject({ status: 'blocked' });
+
+    // Everything quiet → idle again (no unread on this pane).
+    test.cache.setBlocked(pane.id, false);
+    test.cache.setSubagentCount(pane.id, 0);
+    expect(await list()).toMatchObject({ status: 'idle', agents: 0 });
+
+    // A dead runner is not the same as a quiet one.
+    test.cache.setDead(pane.id, true);
+    expect(await list()).toMatchObject({ status: 'dead' });
   });
 
   it('reorders workspaces', async () => {

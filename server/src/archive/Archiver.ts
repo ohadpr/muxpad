@@ -110,7 +110,11 @@ export class Archiver {
   start(): void {
     if (this.events) {
       this.unsubscribe = this.events.subscribe((e) => {
-        if (e.type === 'agent_turn' && e.phase === 'done' && e.sid) {
+        // 'fatal' as well as 'done': a runner dying mid-turn has usually just
+        // written the most interesting part of the transcript, and it will NOT
+        // produce a 'done' to trigger on. Waiting for the 15-min sweep to pick
+        // that up is exactly the wrong latency for the exactly-wrong case.
+        if (e.type === 'agent_turn' && (e.phase === 'done' || e.phase === 'fatal') && e.sid) {
           this.enqueueSid(e.sid, e.backend);
         } else if (e.type === 'agent_session.updated') {
           this.onSessionUpdated(e.pane_id);

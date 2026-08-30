@@ -22,7 +22,16 @@ interface WorkspaceRow {
 export class WorkspaceStore {
   constructor(private readonly db: Database.Database) {}
 
-  create(input: { name: string; hidden?: boolean }): Workspace {
+  /**
+   * A workspace is always created VISIBLE. `hidden` is not a parameter because
+   * nothing may create a hidden workspace any more: the only hidden row that
+   * ever existed was the retired resident-pane container, and the one-time
+   * release (resident-release.ts) exists precisely to get rid of it. The
+   * read-side filters stay — a legacy DB can still hold one, and it must keep
+   * being excluded from the sidebar — but the WRITER is gone so no new code
+   * path can strand a workspace where no surface lists it.
+   */
+  create(input: { name: string }): Workspace {
     const id = ulid();
     const slug = this.uniqueSlug();
     const now = Date.now();
@@ -36,13 +45,13 @@ export class WorkspaceStore {
       .prepare(
         'INSERT INTO workspaces (id, slug, name, position, hidden, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(id, slug, input.name, maxPos + 1, input.hidden ? 1 : 0, now, now);
+      .run(id, slug, input.name, maxPos + 1, 0, now, now);
     return {
       id,
       slug,
       name: input.name,
       position: maxPos + 1,
-      hidden: !!input.hidden,
+      hidden: false,
       created_at: now,
       updated_at: now,
       tab_count: 0,
@@ -51,7 +60,7 @@ export class WorkspaceStore {
 
   /**
    * All visible workspaces, ordered. Hidden system containers (e.g. the one
-   * holding the CEO pane) are excluded unless `opts.all` — they must never
+   * holding the retired resident pane) are excluded unless `opts.all` — they must never
    * appear in the sidebar tree.
    */
   list(opts?: { all?: boolean }): Workspace[] {

@@ -7,6 +7,8 @@
  * exists. Powers `POST /api/agent-sessions/:paneId/send` (the CLI's
  * "open an agent with a first message" flow).
  */
+import type { AgentMode } from '@muxpad/shared';
+
 export interface AgentBridge {
   /**
    * Deliver a user message to the pane's connected agent runner. `queued`
@@ -22,16 +24,25 @@ export interface AgentBridge {
   /**
    * Real turn state for the pane's connected runner: true mid-turn, false
    * idle, null when no runner is connected right now. This is the registry's
-   * `turnActive` — NOT the pane `busy` flag, which also trips on raw pty
-   * output activity (a worker tailing a dev server reads busy forever).
+   * `turnActive` — NOT the pane's `status`/`busy`, which is deliberately
+   * broader: it stays `working` while a background subagent outlives the turn
+   * that launched it (and, on a pane with no runner, tracks raw pty output).
    * `muxpad agent wait` keys on this via GET /api/agent-sessions/by-pane.
    */
   turnActive: (paneId: string) => boolean | null;
+  /**
+   * Tell the pane's connected runner its agent mode changed (⚡ do / 🧠 deep).
+   * Returns false when no runner is connected — NOT an error: the pane row is
+   * already authoritative and its startup_cmd carries the mode, so the next
+   * respawn boots correctly. Powers `PATCH /api/panes/:id {mode}`.
+   */
+  setMode: (paneId: string, mode: AgentMode) => boolean;
 }
 
 export function createAgentBridge(): AgentBridge {
   return {
     send: () => ({ ok: false, reason: 'server starting — try again' }),
     turnActive: () => null,
+    setMode: () => false,
   };
 }
