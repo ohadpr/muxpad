@@ -57,8 +57,12 @@ export function HostedView() {
           </button>
         </header>
 
+        {/* aria-live rather than role="status": the list underneath stays on
+            screen through an error (a stale reading is still the best guess at
+            the truth), so this is an announcement layered over live content,
+            not a status region replacing it. */}
         {error && (
-          <p className="hosted-error" role="status">
+          <p className="hosted-error" aria-live="polite">
             {error}
           </p>
         )}
