@@ -404,6 +404,52 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX cron_runs_cron ON cron_runs(cron_id, fired_at DESC);
     `,
   },
+  {
+    // APPS — the Hosted surface's first kind
+    // (docs/plans/2026-08-30-hosted.md). A registry of long-running local web
+    // servers muxpad supervises, so an app stops costing a permanent TAB just
+    // to keep its process alive.
+    //
+    // `pane_id` is the whole design in one column. An app IS a supervised pane
+    // — one living in a HIDDEN workspace, so it has no presence in the tab
+    // tree — and that pane is what ptyd keeps alive across main-server
+    // restarts. Deliberately NO foreign key: a pane deleted out from under an
+    // app must leave the registry row intact so the app can be rebuilt, not
+    // silently cascade the user's app definition away. The reconciler nulls
+    // the column when the pane is gone and materialises a fresh one.
+    //
+    // NULLABLE `pane_id` is therefore a real, expected state ("registered but
+    // not materialised"), not an anomaly: `app add --no-start`, a stopped app,
+    // and the window between a boot and the first reconcile all live there.
+    //
+    // Two switches, not one, because they answer different questions:
+    //   enabled    is it supposed to be RUNNING right now? (`app start`/`stop`)
+    //   autostart  should a BOOT bring it up? (a scratch app you start by hand)
+    // Collapsing them would make "stop it, but bring it back tomorrow"
+    // unexpressible.
+    //
+    // The UNIQUE index on pane_id is partial (`WHERE pane_id IS NOT NULL`) so
+    // any number of apps may sit unmaterialised, but one pane can never be
+    // claimed by two registry rows — the state that would have two supervisors
+    // fighting over one pty.
+    version: 23,
+    sql: `
+      CREATE TABLE apps (
+        id          TEXT PRIMARY KEY,
+        slug        TEXT UNIQUE NOT NULL,
+        name        TEXT NOT NULL,
+        cwd         TEXT NOT NULL,
+        command     TEXT NOT NULL,
+        url         TEXT NOT NULL,
+        autostart   INTEGER NOT NULL DEFAULT 1,
+        enabled     INTEGER NOT NULL DEFAULT 1,
+        pane_id     TEXT,
+        created_at  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL
+      );
+      CREATE UNIQUE INDEX apps_pane ON apps(pane_id) WHERE pane_id IS NOT NULL;
+    `,
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

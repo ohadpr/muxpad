@@ -251,6 +251,15 @@ export function createServeSupervisor(deps: ServeSupervisorDeps): ServeSuperviso
 export interface ServeSupervisorHandle {
   stop(): void;
   sweep(): Promise<void>;
+  /**
+   * Has this pane's restart budget been exhausted?
+   *
+   * Exposed because a given-up APP has a surface a plain serve pane never had:
+   * the Hosted list, which must show `gave up` rather than an eternal
+   * `starting`. Reading the supervisor's own ledger is the only honest source —
+   * anything else would be a second copy of the give-up rule, free to disagree.
+   */
+  gaveUp(paneId: string): boolean;
 }
 
 /**
@@ -290,5 +299,6 @@ export function startServeSupervisor(
       detach?.();
     },
     sweep: sup.sweep,
+    gaveUp: (paneId: string) => sup.states.get(paneId)?.gaveUp === true,
   };
 }

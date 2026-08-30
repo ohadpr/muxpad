@@ -322,6 +322,83 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
     expect(db.prepare('SELECT id FROM crons WHERE id = ?').get('c1')).toEqual({ id: 'c1' });
   });
 
+  it('upgrades a REAL populated v22 database to v23, adding the apps registry', () => {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 22 });
+    const tables = () =>
+      (
+        db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+          name: string;
+        }[]
+      ).map((t) => t.name);
+    expect(tables()).not.toContain('apps');
+
+    db.prepare(
+      `INSERT INTO workspaces (id, slug, name, position, created_at, updated_at)
+       VALUES ('w1', 'w', 'W', 0, 1, 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at)
+       VALUES ('t1', 't', 'T', '""', 'w1', 0, 1, 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO panes (id, tab_id, kind, shell, startup_cmd, cwd, created_at)
+       VALUES ('p1', 't1', 'shell', '/bin/zsh', 'muxpad serve --url http://127.0.0.1:1 -- ./start', '/tmp', 1)`,
+    ).run();
+
+    runMigrations(db);
+    expect(tables()).toContain('apps');
+    // Existing rows survive untouched.
+    expect(db.prepare('SELECT name FROM tabs WHERE id = ?').get('t1')).toEqual({ name: 'T' });
+
+    db.prepare(
+      `INSERT INTO apps (id, slug, name, cwd, command, url, pane_id, created_at, updated_at)
+       VALUES ('a1', 'notes', 'Notes', '/tmp', './start', 'http://127.0.0.1:1', 'p1', 1, 1)`,
+    ).run();
+    const app = db.prepare('SELECT * FROM apps WHERE id = ?').get('a1') as Record<string, unknown>;
+    expect(app.enabled).toBe(1);
+    expect(app.autostart).toBe(1);
+
+    // The slug is unique…
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO apps (id, slug, name, cwd, command, url, created_at, updated_at)
+           VALUES ('a2', 'notes', 'Dup', '/tmp', './start', 'http://127.0.0.1:2', 1, 1)`,
+        )
+        .run(),
+    ).toThrow();
+    // …and so is a NON-NULL pane_id (two apps must never claim one pty)…
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO apps (id, slug, name, cwd, command, url, pane_id, created_at, updated_at)
+           VALUES ('a3', 'other', 'Other', '/tmp', './start', 'http://127.0.0.1:3', 'p1', 1, 1)`,
+        )
+        .run(),
+    ).toThrow();
+    // …while any number of apps may sit unmaterialised.
+    for (const [id, slug] of [
+      ['a4', 'four'],
+      ['a5', 'five'],
+    ]) {
+      db.prepare(
+        `INSERT INTO apps (id, slug, name, cwd, command, url, created_at, updated_at)
+         VALUES (?, ?, 'X', '/tmp', './start', 'http://127.0.0.1:9', 1, 1)`,
+      ).run(id, slug);
+    }
+    expect(db.prepare('SELECT COUNT(*) AS n FROM apps').get()).toEqual({ n: 3 });
+
+    // Deliberately NO foreign key on pane_id: losing the pty must not silently
+    // delete the app DEFINITION — the reconciler rebuilds the pane instead.
+    db.prepare('DELETE FROM panes WHERE id = ?').run('p1');
+    expect(db.prepare('SELECT id FROM apps WHERE id = ?').get('a1')).toEqual({ id: 'a1' });
+
+    // Idempotent.
+    runMigrations(db);
+    expect(db.prepare('SELECT id FROM apps WHERE id = ?').get('a1')).toEqual({ id: 'a1' });
+  });
+
   it('records the latest schema version', () => {
     const db = new Database(':memory:');
     runMigrations(db);
@@ -329,6 +406,6 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
       .get() as { version: number };
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
-    expect(LATEST_SCHEMA_VERSION).toBe(22);
+    expect(LATEST_SCHEMA_VERSION).toBe(23);
   });
 });
