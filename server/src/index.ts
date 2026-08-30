@@ -7,21 +7,25 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import type { Context } from 'hono';
 import { createAgentBridge } from './agent-bridge.js';
 import { seedAgentInstructions } from './agent-instructions.js';
+import { seedDoMode } from './agent-modes.js';
 import { ArchiveDb } from './archive/ArchiveDb.js';
 import { Archiver } from './archive/Archiver.js';
-import { ensureCeoPane, ensureCeoRuntime } from './ceo.js';
 import { projectsDir } from './chat/TranscriptReader.js';
 import { loadConfig } from './config.js';
 import { EventBus } from './events.js';
 import { createTailscaleFunnel, localFunnel } from './funnel.js';
 import { startPaneReaper } from './pane-reaper.js';
-import { PtydCache, decoratePane } from './ptyd-cache.js';
+import { PtydCache, decoratePane, decorateTab } from './ptyd-cache.js';
 import { PtydClient } from './ptyd-client/PtydClient.js';
 import { createPublicApp } from './public-server.js';
 import { Presence, PushService, attachAttentionPush, createPaneNotifier } from './push.js';
+import { releaseResidentPane } from './resident-release.js';
+import { startServeSupervisor } from './serve-supervisor.js';
 import { createApp } from './server.js';
 import { PaneStore } from './store/PaneStore.js';
+import { TabStore } from './store/TabStore.js';
 import { openDb } from './store/db.js';
+import { TabActivity } from './tab-activity.js';
 import { attachWsServer } from './ws.js';
 
 const config = loadConfig();
@@ -30,8 +34,12 @@ mkdirSync(config.dataDir, { recursive: true });
 // — write-once, user-owned afterwards; every agent backend injects it into new
 // sessions (see agent-instructions.ts for the per-backend mechanisms).
 seedAgentInstructions(config.dataDir);
+// Same lifecycle for the ⚡ Do-mode contract (<dataDir>/do-mode.md): seeded
+// once, user-owned afterwards, injected only into panes in 'do' mode.
+seedDoMode(config.dataDir);
 const db = openDb(join(config.dataDir, 'db.sqlite'));
 const paneStore = new PaneStore(db);
+const tabStore = new TabStore(db);
 // EventBus is shared by the route layer (HTTP-driven mutations) and the
 // /ws/events upgrade arm (server/src/ws.ts) which fans events out to
 // subscribed browsers.
@@ -53,6 +61,26 @@ cache.seedCwds(paneStore.listCwds());
 // restart lands in the shell's actual cwd instead of the spawn cwd.
 ptyd.on('paneCwd', (e: { id: string; cwd: string }) => {
   paneStore.updateCwd(e.id, e.cwd);
+});
+
+// Living sidebar: `tabs.last_activity_at`. One recorder shared with the ws
+// layer so the 60s throttle is per TAB, not per signal source. Raw pty output
+// ticks land here (ptyd throttles them already, but a busy pane still emits
+// several per second — hence the throttle); ws.ts adds the forced bumps for
+// turn-done / user sends and the throttled one for keystrokes.
+const tabActivity = new TabActivity(db, {
+  // Recency changed → tell every open client now, instead of leaving the
+  // reorder to their next 5s poll (which is stopped entirely for a collapsed
+  // workspace or a hidden document). Already rate-limited by the recorder's
+  // own throttle, so this is at most one event per tab per minute plus the
+  // discrete forced bumps.
+  onWrite: (tabId) => {
+    const t = tabStore.getById(tabId);
+    if (t) events.emit({ type: 'tab.updated', tab: decorateTab(cache, db, t) });
+  },
+});
+ptyd.on('paneActivity', (e: { id: string }) => {
+  tabActivity.touchPane(e.id);
 });
 
 // An EXPLICIT app-url declaration (`muxpad app-url` / `muxpad serve` — the
@@ -82,6 +110,23 @@ ptyd.on(
 // subscribers see the diff. The cache emits a single 'paneChange' per
 // field-mutation; we rebuild the full decorated row from the cache + db.
 cache.on('paneChange', (paneId: string) => {
+  const pane = paneStore.getById(paneId);
+  if (!pane) return;
+  events.emit({
+    type: 'pane.updated',
+    tab_id: pane.tab_id,
+    pane: decoratePane(cache, pane),
+  });
+});
+
+// Dropping a pane's whole cache entry (pty exit) is ALSO a status change, and
+// it had no subscriber at all. A pane that exited while its BEL was ringing
+// went from `blocked` to `idle` in the cache with nothing telling anyone, so
+// the tabbed strip kept its attention mark until the user navigated or a poll
+// happened along. When the row is gone too (a real delete) getById returns
+// null and the route layer's own `pane.removed` is the right event — say
+// nothing here.
+cache.on('paneRemoved', (paneId: string) => {
   const pane = paneStore.getById(paneId);
   if (!pane) return;
   events.emit({
@@ -144,6 +189,7 @@ const app = createApp({
   dataDir: config.dataDir,
   events,
   agentBridge,
+  tabActivity,
   push,
   presence,
   ...(archiveDb ? { archive: archiveDb } : {}),
@@ -226,6 +272,10 @@ publicServer.on('error', (err) => {
 });
 
 const httpServer = server as unknown as Server;
+// Chat-runner turn-done / question frames don't ring BEL — push them here.
+// Shared with the serve supervisor, which uses it to announce an app server
+// it has given up restarting.
+const notifyPane = createPaneNotifier(db, push, presence);
 const wsServer = attachWsServer({
   http: httpServer,
   db,
@@ -233,33 +283,54 @@ const wsServer = attachWsServer({
   cache,
   events,
   agentBridge,
-  // Chat-runner turn-done / question frames don't ring BEL — push them here.
-  notifyPane: createPaneNotifier(db, push, presence),
+  tabActivity,
+  notifyPane,
 });
 
 // Straggler prevention: retry pane kills that failed in transit, and (once
 // ptyd supports listPanes) kill any live pty whose DB row is gone.
 startPaneReaper({ db, ptyd, paneExists: (id) => paneStore.getById(id) !== null });
 
+// Supervision for `muxpad serve` panes. ws.ts's sweep only knows about agent
+// panes, so before this an app server whose pty vanished (ptyd restart, reboot)
+// stayed down forever — its pty is only created lazily on a terminal attach,
+// which never happens for a pane the user watches through its web face.
+// Same rails as the agent sweep (respawn-policy.ts); see serve-supervisor.ts.
+const serveSupervisor = startServeSupervisor({
+  db,
+  ptyd,
+  cache,
+  events,
+  notifyPane,
+  onPtydConnected: (fn) => {
+    ptyd.on('connected', fn);
+    return () => {
+      ptyd.off('connected', fn);
+    };
+  },
+});
+
 // Session archiver: boot backfill sweep (background, throttled reads) +
 // 15-min re-sweep + near-realtime triggers off the event bus (turn-done,
 // sid changes). See docs/plans/2026-08-28-session-archive.md.
 archiver?.start();
 
-// The singleton CEO pane: hidden system workspace → 'ceo' tab → agent pane,
-// created once, resolved via globals pointers, eagerly spawned so it's alive
-// with zero browsers open. Idempotent; GET /api/ceo also ensures on demand.
-// On a cold boot the server can beat ptyd to its socket and the eager spawn
-// fails — re-run it on every ptyd (re)connect so the CEO comes alive within
-// seconds instead of waiting on the ~50s dead-runner sweep. Listener is
-// registered BEFORE the ensure so a connect landing mid-ensure isn't missed
-// (ensureCeoRuntime quietly no-ops until the rows exist).
-ptyd.on('connected', () => {
-  void ensureCeoRuntime({ db, ptyd });
-});
-ensureCeoPane({ db, ptyd, events, dataDir: config.dataDir }).catch((err) => {
-  console.error('[ceo] ensure failed at boot', err);
-});
+// The "resident pane" primitive is retired — muxpad no longer creates or
+// guards a singleton agent pane. An always-there chat is now just a chat you
+// PIN (see the living sidebar's pinned block). This one-time sweep hands any
+// pane stranded in the old hidden system workspace back to a visible one, so
+// nothing is orphaned; it never deletes a pane or its history. Best-effort:
+// a failure here must not stop the server booting.
+try {
+  const released = releaseResidentPane({ db, events, cache });
+  if (released.released) {
+    console.log(
+      `[resident] released the retired system workspace (${released.movedTabIds.length} tab(s) moved)`,
+    );
+  }
+} catch (err) {
+  console.error('[resident] one-time release failed (harmless; retried next boot)', err);
+}
 
 let shuttingDown = false;
 const shutdown = async () => {
@@ -269,6 +340,9 @@ const shutdown = async () => {
   // Stop queueing archive work; in-flight copies finish or resume next boot
   // (offsets only advance past complete lines, so a cut mid-copy is safe).
   archiver?.stop();
+  // Stop respawning app servers — we're on our way out; anything we started
+  // here would just be an orphan for the next boot's supervisor to adopt.
+  serveSupervisor.stop();
   // Close browser-facing WSes first so they don't see ptyd's `close` (which
   // is going to follow as we disconnect the control channel) as a PTY-exit.
   //

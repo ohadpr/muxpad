@@ -20,6 +20,15 @@ export interface AgentSession {
   writer: Writer;
   /** PID of the Claude TUI (from the wrapper's $$), for a clean SIGTERM handoff. Null if unknown. */
   tui_pid: number | null;
+  /**
+   * The session's TURN state: 'running' | 'idle'. A DIFFERENT vocabulary from
+   * the `status` on panes/tabs/workspaces (PaneStatus: blocked | working |
+   * dead | done | idle) — two meanings, one word, and they are surfaced side
+   * by side. The CLI resolves the collision by printing this column as
+   * **TURN** (see `muxpad agent list`); nothing else may present it as
+   * "status" without qualifying it. Read PaneStatus for what a pane IS;
+   * read this for whether its session is mid-turn.
+   */
   status: string;
   created_at: number;
   updated_at: number;

@@ -9,7 +9,6 @@ import type { PtydClient } from './ptyd-client/PtydClient.js';
 import type { Presence, PushService } from './push.js';
 import { agentSessionsRoutes } from './routes/agent-sessions.js';
 import { attachmentsRoutes } from './routes/attachments.js';
-import { ceoRoutes } from './routes/ceo.js';
 import { eventsRoutes } from './routes/events.js';
 import { openRoutes } from './routes/open.js';
 import { paneIoRoutes } from './routes/pane-io.js';
@@ -20,6 +19,7 @@ import { archiveRoutes, searchRoutes } from './routes/search.js';
 import { summaryRoutes } from './routes/summary.js';
 import { tabsRoutes } from './routes/tabs.js';
 import { workspacesRoutes } from './routes/workspaces.js';
+import type { TabActivity } from './tab-activity.js';
 
 export interface AppDeps {
   db: Database.Database;
@@ -50,6 +50,13 @@ export interface AppDeps {
    * route then reports the agent as unavailable.
    */
   agentBridge?: AgentBridge;
+  /**
+   * Shared per-tab activity recorder (the living sidebar's recency signal).
+   * The routes only need it to DROP a deleted tab's throttle memo; the ws
+   * layer owns the writes. Optional — without it the memo for a deleted tab
+   * simply lingers until restart.
+   */
+  tabActivity?: TabActivity;
   /**
    * Web Push subscriptions + delivery (see push.ts). Optional so tests
    * that don't exercise notifications can omit it — the /api/push routes
@@ -100,8 +107,6 @@ export function createApp(deps: AppDeps): Hono {
   app.route('/api/open', openRoutes(resolved));
   // SSE mirror of /ws/events — curl-able subscription for scripts/agents.
   app.route('/api/events', eventsRoutes(resolved));
-  // The singleton CEO pane — ensure + resolve its ids.
-  app.route('/api/ceo', ceoRoutes(resolved));
   app.route('/api/agent-sessions', agentSessionsRoutes(resolved));
   // Artifact publishing (copies into <dataDir>/public, served by the separate
   // public-port app). Default funnel is exec-free — see AppDeps.publish.

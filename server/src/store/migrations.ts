@@ -276,15 +276,14 @@ const MIGRATIONS: Migration[] = [
     `,
   },
   {
-    // CEO pane storage (see docs/plans/2026-08-21-ceo-pane.md §B2). Two
-    // additive pieces:
-    //   globals — a tiny server-side KV for singleton pointers
-    //     (ceo_pane_id / ceo_tab_id). Server-side, not localStorage: the
-    //     CEO must resolve to the SAME pane from every browser.
-    //   workspaces.hidden — system-container flag. The CEO pane needs a
-    //     backing tab (panes.tab_id is NOT NULL) and tabs need a workspace;
-    //     rather than relaxing FKs (SQLite table rebuild) the pane lives in
-    //     a hidden '· system ·' workspace excluded from the sidebar tree.
+    // Two additive pieces, originally added for the (since-retired) resident
+    // pane primitive and kept because both are generally useful:
+    //   globals — a tiny server-side KV for singleton pointers and one-shot
+    //     migration markers. Server-side, not localStorage: a "have we run
+    //     this once" marker is meaningless if it's per-device.
+    //   workspaces.hidden — system-container flag, excluding a workspace
+    //     from the sidebar tree (GET /api/workspaces filters it unless
+    //     ?all=1). Still the mechanism for any non-user-facing container.
     version: 19,
     sql: `
       CREATE TABLE globals (
@@ -314,15 +313,51 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    // Step 1 of the UX evolution — two independent, purely additive pieces:
+    //
+    //   panes.mode          — agent behavior mode (⚡ do / 🧠 deep). Default
+    //     'deep' is EXACTLY today's behavior (no overlay injected at all), so
+    //     every existing pane keeps running unchanged after the migration.
+    //
+    //   tabs.pinned         — manual "keep this at the top" flag. Default 0,
+    //     so on upgrade every tab lands in the auto-sorted block, which is
+    //     the pre-migration ordering degraded gracefully (position order is
+    //     still the final tiebreak).
+    //   tabs.last_activity_at — epoch ms of the last turn/send/pty activity.
+    //     Deliberately NULLABLE with no backfill: "we have never observed
+    //     activity here" is a real, distinguishable state, and inventing a
+    //     timestamp (created_at, or now()) would fabricate an ordering the
+    //     user never produced. Null sorts LAST in the recency block (see
+    //     routes/tabs.ts), so untouched tabs sink instead of jumping around.
+    version: 21,
+    sql: `
+      ALTER TABLE panes ADD COLUMN mode TEXT NOT NULL DEFAULT 'deep';
+      ALTER TABLE tabs ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE tabs ADD COLUMN last_activity_at INTEGER;
+    `,
+  },
 ];
 
-export function runMigrations(db: Database.Database): void {
+/** Highest version in the migration list. Exported so a test can assert the
+ *  recorded version without hard-coding a number that drifts. */
+export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
+
+/**
+ * @param opts.upTo Stop after this version instead of migrating to the head.
+ *   TEST-ONLY: it exists so a migration test can build a genuinely OLD
+ *   database and then upgrade it, rather than building a current-schema DB and
+ *   asserting things about it (which proves nothing about the upgrade path).
+ *   Production always calls this with no options.
+ */
+export function runMigrations(db: Database.Database, opts?: { upTo?: number }): void {
   db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)');
   const row = db
     .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
     .get() as { version: number } | undefined;
   const current = row?.version ?? 0;
   for (const m of MIGRATIONS) {
+    if (opts?.upTo !== undefined && m.version > opts.upTo) break;
     if (m.version <= current) continue;
     db.transaction(() => {
       if (m.sql) db.exec(m.sql);
