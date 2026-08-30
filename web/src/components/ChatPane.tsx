@@ -1478,6 +1478,11 @@ export function ChatPane({
       .map((p) => ({ path: p.path, name: p.name, previewUrl: p.url }));
     setInput((cur) => (cur.trim() ? `${prose}\n${cur}` : prose));
     if (atts.length) setChips((prev) => [...prev, ...atts]);
+    // A programmatic setInput fires no onChange, so retire the cleanup undo by
+    // hand — otherwise it would still be offering to restore the pre-cleanup
+    // text over the queued message we just pulled back in (and that message is
+    // already cancelled server-side, so it would be unrecoverable).
+    resetCleanup();
     inputRef.current?.focus();
   };
 
@@ -1648,6 +1653,9 @@ export function ChatPane({
       // to the message at send time, so the composer stays clean prose.
       if (text.trim()) {
         setInput((prev) => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${text.trim()} `);
+        // Same reason as editQueued: a programmatic setInput fires no onChange,
+        // so the cleanup undo has to be retired explicitly.
+        resetCleanup();
       }
       inputRef.current?.focus();
     })();
