@@ -50,6 +50,14 @@ const apiProxy = {
  * wastes build time and can even grow the file, so they are skipped. (The
  * serveStatic side agrees: it only looks for a precompressed sibling when the
  * MIME type is on its compressible list, which excludes font/woff2.)
+ *
+ * ONE EXCEPTION to "the server serves these": index.html. The shell has its
+ * own route in static-assets.ts (readFileSync per request, so a rebuild can
+ * never be served a stale shell from memory) which bypasses serveStatic
+ * entirely, so index.html.br/.gz are written but never read. Left in place
+ * rather than special-cased: it is ~500 bytes of dead build output, and the
+ * shell is 1.3 KB on the wire either way. Do not "fix" it by routing the
+ * shell through serveStatic — the freshness guarantee matters more.
  */
 const COMPRESSIBLE = /\.(js|mjs|css|html|json|webmanifest|svg|map|txt)$/;
 
