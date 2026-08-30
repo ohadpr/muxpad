@@ -22,7 +22,13 @@ export type MessagePart =
   | { kind: 'text'; text: string }
   // `media` = image | video (rendered inline, grouped into a gallery when
   // several are adjacent); `file` = everything else (a click-to-open chip).
-  | { kind: 'media'; media: Exclude<AttachmentKind, 'file'>; path: string; name: string; url: string }
+  | {
+      kind: 'media';
+      media: Exclude<AttachmentKind, 'file'>;
+      path: string;
+      name: string;
+      url: string;
+    }
   | { kind: 'file'; path: string; name: string; url: string };
 
 /** Split message text into plain runs and attachment references (classified

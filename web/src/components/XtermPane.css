@@ -127,10 +127,9 @@
 
 .xterm-paste-toast-path {
   min-width: 0;
-  font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: 11px / 1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
   overflow: hidden;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
 }
-

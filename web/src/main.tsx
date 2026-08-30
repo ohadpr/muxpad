@@ -4,7 +4,7 @@ import { startEvents, subscribe, subscribeReconnect } from './events';
 import { pushOpen } from './lib/external-open-store';
 import { setLastPaneId } from './lib/last-visited';
 import { startPresence } from './lib/presence';
-import { registerServiceWorker } from './lib/push';
+import { reconcilePush, registerServiceWorker } from './lib/push';
 import { setPushFocusPane } from './lib/push-focus';
 import { router } from './router';
 import { refreshTabs } from './tabs';
@@ -46,6 +46,10 @@ if (!selfEmbedded) {
   // http (no secure context → no navigator.serviceWorker) and harmless
   // where push was never enabled — the SW has no fetch handler.
   registerServiceWorker();
+  // Self-heal a subscription that silently died (browser rotated it while we
+  // were off-tailnet, server pruned it, data dir rebuilt). No-op unless the
+  // user actually enabled push on this device. See lib/push.ts.
+  void reconcilePush();
 
   // Notification-tap deep links, cold-start path: a tap that BOOTS the PWA
   // lands on the payload URL, whose ?ptab=&pane= params say which pane to

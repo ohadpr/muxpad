@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
-import { runMigrations } from './migrations.js';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { WorkspaceStore } from './WorkspaceStore.js';
+import { runMigrations } from './migrations.js';
 
 describe('WorkspaceStore', () => {
   let db: Database.Database;
@@ -64,11 +64,11 @@ describe('WorkspaceStore', () => {
   it('decorates with live tab_count from the tabs table', () => {
     const w = store.create({ name: 'A' });
     db.prepare(
-      "INSERT INTO tabs (id, slug, name, layout, workspace_id, created_at, updated_at, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      'INSERT INTO tabs (id, slug, name, layout, workspace_id, created_at, updated_at, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     ).run('t1', 'tslug1aa', 'Tab 1', '""', w.id, 1, 1, 0);
     expect(store.getById(w.id)!.tab_count).toBe(1);
     db.prepare(
-      "INSERT INTO tabs (id, slug, name, layout, workspace_id, created_at, updated_at, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      'INSERT INTO tabs (id, slug, name, layout, workspace_id, created_at, updated_at, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     ).run('t2', 'tslug2aa', 'Tab 2', '""', w.id, 2, 2, 1);
     expect(store.getById(w.id)!.tab_count).toBe(2);
   });
