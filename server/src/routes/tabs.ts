@@ -9,10 +9,10 @@ import {
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { bootstrapTab, deleteTabCascade } from '../agent-tab.js';
 import type { EventBus } from '../events.js';
-import { queuePaneKill } from '../pane-reaper.js';
-import { agentCwd, hasProjectContext } from '../project-root.js';
-import { type PtydCache, decoratePane, decorateTab } from '../ptyd-cache.js';
+import { hasProjectContext } from '../project-root.js';
+import { type PtydCache, cronsByTab, decoratePane, decorateTab } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { randomWorkspaceName } from '../random-name.js';
 import { safeCwd } from '../safe-cwd.js';
@@ -72,86 +72,22 @@ export function tabsRoutes(deps: {
       .parse(await c.req.json().catch(() => ({})));
     // Agent tabs get a deliberate name + mark (auto-renamed to the session's
     // AI title once the conversation has one); everything else keeps the
-    // random-name default.
+    // random-name default. Rows, events and the eager ptyd spawn live in
+    // bootstrapTab — shared verbatim with the cron scheduler's new-tab mode.
     const name =
       body.name?.trim() || (body.bootstrap === 'agent' ? 'agent' : randomWorkspaceName());
-    // Transaction so a mid-request failure can't commit a half-bootstrapped
-    // ghost tab (tab row present, pane/layout missing).
-    const created = deps.db.transaction(() => {
-      let tab = tabs.create({
-        name,
-        layout: body.layout ?? '',
-        workspace_id: body.workspace_id,
-        ...(body.bootstrap === 'agent' ? { icon: '✳' } : {}),
-      });
-      if (!body.bootstrap) return { tab, pane: null };
-      const agent = body.bootstrap === 'agent';
-      // 'deep' is the absence of the flag (never churn the historical command
-      // shape); the flag sits after --backend, matching the ws self-heal
-      // rewrite so a reconnect isn't misread as a new runner.
-      const modeFlag = agent && body.mode === 'do' ? ' --mode do' : '';
-      const pane = panes.create({
-        tab_id: tab.id,
-        shell: process.env.SHELL ?? '/bin/zsh',
-        // Agent panes snap up to the git root so they start with project context.
-        cwd: agent ? agentCwd(safeCwd(body.cwd)) : safeCwd(body.cwd),
-        // Single-quoted model so zsh's nomatch can't glob-error on ids with
-        // brackets ('claude-opus-4-8[1m]'); the charset gate above makes the
-        // quoting safe. Claude stays implicit (no --backend) so its cmd is
-        // unchanged; codex/cursor get an explicit, allowlisted flag.
-        startup_cmd: agent
-          ? // A PENDING pane keeps the exact literal `muxpad agent --pick`:
-            // several call sites (the harness-choice routes' 409 gate, the
-            // dead-runner sweep's skip) compare against it verbatim. The mode
-            // lives on the pane ROW regardless, and the /agent-backend route
-            // re-applies it to the command when the harness is chosen.
-            body.backend === 'pick'
-            ? 'muxpad agent --pick'
-            : `muxpad agent${body.backend && body.backend !== 'claude' ? ` --backend ${body.backend}` : ''}${modeFlag}${body.model ? ` --model '${body.model}'` : ''}`
-          : null,
-        // Agent tabs land directly on the chat face; the (hidden) terminal
-        // face spawns the pty underneath, which runs the startup command.
-        face: agent ? 'chat' : 'terminal',
-        ...(agent && body.mode ? { mode: body.mode } : {}),
-      });
-      tab = tabs.update(tab.id, { layout: pane.id }) ?? tab;
-      return { tab, pane };
-    })();
-    const t = created.tab;
-    const bootstrappedPane = created.pane;
-    deps.events.emit({
-      type: 'tab.added',
+    const created = await bootstrapTab(deps, {
       workspace_id: body.workspace_id,
-      tab: decorateTab(deps.cache, deps.db, t),
+      name,
+      ...(body.layout !== undefined ? { layout: body.layout as string } : {}),
+      ...(body.bootstrap ? { bootstrap: body.bootstrap } : {}),
+      ...(body.cwd !== undefined ? { cwd: body.cwd } : {}),
+      ...(body.model !== undefined ? { model: body.model } : {}),
+      ...(body.backend !== undefined ? { backend: body.backend } : {}),
+      ...(body.mode !== undefined ? { mode: body.mode } : {}),
+      ...(body.bootstrap === 'agent' ? { icon: '✳' } : {}),
     });
-    if (bootstrappedPane) {
-      // Through decoratePane like every other pane payload — a raw row's
-      // absent status/agents fields read as undefined on the client and blank
-      // the new pane's status rail until the next poll.
-      deps.events.emit({
-        type: 'pane.added',
-        tab_id: t.id,
-        pane: decoratePane(deps.cache, bootstrappedPane),
-      });
-      // Eager spawn (same as the panes route): an agent tab created from a
-      // phone starts its runner immediately, before any terminal view ever
-      // attaches.
-      try {
-        await deps.ptyd.ensurePane({
-          id: bootstrappedPane.id,
-          shell: bootstrappedPane.shell ?? process.env.SHELL ?? '/bin/zsh',
-          startup_cmd: bootstrappedPane.startup_cmd,
-          cwd: safeCwd(bootstrappedPane.cwd),
-          env: bootstrappedPane.env,
-          tab_id: t.id,
-          workspace_id: body.workspace_id,
-        });
-      } catch {
-        // ptyd unreachable: the rows are committed; the runtime spawns
-        // lazily when a client attaches and ptyd reconnects.
-      }
-    }
-    return c.json(t, 201);
+    return c.json(created.tab, 201);
   });
 
   app.get('/', (c) => {
@@ -175,7 +111,13 @@ export function tabsRoutes(deps: {
     // decoratePane) — every tab.updated / tab.added emitter routes through it
     // too, so the list and the live events can't describe a tab differently.
     const manualUnreadIds = tabs.unreadIdsByWorkspace(workspaceId);
-    const decorated = list.map((t) => decorateTab(deps.cache, deps.db, t, manualUnreadIds));
+    // One cron query for the whole workspace (see cronsByTab) — the sidebar
+    // polls this route every 5s, so a per-row lookup would be the hottest
+    // query in the app.
+    const cronIds = cronsByTab(deps.db, workspaceId);
+    const decorated = list.map((t) =>
+      decorateTab(deps.cache, deps.db, t, manualUnreadIds, cronIds),
+    );
     // ── The living sidebar's order ────────────────────────────────────────
     // PINNED tabs first, in the user's manual drag order (`list` already
     // arrives position-sorted, so a stable partition preserves it). Then the
@@ -350,44 +292,14 @@ export function tabsRoutes(deps: {
 
   app.delete('/:id', async (c) => {
     const id = c.req.param('id');
-    const t = tabs.getById(id);
-    if (!t) return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
-    // TabStore.getById doesn't surface workspace_id (the shared Tab type
-    // omits it). Pull it via the dedicated helper so the emitted event
-    // carries the right workspace context for clients.
-    const workspaceId = tabs.getWorkspaceId(id);
-    // ptyd holds runtime state; SQLite is the source of truth. If ptyd
-    // is unreachable, the DB cascade must still proceed — ptyd has no
-    // persistent state, so when it reconnects it doesn't need cleanup.
-    const doomed = panes.listByTab(id);
-    for (const p of doomed) {
-      try {
-        await deps.ptyd.killPane(p.id);
-      } catch {
-        // ptyd unreachable / kill lost in transit: the DB cascade proceeds,
-        // so queue the kill durably — the reaper retries until the pty is
-        // confirmed gone (otherwise it would run forever, invisible).
-        queuePaneKill(deps.db, p.id);
-      }
-    }
-    // Rows FIRST (the cascade), caches second: `cache.forget` fires
-    // 'paneRemoved', whose subscriber emits a `pane.updated` for any pane whose
-    // row still exists — forgetting first announced one update per pane of a
-    // tab that was about to vanish. Clients infer the pane removals from
-    // tab.removed below.
-    tabs.delete(id);
-    for (const p of doomed) {
-      deps.cache.forget(p.id);
-      deps.tabActivity?.forgetPane(p.id);
-    }
-    // Drop the in-memory activity memos for the tab and its (cascade-deleted)
-    // panes so the maps stay bounded by what still exists.
-    deps.tabActivity?.forget(id);
-    if (workspaceId) {
-      // Clients infer the cascade-pane removals from tab.removed; we
-      // intentionally do not emit per-pane events here.
-      deps.events.emit({ type: 'tab.removed', workspace_id: workspaceId, tab_id: id });
-    }
+    // Kills, the DB cascade, cache/activity memo cleanup and the tab.removed
+    // event all live in deleteTabCascade — shared with the cron scheduler's
+    // close-when-done, so a scheduled tab is torn down exactly like a manual one.
+    const ok = await deleteTabCascade(
+      { ...deps, ...(deps.tabActivity ? { tabActivity: deps.tabActivity } : {}) },
+      id,
+    );
+    if (!ok) return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
     return c.body(null, 204);
   });
 

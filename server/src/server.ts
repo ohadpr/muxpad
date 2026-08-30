@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import type { AgentBridge } from './agent-bridge.js';
 import type { ArchiveDb } from './archive/ArchiveDb.js';
+import type { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
 import { type Funnel, localFunnel } from './funnel.js';
 import type { PtydCache } from './ptyd-cache.js';
@@ -9,6 +10,7 @@ import type { PtydClient } from './ptyd-client/PtydClient.js';
 import type { Presence, PushService } from './push.js';
 import { agentSessionsRoutes } from './routes/agent-sessions.js';
 import { attachmentsRoutes } from './routes/attachments.js';
+import { cronsRoutes } from './routes/crons.js';
 import { eventsRoutes } from './routes/events.js';
 import { openRoutes } from './routes/open.js';
 import { paneIoRoutes } from './routes/pane-io.js';
@@ -82,6 +84,12 @@ export interface AppDeps {
    * tailscale (nothing a test does can expose content publicly).
    */
   publish?: { funnel: Funnel; publicPort?: number };
+  /**
+   * The server-owned cron scheduler (cron/CronScheduler.ts). Optional so
+   * HTTP-only tests can omit it — /api/crons is still mounted and answers
+   * honestly (empty list, 503 on writes) rather than 404ing.
+   */
+  cronScheduler?: CronScheduler;
 }
 
 export function createApp(deps: AppDeps): Hono {
@@ -108,6 +116,16 @@ export function createApp(deps: AppDeps): Hono {
   // SSE mirror of /ws/events — curl-able subscription for scripts/agents.
   app.route('/api/events', eventsRoutes(resolved));
   app.route('/api/agent-sessions', agentSessionsRoutes(resolved));
+  // Durable schedules (`muxpad cron`). See docs/plans/2026-08-14-muxpad-cron.md.
+  app.route(
+    '/api/crons',
+    cronsRoutes({
+      db: resolved.db,
+      cache: resolved.cache,
+      events: resolved.events,
+      ...(resolved.cronScheduler ? { scheduler: resolved.cronScheduler } : {}),
+    }),
+  );
   // Artifact publishing (copies into <dataDir>/public, served by the separate
   // public-port app). Default funnel is exec-free — see AppDeps.publish.
   app.route(

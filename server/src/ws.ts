@@ -1,5 +1,5 @@
 import type { Server } from 'node:http';
-import { sanitizeAgentStatus } from '@muxpad/shared';
+import { parseCronMarker, sanitizeAgentStatus } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { AgentBridge } from './agent-bridge.js';
@@ -188,7 +188,22 @@ export function attachWsServer(deps: {
     status: (RunnerFrame & { t: 'status' }) | null;
     /** When the last chat send was relayed — see the stop handler's gate. */
     lastSendAt: number;
+    /**
+     * When the last HUMAN message was relayed. Distinct from `lastSendAt`,
+     * which any relay bumps: a cron fire is a relay but nobody is sitting
+     * there. Provenance is read off the message itself (a cron fire carries
+     * its marker), so it survives the durable queue and a server restart —
+     * there is no in-memory flag to lose.
+     *
+     * Two consumers, both of which mean "is a human present?": the turn-done
+     * push gate (an autonomous turn SHOULD push — you weren't watching) and
+     * the cron `quiet_mins` policy (don't barge into a live conversation).
+     */
+    lastHumanSendAt: number;
   }
+  // A message that carries a cron fire marker was written by the scheduler,
+  // not typed by anyone. One predicate, shared by both relay paths.
+  const isHumanMessage = (text: string) => parseCronMarker(text) === null;
   const agentRunners = new Map<string, AgentRunnerConn>();
   /**
    * The bus edge for an OPTIMISTIC turn start — the moment the server relays a
@@ -243,6 +258,26 @@ export function attachWsServer(deps: {
     // False just means "no runner right now" — the row + startup_cmd already
     // carry the mode, so the next respawn is correct either way.
     deps.agentBridge.setMode = (paneId, mode) => sendToRunner(paneId, { t: 'mode', mode });
+    // The UNWRAPPED queue answer, for the cron scheduler's run history. Same
+    // single injection path as `send` above — it just doesn't flatten
+    // 'sent'/'queued' into one boolean, because a run log that can't tell "it
+    // ran" from "it's waiting behind a turn" is most of the way back to the
+    // silent failure this whole thing exists to escape.
+    deps.agentBridge.submitSend = (paneId, text) => submitSend(paneId, text);
+    // Registry reads the cron policies key on. All null/false with no runner
+    // connected, which every caller treats as "unknown → don't block on it".
+    deps.agentBridge.contextPct = (paneId) =>
+      agentRunners.get(paneId)?.status?.context?.pct ?? null;
+    deps.agentBridge.lastSendAt = (paneId) => {
+      const conn = agentRunners.get(paneId);
+      // The HUMAN send, not any relay: a cron's own fire must not count as
+      // "the user is right here", or a 5-minute cron with quiet_mins set would
+      // defer itself forever. 0 is the never-sent sentinel — report it as
+      // "unknown", not as 1970.
+      return conn && conn.lastHumanSendAt > 0 ? conn.lastHumanSendAt : null;
+    };
+    deps.agentBridge.slash = (paneId, cmd) => sendToRunner(paneId, { t: 'slash', cmd });
+    deps.agentBridge.blocked = (paneId) => !!agentRunners.get(paneId)?.pendingQuestion;
   }
 
   // -------------------------------------------------------------------------
@@ -466,6 +501,7 @@ export function attachWsServer(deps: {
       // false and no event fired at all. Mirror the optimism into both.
       conn.turnActive = true;
       conn.lastSendAt = Date.now();
+      if (isHumanMessage(next.text)) conn.lastHumanSendAt = conn.lastSendAt;
       deps.cache.setAgentBusy(paneId, true);
       emitOptimisticTurnStart(paneId);
       queue.remove(next.id, paneId);
@@ -497,6 +533,7 @@ export function attachWsServer(deps: {
       if (sendToRunner(paneId, { t: 'send', text: t })) {
         conn.turnActive = true; // optimistic; runner's turn-start reaffirms
         conn.lastSendAt = Date.now();
+        if (isHumanMessage(t)) conn.lastHumanSendAt = conn.lastSendAt;
         // Same D14 mirroring as drainQueue: turn state, pane status and the
         // bus must not disagree for the duration of the round trip.
         deps.cache.setAgentBusy(paneId, true);
@@ -634,6 +671,7 @@ export function attachWsServer(deps: {
           subagents: new Map(),
           status: null,
           lastSendAt: 0,
+          lastHumanSendAt: 0,
         };
         agentRunners.set(paneId, conn);
         const bcast = (obj: unknown) => bcastToPane(paneId, obj);
@@ -811,7 +849,7 @@ export function attachWsServer(deps: {
             // driving (every reply would buzz their phone mid-chat).
             // Long-running turns (the user walked away) and autonomous
             // wakeup/cron turns (no recent send) do push.
-            if (Date.now() - conn.lastSendAt > INTERACTIVE_PUSH_SUPPRESS_MS) {
+            if (Date.now() - conn.lastHumanSendAt > INTERACTIVE_PUSH_SUPPRESS_MS) {
               // Prefer a snippet of what the agent actually said over the
               // generic "finished its turn".
               deps.notifyPane?.(

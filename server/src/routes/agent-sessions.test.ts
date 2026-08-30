@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createAgentBridge } from '../agent-bridge.js';
 import { openDb } from '../store/db.js';
 import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
 
@@ -147,9 +148,9 @@ describe('agent-sessions turn_active (bridge-wired)', () => {
       db: openDb(':memory:'),
       dataDir: tmp,
       agentBridge: {
+        ...createAgentBridge(),
         send: () => ({ ok: false, reason: 'test bridge' }),
         turnActive: (paneId) => (midTurn.has(paneId) ? true : null),
-        setMode: () => false,
       },
     });
   });
