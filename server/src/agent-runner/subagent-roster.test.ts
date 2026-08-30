@@ -263,6 +263,61 @@ describe('SubagentRoster — reconciliation against the SDK level signal', () =>
     expect(roster.size).toBe(0);
   });
 
+  it('resurrects a RESUMED agent, on its original row', () => {
+    // Probe-verified (SDK 0.3.220): a finished background agent that is resumed
+    // (`SendMessage`) re-enters the live set under the SAME task id, but the
+    // new `task_started` / `task_notification` carry the RESUMING call's
+    // tool_use id — while its child messages still carry the original launch's.
+    // Without resurrection the row would be gone and could never come back:
+    // `activity` no longer adopts, so nothing else would ever re-create it.
+    const { roster, sent, tick } = make();
+    roster.launch('tu_1', 'sleeper');
+    roster.bindTask('tu_1', 'task_1');
+    roster.reconcileBackground(['task_1']);
+    tick(600);
+    roster.activity('tu_1', 'Bash: sleep 3');
+    roster.done('tu_1'); // its task_notification
+    expect(roster.size).toBe(0);
+
+    // Resumed: the level signal names task_1 again, and the resuming
+    // SendMessage id is NOT a launch we know.
+    tick(10_000);
+    roster.bindTask('tu_sendmessage', 'task_1');
+    roster.reconcileBackground(['task_1']);
+    expect(roster.size).toBe(1);
+    const back = roster.values()[0];
+    expect(back?.toolUseId).toBe('tu_1'); // the original row, not the resume's
+    expect(back?.label).toBe('sleeper');
+    expect(back?.steps).toBe(1); // continues, does not restart at zero
+    expect(sent.at(-1)).toMatchObject({ toolUseId: 'tu_1', label: 'sleeper' });
+
+    // …and it still ends properly the second time.
+    roster.reconcileBackground([]);
+    expect(roster.size).toBe(0);
+  });
+
+  it('resurrection cannot smuggle in a NESTED agent', () => {
+    // A grandchild's task id is never bound to a launch, so it is never
+    // remembered — a level payload naming it creates nothing.
+    const { roster } = make();
+    roster.bindTask('tu_nested', 'task_nested'); // ignored: never launched
+    roster.reconcileBackground(['task_nested']);
+    roster.reconcileBackground(['task_nested']);
+    expect(roster.size).toBe(0);
+  });
+
+  it('does not resurrect a task that simply stayed finished', () => {
+    const { roster } = make();
+    roster.launch('tu_1', 'worker');
+    roster.bindTask('tu_1', 'task_1');
+    roster.reconcileBackground(['task_1']);
+    roster.reconcileBackground([]);
+    expect(roster.size).toBe(0);
+    roster.reconcileBackground([]);
+    roster.announceAll();
+    expect(roster.size).toBe(0);
+  });
+
   it('never leaks its bookkeeping onto the wire', () => {
     const { roster, sent } = make();
     roster.launch('tu_1', 'worker');
