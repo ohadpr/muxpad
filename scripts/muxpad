@@ -972,7 +972,7 @@ cmd_pane_list() {
   # "org chart"), one line each:
   #   <pane-id>  <ws>/<tab>  <face>  <status>  <title|foreground_cmd>
   #
-  # <status> is the pane's FULL five-state status (blocked|working|dead|done|
+  # <status> is the pane's FULL five-state status (blocked|working|dead|ready|
   # idle), not the old busy/idle pair. `busy` is a deprecated alias for exactly
   # one of those five (working), so printing it collapsed "waiting on you",
   # "the runner died" and "finished, unreviewed" all into "idle" — the three
@@ -1621,7 +1621,7 @@ cmd_agent_list() {
   res="$(http_request GET /api/agent-sessions)"
   # TURN, not STATUS. `agent_sessions.status` is running|idle — the session's
   # TURN state — and is a different vocabulary from the pane/tab/workspace
-  # `status` (blocked|working|dead|done|idle) the other list commands print.
+  # `status` (blocked|working|dead|ready|idle) the other list commands print.
   # Two meanings under one column header is how a supervisor misreads its own
   # org chart, so the narrower one gets the narrower name.
   print_table "$res" \

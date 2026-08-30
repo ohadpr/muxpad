@@ -119,7 +119,7 @@ title) and \`muxpad agent list\` (every agent session: backend, mode, status).
 - Read \`status\` in \`pane list\`, not \`busy\`. It is one of
   \`blocked\` (wants you NOW — an agent question, or a BEL),
   \`working\` (a turn or a background subagent is running),
-  \`done\` (finished, unread), \`dead\` (the runner gave up), \`idle\`.
+  \`ready\` (finished, waiting for you), \`dead\` (the runner gave up), \`idle\`.
   \`agents\` alongside it counts live background subagents.
   \`busy\` is a deprecated alias for \`status === 'working'\`.
 - For a RUNNER-OWNED pane, \`working\` is the runner registry — a turn or the
