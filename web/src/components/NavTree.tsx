@@ -15,6 +15,7 @@ import { getLastPaneId, setLastPaneId } from '../lib/last-visited';
 import { pushUndo } from '../lib/move-undo-store';
 import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansion';
 import { tabRowAffordances } from '../lib/nav-row-affordances';
+import { nextCronLabel } from '../lib/next-cron-label';
 import { PANE_DRAG_MIME, type PaneDragOrigin, paneDragOrigin } from '../lib/pane-drag';
 import { reorderByDrop } from '../lib/reorder';
 import { orderAfterPinnedDrop, paneDropAction } from '../lib/tab-drag';
@@ -31,6 +32,7 @@ import {
 } from '../workspaces';
 import { NewTabButton } from './NewTabButton';
 import { StatusMark } from './StatusMark';
+import { SwipeRow } from './SwipeRow';
 import { SvgClose } from './icons';
 import './NavTree.css';
 
@@ -724,16 +726,26 @@ function WorkspaceNode({
             Collapsed-ONLY, for the same reason the tab-count chip is: once the
             tabs are listed they carry their own marks, and a rollup on top of
             them would just double-signal. */}
-        {!expanded && <StatusMark status={workspace.status} />}
-        <button
-          type="button"
-          className="navtree-close"
-          onClick={(e) => void closeWorkspace(e)}
-          title="Close workspace"
-          aria-label={`Close workspace ${workspace.name}`}
-        >
-          <SvgClose size={13} />
-        </button>
+        <span className="navtree-tab-controls">
+          <button
+            type="button"
+            className="navtree-close"
+            onClick={(e) => void closeWorkspace(e)}
+            title="Close workspace"
+            aria-label={`Close workspace ${workspace.name}`}
+          >
+            <SvgClose size={13} />
+          </button>
+        </span>
+        {/* LAST cell, always — same rule as the tab rows, which is what puts
+            the workspace mark on the same vertical line as the tab marks
+            beneath it instead of 4px off (the old flex order had the × after
+            the mark, so revealing it on hover shoved the mark left).
+            An EXPANDED workspace draws no mark — its tabs carry their own and
+            a rollup on top would double-signal — but it still renders an
+            `idle` StatusMark rather than nothing, so the column is reserved
+            and expanding a workspace doesn't shift its own header. */}
+        <StatusMark status={expanded ? 'idle' : workspace.status} />
       </div>
       {expanded && (
         <TabList
@@ -1304,16 +1316,21 @@ interface TabRowProps {
 }
 
 /**
- * "This chat runs on a schedule." A quiet ⏱ on the NAME side of a nav row.
+ * "This chat runs on a schedule, and next at —." The nav row's META column.
  *
  * NOT a status. The status rail (StatusMark) holds exactly one transient,
  * mutually-exclusive state and lives in a fixed column at a constant x so it
  * can be scanned vertically — putting a standing PROPERTY of the chat there
  * would both break that scan and lose to `working` the moment the cron
  * actually fired, which is precisely when you'd want to know a schedule
- * exists. So it rides beside the name, where the other facts about the tab
- * (its icon, its name, its pane count) already are, and it never changes:
- * when a cron fires, the existing `working` status shows the activity.
+ * exists. It gets its own column instead, between the name and the rail.
+ *
+ * It used to be a bare ⏱ beside the name, which said a schedule EXISTS but
+ * never when — so the one thing you actually want from a rail glance ("does
+ * anything run before I go out?") still cost a hover. Now the time is the
+ * mark: a dimmed clock set back from a monospace, tabular-figure time, right
+ * aligned, so `◷ 07:00` and `◷ Sun 09:00` land on the same digits. The
+ * tooltip still carries which cron and the full date.
  *
  * The server folds `crons` + `next_cron` into the tab row (decorateTab), so
  * this costs no request — and no per-row query on the server either.
@@ -1321,19 +1338,21 @@ interface TabRowProps {
 function CronMark({ tab }: { tab: Tab }) {
   const next = tab.next_cron;
   const count = tab.crons ?? 0;
-  const when = next
-    ? new Date(next.next_due_at).toLocaleString(undefined, {
-        weekday: 'short',
-        hour: '2-digit',
-        minute: '2-digit',
-      })
-    : null;
+  const label = next ? nextCronLabel(next.next_due_at) : null;
   const title = next
-    ? `${next.name} · next ${when}${count > 1 ? ` (+${count - 1} more)` : ''}`
+    ? `${next.name} · next ${new Date(next.next_due_at).toLocaleString()}${
+        count > 1 ? ` (+${count - 1} more)` : ''
+      }`
     : `${count} scheduled job${count === 1 ? '' : 's'}`;
   return (
     <span className="navtree-cron" title={title} aria-label={title}>
-      ⏱
+      {/* Set BACK from the time (opacity + a 5px gap) so the eye lands on the
+          digits, which are the information; the glyph only says what kind of
+          number it is. */}
+      <span className="navtree-cron-glyph" aria-hidden="true">
+        ◷
+      </span>
+      {label}
     </span>
   );
 }
@@ -1497,121 +1516,128 @@ function TabRow({
           },
         }
       : tabRowDnd;
-  return (
-    <>
-      <div
-        className="navtree-tab-row"
-        data-active={isActiveTab ? 'true' : undefined}
-        data-unread={tab.unread ? 'true' : undefined}
-        data-pressing={pressing ? 'true' : undefined}
-        data-drop-into={dropInto ? 'true' : undefined}
-        {...(variant === 'sidebar' && !isEditing
-          ? {
-              onContextMenu: (e: React.MouseEvent) => {
-                e.preventDefault();
-                setMenu({ x: e.clientX, y: e.clientY });
-              },
-            }
-          : {})}
-        {...dropDnd}
-      >
-        {/* Sheet: the pane disclosure LEADS the row — the same left-edge
+
+  // The row itself, identical on both variants. The sheet wraps it in a
+  // SwipeRow below; the sidebar renders it bare.
+  const row = (
+    <div
+      className="navtree-tab-row"
+      data-active={isActiveTab ? 'true' : undefined}
+      data-unread={tab.unread ? 'true' : undefined}
+      data-pressing={pressing ? 'true' : undefined}
+      data-drop-into={dropInto ? 'true' : undefined}
+      {...(variant === 'sidebar' && !isEditing
+        ? {
+            onContextMenu: (e: React.MouseEvent) => {
+              e.preventDefault();
+              setMenu({ x: e.clientX, y: e.clientY });
+            },
+          }
+        : {})}
+      {...dropDnd}
+    >
+      {/* Sheet: the pane disclosure LEADS the row — the same left-edge
           grammar as the workspace rows, so thumbs already know where it
           lives. Full row height; squeezing it between the name and the ×
           made every tap a coin-flip between expand/navigate/close. Only
           multi-pane tabs get it — with one pane there's nothing to pick. */}
-        {affords.paneExpander ? (
-          <button
-            type="button"
-            className="navtree-pane-expander"
-            data-open={panesOpen ? 'true' : undefined}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              togglePanes();
-            }}
-            aria-expanded={panesOpen}
-            aria-label={panesOpen ? `Hide panes of ${tab.name}` : `Show panes of ${tab.name}`}
-          >
-            <SvgChevronRight />
-          </button>
-        ) : variant === 'sheet' && !isEditing ? (
-          // The expander column doubles as the tab indent — chevron-less
-          // (single-pane) rows keep an identical-width spacer so every tab
-          // name sits on the same grid line.
-          <span className="navtree-pane-expander -spacer" aria-hidden="true" />
-        ) : null}
-        {isEditing ? (
-          <RenameInput
-            initial={tab.name}
-            onCommit={async (name) => {
-              setEditing(null);
-              if (!name || name === tab.name) return;
-              try {
-                await api.patchTab(tab.id, { name });
-              } catch (err) {
-                console.error('rename tab failed', err);
-              }
-              await refreshTabs(workspace.id);
-            }}
-            onCancel={() => setEditing(null)}
-          />
-        ) : (
-          <Link
-            to="/w/$wsSlug/t/$tabSlug"
-            params={{ wsSlug: workspace.slug, tabSlug: tab.slug }}
-            className="navtree-tab-link"
-            // The row owns drag-to-reorder; don't let the anchor drag its URL.
-            draggable={false}
-            title={variant === 'sidebar' && isActiveTab ? 'Double-click to rename' : tab.name}
-            onDoubleClick={
-              variant === 'sidebar' && isActiveTab
-                ? (e) => {
-                    e.preventDefault();
-                    setEditing({ kind: 'tab', id: tab.id });
-                  }
-                : undefined
+      {affords.paneExpander ? (
+        <button
+          type="button"
+          className="navtree-pane-expander"
+          data-open={panesOpen ? 'true' : undefined}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            togglePanes();
+          }}
+          aria-expanded={panesOpen}
+          aria-label={panesOpen ? `Hide panes of ${tab.name}` : `Show panes of ${tab.name}`}
+        >
+          <SvgChevronRight />
+        </button>
+      ) : variant === 'sheet' && !isEditing ? (
+        // The expander column doubles as the tab indent — chevron-less
+        // (single-pane) rows keep an identical-width spacer so every tab
+        // name sits on the same grid line.
+        <span className="navtree-pane-expander -spacer" aria-hidden="true" />
+      ) : null}
+      {/* Leading icon — its OWN grid cell now, not the first inline-flex
+            child of the link. The row is a strict four-track grid
+            (icon | name+headline | meta | status), and the only way every
+            status mark lands on one vertical line is if nothing in front of
+            it is free to size itself. Click opens the picker; a span, not a
+            button, so it can also be dragged with the row. Mouse-only by
+            design — the keyboard path is the context menu's "Change icon…". */}
+      {/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard path is the context menu's "Change icon…" item */}
+      <span
+        className="navtree-tab-icon"
+        title="Change icon"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+          setPicker({ x: r.left, y: r.bottom + 4 });
+        }}
+        onDoubleClick={(e) => {
+          // Don't let a fast double-click on the icon trip the row's
+          // rename-on-doubleclick.
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+      >
+        {tab.icon ?? DEFAULT_TAB_ICON}
+      </span>
+      {isEditing ? (
+        <RenameInput
+          initial={tab.name}
+          onCommit={async (name) => {
+            setEditing(null);
+            if (!name || name === tab.name) return;
+            try {
+              await api.patchTab(tab.id, { name });
+            } catch (err) {
+              console.error('rename tab failed', err);
             }
-            {...pressHandlers}
-            onClick={(e) => {
-              // Long-press consumes the tap (opens the menu, not navigate).
-              pressHandlers.onClick(e);
-              if (e.defaultPrevented) return;
-              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-              // Multi-pane tab on the sheet: the tab name itself TOGGLES the
-              // pane list — you pick an actual pane, never land on "whichever
-              // pane happened to be active".
-              if (sheetPicksPane) {
-                e.preventDefault();
-                togglePanes();
-                return;
-              }
-              onNavigate?.();
-            }}
-          >
-            {/* Leading icon — click to open the picker. A span (not a button)
-              since it lives inside the anchor; stop+prevent so the click
-              picks an icon instead of navigating. Mouse-only by design — the
-              keyboard-accessible path is the row context menu "Change icon…". */}
-            {/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard path is the context menu's "Change icon…" item */}
-            <span
-              className="navtree-tab-icon"
-              title="Change icon"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                setPicker({ x: r.left, y: r.bottom + 4 });
-              }}
-              onDoubleClick={(e) => {
-                // Don't let a fast double-click on the icon trip the row's
-                // rename-on-doubleclick.
-                e.preventDefault();
-                e.stopPropagation();
-              }}
-            >
-              {tab.icon ?? DEFAULT_TAB_ICON}
-            </span>
+            await refreshTabs(workspace.id);
+          }}
+          onCancel={() => setEditing(null)}
+        />
+      ) : (
+        <Link
+          to="/w/$wsSlug/t/$tabSlug"
+          params={{ wsSlug: workspace.slug, tabSlug: tab.slug }}
+          className="navtree-tab-link"
+          // The row owns drag-to-reorder; don't let the anchor drag its URL.
+          draggable={false}
+          title={variant === 'sidebar' && isActiveTab ? 'Double-click to rename' : tab.name}
+          onDoubleClick={
+            variant === 'sidebar' && isActiveTab
+              ? (e) => {
+                  e.preventDefault();
+                  setEditing({ kind: 'tab', id: tab.id });
+                }
+              : undefined
+          }
+          {...pressHandlers}
+          onClick={(e) => {
+            // Long-press consumes the tap (opens the menu, not navigate).
+            pressHandlers.onClick(e);
+            if (e.defaultPrevented) return;
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+            // Multi-pane tab on the sheet: the tab name itself TOGGLES the
+            // pane list — you pick an actual pane, never land on "whichever
+            // pane happened to be active".
+            if (sheetPicksPane) {
+              e.preventDefault();
+              togglePanes();
+              return;
+            }
+            onNavigate?.();
+          }}
+        >
+          {/* Line one: the name, and the two chips that qualify it. */}
+          <span className="navtree-tab-titleline">
             {quickNumber !== undefined && (
               <span className="navtree-quicknum" aria-hidden="true">
                 {quickNumber}
@@ -1620,171 +1646,189 @@ function TabRow({
             <span className="navtree-name-text" title={tab.name}>
               {tab.name}
             </span>
-            {/* ⏱ — this chat has a SCHEDULE. Deliberately on the NAME side and
-                deliberately NOT in the status rail: the rail holds one
-                transient, mutually-exclusive state (working / blocked / …),
-                and a cron is a standing property of the chat that is true
-                whether or not anything is happening. When a cron actually
-                fires, the existing `working` status covers the activity — this
-                mark never changes. Tooltip carries which cron and when it next
-                runs, in the viewer's locale. */}
-            {tab.crons ? <CronMark tab={tab} /> : null}
             {/* Pane-count hint — SHEET ONLY, and only while the row is
-                COLLAPSED. On mobile a one-pane tab and a five-pane tab looked
-                identical yet behaved completely differently: tapping the
-                former navigates into the tab, tapping the latter expands a
-                pane list in place and navigates nowhere. The only thing
-                distinguishing them was a 10px chevron at the far-left edge,
-                opposite the name you actually read.
-                This is deliberately NOT a new indicator: it is the very same
-                `.navtree-ws-count` chip a COLLAPSED WORKSPACE row already
-                uses, and it already means exactly "this row is hiding N
-                children, open it to see them". Same mark, same meaning, one
-                level down — so the row now explains its own tap behavior.
-                Collapsed-only for the same reason the workspace chip is:
-                once the panes are listed, the count is right there. */}
+                  COLLAPSED. On mobile a one-pane tab and a five-pane tab
+                  looked identical yet behaved completely differently: tapping
+                  the former navigates into the tab, tapping the latter expands
+                  a pane list in place and navigates nowhere. The only thing
+                  distinguishing them was a 10px chevron at the far-left edge,
+                  opposite the name you actually read.
+                  This is deliberately NOT a new indicator: it is the very same
+                  `.navtree-ws-count` chip a COLLAPSED WORKSPACE row already
+                  uses, and it already means exactly "this row is hiding N
+                  children, open it to see them". Same mark, same meaning, one
+                  level down — so the row now explains its own tap behavior.
+                  Collapsed-only for the same reason the workspace chip is:
+                  once the panes are listed, the count is right there. */}
             {affords.paneCountChip ? (
               <span className="navtree-ws-count navtree-pane-count" aria-hidden="true">
                 {paneCount}
               </span>
             ) : null}
-          </Link>
-        )}
-        {/* The status rail. OUTSIDE the link on purpose: inside, it trailed an
-            ellipsizable name, so its x differed on every row and there was no
-            vertical line to scan. Out here it sits in a fixed 16px column at a
-            constant x, with only the (zero-width-at-rest) pin and × to its
-            right. Shown on the ACTIVE row too — agent panes work quietly for
+          </span>
+          {/* Line two: WHAT THIS CHAT IS ABOUT — one machine-written line,
+                dim, ellipsised, never wrapped. A name alone ("muxpad",
+                "Main") tells you which chat; it never tells you where you
+                left it, so re-entering a chat always cost a read of the last
+                turn. Written rarely and kept sticky on purpose (see the
+                server's headline generator): a summary that churned every
+                turn would be a second moving thing in a rail whose whole
+                point is that only one thing moves. Absent is FINE — the row
+                is simply one line tall. Never a placeholder, never an error:
+                a rail that says "couldn't summarise" on ten rows is worse
+                than a rail that says nothing. */}
+          {tab.headline ? (
+            <span className="navtree-tab-headline" title={tab.headline}>
+              {tab.headline}
+            </span>
+          ) : null}
+        </Link>
+      )}
+      {/* META — the third grid track. Holds the schedule and nothing else.
+            The subagent count used to ride here (as an absolutely-positioned
+            chip hanging off the status mark) and is gone: it moved the mark
+            off the scan line, and "6 agents" is a number you act on inside
+            the chat, not from the rail. */}
+      {!isEditing ? (
+        <span className="navtree-tab-meta">{tab.crons ? <CronMark tab={tab} /> : null}</span>
+      ) : null}
+      {/* Hover-revealed controls — DESKTOP ONLY, and deliberately placed
+            BEFORE the status mark. They expand from zero width on hover, and
+            anything that grows to the RIGHT of the rail drags the mark off the
+            scan line for exactly the row you happen to be pointing at. In
+            their own cell (which swallows its grid gap while collapsed) the
+            status column stays the last, fixed track in the grid, so the marks
+            hold their line under every condition — hover, focus, drag,
+            whatever. Touch renders none of this: the sheet's pin and close
+            live under the row, behind a left swipe. */}
+      {affords.pinButton || affords.closeButton ? (
+        <span className="navtree-tab-controls">
+          {/* A pinned tab keeps its pin lit — that is the only "this is
+                pinned" signal in the rail, by design (no extra badges). */}
+          {affords.pinButton ? (
+            <button
+              type="button"
+              className={`navtree-close navtree-pin${tab.pinned ? ' is-pinned' : ''}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                onSetPinned(!tab.pinned);
+              }}
+              title={tab.pinned ? 'Unpin tab' : 'Pin tab to the top'}
+              aria-label={tab.pinned ? `Unpin tab ${tab.name}` : `Pin tab ${tab.name}`}
+              aria-pressed={tab.pinned === true}
+            >
+              <SvgPin size={12} filled={tab.pinned === true} />
+            </button>
+          ) : null}
+          {affords.closeButton ? (
+            <button
+              type="button"
+              className="navtree-close"
+              onClick={onClose}
+              title="Close tab"
+              aria-label={`Close tab ${tab.name}`}
+            >
+              <SvgClose size={13} />
+            </button>
+          ) : null}
+        </span>
+      ) : null}
+      {/* The status rail — the LAST track, fixed width, so its x is a
+            property of the row's right edge and nothing in front of it can
+            move it. Shown on the ACTIVE row too: agent panes work quietly for
             minutes on their chat face, and a glance should always answer "is
             anything still running here?" */}
-        {!isEditing && <StatusMark status={tab.status} />}
-        {/* Pin affordance — DESKTOP ONLY. It rides the close ×'s reveal
-            machinery (zero-width until the row is hovered/focused), and a
-            pinned tab keeps it lit so the pin doubles as the "this is pinned"
-            marker. It is deliberately NOT rendered on the sheet: a second
-            always-on 32px hit square next to the × crowded the row, was
-            undiscoverable at 16% opacity, and sat exactly where a thumb lands
-            — so a tap meant to open the row silently toggled pinning, and a
-            long-press meant for the menu hit a button with no press handlers.
-            Touch gets the ⋯ button below instead, which is a real tap target. */}
-        {affords.pinButton ? (
-          <button
-            type="button"
-            className={`navtree-close navtree-pin${tab.pinned ? ' is-pinned' : ''}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              e.preventDefault();
-              onSetPinned(!tab.pinned);
-            }}
-            title={tab.pinned ? 'Unpin tab' : 'Pin tab to the top'}
-            aria-label={tab.pinned ? `Unpin tab ${tab.name}` : `Pin tab ${tab.name}`}
-            aria-pressed={tab.pinned === true}
-          >
-            <SvgPin size={12} filled={tab.pinned === true} />
-          </button>
-        ) : null}
-        {/* Tab actions — SHEET ONLY. Every tab action (pin, mark unread,
-            rename, icon, new pane, move, close) used to be reachable on touch
-            ONLY by long-pressing the row, and that gesture is not dependable
-            here: the rows live in a momentum-scrolling container
-            (.navtree-scroll: overflow-y auto + -webkit-overflow-scrolling
-            touch), and iOS hands the touch to the scroll recognizer, which
-            surfaces to the page as pointercancel and kills the hold. A plain
-            tap on a real button has none of that fragility. Long-press still
-            works where it works; it is no longer the only way in. */}
-        {affords.moreButton ? (
-          <button
-            type="button"
-            className="navtree-close navtree-more"
-            onClick={(e) => {
-              e.stopPropagation();
-              e.preventDefault();
-              // Anchor under the button so the menu opens where you tapped.
-              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-              setMenu({ x: r.right, y: r.bottom + 4 });
-            }}
-            title="Tab actions"
-            aria-haspopup="menu"
-            aria-expanded={menu !== null}
-            aria-label={`Actions for tab ${tab.name}`}
-          >
-            <SvgMore size={14} />
-          </button>
-        ) : null}
-        <button
-          type="button"
-          className="navtree-close"
-          onClick={onClose}
-          title="Close tab"
-          aria-label={`Close tab ${tab.name}`}
+      {!isEditing && <StatusMark status={tab.status} />}
+      {menu && (
+        <NavContextMenu
+          x={menu.x}
+          y={menu.y}
+          onDismiss={() => setMenu(null)}
+          items={[
+            // Leads the list: on touch this menu (reached by the row's ⋯
+            // button) is the ONLY route to pin/unpin — the pin button is
+            // desktop-only. See lib/nav-row-affordances.
+            tab.pinned
+              ? { label: 'Unpin', onSelect: () => onSetPinned(false) }
+              : { label: 'Pin to top', onSelect: () => onSetPinned(true) },
+            tab.unread
+              ? { label: 'Mark as read', onSelect: () => onSetUnread(false) }
+              : { label: 'Mark as unread', onSelect: () => onSetUnread(true) },
+            {
+              label: 'Change icon…',
+              onSelect: () => setPicker({ x: menu.x, y: menu.y }),
+            },
+            { label: 'Rename', onSelect: () => setEditing({ kind: 'tab', id: tab.id }) },
+            { label: 'New pane', onSelect: () => onAddPane() },
+            // "Move to workspace ▸" with the workspaces in a hover flyout, so
+            // the main menu stays short. Omitted entirely when there's nowhere
+            // to move to. (Dragging the tab onto a workspace row also works.)
+            ...(otherWorkspaces.length > 0
+              ? [
+                  {
+                    label: 'Move to workspace',
+                    submenu: otherWorkspaces.map((w) => ({
+                      label: w.name,
+                      onSelect: () =>
+                        void moveTabToWorkspace({
+                          tabId: tab.id,
+                          tabName: tab.name,
+                          fromWorkspaceId: workspace.id,
+                          toWorkspaceId: w.id,
+                          toWorkspaceName: w.name,
+                        }),
+                    })),
+                  },
+                ]
+              : []),
+            {
+              label: 'Close tab',
+              danger: true,
+              // onClose expects a MouseEvent for stopPropagation; the menu
+              // already dismissed, so a lightweight stub is enough.
+              onSelect: () =>
+                onClose({ stopPropagation() {}, preventDefault() {} } as React.MouseEvent),
+            },
+          ]}
+        />
+      )}
+      {picker && (
+        <IconPicker
+          x={picker.x}
+          y={picker.y}
+          onPick={(icon) => {
+            setPicker(null);
+            onSetIcon(icon);
+          }}
+          onDismiss={() => setPicker(null)}
+        />
+      )}
+    </div>
+  );
+
+  return (
+    <>
+      {/* Touch wraps the row in its swipe shell; the pin and close it reveals
+          are the ONLY per-row actions on the sheet, and they cost nothing
+          until you ask for them. Desktop renders the row bare and keeps its
+          hover-revealed controls — a mouse has hover, so there is nothing to
+          fix there and a gesture would only be in the way.
+          Not while EDITING: a rename input you can swipe out from under is a
+          way to lose what you typed. */}
+      {variant === 'sheet' && !isEditing ? (
+        <SwipeRow
+          id={tab.id}
+          label={`chat ${tab.name}`}
+          pinned={tab.pinned === true}
+          onPin={() => onSetPinned(!tab.pinned)}
+          onClose={() => onClose({ stopPropagation() {}, preventDefault() {} } as React.MouseEvent)}
         >
-          <SvgClose size={13} />
-        </button>
-        {menu && (
-          <NavContextMenu
-            x={menu.x}
-            y={menu.y}
-            onDismiss={() => setMenu(null)}
-            items={[
-              // Leads the list: on touch this menu (reached by the row's ⋯
-              // button) is the ONLY route to pin/unpin — the pin button is
-              // desktop-only. See lib/nav-row-affordances.
-              tab.pinned
-                ? { label: 'Unpin', onSelect: () => onSetPinned(false) }
-                : { label: 'Pin to top', onSelect: () => onSetPinned(true) },
-              tab.unread
-                ? { label: 'Mark as read', onSelect: () => onSetUnread(false) }
-                : { label: 'Mark as unread', onSelect: () => onSetUnread(true) },
-              {
-                label: 'Change icon…',
-                onSelect: () => setPicker({ x: menu.x, y: menu.y }),
-              },
-              { label: 'Rename', onSelect: () => setEditing({ kind: 'tab', id: tab.id }) },
-              { label: 'New pane', onSelect: () => onAddPane() },
-              // "Move to workspace ▸" with the workspaces in a hover flyout, so
-              // the main menu stays short. Omitted entirely when there's nowhere
-              // to move to. (Dragging the tab onto a workspace row also works.)
-              ...(otherWorkspaces.length > 0
-                ? [
-                    {
-                      label: 'Move to workspace',
-                      submenu: otherWorkspaces.map((w) => ({
-                        label: w.name,
-                        onSelect: () =>
-                          void moveTabToWorkspace({
-                            tabId: tab.id,
-                            tabName: tab.name,
-                            fromWorkspaceId: workspace.id,
-                            toWorkspaceId: w.id,
-                            toWorkspaceName: w.name,
-                          }),
-                      })),
-                    },
-                  ]
-                : []),
-              {
-                label: 'Close tab',
-                danger: true,
-                // onClose expects a MouseEvent for stopPropagation; the menu
-                // already dismissed, so a lightweight stub is enough.
-                onSelect: () =>
-                  onClose({ stopPropagation() {}, preventDefault() {} } as React.MouseEvent),
-              },
-            ]}
-          />
-        )}
-        {picker && (
-          <IconPicker
-            x={picker.x}
-            y={picker.y}
-            onPick={(icon) => {
-              setPicker(null);
-              onSetIcon(icon);
-            }}
-            onDismiss={() => setPicker(null)}
-          />
-        )}
-      </div>
+          {row}
+        </SwipeRow>
+      ) : (
+        row
+      )}
       {variant === 'sheet' && sheetPicksPane && panesOpen ? (
         <SheetPaneList
           tab={tab}
@@ -2018,15 +2062,6 @@ function SvgPin({ size = 12, filled = false }: { size?: number; filled?: boolean
 /** Horizontal ellipsis — the universal "more actions here" mark. Used on the
  *  mobile sheet, where the row's actions can't hide behind a hover or a
  *  gesture and need a control you can simply see and tap. */
-function SvgMore({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
-      <circle cx="3.5" cy="8" r="1.35" />
-      <circle cx="8" cy="8" r="1.35" />
-      <circle cx="12.5" cy="8" r="1.35" />
-    </svg>
-  );
-}
 
 function SvgChevronRight() {
   return (

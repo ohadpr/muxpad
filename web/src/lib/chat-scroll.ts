@@ -1,15 +1,40 @@
 /**
  * Remembered scroll positions for chat panes. A ChatPane loses its scroll
- * constantly — tab navigation unmounts it, and same-tab pane/face switches
- * hide it with display:none (which zeroes scrollTop) — so returning to a
- * chat always snapped to the bottom.
+ * constantly — a reload unmounts it, and tab/pane/face switches hide it with
+ * display:none (which zeroes scrollTop) — so returning to a chat always
+ * snapped to the bottom.
  *
- * Position is a RATIO of the scrollable range, not an absolute scrollTop:
- * content height can change while the reader is away (lazy-loading
- * attachment thumbnails especially), and an absolute offset then lands on
- * the wrong message; a ratio degrades proportionally. `pinned` readers keep
- * the follow-new-messages behavior; the sid guards staleness — a cleared/
- * rotated session forgets the spot.
+ * ── WHY A MESSAGE ID, NOT A RATIO ────────────────────────────────────────────
+ * This used to store position as a RATIO of the scrollable range, on the theory
+ * that a ratio "degrades proportionally" when the document height changes. It
+ * does — and proportional degradation is precisely the bug, because a chat log
+ * grows at BOTH ends:
+ *
+ *   · below, when the agent keeps talking while you're away;
+ *   · ABOVE, every time the older-history pager prepends a 128 KB batch.
+ *
+ * A ratio only preserves the reader's place when the content above them is
+ * fixed. Prepend `g` pixels of older history and the honest target is
+ * `R·range + g` (the same messages, pushed down); the ratio computes
+ * `R·(range + g)`, which is smaller for every R < 1 — so the reader is dragged
+ * BACK into older history, further with every batch. Worse, the ratio is a
+ * FIXED POINT: the settling-restore loop re-applies it each frame, so it
+ * silently overrides the prepend compensation `scrollTopAfterOlderPrepend`
+ * just computed. Measured on the real stack: parked at message 70, reopened at
+ * message 165, with the final scroll ratio equal to the stored one to three
+ * decimals.
+ *
+ * So the unit of memory is a MESSAGE: `anchorId` (an event id, which is stable
+ * across prepends, appends, dedupe and reconnects) plus `anchorOffset`, how far
+ * that message's top sat above the viewport top. Restoring means "put message
+ * X back under the reader's eyes", which is invariant to everything the
+ * document does around it. `ratio` is still written, purely as the fallback for
+ * when the anchored message isn't rendered (a fresh mount opens on a 128 KB
+ * tail; anything older has to be paged back in first — see the seek in
+ * ChatPane's restore effect).
+ *
+ * `pinned` readers keep the follow-new-messages behavior; the sid guards
+ * staleness — a cleared/rotated session forgets the spot.
  *
  * Persistence is gated by `shouldPersistChatScroll`: a display:none hide
  * zeroes clientHeight and must NOT write ratio 0 / unpinned, or the next
@@ -20,17 +45,24 @@
  * Module map + debounced sessionStorage write-through (reloads keep it),
  * LRU-bounded so a long cockpit session that visits many panes doesn't grow
  * it forever (pane deletion has no client-side hook to evict on). Storage key
- * is versioned (`:v2`) so a one-time wipe clears pre-fix corrupt entries
- * (ratio 0 / unpinned written while display:none).
+ * is versioned (`:v3` — v2 entries carry no anchor, and reading them would
+ * silently keep the ratio behaviour this file exists to retire).
  */
 export interface ChatScrollMem {
-  /** 0..1 fraction of (scrollHeight - clientHeight). */
+  /**
+   * Event id of the message under the viewport top, and how far its top sat
+   * ABOVE that line (so normally <= 0). null when nothing was measurable —
+   * then `ratio` is all we have.
+   */
+  anchorId: string | null;
+  anchorOffset: number;
+  /** 0..1 fraction of (scrollHeight - clientHeight). Fallback only. */
   ratio: number;
   pinned: boolean;
   sid: string | null;
 }
 
-const KEY = 'muxpad:chat-scroll:v2';
+const KEY = 'muxpad:chat-scroll:v3';
 const MAX_ENTRIES = 50;
 
 const mem: Map<string, ChatScrollMem> = (() => {
@@ -66,11 +98,16 @@ export function rememberChatScroll(paneId: string, m: ChatScrollMem): void {
 
 export function recallChatScroll(paneId: string): ChatScrollMem | null {
   const m = mem.get(paneId);
-  // Entries persisted by the earlier absolute-top format (same storage key)
-  // have no finite ratio — NaN scrollTop coerces to 0 and dumps the reader
-  // at the TOP of the chat. Treat them as no memory.
+  // A non-finite ratio (an older format, or a divide-by-zero that escaped)
+  // coerces to scrollTop 0 and dumps the reader at the TOP of the chat. Treat
+  // it as no memory. The anchor fields are normalised rather than rejected —
+  // an entry with a usable anchor and a junk offset is still worth honouring.
   if (!m || !Number.isFinite(m.ratio)) return null;
-  return m;
+  return {
+    ...m,
+    anchorId: typeof m.anchorId === 'string' ? m.anchorId : null,
+    anchorOffset: Number.isFinite(m.anchorOffset) ? m.anchorOffset : 0,
+  };
 }
 
 /**
@@ -178,3 +215,86 @@ export function scrollEventIsTrustworthy(opts: {
 }): boolean {
   return opts.now >= opts.suppressedUntil;
 }
+
+/**
+ * Index of the first row still (at least partly) on screen: the first whose
+ * BOTTOM is below the viewport top. That row is the one the reader's eye is
+ * anchored to, and the only one whose identity survives the document changing
+ * around it.
+ *
+ * Binary search, because this runs off scroll events and `bottomOf` costs a
+ * `getBoundingClientRect` each — a linear scan over a few hundred rows would
+ * be a per-frame layout tax on a chat that is doing nothing wrong. Rows are
+ * in-flow siblings in document order, so their bottoms are monotonic.
+ *
+ * Returns `count` when every row is above the line (the reader is past the end
+ * — only reachable transiently mid-relayout).
+ */
+export function firstVisibleRow(
+  count: number,
+  bottomOf: (i: number) => number,
+  viewportTop: number,
+): number {
+  let lo = 0;
+  let hi = count; // invariant: answer is in [lo, hi]
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (bottomOf(mid) > viewportTop) hi = mid;
+    else lo = mid + 1;
+  }
+  return lo;
+}
+
+/**
+ * Where `scrollTop` must land to put the anchored message back where it was.
+ *
+ * `rowTop` is the anchor row's current top relative to the viewport top;
+ * `anchorOffset` is where it sat when we remembered it. The difference is
+ * exactly how far the document has drifted under the reader, whatever caused
+ * it — a prepended history batch, a thumbnail decoding above, a font settling.
+ *
+ * CLAMPED for the same reason `scrollTopAfterOlderPrepend` is: the caller
+ * stamps the returned value as `lastProgrammaticTop`, and an out-of-range value
+ * never equals the scrollTop the browser clamps to — so the next scroll event
+ * would read as the reader taking control, and the restore loop would re-assign
+ * (forcing a reflow) every frame for its whole window.
+ */
+export function scrollTopForAnchor(opts: {
+  scrollTop: number;
+  rowTop: number;
+  anchorOffset: number;
+  scrollHeight: number;
+  clientHeight: number;
+}): number {
+  const raw = opts.scrollTop + (opts.rowTop - opts.anchorOffset);
+  return Math.min(Math.max(0, raw), maxScrollTop(opts.scrollHeight, opts.clientHeight));
+}
+
+/**
+ * How many older-history pages a restore may request while hunting for the
+ * remembered message.
+ *
+ * A fresh mount opens on the server's ~128 KB tail, so a reader who had paged
+ * back through half a long conversation left an anchor that simply is not in
+ * the document yet — and no arithmetic can conjure it. Paging back to find it
+ * is the only honest answer, but it has to be bounded: each page is a socket
+ * round trip and up to 128 KB, and a reader whose anchor was lost to a `/clear`
+ * must not drag the whole transcript over the wire looking for it.
+ *
+ * Eight pages ≈ 1 MB, which covers "I scrolled back a few screens yesterday"
+ * without ever approaching the tens of MB a long session's transcript reaches.
+ * Past that the fallback ratio applies and the reader lands in the tail — the
+ * old behaviour, which is a floor, not a regression.
+ */
+export const ANCHOR_SEEK_PAGE_BUDGET = 8;
+
+/**
+ * How long the settling restore keeps trying.
+ *
+ * The base window covers layout settling (composer regrowth, thumbnails). A
+ * restore that is SEEKING an off-screen anchor needs longer — each page is a
+ * server round trip — so the component extends the deadline per page it asks
+ * for, rather than raising the base for every restore.
+ */
+export const RESTORE_SETTLE_MS = 2500;
+export const ANCHOR_SEEK_PAGE_MS = 1500;

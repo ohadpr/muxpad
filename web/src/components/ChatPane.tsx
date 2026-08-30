@@ -42,8 +42,12 @@ import { SvgAgentGlyph, SvgGlobe, SvgTerminalGlyph } from './PaneWebSwitch';
 /** Open a media item in the lightbox (image or video). */
 type OpenMedia = (m: { url: string; name: string; video: boolean }) => void;
 import {
+  ANCHOR_SEEK_PAGE_BUDGET,
+  ANCHOR_SEEK_PAGE_MS,
+  RESTORE_SETTLE_MS,
   SHOW_SETTLE_MS,
   SMOOTH_SCROLL_SETTLE_MS,
+  firstVisibleRow,
   maxScrollTop,
   pinnedFromMemory,
   recallChatScroll,
@@ -51,6 +55,7 @@ import {
   scrollEventIsTrustworthy,
   scrollMemorySidMatches,
   scrollTopAfterOlderPrepend,
+  scrollTopForAnchor,
   shouldPersistChatScroll,
 } from '../lib/chat-scroll';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
@@ -815,6 +820,70 @@ function imageExtFromName(name: string): string | null {
 }
 
 /**
+ * The attribute top-level chat rows carry so the scroll memory can name one.
+ *
+ * The value is the same id the React key uses (an event id, or an action run's
+ * stable end event) — see `renderEvent`. Only TOP-LEVEL rows carry it: the
+ * lookups below assume `[data-eid]` boxes are siblings in document order, so
+ * their bottoms increase monotonically and can be binary-searched.
+ */
+const ANCHOR_ATTR = 'data-eid';
+
+/** The anchored rows of a chat, in document order. */
+function anchorRows(el: HTMLElement): HTMLElement[] {
+  const list = el.querySelector('.chat-list');
+  if (!list) return [];
+  // One pass over the list's DIRECT children (a live HTMLCollection, no layout
+  // and no subtree walk) rather than `querySelectorAll` over the whole tree:
+  // this runs off scroll events, and a long chat's rendered markdown is tens of
+  // thousands of nodes.
+  const out: HTMLElement[] = [];
+  for (const child of Array.from(list.children)) {
+    if (child instanceof HTMLElement && child.hasAttribute(ANCHOR_ATTR)) out.push(child);
+  }
+  return out;
+}
+
+/**
+ * Which message the reader is looking at, and how far its top sits above the
+ * viewport top. `null` when there is nothing anchorable (empty chat, or a
+ * hidden pane whose boxes have all collapsed).
+ */
+function captureAnchor(el: HTMLElement): { anchorId: string; anchorOffset: number } | null {
+  const rows = anchorRows(el);
+  if (rows.length === 0) return null;
+  const viewportTop = el.getBoundingClientRect().top;
+  const i = firstVisibleRow(
+    rows.length,
+    (k) => (rows[k] as HTMLElement).getBoundingClientRect().bottom,
+    viewportTop + 1,
+  );
+  // `firstVisibleRow` returns `count` when every row is above the line, which
+  // only happens transiently mid-relayout — the last row is still the best
+  // description of where the reader is.
+  const row = rows[Math.min(i, rows.length - 1)];
+  const anchorId = row?.getAttribute(ANCHOR_ATTR);
+  if (!row || !anchorId) return null;
+  return { anchorId, anchorOffset: Math.round(row.getBoundingClientRect().top - viewportTop) };
+}
+
+/** The rendered row for a remembered anchor id, or null if it isn't loaded. */
+function findAnchorRow(el: HTMLElement, anchorId: string): HTMLElement | null {
+  // Event ids carry '#' (Claude's `<uuid>#<block>`) and other selector
+  // metacharacters, so the value must be escaped — an unescaped '#' turns the
+  // attribute selector into a syntax error and throws out of the restore loop.
+  const escaped =
+    typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+      ? CSS.escape(anchorId)
+      : anchorId.replace(/["\\]/g, '\\$&');
+  try {
+    return el.querySelector<HTMLElement>(`[${ANCHOR_ATTR}="${escaped}"]`);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Chat view of the Claude session tracked in a pane. Connects to
  * /ws/chat/:paneId, replays the transcript as chat, then streams live turns
  * (dedupes by event id — the server may re-emit history after a compaction
@@ -917,6 +986,12 @@ export function ChatPane({
   // corrected by the server's `older-done`; `olderAnchor` preserves the scroll
   // position across a prepend so the view doesn't jump.
   const [hasMoreOlder, setHasMoreOlder] = useState(true);
+  // Mirror for the closures that outlive a render: the restore effect re-runs
+  // only on activation, so it would otherwise seek against whatever
+  // `hasMoreOlder` was when the pane became visible and keep asking for pages
+  // the server has already said don't exist.
+  const hasMoreOlderRef = useRef(true);
+  hasMoreOlderRef.current = hasMoreOlder;
   const [loadingOlder, setLoadingOlder] = useState(false);
   const loadingOlderRef = useRef(false);
   // The in-flight request's safety-net timer — cleared when `older-done` lands
@@ -1054,6 +1129,12 @@ export function ChatPane({
           setEvents([]);
           setStreamingText('');
           setHasMoreOlder(true);
+          hasMoreOlderRef.current = true;
+          // Geometry measured against the log we just wiped describes a
+          // document that no longer exists. The commit-identity guard in the
+          // prepend effect would drop it anyway, but leaving it live means the
+          // NEXT older batch of the NEW session could match it first.
+          olderAnchor.current = null;
         }
         if (newSid) renderedSid.current = newSid;
         setSession(
@@ -1757,8 +1838,23 @@ export function ChatPane({
   // pager keeps prepending older batches, image thumbnails load, and the sid
   // (staleness guard) may not be bound yet. A one-shot restore lands against a
   // partial height and drifts (the "doesn't always remember" bug). Instead,
-  // re-apply the remembered RATIO each frame for a short settling window — it
-  // converges as content arrives, and stops the instant the reader scrolls.
+  // re-assert the remembered position each frame for a short settling window —
+  // it converges as content arrives, and stops the instant the reader scrolls.
+  //
+  // The position it re-asserts is a MESSAGE, not a ratio. That distinction is
+  // the whole fix: the loop's re-assertion is authoritative, so whatever unit
+  // it uses wins over everything else that moves the scroll — including the
+  // older-prepend compensation below. With a ratio, every prepended batch was
+  // silently undone and the reader was dragged back into older history. With a
+  // message id, the loop and the prepend compensation agree by construction,
+  // because they are computing the same thing. See chat-scroll.ts.
+  //
+  // When the anchored message isn't rendered at all — a fresh mount opens on
+  // the server's 128 KB tail, and anything older has to be paged back in — the
+  // loop SEEKS it: up to ANCHOR_SEEK_PAGE_BUDGET older pages, extending its own
+  // deadline per request. Until it lands (or the budget runs out) the remembered
+  // ratio holds the reader roughly in place, which is the pre-fix behaviour and
+  // therefore a floor.
   //
   // Sid matching is soft: memory may be saved before the hello binds
   // renderedSid (or remount starts with sid=null). Requiring equality then
@@ -1791,9 +1887,20 @@ export function ChatPane({
     // refusing to apply its ratio was the worst of both — an unpinned pane
     // that anchored to nothing and then didn't follow new messages either.
     const usable = (mem: ReturnType<typeof recallChatScroll>) => (mem && sidOk(mem) ? mem : null);
-    pinnedToBottom.current = pinnedFromMemory(usable(recallChatScroll(paneId)));
+    // SNAPSHOT, read once. The loop used to re-read the store every frame,
+    // which was harmless while position was a ratio (writing R then reading R
+    // is a no-op) and is fatal now that it is a message: this loop's own
+    // scrollTop writes fire `onScroll`, which records the message NOW under the
+    // viewport top — so the target the loop is converging on was being
+    // overwritten with wherever the loop had got to. It could never move on
+    // from its first frame's guess, and a restore that has to PAGE the
+    // remembered message back in (see the seek below) lost its target before
+    // the first page even arrived.
+    const goal = usable(recallChatScroll(paneId));
+    pinnedToBottom.current = pinnedFromMemory(goal);
     let raf = 0;
-    const deadline = performance.now() + 2500;
+    let deadline = performance.now() + RESTORE_SETTLE_MS;
+    let seekPages = 0;
     const apply = () => {
       raf = 0;
       const el = scrollRef.current;
@@ -1801,7 +1908,10 @@ export function ChatPane({
       // the pane is collapsed). Every measurement taken from it is wrong;
       // skip this frame and try the next one.
       if (el && !userScrolled.current && el.clientHeight >= 40) {
-        const mem = usable(recallChatScroll(paneId));
+        // Re-check the sid each frame against the SNAPSHOT: on a fresh mount
+        // `renderedSid` is null until the hello lands, and a rotation that
+        // arrives mid-window must retire the goal (its conversation is gone).
+        const mem = usable(goal);
         if (el.scrollHeight > el.clientHeight) {
           if (!mem || mem.pinned) {
             // Pinned / no memory → hold the bottom while content streams in
@@ -1815,12 +1925,37 @@ export function ChatPane({
             }
           } else {
             pinnedToBottom.current = false;
-            // Clamped: iOS rubber-band can persist a slightly negative ratio,
-            // and an out-of-range target never equals the scrollTop the
-            // browser clamps it to — so the loop would re-assign (and force a
-            // reflow) every frame for the full window.
-            const range = maxScrollTop(el.scrollHeight, el.clientHeight);
-            const target = Math.min(Math.max(0, Math.round(mem.ratio * range)), range);
+            const row = mem.anchorId ? findAnchorRow(el, mem.anchorId) : null;
+            if (!row && mem.anchorId && hasMoreOlderRef.current) {
+              // The remembered message is older than the loaded window. Ask
+              // for the next page and give the loop time for the round trip —
+              // bounded, so a lost anchor can't drag a huge transcript over.
+              if (seekPages < ANCHOR_SEEK_PAGE_BUDGET && !loadingOlderRef.current) {
+                seekPages++;
+                deadline = performance.now() + ANCHOR_SEEK_PAGE_MS;
+                requestOlder();
+              }
+            }
+            const target = row
+              ? scrollTopForAnchor({
+                  scrollTop: el.scrollTop,
+                  rowTop: row.getBoundingClientRect().top - el.getBoundingClientRect().top,
+                  anchorOffset: mem.anchorOffset,
+                  scrollHeight: el.scrollHeight,
+                  clientHeight: el.clientHeight,
+                })
+              : // No anchor to hold (never captured, or still being paged in).
+                // Clamped: iOS rubber-band can persist a slightly negative
+                // ratio, and an out-of-range target never equals the scrollTop
+                // the browser clamps it to — so the loop would re-assign (and
+                // force a reflow) every frame for the full window.
+                Math.min(
+                  Math.max(
+                    0,
+                    Math.round(mem.ratio * maxScrollTop(el.scrollHeight, el.clientHeight)),
+                  ),
+                  maxScrollTop(el.scrollHeight, el.clientHeight),
+                );
             if (Math.abs(el.scrollTop - target) > 1) {
               lastProgrammaticTop.current = target;
               el.scrollTop = target;
@@ -1893,7 +2028,9 @@ export function ChatPane({
   }, [active, events, loadingOlder, hasMoreOlder, session?.current_sid]);
 
   const requestOlder = () => {
-    if (loadingOlderRef.current || !hasMoreOlder) return;
+    // The ref, not the state: the restore effect's seek holds this closure
+    // across many renders and must see the server's latest answer.
+    if (loadingOlderRef.current || !hasMoreOlderRef.current) return;
     const ws = wsRef.current;
     if (ws?.readyState !== WebSocket.OPEN) return;
     loadingOlderRef.current = true;
@@ -2036,7 +2173,15 @@ export function ChatPane({
       const range = Math.max(1, el.scrollHeight - el.clientHeight);
       const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
       pinnedToBottom.current = nearBottom;
+      // The ANCHOR is the position that matters (see chat-scroll.ts); the ratio
+      // rides along as the fallback for a mount whose window doesn't hold the
+      // anchored message yet. Measured only for an UNPINNED reader: a reader at
+      // the bottom is restored to the bottom, so the walk would be pure cost —
+      // and the bottom is where chats sit almost all of the time.
+      const anchor = nearBottom ? null : captureAnchor(el);
       rememberChatScroll(paneId, {
+        anchorId: anchor?.anchorId ?? null,
+        anchorOffset: anchor?.anchorOffset ?? 0,
         // Clamped: overscroll (iOS rubber-band) reports a scrollTop outside
         // the range, and a stored ratio outside [0,1] restores to a position
         // the browser then clamps — leaving the restore loop re-assigning a
@@ -2065,7 +2210,15 @@ export function ChatPane({
     setShowScrollDown(false);
     // Record the re-pin immediately — the smooth scroll's own onScroll
     // events lag, and switching away mid-glide must not save a stale spot.
-    rememberChatScroll(paneId, { ratio: 1, pinned: true, sid: renderedSid.current });
+    // No anchor: "the bottom" is not a message, and leaving a stale one here
+    // would out-rank the pin on the next restore.
+    rememberChatScroll(paneId, {
+      anchorId: null,
+      anchorOffset: 0,
+      ratio: 1,
+      pinned: true,
+      sid: renderedSid.current,
+    });
     // …and suppress the glide itself. A smooth scroll emits an event per
     // frame, none of them the reader: each one used to read as "scrolled away
     // from the programmatic target", unpinning the chat this button just
@@ -2304,18 +2457,38 @@ export function ChatPane({
       );
     }
     const { resultFor, consumed } = toolIndex;
-    const renderEvent = (e: ChatEvent) => {
+    // `anchorId` is set ONLY for rows the scroll memory may anchor to, which
+    // means TOP-LEVEL rows. Rows rendered inside an expanded ActionGroup are
+    // nested under that group's own anchored box, so stamping them too would
+    // break the one property the anchor lookup relies on: that `[data-eid]`
+    // in document order have monotonically increasing bottoms (a parent's box
+    // encloses its children's). ActionGroup receives this as a one-argument
+    // callback, so its nested rows get `undefined` and stay unanchored.
+    const renderEvent = (e: ChatEvent, anchorId?: string) => {
       if (e.kind === 'tool_use') {
         // A subagent launch reads as an event ("agent X launched"), not a
         // tool call — its own bubble, mirroring the finish notice.
         if (isAgentLaunch(e))
-          return <AgentLaunchCard key={e.id} description={agentLaunchDescription(e)} />;
+          return (
+            <AgentLaunchCard
+              key={e.id}
+              description={agentLaunchDescription(e)}
+              anchorId={anchorId}
+            />
+          );
         return (
-          <ToolRow key={e.id} use={e} result={resultFor.get(e.toolUseId)} onOpen={setOpenTool} />
+          <ToolRow
+            key={e.id}
+            use={e}
+            result={resultFor.get(e.toolUseId)}
+            anchorId={anchorId}
+            onOpen={setOpenTool}
+          />
         );
       }
-      if (e.kind === 'tool_result') return <ToolRow key={e.id} result={e} onOpen={setOpenTool} />;
-      return <ChatRow key={e.id} event={e} onOpenImage={setOpenImage} />;
+      if (e.kind === 'tool_result')
+        return <ToolRow key={e.id} result={e} anchorId={anchorId} onOpen={setOpenTool} />;
+      return <ChatRow key={e.id} event={e} anchorId={anchorId} onOpenImage={setOpenImage} />;
     };
 
     // A long agentic stretch renders as ONE collapsed block instead of a
@@ -2340,7 +2513,7 @@ export function ChatPane({
     for (let i = 0; i < renderable.length; ) {
       const e = renderable[i] as ChatEvent;
       if (!isAction(e)) {
-        items.push(renderEvent(e));
+        items.push(renderEvent(e, e.id));
         i++;
         continue;
       }
@@ -2348,7 +2521,9 @@ export function ChatPane({
       while (j < renderable.length && isAction(renderable[j] as ChatEvent)) j++;
       const run = renderable.slice(i, j) as ChatEvent[];
       if (run.length < MIN_GROUP) {
-        items.push(...run.map(renderEvent));
+        // Explicit arrow, not `.map(renderEvent)`: Array#map passes the INDEX
+        // as the second argument, which is now the anchor id.
+        items.push(...run.map((ev) => renderEvent(ev, ev.id)));
       } else {
         // Key stability differs by position: a CLOSED run never grows at
         // its tail but older-history prepends can extend its head — key by
@@ -2362,6 +2537,7 @@ export function ChatPane({
             key={`group-${id}`}
             events={run}
             expanded={expandedGroups.has(id)}
+            anchorId={id}
             onToggle={() =>
               setExpandedGroups((prev) => {
                 const next = new Set(prev);
@@ -2839,11 +3015,14 @@ export function ChatPane({
 function ActionGroup({
   events,
   expanded,
+  anchorId,
   onToggle,
   renderEvent,
 }: {
   events: ChatEvent[];
   expanded: boolean;
+  /** See ANCHOR_ATTR — the scroll memory's handle on this row. */
+  anchorId?: string | undefined;
   onToggle: () => void;
   renderEvent: (e: ChatEvent) => React.ReactNode;
 }) {
@@ -2863,7 +3042,7 @@ function ActionGroup({
   const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
   const summary = top.map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(' · ');
   return (
-    <div className="chat-turn chat-turn-assistant">
+    <div className="chat-turn chat-turn-assistant" data-eid={anchorId}>
       <div className="chat-msg chat-action-group">
         <button
           type="button"
@@ -2894,15 +3073,18 @@ function ActionGroup({
  *  (and re-parsing Markdown for) the entire transcript. */
 const ChatRow = memo(function ChatRow({
   event,
+  anchorId,
   onOpenImage,
 }: {
   event: ChatEvent;
+  /** See ANCHOR_ATTR — the scroll memory's handle on this row. */
+  anchorId?: string | undefined;
   onOpenImage?: OpenMedia | undefined;
 }) {
   switch (event.kind) {
     case 'user':
       return (
-        <div className="chat-turn chat-turn-user">
+        <div className="chat-turn chat-turn-user" data-eid={anchorId}>
           <div className="chat-bubble" dir="auto">
             <UserText text={event.text} onOpenImage={onOpenImage} />
           </div>
@@ -2910,7 +3092,7 @@ const ChatRow = memo(function ChatRow({
       );
     case 'assistant':
       return (
-        <div className="chat-turn chat-turn-assistant">
+        <div className="chat-turn chat-turn-assistant" data-eid={anchorId}>
           <div className="chat-msg">
             <AssistantText text={event.text} onOpenImage={onOpenImage} />
           </div>
@@ -2918,14 +3100,14 @@ const ChatRow = memo(function ChatRow({
       );
     case 'thinking':
       return (
-        <div className="chat-turn chat-turn-assistant">
+        <div className="chat-turn chat-turn-assistant" data-eid={anchorId}>
           <div className="chat-thinking" dir="auto">
             {event.text}
           </div>
         </div>
       );
     case 'notice':
-      return <NoticeCard event={event} />;
+      return <NoticeCard event={event} anchorId={anchorId} />;
     // tool_use / tool_result are rendered as collapsed ToolRows in the body map
     // (paired into one row), never through ChatRow.
     default:
@@ -3367,11 +3549,11 @@ function fireTime(ts: number | null): string {
 
 /** Harness control message (background-task update / session reminder), or a
  *  muxpad cron fire — "⏱ pr-sweep · 09:00" ahead of the prompt it delivered. */
-function NoticeCard({ event }: { event: NoticeEvent }) {
+function NoticeCard({ event, anchorId }: { event: NoticeEvent; anchorId?: string | undefined }) {
   const at = event.variant === 'cron' ? fireTime(event.ts) : '';
   const detail = event.detail ?? (at || undefined);
   return (
-    <div className="chat-turn chat-turn-notice">
+    <div className="chat-turn chat-turn-notice" data-eid={anchorId}>
       <div className={`chat-sysnote chat-sysnote-${event.variant}`} title={event.text}>
         <span className="chat-sysnote-icon" aria-hidden="true">
           {NOTICE_ICON[event.variant]}
@@ -3386,10 +3568,13 @@ function NoticeCard({ event }: { event: NoticeEvent }) {
 /** Subagent LAUNCH bubble — the counterpart to the harness "…finished"
  *  notice, so a dispatch reads as one discrete event instead of folding into
  *  a "5 actions · Agent ×5" run. Same pill family as NoticeCard. */
-function AgentLaunchCard({ description }: { description: string }) {
+function AgentLaunchCard({
+  description,
+  anchorId,
+}: { description: string; anchorId?: string | undefined }) {
   const text = `Agent "${description}" launched`;
   return (
-    <div className="chat-turn chat-turn-notice">
+    <div className="chat-turn chat-turn-notice" data-eid={anchorId}>
       <div className="chat-sysnote chat-sysnote-task chat-sysnote-launch" title={text}>
         <span className="chat-sysnote-icon" aria-hidden="true">
           <SvgAgentGlyph />
@@ -3447,10 +3632,13 @@ function diffStat(diff?: ToolResultEvent['diff']): { add: number; del: number } 
 const ToolRow = memo(function ToolRow({
   use,
   result,
+  anchorId,
   onOpen,
 }: {
   use?: ToolUseEvent | undefined;
   result?: ToolResultEvent | undefined;
+  /** See ANCHOR_ATTR — the scroll memory's handle on this row. */
+  anchorId?: string | undefined;
   onOpen: (d: ToolDetail) => void;
 }) {
   const verb = use
@@ -3462,7 +3650,7 @@ const ToolRow = memo(function ToolRow({
   const err = result?.ok === false;
   const stat = diffStat(result?.diff);
   return (
-    <div className="chat-turn chat-turn-assistant">
+    <div className="chat-turn chat-turn-assistant" data-eid={anchorId}>
       <button
         type="button"
         className={`chat-toolrow${err ? ' error' : ''}`}
