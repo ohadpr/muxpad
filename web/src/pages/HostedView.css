@@ -359,16 +359,18 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 6px 12px;
   background: var(--bg-chrome);
   border-bottom: 1px solid var(--border);
+  /* The bar scrolls rather than wrapping: on a narrow phone the app's name can
+     be long, and a two-row header would eat the view it exists to frame. */
   overflow-x: auto;
 }
-.hosted-app-bar .hosted-btn {
-  min-height: 36px;
-  padding: 0 10px;
-  font-size: 12.5px;
-}
+/* NOTE: the app bar deliberately does NOT shrink its buttons on touch. An
+   earlier draft set 36px here and the Playwright pass caught it — `‹ Hosted`
+   and `Logs` were the only sub-44px controls in the whole feature, and they
+   are the two a phone reaches for most. The desktop shrink lives in the
+   pointer breakpoint at the bottom of this file, with the others. */
 .hosted-app-name {
   font-size: 14px;
   font-weight: 600;
@@ -390,6 +392,20 @@
   width: 100%;
   border: 0;
   background: #fff;
+}
+/* When there is no frame to show — stopped, unreachable, no logs yet — the
+   explanation is the content, so it gets a measure and vertical air instead of
+   being flush-left against a full-width void. */
+.hosted-app-body > .hosted-empty {
+  margin: 0 auto;
+  padding: 48px 20px;
+  max-width: 46ch;
+  width: 100%;
+  text-align: center;
+  background: var(--bg);
+}
+.hosted-app-body > .hosted-empty .hosted-empty-hint {
+  text-align: left;
 }
 
 /* ─── Pointer / wider screens ────────────────────────────────────────── */
@@ -419,6 +435,11 @@
   }
   .hosted-btn-sm {
     min-height: 28px;
+  }
+  .hosted-app-bar .hosted-btn {
+    min-height: 30px;
+    padding: 0 10px;
+    font-size: 12.5px;
   }
   /* The versions list is a full-width row of its own under a wrapped row. */
   .hosted-versions {
