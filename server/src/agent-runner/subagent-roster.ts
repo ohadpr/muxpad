@@ -49,8 +49,10 @@ import type { SubagentProgress } from '@muxpad/shared';
  * therefore structurally immortal — no end-path can ever reach it, and every
  * research fan-out permanently inflated the pane's `agents:` count.
  *
- * So: an entry exists IFF we saw its top-level `Task`/`Agent` `tool_use`.
- * Unknown ids are ignored, and the pane counts what its chat can render.
+ * So: an entry exists IFF we saw its top-level `Task`/`Agent` `tool_use` — or
+ * IFF it is the resurrection of one (see {@link reconcileBackground}, which is
+ * how a RESUMED agent gets its row back now that nothing adopts ids).
+ * Everything else is ignored, and the pane counts what its chat can render.
  */
 export interface RosterEntry extends SubagentProgress {
   lastSentAt: number;
@@ -81,6 +83,9 @@ export const MAX_ROSTER_ENTRIES = 32;
 /** Rate limit for the cap warning. */
 const OVERFLOW_WARN_INTERVAL_MS = 60_000;
 
+/** How many finished task ids to remember for resurrection (see knownTasks). */
+const MAX_REMEMBERED_TASKS = 256;
+
 /** The roster's own bookkeeping fields, stripped for the wire. */
 function wireProgress(p: RosterEntry): SubagentProgress {
   const { lastSentAt, dirty, taskId, background, ...progress } = p;
@@ -93,6 +98,19 @@ export class SubagentRoster {
    *  `task_started` that lands AFTER its level event can still mark its entry
    *  as background — the SDK documents that ordering as unspecified. */
   private lastLevel = new Set<string>();
+  /**
+   * taskId → the launch it came from, REMEMBERED PAST RETIREMENT. A finished
+   * background agent can be resumed (the harness's own notice says so: "the
+   * same task-id may notify more than once"), and a resume re-enters the live
+   * set under the SAME task id but a NEW tool_use id — the resuming
+   * `SendMessage` call's, not the original `Task` call's (probe-verified).
+   * Its child messages, though, still carry the ORIGINAL id. So the only way
+   * to show a resumed agent on its own row is to resurrect that row from here.
+   */
+  private readonly knownTasks = new Map<
+    string,
+    { toolUseId: string; label?: string; steps: number }
+  >();
   /** Clock of the last cap warning (0 = never). */
   private lastOverflowWarnAt = Number.NEGATIVE_INFINITY;
 
@@ -178,6 +196,22 @@ export class SubagentRoster {
     // The level payload may have arrived FIRST (the SDK documents the ordering
     // as unspecified); if it named this task, it is already known-background.
     if (this.lastLevel.has(taskId)) p.background = true;
+    this.remember(taskId, p);
+  }
+
+  /** Record (or refresh) the launch behind a task id, for resurrection. */
+  private remember(taskId: string, p: RosterEntry): void {
+    this.knownTasks.delete(taskId); // re-insert so the map stays LRU-ordered
+    this.knownTasks.set(taskId, {
+      toolUseId: p.toolUseId,
+      steps: p.steps,
+      ...(p.label ? { label: p.label } : {}),
+    });
+    while (this.knownTasks.size > MAX_REMEMBERED_TASKS) {
+      const oldest = this.knownTasks.keys().next();
+      if (oldest.done) break;
+      this.knownTasks.delete(oldest.value);
+    }
   }
 
   /**
@@ -188,6 +222,10 @@ export class SubagentRoster {
    *
    * Only entries observed as background are eligible: a foreground Task never
    * appears here, and sweeping it on absence would evict a live agent.
+   *
+   * It resurrects too. A task id that is live again but has no row is a RESUMED
+   * agent — the level signal is the only place that shows up, since the resume
+   * carries the `SendMessage` call's tool_use id rather than the launch's.
    */
   reconcileBackground(liveTaskIds: readonly string[]): void {
     this.lastLevel = new Set(liveTaskIds);
@@ -199,6 +237,25 @@ export class SubagentRoster {
         this.done(p.toolUseId);
       }
     }
+    for (const taskId of this.lastLevel) {
+      const known = this.knownTasks.get(taskId);
+      // Only ids we once saw LAUNCHED at top level can come back — a nested
+      // agent is never remembered, so the level signal cannot smuggle one in.
+      if (!known || this.entries.has(known.toolUseId)) continue;
+      this.enforceCap();
+      const p: RosterEntry = {
+        toolUseId: known.toolUseId,
+        steps: known.steps,
+        seenAt: this.now(),
+        lastSentAt: 0,
+        dirty: true,
+        taskId,
+        background: true,
+        ...(known.label ? { label: known.label } : {}),
+      };
+      this.entries.set(known.toolUseId, p);
+      this.send(p);
+    }
   }
 
   /**
@@ -208,6 +265,9 @@ export class SubagentRoster {
   done(toolUseId: string): void {
     const p = this.entries.get(toolUseId);
     if (!p) return;
+    // Carry the step count over, so a RESUMED agent's row picks up where it
+    // left off rather than restarting at zero.
+    if (p.taskId) this.remember(p.taskId, p);
     this.entries.delete(toolUseId);
     this.emit({ ...wireProgress(p), done: true });
   }
