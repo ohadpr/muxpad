@@ -248,6 +248,10 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
       el.textContent = (el.textContent ?? '') + text;
     }
     syncEmpty();
+    // The execCommand path fires a real `input` event (which already retires
+    // the cleanup undo via onEditableInput); the textContent fallback does not.
+    // Retire it here so both paths behave the same.
+    resetCleanup();
   };
 
   // Upload image blobs to muxpad's attachments endpoint and splice the returned

@@ -88,6 +88,8 @@ interface Instance {
   prompts: string[];
   /** Flip to make the next cleanup call fail, for the unreachable-model case. */
   fail: { now: boolean };
+  /** Hold the next cleanup call open, for the racing-a-send case. */
+  delay: { ms: number };
   stop(): Promise<void>;
 }
 
@@ -101,10 +103,12 @@ async function startInstance(): Promise<Instance> {
 
   const prompts: string[] = [];
   const fail = { now: false };
+  const delay = { ms: 0 };
   // The stub IS the seam AppDeps.cleanupModel exists for. It never touches the
   // network, and it returns a fixed correction so the assertions are exact.
   const cleanupModel: CleanupModel = async (prompt) => {
     prompts.push(prompt);
+    if (delay.ms > 0) await new Promise((r) => setTimeout(r, delay.ms));
     if (fail.now) throw new Error('stubbed model outage');
     return CLEANED;
   };
@@ -164,6 +168,7 @@ async function startInstance(): Promise<Instance> {
     chatTab: chatTab.slug,
     prompts,
     fail,
+    delay,
     async stop() {
       await wsHandle.close();
       server.closeAllConnections?.();
@@ -205,8 +210,8 @@ describe('mobile dictation cleanup (browser)', () => {
     await inst?.stop();
   });
 
-  it('cleans the composer on tap, shows what changed, and undo restores it', async () => {
-    if (skip) return expect(skip).toBeTruthy();
+  it('cleans the composer on tap, shows what changed, and undo restores it', async (t) => {
+    if (skip) return t.skip();
     const ctx = await browser?.newContext({ viewport: MOBILE, isMobile: true, hasTouch: true });
     if (!ctx) throw new Error('no browser context');
     const page = await ctx.newPage();
@@ -248,8 +253,8 @@ describe('mobile dictation cleanup (browser)', () => {
     await ctx.close();
   }, 120_000);
 
-  it('never sends on its own — cleanup only rewrites the composer', async () => {
-    if (skip) return expect(skip).toBeTruthy();
+  it('never sends on its own — cleanup only rewrites the composer', async (t) => {
+    if (skip) return t.skip();
     const ctx = await browser?.newContext({ viewport: MOBILE, isMobile: true, hasTouch: true });
     if (!ctx) throw new Error('no browser context');
     const page = await ctx.newPage();
@@ -271,8 +276,8 @@ describe('mobile dictation cleanup (browser)', () => {
     await ctx.close();
   }, 120_000);
 
-  it('says so, loudly, when the model cannot be reached', async () => {
-    if (skip) return expect(skip).toBeTruthy();
+  it('says so, loudly, when the model cannot be reached', async (t) => {
+    if (skip) return t.skip();
     const ctx = await browser?.newContext({ viewport: MOBILE, isMobile: true, hasTouch: true });
     if (!ctx) throw new Error('no browser context');
     const page = await ctx.newPage();
@@ -298,8 +303,8 @@ describe('mobile dictation cleanup (browser)', () => {
   // The chat composer is the other half: unlike the terminal bar it renders on
   // BOTH layouts, so it carries the viewport gate itself — and it is the
   // composer that drives an agent that runs tool calls.
-  it('offers the same review-then-undo in the mobile chat composer', async () => {
-    if (skip) return expect(skip).toBeTruthy();
+  it('offers the same review-then-undo in the mobile chat composer', async (t) => {
+    if (skip) return t.skip();
     const ctx = await browser?.newContext({ viewport: MOBILE, isMobile: true, hasTouch: true });
     if (!ctx) throw new Error('no browser context');
     const page = await ctx.newPage();
@@ -324,12 +329,47 @@ describe('mobile dictation cleanup (browser)', () => {
 
     await undo.tap();
     await expect.poll(() => box.inputValue(), POLL).toBe(DICTATED);
+    // Nothing left the composer: no user bubble, live or queued. This is the
+    // composer that drives tool calls, so "review before send" has to hold here
+    // most of all.
+    expect(await page.locator('.chat-turn-user').count()).toBe(0);
 
     await ctx.close();
   }, 120_000);
 
-  it('is absent on desktop — in both composers', async () => {
-    if (skip) return expect(skip).toBeTruthy();
+  // Regression: the model call takes seconds, which is ample time to hit Send.
+  // Without a generation guard the late response repopulated the (now empty)
+  // composer with the cleaned copy of a message that had already gone out —
+  // one more Send away from duplicating it to an agent that runs tool calls.
+  it('drops a cleanup whose result arrives after the message was sent', async (t) => {
+    if (skip) return t.skip();
+    const ctx = await browser?.newContext({ viewport: MOBILE, isMobile: true, hasTouch: true });
+    if (!ctx) throw new Error('no browser context');
+    const page = await ctx.newPage();
+    await page.goto(`${inst.origin}/w/${inst.ws}/t/${inst.tab}`);
+
+    const clean = inBar(page, 'cleanup-run');
+    await clean.waitFor({ state: 'visible', timeout: 20_000 });
+    await typeIntoComposer(page, DICTATED);
+
+    inst.delay.ms = 2_500;
+    await clean.tap();
+    // Send while the cleanup is still in flight.
+    await page.locator('.mobile-input-send').tap();
+    await expect.poll(() => composerText(page), POLL).toBe('');
+
+    // Well past the stubbed model's delay: the composer must still be empty and
+    // no undo may be offered over text the user never composed.
+    await page.waitForTimeout(3_500);
+    expect(await composerText(page)).toBe('');
+    expect(await inBar(page, 'cleanup-undo').count()).toBe(0);
+    inst.delay.ms = 0;
+
+    await ctx.close();
+  }, 120_000);
+
+  it('is absent on desktop — in both composers', async (t) => {
+    if (skip) return t.skip();
     const ctx = await browser?.newContext({ viewport: DESKTOP });
     if (!ctx) throw new Error('no browser context');
     const page = await ctx.newPage();
