@@ -24,6 +24,22 @@
      red dot                  = "wants you"
    ────────────────────────────────────────────────────────────────────── */
 
+/* ─── Rail width ──────────────────────────────────────────────────────────
+   280px, up from 240px.
+
+   Measured, not guessed. The redesign was drawn and approved against a 330px
+   rail; muxpad's was 240px, and the deficit lands entirely on the name. A row
+   must fit: icon (22 + 8 gutter) + name + meta + rail (22 + 8 gutter). On a
+   row with a schedule the meta is a real 79px (`◷ Wed 09:00` at 10.5px
+   monospace, plus its gutter), which left the name 74px at 240px — and a
+   14-character name needs 96px in the nav font. That is exactly why "Reading
+   List" rendered as "Reading …".
+
+   At 280px the same worst-case row gives the name 114px, and a row without a
+   schedule gets 193px (~27 characters). Still 50px narrower than the rail the
+   design was approved at, so it is a compromise, not a capitulation — and it
+   is one line to revert if the workspace wants the 40px back more than the
+   sidebar wants readable names. */
 .navtree {
   /* Row metrics + surfaces are the only things the variants disagree on. */
   --nt-row-ws: 32px;
@@ -357,13 +373,23 @@
 .navtree-tab-controls {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  /* No `gap`: a gap between two ZERO-WIDTH buttons is still charged, so a
+     resting row paid 2px for a cell with nothing in it. The revealed spacing
+     is a margin on the second button instead, which costs nothing until there
+     is a second button to space. */
+  gap: 0;
   /* Declines its gutter while it has no width to separate. */
   margin-left: 0;
 }
+/* …and the spacing between them is charged only once they have width. */
+.navtree-tab-row:hover > .navtree-tab-controls > * + *,
+.navtree-tab-row:focus-within > .navtree-tab-controls > * + *,
+.navtree-ws-row:hover > .navtree-tab-controls > * + *,
+.navtree-ws-row:focus-within > .navtree-tab-controls > * + * {
+  margin-left: 2px;
+}
 .navtree-tab-row:hover > .navtree-tab-controls,
 .navtree-tab-row:focus-within > .navtree-tab-controls,
-.navtree-tab-row:has(.navtree-pin.is-pinned) > .navtree-tab-controls,
 .navtree-ws-row:hover > .navtree-tab-controls,
 .navtree-ws-row:focus-within > .navtree-tab-controls {
   margin-left: var(--nt-gutter);
@@ -684,28 +710,27 @@
 }
 
 /* ─── Pin affordance (DESKTOP sidebar only) ──────────────────────────── */
-/* Rides the .navtree-close reveal machinery above (identical collapse/expand
-   transition), then overrides only what must differ: pinning is not a
-   destructive action, so it never goes danger-red, and a PINNED tab keeps its
-   pin permanently visible — that lit pin is the only "this is pinned" signal
-   (no new badges by design). Touch never renders this button; the sheet's
-   swipe tray owns pin/unpin there. */
+/* Rides the .navtree-close reveal machinery above — zero-width at rest, its
+   hit area claimed only on hover/focus — and overrides only what must differ:
+   pinning is not destructive, so it never goes danger-red, and a pinned tab's
+   button reads accent while hovered so you can tell which way it will toggle.
+
+   It is NOT lit at rest any more. A pinned tab used to keep its pin
+   permanently visible as the "this is pinned" marker, which was redundant
+   twice over: pinned-ness is already conveyed by POSITION (the pinned block
+   sits above the divider), and the resting glyph cost 26px of name width on
+   exactly the rows the user pinned because they matter most. On a 240px rail
+   that is the difference between "Reading List" and "Reading …". It also
+   collided with the meta column — a pinned tab with a schedule rendered
+   `📌 ◷ 23:30`, two unrelated marks reading as one chip.
+
+   Touch never renders this button; the sheet's swipe tray owns pin/unpin. */
 .navtree-pin:hover {
   background: var(--bg-hover);
   color: var(--accent);
 }
-.navtree-pin.is-pinned {
-  flex-basis: 18px;
-  width: 18px;
-  /* Quiet by default: a column of bright pins would out-shout the attention
-     dots, which are the signals that actually want you. It brightens with
-     the rest of the row's controls on hover. */
-  opacity: 0.5;
-  color: var(--fg-dim);
-}
 .navtree-tab-row:hover .navtree-pin.is-pinned,
 .navtree-tab-row:focus-within .navtree-pin.is-pinned {
-  opacity: 1;
   color: var(--accent);
 }
 
@@ -1072,8 +1097,10 @@
 .sidenav {
   /* flex-basis is overridden inline with the persisted/dragged width; this
      is just the fallback before React mounts. grow/shrink stay 0 so the rail
-     holds whatever width the user dragged. */
-  flex: 0 0 240px;
+     holds whatever width the user dragged. Kept in step with
+     settings.ts DEFAULTS.sidebarWidth so the rail doesn't visibly jump on
+     mount for a fresh profile. */
+  flex: 0 0 280px;
   /* min-width:0 caps the flex AUTOMATIC minimum (default min-width:auto
      = content min-content size). Without it, the rename <input>'s
      intrinsic width raises the sidebar's min-content above 240px and
