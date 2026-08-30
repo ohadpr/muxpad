@@ -14,7 +14,7 @@ import { collectLayoutLeaves, spliceLayoutAtTarget } from '@muxpad/shared';
 import { type TabWithPanes, api } from '../api';
 import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
 import { MobileInputBar } from '../components/MobileInputBar';
-import { NewTabChooser } from '../components/NewTabChooser';
+import { NewTabButton } from '../components/NewTabButton';
 import {
   PaneFaceMenuList,
   PaneWebSwitch,
@@ -26,20 +26,21 @@ import {
 // PaneWebSwitch mount to pull it into the bundle.
 import '../components/PaneWebSwitch.css';
 import { ShellPaneBody } from '../components/ShellPaneBody';
+import { StatusMark } from '../components/StatusMark';
 import { UrlPane } from '../components/UrlPane';
 import { SvgClose } from '../components/icons';
 import { subscribe, subscribeReconnect } from '../events';
-import { PENDING_AGENT_STARTUP } from '../lib/agent-backend';
+import { HOUSE_CHAT_PANE_CREATE } from '../lib/agent-backend';
 import { consumeFollowTarget } from '../lib/follow-tab';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
-import { consumePushFocusPane } from '../lib/push-focus';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { pushUndo } from '../lib/move-undo-store';
 import { PANE_DRAG_MIME, paneDragOrigin } from '../lib/pane-drag';
 import { usePaneFace } from '../lib/pane-face';
+import { consumePushFocusPane } from '../lib/push-focus';
 import { setTabViewMode, useTabViewMode } from '../lib/tab-view-mode';
-import { refreshTabs, useTabs } from '../tabs';
 import { useDismissable } from '../lib/use-dismissable';
+import { refreshTabs, useTabs } from '../tabs';
 import { useMediaQuery } from '../use-media-query';
 import { refreshWorkspaces, useWorkspaces } from '../workspaces';
 
@@ -106,6 +107,32 @@ function removePane(layout: Layout, paneId: string): Layout {
   if (first == null) return second;
   if (second == null) return first;
   return { ...layout, first, second };
+}
+
+/**
+ * Per-tab serialization of outbound whole-layout PATCHes.
+ *
+ * Module-level (not a ref) on purpose: it must survive TabView remounting and
+ * cover every writer of the same tab in this document, which a per-instance
+ * chain would not. Entries are keyed by tab id and dropped as soon as their
+ * chain drains, so the map stays the size of the tabs currently being edited.
+ */
+const layoutWriteChains = new Map<string, Promise<unknown>>();
+
+function enqueueLayoutWrite<T>(tabId: string, write: () => Promise<T>): Promise<T> {
+  const prior = layoutWriteChains.get(tabId) ?? Promise.resolve();
+  // `.then` on the SETTLED prior (failures don't stall the queue) — a rejected
+  // write is reported to its own caller, not to the next one in line.
+  const mine = prior.then(write, write);
+  const tail = mine.then(
+    () => {},
+    () => {},
+  );
+  layoutWriteChains.set(tabId, tail);
+  void tail.then(() => {
+    if (layoutWriteChains.get(tabId) === tail) layoutWriteChains.delete(tabId);
+  });
+  return mine;
 }
 
 /** Walk the binary tree, returning all pane ids in tree order. Delegates to
@@ -485,23 +512,46 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     if (stored && ids.includes(stored)) return stored;
     return ids[0] ?? null;
   })();
+  // D11: the dot didn't clear on the tab you were ALREADY watching. This effect
+  // ran on mount, pane-switch and unmount, and none of its deps changed when a
+  // BEL rang (or a turn finished) while you sat there — so the sidebar kept
+  // flagging a tab that was open on your screen, and the comment in NavTree
+  // claiming "the dot still self-hides on the active tab via markSeen" was
+  // simply false.
+  //
+  // The fix is a dep that moves on those edges: a signature of the panes'
+  // read-state. It terminates — mark-seen makes the server emit pane.updated
+  // with the flags cleared, which changes the signature once more, and the
+  // follow-up call finds nothing left to clear (both /seen routes only emit
+  // when something actually changed), so the third pass never happens.
+  const seenSignature = (tab?.panes ?? [])
+    .map((p) => `${p.id}:${p.attention === true ? 1 : 0}${p.unread === true ? 1 : 0}`)
+    .join('|');
   useEffect(() => {
     if (!tab || !workspace || !isActive) return;
-    const refresh = () =>
-      Promise.all([refreshTabs(workspace.id), refreshWorkspaces()]).catch(() => {});
-    if (isMobile) {
-      if (!mobileActiveResolved) return;
-      api
-        .markPaneSeen(mobileActiveResolved)
-        .then(refresh)
-        .catch(() => {});
-    } else {
-      api
-        .markTabSeen(tab.id)
-        .then(refresh)
-        .catch(() => {});
-    }
-  }, [tab?.id, mobileActiveResolved, isMobile, workspace?.id, isActive]);
+    // Debounced. `attention` is the BEL bit, and a pane can ring it in a tight
+    // loop (shell completion beeps, a chatty build) — each ring moves the
+    // signature, and each run costs a POST plus two list refetches. Coalescing
+    // a storm into one round trip is free; the delay is imperceptible for
+    // something whose whole job is to clear a dot on the tab you're watching.
+    const t = window.setTimeout(() => {
+      const refresh = () =>
+        Promise.all([refreshTabs(workspace.id), refreshWorkspaces()]).catch(() => {});
+      if (isMobile) {
+        if (!mobileActiveResolved) return;
+        api
+          .markPaneSeen(mobileActiveResolved)
+          .then(refresh)
+          .catch(() => {});
+      } else {
+        api
+          .markTabSeen(tab.id)
+          .then(refresh)
+          .catch(() => {});
+      }
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [tab?.id, mobileActiveResolved, isMobile, workspace?.id, isActive, seenSignature]);
 
   // Title pulls the live name from the shared tabs list so renames in
   // the tab bar update the document title without a refetch here. The
@@ -516,48 +566,21 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
       ? `${liveWorkspaceName} ⋅ ${liveName}`
       : (liveName ?? liveWorkspaceName ?? 'muxpad');
 
-  // In single-pane views (mobile or desktop 'tabbed') the browser tab is a
-  // window onto ONE pane at a time, so we can meaningfully say "the visible
-  // pane is working" by animating a spinner into the tab title. Split view
-  // shows every pane at once — there's no single active pane to represent, so
-  // we leave the title clean there.
-  const activePaneBusy = (() => {
-    if (!singlePane || !tab) return false;
-    const ids = tab.panes.map((p) => p.id);
-    let activeId: string | null = null;
-    if (mobileActiveId && ids.includes(mobileActiveId)) activeId = mobileActiveId;
-    else {
-      const stored = getLastPaneId(tab.id);
-      activeId = stored && ids.includes(stored) ? stored : (ids[0] ?? null);
-    }
-    return tab.panes.find((p) => p.id === activeId)?.busy ?? false;
-  })();
-
+  // The braille document-title spinner is gone, deliberately. It duplicated a
+  // signal you can already see — the status rail says "working" in the
+  // navigator, in the tab strip and in the mobile switcher — and it rode the
+  // exact same broken input: `tab.panes[].busy`, which a PATCH-route
+  // pane.updated blanked on every face switch (D1). A duplicate indicator that
+  // is wrong in the same cases as the original buys nothing and costs a
+  // 120ms interval rewriting document.title for the lifetime of every turn.
   useEffect(() => {
     if (!isActive) return;
     const previous = document.title;
-    if (!activePaneBusy) {
-      document.title = documentTitle;
-      return () => {
-        document.title = previous;
-      };
-    }
-    // Braille spinner cycled via the title itself — the only way to show a
-    // live loading indicator in a browser tab (favicons can't animate without
-    // canvas hackery, and the emoji/text of the title is all we control).
-    const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    let i = 0;
-    const tick = () => {
-      document.title = `${frames[i]} ${documentTitle}`;
-      i = (i + 1) % frames.length;
-    };
-    tick();
-    const id = window.setInterval(tick, 120);
+    document.title = documentTitle;
     return () => {
-      window.clearInterval(id);
       document.title = previous;
     };
-  }, [isActive, documentTitle, activePaneBusy]);
+  }, [isActive, documentTitle]);
 
   // Keep local tab.name in sync with the shared list.
   useEffect(() => {
@@ -659,7 +682,18 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
       if (!tab) return;
       pendingLayoutWrites.current += 1;
       try {
-        await api.patchTab(tab.id, { layout: fromMosaic(layout) });
+        // SERIALIZED PER TAB. A whole-layout PATCH is last-writer-wins, so two
+        // rapid structural edits (split, then reorder) racing on the wire could
+        // land B before A — and A, written last, describes a tree that predates
+        // B's newly created pane. The pane row survives but no layout mentions
+        // it, and the settle-refetch faithfully adopts that wrong truth. The
+        // chain makes the wire order match the user's order; it does not make
+        // the write conditional, so a SECOND writer (another device) can still
+        // win last — that's the same last-writer-wins the endpoint has always
+        // had, and out of scope for a client-side fix.
+        await enqueueLayoutWrite(tab.id, () =>
+          api.patchTab(tab.id, { layout: fromMosaic(layout) }),
+        );
       } catch (e) {
         console.error('failed to persist layout', e);
       } finally {
@@ -720,10 +754,10 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
       if (!tab) return;
       const created = await api.createPane(tab.id, {
         ...(sourcePaneId ? { inherit_cwd_from: sourcePaneId } : {}),
-        // Always land on the harness picker (Claude / Codex / Cursor /
-        // Terminal). Kind is chosen there — not in the chrome.
-        startup_cmd: PENDING_AGENT_STARTUP,
-        face: 'chat',
+        // New panes are the house chat, same as new tabs. The alternatives
+        // (raw Claude/Codex/Cursor, terminal, web) live in the empty chat's
+        // own "open instead:" strip.
+        ...HOUSE_CHAT_PANE_CREATE,
       });
       const newLayout =
         sourcePaneId == null
@@ -1007,6 +1041,16 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                     // runtime-only attention flag. Preserve prior so we
                     // don't clobber a true value with undefined.
                     attention: e.pane.attention ?? p.attention,
+                    // Same for the runtime-only status channel. The server now
+                    // decorates every pane.updated, but a version-skewed (or
+                    // future partial) emitter must not be able to blank the
+                    // status mark mid-turn — coalescing is the cheap invariant.
+                    // `status`/`agents` are the fields this file actually
+                    // RENDERS (the tabbed strip's StatusMark); `busy` is the
+                    // deprecated alias, coalesced for anything still reading it.
+                    status: e.pane.status ?? p.status,
+                    agents: e.pane.agents ?? p.agents,
+                    busy: e.pane.busy ?? p.busy,
                     // Same: a PATCH-route pane.updated carries the raw row
                     // without runtime app_urls. Coalesce so a kind/url edit
                     // doesn't transiently blank the web-switch dropdown.
@@ -1210,7 +1254,13 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     setPaneDragId(id);
     // Mirror the origin so sidebar tab rows can gate their move-here drop
     // affordance during dragover (when the payload itself is unreadable).
-    if (tab) paneDragOrigin.set({ paneId: id, fromTabId: tab.id });
+    if (tab)
+      paneDragOrigin.set({
+        paneId: id,
+        fromTabId: tab.id,
+        ...(workspace ? { fromWorkspaceId: workspace.id } : {}),
+        soloPane: tab.panes.length <= 1,
+      });
   };
   const onPaneDragOver = (e: ReactDragEvent, id: string) => {
     if (!paneDragId || paneDragId === id) return;
@@ -1254,8 +1304,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
       const target = activeId ?? paneIds[paneIds.length - 1];
       const created = await api.createPane(tab.id, {
         ...(target ? { inherit_cwd_from: target } : {}),
-        startup_cmd: PENDING_AGENT_STARTUP,
-        face: 'chat',
+        ...HOUSE_CHAT_PANE_CREATE,
       });
       // Append at the END — same convention as the desktop strip's +.
       const newLayout: Layout =
@@ -1309,10 +1358,8 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                 ) : null;
               return (
                 <MobilePaneChrome>
-                  {webSwitch ? (
-                    <div className="mobile-strip-webswitch">{webSwitch}</div>
-                  ) : null}
-                  <NewTabChooser
+                  {webSwitch ? <div className="mobile-strip-webswitch">{webSwitch}</div> : null}
+                  <NewTabButton
                     idleLabel="+"
                     idleTitle="New pane"
                     idleClassName="mobile-strip-add"
@@ -1373,8 +1420,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
       const target = activeId ?? paneIds[paneIds.length - 1];
       const created = await api.createPane(tab.id, {
         ...(target ? { inherit_cwd_from: target } : {}),
-        startup_cmd: PENDING_AGENT_STARTUP,
-        face: 'chat',
+        ...HOUSE_CHAT_PANE_CREATE,
       });
       // The strip's "+" appends at the END (browser-tab convention).
       // Splitting at the active pane put the newcomer mid-strip whenever a
@@ -1469,19 +1515,10 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                           {paneSurfaceIcon(p)}
                         </span>
                         <span className="desktop-tab-label">{paneLabel(paneId)}</span>
-                        {/* Status sits just RIGHT of the name (spinner while
-                            working, dot when it wants you) — the label doesn't
-                            grow, so it hugs the text rather than the pill edge.
-                            Kept out of the trailing × box so the two never read
-                            as one mashed-together control. Priority mirrors the
-                            navigator. */}
-                        {p?.busy ? (
-                          <span className="desktop-tab-busy" aria-hidden="true" title="Working…">
-                            <SvgSpinner />
-                          </span>
-                        ) : p?.attention ? (
-                          <span className="badge-dot -inline" aria-label="needs attention" />
-                        ) : null}
+                        {/* The same status rail the navigator uses — one
+                            component, so the strip and the sidebar can never
+                            tell different stories about the same pane. */}
+                        <StatusMark status={p?.status} agents={p?.agents} />
                       </button>
                       {/* Trailing slot holds only the hover-revealed × now —
                           status moved to LEAD the label. */}
@@ -1506,7 +1543,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
             })}
             {/* Browser-standard lone "+"; always opens the harness picker
                 (Claude / Codex / Cursor + Terminal below). */}
-            <NewTabChooser
+            <NewTabButton
               idleLabel="+"
               idleTitle="New pane"
               idleClassName="desktop-tab-add desktop-tab-add-plus"
@@ -2115,34 +2152,6 @@ function SvgTabsView() {
       />
       <rect x="2" y="1.5" width="4.5" height="3" rx="0.8" fill="currentColor" opacity="0.7" />
       <rect x="7" y="1.5" width="4.5" height="3" rx="0.8" fill="currentColor" opacity="0.3" />
-    </svg>
-  );
-}
-
-/**
- * Busy spinner for a pane header — a partial ring in `currentColor`, spun by
- * CSS (.desktop-tab-busy). Mirrors the navigator's SvgSpinner so "working"
- * reads the same in the tab strip as in the sidebar.
- */
-function SvgSpinner() {
-  return (
-    <svg width="11" height="11" viewBox="0 0 16 16" aria-hidden="true">
-      <circle
-        cx="8"
-        cy="8"
-        r="6"
-        stroke="currentColor"
-        strokeWidth="2"
-        fill="none"
-        opacity="0.25"
-      />
-      <path
-        d="M8 2 a6 6 0 0 1 6 6"
-        stroke="currentColor"
-        strokeWidth="2"
-        fill="none"
-        strokeLinecap="round"
-      />
     </svg>
   );
 }

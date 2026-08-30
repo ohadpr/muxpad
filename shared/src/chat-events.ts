@@ -91,13 +91,33 @@ export interface AgentQuestion {
   options: Array<{ label: string; description?: string }>;
 }
 
-/** Live progress of one subagent (Task tool call), keyed by its tool-use id. */
+/**
+ * Live progress of one subagent (Task tool call), keyed by its tool-use id.
+ *
+ * This is a ROSTER ENTRY, not a heartbeat. The server holds it from the launch
+ * until an explicit finish (`done`) or its runner's death — deliberately NOT on
+ * a decay timer. Measured (P1 experiment, 2026-08): a background subagent
+ * parked in one long tool call emits ZERO frames for 44s+ while plainly alive,
+ * so any timeout short enough to be useful is also short enough to be wrong.
+ */
 export interface SubagentProgress {
   toolUseId: string;
   /** Messages seen from the subagent so far — a coarse "it's alive" counter. */
   steps: number;
   /** Most recent tool the subagent invoked, e.g. "Bash: pnpm test". */
   lastTool?: string;
+  /** The launch description ("audit the status pipeline"), when the runner saw
+   *  the launching tool_use. Lets a (re)connecting client name the row without
+   *  the transcript — which the 128 KB history window may have scrolled past. */
+  label?: string;
+  /** Epoch ms of the runner's last REAL observed activity for this subagent
+   *  (never bumped by the keepalive — the keepalive re-sends this value
+   *  unchanged). Drives the per-row busy/quiet dot; roster MEMBERSHIP never
+   *  depends on it. */
+  seenAt?: number;
+  /** Terminal notice: this subagent is finished — drop it from the roster.
+   *  The only way an entry leaves, short of its runner dying. */
+  done?: boolean;
 }
 
 /**
@@ -195,6 +215,58 @@ function isPlumbingUserText(text: string): boolean {
 function extractTag(xml: string, tag: string): string | undefined {
   const m = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`));
   return m?.[1]?.trim();
+}
+
+// ── Subagent lifecycle recognisers ──────────────────────────────────────────
+// Shared because the RUNNER (which owns the durable roster) and the WEB chat
+// (which renders it) must agree byte-for-byte on what a launch and a finish
+// look like. Two hand-kept copies of these rules is how a roster starts
+// disagreeing with the list right next to it.
+
+/** A Task/Agent tool call — a subagent LAUNCH. */
+export function isAgentLaunchTool(name: string): boolean {
+  return name === 'Agent' || name === 'Task';
+}
+
+/** The human description of a subagent launch, from the launching tool input. */
+export function subagentLabel(input: unknown): string {
+  if (input && typeof input === 'object') {
+    const d = (input as { description?: unknown }).description;
+    if (typeof d === 'string' && d.trim()) return d.trim().slice(0, 80);
+  }
+  return '';
+}
+
+/**
+ * A BACKGROUND agent's tool_result is the immediate "launched" ack, NOT a
+ * completion — so it must not be read as "this agent finished". A FOREGROUND
+ * agent's result IS its completion. This tells them apart.
+ */
+export const LAUNCH_ACK_RE = /agent launched successfully|async agent launched/i;
+
+/** Flatten an SDK tool_result `content` (string, or a block array) to text. */
+export function blockText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((b) =>
+      b && typeof b === 'object' && (b as { type?: string }).type === 'text'
+        ? String((b as { text?: unknown }).text ?? '')
+        : '',
+    )
+    .join(' ');
+}
+
+/**
+ * The launching tool-use id carried by a `<task-notification>` — the harness's
+ * "your background subagent finished" injection. Returns null for anything
+ * else, including a notification that predates the tool-use-id field.
+ */
+export function taskNotificationToolUseId(text: string): string | null {
+  if (!text.includes('<task-notification>')) return null;
+  const inner = extractTag(text, 'task-notification');
+  if (inner === undefined) return null;
+  return extractTag(inner, 'tool-use-id') ?? null;
 }
 
 /**

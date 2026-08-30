@@ -318,49 +318,26 @@ select:focus {
 .btn-primary:hover {
   filter: brightness(0.95);
 }
-.btn-danger {
-  color: var(--danger);
-}
-.btn-danger:hover {
-  background: var(--bg-hover);
-}
 
-/* ─── Notification dot ───────────────────────────────────────────────────
-   Theme-accented dot. Two modes:
+/* ─── The status channel's colour rule ──────────────────────────────────
+   Stated here, at the top of the shared stylesheet, because it is the rule
+   the whole chrome now obeys — the marks themselves live in StatusMark.css:
 
-   .badge-dot          — absolutely positioned top-right of its parent;
-                         parent must be position:relative. Use this on
-                         pinned plates (tabs, switcher trigger, pane title)
-                         where the dot rides the corner like an app icon.
-   .badge-dot.-inline  — flow-laid out, drop into a row next to text
-                         (dropdown rows next to the workspace/tab name).
+     --accent   the MACHINE is working  (the status rail's working ring)
+     --danger   it WANTS YOU            (the rail's blocked dot)
+     --fg-dim   done / quiet            (the rail's done ring)
 
-   Single signal across the app: "this wants you." Uses var(--accent) (the
-   theme color — violet on Acme, etc.) rather than a hard red: "your turn"
-   isn't an error, and everything else in the chrome speaks the theme palette.
-   It shares the accent hue with the selection pill ("you are here"), but the
-   two never co-occur on a row (viewing a tab clears its dot) and read as very
-   different forms — a filled row pill vs a 7px dot. The MACHINE/progress
-   channel (the busy spinner) is deliberately NEUTRAL grey, not accent, so the
-   "concerns you" hue stays exclusively about you. */
-.badge-dot {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 1.5px var(--bg-tabbar);
-  pointer-events: none;
-}
-.badge-dot.-inline {
-  position: static;
-  display: inline-block;
-  flex: 0 0 auto;
-  vertical-align: middle;
-  box-shadow: 0 0 0 1.5px var(--bg-elev);
-}
+   The old `.badge-dot` lived here and is GONE — every render site (nav tree,
+   sheet pane list, tab-bar dropdown, desktop tab strip, mobile switcher) now
+   draws a StatusMark instead, so there is exactly one component describing
+   pane state and the surfaces cannot drift apart.
+
+   It is also why the two channels are no longer the same hue. The dot was
+   var(--accent), on the theory that "your turn isn't an error", and the busy
+   spinner was accent-mixed-toward-grey. On an ACTIVE row — itself a 14%
+   accent pill with the name at 75% accent — a glance could not tell "working"
+   from "wants you" at all. "Wants you" is now the only warm mark in the
+   chrome, and therefore findable. */
 
 /* App layout — persistent tab bar above an outlet that fills the rest. */
 

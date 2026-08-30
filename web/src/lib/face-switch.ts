@@ -1,3 +1,6 @@
+import type { UrlHealth, UrlHealthReason } from '@muxpad/shared';
+import { api } from '../api';
+
 /**
  * Window-event contract for switching a pane's face (terminal | web | chat).
  *
@@ -35,6 +38,80 @@ export async function probeUrl(url: string, timeoutMs = 1500): Promise<boolean> 
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Why the web face believes what it believes. Everything in {@link UrlHealth}
+ *  plus 'opaque' — the browser's own no-cors probe, which knows only that
+ *  *something* answered. */
+export type LivenessReason = UrlHealthReason | 'opaque';
+
+export interface UrlLiveness {
+  alive: boolean;
+  reason: LivenessReason;
+  /** Real status when the server probe produced one; null otherwise. */
+  status: number | null;
+}
+
+/**
+ * What to do with the server's verdict.
+ *
+ *  - 'dead'     — the server saw a GATEWAY status (502/503/504). A proxy
+ *                 answering "my backend is gone" is the ONE case the page can
+ *                 never see for itself (opaque responses have no status), so
+ *                 this is authoritative and the browser gets no say.
+ *  - 'alive'    — the server reached it. Includes 401/403/404/500: the app is
+ *                 up and its own page beats our "nothing is responding".
+ *  - 'fallback' — the SERVER couldn't reach it (unreachable/timeout). That is
+ *                 not the same as "the user can't reach it": a pane URL on the
+ *                 viewer's LAN or VPN may be reachable from this browser and
+ *                 not from the muxpad host. Ask the browser before condemning.
+ */
+export function serverVerdict(h: UrlHealth): 'dead' | 'alive' | 'fallback' {
+  if (h.reason === 'gateway') return 'dead';
+  if (h.alive) return 'alive';
+  return 'fallback';
+}
+
+export interface ProbeUrlLiveDeps {
+  /** Server-side probe. Rejects when the endpoint itself is unavailable. */
+  health?: (paneId: string, url: string) => Promise<UrlHealth>;
+  /** The browser's opaque probe (this module's {@link probeUrl}). */
+  opaque?: (url: string) => Promise<boolean>;
+}
+
+/**
+ * The web face's real liveness question: "should I mount the iframe?"
+ *
+ * Server first (it can read statuses; see serverVerdict), browser second and
+ * only when the server's answer is inconclusive. Never throws: a broken
+ * health endpoint degrades to exactly the behaviour we had before it existed,
+ * which is the right failure mode — losing the 502 detection is a regression,
+ * declaring every app dead because our own API hiccuped is an outage.
+ */
+export async function probeUrlLive(
+  paneId: string,
+  url: string,
+  deps: ProbeUrlLiveDeps = {},
+): Promise<UrlLiveness> {
+  const health = deps.health ?? ((id: string, u: string) => api.paneUrlHealth(id, u));
+  const opaque = deps.opaque ?? ((u: string) => probeUrl(u));
+  let h: UrlHealth | null = null;
+  try {
+    h = await health(paneId, url);
+  } catch {
+    h = null; // endpoint missing / 403 / muxpad API blip → browser decides
+  }
+  if (h) {
+    const verdict = serverVerdict(h);
+    if (verdict !== 'fallback') {
+      return { alive: verdict === 'alive', reason: h.reason, status: h.status };
+    }
+  }
+  const ok = await opaque(url);
+  // On agreement (both say dead) keep the server's reason — 'timeout' tells the
+  // user something 'opaque' cannot.
+  if (ok) return { alive: true, reason: 'opaque', status: null };
+  return { alive: false, reason: h?.reason ?? 'unreachable', status: h?.status ?? null };
 }
 
 /**

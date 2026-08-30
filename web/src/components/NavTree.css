@@ -226,10 +226,12 @@
 .navtree-tab-row[data-drop-edge="bottom"]::after {
   bottom: -1px;
 }
-/* A tab is being dragged over this workspace row — light the whole row as a
-   drop basin (distinct from the thin reorder line above, which means "insert
-   between rows"). */
-.navtree-ws-row[data-tab-drop="true"] {
+/* Something is being dragged over this workspace row — light the whole row as
+   a drop basin (distinct from the thin reorder line above, which means "insert
+   between rows"). A TAB dropped here moves to this workspace; a PANE dropped
+   here gets a new tab in it. One drop-target language, whatever is hovering. */
+.navtree-ws-row[data-tab-drop="true"],
+.navtree-ws-row[data-pane-drop="true"] {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   box-shadow: inset 0 0 0 1px var(--accent);
   border-radius: 4px;
@@ -252,72 +254,35 @@
   min-width: 0;
 }
 
-/* ─── Busy spinner ──────────────────────────────────────────────────────
-   "This tab's app is working." A different channel from .badge-dot
-   ("wants you"): the spinner says "in progress" and clears itself when the
-   output stream goes quiet. Sits inline to the right of the name; never
-   shrinks. Neutral grey (the machine/working channel) — NOT accent, which is
-   reserved for the "concerns you" channel (selection pill + attention dot). */
-.navtree-busy {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  /* Muted accent — a quieter cousin of the attention dot it shares a slot
-     with: same hue family so the two "rhyme", but desaturated toward neutral
-     (and a thin animated ring vs the dot's solid fill) so "working" still
-     reads distinct from "wants you". */
-  color: color-mix(in srgb, var(--accent) 60%, var(--fg-dim));
-  line-height: 0;
-  /* Sit just after the name with a little breathing room (on top of the row's
-     5px flex gap) — not jammed against the text, not flung to the right edge.
-     Matches the attention dot below. */
-  margin-left: 4px;
-  /* Optical nudge: flex align-items:center centers the icon's BOX, but text
-     glyphs sit low within their line box, so a box-centered icon reads ~1px
-     high against the label. Drop it to sit on the text's optical center. */
-  position: relative;
-  top: 1px;
-}
+/* ─── Status rail ───────────────────────────────────────────────────────
+   The mark itself lives in StatusMark.css (one component, one stylesheet, used
+   by the sidebar, the sheet, the tab-bar dropdown and the mobile switcher so
+   all four tell the same story). What belongs HERE is only how the column sits
+   inside a nav row.
 
-/* The inline attention dot shares the spinner's status slot and the same
-   flex-box-centering quirk — box-centered, so it reads ~1px high against the
-   text. Give it the identical optical nudge so dot and spinner sit level.
-   `right: auto` is load-bearing: the base .badge-dot (absolute variant) sets
-   `right: 6px`, which `position: relative` here would otherwise reactivate and
-   shove the dot 6px left into the text. */
-.navtree-tab-link .badge-dot.-inline,
-.navtree-ws-name .badge-dot.-inline {
-  position: relative;
-  top: 1px;
-  right: auto;
-  /* A little breathing room after the name (atop the flex gap), not flush-right. */
+   Replaces the old `.navtree-busy` spinner + `.badge-dot.-inline` pair, which
+   shared a slot INSIDE the link, immediately after `.navtree-name-text`
+   (`flex: 0 1 auto`) — so the glyph's x moved with every name length and there
+   was no vertical line to scan. It was also ~1.4px of accent-mixed-with-grey
+   over a 0.25-opacity track: about as quiet as a live indicator can be while
+   still technically rendering. */
+.navtree-tab-row > .navtree-status,
+.navtree-ws-row > .navtree-status,
+.navtree-pane-row > .navtree-status {
+  /* Breathing room after the name (on top of the row's flex gap) — not jammed
+     against the text, not flung to the pill edge. */
   margin-left: 4px;
+  margin-right: 2px;
 }
-.navtree-busy svg {
-  animation: navtree-spin 0.8s linear infinite;
-  transform-origin: center;
-}
-@keyframes navtree-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-/* Honor reduced-motion: drop the rotation, keep a static (but visible)
-   indicator via a gentle opacity pulse instead of a spin. */
-@media (prefers-reduced-motion: reduce) {
-  .navtree-busy svg {
-    animation: navtree-busy-pulse 1.6s ease-in-out infinite;
-  }
-  @keyframes navtree-busy-pulse {
-    0%,
-    100% {
-      opacity: 0.4;
-    }
-    50% {
-      opacity: 1;
-    }
-  }
+/* Workspace rows carry NO flex `gap`, but `.navtree-close` still applies the
+   `margin-left: -4px` that exists to swallow one on tab rows. With nothing to
+   swallow, that -4px drags the whole trailing group 4px right — measured, the
+   workspace mark landed at x+4 relative to every tab mark below it, which is
+   precisely the vertical line this column exists to create. Pay the 4px back
+   here rather than adding a `gap` to the workspace row, which would also move
+   its disclosure, name and count chip. */
+.navtree-ws-row > .navtree-status {
+  margin-right: 6px;
 }
 
 /* Quiet tab-count chip on collapsed rows — says what's folded away. */
@@ -501,6 +466,80 @@
   opacity: 1;
 }
 
+/* ─── Pin affordance (DESKTOP sidebar only) ──────────────────────────── */
+/* Rides the .navtree-close reveal machinery above (identical collapse/expand
+   transition), then overrides only what must differ: pinning is not a
+   destructive action, so it never goes danger-red, and a PINNED tab keeps its
+   pin permanently visible — that lit pin is the only "this is pinned" signal
+   (no new badges by design). Touch never renders this button; the sheet's ⋯
+   menu owns pin/unpin there. */
+.navtree-pin:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+.navtree-pin.is-pinned {
+  flex-basis: 18px;
+  width: 18px;
+  margin-left: 0;
+  /* Quiet by default: a column of bright pins would out-shout the attention
+     dots, which are the signals that actually want you. It brightens with
+     the rest of the row's controls on hover. */
+  opacity: 0.5;
+  color: var(--fg-dim);
+}
+.navtree-tab-row:hover .navtree-pin.is-pinned,
+.navtree-tab-row:focus-within .navtree-pin.is-pinned {
+  opacity: 1;
+  color: var(--accent);
+}
+
+/* ─── ⋯ tab actions (SHEET only) ─────────────────────────────────────── */
+/* The one reliable route to a tab's actions on touch. It reuses the close
+   button's box (same hit square, same collapse machinery) but NOT its
+   meaning: never danger-red, and noticeably more present than the ×'s 16%,
+   because unlike the × it is not a shortcut for something you can do another
+   way — it IS the way. */
+.navtree[data-variant="sheet"] .navtree-more {
+  opacity: 0.55;
+  color: var(--fg-dim);
+}
+.navtree[data-variant="sheet"] .navtree-tab-row[data-active="true"] .navtree-more {
+  opacity: 0.85;
+}
+/* Variant-scoped so these BEAT the resting rule above — an unscoped
+   `.navtree-more:active` (0,2,0) would lose to `.navtree[…] .navtree-more`
+   (0,3,0) and the button would never acknowledge the tap. */
+.navtree[data-variant="sheet"] .navtree-more:hover,
+.navtree[data-variant="sheet"] .navtree-more:active,
+.navtree[data-variant="sheet"] .navtree-more:focus-visible {
+  background: var(--bg-hover);
+  color: var(--fg);
+  opacity: 1;
+}
+
+/* Pane-count hint on a collapsed multi-pane row (sheet). Same chip as
+   .navtree-ws-count on a collapsed workspace — reused verbatim so it carries
+   the meaning it already has ("N children hidden in here"); this only stops
+   it from being squeezed by a long tab name. */
+.navtree-pane-count {
+  flex: 0 0 auto;
+  margin-right: 0;
+  margin-left: 2px;
+}
+
+/* The seam between the pinned block and the auto-sorted one. A hairline with
+   generous air, not a labelled section header: the sidebar is already dense,
+   and the two blocks explain themselves once you've pinned something. */
+.navtree-pin-divider {
+  height: 1px;
+  margin: 5px 10px 5px 22px;
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--border-strong, #3b4261) 80%, transparent),
+    transparent
+  );
+}
+
 /* ─── Sheet pane list (mobile: tab row expands into its panes) ───────── */
 
 /* Expander chevron LEADING sheet tab rows — same left-edge grammar and
@@ -605,14 +644,18 @@
 .navtree-pane-row[data-unread="true"] .navtree-pane-label {
   font-weight: 700;
 }
-.navtree-ws-row[data-unread="true"] .navtree-name-text {
-  font-weight: 700;
-}
+/* The WORKSPACE-level unread bold is deliberately gone. `unread` bolded pane +
+   tab + workspace simultaneously — the exact triple-signal the attention dot
+   already refuses (it renders on collapsed workspace rows only, so it never
+   repeats what an expanded tab is already saying). Pane and tab keep the bold;
+   the workspace row now says the same thing once, in the status rail. */
 .navtree-pane-label {
-  /* Shrink-to-content (not flex:1) so the working/attention indicator sits
-     right AFTER the name — same as the tab row — instead of being flung to
-     the sidebar's right edge. */
-  flex: 0 1 auto;
+  /* GROW, so the status column that follows is pushed to the row's right edge
+     and lands on the same vertical line as every tab and workspace mark. It was
+     `flex: 0 1 auto` when the glyph was meant to trail the name — which is
+     precisely what made the old rail unscannable. */
+  flex: 1 1 auto;
+  text-align: left;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -622,8 +665,15 @@
   padding: 4px 8px;
   color: var(--fg-faint);
 }
-.navtree-new-pane {
-  margin: 2px 0 0;
+/* Shown when the pane-list poll has missed repeatedly (D16). Any marks still
+   rendered below are a stale snapshot, so this has to be legible rather than a
+   whisper — but it is a transient condition, not an error the user caused, so
+   it stays --fg-dim rather than --danger. */
+.navtree-pane-error {
+  padding: 4px 8px;
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-style: italic;
 }
 
 /* ─── Inline rename (sidebar) ────────────────────────────────────────── */
@@ -889,6 +939,25 @@ body.sidenav-resizing iframe {
   pointer-events: none;
 }
 
+.sidenav-brand {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  /* Match the pane tab-strip height (--chrome-h) so the brand's bottom
+     hairline lines up exactly with the tab strip's bottom line at the top
+     of the workspace, in both split and tabbed views. */
+  height: var(--chrome-h);
+  border-bottom: 1px solid var(--border);
+}
+.sidenav-brand .brand {
+  flex: 1;
+  height: var(--chrome-h);
+  border-right: none;
+  /* Center the wordmark+mark so the brand reads as a title plate, set apart
+     from the left-aligned workspace/tab rows below it. */
+  justify-content: center;
+}
+
 .sidenav-footer {
   position: relative;
   flex: 0 0 auto;
@@ -928,108 +997,4 @@ body.sidenav-resizing iframe {
   border-bottom: none;
   border-radius: 6px 6px 6px 0;
   box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.22);
-}
-
-/* The transient Terminal/Agent choice row — appears in place of the quiet
-   "+ New tab" action only while choosing. Equal-width ghost-chip BUTTONS
-   (bordered, centered, identical) so both read as flavors of one action. */
-.navtree-new-row {
-  display: flex;
-  gap: 6px;
-  padding: 4px 8px 6px;
-}
-.navtree-new-row .navtree-add {
-  flex: 1 1 0;
-  padding: 5px 0;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg-dim);
-  font-size: var(--chrome-size-sm, 12px);
-  text-align: center;
-  cursor: pointer;
-  transition: color 80ms ease, border-color 80ms ease, background 80ms ease;
-}
-.navtree-new-row .navtree-add:hover:not(:disabled) {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-}
-
-/* ─── Pinned "muxpad" row (the brand entry / resident agent) ────────────
-   The one slot above the scrolling tree (both variants): brand mark +
-   wordmark, opening the singleton resident-agent pane (internally the CEO —
-   see server/src/ceo.ts). It replaced the old separate brand plate at the
-   sidebar's head. Same row grammar as a tab row — icon, name, one status
-   slot (spinner while busy, else attention dot), bold name when unread —
-   but pinned: no close ×, no drag, no disclosure. A bottom hairline
-   separates it from the tree the same way workspace groups separate. */
-.navtree-ceo {
-  flex: 0 0 auto;
-  margin: 6px 8px 0 4px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--border);
-}
-.navtree[data-variant="sheet"] .navtree-ceo {
-  margin: 6px 8px 0;
-}
-.navtree-ceo-row {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  height: var(--nt-row-tab);
-  padding: 0 6px 0 4px;
-  border-radius: var(--nt-pill);
-  color: var(--fg-dim);
-  font-weight: 500;
-  text-decoration: none;
-  -webkit-touch-callout: none;
-  -webkit-user-select: none;
-  user-select: none;
-}
-.navtree-ceo-row:hover {
-  color: var(--fg);
-  background: var(--bg-hover);
-  text-decoration: none;
-}
-/* Active = you're on the CEO's workspace-tab route — the same soft
-   accent-tint pill grammar as the active tab row. */
-.navtree-ceo-row[data-active="true"] {
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
-}
-.navtree-ceo-row[data-active="true"] .navtree-name-text {
-  color: color-mix(in srgb, var(--accent) 75%, var(--fg));
-}
-.navtree-ceo-row[data-active="true"]:hover {
-  background: color-mix(in srgb, var(--accent) 20%, var(--bg));
-}
-.navtree-ceo-row[data-unread="true"] .navtree-name-text {
-  font-weight: 700;
-}
-/* Brand-entry treatment: the quiet logotype tracking the old brand plate's
-   wordmark had (weight still flips to 700 for unread, which wins below). */
-.navtree-ceo-row .navtree-name-text {
-  font-weight: 400;
-  letter-spacing: 0.06em;
-}
-/* The mark rests muted (grayscale via .brand-mark in styles.css); hovering
-   the row restores its full colors — same grammar as the old brand plate. */
-.navtree-ceo-row:hover .brand-mark {
-  filter: none;
-  opacity: 1;
-}
-/* The icon is not a picker here — no hover chip, default cursor. */
-.navtree-ceo-icon {
-  cursor: inherit;
-}
-.navtree-ceo-icon:hover {
-  background: none;
-}
-/* Status slot: same optical nudge as the tab rows' inline dot/spinner. */
-.navtree-ceo-row .badge-dot.-inline {
-  position: relative;
-  top: 1px;
-  right: auto;
-  margin-left: 4px;
 }
