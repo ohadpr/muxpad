@@ -1,12 +1,12 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import type { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { EventEmitter } from 'node:events';
-import { openDb } from '../store/db.js';
-import { EventBus } from '../events.js';
 import type { MuxpadEvent } from '@muxpad/shared';
-import { createTestApp, type TestApp } from '../test-helpers/createTestApp.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { EventBus } from '../events.js';
+import { openDb } from '../store/db.js';
+import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
 
 describe('tabs routes', () => {
   let test: TestApp;
@@ -260,9 +260,9 @@ describe('tabs routes', () => {
     const srcList = (await (
       await test.app.request(`/api/tabs?workspaceId=${workspaceId}`)
     ).json()) as { id: string }[];
-    const destList = (await (
-      await test.app.request(`/api/tabs?workspaceId=${dest}`)
-    ).json()) as { id: string }[];
+    const destList = (await (await test.app.request(`/api/tabs?workspaceId=${dest}`)).json()) as {
+      id: string;
+    }[];
     expect(srcList.some((t) => t.id === tab.id)).toBe(false);
     expect(destList.some((t) => t.id === tab.id)).toBe(true);
   });

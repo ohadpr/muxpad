@@ -1,14 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  encodeInput,
-  encodeResize,
-  encodeOutput,
-  encodeExit,
+  decodeClientMessage,
+  decodeServerMessage,
   encodeError,
+  encodeExit,
+  encodeInput,
+  encodeOutput,
   encodePing,
   encodePong,
-  decodeServerMessage,
-  decodeClientMessage,
+  encodeResize,
 } from './ws-protocol';
 
 describe('ws-protocol', () => {

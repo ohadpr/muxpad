@@ -35,7 +35,6 @@ body.mosaic-dragging .shell-pane-web {
   pointer-events: none;
 }
 
-
 /* Web face refused (self-embed guard) or dead (nothing answering at the
    URL): explain instead of a blank tile. */
 .shell-pane-web-blocked {

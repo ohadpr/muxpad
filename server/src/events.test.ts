@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { EventBus } from './events.js';
 import type { MuxpadEvent } from '@muxpad/shared';
+import { describe, expect, it } from 'vitest';
+import { EventBus } from './events.js';
 
 describe('EventBus', () => {
   it('broadcasts to all subscribers', () => {
