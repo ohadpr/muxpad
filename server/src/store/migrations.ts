@@ -450,6 +450,39 @@ const MIGRATIONS: Migration[] = [
       CREATE UNIQUE INDEX apps_pane ON apps(pane_id) WHERE pane_id IS NOT NULL;
     `,
   },
+  {
+    // The nav row's second line, and the auto-namer's hard stop.
+    //
+    //   tabs.headline — ONE line saying what this chat is currently about,
+    //     written by a cheap model from the transcript (chat/headline.ts).
+    //     Nullable with no backfill, because "we have never summarised this
+    //     chat" is a real and permanent state: a tab with no agent session
+    //     never gets one, and the rail simply renders a one-line row. An
+    //     empty string would be a different (and wrong) claim — that we
+    //     summarised it and it came out blank.
+    //
+    //   tabs.headline_at — when that line was last written. This is the
+    //     rate limiter's clock, and it is PERSISTED for the same reason the
+    //     cron scheduler persists next_due_at: an in-memory timestamp resets
+    //     on every server restart, and a restart is exactly the moment a
+    //     rate limiter must not forget itself (a bounce loop would otherwise
+    //     re-summarise every chat on every boot).
+    //
+    //   tabs.name_sticky — the user has named this tab by hand. Permanent.
+    //     This replaces an in-memory Map in ws.ts whose own comment conceded
+    //     the flaw: after a restart it treated every existing auto-name as
+    //     user-given, so the guard held only by the accident that a manual
+    //     name matched neither the bootstrap sentinel nor the last title.
+    //     Backfilled to 0, which is the safe direction — a tab wrongly
+    //     marked not-sticky can be re-stickied by renaming it once; a tab
+    //     wrongly marked sticky can never be auto-named again.
+    version: 24,
+    sql: `
+      ALTER TABLE tabs ADD COLUMN headline TEXT;
+      ALTER TABLE tabs ADD COLUMN headline_at INTEGER;
+      ALTER TABLE tabs ADD COLUMN name_sticky INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

@@ -225,6 +225,8 @@ export function tabsRoutes(deps: {
         // follows the user across devices (the emitted tab.updated syncs
         // other connected clients live).
         view_mode: z.enum(['split', 'tabbed']).optional(),
+        // Setting `name` also marks the tab name-sticky (permanently) — see
+        // the transaction below and TabStore.setNameSticky.
         // Living sidebar: pin this tab to the top of its workspace block, in
         // the manual drag order. Handled outside TabStore.update because it
         // is a flag, not one of the row's structural fields (and must not
@@ -259,6 +261,11 @@ export function tabsRoutes(deps: {
     let updated: Tab;
     try {
       updated = deps.db.transaction((): Tab => {
+        // A NAME the user typed is the auto-namer's hard stop, forever.
+        // Inside the transaction with the rename itself: a rename that
+        // committed without its flag would be silently re-namable by the next
+        // AI title, which is precisely the bug this replaces.
+        if (rowPatch.name !== undefined) tabs.setNameSticky(id);
         if (pinned !== undefined) {
           tabs.setPinned(id, pinned);
           // Newly pinned tabs land at the END of the pinned block: appending is
