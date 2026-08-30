@@ -4,9 +4,21 @@
 // server relays chat clients' sends/stops to it and fans its turn lifecycle
 // back out to every open chat view of the pane.
 
-import type { AgentQuestion, AgentSessionStatus, SubagentProgress } from '@muxpad/shared';
+import type {
+  AgentMode,
+  AgentQuestion,
+  AgentSessionStatus,
+  SubagentProgress,
+} from '@muxpad/shared';
 
-export type { AgentQuestion, AgentSessionStatus, SubagentProgress };
+export type { AgentMode, AgentQuestion, AgentSessionStatus, SubagentProgress };
+
+/** Narrow an off-the-wire value to an AgentMode. Same shape as isBackendId:
+ *  the value can reach a shell (`muxpad agent --mode do` in a startup_cmd),
+ *  so only these two literals may ever pass. */
+export function isAgentMode(v: unknown): v is AgentMode {
+  return v === 'do' || v === 'deep';
+}
 
 /** Which agent CLI/SDK drives a pane's session. The runner declares it in its
  *  hello; the server stores it (AgentSession.assistant) and preserves it in the
@@ -86,6 +98,19 @@ export type ServerFrame =
       t: 'answer';
       qid: string;
       answers: Array<{ question: string; answers: string[] }>;
+    }
+  | {
+      /**
+       * The pane's agent MODE (⚡ do / 🧠 deep). Sent right after an accepted
+       * hello (so a runner that booted from a stale startup_cmd converges on
+       * the DB's authoritative value) and on every PATCH /api/panes/:id
+       * {mode}. A frame carrying the mode the backend already booted with is
+       * a no-op; a genuine change makes the backend prepend a ONE-TIME
+       * <muxpad-mode> note to the next user message — no harness lets us
+       * re-write a live session's system prompt (see agent-modes.ts).
+       */
+      t: 'mode';
+      mode: AgentMode;
     };
 
 /**
