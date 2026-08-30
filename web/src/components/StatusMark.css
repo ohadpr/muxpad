@@ -1,0 +1,135 @@
+/* ─── The status rail ────────────────────────────────────────────────────
+   ONE fixed 16px column, at the same x on every row. Everything to its right
+   in a nav row (the close ×, the pin) is zero-width at rest, so the mark's
+   distance from the row's right edge is identical on workspace rows, tab rows
+   and pane rows — that constant x is what makes the rail scannable as a
+   vertical line rather than a scatter of glyphs trailing ragged names.
+
+   `flex: 0 0 16px` and never shrinks: the column is reserved even when the row
+   is idle and draws nothing, so a row going from idle → working doesn't reflow
+   its name out from under the cursor.
+
+   Colour rule, enforced by the three data-status blocks below:
+     --accent   the MACHINE is working
+     --danger   it WANTS YOU
+     --fg-dim   done / quiet
+   These never share a hue. (They used to: the busy spinner was accent-mixed
+   and the attention dot was plain accent, so on an active row — itself an
+   accent pill with an accent-tinted name — the "machine" and "you" channels
+   collapsed into one colour.) */
+.navtree-status {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  position: relative;
+  /* Optical nudge: flex centering centers the icon's BOX, but text glyphs sit
+     low in their line box, so a box-centered mark reads ~1px high next to the
+     label. Same nudge the old dot/spinner shared. */
+  top: 1px;
+}
+
+/* blocked — the ONLY red in the rail, and the only mark that never moves.
+   Motion means "in progress"; a thing waiting on you is not in progress. */
+.navtree-status[data-status="blocked"] {
+  color: var(--danger);
+}
+.navtree-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* working — accent at FULL strength (not mixed toward grey), a thicker ring
+   than the old 1.4px hairline, and a faint track so the arc reads as rotation
+   rather than a floating tick. */
+.navtree-status[data-status="working"] {
+  color: var(--accent);
+}
+.navtree-status-ring {
+  animation: navtree-spin 0.9s linear infinite;
+  transform-origin: center;
+}
+@keyframes navtree-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* The reduced-motion substitute is hidden by default. */
+.navtree-status-bar {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .navtree-status-ring {
+    display: none;
+  }
+  /* A 2px accent bar that SLIDES inside the column. Deliberately NOT the old
+     opacity pulse: fading the only indicator you have makes the one row you
+     most need to see the faintest thing on screen. Position/clip changes are
+     far gentler than rotation while still being unambiguously alive. */
+  .navtree-status-bar {
+    display: block;
+    position: absolute;
+    left: 1px;
+    right: 1px;
+    height: 2px;
+    border-radius: 1px;
+    background: color-mix(in srgb, var(--accent) 25%, transparent);
+    overflow: hidden;
+  }
+  .navtree-status-bar::after {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 45%;
+    border-radius: 1px;
+    background: var(--accent);
+    animation: navtree-status-slide 1.4s ease-in-out infinite;
+  }
+  @keyframes navtree-status-slide {
+    0% {
+      transform: translateX(-10%);
+    }
+    50% {
+      transform: translateX(130%);
+    }
+    100% {
+      transform: translateX(-10%);
+    }
+  }
+}
+
+/* done — a small hollow ring, static. The name is already bold for unread;
+   this is the mark that says WHY it's bold without adding a second colour. */
+.navtree-status[data-status="done"] {
+  color: var(--fg-dim);
+}
+
+/* dead — quieter than done on purpose. It is not asking for anything; it is
+   reporting that this pane is over. */
+.navtree-status[data-status="dead"] {
+  color: var(--fg-faint);
+}
+
+/* Live background-subagent count. Rides to the LEFT of the ring, OUTSIDE the
+   fixed column (absolute), so the ring itself never leaves the scan line no
+   matter how many subagents are running. Reuses the .navtree-ws-count chip
+   language — same "this row is hiding N things" meaning, one level in. */
+.navtree-status-agents {
+  position: absolute;
+  right: 100%;
+  margin-right: 2px;
+  font-family: var(--chrome-font);
+  font-size: 9px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-dim);
+  background: var(--bg-hover);
+  border-radius: 6px;
+  padding: 2px 3px;
+  pointer-events: none;
+}

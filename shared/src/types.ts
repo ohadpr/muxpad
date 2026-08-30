@@ -38,6 +38,124 @@ export const AppUrlSchema = z.object({
 });
 export type AppUrl = z.infer<typeof AppUrlSchema>;
 
+/**
+ * Result of the SERVER-side reachability probe for a pane's web-face URL
+ * (GET /api/panes/:id/url-health). Shared because the web face's liveness
+ * decision is made from these exact fields.
+ *
+ * It lives on the server because the browser cannot produce it: the web face
+ * probes with `fetch(mode:'no-cors')`, whose opaque response has `status === 0`
+ * and no headers — so a healthy 200 and a `tailscale serve` 502 (proxy up,
+ * local backend dead) are indistinguishable from the page. The server shares a
+ * machine with the app and can read the real status.
+ *
+ * `reason` is the decision, not just a label: 'gateway' (502/503/504) is the
+ * one verdict the browser can never reach on its own, so the client treats it
+ * as authoritative; 'unreachable'/'timeout' mean the SERVER couldn't get there,
+ * which for a URL only the viewer's network can reach is not the last word.
+ */
+export const UrlHealthSchema = z.object({
+  /** Should the web face mount the iframe? */
+  alive: z.boolean(),
+  /** Real HTTP status, or null on transport failure/timeout. */
+  status: z.number().nullable(),
+  reason: z.enum(['ok', 'client_error', 'server_error', 'gateway', 'unreachable', 'timeout']),
+  /** Probe round-trip in ms (our cost, not the app's real latency). */
+  elapsedMs: z.number(),
+});
+export type UrlHealth = z.infer<typeof UrlHealthSchema>;
+export type UrlHealthReason = UrlHealth['reason'];
+
+/**
+ * How an agent pane is asked to behave. 'deep' is the historical (and
+ * default) behavior — no extra system-prompt material at all. 'do' overlays
+ * the user-owned `<dataDir>/do-mode.md` contract on top of the harness's
+ * normal prompt: decisive, terse, result-first.
+ *
+ * Stored per PANE (agent sessions are pane-scoped), never per tab — the
+ * sidebar deliberately doesn't surface it.
+ */
+export const AgentModeSchema = z.enum(['do', 'deep']);
+export type AgentMode = z.infer<typeof AgentModeSchema>;
+export const DEFAULT_AGENT_MODE: AgentMode = 'deep';
+
+/**
+ * The ONE status a pane/tab/workspace is in. Five states, mutually exclusive,
+ * evaluated in this precedence — highest first:
+ *
+ *   blocked  wants you NOW.       agent: a question is awaiting an answer;
+ *                                 shell: BEL attention. Exactly those two —
+ *                                 a runner that gave up is `dead`, below.
+ *   working  a turn or a background subagent is running. For a RUNNER-OWNED
+ *            pane this is the runner registry, never pty output. For a pane
+ *            with no runner it is the pty-output heuristic.
+ *   dead     the runner gave up — automatic restarts exhausted.
+ *   done     finished, unseen (the persisted `unread` flag).
+ *   idle     none of the above.
+ *
+ * Listed in PRECEDENCE order (STATUS_ORDER below), which is why `dead` sits
+ * above `done`: "it crashed" must not be masked by "it finished".
+ *
+ * Replaces three physically different conditions previously ORed into one
+ * `busy` boolean. `busy` remains a DEPRECATED ALIAS on the same rows for one
+ * release, so the CLI and any older client keep working:
+ *   busy ≡ status === 'working'
+ *
+ * `attention` is NOT an alias and deliberately keeps its ORIGINAL meaning —
+ * the raw BEL bit. `blocked` is a superset (BEL ∪ an open agent question),
+ * and widening `attention` to match it would double-notify: the
+ * push bridge fires on `attention`'s rising edge, and the ws layer already
+ * pushes explicitly when a question arrives. Read `status` for the new
+ * semantics; `attention` still means exactly what it always did.
+ *
+ * A tab's status is the highest-precedence status among its panes; a
+ * workspace's is the highest among its tabs — computed on the server, ALWAYS,
+ * collapsed or not (a collapsed workspace used to have no busy signal at all).
+ */
+export const PaneStatusSchema = z.enum(['blocked', 'working', 'done', 'dead', 'idle']);
+export type PaneStatus = z.infer<typeof PaneStatusSchema>;
+
+/**
+ * Precedence order, highest first. Exported so every rollup — pane→tab,
+ * tab→workspace, and any future surface — folds through ONE table rather than
+ * re-deriving the priority in each renderer (which is how the sidebar and the
+ * tab strip came to disagree in the first place).
+ *
+ * `dead` outranks `done`: a runner that gave up needs the user's attention
+ * more than an unread-but-fine turn does — "it finished" must not mask "it
+ * crashed". (The audit's literal order had these two swapped; deliberate
+ * deviation.)
+ */
+export const STATUS_ORDER: readonly PaneStatus[] = ['blocked', 'working', 'dead', 'done', 'idle'];
+
+/**
+ * The higher-precedence of two statuses. The single rollup primitive.
+ *
+ * An UNKNOWN string (a newer server inventing a status, a hand-built row)
+ * clamps to the bottom rather than winning: raw `indexOf` returns -1, which
+ * compares as the HIGHEST precedence, so one unrecognised value used to
+ * outrank `blocked` and swallow every real signal in a rollup. Degrading an
+ * unknown to `idle` loses information; letting it win loses the whole rail.
+ */
+function rank(s: PaneStatus): number {
+  const i = STATUS_ORDER.indexOf(s);
+  return i === -1 ? STATUS_ORDER.length : i;
+}
+
+export function maxStatus(a: PaneStatus, b: PaneStatus): PaneStatus {
+  return rank(a) <= rank(b) ? a : b;
+}
+
+/** Fold a list of statuses to the one that should represent them. */
+export function rollupStatus(list: Iterable<PaneStatus>): PaneStatus {
+  let out: PaneStatus = 'idle';
+  for (const s of list) {
+    out = maxStatus(out, s);
+    if (out === 'blocked') break; // nothing outranks it
+  }
+  return out;
+}
+
 export const PaneSpecSchema = z.object({
   id: z.string(),
   tab_id: z.string(),
@@ -59,6 +177,10 @@ export const PaneSpecSchema = z.object({
   // events). `face_url` is the web face's chosen URL.
   face: z.enum(['terminal', 'web', 'chat']).default('terminal'),
   face_url: z.string().nullable().default(null),
+  // Agent behavior mode (⚡ Do / 🧠 Deep). Meaningful only for agent panes;
+  // every other pane carries the 'deep' default and ignores it. Persisted so
+  // the choice survives respawns and follows the user across devices.
+  mode: AgentModeSchema.default('deep'),
   // Runtime-only fields decorated by the route layer.
   title: z.string().nullable().optional(),
   foreground_cmd: z.string().nullable().optional(),
@@ -66,10 +188,16 @@ export const PaneSpecSchema = z.object({
   // the user last interacted with it. Decorated at the route layer from
   // the ptyd cache (same source as Tab.attention / Workspace.attention).
   attention: z.boolean().optional(),
-  // Runtime-only flag. True while this pane is actively producing output
-  // (the foreground app is working, not idling at a prompt). Decorated at
-  // the route layer from the ptyd cache; same source as Tab.busy.
+  // Runtime-only. DEPRECATED ALIAS for `status === 'working'` — kept for one
+  // release so the CLI and older clients don't break. New code reads `status`.
   busy: z.boolean().optional(),
+  // The pane's single status (see PaneStatusSchema). Runtime-only, decorated at
+  // the route layer. Optional so a client can talk to an older server.
+  status: PaneStatusSchema.optional(),
+  // How many live BACKGROUND subagents are running in this pane. A NUMBER, not
+  // a state: rendered as a count badge beside the `working` glyph. 0/absent
+  // when none. Sourced from the durable server-owned roster (never a timer).
+  agents: z.number().int().nonnegative().optional(),
   // "Done, unreviewed" — an agent turn finished here while you weren't
   // looking (or you manually marked it). Orthogonal to `attention` ("wants
   // you NOW", a red dot): unread is the calm "there are results to read",
@@ -109,16 +237,27 @@ export const TabSchema = z.object({
   // Runtime-only flag. True iff at least one pane in this tab has
   // received a BEL (\x07) since the user last interacted with it.
   attention: z.boolean().optional(),
-  // Runtime-only flag. True iff at least one pane in this tab is actively
-  // producing output (a foreground app working). Drives the busy spinner in
-  // the navigator. Distinct from `attention` ("wants you"): busy says
-  // "working", and clears on its own when the work goes quiet.
+  // Runtime-only. DEPRECATED ALIAS for `status === 'working'` (see PaneSpec).
   busy: z.boolean().optional(),
+  // Rollup: the highest-precedence status among this tab's panes.
+  status: PaneStatusSchema.optional(),
+  // Sum of live background subagents across this tab's panes.
+  agents: z.number().int().nonnegative().optional(),
   // "Done, unreviewed" rollup (bold name). True iff this tab was manually
   // marked unread OR any of its panes is unread (an agent finished a turn
   // there unobserved). Distinct from `attention` (red dot / wants-you);
   // cleared when the tab is viewed.
   unread: z.boolean().optional(),
+  // Pinned to the top of its workspace's sidebar block, in the user's manual
+  // drag order. Unpinned tabs below the divider are auto-sorted by the server
+  // (attention → busy → recency), so pinning is how you opt a tab OUT of the
+  // shuffling. DB-persisted. Optional for rows/servers predating the column.
+  pinned: z.boolean().optional(),
+  // Epoch ms of the last thing that happened in this tab: an agent turn
+  // finishing, a user send, or (throttled to one write per minute) pty
+  // output. Drives the recency ordering of the unpinned block. Null on rows
+  // migrated in before the column existed — those sort last.
+  last_activity_at: z.number().nullable().optional(),
 });
 export type Tab = z.infer<typeof TabSchema>;
 
@@ -135,7 +274,8 @@ export const WorkspaceSchema = z.object({
   updated_at: z.number(),
   // Derived at read time; not stored in the DB.
   tab_count: z.number().int().nonnegative(),
-  // System container flag (e.g. the workspace holding the CEO pane).
+  // System container flag (the hidden workspace the retired resident-pane
+  // primitive used as its container; see server/src/resident-release.ts).
   // Hidden workspaces are excluded from GET /api/workspaces (and thus the
   // sidebar tree) unless ?all=1. Optional for servers predating the column.
   hidden: z.boolean().optional(),
@@ -146,6 +286,13 @@ export const WorkspaceSchema = z.object({
   // "Done, unreviewed" rollup (bold name). True iff any tab in this
   // workspace is unread. Distinct from `attention` (red dot).
   unread: z.boolean().optional(),
+  // Rollup: the highest-precedence status across every pane in every tab.
+  // Computed ALWAYS — collapsed or not. A collapsed workspace previously had
+  // no working signal of any kind, so on a fresh profile (where only the
+  // active workspace auto-expands) every agent working elsewhere was invisible.
+  status: PaneStatusSchema.optional(),
+  // Sum of live background subagents across the whole workspace.
+  agents: z.number().int().nonnegative().optional(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 

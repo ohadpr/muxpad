@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { type ChatEvent, normalizeTranscriptLine, sanitizeAgentStatus } from './chat-events.js';
+import {
+  type ChatEvent,
+  LAUNCH_ACK_RE,
+  blockText,
+  isAgentLaunchTool,
+  normalizeTranscriptLine,
+  sanitizeAgentStatus,
+  subagentLabel,
+  taskNotificationToolUseId,
+} from './chat-events.js';
 
 const TS = '2026-07-01T10:00:00.000Z';
 const MS = Date.parse(TS);
@@ -243,9 +252,9 @@ describe('sanitizeAgentStatus', () => {
     // No context (Codex/Cursor backends) → valid, context simply omitted.
     expect(sanitizeAgentStatus({ model: 'x' })).toEqual({ model: 'x' });
     // Malformed context is dropped, not fatal — the model still surfaces.
-    expect(
-      sanitizeAgentStatus({ model: 'x', context: { pct: '12', tokens: 1, max: 2 } }),
-    ).toEqual({ model: 'x' });
+    expect(sanitizeAgentStatus({ model: 'x', context: { pct: '12', tokens: 1, max: 2 } })).toEqual({
+      model: 'x',
+    });
   });
 
   it('omits models when the array sanitizes to empty', () => {
@@ -255,5 +264,51 @@ describe('sanitizeAgentStatus', () => {
       models: ['junk'],
     });
     expect(out).toEqual({ model: 'x', context: { pct: 1, tokens: 2, max: 3 } });
+  });
+});
+
+describe('subagent lifecycle recognisers', () => {
+  // These are SHARED because the runner (which owns the durable roster) and the
+  // web chat (which renders it) must agree byte-for-byte. Two hand-kept copies
+  // is how a roster starts disagreeing with the list beside it.
+
+  it('recognises launches and reads their description', () => {
+    expect(isAgentLaunchTool('Task')).toBe(true);
+    expect(isAgentLaunchTool('Agent')).toBe(true);
+    expect(isAgentLaunchTool('Bash')).toBe(false);
+    expect(subagentLabel({ description: '  audit the pipeline  ' })).toBe('audit the pipeline');
+    expect(subagentLabel({})).toBe('');
+    expect(subagentLabel(null)).toBe('');
+    expect(subagentLabel({ description: 'x'.repeat(200) })).toHaveLength(80);
+  });
+
+  it('tells a background LAUNCH ACK apart from a real completion', () => {
+    // The load-bearing distinction: reading the ack as a completion is what
+    // used to drop every background agent one second after launch.
+    expect(LAUNCH_ACK_RE.test('Agent launched successfully. Task ID: abc')).toBe(true);
+    expect(LAUNCH_ACK_RE.test('Async agent launched')).toBe(true);
+    expect(LAUNCH_ACK_RE.test('Here is what I found: 3 defects')).toBe(false);
+  });
+
+  it('flattens tool_result content in either shape', () => {
+    expect(blockText('agent launched successfully')).toBe('agent launched successfully');
+    expect(
+      blockText([{ type: 'text', text: 'a' }, { type: 'image' }, { type: 'text', text: 'b' }]),
+    ).toContain('a');
+    expect(blockText(null)).toBe('');
+  });
+
+  it('extracts the tool-use-id from a background finish notification', () => {
+    const notif =
+      '<task-notification><status>completed</status>' +
+      '<tool-use-id>toolu_42</tool-use-id><summary>Agent "x" finished</summary>' +
+      '</task-notification>';
+    expect(taskNotificationToolUseId(notif)).toBe('toolu_42');
+    // A notification from a harness predating the field yields null (the
+    // description-matched fallback in the client handles those).
+    expect(
+      taskNotificationToolUseId('<task-notification><summary>done</summary></task-notification>'),
+    ).toBeNull();
+    expect(taskNotificationToolUseId('just some prose')).toBeNull();
   });
 });
