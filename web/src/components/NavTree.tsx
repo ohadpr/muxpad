@@ -1266,6 +1266,41 @@ interface TabRowProps {
   rowDnd?: DragItemProps | undefined;
 }
 
+/**
+ * "This chat runs on a schedule." A quiet ⏱ on the NAME side of a nav row.
+ *
+ * NOT a status. The status rail (StatusMark) holds exactly one transient,
+ * mutually-exclusive state and lives in a fixed column at a constant x so it
+ * can be scanned vertically — putting a standing PROPERTY of the chat there
+ * would both break that scan and lose to `working` the moment the cron
+ * actually fired, which is precisely when you'd want to know a schedule
+ * exists. So it rides beside the name, where the other facts about the tab
+ * (its icon, its name, its pane count) already are, and it never changes:
+ * when a cron fires, the existing `working` status shows the activity.
+ *
+ * The server folds `crons` + `next_cron` into the tab row (decorateTab), so
+ * this costs no request — and no per-row query on the server either.
+ */
+function CronMark({ tab }: { tab: Tab }) {
+  const next = tab.next_cron;
+  const count = tab.crons ?? 0;
+  const when = next
+    ? new Date(next.next_due_at).toLocaleString(undefined, {
+        weekday: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : null;
+  const title = next
+    ? `${next.name} · next ${when}${count > 1 ? ` (+${count - 1} more)` : ''}`
+    : `${count} scheduled job${count === 1 ? '' : 's'}`;
+  return (
+    <span className="navtree-cron" title={title} aria-label={title}>
+      ⏱
+    </span>
+  );
+}
+
 function TabRow({
   tab,
   workspace,
@@ -1548,6 +1583,15 @@ function TabRow({
             <span className="navtree-name-text" title={tab.name}>
               {tab.name}
             </span>
+            {/* ⏱ — this chat has a SCHEDULE. Deliberately on the NAME side and
+                deliberately NOT in the status rail: the rail holds one
+                transient, mutually-exclusive state (working / blocked / …),
+                and a cron is a standing property of the chat that is true
+                whether or not anything is happening. When a cron actually
+                fires, the existing `working` status covers the activity — this
+                mark never changes. Tooltip carries which cron and when it next
+                runs, in the viewer's locale. */}
+            {tab.crons ? <CronMark tab={tab} /> : null}
             {/* Pane-count hint — SHEET ONLY, and only while the row is
                 COLLAPSED. On mobile a one-pane tab and a five-pane tab looked
                 identical yet behaved completely differently: tapping the

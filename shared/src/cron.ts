@@ -53,6 +53,11 @@ export const CronSchema = z.object({
   max_open: z.number().int().positive(),
   /** new-tab only: close the spawned tab when its turn finishes cleanly. */
   close_when_done: z.boolean(),
+  /** Deterministic per-cron offset (ms) folded into `next_due_at`, so N daily
+   *  crons don't stampede at :00. Derived from the id, never random. */
+  jitter_ms: z.number().int().nonnegative(),
+  /** When it will ACTUALLY fire next — nominal slot + jitter. Every surface
+   *  shows this, never the nominal time. */
   next_due_at: z.number(),
   last_fire_at: z.number().nullable(),
   last_status: z.string().nullable(),

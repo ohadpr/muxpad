@@ -82,8 +82,14 @@ export function compileSchedule(input: string): string {
   if (!raw) throw new ScheduleError('schedule is empty');
   // Already a cron expression? Let cron-parser be the judge; its error message
   // is better than anything we would invent.
+  //
+  // The field COUNT alone is not the test: "monthly on 1 at 09:00" is also
+  // five whitespace-separated tokens, and taking this branch on it produced a
+  // baffling "Invalid characters, got value: monthly" instead of compiling the
+  // phrase. So every field must also LOOK like a cron field.
   const fields = raw.split(/\s+/);
-  if (fields.length === 5 || fields.length === 6) {
+  const cronish = fields.every((f) => /^[0-9*,\-/?LW#]+$/.test(f));
+  if (cronish && (fields.length === 5 || fields.length === 6)) {
     assertParsable(raw);
     return raw;
   }
@@ -152,6 +158,52 @@ function assertParsable(expr: string): void {
 export function nextAfter(expr: string, tz: string, from: number): number {
   const it = CronExpressionParser.parse(expr, { currentDate: new Date(from), tz });
   return it.next().getTime();
+}
+
+/** Jitter is never more than this, however long the interval. */
+export const MAX_JITTER_MS = 30 * 60_000;
+
+/** FNV-1a. Any stable 32-bit hash works; this one is four lines and has no
+ *  dependency. What matters is that it is a PURE function of the id. */
+function hash32(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h >>> 0;
+}
+
+/**
+ * Gap between the next two occurrences after `ref`. Only used to CAP the
+ * jitter, so an irregular schedule's locally-measured gap (weekdays sampled on
+ * a Friday reads 3 days) is harmless — anything hourly or slower saturates the
+ * 30-minute ceiling anyway.
+ */
+export function estimateIntervalMs(expr: string, tz: string, ref: number): number {
+  const it = CronExpressionParser.parse(expr, { currentDate: new Date(ref), tz });
+  const a = it.next().getTime();
+  const b = it.next().getTime();
+  return Math.max(0, b - a);
+}
+
+/**
+ * Per-cron offset added to every nominal slot, so N daily crons don't all fire
+ * at exactly :00 and stampede the runner fleet (and the model API) in the same
+ * second. Capped at half the interval, so a fire can never slide past its own
+ * next slot, and at 30 minutes absolute.
+ *
+ * DETERMINISTIC — derived from the cron's id, not from Math.random(). Random
+ * jitter would make `next_due_at` unreproducible across a restart and
+ * untestable at any point, which is most of what this scheduler is for. The
+ * jittered time is also the time we PERSIST and DISPLAY: `cron list`, `cron
+ * show` and the sidebar's ⏱ tooltip all show when it will actually fire, never
+ * a nominal :00 that is a lie.
+ */
+export function scheduleJitterMs(cronId: string, expr: string, tz: string, ref: number): number {
+  const cap = Math.min(MAX_JITTER_MS, Math.floor(estimateIntervalMs(expr, tz, ref) / 2));
+  if (cap <= 0) return 0;
+  return hash32(cronId) % cap;
 }
 
 export interface DueFires {
