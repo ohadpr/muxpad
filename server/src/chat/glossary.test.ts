@@ -142,6 +142,24 @@ describe('buildGlossary', () => {
     expect(terms.slice(0, STATIC_GLOSSARY.length)).toEqual([...STATIC_GLOSSARY]);
   });
 
+  it('does not let a wall of pane names crowd out the other sources', () => {
+    // Concatenating source-by-source meant an install with hundreds of panes
+    // spent the whole live-name budget on pane names, and the app slug /
+    // artifact slug / repo basename — the terms most worth teaching — never
+    // reached the prompt at all.
+    const { tab } = seed();
+    for (let i = 0; i < MAX_GLOSSARY_TERMS * 2; i++) addPane(tab, `pane-name-${i}`, '/tmp');
+    db.prepare(
+      'INSERT INTO apps (id, slug, name, cwd, command, url, created_at, updated_at) VALUES (?,?,?,?,?,?,0,1)',
+    ).run('a1', 'signalscout', 'Signal Scout', '/Users/me/dev/interesting-repo', 'x', 'http://x');
+    mkdirSync(join(dataDir, 'public', 'roadmap'), { recursive: true });
+
+    const terms = buildGlossary(db, dataDir);
+    expect(terms).toContain('signalscout');
+    expect(terms).toContain('roadmap');
+    expect(terms).toContain('interesting-repo');
+  });
+
   it('tolerates a table that is not there', () => {
     const bare = openDb(':memory:');
     bare.exec('DROP TABLE apps');

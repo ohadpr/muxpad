@@ -155,14 +155,33 @@ export function liveNames(db: Database.Database, dataDir: string): string[] {
     `SELECT slug, name, cwd FROM apps ORDER BY updated_at DESC LIMIT ${PER_SOURCE_LIMIT}`,
   );
 
-  return [
-    ...workspaces,
-    ...tabs,
-    ...panes.map((p) => p.name ?? ''),
-    ...apps.flatMap((a) => [a.slug, a.name]),
-    ...artifactSlugs(dataDir),
-    ...dirBasenames([...panes.map((p) => p.cwd), ...apps.map((a) => a.cwd)]),
-  ].filter(isUsefulTerm);
+  // Round-robin across the sources rather than concatenating them.
+  // Concatenation looks harmless until an install has 200 panes: the cap in
+  // `dedupeTerms` then falls entirely inside the pane names and the app slugs,
+  // artifact slugs and repo basenames — the highest-signal terms here, and the
+  // ones a mishearing most often reaches for — never make it into the prompt.
+  const sources = [
+    workspaces,
+    tabs,
+    apps.flatMap((a) => [a.slug, a.name]),
+    artifactSlugs(dataDir),
+    dirBasenames([...panes.map((p) => p.cwd), ...apps.map((a) => a.cwd)]),
+    panes.map((p) => p.name ?? ''),
+    // Per-source dedupe BEFORE interleaving: 200 panes in the same checkout
+    // contribute 200 copies of one basename, and round-robining those would
+    // starve the later entries of that same source just as badly as
+    // concatenating starved the later sources.
+  ].map((s) => dedupeTerms(s.filter(isUsefulTerm), Number.POSITIVE_INFINITY));
+
+  const out: string[] = [];
+  const longest = sources.reduce((n, s) => Math.max(n, s.length), 0);
+  for (let i = 0; i < longest; i++) {
+    for (const source of sources) {
+      const term = source[i];
+      if (term !== undefined) out.push(term);
+    }
+  }
+  return out;
 }
 
 /**
