@@ -12,6 +12,7 @@ import { ArchiveDb } from './archive/ArchiveDb.js';
 import { Archiver } from './archive/Archiver.js';
 import { projectsDir } from './chat/TranscriptReader.js';
 import { loadConfig } from './config.js';
+import { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
 import { createTailscaleFunnel, localFunnel } from './funnel.js';
 import { startPaneReaper } from './pane-reaper.js';
@@ -182,6 +183,28 @@ const funnel = config.funnelEnabled
   ? createTailscaleFunnel({ publicPort: config.publicPort })
   : localFunnel(config.publicPort, 'funnel disabled (MUXPAD_NO_FUNNEL=1)');
 
+// The cron scheduler. Built BEFORE createApp (the routes need its store) but
+// after the agentBridge, whose late-bound accessors it reads — every injection
+// still goes through the ws layer's single `submitSend`, exactly like an HTTP
+// send. Its tick doesn't start until `start()` below, after the ws layer is
+// attached, so a fire can never race the registry into existence.
+const cronScheduler = new CronScheduler({
+  db,
+  ptyd,
+  cache,
+  events,
+  tabActivity,
+  submitSend: (paneId, text) => agentBridge.submitSend(paneId, text),
+  turnActive: (paneId) => agentBridge.turnActive(paneId),
+  contextPct: (paneId) => agentBridge.contextPct(paneId),
+  lastHumanSendAt: (paneId) => agentBridge.lastSendAt(paneId),
+  slash: (paneId, cmd) => agentBridge.slash(paneId, cmd),
+  blocked: (paneId) => agentBridge.blocked(paneId),
+  notify: (title, body) => {
+    void push.send({ title, body, url: '/', tag: 'cron' });
+  },
+});
+
 const app = createApp({
   db,
   ptyd,
@@ -192,6 +215,7 @@ const app = createApp({
   tabActivity,
   push,
   presence,
+  cronScheduler,
   ...(archiveDb ? { archive: archiveDb } : {}),
   publish: { funnel },
 });
@@ -310,6 +334,12 @@ const serveSupervisor = startServeSupervisor({
   },
 });
 
+// Durable schedules. The tick starts only now, with the ws layer attached and
+// the runner registry live behind the bridge; its own 15s startup grace then
+// keeps the first pass from firing before runners have re-registered after a
+// restart (which would land as a wave of rejections + fail streaks).
+cronScheduler.start();
+
 // Session archiver: boot backfill sweep (background, throttled reads) +
 // 15-min re-sweep + near-realtime triggers off the event bus (turn-done,
 // sid changes). See docs/plans/2026-08-28-session-archive.md.
@@ -340,6 +370,8 @@ const shutdown = async () => {
   // Stop queueing archive work; in-flight copies finish or resume next boot
   // (offsets only advance past complete lines, so a cut mid-copy is safe).
   archiver?.stop();
+  // Stop the cron tick — anything it started now would be an orphan.
+  cronScheduler.stop();
   // Stop respawning app servers — we're on our way out; anything we started
   // here would just be an orphan for the next boot's supervisor to adopt.
   serveSupervisor.stop();

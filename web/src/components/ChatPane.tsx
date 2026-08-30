@@ -3303,14 +3303,28 @@ function renderMessageParts(
   return out;
 }
 
-// Icon per notice variant — a task update vs a session reminder.
+// Icon per notice variant — a task update, a session reminder, or a muxpad
+// cron fire. The clock is deliberately the SAME glyph the nav uses for "this
+// chat has a schedule", so the mark you see on the sidebar row and the mark in
+// the transcript read as one thing.
 const NOTICE_ICON: Record<NoticeEvent['variant'], string> = {
   task: '⚙',
   reminder: 'ⓘ',
+  cron: '⏱',
 };
 
-/** Harness control message (background-task update / session reminder). */
+/** Time-of-day for a cron chip, in the VIEWER's zone. The cron's own zone is
+ *  the scheduling truth, but this line answers "when did this land for me". */
+function fireTime(ts: number | null): string {
+  if (ts === null) return '';
+  return new Date(ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+/** Harness control message (background-task update / session reminder), or a
+ *  muxpad cron fire — "⏱ pr-sweep · 09:00" ahead of the prompt it delivered. */
 function NoticeCard({ event }: { event: NoticeEvent }) {
+  const at = event.variant === 'cron' ? fireTime(event.ts) : '';
+  const detail = event.detail ?? (at || undefined);
   return (
     <div className="chat-turn chat-turn-notice">
       <div className={`chat-sysnote chat-sysnote-${event.variant}`} title={event.text}>
@@ -3318,7 +3332,7 @@ function NoticeCard({ event }: { event: NoticeEvent }) {
           {NOTICE_ICON[event.variant]}
         </span>
         <span className="chat-sysnote-text">{event.text}</span>
-        {event.detail ? <span className="chat-sysnote-detail">{event.detail}</span> : null}
+        {detail ? <span className="chat-sysnote-detail">{detail}</span> : null}
       </div>
     </div>
   );

@@ -785,6 +785,15 @@
 .chat-sysnote-task .chat-sysnote-icon {
   color: var(--chat-accent);
 }
+/* A cron fire. Deliberately the same quiet pill as the other notices — the
+   point is "this turn was started by a schedule, not by you", which is a fact
+   about the message, not an alert. The clock matches the nav-row ⏱. */
+.chat-sysnote-cron .chat-sysnote-icon {
+  color: var(--chat-accent);
+}
+.chat-sysnote-cron .chat-sysnote-text {
+  font-variant-numeric: tabular-nums;
+}
 
 /* ── Diffs ─────────────────────────────────────────────────────────────── */
 .chat-diff {
