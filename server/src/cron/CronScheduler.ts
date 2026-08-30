@@ -393,6 +393,17 @@ export class CronScheduler {
       if (cron.on_context === 'skip')
         return { outcome: 'skipped', detail: `context ${Math.round(pct)}%`, targetPane: paneId };
       if (cron.on_context === 'rotate') {
+        // Where does the rotation LAND? A pane cron carries no workspace of its
+        // own, so fall back to the pane's own workspace — the rotated session
+        // belongs next to the one it replaced. Resolved BEFORE the (paid,
+        // model-backed) briefing so a rotate with nowhere to go fails free.
+        const workspaceId = cron.workspace_id ?? this.tabs.getWorkspaceId(pane.tab_id) ?? null;
+        if (!workspaceId)
+          return {
+            outcome: 'error',
+            detail: 'rotate: no workspace to rotate into',
+            targetPane: paneId,
+          };
         // ROTATION MUST CARRY CONTEXT. A fresh tab that knows nothing about
         // the conversation it just replaced doesn't produce a clean answer,
         // it produces a confidently amnesiac one — and it looks identical to
@@ -409,7 +420,12 @@ export class CronScheduler {
             detail: `carryover-failed (context ${Math.round(pct)}%) — refusing to rotate into a blank session`,
             targetPane: paneId,
           };
-        const r = await this.fireNewTab(cron, `${wrapCarryover(carry)}\n\n${text}`, now);
+        const r = await this.fireNewTab(
+          cron,
+          `${wrapCarryover(carry)}\n\n${text}`,
+          now,
+          workspaceId,
+        );
         return {
           ...r,
           detail: [`rotated at ${Math.round(pct)}% context with carryover`, r.detail]
@@ -448,8 +464,16 @@ export class CronScheduler {
     }
   }
 
-  private async fireNewTab(cron: Cron, text: string, _now: number): Promise<CronFireResult> {
-    const workspaceId = cron.workspace_id;
+  private async fireNewTab(
+    cron: Cron,
+    text: string,
+    _now: number,
+    /** Overrides the cron's own workspace — the `rotate` path lands the fresh
+     *  session in the ROTATING PANE's workspace, not a column the cron row
+     *  never had. */
+    workspaceOverride?: string,
+  ): Promise<CronFireResult> {
+    const workspaceId = workspaceOverride ?? cron.workspace_id;
     if (!workspaceId) return { outcome: 'error', detail: 'no target workspace' };
     // Guardrail: a nightly cron must not leave 30 tabs after a month. Prune
     // the recorded tabs to those that still exist, then honour max_open.
