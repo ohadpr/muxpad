@@ -27,7 +27,7 @@ import {
   type MigratedFile,
   readAgentNotes,
   runnerDataDir,
-  sha256,
+  shippedBodyHashes,
   writeGeneratedFile,
 } from './agent-files.js';
 
@@ -194,7 +194,7 @@ export const SHIPPED_INSTRUCTIONS_DEFAULTS: readonly string[] = [
  *  file (which is injected in exactly the same place). */
 export const INSTRUCTIONS_MIGRATION: MigratedFile = {
   name: AGENT_INSTRUCTIONS_FILE,
-  knownDefaults: [...SHIPPED_INSTRUCTIONS_DEFAULTS, sha256(AGENT_INSTRUCTIONS_SEED)],
+  knownDefaults: [...SHIPPED_INSTRUCTIONS_DEFAULTS, ...shippedBodyHashes(AGENT_INSTRUCTIONS_SEED)],
   appendToNotes: true,
 };
 
@@ -205,8 +205,10 @@ export function seedAgentInstructions(dataDir: string): void {
 
 /**
  * What gets injected: muxpad's generated instructions followed by the user's
- * notes. Either half missing, empty or unreadable simply contributes nothing
- * — emptying both is a supported way to opt out, never an error.
+ * notes. Either half missing, empty or unreadable simply contributes nothing,
+ * never an error — emptying `agent-notes.md` is how you inject none of your
+ * own. The generated half is muxpad's and comes back on the next boot; opting
+ * out of THAT is not a thing you do by deleting a file.
  */
 export function readAgentInstructions(dataDir: string = runnerDataDir()): string | null {
   let generated: string | null = null;
