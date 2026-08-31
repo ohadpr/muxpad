@@ -70,6 +70,14 @@
      space above it than a two-line row's first line gets — which is the
      ragged rhythm, measured as 14px of leading against 11px. */
   --nt-icon-h: 18px;
+  /* The chip: a uniform rounded container behind every icon, and the column's
+     real anchor (see .navtree-tab-icon). Bigger than the glyph on purpose —
+     an inset is the whole point, or a full-bleed tile merges with the chip and
+     the density cue is back. Bigger than --nt-icon-h too, which it can afford
+     to be because it is painted by a pseudo-element and so does not enter the
+     row's height calculation. */
+  --nt-chip: 20px;
+  --nt-chip-radius: 5px;
   --nt-col-status: 22px;
   /* Floor for the meta cell, wide enough that `◷ 07:00` and `◷ Sun 09:00`
      right-align on the same digits instead of jittering row to row. A FLOOR,
@@ -105,6 +113,8 @@
   --nt-indent: 28px;
   --nt-col-icon: 26px;
   --nt-icon-h: 20px;
+  --nt-chip: 24px;
+  --nt-chip-radius: 6px;
   --nt-col-meta: 52px;
   --nt-gutter: 10px;
   /* What a swiped row slides over — see SwipeRow.css. */
@@ -1044,51 +1054,79 @@
 /* ─── Tab leading icon + picker ──────────────────────────────────────── */
 
 /* Fixed leading column so every tab row has a glyph in the same place. */
-/* Exactly the width of its grid track, and it CLIPS. Emoji metrics vary
-   wildly by platform and family — several render well past their nominal em
-   box — and an icon that overflows its track lands on the first letter of the
-   name. (It did: 🪐 sat on the R of "Reading List" on the sheet, where the
-   glyph is 26px in a 22px track.)
+/* ─── The icon chip ───────────────────────────────────────────────────────
+   A uniform rounded container behind every tab icon, and the reason it exists
+   is measured rather than felt.
 
-   The BOX being fixed is not enough on its own. Emoji also differ hugely in
-   how much of their em they fill: a full-bleed tile like ✳️ or 🛜 paints
-   corner to corner, while 🗝 and 🩺 are narrow glyphs floating in the middle
-   of theirs. Centred in the same box, the tile's painted edge sits ~4px left
-   of the narrow glyph's — so a column of mixed emoji reads as if the text
-   after them is wobbling, even when every name box starts on the identical
-   pixel (measured: it does). Pinning the font-size in PX rather than an `em`
-   that inherits the row's font, plus line-height 1, makes the rendered size
-   one number for every glyph and every variant. */
+   Every earlier attempt anchored on the glyph. That fails because emoji ink is
+   a property of the artwork, not of geometry: scanned out of a real screenshot
+   of the real list, the ink LEFT EDGES already agreed to within 1px, but the
+   ink COVERAGE of the box ran from 11% (🩺) to 47.9% (📶) — a 4.4× range. The
+   eye anchors on where ink is dense, so a solid tile reads as starting at the
+   column edge while a thin diagonal key reads as starting somewhere in the
+   middle, and no amount of aligning or resizing reaches that.
+
+   The chip replaces the thing being anchored on. Its edge is a DOM box, so it
+   is identical on every row by construction — spread 0, not 1px — and the
+   glyph's density stops mattering because it is no longer the leftmost thing
+   in the column.
+
+   Three properties it must hold:
+
+   1. The chip is INSET from the glyph, not flush with it. If a full-bleed tile
+      filled the chip edge to edge the two would merge and the density cue
+      would be back. 24px chip / 16px glyph on the sheet, 20/14 on the rail.
+   2. It must not change the row height, which is pinned to the text line (see
+      --nt-icon-h). So the chip is painted by a pseudo-element and the element's
+      LAYOUT box stays one line tall; the chip's extra 2px above and below
+      spills into the row's 12px padding and costs nothing.
+   3. It must not read as a button. No border, no shadow, and — unlike the old
+      icon — no hover fill. Clicking the icon still opens the picker (the
+      keyboard path remains the context menu's "Change icon…"), but a resting
+      list must not look like a row of tappable squares. */
 .navtree-tab-icon {
   flex: 0 0 auto;
-  width: var(--nt-col-icon);
+  position: relative;
+  /* WIDTH is the chip, so the glyph centres over it. The grid TRACK stays
+     --nt-col-icon and is wider, which is what keeps the text column exactly
+     where it is; the element simply sits at the track's left edge. */
+  width: var(--nt-chip);
+  justify-self: start;
+  /* HEIGHT stays one line of title text. The chip is bigger than this and
+     overflows deliberately — see (2) above — which is why there is no
+     `overflow: hidden` here any more. It is not needed: the glyph is clamped
+     to an absolute size well inside the chip and cannot reach the name. */
   height: var(--nt-icon-h);
-  overflow: hidden;
-  /* LEFT-aligned horizontally, centred vertically: with the glyph centred, a
-     narrow-artwork emoji's ink starts further right than a full-bleed tile's,
-     so the column's visible left edge zig-zags even though every box is
-     identical. Pinning the glyph box to the left makes the ink start as close
-     to a common edge as the font allows. */
   display: inline-flex;
   align-items: center;
-  justify-content: flex-start;
-  /* A hair larger than the label so the emoji reads as a proper icon, not
-     shrunk-down text — but an absolute size, so it cannot scale with an
-     inherited font and cannot exceed the box it has to sit inside. */
+  justify-content: center;
+  /* Absolute, not an inherited `em`: the rendered size must be one number for
+     every glyph and every variant, and must stay inside the chip. */
   font-size: 14px;
   line-height: 1;
-  border-radius: 4px;
   cursor: pointer;
   -webkit-user-select: none;
   user-select: none;
 }
-.navtree[data-variant="sheet"] .navtree-tab-icon {
-  /* Comfortably inside the sheet's 26 × 20 icon box, so even a full-bleed
-     tile has margin on every side and cannot touch the name or grow the row. */
-  font-size: 16px;
+/* The chip itself. Behind the glyph, centred on it, and inert. */
+.navtree-tab-icon::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: var(--nt-chip);
+  height: var(--nt-chip);
+  border-radius: var(--nt-chip-radius);
+  /* Derived from the row's own foreground, so it lands as a low-contrast
+     container on the warm cream and the dark violet alike without either
+     theme needing its own value. Deliberately quieter than the hover wash
+     (--bg-hover) and the active row's 14% accent pill, so the chip recedes
+     into whichever state the row is in rather than competing with it. */
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
 }
-.navtree-tab-icon:hover {
-  background: color-mix(in srgb, var(--fg) 12%, transparent);
+.navtree[data-variant="sheet"] .navtree-tab-icon {
+  font-size: 16px;
 }
 
 /* Positioned wrapper for the emoji-mart picker (which brings its own
