@@ -42,7 +42,12 @@
 .external-open-toast-url {
   color: var(--fg);
   font-weight: 600;
-  font-family: "MesloLGS NF", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  /* NO "MesloLGS NF" here. It leads the terminal's stack because a terminal
+     needs the Nerd Font glyphs, and it is a ~1MB webfont — an unreasonable
+     download for one line of URL in a transient toast, on every user who never
+     chose a Nerd Font. Nothing in this toast renders a powerline glyph; the
+     system monospace stack is all it needs. */
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

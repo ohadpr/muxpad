@@ -36,7 +36,14 @@ export const SWIPE_SLOP = 8;
  */
 export const SWIPE_RATIO = 1.4;
 
-/** Width of ONE revealed action button. Two of them (Pin, Close). */
+/**
+ * Width of ONE revealed action button. Two of them (Pin, Close).
+ *
+ * SwipeRow.tsx publishes this to CSS as `--swipe-action-width`, which
+ * `.swiperow-action` in SwipeRow.css consumes — the stylesheet must never
+ * hardcode the number, because the tray geometry below is derived from it and
+ * a drifting literal would leave the tray not lining up with the row.
+ */
 export const SWIPE_ACTION_WIDTH = 76;
 
 /** Total tray width — how far the row slides when fully open. */
