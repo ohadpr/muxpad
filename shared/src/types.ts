@@ -69,7 +69,7 @@ export type UrlHealthReason = UrlHealth['reason'];
 /**
  * How an agent pane is asked to behave. 'deep' is the historical (and
  * default) behavior — no extra system-prompt material at all. 'do' overlays
- * the user-owned `<dataDir>/do-mode.md` contract on top of the harness's
+ * the generated `<dataDir>/do-mode.md` contract on top of the harness's
  * normal prompt: decisive, terse, result-first.
  *
  * Stored per PANE (agent sessions are pane-scoped), never per tab — the

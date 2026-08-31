@@ -42,7 +42,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentMode } from '@muxpad/shared';
-import { type MigratedFile, runnerDataDir, sha256, writeGeneratedFile } from './agent-files.js';
+import {
+  type MigratedFile,
+  runnerDataDir,
+  shippedBodyHashes,
+  writeGeneratedFile,
+} from './agent-files.js';
 
 /** Seed content — harness-neutral (claude/codex/cursor may all read it) and
  *  deliberately short: it competes for attention with the harness's own
@@ -105,7 +110,7 @@ export const SHIPPED_DO_MODE_DEFAULTS: readonly string[] = [
  *  only applies in ⚡ Do mode, and the notes are injected in EVERY session. */
 export const DO_MODE_MIGRATION: MigratedFile = {
   name: DO_MODE_FILE,
-  knownDefaults: [...SHIPPED_DO_MODE_DEFAULTS, sha256(DO_MODE_SEED)],
+  knownDefaults: [...SHIPPED_DO_MODE_DEFAULTS, ...shippedBodyHashes(DO_MODE_SEED)],
   appendToNotes: false,
 };
 
