@@ -61,10 +61,19 @@
 }
 
 .swiperow-action {
-  /* FULL row height and 76px wide — comfortably past the 44px floor on both
-     axes, and wide enough that the label fits without truncation. These are
-     the only tap targets in the tray, so they can afford to be generous. */
-  width: 76px;
+  /* FULL row height, and as wide as SWIPE_ACTION_WIDTH — comfortably past the
+     44px floor on both axes, and wide enough that the label fits without
+     truncation. These are the only tap targets in the tray, so they can afford
+     to be generous.
+
+     The number is NOT written here. SwipeRow.tsx publishes
+     `--swipe-action-width` from the SWIPE_ACTION_WIDTH constant, because the
+     same value also drives SWIPE_TRAY_WIDTH — how far the row slides, where
+     the release latches, and what swipe-axis.test.ts asserts about tap-target
+     size. A literal here could drift from the arithmetic and the tray would
+     stop lining up with the row. The fallback is only for a stray
+     `.swiperow-action` rendered outside this component. */
+  width: var(--swipe-action-width, 76px);
   border: 0;
   padding: 0;
   display: flex;

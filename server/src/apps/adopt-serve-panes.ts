@@ -100,6 +100,15 @@ export function adoptServePanes(deps: {
   events?: EventBus | undefined;
   /** Unused today; accepted so the call site matches releaseResidentPane's. */
   cache?: PtydCache | undefined;
+  /**
+   * `registry.containerId` — resolve-or-create the hidden apps container.
+   * index.ts builds the registry before adoption runs, so it passes the real
+   * one and the "which workspace do apps live in" rule exists in exactly ONE
+   * place (AppRegistry.ts). The local fallback below is for tests that call
+   * adoption without a registry; both are lazy, so an install with nothing to
+   * adopt still never grows a workspace it will not use.
+   */
+  containerId?: (() => string) | undefined;
 }): AdoptResult {
   const globals = new GlobalsStore(deps.db);
   const result: AdoptResult = { adopted: [], log: [] };
@@ -110,10 +119,17 @@ export function adoptServePanes(deps: {
   const tabs = new TabStore(deps.db);
   const workspaces = new WorkspaceStore(deps.db);
 
-  // Resolve (or create) the hidden container the same way the registry does,
-  // so adoption and `app add` can never end up with two containers.
-  const savedContainer = globals.get(APPS_WORKSPACE_KEY);
-  let containerId = savedContainer && workspaces.getById(savedContainer) ? savedContainer : null;
+  const resolveContainer =
+    deps.containerId ??
+    ((): string => {
+      const saved = globals.get(APPS_WORKSPACE_KEY);
+      if (saved && workspaces.getById(saved)) return saved;
+      const created = workspaces.createHidden({ name: APPS_WORKSPACE_NAME }).id;
+      globals.set(APPS_WORKSPACE_KEY, created);
+      return created;
+    });
+  /** Memoised so the "created the container" log line appears at most once. */
+  let containerId: string | null = null;
 
   const candidates = deps.db
     .prepare(
@@ -163,12 +179,11 @@ export function adoptServePanes(deps: {
     const base = AppStore.slugify(name) || AppStore.slugify(tab.name) || 'app';
     const slug = apps.uniqueSlug(base);
 
-    // Create the container lazily — an install with nothing to adopt should not
-    // grow a workspace it will never use.
+    // Resolved lazily — an install with nothing to adopt should not grow a
+    // workspace it will never use.
     if (!containerId) {
-      containerId = workspaces.createHidden({ name: APPS_WORKSPACE_NAME }).id;
-      globals.set(APPS_WORKSPACE_KEY, containerId);
-      result.log.push(`created the hidden apps container (${containerId})`);
+      containerId = resolveContainer();
+      result.log.push(`hidden apps container: ${containerId}`);
     }
 
     // Row + move, together: an app row pointing at a tab still in the sidebar

@@ -34,16 +34,27 @@ import {
  * the record — nothing to migrate, nothing to drift when a dir is removed by
  * hand.
  *
- * URL resolution — three-tier, because the live server runs under launchd
- * where the macOS Tailscale app CLI refuses to run ("The Tailscale GUI
- * failed to start", CLIError 3); it only works from user shells:
- *   1. a `public_base_url` hint in the POST body (the CLI discovers it in
- *      the pane shell where tailscale DOES work) — validated, persisted;
- *   2. fresh server-side CLI discovery (funnel.ensure()) — works in dev /
- *      non-launchd runs; persisted on success;
- *   3. the persisted `public_base_url` key in the globals KV — seeded by
- *      either of the above, so headless/cron publishes keep working;
- *   4. else the local URL + a warning.
+ * URL resolution does NOT live here. These routes call the ONE resolver in
+ * public-base.ts (`createPublicBaseResolver`), which walks six tiers,
+ * configuration before discovery:
+ *
+ *   env > pinned > hint > funnel > persisted > local
+ *
+ *   env       MUXPAD_PUBLIC_BASE_URL — a permanent domain, set once.
+ *   pinned    `public_base_url_pinned`, set by `muxpad publish --set-base`,
+ *             for a tunnel whose name changes on every restart.
+ *   hint      the `public_base_url` in this POST's body — the CLI discovers it
+ *             in the pane shell, because under launchd the macOS Tailscale app
+ *             CLI refuses to run ("The Tailscale GUI failed to start",
+ *             CLIError 3). Below `pinned` on purpose: it is the funnel url,
+ *             and it is exactly what used to clobber a working base.
+ *   funnel    server-side `funnel.ensure()` discovery (dev / non-launchd).
+ *   persisted the `public_base_url` global, seeded by hint or funnel, so
+ *             headless/cron publishes keep working.
+ *   local     the loopback url + a warning. Never shareable, and says so.
+ *
+ * Dead candidates are probed out (a quick tunnel whose process exited stops
+ * resolving); see public-base.ts for the honest limit of that check.
  *
  * Source paths must be absolute; any path the server can read is fair game
  * (personal tool). The one refusal is publishing the public dir into itself —
