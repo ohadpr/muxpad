@@ -26,6 +26,7 @@ import { archiveRoutes, searchRoutes } from './routes/search.js';
 import { summaryRoutes } from './routes/summary.js';
 import { tabsRoutes } from './routes/tabs.js';
 import { workspacesRoutes } from './routes/workspaces.js';
+import { sameOriginGuard } from './same-origin.js';
 import type { TabActivity } from './tab-activity.js';
 
 export interface AppDeps {
@@ -118,6 +119,12 @@ export interface AppDeps {
    * supply a fake so no suite can ever reach the network.
    */
   cleanupModel?: CleanupModel;
+  /**
+   * Extra hostnames the CSRF guard trusts as an Origin, on top of loopback
+   * and "same hostname as Host". Production reads MUXPAD_ALLOWED_ORIGINS;
+   * this is the injection seam for tests. See same-origin.ts.
+   */
+  allowedOrigins?: Set<string>;
 }
 
 export function createApp(deps: AppDeps): Hono {
@@ -126,6 +133,15 @@ export function createApp(deps: AppDeps): Hono {
   // Keeps the route-level emit() calls type-clean without forcing every
   // test harness (or the WS-less HTTP smoke tests) to construct one.
   const resolved = { ...deps, events: deps.events ?? new EventBus() };
+  // CSRF: refuse a state-changing request that a foreign page made on the
+  // user's behalf. muxpad has no auth — reachability is authorization — so
+  // without this, any web page open on a tailnet browser could POST
+  // /api/apps (an arbitrary command that autostarts every boot) or
+  // /api/crons (unattended agent work across reboots) as a CORS *simple
+  // request*, with no preflight to stop it. Mounted FIRST so it covers every
+  // route below, including ones not yet written. See same-origin.ts for what
+  // is allowed and why the CLI (which sends no Origin) still works.
+  app.use('*', sameOriginGuard(deps.allowedOrigins ? { allowedOrigins: deps.allowedOrigins } : {}));
   app.get('/api/health', (c) => c.json({ ok: true }));
   // Active-device heartbeat: the web app POSTs this while foregrounded and
   // interacted-with, so push notifications hold off while you're at a device.
