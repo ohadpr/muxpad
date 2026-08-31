@@ -119,6 +119,13 @@ export function readAgentNotes(dataDir: string): string | null {
 }
 
 // ─── One-shot migration ─────────────────────────────────────────────────────
+//
+// EVERYTHING BELOW IS TEMPORARY — it is more than half this file, and it is
+// the only reason the shipped-default hashes still exist. Once every install
+// that predates the split has booted (the marker is set, the files are
+// generated bodies), delete this section, the two MigratedFile constants, the
+// SHIPPED_*_DEFAULTS lists and the migration's call in index.ts. What is left
+// is the steady state: write two files, create one if absent, read them.
 
 /** A file that used to be user-owned and is now generated. */
 export interface MigratedFile {
