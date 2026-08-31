@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type Database from 'better-sqlite3';
@@ -58,6 +58,18 @@ export function generatedBody(seed: string): string {
   return `${GENERATED_BANNER}\n\n${seed}`;
 }
 
+/**
+ * Every byte sequence muxpad can have put on disk for `seed`: the BARE text,
+ * from back when these files were user-owned and written without a banner,
+ * and today's bannered body. The migration needs both — hashing only the bare
+ * seed would make muxpad's own generated file look like the user's work and
+ * import 7KB of muxpad's docs into their notes the first time the marker went
+ * missing (a restored DB backup, a failed `globals.set`).
+ */
+export function shippedBodyHashes(seed: string): string[] {
+  return [sha256(seed), sha256(generatedBody(seed))];
+}
+
 /** Write a generated file, banner included. Best-effort: an unwritable data
  *  dir leaves the old copy in place rather than failing the boot. */
 export function writeGeneratedFile(dataDir: string, name: string, seed: string): void {
@@ -69,8 +81,9 @@ export function writeGeneratedFile(dataDir: string, name: string, seed: string):
   }
 }
 
-/** Seed for `agent-notes.md`. An HTML comment so a file the user never fills
- *  in contributes nothing an agent will act on. */
+/** Seed for `agent-notes.md`. Written as an HTML comment: it IS injected into
+ *  every session like the rest of the file, and a comment is the cheapest way
+ *  to say "this is not addressed to you" to a model reading markdown. */
 export const AGENT_NOTES_SEED = `<!--
 Your standing notes for every agent session on this machine, injected after
 muxpad's generated agent-instructions.md on every backend.
@@ -122,10 +135,20 @@ export interface MigratedFile {
   appendToNotes: boolean;
 }
 
+export interface Rescued {
+  /** The file the content came out of. */
+  name: string;
+  /** Absolute path it was renamed to. */
+  backup: string;
+  /** True when the content was also appended to the notes file. */
+  intoNotes: boolean;
+}
+
 export interface MigrationResult {
-  /** Files whose content was rescued (renamed aside, and appended to notes
-   *  when `appendToNotes`). Empty on a pristine or already-migrated install. */
-  rescued: string[];
+  /** What was moved out of the way. Empty on a pristine or already-migrated
+   *  install. The caller announces these — a migration that silently rewrites
+   *  the file an agent's behaviour comes from is a mystery, not a feature. */
+  rescued: Rescued[];
   /**
    * False when a file still holds content of the user's that could NOT be
    * moved out of the way. The caller must not run its generated writes in that
@@ -177,9 +200,12 @@ export function migrateAgentFileEdits(deps: {
     globals = new GlobalsStore(deps.db);
     if (globals.get(KEY_MIGRATED)) return result;
   } catch {
-    // No globals table (a DB this old cannot have the files either). Do
-    // nothing rather than risk running unguarded on every boot.
-    return result;
+    // A DB we cannot read — locked, corrupt, or (barely possible, openDb
+    // migrates first) too old to have the table. We cannot tell "already
+    // migrated" from "never ran", so we must assume the user's content is
+    // still sitting where the generated write is about to land. Refusing to
+    // generate costs a boot's worth of freshness; guessing costs their file.
+    return { rescued: [], safe: false };
   }
 
   for (const file of deps.files) {
@@ -196,8 +222,9 @@ export function migrateAgentFileEdits(deps: {
     try {
       globals.set(KEY_MIGRATED, '1');
     } catch {
-      // Worst case we look again next boot — harmless: by then the file on
-      // disk is the generated default and matches a known hash.
+      // We look again next boot. Harmless only because the file on disk is by
+      // then a generated body, whose hash IS in knownDefaults
+      // (shippedBodyHashes) — so the second pass finds nothing to rescue.
     }
   }
   return result;
@@ -217,26 +244,37 @@ function rescueOne(dataDir: string, file: MigratedFile, result: MigrationResult)
     return;
   }
   renameSync(path, bak); // throws → caught above → safe = false
-  result.rescued.push(file.name);
+  const entry: Rescued = { name: file.name, backup: bak, intoNotes: false };
+  result.rescued.push(entry);
   if (!file.appendToNotes) return;
 
   ensureAgentNotes(dataDir);
+  const notesPath = agentNotesPath(dataDir);
   const notes = (() => {
     try {
-      return readFileSync(agentNotesPath(dataDir), 'utf8');
+      return readFileSync(notesPath, 'utf8');
     } catch {
       return '';
     }
   })();
   const heading = `## From ${file.name} (${today()})`;
   const preamble = `<!-- muxpad moved this here: ${file.name} is now generated and rewritten on every start, so your edits could not stay in it. Trim anything below that is just a copy of muxpad's own capability docs; keep what is yours. The original file is beside this one as ${bak.slice(dataDir.length + 1)}. -->`;
+  const merged = `${notes.replace(/\s*$/, '')}\n\n${preamble}\n\n${heading}\n\n${content.trim()}\n`;
+  const tmp = `${notesPath}.tmp`;
   try {
-    writeFileSync(
-      agentNotesPath(dataDir),
-      `${notes.replace(/\s*$/, '')}\n\n${preamble}\n\n${heading}\n\n${content.trim()}\n`,
-    );
+    // Via a temp file: a truncating write that died halfway would take out
+    // notes the user had ALREADY written, which no .bak covers.
+    writeFileSync(tmp, merged);
+    renameSync(tmp, notesPath);
+    entry.intoNotes = true;
   } catch {
-    // The notes file is unwritable. The user's content is already safe in the
-    // .bak — nothing is lost, it just isn't injected until they move it back.
+    // The notes file could not be replaced. The user's content is already
+    // safe in the .bak — nothing is lost, it just isn't injected until they
+    // move it across themselves.
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      // Leaving a stray .tmp is the least of the day's problems.
+    }
   }
 }
