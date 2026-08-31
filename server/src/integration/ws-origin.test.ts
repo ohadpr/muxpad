@@ -125,13 +125,29 @@ describe('WebSocket upgrade origin guard', () => {
   it('ALLOWS a same-origin browser-style handshake on every arm', async () => {
     // What the real app sends: XtermPane, ChatPane/DocChat and events.ts all
     // build their URL from `location.host`, so Origin and Host agree.
+    //
+    // BOTH shapes, because they take different branches and only one of them
+    // is the branch the tailnet actually uses. A loopback Origin is allowed by
+    // the LOOPBACK set before Host is ever consulted — so on its own it would
+    // keep passing while the Origin-vs-Host comparison was broken and every
+    // real terminal on `<host>.ts.net:7777` was 403'd.
     const { port, arms, refusals } = await boot();
-    const origin = `http://127.0.0.1:${port}`;
-    for (const [name, path] of Object.entries(arms)) {
-      expect([name, await handshake(`ws://127.0.0.1:${port}${path}`, { origin })]).toEqual([
-        name,
-        'open',
-      ]);
+    const shapes = [
+      { label: 'loopback', origin: `http://127.0.0.1:${port}`, host: undefined },
+      {
+        label: 'tailnet hostname (Origin matches Host)',
+        origin: 'http://muxpad-mini.tail1234.ts.net:7777',
+        host: 'muxpad-mini.tail1234.ts.net:7777',
+      },
+    ];
+    for (const shape of shapes) {
+      for (const [name, path] of Object.entries(arms)) {
+        const result = await handshake(`ws://127.0.0.1:${port}${path}`, {
+          origin: shape.origin,
+          ...(shape.host ? { headers: { Host: shape.host } } : {}),
+        });
+        expect([shape.label, name, result]).toEqual([shape.label, name, 'open']);
+      }
     }
     expect(refusals).toEqual([]);
   });
