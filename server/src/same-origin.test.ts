@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { describe, expect, it } from 'vitest';
-import { parseAllowedOrigins, sameOriginGuard } from './same-origin.js';
+import { checkOrigin, parseAllowedOrigins, sameOriginGuard } from './same-origin.js';
 
 const HOST = 'muxpad-mini.tail1234.ts.net:7777';
 
@@ -175,5 +175,69 @@ describe('sameOriginGuard', () => {
     );
     expect(parseAllowedOrigins(undefined).size).toBe(0);
     expect(parseAllowedOrigins('').size).toBe(0);
+  });
+});
+
+/**
+ * The same predicate, called the way the WebSocket upgrade arm calls it: on
+ * EVERY handshake, with no method filter, because a WS handshake is a GET that
+ * hands out a write channel. These are the unit-level statements about the
+ * decision; ws-origin.test.ts proves the wiring over real sockets.
+ */
+describe('checkOrigin on the WS upgrade path', () => {
+  const none = new Set<string>();
+  const ok = (h: Parameters<typeof checkOrigin>[0], allowed = none) => checkOrigin(h, allowed).ok;
+
+  it('ALLOWS a same-hostname browser handshake (the app talking to itself)', () => {
+    // Every real client: XtermPane → /ws/pane/:id, ChatPane/DocChat →
+    // /ws/chat/:paneId, events.ts → /ws/events, all built from location.host.
+    expect(ok({ origin: `http://${HOST}`, host: HOST })).toBe(true);
+  });
+
+  it('ALLOWS a no-Origin handshake — that is the agent runner, and the tests', () => {
+    // agent-runner/index.ts opens `new WebSocket(...)` from the `ws` library
+    // with no options, which sends no Origin, and reconnects forever. A
+    // browser cannot reach this branch: RFC 6455 §4.1 makes Origin mandatory
+    // for browser clients. Refusing it would break the runner and buy nothing.
+    expect(ok({ host: HOST })).toBe(true);
+    expect(ok({ host: '127.0.0.1:7777' })).toBe(true);
+  });
+
+  it('REFUSES a foreign page opening a socket into a live terminal', () => {
+    const verdict = checkOrigin({ origin: 'https://evil.example.com', host: HOST }, none);
+    expect(verdict.ok).toBe(false);
+    if (!verdict.ok) expect(verdict.why).toContain('evil.example.com');
+  });
+
+  it('REFUSES an opaque `null` Origin (a sandboxed published artifact)', () => {
+    expect(ok({ origin: 'null', host: HOST })).toBe(false);
+  });
+
+  it('ALLOWS loopback and the vite dev proxy, whatever the Host', () => {
+    for (const origin of ['http://localhost:5173', 'http://127.0.0.1:7777', 'http://[::1]:7777'])
+      expect(ok({ origin, host: HOST })).toBe(true);
+  });
+
+  it('ALLOWS a scheme/port change on the same hostname (tailscale serve, TLS terminator)', () => {
+    // Hostname-only comparison. A terminator in front keeps the Host and
+    // changes scheme+port; comparing full origins would kill every socket in
+    // the app — a worse outcome than the hole this closes.
+    expect(ok({ origin: 'https://muxpad-mini.tail1234.ts.net', host: HOST })).toBe(true);
+  });
+
+  it('MUXPAD_ALLOWED_ORIGINS opens it, identically to the HTTP guard', () => {
+    const allowed = parseAllowedOrigins('https://muxpad.example.com');
+    expect(ok({ origin: 'https://muxpad.example.com', host: HOST }, allowed)).toBe(true);
+    expect(ok({ origin: 'https://evil.example.com', host: HOST }, allowed)).toBe(false);
+  });
+
+  it('is the SAME function the HTTP guard uses — one policy, not two', async () => {
+    // Belt and braces against the two drifting: for a given (origin, host) the
+    // predicate's verdict and the middleware's status must agree.
+    const { app } = makeApp();
+    for (const origin of [`http://${HOST}`, 'https://evil.example.com', 'null']) {
+      const viaHttp = (await req(app, 'POST', '/api/apps', { origin })).status !== 403;
+      expect(ok({ origin, host: HOST })).toBe(viaHttp);
+    }
   });
 });
