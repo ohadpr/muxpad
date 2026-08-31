@@ -24,6 +24,7 @@ import { PtydClient } from './ptyd-client/PtydClient.js';
 import { createPublicApp } from './public-server.js';
 import { Presence, PushService, attachAttentionPush, createPaneNotifier } from './push.js';
 import { releaseResidentPane } from './resident-release.js';
+import { seedNotice } from './seed-file.js';
 import { startServeSupervisor } from './serve-supervisor.js';
 import { createApp } from './server.js';
 import { mountStaticWeb } from './static-assets.js';
@@ -35,13 +36,16 @@ import { attachWsServer } from './ws.js';
 
 const config = loadConfig();
 mkdirSync(config.dataDir, { recursive: true });
-// Seed the universal agent instructions file (<dataDir>/agent-instructions.md)
-// — write-once, user-owned afterwards; every agent backend injects it into new
-// sessions (see agent-instructions.ts for the per-backend mechanisms).
-seedAgentInstructions(config.dataDir);
-// Same lifecycle for the ⚡ Do-mode contract (<dataDir>/do-mode.md): seeded
-// once, user-owned afterwards, injected only into panes in 'do' mode.
-seedDoMode(config.dataDir);
+// Reconcile the two seeded, USER-OWNED prompt files against the defaults this
+// build ships: <dataDir>/agent-instructions.md (injected into every agent
+// session, whatever the backend) and <dataDir>/do-mode.md (injected only into
+// panes in ⚡ Do mode). Pristine files are refreshed, edited ones are never
+// touched — and when muxpad declines to touch one it SAYS so, exactly once per
+// change of the shipped default. See seed-file.ts for the whole policy.
+for (const outcome of [seedAgentInstructions(config.dataDir), seedDoMode(config.dataDir)]) {
+  const notice = seedNotice(outcome);
+  if (notice) console.log(notice);
+}
 const db = openDb(join(config.dataDir, 'db.sqlite'));
 const paneStore = new PaneStore(db);
 const tabStore = new TabStore(db);
@@ -343,7 +347,9 @@ serveSupervisorRef = serveSupervisor;
 // marker — see apps/adopt-serve-panes.ts. Best-effort: a failure here must not
 // stop the server booting.
 try {
-  const adopted = adoptServePanes({ db, events, cache });
+  // The registry (built above) owns "which workspace do apps live in", so
+  // adoption borrows its resolver instead of re-implementing it.
+  const adopted = adoptServePanes({ db, events, cache, containerId: appRegistry.containerId });
   for (const line of adopted.log) console.log(`[apps/adopt] ${line}`);
 } catch (err) {
   console.error('[apps/adopt] one-time adoption failed (harmless; retried next boot)', err);
