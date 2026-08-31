@@ -1,15 +1,14 @@
-// The muxpad-owned UNIVERSAL agent instructions file — one file injected into
-// EVERY agent chat session regardless of backend (claude / codex / cursor).
-// Capabilities like `muxpad search` and `muxpad publish` must be known to all
-// harnesses; CLAUDE.md only reaches Claude, so muxpad does the injecting.
+// The muxpad-owned UNIVERSAL agent instructions injected into EVERY agent chat
+// session regardless of backend (claude / codex / cursor). Capabilities like
+// `muxpad search` and `muxpad publish` must be known to all harnesses;
+// CLAUDE.md only reaches Claude, so muxpad does the injecting.
 //
-// Lifecycle mirrors the agent-mode overlays (agent-modes.ts): seeded at server
-// boot and USER-OWNED afterwards — hand edits are never overwritten, so tuning
-// what every agent knows is editing the file, not a deploy. An UNTOUCHED older
-// default IS refreshed to the current seed (seed-file.ts explains why: the old
-// write-once rule left every existing install stuck on its first-ever seed).
-// If the file is missing (or empty) at injection time, backends inject nothing
-// — no error.
+// TWO FILES, injected in this order (agent-files.ts has the reasoning):
+//   <dataDir>/agent-instructions.md  GENERATED from AGENT_INSTRUCTIONS_SEED
+//                                    below and rewritten on every boot, so it
+//                                    always describes THIS build.
+//   <dataDir>/agent-notes.md         The user's. Created once, never touched.
+// Either being missing or empty simply contributes nothing — never an error.
 //
 // Per-backend injection mechanism (each documented at its call site):
 // - claude  → the Agent SDK's native `systemPrompt: { preset: 'claude_code',
@@ -23,13 +22,18 @@
 // - `muxpad claude` TUI wrapper → native `--append-system-prompt`
 //   (scripts/muxpad cmd_claude)
 import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { type SeedOutcome, reconcileSeedFile } from './seed-file.js';
+import {
+  type MigratedFile,
+  readAgentNotes,
+  runnerDataDir,
+  sha256,
+  writeGeneratedFile,
+} from './agent-files.js';
 
 /** Seed content — concise and harness-neutral (any of the three backends may
- *  be reading this). Seeded on first boot and refreshed while it stays
- *  pristine; the user owns the file the moment they edit it. */
+ *  be reading this). Written to disk verbatim (under a generated-file banner)
+ *  on every boot. */
 export const AGENT_INSTRUCTIONS_SEED = `# muxpad
 
 You are running inside a muxpad pane — a multi-workspace terminal-and-browser
@@ -166,16 +170,18 @@ export function agentInstructionsPath(dataDir: string): string {
 }
 
 /**
- * sha256 of every `agent-instructions.md` default shipped BEFORE
- * `.seed-stamps.json` existed — the only way to recognise a pristine file on
- * an install that predates the stamp. Frozen: never append to this. Anything
- * muxpad writes from now on stamps itself (see seed-file.ts).
+ * sha256 of every `agent-instructions.md` default this project ever shipped,
+ * oldest first (c2110d5, edb661b, ccfbebc, 3ab5df2, 6d66549), recovered by
+ * evaluating AGENT_INSTRUCTIONS_SEED at each revision of this file. The
+ * CURRENT seed is added at use — together they are every byte sequence muxpad
+ * can have written here.
  *
- * Recovered from git history by evaluating AGENT_INSTRUCTIONS_SEED at each
- * revision of this file, oldest first (c2110d5, edb661b, ccfbebc, 3ab5df2,
- * 6d66549).
+ * Their one remaining job is the one-shot migration: a file matching one of
+ * them is untouched plumbing, so there is nothing of the user's to rescue.
+ * Add the outgoing hash whenever the seed changes, until the migration is
+ * retired; anything unrecognised is treated as the user's and kept.
  */
-export const LEGACY_INSTRUCTIONS_DEFAULTS: readonly string[] = [
+export const SHIPPED_INSTRUCTIONS_DEFAULTS: readonly string[] = [
   '4e6713de01f8b9f5666f149cc297df7d54421e94ee51d8a420171014d6bbd7d7',
   'ea5747ded789e55db867340cd422059ac7c83eeb5c8c5aeb1b640e608814d242',
   '277aae4ac82196b5360b5d78570ec7b17cc907ea9cb7b588d199bb88985b2efb',
@@ -183,36 +189,36 @@ export const LEGACY_INSTRUCTIONS_DEFAULTS: readonly string[] = [
   '423da5969cfd0a4cfc24c0bb8a2a156f291699a37e860988885afa9bbfca324c',
 ];
 
+/** What the one-shot migration needs to know about this file: anything on
+ *  disk that is not a shipped default is the user's, and belongs in the notes
+ *  file (which is injected in exactly the same place). */
+export const INSTRUCTIONS_MIGRATION: MigratedFile = {
+  name: AGENT_INSTRUCTIONS_FILE,
+  knownDefaults: [...SHIPPED_INSTRUCTIONS_DEFAULTS, sha256(AGENT_INSTRUCTIONS_SEED)],
+  appendToNotes: true,
+};
+
+/** Rewrite the generated file at server boot. It always matches this build. */
+export function seedAgentInstructions(dataDir: string): void {
+  writeGeneratedFile(dataDir, AGENT_INSTRUCTIONS_FILE, AGENT_INSTRUCTIONS_SEED);
+}
+
 /**
- * Reconcile the file at server boot: create it, refresh it while it is still
- * an untouched default, or leave the user's edited copy alone and report that
- * the shipped default moved. See seed-file.ts for the full policy.
+ * What gets injected: muxpad's generated instructions followed by the user's
+ * notes. Either half missing, empty or unreadable simply contributes nothing
+ * — emptying both is a supported way to opt out, never an error.
  */
-export function seedAgentInstructions(dataDir: string): SeedOutcome {
-  return reconcileSeedFile({
-    dataDir,
-    name: AGENT_INSTRUCTIONS_FILE,
-    seed: AGENT_INSTRUCTIONS_SEED,
-    legacyDefaults: LEGACY_INSTRUCTIONS_DEFAULTS,
-  });
-}
-
-/** Data-dir resolution for the RUNNER process, which has no Config object:
- *  the same rule the harness uses for its agent-logs dir (index.ts). */
-export function runnerDataDir(): string {
-  return process.env.MUXPAD_DATA_DIR ?? join(homedir(), '.muxpad');
-}
-
-/** Read the instructions at injection time. Missing, empty, or unreadable →
- *  null, and the caller injects nothing — deleting the file is a supported
- *  way to opt out, never an error. */
 export function readAgentInstructions(dataDir: string = runnerDataDir()): string | null {
+  let generated: string | null = null;
   try {
-    const text = readFileSync(agentInstructionsPath(dataDir), 'utf8');
-    return text.trim() ? text : null;
+    generated = readFileSync(agentInstructionsPath(dataDir), 'utf8');
   } catch {
-    return null;
+    generated = null;
   }
+  const parts = [generated, readAgentNotes(dataDir)]
+    .map((t) => t?.trim())
+    .filter((t): t is string => !!t);
+  return parts.length ? parts.join('\n\n') : null;
 }
 
 /** Delimited block for backends with NO native system-prompt/instructions
