@@ -5,10 +5,10 @@
 // top of the universal agent instructions: a short behavioral contract that
 // makes the agent decisive and terse.
 //
-// The contract text lives in a seed-once, user-owned file
+// The contract text lives in a seeded, user-owned file
 // (`<dataDir>/do-mode.md`) with the same lifecycle as agent-instructions.md
-// and the house instructions (agent-instructions.ts): written once at server
-// boot, never overwritten, so
+// (seed-file.ts): written at server boot, refreshed while it is still an
+// untouched default, and never overwritten once the user edits it — so
 // tuning what "Do" means is editing a file, not a deploy. Missing or empty →
 // nothing is injected and 'do' silently degrades to 'deep' behavior; that's a
 // supported opt-out, never an error.
@@ -41,10 +41,11 @@
 // That note is a MESSAGE, not a system prompt — a long session can drift from
 // it the way it drifts from any instruction. A fresh pane (or a respawn) in
 // 'do' mode gets the real system-prompt-level overlay.
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentMode } from '@muxpad/shared';
 import { runnerDataDir } from './agent-instructions.js';
+import { type SeedOutcome, reconcileSeedFile } from './seed-file.js';
 
 /** Seed content — harness-neutral (claude/codex/cursor may all read it) and
  *  deliberately short: it competes for attention with the harness's own
@@ -85,15 +86,34 @@ it faster.
   matters. Never a narration of who you asked and what you're waiting on.
 `;
 
+export const DO_MODE_FILE = 'do-mode.md';
+
 export function doModePath(dataDir: string): string {
-  return join(dataDir, 'do-mode.md');
+  return join(dataDir, DO_MODE_FILE);
 }
 
-/** Seed the file at server boot. Written ONCE — an existing file is the
- *  user's and is never touched (same policy as agent-instructions.md). */
-export function seedDoMode(dataDir: string): void {
-  const path = doModePath(dataDir);
-  if (!existsSync(path)) writeFileSync(path, DO_MODE_SEED);
+/**
+ * sha256 of every `do-mode.md` default shipped BEFORE `.seed-stamps.json`
+ * existed (one: edb661b, the revision that introduced modes). Frozen — see
+ * LEGACY_INSTRUCTIONS_DEFAULTS.
+ */
+export const LEGACY_DO_MODE_DEFAULTS: readonly string[] = [
+  'dd07e927e4833873ccf0bfc5ce8a12ab4331aacb2cdbc422824e9fde1c6ac209',
+];
+
+/**
+ * Reconcile the file at server boot — same policy as agent-instructions.md:
+ * create, refresh while pristine, never clobber the user's edits. Do mode has
+ * the same staleness exposure (a machine that booted once keeps the first
+ * contract forever), so it gets the same treatment. See seed-file.ts.
+ */
+export function seedDoMode(dataDir: string): SeedOutcome {
+  return reconcileSeedFile({
+    dataDir,
+    name: DO_MODE_FILE,
+    seed: DO_MODE_SEED,
+    legacyDefaults: LEGACY_DO_MODE_DEFAULTS,
+  });
 }
 
 /**

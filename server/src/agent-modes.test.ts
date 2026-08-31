@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   DO_MODE_SEED,
+  LEGACY_DO_MODE_DEFAULTS,
   applyModeToStartupCmd,
   doModePath,
   readDoModeOverlay,
@@ -25,12 +26,23 @@ describe('do-mode.md seeding', () => {
     expect(readFileSync(doModePath(dir), 'utf8')).toBe(DO_MODE_SEED);
   });
 
-  it('seeds ONCE — an edited file is the user’s and is never overwritten', () => {
+  it('an edited file is the user’s and is never overwritten', () => {
     seedDoMode(dir);
     writeFileSync(doModePath(dir), '# my own contract\nbe brutal\n');
     seedDoMode(dir);
     seedDoMode(dir);
     expect(readFileSync(doModePath(dir), 'utf8')).toBe('# my own contract\nbe brutal\n');
+  });
+
+  it('re-seeding a pristine file is idempotent, and its legacy hashes are sane', () => {
+    // do-mode.md has the SAME staleness exposure as agent-instructions.md, so
+    // it runs through the same reconcile (seed-file.ts) rather than the old
+    // write-once rule. Nothing to refresh yet — one default has ever shipped.
+    expect(seedDoMode(dir).action).toBe('created');
+    expect(seedDoMode(dir).action).toBe('current');
+    expect(readFileSync(doModePath(dir), 'utf8')).toBe(DO_MODE_SEED);
+    expect(LEGACY_DO_MODE_DEFAULTS.length).toBeGreaterThan(0);
+    for (const hash of LEGACY_DO_MODE_DEFAULTS) expect(hash).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('the seed states every clause of the Do contract', () => {

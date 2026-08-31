@@ -3,10 +3,13 @@
 // Capabilities like `muxpad search` and `muxpad publish` must be known to all
 // harnesses; CLAUDE.md only reaches Claude, so muxpad does the injecting.
 //
-// Lifecycle mirrors the agent-mode overlays (agent-modes.ts): seeded ONCE at server boot,
-// user-owned afterwards — never overwritten, so tuning what every agent knows
-// is editing the file, not a deploy. If the file is missing (or empty) at
-// injection time, backends inject nothing — no error.
+// Lifecycle mirrors the agent-mode overlays (agent-modes.ts): seeded at server
+// boot and USER-OWNED afterwards — hand edits are never overwritten, so tuning
+// what every agent knows is editing the file, not a deploy. An UNTOUCHED older
+// default IS refreshed to the current seed (seed-file.ts explains why: the old
+// write-once rule left every existing install stuck on its first-ever seed).
+// If the file is missing (or empty) at injection time, backends inject nothing
+// — no error.
 //
 // Per-backend injection mechanism (each documented at its call site):
 // - claude  → the Agent SDK's native `systemPrompt: { preset: 'claude_code',
@@ -19,12 +22,14 @@
 //             (backends/cursor.ts)
 // - `muxpad claude` TUI wrapper → native `--append-system-prompt`
 //   (scripts/muxpad cmd_claude)
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { type SeedOutcome, reconcileSeedFile } from './seed-file.js';
 
 /** Seed content — concise and harness-neutral (any of the three backends may
- *  be reading this). Written once; the user owns the file afterwards. */
+ *  be reading this). Seeded on first boot and refreshed while it stays
+ *  pristine; the user owns the file the moment they edit it. */
 export const AGENT_INSTRUCTIONS_SEED = `# muxpad
 
 You are running inside a muxpad pane — a multi-workspace terminal-and-browser
@@ -64,18 +69,38 @@ list. Capabilities worth knowing:
   APPS ARE PRIVATE (tailnet only) — never publish an app's data or suggest
   exposing it; \`publish\` is for static artifacts you MEAN to be public.
 
-## Scheduling — use \`muxpad cron\`, never the harness's own
+## Scheduling — \`muxpad cron\` is the ONLY scheduler on this machine
 
-**DO NOT use your harness's built-in scheduling** — Claude Code's
-\`CronCreate\`/\`CronList\`, or any backend-internal scheduler. Those live
-INSIDE this session: they fire into a week-old, compacted context, expire
-silently after ~7 days, lose every fire that came due while the machine was
-asleep or the pane was closed, are invisible from anywhere but here, and
-report nothing when they fail. Do not offer them either.
+**Anything that should happen LATER — once or repeatedly — is a \`muxpad
+cron\`.** "Remind me tomorrow", "check this every morning", "run that at 5pm",
+"do this weekly": all the same verb. There is no other scheduling mechanism
+here, and this rule is absolute. There is no one-shot flag: for a ONE-OFF,
+make the cron for that moment (a dated expression like \`0 17 4 9 *\` — 17:00
+on Sep 4) and \`muxpad cron rm <name>\` once it has fired.
 
-Use muxpad's instead. It is durable (SQLite, survives every restart), catches
-up after downtime, never expires, is visible and editable from any pane, and
-can be fired by hand before you trust it.
+**DO NOT use your harness's own scheduling, under ANY of its names.** It is
+not always a tool — it is often a SKILL or a SLASH COMMAND, which is how this
+rule gets missed. Specifically ruled out:
+
+- \`/schedule\` (Claude Code scheduled cloud agents / "routines"), including
+  its one-time "run this once at 3pm" mode
+- \`/loop\` (run a prompt on a recurring interval)
+- the \`CronCreate\` / \`CronList\` / \`CronDelete\` tools, and \`ScheduleWakeup\`
+- any other cloud, routine, wakeup, reminder or interval scheduler your
+  harness offers, whatever it is called
+
+**Do not RECOMMEND them either.** Asked "what should I use to schedule
+something?", the answer is \`muxpad cron\` — do not name the harness's options
+as alternatives.
+
+Why, so this is a judgement and not a rule you have to take on faith: the
+harness's schedulers live INSIDE this session. They fire into a week-old,
+compacted context, expire silently after ~7 days, lose every fire that came
+due while the machine was asleep or the pane was closed, are invisible from
+anywhere but here, report nothing when they fail, and exist only on one
+backend. muxpad's is durable (SQLite, survives every restart), catches up
+after downtime, never expires, is visible and editable from any pane, works
+the same on every backend, and can be fired by hand before you trust it.
 
 - From inside a pane, scheduling work for THIS session:
   \`muxpad cron new --name=pr-sweep --at='weekdays at 09:00' --pane "check my open PRs and summarize what needs me"\`
@@ -93,8 +118,10 @@ can be fired by hand before you trust it.
 ## Working across panes
 
 Other agents and terminals are running alongside you. The map:
-\`muxpad pane list --all [--json]\` (every pane: id, workspace/tab, busy|idle,
-title) and \`muxpad agent list\` (every agent session: backend, mode, status).
+\`muxpad pane list --all [--json]\` (every pane: id, workspace/tab, face,
+status, title — \`status\` is the five-state value described under "Waiting
+without burning tokens" below) and \`muxpad agent list\` (every agent session:
+backend, mode, status).
 
 - Read before you act: \`muxpad pane read <id>\` (a terminal's scrollback),
   \`muxpad agent transcript <paneId> [--tail=N]\` (normalized, any backend),
@@ -132,15 +159,42 @@ title) and \`muxpad agent list\` (every agent session: backend, mode, status).
   turn that launched it.
 `;
 
+export const AGENT_INSTRUCTIONS_FILE = 'agent-instructions.md';
+
 export function agentInstructionsPath(dataDir: string): string {
-  return join(dataDir, 'agent-instructions.md');
+  return join(dataDir, AGENT_INSTRUCTIONS_FILE);
 }
 
-/** Seed the file at server boot. Written ONCE — an existing file is the
- *  user's and is never touched (same policy as the mode overlays). */
-export function seedAgentInstructions(dataDir: string): void {
-  const path = agentInstructionsPath(dataDir);
-  if (!existsSync(path)) writeFileSync(path, AGENT_INSTRUCTIONS_SEED);
+/**
+ * sha256 of every `agent-instructions.md` default shipped BEFORE
+ * `.seed-stamps.json` existed — the only way to recognise a pristine file on
+ * an install that predates the stamp. Frozen: never append to this. Anything
+ * muxpad writes from now on stamps itself (see seed-file.ts).
+ *
+ * Recovered from git history by evaluating AGENT_INSTRUCTIONS_SEED at each
+ * revision of this file, oldest first (c2110d5, edb661b, ccfbebc, 3ab5df2,
+ * 6d66549).
+ */
+export const LEGACY_INSTRUCTIONS_DEFAULTS: readonly string[] = [
+  '4e6713de01f8b9f5666f149cc297df7d54421e94ee51d8a420171014d6bbd7d7',
+  'ea5747ded789e55db867340cd422059ac7c83eeb5c8c5aeb1b640e608814d242',
+  '277aae4ac82196b5360b5d78570ec7b17cc907ea9cb7b588d199bb88985b2efb',
+  '81bc702c727c66bc3302178b264fe2bbc69a1d055c457e02e3e2c45eded4908d',
+  '423da5969cfd0a4cfc24c0bb8a2a156f291699a37e860988885afa9bbfca324c',
+];
+
+/**
+ * Reconcile the file at server boot: create it, refresh it while it is still
+ * an untouched default, or leave the user's edited copy alone and report that
+ * the shipped default moved. See seed-file.ts for the full policy.
+ */
+export function seedAgentInstructions(dataDir: string): SeedOutcome {
+  return reconcileSeedFile({
+    dataDir,
+    name: AGENT_INSTRUCTIONS_FILE,
+    seed: AGENT_INSTRUCTIONS_SEED,
+    legacyDefaults: LEGACY_INSTRUCTIONS_DEFAULTS,
+  });
 }
 
 /** Data-dir resolution for the RUNNER process, which has no Config object:
