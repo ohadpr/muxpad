@@ -76,7 +76,7 @@ First load lands you on the workspace picker at `/`. Make a workspace, you'll la
 | `MUXPAD_PORT` | `7777` | TCP port. |
 | `MUXPAD_DATA_DIR` | `~/.muxpad` | SQLite DB, attachments, sockets, pid files. |
 | `MUXPAD_TAILSCALE_SERVE` | (unset) | Set to `1` to bind to `127.0.0.1` and front the daemon via `tailscale serve` (see below). |
-| `MUXPAD_ALLOWED_ORIGINS` | (unset) | Comma-separated extra origins (or bare hostnames) allowed to make **writes**. State-changing requests must come from an `Origin` whose hostname is loopback, matches the request's `Host`, or is listed here — a foreign page must not be able to POST an autostarting app or a cron into your muxpad. The CLI and other non-browser callers send no `Origin` and are unaffected. Set this only if a reverse proxy rewrites `Host`; the 403 names the variable. See `server/src/same-origin.ts`. |
+| `MUXPAD_ALLOWED_ORIGINS` | (unset) | Comma-separated extra origins (or bare hostnames) allowed to make **writes** and to open **WebSockets**. State-changing HTTP requests and every `/ws/*` upgrade must come from an `Origin` whose hostname is loopback, matches the request's `Host`, or is listed here — a foreign page must not be able to POST an autostarting app or a cron into your muxpad, nor open a socket into a live terminal. The CLI, the agent runner and other non-browser callers send no `Origin` and are unaffected. Set this only if a reverse proxy rewrites `Host`; the 403 names the variable. See `server/src/same-origin.ts`. |
 
 ### Optional: nicer URL via Tailscale Serve
 

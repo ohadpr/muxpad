@@ -1,4 +1,5 @@
 import type { Server } from 'node:http';
+import type { Duplex } from 'node:stream';
 import { parseCronMarker, sanitizeAgentStatus } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -28,6 +29,7 @@ import {
   RESPAWN_SWEEP_MS,
 } from './respawn-policy.js';
 import { safeCwd } from './safe-cwd.js';
+import { checkOrigin, parseAllowedOrigins } from './same-origin.js';
 import { AgentQueueStore } from './store/AgentQueueStore.js';
 import { AgentSessionStore } from './store/AgentSessionStore.js';
 import { PaneStore } from './store/PaneStore.js';
@@ -90,6 +92,73 @@ export function evictOverflowEntries(subagents: Map<string, unknown>): string[] 
   return dropped;
 }
 
+/**
+ * Say no to an upgrade before it becomes a WebSocket.
+ *
+ * The socket is still a raw TCP stream here — `ws` has not touched it — so the
+ * refusal is a hand-written HTTP response. It must be a real one and not a bare
+ * `socket.destroy()`: a browser reports a destroyed socket as an opaque
+ * connection error, while a 403 shows up in devtools with a body naming the
+ * escape hatch. That is the difference between "muxpad is broken" and "muxpad
+ * told me exactly which env var to set".
+ *
+ * Nothing in here may throw. A raw upgrade socket has no 'error' listener yet,
+ * and an unhandled 'error' on a net.Socket is a process-level throw — a peer
+ * that resets while we write the 403 would take the whole server down, which
+ * would be a far better attack than the one we are closing. Hence the no-op
+ * listener before the write, and the try/catch around both calls.
+ */
+function refuseUpgrade(socket: Duplex, why: string): void {
+  socket.on('error', () => {
+    // The peer is being refused; a reset mid-write is expected, not news.
+  });
+  const body = JSON.stringify({
+    error: {
+      code: 'cross_origin_refused',
+      message: `cross-origin WebSocket upgrade refused (${why}); set MUXPAD_ALLOWED_ORIGINS to allow this origin`,
+    },
+  });
+  const head = [
+    'HTTP/1.1 403 Forbidden',
+    'Connection: close',
+    'Content-Type: application/json',
+    `Content-Length: ${Buffer.byteLength(body)}`,
+  ].join('\r\n');
+  try {
+    socket.write(`${head}\r\n\r\n${body}`);
+  } catch {
+    // socket already gone
+  }
+  try {
+    socket.destroy();
+  } catch {
+    // already destroyed
+  }
+}
+
+/**
+ * Rate limiter for the refusal log. One line per offending origin per minute:
+ * enough to diagnose a lockout, not enough for a page (or a wedged client of
+ * the user's own) reconnecting in a loop to fill the log with the same line.
+ */
+function makeRefusalLogger(log: (line: string) => void): (origin: string, why: string) => void {
+  const lastLoggedAt = new Map<string, number>();
+  const WINDOW_MS = 60_000;
+  return (origin, why) => {
+    const now = Date.now();
+    const previous = lastLoggedAt.get(origin);
+    if (previous !== undefined && now - previous < WINDOW_MS) return;
+    lastLoggedAt.set(origin, now);
+    // Unbounded growth would be a (very slow) leak, and a hostile page can
+    // vary its origin. The map only exists to suppress repeats, so dropping
+    // the whole thing when it gets silly costs at most one extra log line.
+    if (lastLoggedAt.size > 256) lastLoggedAt.clear();
+    log(
+      `muxpad: refused WebSocket upgrade from ${origin} — ${why}. If this is your own front end, add its origin to MUXPAD_ALLOWED_ORIGINS.`,
+    );
+  };
+}
+
 export function attachWsServer(deps: {
   http: Server;
   db: Database.Database;
@@ -112,8 +181,21 @@ export function attachWsServer(deps: {
    * its own, which only costs a duplicate throttle window.
    */
   tabActivity?: TabActivity;
+  /**
+   * Extra hostnames the upgrade guard trusts as an Origin, on top of loopback
+   * and "same hostname as Host". Production omits it and the guard reads
+   * MUXPAD_ALLOWED_ORIGINS; this is the injection seam for tests. Same shape
+   * and same meaning as AppDeps.allowedOrigins — deliberately, since both feed
+   * the one predicate in same-origin.ts.
+   */
+  allowedOrigins?: Set<string>;
+  /** Refusal sink. Defaults to console.warn; tests pass a collector. */
+  logRefusal?: (line: string) => void;
 }): WsServerHandle {
   const wss = new WebSocketServer({ noServer: true });
+  const allowedOrigins =
+    deps.allowedOrigins ?? parseAllowedOrigins(process.env.MUXPAD_ALLOWED_ORIGINS);
+  const logRefusal = makeRefusalLogger(deps.logRefusal ?? ((line: string) => console.warn(line)));
   const panes = new PaneStore(deps.db);
   const tabs = new TabStore(deps.db);
   // Living sidebar: bumps `tabs.last_activity_at`. Forced for discrete
@@ -639,6 +721,54 @@ export function attachWsServer(deps: {
 
   deps.http.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://x');
+    // CSRF for WebSockets. FIRST, above the path dispatch, so it covers every
+    // arm below — /ws/pane/:id, /ws/agent-runner/:paneId, /ws/chat/:paneId,
+    // /ws/events — and any arm added later without anyone remembering this.
+    //
+    // Why it is needed at all: muxpad has no auth (reachability is
+    // authorization, bounded by the tailnet), the HTTP guard in same-origin.ts
+    // exempts GET, and a WS handshake IS a GET that never reaches Hono anyway.
+    // So until this, any page the user visited while their browser sat on the
+    // tailnet could open /ws/pane/<id> and write OP_INPUT frames straight into
+    // a live shell. Browsers apply no CORS to WebSockets; they do send Origin.
+    // Exactly the same predicate as the HTTP guard, so there is one policy.
+    //
+    // MISSING Origin STAYS ALLOWED, same as HTTP, and here is the check of
+    // that reasoning for this path specifically — every non-browser WS client
+    // in the repo, traced:
+    //
+    //   - the agent runner (agent-runner/index.ts) opens
+    //     `new WebSocket(MUXPAD_API_URL→ws + /ws/agent-runner/:paneId)` with
+    //     the `ws` library and no options, which sends NO Origin. It also
+    //     reconnects forever across every `muxpad restart`, so refusing it
+    //     would not fail loudly — it would spin.
+    //   - the `muxpad` CLI never opens a WebSocket at all; `muxpad events`
+    //     curls the SSE mirror at /api/events (guarded as a GET, i.e. not).
+    //   - every server-side test client is `ws` on 127.0.0.1: no Origin, and
+    //     loopback besides.
+    //
+    // and no browser reaches this branch: RFC 6455 §4.1 makes Origin
+    // mandatory for browser clients, and Chrome/Firefox/Safari all send it on
+    // every `new WebSocket()`. So "no Origin" means "not a page", which is the
+    // whole population this guard is aimed at. A non-browser attacker who can
+    // already reach port 7777 on the tailnet is outside the threat model by
+    // construction — they could equally curl the API.
+    // Node types unknown headers as string | string[]; a repeated header
+    // arrives as an array. Take the first — a browser sends exactly one.
+    const rawSecFetchSite = req.headers['sec-fetch-site'];
+    const verdict = checkOrigin(
+      {
+        origin: req.headers.origin,
+        host: req.headers.host,
+        secFetchSite: Array.isArray(rawSecFetchSite) ? rawSecFetchSite[0] : rawSecFetchSite,
+      },
+      allowedOrigins,
+    );
+    if (!verdict.ok) {
+      logRefusal(req.headers.origin ?? '(no origin)', `${verdict.why} on ${url.pathname}`);
+      refuseUpgrade(socket, verdict.why);
+      return;
+    }
     // App-level event stream. One socket per browser; receives JSON-encoded
     // MuxpadEvent frames for structural state changes (panes/tabs/workspaces).
     // PTY I/O still goes through /ws/pane/:id below.
