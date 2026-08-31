@@ -4,6 +4,7 @@ import { decorateTab } from '../ptyd-cache.js';
 import type { PtydCache } from '../ptyd-cache.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
+import { glossaryCache } from './glossary.js';
 import { type HeadlineModel, agentSdkHeadlineModel, maybeWriteHeadline } from './headline.js';
 
 /**
@@ -35,6 +36,7 @@ export class HeadlineWriter {
   private readonly events: EventBus;
   private readonly cache: PtydCache;
   private readonly model: HeadlineModel;
+  private readonly glossary: () => readonly string[];
   private unsubscribe?: () => void;
   private readonly inFlight = new Set<string>();
   /** Tests await this to let a triggered generation settle. */
@@ -44,6 +46,9 @@ export class HeadlineWriter {
     db: Database.Database;
     events: EventBus;
     cache: PtydCache;
+    /** Where this install's published artifacts live — the one thing the
+     *  glossary needs beyond the db. */
+    dataDir?: string;
     /** Test seam. Defaults to the Agent SDK haiku one-shot. */
     model?: HeadlineModel;
   }) {
@@ -51,6 +56,13 @@ export class HeadlineWriter {
     this.events = opts.events;
     this.cache = opts.cache;
     this.model = opts.model ?? agentSdkHeadlineModel;
+    // Same builder, and same time-cache, as the dictation cleanup pass: the
+    // model labelling a chat needs to know "muxpad" and "ptyd" for exactly the
+    // reason the model repairing dictation does, and maintaining a second list
+    // would guarantee the two drift. Cached because a generation is
+    // rate-limited but a boot with forty tabs is not.
+    const dataDir = opts.dataDir;
+    this.glossary = dataDir ? glossaryCache(opts.db, dataDir) : () => [];
   }
 
   start(): void {
@@ -80,7 +92,9 @@ export class HeadlineWriter {
     const tabId = pane.tab_id;
     if (this.inFlight.has(tabId)) return;
     this.inFlight.add(tabId);
-    const run = maybeWriteHeadline(this.db, tabId, paneId, this.model)
+    const run = maybeWriteHeadline(this.db, tabId, paneId, this.model, {
+      glossary: this.glossary(),
+    })
       .then((headline) => {
         if (!headline) return;
         const tab = new TabStore(this.db).getById(tabId);
