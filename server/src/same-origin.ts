@@ -88,6 +88,16 @@ import type { MiddlewareHandler } from 'hono';
  * attack this stops (an unrelated internet page) fails the hostname test
  * anyway.
  *
+ * WHAT THIS DOES NOT STOP, said plainly: DNS rebinding. `Origin` is compared
+ * against `Host`, and `Host` is whatever the browser was told to ask for — so
+ * a page on `evil.com` whose DNS rebinds to the tailnet address sends
+ * `Origin: http://evil.com` with `Host: evil.com:7777`, and they match.
+ * Closing that needs an allowlist of acceptable HOSTS, which is a different
+ * (and much easier to lock yourself out of) policy than this one. Noted rather
+ * than quietly implied: this guard raises the bar from "any page" to "a page
+ * whose author set up rebinding against your tailnet address", which is the
+ * whole population it was built for.
+ *
  * ESCAPE HATCH: `MUXPAD_ALLOWED_ORIGINS` — a comma-separated list of origins
  * or bare hostnames. The one configuration a reverse proxy that REWRITES the
  * Host header needs, and the rejection log line names it, so a lockout is

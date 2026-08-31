@@ -118,6 +118,11 @@ function refuseUpgrade(socket: Duplex, why: string): void {
       message: `cross-origin WebSocket upgrade refused (${why}); set MUXPAD_ALLOWED_ORIGINS to allow this origin`,
     },
   });
+  // write-then-destroy delivers this body whole — measured against a client
+  // that never reads, truncation only starts around 8 MB, where write() starts
+  // returning false. Keep the body small (it is a fixed ~250 bytes) or switch
+  // to socket.end(), which flushes but leaves the socket alive until the peer
+  // closes it — a worse trade for a refusal an attacker can repeat.
   const head = [
     'HTTP/1.1 403 Forbidden',
     'Connection: close',
@@ -148,11 +153,14 @@ function makeRefusalLogger(log: (line: string) => void): (origin: string, why: s
     const now = Date.now();
     const previous = lastLoggedAt.get(origin);
     if (previous !== undefined && now - previous < WINDOW_MS) return;
-    lastLoggedAt.set(origin, now);
-    // Unbounded growth would be a (very slow) leak, and a hostile page can
-    // vary its origin. The map only exists to suppress repeats, so dropping
-    // the whole thing when it gets silly costs at most one extra log line.
+    // Unbounded growth would be a (very slow) leak, and a caller that varies
+    // its Origin per request defeats the key anyway. The map only exists to
+    // suppress repeats, so dropping the whole thing when it gets silly costs
+    // at most one extra log line. Cleared BEFORE the set, or the origin that
+    // tripped the limit would be evicted immediately and log again next time —
+    // which is exactly the flood this is here to stop.
     if (lastLoggedAt.size > 256) lastLoggedAt.clear();
+    lastLoggedAt.set(origin, now);
     log(
       `muxpad: refused WebSocket upgrade from ${origin} — ${why}. If this is your own front end, add its origin to MUXPAD_ALLOWED_ORIGINS.`,
     );
