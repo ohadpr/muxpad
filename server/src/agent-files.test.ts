@@ -1,6 +1,7 @@
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -21,6 +22,7 @@ import {
   migrateAgentFileEdits,
   readAgentNotes,
   sha256,
+  shippedBodyHashes,
   writeGeneratedFile,
 } from './agent-files.js';
 import { openDb } from './store/db.js';
@@ -136,6 +138,9 @@ describe('migrateAgentFileEdits — nothing the user wrote may be lost', () => {
     { name: 'do-mode.md', knownDefaults: [sha256('# do\nbe brief\n')], appendToNotes: false },
   ];
   const migrate = () => migrateAgentFileEdits({ db, dataDir: dir, files: FILES });
+  /** The rescued file NAMES — the detail (backup path, whether it reached the
+   *  notes) is asserted where it matters. */
+  const rescuedNames = (r: ReturnType<typeof migrate>): string[] => r.rescued.map((x) => x.name);
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'agent-migrate-'));
@@ -147,14 +152,14 @@ describe('migrateAgentFileEdits — nothing the user wrote may be lost', () => {
   });
 
   it('(a) pristine install: nothing on disk, nothing to do', () => {
-    expect(migrate().rescued).toEqual([]);
+    expect(rescuedNames(migrate())).toEqual([]);
     expect(existsSync(instructions())).toBe(false);
     expect(readdirSync(dir)).toEqual([]);
   });
 
   it('(b) an UNMODIFIED older default is recognised and simply dropped', () => {
     writeFileSync(instructions(), V1); // what an old muxpad wrote, untouched
-    expect(migrate().rescued).toEqual([]);
+    expect(rescuedNames(migrate())).toEqual([]);
     expect(baks()).toEqual([]);
     expect(existsSync(agentNotesPath(dir))).toBe(false);
     // …and the boot's generated write then lands on it, unobstructed.
@@ -166,7 +171,7 @@ describe('migrateAgentFileEdits — nothing the user wrote may be lost', () => {
     const mine = `${V1}\n## The territory\nprojects live in ~/dev\nask Ana about billing\n`;
     writeFileSync(instructions(), mine);
 
-    expect(migrate().rescued).toEqual(['agent-instructions.md']);
+    expect(rescuedNames(migrate())).toEqual(['agent-instructions.md']);
 
     // Injected: the notes file now carries every line they wrote.
     const notes = readFileSync(agentNotesPath(dir), 'utf8');
@@ -180,6 +185,20 @@ describe('migrateAgentFileEdits — nothing the user wrote may be lost', () => {
     expect(notes).toContain(baks()[0] as string);
     // The old file is out of the way, so the generated write is unobstructed.
     expect(existsSync(instructions())).toBe(false);
+  });
+
+  it('reports what it moved and where, so the boot can say so out loud', () => {
+    writeFileSync(instructions(), `${V1}\nmy own section\n`);
+    writeFileSync(doMode(), '# my own contract\n');
+    const { rescued } = migrate();
+    expect(rescued).toHaveLength(2);
+    for (const r of rescued) {
+      expect(existsSync(r.backup)).toBe(true);
+      expect(r.backup.startsWith(join(dir, r.name))).toBe(true);
+    }
+    expect(rescued.find((r) => r.name === 'agent-instructions.md')?.intoNotes).toBe(true);
+    expect(rescued.find((r) => r.name === 'do-mode.md')?.intoNotes).toBe(false);
+    expect(readdirSync(dir)).not.toContain('agent-notes.md.tmp'); // no litter
   });
 
   it('appends under a dated heading when the notes file already has content', () => {
@@ -201,16 +220,16 @@ describe('migrateAgentFileEdits — nothing the user wrote may be lost', () => {
     // Boot again, generated file back in place — and again with a re-created
     // old file, which the marker must ignore.
     writeGeneratedFile(dir, 'agent-instructions.md', V2);
-    expect(migrate().rescued).toEqual([]);
+    expect(rescuedNames(migrate())).toEqual([]);
     writeFileSync(instructions(), 'something else entirely\n');
-    expect(migrate().rescued).toEqual([]);
+    expect(rescuedNames(migrate())).toEqual([]);
     expect(readFileSync(agentNotesPath(dir), 'utf8')).toBe(after);
     expect(baks()).toHaveLength(1);
   });
 
   it('an EMPTIED file is the old opt-out: nothing to rescue, no .bak, no notes', () => {
     writeFileSync(instructions(), '   \n\t\n');
-    expect(migrate().rescued).toEqual([]);
+    expect(rescuedNames(migrate())).toEqual([]);
     expect(baks()).toEqual([]);
     expect(existsSync(agentNotesPath(dir))).toBe(false);
   });
@@ -218,7 +237,7 @@ describe('migrateAgentFileEdits — nothing the user wrote may be lost', () => {
   it('an edited do-mode.md is kept as a .bak and NOT folded into the notes', () => {
     // Its contract only applies in ⚡ Do mode; the notes go into every session.
     writeFileSync(doMode(), '# my own contract\nbe brutal\n');
-    expect(migrate().rescued).toEqual(['do-mode.md']);
+    expect(rescuedNames(migrate())).toEqual(['do-mode.md']);
     expect(baks()).toHaveLength(1);
     expect(baks()[0]).toMatch(/^do-mode\.md\.pre-notes-/);
     expect(existsSync(agentNotesPath(dir))).toBe(false);
@@ -228,7 +247,7 @@ describe('migrateAgentFileEdits — nothing the user wrote may be lost', () => {
   it('rescues both files in one pass', () => {
     writeFileSync(instructions(), `${V1}\nmine\n`);
     writeFileSync(doMode(), '# my own contract\n');
-    expect(migrate().rescued).toEqual(['agent-instructions.md', 'do-mode.md']);
+    expect(rescuedNames(migrate())).toEqual(['agent-instructions.md', 'do-mode.md']);
     expect(baks()).toHaveLength(2);
   });
 
@@ -269,31 +288,62 @@ describe('migrateAgentFileEdits — nothing the user wrote may be lost', () => {
     // Permissions fixed → the next boot rescues it after all.
     const out = migrate();
     expect(out.safe).toBe(true);
-    expect(out.rescued).toEqual(['agent-instructions.md']);
+    expect(rescuedNames(out)).toEqual(['agent-instructions.md']);
     expect(readFileSync(agentNotesPath(dir), 'utf8')).toContain('my own section');
   });
 
-  it('an unwritable NOTES file still gets the content out, into the .bak', () => {
+  it('merges into the notes via a temp file — a dead write can’t truncate them', () => {
+    // The .bak covers the RESCUED content; it does not cover notes the user
+    // had already written, so the merge must never leave a half-written file.
     const mine = `${V1}\nmy own section\n`;
     writeFileSync(instructions(), mine);
-    writeFileSync(agentNotesPath(dir), '# mine\n');
-    chmodSync(agentNotesPath(dir), 0o444);
-    try {
-      expect(() => migrate()).not.toThrow();
-      expect(readFileSync(agentNotesPath(dir), 'utf8')).toBe('# mine\n'); // untouched
-      expect(baks()).toHaveLength(1);
-      expect(readFileSync(join(dir, baks()[0] as string), 'utf8')).toBe(mine);
-    } finally {
-      chmodSync(agentNotesPath(dir), 0o644);
-    }
+    writeFileSync(agentNotesPath(dir), '# mine\nkeep me\n');
+    migrate();
+    const notes = readFileSync(agentNotesPath(dir), 'utf8');
+    expect(notes.startsWith('# mine\nkeep me')).toBe(true);
+    expect(notes).toContain('my own section');
+    expect(readdirSync(dir)).not.toContain('agent-notes.md.tmp');
   });
 
-  it('does nothing at all when the DB has no globals table', () => {
+  it('a notes file that cannot be replaced: content still lands in the .bak', () => {
+    const mine = `${V1}\nmy own section\n`;
+    writeFileSync(instructions(), mine);
+    mkdirSync(agentNotesPath(dir)); // pathological: the notes path is a DIR
+    writeFileSync(join(agentNotesPath(dir), 'x'), 'x'); // …and not an empty one
+    const out = migrate();
+    expect(out.rescued[0]?.intoNotes).toBe(false);
+    expect(readFileSync(join(dir, baks()[0] as string), 'utf8')).toBe(mine);
+    expect(readdirSync(dir)).not.toContain('agent-notes.md.tmp'); // cleaned up
+  });
+
+  it('an unreadable DB is NOT read as “already migrated” — it generates nothing', () => {
+    // The direction that matters: guessing "done" here would hand the user's
+    // still-unrescued file straight to the generated write.
     const bare = openDb(':memory:');
     bare.exec('DROP TABLE globals');
     writeFileSync(instructions(), `${V1}\nmine\n`);
-    expect(() => migrateAgentFileEdits({ db: bare, dataDir: dir, files: FILES })).not.toThrow();
-    expect(existsSync(instructions())).toBe(true);
+    const out = migrateAgentFileEdits({ db: bare, dataDir: dir, files: FILES });
+    expect(out.safe).toBe(false);
+    expect(out.rescued).toEqual([]);
+    expect(readFileSync(instructions(), 'utf8')).toBe(`${V1}\nmine\n`);
     bare.close();
+  });
+
+  it('a GENERATED file is a known default — a lost marker cannot re-import it', () => {
+    // Files on disk carry the banner; the shipped-default hashes must cover
+    // that body too, or muxpad's own docs get imported into the user's notes
+    // (and injected twice) the first time the marker goes missing.
+    const files: readonly MigratedFile[] = [
+      {
+        name: 'agent-instructions.md',
+        knownDefaults: shippedBodyHashes(V1),
+        appendToNotes: true,
+      },
+    ];
+    writeGeneratedFile(dir, 'agent-instructions.md', V1);
+    const out = migrateAgentFileEdits({ db, dataDir: dir, files });
+    expect(out.rescued).toEqual([]);
+    expect(baks()).toEqual([]);
+    expect(existsSync(agentNotesPath(dir))).toBe(false);
   });
 });

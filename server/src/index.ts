@@ -51,9 +51,20 @@ const rescue = migrateAgentFileEdits({
   dataDir: config.dataDir,
   files: [INSTRUCTIONS_MIGRATION, DO_MODE_MIGRATION],
 });
+for (const r of rescue.rescued)
+  console.log(
+    `muxpad: ${r.name} is now GENERATED and rewritten on every start. Your copy was saved as ${r.backup}${r.intoNotes ? ', and its content appended to agent-notes.md — the file muxpad never touches. Trim it to just what is yours.' : '.'}`,
+  );
 if (rescue.safe) {
   seedAgentInstructions(config.dataDir);
   seedDoMode(config.dataDir);
+} else {
+  // Something of the user's is still in a generated file's path and could not
+  // be moved. Say so: the alternative is instructions that silently stop
+  // tracking the build, with nothing anywhere explaining why.
+  console.warn(
+    `muxpad: could not move your older agent-instructions.md / do-mode.md aside in ${config.dataDir}, so they were NOT regenerated (check permissions). Retrying next start.`,
+  );
 }
 ensureAgentNotes(config.dataDir);
 const paneStore = new PaneStore(db);
