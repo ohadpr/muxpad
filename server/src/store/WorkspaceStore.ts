@@ -41,13 +41,18 @@ export class WorkspaceStore {
    * Create a HIDDEN system container — a workspace excluded from `list()` and
    * therefore from the sidebar tree.
    *
-   * The one caller is the app registry (apps/AppRegistry.ts). An app is a
-   * supervised pane with no presence in the tab tree, and this is what "no
-   * presence" is built from: a real workspace holding real tabs holding real
-   * panes, so every existing mechanism (PaneRuntime env injection, the ptyd
-   * lifecycle, `/p/:id` terminal attach, the serve supervisor's sweep) applies
-   * unchanged — while `visibleWorkspaces()` keeps the whole container out of
-   * the navigator.
+   * Both callers are building the SAME container, the hidden apps workspace:
+   * `AppRegistry.containerId()` (apps/AppRegistry.ts), and the one-shot
+   * adoption of pre-registry `muxpad serve` panes (apps/adopt-serve-panes.ts),
+   * which borrows the registry's resolver at the index.ts call site and only
+   * falls back to its own copy when called without one (tests).
+   *
+   * An app is a supervised pane with no presence in the tab tree, and this is
+   * what "no presence" is built from: a real workspace holding real tabs
+   * holding real panes, so every existing mechanism (PaneRuntime env
+   * injection, the ptyd lifecycle, `/p/:id` terminal attach, the serve
+   * supervisor's sweep) applies unchanged — while `visibleWorkspaces()` keeps
+   * the whole container out of the navigator.
    *
    * Named separately from `create` rather than added as a flag so that the
    * grep for "who can hide a workspace" stays a one-line answer.

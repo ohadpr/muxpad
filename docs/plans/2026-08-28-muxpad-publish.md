@@ -93,13 +93,18 @@ chain (routes/publish.ts):
   defaults the same way, so no test path can run a tailscale command. CLI
   tests stub the binary via `MUXPAD_TAILSCALE_BIN`.
 
-### 4. CLI + playbook
+### 4. CLI + agent instructions
 
 - `muxpad publish <path> [--name=slug]` — prints the public URL on stdout
-  (the one thing on stdout; warnings on stderr), `--list`, `--rm <slug>`.
-- CEO playbook template (server/src/ceo.ts) gains a Publishing section and
-  a `muxpad search` pointer — new CEO homes only; the live
-  `~/.muxpad/ceo/CLAUDE.md` is user-owned and untouched.
+  (the one thing on stdout; warnings on stderr), `--list`, `--rm <slug>`,
+  `--update=<slug>`, `--set-base`.
+- The Publishing section lives in the UNIVERSAL agent-instructions seed
+  (`server/src/agent-instructions.ts` → `<dataDir>/agent-instructions.md`),
+  which every backend injects — not in a CEO playbook. The CEO primitive and
+  `server/src/ceo.ts` were retired in `65f17b9`; see
+  docs/plans/2026-08-21-ceo-pane.md. The on-disk file stays user-owned:
+  muxpad refreshes it only while it is still an untouched default, and
+  otherwise leaves the user's copy alone and says so (server/src/seed-file.ts).
 
 ## Non-goals
 
