@@ -3,15 +3,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PaneStatusSchema } from '@muxpad/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { agentNotesPath, generatedBody, sha256 } from './agent-files.js';
 import {
   AGENT_INSTRUCTIONS_SEED,
-  LEGACY_INSTRUCTIONS_DEFAULTS,
+  INSTRUCTIONS_MIGRATION,
+  SHIPPED_INSTRUCTIONS_DEFAULTS,
   agentInstructionsPath,
   readAgentInstructions,
   seedAgentInstructions,
   wrapAgentInstructions,
 } from './agent-instructions.js';
-import { sha256 } from './seed-file.js';
 
 describe('agent-instructions', () => {
   let dataDir: string;
@@ -22,10 +23,10 @@ describe('agent-instructions', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it('seeds the file once at boot with muxpad capability content', () => {
+  it('generates the file at boot with muxpad capability content', () => {
     seedAgentInstructions(dataDir);
     const text = readFileSync(agentInstructionsPath(dataDir), 'utf8');
-    expect(text).toBe(AGENT_INSTRUCTIONS_SEED);
+    expect(text).toBe(generatedBody(AGENT_INSTRUCTIONS_SEED));
     expect(text).toContain('muxpad search');
     expect(text).toContain('muxpad publish');
     expect(text).toContain('muxpad --help');
@@ -72,31 +73,28 @@ describe('agent-instructions', () => {
       expect(AGENT_INSTRUCTIONS_SEED).toMatch(reason);
   });
 
-  it('never overwrites a user-owned file on re-seed', () => {
+  it('rewrites the file on every boot, so a seed change can never go stale', () => {
     seedAgentInstructions(dataDir);
-    writeFileSync(agentInstructionsPath(dataDir), 'my own rules\n');
+    writeFileSync(agentInstructionsPath(dataDir), 'a stale older default\n');
     seedAgentInstructions(dataDir); // boot again
-    expect(readFileSync(agentInstructionsPath(dataDir), 'utf8')).toBe('my own rules\n');
+    expect(readFileSync(agentInstructionsPath(dataDir), 'utf8')).toBe(
+      generatedBody(AGENT_INSTRUCTIONS_SEED),
+    );
   });
 
-  it('an unrecognised file is the user’s; the legacy-default list stays sane', () => {
-    // The refresh path itself is covered in seed-file.test.ts. What matters
-    // here is the DATA: the frozen hash list is what lets a stamp-less install
-    // (every machine that predates .seed-stamps.json) be told apart from an
-    // edited one, and a wrong entry there would clobber real user edits.
-    const stale = '# muxpad\n\n`muxpad pane list --all` (id, workspace/tab, busy|idle, title)\n';
-    writeFileSync(agentInstructionsPath(dataDir), stale);
-    // Not a known default → treated as the user's, left alone.
-    expect(seedAgentInstructions(dataDir).action).toBe('stale');
-    expect(readFileSync(agentInstructionsPath(dataDir), 'utf8')).toBe(stale);
-
-    // One entry per default this project actually shipped, all well-formed.
-    expect(LEGACY_INSTRUCTIONS_DEFAULTS.length).toBeGreaterThan(0);
-    for (const hash of LEGACY_INSTRUCTIONS_DEFAULTS) expect(hash).toMatch(/^[0-9a-f]{64}$/);
-    expect(new Set(LEGACY_INSTRUCTIONS_DEFAULTS).size).toBe(LEGACY_INSTRUCTIONS_DEFAULTS.length);
-    // The list is FROZEN — it only exists for installs that predate the stamp
-    // file — so the seed shipping today is not expected to be in it.
-    expect(LEGACY_INSTRUCTIONS_DEFAULTS).not.toContain(sha256(AGENT_INSTRUCTIONS_SEED));
+  it('the shipped-defaults list the migration reads stays sane', () => {
+    // The DATA the one-shot migration leans on: a file matching one of these
+    // hashes is untouched plumbing. A WRONG entry here would silently discard
+    // real user edits, so it is worth pinning.
+    const known = INSTRUCTIONS_MIGRATION.knownDefaults;
+    expect(SHIPPED_INSTRUCTIONS_DEFAULTS.length).toBeGreaterThan(0);
+    for (const hash of known) expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(new Set(known).size).toBe(known.length);
+    // The seed shipping TODAY has to be in there — an install already on the
+    // current default has nothing to rescue.
+    expect(known).toContain(sha256(AGENT_INSTRUCTIONS_SEED));
+    // …and the frozen historical entries are not it.
+    expect(SHIPPED_INSTRUCTIONS_DEFAULTS).not.toContain(sha256(AGENT_INSTRUCTIONS_SEED));
   });
 
   it('teaches EXACTLY the five statuses in PaneStatusSchema, and no retired ones', () => {
@@ -126,12 +124,22 @@ describe('agent-instructions', () => {
     }
   });
 
-  it('read returns the file content, and null for missing/empty (no error)', () => {
-    expect(readAgentInstructions(dataDir)).toBeNull(); // missing → inject nothing
-    writeFileSync(agentInstructionsPath(dataDir), '   \n'); // emptied by the user
-    expect(readAgentInstructions(dataDir)).toBeNull();
+  it('injects the GENERATED file and then the user’s notes, in that order', () => {
     writeFileSync(agentInstructionsPath(dataDir), 'use muxpad publish\n');
-    expect(readAgentInstructions(dataDir)).toBe('use muxpad publish\n');
+    writeFileSync(agentNotesPath(dataDir), 'projects live in ~/dev\n');
+    expect(readAgentInstructions(dataDir)).toBe('use muxpad publish\n\nprojects live in ~/dev');
+  });
+
+  it('either half missing or empty contributes nothing, and is never an error', () => {
+    expect(readAgentInstructions(dataDir)).toBeNull(); // neither file → nothing
+    writeFileSync(agentInstructionsPath(dataDir), '   \n');
+    expect(readAgentInstructions(dataDir)).toBeNull();
+
+    writeFileSync(agentNotesPath(dataDir), 'projects live in ~/dev\n');
+    expect(readAgentInstructions(dataDir)).toBe('projects live in ~/dev'); // notes only
+    writeFileSync(agentInstructionsPath(dataDir), 'use muxpad publish\n');
+    writeFileSync(agentNotesPath(dataDir), '\t\n');
+    expect(readAgentInstructions(dataDir)).toBe('use muxpad publish'); // generated only
   });
 
   it('wraps fallback injections in a clearly delimited block', () => {

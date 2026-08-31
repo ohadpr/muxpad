@@ -5,13 +5,11 @@
 // top of the universal agent instructions: a short behavioral contract that
 // makes the agent decisive and terse.
 //
-// The contract text lives in a seeded, user-owned file
-// (`<dataDir>/do-mode.md`) with the same lifecycle as agent-instructions.md
-// (seed-file.ts): written at server boot, refreshed while it is still an
-// untouched default, and never overwritten once the user edits it — so
-// tuning what "Do" means is editing a file, not a deploy. Missing or empty →
-// nothing is injected and 'do' silently degrades to 'deep' behavior; that's a
-// supported opt-out, never an error.
+// The contract text lives in `<dataDir>/do-mode.md`, a GENERATED file with the
+// same lifecycle as agent-instructions.md (agent-files.ts): rewritten from
+// DO_MODE_SEED below on every boot, so it always states this build's contract.
+// Missing or empty → nothing is injected and 'do' silently degrades to 'deep'
+// behavior; never an error.
 //
 // Injection uses the SAME per-backend mechanism as agent-instructions.md —
 // each documented at its call site:
@@ -44,12 +42,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentMode } from '@muxpad/shared';
-import { runnerDataDir } from './agent-instructions.js';
-import { type SeedOutcome, reconcileSeedFile } from './seed-file.js';
+import { type MigratedFile, runnerDataDir, sha256, writeGeneratedFile } from './agent-files.js';
 
 /** Seed content — harness-neutral (claude/codex/cursor may all read it) and
  *  deliberately short: it competes for attention with the harness's own
- *  system prompt. Written once; the user owns the file afterwards. */
+ *  system prompt. Written to disk verbatim (under a generated-file banner) on
+ *  every boot. */
 export const DO_MODE_SEED = `# ⚡ Do mode
 
 This session is in **Do mode**. Optimize for shipped results, not for
@@ -93,27 +91,27 @@ export function doModePath(dataDir: string): string {
 }
 
 /**
- * sha256 of every `do-mode.md` default shipped BEFORE `.seed-stamps.json`
- * existed (one: edb661b, the revision that introduced modes). Frozen — see
- * LEGACY_INSTRUCTIONS_DEFAULTS.
+ * sha256 of every `do-mode.md` default this project ever shipped (one:
+ * edb661b, the revision that introduced modes); the current seed is added at
+ * use. Only the one-shot migration reads them — see
+ * SHIPPED_INSTRUCTIONS_DEFAULTS.
  */
-export const LEGACY_DO_MODE_DEFAULTS: readonly string[] = [
+export const SHIPPED_DO_MODE_DEFAULTS: readonly string[] = [
   'dd07e927e4833873ccf0bfc5ce8a12ab4331aacb2cdbc422824e9fde1c6ac209',
 ];
 
-/**
- * Reconcile the file at server boot — same policy as agent-instructions.md:
- * create, refresh while pristine, never clobber the user's edits. Do mode has
- * the same staleness exposure (a machine that booted once keeps the first
- * contract forever), so it gets the same treatment. See seed-file.ts.
- */
-export function seedDoMode(dataDir: string): SeedOutcome {
-  return reconcileSeedFile({
-    dataDir,
-    name: DO_MODE_FILE,
-    seed: DO_MODE_SEED,
-    legacyDefaults: LEGACY_DO_MODE_DEFAULTS,
-  });
+/** What the one-shot migration needs about this file. An edited do-mode.md is
+ *  kept as a `.bak` rather than folded into the notes: it is a contract that
+ *  only applies in ⚡ Do mode, and the notes are injected in EVERY session. */
+export const DO_MODE_MIGRATION: MigratedFile = {
+  name: DO_MODE_FILE,
+  knownDefaults: [...SHIPPED_DO_MODE_DEFAULTS, sha256(DO_MODE_SEED)],
+  appendToNotes: false,
+};
+
+/** Rewrite the generated file at server boot. It always matches this build. */
+export function seedDoMode(dataDir: string): void {
+  writeGeneratedFile(dataDir, DO_MODE_FILE, DO_MODE_SEED);
 }
 
 /**

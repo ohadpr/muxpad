@@ -1449,11 +1449,12 @@ cmd_claude() {
     echo "muxpad claude: --settings supplied; skipping hook injection (this session won't be web-switchable)" >&2
   fi
 
-  # Universal muxpad instructions (<dataDir>/agent-instructions.md, seeded by
-  # the server, user-owned): appended via claude's native
-  # --append-system-prompt — works for the interactive TUI too. Skipped when
-  # the user passed any system-prompt flag of their own, or when the file is
-  # missing/empty (never an error).
+  # Universal muxpad instructions — the server-GENERATED
+  # <dataDir>/agent-instructions.md followed by the user's
+  # <dataDir>/agent-notes.md, the same order every backend injects them in.
+  # Appended via claude's native --append-system-prompt, which works for the
+  # interactive TUI too. Skipped when the user passed any system-prompt flag of
+  # their own; a missing/empty file simply contributes nothing (never an error).
   #
   # ⚡ Do mode rides the SAME flag, appended after the instructions (behavior
   # last, matching the SDK backend's append order). The pane's mode is read
@@ -1463,8 +1464,11 @@ cmd_claude() {
   # no `mode` field, or a missing file all fall through to Deep, which is the
   # historical behavior.
   if [ "$user_has_sysprompt" = "0" ]; then
-    local sysprompt=""
-    [ -s "$DATA_DIR/agent-instructions.md" ] && sysprompt="$(cat "$DATA_DIR/agent-instructions.md")"
+    local sysprompt="" part
+    for part in agent-instructions.md agent-notes.md; do
+      [ -s "$DATA_DIR/$part" ] || continue
+      sysprompt="${sysprompt:+$sysprompt$'\n\n'}$(cat "$DATA_DIR/$part")"
+    done
     if [ -s "$DATA_DIR/do-mode.md" ] && [ -n "${MUXPAD_API_URL:-}" ]; then
       local pane_mode
       pane_mode="$(curl -sS --max-time 3 \
