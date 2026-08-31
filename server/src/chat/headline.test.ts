@@ -37,10 +37,26 @@ describe('shouldConsiderHeadline — the rate limit, before any spend', () => {
     expect(shouldConsiderHeadline({ ...base, turns: HEADLINE_MIN_TURNS - 1 })).toBe(false);
   });
 
-  it('writes the FIRST line immediately — no interval to wait out', () => {
+  it('tries the FIRST time immediately — no interval to wait out', () => {
     // The rail is least useful exactly when you have the most chats open; a
-    // new chat must not sit blank for 20 minutes.
+    // new chat must not wait 20 minutes for its first ATTEMPT. Note what this
+    // no longer promises: if that attempt is rejected, the row does sit blank
+    // until the interval is up. That is the deliberate price of not letting a
+    // chat whose every reply is malformed re-ask on every finished turn.
     expect(shouldConsiderHeadline({ ...base, turns: HEADLINE_MIN_TURNS })).toBe(true);
+  });
+
+  it('a chat with NO headline is still rate-limited once it has been asked', () => {
+    // The hole that let a persistently-failing chat spin: `existing` used to
+    // short-circuit the interval, and a rejected reply leaves it null forever.
+    expect(shouldConsiderHeadline({ ...base, existing: null, lastAt: NOW - 60_000 })).toBe(false);
+    expect(
+      shouldConsiderHeadline({
+        ...base,
+        existing: null,
+        lastAt: NOW - HEADLINE_MIN_INTERVAL_MS,
+      }),
+    ).toBe(true);
   });
 
   it('a QUIET chat with a line already costs nothing', () => {
@@ -132,7 +148,7 @@ describe('parseHeadlineReply — every ambiguity resolves to KEEP', () => {
     // reply is how an answer-to-the-conversation became a headline: the reply
     // was wrong, and its first 90 characters were wrong too.
     expect(parseHeadlineReply('a'.repeat(300), null)).toBeNull();
-    expect(parseHeadlineReply(THE_BUG, null)).toBeNull();
+    expect(headlineRejectReason('a'.repeat(300))).toBe(`over ${HEADLINE_MAX_CHARS} chars`);
   });
 
   it('strips trailing sentence punctuation rather than rejecting on it', () => {
@@ -200,15 +216,57 @@ describe('headline shape check — the good lines must survive', () => {
     'wiring the cron scheduler into boot',
     'cohort B at 2.1x reply rate',
     'picking a CDP vendor',
-    // Hyphens and possessives must not read as the words they contain: "no-",
-    // "my-" and "we-" are not the words "no", "my" and "we".
+    // Hyphens and slashes must not read as word ends: "no-", "my-", "keep-"
+    // and "I/" are not the words "no", "my", "keep" and "I".
     'no-code vendor comparison',
     'my-app deploy script rewrite',
+    'keep-alive tuning for the launchd socket',
+    'Keep-Alive vs Connection: close',
+    'disk I/O latency on the NAS',
+    'async I/O in the ptyd bridge',
+    'ME/CFS treatment literature',
     'ptyd socket ownership after a restart',
     'Tailscale Funnel for the publish port',
+    // A comparison is the commonest label shape there is, and it must not
+    // hinge on whether the model typed "vs" or "vs.".
+    'mid-drive vs. hub motors',
+    'Postgres vs. SQLite for the archive',
+    'PETG vs. PLA warping on the bed',
+    'heat pump vs. gas furnace running costs',
+    'CPI vs. PCE as the Fed target',
+    // Abbreviations and initials are not sentence boundaries either.
+    'U.S. Treasury yields vs TIPS',
+    'St. Louis Fed CPI series',
+    'Alphabet Inc. earnings call',
+    'Ph.D. thesis latex build',
+    'Rev. B board bring-up',
+    // A standalone capital I is usually a numeral or an initial.
+    'Phase I rollout of the new router',
+    'Type I vs Type II errors in the A/B test',
+    'Series I savings bonds',
     // Version numbers and package names contain dots; that is not a sentence
     // boundary.
     'Node.js 22 upgrade for the runner',
+    // "the user"/"the chat"/"the transcript" are ordinary subjects here — two
+    // of these three are things in this codebase.
+    'the user table migration',
+    'the transcript reader rewrite',
+    'the chat sidebar redesign',
+    'the assistant pane restart loop',
+    'the thread pool sizing',
+    // Proper nouns that collide with a greeting or a pronoun.
+    'great room lighting plan',
+    'Hello World bootloader for the RP2040',
+    'HERE Maps API for the trip planner',
+    'Sure Cuts A Lot for the vinyl cutter',
+    'your.org DNS migration',
+    'i.e. the replication crisis',
+    // Deliberation labels in the first person plural are still labels.
+    'should we drop the resident pane',
+    'do we need a server-side queue',
+    // The worked example's own subject. This user has coffee chats, and the
+    // echo check must not delete a correct line about one.
+    'sour espresso and grind adjustment',
     // Unfamiliar vocabulary is not a defect — most of this user's headlines
     // are made of words a general model has never seen.
     'ohados worktree cleanup',
@@ -222,45 +280,104 @@ describe('headline shape check — the good lines must survive', () => {
 });
 
 describe('headline shape check — the bad output must not reach the row', () => {
-  const bad: Array<[string, string]> = [
+  // Each row names the rule it is here to exercise, and the rule is ASSERTED.
+  // A table that only checked "rejected somehow" would quietly stop testing
+  // what its own labels claim the moment an earlier rule started catching the
+  // fixture first.
+  const bad: Array<[string, string, string]> = [
     // THE bug, verbatim.
-    ['the live bug, verbatim', THE_BUG],
+    ['the live bug, verbatim', THE_BUG, 'conversational opener'],
     // The same failure caught earlier, before the clamp got to it.
     [
       'answering instead of labelling',
       'I\'m not familiar with "muxpad" — is that an internal tool or a product name?',
+      'conversational opener',
     ],
-    ['first person', "I can't summarize this conversation"],
-    ['first person, mid-phrase', 'the cron scheduler as I understand it'],
-    ['assistant preamble', "Sure! Here's a headline for this conversation"],
-    ['assistant preamble, bare', "Here's a summary of the chat"],
-    ['hedging opener', 'It looks like the user is debugging a cron schedule'],
-    ['hedging opener, variant', 'It seems the conversation is about e-bike motors'],
-    ['meta subject', 'The conversation is about cron scheduling'],
-    ['meta subject, variant', 'The user is researching e-bikes'],
-    ['apology', 'Sorry, I do not have enough context to write a label'],
-    ['offer of further help', 'Let me know if you need anything else'],
-    ['a question put to the reader', 'What would you like this labelled as?'],
-    ['a question put to the reader, short', 'Is this an internal tool?'],
-    ['addresses the reader mid-phrase', 'cron scheduling, or did you mean something else'],
-    ['two sentences', 'Cron scheduling. The user wants a catch-up pass'],
-    ['trails off', 'the user is asking about the cron scheduler and whether…'],
-    ['field prefix', 'Headline: cron scheduling'],
-    ['over the ceiling', 'a'.repeat(HEADLINE_MAX_CHARS + 1)],
-    ['newline', 'cron scheduling\nand also e-bikes'],
-    ['empty', ''],
-    ['whitespace only', '   \t  '],
-    ['the sentinel', 'KEEP'],
+    ['a first-person opener', "I can't summarize this conversation", 'conversational opener'],
+    ['first person mid-phrase', 'the cron scheduler as I understand it', 'first person'],
+    ['an assistant preamble', "Sure! Here's a headline for this chat", 'conversational opener'],
+    ['a bare preamble', "Here's a summary of the chat", 'conversational opener'],
+    [
+      'a hedging opener',
+      'It looks like the user is debugging a cron schedule',
+      'conversational opener',
+    ],
+    ['a hedging opener, variant', 'It seems this is about e-bike motors', 'conversational opener'],
+    ['an apology', 'Sorry, I do not have enough context', 'conversational opener'],
+    ['an offer of further help', 'Let me know if you need anything else', 'conversational opener'],
+    [
+      'describing the chat',
+      'The conversation is about cron scheduling',
+      'describes the conversation',
+    ],
+    [
+      'describing the people in it',
+      'The user is researching e-bikes',
+      'describes the conversation',
+    ],
+    ['a meta statement', 'The topic is cron scheduling', 'describes the conversation'],
+    ['a question put to the reader', 'What would you like this labelled as?', 'is a question'],
+    [
+      'addressing the reader mid-phrase',
+      'cron scheduling, or did you mean something else',
+      'addresses the reader',
+    ],
+    ['two sentences', 'Cron scheduling. The user wants a catch-up pass', 'more than one sentence'],
+    ['trailing off', 'cron scheduling and whether the catch-up pass should…', 'trails off'],
+    ['a field prefix', 'Headline: cron scheduling', 'field prefix'],
+    ['over the ceiling', 'a'.repeat(HEADLINE_MAX_CHARS + 1), `over ${HEADLINE_MAX_CHARS} chars`],
+    ['a newline', 'cron scheduling\nand also e-bikes', 'multiple lines'],
+    ['empty', '', 'empty'],
+    ['whitespace only', '   \t  ', 'empty'],
+    ['the sentinel', 'KEEP', 'sentinel'],
     // The prompt read back at us. A cheap model handed a rule list sometimes
     // answers with one of the rules.
-    ['echoes a rule', 'A noun phrase, not a sentence. Never a question.'],
-    ['echoes a rule, unpunctuated', 'Name the SUBJECT of the conversation'],
-    ['echoes the worked example', 'sour espresso and grind adjustment'],
+    ['echoing a rule', 'Name the SUBJECT of the conversation', 'echoes the prompt'],
+    [
+      'echoing a rule, verbatim',
+      'Lowercase unless it starts with a proper noun',
+      'echoes the prompt',
+    ],
+    // Models type the typographic apostrophe far more often than the ASCII
+    // one — the live bug string's em dash says it came out of exactly that
+    // register — so every contraction rule has to see through it.
+    [
+      'the bug, with a typographic apostrophe',
+      'I’m not familiar with muxpad — is that an internal tool?',
+      'conversational opener',
+    ],
+    [
+      'a curly contraction preamble',
+      'Here’s the label: cron scheduler wiring',
+      'conversational opener',
+    ],
+    ['a curly first person', 'I’ll summarise the cron work for you', 'conversational opener'],
+    // Refusals that contain no contraction and no pronoun at all — the class
+    // that slips past a check built only from "I'm"-shaped examples.
+    ['a hedged description', 'This appears to be about cron scheduling', 'conversational opener'],
+    [
+      'a hedged description, variant',
+      'This is a conversation about cron scheduling',
+      'conversational opener',
+    ],
+    ['a refusal', 'Not enough context to label this', 'conversational opener'],
+    ['a refusal, variant', 'Unable to determine the subject', 'conversational opener'],
+    ['a refusal, third variant', 'Could not determine a label', 'conversational opener'],
+    ['an acknowledgement', 'Got it, the cron scheduler wiring', 'conversational opener'],
+    ['an acknowledgement, dashed', 'Understood — cron scheduler wiring', 'conversational opener'],
+    // Questions that do not open with an interrogative but are still
+    // questions: enough clause structure to have stopped being a phrase.
+    ['a trailing question clause', 'muxpad — what is it?', 'is a question'],
+    [
+      'a list of alternatives',
+      'an internal tool, a product name, or something else?',
+      'is a question',
+    ],
   ];
 
-  for (const [label, line] of bad) {
+  for (const [label, line, reason] of bad) {
     it(`rejects ${label}`, () => {
-      expect(headlineRejectReason(line)).not.toBeNull();
+      expect(headlineRejectReason(line)).toBe(reason);
       expect(isPlausibleHeadline(line)).toBe(false);
     });
   }

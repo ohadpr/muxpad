@@ -201,7 +201,9 @@ export function parseHeadline(
   // One line only — a model that explained itself gets its first line taken
   // and the explanation dropped.
   s = (s.split('\n').find((l) => l.trim().length > 0) ?? '').trim();
-  s = s.replace(/^(headline|summary|title|label)\s*:\s*/i, '');
+  // Same field names FIELD_PREFIX rejects, so the stripper and the check can
+  // never disagree about what counts as a prefix.
+  s = s.replace(/^(headline|summary|title|label|subject|topic)\s*:\s*/i, '');
   // Strip a leading list bullet — a model given rules as a list sometimes
   // answers in one.
   s = s.replace(/^[-*•]\s+/, '');
@@ -362,37 +364,114 @@ export function buildHeadlinePrompt(
  * The model had answered the conversation rather than labelled it, and
  * nothing between the model and the database disagreed.
  *
- * The failure mode to design AGAINST is over-rejection, because a rejected
- * generation costs a whole interval of blankness. So every rule keys on a
- * structural marker of "this is prose aimed at a reader", never on topic:
+ * ─── Over-rejection is the way this breaks a SECOND time ──────────────────
+ *
+ * A rejected generation costs a whole interval of blank row, and the one-time
+ * sweep DELETES stored headlines that fail these rules — so a false positive
+ * destroys something real. Every rule below therefore keys on a structural
+ * marker of "this is prose aimed at a reader", never on topic, and every one
+ * of them is deliberately narrower than its first draft:
  *
  *   - A label ABOUT a question is fine. "whether to sell the SMH position"
  *     and "sell the SMH overweight or hold?" are both good labels. What is
  *     rejected is a label that IS a question put to the reader — one that
- *     opens with an interrogative ("is that an internal tool?").
+ *     opens with an interrogative, or that has grown a comma or a dash and
+ *     stopped being a phrase.
  *   - A label may contain any vocabulary at all, including words we have
- *     never seen. Nothing here has an opinion about the subject matter.
+ *     never seen. Nothing here has an opinion about subject matter.
+ *   - Word boundaries are hyphen- and slash-aware, so "keep-alive tuning",
+ *     "no-code vendor comparison" and "disk I/O latency on the NAS" are not
+ *     read as the sentinel, the word "no" and the pronoun "I".
+ *   - A full stop is only a sentence end when the token before it isn't an
+ *     abbreviation or an initial, because "mid-drive vs. hub motors" and
+ *     "St. Louis Fed CPI series" are labels, not paragraphs.
+ *   - Greetings only count when punctuation follows them, because "great room
+ *     lighting plan" and "Hello World bootloader" are subjects.
+ *   - "the user"/"the chat"/"the transcript" only count when a verb follows,
+ *     because two of those three are nouns in this codebase.
+ *
+ * The corresponding test file keeps a table of lines that MUST survive, and
+ * it is the more important of the two tables there.
  */
 
 /**
- * Every pattern below ends the matched word with `(?![\w'’-])` rather than
- * `\b`. `\b` treats a hyphen as a word end, which would make "no-code vendor
- * comparison" open with the word "no" and "my-app deploy script" contain the
- * word "my". Requiring the next character to be a space or terminator keeps
- * every rule aimed at whole words used as words.
+ * Every pattern below bounds the matched word with `(?![\w'/-])` rather than
+ * `\b`, because `\b` calls a hyphen and a slash word ends. Under `\b`,
+ * "no-code vendor comparison" opens with the word "no", "keep-alive tuning"
+ * opens with the sentinel, "my-app deploy script" contains "my", and
+ * "disk I/O latency" contains the pronoun "I". Requiring the next character to
+ * be whitespace or a terminator keeps every rule aimed at whole words used as
+ * words.
  */
-const WORD_END = "(?![\\w'’-])";
+const WORD_END = "(?![\\w'/-])";
+const WORD_START = "(?<![\\w'/-])";
 
-/** Openers that mean the model is talking to someone rather than labelling.
- *  Anchored at the start — these words are only damning in first position. */
-const CONVERSATIONAL_OPENER = new RegExp(
-  `^(?:i|i'm|im|i've|i'd|i'll|we|we're|my|me|you|you're|your|sure|certainly|of course|absolutely|okay|alright|yeah|sorry|apologies|unfortunately|hmm|hey|hi|hello|thanks|thank you|great|good question|here|here's|here is|that's|that is|it looks like|it seems|it appears|it sounds like|looks like|seems like|based on|looking at|as an ai|as a language model|let me|let's|note that|please|could you|can you|would you|do you|did you|are you|is that|is this|the user|the conversation|this conversation|the chat|this chat|the assistant|the discussion|the thread|the transcript)${WORD_END}`,
+/**
+ * `’` → `'` before any of this runs.
+ *
+ * Models type the typographic apostrophe far more often than the ASCII one —
+ * the live bug string carries an em dash, so it came out of exactly that
+ * register. Every contraction below is spelled once, in ASCII, and the input
+ * is normalised to meet it. The alternative (spelling every rule twice) is the
+ * kind of duplication that goes stale on the first edit.
+ */
+function straightenQuotes(s: string): string {
+  return s.replace(/[‘’ʼ＇]/g, "'");
+}
+
+/**
+ * Openers that are only ever a model talking rather than labelling. Anchored,
+ * and unconditional — every one of these is several words long or a
+ * contraction, so none of them collides with an ordinary noun phrase.
+ */
+const PROSE_OPENER = new RegExp(
+  `^(?:i'm|i've|i'd|i'll|we're|we've|you're|here's|here is|that's|that is|it looks like|it seems|it appears|it sounds like|looks like|seems like|based on|looking at|as an ai|as a language model|let me|let's|note that|this is a|this appears|this seems|this looks like|this conversation|this chat|this transcript|this discussion|this thread|not enough context|no context|there is not|there isn't|unable to|cannot determine|can't determine|could not determine|couldn't determine|good question|thank you|could you|can you|would you|do you|did you|are you|is that|is this)${WORD_END}`,
   'i',
 );
 
-/** First-person pronouns anywhere. A label never has an author in it. */
-const FIRST_PERSON = new RegExp(
-  `(?<![\\w'’-])(?:i|i'm|im|i've|i'd|i'll|me|my|mine|myself)${WORD_END}`,
+/**
+ * A bare pronoun in first position, required to be followed by a SPACE.
+ *
+ * The space matters. "i.e. the replication crisis", "I/O throughput on the
+ * build box" and "your.org DNS migration" all open with one of these letter
+ * sequences and none of them is a pronoun.
+ */
+const PRONOUN_OPENER = /^(?:i|we|my|me|you|your|our)\s/i;
+
+/**
+ * Interjections — but only when punctuation follows, which is how a model
+ * actually writes them ("Sure!", "Okay,", "Understood —").
+ *
+ * Unconditionally banning the bare words would cost "great room lighting
+ * plan", "Hello World bootloader for the RP2040", "HERE Maps API for the trip
+ * planner" and "Sure Cuts A Lot for the vinyl cutter" — all perfectly good
+ * labels whose first word happens to be a greeting.
+ */
+const INTERJECTION_OPENER =
+  /^(?:sure|certainly|absolutely|of course|okay|ok|alright|yeah|yep|sorry|apologies|unfortunately|hmm|hey|hi|hello|thanks|great|got it|understood|please|well)\s*(?=$|[,!.:;—–])/i;
+
+/**
+ * The model describing the conversation instead of naming its subject.
+ *
+ * The verb is required, and that is the whole point: "the user is researching
+ * e-bikes" is meta-commentary, while "the user table migration", "the
+ * transcript reader rewrite" and "the chat sidebar redesign" are subjects —
+ * and two of those three are things in this very codebase.
+ */
+const META_SUBJECT =
+  /^the\s+(?:user|assistant|conversation|chat|discussion|thread|transcript|topic|subject)\s+(?:is|was|are|were|asks?|asked|wants?|wanted|needs?|needed|discusses?|discussed|talks?|talked|seems?|appears?|has|have|had|covers?|centers?|revolves|involves?|explores?|focuses)\b/i;
+
+/**
+ * First-person pronouns anywhere. A label never has an author in it.
+ *
+ * Bare "I" is gated behind a following verb, because a standalone capital I is
+ * far more often a numeral or an initial than a pronoun: "Phase I rollout",
+ * "Type I vs Type II errors", "Series I savings bonds". "mine" is out
+ * entirely — it is an ordinary noun.
+ */
+const FIRST_PERSON = new RegExp(`${WORD_START}(?:i'm|i've|i'd|i'll|me|my|myself)${WORD_END}`, 'i');
+const FIRST_PERSON_VERB = new RegExp(
+  `${WORD_START}i\\s+(?:am|was|will|would|can|can't|cannot|could|should|do|don't|did|didn't|think|thought|believe|understand|see|saw|need|want|have|had|know|notice|noticed|suggest|recommend|apologize|assume|guess|wonder|feel|expect|found|find|tried|ran|checked|looked|made|used|added)${WORD_END}`,
   'i',
 );
 
@@ -403,26 +482,109 @@ const INTERROGATIVE_OPENER = new RegExp(
   'i',
 );
 
-/** "did you mean", "can we try", … — an aside to a person, wherever it sits. */
-const ADDRESSES_A_PERSON =
-  /\b(?:do|does|did|are|is|was|were|can|could|would|should|will|shall|have|has|had)\s+(?:you|we|i)\b/i;
-
-/** A second sentence. One label, one phrase — prose gives itself away here. */
-const MULTIPLE_SENTENCES = /[.!?]["'”’)\]]?\s+[A-Za-z]/;
+/** "did you mean", "have you tried" — an aside to a person, wherever it sits.
+ *  Second person only: "should we drop the resident pane" is a real label. */
+const ADDRESSES_A_PERSON = new RegExp(
+  `${WORD_START}(?:do|does|did|are|is|was|were|can|could|would|should|will|shall|have|has|had)\\s+you${WORD_END}`,
+  'i',
+);
 
 /** A label that trails off. Only ever produced by truncating prose, which is
  *  why the truncating clamp is gone (see HEADLINE_MAX_CHARS). */
 const TRAILS_OFF = /(?:…|\.\.\.)$/;
 
-/** "Headline: x" — the model narrating the field it is filling in. */
+/** "Headline: x" — the model narrating the field it is filling in. Same list
+ *  the parser strips, so the two can't disagree about what a prefix is. */
 const FIELD_PREFIX = /^(?:headline|summary|title|label|subject|topic)\s*:/i;
+
+/**
+ * Abbreviations whose full stop is not a sentence end.
+ *
+ * Without this list the comparison label — the single commonest shape here —
+ * is a coin flip on whether the model typed "vs" or "vs.": "mid-drive vs. hub
+ * motors", "Postgres vs. SQLite for the archive" and "St. Louis Fed CPI
+ * series" all look like two sentences to a naive pattern.
+ */
+const ABBREVIATIONS = new Set([
+  'vs',
+  'etc',
+  'eg',
+  'ie',
+  'inc',
+  'ltd',
+  'co',
+  'corp',
+  'dr',
+  'mr',
+  'mrs',
+  'ms',
+  'prof',
+  'st',
+  'rev',
+  'jr',
+  'sr',
+  'no',
+  'fig',
+  'approx',
+  'al',
+  'cf',
+  'viz',
+  'ca',
+  'est',
+  'dept',
+  'univ',
+  'mt',
+  'ft',
+  'vol',
+  'ed',
+  'esp',
+  'min',
+  'max',
+  'avg',
+  'sec',
+  'msg',
+  'ref',
+  'ph',
+  'ave',
+  'blvd',
+  'gen',
+  'sgt',
+  'capt',
+]);
+
+/**
+ * Does this read as two sentences?
+ *
+ * A stop followed by a capital, unless the token before the stop is an
+ * abbreviation or a single letter (which makes it an initial — "U.S.
+ * Treasury yields", "Ph.D. thesis latex build").
+ */
+function looksLikeTwoSentences(s: string): boolean {
+  const boundary = /([A-Za-z0-9.]*[A-Za-z0-9])([.!?])["'”’)\]]?\s+[A-Z]/g;
+  for (const m of s.matchAll(boundary)) {
+    const token = (m[1] ?? '').split('.').pop() ?? '';
+    if (token.length <= 1) continue;
+    if (ABBREVIATIONS.has(token.toLowerCase())) continue;
+    return true;
+  }
+  return false;
+}
 
 /** Shortest candidate we'll accuse of quoting the prompt back. Below this,
  *  overlap is coincidence: "cron scheduler" appears in the instructions and is
  *  also a perfectly good label. */
 const MIN_ECHO_CHARS = 20;
 
-const NORMALIZED_RULES = normalizeForCompare([...RULE_LINES, EXAMPLE_OUTPUT].join(' '));
+/**
+ * The RULES only — never the worked example.
+ *
+ * The example's answer is a well-formed label about espresso, and this user
+ * has chats about espresso. Including it would delete a correct line ("sour
+ * espresso and grind adjustment") on the theory that the model might have
+ * parroted it, which is a bad trade: a parroted example is at least a
+ * plausible label, whereas a rejected true one leaves the row blank forever.
+ */
+const NORMALIZED_RULES = normalizeForCompare(RULE_LINES.join(' '));
 
 function echoesInstructions(s: string): boolean {
   const n = normalizeForCompare(s);
@@ -438,20 +600,28 @@ function echoesInstructions(s: string): boolean {
  * them.
  */
 export function headlineRejectReason(raw: string): string | null {
-  const s = raw.trim();
+  const s = straightenQuotes(raw.trim());
   if (!s) return 'empty';
   if (/[\n\r]/.test(s)) return 'multiple lines';
   if (s.length > HEADLINE_MAX_CHARS) return `over ${HEADLINE_MAX_CHARS} chars`;
-  if (s.toUpperCase() === KEEP || /^keep\b/i.test(s)) return 'sentinel';
+  if (s.toUpperCase() === KEEP || new RegExp(`^keep${WORD_END}`, 'i').test(s)) return 'sentinel';
   // Semantic rules first, cosmetic ones after — when a reply breaks several,
   // the logged reason should be the one that explains what went wrong.
-  if (CONVERSATIONAL_OPENER.test(s)) return 'conversational opener';
-  if (FIRST_PERSON.test(s)) return 'first person';
+  if (PROSE_OPENER.test(s) || PRONOUN_OPENER.test(s) || INTERJECTION_OPENER.test(s)) {
+    return 'conversational opener';
+  }
+  if (META_SUBJECT.test(s)) return 'describes the conversation';
+  if (FIRST_PERSON.test(s) || FIRST_PERSON_VERB.test(s)) return 'first person';
   if (TRAILS_OFF.test(s)) return 'trails off';
   if (FIELD_PREFIX.test(s)) return 'field prefix';
-  if (s.endsWith('?') && INTERROGATIVE_OPENER.test(s)) return 'is a question';
+  // A label ABOUT a question keeps its "?" ("sell the SMH overweight or
+  // hold?"). What gives away a question put to the READER is either an
+  // interrogative first word, or enough clause structure — a comma or a dash —
+  // that it stopped being a phrase ("muxpad — what is it?", "an internal tool,
+  // a product name, or something else?").
+  if (s.endsWith('?') && (INTERROGATIVE_OPENER.test(s) || /[,—–]/.test(s))) return 'is a question';
   if (ADDRESSES_A_PERSON.test(s)) return 'addresses the reader';
-  if (MULTIPLE_SENTENCES.test(s)) return 'more than one sentence';
+  if (looksLikeTwoSentences(s)) return 'more than one sentence';
   if (echoesInstructions(s)) return 'echoes the prompt';
   return null;
 }
