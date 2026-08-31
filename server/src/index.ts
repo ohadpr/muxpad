@@ -14,6 +14,7 @@ import { ArchiveDb } from './archive/ArchiveDb.js';
 import { Archiver } from './archive/Archiver.js';
 import { HeadlineWriter } from './chat/HeadlineWriter.js';
 import { projectsDir } from './chat/TranscriptReader.js';
+import { sweepImplausibleHeadlines } from './chat/headline.js';
 import { paneCarryover } from './chat/summarize.js';
 import { loadConfig } from './config.js';
 import { CronScheduler } from './cron/CronScheduler.js';
@@ -215,7 +216,7 @@ const archiver = archiveDb
 // (chat/headline.ts owns every decision about whether to spend a call).
 // Unconditional, unlike the archiver: it has no store of its own to fail to
 // open, and it degrades to "no second line" on every error by contract.
-const headlines = new HeadlineWriter({ db, events, cache });
+const headlines = new HeadlineWriter({ db, events, cache, dataDir: config.dataDir });
 
 // Funnel manager for `POST /api/publish` — ensures the PUBLIC port (never
 // the main UI port, which is unauthenticated) is funneled to the internet.
@@ -403,6 +404,24 @@ cronScheduler.start();
 // sid changes). See docs/plans/2026-08-28-session-archive.md.
 archiver?.start();
 headlines.start();
+
+// One-time repair of headlines written before the shape check existed — the
+// generation that answered the conversation ("I'm not familiar with muxpad —
+// is that an internal tool…") instead of labelling it, and was then stored
+// verbatim. Clearing puts the row back to "never summarised" so the next
+// finished turn regenerates it; nothing is rewritten and no good line is
+// touched. Marker-guarded, so it happens once. Best-effort: a failure here
+// must not stop the server booting.
+try {
+  const swept = sweepImplausibleHeadlines(db);
+  if (swept.cleared.length > 0) {
+    console.log(
+      `[headline] cleared ${swept.cleared.length} malformed headline(s) for regeneration`,
+    );
+  }
+} catch (err) {
+  console.error('[headline] one-time sweep failed (harmless; retried next boot)', err);
+}
 
 // The "resident pane" primitive is retired — muxpad no longer creates or
 // guards a singleton agent pane. An always-there chat is now just a chat you
