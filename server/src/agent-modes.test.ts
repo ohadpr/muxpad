@@ -2,9 +2,11 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { generatedBody, sha256 } from './agent-files.js';
 import {
+  DO_MODE_MIGRATION,
   DO_MODE_SEED,
-  LEGACY_DO_MODE_DEFAULTS,
+  SHIPPED_DO_MODE_DEFAULTS,
   applyModeToStartupCmd,
   doModePath,
   readDoModeOverlay,
@@ -12,7 +14,7 @@ import {
   wrapModeNote,
 } from './agent-modes.js';
 
-describe('do-mode.md seeding', () => {
+describe('do-mode.md generation', () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'do-mode-'));
@@ -21,28 +23,28 @@ describe('do-mode.md seeding', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('writes the seed on a fresh data dir', () => {
+  it('writes the seed on a fresh data dir, under the generated banner', () => {
     seedDoMode(dir);
-    expect(readFileSync(doModePath(dir), 'utf8')).toBe(DO_MODE_SEED);
+    expect(readFileSync(doModePath(dir), 'utf8')).toBe(generatedBody(DO_MODE_SEED));
   });
 
-  it('an edited file is the user’s and is never overwritten', () => {
+  it('is regenerated on every boot — the contract cannot go stale', () => {
+    // do-mode.md had the SAME staleness exposure as agent-instructions.md: a
+    // machine that booted once kept its first-ever contract forever.
     seedDoMode(dir);
-    writeFileSync(doModePath(dir), '# my own contract\nbe brutal\n');
+    writeFileSync(doModePath(dir), '# an older contract\n');
     seedDoMode(dir);
     seedDoMode(dir);
-    expect(readFileSync(doModePath(dir), 'utf8')).toBe('# my own contract\nbe brutal\n');
+    expect(readFileSync(doModePath(dir), 'utf8')).toBe(generatedBody(DO_MODE_SEED));
   });
 
-  it('re-seeding a pristine file is idempotent, and its legacy hashes are sane', () => {
-    // do-mode.md has the SAME staleness exposure as agent-instructions.md, so
-    // it runs through the same reconcile (seed-file.ts) rather than the old
-    // write-once rule. Nothing to refresh yet — one default has ever shipped.
-    expect(seedDoMode(dir).action).toBe('created');
-    expect(seedDoMode(dir).action).toBe('current');
-    expect(readFileSync(doModePath(dir), 'utf8')).toBe(DO_MODE_SEED);
-    expect(LEGACY_DO_MODE_DEFAULTS.length).toBeGreaterThan(0);
-    for (const hash of LEGACY_DO_MODE_DEFAULTS) expect(hash).toMatch(/^[0-9a-f]{64}$/);
+  it('the shipped-defaults list the one-shot migration reads is sane', () => {
+    expect(SHIPPED_DO_MODE_DEFAULTS.length).toBeGreaterThan(0);
+    for (const hash of DO_MODE_MIGRATION.knownDefaults) expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(DO_MODE_MIGRATION.knownDefaults).toContain(sha256(DO_MODE_SEED));
+    // A Do contract only means anything in Do mode, so a rescued one must NOT
+    // land in the always-injected notes file.
+    expect(DO_MODE_MIGRATION.appendToNotes).toBe(false);
   });
 
   it('the seed states every clause of the Do contract', () => {
@@ -69,7 +71,7 @@ describe('readDoModeOverlay', () => {
   });
 
   it('returns the file contents in do mode', () => {
-    expect(readDoModeOverlay('do', dir)).toBe(DO_MODE_SEED);
+    expect(readDoModeOverlay('do', dir)).toBe(generatedBody(DO_MODE_SEED));
   });
 
   it('returns null in deep mode — deep injects NOTHING, by definition', () => {
