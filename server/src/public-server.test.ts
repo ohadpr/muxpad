@@ -108,4 +108,63 @@ describe('public static server', () => {
     expect(res.headers.get('content-length')).toBe('18');
     expect(await res.text()).toBe('');
   });
+
+  describe('sandbox headers', () => {
+    // One shared public origin serves every artifact and every @2/@3 version,
+    // and the MIME map serves html/js/svg. The sandbox is what stops artifact
+    // A's script reaching artifact B's storage and stops a navigated .svg
+    // executing in a shared origin. THIS suite pins the exact token list;
+    // integration/public-csp.test.ts drives a real browser to prove the
+    // artifacts still render under it.
+    const csp = (res: Response) => res.headers.get('content-security-policy') ?? '';
+
+    it('sandboxes every response — file, 404, redirect, HEAD', async () => {
+      for (const res of [
+        await app.request('/site/index.html'),
+        await app.request('/site/assets/app.js'),
+        await app.request('/nope/'),
+        await app.request('/'),
+        await app.request('/site'), // 301
+        await app.request('/site/index.html', { method: 'HEAD' }),
+      ]) {
+        expect(csp(res)).toMatch(/^sandbox\b/);
+        expect(res.headers.get('referrer-policy')).toBe('no-referrer');
+        expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+      }
+    });
+
+    it('never grants allow-same-origin — that would undo the whole point', async () => {
+      // `allow-scripts allow-same-origin` together hand the document the real
+      // shared origin back, which is exactly the state this header exists to
+      // end. If anyone ever adds it to "fix" a broken artifact, fail here.
+      expect(csp(await app.request('/site/index.html'))).not.toContain('allow-same-origin');
+    });
+
+    it('grants EXACTLY the tokens a real artifact needs, and no others', async () => {
+      // Bare `sandbox` renders agent-written dashboards as dead layout, so
+      // some tokens are the difference between "isolated" and "broken". This
+      // is an equality check, not a contains-check: a token quietly ADDED to
+      // "fix" something is how a sandbox stops being one.
+      const tokens = csp(await app.request('/site/index.html')).split(/\s+/);
+      expect(tokens).toEqual([
+        'sandbox',
+        'allow-scripts',
+        'allow-forms',
+        'allow-modals',
+        'allow-popups',
+        'allow-popups-to-escape-sandbox',
+        'allow-downloads',
+      ]);
+    });
+
+    it('allows the opaque origin — and only it — to fetch sibling data files', async () => {
+      // The sandbox makes `fetch('./data.json')` cross-origin, so without an
+      // ACAO a data-driven artifact silently shows nothing. `null` is the
+      // origin our own sandboxed documents send; `*` would additionally hand
+      // every named origin blanket read access to a port that is loopback-only
+      // when MUXPAD_NO_FUNNEL=1.
+      const res = await app.request('/site/index.html');
+      expect(res.headers.get('access-control-allow-origin')).toBe('null');
+    });
+  });
 });
