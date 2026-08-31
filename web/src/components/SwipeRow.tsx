@@ -1,5 +1,13 @@
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import {
+  type CSSProperties,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
+import {
+  SWIPE_ACTION_WIDTH,
   SWIPE_TRAY_WIDTH,
   type SwipeAxis,
   clampOffset,
@@ -186,7 +194,17 @@ export function SwipeRow({ id, children, onPin, onClose, pinned, label }: SwipeR
   };
 
   return (
-    <div className="swiperow" ref={shell} data-open={isOpen ? 'true' : undefined}>
+    <div
+      className="swiperow"
+      ref={shell}
+      data-open={isOpen ? 'true' : undefined}
+      // The action width is arithmetic, not styling: SWIPE_TRAY_WIDTH (which
+      // decides how far the row slides, where the latch is, and what the tap
+      // targets measure) is derived from it. Publishing it as a custom
+      // property is what keeps the CSS from drifting away from the maths —
+      // the two used to be the literal 76 written down twice.
+      style={{ '--swipe-action-width': `${SWIPE_ACTION_WIDTH}px` } as CSSProperties}
+    >
       {/* The tray sits UNDER the row and never moves — the row slides off it.
           Sliding the actions in instead would make them arrive from off-screen
           at a different speed from the finger, which reads as lag. */}
