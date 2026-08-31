@@ -4,8 +4,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 import { createAgentBridge } from './agent-bridge.js';
-import { seedAgentInstructions } from './agent-instructions.js';
-import { seedDoMode } from './agent-modes.js';
+import { ensureAgentNotes, migrateAgentFileEdits } from './agent-files.js';
+import { INSTRUCTIONS_MIGRATION, seedAgentInstructions } from './agent-instructions.js';
+import { DO_MODE_MIGRATION, seedDoMode } from './agent-modes.js';
 import { createAppRegistry, startAppReconciler } from './apps/AppRegistry.js';
 import { createAppStatusProbe } from './apps/AppStatus.js';
 import { adoptServePanes } from './apps/adopt-serve-panes.js';
@@ -24,7 +25,6 @@ import { PtydClient } from './ptyd-client/PtydClient.js';
 import { createPublicApp } from './public-server.js';
 import { Presence, PushService, attachAttentionPush, createPaneNotifier } from './push.js';
 import { releaseResidentPane } from './resident-release.js';
-import { seedNotice } from './seed-file.js';
 import { startServeSupervisor } from './serve-supervisor.js';
 import { createApp } from './server.js';
 import { mountStaticWeb } from './static-assets.js';
@@ -36,17 +36,26 @@ import { attachWsServer } from './ws.js';
 
 const config = loadConfig();
 mkdirSync(config.dataDir, { recursive: true });
-// Reconcile the two seeded, USER-OWNED prompt files against the defaults this
-// build ships: <dataDir>/agent-instructions.md (injected into every agent
-// session, whatever the backend) and <dataDir>/do-mode.md (injected only into
-// panes in ⚡ Do mode). Pristine files are refreshed, edited ones are never
-// touched — and when muxpad declines to touch one it SAYS so, exactly once per
-// change of the shipped default. See seed-file.ts for the whole policy.
-for (const outcome of [seedAgentInstructions(config.dataDir), seedDoMode(config.dataDir)]) {
-  const notice = seedNotice(outcome);
-  if (notice) console.log(notice);
-}
 const db = openDb(join(config.dataDir, 'db.sqlite'));
+// The prompt files (agent-files.ts). agent-instructions.md and do-mode.md are
+// GENERATED — rewritten from source here on every boot, so they always describe
+// this build — and agent-notes.md is the user's, created once and never touched.
+// The migration runs FIRST and exactly once: it rescues anything the user had
+// added to the two files back when they were user-owned, before the first
+// generated write lands on them.
+// `safe` is false only when something of the user's is still sitting in a
+// generated file's path — then we generate NOTHING and retry next boot,
+// because an overwrite can succeed where the rescue failed.
+const rescue = migrateAgentFileEdits({
+  db,
+  dataDir: config.dataDir,
+  files: [INSTRUCTIONS_MIGRATION, DO_MODE_MIGRATION],
+});
+if (rescue.safe) {
+  seedAgentInstructions(config.dataDir);
+  seedDoMode(config.dataDir);
+}
+ensureAgentNotes(config.dataDir);
 const paneStore = new PaneStore(db);
 const tabStore = new TabStore(db);
 // EventBus is shared by the route layer (HTTP-driven mutations) and the
