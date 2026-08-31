@@ -1017,7 +1017,7 @@
 }
 .navtree-menu-caret {
   color: var(--fg-faint);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1;
 }
 .navtree-submenu {
@@ -1064,13 +1064,18 @@
   width: var(--nt-col-icon);
   height: var(--nt-icon-h);
   overflow: hidden;
+  /* LEFT-aligned horizontally, centred vertically: with the glyph centred, a
+     narrow-artwork emoji's ink starts further right than a full-bleed tile's,
+     so the column's visible left edge zig-zags even though every box is
+     identical. Pinning the glyph box to the left makes the ink start as close
+     to a common edge as the font allows. */
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   /* A hair larger than the label so the emoji reads as a proper icon, not
      shrunk-down text — but an absolute size, so it cannot scale with an
      inherited font and cannot exceed the box it has to sit inside. */
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1;
   border-radius: 4px;
   cursor: pointer;
@@ -1080,7 +1085,7 @@
 .navtree[data-variant="sheet"] .navtree-tab-icon {
   /* Comfortably inside the sheet's 26 × 20 icon box, so even a full-bleed
      tile has margin on every side and cannot touch the name or grow the row. */
-  font-size: 18px;
+  font-size: 16px;
 }
 .navtree-tab-icon:hover {
   background: color-mix(in srgb, var(--fg) 12%, transparent);
