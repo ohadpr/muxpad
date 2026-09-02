@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { TAB_ICONS, isSingleEmoji, normalizeTabIcon, splitLeadingEmoji } from './tab-icons.js';
+import {
+  TAB_ICONS,
+  fallbackTabIcon,
+  isSingleEmoji,
+  normalizeTabIcon,
+  splitLeadingEmoji,
+} from './tab-icons.js';
 
 /**
  * The gate between a cheap model and the one fixed-width cell at the head of
@@ -161,5 +167,37 @@ describe('normalizeTabIcon — presentation is a formatting slip, not a wrong an
       expect(normalizeTabIcon(bad)).toBeNull();
       expect(isSingleEmoji(bad)).toBe(false);
     }
+  });
+});
+
+describe('fallbackTabIcon — arbitrary, but stable and mostly distinct', () => {
+  it('is stable for a given id', () => {
+    // Every render, every device, every restart. A stand-in that moved would
+    // be worse than the constant it replaces.
+    const id = '01M1HT3NVH8JMJEY0W6N8HF7AD';
+    expect(fallbackTabIcon(id)).toBe(fallbackTabIcon(id));
+  });
+
+  it('spreads a realistic rail across many different glyphs', () => {
+    // The property that matters: a sidebar of not-yet-labelled rows must stay
+    // scannable BY SHAPE. One shared default made every such row identical —
+    // and for terminals, web views and url panes, which never produce a turn
+    // for an icon to be derived from, permanently so.
+    const ids = Array.from({ length: 25 }, (_, i) => `01M1HT3NVH8JMJEY0W6N8HF7A${i}`);
+    const distinct = new Set(ids.map(fallbackTabIcon));
+    // Collisions are expected (25 rows into 50 glyphs) and are not worth
+    // engineering away — the random icons this replaces collided too, which is
+    // how three unrelated chats ended up all wearing 👍. What is asserted is
+    // that the column is VARIED, not that it is a perfect permutation.
+    expect(distinct.size).toBeGreaterThan(15);
+  });
+
+  it('only ever returns a glyph the icon cell can render', () => {
+    const ids = Array.from({ length: 200 }, (_, i) => `tab-${i}`);
+    for (const id of ids) expect(isSingleEmoji(fallbackTabIcon(id))).toBe(true);
+  });
+
+  it('handles an empty id without throwing', () => {
+    expect(isSingleEmoji(fallbackTabIcon(''))).toBe(true);
   });
 });
