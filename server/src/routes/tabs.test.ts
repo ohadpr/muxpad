@@ -3,8 +3,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { MuxpadEvent } from '@muxpad/shared';
+import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../events.js';
+import { TabStore } from '../store/TabStore.js';
 import { openDb } from '../store/db.js';
 import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
 
@@ -12,10 +14,12 @@ describe('tabs routes', () => {
   let test: TestApp;
   let tmp: string;
   let workspaceId: string;
+  let db: Database.Database;
 
   beforeEach(async () => {
     tmp = mkdtempSync(join(tmpdir(), 'muxpad-tabs-'));
-    test = await createTestApp({ db: openDb(':memory:'), dataDir: tmp });
+    db = openDb(':memory:');
+    test = await createTestApp({ db, dataDir: tmp });
     // Every tab needs a parent workspace. Spin one up fresh for each test.
     const wsRes = await test.app.request('/api/workspaces', {
       method: 'POST',
@@ -316,5 +320,60 @@ describe('tabs routes', () => {
     } finally {
       await local.cleanup();
     }
+  });
+  it('PATCHing an icon marks it sticky, permanently and one-way', async () => {
+    // The generator's hard stop. Setting an icon by hand through the picker is
+    // the ONLY way a human puts a glyph on a row, and this route is where it
+    // lands — so this is the only place the flag has to be set, and the only
+    // place it can be missed. Asserted through the HTTP surface rather than on
+    // the store, because a store method nobody calls would satisfy a unit test
+    // and still leave the picker writing an icon the model then overwrote.
+    const created = await postTab({ name: 'A' });
+    const tab = (await created.json()) as { id: string };
+    const tabs = new TabStore(db);
+    expect(tabs.isIconSticky(tab.id)).toBe(false);
+
+    const patch = (body: object) =>
+      test.app.request(`/api/tabs/${tab.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    expect((await patch({ icon: '🚀' })).status).toBe(200);
+    expect(tabs.isIconSticky(tab.id)).toBe(true);
+    expect(tabs.getById(tab.id)?.icon).toBe('🚀');
+
+    // One-way: nothing later un-sticks it. Re-picking, renaming, pinning —
+    // none of them hands the glyph back to the machine.
+    await patch({ icon: '🐛' });
+    await patch({ name: 'renamed' });
+    await patch({ pinned: true });
+    expect(tabs.isIconSticky(tab.id)).toBe(true);
+    expect(tabs.getById(tab.id)?.icon).toBe('🐛');
+  });
+
+  it('a PATCH that does not mention the icon leaves it un-sticky', async () => {
+    // Otherwise every rename, pin and layout change would quietly freeze the
+    // glyph, and the generator would never write one on any tab the user had
+    // ever touched.
+    const created = await postTab({ name: 'A' });
+    const tab = (await created.json()) as { id: string };
+    await test.app.request(`/api/tabs/${tab.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'B', pinned: true }),
+    });
+    expect(new TabStore(db).isIconSticky(tab.id)).toBe(false);
+  });
+
+  it('a new tab is born with NO icon, so the generator may give it one', async () => {
+    // Tabs used to get a random emoji here. That was not merely meaningless —
+    // a non-null icon is the generator's own hands-off signal, so the random
+    // default silently disabled content-derived icons for every tab ever made.
+    const created = await postTab({ name: 'A' });
+    const tab = (await created.json()) as { id: string; icon?: string };
+    expect(tab.icon).toBeUndefined();
+    expect(new TabStore(db).getById(tab.id)?.icon).toBeUndefined();
   });
 });
