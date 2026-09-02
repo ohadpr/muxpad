@@ -70,20 +70,63 @@ export const TAB_ICONS: readonly string[] = [
   '🍿',
 ];
 
-/** A sensible fallback when a tab somehow has no icon set. */
+/** A sensible fallback when a tab somehow has no icon set and no id to key
+ *  one off. Prefer `fallbackTabIcon`, which is distinct per row. */
 export const DEFAULT_TAB_ICON = '🗂️';
 
 /**
  * Pick a random icon from the curated set.
  *
- * NO LONGER the new-tab default — a random icon is a meaningless one, and
- * because "the tab already has an icon" is exactly what stops the generator
- * writing a real one, a random default silently disabled the feature for every
- * tab ever created. Retained for the historical emoji-in-name migration only,
- * which runs against rows the one-time icon backfill then clears anyway.
+ * NO LONGER the new-tab default — a stored random icon is a meaningless one,
+ * and worse, "the tab already has an icon" is what stops the generator writing
+ * a real one, so a random default silently disabled the feature for every tab
+ * ever created. Retained only for the historical emoji-in-name migration.
+ *
+ * The rail's stand-in for a tab with no icon is `fallbackTabIcon`, which is the
+ * same idea done properly: distinct per row, but derived rather than stored, so
+ * it can never be mistaken for a choice anybody made.
  */
 export function randomTabIcon(): string {
   return TAB_ICONS[Math.floor(Math.random() * TAB_ICONS.length)] ?? DEFAULT_TAB_ICON;
+}
+
+/**
+ * The glyph the rail draws for a tab that has no icon of its own.
+ *
+ * DERIVED FROM THE TAB'S ID, not constant, and that is the whole point. A tab
+ * has no stored icon until the generator gives it one — and some tabs never
+ * get one, because a terminal, a web view or a url pane produces no turns for
+ * anything to be derived FROM. Rendering one shared default meant those rows
+ * became an undifferentiated column of the same glyph, and finding a row by
+ * its shape is the entire reason the icon column exists. A wall of identical
+ * icons is strictly worse than a wall of arbitrary ones.
+ *
+ * So the fallback is arbitrary but STABLE and mostly distinct: the same tab
+ * draws the same glyph on every render, on every device, across restarts,
+ * with nothing written to the database. That last part is what makes it
+ * better than the random icon it replaces — a stored random glyph is
+ * indistinguishable from one the user picked, which is exactly the ambiguity
+ * that made the old icons impossible to safely replace. A derived one is
+ * unambiguously not a choice, so the generator is free to override it the
+ * moment it has something real to say.
+ *
+ * Collisions are possible (fifty glyphs, and a busy install has a few dozen
+ * tabs) and are not worth engineering away: the old random assignment had
+ * exactly the same property, and any row that collides is a row whose real
+ * icon is one accepted generation away.
+ *
+ * FNV-1a, because it needs to be stable across processes and languages, not
+ * cryptographic.
+ */
+export function fallbackTabIcon(id: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) {
+    hash ^= id.charCodeAt(i);
+    // >>> 0 keeps it an unsigned 32-bit value; Math.imul does the mod-2^32
+    // multiply that plain `*` would lose precision on.
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return TAB_ICONS[hash % TAB_ICONS.length] ?? DEFAULT_TAB_ICON;
 }
 
 // Variation selector / skin-tone / ZWJ — referenced by escape so no

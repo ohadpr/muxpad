@@ -14,7 +14,7 @@ import { ArchiveDb } from './archive/ArchiveDb.js';
 import { Archiver } from './archive/Archiver.js';
 import { HeadlineWriter } from './chat/HeadlineWriter.js';
 import { projectsDir } from './chat/TranscriptReader.js';
-import { backfillGeneratedIcons, sweepImplausibleHeadlines } from './chat/headline.js';
+import { sweepImplausibleHeadlines } from './chat/headline.js';
 import { paneCarryover } from './chat/summarize.js';
 import { loadConfig } from './config.js';
 import { CronScheduler } from './cron/CronScheduler.js';
@@ -421,26 +421,6 @@ try {
   }
 } catch (err) {
   console.error('[headline] one-time sweep failed (harmless; retried next boot)', err);
-}
-
-// One-time backfill of the tab-icon PROVENANCE STAMP. Tabs used to be born
-// with a random emoji, so no pre-existing glyph was chosen by anyone; this
-// makes sure none of them claims to have come from the generator, which is
-// what gates the six-hour stability window. It never touches the icon itself —
-// the rail keeps rendering exactly what it renders today and the glyph is
-// swapped in place by the first generation that improves on it, so there is no
-// boot where the sidebar goes blank. It generates NOTHING: mass generation at
-// boot would be one model call per tab, all at once. Marker-guarded and
-// best-effort, same contract as the headline sweep above.
-try {
-  const icons = backfillGeneratedIcons(db);
-  if (icons.cleared.length > 0) {
-    console.log(
-      `[headline] icon backfill: cleared a stale provenance stamp on ${icons.cleared.length} tab(s)`,
-    );
-  }
-} catch (err) {
-  console.error('[headline] icon backfill failed (harmless; retried next boot)', err);
 }
 
 // The "resident pane" primitive is retired — muxpad no longer creates or

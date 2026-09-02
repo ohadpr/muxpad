@@ -500,7 +500,7 @@ describe('buildHeadlinePrompt', () => {
  * — it is "the emoji churns", which costs the reader the ability to find a row
  * by shape, i.e. the entire reason the icon column exists.
  */
-describe('isIconFrozen — when the glyph is off-limits (conditions 1-2)', () => {
+describe('isIconFrozen — when the glyph is off-limits (conditions 1 and 2)', () => {
   const base = { sticky: false, iconAt: NOW - 10 * ICON_MIN_STABLE_MS, now: NOW };
 
   it('a user-chosen icon is frozen, forever, whatever else is true', () => {
@@ -551,7 +551,7 @@ describe('isIconFrozen — when the glyph is off-limits (conditions 1-2)', () =>
   });
 });
 
-describe('chooseIcon — what may actually be written (conditions 4–5)', () => {
+describe('chooseIcon — what may actually be written (conditions 3 and 4)', () => {
   const base = {
     frozen: false,
     current: '🚀' as string | null,

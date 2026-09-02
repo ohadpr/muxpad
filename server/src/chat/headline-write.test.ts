@@ -12,9 +12,6 @@ import { openDb } from '../store/db.js';
 import {
   HEADLINE_MIN_INTERVAL_MS,
   ICON_MIN_STABLE_MS,
-  backfillGeneratedIcons,
-  chooseIcon,
-  isIconFrozen,
   maybeWriteHeadline,
   sweepImplausibleHeadlines,
 } from './headline.js';
@@ -381,15 +378,18 @@ describe('maybeWriteHeadline — the icon, and what must never move it', () => {
     });
     const stamped = tabs.iconAt(tabId);
 
-    for (const bad of ['🚀🔥', 'rocket', ':-)', '🚀 deploy', '', 'x']) {
+    const BAD = ['🚀🔥', 'rocket', ':-)', '🚀 deploy', '', 'x'];
+    for (const [i, bad] of BAD.entries()) {
       const out = await maybeWriteHeadline(
         db,
         tabId,
         paneId,
-        reply(`subject number ${bad.length}`, bad),
-        // Well past the stability window, so the ONLY thing standing between
-        // this reply and the row is the validator.
-        { now: 1_000 + 10 * ICON_MIN_STABLE_MS },
+        reply(`subject number ${i}`, bad),
+        // Each iteration gets its OWN slot past the rate limiter, and every
+        // slot is past the stability window. Reusing one `now` made five of
+        // the six vacuous — the limiter swallowed the calls, so the table
+        // looked like six cases and exercised one.
+        { now: 1_000 + (i + 10) * ICON_MIN_STABLE_MS },
       );
       expect(out.icon).toBeNull();
       expect(tabs.getById(tabId)?.icon).toBe('⏰');
@@ -648,130 +648,5 @@ describe('maybeWriteHeadline — the icon, and what must never move it', () => {
       { now: 1_000 + HEADLINE_MIN_INTERVAL_MS },
     );
     expect(seen).toContain('not up for review');
-  });
-});
-
-describe('backfillGeneratedIcons — clears the provenance stamp, never the glyph', () => {
-  let dir: string;
-  let db: Database.Database;
-  let tabs: TabStore;
-  let workspaceId: string;
-
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'muxpad-icon-backfill-'));
-    db = openDb(join(dir, 'db.sqlite'));
-    workspaceId = new WorkspaceStore(db).create({ name: 'W' }).id;
-    tabs = new TabStore(db);
-  });
-
-  afterEach(() => {
-    db.close();
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  /** A tab wearing `icon`, as though created before this feature existed. */
-  const mk = (name: string, icon?: string) => {
-    const id = tabs.create({ name, workspace_id: workspaceId, layout: 'p' }).id;
-    if (icon) db.prepare('UPDATE tabs SET icon = ? WHERE id = ?').run(icon, id);
-    return id;
-  };
-
-  it('NEVER blanks a row — the rail keeps rendering what it renders today', () => {
-    // The regression this function was rewritten to avoid. Nulling the icon
-    // and falling back to DEFAULT_TAB_ICON would leave a twenty-row rail as a
-    // column of identical folders for as long as those chats stayed quiet —
-    // and FOREVER for tabs with no agent session, which produce no turns at
-    // all. Random glyphs are meaningless but DISTINCT, and telling rows apart
-    // by shape is the whole job of the column.
-    const a = mk('muxpad', '👍');
-    const b = mk('kipa', '👍');
-    const c = mk('terminal', '🗝\uFE0F');
-
-    backfillGeneratedIcons(db);
-
-    expect(tabs.getById(a)?.icon).toBe('👍');
-    expect(tabs.getById(b)?.icon).toBe('👍');
-    expect(tabs.getById(c)?.icon).toBe('🗝\uFE0F');
-  });
-
-  it('leaves those rows eligible, which is the point of not stamping them', () => {
-    // Eligibility is not something this function grants — `chooseIcon` grants
-    // it, by treating any glyph it did not write as replaceable once the
-    // headline moves. What the backfill guarantees is that `icon_at` is not
-    // lying about which glyphs those are.
-    const id = mk('muxpad', '👍');
-    backfillGeneratedIcons(db);
-    expect(tabs.iconAt(id)).toBeNull();
-    expect(isIconFrozen({ sticky: false, iconAt: tabs.iconAt(id), now: Date.now() })).toBe(false);
-    expect(
-      chooseIcon({ frozen: false, current: '👍', proposed: '⏰', headlineChanged: true }),
-    ).toBe('⏰');
-  });
-
-  it('clears a stale stamp on a non-sticky row', () => {
-    const id = mk('muxpad', '👍');
-    db.prepare('UPDATE tabs SET icon_at = ? WHERE id = ?').run(5_000, id);
-    expect(backfillGeneratedIcons(db).cleared).toEqual([id]);
-    expect(tabs.iconAt(id)).toBeNull();
-    // The glyph is untouched. Only our claim to have written it is dropped.
-    expect(tabs.getById(id)?.icon).toBe('👍');
-  });
-
-  it('GENERATES NOTHING', () => {
-    // Mass generation at boot would be one model call per tab, all at once, on
-    // a machine that has just started. The model seam is not reachable from
-    // here; what this pins is that no icon VALUE moves.
-    const id = mk('muxpad', '👍');
-    backfillGeneratedIcons(db);
-    expect(tabs.getById(id)?.icon).toBe('👍');
-  });
-
-  it('never touches a sticky icon, or its stamp', () => {
-    const chosen = mk('mine', '👍');
-    tabs.setIcon(chosen, '⏰', 5_000);
-    tabs.setIconSticky(chosen);
-    expect(backfillGeneratedIcons(db).cleared).not.toContain(chosen);
-    expect(tabs.getById(chosen)?.icon).toBe('⏰');
-    expect(tabs.iconAt(chosen)).toBe(5_000);
-    expect(tabs.isIconSticky(chosen)).toBe(true);
-  });
-
-  it('is a no-op on an install upgraded through migration 25, and says so', () => {
-    // Honest about its own size: migration 25 introduces `icon_at` as NULL and
-    // nothing else writes it, so on a real upgrade there is nothing to clear.
-    // It is kept as the marker-guarded hook the eligibility rule hangs off.
-    mk('muxpad', '👍');
-    mk('kipa', '🗝\uFE0F');
-    mk('bare');
-    expect(backfillGeneratedIcons(db).cleared).toEqual([]);
-  });
-
-  it('runs once — a stamp written after the backfill is never cleared', () => {
-    const id = mk('muxpad', '👍');
-    db.prepare('UPDATE tabs SET icon_at = ? WHERE id = ?').run(5_000, id);
-    expect(backfillGeneratedIcons(db).cleared).toEqual([id]);
-
-    // A later generation. The backfill must not come back for it on every
-    // boot, or the stability window would reset whenever the server bounced.
-    tabs.setIcon(id, '⏰', 9_000);
-    expect(backfillGeneratedIcons(db)).toEqual({ cleared: [] });
-    expect(tabs.iconAt(id)).toBe(9_000);
-  });
-
-  it('sets its marker even when there is nothing to do', () => {
-    expect(backfillGeneratedIcons(db)).toEqual({ cleared: [] });
-    expect(new GlobalsStore(db).get('tab_icon_backfill_v1')).toBe('1');
-  });
-
-  it('does not touch names, headlines or their stickiness', () => {
-    const id = mk('Main', '👍');
-    tabs.setHeadline(id, 'cron restart persistence', 5_000);
-    tabs.setNameSticky(id);
-    backfillGeneratedIcons(db);
-    const tab = tabs.getById(id);
-    expect(tab?.name).toBe('Main');
-    expect(tab?.headline).toBe('cron restart persistence');
-    expect(tabs.isNameSticky(id)).toBe(true);
-    expect(tabs.headlineAt(id)).toBe(5_000);
   });
 });

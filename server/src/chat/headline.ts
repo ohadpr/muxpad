@@ -1170,76 +1170,35 @@ export function sweepImplausibleHeadlines(db: Database.Database): { cleared: str
   return { cleared: bad.map((r) => r.id) };
 }
 
-/** Marker so the icon backfill can never run twice on one install. */
-const KEY_ICON_BACKFILL = 'tab_icon_backfill_v1';
-
 /**
- * One-time backfill: make every tab whose icon nobody has claimed eligible for
- * a generated one.
+ * ─── There is deliberately NO one-time icon backfill ──────────────────────
  *
- * It clears the PROVENANCE STAMP (`icon_at`) and never the glyph. That
- * distinction is the whole design of this function, and getting it backwards
- * was a real and nearly-shipped mistake.
+ * There was one, twice, and both versions were wrong in instructive ways.
  *
- * ─── Why it must not clear the icon ───────────────────────────────────────
+ * The first cleared `tabs.icon` for every non-sticky row, to put them back in
+ * the "never had an icon" state the generator treats as free. That blanked the
+ * whole rail on the upgrade boot — and permanently for terminals, web views and
+ * url panes, which produce no turns for anything to be derived from.
  *
- * The obvious reading of "make these rows eligible" is to null the icon and let
- * the rail fall back to DEFAULT_TAB_ICON until a generation fills it. That
- * regresses the sidebar on the one boot the user is least willing to forgive
- * one, and in three separate ways:
+ * The second cleared only `icon_at`, the "we wrote this glyph" stamp, leaving
+ * the icon rendering. Harmless, and a provable no-op: migration 25 introduces
+ * `icon_at` as NULL, and the only things that ever write it are `setIcon` (on
+ * rows we are writing) and `clearIconClock` (to NULL). So at boot there is
+ * never a row with `icon_sticky = 0 AND icon_at IS NOT NULL` for it to find.
+ * Its one reachable non-empty behaviour was a hazard rather than a repair: if
+ * its transaction ever threw, a LATER boot would clear legitimate stamps and
+ * un-freeze icons the generator had just written.
  *
- *   - A twenty-row rail is mostly IDLE at any moment, so it would sit as a
- *     column of identical 🗂️ for as long as those chats stay quiet. Random
- *     icons are meaningless, but they are DISTINCT, and telling rows apart by
- *     shape is the entire job of the column — a wall of one glyph is strictly
- *     worse than a wall of arbitrary ones.
- *   - Tabs with no agent session — terminals, web views, url panes — produce no
- *     turns at all. For those the fallback is not "until the next generation",
- *     it is FOREVER.
- *   - It is a visible downgrade on an upgrade, which is the worst possible
- *     moment to spend the user's goodwill.
+ * Nothing needs backfilling because nothing is blocking. Eligibility lives in
+ * `chooseIcon`, which treats any glyph it did not write as replaceable as soon
+ * as the chat's headline moves, and a row with no icon at all as a free write.
+ * Old rows are already eligible under both branches, and the rail draws
+ * `fallbackTabIcon` for the bare ones — distinct per tab, derived rather than
+ * stored, so it is unambiguously not a choice anyone made.
  *
- * So the row keeps rendering exactly what it renders today, and the glyph is
- * swapped in place the first time a generation produces a better one. There is
- * no window in which the rail is blank.
- *
- * ─── What clearing `icon_at` actually buys ────────────────────────────────
- *
- * `icon_at` is our claim to have written a row's icon. It gates the
- * ICON_MIN_STABLE_MS window, so a row wrongly stamped would sit out six hours
- * for a glyph we never wrote. This guarantees the stamp is set on exactly the
- * rows we set it on.
- *
- * BE HONEST ABOUT THE SIZE OF THAT: on an install upgrading through migration
- * 25 this is a NO-OP, because that migration introduces `icon_at` as NULL and
- * nothing else writes it. It is kept anyway, and marker-guarded, for two
- * reasons — it is the one documented place where "make old rows eligible"
- * lives, so the next change to the eligibility rule has an obvious hook; and a
- * repair that costs one indexed UPDATE and can only ever run once is the cheap
- * side of the trade against a stamp we cannot detect being wrong.
- *
- * What makes the old rows eligible is not this function at all — it is
- * `chooseIcon`, which treats any glyph it did not write as replaceable the
- * moment the chat's headline moves. This just makes sure that "did not write
- * it" is the truth.
- *
- * A sticky icon is neither read nor written. Never touch a sticky icon is the
- * one rule with no exceptions.
+ * The globals key `tab_icon_backfill_v1` is left set on installs that ran the
+ * first version. It is inert, and reusing it would be a trap.
  */
-export function backfillGeneratedIcons(db: Database.Database): { cleared: string[] } {
-  const globals = new GlobalsStore(db);
-  if (globals.get(KEY_ICON_BACKFILL)) return { cleared: [] };
-
-  const rows = db
-    .prepare('SELECT id FROM tabs WHERE icon_sticky = 0 AND icon_at IS NOT NULL')
-    .all() as { id: string }[];
-  const clear = db.prepare('UPDATE tabs SET icon_at = NULL WHERE id = ?');
-  db.transaction(() => {
-    for (const r of rows) clear.run(r.id);
-    globals.set(KEY_ICON_BACKFILL, '1');
-  })();
-  return { cleared: rows.map((r) => r.id) };
-}
 
 /**
  * The production model: a one-shot Haiku completion through the Claude Agent
