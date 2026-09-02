@@ -51,12 +51,19 @@ describe('one family — 18px box, 2.2px stroke', () => {
   });
 });
 
-describe('motion is what separates red from green', () => {
-  it('ONLY blocked carries the breath', () => {
-    expect(html('blocked')).toContain('navtree-status-breath');
-    for (const s of ['ready', 'dead', 'idle'] as const) {
-      expect(html(s)).not.toContain('navtree-status-breath');
+describe('only WORKING moves', () => {
+  // The invariant, stated once and enforced in both directions: anything
+  // moving in the chrome means something is running, and a still chrome means
+  // nothing is. `blocked` used to breathe on a 2s cycle and no longer does.
+  it('the arc is the only animated thing in the family', () => {
+    expect(html('working')).toContain('navtree-status-arc');
+    for (const s of ['blocked', 'ready', 'dead', 'idle'] as const) {
+      expect(html(s)).not.toContain('navtree-status-arc');
     }
+  });
+
+  it('blocked is perfectly still — the breath is gone', () => {
+    expect(html('blocked')).not.toContain('breath');
   });
 
   it('ready is perfectly still — no animated class at all', () => {

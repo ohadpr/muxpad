@@ -49,6 +49,20 @@
   --status-ready: #49c07d;
   /* dead's ✕ and the working ring's track. */
   --status-quiet: #45454e;
+  /* `dead` in the NAV ROWS' state language (left bar, row tint, FAILED chip).
+     Deliberately NOT --status-quiet: that one doubles as the working ring's
+     track and is tuned to recede behind the arc it sits under, which on a
+     near-black rail leaves a 3px bar you cannot find. Grey either way — a dead
+     runner is not asking for anything. */
+  --status-dead: #7c7c88;
+  /* Alpha of the row TINT and of the word chip's fill. Stepped for light and
+     dark rather than shared — see the derivation in StateChip.css. */
+  --status-wash: 12%;
+  --status-chip-wash: 22%;
+  /* How much of the state hue survives in the chip's TEXT; the rest is --fg,
+     which darkens the ink on light themes and lightens it on dark ones. Tuned
+     to clear 4.5:1 against the chip's own fill on every theme and surface. */
+  --status-ink-mix: 55%;
 }
 
 /* Tokyo Night — saturated deep navy with a vivid blue accent. */
@@ -108,11 +122,27 @@
   --accent: #0969da;
   --accent-fg: #ffffff;
   /* Light re-step (see :root). Neutral --status-quiet here rather than the
-     warm one Acme uses — this surface is a cool pure white. */
+     warm one Acme uses — this surface is a cool pure white.
+     `working` is a step darker than the amber this file used to carry
+     (#b8801a): amber is the one hue whose mid-luminance version cannot clear
+     3:1 against a light surface (measured 2.49 on this theme's rail), and
+     `working` is the one state the nav rows draw with NO word beside it — so
+     its ring was a sub-3:1 mark carrying the whole signal on its own. At
+     #96650b it measures 3.67–4.28 there and the StatusMark arc gets the same
+     lift for free. */
   --status-blocked: #cf3b34;
-  --status-working: #b8801a;
+  --status-working: #96650b;
   --status-ready: #217a4b;
   --status-quiet: #a2aab3;
+  /* Light step for the nav rows' state language (see :root). The washes come
+     DOWN because a dark hue subtracts luminance from a light surface far more
+     readily than a bright one adds it to a dark surface; the ink keeps less
+     hue because the light-step colours are already near their contrast floor
+     against their own chip fill. */
+  --status-dead: #6f6f79;
+  --status-wash: 10%;
+  --status-chip-wash: 18%;
+  --status-ink-mix: 50%;
 }
 
 /* Acme — warm cream paper with a vivid violet brand accent. Inspired by
@@ -135,11 +165,18 @@
   --accent: #6f55ff;
   --accent-fg: #ffffff;
   /* Light re-step for the WARM CREAM surface — the values the design was
-     iterated against (see the reference prototype's `.theme.light` block). */
+     iterated against (see the reference prototype's `.theme.light` block),
+     with `working` taken a step darker for contrast (see github-light). */
   --status-blocked: #cf3b34;
-  --status-working: #b8801a;
+  --status-working: #96650b;
   --status-ready: #217a4b;
   --status-quiet: #b3aa9a;
+  /* Light step for the nav rows' state language — same reasoning as
+     github-light's; only --status-quiet differs (warm cream vs cool white). */
+  --status-dead: #6f6f79;
+  --status-wash: 10%;
+  --status-chip-wash: 18%;
+  --status-ink-mix: 50%;
 }
 
 /* Acme Dark — calm dark surfaces with a hint of violet, brand-violet
@@ -321,24 +358,30 @@ select:focus {
 }
 
 /* ─── The status channel's colour rule ──────────────────────────────────
-   Stated here, at the top of the shared stylesheet, because it is the rule
-   the whole chrome now obeys — the marks themselves live in StatusMark.css:
+   Stated here, at the top of the shared stylesheet, because it is the rule the
+   whole chrome obeys. Two components draw from these tokens, for two different
+   kinds of surface:
 
-     --status-blocked   it WANTS YOU              (breathing red disc)
-     --status-working   the MACHINE is working    (turning amber ring)
-     --status-ready     finished, waiting for you (still green disc)
-     --status-quiet     over / the ring's track   (grey ✕)
+     StatusMark.css   an 18px glyph, for single-item chrome with no column to
+                      scan and no room for a word (tab strip, tab-bar dropdown,
+                      mobile switcher, Hosted).
+     StateChip.css    the navigator ROWS' three-way encoding — a left bar, a
+                      faint row tint, and a word chip.
 
-   The old `.badge-dot` lived here and is GONE — every render site (nav tree,
-   sheet pane list, tab-bar dropdown, desktop tab strip, mobile switcher) now
-   draws a StatusMark instead, so there is exactly one component describing
-   pane state and the surfaces cannot drift apart.
+     --status-blocked   it WANTS YOU              (red — and the word YOU)
+     --status-working   the MACHINE is working    (amber — a turning ring)
+     --status-ready     finished, waiting for you (green — the word READY)
+     --status-dead      over                      (grey — the word FAILED)
+     --status-quiet     the working ring's track and the ✕ in StatusMark
 
-   The four are their own tokens, not --accent/--danger, for two reasons. One:
-   the status channel must not change hue with the theme, and every theme
-   re-tunes --danger to fit its own palette. Two: on an ACTIVE row — itself a
-   14% accent pill with the name at 75% accent — an accent-coloured "working"
-   mark was indistinguishable from the row's own chrome. */
+   ONLY `working` moves, in either component. Anything moving in the chrome
+   means something is running; a still chrome means nothing is.
+
+   These are their own tokens, not --accent/--danger, for two reasons. One: the
+   status channel must not change hue with the theme, and every theme re-tunes
+   --danger to fit its own palette. Two: the row you are ON is a solid --accent
+   block, so anything accent-derived would vanish into it exactly where it
+   matters most. */
 
 /* App layout — persistent tab bar above an outlet that fills the rest. */
 

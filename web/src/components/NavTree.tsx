@@ -33,7 +33,7 @@ import {
   visibleWorkspaces,
 } from '../workspaces';
 import { NewTabButton } from './NewTabButton';
-import { StatusMark } from './StatusMark';
+import { StateChip } from './StateChip';
 import { SwipeRow } from './SwipeRow';
 import { SvgClose } from './icons';
 import './NavTree.css';
@@ -332,9 +332,10 @@ interface NavTreeProps {
  *     thumb-height rows, close buttons always faintly present (touch has
  *     no hover).
  *
- * Hierarchy is carried by STRUCTURE (disclosure + indent) and STATE
- * (accent rail = "you are here", red dot = "wants you"), not type-size
- * escalation — the same grammar as the rest of muxpad's chrome.
+ * Hierarchy is carried by STRUCTURE (disclosure + indent) and by two
+ * channels that never share an encoding — a solid accent block for "you are
+ * here", a left bar + faint tint + word for "what this chat is doing" (see
+ * StateChip.tsx) — not by type-size escalation.
  *
  * Every workspace is collapsible, including the active one. Expansion
  * state persists across sessions (lib/nav-expansion.ts); untouched
@@ -623,6 +624,10 @@ function WorkspaceNode({
       <div
         className="navtree-ws-row"
         data-active={isActive ? 'true' : undefined}
+        // The row's own left bar + tint. Same value the chip below is given,
+        // and given to the ROW because that is what the bar and the wash are
+        // painted on — see StateChip.css for the three-way encoding.
+        data-state={expanded ? 'idle' : (workspace.status ?? 'idle')}
         data-unread={workspace.unread ? 'true' : undefined}
         data-pressing={pressing ? 'true' : undefined}
         data-tab-drop={tabDropOver ? 'true' : undefined}
@@ -746,15 +751,12 @@ function WorkspaceNode({
             </button>
           </span>
         )}
-        {/* LAST cell, always — same rule as the tab rows, which is what puts
-            the workspace mark on the same vertical line as the tab marks
-            beneath it instead of 4px off (the old flex order had the × after
-            the mark, so revealing it on hover shoved the mark left).
-            An EXPANDED workspace draws no mark — its tabs carry their own and
-            a rollup on top would double-signal — but it still renders an
-            `idle` StatusMark rather than nothing, so the column is reserved
-            and expanding a workspace doesn't shift its own header. */}
-        {!isEditing && <StatusMark status={expanded ? 'idle' : workspace.status} />}
+        {/* LAST cell, always — same rule as the tab rows.
+            An EXPANDED workspace says nothing here: its tabs carry their own
+            state and a rollup on top of them would double-signal. It still
+            renders an `idle` chip rather than nothing, so the cell exists in
+            the grid either way. */}
+        {!isEditing && <StateChip status={expanded ? 'idle' : workspace.status} />}
       </div>
       {expanded && (
         <TabList
@@ -1287,6 +1289,7 @@ function SheetPaneList({
               key={p.id}
               className="navtree-pane-row-wrap"
               data-active={active ? 'true' : undefined}
+              data-state={p.status ?? 'idle'}
             >
               <button
                 type="button"
@@ -1296,11 +1299,18 @@ function SheetPaneList({
                 onClick={() => openPane(p.id)}
               >
                 <span className="navtree-pane-label">{label}</span>
-                {/* Per-pane status, same rail, same column. The tab level only
-                    aggregates; a glance at the list should say WHICH pane is
-                    running (or blocked). */}
-                <StatusMark status={p.status} />
               </button>
+              {/* Per-pane state, in the same language as the tabs above. The
+                  tab level only aggregates; a glance at the list should say
+                  WHICH pane is running (or blocked).
+                  OUTSIDE the button, exactly as the tab rows keep it outside
+                  their link: the chip carries visually-hidden state text, and
+                  inside the button that text joins the button's ACCESSIBLE
+                  NAME — so a screen-reader user would hear the name change
+                  ("claude · api refactor" → "…, Ready for you") every time the
+                  agent started or stopped. As a sibling it is still read, just
+                  not as part of the control's name. */}
+              <StateChip status={p.status} />
               <button
                 type="button"
                 className="navtree-close"
@@ -1349,12 +1359,12 @@ interface TabRowProps {
 /**
  * "This chat runs on a schedule, and next at —." The nav row's META column.
  *
- * NOT a status. The status rail (StatusMark) holds exactly one transient,
- * mutually-exclusive state and lives in a fixed column at a constant x so it
- * can be scanned vertically — putting a standing PROPERTY of the chat there
- * would both break that scan and lose to `working` the moment the cron
- * actually fired, which is precisely when you'd want to know a schedule
- * exists. It gets its own column instead, between the name and the rail.
+ * NOT a status. The state channel (StateChip) holds exactly one transient,
+ * mutually-exclusive state, and it is scanned down the rows' left edge —
+ * putting a standing PROPERTY of the chat in it would both break that scan and
+ * lose to `working` the moment the cron actually fired, which is precisely
+ * when you'd want to know a schedule exists. It gets its own column instead,
+ * between the name and the state chip.
  *
  * It used to be a bare ⏱ beside the name, which said a schedule EXISTS but
  * never when — so the one thing you actually want from a rail glance ("does
@@ -1554,6 +1564,10 @@ function TabRow({
     <div
       className="navtree-tab-row"
       data-active={isActiveTab ? 'true' : undefined}
+      // Drives the row's left state bar and its tint (StateChip.css). The chip
+      // at the far end of the row reads the same value; one attribute, so the
+      // three tellings of a row's state cannot disagree.
+      data-state={tab.status ?? 'idle'}
       data-unread={tab.unread ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
       data-drop-into={dropInto ? 'true' : undefined}
@@ -1778,12 +1792,12 @@ function TabRow({
       {!isEditing ? (
         <span className="navtree-tab-meta">{tab.crons ? <CronMark tab={tab} /> : null}</span>
       ) : null}
-      {/* The status rail — the LAST track, fixed width, so its x is a
-            property of the row's right edge and nothing in front of it can
-            move it. Shown on the ACTIVE row too: agent panes work quietly for
-            minutes on their chat face, and a glance should always answer "is
-            anything still running here?" */}
-      {!isEditing && <StatusMark status={tab.status} />}
+      {/* The state chip — the LAST track, so nothing in front of it can push
+            it off the row's right edge. Rendered on the ACTIVE row too, and
+            deliberately: agent panes work quietly for minutes on their chat
+            face, and the one chat whose progress you are actually waiting on
+            must not be the single row that goes dark. */}
+      {!isEditing && <StateChip status={tab.status} />}
       {menu && (
         <NavContextMenu
           x={menu.x}
