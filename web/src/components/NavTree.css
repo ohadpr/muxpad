@@ -43,7 +43,24 @@
    schedule gets 193px (~27 characters). Still 50px narrower than the rail the
    design was approved at, so it is a compromise, not a capitulation — and it
    is one line to revert if the workspace wants the 40px back more than the
-   sidebar wants readable names. */
+   sidebar wants readable names.
+
+   Both figures predate the spacing scale below, and every row is poorer for
+   it: the icon column grew 10px and the row's right inset grew 8px, so an idle
+   row loses 18px, and a row that DRAWS a chip loses another 4 (the chip's
+   leading space stepped from the gutter to air) for 22. Measured in a real
+   engine at 280px afterwards, a `ready` row with no schedule leaves the name
+   149px of track before it ellipsises — a character or two fewer than before.
+   That is the price of the fix, and it is the right way round: a name that
+   truncates a character earlier costs a glance, while a chip welded to the
+   row's edge costs the rail its rhythm on every row at once.
+
+   None of this reasons about the rail being RESIZABLE, and it should: the user
+   drags it, and SIDENAV_MIN_WIDTH (settings.ts) is 160px. The worst-case row —
+   `WORKING` under reduced motion, plus a schedule, plus revealed hover
+   controls — now needs 247px before the name track reaches zero, against 225px
+   before. Below that the auto tracks overflow the row box and .navtree-scroll
+   clips them; that was true before this pass and is 22px truer now. */
 .navtree {
   /* Row metrics + surfaces are the only things the variants disagree on. */
   --nt-row-ws: 32px;
@@ -56,10 +73,51 @@
   --nt-indent: 12px;
   --nt-pill: 6px; /* selection/hover pill corner radius */
 
+  /* ─── The row's spacing scale ──────────────────────────────────────────
+     Every horizontal gap inside a nav row is one of exactly three steps off
+     a 4px base, and which step a gap gets is decided by WHAT it separates:
+
+       4px   --nt-pad     the row's own left inset, and the state bar's inset
+                          from the row edge. The hairline step: it separates
+                          a row's box from a mark that belongs to that box.
+       8px   --nt-gutter  between two CONTENT columns (name ↔ schedule ↔
+                          controls). The reading step.
+      12px   --nt-air     between content and either ANCHOR — the icon chip
+                          at the row's head, the state chip at its tail — and
+                          the row's own right inset. The breathing step.
+
+     The rule that makes it a scale rather than three numbers: AIR WRAPS THE
+     ANCHORS. The two chips are the fixed points a scan uses (one is the
+     column's hard left edge, the other the state column), and a fixed point
+     the eye lands on needs more room around it than two columns of text need
+     between them. Both defects this replaces were the same mistake in two
+     places — the anchors were given the CONTENT step, or none at all:
+
+       · the spinner sat 4px from the row's right edge, which on the selected
+         row is 4px from a solid accent block's border-radius, and read as
+         touching it;
+       · the icon chip was given `margin-right: var(--nt-gutter)` — a margin
+         that never applied, because --nt-col-icon was a FIXED 22px track and
+         a fixed track does not grow for its item's margin. Measured in a real
+         engine: 2.00px from the chip's right edge to the name's first glyph,
+         not the 8px the declaration claimed. The track is now derived
+         (`chip + air`), so the gap is a property of the scale and cannot be
+         silently swallowed by a track size again.
+
+     The SELECTED row deliberately gets the SAME inset, not more. A filled
+     block does read a touch tighter than an open row at equal padding, and
+     the usual answer is to give the block a little extra — but the extra
+     would move the state chip on exactly one row, and the whole rail rests on
+     the chips (and the icon chips) sitting on unmoving vertical lines. So the
+     air is sized for the WORST case, which is the block: 12px is what the
+     accent row wants, and the open rows inherit it. */
+  --nt-pad: 4px;
+  --nt-air: 12px;
+
   /* ─── The row grid ─────────────────────────────────────────────────────
      Four tracks, and NOTHING absolutely positioned:
 
-       icon 22px │ name + headline (1fr, min-width 0) │ meta (auto) │ state auto
+       icon (chip + air) │ name + headline (1fr, min-width 0) │ meta (auto) │ state auto
 
      The state cell is LAST, so nothing in front of it can push it off the
      row's right edge, and it is AUTO rather than a fixed column. It used to be
@@ -69,8 +127,17 @@
      rows' LEFT edge (the 3px state bar in StateChip.css), which is both where
      a scan starts and a place no content can ever shift; the right-hand cell
      is now a word you read on purpose, and it costs width only when there is
-     something to say. */
-  --nt-col-icon: 22px;
+     something to say.
+
+     The ICON track is DERIVED, not written: it is exactly the chip plus one
+     step of air, so the chip's left edge (the column's hard anchor) and the
+     name's first glyph are both consequences of the scale. It was a literal
+     22px against a 20px chip, which is where the 2px gap came from — and the
+     `margin-right: var(--nt-gutter)` on the icon that was meant to open that
+     gap could never do it, because a FIXED track does not grow for its item's
+     margin. Deriving it removes the whole class of bug: there is no second
+     number left to disagree with the first. */
+  --nt-col-icon: calc(var(--nt-chip) + var(--nt-air));
   /* The icon's BOX HEIGHT, pinned to one line of title text. It is the width
      that has to be a fixed track; the height must not exceed the text line, or
      a one-line row becomes icon-driven and its single line floats with more
@@ -114,12 +181,16 @@
   --nt-hit: 32px;
   --nt-disc: 24px;
   --nt-indent: 28px;
-  --nt-col-icon: 26px;
   --nt-icon-h: 20px;
   --nt-chip: 24px;
   --nt-chip-radius: 6px;
   --nt-col-meta: 52px;
   --nt-gutter: 10px;
+  /* The scale steps up with everything else on the sheet (gutter 8 → 10, icon
+     chip 20 → 24), so the air does too: 14px, still one clear step above the
+     gutter. --nt-col-icon is derived from both, so it follows on its own —
+     the sheet's literal 26px against a 24px chip is gone. */
+  --nt-air: 14px;
   /* What a swiped row slides over — see SwipeRow.css. */
   --swipe-surface: var(--bg-chrome);
   font-size: 15px;
@@ -203,7 +274,18 @@
   align-items: center;
   column-gap: 4px;
   height: var(--nt-row-ws);
-  padding: 0 4px;
+  /* Right inset is AIR, left is the row's own 4px pad — the workspace row's
+     head is a disclosure chevron with a hit box of its own, not an anchor
+     chip, so it wants the hairline step; its tail is a state chip like every
+     other row's, and its INSET is what puts that chip on the same column as
+     every tab chip below it.
+     One difference, and it is the `column-gap: 4px` above rather than anything
+     here: grid charges that gap between every pair of adjacent tracks, so this
+     row's chip LEADS by air + 4 (16px, 18 on the sheet) where a tab row's leads
+     by exactly air. Bigger than the floor, on the row kind with the shortest
+     names, and it does not move the column — so it is left alone rather than
+     zeroed, which would also close the disclosure→name gap. */
+  padding: 0 var(--nt-air) 0 var(--nt-pad);
   border-radius: var(--nt-pill);
   font-weight: 600;
   color: var(--fg);
@@ -375,12 +457,15 @@
   height: 18px;
   justify-self: end;
 }
-/* The gutter belongs to the ITEM, so an idle (empty) chip can decline to pay
-   it — the same rule the meta cell follows, and the reason an idle row now
-   spends its full width on the name. */
+/* AIR, not the gutter: the chip is an anchor, and what sits in front of it is
+   an ellipsised name that ends wherever the truncation lands. At the gutter
+   step a long name's `…` came within 8px of the word chip and the two read as
+   one run. The space belongs to the ITEM, so an idle (empty) chip can decline
+   to pay it — the same rule the meta cell follows, and the reason an idle row
+   still spends its full width on the name. */
 .navtree-tab-row > .navtree-state:not(:empty),
 .navtree-ws-row > .navtree-state:not(:empty) {
-  margin-left: var(--nt-gutter);
+  margin-left: var(--nt-air);
 }
 /* Meta is pinned too, and pinned INSIDE the controls — so its right edge is
    the rail's left edge and nothing can move it.
@@ -486,8 +571,13 @@
      link's padding-left. In the grid it has to be the ROW's, or the icon
      column starts at the pill edge and the hierarchy step disappears. */
   /* 8px: a one-line row is then 8 + 18 + 8 = 34px, exactly --nt-row-tab, so
-     it is NOT floor-clamped and its leading matches a two-line row's. */
-  padding: 8px 4px 8px calc(4px + var(--nt-indent));
+     it is NOT floor-clamped and its leading matches a two-line row's.
+     LEFT is the row's 4px pad plus the hierarchy indent, and it is frozen:
+     the icon chip's left edge is the one x in this tree that every row agrees
+     on to 0.00px, and it is this number. RIGHT is one step of air, so the
+     state chip clears the row's edge — and, on the selected row, the accent
+     block's rounded corner. */
+  padding: 8px var(--nt-air) 8px calc(var(--nt-pad) + var(--nt-indent));
   border-radius: var(--nt-pill);
   color: var(--fg-dim);
   font-weight: 500;
@@ -515,7 +605,10 @@
      so it is not floor-clamped and both shapes lead identically. */
   padding-top: 12px;
   padding-bottom: 12px;
-  padding-left: 4px;
+  /* No indent term: on the sheet the leading disclosure track IS the indent.
+     (padding-right is inherited from the rule above — one air token, both
+     variants.) */
+  padding-left: var(--nt-pad);
   min-height: 44px;
 }
 /* Renaming collapses the row to icon + input: the meta, controls and status
@@ -530,13 +623,11 @@
 .navtree[data-variant="sheet"] .navtree-tab-row:has(.navtree-rename) {
   grid-template-columns: var(--nt-col-icon) minmax(0, 1fr);
 }
-/* Gutters are applied to NAMED items, never blanket-adjacency. A `* + *` rule
-   also charges the fixed 22px status track, whose item then overflows it and
-   drags the mark off the scan line — measured 8px, which is exactly the kind
-   of drift this grid exists to prevent. */
-.navtree-tab-row > .navtree-tab-icon {
-  margin-right: var(--nt-gutter);
-}
+/* The icon carries NO margin. The gap to the name is the slack inside its own
+   grid track (--nt-col-icon = chip + air), which is the only place it can live
+   and still be honoured: a fixed track does not grow for its item's margin, so
+   the `margin-right: var(--nt-gutter)` that used to be declared here bought
+   exactly 0px and the measured gap was the track's 2px of slack. */
 .navtree-tab-row:hover {
   color: var(--fg);
   background-color: var(--bg-hover);
@@ -942,10 +1033,17 @@
 .navtree-pane-list {
   display: flex;
   flex-direction: column;
-  /* One hierarchy step DEEPER than the tab name — children must never
-     sit left of their parent. Right padding matches the tab row's (4px) so
-     the pane × lands in the SAME column as the tab ×. */
-  padding: 2px 4px 6px 64px;
+  /* LEFT is DERIVED, so the 18px hierarchy step survives a change to the icon
+     column. A tab name starts at `pad + disc + col-icon` inside the list; a
+     pane label has to start 18px further in, and the pane button contributes
+     8px of its own padding — so the list's inset is that sum minus the 8px the
+     button already pays. Written as a literal (64px) it silently shrank to a
+     6px step the moment the icon track grew.
+     RIGHT is ZERO: the row's own air lives on .navtree-pane-row-wrap below, so
+     the pane's accent block ends on the same x as a tab row's block instead of
+     4px short of it, and the rightmost ink in every sheet row lands on one
+     vertical line. */
+  padding: 2px 0 6px calc(var(--nt-pad) + var(--nt-disc) + var(--nt-col-icon) + 18px - 8px);
 }
 /* Pane row = navigable pill + trailing × sibling (can't nest the × in the
    row's own <button>). The wrap owns the flex row + the hover-reveal. */
@@ -955,13 +1053,20 @@
   /* Anchor for the row's own left state bar (StateChip.css) — pane rows speak
      the same state language as the tabs above them, one indent deeper. */
   position: relative;
+  /* Same air a tab row's padding gives its tail, on the row's own box rather
+     than on the list, because THIS is the box that paints the accent block
+     when the pane is the one you are in. On the list it was outside the block
+     and bought the block nothing. */
+  padding-right: var(--nt-air);
 }
 /* The chip trails the button, which grows; no fixed track down here, because a
    pane list is short and never scanned as a column of its own. A sibling of the
-   button rather than a child — see NavTree.tsx for why — so its gutter is a
-   margin on the WRAP's flex line, and an idle (empty) chip pays nothing. */
+   button rather than a child — see NavTree.tsx for why — so its space is a
+   margin on the WRAP's flex line, and an idle (empty) chip pays nothing. Air,
+   not the gutter, for the same reason as the tab rows': the thing in front of
+   it is a label that ends at its truncation point. */
 .navtree-pane-row-wrap > .navtree-state:not(:empty) {
-  margin-left: var(--nt-gutter);
+  margin-left: var(--nt-air);
 }
 /* Re-inked against the solid block, same rule as the tab row's controls. */
 .navtree-pane-row-wrap[data-active="true"] .navtree-close {

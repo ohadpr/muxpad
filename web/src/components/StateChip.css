@@ -102,7 +102,12 @@
 .navtree-pane-row-wrap::before {
   content: "";
   position: absolute;
-  left: 4px;
+  /* FROZEN at the scale's hairline step (--nt-pad, 4px). This x is the one the
+     whole rail is read against — every row's bar, and by extension the icon
+     chips beside them, agree on it to 0.00px — so it is named rather than
+     re-derived, and the spacing pass that opened up the row's RIGHT edge
+     deliberately did not touch it. */
+  left: var(--nt-pad);
   top: 6px;
   bottom: 6px;
   width: 3px;
@@ -147,12 +152,14 @@
 
    The WIDTH is free, and that is a TRADE, not a win. The fixed 22px column
    this replaced (30px with its gutter) was charged to every row whether or not
-   it drew anything. Measured, chip + gutter, at the desktop rail's metrics:
-   idle 0px, working 21px, `YOU` 41px, `READY` 54px, `FAILED` 56px, and
-   `WORKING` 70px under reduced motion. So idle and working rows hand width
-   back to the name and the three worded states take more than the column ever
-   did — a `dead` row with a schedule is where names now truncate first. It is
-   the right side of the trade because idle is the overwhelming majority of
+   it drew anything. Re-measured in a real engine at the desktop rail's
+   metrics, chip + its step of air (--nt-air, 12px — see the spacing scale in
+   NavTree.css; it was the 8px gutter until the chip was found to be sitting
+   4px off the row's edge): idle 0px, working 25px, `YOU` 45px, `READY` 58px,
+   `FAILED` 60px, and `WORKING` 74px under reduced motion. So idle and working
+   rows hand width back to the name and the three worded states take more than
+   the column ever did — a `dead` row with a schedule is where names truncate
+   first. It is the right side of the trade because idle is the majority of
    rows, and because a row that has something to say has earned the space to
    say it. */
 .navtree-state {
