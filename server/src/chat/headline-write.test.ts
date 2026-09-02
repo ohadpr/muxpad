@@ -499,16 +499,61 @@ describe('maybeWriteHeadline — the icon, and what must never move it', () => {
     expect(tabs.getById(tabId)?.headline).toBe('cron restart persistence');
   });
 
-  it('leaves an icon of unknown provenance alone', async () => {
-    // An icon with no `icon_at` did not come from us. Only the one-time
-    // backfill takes a view on those, and it does so once — a per-turn path
-    // that clobbered them would undo exactly what the backfill preserved.
-    tabs.update(tabId, { icon: '🦊' });
-    const out = await maybeWriteHeadline(db, tabId, paneId, reply('cron restarts', '⏰'), {
-      now: 1_000,
-    });
+  it('REPLACES a creation-time placeholder, even with the label kept', async () => {
+    // `✳` is what every tab the + button creates is born with; cron tabs get
+    // `⏱`; a pane dragged out inherits its title's leading emoji. None was
+    // chosen by anyone. An earlier draft froze any icon whose `icon_at` was
+    // null, which meant the feature worked exactly once — for the rows that
+    // existed when the backfill ran — and never for a tab created afterwards.
+    for (const placeholder of ['✳', '⏱', '🦊']) {
+      const id = tabs.create({ name: 'P', workspace_id: workspaceId, layout: 'p' }).id;
+      const pane = new PaneStore(db).create({ tab_id: id }).id;
+      new AgentSessionStore(db).register({
+        pane_id: pane,
+        assistant: 'codex',
+        session_id: 'sid-icon-test',
+      });
+      tabs.update(id, { icon: placeholder });
+      const out = await maybeWriteHeadline(db, id, pane, reply('KEEP', '⏰'), { now: 1_000 });
+      expect(out.icon).toBe('⏰');
+      expect(tabs.getById(id)?.icon).toBe('⏰');
+    }
+  });
+
+  it('a sticky icon set DURING the model call still wins', async () => {
+    // The race the SQL guard exists for. A generation reads the sticky flag,
+    // then awaits a CLI subprocess for up to 30s, then writes. Without the
+    // predicate in the UPDATE itself, a user picking an icon in that window has
+    // their choice destroyed — and because the PATCH set icon_sticky on its way
+    // through, the row is afterwards frozen on the GENERATOR's glyph forever:
+    // the sticky flag protecting the very value it was set to prevent.
+    const out = await maybeWriteHeadline(
+      db,
+      tabId,
+      paneId,
+      async () => {
+        // Exactly what a PATCH /tabs/:id {icon} does, mid-flight.
+        tabs.update(tabId, { icon: '🦊' });
+        tabs.setIconSticky(tabId);
+        return 'LABEL: cron restarts\nICON: ⏰';
+      },
+      { now: 1_000 },
+    );
     expect(out.icon).toBeNull();
     expect(tabs.getById(tabId)?.icon).toBe('🦊');
+    expect(tabs.iconAt(tabId)).toBeNull();
+    // The HEADLINE still lands — stickiness is about the glyph only.
+    expect(out.headline).toBe('cron restarts');
+  });
+
+  it('stores the canonical form of a bare text-presentation glyph', async () => {
+    // ⚙ / 🛠 / ⏱ are what a model actually types, and they render as
+    // monochrome text without a variation selector.
+    const out = await maybeWriteHeadline(db, tabId, paneId, reply('gear ratios', '⚙'), {
+      now: 1_000,
+    });
+    expect(out.icon).toBe('⚙\uFE0F');
+    expect(tabs.getById(tabId)?.icon).toBe('⚙\uFE0F');
   });
 
   it('degrades to headline-only against a model that ignores the format', async () => {

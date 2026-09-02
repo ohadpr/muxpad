@@ -376,4 +376,37 @@ describe('tabs routes', () => {
     expect(tab.icon).toBeUndefined();
     expect(new TabStore(db).getById(tab.id)?.icon).toBeUndefined();
   });
+  it('an EMPTY icon is the one way back — it clears without sticking', async () => {
+    // Sticky is one-way, so without this carve-out a single `{icon: ''}` would
+    // strand the row on the default glyph permanently: nothing could ever put
+    // one back, by hand or by generation.
+    const created = await postTab({ name: 'A' });
+    const tab = (await created.json()) as { id: string };
+    const tabs = new TabStore(db);
+    const patch = (body: object) =>
+      test.app.request(`/api/tabs/${tab.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    await patch({ icon: '\u{1F680}' });
+    expect(tabs.isIconSticky(tab.id)).toBe(true);
+
+    // Clearing does NOT un-stick (sticky is one-way by contract) — but on a
+    // row that was never sticky it leaves the generator free.
+    const other = (await (await postTab({ name: 'B' })).json()) as { id: string };
+    tabs.setIcon(other.id, '\u{23F0}', 5_000);
+    expect(tabs.iconAt(other.id)).toBe(5_000);
+    await test.app.request(`/api/tabs/${other.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ icon: '' }),
+    });
+    expect(tabs.isIconSticky(other.id)).toBe(false);
+    expect(tabs.getById(other.id)?.icon).toBeUndefined();
+    // …and the clock goes with it, so "clear it and let the machine try again"
+    // is not a six-hour wait.
+    expect(tabs.iconAt(other.id)).toBeNull();
+  });
 });
