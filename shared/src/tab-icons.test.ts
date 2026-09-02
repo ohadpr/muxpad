@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TAB_ICONS, isSingleEmoji, splitLeadingEmoji } from './tab-icons.js';
+import { TAB_ICONS, isSingleEmoji, normalizeTabIcon, splitLeadingEmoji } from './tab-icons.js';
 
 /**
  * The gate between a cheap model and the one fixed-width cell at the head of
@@ -18,6 +18,9 @@ describe('isSingleEmoji — exactly one emoji, grapheme-aware', () => {
    */
   const LEGAL: [string, string][] = [
     ['👍', 'a plain single-code-point emoji'],
+    ['⚙', 'BARE text-presentation — the form a model actually types'],
+    ['🛠', 'another bare one'],
+    ['⏱', 'the glyph a cron tab is created with, bare'],
     ['☕', 'a BMP pictographic with default emoji presentation'],
     ['🚀', 'the obvious deploy glyph'],
     ['❤️', 'emoji + VS16 — two code points, one glyph'],
@@ -32,7 +35,6 @@ describe('isSingleEmoji — exactly one emoji, grapheme-aware', () => {
     ['🇺🇸', 'another flag'],
     ['1️⃣', 'a keycap: digit + VS16 + enclosing keycap'],
     ['#️⃣', 'a hash keycap'],
-    ['®️', 'a text-default pictographic RESCUED by its VS16'],
   ];
 
   for (const [s, why] of LEGAL) {
@@ -66,6 +68,12 @@ describe('isSingleEmoji — exactly one emoji, grapheme-aware', () => {
     ['emoji', 'the word'],
     ['™', 'Extended_Pictographic but TEXT presentation, no VS16'],
     ['©', 'same — a copyright sign is not an icon'],
+    ['®️', 'a typographic mark is not an icon even WITH a VS16'],
+    ['™️', 'nor is this one'],
+    ['‼️', 'nor a double exclamation'],
+    ['🚀\u0301', 'an emoji with a combining accent welded on'],
+    ['🚀\u200B', 'an emoji with a zero-width space after it'],
+    ['\u202E🚀', 'an emoji behind a right-to-left override'],
     ['🏽', 'a lone skin-tone modifier: Emoji_Presentation but not pictographic'],
     ['🇺', 'a single regional indicator — half a flag'],
     ['.', 'punctuation'],
@@ -113,6 +121,45 @@ describe('isSingleEmoji — exactly one emoji, grapheme-aware', () => {
       const { icon } = splitLeadingEmoji(name);
       expect(icon).not.toBeNull();
       expect(isSingleEmoji(icon as string)).toBe(true);
+    }
+  });
+});
+
+describe('normalizeTabIcon — presentation is a formatting slip, not a wrong answer', () => {
+  it('appends the VS16 a text-presentation base needs to be drawn as a picture', () => {
+    // Roughly a third of the glyphs a model reaches for are text-presentation
+    // by default and get typed bare. Rejecting them left the row on its
+    // placeholder, silently, forever; repairing the presentation keeps the
+    // answer and fixes only how it is drawn.
+    for (const bare of ['⚙', '🛠', '🗂', '🗝', '⏱', '👁', '🖥', '✂', '✉', '☁', '⚠', '❄']) {
+      expect(normalizeTabIcon(bare)).toBe(`${bare}\uFE0F`);
+    }
+  });
+
+  it('leaves an already-canonical glyph exactly as it is', () => {
+    for (const s of ['🚀', '☕', '❤️', '🗂️', '👨‍👩‍👧‍👦', '👍🏽', '🇮🇱', '1️⃣']) {
+      expect(normalizeTabIcon(s)).toBe(s);
+    }
+  });
+
+  it('is idempotent — normalising twice is normalising once', () => {
+    for (const s of ['⚙', '🚀', '🗂️', '👨‍👩‍👧‍👦']) {
+      const once = normalizeTabIcon(s) as string;
+      expect(normalizeTabIcon(once)).toBe(once);
+    }
+  });
+
+  it('makes the bare and VS16 spellings of one glyph compare equal', () => {
+    // The reason the caller compares canonical forms: a model proposing a bare
+    // ⚙ against a stored ⚙️ is agreeing, not changing its mind, and must not
+    // spend the tab's one allowed icon change on a no-op.
+    expect(normalizeTabIcon('⚙')).toBe(normalizeTabIcon('⚙️'));
+  });
+
+  it('returns null for everything the predicate rejects', () => {
+    for (const bad of ['', 'x', '🚀🔥', ':-)', '™', '®️', '🏽']) {
+      expect(normalizeTabIcon(bad)).toBeNull();
+      expect(isSingleEmoji(bad)).toBe(false);
     }
   });
 });
