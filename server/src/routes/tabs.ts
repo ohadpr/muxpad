@@ -273,7 +273,14 @@ export function tabsRoutes(deps: {
         // icon…" both land here), so it is the only place the flag has to be
         // set. Note it fires on the value being SUPPLIED, not on it differing:
         // re-picking the emoji a tab already wears is still you choosing it.
-        if (rowPatch.icon !== undefined) tabs.setIconSticky(id);
+        //
+        // The EMPTY string is the deliberate exception, and it is the only way
+        // back: `{icon: ''}` clears the glyph and leaves the row un-sticky, so
+        // the generator may fill it again. Without that carve-out, one empty
+        // PATCH would strand a row on the default icon permanently — sticky is
+        // one-way, so there would be nothing that could ever put a glyph back.
+        if (rowPatch.icon) tabs.setIconSticky(id);
+        else if (rowPatch.icon === '') tabs.clearIconClock(id);
         if (pinned !== undefined) {
           tabs.setPinned(id, pinned);
           // Newly pinned tabs land at the END of the pinned block: appending is
