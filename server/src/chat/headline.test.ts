@@ -53,7 +53,10 @@ describe('shouldConsiderHeadline — the rate limit, before any spend', () => {
       shouldConsiderHeadline({
         ...base,
         existing: null,
-        lastAt: NOW - (HEADLINE_MIN_INTERVAL_MS - 1),
+        // Mid-window, not I-1: the boundary itself is pinned by its own test
+        // below, and this one should keep failing even if the gate grows a
+        // little deliberate slack around the edge.
+        lastAt: NOW - Math.floor(HEADLINE_MIN_INTERVAL_MS / 2),
       }),
     ).toBe(false);
     expect(
@@ -72,7 +75,7 @@ describe('shouldConsiderHeadline — the rate limit, before any spend', () => {
         existing: 'wiring the cron scheduler into boot',
         // "inside the interval", not "a minute ago" — see the note on the
         // busy-chat test below.
-        lastAt: NOW - (HEADLINE_MIN_INTERVAL_MS - 1),
+        lastAt: NOW - Math.floor(HEADLINE_MIN_INTERVAL_MS / 2),
       }),
     ).toBe(false);
   });

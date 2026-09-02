@@ -90,11 +90,17 @@ describe('maybeWriteHeadline — what a bad generation must not cost you', () =>
     // The whole point. A row that already says something true keeps saying it
     // — a bad generation is never an improvement on a good line.
     tabs.setHeadline(tabId, GOOD, 1_000);
-    const out = await maybeWriteHeadline(db, tabId, paneId, model(BUG), {
-      now: 1_000 + HEADLINE_MIN_INTERVAL_MS,
-    });
+    // Comfortably PAST the interval, not exactly on it: sitting on the `>=`
+    // boundary would let a gate that blocked the call entirely produce this
+    // test's whole result (null, headline untouched), so it would pass while
+    // testing nothing.
+    const now = 1_000 + 3 * HEADLINE_MIN_INTERVAL_MS;
+    const out = await maybeWriteHeadline(db, tabId, paneId, model(BUG), { now });
     expect(out).toBeNull();
     expect(tabs.getById(tabId)?.headline).toBe(GOOD);
+    // The generation really did run and really was rejected — without this the
+    // assertions above are also satisfied by never calling the model.
+    expect(tabs.headlineAt(tabId)).toBe(now);
   });
 
   it('a rejected FIRST generation leaves the row blank rather than wrong', async () => {
@@ -132,10 +138,15 @@ describe('maybeWriteHeadline — what a bad generation must not cost you', () =>
       return calls;
     };
 
+    const INTERVALS = SPAN / HEADLINE_MIN_INTERVAL_MS;
     const calls = await drive(tabId, 50);
-    // One call per interval at most, plus the first — the greedy bound, the
-    // same one headline.test.ts holds the pure gate to.
-    expect(calls).toBeLessThanOrEqual(Math.floor(SPAN / HEADLINE_MIN_INTERVAL_MS) + 1);
+    // Two-sided on purpose. The ceiling is the greedy bound — one call per
+    // interval, plus the first — and is what "cannot spin" means. The FLOOR
+    // matters just as much: a gate that never fires at all also satisfies a
+    // "≤" and would let this test pass with the whole write path disabled,
+    // which is the way the previous exact `toBe(1)` was actually stronger.
+    expect(calls).toBeGreaterThanOrEqual(Math.floor(INTERVALS));
+    expect(calls).toBeLessThanOrEqual(Math.floor(INTERVALS) + 1);
     expect(tabs.getById(tabId)?.headline).toBeUndefined();
 
     // …and the bound tracks the CLOCK, not the loop: four times the turns over
@@ -144,6 +155,7 @@ describe('maybeWriteHeadline — what a bad generation must not cost you', () =>
     // makes it 200 calls against the other tab's 50.
     const busier = tabs.create({ name: 'Busier', workspace_id: workspaceId, layout: 'p' }).id;
     expect(await drive(busier, 200)).toBe(calls);
+    expect(tabs.getById(busier)?.headline).toBeUndefined();
   });
 
   it('re-asks once the interval has passed, and takes a good line then', async () => {
