@@ -119,6 +119,27 @@ the same on every backend, and can be fired by hand before you trust it.
   (fire NOW — always test a new cron this way), \`muxpad cron pause/resume
   <name>\`, \`muxpad cron rm <name>\`.
 
+## Browsers, screenshots and dev servers
+
+This runs on somebody's live workstation. **Nothing you do may put a window on
+their screen.**
+
+- **Drive browsers through the Playwright MCP** (\`mcp__playwright__*\`). It is
+  configured, allowed, and headless. Use it for navigation, screenshots,
+  snapshots and any UI verification.
+- **Never launch a browser yourself** — no \`chromium.launch()\`, no
+  \`puppeteer\`, no \`open http://…\`, no shelling out to Chrome. A raw launch is
+  how a visible window ends up on their desktop.
+- **Never run this repo's dev server.** \`pnpm dev\` is \`vite --host\`: it binds
+  every interface and can pop the user's default browser. If you need a server
+  in order to look at something, run an ISOLATED instance — its own port bound
+  to 127.0.0.1, its own \`MUXPAD_DATA_DIR\`, its own \`MUXPAD_PTYD_SOCKET\` — and
+  tear it down when you are finished.
+- **Bind to loopback, never \`--host\`/\`0.0.0.0\`.** This machine is on a tailnet;
+  anything bound wide is reachable by every device on it.
+- Leave nothing running. Before you report, check for servers and browser
+  processes you started and kill them.
+
 ## Working across panes
 
 Other agents and terminals are running alongside you. The map:
