@@ -730,8 +730,8 @@
   -webkit-tap-highlight-color: transparent;
 }
 /* Sheet: WORKSPACE and PANE rows keep their × (both are still flex rows and
-   neither is swipeable). TAB rows on the sheet render no × at all — pin and
-   close live under the row behind a left swipe. */
+   neither is swipeable). TAB rows on the sheet render no × at all — pin,
+   mark-unread and close live under the row behind a left swipe. */
 .navtree[data-variant="sheet"] .navtree-ws-row .navtree-close,
 .navtree[data-variant="sheet"] .navtree-pane-row-wrap .navtree-close {
   flex-basis: var(--nt-hit);
