@@ -49,7 +49,13 @@ describe('shouldConsiderHeadline — the rate limit, before any spend', () => {
   it('a chat with NO headline is still rate-limited once it has been asked', () => {
     // The hole that let a persistently-failing chat spin: `existing` used to
     // short-circuit the interval, and a rejected reply leaves it null forever.
-    expect(shouldConsiderHeadline({ ...base, existing: null, lastAt: NOW - 60_000 })).toBe(false);
+    expect(
+      shouldConsiderHeadline({
+        ...base,
+        existing: null,
+        lastAt: NOW - (HEADLINE_MIN_INTERVAL_MS - 1),
+      }),
+    ).toBe(false);
     expect(
       shouldConsiderHeadline({
         ...base,
@@ -64,7 +70,9 @@ describe('shouldConsiderHeadline — the rate limit, before any spend', () => {
       shouldConsiderHeadline({
         ...base,
         existing: 'wiring the cron scheduler into boot',
-        lastAt: NOW - 60_000,
+        // "inside the interval", not "a minute ago" — see the note on the
+        // busy-chat test below.
+        lastAt: NOW - (HEADLINE_MIN_INTERVAL_MS - 1),
       }),
     ).toBe(false);
   });

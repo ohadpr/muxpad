@@ -773,7 +773,7 @@ const KEY_HEADLINE_SWEEP = 'headline_shape_swept_v1';
  * to write today.
  *
  * The validator only guards new generations, and a headline is written once
- * and then defended by a 20-minute rate limit and a bias toward keeping what
+ * and then defended by HEADLINE_MIN_INTERVAL_MS and a bias toward keeping what
  * is there — so without this, every row that was already wrong stays wrong
  * forever. The row for the "Main" tab reading `I'm not familiar with
  * "muxpad" — is that an internal tool, a product name, or did you mea…` is
