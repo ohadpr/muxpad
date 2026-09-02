@@ -363,25 +363,46 @@ export class TabStore {
 
   /**
    * Write a GENERATED icon, stamping the anti-drift clock in the same
-   * statement so the two can never disagree.
+   * statement so the two can never disagree. Returns whether it wrote.
    *
    * Deliberately not `update()`: that bumps `updated_at`, which clients key
-   * cache invalidation off, and it would also have to be told not to set the
-   * sticky flag. Same split, and the same reasoning, as `setHeadline`.
+   * cache invalidation off. Same split, and the same reasoning, as
+   * `setHeadline`.
    *
-   * Callers must have checked `isIconSticky` first — this method does not,
-   * because a store method that silently no-ops is a worse contract than one
-   * whose single caller is responsible for the policy (see chat/headline.ts,
-   * where the whole anti-drift rule lives in one place).
+   * THE STICKY CHECK IS IN THE SQL, not left to the caller, because the caller
+   * physically cannot do it safely. A generation reads the flag, then awaits a
+   * model call — a CLI subprocess, up to 30 seconds — and only then writes. A
+   * user picking an icon from the rail during that window would have their
+   * choice silently destroyed, and since the PATCH sets `icon_sticky = 1` on
+   * its way through, the row would afterwards be frozen on the GENERATOR's
+   * glyph forever: the sticky flag protecting the very value it was set to
+   * prevent. The predicate has to be evaluated at write time, in the same
+   * statement, and SQLite is the only place that is true.
    */
-  setIcon(id: string, icon: string, at: number = Date.now()): void {
-    this.db.prepare('UPDATE tabs SET icon = ?, icon_at = ? WHERE id = ?').run(icon, at, id);
+  setIcon(id: string, icon: string, at: number = Date.now()): boolean {
+    const r = this.db
+      .prepare('UPDATE tabs SET icon = ?, icon_at = ? WHERE id = ? AND icon_sticky = 0')
+      .run(icon, at, id);
+    return r.changes > 0;
+  }
+
+  /**
+   * Forget that the generator ever wrote this row's icon.
+   *
+   * The counterpart to `PATCH {icon: ''}`, which clears the glyph and (unlike
+   * every other icon PATCH) leaves the row un-sticky. Without dropping the
+   * clock too, a row whose icon had been generated would sit out the rest of
+   * its stability window before it could be given a new one — a "clear it and
+   * let the machine try again" that visibly does nothing for six hours.
+   */
+  clearIconClock(id: string): void {
+    this.db.prepare('UPDATE tabs SET icon_at = NULL WHERE id = ?').run(id);
   }
 
   /**
    * When this tab's icon was last written by the generator; null if it never
-   * was — which also means the icon it currently wears (if any) did not come
-   * from us and must be left alone.
+   * was — which means whatever glyph the row wears is a placeholder nobody
+   * chose (see the ESTABLISHED note in chat/headline.ts).
    */
   iconAt(id: string): number | null {
     const r = this.db.prepare('SELECT icon_at FROM tabs WHERE id = ?').get(id) as

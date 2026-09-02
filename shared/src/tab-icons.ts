@@ -117,18 +117,22 @@ export function splitLeadingEmoji(name: string): { icon: string | null; rest: st
 }
 
 /**
- * ─── Is this string exactly ONE emoji? ────────────────────────────────────
+ * ─── Is this string exactly ONE emoji, and what is its canonical form? ────
  *
- * The gate on model-generated tab icons (server/src/chat/headline.ts). A tab's
- * icon occupies one fixed-width cell in the nav rail, and anything that is not
- * a single glyph either overflows that cell or renders as text sitting where a
- * picture should be. So this rejects rather than repairs: no trimming a
- * two-emoji answer down to its first, no stripping a trailing word. A bad
- * generation must never overwrite a good value, and half of a bad generation
- * is still a bad generation.
+ * The gate between a cheap model and the one fixed-width cell at the head of
+ * every nav row (server/src/chat/headline.ts). Anything that is not a single
+ * glyph either overflows that cell or renders as text sitting where a picture
+ * should be.
  *
- * COUNTING IS GRAPHEME-AWARE, NOT LENGTH-BASED, and that is the whole reason
- * this function exists rather than a `[...s].length === 1` test:
+ * It REJECTS rather than repairs: no trimming a two-emoji answer down to its
+ * first, no lifting the emoji out of "🚀 deploy". A bad generation must never
+ * overwrite a good value, and half of a bad generation is still a bad
+ * generation. The one thing it normalises is PRESENTATION — see below — which
+ * changes how a correct answer is drawn, not which answer it is.
+ *
+ * ─── Counting is grapheme-aware, not length-based ─────────────────────────
+ *
+ * That is the whole reason this exists rather than a `[...s].length === 1`:
  *
  *   - `👨‍👩‍👧‍👦` is SEVEN code points (four people joined by three ZWJs) and one
  *     emoji. A code-point test rejects it; a UTF-16 `.length` test sees 11.
@@ -138,33 +142,71 @@ export function splitLeadingEmoji(name: string): { icon: string | null; rest: st
  *   - `👍👍` is two code points and TWO emoji, and must be rejected — which no
  *     code-point count can distinguish from the skin-tone case.
  *
- * `Intl.Segmenter` is the only thing in the platform that draws that line
- * correctly, so it draws it.
+ * `Intl.Segmenter` is the only thing in the platform that draws that line, so
+ * it draws it. Its one known blind spot is recorded at the bottom.
  *
- * Four things are then required of the single grapheme, because "one grapheme"
- * on its own also describes `a`, `7`, `é` and `:` :
+ * ─── What the single grapheme must then be ────────────────────────────────
+ *
+ * "One grapheme" also describes `a`, `7`, `é` and `:`, so:
  *
  *   1. A flag (regional-indicator pair) or a keycap (`1️⃣`) passes outright —
  *      neither base character is Extended_Pictographic, so both need naming.
- *   2. Otherwise it must contain an Extended_Pictographic code point. This is
- *      what rejects letters, digits, punctuation, and a lone skin-tone
- *      modifier (`🏽`, which is Emoji_Presentation but not pictographic).
- *   3. It must actually RENDER as a picture: either its base has emoji
- *      presentation by default, or it carries an explicit VS16. Without this,
- *      `™`, `©`, `®` and `‼` — all Extended_Pictographic, all drawn as text —
- *      would land in the icon cell as punctuation. `®️` with its VS16 is a real
- *      emoji and still passes.
- *   4. No letters, digits or whitespace anywhere (keycaps excepted at step 1).
- *      Belt and braces behind the grapheme count.
+ *   2. Otherwise every code point must come from the emoji alphabet:
+ *      Extended_Pictographic, a skin-tone modifier, a ZWJ, or a VS16. That one
+ *      rule rejects letters, digits, punctuation, whitespace, a lone skin-tone
+ *      modifier (`🏽`, which is Emoji_Presentation but not pictographic),
+ *      zero-width and bidi controls, and an emoji with a combining accent
+ *      stuck on the end of it.
+ *   3. Typographic marks are never icons: ™ © ® ‼ ⁉ are all
+ *      Extended_Pictographic and all punctuation, and they are rejected
+ *      whether or not a variation selector is attached.
  *
- * Empty, whitespace-only, `:-)`, `:)`, `<3` and any typed face fail at the
- * grapheme count — an ASCII emoticon is three graphemes, not one.
+ * ─── Why it NORMALISES presentation instead of demanding a VS16 ───────────
+ *
+ * A first draft required either default emoji presentation or an explicit
+ * VS16. That sounds like rule 3 and is not. Roughly a third of the glyphs a
+ * model actually reaches for — ⚙ 🛠 🗂 🗝 ⏱ 👁 🖥 ✂ ✉ ☁ ⚠ ♻ ⚖ ❄ — are
+ * Extended_Pictographic with TEXT presentation by default, and a model types
+ * them bare far more often than with the selector. Under that rule those
+ * answers were silently thrown away and the row kept its placeholder, forever,
+ * for a reason the user could never see. And the rule did not even do its
+ * stated job: `®️` sailed through it, so it was testing "did the model happen
+ * to type U+FE0F" rather than "is this punctuation".
+ *
+ * So presentation is a formatting slip, like whitespace, repaired by appending
+ * the VS16 — and rule 3 does the job rule 3 was for. Every icon this function
+ * returns renders as a picture, so the rail is not half colour, half
+ * monochrome.
+ *
+ * ─── The blind spot ───────────────────────────────────────────────────────
+ *
+ * Two unrelated emoji welded together with a ZWJ are ONE grapheme by
+ * segmentation and TWO glyphs on screen, because no font ligates that pair;
+ * an invalid regional-indicator pair draws as two letter tiles. Both pass.
+ * Telling them from the real sequences needs Unicode's RGI list, which is a
+ * data file that goes stale — and neither is a shape a model produces, since a
+ * ZWJ between unrelated emoji is not something anyone types by accident.
+ * Recorded rather than defended.
  */
 const SINGLE_FLAG = new RegExp(`^(?:${FLAG})$`, 'u');
 const SINGLE_KEYCAP = new RegExp(`^(?:${KEYCAP})$`, 'u');
 const HAS_PICTOGRAPHIC = /\p{Extended_Pictographic}/u;
+/**
+ * The emoji alphabet, and nothing else. Anything outside it — a letter, a
+ * digit, a space, a combining accent, a zero-width space, an RTL override —
+ * makes the grapheme something other than an emoji.
+ */
+const EMOJI_ALPHABET_ONLY = new RegExp(
+  `^(?:\\p{Extended_Pictographic}|\\p{Emoji_Modifier}|${ZWJ}|${VS16})+$`,
+  'u',
+);
+/** Default-emoji presentation: no variation selector needed to draw it. */
 const STARTS_EMOJI_PRESENTATION = /^\p{Emoji_Presentation}/u;
-const HAS_TEXTUAL = /[\p{L}\p{N}\s]/u;
+/**
+ * Extended_Pictographic characters that are PUNCTUATION rather than pictures.
+ * Rejected with or without a VS16 — a row labelled ® is not labelled.
+ */
+const TYPOGRAPHIC_MARKS = new Set(['™', '©', '®', '‼', '⁉']);
 /** Escaped, like the regex fragments above — no invisible characters in the
  *  source. */
 const VS16_CHAR = '\uFE0F';
@@ -176,21 +218,34 @@ const VS16_CHAR = '\uFE0F';
  */
 const MAX_ICON_CHARS = 32;
 
-export function isSingleEmoji(raw: string): boolean {
+/**
+ * The canonical form of a one-emoji string, or null if it is not one.
+ *
+ * Canonical means "will be drawn as a picture": a text-presentation base gets
+ * its VS16 appended. Everything else is returned exactly as given.
+ */
+export function normalizeTabIcon(raw: string): string | null {
   const s = raw.trim();
-  if (!s || s.length > MAX_ICON_CHARS) return false;
+  if (!s || s.length > MAX_ICON_CHARS) return null;
   // One grapheme cluster, or it is not one glyph. `Intl.Segmenter` has been in
   // Node since 16 and in every browser muxpad runs in; the guard is for an
   // exotic runtime, and its answer is "reject", never "guess".
-  if (typeof Intl.Segmenter !== 'function') return false;
+  if (typeof Intl.Segmenter !== 'function') return null;
   const segmenter = new Intl.Segmenter('en', { granularity: 'grapheme' });
   // Bounded by MAX_ICON_CHARS above, so materialising the clusters is a
   // handful of objects, not a scan of a model's whole reply.
-  if ([...segmenter.segment(s)].length !== 1) return false;
+  if ([...segmenter.segment(s)].length !== 1) return null;
 
-  if (SINGLE_FLAG.test(s) || SINGLE_KEYCAP.test(s)) return true;
-  if (!HAS_PICTOGRAPHIC.test(s)) return false;
-  if (!s.includes(VS16_CHAR) && !STARTS_EMOJI_PRESENTATION.test(s)) return false;
-  if (HAS_TEXTUAL.test(s)) return false;
-  return true;
+  // Flags and keycaps have no pictographic base and are already canonical.
+  if (SINGLE_FLAG.test(s) || SINGLE_KEYCAP.test(s)) return s;
+  if (!HAS_PICTOGRAPHIC.test(s)) return null;
+  if (!EMOJI_ALPHABET_ONLY.test(s)) return null;
+  if (TYPOGRAPHIC_MARKS.has(String.fromCodePoint(s.codePointAt(0) ?? 0))) return null;
+  if (s.includes(VS16_CHAR) || STARTS_EMOJI_PRESENTATION.test(s)) return s;
+  return s + VS16_CHAR;
+}
+
+/** Predicate over `normalizeTabIcon`, for callers that only need the verdict. */
+export function isSingleEmoji(raw: string): boolean {
+  return normalizeTabIcon(raw) !== null;
 }

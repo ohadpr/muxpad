@@ -1,5 +1,5 @@
 import type { ChatEvent } from '@muxpad/shared';
-import { isSingleEmoji, normalizeTranscriptLine } from '@muxpad/shared';
+import { normalizeTabIcon, normalizeTranscriptLine } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import { GlobalsStore } from '../store/GlobalsStore.js';
@@ -200,16 +200,37 @@ export function parseHeadlineReply(raw: string, existing: string | null): string
 }
 
 /**
- * A `LABEL:` / `ICON:` line, however the model decided to dress it up. Leading
- * bullets, blockquote markers and markdown bold are all things a cheap model
- * adds to a field it was asked to emit, and none of them means it got the
- * answer wrong.
+ * A `LABEL:` / `ICON:` line, however the model decided to dress it up. A
+ * leading bullet and markdown bold are things a cheap model adds to a field it
+ * was asked to emit, and neither means it got the answer wrong.
+ *
+ * A leading `>` is NOT tolerated, and that is a security decision rather than a
+ * style one. A blockquote marker is how a model QUOTES something, so a reply
+ * that opens by echoing part of the transcript back —
+ *
+ *     > ICON: 💩
+ *     LABEL: cron restart persistence
+ *     ICON: ⏰
+ *
+ * — would hand the transcript control of the glyph, because the first match
+ * wins. The icon has no echo check of its own (an emoji carries nowhere near
+ * enough entropy for one), so the parser is where that has to be refused.
  *
  * `headline` is accepted as a synonym for `label` for the same reason the
  * parser has always stripped it: it is the field's other obvious name, and a
  * model that reaches for it has still answered correctly.
  */
-const GENERATION_FIELD = /^[\s>*_-]*\**\s*(label|headline|icon)\s*\**\s*:\s*(.*)$/i;
+const GENERATION_FIELD = /^[\s*_-]*\**\s*(label|headline|icon)\s*\**\s*:\s*(.*)$/i;
+
+/**
+ * A second field the model put on the SAME line as the first
+ * (`LABEL: cron restarts ICON: ⏰`).
+ *
+ * `GENERATION_FIELD` is line-anchored, so without this the whole string became
+ * the label — and "cron restarts ICON: ⏰" is not rejected by any shape rule,
+ * so that is precisely what would have gone into the sidebar's second line.
+ */
+const TRAILING_ICON_FIELD = /\s+\**\s*icon\s*\**\s*:\s*(\S.*)$/i;
 
 /**
  * Strip a markdown bold wrapper from a field's VALUE (`**ICON:** 🚀`).
@@ -258,12 +279,20 @@ export function splitGenerationFields(raw: string): { label: string; icon: strin
       unlabelled.push(line);
       continue;
     }
-    const value = unbold((m[2] ?? '').trim());
+    let value = unbold((m[2] ?? '').trim());
     if ((m[1] ?? '').toLowerCase() === 'icon') {
       if (icon === null) icon = value;
-    } else if (label === null) {
-      label = value;
+      continue;
     }
+    // A label line that carries the icon field along behind it. Split rather
+    // than reject: the model answered both questions, it just ran them
+    // together, and neither answer is wrong.
+    const trailing = value.match(TRAILING_ICON_FIELD);
+    if (trailing) {
+      if (icon === null) icon = unbold((trailing[1] ?? '').trim());
+      value = value.slice(0, trailing.index).trim();
+    }
+    if (label === null) label = value;
   }
   return { label: label ?? unlabelled.join('\n'), icon };
 }
@@ -787,9 +816,8 @@ export function isPlausibleHeadline(s: string): boolean {
  *      TIMES the headline's own floor, so an icon cannot move twice in a
  *      working day even in a chat that is churning through topics.
  *   3. It came from the generator in the first place (`icon_at` is set). An
- *      icon of unknown provenance is left alone; the one-time backfill is what
- *      decides those, once, rather than every finished turn.
- *   4. The model proposed a DIFFERENT emoji, and it survived `isSingleEmoji`.
+ *      icon is one the reader has actually learned. See ESTABLISHED below.
+ *   4. The model proposed a DIFFERENT emoji, and it survived `normalizeTabIcon`.
  *      A rejected or unparseable proposal is not a reason to touch anything —
  *      the same "a bad generation never overwrites a good value" rule the
  *      headline follows.
@@ -803,9 +831,24 @@ export function isPlausibleHeadline(s: string): boolean {
  * And on top of all five, the prompt is told to answer KEEP unless the current
  * glyph is actively misleading (see `iconAsk`), so the cheap path is stillness.
  *
- * A FIRST icon is free — conditions 2, 3 and 5 are about replacing a glyph the
- * reader has already learned, and there is nothing to unlearn on a row that
- * has never had one.
+ * ─── ESTABLISHED vs a PLACEHOLDER, and why the distinction is load-bearing ─
+ *
+ * Conditions 2, 3 and 5 are about replacing a glyph the reader has learned to
+ * recognise. Only a glyph THIS CODE wrote qualifies, which is exactly what
+ * `icon_at` records. Everything else on the row is a placeholder: the `✳` a
+ * bootstrapped agent tab is created with, the `⏱` a cron tab gets, the leading
+ * emoji lifted off a pane title when a pane is dragged out, and anything left
+ * over from before this feature. Those are machine defaults nobody chose and
+ * nobody has learned, and replacing one is a FIRST write, not a change.
+ *
+ * Getting this wrong is not a subtle bug, it is the whole feature: an earlier
+ * draft froze any icon whose `icon_at` was null, on the reasoning that an icon
+ * of unknown provenance deserved the benefit of the doubt. But every tab the
+ * `+` button makes is born with `✳`, so under that rule the feature would have
+ * worked exactly once — for the rows that happened to exist when the backfill
+ * ran — and never for a single tab created afterwards. Replacing
+ * `randomTabIcon()` with a constant would not have fixed anything; it would
+ * have made the failure uniform.
  */
 
 /**
@@ -824,34 +867,39 @@ export const ICON_KEEP = KEEP;
 export interface IconFreezeInput {
   /** `tabs.icon_sticky` — the user picked this glyph. */
   sticky: boolean;
-  /** The glyph on the row now, or null if it has none. */
-  current: string | null;
-  /** `tabs.icon_at` — when the GENERATOR last wrote it; null if it never did. */
+  /**
+   * `tabs.icon_at` — when the GENERATOR last wrote this glyph; null if it never
+   * did, which means whatever is on the row is a placeholder (see above).
+   */
   iconAt: number | null;
   now: number;
 }
 
 /**
- * Is this tab's icon off-limits for this turn? Conditions 1–3 of the rule
+ * Is this tab's icon off-limits for this turn? Conditions 1 and 2 of the rule
  * above, pure so both the prompt and the write path can ask the same question
  * and get the same answer.
  */
 export function isIconFrozen(i: IconFreezeInput): boolean {
   // The user's choice. Forever, and before anything else is considered.
   if (i.sticky) return true;
-  // Nothing on the row to protect — a first icon is always welcome.
-  if (i.current === null) return false;
-  // An icon we did not write. The backfill decides what to do with those,
-  // exactly once; a turn-by-turn path must not.
-  if (i.iconAt === null) return true;
+  // No glyph of ours on the row: either it is bare, or it wears a placeholder.
+  // Nothing to protect either way.
+  if (i.iconAt === null) return false;
   return i.now - i.iconAt < ICON_MIN_STABLE_MS;
 }
 
 export interface IconChoiceInput {
   /** The answer from `isIconFrozen`. */
   frozen: boolean;
-  /** The glyph on the row now. */
+  /** The glyph on the row now, placeholder or not — what a write would replace. */
   current: string | null;
+  /**
+   * Has the current glyph been ESTABLISHED, i.e. written by the generator
+   * (`icon_at` is set)? A placeholder has not, and replacing one is a first
+   * write rather than a change. Condition 3.
+   */
+  established: boolean;
   /** Verbatim from the model's ICON line; null if it emitted none. */
   proposed: string | null;
   /** Did the SAME reply also yield a new headline? Condition 5. */
@@ -859,8 +907,8 @@ export interface IconChoiceInput {
 }
 
 /**
- * The icon to write, or null for "leave the row alone" — conditions 4 and 5,
- * on top of the frozen check.
+ * The icon to write, or null for "leave the row alone" — conditions 3–5, on
+ * top of the frozen check.
  *
  * Like `parseHeadline`, every ambiguous outcome resolves to null: a KEEP, an
  * empty line, a sentence, two emoji, a letter and a missing field are all the
@@ -869,15 +917,20 @@ export interface IconChoiceInput {
 export function chooseIcon(c: IconChoiceInput): string | null {
   if (c.frozen) return null;
   if (c.proposed === null) return null;
-  const s = c.proposed.trim();
-  if (!s) return null;
-  // The sentinel first: `isSingleEmoji` would reject "KEEP" anyway, but a
+  const raw = c.proposed.trim();
+  if (!raw) return null;
+  // The sentinel first: `normalizeTabIcon` would reject "KEEP" anyway, but a
   // KEEP is a correct answer and must not be logged as a bad generation.
-  if (s.toUpperCase() === ICON_KEEP) return null;
-  if (!isSingleEmoji(s)) return null;
-  if (s === c.current) return null;
-  // A first icon is free; replacing one is not.
-  if (c.current === null) return s;
+  if (raw.toUpperCase() === ICON_KEEP) return null;
+  const s = normalizeTabIcon(raw);
+  if (s === null) return null;
+  // Compared in canonical form, so a bare `⚙` proposed against a stored `⚙️`
+  // reads as the agreement it is rather than as a change.
+  if (s === (c.current === null ? null : normalizeTabIcon(c.current))) return null;
+  // Replacing a glyph the reader has learned needs the label to have moved
+  // too. Filling a bare row, or displacing a placeholder nobody chose, does
+  // not — see the ESTABLISHED note above.
+  if (!c.established || c.current === null) return s;
   return c.headlineChanged ? s : null;
 }
 
@@ -976,12 +1029,15 @@ export async function maybeWriteHeadline(
   const existing = tab.headline ?? null;
   const lastAt = tabs.headlineAt(tabId);
   const existingIcon = tab.icon ?? null;
+  const iconAt = tabs.iconAt(tabId);
   // Decided BEFORE the call, because the prompt has to say the same thing the
-  // write path will do — an ask we would discard is a lie in the prompt.
+  // write path will do — an ask we would discard is a lie in the prompt. The
+  // sticky flag is re-checked at WRITE time inside TabStore.setIcon; this read
+  // only shapes the prompt, and a user who picks an icon mid-call must not be
+  // overwritten by a decision taken thirty seconds before they clicked.
   const iconFrozen = isIconFrozen({
     sticky: tabs.isIconSticky(tabId),
-    current: existingIcon,
-    iconAt: tabs.iconAt(tabId),
+    iconAt,
     now,
   });
 
@@ -1032,9 +1088,10 @@ export async function maybeWriteHeadline(
   // The icon is decided from the SAME reply and gated on the headline's own
   // verdict — condition 5 of the rule above. Note the order: `next` first,
   // because "did the label move?" is an input to "may the glyph move?".
-  const nextIcon = chooseIcon({
+  const chosenIcon = chooseIcon({
     frozen: iconFrozen,
     current: existingIcon,
+    established: iconAt !== null,
     proposed: splitGenerationFields(reply).icon,
     headlineChanged: next !== null,
   });
@@ -1044,7 +1101,11 @@ export async function maybeWriteHeadline(
   // been stable long enough to keep its line can still be meeting the icon
   // generator for the first time (every tab that existed before this feature,
   // right after the backfill). `headlineChanged` guards only REPLACEMENT.
-  if (nextIcon !== null) tabs.setIcon(tabId, nextIcon, now);
+  //
+  // `setIcon` re-checks stickiness in its own UPDATE and reports whether it
+  // wrote, so a user who picked an icon while the model was thinking wins —
+  // and the result we return says nothing changed, because nothing did.
+  const nextIcon = chosenIcon !== null && tabs.setIcon(tabId, chosenIcon, now) ? chosenIcon : null;
   if (next === null) {
     if (reason && reason !== 'sentinel' && reason !== 'unchanged') {
       // One line, at most once per tab per interval (the clock below is what
