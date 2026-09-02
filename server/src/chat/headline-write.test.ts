@@ -11,6 +11,8 @@ import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { openDb } from '../store/db.js';
 import {
   HEADLINE_MIN_INTERVAL_MS,
+  ICON_MIN_STABLE_MS,
+  backfillGeneratedIcons,
   maybeWriteHeadline,
   sweepImplausibleHeadlines,
 } from './headline.js';
@@ -82,7 +84,7 @@ describe('maybeWriteHeadline — what a bad generation must not cost you', () =>
       paneId,
       model('cron scheduling after a restart'),
     );
-    expect(out).toBe('cron scheduling after a restart');
+    expect(out.headline).toBe('cron scheduling after a restart');
     expect(tabs.getById(tabId)?.headline).toBe('cron scheduling after a restart');
   });
 
@@ -96,7 +98,7 @@ describe('maybeWriteHeadline — what a bad generation must not cost you', () =>
     // testing nothing.
     const now = 1_000 + 3 * HEADLINE_MIN_INTERVAL_MS;
     const out = await maybeWriteHeadline(db, tabId, paneId, model(BUG), { now });
-    expect(out).toBeNull();
+    expect(out.headline).toBeNull();
     expect(tabs.getById(tabId)?.headline).toBe(GOOD);
     // The generation really did run and really was rejected — without this the
     // assertions above are also satisfied by never calling the model.
@@ -105,7 +107,7 @@ describe('maybeWriteHeadline — what a bad generation must not cost you', () =>
 
   it('a rejected FIRST generation leaves the row blank rather than wrong', async () => {
     const out = await maybeWriteHeadline(db, tabId, paneId, model(BUG));
-    expect(out).toBeNull();
+    expect(out.headline).toBeNull();
     expect(tabs.getById(tabId)?.headline).toBeUndefined();
   });
 
@@ -164,7 +166,7 @@ describe('maybeWriteHeadline — what a bad generation must not cost you', () =>
       // "once the interval has passed", not "once 21 minutes have passed".
       now: 1_000 + HEADLINE_MIN_INTERVAL_MS,
     });
-    expect(out).toBe('cron restart persistence');
+    expect(out.headline).toBe('cron restart persistence');
   });
 
   it('a model failure leaves the line alone and charges the attempt', async () => {
@@ -178,7 +180,7 @@ describe('maybeWriteHeadline — what a bad generation must not cost you', () =>
       },
       { now: 1_000 + HEADLINE_MIN_INTERVAL_MS },
     );
-    expect(out).toBeNull();
+    expect(out.headline).toBeNull();
     expect(tabs.getById(tabId)?.headline).toBe(GOOD);
     expect(tabs.headlineAt(tabId)).toBe(1_000 + HEADLINE_MIN_INTERVAL_MS);
   });
@@ -281,5 +283,402 @@ describe('sweepImplausibleHeadlines — the one-time repair', () => {
     mk('empty');
     expect(() => sweepImplausibleHeadlines(db)).not.toThrow();
     expect(sweepImplausibleHeadlines(db).cleared).toEqual([]);
+  });
+});
+
+/**
+ * The icon, on the write path.
+ *
+ * The pure rules are pinned in headline.test.ts; what is tested here is that
+ * the database ends up in the right state — because every failure mode that
+ * matters is a persisted one. A sticky icon overwritten stays overwritten; an
+ * icon that churns churns on the row the user is looking at.
+ */
+describe('maybeWriteHeadline — the icon, and what must never move it', () => {
+  let dir: string;
+  let prevDataDir: string | undefined;
+  let db: Database.Database;
+  let tabs: TabStore;
+  let workspaceId: string;
+  let tabId: string;
+  let paneId: string;
+
+  const TRANSCRIPT = [
+    { id: '1', ts: 1, kind: 'user', text: 'the cron never fires after a restart' },
+    { id: '2', ts: 2, kind: 'assistant', text: 'next_due_at only lives in memory' },
+    { id: '3', ts: 3, kind: 'user', text: 'persist it then' },
+  ];
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'muxpad-icon-write-'));
+    prevDataDir = process.env.MUXPAD_DATA_DIR;
+    process.env.MUXPAD_DATA_DIR = dir;
+    db = openDb(join(dir, 'db.sqlite'));
+    workspaceId = new WorkspaceStore(db).create({ name: 'W' }).id;
+    tabs = new TabStore(db);
+    tabId = tabs.create({ name: 'Main', workspace_id: workspaceId, layout: 'p' }).id;
+    paneId = new PaneStore(db).create({ tab_id: tabId }).id;
+    const sid = 'sid-icon-test';
+    new AgentSessionStore(db).register({ pane_id: paneId, assistant: 'codex', session_id: sid });
+    mkdirSync(join(dir, 'agent-transcripts'), { recursive: true });
+    writeFileSync(
+      join(dir, 'agent-transcripts', `${sid}.jsonl`),
+      `${TRANSCRIPT.map((e) => JSON.stringify(e)).join('\n')}\n`,
+    );
+  });
+
+  afterEach(() => {
+    db.close();
+    // biome-ignore lint/performance/noDelete: restoring an env var that wasn't set
+    if (prevDataDir === undefined) delete process.env.MUXPAD_DATA_DIR;
+    else process.env.MUXPAD_DATA_DIR = prevDataDir;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A well-formed two-field reply. */
+  const reply = (label: string, icon: string) => async () => `LABEL: ${label}\nICON: ${icon}`;
+
+  it('a new tab starts with NO icon, so it is eligible', () => {
+    // The random default is gone. It was not merely meaningless — it was the
+    // generator's own hands-off signal, so it disabled this feature for every
+    // tab that has ever been created.
+    expect(tabs.getById(tabId)?.icon).toBeUndefined();
+  });
+
+  it('writes both outputs from ONE model call', () => {
+    // The cost contract, asserted where it lives. Two calls would double the
+    // spend and let the two answers disagree about what the chat is about.
+    let calls = 0;
+    return maybeWriteHeadline(
+      db,
+      tabId,
+      paneId,
+      async () => {
+        calls += 1;
+        return 'LABEL: cron restart persistence\nICON: ⏰';
+      },
+      { now: 1_000 },
+    ).then((out) => {
+      expect(calls).toBe(1);
+      expect(out).toEqual({ headline: 'cron restart persistence', icon: '⏰' });
+      const tab = tabs.getById(tabId);
+      expect(tab?.headline).toBe('cron restart persistence');
+      expect(tab?.icon).toBe('⏰');
+      expect(tabs.iconAt(tabId)).toBe(1_000);
+    });
+  });
+
+  it('a REJECTED icon leaves the existing one exactly as it was', async () => {
+    // The icon's version of the rule the headline already follows: a bad
+    // generation is never an improvement on a good value.
+    await maybeWriteHeadline(db, tabId, paneId, reply('cron restart persistence', '⏰'), {
+      now: 1_000,
+    });
+    const stamped = tabs.iconAt(tabId);
+
+    for (const bad of ['🚀🔥', 'rocket', ':-)', '🚀 deploy', '', 'x']) {
+      const out = await maybeWriteHeadline(
+        db,
+        tabId,
+        paneId,
+        reply(`subject number ${bad.length}`, bad),
+        // Well past the stability window, so the ONLY thing standing between
+        // this reply and the row is the validator.
+        { now: 1_000 + 10 * ICON_MIN_STABLE_MS },
+      );
+      expect(out.icon).toBeNull();
+      expect(tabs.getById(tabId)?.icon).toBe('⏰');
+      // …and the clock did not move either, or the window would restart on
+      // every bad generation and a real change could never land.
+      expect(tabs.iconAt(tabId)).toBe(stamped);
+    }
+  });
+
+  it('a rejected FIRST icon leaves the row bare rather than wrong', async () => {
+    const out = await maybeWriteHeadline(db, tabId, paneId, reply('cron restarts', '🚀🔥'), {
+      now: 1_000,
+    });
+    expect(out.icon).toBeNull();
+    expect(tabs.getById(tabId)?.icon).toBeUndefined();
+    expect(tabs.iconAt(tabId)).toBeNull();
+  });
+
+  it('NEVER touches an icon the user chose — not once, not ever', async () => {
+    // The sticky rule, end to end and over many attempts across a long span.
+    // A single-attempt version of this test would pass against an
+    // implementation that merely rate-limited the overwrite.
+    tabs.setIcon(tabId, '⏰', 1_000);
+    tabs.setIconSticky(tabId);
+    for (let i = 1; i <= 20; i++) {
+      const out = await maybeWriteHeadline(
+        db,
+        tabId,
+        paneId,
+        reply(`subject that keeps moving ${i}`, '🐛'),
+        { now: 1_000 + i * 10 * ICON_MIN_STABLE_MS },
+      );
+      expect(out.icon).toBeNull();
+    }
+    expect(tabs.getById(tabId)?.icon).toBe('⏰');
+    expect(tabs.iconAt(tabId)).toBe(1_000);
+    // The headline meanwhile is NOT frozen — sticky is about the glyph only,
+    // and a test that couldn't tell the two apart would also pass if the
+    // whole write path had stopped working.
+    expect(tabs.getById(tabId)?.headline).toBeTruthy();
+  });
+
+  it('a sticky icon on a row the model has never seen is still untouchable', async () => {
+    // Sticky outranks "there is nothing there yet": a user who picked a glyph
+    // and then cleared it has still expressed that this row is theirs.
+    tabs.setIconSticky(tabId);
+    const out = await maybeWriteHeadline(db, tabId, paneId, reply('cron restarts', '⏰'), {
+      now: 1_000,
+    });
+    expect(out.icon).toBeNull();
+    expect(tabs.getById(tabId)?.icon).toBeUndefined();
+  });
+
+  it('holds the glyph still for the whole stability window', async () => {
+    await maybeWriteHeadline(db, tabId, paneId, reply('cron restart persistence', '⏰'), {
+      now: 1_000,
+    });
+    // Twenty finished turns across the window, every one of them proposing a
+    // different emoji and a different subject. This is the churn scenario.
+    for (let i = 1; i <= 20; i++) {
+      await maybeWriteHeadline(db, tabId, paneId, reply(`subject ${i}`, i % 2 ? '🐛' : '🔥'), {
+        now: 1_000 + Math.floor((i * (ICON_MIN_STABLE_MS - 1)) / 20),
+      });
+    }
+    expect(tabs.getById(tabId)?.icon).toBe('⏰');
+    // The HEADLINE moved several times over the same span — proof the calls
+    // really happened and that the icon's stillness is its own rule, not a
+    // side effect of the row being idle.
+    expect(tabs.getById(tabId)?.headline).not.toBe('cron restart persistence');
+  });
+
+  it('lets the glyph move once the window is up AND the line moved with it', async () => {
+    await maybeWriteHeadline(db, tabId, paneId, reply('cron restart persistence', '⏰'), {
+      now: 1_000,
+    });
+    const later = 1_000 + ICON_MIN_STABLE_MS;
+    const out = await maybeWriteHeadline(db, tabId, paneId, reply('bambu printer slicing', '🖨️'), {
+      now: later,
+    });
+    expect(out).toEqual({ headline: 'bambu printer slicing', icon: '🖨️' });
+    expect(tabs.getById(tabId)?.icon).toBe('🖨️');
+    expect(tabs.iconAt(tabId)).toBe(later);
+  });
+
+  it('refuses to move the glyph when the LINE stood still', async () => {
+    // Anti-drift condition 5, end to end. Past the window, a valid new emoji,
+    // and the model saying KEEP to the label — which means the subject did not
+    // move, which means the picture of it has no business moving either.
+    await maybeWriteHeadline(db, tabId, paneId, reply('cron restart persistence', '⏰'), {
+      now: 1_000,
+    });
+    const out = await maybeWriteHeadline(db, tabId, paneId, reply('KEEP', '🐛'), {
+      now: 1_000 + 10 * ICON_MIN_STABLE_MS,
+    });
+    expect(out.icon).toBeNull();
+    expect(tabs.getById(tabId)?.icon).toBe('⏰');
+  });
+
+  it('gives a FIRST icon even when the line is kept', async () => {
+    // The one case where the two outputs come apart: a settled chat that has
+    // never had a glyph. Every tab that existed before this feature is in
+    // exactly this state right after the backfill, so gating the first icon on
+    // a headline change would have meant they never got one.
+    tabs.setHeadline(tabId, 'cron restart persistence', 1_000);
+    const out = await maybeWriteHeadline(db, tabId, paneId, reply('KEEP', '⏰'), {
+      now: 1_000 + HEADLINE_MIN_INTERVAL_MS,
+    });
+    expect(out.headline).toBeNull();
+    expect(out.icon).toBe('⏰');
+    expect(tabs.getById(tabId)?.icon).toBe('⏰');
+    // The line really was kept.
+    expect(tabs.getById(tabId)?.headline).toBe('cron restart persistence');
+  });
+
+  it('leaves an icon of unknown provenance alone', async () => {
+    // An icon with no `icon_at` did not come from us. Only the one-time
+    // backfill takes a view on those, and it does so once — a per-turn path
+    // that clobbered them would undo exactly what the backfill preserved.
+    tabs.update(tabId, { icon: '🦊' });
+    const out = await maybeWriteHeadline(db, tabId, paneId, reply('cron restarts', '⏰'), {
+      now: 1_000,
+    });
+    expect(out.icon).toBeNull();
+    expect(tabs.getById(tabId)?.icon).toBe('🦊');
+  });
+
+  it('degrades to headline-only against a model that ignores the format', async () => {
+    const out = await maybeWriteHeadline(
+      db,
+      tabId,
+      paneId,
+      async () => 'cron restart persistence',
+      { now: 1_000 },
+    );
+    expect(out).toEqual({ headline: 'cron restart persistence', icon: null });
+    expect(tabs.getById(tabId)?.icon).toBeUndefined();
+  });
+
+  it('tells the model what glyph is on the row, and to keep it', async () => {
+    tabs.setIcon(tabId, '⏰', 1_000);
+    let seen = '';
+    await maybeWriteHeadline(
+      db,
+      tabId,
+      paneId,
+      async (prompt) => {
+        seen = prompt;
+        return 'LABEL: KEEP\nICON: KEEP';
+      },
+      { now: 1_000 + ICON_MIN_STABLE_MS },
+    );
+    expect(seen).toContain('currently ⏰');
+    expect(seen).toContain('ICON: KEEP');
+  });
+
+  it('tells the model the glyph is settled while it is frozen', async () => {
+    tabs.setIcon(tabId, '⏰', 1_000);
+    let seen = '';
+    await maybeWriteHeadline(
+      db,
+      tabId,
+      paneId,
+      async (prompt) => {
+        seen = prompt;
+        return 'LABEL: KEEP\nICON: KEEP';
+      },
+      // Inside the window: the ask must not pretend the answer could matter.
+      { now: 1_000 + HEADLINE_MIN_INTERVAL_MS },
+    );
+    expect(seen).toContain('not up for review');
+  });
+});
+
+describe('backfillGeneratedIcons — the one-shot that unblocks generation', () => {
+  let dir: string;
+  let db: Database.Database;
+  let tabs: TabStore;
+  let workspaceId: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'muxpad-icon-backfill-'));
+    db = openDb(join(dir, 'db.sqlite'));
+    workspaceId = new WorkspaceStore(db).create({ name: 'W' }).id;
+    tabs = new TabStore(db);
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A tab wearing `icon`, as though it had been created before this feature. */
+  const mk = (name: string, icon?: string) => {
+    const id = tabs.create({ name, workspace_id: workspaceId, layout: 'p' }).id;
+    if (icon) db.prepare('UPDATE tabs SET icon = ? WHERE id = ?').run(icon, id);
+    return id;
+  };
+
+  it('clears the meaningless glyphs so the normal path picks those rows up', () => {
+    // The reported symptom: several unrelated chats all wearing the same
+    // meaningless emoji, and none of them able to be given a real one —
+    // because "this tab already has an icon" is the generator's own hands-off
+    // signal.
+    const a = mk('muxpad', '👍');
+    const b = mk('kipa', '👍');
+    const c = mk('trading', '🗝\uFE0F');
+
+    const { cleared } = backfillGeneratedIcons(db);
+
+    expect(new Set(cleared)).toEqual(new Set([a, b, c]));
+    for (const id of [a, b, c]) {
+      expect(tabs.getById(id)?.icon).toBeUndefined();
+      expect(tabs.iconAt(id)).toBeNull();
+      // NOT made sticky. Clearing hands the row to the generator; marking it
+      // sticky would hand it to nobody, forever.
+      expect(tabs.isIconSticky(id)).toBe(false);
+    }
+  });
+
+  it('GENERATES NOTHING — it only clears', () => {
+    // Mass generation at boot would be one model call per tab, all at once, on
+    // a machine that has just started. The model seam is not even reachable
+    // from here; what this pins is the shape of that promise — the row is left
+    // EMPTY for the per-turn path to fill, not filled here.
+    mk('muxpad', '👍');
+    backfillGeneratedIcons(db);
+    expect(
+      db.prepare("SELECT COUNT(*) AS n FROM tabs WHERE icon IS NOT NULL AND icon != ''").get(),
+    ).toEqual({ n: 0 });
+  });
+
+  it('never touches a sticky icon', () => {
+    const chosen = mk('mine', '👍');
+    tabs.setIconSticky(chosen);
+    const { cleared } = backfillGeneratedIcons(db);
+    expect(cleared).not.toContain(chosen);
+    expect(tabs.getById(chosen)?.icon).toBe('👍');
+    expect(tabs.isIconSticky(chosen)).toBe(true);
+  });
+
+  it('clears rather than guessing which old icons were chosen by a human', () => {
+    // It is tempting to keep any icon outside TAB_ICONS on the theory that
+    // `randomTabIcon()` could not have produced it, so a person must have. That
+    // makes a PERMANENT decision out of a guess about the past, and in the
+    // wrong direction: a row wrongly left not-sticky is repaired by picking an
+    // icon once, a row wrongly marked sticky can never be given a meaningful
+    // one again. It is also wrong in fact — the reported 👍 is not in
+    // TAB_ICONS and is exactly the glyph this change exists to replace.
+    const offPalette = mk('kipa', '🧿');
+    const zwj = mk('family', '👨\u200D👩\u200D👧\u200D👦');
+    const inPalette = mk('other', '🗝\uFE0F');
+
+    const { cleared } = backfillGeneratedIcons(db);
+
+    expect(new Set(cleared)).toEqual(new Set([offPalette, zwj, inPalette]));
+    for (const id of [offPalette, zwj, inPalette]) {
+      expect(tabs.getById(id)?.icon).toBeUndefined();
+      expect(tabs.isIconSticky(id)).toBe(false);
+    }
+  });
+
+  it('leaves a tab that already has no icon alone', () => {
+    const bare = mk('fresh');
+    const { cleared } = backfillGeneratedIcons(db);
+    expect(cleared).toEqual([]);
+    expect(tabs.isIconSticky(bare)).toBe(false);
+  });
+
+  it('runs once — a glyph written after the backfill is never re-cleared', () => {
+    const id = mk('muxpad', '👍');
+    expect(backfillGeneratedIcons(db).cleared).toEqual([id]);
+
+    // A later generation, or a later random-looking pick. The backfill must
+    // not come back for it on every boot — that would be an icon that resets
+    // itself whenever the server bounces.
+    tabs.setIcon(id, '🗝️', 9_000);
+    expect(backfillGeneratedIcons(db)).toEqual({ cleared: [] });
+    expect(tabs.getById(id)?.icon).toBe('🗝️');
+  });
+
+  it('sets its marker even when there is nothing to do', () => {
+    expect(backfillGeneratedIcons(db)).toEqual({ cleared: [] });
+    expect(new GlobalsStore(db).get('tab_icon_backfill_v1')).toBe('1');
+  });
+
+  it('does not touch names, headlines or their stickiness', () => {
+    const id = mk('Main', '👍');
+    tabs.setHeadline(id, 'cron restart persistence', 5_000);
+    tabs.setNameSticky(id);
+    backfillGeneratedIcons(db);
+    const tab = tabs.getById(id);
+    expect(tab?.name).toBe('Main');
+    expect(tab?.headline).toBe('cron restart persistence');
+    expect(tabs.isNameSticky(id)).toBe(true);
+    expect(tabs.headlineAt(id)).toBe(5_000);
   });
 });

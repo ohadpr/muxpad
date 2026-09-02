@@ -406,7 +406,7 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
       .get() as { version: number };
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
-    expect(LATEST_SCHEMA_VERSION).toBe(24);
+    expect(LATEST_SCHEMA_VERSION).toBe(25);
   });
 });
 
@@ -463,6 +463,67 @@ describe("migrations v24 — the nav row's second line", () => {
     expect(db.prepare('SELECT headline, name_sticky FROM tabs WHERE id = ?').get('t1')).toEqual({
       headline: 'a line',
       name_sticky: 1,
+    });
+  });
+});
+
+describe('migrations v25 — content-derived tab icons', () => {
+  const seedTab = (db: Database.Database, icon: string | null = null) => {
+    db.prepare(
+      `INSERT INTO workspaces (id, slug, name, position, created_at, updated_at)
+       VALUES ('w1', 'w-one', 'W', 0, 1, 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, icon, layout, workspace_id, position, created_at, updated_at)
+       VALUES ('t1', 't-one', 'agent', ?, 'p1', 'w1', 0, 1, 1)`,
+    ).run(icon);
+  };
+
+  it('adds the two columns with the right nullability', () => {
+    const db = new Database(':memory:');
+    runMigrations(db);
+    seedTab(db, '🚀');
+    const row = db.prepare('SELECT icon, icon_sticky, icon_at FROM tabs').get() as {
+      icon: string | null;
+      icon_sticky: number;
+      icon_at: number | null;
+    };
+    // icon_sticky backfills to 0, the SAFE direction and the same argument
+    // migration 24 made for name_sticky: a row wrongly left not-sticky is
+    // repaired by picking an icon once, a row wrongly marked sticky can never
+    // be given a meaningful one again.
+    expect(row.icon_sticky).toBe(0);
+    // icon_at is nullable with no backfill, because "this glyph did not come
+    // from the generator" is a real state — and for every pre-existing row it
+    // is the true one.
+    expect(row.icon_at).toBeNull();
+    // The migration itself does not touch the icon. Clearing the unclaimed
+    // ones is the one-time backfill's job (chat/headline.ts), behind its own
+    // globals marker, so it happens once per install rather than once per
+    // schema step.
+    expect(row.icon).toBe('🚀');
+  });
+
+  it('backfills EXISTING tabs rather than failing on the NOT NULL default', () => {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 24 });
+    seedTab(db, '🚀');
+    runMigrations(db);
+    expect(db.prepare('SELECT icon_sticky, icon_at FROM tabs WHERE id = ?').get('t1')).toEqual({
+      icon_sticky: 0,
+      icon_at: null,
+    });
+  });
+
+  it('is idempotent', () => {
+    const db = new Database(':memory:');
+    runMigrations(db);
+    seedTab(db, '🚀');
+    db.prepare('UPDATE tabs SET icon_sticky = 1, icon_at = 99 WHERE id = ?').run('t1');
+    runMigrations(db);
+    expect(db.prepare('SELECT icon_sticky, icon_at FROM tabs WHERE id = ?').get('t1')).toEqual({
+      icon_sticky: 1,
+      icon_at: 99,
     });
   });
 });
