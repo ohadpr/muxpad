@@ -74,11 +74,17 @@ export const HEADLINE_TARGET_CHARS = 60;
 export const HEADLINE_MAX_CHARS = 90;
 
 /**
- * Floor between model calls for one chat. 20 minutes is long enough that an
+ * Floor between model calls for one chat. Long enough that an
  * agent working steadily for an hour costs three calls, not sixty, and short
  * enough that a chat you come back to after lunch is current.
  */
-export const HEADLINE_MIN_INTERVAL_MS = 20 * 60_000;
+export const HEADLINE_MIN_INTERVAL_MS = 6 * 60_000;
+// Was 20 minutes, which read as "the headline is stale" in practice: a chat
+// that changes subject three times in an hour kept describing the first one.
+// The gate only runs on turn-done, so an IDLE chat costs nothing no matter
+// how short this is — the interval only ever spends money on a chat that is
+// actively producing turns, i.e. exactly the one whose subject is moving.
+// A KEEP is the cheap common case; the expensive failure was being wrong.
 
 /**
  * How many user/assistant turns a chat must contain before it gets a headline
@@ -122,7 +128,7 @@ export interface HeadlineGateInput {
  *
  *   - Too few turns → no. There is nothing to summarise yet.
  *   - Never attempted → YES. The first line is the whole value; making a new
- *     chat wait 20 minutes for it would mean the rail is least useful exactly
+ *     chat wait for the interval would mean the rail is least useful exactly
  *     when you have the most chats open.
  *   - Otherwise → only after the interval.
  *
