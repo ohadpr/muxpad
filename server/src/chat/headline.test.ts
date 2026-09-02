@@ -555,13 +555,12 @@ describe('chooseIcon — what may actually be written (conditions 4–5)', () =>
   const base = {
     frozen: false,
     current: '🚀' as string | null,
-    established: true,
     proposed: '🐛' as string | null,
     headlineChanged: true,
   };
 
   it('writes a first icon on a row that has none', () => {
-    expect(chooseIcon({ ...base, current: null, established: false })).toBe('🐛');
+    expect(chooseIcon({ ...base, current: null })).toBe('🐛');
   });
 
   it('writes a first icon even when the LABEL was kept', () => {
@@ -571,9 +570,7 @@ describe('chooseIcon — what may actually be written (conditions 4–5)', () =>
     // chat that still needs its first glyph — every tab that existed before
     // this feature is in that state right after the backfill. If this were
     // gated on `headlineChanged`, a settled chat would never get an icon.
-    expect(chooseIcon({ ...base, current: null, established: false, headlineChanged: false })).toBe(
-      '🐛',
-    );
+    expect(chooseIcon({ ...base, current: null, headlineChanged: false })).toBe('🐛');
   });
 
   it('will NOT replace an existing icon while the headline stood still', () => {
@@ -591,7 +588,7 @@ describe('chooseIcon — what may actually be written (conditions 4–5)', () =>
 
   it('writes nothing at all when frozen, however good the proposal', () => {
     expect(chooseIcon({ ...base, frozen: true })).toBeNull();
-    expect(chooseIcon({ ...base, frozen: true, current: null, established: false })).toBeNull();
+    expect(chooseIcon({ ...base, frozen: true, current: null })).toBeNull();
   });
 
   it('treats KEEP as the no-op it is', () => {
@@ -625,9 +622,7 @@ describe('chooseIcon — what may actually be written (conditions 4–5)', () =>
   });
 
   it('accepts a ZWJ sequence as the single glyph it is', () => {
-    expect(chooseIcon({ ...base, current: null, established: false, proposed: '🧑‍💻' })).toBe(
-      '🧑‍💻',
-    );
+    expect(chooseIcon({ ...base, current: null, proposed: '🧑‍💻' })).toBe('🧑‍💻');
   });
 });
 
@@ -768,36 +763,61 @@ describe('the prompt still frames the model as a labelling tool', () => {
   });
 });
 
-describe('chooseIcon — the placeholder rule, and presentation', () => {
+describe('chooseIcon — a visible glyph is a visible glyph, whoever put it there', () => {
   const base = {
     frozen: false,
     current: '✳' as string | null,
-    established: false,
     proposed: '🐛' as string | null,
     headlineChanged: false,
   };
 
-  it('displaces a PLACEHOLDER even though the label stood still', () => {
-    // The ✳ every bootstrapped agent tab is born with, the ⏱ a cron tab gets.
-    // Nobody chose them and nobody has learned them, so replacing one is a
-    // first write, not a change — and gating it on `headlineChanged` would
-    // mean a settled chat never lost its placeholder.
-    expect(chooseIcon(base)).toBe('🐛');
-    expect(chooseIcon({ ...base, current: '⏱' })).toBe('🐛');
+  it('will NOT displace a creation default while the label stood still', () => {
+    // `✳` is what a bootstrapped agent tab is created with, `⏱` what a cron tab
+    // gets. It is tempting to call those free to replace — nobody chose them.
+    // But we cannot tell them from an icon the user picked by hand before there
+    // was a flag to record it, and churning THAT on the first turn after an
+    // upgrade is the worse mistake. So the ambiguity resolves the way every
+    // ambiguity here resolves: prefer keeping.
+    expect(chooseIcon(base)).toBeNull();
+    expect(chooseIcon({ ...base, current: '⏱' })).toBeNull();
+    // Nor an arbitrary emoji of unknown provenance, which is the case that
+    // rule actually exists to protect.
+    expect(chooseIcon({ ...base, current: '🧿' })).toBeNull();
+  });
+
+  it('displaces it the moment the label DOES move', () => {
+    // The cost of preferring to keep is a delay, never a permanent block: any
+    // reply that carries a new headline carries the new glyph with it.
+    expect(chooseIcon({ ...base, headlineChanged: true })).toBe('🐛');
+    expect(chooseIcon({ ...base, current: '🧿', headlineChanged: true })).toBe('🐛');
+  });
+
+  it('still labels a BRAND-NEW tab on its first successful generation', () => {
+    // The property that makes "prefer keeping" free rather than costly. A new
+    // tab has no headline, so its first accepted label is by definition a
+    // change, and the icon rides along with it — a fresh `✳` row is labelled on
+    // the first generation exactly as it would have been under a free-
+    // replacement rule.
+    expect(isMaterialChange(null, 'cron restart persistence')).toBe(true);
+    expect(chooseIcon({ ...base, current: '✳', headlineChanged: true })).toBe('🐛');
   });
 
   it('canonicalises what it returns', () => {
     // A bare text-presentation glyph is stored in the form that renders as a
     // picture, so the rail is not half colour and half monochrome.
-    expect(chooseIcon({ ...base, proposed: '⚙' })).toBe('⚙\uFE0F');
+    expect(chooseIcon({ ...base, current: null, proposed: '⚙' })).toBe('⚙\uFE0F');
   });
 
   it('reads a bare proposal against a stored VS16 spelling as agreement', () => {
     // Without canonical comparison this is a WRITE — the same glyph, restamped,
     // restarting the stability window and burning the row's one allowed change
     // on a repaint nobody would see.
-    expect(chooseIcon({ ...base, current: '⚙\uFE0F', proposed: '⚙' })).toBeNull();
-    expect(chooseIcon({ ...base, current: '⚙', proposed: '⚙\uFE0F' })).toBeNull();
+    expect(
+      chooseIcon({ ...base, current: '⚙\uFE0F', proposed: '⚙', headlineChanged: true }),
+    ).toBeNull();
+    expect(
+      chooseIcon({ ...base, current: '⚙', proposed: '⚙\uFE0F', headlineChanged: true }),
+    ).toBeNull();
   });
 });
 
