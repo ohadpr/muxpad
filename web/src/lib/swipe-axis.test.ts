@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  SWIPE_ACTION_COUNT,
+  SWIPE_ACTION_WIDTH,
   SWIPE_FLICK,
   SWIPE_LATCH,
   SWIPE_SLOP,
@@ -99,8 +101,61 @@ describe('settleOpen — there is no half-open resting state', () => {
   });
 });
 
-describe('the tray geometry meets the touch-target floor', () => {
-  it('each action is comfortably past 44px wide', () => {
-    expect(SWIPE_TRAY_WIDTH / 2).toBeGreaterThanOrEqual(44);
+describe('the tray geometry — three actions, one derivation', () => {
+  it('reveals exactly the three actions the tray renders', () => {
+    // Pin, Mark unread, Close. If a fourth is ever added this fails first,
+    // which is the point: the width below has to be re-argued, not just
+    // inherited.
+    expect(SWIPE_ACTION_COUNT).toBe(3);
+  });
+
+  it('opens FAR ENOUGH to show every action, not two of three', () => {
+    // The regression this guards is the one the third action actually hit: the
+    // tray width was a literal `* 2`, so the row slid two-thirds of the way and
+    // the last action stayed permanently off-screen with its tap target clipped
+    // to nothing. Stated as "a fully-open row exposes N whole actions" rather
+    // than by restating the definition, which would pass however wrong the
+    // count was.
+    expect(Math.abs(clampOffset(0, -1000)) / SWIPE_ACTION_WIDTH).toBe(SWIPE_ACTION_COUNT);
+  });
+
+  it('every action clears the 44px touch floor', () => {
+    // Both axes: the width here, and the row's own 44px min-height in
+    // NavTree.css (the actions are `align-items: stretch`, so they are exactly
+    // as tall as the row).
+    expect(SWIPE_TRAY_WIDTH / SWIPE_ACTION_COUNT).toBeGreaterThanOrEqual(44);
+  });
+
+  it('keeps the tray under HALF the row on a 375px phone', () => {
+    // 375 (iPhone SE 3 / 13 mini) is the floor the width is DERIVED from, less
+    // the sheet scroller's 8px inset each side — not 390, which is only the
+    // size this was designed against. The face is what you tap to dismiss the
+    // tray, so it has to stay unmistakably the biggest thing on the row.
+    // This is the assertion that pins SWIPE_ACTION_WIDTH: a fourth action, or
+    // widening these back toward 76, fails here first.
+    const rowWidth = 375 - 8 * 2;
+    const face = rowWidth - SWIPE_TRAY_WIDTH;
+    expect(face).toBeGreaterThanOrEqual(rowWidth / 2);
+  });
+
+  it('still leaves a real target at 360, where the half is knowingly missed', () => {
+    // Narrow Android. Documented as an accepted exception rather than shaved
+    // for — so it gets the weaker bound it actually holds, and a regression
+    // that blew past it would still be caught.
+    const rowWidth = 360 - 8 * 2;
+    const face = rowWidth - SWIPE_TRAY_WIDTH;
+    expect(face).toBeGreaterThan(SWIPE_ACTION_WIDTH * 2);
+    expect(face / rowWidth).toBeGreaterThan(0.45);
+  });
+
+  it('revealing ONE action is not yet a commitment to open', () => {
+    // The latch is a fraction of the tray, so it scales with the count for
+    // free — and that rescaling is load-bearing, not incidental. At two 76px
+    // actions, dragging a single action's width (76) already cleared the latch
+    // (60.8) and the row snapped open. At three it does not: one action is a
+    // peek, and you have to mean it. A fixed-pixel latch would have lost this.
+    expect(settleOpen(-SWIPE_ACTION_WIDTH, -1)).toBe(false);
+    expect(settleOpen(-SWIPE_TRAY_WIDTH, -1)).toBe(true);
+    expect(SWIPE_ACTION_WIDTH).toBeLessThan(SWIPE_TRAY_WIDTH * SWIPE_LATCH);
   });
 });

@@ -2,6 +2,7 @@ import type { Tab } from '@muxpad/shared';
 import { useEffect, useState } from 'react';
 import { api } from './api';
 import { subscribe, subscribeReconnect } from './events';
+import { unreadRowPatch } from './lib/tab-unread';
 import { refreshWorkspaces } from './workspaces';
 
 /**
@@ -147,6 +148,44 @@ export function applyTabOrder(workspaceId: string, ids: string[]): void {
   caches.set(workspaceId, next);
   const subs = listenersByWs.get(workspaceId);
   if (subs) for (const fn of subs) fn(next);
+}
+
+/**
+ * Optimistically flip one tab's manual unread mark in whatever workspace slot
+ * holds it, so the row's bold name and status dot land on the tap's own frame
+ * rather than after the write's round trip. See lib/tab-unread for the shape
+ * of the patch (and why it patches `status` as well as `unread`).
+ *
+ * Scans the cache slots rather than taking a workspaceId: the callers that
+ * have one (NavTree) also have the tab, and the ones that don't would have to
+ * invent it. Patching every slot that holds the tab is also what keeps the
+ * OTHER readers of this cache honest for free — the tab-bar dropdown and the
+ * mobile switcher both render from it and pick the flip up in the same frame.
+ *
+ * Same bump-the-version trick as applyTabOrder — an in-flight poll that
+ * started before this patch must not land after it and undo it. The caller's
+ * own refreshTabs() is issued AFTER the bump, so it takes a higher version and
+ * its answer still wins; only the older poll is discarded.
+ *
+ * DELIBERATELY PARTIAL. This patches the tab row and nothing else, so for one
+ * round trip the workspace row's rollup dot above it, and the pane rows inside
+ * an expanded tab, still show the pre-tap state. Reproducing decorateWorkspace
+ * and the per-pane fan-out of /seen on the client would mean a second
+ * implementation of the server's rollup rules, which is a far worse trade than
+ * a sibling row lagging by one request — and the refetch behind this fixes
+ * them all at once.
+ */
+export function applyTabUnread(tabId: string, unread: boolean): void {
+  for (const [wsId, list] of caches) {
+    const i = list.findIndex((t) => t.id === tabId);
+    if (i < 0) continue;
+    const next = [...list];
+    next[i] = { ...list[i], ...unreadRowPatch(list[i] as Tab, unread) } as Tab;
+    versions.set(wsId, (versions.get(wsId) ?? 0) + 1);
+    caches.set(wsId, next);
+    const subs = listenersByWs.get(wsId);
+    if (subs) for (const fn of subs) fn(next);
+  }
 }
 
 // ── One driver PER WORKSPACE, not per subscriber ─────────────────────────

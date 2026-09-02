@@ -12,12 +12,14 @@
  *    per-row control — no ×, no ⋯. Both were always-on hit squares parked
  *    exactly where a thumb lands while scrolling, so the two most common
  *    mis-taps in the whole app were "closed a chat I meant to open" and
- *    "opened a menu I meant to scroll past". Pin and Close moved UNDER the
- *    row, revealed by a left swipe (see lib/swipe-axis + NavTree's
+ *    "opened a menu I meant to scroll past". Pin, Mark unread and Close moved
+ *    UNDER the row, revealed by a left swipe (see lib/swipe-axis + NavTree's
  *    SwipeRow) — the standard iOS list idiom, discoverable by muscle memory,
  *    and impossible to hit by accident because it takes a deliberate
- *    horizontal gesture. Long-press still opens the full context menu where
- *    the OS lets it through; it is a bonus path, never the only one.
+ *    horizontal gesture. Mark unread joined the other two rather than staying
+ *    menu-only: it was the one action the removed ⋯ menu owned that has no
+ *    other one-gesture route on touch. Long-press still opens the full context
+ *    menu where the OS lets it through; it is a bonus path, never the only one.
  *
  * The pane-count chip exists because a one-pane and a five-pane row looked
  * identical on the sheet yet behaved completely differently on tap (navigate
@@ -56,8 +58,8 @@ export function tabRowAffordances(opts: {
   return {
     pinButton: variant === 'sidebar' && !isEditing,
     // Touch rows carry NO permanent controls at all now — see the swipe note
-    // above. Both the × and the ⋯ that preceded it are gone; pin and close
-    // live under the row, revealed by a left swipe.
+    // above. Both the × and the ⋯ that preceded it are gone; pin, mark-unread
+    // and close live under the row, revealed by a left swipe.
     closeButton: variant === 'sidebar' && !isEditing,
     paneExpander: picksPane && !isEditing,
     // Collapsed-only, mirroring the workspace chip: once the panes are listed

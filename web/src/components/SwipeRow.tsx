@@ -43,8 +43,15 @@ import './SwipeRow.css';
  *
  * Keyboard and pointer users are unaffected: this component is only mounted
  * for the sheet variant, and the desktop sidebar keeps its hover-revealed
- * controls. The actions are real `<button>`s in the DOM, so a screen reader
- * reaches them by tabbing whether or not the tray is visibly open.
+ * controls — where pin, mark-unread and close all live in the context menu,
+ * which IS the keyboard path.
+ *
+ * A closed tray is inert on purpose: `aria-hidden` on the tray plus
+ * `tabIndex={-1}` on its buttons. Three actions × every row would otherwise be
+ * three extra tab stops and three announced buttons per chat, on a surface a
+ * keyboard user cannot open in the first place (opening it takes a touch
+ * gesture). So the sheet has no AT path to these three, by construction, and
+ * the desktop menu is the one that has to keep working.
  */
 
 // ─── "only one open" ────────────────────────────────────────────────────────
@@ -70,13 +77,28 @@ export interface SwipeRowProps {
   id: string;
   children: ReactNode;
   onPin: () => void;
+  /** Toggle the manual unread mark — the same action the desktop context menu
+   *  offers, reaching the same route. `true` marks unread, `false` marks read. */
+  onSetUnread: (want: boolean) => void;
   onClose: () => void;
   pinned: boolean;
+  /** Whether the row currently carries the unread mark (the `ready` state's
+   *  persisted flag) — decides which way the middle action toggles. */
+  unread: boolean;
   /** For the actions' accessible names ("Close chat Investing"). */
   label: string;
 }
 
-export function SwipeRow({ id, children, onPin, onClose, pinned, label }: SwipeRowProps) {
+export function SwipeRow({
+  id,
+  children,
+  onPin,
+  onSetUnread,
+  onClose,
+  pinned,
+  unread,
+  label,
+}: SwipeRowProps) {
   const [offset, setOffset] = useState(0);
   const [dragging, setDragging] = useState(false);
   // Close is destructive and there is no undo, so it takes two taps: the first
@@ -223,6 +245,44 @@ export function SwipeRow({ id, children, onPin, onClose, pinned, label }: SwipeR
             {pinned ? '📌' : '📍'}
           </span>
           {pinned ? 'Unpin' : 'Pin'}
+        </button>
+        {/* MIDDLE, between the two that were already here.
+
+            Only ONE of the two existing actions can keep its POSITION when a
+            third arrives, because the tray is anchored to the row's right edge
+            and everything to the left of the new button shifts. Close is the
+            one worth keeping still: measured from that edge it stays the
+            0–59 band it has always been, and it is the destructive one — the
+            action whose accidental press costs something. Pin keeps only its
+            ORDINAL slot (still leftmost); a thumb aimed at where Pin used to
+            be now lands on this button. Accepted, because the miss is
+            recoverable with one more tap and the swipe is visibly longer than
+            it was, which is its own cue that the row has changed.
+
+            It toggles rather than only marking, for the same reason Pin does:
+            the tray is a thumb-sized target reached by a gesture, so the undo
+            for a mis-tap has to be the button you just hit. Marking a chat
+            unread with no way back would leave you hunting for the long-press
+            menu to undo a one-tap mistake. */}
+        <button
+          type="button"
+          className="swiperow-action -unread"
+          tabIndex={isOpen ? 0 : -1}
+          onClick={() => {
+            onSetUnread(!unread);
+            setOpenRow(null);
+          }}
+          aria-label={unread ? `Mark ${label} read` : `Mark ${label} unread`}
+        >
+          {/* The status rail's own vocabulary: a FILLED disc is `ready`
+              ("finished, waiting for you"), which is exactly the state this
+              button produces, and a hollow one is its absence. Reusing the
+              shape means the button names its outcome instead of inventing a
+              second glyph for the same idea. */}
+          <span className="swiperow-action-glyph" aria-hidden="true">
+            {unread ? '○' : '●'}
+          </span>
+          {unread ? 'Read' : 'Unread'}
         </button>
         <button
           type="button"
