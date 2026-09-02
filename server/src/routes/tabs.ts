@@ -88,7 +88,15 @@ export function tabsRoutes(deps: {
       ...(body.model !== undefined ? { model: body.model } : {}),
       ...(body.backend !== undefined ? { backend: body.backend } : {}),
       ...(body.mode !== undefined ? { mode: body.mode } : {}),
-      ...(body.bootstrap === 'agent' ? { icon: '✳' } : {}),
+      // Deliberately NO icon. Agent tabs used to be created wearing `✳`, which
+      // was the worst of both worlds: every one of them drew the same glyph,
+      // so the rail was already the uniform column a per-tab icon exists to
+      // avoid — and because a STORED glyph is one the generator must ask
+      // permission to replace (chat/headline.ts), it also cost the tab its one
+      // free icon write. A tab whose first generation happened to answer
+      // "ICON: KEEP" wore `✳` until its subject changed. Left bare, the rail
+      // draws a stable per-tab stand-in and the first good generation lands
+      // unconditionally.
     });
     return c.json(created.tab, 201);
   });
@@ -275,12 +283,17 @@ export function tabsRoutes(deps: {
         // re-picking the emoji a tab already wears is still you choosing it.
         //
         // The EMPTY string is the deliberate exception, and it is the only way
-        // back: `{icon: ''}` clears the glyph and leaves the row un-sticky, so
-        // the generator may fill it again. Without that carve-out, one empty
-        // PATCH would strand a row on the default icon permanently — sticky is
-        // one-way, so there would be nothing that could ever put a glyph back.
+        // back: `{icon: ''}` releases the row entirely — glyph, clock and the
+        // sticky flag — so the generator may fill it again. Stickiness is
+        // one-way against the MACHINE, not against the person who set it, and
+        // clearing your own icon is about as explicit as changing your mind
+        // gets. Without the release, an empty PATCH on an already-sticky row
+        // (which is every row anyone would want to clear) left it frozen on
+        // nothing, permanently, from every surface.
+        //
+        // `tabs.update` runs after this and would write the empty string back,
+        // so the release happens below it, outside this block.
         if (rowPatch.icon) tabs.setIconSticky(id);
-        else if (rowPatch.icon === '') tabs.clearIconClock(id);
         if (pinned !== undefined) {
           tabs.setPinned(id, pinned);
           // Newly pinned tabs land at the END of the pinned block: appending is
@@ -303,7 +316,15 @@ export function tabsRoutes(deps: {
         // unlike the pty-driven `touchActivity`, which avoids updated_at
         // precisely because it fires on its own). We call it either way to get
         // a freshly-read Tab to emit and return.
-        return tabs.update(id, rowPatch);
+        const next = tabs.update(id, rowPatch);
+        // After `update`, which would otherwise leave the empty string sitting
+        // in the column, and inside the same transaction so a row can never
+        // commit half-released.
+        if (rowPatch.icon === '') {
+          tabs.releaseIcon(id);
+          return { ...next, icon: undefined };
+        }
+        return next;
       })();
     } catch (err) {
       // The tab exists (checked above), so a throw here is the patch itself
