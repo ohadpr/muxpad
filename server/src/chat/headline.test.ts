@@ -39,7 +39,7 @@ describe('shouldConsiderHeadline — the rate limit, before any spend', () => {
 
   it('tries the FIRST time immediately — no interval to wait out', () => {
     // The rail is least useful exactly when you have the most chats open; a
-    // new chat must not wait 20 minutes for its first ATTEMPT. Note what this
+    // new chat must not wait out the interval for its first ATTEMPT. Note what this
     // no longer promises: if that attempt is rejected, the row does sit blank
     // until the interval is up. That is the deliberate price of not letting a
     // chat whose every reply is malformed re-ask on every finished turn.
@@ -71,15 +71,24 @@ describe('shouldConsiderHeadline — the rate limit, before any spend', () => {
 
   it('a BUSY chat costs at most one call per interval', () => {
     const withLine = { ...base, existing: 'wiring the cron scheduler into boot' };
-    // Simulate 200 finished turns inside one interval — the thing that would
-    // make this feature expensive if the gate were per-turn.
+    // 200 finished turns, 5s apart — the shape that would make this feature
+    // expensive if the gate were per-turn. The rate limiter charges every
+    // ATTEMPT, so lastAt advances on each allowed call, exactly as the caller
+    // does it; the assertion is therefore about the RATE, not the floor's
+    // current value, and stays honest if the interval is retuned.
     let calls = 0;
-    for (let i = 0; i < 200; i++) {
-      const now = NOW + i * 5_000;
-      if (shouldConsiderHeadline({ ...withLine, lastAt: NOW, now })) calls += 1;
+    let lastAt = NOW;
+    const step = 5_000;
+    const turns = 200;
+    for (let i = 0; i < turns; i++) {
+      const now = NOW + i * step;
+      if (shouldConsiderHeadline({ ...withLine, lastAt, now })) {
+        calls += 1;
+        lastAt = now;
+      }
     }
-    // 200 turns × 5s = ~16 minutes, still inside the 20-minute floor.
-    expect(calls).toBe(0);
+    const elapsed = (turns - 1) * step;
+    expect(calls).toBeLessThanOrEqual(Math.floor(elapsed / HEADLINE_MIN_INTERVAL_MS) + 1);
   });
 
   it('re-asks once the interval has elapsed', () => {
