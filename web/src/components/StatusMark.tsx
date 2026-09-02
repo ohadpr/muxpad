@@ -10,14 +10,18 @@ import './StatusMark.css';
  * navigator answers "what's running?" without reading a single word.
  *
  * The primary distinction is FILLED vs RING, not colour: red `blocked` and
- * green `ready` are the classic colour-blindness pair, so they are separated
- * by MOTION instead — blocked breathes slowly, ready is perfectly still.
- * Blocked is the only mark in the whole rail that moves while at rest, which
- * is defensible precisely because it is the only state that means "act now".
- * Colour then reinforces what shape and motion already said.
+ * green `ready` are the classic colour-blindness pair, and a filled disc reads
+ * apart from a ring for a viewer who cannot tell those two hues apart at all.
  *
- *   blocked  filled circle, r=5.5, red   — breathing (2s)
- *   working  ring r=6.5 + a 90° arc      — rotating (0.85s)
+ * ONLY `working` moves — the same invariant the nav rows hold (StateChip.css),
+ * and the reason `blocked` no longer breathes. Two things moving for two
+ * different reasons is one thing too many: motion has to mean "something is
+ * running" everywhere in the chrome or it means nothing anywhere. `blocked`
+ * gives up its 2s breath and keeps shape, colour and — where there is room for
+ * one — a word.
+ *
+ *   blocked  filled circle, r=5.5, red   — still
+ *   working  ring r=6.5 + a 90° arc      — rotating (0.85s), the one mover
  *   ready    filled circle, r=5.5, green — still
  *   dead     ✕, round caps, grey         — still, and the only mark that
  *                                          breaks the circle, because it is
@@ -66,7 +70,7 @@ export function StatusMark({
     >
       {s === 'blocked' ? (
         <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-          <circle className="navtree-status-breath" cx="9" cy="9" r="5.5" fill="currentColor" />
+          <circle cx="9" cy="9" r="5.5" fill="currentColor" />
         </svg>
       ) : null}
       {s === 'working' ? (
