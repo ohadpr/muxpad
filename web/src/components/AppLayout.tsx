@@ -240,14 +240,30 @@ function SidenavResizeHandle({ asideRef }: { asideRef: React.RefObject<HTMLEleme
  * fixed (icon + indent), so this is independent of the rail's current width.
  */
 function measureSidenavContentWidth(aside: HTMLElement): number {
-  const asideLeft = aside.getBoundingClientRect().left;
-  // Fixed chrome to the RIGHT of the name+bubble in the RESTING (un-hovered)
+  const asideRect = aside.getBoundingClientRect();
+  const asideLeft = asideRect.left;
+  // Fixed chrome to the RIGHT of the name+chip in the RESTING (un-hovered)
   // state — the close × is deliberately NOT reserved, so the fit width stays
-  // tight to the content: the link's right gutter (6), the row's right
-  // padding (4), the scroll container's right padding (8) and a hair of
-  // breathing room (4). The state chip is added PER ROW below — only rows that
-  // actually have something to say pay for it.
-  const fixedTrailing = 6 + 4 + 8 + 4;
+  // tight to the content. It is READ OFF THE DOM rather than written down: the
+  // two terms are the row's own right inset (--nt-air, and it has already been
+  // 4px and 12px) and everything outside the row (the scroll container's right
+  // padding and the rail's border). Both were written here as literals, and the
+  // first went stale the moment the rail's spacing scale moved: the row inset
+  // went 4 → 12 and this said 4. Measured, the same tree fitted to 401px
+  // instead of 404 — the whole 4px of breathing room spent and 1px of overdraft,
+  // so whether the longest name ellipsises at its own fit width comes down to
+  // sub-pixel text metrics. Reading it back off the DOM is the same arithmetic
+  // with nothing left to go stale. (It is also the DRAG CEILING, so a short
+  // measurement caps how wide the rail can be dragged, not just where
+  // double-click lands.)
+  // The state chip is added PER ROW below — only rows with something to say
+  // pay for it.
+  const probe = aside.querySelector<HTMLElement>('.navtree-tab-row, .navtree-ws-row');
+  const rowInset = probe ? Number.parseFloat(getComputedStyle(probe).paddingRight) : 12;
+  const outsideRow = probe ? asideRect.right - probe.getBoundingClientRect().right : 9;
+  // …plus a hair of breathing room, so the fitted name is not flush against
+  // the chip's own edge.
+  const fixedTrailing = rowInset + outsideRow + 4;
   let max = SIDENAV_MIN_WIDTH;
   for (const el of aside.querySelectorAll<HTMLElement>('.navtree-name-text')) {
     const nameRect = el.getBoundingClientRect();
@@ -259,10 +275,10 @@ function measureSidenavContentWidth(aside: HTMLElement): number {
     //
     // Measuring by right-edge delta (rather than adding a constant) is now
     // load-bearing rather than merely convenient: the chip is no longer a fixed
-    // column but a WORD, so the amount it trails by is per-row — 21px for the
-    // working spinner, 56px for `FAILED`, 70px for `WORKING` under reduced
-    // motion, 0 for an idle row. A constant could only ever be right for one of
-    // them.
+    // column but a WORD, so the amount it trails by is per-row — 25px for the
+    // working spinner, 60px for `FAILED`, 74px for `WORKING` under reduced
+    // motion, 0 for an idle row (see StateChip.css). A constant could only ever
+    // be right for one of them.
     const row = el.closest<HTMLElement>('.navtree-tab-row, .navtree-ws-row, .navtree-pane-row');
     const scope = row ?? el.parentElement;
     // Take the RIGHTMOST trailing element, not the first match. `querySelector`
