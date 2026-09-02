@@ -13,6 +13,8 @@ import {
   HEADLINE_MIN_INTERVAL_MS,
   ICON_MIN_STABLE_MS,
   backfillGeneratedIcons,
+  chooseIcon,
+  isIconFrozen,
   maybeWriteHeadline,
   sweepImplausibleHeadlines,
 } from './headline.js';
@@ -337,6 +339,9 @@ describe('maybeWriteHeadline — the icon, and what must never move it', () => {
 
   /** A well-formed two-field reply. */
   const reply = (label: string, icon: string) => async () => `LABEL: ${label}\nICON: ${icon}`;
+  /** A LABEL the shape check refuses — verbatim from the user's own sidebar. */
+  const BUG_LINE =
+    'I\'m not familiar with "muxpad" — is that an internal tool, a product name, or did you mea…';
 
   it('a new tab starts with NO icon, so it is eligible', () => {
     // The random default is gone. It was not merely meaningless — it was the
@@ -499,13 +504,14 @@ describe('maybeWriteHeadline — the icon, and what must never move it', () => {
     expect(tabs.getById(tabId)?.headline).toBe('cron restart persistence');
   });
 
-  it('REPLACES a creation-time placeholder, even with the label kept', async () => {
-    // `✳` is what every tab the + button creates is born with; cron tabs get
-    // `⏱`; a pane dragged out inherits its title's leading emoji. None was
-    // chosen by anyone. An earlier draft froze any icon whose `icon_at` was
-    // null, which meant the feature worked exactly once — for the rows that
-    // existed when the backfill ran — and never for a tab created afterwards.
-    for (const placeholder of ['✳', '⏱', '🦊']) {
+  it('KEEPS a glyph of unknown provenance until the label moves', async () => {
+    // `✳` is what every tab the + button creates is born with, `⏱` what cron
+    // tabs get — but `🧿` could equally be something the user picked by hand
+    // before there was a flag to record it, and nothing in the row can tell
+    // those apart. Displacing one for free would churn a deliberately-chosen
+    // icon on the first turn after an upgrade, so all three are treated like
+    // the one we would least like to lose.
+    for (const placeholder of ['✳', '⏱', '🧿']) {
       const id = tabs.create({ name: 'P', workspace_id: workspaceId, layout: 'p' }).id;
       const pane = new PaneStore(db).create({ tab_id: id }).id;
       new AgentSessionStore(db).register({
@@ -514,10 +520,52 @@ describe('maybeWriteHeadline — the icon, and what must never move it', () => {
         session_id: 'sid-icon-test',
       });
       tabs.update(id, { icon: placeholder });
-      const out = await maybeWriteHeadline(db, id, pane, reply('KEEP', '⏰'), { now: 1_000 });
-      expect(out.icon).toBe('⏰');
+      tabs.setHeadline(id, 'cron restart persistence', 1_000);
+
+      const kept = await maybeWriteHeadline(db, id, pane, reply('KEEP', '⏰'), {
+        now: 1_000 + HEADLINE_MIN_INTERVAL_MS,
+      });
+      expect(kept.icon).toBeNull();
+      expect(tabs.getById(id)?.icon).toBe(placeholder);
+
+      // …and it is a delay, not a permanent block: the next reply that moves
+      // the LABEL moves the glyph with it.
+      const moved = await maybeWriteHeadline(db, id, pane, reply('bambu printer slicing', '⏰'), {
+        now: 1_000 + 2 * HEADLINE_MIN_INTERVAL_MS,
+      });
+      expect(moved.icon).toBe('⏰');
       expect(tabs.getById(id)?.icon).toBe('⏰');
     }
+  });
+
+  it('a brand-new tab is still labelled on its FIRST successful generation', async () => {
+    // What makes "prefer keeping" free rather than costly. A fresh tab wears
+    // `✳` and has no headline, so its first accepted label IS a change and
+    // carries the glyph along — no upgrade in behaviour was traded away for
+    // the conservatism above.
+    const id = tabs.create({ name: 'Fresh', workspace_id: workspaceId, layout: 'p' }).id;
+    const pane = new PaneStore(db).create({ tab_id: id }).id;
+    new AgentSessionStore(db).register({
+      pane_id: pane,
+      assistant: 'codex',
+      session_id: 'sid-icon-test',
+    });
+    tabs.update(id, { icon: '✳' });
+    const out = await maybeWriteHeadline(db, id, pane, reply('cron restart persistence', '⏰'), {
+      now: 1_000,
+    });
+    expect(out).toEqual({ headline: 'cron restart persistence', icon: '⏰' });
+    expect(tabs.getById(id)?.icon).toBe('⏰');
+  });
+
+  it('an icon can only land in a reply whose LABEL was also accepted', async () => {
+    // A pleasant consequence of gating replacement on the headline: a
+    // generation we distrusted enough to reject the line from never gets to
+    // pick the picture either.
+    tabs.update(tabId, { icon: '✳' });
+    const out = await maybeWriteHeadline(db, tabId, paneId, reply(BUG_LINE, '⏰'), { now: 1_000 });
+    expect(out).toEqual({ headline: null, icon: null });
+    expect(tabs.getById(tabId)?.icon).toBe('✳');
   });
 
   it('a sticky icon set DURING the model call still wins', async () => {
@@ -603,7 +651,7 @@ describe('maybeWriteHeadline — the icon, and what must never move it', () => {
   });
 });
 
-describe('backfillGeneratedIcons — the one-shot that unblocks generation', () => {
+describe('backfillGeneratedIcons — clears the provenance stamp, never the glyph', () => {
   let dir: string;
   let db: Database.Database;
   let tabs: TabStore;
@@ -621,93 +669,93 @@ describe('backfillGeneratedIcons — the one-shot that unblocks generation', () 
     rmSync(dir, { recursive: true, force: true });
   });
 
-  /** A tab wearing `icon`, as though it had been created before this feature. */
+  /** A tab wearing `icon`, as though created before this feature existed. */
   const mk = (name: string, icon?: string) => {
     const id = tabs.create({ name, workspace_id: workspaceId, layout: 'p' }).id;
     if (icon) db.prepare('UPDATE tabs SET icon = ? WHERE id = ?').run(icon, id);
     return id;
   };
 
-  it('clears the meaningless glyphs so the normal path picks those rows up', () => {
-    // The reported symptom: several unrelated chats all wearing the same
-    // meaningless emoji, and none of them able to be given a real one —
-    // because "this tab already has an icon" is the generator's own hands-off
-    // signal.
+  it('NEVER blanks a row — the rail keeps rendering what it renders today', () => {
+    // The regression this function was rewritten to avoid. Nulling the icon
+    // and falling back to DEFAULT_TAB_ICON would leave a twenty-row rail as a
+    // column of identical folders for as long as those chats stayed quiet —
+    // and FOREVER for tabs with no agent session, which produce no turns at
+    // all. Random glyphs are meaningless but DISTINCT, and telling rows apart
+    // by shape is the whole job of the column.
     const a = mk('muxpad', '👍');
     const b = mk('kipa', '👍');
-    const c = mk('trading', '🗝\uFE0F');
+    const c = mk('terminal', '🗝\uFE0F');
 
-    const { cleared } = backfillGeneratedIcons(db);
-
-    expect(new Set(cleared)).toEqual(new Set([a, b, c]));
-    for (const id of [a, b, c]) {
-      expect(tabs.getById(id)?.icon).toBeUndefined();
-      expect(tabs.iconAt(id)).toBeNull();
-      // NOT made sticky. Clearing hands the row to the generator; marking it
-      // sticky would hand it to nobody, forever.
-      expect(tabs.isIconSticky(id)).toBe(false);
-    }
-  });
-
-  it('GENERATES NOTHING — it only clears', () => {
-    // Mass generation at boot would be one model call per tab, all at once, on
-    // a machine that has just started. The model seam is not even reachable
-    // from here; what this pins is the shape of that promise — the row is left
-    // EMPTY for the per-turn path to fill, not filled here.
-    mk('muxpad', '👍');
     backfillGeneratedIcons(db);
-    expect(
-      db.prepare("SELECT COUNT(*) AS n FROM tabs WHERE icon IS NOT NULL AND icon != ''").get(),
-    ).toEqual({ n: 0 });
+
+    expect(tabs.getById(a)?.icon).toBe('👍');
+    expect(tabs.getById(b)?.icon).toBe('👍');
+    expect(tabs.getById(c)?.icon).toBe('🗝\uFE0F');
   });
 
-  it('never touches a sticky icon', () => {
+  it('leaves those rows eligible, which is the point of not stamping them', () => {
+    // Eligibility is not something this function grants — `chooseIcon` grants
+    // it, by treating any glyph it did not write as replaceable once the
+    // headline moves. What the backfill guarantees is that `icon_at` is not
+    // lying about which glyphs those are.
+    const id = mk('muxpad', '👍');
+    backfillGeneratedIcons(db);
+    expect(tabs.iconAt(id)).toBeNull();
+    expect(isIconFrozen({ sticky: false, iconAt: tabs.iconAt(id), now: Date.now() })).toBe(false);
+    expect(
+      chooseIcon({ frozen: false, current: '👍', proposed: '⏰', headlineChanged: true }),
+    ).toBe('⏰');
+  });
+
+  it('clears a stale stamp on a non-sticky row', () => {
+    const id = mk('muxpad', '👍');
+    db.prepare('UPDATE tabs SET icon_at = ? WHERE id = ?').run(5_000, id);
+    expect(backfillGeneratedIcons(db).cleared).toEqual([id]);
+    expect(tabs.iconAt(id)).toBeNull();
+    // The glyph is untouched. Only our claim to have written it is dropped.
+    expect(tabs.getById(id)?.icon).toBe('👍');
+  });
+
+  it('GENERATES NOTHING', () => {
+    // Mass generation at boot would be one model call per tab, all at once, on
+    // a machine that has just started. The model seam is not reachable from
+    // here; what this pins is that no icon VALUE moves.
+    const id = mk('muxpad', '👍');
+    backfillGeneratedIcons(db);
+    expect(tabs.getById(id)?.icon).toBe('👍');
+  });
+
+  it('never touches a sticky icon, or its stamp', () => {
     const chosen = mk('mine', '👍');
+    tabs.setIcon(chosen, '⏰', 5_000);
     tabs.setIconSticky(chosen);
-    const { cleared } = backfillGeneratedIcons(db);
-    expect(cleared).not.toContain(chosen);
-    expect(tabs.getById(chosen)?.icon).toBe('👍');
+    expect(backfillGeneratedIcons(db).cleared).not.toContain(chosen);
+    expect(tabs.getById(chosen)?.icon).toBe('⏰');
+    expect(tabs.iconAt(chosen)).toBe(5_000);
     expect(tabs.isIconSticky(chosen)).toBe(true);
   });
 
-  it('clears rather than guessing which old icons were chosen by a human', () => {
-    // It is tempting to keep any icon outside TAB_ICONS on the theory that
-    // `randomTabIcon()` could not have produced it, so a person must have. That
-    // makes a PERMANENT decision out of a guess about the past, and in the
-    // wrong direction: a row wrongly left not-sticky is repaired by picking an
-    // icon once, a row wrongly marked sticky can never be given a meaningful
-    // one again. It is also wrong in fact — the reported 👍 is not in
-    // TAB_ICONS and is exactly the glyph this change exists to replace.
-    const offPalette = mk('kipa', '🧿');
-    const zwj = mk('family', '👨\u200D👩\u200D👧\u200D👦');
-    const inPalette = mk('other', '🗝\uFE0F');
-
-    const { cleared } = backfillGeneratedIcons(db);
-
-    expect(new Set(cleared)).toEqual(new Set([offPalette, zwj, inPalette]));
-    for (const id of [offPalette, zwj, inPalette]) {
-      expect(tabs.getById(id)?.icon).toBeUndefined();
-      expect(tabs.isIconSticky(id)).toBe(false);
-    }
+  it('is a no-op on an install upgraded through migration 25, and says so', () => {
+    // Honest about its own size: migration 25 introduces `icon_at` as NULL and
+    // nothing else writes it, so on a real upgrade there is nothing to clear.
+    // It is kept as the marker-guarded hook the eligibility rule hangs off.
+    mk('muxpad', '👍');
+    mk('kipa', '🗝\uFE0F');
+    mk('bare');
+    expect(backfillGeneratedIcons(db).cleared).toEqual([]);
   });
 
-  it('leaves a tab that already has no icon alone', () => {
-    const bare = mk('fresh');
-    const { cleared } = backfillGeneratedIcons(db);
-    expect(cleared).toEqual([]);
-    expect(tabs.isIconSticky(bare)).toBe(false);
-  });
-
-  it('runs once — a glyph written after the backfill is never re-cleared', () => {
+  it('runs once — a stamp written after the backfill is never cleared', () => {
     const id = mk('muxpad', '👍');
+    db.prepare('UPDATE tabs SET icon_at = ? WHERE id = ?').run(5_000, id);
     expect(backfillGeneratedIcons(db).cleared).toEqual([id]);
 
-    // A later generation, or a later random-looking pick. The backfill must
-    // not come back for it on every boot — that would be an icon that resets
-    // itself whenever the server bounces.
-    tabs.setIcon(id, '🗝️', 9_000);
+    // A later generation. The backfill must not come back for it on every
+    // boot, or the stability window would reset whenever the server bounced.
+    tabs.setIcon(id, '⏰', 9_000);
     expect(backfillGeneratedIcons(db)).toEqual({ cleared: [] });
-    expect(tabs.getById(id)?.icon).toBe('🗝️');
+    expect(tabs.iconAt(id)).toBe(9_000);
   });
 
   it('sets its marker even when there is nothing to do', () => {
