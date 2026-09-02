@@ -37,17 +37,57 @@ export const SWIPE_SLOP = 8;
 export const SWIPE_RATIO = 1.4;
 
 /**
- * Width of ONE revealed action button. Two of them (Pin, Close).
+ * How many actions the tray reveals: Pin, Mark unread, Close.
+ *
+ * A COUNT, not a hardcoded tray width, because the tray geometry is
+ * `count × width` in three places at once (how far the row slides, where the
+ * release latches, what the CSS lays out) and the moment a third action was
+ * added, a literal `* 2` left the row sliding two-thirds of the way and the
+ * last action permanently off-screen.
+ */
+export const SWIPE_ACTION_COUNT = 3;
+
+/**
+ * Width of ONE revealed action button.
+ *
+ * 59, down from the 76 that two actions could afford — DERIVED, not picked.
+ *
+ * THE RULE: the tray may never take more than HALF the row. The half is about
+ * the FACE, not about reading the name — the row slides off the tray, so its
+ * name is off the left edge either way while the tray is open (it already was,
+ * at two actions). What the face has to stay is a TARGET: tapping it is how you
+ * dismiss the tray, and it is the escape hatch for a row you opened by
+ * accident, so it must remain unmistakably the biggest thing on the row rather
+ * than a stripe beside a wall of buttons.
+ *
+ * THE WIDTH IT YIELDS. The sheet's rows are the viewport less 8px of scroller
+ * inset each side. Applying the rule at the narrowest CURRENT iPhone, 375
+ * (SE 3 / 13 mini — not 390, which is merely the size this was designed
+ * against): row 359, half 179.5, over three actions 59.8 → 59. At 390 that
+ * leaves the face 213 of 374 (57%). Three 76s would have taken 228px — 61% of
+ * the row at 390, and MORE than the whole face at 375.
+ *
+ * The rule is not universal and the exception is deliberate: at 360 (common
+ * narrow Android) the row is 344 and the face 167 — 48.5%, a hair under. Held
+ * rather than shaved further because 167px is still nearly four touch targets
+ * wide and plainly the largest region on the row, while a fourth 2px would
+ * start crowding the labels for a width almost nothing in the fleet has.
+ *
+ * 59 is still 15px past the 44px touch floor on the short axis, and the longest
+ * label ("Unread") measures 45px in the 12.5px/600 type the actions use
+ * (measured in the browser, not estimated), so nothing truncates or wraps.
  *
  * SwipeRow.tsx publishes this to CSS as `--swipe-action-width`, which
  * `.swiperow-action` in SwipeRow.css consumes — the stylesheet must never
  * hardcode the number, because the tray geometry below is derived from it and
  * a drifting literal would leave the tray not lining up with the row.
  */
-export const SWIPE_ACTION_WIDTH = 76;
+export const SWIPE_ACTION_WIDTH = 59;
 
-/** Total tray width — how far the row slides when fully open. */
-export const SWIPE_TRAY_WIDTH = SWIPE_ACTION_WIDTH * 2;
+/** Total tray width — how far the row slides when fully open. DERIVED: the
+ *  count and the width are the only two numbers, and everything else (the
+ *  clamp, the latch, the CSS layout) falls out of their product. */
+export const SWIPE_TRAY_WIDTH = SWIPE_ACTION_WIDTH * SWIPE_ACTION_COUNT;
 
 /**
  * Fraction of the tray you must drag past for a release to LATCH open.
