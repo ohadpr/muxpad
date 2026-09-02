@@ -245,31 +245,41 @@ function measureSidenavContentWidth(aside: HTMLElement): number {
   // state — the close × is deliberately NOT reserved, so the fit width stays
   // tight to the content: the link's right gutter (6), the row's right
   // padding (4), the scroll container's right padding (8) and a hair of
-  // breathing room (4). The status bubble is added PER ROW below — only rows
-  // that actually carry a dot/spinner pay for it.
+  // breathing room (4). The state chip is added PER ROW below — only rows that
+  // actually have something to say pay for it.
   const fixedTrailing = 6 + 4 + 8 + 4;
   let max = SIDENAV_MIN_WIDTH;
   for (const el of aside.querySelectorAll<HTMLElement>('.navtree-name-text')) {
     const nameRect = el.getBoundingClientRect();
     const left = nameRect.left - asideLeft;
-    // The status rail (and the workspace tab-count) trails the name. The rail
-    // now lives OUTSIDE the link — it's a fixed 16px column on the ROW, which
-    // is what gives it a constant x — so search the row, not just the link's
-    // own parent, or every measurement would come up 16-20px short and the
-    // auto-fit width would clip the column off the right edge.
+    // The state chip (and the workspace tab-count) trails the name, OUTSIDE the
+    // link — so search the ROW, not just the link's own parent, or every
+    // measurement comes up short and the auto-fit width clips the chip off the
+    // right edge.
     //
-    // Measuring by right-edge delta (rather than adding a constant) still
-    // holds: the delta is margin + glyph width, and it survives the name being
-    // ellipsis-truncated, since the column trails the name's box either way.
+    // Measuring by right-edge delta (rather than adding a constant) is now
+    // load-bearing rather than merely convenient: the chip is no longer a fixed
+    // column but a WORD, so the amount it trails by is per-row — 21px for the
+    // working spinner, 56px for `FAILED`, 70px for `WORKING` under reduced
+    // motion, 0 for an idle row. A constant could only ever be right for one of
+    // them.
     const row = el.closest<HTMLElement>('.navtree-tab-row, .navtree-ws-row, .navtree-pane-row');
     const scope = row ?? el.parentElement;
     // Take the RIGHTMOST trailing element, not the first match. `querySelector`
     // returns document order, and a collapsed workspace row renders its
-    // tab-count chip BEFORE the status column — so a plain query stopped at the
+    // tab-count chip BEFORE the state chip — so a plain query stopped at the
     // chip and came up ~20px short on exactly the rows that have both, clipping
     // the rail off the auto-fit width.
+    // `.navtree-status` is kept in the list on purpose: the nav rows moved to
+    // `.navtree-state`, but the Hosted list still renders a StatusMark, and a
+    // selector that silently matches nothing is exactly how this measurement
+    // broke last time.
     const trailing = scope
-      ? [...scope.querySelectorAll<HTMLElement>('.navtree-status, .navtree-ws-count')]
+      ? [
+          ...scope.querySelectorAll<HTMLElement>(
+            '.navtree-state, .navtree-status, .navtree-ws-count',
+          ),
+        ]
       : [];
     const statusExtra = trailing.reduce(
       (max, node) => Math.max(max, node.getBoundingClientRect().right - nameRect.right),
