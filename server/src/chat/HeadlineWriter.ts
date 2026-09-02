@@ -8,7 +8,8 @@ import { glossaryCache } from './glossary.js';
 import { type HeadlineModel, agentSdkHeadlineModel, maybeWriteHeadline } from './headline.js';
 
 /**
- * Keeps the nav rail's second line current, and nothing else.
+ * Keeps the nav rail's second line — and the glyph in front of it — current,
+ * and nothing else.
  *
  * Subscribes to turn-end on the shared event bus — the same trigger the
  * archiver uses — and hands each finished turn to the rate-limited generator
@@ -27,9 +28,9 @@ import { type HeadlineModel, agentSdkHeadlineModel, maybeWriteHeadline } from '.
  *    second line is the least important thing on the screen, and it should
  *    behave like it.
  *
- * Emits `tab.updated` on a successful write so the sidebar picks the line up
- * live rather than on its next 5s poll. Nothing is emitted for a KEEP, which
- * is the common case — a no-op turn costs the client nothing.
+ * Emits `tab.updated` when EITHER output changed, so the sidebar picks it up
+ * live rather than on its next 5s poll. Nothing is emitted for a KEEP on both,
+ * which is the common case — a no-op turn costs the client nothing.
  */
 export class HeadlineWriter {
   private readonly db: Database.Database;
@@ -95,8 +96,14 @@ export class HeadlineWriter {
     const run = maybeWriteHeadline(this.db, tabId, paneId, this.model, {
       glossary: this.glossary(),
     })
-      .then((headline) => {
-        if (!headline) return;
+      .then(({ headline, icon }) => {
+        // EITHER output landing is worth a repaint, and they move
+        // independently: the common shape after a subject shift is a new line
+        // with the same glyph, but a tab meeting the icon generator for the
+        // first time can just as easily get a new glyph under a KEPT line.
+        // Testing only `headline` here would have left that second case
+        // invisible until the sidebar's next 5s poll.
+        if (!headline && !icon) return;
         const tab = new TabStore(this.db).getById(tabId);
         if (!tab) return;
         this.events.emit({

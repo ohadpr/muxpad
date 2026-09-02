@@ -483,6 +483,36 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE tabs ADD COLUMN name_sticky INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    // The tab ICON becomes content-derived, chosen by the same model call that
+    // writes the headline (chat/headline.ts). Two columns, mirroring the two
+    // the headline needed:
+    //
+    //   tabs.icon_sticky — the user has chosen this icon by hand. Permanent,
+    //     one-way, and it outranks everything: exactly the `name_sticky`
+    //     contract, for exactly the same reason. The sidebar work flagged this
+    //     gap explicitly ("no content-derived icon path exists; if one is
+    //     added it must consult name_sticky"), and an icon deserves its own
+    //     flag rather than riding the name's — renaming a tab and choosing its
+    //     glyph are different acts, and one should not silently freeze the
+    //     other. Backfilled to 0, the safe direction: a tab wrongly marked
+    //     not-sticky can be re-stickied by picking its icon once, while a tab
+    //     wrongly marked sticky can never be given a meaningful one again.
+    //
+    //   tabs.icon_at — when the generated icon was last WRITTEN. Not an
+    //     attempt clock (that is headline_at, shared, because it is one model
+    //     call): this measures how long the current glyph has been sitting
+    //     there, and it is the anti-drift window. Persisted for the same
+    //     reason headline_at is — a restart is exactly when a stability window
+    //     must not forget itself. NULL means "this icon did not come from the
+    //     generator", which for every pre-existing row means the random one it
+    //     was born with.
+    version: 25,
+    sql: `
+      ALTER TABLE tabs ADD COLUMN icon_sticky INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE tabs ADD COLUMN icon_at INTEGER;
+    `,
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the
