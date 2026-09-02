@@ -39,7 +39,11 @@
    has to carry the same fill or the row reads as a full-bleed band the moment
    it moves. */
 .swiperow-face .navtree-tab-row {
-  background: transparent;
+  /* background-COLOR, not the shorthand: the row's state tint is painted as a
+     background-IMAGE (StateChip.css) and the shorthand would reset it. It does
+     not today — the tint's selector outweighs this one — but "it happens to
+     outweigh me" is not a thing to leave load-bearing under a swipe. */
+  background-color: transparent;
 }
 
 .swiperow-tray {
