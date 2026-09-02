@@ -387,16 +387,30 @@ export class TabStore {
   }
 
   /**
-   * Forget that the generator ever wrote this row's icon.
+   * Hand the icon back to the machine: no glyph, no clock, no sticky flag.
    *
-   * The counterpart to `PATCH {icon: ''}`, which clears the glyph and (unlike
-   * every other icon PATCH) leaves the row un-sticky. Without dropping the
-   * clock too, a row whose icon had been generated would sit out the rest of
-   * its stability window before it could be given a new one — a "clear it and
-   * let the machine try again" that visibly does nothing for six hours.
+   * The counterpart to `PATCH {icon: ''}` and the ONLY thing that lowers
+   * `icon_sticky`. Stickiness is otherwise one-way by design, but "one-way"
+   * has to mean "the generator can never take it back", not "the user can
+   * never change their mind" — and clearing your own icon is about as explicit
+   * as changing your mind gets.
+   *
+   * Without this the carve-out was a trap that did the opposite of its
+   * docstring. `{icon: ''}` on a row that was ALREADY sticky — which is every
+   * row anyone would want to clear, since picking an icon is what makes a row
+   * sticky — left `icon = NULL, icon_sticky = 1`: frozen forever, `setIcon`
+   * refusing every write, the row pinned to the fallback glyph with no way
+   * back from any surface. Exactly the stranding the carve-out was added to
+   * prevent.
+   *
+   * All three columns move together because any two of them without the third
+   * is a state with no meaning: a clock for a glyph that is gone, or a sticky
+   * flag guarding nothing.
    */
-  clearIconClock(id: string): void {
-    this.db.prepare('UPDATE tabs SET icon_at = NULL WHERE id = ?').run(id);
+  releaseIcon(id: string): void {
+    this.db
+      .prepare('UPDATE tabs SET icon = NULL, icon_at = NULL, icon_sticky = 0 WHERE id = ?')
+      .run(id);
   }
 
   /**

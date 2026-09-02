@@ -1,9 +1,9 @@
 import {
-  DEFAULT_TAB_ICON,
   type PaneSpec,
   type Tab,
   type Workspace,
   collectLayoutLeaves,
+  fallbackTabIcon,
 } from '@muxpad/shared';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { Fragment, Suspense, lazy, useEffect, useRef, useState } from 'react';
@@ -1631,7 +1631,11 @@ function TabRow({
           e.stopPropagation();
         }}
       >
-        {tab.icon ?? DEFAULT_TAB_ICON}
+        {/* No stored icon yet — draw a stable, per-tab stand-in rather than
+            one shared default, so a rail of not-yet-labelled rows is still
+            scannable by shape. Derived from the id, never persisted, so the
+            generator stays free to replace it. */}
+        {tab.icon ?? fallbackTabIcon(tab.id)}
       </span>
       {isEditing ? (
         <RenameInput

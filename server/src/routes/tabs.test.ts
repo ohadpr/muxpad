@@ -376,10 +376,14 @@ describe('tabs routes', () => {
     expect(tab.icon).toBeUndefined();
     expect(new TabStore(db).getById(tab.id)?.icon).toBeUndefined();
   });
-  it('an EMPTY icon is the one way back — it clears without sticking', async () => {
-    // Sticky is one-way, so without this carve-out a single `{icon: ''}` would
-    // strand the row on the default glyph permanently: nothing could ever put
-    // one back, by hand or by generation.
+  it('an EMPTY icon releases the row completely — glyph, clock AND sticky', async () => {
+    // The only way back. Stickiness is one-way against the MACHINE, not
+    // against the person who set it. Before this, `{icon: ''}` on an
+    // already-sticky row — which is every row anyone would want to clear,
+    // since picking an icon is what makes a row sticky — left `icon NULL,
+    // icon_sticky 1`: frozen forever, every generated write refused, the row
+    // pinned to its fallback glyph with no way back from any surface. That was
+    // the exact stranding the carve-out had been added to prevent.
     const created = await postTab({ name: 'A' });
     const tab = (await created.json()) as { id: string };
     const tabs = new TabStore(db);
@@ -390,23 +394,45 @@ describe('tabs routes', () => {
         body: JSON.stringify(body),
       });
 
-    await patch({ icon: '\u{1F680}' });
+    await patch({ icon: '🚀' });
     expect(tabs.isIconSticky(tab.id)).toBe(true);
+    tabs.setIcon(tab.id, '⏰');
+    // (sticky, so that write is refused — proving the row really is locked)
+    expect(tabs.getById(tab.id)?.icon).toBe('🚀');
 
-    // Clearing does NOT un-stick (sticky is one-way by contract) — but on a
-    // row that was never sticky it leaves the generator free.
-    const other = (await (await postTab({ name: 'B' })).json()) as { id: string };
-    tabs.setIcon(other.id, '\u{23F0}', 5_000);
-    expect(tabs.iconAt(other.id)).toBe(5_000);
-    await test.app.request(`/api/tabs/${other.id}`, {
+    const res = await patch({ icon: '' });
+    expect(res.status).toBe(200);
+    expect(tabs.getById(tab.id)?.icon).toBeUndefined();
+    expect(tabs.isIconSticky(tab.id)).toBe(false);
+    expect(tabs.iconAt(tab.id)).toBeNull();
+    // …and the generator can write again, immediately — no stability window
+    // left over from a glyph that is gone.
+    expect(tabs.setIcon(tab.id, '⏰', 9_000)).toBe(true);
+    expect(tabs.getById(tab.id)?.icon).toBe('⏰');
+  });
+
+  it('the response body reports the released icon as absent', async () => {
+    // `tabs.update` writes the empty string before the release runs, so a
+    // response built from its return value would tell the client the row wears
+    // an empty-string icon.
+    const tab = (await (await postTab({ name: 'A' })).json()) as { id: string };
+    const res = await test.app.request(`/api/tabs/${tab.id}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ icon: '' }),
     });
-    expect(tabs.isIconSticky(other.id)).toBe(false);
-    expect(tabs.getById(other.id)?.icon).toBeUndefined();
-    // …and the clock goes with it, so "clear it and let the machine try again"
-    // is not a six-hour wait.
-    expect(tabs.iconAt(other.id)).toBeNull();
+    expect(((await res.json()) as { icon?: string }).icon).toBeUndefined();
+  });
+
+  it('an agent tab is created with NO icon, so its first glyph is free', async () => {
+    // Agent tabs used to be born wearing `✳`. That was the worst of both
+    // worlds: every one of them drew the same glyph, so the rail was already
+    // the uniform column a per-tab icon exists to avoid — and a STORED glyph
+    // costs the tab its one free icon write, so a tab whose first generation
+    // answered "ICON: KEEP" wore `✳` until its subject changed.
+    const res = await postTab({ name: 'A', bootstrap: 'agent' });
+    const tab = (await res.json()) as { id: string; icon?: string };
+    expect(tab.icon).toBeUndefined();
+    expect(new TabStore(db).getById(tab.id)?.icon).toBeUndefined();
   });
 });
