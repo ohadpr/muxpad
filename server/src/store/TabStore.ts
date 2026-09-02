@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { type LayoutNode, type Tab, randomTabIcon } from '@muxpad/shared';
+import type { LayoutNode, Tab } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { monotonicFactory } from 'ulid';
 
@@ -32,6 +32,8 @@ interface TabRow {
   headline: string | null;
   headline_at: number | null;
   name_sticky: number;
+  icon_sticky: number;
+  icon_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -48,8 +50,14 @@ export class TabStore {
     const id = ulid();
     const slug = this.uniqueSlug();
     const now = Date.now();
-    // New tabs get a random icon by default (the picker can change it).
-    const icon = input.icon ?? randomTabIcon();
+    // A new tab has NO icon, and the rail renders DEFAULT_TAB_ICON until it
+    // gets one. This used to be `randomTabIcon()`, which was worse than
+    // meaningless: an icon nobody chose is what the generator reads as "this
+    // tab already has one, hands off", so a random default did not merely fail
+    // to describe the tab — it permanently prevented anything from describing
+    // it. The icon now arrives from the chat's own subject (chat/headline.ts)
+    // or from the picker, and both of those are better than a dice roll.
+    const icon = input.icon ?? null;
     const maxPos =
       (
         this.db
@@ -84,7 +92,10 @@ export class TabStore {
       id,
       slug,
       name: input.name,
-      icon,
+      // Same rule as `row()`: absent, not null. A tab with no icon adds
+      // nothing to the payload and nothing to the client's change-dedup
+      // signature.
+      ...(icon ? { icon } : {}),
       layout: input.layout,
       view_mode,
       pinned: false,
@@ -329,6 +340,56 @@ export class TabStore {
     return !!r?.name_sticky;
   }
 
+  /**
+   * "The user chose this glyph." One-way, like `setNameSticky`, and for a
+   * sharper version of the same reason: the icon is how a row is found by
+   * shape, so an icon you deliberately picked changing under you is worse than
+   * a name doing it. There is no unset.
+   *
+   * Its own flag rather than a second meaning for `name_sticky`: renaming a
+   * tab and choosing its glyph are separate acts, and doing one should not
+   * silently freeze the other.
+   */
+  setIconSticky(id: string): void {
+    this.db.prepare('UPDATE tabs SET icon_sticky = 1 WHERE id = ?').run(id);
+  }
+
+  isIconSticky(id: string): boolean {
+    const r = this.db.prepare('SELECT icon_sticky FROM tabs WHERE id = ?').get(id) as
+      | { icon_sticky: number }
+      | undefined;
+    return !!r?.icon_sticky;
+  }
+
+  /**
+   * Write a GENERATED icon, stamping the anti-drift clock in the same
+   * statement so the two can never disagree.
+   *
+   * Deliberately not `update()`: that bumps `updated_at`, which clients key
+   * cache invalidation off, and it would also have to be told not to set the
+   * sticky flag. Same split, and the same reasoning, as `setHeadline`.
+   *
+   * Callers must have checked `isIconSticky` first — this method does not,
+   * because a store method that silently no-ops is a worse contract than one
+   * whose single caller is responsible for the policy (see chat/headline.ts,
+   * where the whole anti-drift rule lives in one place).
+   */
+  setIcon(id: string, icon: string, at: number = Date.now()): void {
+    this.db.prepare('UPDATE tabs SET icon = ?, icon_at = ? WHERE id = ?').run(icon, at, id);
+  }
+
+  /**
+   * When this tab's icon was last written by the generator; null if it never
+   * was — which also means the icon it currently wears (if any) did not come
+   * from us and must be left alone.
+   */
+  iconAt(id: string): number | null {
+    const r = this.db.prepare('SELECT icon_at FROM tabs WHERE id = ?').get(id) as
+      | { icon_at: number | null }
+      | undefined;
+    return r?.icon_at ?? null;
+  }
+
   private row(r: unknown): Tab | null {
     if (!r) return null;
     const x = r as TabRow;
@@ -349,6 +410,11 @@ export class TabStore {
       // client's change-dedup signature.
       ...(x.headline ? { headline: x.headline } : {}),
       ...(x.name_sticky ? { name_sticky: true } : {}),
+      // `icon_sticky` is deliberately NOT surfaced. Nothing on the client
+      // branches on it — the picker sets it as a side effect of PATCHing an
+      // icon, and the rail renders whatever glyph it is handed — so adding it
+      // would only widen the payload and the change-dedup signature for a
+      // field no renderer reads.
       created_at: x.created_at,
       updated_at: x.updated_at,
     };

@@ -14,7 +14,7 @@ import { ArchiveDb } from './archive/ArchiveDb.js';
 import { Archiver } from './archive/Archiver.js';
 import { HeadlineWriter } from './chat/HeadlineWriter.js';
 import { projectsDir } from './chat/TranscriptReader.js';
-import { sweepImplausibleHeadlines } from './chat/headline.js';
+import { backfillGeneratedIcons, sweepImplausibleHeadlines } from './chat/headline.js';
 import { paneCarryover } from './chat/summarize.js';
 import { loadConfig } from './config.js';
 import { CronScheduler } from './cron/CronScheduler.js';
@@ -421,6 +421,25 @@ try {
   }
 } catch (err) {
   console.error('[headline] one-time sweep failed (harmless; retried next boot)', err);
+}
+
+// One-time backfill of tab ICONS. Tabs used to be born with a RANDOM emoji,
+// which is both meaningless (several unrelated chats wearing 👍) and, worse,
+// self-perpetuating: "this tab already has an icon" is exactly what stops the
+// generator giving it a real one. This clears the unclaimed ones so the normal
+// per-turn path picks those rows up; a sticky icon is never read or written.
+// It generates NOTHING — mass generation at boot would be one model call per
+// tab, all at once. Marker-guarded and best-effort, same contract as the
+// headline sweep above.
+try {
+  const icons = backfillGeneratedIcons(db);
+  if (icons.cleared.length > 0) {
+    console.log(
+      `[headline] icon backfill: ${icons.cleared.length} unclaimed icon(s) cleared for regeneration`,
+    );
+  }
+} catch (err) {
+  console.error('[headline] icon backfill failed (harmless; retried next boot)', err);
 }
 
 // The "resident pane" primitive is retired — muxpad no longer creates or

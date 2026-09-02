@@ -266,6 +266,14 @@ export function tabsRoutes(deps: {
         // committed without its flag would be silently re-namable by the next
         // AI title, which is precisely the bug this replaces.
         if (rowPatch.name !== undefined) tabs.setNameSticky(id);
+        // And an ICON the user picked is the icon generator's hard stop,
+        // forever — same contract, same transaction, same failure mode if it
+        // were not in one. This route is the ONLY way an icon reaches the row
+        // from a human (the rail's glyph click and the context menu's "Change
+        // icon…" both land here), so it is the only place the flag has to be
+        // set. Note it fires on the value being SUPPLIED, not on it differing:
+        // re-picking the emoji a tab already wears is still you choosing it.
+        if (rowPatch.icon !== undefined) tabs.setIconSticky(id);
         if (pinned !== undefined) {
           tabs.setPinned(id, pinned);
           // Newly pinned tabs land at the END of the pinned block: appending is
