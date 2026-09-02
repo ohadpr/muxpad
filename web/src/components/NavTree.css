@@ -10,18 +10,22 @@
 
    Both variants render a flat list, Slack-rail style: workspaces are
    quiet bold headers (a disclosure chevron + name, no fill) with their
-   tabs indented below. Selection is a ROUNDED PILL inset from the rail's
-   edges — hover is a faint pill, the active tab is one crisp solid-accent
-   pill. Hierarchy comes from indent + weight + that single strong anchor,
-   not from bands, rails, and guide-lines stacked together.
+   tabs indented below. Hierarchy comes from indent + weight + one strong
+   anchor, not from bands, rails, and guide-lines stacked together.
 
-   Visual grammar shared with the rest of muxpad's chrome:
+   TWO channels, and they never borrow each other's encoding — that
+   separation is the thing the whole rail rests on:
+
+     WHERE YOU ARE      a SOLID accent block (active tab, active pane,
+                        Hosted). Filled, never a wash.
+     WHAT IT IS DOING   a 3px bar on the left edge + a very faint tint of
+                        the same hue + a word (or a spinner) on the right.
+                        Always a wash, never filled. See StateChip.css.
+
+   The rest of the grammar:
      bold name, no fill       = workspace header
-     faint accent tint        = active workspace, collapsed ("you are in")
-     solid accent pill        = active tab ("you are here") — the one
-                                dominant anchor in the list
+     bold text                = unread
      faint pill on hover      = hover affordance
-     red dot                  = "wants you"
    ────────────────────────────────────────────────────────────────────── */
 
 /* ─── Rail width ──────────────────────────────────────────────────────────
@@ -55,14 +59,17 @@
   /* ─── The row grid ─────────────────────────────────────────────────────
      Four tracks, and NOTHING absolutely positioned:
 
-       icon 22px │ name + headline (1fr, min-width 0) │ meta (auto) │ status 22px
+       icon 22px │ name + headline (1fr, min-width 0) │ meta (auto) │ state auto
 
-     The status column is LAST and fixed, so its x is a property of the row's
-     right edge alone — no name length, no revealed control, no chip in front
-     of it can move it, and every mark in the rail lands on one line you can
-     scan without reading a word. That is the whole reason this is a grid and
-     not the flex row it used to be: in flex, every trailing element's position
-     was the sum of everything before it. */
+     The state cell is LAST, so nothing in front of it can push it off the
+     row's right edge, and it is AUTO rather than a fixed column. It used to be
+     a fixed 22px track holding a drawn mark — charged to every row whether or
+     not it drew anything, which on the majority (idle) rows meant 30px of
+     permanently blank rail taken from the name. The scan line moved to the
+     rows' LEFT edge (the 3px state bar in StateChip.css), which is both where
+     a scan starts and a place no content can ever shift; the right-hand cell
+     is now a word you read on purpose, and it costs width only when there is
+     something to say. */
   --nt-col-icon: 22px;
   /* The icon's BOX HEIGHT, pinned to one line of title text. It is the width
      that has to be a fixed track; the height must not exceed the text line, or
@@ -78,15 +85,11 @@
      row's height calculation. */
   --nt-chip: 20px;
   --nt-chip-radius: 5px;
-  --nt-col-status: 22px;
   /* Floor for the meta cell, wide enough that `◷ 07:00` and `◷ Sun 09:00`
      right-align on the same digits instead of jittering row to row. A FLOOR,
      not a reservation: rows with no schedule collapse it to zero (and swallow
      its gutter), because a 240px rail cannot afford 62px of permanent blank. */
   --nt-col-meta: 46px;
-  /* The status column plus the gutter that separates it from whatever
-     precedes it — one track, so the mark can sit flush right in it. */
-  --nt-rail: calc(var(--nt-col-status) + var(--nt-gutter));
   /* 8px, not the prototype's 10px: that prototype's rail was 330px wide and
      this one is 240px. At 10px the gutters alone ate 40px of a 207px row. */
   --nt-gutter: 8px;
@@ -188,16 +191,15 @@
 /* ─── Workspace row (banded header) ──────────────────────────────────── */
 
 /* Same grid discipline as the tab rows, for the same reason and with the same
-   RIGHT edge: disclosure │ name (1fr) │ count │ controls │ status. Only then
-   does a collapsed workspace's mark land on the exact vertical line its tabs'
-   marks use. (In the old flex row the × came AFTER the mark, so hovering the
-   header shoved its mark 18px left, and the workspace mark sat 4px off every
-   tab mark below it even at rest — hence the pile of compensating margins
-   this replaces.) */
+   RIGHT edge: disclosure │ name (1fr) │ count │ controls │ state. Only then
+   does a collapsed workspace's chip land where its tabs' chips do. (In the old
+   flex row the × came AFTER the mark, so hovering the header shoved its mark
+   18px left, and the workspace mark sat 4px off every tab mark below it even at
+   rest — hence the pile of compensating margins this replaces.) */
 .navtree-ws-row {
   position: relative;
   display: grid;
-  grid-template-columns: var(--nt-disc) minmax(0, 1fr) auto auto var(--nt-rail);
+  grid-template-columns: var(--nt-disc) minmax(0, 1fr) auto auto auto;
   align-items: center;
   column-gap: 4px;
   height: var(--nt-row-ws);
@@ -210,7 +212,11 @@
   grid-template-columns: var(--nt-disc) minmax(0, 1fr);
 }
 .navtree-ws-row:hover {
-  background: var(--bg-hover);
+  /* background-COLOR, never the shorthand: the row's state tint is painted as
+     a background-IMAGE (see StateChip.css) so that hovering a working row
+     shows both. A shorthand here would silently reset it. Same everywhere a
+     nav row takes a fill. */
+  background-color: var(--bg-hover);
 }
 /* Active workspace: the bold name alone marks it — the active TAB's tint
    pill is the dominant anchor, so a competing fill on the header would
@@ -266,7 +272,7 @@
 .navtree-ws-row[data-pressing="true"],
 .navtree-tab-row[data-pressing="true"],
 .navtree[data-variant="sheet"] .navtree-ws-row[data-pressing="true"] {
-  background: var(--bg-hover);
+  background-color: var(--bg-hover);
 }
 
 /* Drag-to-reorder (desktop sidebar). The row carries the drag; the dragged
@@ -310,7 +316,7 @@
    here gets a new tab in it. One drop-target language, whatever is hovering. */
 .navtree-ws-row[data-tab-drop="true"],
 .navtree-ws-row[data-pane-drop="true"] {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background-color: color-mix(in srgb, var(--accent) 18%, transparent);
   box-shadow: inset 0 0 0 1px var(--accent);
   border-radius: 4px;
 }
@@ -318,7 +324,7 @@
    the row's middle band (merge). Same accent ring language as the
    workspace rows' move-tab-here affordance. */
 .navtree-tab-row[data-drop-into="true"] {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background-color: color-mix(in srgb, var(--accent) 18%, transparent);
   box-shadow: inset 0 0 0 1px var(--accent);
   border-radius: var(--nt-pill);
 }
@@ -342,41 +348,39 @@
   text-align: left;
 }
 
-/* ─── Status rail ───────────────────────────────────────────────────────
-   The mark itself lives in StatusMark.css (one component, one stylesheet, used
-   by the sidebar, the sheet, the tab-bar dropdown and the mobile switcher so
-   all four tell the same story). What belongs HERE is only how the column sits
-   inside a nav row.
+/* ─── State cell ────────────────────────────────────────────────────────
+   The chip itself — and the row's left bar and tint with it — lives in
+   StateChip.css, which is where the whole state language is described. What
+   belongs HERE is only how its cell sits inside a nav row.
 
-   Replaces the old `.navtree-busy` spinner + `.badge-dot.-inline` pair, which
-   shared a slot INSIDE the link, immediately after `.navtree-name-text`
-   (`flex: 0 1 auto`) — so the glyph's x moved with every name length and there
-   was no vertical line to scan. It was also ~1.4px of accent-mixed-with-grey
-   over a 0.25-opacity track: about as quiet as a live indicator can be while
-   still technically rendering. */
+   The nav rows are the ONLY surface that speaks this language. The tab strip,
+   the tab-bar dropdown and the mobile switcher still draw a StatusMark: those
+   are single-item chrome, with no column of rows to scan and no room for a
+   word, which is exactly what a compact glyph is for. */
 /* Pinned to the LAST track by explicit line number (negative lines count from
    the grid's end), not by DOM order. Half the items in front of it are
    conditional — the pane-count chip, the workspace's tab count, the meta cell
    — and with pure auto-placement a row that happened to be missing one would
-   shuffle its mark a track to the left. `-2 / -1` is the last column of
+   shuffle its chip a track to the left. `-2 / -1` is the last column of
    whatever template the variant declared, always.
 
    Everything else auto-flows into the free tracks around these two. */
-.navtree-tab-row > .navtree-status,
-.navtree-ws-row > .navtree-status {
+.navtree-tab-row > .navtree-state,
+.navtree-ws-row > .navtree-state {
   grid-column: -2 / -1;
-  /* The WIDTH is the scan column and stays fixed. The HEIGHT drops to the
-     glyph's own 18px box: at 22px the mark was the tallest thing in a
-     one-line row, so that row's height was mark-driven (46px, not the 44px
-     its text and padding asked for) and its single line picked up an extra
-     pixel of leading that a two-line row never got. Nothing clips — the mark
-     is an 18px SVG. Scoped to nav rows so the Hosted list and the tab-bar
-     dropdown keep their own metrics. */
+  /* Height pinned to the text line for the same reason the icon's is: at
+     anything taller, a one-line row becomes CHIP-driven and picks up leading a
+     two-line row never gets. The chip's contents (a 15px word, a 13px ring)
+     both sit inside this. */
   height: 18px;
-  /* Flush to the track's right edge, which is the row's content edge. The
-     track is one gutter wider than the mark so the separation lives INSIDE
-     it — no margin on the mark, nothing in front of it that can shift it. */
   justify-self: end;
+}
+/* The gutter belongs to the ITEM, so an idle (empty) chip can decline to pay
+   it — the same rule the meta cell follows, and the reason an idle row now
+   spends its full width on the name. */
+.navtree-tab-row > .navtree-state:not(:empty),
+.navtree-ws-row > .navtree-state:not(:empty) {
+  margin-left: var(--nt-gutter);
 }
 /* Meta is pinned too, and pinned INSIDE the controls — so its right edge is
    the rail's left edge and nothing can move it.
@@ -462,13 +466,13 @@
 }
 
 /* THE grid (see --nt-col-* above for why). Column order is DOM order, and the
-   trailing `auto` track between meta and status is the hover-revealed control
+   trailing `auto` track between meta and state is the hover-revealed control
    group — it collapses to zero and swallows its own gutter, so at rest the row
    is exactly the four specified tracks. */
 .navtree-tab-row {
   position: relative;
   display: grid;
-  grid-template-columns: var(--nt-col-icon) minmax(0, 1fr) auto auto var(--nt-rail);
+  grid-template-columns: var(--nt-col-icon) minmax(0, 1fr) auto auto auto;
   align-items: center;
   /* The gutter is an item MARGIN, not `column-gap`. A gap is charged between
      every pair of adjacent tracks whether or not the track between them has
@@ -493,7 +497,7 @@
    so single- and multi-pane tabs share one grid. No control tracks — touch
    rows carry no permanent buttons at all. */
 .navtree[data-variant="sheet"] .navtree-tab-row {
-  grid-template-columns: var(--nt-disc) var(--nt-col-icon) minmax(0, 1fr) auto var(--nt-rail);
+  grid-template-columns: var(--nt-disc) var(--nt-col-icon) minmax(0, 1fr) auto auto;
   /* COLLAPSING, not reserving: a row with no headline is a genuinely shorter
      one-line row, because most rows have no headline until the generator has
      run and a column of empty reserved lines reads as broken.
@@ -535,23 +539,52 @@
 }
 .navtree-tab-row:hover {
   color: var(--fg);
-  background: var(--bg-hover);
+  background-color: var(--bg-hover);
 }
-/* Active TAB = the CONTAINER of the pane you're in: a SOFT accent-tint pill
-   with accent-tinted name text ("this branch is open"). Deliberately lighter
-   than the active PANE's pill below, so the leaf you're actually viewing stays
-   the dominant anchor and the two levels never read as identical (they used
-   to). No left-rail (it floated disconnected in the indent); no bold (weight
-   now means unread and nothing else). */
+/* Active TAB = the row you are in: a SOLID accent block with the accent's own
+   ink. It was a 14% accent TINT, and a tint is no longer available to it —
+   every non-idle row now carries a faint tint of its state hue (StateChip.css),
+   and "where I am" and "what the machine is doing" cannot share an encoding
+   without the rail becoming unreadable the moment the row you are on starts
+   working. A solid block is unmistakably not a wash, at any tint strength, on
+   any theme.
+   Still no left-rail (it floated disconnected in the indent) and no bold —
+   weight means unread and nothing else. */
 .navtree-tab-row[data-active="true"] {
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+  background-color: var(--accent);
+  color: var(--accent-fg);
 }
 .navtree-tab-row[data-active="true"] .navtree-name-text {
-  color: color-mix(in srgb, var(--accent) 75%, var(--fg));
+  color: var(--accent-fg);
 }
+/* Hover on the row you are already on has almost nothing to say, so it says it
+   quietly: a nudge of the block's own ink into the fill, rather than a second
+   colour. */
 .navtree-tab-row[data-active="true"]:hover {
-  background: color-mix(in srgb, var(--accent) 20%, var(--bg));
+  background-color: color-mix(in srgb, var(--accent) 88%, var(--accent-fg));
 }
+/* Everything else the row carries is re-inked against the block. These are all
+   elements whose resting colour is derived from --fg or --accent, both of
+   which are now the wrong side of the fill: on a solid accent row the only
+   colour guaranteed legible is the one the theme nominates for exactly that
+   job. (The icon chip keeps its geometry untouched — only what it is mixed
+   FROM changes.) */
+.navtree-tab-row[data-active="true"] .navtree-tab-icon::before {
+  background: color-mix(in srgb, var(--accent-fg) 18%, transparent);
+}
+.navtree-tab-row[data-active="true"] .navtree-quicknum {
+  background: color-mix(in srgb, var(--accent-fg) 22%, transparent);
+  color: var(--accent-fg);
+}
+.navtree-tab-row[data-active="true"] .navtree-close {
+  color: color-mix(in srgb, var(--accent-fg) 78%, var(--accent));
+}
+/* The close × and the pin are re-inked too — but their rules live down in the
+   Pin affordance section, NOT here. `.navtree-tab-row:hover .navtree-pin.is-pinned`
+   is (0,4,0), the same weight as an override written here would be, and it is
+   declared ~240 lines further down, so it would win the tie on source order and
+   paint the pinned tab's glyph in --accent ON an --accent block. Measured:
+   1.00:1, an invisible glyph inside a visible hover square. */
 
 /* The 1fr cell: two stacked lines, both of which must be free to ellipsise.
    `min-width: 0` is load-bearing — a grid item's default `min-width: auto` is
@@ -609,11 +642,15 @@
   font-size: 12px;
   line-height: 16px;
 }
-/* On the active row the name goes accent; hold the headline back so the pair
-   keeps its hierarchy instead of both lighting up. */
+/* On the active row the headline is drawn in the block's own ink, for the same
+   measured reason as the schedule above: every step down from it — a mix
+   toward the accent, or the `opacity: 0.75` this replaced — lands 11.5px text
+   between 3.4:1 and 4.4:1 on the five themes, and the version before this
+   redesign was already failing at 3.9 on two of them. The hierarchy is carried
+   by size and weight instead (11.5px regular under a 14px medium), which is
+   the one step that costs no contrast. */
 .navtree-tab-row[data-active="true"] .navtree-tab-headline {
-  color: var(--fg-dim);
-  opacity: 0.75;
+  color: var(--accent-fg);
 }
 
 /* ─── Meta column ─────────────────────────────────────────────────────────
@@ -692,8 +729,19 @@
      presentation so it matches the rest of the row's monochrome chrome. */
   font-variant-emoji: text;
 }
+/* On the solid block the schedule is drawn in the block's OWN ink, not a mix
+   back toward it. Every mix that keeps a visible step down from the name lands
+   this 10.5px text between 3.2:1 and 4.0:1 depending on theme (measured on all
+   five); only the undiluted ink clears 4.5. The hierarchy it gives up is paid
+   for by size — 10.5px monospace under a 14px name — which is a step that
+   costs no contrast. */
 .navtree-tab-row[data-active="true"] .navtree-cron {
-  color: var(--fg-dim);
+  color: var(--accent-fg);
+}
+/* The glyph is aria-hidden decoration next to the digits that carry the
+   meaning, but at the resting 0.6 it composites to ~2:1 on the block. */
+.navtree-tab-row[data-active="true"] .navtree-cron-glyph {
+  opacity: 0.8;
 }
 .navtree[data-variant="sheet"] .navtree-cron {
   font-size: 11.5px;
@@ -791,6 +839,45 @@
   color: var(--accent);
 }
 
+/* ─── …and both buttons, re-inked on the SELECTED row ────────────────────
+   Declared HERE, at the bottom of the section, and not up with the rest of the
+   active-row overrides: `.navtree-tab-row:hover .navtree-pin.is-pinned` above
+   is (0,4,0), and so is any override written with `[data-active="true"]`, so
+   the tie is settled by source order. Written 240 lines earlier it LOST, and a
+   pinned active tab drew its pin in --accent on an --accent block — 1.00:1,
+   an invisible glyph inside a perfectly visible hover square. */
+.navtree-tab-row[data-active="true"] .navtree-close,
+.navtree-tab-row[data-active="true"] .navtree-pin.is-pinned {
+  color: color-mix(in srgb, var(--accent-fg) 78%, var(--accent));
+}
+/* The pin is not destructive; it only has to be visible. */
+.navtree-tab-row[data-active="true"] .navtree-pin:hover,
+.navtree-tab-row[data-active="true"] .navtree-pin.is-pinned:hover {
+  background-color: color-mix(in srgb, var(--accent-fg) 22%, transparent);
+  color: var(--accent-fg);
+}
+/* The × keeps its destructive red wherever it lives — but red on the accent
+   block is unreadable, so the square behind it inverts to the block's ink and
+   the glyph stays --danger against THAT. Declared last so it wins for the one
+   button that is not a pin. */
+.navtree-tab-row[data-active="true"] button.navtree-close:not(.navtree-pin):hover,
+.navtree-pane-row-wrap[data-active="true"] .navtree-close:hover {
+  background-color: var(--accent-fg);
+  color: var(--danger);
+}
+
+/* Two more things that sit ON the solid block and derive their colour from
+   --fg / --bg tokens that are now the wrong side of it. Both render on the
+   SHEET's active tab row: the pane chevron measured 1.4:1 on trayo, and the
+   count chip is an OPAQUE --bg-hover blob, so it needs its fill replaced and
+   not just its ink. */
+.navtree-tab-row[data-active="true"] .navtree-pane-expander {
+  color: color-mix(in srgb, var(--accent-fg) 80%, var(--accent));
+}
+.navtree-tab-row[data-active="true"] .navtree-ws-count {
+  background: color-mix(in srgb, var(--accent-fg) 20%, transparent);
+  color: var(--accent-fg);
+}
 
 /* Pane-count hint on a collapsed multi-pane row (sheet). Same chip as
    .navtree-ws-count on a collapsed workspace — reused verbatim so it carries
@@ -865,6 +952,24 @@
 .navtree-pane-row-wrap {
   display: flex;
   align-items: center;
+  /* Anchor for the row's own left state bar (StateChip.css) — pane rows speak
+     the same state language as the tabs above them, one indent deeper. */
+  position: relative;
+}
+/* The chip trails the button, which grows; no fixed track down here, because a
+   pane list is short and never scanned as a column of its own. A sibling of the
+   button rather than a child — see NavTree.tsx for why — so its gutter is a
+   margin on the WRAP's flex line, and an idle (empty) chip pays nothing. */
+.navtree-pane-row-wrap > .navtree-state:not(:empty) {
+  margin-left: var(--nt-gutter);
+}
+/* Re-inked against the solid block, same rule as the tab row's controls. */
+.navtree-pane-row-wrap[data-active="true"] .navtree-close {
+  color: color-mix(in srgb, var(--accent-fg) 78%, var(--accent));
+}
+.navtree-pane-row-wrap[data-active="true"] .navtree-close:hover {
+  background-color: var(--accent-fg);
+  color: var(--danger);
 }
 .navtree-pane-row-wrap .navtree-pane-row {
   flex: 1 1 auto;
@@ -895,21 +1000,24 @@
   -webkit-tap-highlight-color: transparent;
 }
 .navtree-pane-row:active {
-  background: var(--bg-hover);
+  background-color: var(--bg-hover);
 }
 /* The pane you're currently viewing shares the active TAB's exact language — a
-   full-row soft accent pill + accent-tinted text — just one indent deeper, so
-   the relationship reads from POSITION (parent tab, child pane below it), not
-   from a different colour or shape. The pill lives on the WRAP so it spans the
-   whole row, × included, exactly like the tab (an inset chip that stopped short
-   of the × was what made them feel like two different things). A hair stronger
-   than the tab since it's the actual focus. No bold — weight means unread. */
+   full-row SOLID accent block with the accent's own ink — just one indent
+   deeper, so the relationship reads from POSITION (parent tab, child pane
+   below it), not from a different colour or shape. It used to be a slightly
+   STRONGER tint than the tab's, which is exactly the distinction that stopped
+   being available: tints now mean state, and two levels of selection told
+   apart by 4% of accent were never a real distinction anyway. The block lives
+   on the WRAP so it spans the whole row, × included, exactly like the tab (an
+   inset chip that stopped short of the × was what made them feel like two
+   different things). No bold — weight means unread. */
 .navtree-pane-row-wrap[data-active="true"] {
-  background: color-mix(in srgb, var(--accent) 18%, var(--bg));
+  background-color: var(--accent);
   border-radius: var(--nt-pill);
 }
 .navtree-pane-row[data-active="true"] .navtree-pane-label {
-  color: color-mix(in srgb, var(--accent) 75%, var(--fg));
+  color: var(--accent-fg);
 }
 
 /* Unread = "done, unreviewed" — an agent finished a turn here while you weren't
