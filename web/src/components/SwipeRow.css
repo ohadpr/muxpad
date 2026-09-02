@@ -61,10 +61,12 @@
 }
 
 .swiperow-action {
-  /* FULL row height, and as wide as SWIPE_ACTION_WIDTH — comfortably past the
-     44px floor on both axes, and wide enough that the label fits without
-     truncation. These are the only tap targets in the tray, so they can afford
-     to be generous.
+  /* FULL row height, and as wide as SWIPE_ACTION_WIDTH — past the 44px floor
+     on both axes, and wide enough that the label fits without truncation.
+     These are the only tap targets in the tray, so they can afford to be
+     generous — but only as generous as three of them fit on a 375px phone
+     without the tray taking more than half the row, which is why the number
+     came down when the third arrived (see SWIPE_ACTION_WIDTH).
 
      The number is NOT written here. SwipeRow.tsx publishes
      `--swipe-action-width` from the SWIPE_ACTION_WIDTH constant, because the
@@ -73,7 +75,7 @@
      size. A literal here could drift from the arithmetic and the tray would
      stop lining up with the row. The fallback is only for a stray
      `.swiperow-action` rendered outside this component. */
-  width: var(--swipe-action-width, 76px);
+  width: var(--swipe-action-width, 59px);
   border: 0;
   padding: 0;
   display: flex;
@@ -100,6 +102,17 @@
    out under a row would read as a selection. */
 .swiperow-action.-pin {
   background: #5b6478;
+}
+/* Mark unread/read. Teal: it has to be legible as "not Pin" and "not Close" in
+   the half-second the tray is sliding, and hue is the only channel doing that
+   work (all three blocks are the same size, at the same height, in the same
+   type). Teal sits far enough from Pin's blue-grey to read as a different
+   thing, and is unambiguous against Close for every kind of colour vision —
+   which the obvious alternative, the green of the `ready` state this button
+   produces, would not be sitting directly beside a red block. 5.1:1 on white,
+   so the label clears AA at 12.5px like the other two. */
+.swiperow-action.-unread {
+  background: #2c7a80;
 }
 /* Close is red because it destroys — the same meaning the desktop ×'s
    danger-red hover carries. */

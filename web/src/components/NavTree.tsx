@@ -21,8 +21,9 @@ import { PANE_DRAG_MIME, type PaneDragOrigin, paneDragOrigin } from '../lib/pane
 import { reorderByDrop } from '../lib/reorder';
 import { orderAfterPinnedDrop, paneDropAction } from '../lib/tab-drag';
 import { useFrozenTabOrder } from '../lib/tab-freeze';
+import { setTabUnread as setTabUnreadAction } from '../lib/tab-unread';
 import { useDismissable } from '../lib/use-dismissable';
-import { applyTabOrder, refreshTabs, useTabs } from '../tabs';
+import { applyTabOrder, applyTabUnread, refreshTabs, useTabs } from '../tabs';
 import { useLongPress } from '../use-long-press';
 import { MAX_QUICK_SWITCH_TABS, useTabQuickSwitch } from '../use-tab-quickswitch';
 import {
@@ -1030,18 +1031,40 @@ function TabList({
     }
   };
 
-  // Manual unread toggle (context menu). `want=true` flags the attention
-  // dot; `want=false` clears it (same path as viewing the tab). Refresh
-  // both the tab list and the workspace rollup so the dot updates at once.
-  const setTabUnread = async (tab: Tab, want: boolean) => {
-    try {
-      await (want ? api.markTabUnread(tab.id) : api.markTabSeen(tab.id));
-      await refreshTabs(workspace.id);
-      await refreshWorkspaces();
-    } catch (err) {
+  // Manual unread toggle — reached from the context menu (desktop right-click
+  // and touch long-press) AND from the sheet's swipe tray. `want=true` flags
+  // the attention dot; `want=false` clears it (same path as viewing the tab).
+  //
+  // The body lives in lib/tab-unread so those surfaces cannot drift: it
+  // patches the cached row FIRST (so the bold name and the `ready` dot land on
+  // the tap's own frame instead of after the round trip, and long before the
+  // 5s poll), then writes, then refetches both the tab list and the workspace
+  // rollup to reconcile. A failed write rolls the patch back.
+  //
+  // The failure path stays console-only, matching every other write on this
+  // tree (rename, icon, pin). It is the one place the optimistic patch costs
+  // something: a write that fails now shows the mark and then silently takes
+  // it away, where the old code simply did nothing. Judged the smaller evil
+  // than a fourth bespoke toast surface for the least consequential write in
+  // the app — the mark is a reminder, not data, and the row it rolls back to
+  // is the truthful one. If this ever gets a toast it should be a generic
+  // "write failed" one shared by all of these, not one for unread alone.
+  const setTabUnread = (tab: Tab, want: boolean) =>
+    setTabUnreadAction(
+      {
+        markUnread: api.markTabUnread,
+        markSeen: api.markTabSeen,
+        patch: applyTabUnread,
+        refresh: async () => {
+          await refreshTabs(workspace.id);
+          await refreshWorkspaces();
+        },
+      },
+      tab.id,
+      want,
+    ).catch((err: unknown) => {
       console.error('set tab unread failed', err);
-    }
-  };
+    });
 
   const setTabIcon = async (tab: Tab, icon: string) => {
     try {
@@ -1712,8 +1735,8 @@ function TabRow({
             emitting meta first put the controls and the status mark on a
             second line underneath the name — measured, and invisible to an
             x-only alignment check, since every row broke identically.
-            Touch renders none of this: the sheet's pin and close live under
-            the row, behind a left swipe. */}
+            Touch renders none of this: the sheet's pin, mark-unread and close
+            live under the row, behind a left swipe. */}
       {affords.pinButton || affords.closeButton ? (
         <span className="navtree-tab-controls">
           {/* A pinned tab keeps its pin lit — that is the only "this is
@@ -1830,11 +1853,13 @@ function TabRow({
 
   return (
     <>
-      {/* Touch wraps the row in its swipe shell; the pin and close it reveals
-          are the ONLY per-row actions on the sheet, and they cost nothing
-          until you ask for them. Desktop renders the row bare and keeps its
-          hover-revealed controls — a mouse has hover, so there is nothing to
-          fix there and a gesture would only be in the way.
+      {/* Touch wraps the row in its swipe shell; the pin, mark-unread and
+          close it reveals are the ONLY per-row actions on the sheet, and they
+          cost nothing until you ask for them. Desktop renders the row bare and
+          keeps its hover-revealed controls — a mouse has hover, so there is
+          nothing to fix there and a gesture would only be in the way.
+          Mark unread rides the SAME onSetUnread the context menu uses, so
+          touch and desktop reach one route and one optimistic patch.
           Not while EDITING: a rename input you can swipe out from under is a
           way to lose what you typed. */}
       {variant === 'sheet' && !isEditing ? (
@@ -1842,7 +1867,9 @@ function TabRow({
           id={tab.id}
           label={`chat ${tab.name}`}
           pinned={tab.pinned === true}
+          unread={tab.unread === true}
           onPin={() => onSetPinned(!tab.pinned)}
+          onSetUnread={onSetUnread}
           onClose={() => onClose({ stopPropagation() {}, preventDefault() {} } as React.MouseEvent)}
         >
           {row}
