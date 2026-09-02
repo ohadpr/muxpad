@@ -806,49 +806,62 @@ export function isPlausibleHeadline(s: string): boolean {
  * find by shape has to still be that shape tomorrow. So the icon is set once
  * and then defended much harder than the line under it.
  *
- * THE RULE, in full. An existing icon changes only if ALL of these hold:
+ * THE RULE, in full. A glyph already on the row changes only if ALL of these
+ * hold:
  *
  *   1. The user has never set it by hand. `icon_sticky` is one-way and
  *      absolute — the same contract as `name_sticky`, which the sidebar work
  *      called out as the thing any content-derived icon path would have to
  *      consult. This one is not a heuristic and has no time limit.
- *   2. It has been on the row for at least ICON_MIN_STABLE_MS. That is SIXTY
- *      TIMES the headline's own floor, so an icon cannot move twice in a
- *      working day even in a chat that is churning through topics.
- *   3. It came from the generator in the first place (`icon_at` is set). An
- *      icon is one the reader has actually learned. See ESTABLISHED below.
- *   4. The model proposed a DIFFERENT emoji, and it survived `normalizeTabIcon`.
- *      A rejected or unparseable proposal is not a reason to touch anything —
- *      the same "a bad generation never overwrites a good value" rule the
- *      headline follows.
- *   5. The SAME reply also produced a new headline. This is the sharp one, and
+ *   2. At least ICON_MIN_STABLE_MS has passed since WE last wrote it. That is
+ *      SIXTY TIMES the headline's own floor, so an icon cannot move twice in a
+ *      working day even in a chat that is churning through topics. A glyph we
+ *      have never written has no such clock, and is governed by 4 alone.
+ *   3. The model proposed a DIFFERENT emoji — compared in canonical form, so a
+ *      bare `⚙` against a stored `⚙️` reads as the agreement it is — and it
+ *      survived `normalizeTabIcon`. A rejected or unparseable proposal is not
+ *      a reason to touch anything: the same "a bad generation never overwrites
+ *      a good value" rule the headline follows.
+ *   4. The SAME reply also produced a new headline. This is the sharp one, and
  *      the reason churn is structurally impossible rather than merely
  *      unlikely: a subject that has genuinely and durably changed moves the
  *      LABEL first — that is what the label is for — so an icon change beside
  *      a stable label is, by definition, the model preferring a different
  *      picture of the same thing. Which is exactly the churn we are refusing.
  *
- * And on top of all five, the prompt is told to answer KEEP unless the current
+ * And on top of all four, the prompt is told to answer KEEP unless the current
  * glyph is actively misleading (see `iconAsk`), so the cheap path is stillness.
  *
- * ─── ESTABLISHED vs a PLACEHOLDER, and why the distinction is load-bearing ─
+ * ─── The ONLY free write is onto a BARE row ───────────────────────────────
  *
- * Conditions 2, 3 and 5 are about replacing a glyph the reader has learned to
- * recognise. Only a glyph THIS CODE wrote qualifies, which is exactly what
- * `icon_at` records. Everything else on the row is a placeholder: the `✳` a
- * bootstrapped agent tab is created with, the `⏱` a cron tab gets, the leading
- * emoji lifted off a pane title when a pane is dragged out, and anything left
- * over from before this feature. Those are machine defaults nobody chose and
- * nobody has learned, and replacing one is a FIRST write, not a change.
+ * Conditions 2 and 4 are about displacing a glyph the reader can already see.
+ * A row with no icon at all has nothing to displace and nothing to unlearn, so
+ * it takes the first valid emoji offered.
  *
- * Getting this wrong is not a subtle bug, it is the whole feature: an earlier
- * draft froze any icon whose `icon_at` was null, on the reasoning that an icon
- * of unknown provenance deserved the benefit of the doubt. But every tab the
- * `+` button makes is born with `✳`, so under that rule the feature would have
- * worked exactly once — for the rows that happened to exist when the backfill
- * ran — and never for a single tab created afterwards. Replacing
- * `randomTabIcon()` with a constant would not have fixed anything; it would
- * have made the failure uniform.
+ * A previous draft drew the line somewhere else: at PROVENANCE. Anything we had
+ * not written ourselves was a "placeholder" — the `✳` a bootstrapped agent tab
+ * is created with, the `⏱` a cron tab gets, the leading emoji lifted off a pane
+ * title, the random glyphs from before this feature — and displacing one was
+ * free. That is wrong, and the reason is that provenance is exactly what we do
+ * not know. Before `icon_sticky` existed nothing recorded who put a glyph on a
+ * row, so "we did not write it" covers both the machine defaults AND every icon
+ * the user chose by hand in the year before there was a flag to record it. A
+ * free-replacement path cannot tell those apart, so it would churn a
+ * deliberately-chosen icon on the first turn after an upgrade.
+ *
+ * The ambiguity is real and permanent, so it resolves the way every other
+ * ambiguity in this file resolves: PREFER KEEPING. A glyph the user can see is
+ * a glyph that changes only under the full rule, whoever put it there.
+ *
+ * That costs nothing where it might seem to. A brand-new tab wearing `✳` has no
+ * headline yet, so its first accepted label IS a change and carries the icon
+ * with it — new tabs are labelled on their first successful generation, exactly
+ * as before. What it buys is that a chat which has settled on a subject keeps
+ * whatever glyph it is wearing until the subject actually moves.
+ *
+ * A pleasant side effect of condition 4: an icon can only ever land as part of
+ * a reply whose LABEL we also accepted. A generation we distrusted enough to
+ * reject the line from never gets to pick the picture either.
  */
 
 /**
@@ -868,8 +881,9 @@ export interface IconFreezeInput {
   /** `tabs.icon_sticky` — the user picked this glyph. */
   sticky: boolean;
   /**
-   * `tabs.icon_at` — when the GENERATOR last wrote this glyph; null if it never
-   * did, which means whatever is on the row is a placeholder (see above).
+   * `tabs.icon_at` — when the GENERATOR last wrote this glyph. Null means we
+   * have never written this row, so there is no stability window to sit out;
+   * condition 4 governs it instead.
    */
   iconAt: number | null;
   now: number;
@@ -883,8 +897,9 @@ export interface IconFreezeInput {
 export function isIconFrozen(i: IconFreezeInput): boolean {
   // The user's choice. Forever, and before anything else is considered.
   if (i.sticky) return true;
-  // No glyph of ours on the row: either it is bare, or it wears a placeholder.
-  // Nothing to protect either way.
+  // Never written by us, so there is no clock to run down. The row is not
+  // therefore free — `chooseIcon` still requires the label to have moved
+  // before it will displace a visible glyph.
   if (i.iconAt === null) return false;
   return i.now - i.iconAt < ICON_MIN_STABLE_MS;
 }
@@ -892,23 +907,17 @@ export function isIconFrozen(i: IconFreezeInput): boolean {
 export interface IconChoiceInput {
   /** The answer from `isIconFrozen`. */
   frozen: boolean;
-  /** The glyph on the row now, placeholder or not — what a write would replace. */
+  /** The glyph on the row now — what a write would displace. */
   current: string | null;
-  /**
-   * Has the current glyph been ESTABLISHED, i.e. written by the generator
-   * (`icon_at` is set)? A placeholder has not, and replacing one is a first
-   * write rather than a change. Condition 3.
-   */
-  established: boolean;
   /** Verbatim from the model's ICON line; null if it emitted none. */
   proposed: string | null;
-  /** Did the SAME reply also yield a new headline? Condition 5. */
+  /** Did the SAME reply also yield a new headline? Condition 4. */
   headlineChanged: boolean;
 }
 
 /**
- * The icon to write, or null for "leave the row alone" — conditions 3–5, on
- * top of the frozen check.
+ * The icon to write, or null for "leave the row alone" — conditions 3 and 4,
+ * on top of the frozen check.
  *
  * Like `parseHeadline`, every ambiguous outcome resolves to null: a KEEP, an
  * empty line, a sentence, two emoji, a letter and a missing field are all the
@@ -927,10 +936,11 @@ export function chooseIcon(c: IconChoiceInput): string | null {
   // Compared in canonical form, so a bare `⚙` proposed against a stored `⚙️`
   // reads as the agreement it is rather than as a change.
   if (s === (c.current === null ? null : normalizeTabIcon(c.current))) return null;
-  // Replacing a glyph the reader has learned needs the label to have moved
-  // too. Filling a bare row, or displacing a placeholder nobody chose, does
-  // not — see the ESTABLISHED note above.
-  if (!c.established || c.current === null) return s;
+  // A BARE row is the only free write. Any glyph the reader can already see —
+  // ours, a creation default, or something they chose before there was a flag
+  // to record it — moves only alongside a new headline. We cannot tell those
+  // apart, so we treat them all like the one we would least like to churn.
+  if (c.current === null) return s;
   return c.headlineChanged ? s : null;
 }
 
@@ -1091,7 +1101,6 @@ export async function maybeWriteHeadline(
   const chosenIcon = chooseIcon({
     frozen: iconFrozen,
     current: existingIcon,
-    established: iconAt !== null,
     proposed: splitGenerationFields(reply).icon,
     headlineChanged: next !== null,
   });
@@ -1099,8 +1108,7 @@ export async function maybeWriteHeadline(
   // silently discard a FIRST icon for a row that has none. That is the one
   // case where the two outputs genuinely come apart: a chat whose subject has
   // been stable long enough to keep its line can still be meeting the icon
-  // generator for the first time (every tab that existed before this feature,
-  // right after the backfill). `headlineChanged` guards only REPLACEMENT.
+  // generator for the first time. `headlineChanged` guards only REPLACEMENT.
   //
   // `setIcon` re-checks stickiness in its own UPDATE and reports whether it
   // wrote, so a user who picked an icon while the model was thinking wins —
@@ -1169,50 +1177,63 @@ const KEY_ICON_BACKFILL = 'tab_icon_backfill_v1';
  * One-time backfill: make every tab whose icon nobody has claimed eligible for
  * a generated one.
  *
- * ─── What it does NOT do ──────────────────────────────────────────────────
+ * It clears the PROVENANCE STAMP (`icon_at`) and never the glyph. That
+ * distinction is the whole design of this function, and getting it backwards
+ * was a real and nearly-shipped mistake.
  *
- * It does not generate anything. Firing the model at every tab at boot would
- * be N calls in one breath, on a machine that has just started, for rows the
- * user may not look at today — and the normal path already handles each of
- * them for free, one at a time, on its next finished turn. So this only clears
- * the thing that was STOPPING that path: a non-null `icon` is precisely the
- * generator's hands-off signal (see `isIconFrozen`), and every pre-existing row
- * has one purely because tabs used to be born with a random glyph.
+ * ─── Why it must not clear the icon ───────────────────────────────────────
  *
- * ─── Why it clears rather than tries to sort the good ones out ────────────
+ * The obvious reading of "make these rows eligible" is to null the icon and let
+ * the rail fall back to DEFAULT_TAB_ICON until a generation fills it. That
+ * regresses the sidebar on the one boot the user is least willing to forgive
+ * one, and in three separate ways:
  *
- * Before `icon_sticky` existed nothing recorded WHO put a glyph on a row, so no
- * stored icon is provably the user's. It is tempting to infer it — an icon
- * outside TAB_ICONS cannot have come from `randomTabIcon()`, so surely a human
- * chose it — but that inference makes a PERMANENT decision from a guess about
- * the past, and it is a guess in the wrong direction. Migration 24 already
- * settled this argument for `name_sticky` and the reasoning transfers whole: a
- * row wrongly left not-sticky is repaired by the user picking an icon once,
- * while a row wrongly marked sticky can never be given a meaningful one again.
- * (The inference is also just wrong in fact: the 👍 the reported install was
- * covered in is not in TAB_ICONS, and is exactly the meaningless glyph this
- * whole change exists to replace.)
+ *   - A twenty-row rail is mostly IDLE at any moment, so it would sit as a
+ *     column of identical 🗂️ for as long as those chats stay quiet. Random
+ *     icons are meaningless, but they are DISTINCT, and telling rows apart by
+ *     shape is the entire job of the column — a wall of one glyph is strictly
+ *     worse than a wall of arbitrary ones.
+ *   - Tabs with no agent session — terminals, web views, url panes — produce no
+ *     turns at all. For those the fallback is not "until the next generation",
+ *     it is FOREVER.
+ *   - It is a visible downgrade on an upgrade, which is the worst possible
+ *     moment to spend the user's goodwill.
  *
- * So every non-sticky icon is cleared, clock and all. The rail renders
- * DEFAULT_TAB_ICON on those rows until the chat's next qualifying turn writes a
- * real one; a tab with no agent session keeps the default, which is honest —
- * there is nothing to derive an icon from — and one click from the picker.
+ * So the row keeps rendering exactly what it renders today, and the glyph is
+ * swapped in place the first time a generation produces a better one. There is
+ * no window in which the rail is blank.
  *
- * `icon_sticky = 1` rows are neither read nor written. Never touch a sticky
- * icon is the one rule with no exceptions.
+ * ─── What clearing `icon_at` actually buys ────────────────────────────────
  *
- * Idempotent by construction (a `globals` marker, the same pattern as
- * `sweepImplausibleHeadlines`) and safe on a fresh install, where it sets its
- * marker over zero rows.
+ * `icon_at` is our claim to have written a row's icon. It gates the
+ * ICON_MIN_STABLE_MS window, so a row wrongly stamped would sit out six hours
+ * for a glyph we never wrote. This guarantees the stamp is set on exactly the
+ * rows we set it on.
+ *
+ * BE HONEST ABOUT THE SIZE OF THAT: on an install upgrading through migration
+ * 25 this is a NO-OP, because that migration introduces `icon_at` as NULL and
+ * nothing else writes it. It is kept anyway, and marker-guarded, for two
+ * reasons — it is the one documented place where "make old rows eligible"
+ * lives, so the next change to the eligibility rule has an obvious hook; and a
+ * repair that costs one indexed UPDATE and can only ever run once is the cheap
+ * side of the trade against a stamp we cannot detect being wrong.
+ *
+ * What makes the old rows eligible is not this function at all — it is
+ * `chooseIcon`, which treats any glyph it did not write as replaceable the
+ * moment the chat's headline moves. This just makes sure that "did not write
+ * it" is the truth.
+ *
+ * A sticky icon is neither read nor written. Never touch a sticky icon is the
+ * one rule with no exceptions.
  */
 export function backfillGeneratedIcons(db: Database.Database): { cleared: string[] } {
   const globals = new GlobalsStore(db);
   if (globals.get(KEY_ICON_BACKFILL)) return { cleared: [] };
 
   const rows = db
-    .prepare("SELECT id FROM tabs WHERE icon_sticky = 0 AND icon IS NOT NULL AND icon != ''")
+    .prepare('SELECT id FROM tabs WHERE icon_sticky = 0 AND icon_at IS NOT NULL')
     .all() as { id: string }[];
-  const clear = db.prepare('UPDATE tabs SET icon = NULL, icon_at = NULL WHERE id = ?');
+  const clear = db.prepare('UPDATE tabs SET icon_at = NULL WHERE id = ?');
   db.transaction(() => {
     for (const r of rows) clear.run(r.id);
     globals.set(KEY_ICON_BACKFILL, '1');
