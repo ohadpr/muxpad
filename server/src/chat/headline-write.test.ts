@@ -9,7 +9,11 @@ import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { openDb } from '../store/db.js';
-import { maybeWriteHeadline, sweepImplausibleHeadlines } from './headline.js';
+import {
+  HEADLINE_MIN_INTERVAL_MS,
+  maybeWriteHeadline,
+  sweepImplausibleHeadlines,
+} from './headline.js';
 
 /**
  * The write path, against a real database and a real transcript on disk.
@@ -25,6 +29,7 @@ describe('maybeWriteHeadline — what a bad generation must not cost you', () =>
   let prevDataDir: string | undefined;
   let db: Database.Database;
   let tabs: TabStore;
+  let workspaceId: string;
   let tabId: string;
   let paneId: string;
 
@@ -45,9 +50,9 @@ describe('maybeWriteHeadline — what a bad generation must not cost you', () =>
     prevDataDir = process.env.MUXPAD_DATA_DIR;
     process.env.MUXPAD_DATA_DIR = dir;
     db = openDb(join(dir, 'db.sqlite'));
-    const ws = new WorkspaceStore(db).create({ name: 'W' });
+    workspaceId = new WorkspaceStore(db).create({ name: 'W' }).id;
     tabs = new TabStore(db);
-    tabId = tabs.create({ name: 'Main', workspace_id: ws.id, layout: 'p' }).id;
+    tabId = tabs.create({ name: 'Main', workspace_id: workspaceId, layout: 'p' }).id;
     paneId = new PaneStore(db).create({ tab_id: tabId }).id;
     // A non-claude backend so the locator uses muxpad's own transcript dir,
     // which we can write.
@@ -86,7 +91,7 @@ describe('maybeWriteHeadline — what a bad generation must not cost you', () =>
     // — a bad generation is never an improvement on a good line.
     tabs.setHeadline(tabId, GOOD, 1_000);
     const out = await maybeWriteHeadline(db, tabId, paneId, model(BUG), {
-      now: 1_000 + 60 * 60_000,
+      now: 1_000 + HEADLINE_MIN_INTERVAL_MS,
     });
     expect(out).toBeNull();
     expect(tabs.getById(tabId)?.headline).toBe(GOOD);
@@ -101,23 +106,51 @@ describe('maybeWriteHeadline — what a bad generation must not cost you', () =>
   it('still charges the attempt, so a persistently-failing chat cannot spin', async () => {
     // A row with no headline used to bypass the interval entirely, which meant
     // a chat whose every reply was rejected spawned a fresh model call on
-    // every finished turn, forever.
-    let calls = 0;
-    const counting = async () => {
-      calls += 1;
-      return BUG;
+    // every finished turn, forever. Charging the clock on rejection makes the
+    // cost a function of ELAPSED TIME instead of turn count.
+    //
+    // That property is what is asserted, not a literal call count. This test
+    // used to say `toBe(1)`, which held only because a 50-turn loop 10s apart
+    // spanned 8 minutes and the floor was 20; retuning the floor to 6 (26839f5)
+    // broke it with nothing actually wrong. Everything below is expressed in
+    // intervals, so it is scale-invariant under the next retune.
+    const SPAN = 3 * HEADLINE_MIN_INTERVAL_MS;
+
+    /** Drive `turns` finished turns across SPAN, every one of them rejected. */
+    const drive = async (tab: string, turns: number) => {
+      let calls = 0;
+      const counting = async () => {
+        calls += 1;
+        return BUG;
+      };
+      const step = SPAN / (turns - 1);
+      for (let i = 0; i < turns; i++) {
+        await maybeWriteHeadline(db, tab, paneId, counting, {
+          now: 1_000 + Math.round(i * step),
+        });
+      }
+      return calls;
     };
-    for (let i = 0; i < 50; i++) {
-      await maybeWriteHeadline(db, tabId, paneId, counting, { now: 1_000 + i * 10_000 });
-    }
-    expect(calls).toBe(1);
+
+    const calls = await drive(tabId, 50);
+    // One call per interval at most, plus the first — the greedy bound, the
+    // same one headline.test.ts holds the pure gate to.
+    expect(calls).toBeLessThanOrEqual(Math.floor(SPAN / HEADLINE_MIN_INTERVAL_MS) + 1);
     expect(tabs.getById(tabId)?.headline).toBeUndefined();
+
+    // …and the bound tracks the CLOCK, not the loop: four times the turns over
+    // the same wall-clock span costs exactly the same. A regression to per-turn
+    // generation cannot sneak past this one — dropping the charge-on-rejection
+    // makes it 200 calls against the other tab's 50.
+    const busier = tabs.create({ name: 'Busier', workspace_id: workspaceId, layout: 'p' }).id;
+    expect(await drive(busier, 200)).toBe(calls);
   });
 
   it('re-asks once the interval has passed, and takes a good line then', async () => {
     await maybeWriteHeadline(db, tabId, paneId, model(BUG), { now: 1_000 });
     const out = await maybeWriteHeadline(db, tabId, paneId, model('cron restart persistence'), {
-      now: 1_000 + 21 * 60_000,
+      // "once the interval has passed", not "once 21 minutes have passed".
+      now: 1_000 + HEADLINE_MIN_INTERVAL_MS,
     });
     expect(out).toBe('cron restart persistence');
   });
@@ -131,11 +164,11 @@ describe('maybeWriteHeadline — what a bad generation must not cost you', () =>
       async () => {
         throw new Error('no login');
       },
-      { now: 1_000 + 60 * 60_000 },
+      { now: 1_000 + HEADLINE_MIN_INTERVAL_MS },
     );
     expect(out).toBeNull();
     expect(tabs.getById(tabId)?.headline).toBe(GOOD);
-    expect(tabs.headlineAt(tabId)).toBe(1_000 + 60 * 60_000);
+    expect(tabs.headlineAt(tabId)).toBe(1_000 + HEADLINE_MIN_INTERVAL_MS);
   });
 
   it('passes the glossary into the prompt it sends', async () => {
