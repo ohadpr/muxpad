@@ -488,13 +488,14 @@ describe('subagent count — SDK shapes the declarations permit', () => {
 
     await runner.feed([
       sdk.init(),
-      sdk.launchToolUse('toolu_a', 'unbindable worker'),
+      sdk.launchToolUse('toolu_a', 'worker'),
       sdk.level([A]),
-      // `tool_use_id` is optional on SDKTaskStartedMessage. Omitted, the roster
-      // never learns which task this row is, so no task-keyed end-path can
-      // reach it.
-      sdk.taskStarted('task_a', null, 'unbindable worker'),
-      sdk.launchAck('toolu_a'),
+      // `tool_use_id` is optional on SDKTaskStartedMessage. With it omitted the
+      // task channel cannot bind this row — but the launch ack can, and does:
+      // it carries `agentId: <task_id>` (11/11 background launches across two
+      // captures, always equal to the task_started task_id).
+      sdk.taskStarted('task_a', null, 'worker'),
+      sdk.launchAck('toolu_a', 'task_a'),
       sdk.childActivity('toolu_a'),
       sdk.result('success'),
     ]);
@@ -506,28 +507,33 @@ describe('subagent count — SDK shapes the declarations permit', () => {
       sdk.taskUpdated('task_a', 'completed'),
       sdk.taskNotification('task_a', 'toolu_a'),
     ]);
-    expectCount(fx, runner, 0, 'an unbound entry must still be retirable');
+    expectCount(fx, runner, 0, 'the ack binding must survive a task_started with no tool_use_id');
   });
 
-  it('survives an unbound task whose finish also omits tool_use_id', async () => {
+  it('survives a launch with NO id link anywhere — ack, start and finish all bare', async () => {
+    // The pathological shape: no `agentId:` on the ack, no `tool_use_id` on
+    // either bookend. Nothing observed live produces this (every captured ack
+    // carried agentId, every captured bookend carried tool_use_id), so it is a
+    // backstop, not a repro — but an entry with steps that no id can reach is
+    // precisely the field symptom, so the floor has to hold without an id.
     const fx = await bootPair();
     const { runner } = fx;
     const A = liveTask('task_a');
 
     await runner.feed([
       sdk.init(),
-      sdk.launchToolUse('toolu_a', 'doubly unbindable'),
+      sdk.launchToolUse('toolu_a', 'idless worker'),
       sdk.level([A]),
-      sdk.taskStarted('task_a', null, 'doubly unbindable'),
-      sdk.launchAck('toolu_a'),
+      sdk.taskStarted('task_a', null, 'idless worker'),
+      sdk.launchAck('toolu_a', null),
       sdk.childActivity('toolu_a'),
       sdk.result('success'),
     ]);
     expectCount(fx, runner, 1, 'running');
 
-    // Both bookends declare tool_use_id optional. With neither carrying it and
-    // the binding never made, the entry has NO end-path at all — and it has
-    // steps, so `retireUnstarted` deliberately spares it.
+    // `retireUnstarted` deliberately spares it (it has steps), and no task-keyed
+    // path can find it. Only the level signal going EMPTY — "no background task
+    // is running at all" — can settle it.
     await runner.feed([
       sdk.level([]),
       sdk.taskUpdated('task_a', 'completed'),
@@ -595,9 +601,8 @@ describe('subagent count — SDK shapes the declarations permit', () => {
 
   it('a launch whose level payload never arrives is still retirable', async () => {
     // The level is emitted on membership change, but its ordering against the
-    // bookends is explicitly "unspecified" and it is per-process. An entry that
-    // is bound but never SEEN in a level payload is never marked background, so
-    // the level sweep will not touch it — the edges are its only way out.
+    // bookends is explicitly "unspecified" and it is per-process. An entry never
+    // SEEN in a level payload must still have a way out.
     const fx = await bootPair();
     const { runner } = fx;
 
@@ -605,7 +610,7 @@ describe('subagent count — SDK shapes the declarations permit', () => {
       sdk.init(),
       sdk.launchToolUse('toolu_a', 'level-less worker'),
       sdk.taskStarted('task_a', 'toolu_a', 'level-less worker'),
-      sdk.launchAck('toolu_a'),
+      sdk.launchAck('toolu_a', 'task_a'),
       sdk.childActivity('toolu_a'),
       sdk.result('success'),
     ]);
@@ -613,6 +618,42 @@ describe('subagent count — SDK shapes the declarations permit', () => {
 
     await runner.feed([sdk.level([]), sdk.taskNotification('task_a', 'toolu_a')]);
     expectCount(fx, runner, 0, 'the edge retires it');
+  });
+
+  it('background BASH tasks in the level payload cannot move the count', async () => {
+    // The level signal is not agent-only: the captures show `local_bash` task
+    // ids sharing the payload with agents (6 of 11 across two runs). They are
+    // never launched at top level, so they must neither create a row nor — the
+    // subtler half — count as "the background set is non-empty" in a way that
+    // rescues an agent row that should have been swept.
+    const fx = await bootPair();
+    const { runner } = fx;
+    const A = liveTask('task_a');
+    const BASH = { task_id: 'bn911erx6', task_type: 'local_bash', description: 'sleep 30' };
+
+    await runner.feed([
+      sdk.init(),
+      ...backgroundLaunch('toolu_a', 'task_a', 'A', [A]),
+      // A top-level background Bash starts: it joins the level payload and gets
+      // its own task_started under the Bash call's tool_use id.
+      sdk.level([A, BASH]),
+      sdk.taskStarted('bn911erx6', 'toolu_bash', 'sleep 30'),
+      sdk.result('success'),
+    ]);
+    expectCount(fx, runner, 1, 'the bash task adds no row');
+
+    // The agent finishes while the bash task is still running, so the level is
+    // NOT empty when the agent leaves it.
+    await runner.feed([
+      sdk.level([BASH]),
+      sdk.taskUpdated('task_a', 'completed'),
+      sdk.taskNotification('task_a', 'toolu_a'),
+    ]);
+    expectCount(fx, runner, 0, 'a non-empty level of bash tasks must not keep the agent alive');
+
+    // …and the bash task's own finish is a no-op either way.
+    await runner.feed([sdk.level([]), sdk.taskNotification('bn911erx6', 'toolu_bash')]);
+    expectCount(fx, runner, 0, 'still zero');
   });
 
   it('a version-skewed runner cannot push the pane past the cap', async () => {
