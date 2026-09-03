@@ -50,8 +50,13 @@ export class TabStore {
     const id = ulid();
     const slug = this.uniqueSlug();
     const now = Date.now();
-    // A new tab has NO icon, and the rail renders DEFAULT_TAB_ICON until it
-    // gets one. This used to be `randomTabIcon()`, which was worse than
+    // A new tab has NO icon, and the rail renders `fallbackTabIcon(tab.id)`
+    // until it gets one — derived from the id, so it is stable per row and
+    // mostly distinct across rows, and stored nowhere. (NOT `DEFAULT_TAB_ICON`,
+    // which is one constant glyph and would turn the icon column into an
+    // undifferentiated stripe.)
+    //
+    // This used to be `randomTabIcon()`, which was worse than
     // meaningless: an icon nobody chose is what the generator reads as "this
     // tab already has one, hands off", so a random default did not merely fail
     // to describe the tab — it permanently prevented anything from describing
