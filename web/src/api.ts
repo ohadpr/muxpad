@@ -20,9 +20,7 @@ async function errorEnvelope(res: Response): Promise<{ message: string; code: st
     // not our envelope — fall through
   }
   return {
-    message: text.trim()
-      ? `${res.status} ${text.slice(0, 200)}`
-      : `request failed (${res.status})`,
+    message: text.trim() ? `${res.status} ${text.slice(0, 200)}` : `request failed (${res.status})`,
     code: null,
   };
 }
@@ -245,7 +243,15 @@ export const api = {
      *  keep the pane's folder / let the harness pick its own model. */
     start?: { cwd?: string | undefined; model?: string | undefined },
   ) =>
-    req<void>(`/api/panes/${paneId}/agent-backend`, {
+    req<{
+      backend: 'claude' | 'codex' | 'cursor';
+      mode: AgentMode;
+      /** The folder the session ACTUALLY got. The server snaps the request to
+       *  the project root, so echoing our own input can name a different
+       *  folder than the one running. Always prefer this. */
+      cwd: string | null;
+      model: string | null;
+    }>(`/api/panes/${paneId}/agent-backend`, {
       method: 'POST',
       body: JSON.stringify({
         backend,

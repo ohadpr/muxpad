@@ -273,6 +273,7 @@ export function FolderChoice({
   folders,
   current,
   disabled,
+  autoFocus,
 }: {
   inputId: string;
   value: string;
@@ -283,6 +284,10 @@ export function FolderChoice({
   /** The pane's folder right now — always offered, even if it isn't "recent". */
   current: string | null;
   disabled?: boolean;
+  /** Focus the field on mount. The session-menu "Switch folder" panel opens
+   *  BECAUSE you asked to type a folder, so it should not cost another tap;
+   *  the launch card does not set this, since its likely answer is a chip. */
+  autoFocus?: boolean;
 }) {
   // The current folder leads the row: keeping things where they are is the
   // most likely answer, and it must never be the one option you can't tap.
@@ -330,6 +335,8 @@ export function FolderChoice({
       ) : null}
       <input
         id={inputId}
+        // biome-ignore lint/a11y/noAutofocus: the panel exists to be typed in
+        autoFocus={autoFocus}
         className="chat-folder-input"
         value={value}
         spellCheck={false}
@@ -752,6 +759,7 @@ function SessionBar({
           folders={recent}
           current={folder.cwd}
           disabled={folderBusy}
+          autoFocus
         />
         {folderErr ? <div className="chat-folder-error">{folderErr}</div> : null}
         <button
@@ -2696,15 +2704,25 @@ export function ChatPane({
    *  only for a chat that is actually showing the offer. */
   const [launchOptions, setLaunchOptions] = useState<AgentLaunchOptions | null>(null);
   const launchFetched = useRef(false);
-  const wantLaunchOptions = staged !== null;
+  // PREFETCH on the strip, not on the card. Fetching when the card opens meant
+  // its first frame had no folder chips and a models list of just "Default",
+  // which then popped in — the exact layout jump the single-request design
+  // exists to avoid. Worse, `launchFetched` was set before the request
+  // resolved, so ONE failed fetch left the card Default-only for the rest of
+  // the mount and the user again "can't change the model". Now it is fetched
+  // as soon as the offer is on screen, and a failure is retryable.
+  const wantLaunchOptions = staged !== null || !hasMessages;
   useEffect(() => {
     if (!wantLaunchOptions || launchFetched.current) return;
-    launchFetched.current = true;
     let cancelled = false;
     void api
       .agentLaunchOptions()
       .then((o) => {
-        if (!cancelled) setLaunchOptions(o);
+        if (cancelled) return;
+        // Only a SUCCESS closes the door. A rejected fetch leaves the flag
+        // clear so opening the card can try again.
+        launchFetched.current = true;
+        setLaunchOptions(o);
       })
       .catch(() => {
         // Suggestions are a convenience: with none, the card still shows the
@@ -2828,17 +2846,27 @@ export function ChatPane({
     if (!staged) return;
     const { backend, cwd, model } = staged;
     const dir = cwd.trim();
-    const ok = await runConversion(backend, 'could not start the agent', () =>
+    // What the server RESOLVED, which is not always what we asked for: it snaps
+    // the folder to the project root. Echoing our own input here put two
+    // different folders on screen for one conversion — the receipt naming the
+    // subdirectory the user typed, the greeting naming the root that actually
+    // started.
+    let resolved: { cwd: string | null; model: string | null } | null = null;
+    const ok = await runConversion(backend, 'could not start the agent', async () => {
       // 'deep' = NO house overlay. Choosing a harness by name means you
       // want that harness as it ships — capabilities injection only.
-      api.setAgentBackend(paneId, backend, 'deep', {
+      resolved = await api.setAgentBackend(paneId, backend, 'deep', {
         ...(dir ? { cwd: dir } : {}),
         ...(model ? { model } : {}),
-      }),
-    );
+      });
+    });
     if (!ok) return;
     setStaged(null);
-    setConverted({ backend, cwd: dir, model });
+    setConverted({
+      backend,
+      cwd: (resolved as { cwd: string | null } | null)?.cwd ?? dir,
+      model: (resolved as { model: string | null } | null)?.model ?? model,
+    });
     window.clearTimeout(confirmTimer.current);
     confirmTimer.current = window.setTimeout(() => setConverted(null), CONVERT_CONFIRM_MS);
   }, [staged, paneId, runConversion]);
@@ -2945,12 +2973,24 @@ export function ChatPane({
                 onTerminal={() => void chooseTerminal()}
                 onWeb={() => void chooseWeb()}
               />
-            ) : // Messages are parked waiting for this agent: the chat is not
-            // empty in any sense the user would recognise, and converting
-            // would respawn the runner out from under them. The server would
-            // NOT refuse (the queue is not a transcript), so this gate is the
-            // only thing standing between a stray tap and a lost message.
-            null}
+            ) : (
+              // Messages are parked waiting for this agent, so the chat is not
+              // empty in any sense the user would recognise and converting
+              // would respawn the runner out from under them.
+              //
+              // The server agrees and REFUSES: `agentPaneHasMessages` returns
+              // true on a non-empty queue, first thing. (An earlier comment
+              // here claimed the opposite and called this gate "the only thing
+              // standing between a stray tap and a lost message" — it is not,
+              // it is the second line.) So this branch is presentation only,
+              // and rendering `null` was wrong: it removed the harness offer,
+              // Terminal, Web view AND any explanation, leaving a silent dead
+              // end with no way out.
+              <p className="chat-empty-hint">
+                {queue.length === 1 ? 'A message is' : `${queue.length} messages are`} waiting for
+                this agent to start. Other harnesses are offered once the queue drains.
+              </p>
+            )}
           </div>
         );
       }

@@ -86,7 +86,7 @@ describe('pane conversion — the zero-message gate', () => {
       method: 'POST',
       ...json({ backend: 'codex', mode: 'deep' }),
     });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
     // Raw = the harness as it ships: no --mode flag, and the row says deep.
     expect(row(pane.id)).toMatchObject({
       mode: 'deep',
@@ -106,7 +106,7 @@ describe('pane conversion — the zero-message gate', () => {
       method: 'POST',
       ...json({ backend: 'codex', mode: 'deep', cwd: dir, model: 'gpt-5-codex' }),
     });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
     expect(row(pane.id).startup_cmd).toBe("muxpad agent --backend codex --model 'gpt-5-codex'");
     expect(
       (db.prepare('SELECT cwd FROM panes WHERE id = ?').get(pane.id) as { cwd: string }).cwd,
@@ -119,7 +119,7 @@ describe('pane conversion — the zero-message gate', () => {
       method: 'POST',
       ...json({ backend: 'claude', mode: 'deep' }),
     });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
     expect(row(pane.id).startup_cmd).toBe('muxpad agent');
   });
 
@@ -165,7 +165,7 @@ describe('pane conversion — the zero-message gate', () => {
       method: 'POST',
       ...json({ backend: 'claude', mode: 'deep', model: 'claude-opus-4-8[1m]' }),
     });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
     // Single-quoted so zsh's nomatch cannot glob-error on the brackets.
     expect(row(pane.id).startup_cmd).toBe("muxpad agent --model 'claude-opus-4-8[1m]'");
   });
@@ -218,7 +218,7 @@ describe('pane conversion — the zero-message gate', () => {
       method: 'POST',
       ...json({ backend: 'cursor', mode: 'deep' }),
     });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
   });
 
   it('REFUSES while a turn is in flight, even with nothing on disk yet', async () => {
@@ -257,7 +257,14 @@ describe('pane conversion — the zero-message gate', () => {
       method: 'POST',
       ...json({ backend: 'cursor', mode: 'deep' }),
     });
-    expect(ok.status).toBe(204);
+    expect(ok.status).toBe(200);
+    // Status alone would pass against a route that did nothing. The point of
+    // this case is that a STARTED session is still convertible, so assert the
+    // conversion actually landed.
+    expect(row(pane.id)).toMatchObject({
+      mode: 'deep',
+      startup_cmd: 'muxpad agent --backend cursor',
+    });
   });
 
   it('REFUSES a chat with a real transcript — a live conversation is never nuked', async () => {
@@ -316,6 +323,39 @@ describe('pane conversion — the zero-message gate', () => {
       method: 'POST',
       ...json({ backend: 'claude' }),
     });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
+    // The whole point: the legacy chooser is REPLACED. Asserting only the
+    // status let this pass while `muxpad agent --pick` stayed in the row.
+    expect(row(pane.id).startup_cmd).toBe('muxpad agent');
+  });
+
+  it('returns what it RESOLVED, not what was asked for', async () => {
+    // The client echoes this back as "Now running X · model · folder". It used
+    // to echo its own input, which names a different folder than the session
+    // got whenever agentCwd snaps the request to a project root.
+    const { pane } = await houseChat();
+    const res = await test.app.request(`/api/panes/${pane.id}/agent-backend`, {
+      method: 'POST',
+      ...json({ backend: 'claude', mode: 'deep', model: 'claude-sonnet-4-5' }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      backend: 'claude',
+      mode: 'deep',
+      model: 'claude-sonnet-4-5',
+    });
+  });
+
+  it('REJECTS a flag-shaped model id', async () => {
+    // The charset alone admits `--dangerously-skip-permissions`, which reaches
+    // the runner as the VALUE of --model. Not RCE (single-quoted, no shell
+    // metacharacters in the charset) but never a real model id.
+    const { pane } = await houseChat();
+    const res = await test.app.request(`/api/panes/${pane.id}/agent-backend`, {
+      method: 'POST',
+      ...json({ backend: 'claude', model: '--dangerously-skip-permissions' }),
+    });
+    expect(res.status).toBe(400);
+    expect(row(pane.id).startup_cmd).not.toContain('dangerously');
   });
 });
