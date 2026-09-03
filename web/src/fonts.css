@@ -1,0 +1,48 @@
+/* Self-hosted webfonts. NOTHING here is fetched on a cold load: every face is
+   declared but only pulled when a rendered element actually resolves to it,
+   and the default terminal font is Menlo. Two rules keep it that way:
+
+   1. The files live in web/src/fonts/ (NOT web/public/) so Vite content-hashes
+      them into /assets/. That is what makes the immutable year-long
+      Cache-Control the server sets on /assets/* unconditionally correct —
+      changing a font's bytes changes its URL.
+   2. `font-display: swap` — a selected-but-unloaded family never blocks paint.
+
+   MesloLGS NF is the canonical Powerlevel10k Nerd Font, converted from the
+   upstream TTFs with fontTools (`flavor = 'woff2'`): 2.55 MB → 1.03 MB each.
+   Chrome on macOS often can't reach user-installed fonts under ~/Library/Fonts,
+   so we ship our own copy for reliable Nerd Font glyphs. It stays HERE (eager
+   declarations, lazy bytes) rather than in terminal-fonts.css because
+   ExternalOpenToasts.css names it directly, outside the terminal-font setting.
+
+   The other three terminal-font choices live in terminal-fonts.css, which is
+   imported on demand — see the note there. */
+
+@font-face {
+  font-family: "MesloLGS NF";
+  src: url("./fonts/MesloLGS-NF-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "MesloLGS NF";
+  src: url("./fonts/MesloLGS-NF-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "MesloLGS NF";
+  src: url("./fonts/MesloLGS-NF-Italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "MesloLGS NF";
+  src: url("./fonts/MesloLGS-NF-Bold-Italic.woff2") format("woff2");
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}

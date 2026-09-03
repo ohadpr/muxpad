@@ -242,6 +242,7 @@ describe('PtydCache', () => {
       url: null,
       shell: '/bin/zsh',
       startup_cmd: null,
+      mode: 'deep',
       cwd: '/tmp',
       env: null,
       face: 'terminal',
@@ -253,41 +254,213 @@ describe('PtydCache', () => {
     expect(decoratePane(cache, pane).busy).toBe(true);
   });
 
-  it('keeps busy while a background subagent pokes, then decays', async () => {
-    const cache = new PtydCache({ subagentBusyMs: 60 });
+  it('a live subagent roster holds busy with NO decay window, and is count-edge-triggered', async () => {
+    // Replaces the old 15s-decay poke. Measured (P1, 2026-08): a background
+    // subagent parked in one tool call goes 44s+ without a frame while alive,
+    // so any decay window evicts a running agent. Membership now has real
+    // launch/finish edges and no timer at all.
+    const cache = new PtydCache();
     const events: string[] = [];
     cache.on('paneChange', (id: string) => events.push(id));
 
-    // First poke → busy rises (one paneChange).
-    cache.pokeSubagentBusy('p1');
+    cache.setSubagentCount('p1', 1);
     expect(cache.getBusy('p1')).toBe(true);
+    expect(cache.getSubagentCount('p1')).toBe(1);
     expect(events).toEqual(['p1']);
 
-    // A second poke within the window re-arms the timer without re-firing
-    // (already busy) and keeps it lit.
-    await new Promise((r) => setTimeout(r, 40));
-    cache.pokeSubagentBusy('p1');
-    expect(cache.getBusy('p1')).toBe(true);
-    expect(events).toEqual(['p1']); // no duplicate rise
+    // The runner's keepalive re-announces the SAME roster — no event, no churn.
+    cache.setSubagentCount('p1', 1);
+    expect(events).toEqual(['p1']);
 
-    // No more pokes → decays after the window, firing the idle transition once.
-    await new Promise((r) => setTimeout(r, 90));
-    expect(cache.getBusy('p1')).toBe(false);
+    // A second subagent IS a visible change (the badge shows the number).
+    cache.setSubagentCount('p1', 2);
     expect(events).toEqual(['p1', 'p1']);
+
+    // Long silence changes nothing — there is no window to expire.
+    await new Promise((r) => setTimeout(r, 80));
+    expect(cache.getBusy('p1')).toBe(true);
+
+    // Only an explicit empty roster clears it.
+    cache.setSubagentCount('p1', 0);
+    expect(cache.getBusy('p1')).toBe(false);
+    expect(cache.getSubagentCount('p1')).toBe(0);
+    expect(events).toEqual(['p1', 'p1', 'p1']);
   });
 
-  it('subagent-busy ORs with agent-turn busy and forget clears its timer', async () => {
-    const cache = new PtydCache({ subagentBusyMs: 40 });
+  it('the roster ORs with agent-turn busy, and outlives turn-done', () => {
+    // The exact D3 shape: the turn ends, the background subagent does not.
+    const cache = new PtydCache();
     cache.setAgentBusy('p1', true);
-    cache.pokeSubagentBusy('p1');
+    cache.setSubagentCount('p1', 1);
     expect(cache.getBusy('p1')).toBe(true);
-    // Turn ends but the background subagent still holds it busy.
     cache.setAgentBusy('p1', false);
     expect(cache.getBusy('p1')).toBe(true);
-    // forget() cancels the pending decay timer (no post-delete resurrection).
     cache.forget('p1');
     expect(cache.getBusy('p1')).toBe(false);
-    await new Promise((r) => setTimeout(r, 60));
+    expect(cache.getSubagentCount('p1')).toBe(0);
+  });
+});
+
+describe('the five-state status model', () => {
+  const pane = (over: Partial<PaneSpec> = {}): PaneSpec => ({
+    id: 'p1',
+    tab_id: 't1',
+    kind: 'shell',
+    url: null,
+    shell: '/bin/zsh',
+    startup_cmd: null,
+    mode: 'deep',
+    cwd: '/tmp',
+    env: null,
+    face: 'terminal',
+    face_url: null,
+    created_at: 0,
+    ...over,
+  });
+
+  it('evaluates the documented precedence', () => {
+    const cache = new PtydCache();
+    expect(cache.getStatus('p1', false)).toBe('idle');
+
+    // done ← the persisted unread flag
+    expect(cache.getStatus('p1', true)).toBe('ready');
+
+    // dead outranks ready (see STATUS_ORDER's note): a crash must not be
+    // masked by an unread turn
+    cache.setDead('p1', true);
+    expect(cache.getStatus('p1', false)).toBe('dead');
+    expect(cache.getStatus('p1', true)).toBe('dead');
+
+    // working outranks both
+    cache.setAgentBusy('p1', true);
+    expect(cache.getStatus('p1', true)).toBe('working');
+
+    // blocked outranks everything
+    cache.setBlocked('p1', true);
+    expect(cache.getStatus('p1', true)).toBe('blocked');
+
+    cache.setBlocked('p1', false);
+    expect(cache.getStatus('p1', true)).toBe('working');
+  });
+
+  it('gates the pty heuristic to RUNNER-LESS panes (D4)', async () => {
+    // The rest of the codebase already tells agents never to trust `busy` for
+    // turn state. This makes the sidebar agree: on a runner-owned pane, pty
+    // output is not a status source at all — so `tail -f` in an agent pane's
+    // terminal face no longer spins forever, and a silently-thinking agent no
+    // longer reads idle.
+    const cache = new PtydCache({ busyQuietMs: 200, busyWarmupMs: 20 });
+    const c = fakeClient();
+    cache.attach(c);
+    const tick = () => (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
+
+    tick();
+    await new Promise((r) => setTimeout(r, 30));
+    tick();
+    // No runner → the heuristic still speaks for the pane.
+    expect(cache.getStatus('p1', false)).toBe('working');
+
+    // A runner attaches: pty output stops counting, and the flip itself is an
+    // edge the nav must be told about.
+    const changes: string[] = [];
+    cache.on('paneChange', (id: string) => changes.push(id));
+    cache.setRunnerOwned('p1', true);
+    expect(cache.getStatus('p1', false)).toBe('idle');
+    expect(changes).toEqual(['p1']);
+
+    // …and the registry now speaks for it instead.
+    cache.setAgentBusy('p1', true);
+    expect(cache.getStatus('p1', false)).toBe('working');
+  });
+
+  it('the echo gate suppresses the RISE but never ends a running spell (D6)', async () => {
+    // Typing into an ALREADY-BUSY pane used to starve the decay re-arm: the
+    // echo check returned before the timer block, so busy expired
+    // busyQuietMs later while the app was still streaming.
+    const cache = new PtydCache({ busyQuietMs: 150, busyWarmupMs: 20, busyInputGraceMs: 100 });
+    const c = fakeClient();
+    cache.attach(c);
+    const tick = () => (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
+
+    // Typing alone never trips busy.
+    cache.noteInput('p1');
+    tick();
+    await new Promise((r) => setTimeout(r, 25));
+    cache.noteInput('p1');
+    tick();
     expect(cache.getBusy('p1')).toBe(false);
+
+    // Real output (no recent keystroke) crosses the warmup.
+    await new Promise((r) => setTimeout(r, 120));
+    tick();
+    await new Promise((r) => setTimeout(r, 30));
+    tick();
+    expect(cache.getBusy('p1')).toBe(true);
+
+    // Now type continuously while the app keeps streaming. Every tick lands
+    // inside the input grace — the old code dropped them all and let busy
+    // expire mid-work.
+    for (let i = 0; i < 4; i++) {
+      await new Promise((r) => setTimeout(r, 60));
+      cache.noteInput('p1');
+      tick();
+    }
+    expect(cache.getBusy('p1')).toBe(true);
+
+    // Output really stops → it decays normally.
+    await new Promise((r) => setTimeout(r, 220));
+    expect(cache.getBusy('p1')).toBe(false);
+  });
+
+  it('…but echo can only SUSTAIN a spell for a bounded window', async () => {
+    // Ticks are indistinguishable at this layer, so "the app is streaming while
+    // you type" and "the app went quiet while you type" look identical. The
+    // sustain is therefore capped past the last NON-echo tick — otherwise
+    // steady typing would hold a quiet pane `working` indefinitely.
+    const cache = new PtydCache({
+      busyQuietMs: 150,
+      busyWarmupMs: 20,
+      busyInputGraceMs: 100,
+      busyEchoSustainMs: 200,
+    });
+    const c = fakeClient();
+    cache.attach(c);
+    const tick = () => (c as unknown as EventEmitter).emit('paneActivity', { id: 'p1' });
+
+    // Get genuinely busy off real output.
+    tick();
+    await new Promise((r) => setTimeout(r, 30));
+    tick();
+    expect(cache.getBusy('p1')).toBe(true);
+
+    // Type steadily, with NO further real output, past the sustain cap.
+    for (let i = 0; i < 8; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      cache.noteInput('p1');
+      tick();
+    }
+    await new Promise((r) => setTimeout(r, 200));
+    expect(cache.getBusy('p1')).toBe(false);
+  });
+
+  it('decoratePane carries status + agents, with busy as an exact alias', () => {
+    const cache = new PtydCache();
+    expect(decoratePane(cache, pane())).toMatchObject({ status: 'idle', busy: false, agents: 0 });
+
+    cache.setSubagentCount('p1', 2);
+    const working = decoratePane(cache, pane());
+    expect(working.status).toBe('working');
+    expect(working.busy).toBe(true);
+    expect(working.agents).toBe(2);
+
+    cache.setSubagentCount('p1', 0);
+    expect(decoratePane(cache, pane({ unread: true })).status).toBe('ready');
+
+    // `attention` keeps its ORIGINAL meaning (raw BEL), deliberately — a
+    // question-blocked pane must not re-trigger the attention push.
+    cache.setBlocked('p1', true);
+    const blocked = decoratePane(cache, pane());
+    expect(blocked.status).toBe('blocked');
+    expect(blocked.attention).toBe(false);
   });
 });

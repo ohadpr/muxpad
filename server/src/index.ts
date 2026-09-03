@@ -1,26 +1,75 @@
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
-import { serveStatic } from '@hono/node-server/serve-static';
-import type { Context } from 'hono';
 import { createAgentBridge } from './agent-bridge.js';
+import { ensureAgentNotes, migrateAgentFileEdits } from './agent-files.js';
+import { INSTRUCTIONS_MIGRATION, seedAgentInstructions } from './agent-instructions.js';
+import { DO_MODE_MIGRATION, seedDoMode } from './agent-modes.js';
+import { createAppRegistry, startAppReconciler } from './apps/AppRegistry.js';
+import { createAppStatusProbe } from './apps/AppStatus.js';
+import { adoptServePanes } from './apps/adopt-serve-panes.js';
+import { ArchiveDb } from './archive/ArchiveDb.js';
+import { Archiver } from './archive/Archiver.js';
+import { HeadlineWriter } from './chat/HeadlineWriter.js';
+import { projectsDir } from './chat/TranscriptReader.js';
+import { sweepImplausibleHeadlines } from './chat/headline.js';
+import { paneCarryover } from './chat/summarize.js';
 import { loadConfig } from './config.js';
+import { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
+import { createTailscaleFunnel, localFunnel } from './funnel.js';
 import { startPaneReaper } from './pane-reaper.js';
-import { PtydCache, decoratePane } from './ptyd-cache.js';
+import { PtydCache, decoratePane, decorateTab } from './ptyd-cache.js';
 import { PtydClient } from './ptyd-client/PtydClient.js';
+import { createPublicApp } from './public-server.js';
 import { Presence, PushService, attachAttentionPush, createPaneNotifier } from './push.js';
+import { releaseResidentPane } from './resident-release.js';
+import { startServeSupervisor } from './serve-supervisor.js';
 import { createApp } from './server.js';
+import { mountStaticWeb } from './static-assets.js';
 import { PaneStore } from './store/PaneStore.js';
+import { TabStore } from './store/TabStore.js';
 import { openDb } from './store/db.js';
+import { TabActivity } from './tab-activity.js';
 import { attachWsServer } from './ws.js';
 
 const config = loadConfig();
 mkdirSync(config.dataDir, { recursive: true });
 const db = openDb(join(config.dataDir, 'db.sqlite'));
+// The prompt files (agent-files.ts). agent-instructions.md and do-mode.md are
+// GENERATED — rewritten from source here on every boot, so they always describe
+// this build — and agent-notes.md is the user's, created once and never touched.
+// The migration runs FIRST and exactly once: it rescues anything the user had
+// added to the two files back when they were user-owned, before the first
+// generated write lands on them.
+// `safe` is false only when something of the user's is still sitting in a
+// generated file's path — then we generate NOTHING and retry next boot,
+// because an overwrite can succeed where the rescue failed.
+const rescue = migrateAgentFileEdits({
+  db,
+  dataDir: config.dataDir,
+  files: [INSTRUCTIONS_MIGRATION, DO_MODE_MIGRATION],
+});
+for (const r of rescue.rescued)
+  console.log(
+    `muxpad: ${r.name} is now GENERATED and rewritten on every start. Your copy was saved as ${r.backup}${r.intoNotes ? ', and its content appended to agent-notes.md — the file muxpad never touches. Trim it to just what is yours.' : '.'}`,
+  );
+if (rescue.safe) {
+  seedAgentInstructions(config.dataDir);
+  seedDoMode(config.dataDir);
+} else {
+  // Something of the user's is still in a generated file's path and could not
+  // be moved. Say so: the alternative is instructions that silently stop
+  // tracking the build, with nothing anywhere explaining why.
+  console.warn(
+    `muxpad: could not move your older agent-instructions.md / do-mode.md aside in ${config.dataDir}, so they were NOT regenerated (check permissions). Retrying next start.`,
+  );
+}
+ensureAgentNotes(config.dataDir);
 const paneStore = new PaneStore(db);
+const tabStore = new TabStore(db);
 // EventBus is shared by the route layer (HTTP-driven mutations) and the
 // /ws/events upgrade arm (server/src/ws.ts) which fans events out to
 // subscribed browsers.
@@ -42,6 +91,26 @@ cache.seedCwds(paneStore.listCwds());
 // restart lands in the shell's actual cwd instead of the spawn cwd.
 ptyd.on('paneCwd', (e: { id: string; cwd: string }) => {
   paneStore.updateCwd(e.id, e.cwd);
+});
+
+// Living sidebar: `tabs.last_activity_at`. One recorder shared with the ws
+// layer so the 60s throttle is per TAB, not per signal source. Raw pty output
+// ticks land here (ptyd throttles them already, but a busy pane still emits
+// several per second — hence the throttle); ws.ts adds the forced bumps for
+// turn-done / user sends and the throttled one for keystrokes.
+const tabActivity = new TabActivity(db, {
+  // Recency changed → tell every open client now, instead of leaving the
+  // reorder to their next 5s poll (which is stopped entirely for a collapsed
+  // workspace or a hidden document). Already rate-limited by the recorder's
+  // own throttle, so this is at most one event per tab per minute plus the
+  // discrete forced bumps.
+  onWrite: (tabId) => {
+    const t = tabStore.getById(tabId);
+    if (t) events.emit({ type: 'tab.updated', tab: decorateTab(cache, db, t) });
+  },
+});
+ptyd.on('paneActivity', (e: { id: string }) => {
+  tabActivity.touchPane(e.id);
 });
 
 // An EXPLICIT app-url declaration (`muxpad app-url` / `muxpad serve` — the
@@ -80,6 +149,23 @@ cache.on('paneChange', (paneId: string) => {
   });
 });
 
+// Dropping a pane's whole cache entry (pty exit) is ALSO a status change, and
+// it had no subscriber at all. A pane that exited while its BEL was ringing
+// went from `blocked` to `idle` in the cache with nothing telling anyone, so
+// the tabbed strip kept its attention mark until the user navigated or a poll
+// happened along. When the row is gone too (a real delete) getById returns
+// null and the route layer's own `pane.removed` is the right event — say
+// nothing here.
+cache.on('paneRemoved', (paneId: string) => {
+  const pane = paneStore.getById(paneId);
+  if (!pane) return;
+  events.emit({
+    type: 'pane.updated',
+    tab_id: pane.tab_id,
+    pane: decoratePane(cache, pane),
+  });
+});
+
 // Shared between the route layer (built now) and the ws layer (attached after
 // the HTTP server exists) — ws.ts binds the real runner relay onto it.
 const agentBridge = createAgentBridge();
@@ -92,7 +178,94 @@ const push = new PushService(db, config.dataDir);
 // Active-device presence: /api/presence heartbeats mark it; notifiers hold
 // pushes while any device is active (see Presence / createPaneNotifier).
 const presence = new Presence();
-attachAttentionPush({ events, db, push, presence });
+attachAttentionPush({
+  events,
+  db,
+  push,
+  presence,
+  liveLabel: (id) => ({ title: cache.getTitle(id), fg: cache.getFg(id) }),
+});
+
+// Session archive: raw transcript mirrors + FTS5 index in a SEPARATE
+// archive.sqlite (the index dwarfs the operational DB and FTS churn must not
+// share the WAL the UI reads). All paths derive from config.dataDir so an
+// isolated instance stays sandboxed; the Claude projects dir respects
+// CLAUDE_CONFIG_DIR the same way TranscriptReader does.
+// A corrupt/unopenable archive.sqlite must degrade to "archiving disabled",
+// never kill the whole server at boot — the archive is an accessory to the
+// cockpit, not a dependency of it.
+let archiveDb: ArchiveDb | undefined;
+try {
+  archiveDb = new ArchiveDb(join(config.dataDir, 'archive.sqlite'));
+} catch (err) {
+  console.error('[archive] failed to open archive.sqlite — archiving disabled', err);
+}
+const archiver = archiveDb
+  ? new Archiver({
+      archive: archiveDb,
+      archiveDir: join(config.dataDir, 'archive'),
+      claudeProjectsDir: projectsDir(),
+      muxpadTranscriptsDir: join(config.dataDir, 'agent-transcripts'),
+      db,
+      events,
+    })
+  : undefined;
+
+// The nav rail's second line. Subscribes to turn-end on the same bus the
+// archiver uses and hands each finished turn to a rate-limited haiku one-shot
+// (chat/headline.ts owns every decision about whether to spend a call).
+// Unconditional, unlike the archiver: it has no store of its own to fail to
+// open, and it degrades to "no second line" on every error by contract.
+const headlines = new HeadlineWriter({ db, events, cache, dataDir: config.dataDir });
+
+// Funnel manager for `POST /api/publish` — ensures the PUBLIC port (never
+// the main UI port, which is unauthenticated) is funneled to the internet.
+// MUXPAD_NO_FUNNEL=1 (isolated/test instances) swaps in an exec-free stub.
+const funnel = config.funnelEnabled
+  ? createTailscaleFunnel({ publicPort: config.publicPort })
+  : localFunnel(config.publicPort, 'funnel disabled (MUXPAD_NO_FUNNEL=1)');
+
+// The cron scheduler. Built BEFORE createApp (the routes need its store) but
+// after the agentBridge, whose late-bound accessors it reads — every injection
+// still goes through the ws layer's single `submitSend`, exactly like an HTTP
+// send. Its tick doesn't start until `start()` below, after the ws layer is
+// attached, so a fire can never race the registry into existence.
+const cronScheduler = new CronScheduler({
+  db,
+  ptyd,
+  cache,
+  events,
+  tabActivity,
+  submitSend: (paneId, text) => agentBridge.submitSend(paneId, text),
+  turnActive: (paneId) => agentBridge.turnActive(paneId),
+  contextPct: (paneId) => agentBridge.contextPct(paneId),
+  lastHumanSendAt: (paneId) => agentBridge.lastSendAt(paneId),
+  slash: (paneId, cmd) => agentBridge.slash(paneId, cmd),
+  blocked: (paneId) => agentBridge.blocked(paneId),
+  notify: (title, body) => {
+    void push.send({ title, body, url: '/', tag: 'cron' });
+  },
+  // Rotation handoff: summarize the pane whose window filled up, so the fresh
+  // tab starts briefed instead of amnesiac. Swappable by design — a future
+  // per-chat dossier replaces this one line.
+  carryover: (paneId) => paneCarryover(db, paneId),
+});
+
+// Hosted APPS (`muxpad app`): supervised `muxpad serve` panes in a hidden
+// workspace, so a long-running local web server stops costing a permanent tab.
+// The registry only creates/destroys the pane; keeping it ALIVE is the serve
+// supervisor's job below, which is why there is no second process supervisor
+// here — one dying with the main server would take every app down on deploy.
+const appRegistry = createAppRegistry({ db, ptyd, events });
+// Late-bound so the status probe can read the supervisor's give-up ledger:
+// the supervisor is constructed after the ws layer, and the probe is needed
+// before it, by createApp.
+let serveSupervisorRef: { gaveUp(paneId: string): boolean } | null = null;
+const appStatus = createAppStatusProbe({
+  db,
+  ptyd,
+  gaveUp: (paneId) => serveSupervisorRef?.gaveUp(paneId) ?? false,
+});
 
 const app = createApp({
   db,
@@ -101,65 +274,60 @@ const app = createApp({
   dataDir: config.dataDir,
   events,
   agentBridge,
+  tabActivity,
   push,
   presence,
+  cronScheduler,
+  ...(archiveDb ? { archive: archiveDb } : {}),
+  publish: {
+    funnel,
+    publicPort: config.publicPort,
+    ...(config.publicBaseUrl ? { publicBaseUrl: config.publicBaseUrl } : {}),
+  },
+  apps: { registry: appRegistry, status: appStatus },
 });
 
-// Static asset serving (CSS, JS, images, etc.) from the built web bundle.
+// Static asset serving (CSS, JS, fonts, images) from the built web bundle,
+// plus the SPA fallback. Caching/compression policy lives in static-assets.ts.
 const here = dirname(fileURLToPath(import.meta.url));
-const webRoot = join(here, '..', '..', 'web', 'dist');
-
-// The HTML shell must be served `no-cache` so the browser ALWAYS revalidates it
-// and picks up a rebuilt bundle's new hashed asset names. Assets themselves are
-// content-hashed (immutable) and keep serveStatic's cacheable headers — only the
-// index.html entrypoint is the stale-after-rebuild trap. Without this, a reload
-// can keep serving an old index.html that references the pre-rebuild CSS/JS.
-const serveIndexHtml = (c: Context) => {
-  c.header('Cache-Control', 'no-cache');
-  try {
-    return c.html(readFileSync(join(webRoot, 'index.html'), 'utf-8'));
-  } catch {
-    return c.text('not found', 404);
-  }
-};
-app.get('/', serveIndexHtml);
-// Direct /index.html requests must not slip through to serveStatic either —
-// that would hand the shell back with cacheable headers, the exact trap the
-// no-cache route exists to close.
-app.get('/index.html', serveIndexHtml);
-
-app.use('/*', serveStatic({ root: webRoot }));
-
-// Anything that fell through both API routes and static files lands here.
-// API/WS paths return JSON 404 so the client can parse them; everything else
-// is treated as a client-side SPA route and gets index.html.
-//
-// Read index.html fresh on each fallback request — caching it in memory means
-// a rebuild that produces a new hashed bundle name still serves the old HTML,
-// which then 404s on its asset references. The file is ~1KB and the SPA
-// fallback is rare relative to static-asset hits, so the cost is negligible.
-//
-// Asset paths (/assets/*) and any path with a file extension must NEVER fall
-// back to index.html — serving HTML with a JS or CSS Content-Type triggers
-// the browser's MIME-type sniffing and breaks module loading. Those return
-// a real 404 instead.
-app.notFound((c) => {
-  const path = c.req.path;
-  if (path.startsWith('/api/') || path.startsWith('/ws/')) {
-    return c.json({ error: { code: 'not_found', message: 'route not found' } }, 404);
-  }
-  if (path.startsWith('/assets/') || /\.[a-zA-Z0-9]+$/.test(path)) {
-    return c.text('not found', 404);
-  }
-  // SPA client route (e.g. /w/:ws/t/:tab) → the no-cache HTML shell.
-  return serveIndexHtml(c);
-});
+mountStaticWeb(app, join(here, '..', '..', 'web', 'dist'));
 
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
   console.log(`muxpad listening on http://${info.address}:${info.port}`);
 });
 
+// The public artifact server: a SECOND listener that serves nothing but
+// static files from <dataDir>/public (see public-server.ts). This — and only
+// this — port is what Tailscale Funnel exposes to the internet. Loopback by
+// default: the funnel proxies to 127.0.0.1, nothing else needs it.
+const publicDir = join(config.dataDir, 'public');
+mkdirSync(publicDir, { recursive: true });
+const publicApp = createPublicApp(publicDir);
+const publicServer = serve(
+  { fetch: publicApp.fetch, port: config.publicPort, hostname: config.publicHost },
+  (info) => {
+    console.log(`muxpad public artifacts on http://${info.address}:${info.port}`);
+  },
+) as unknown as Server;
+// The public listener is an accessory (like archiving): an isolated instance
+// that overrode the main port but not MUXPAD_PUBLIC_PORT would otherwise
+// crash on EADDRINUSE against a live daemon. Log and carry on — publish
+// still works, the artifacts are just unservable from this instance.
+publicServer.on('error', (err) => {
+  console.error(`[public] listener failed (${String(err)}) — public serving disabled`);
+});
+
 const httpServer = server as unknown as Server;
+// Chat-runner turn-done / question frames don't ring BEL — push them here.
+// Shared with the serve supervisor, which uses it to announce an app server
+// it has given up restarting.
+// The live-label resolver lets the notification TITLE name the pane that rang
+// ("claude · muxpad"), not just its tab — the pty title/foreground command are
+// runtime-only, so they have to come from the cache.
+const notifyPane = createPaneNotifier(db, push, presence, (id) => ({
+  title: cache.getTitle(id),
+  fg: cache.getFg(id),
+}));
 const wsServer = attachWsServer({
   http: httpServer,
   db,
@@ -167,19 +335,127 @@ const wsServer = attachWsServer({
   cache,
   events,
   agentBridge,
-  // Chat-runner turn-done / question frames don't ring BEL — push them here.
-  notifyPane: createPaneNotifier(db, push, presence),
+  tabActivity,
+  notifyPane,
 });
 
 // Straggler prevention: retry pane kills that failed in transit, and (once
 // ptyd supports listPanes) kill any live pty whose DB row is gone.
 startPaneReaper({ db, ptyd, paneExists: (id) => paneStore.getById(id) !== null });
 
+// Supervision for `muxpad serve` panes. ws.ts's sweep only knows about agent
+// panes, so before this an app server whose pty vanished (ptyd restart, reboot)
+// stayed down forever — its pty is only created lazily on a terminal attach,
+// which never happens for a pane the user watches through its web face.
+// Same rails as the agent sweep (respawn-policy.ts); see serve-supervisor.ts.
+const serveSupervisor = startServeSupervisor({
+  db,
+  ptyd,
+  cache,
+  events,
+  notifyPane,
+  onPtydConnected: (fn) => {
+    ptyd.on('connected', fn);
+    return () => {
+      ptyd.off('connected', fn);
+    };
+  },
+});
+serveSupervisorRef = serveSupervisor;
+
+// One-shot: adopt the pre-registry `muxpad serve` panes (Notes, Reader) into
+// the app registry and free their tabs. Non-destructive and behind a globals
+// marker — see apps/adopt-serve-panes.ts. Best-effort: a failure here must not
+// stop the server booting.
+try {
+  // The registry (built above) owns "which workspace do apps live in", so
+  // adoption borrows its resolver instead of re-implementing it.
+  const adopted = adoptServePanes({ db, events, cache, containerId: appRegistry.containerId });
+  for (const line of adopted.log) console.log(`[apps/adopt] ${line}`);
+} catch (err) {
+  console.error('[apps/adopt] one-time adoption failed (harmless; retried next boot)', err);
+}
+
+// Bring registered apps up: a boot pass (which honours autostart=0 by leaving
+// those apps honestly stopped rather than enabled-but-paneless), then a slow
+// repair interval plus a pass on every ptyd (re)connect. This only creates and
+// destroys PANES — keeping a pty alive is the serve supervisor's job above.
+const appReconciler = startAppReconciler({
+  db,
+  ptyd,
+  events,
+  registry: appRegistry,
+  onPtydConnected: (fn) => {
+    ptyd.on('connected', fn);
+    return () => {
+      ptyd.off('connected', fn);
+    };
+  },
+});
+
+// Durable schedules. The tick starts only now, with the ws layer attached and
+// the runner registry live behind the bridge; its own 15s startup grace then
+// keeps the first pass from firing before runners have re-registered after a
+// restart (which would land as a wave of rejections + fail streaks).
+cronScheduler.start();
+
+// Session archiver: boot backfill sweep (background, throttled reads) +
+// 15-min re-sweep + near-realtime triggers off the event bus (turn-done,
+// sid changes). See docs/plans/2026-08-28-session-archive.md.
+archiver?.start();
+headlines.start();
+
+// One-time repair of headlines written before the shape check existed — the
+// generation that answered the conversation ("I'm not familiar with muxpad —
+// is that an internal tool…") instead of labelling it, and was then stored
+// verbatim. Clearing puts the row back to "never summarised" so the next
+// finished turn regenerates it; nothing is rewritten and no good line is
+// touched. Marker-guarded, so it happens once. Best-effort: a failure here
+// must not stop the server booting.
+try {
+  const swept = sweepImplausibleHeadlines(db);
+  if (swept.cleared.length > 0) {
+    console.log(
+      `[headline] cleared ${swept.cleared.length} malformed headline(s) for regeneration`,
+    );
+  }
+} catch (err) {
+  console.error('[headline] one-time sweep failed (harmless; retried next boot)', err);
+}
+
+// The "resident pane" primitive is retired — muxpad no longer creates or
+// guards a singleton agent pane. An always-there chat is now just a chat you
+// PIN (see the living sidebar's pinned block). This one-time sweep hands any
+// pane stranded in the old hidden system workspace back to a visible one, so
+// nothing is orphaned; it never deletes a pane or its history. Best-effort:
+// a failure here must not stop the server booting.
+try {
+  const released = releaseResidentPane({ db, events, cache });
+  if (released.released) {
+    console.log(
+      `[resident] released the retired system workspace (${released.movedTabIds.length} tab(s) moved)`,
+    );
+  }
+} catch (err) {
+  console.error('[resident] one-time release failed (harmless; retried next boot)', err);
+}
+
 let shuttingDown = false;
 const shutdown = async () => {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log('shutting down…');
+  // Stop queueing archive work; in-flight copies finish or resume next boot
+  // (offsets only advance past complete lines, so a cut mid-copy is safe).
+  archiver?.stop();
+  // Stop the cron tick — anything it started now would be an orphan.
+  cronScheduler.stop();
+  // Stop respawning app servers — we're on our way out; anything we started
+  // here would just be an orphan for the next boot's supervisor to adopt.
+  serveSupervisor.stop();
+  // Same for the app reconciler: a pass landing now would materialise panes
+  // for a server that is going away.
+  appReconciler.stop();
   // Close browser-facing WSes first so they don't see ptyd's `close` (which
   // is going to follow as we disconnect the control channel) as a PTY-exit.
   //
@@ -196,6 +472,8 @@ const shutdown = async () => {
   // keeps PTYs warm across main-server restarts.
   await ptyd.close();
   // Force keep-alive HTTP sockets to drop so server.close()'s callback fires.
+  publicServer.closeAllConnections();
+  publicServer.close();
   httpServer.closeAllConnections();
   httpServer.close(() => process.exit(0));
   // Belt-and-suspenders: hard exit if anything still pins the loop after 5s.

@@ -1,0 +1,88 @@
+/* ─── The status rail ────────────────────────────────────────────────────
+   ONE fixed 22px column, at the same x on every row. The mark inside it is an
+   18px box on a 2.2px stroke — one family, four glyphs (see StatusMark.tsx for
+   why filled-vs-ring is the primary distinction and motion the secondary).
+
+   `flex: 0 0 22px` and never shrinks. The column is RESERVED even when the
+   state is idle and nothing is drawn, so a mark appearing doesn't reflow the
+   label beside it.
+
+   The NAV ROWS no longer render this component at all — they speak a wider
+   language with room for a word (StateChip.css). What is left here is the
+   single-item chrome: the tab strip, the tab-bar dropdown, the mobile
+   switcher's trigger, and the Hosted list. Hence the literal 22px below, where
+   this used to read `var(--nt-col-status)` off the tree it no longer lives in.
+
+   Colour lives in four tokens rather than being borrowed from --accent /
+   --danger. Status semantics must not shift hue per theme (dracula's danger is
+   pink, tokyo-night's is salmon; "blocked" reading pink on one theme and red on
+   another is exactly the drift the rail exists to prevent), and the light
+   surfaces need their own STEP — the same hue at dark-surface luminance is
+   washed out on cream. See web/src/styles.css for the token values. */
+.navtree-status {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  position: relative;
+}
+.navtree-status svg {
+  display: block;
+}
+
+/* blocked — the ONLY red in the chrome, and PERFECTLY STILL. It used to
+   breathe on a 2s cycle; the breath is gone because `working` is now the only
+   thing that moves anywhere, in this mark and in the nav rows alike (see
+   StateChip.css). The rule it buys is worth more than the emphasis it cost:
+   anything moving means something is running, and a still chrome means nothing
+   is. Red on its own is quite loud enough to say "act now". */
+.navtree-status[data-status="blocked"] {
+  color: var(--status-blocked);
+}
+
+/* working — amber ring at full strength, arc turning. */
+.navtree-status[data-status="working"] {
+  color: var(--status-working);
+}
+.navtree-status-track {
+  stroke: var(--status-quiet);
+  opacity: 0.45;
+}
+.navtree-status-arc {
+  transform-origin: center;
+  animation: navtree-status-spin 0.85s linear infinite;
+}
+@keyframes navtree-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ready — solid green, perfectly still. Finished, waiting for you. */
+.navtree-status[data-status="ready"] {
+  color: var(--status-ready);
+}
+
+/* dead — grey, and the only mark that breaks the circle, because it is the
+   only state that is over. Quieter than ready on purpose: it is not asking for
+   anything, it is reporting that this pane is finished with. */
+.navtree-status[data-status="dead"] {
+  color: var(--status-quiet);
+}
+
+/* ─── Reduced motion ──────────────────────────────────────────────────────
+   The working ring simply stops turning — nothing else in this family moves
+   any more, so there is nothing else to stand down. Never a FAINTER mark:
+   dimming the one indicator a user has would make the state you most need to
+   see the quietest thing on screen. The ring is still unambiguous standing
+   still, since it is the only mark in the family that isn't filled.
+   (The nav ROWS do better than this — their spinner degrades into a word; see
+   StateChip.css. There is no room for a word in this 18px box.) */
+@media (prefers-reduced-motion: reduce) {
+  .navtree-status-arc {
+    animation: none;
+  }
+}

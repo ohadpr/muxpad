@@ -1,10 +1,19 @@
+import { type ChatEvent, normalizeTranscriptLine } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AgentBridge } from '../agent-bridge.js';
+import { findTranscript, identityNormalize, muxpadLocate } from '../chat/TranscriptReader.js';
+import { readTailLines } from '../chat/has-messages.js';
 import type { EventBus } from '../events.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
+import { PaneStore } from '../store/PaneStore.js';
+
+// How much of a transcript's tail to read when serving /transcript. Bounds
+// the read on multi-GB transcripts; comfortably holds the max `tail` events
+// (image-heavy lines run to hundreds of KB, hence the generous window).
+const TRANSCRIPT_TAIL_BYTES = 4 * 1024 * 1024;
 
 // Session ids become a filename (`<sid>.jsonl`) that the tail resolves by
 // scanning project dirs — so constrain the charset to prevent a crafted id
@@ -96,12 +105,75 @@ export function agentSessionsRoutes(deps: {
     return c.json(session);
   });
 
-  app.get('/', (c) => c.json(store.list()));
+  // `turn_active`: the runner registry's real turn state (true mid-turn,
+  // false idle, false when no runner is connected). Deliberately NOT the
+  // pane's `status`/`busy`, which is broader by design — it stays `working`
+  // while a background subagent outlives the turn that launched it, and on a
+  // runner-LESS pane it tracks raw pty output. This is the narrow "is a turn
+  // in flight right now" that `muxpad agent wait` needs.
+  const turnActive = (paneId: string): boolean => deps.agentBridge?.turnActive(paneId) === true;
+
+  // Every tracked session. `mode` is joined in from the PANE row (the source
+  // of truth for ⚡ do / 🧠 deep) rather than duplicated onto agent_sessions:
+  // the mode belongs to the pane and must survive a session being re-minted.
+  app.get('/', (c) => {
+    const panes = new PaneStore(deps.db);
+    return c.json(
+      store.list().map((s) => ({
+        ...s,
+        mode: panes.getById(s.pane_id)?.mode ?? 'deep',
+        turn_active: turnActive(s.pane_id),
+      })),
+    );
+  });
+
+  // Last N normalized transcript events for a pane's session, as JSONL —
+  // role/text/tool-use ChatEvents, whatever the backend. CLI consumers must
+  // never have to parse raw backend formats (Claude's projects JSONL vs the
+  // muxpad-normalized log); the same TranscriptReader machinery the chat
+  // socket uses does the translation here.
+  app.get('/:paneId/transcript', (c) => {
+    const paneId = c.req.param('paneId');
+    const sess = store.getByPane(paneId);
+    if (!sess) return c.json({ error: 'no agent session for pane' }, 404);
+    const sid = sess.current_sid;
+    if (!sid) return c.json({ error: 'session has no transcript yet' }, 404);
+    // Claude writes ~/.claude/projects/**/<sid>.jsonl; codex/cursor write the
+    // muxpad-normalized log. Same locator cascade as the summarize route.
+    const path = (sess.assistant === 'claude' ? findTranscript(sid) : null) ?? muxpadLocate(sid);
+    if (!path) return c.json({ error: 'transcript not found' }, 404);
+    const tailQ = Number(c.req.query('tail') ?? 100);
+    const tail = Number.isInteger(tailQ) && tailQ > 0 ? Math.min(tailQ, 1000) : 100;
+    const normalize = sess.assistant === 'claude' ? normalizeTranscriptLine : identityNormalize;
+    let lines: string[];
+    try {
+      lines = readTailLines(path, TRANSCRIPT_TAIL_BYTES);
+    } catch {
+      return c.json({ error: 'transcript unreadable' }, 404);
+    }
+    const events: ChatEvent[] = [];
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let obj: unknown;
+      try {
+        obj = JSON.parse(line);
+      } catch {
+        continue; // torn/garbage line — skip, never break the feed
+      }
+      events.push(...normalize(obj));
+    }
+    const body = events
+      .slice(-tail)
+      .map((e) => JSON.stringify(e))
+      .join('\n');
+    return c.text(body ? `${body}\n` : '', 200, { 'content-type': 'application/x-ndjson' });
+  });
 
   app.get('/by-pane/:paneId', (c) => {
-    const session = store.getByPane(c.req.param('paneId'));
+    const paneId = c.req.param('paneId');
+    const session = store.getByPane(paneId);
     if (!session) return c.json({ error: 'not found' }, 404);
-    return c.json(session);
+    return c.json({ ...session, turn_active: turnActive(paneId) });
   });
 
   return app;

@@ -1,6 +1,6 @@
 import { ClipboardAddon } from '@xterm/addon-clipboard';
-import type { IClipboardProvider, ClipboardSelectionType } from '@xterm/addon-clipboard';
-import { writeClipboard, readClipboard } from './clipboard-write';
+import type { ClipboardSelectionType, IClipboardProvider } from '@xterm/addon-clipboard';
+import { readClipboard, writeClipboard } from './clipboard-write';
 
 /**
  * A clipboard provider for xterm's ClipboardAddon that works in non-secure
@@ -41,10 +41,7 @@ export function createSafeClipboardProvider(): IClipboardProvider {
  * real second slot. `undefined` for the first arg lets the constructor's
  * default Base64 codec apply.
  */
-type ClipboardAddonCtor = new (
-  base64?: unknown,
-  provider?: IClipboardProvider,
-) => ClipboardAddon;
+type ClipboardAddonCtor = new (base64?: unknown, provider?: IClipboardProvider) => ClipboardAddon;
 
 export function createSafeClipboardAddon(): ClipboardAddon {
   const Ctor = ClipboardAddon as unknown as ClipboardAddonCtor;

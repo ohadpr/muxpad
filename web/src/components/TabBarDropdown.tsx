@@ -1,10 +1,12 @@
-import type { Tab } from '@muxpad/shared';
+import type { PaneStatus, Tab } from '@muxpad/shared';
+import { rollupStatus } from '@muxpad/shared';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { useDismissable } from '../lib/use-dismissable';
 import { refreshTabs } from '../tabs';
 import { openInNewTab, useLongPress } from '../use-long-press';
+import { StatusMark } from './StatusMark';
 import { SvgClose } from './icons';
 import './TabBarDropdown.css';
 
@@ -31,16 +33,36 @@ export function TabBarDropdown({
   const navigate = useNavigate();
 
   const active = tabs.find((t) => t.slug === activeSlug);
-  // How many *other* tabs are flagging attention. Surfaced on the
-  // dropdown chevron (which is the only part of the trigger whose
-  // semantics are "more inside, not this label") — colored accent to
-  // signal "look here," and a small count to say how many. Sticking the
-  // signal on the chevron and not on the trigger label avoids the
-  // "looks like the active tab needs attention" misread.
-  const otherAttentionCount = tabs.reduce(
-    (n, t) => (t.attention && t.slug !== activeSlug ? n + 1 : n),
-    0,
-  );
+  // What the COLLAPSED trigger has to say about the tabs it is hiding. It
+  // carried exactly one bit before — "some other tab rang BEL" — so the
+  // overflow chrome could not tell you anything was WORKING, which is the
+  // state you spend most of your day in (D10).
+  //
+  // The trigger shows the same rail as every other surface, rolled up over the
+  // OTHER tabs only: a mark on the label you're already reading would read as
+  // "the active tab needs attention". The count says how many rows are in that
+  // state so the number means something ("3 waiting", not "3 tabs exist").
+  //
+  // FIVE states, not three: the hand-rolled blocked/working test dropped `dead`
+  // and `ready` on the floor, so a crashed runner or a finished-but-unread turn
+  // behind the overflow was indistinguishable from an empty tab bar. Fold
+  // through the shared rollup so precedence lives in exactly one place.
+  const others = tabs.filter((t) => t.slug !== activeSlug);
+  // `attention` is the raw BEL bit an older server sends without `status`.
+  const statusOf = (t: Tab): PaneStatus => (t.attention ? 'blocked' : (t.status ?? 'idle'));
+  const triggerStatus = rollupStatus(others.map(statusOf));
+  const triggerCount = others.filter((t) => statusOf(t) === triggerStatus).length;
+  const plural = (n: number) => (n === 1 ? 'tab is' : 'tabs are');
+  const triggerTitle =
+    triggerStatus === 'blocked'
+      ? `${triggerCount} other ${plural(triggerCount)} waiting on you`
+      : triggerStatus === 'working'
+        ? `${triggerCount} other ${plural(triggerCount)} working`
+        : triggerStatus === 'dead'
+          ? `${triggerCount} other ${plural(triggerCount)} stopped`
+          : triggerStatus === 'ready'
+            ? `${triggerCount} other ${plural(triggerCount)} ready for you`
+            : 'Switch tab';
 
   useDismissable(open, ref, () => setOpen(false));
 
@@ -50,17 +72,16 @@ export function TabBarDropdown({
         type="button"
         className="ws-tabbar-dropdown-trigger"
         onClick={() => setOpen((v) => !v)}
-        title={
-          otherAttentionCount > 0
-            ? `${otherAttentionCount} other ${otherAttentionCount === 1 ? 'tab needs' : 'tabs need'} attention`
-            : 'Switch tab'
-        }
+        title={triggerTitle}
       >
         <span className="ws-tabbar-dropdown-label">{active?.name ?? 'Tabs'}</span>
-        <span
-          className="ws-tabbar-dropdown-chevron"
-          data-attention={otherAttentionCount > 0 ? 'true' : undefined}
-        >
+        {triggerStatus !== 'idle' && (
+          <span className="ws-tabbar-dropdown-rollup" role="img" aria-label={triggerTitle}>
+            <StatusMark status={triggerStatus} />
+            {triggerCount > 1 && <span className="ws-tabbar-dropdown-count">{triggerCount}</span>}
+          </span>
+        )}
+        <span className="ws-tabbar-dropdown-chevron">
           <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
             <path
               d="M2 4 L5 7 L8 4"
@@ -71,14 +92,6 @@ export function TabBarDropdown({
               strokeLinejoin="round"
             />
           </svg>
-          {otherAttentionCount > 0 && (
-            <span
-              className="ws-tabbar-dropdown-count"
-              aria-label={`${otherAttentionCount} other ${otherAttentionCount === 1 ? 'tab needs' : 'tabs need'} attention`}
-            >
-              {otherAttentionCount}
-            </span>
-          )}
         </span>
       </button>
       {open && (
@@ -156,12 +169,11 @@ function TabDropdownItem({
     >
       <span className="ws-tabbar-dropdown-item-label">
         <span className="ws-tabbar-dropdown-item-label-text">{tab.name}</span>
-        {tab.attention && (
-          // Render on the active row too — visiting a tab doesn't auto-
-          // clear pane-level attention, so the active row's own dot is
-          // a real signal that something inside still wants you.
-          <span className="badge-dot -inline" aria-label="needs attention" />
-        )}
+        {/* Same rail as the navigator, right down to the fixed column — the
+            overflow list had no working signal at all before (D10). Rendered on
+            the active row too: visiting a tab doesn't auto-clear pane-level
+            state, so its own mark is a real signal. */}
+        <StatusMark status={tab.status} />
       </span>
       {/* The close affordance is rendered as a sibling visual (a <span>
           with click) to avoid nested-button HTML. stopPropagation in

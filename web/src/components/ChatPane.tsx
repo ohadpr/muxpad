@@ -1,13 +1,17 @@
 import {
+  type AgentMode,
   type AgentQuestion,
   type AgentSessionStatus,
   type ChatEvent,
+  IMAGE_MIME_BY_EXT,
+  LAUNCH_ACK_RE,
   type NoticeEvent,
   type SubagentProgress,
   type ToolResultEvent,
   type ToolUseEvent,
-  IMAGE_MIME_BY_EXT,
   imageExtForMime,
+  isAgentLaunchTool,
+  subagentLabel,
   summarizeToolInput,
 } from '@muxpad/shared';
 import {
@@ -24,27 +28,44 @@ import {
 } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { SvgAgentGlyph, SvgGlobe, SvgTerminalGlyph } from './PaneWebSwitch';
-import { api } from '../api';
+import { ApiError, api } from '../api';
 import { AGENT_BACKENDS, type AgentBackendId } from '../lib/agent-backend';
+import {
+  type MessagePart,
+  composeOutgoingMessage,
+  splitMessageAttachments,
+} from '../lib/attachments';
+import { showFolderChip } from '../lib/nav-row-affordances';
 import { AgentBackendLogo, backendFromAssistant } from './AgentLogos';
-import { type MessagePart, splitMessageAttachments } from '../lib/attachments';
+import { SvgAgentGlyph, SvgGlobe, SvgTerminalGlyph } from './PaneWebSwitch';
 
 /** Open a media item in the lightbox (image or video). */
 type OpenMedia = (m: { url: string; name: string; video: boolean }) => void;
 import {
+  ANCHOR_SEEK_PAGE_BUDGET,
+  ANCHOR_SEEK_PAGE_MS,
+  RESTORE_HARD_STOP_MS,
+  RESTORE_SETTLE_MS,
+  SHOW_SETTLE_MS,
+  SMOOTH_SCROLL_SETTLE_MS,
+  firstVisibleRow,
   maxScrollTop,
   pinnedFromMemory,
   recallChatScroll,
   rememberChatScroll,
+  scrollEventIsTrustworthy,
   scrollMemorySidMatches,
   scrollTopAfterOlderPrepend,
+  scrollTopForAnchor,
   shouldPersistChatScroll,
 } from '../lib/chat-scroll';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
+import { useDictationCleanup } from '../lib/dictation-cleanup';
 import { liveStatusLabel } from '../lib/live-status';
-import { isMobileLayout } from '../lib/mobile-layout';
+import { MOBILE_BREAKPOINT, isMobileLayout } from '../lib/mobile-layout';
 import { useDismissable } from '../lib/use-dismissable';
+import { useMediaQuery } from '../use-media-query';
+import { CleanupButton, CleanupHint } from './DictationCleanup';
 import './ChatPane.css';
 
 // Assistant + streaming text is rendered as GitHub-flavored markdown. No raw
@@ -59,7 +80,8 @@ import './ChatPane.css';
 // message mis-directs a Hebrew body under an English intro line. Computing
 // from the real text sidesteps both — each paragraph/list-item/quote gets its
 // own correct direction. Code stays LTR.
-const RTL_CHAR = /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB1D-\uFB4F\uFB50-\uFDFF\uFE70-\uFEFF]/; // Hebrew, Arabic (+ presentation forms)
+const RTL_CHAR =
+  /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB1D-\uFB4F\uFB50-\uFDFF\uFE70-\uFEFF]/; // Hebrew, Arabic (+ presentation forms)
 const LTR_CHAR = /[a-z\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF]/i; // Latin, Greek, Cyrillic
 function textOf(node: ReactNode): string {
   if (node == null || typeof node === 'boolean') return '';
@@ -223,6 +245,87 @@ interface RosterAgent {
 }
 
 /**
+ * "or open instead" — the alternatives to the house chat, shown in the empty
+ * state directly under the greeting.
+ *
+ * This replaced a full-screen "What do you want to open?" chooser. That
+ * screen made every new tab a question before it was a place, and the answer
+ * was almost always "the chat" — so the chat is now the default and the
+ * question became a secondary offer. It first shipped as a tiny text strip
+ * above the composer, which was too timid to find; it now sits where the eye
+ * already is, with real tappable buttons.
+ *
+ * Still deliberately quiet — muted until touched, no accent fills — because
+ * it IS the secondary path. And it exists only while the chat is empty: the
+ * moment you say something, this is not a decision you're making any more.
+ *
+ * The three harnesses open a RAW session (the harness as it ships, no house
+ * contract). Terminal and Web view convert the pane to those plain surfaces.
+ * All five are the same server-side respawn, which refuses (cleanly) on any
+ * chat that already has messages.
+ */
+function OpenInsteadStrip({
+  busy,
+  error,
+  onBackend,
+  onTerminal,
+  onWeb,
+}: {
+  busy: AgentBackendId | 'terminal' | 'web' | null;
+  error: string | null;
+  onBackend: (b: AgentBackendId) => void;
+  onTerminal: () => void;
+  onWeb: () => void;
+}) {
+  return (
+    <div className="chat-open-instead">
+      <div className="chat-open-instead-lbl">or open instead</div>
+      <div className="chat-open-instead-row">
+        {AGENT_BACKENDS.map((b) => (
+          <button
+            key={b.id}
+            type="button"
+            className="chat-open-instead-btn"
+            disabled={busy !== null}
+            aria-busy={busy === b.id}
+            title={`Open a raw ${b.label} session in this pane`}
+            onClick={() => onBackend(b.id)}
+          >
+            <AgentBackendLogo backend={b.id} size={18} />
+            <span>{b.label}</span>
+          </button>
+        ))}
+        <button
+          type="button"
+          className="chat-open-instead-btn"
+          disabled={busy !== null}
+          aria-busy={busy === 'terminal'}
+          title="Turn this pane into a plain terminal"
+          onClick={onTerminal}
+        >
+          <SvgTerminalGlyph />
+          <span>Terminal</span>
+        </button>
+        <button
+          type="button"
+          className="chat-open-instead-btn"
+          disabled={busy !== null}
+          aria-busy={busy === 'web'}
+          title="Turn this pane into a web view"
+          onClick={onWeb}
+        >
+          <SvgGlobe />
+          <span>Web view</span>
+        </button>
+      </div>
+      {/* <output> is the semantic live region for "result of the thing you
+          just pressed" — it announces without stealing focus. */}
+      {error ? <output className="chat-open-instead-error">{error}</output> : null}
+    </div>
+  );
+}
+
+/**
  * Status bar: one segmented strip above the composer —
  * folder | model · ctx | agents (when any). Each segment opens its own
  * upward panel; only one panel at a time. Parent-turn busy state stays in
@@ -248,8 +351,7 @@ function SessionBar({
   const [panel, setPanel] = useState<StatusPanel>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   useDismissable(panel !== null, wrapRef, () => setPanel(null));
-  const toggle = (p: Exclude<StatusPanel, null>) =>
-    setPanel((cur) => (cur === p ? null : p));
+  const toggle = (p: Exclude<StatusPanel, null>) => setPanel((cur) => (cur === p ? null : p));
   // If the open segment's data goes away (turn ends, status drop, folder
   // cleared), close the panel — otherwise it auto-reopens next time that
   // segment remounts with stale panel === 'live'|'model'|'folder'.
@@ -308,71 +410,75 @@ function SessionBar({
   const ctx = status?.context;
   const kTokens = (n: number) => `${Math.round(n / 1000)}k`;
 
-  if (!folder && !status && !liveLabel && !assistant) return null;
+  // Does the folder deserve a cell in the header at all?
+  //
+  // ONLY when the pane actually sits in a project (git repo / AGENTS.md /
+  // .mcp.json up the tree — the same hasProjectContext the server computes).
+  // For a plain conversation the working directory is an implementation
+  // detail: showing "~" next to a red "!" told the user their chat was
+  // BROKEN, when nothing was wrong — you just weren't coding. So a
+  // non-project chat shows no path and no warning at all.
+  //
+  // The folder is not lost: it moves into the session menu (the model chip),
+  // which still lists the full path and opens the same switcher.
+  const folderChipVisible = showFolderChip(folder);
+  const folderPanel =
+    folder && panel === 'folder' ? (
+      <div className="chat-status-menu chat-folder-menu" role="dialog">
+        <div className="chat-folder-path">{folder.cwd}</div>
+        {!folder.hasProject ? (
+          <div className="chat-folder-nocontext">
+            No project context here — no git repo, AGENTS.md, or .mcp.json up the tree. Fine for a
+            plain conversation; switch to a project folder to give the agent its rules and MCP.
+          </div>
+        ) : null}
+        <label className="chat-folder-lbl" htmlFor={`fld-${paneId}`}>
+          Switch folder — starts a fresh agent here
+        </label>
+        <input
+          id={`fld-${paneId}`}
+          className="chat-folder-input"
+          value={draft}
+          spellCheck={false}
+          // biome-ignore lint/a11y/noAutofocus: opened by an explicit user click
+          autoFocus
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              void submitFolder();
+            } else if (e.key === 'Escape') {
+              setPanel(null);
+            }
+          }}
+        />
+        {folderErr ? <div className="chat-folder-error">{folderErr}</div> : null}
+        <button
+          type="button"
+          className="chat-folder-go"
+          disabled={folderBusy}
+          onClick={() => void submitFolder()}
+        >
+          {folderBusy ? 'Switching…' : 'Switch & start fresh'}
+        </button>
+      </div>
+    ) : null;
 
   return (
     <div className="chat-status-bar" ref={wrapRef}>
-      {folder ? (
+      {folderChipVisible && folder ? (
         <div className="chat-status-seg-wrap">
           <button
             type="button"
-            className={`chat-status-seg${folder.hasProject ? '' : ' -warn'}${panel === 'folder' ? ' is-open' : ''}`}
+            className={`chat-status-seg${panel === 'folder' ? ' is-open' : ''}`}
             onClick={() => toggle('folder')}
             aria-expanded={panel === 'folder'}
-            title={
-              folder.hasProject
-                ? folder.cwd
-                : `${folder.cwd} — no project context (no git/AGENTS.md/.mcp.json)`
-            }
+            title={folder.cwd}
           >
             <SvgFolder />
             <span className="chat-status-seg-label">{folderBase}</span>
-            {!folder.hasProject ? (
-              <span className="chat-status-warn" aria-label="no project context">
-                !
-              </span>
-            ) : null}
           </button>
-          {panel === 'folder' ? (
-            <div className="chat-status-menu chat-folder-menu" role="dialog">
-              <div className="chat-folder-path">{folder.cwd}</div>
-              {!folder.hasProject ? (
-                <div className="chat-folder-nocontext">
-                  No project context here — no git repo, AGENTS.md, or .mcp.json up the tree, so the
-                  agent has no project rules or MCP.
-                </div>
-              ) : null}
-              <label className="chat-folder-lbl" htmlFor={`fld-${paneId}`}>
-                Switch folder — starts a fresh agent here
-              </label>
-              <input
-                id={`fld-${paneId}`}
-                className="chat-folder-input"
-                value={draft}
-                spellCheck={false}
-                // biome-ignore lint/a11y/noAutofocus: opened by an explicit user click
-                autoFocus
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    void submitFolder();
-                  } else if (e.key === 'Escape') {
-                    setPanel(null);
-                  }
-                }}
-              />
-              {folderErr ? <div className="chat-folder-error">{folderErr}</div> : null}
-              <button
-                type="button"
-                className="chat-folder-go"
-                disabled={folderBusy}
-                onClick={() => void submitFolder()}
-              >
-                {folderBusy ? 'Switching…' : 'Switch & start fresh'}
-              </button>
-            </div>
-          ) : null}
+          {folderPanel}
         </div>
       ) : null}
 
@@ -392,13 +498,31 @@ function SessionBar({
           >
             <AgentBackendLogo backend={backendFromAssistant(assistant)} size={12} />
             <span className="chat-status-seg-label">
-              {status
-                ? `${modelLabel}${ctx ? ` · ${ctx.pct}%` : ''}`
-                : assistantLabel(assistant)}
+              {status ? `${modelLabel}${ctx ? ` · ${ctx.pct}%` : ''}` : assistantLabel(assistant)}
             </span>
           </button>
+          {/* When the folder chip is hidden (a plain, non-project chat) the
+              switcher still has to be reachable — it opens from the session
+              menu's "Working folder" row instead, anchored here. */}
+          {!folderChipVisible ? folderPanel : null}
           {panel === 'model' && status ? (
             <div className="chat-status-menu chat-session-menu" role="menu">
+              {/* Working folder — only listed when it isn't already its own
+                  cell in the bar, so the two never both show the path. */}
+              {folder && !folderChipVisible ? (
+                <>
+                  <div className="chat-session-head">Folder</div>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="chat-session-item"
+                    onClick={() => setPanel('folder')}
+                  >
+                    <span className="chat-session-item-label">Working folder…</span>
+                    <span className="chat-session-item-desc chat-model-id">{folder.cwd}</span>
+                  </button>
+                </>
+              ) : null}
               {ctx ? (
                 <>
                   <div className="chat-session-head">Context</div>
@@ -455,7 +579,9 @@ function SessionBar({
                     }}
                   >
                     <span className="chat-session-item-label">Compact conversation</span>
-                    <span className="chat-session-item-desc">Summarize history to free context</span>
+                    <span className="chat-session-item-desc">
+                      Summarize history to free context
+                    </span>
                   </button>
                   <button
                     type="button"
@@ -503,16 +629,10 @@ function SessionBar({
           </button>
           {panel === 'live' && agents.length > 0 ? (
             <div className="chat-status-menu chat-live-menu" role="dialog">
-              <div className="chat-session-head">
-                Subagent{agents.length === 1 ? '' : 's'}
-              </div>
+              <div className="chat-session-head">Subagent{agents.length === 1 ? '' : 's'}</div>
               <ul className="chat-roster-list">
                 {agents.map((a) => (
-                  <li
-                    key={a.id}
-                    className="chat-roster-item"
-                    data-busy={a.busy || undefined}
-                  >
+                  <li key={a.id} className="chat-roster-item" data-busy={a.busy || undefined}>
                     <span className="chat-roster-spin" aria-hidden="true">
                       <RosterSpinner />
                     </span>
@@ -565,6 +685,14 @@ type ServerMsg =
   | {
       t: 'session';
       session: (SessionMeta & Record<string, unknown>) | null;
+      /** The PANE's agent mode — pane-level, not session-level, so it
+       *  survives a session being re-minted. Internal plumbing. */
+      mode?: AgentMode;
+      /** Server's authoritative "has anything been said here?". The empty
+       *  state must NOT infer this from `events.length`: history replays
+       *  asynchronously, so a real conversation reads as empty for a beat on
+       *  every reconnect. */
+      hasMessages?: boolean;
       // True when a headless turn is already in flight for this pane — a
       // reconnect mid-turn restores the working/Stop state from this.
       turnRunning?: boolean;
@@ -652,30 +780,36 @@ function consumeStreamedText(preview: string, landed: string[]): string {
 
 /** A Task/Agent tool call — a subagent LAUNCH. It gets its own notice bubble
  *  (mirroring the finish notice the harness injects), so it is NEVER folded
- *  into an action run and never rendered as a plain tool row. */
+ *  into an action run and never rendered as a plain tool row.
+ *
+ *  The name test and the description extraction come from @muxpad/shared,
+ *  which is also what the RUNNER uses to build the durable roster. That is the
+ *  point: the two roster sources are merged into one list, so if they disagreed
+ *  about what a launch is — or truncated its label differently — the same
+ *  subagent could appear twice, under two names. */
 function isAgentLaunch(e: ChatEvent): boolean {
-  return e.kind === 'tool_use' && (e.name === 'Agent' || e.name === 'Task');
+  return e.kind === 'tool_use' && isAgentLaunchTool(e.name);
 }
 function agentLaunchDescription(e: ToolUseEvent): string {
-  const desc = (e.input as { description?: string } | null)?.description?.trim();
-  return desc || 'subagent';
+  return subagentLabel(e.input) || 'subagent';
 }
-/** A BACKGROUND agent's tool_result is the immediate "launched" ack, NOT a
- *  completion — so it must not be read as "this agent finished". A foreground
- *  agent's result IS its completion. This tells them apart. */
-const LAUNCH_ACK_RE = /agent launched successfully|async agent launched/i;
 
-/** How long a rostered subagent may go without a progress frame — while no
- *  parent turn is driving — before we treat it as finished. A LIVE background
- *  subagent pings progress every ≤500ms; prolonged quiet while the pane is idle
- *  means it completed/was killed even when no finish-notice ever lands (a
- *  stopped/failed turn, a subagent that finished while idle with no next turn to
- *  inject the notice, or a post-compaction ghost launch event). This is the
- *  backstop that keeps the bottom-right roster from accreting stale rows; the
- *  finish-notice path still clears the clean case instantly. Generous so a
- *  single long silent tool call inside a background subagent doesn't blink it
- *  out (it re-appears on its next progress frame if still alive). */
-const STALE_ROSTER_MS = 30_000;
+/** How long a rostered subagent may go without a progress frame before its
+ *  per-row dot reads "quiet" rather than "busy". Presentation only — it can no
+ *  longer evict anyone. Membership is the SERVER's durable roster (see
+ *  SubagentProgress), which has real launch/finish edges; the old 30s eviction
+ *  gate here was measurably wrong (P1, 2026-08: a live background subagent goes
+ *  44s+ without a frame inside one long tool call) and, because it was disabled
+ *  whenever `agentWorking` was true — which `setSending(true)` makes so
+ *  synchronously on keypress — every evicted agent popped back the instant you
+ *  hit send. */
+const SUBAGENT_QUIET_MS = 15_000;
+
+/** How long a conversion request may hang before the strip re-enables itself.
+ *  Generous — the route kills a pty and spawns a runner before it answers —
+ *  and deliberately NOT an error claim: it only gives the user their button
+ *  back when neither fetch nor the ptyd RPC layer has a timeout of its own. */
+const CONVERT_STALL_MS = 60_000;
 
 /** '.ext' when the filename carries a renderable image extension — the
  *  picker's fallback for providers that report an empty MIME type (mirrors
@@ -684,6 +818,85 @@ function imageExtFromName(name: string): string | null {
   const m = /\.[a-z0-9]+$/i.exec(name);
   const ext = m ? m[0].toLowerCase() : '';
   return ext && ext in IMAGE_MIME_BY_EXT ? ext : null;
+}
+
+/**
+ * The attribute top-level chat rows carry so the scroll memory can name one.
+ *
+ * The value is the same id the React key uses (an event id, or an action run's
+ * stable end event) — see `renderEvent`. Only TOP-LEVEL rows carry it: the
+ * lookups below assume `[data-eid]` boxes are siblings in document order, so
+ * their bottoms increase monotonically and can be binary-searched.
+ */
+const ANCHOR_ATTR = 'data-eid';
+
+/**
+ * The anchored rows of a chat, in document order.
+ *
+ * DIRECT children of `.chat-list` only — a live HTMLCollection, no layout and no
+ * subtree walk. Everything here runs off scroll events or an animation-frame
+ * loop, and a long chat's rendered markdown is tens of thousands of nodes; a
+ * `querySelectorAll` over the whole tree would be a per-frame tax on a chat that
+ * is doing nothing wrong. Scanning the children also means an attribute that
+ * somehow ends up on a NESTED row can never be mistaken for a top-level one, so
+ * the monotonic-bottoms invariant holds structurally rather than by convention.
+ */
+function anchorRows(el: HTMLElement): HTMLElement[] {
+  const list = el.querySelector('.chat-list');
+  if (!list) return [];
+  const kids = list.children;
+  const out: HTMLElement[] = [];
+  for (let i = 0; i < kids.length; i++) {
+    const child = kids[i];
+    if (child instanceof HTMLElement && child.hasAttribute(ANCHOR_ATTR)) out.push(child);
+  }
+  return out;
+}
+
+/**
+ * Which message the reader is looking at, and how far its top sits above the
+ * viewport top. `null` when there is nothing anchorable (empty chat, or a
+ * hidden pane whose boxes have all collapsed).
+ */
+function captureAnchor(el: HTMLElement): { anchorId: string; anchorOffset: number } | null {
+  return anchorAt(el, anchorRows(el));
+}
+
+/** `captureAnchor` against an already-collected row list (saves a re-scan). */
+function anchorAt(
+  el: HTMLElement,
+  rows: HTMLElement[],
+): { anchorId: string; anchorOffset: number } | null {
+  if (rows.length === 0) return null;
+  const viewportTop = el.getBoundingClientRect().top;
+  const i = firstVisibleRow(
+    rows.length,
+    (k) => (rows[k] as HTMLElement).getBoundingClientRect().bottom,
+    viewportTop + 1,
+  );
+  // `firstVisibleRow` returns `count` when every row is above the line, which
+  // only happens transiently mid-relayout — the last row is still the best
+  // available description of where the reader is.
+  const row = rows[Math.min(i, rows.length - 1)];
+  const anchorId = row?.getAttribute(ANCHOR_ATTR);
+  if (!row || !anchorId) return null;
+  return { anchorId, anchorOffset: Math.round(row.getBoundingClientRect().top - viewportTop) };
+}
+
+/**
+ * The rendered row for a remembered anchor id, or null if it isn't loaded.
+ *
+ * A linear scan of the already-collected top-level rows, NOT
+ * `querySelector('[data-eid="…"]')`. The selector form walks the entire subtree
+ * — and walks ALL of it on the miss, which is exactly the case the restore loop
+ * hits every frame while it is paging the anchor back in. It also needed the id
+ * escaped as a CSS string, which this doesn't.
+ */
+function findAnchorRow(rows: HTMLElement[], anchorId: string): HTMLElement | null {
+  for (const row of rows) {
+    if (row.getAttribute(ANCHOR_ATTR) === anchorId) return row;
+  }
+  return null;
 }
 
 /**
@@ -728,6 +941,20 @@ export function ChatPane({
   const lastProgrammaticTop = useRef(-1);
   // Settling restore stops the moment the reader scrolls; reset on hide.
   const userScrolled = useRef(false);
+  // Monotonic deadline (performance.now) until which scroll events are OUR
+  // doing — a show transition relaying out, or a smooth jump-to-bottom — and
+  // so must not touch pin state or scroll memory. 0 = nothing in flight. A
+  // real gesture clears it (see the wheel/touch listener): distrusting events
+  // for a moment is right; distrusting the reader never is.
+  const suppressPinUntil = useRef(0);
+  // True while the settling restore is still trying to reach a remembered
+  // MESSAGE it hasn't found yet. `onScroll` keeps recording pin + ratio (both
+  // describe the pane as it actually is) but must leave the stored anchor
+  // alone: the restore's own scrollTop writes would otherwise overwrite the
+  // reader's parked message with wherever the restore had got to, losing it for
+  // good. Cleared by the restore itself; a real gesture ends the restore, which
+  // clears it too.
+  const holdRememberedAnchor = useRef(false);
   // Live mirror of `active` for the WS message handler's closures (which
   // capture it at subscription time) — see the turn-done seen-clear.
   const activeRef = useRef(active);
@@ -755,6 +982,22 @@ export function ChatPane({
       // storage unavailable (private mode / quota) — drafts just don't persist
     }
   }, [input, draftKey]);
+  // ── Dictation cleanup (mobile only) ──────────────────────────────────────
+  // Phone dictation can't learn muxpad's vocabulary, so a dictated message
+  // arrives as "check the crown schedule on Max pad". The button repairs it
+  // IN THE COMPOSER — this pane's messages drive an agent that runs tool
+  // calls, so the human reads the corrected text before it goes anywhere.
+  //
+  // Gated on the live viewport rather than `isMobileLayout()`: this composer
+  // renders on desktop too, and the desktop composer deliberately does not get
+  // the affordance (desktop input is typed, not dictated). A media-query hook
+  // rather than a one-shot read so rotating or resizing doesn't strand it.
+  const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
+  const cleanup = useDictationCleanup({
+    read: () => inputRef.current?.value ?? '',
+    write: (text) => setInput(text),
+  });
+  const { reset: resetCleanup } = cleanup;
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
   // tone 'info' = transient connection chatter (reconnecting, not connected
@@ -767,13 +1010,32 @@ export function ChatPane({
   // corrected by the server's `older-done`; `olderAnchor` preserves the scroll
   // position across a prepend so the view doesn't jump.
   const [hasMoreOlder, setHasMoreOlder] = useState(true);
+  // Mirror for the closures that outlive a render: the restore effect re-runs
+  // only on activation, so it would otherwise seek against whatever
+  // `hasMoreOlder` was when the pane became visible and keep asking for pages
+  // the server has already said don't exist.
+  const hasMoreOlderRef = useRef(true);
+  hasMoreOlderRef.current = hasMoreOlder;
   const [loadingOlder, setLoadingOlder] = useState(false);
   const loadingOlderRef = useRef(false);
   // The in-flight request's safety-net timer — cleared when `older-done` lands
   // (or on unmount/pane switch) so a stale timer can't fire into a LATER
   // request and clear its loading flag mid-flight.
   const olderTimeout = useRef<number | undefined>(undefined);
-  const olderAnchor = useRef<{ height: number; top: number } | null>(null);
+  /**
+   * Scroll geometry captured just before an older-history prepend, so the
+   * layout effect below can restore the reader's position after the content
+   * grows above the viewport.
+   *
+   * `forEvents` KEYS IT TO ONE EVENTS COMMIT. The apply used to sit inside a
+   * `clientHeight >= 40` guard, and so did the null-reset — so a batch that
+   * prepended while the pane was hidden left a live anchor behind, and the next
+   * unrelated commit (a plain incoming message) applied that stale geometry and
+   * teleported the reader. An anchor is only ever valid for the exact commit it
+   * was measured against; anything else drops it and lets the ratio-restore
+   * loop do its job.
+   */
+  const olderAnchor = useRef<{ height: number; top: number; forEvents: ChatEvent[] } | null>(null);
   // Tool calls collapse to a one-line summary; tapping opens this modal with the
   // full command + output. null = closed.
   const [openTool, setOpenTool] = useState<ToolDetail | null>(null);
@@ -785,6 +1047,11 @@ export function ChatPane({
   } | null>(null);
   // Floating "jump to latest" arrow — shown only when scrolled up off the bottom.
   const [showScrollDown, setShowScrollDown] = useState(false);
+  // Bumped whenever the document becomes visible again. `active` only tracks
+  // muxpad's own hiding (tab/pane/face switches); a browser-tab switch, an
+  // iOS app backgrounding or a bfcache restore hide the pane just as
+  // thoroughly and must re-anchor the same way.
+  const [showEpoch, setShowEpoch] = useState(0);
   // The floating composer overlaps the scroll area, so we reserve its exact
   // measured height as bottom padding — that way, scrolled all the way down, the
   // last message clears the box instead of hiding behind it (the box grows with
@@ -815,6 +1082,10 @@ export function ChatPane({
   // null = no runner status yet (TUI-view chats never get one).
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const [folder, setFolder] = useState<{ cwd: string; hasProject: boolean } | null>(null);
+  // Authoritative emptiness, from the server (see the session frame). Starts
+  // TRUE — "assume there is history until told otherwise" — so a slow first
+  // frame can never flash the alternatives over someone's conversation.
+  const [hasMessages, setHasMessages] = useState(true);
   // The text of the in-flight send, held so a socket death before the ack
   // can restore it into the composer instead of losing it.
   const pendingText = useRef('');
@@ -882,6 +1153,12 @@ export function ChatPane({
           setEvents([]);
           setStreamingText('');
           setHasMoreOlder(true);
+          hasMoreOlderRef.current = true;
+          // Geometry measured against the log we just wiped describes a
+          // document that no longer exists. The commit-identity guard in the
+          // prepend effect would drop it anyway, but leaving it live means the
+          // NEXT older batch of the NEW session could match it first.
+          olderAnchor.current = null;
         }
         if (newSid) renderedSid.current = newSid;
         setSession(
@@ -917,14 +1194,22 @@ export function ChatPane({
         // a stale chip would keep offering controls that go nowhere.
         setAgentStatus(msg.status ?? null);
         setFolder(msg.cwd ? { cwd: msg.cwd, hasProject: msg.hasProject ?? false } : null);
+        // Absent (older server) → assume history: never flash the offer.
+        setHasMessages(msg.hasMessages !== false);
         // Server-owned pending queue: authoritative on every (re)connect.
         setQueue(msg.queue ?? []);
-        if (msg.subagents) {
+        // The session frame is a FULL SNAPSHOT of the server's durable roster,
+        // and an EMPTY roster is a meaningful value — the server omits the key
+        // when nothing is running. Guarding on presence (`if (msg.subagents)`)
+        // meant an emptied roster never overwrote a stale map, so the last
+        // subagent of a session could never be cleared by a resync. Assign
+        // unconditionally, and rebuild the seen-at map alongside it so it can't
+        // leak entries for tasks the snapshot no longer carries.
+        {
           const now = Date.now();
-          // Full snapshot — REBUILD the seen-at map too (a plain set would
-          // leak entries for tasks the snapshot no longer carries).
-          subagentSeenAt.current = new Map(msg.subagents.map((p) => [p.toolUseId, now]));
-          setSubagents(Object.fromEntries(msg.subagents.map((p) => [p.toolUseId, p])));
+          const live = msg.subagents ?? [];
+          subagentSeenAt.current = new Map(live.map((p) => [p.toolUseId, p.seenAt ?? now]));
+          setSubagents(Object.fromEntries(live.map((p) => [p.toolUseId, p])));
         }
       } else if (msg.t === 'events') {
         const fresh = msg.events.filter((e) => !byId.current.has(e.id));
@@ -970,8 +1255,11 @@ export function ChatPane({
             // useLayoutEffect below. The batch is chronological and entirely
             // before the current head, so prepend it wholesale.
             const el = scrollRef.current;
-            if (el) olderAnchor.current = { height: el.scrollHeight, top: el.scrollTop };
+            const measured = el ? { height: el.scrollHeight, top: el.scrollTop } : null;
             ordered.current = [...fresh, ...ordered.current];
+            // Keyed to THIS array identity — the very commit setEvents is about
+            // to publish. See olderAnchor's note.
+            olderAnchor.current = measured ? { ...measured, forEvents: ordered.current } : null;
           } else {
             ordered.current = [...ordered.current, ...fresh];
           }
@@ -1002,13 +1290,11 @@ export function ChatPane({
         setStreamingText('');
         setOptimisticUser(null);
         setQuestion(null);
-        // BACKGROUND subagents outlive the turn — keep their progress so the
-        // running-subagents indicator stays honest (each entry hides when its
-        // tool_result lands). A failed/stopped turn kills subagents with it
-        // (live-verified: Stop interrupts background tasks too) — clear the live
-        // detail AND the seen-at clocks, so the transcript-driven roster evicts
-        // their now-orphaned launches on the next render (they'll read as stale
-        // immediately rather than lingering the full STALE_ROSTER_MS).
+        // BACKGROUND subagents outlive the turn — keep their progress; the
+        // server keeps them rostered too, and each entry leaves on its own
+        // finish notice. A failed/STOPPED turn is the exception: it kills
+        // background tasks with it (live-verified), and no finish notice will
+        // ever arrive for them, so clear the live detail here.
         if (msg.ok === false) {
           setSubagents({});
           subagentSeenAt.current.clear();
@@ -1028,6 +1314,12 @@ export function ChatPane({
         // The server-owned pending queue changed (a send parked, drained, or was
         // cancelled — possibly from another device). Render it verbatim.
         setQueue(msg.items);
+        // A queued send is a message: the server counts it in
+        // agentPaneHasMessages, so a chat with a pending bubble WILL 409 any
+        // conversion. Only the session frame used to set this, so a send that
+        // arrived from another device left the strip on offer here — inviting
+        // a click that could only fail.
+        if (msg.items.length > 0) setHasMessages(true);
       } else if (msg.t === 'queued') {
         // Our just-sent message was parked (agent busy / reconnecting). It's now
         // a pending bubble via the `queue` broadcast, so drop only the optimistic
@@ -1049,8 +1341,24 @@ export function ChatPane({
         pendingText.current = '';
         if (wasOurOptimistic) setOptimisticUser(null);
       } else if (msg.t === 'subagent') {
-        subagentSeenAt.current.set(msg.progress.toolUseId, Date.now());
-        setSubagents((m) => ({ ...m, [msg.progress.toolUseId]: msg.progress }));
+        const { toolUseId, done } = msg.progress;
+        if (done) {
+          // A TERMINAL frame. The server has already dropped it from its own
+          // roster; inserting it here (which is what happened before this
+          // branch existed) left a permanent phantom row per foreground Task —
+          // those complete via a tool_result, so the transcript's
+          // finish-notice path never covers them either.
+          subagentSeenAt.current.delete(toolUseId);
+          setSubagents((m) => {
+            if (!(toolUseId in m)) return m;
+            const next = { ...m };
+            delete next[toolUseId];
+            return next;
+          });
+        } else {
+          subagentSeenAt.current.set(toolUseId, msg.progress.seenAt ?? Date.now());
+          setSubagents((m) => ({ ...m, [toolUseId]: msg.progress }));
+        }
       } else if (msg.t === 'status') {
         setAgentStatus((prev) => {
           const next: AgentStatus = {
@@ -1275,11 +1583,19 @@ export function ChatPane({
       .map((p) => ({ path: p.path, name: p.name, previewUrl: p.url }));
     setInput((cur) => (cur.trim() ? `${prose}\n${cur}` : prose));
     if (atts.length) setChips((prev) => [...prev, ...atts]);
+    // A programmatic setInput fires no onChange, so retire the cleanup undo by
+    // hand — otherwise it would still be offering to restore the pre-cleanup
+    // text over the queued message we just pulled back in (and that message is
+    // already cancelled server-side, so it would be unrecoverable).
+    resetCleanup();
     inputRef.current?.focus();
   };
 
   const sendMessage = () => {
     const text = input.trim();
+    // Whatever happens below, the composed text is leaving (or being answered
+    // with) — a lingering "undo cleanup" would offer to restore it afterwards.
+    resetCleanup();
     // Attachment paths ride along at the END of the message — the agent reads
     // the path, not the pixels. The draft box stays clean prose.
     const attachmentPaths = chips.map((c) => c.path);
@@ -1296,7 +1612,7 @@ export function ChatPane({
       setInput('');
       return;
     }
-    const outgoing = [text, ...attachmentPaths].filter(Boolean).join(' ');
+    const outgoing = composeOutgoingMessage(text, attachmentPaths);
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       // Don't fire into a dead socket (the browser would drop it silently).
@@ -1334,9 +1650,11 @@ export function ChatPane({
   };
 
   // Photo picker → upload via the same attachments endpoint the TUI composer
-  // uses, then append the returned path(s) to the message so Claude reads the
-  // image. accept="image/*" with no `capture` → the OS sheet offers library +
-  // camera. Empty-type files (HEIC / some Android providers) are kept.
+  // uses; each upload becomes a composer chip whose path is appended at send
+  // (exactly like paste — the path is NEVER spliced into the draft, or it would
+  // ride out twice and render the image twice). accept="image/*" with no
+  // `capture` → the OS sheet offers library + camera. Empty-type files
+  // (HEIC / some Android providers) are kept.
   const onPickImages = async (e: ChangeEvent<HTMLInputElement>) => {
     const el = e.target;
     // Accept exactly what the server upload route accepts: a renderable
@@ -1357,19 +1675,15 @@ export function ChatPane({
     el.value = ''; // reset so re-picking the same file still fires onChange
     if (files.length === 0) return;
     setUploading(true);
-    const paths: string[] = [];
     for (const f of files) {
       try {
         const { path } = await api.uploadAttachment(paneId, f, f.name || 'image.png');
-        paths.push(path);
         addChip(path, f);
       } catch {
         // drop this one; the rest still upload
       }
     }
     setUploading(false);
-    if (paths.length === 0) return;
-    setInput((prev) => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${paths.join(' ')} `);
     inputRef.current?.focus();
   };
 
@@ -1406,7 +1720,6 @@ export function ChatPane({
     },
     [],
   );
-
 
   const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const data = e.clipboardData;
@@ -1445,6 +1758,9 @@ export function ChatPane({
       // to the message at send time, so the composer stays clean prose.
       if (text.trim()) {
         setInput((prev) => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${text.trim()} `);
+        // Same reason as editQueued: a programmatic setInput fires no onChange,
+        // so the cleanup undo has to be retired explicitly.
+        resetCleanup();
       }
       inputRef.current?.focus();
     })();
@@ -1462,7 +1778,11 @@ export function ChatPane({
   // biome-ignore lint/correctness/useExhaustiveDependencies: events/streamingText/optimisticUser/question/subagent-count/queued-count are the scroll triggers
   useEffect(() => {
     const el = scrollRef.current;
-    if (el && active && pinnedToBottom.current) {
+    // clientHeight < 40 means no real box (mid-relayout, or a pane hidden by
+    // an ancestor we haven't been told about): measuring it yields target 0,
+    // which stamps a bogus lastProgrammaticTop and parks the reader at the
+    // top. Same threshold the persistence and re-pin guards use.
+    if (el && active && el.clientHeight >= 40 && pinnedToBottom.current) {
       const target = maxScrollTop(el.scrollHeight, el.clientHeight);
       lastProgrammaticTop.current = target;
       el.scrollTop = target;
@@ -1501,7 +1821,16 @@ export function ChatPane({
       setComposerH(0);
       return;
     }
-    const measure = () => setComposerH(el.offsetHeight);
+    // A display:none ancestor collapses offsetHeight to 0. Publishing that
+    // shrinks .chat-list's bottom padding by the composer's whole height
+    // (~86px) while hidden, and it regrows a frame AFTER the pane is shown —
+    // landing the reader about one message off even when the re-anchor
+    // works. So: measure only a element that actually has a box. Same shape
+    // as the MobileInputBar fix, for the same reason.
+    const measure = () => {
+      const h = el.offsetHeight;
+      if (h > 0) setComposerH(h);
+    };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -1533,69 +1862,220 @@ export function ChatPane({
   // pager keeps prepending older batches, image thumbnails load, and the sid
   // (staleness guard) may not be bound yet. A one-shot restore lands against a
   // partial height and drifts (the "doesn't always remember" bug). Instead,
-  // re-apply the remembered RATIO each frame for a short settling window — it
-  // converges as content arrives, and stops the instant the reader scrolls.
+  // re-assert the remembered position each frame for a short settling window —
+  // it converges as content arrives, and stops the instant the reader scrolls.
+  //
+  // The position it re-asserts is a MESSAGE, not a ratio. That distinction is
+  // the whole fix: the loop's re-assertion is authoritative, so whatever unit
+  // it uses wins over everything else that moves the scroll — including the
+  // older-prepend compensation below. With a ratio, every prepended batch was
+  // silently undone and the reader was dragged back into older history. With a
+  // message id, the loop and the prepend compensation agree by construction,
+  // because they are computing the same thing. See chat-scroll.ts.
+  //
+  // When the anchored message isn't rendered at all — a fresh mount opens on
+  // the server's 128 KB tail, and anything older has to be paged back in — the
+  // loop SEEKS it: up to ANCHOR_SEEK_PAGE_BUDGET older pages, extending its own
+  // deadline per request.
+  //
+  // The remembered ratio places the reader while that runs, but ONLY ONCE: the
+  // frame it is applied, the loop freezes the row it landed on and holds THAT
+  // for the rest of the window. Re-deriving from the ratio every frame would be
+  // the original bug in miniature — the seek's own prepends grow the document
+  // above the reader, and R·(range + g) walks them backward with every page, so
+  // a budget-exhausted restore would end up DEEPER in history than doing
+  // nothing at all. Frozen to a row, the fallback is merely imprecise.
   //
   // Sid matching is soft: memory may be saved before the hello binds
   // renderedSid (or remount starts with sid=null). Requiring equality then
   // skipped every restore for the whole window and left unpinned readers at
   // scrollTop 0 — "scroll is totally not remembered". Only skip on a REAL
   // mismatch (both set, different) for /clear / resume rotation.
+  //
+  // `showEpoch` re-runs it for the visibility transitions that never touch
+  // `active`: a browser-tab switch, an iOS app backgrounding, a bfcache
+  // restore. Those hide the pane just as thoroughly as display:none does.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: showEpoch is a re-run trigger — becoming visible again must re-anchor.
   useLayoutEffect(() => {
     if (!active) {
       userScrolled.current = false; // hidden panes lose scrollTop — re-restore on return
+      suppressPinUntil.current = 0;
       return;
     }
     userScrolled.current = false;
-    const mem0 = recallChatScroll(paneId);
-    pinnedToBottom.current = pinnedFromMemory(mem0);
-    let raf = 0;
-    const deadline = Date.now() + 2500;
+    // Becoming visible starts the settling window (C) and invalidates the
+    // last programmatic target: while hidden, the follow-bottom effect ran
+    // against a zero-height element and stamped 0. Leaving that in place
+    // makes the first real scroll event look like a 0→N reader jump.
+    suppressPinUntil.current = performance.now() + SHOW_SETTLE_MS;
+    lastProgrammaticTop.current = -1;
     const sidOk = (mem: NonNullable<ReturnType<typeof recallChatScroll>>) =>
       scrollMemorySidMatches(mem.sid, renderedSid.current);
+    // Memory whose sid REALLY disagrees with what's rendered (/clear, a resume
+    // rotation) describes a conversation that no longer exists: treat it as no
+    // memory at all, i.e. follow the bottom. Reading `pinned` off it while
+    // refusing to apply its ratio was the worst of both — an unpinned pane
+    // that anchored to nothing and then didn't follow new messages either.
+    const usable = (mem: ReturnType<typeof recallChatScroll>) => (mem && sidOk(mem) ? mem : null);
+    // SNAPSHOT, read once. The loop used to re-read the store every frame,
+    // which was harmless while position was a ratio (writing R then reading R
+    // is a no-op) and is fatal now that it is a message: this loop's own
+    // scrollTop writes fire `onScroll`, which records the message NOW under the
+    // viewport top — so the target the loop is converging on was being
+    // overwritten with wherever the loop had got to. It could never move on
+    // from its first frame's guess, and a restore that has to PAGE the
+    // remembered message back in (see the seek below) lost its target before
+    // the first page even arrived.
+    const goal = usable(recallChatScroll(paneId));
+    pinnedToBottom.current = pinnedFromMemory(goal);
+    // While a goal ANCHOR is still outstanding, `onScroll` must not overwrite it
+    // in the store. Every scrollTop this loop writes produces a trustworthy
+    // scroll event once the 250ms show-settle window closes, and that event
+    // records the row the loop is currently sitting on — so a restore that has
+    // to PAGE its message back in would destroy the reader's real parked spot
+    // (permanently, and for every future open of the pane) before the first page
+    // landed. Cleared the moment the anchor is applied, the goal is retired, or
+    // the reader takes over.
+    holdRememberedAnchor.current = !!goal && !goal.pinned && !!goal.anchorId;
+    let raf = 0;
+    const startedAt = performance.now();
+    let deadline = startedAt + RESTORE_SETTLE_MS;
+    // Absolute ceiling. The seek extends `deadline` per page, and the
+    // not-scrollable-yet branch below extends it while the transcript is still
+    // in flight; neither may keep an animation frame loop alive indefinitely.
+    const hardStop = startedAt + RESTORE_HARD_STOP_MS;
+    let seekPages = 0;
+    // Once the ratio fallback has placed the reader, we anchor to whatever row
+    // that landed on and hold THAT for the rest of the window. Re-deriving the
+    // position from the ratio every frame is the original bug in miniature: the
+    // seek's own prepends grow the document above the reader, and R·(range + g)
+    // walks them backward with every page — which would have made a
+    // budget-exhausted restore land DEEPER in history than doing nothing at all.
+    let held: { anchorId: string; anchorOffset: number } | null = null;
     const apply = () => {
       raf = 0;
       const el = scrollRef.current;
-      if (el && !userScrolled.current) {
-        const mem = recallChatScroll(paneId);
-        if (el.scrollHeight > el.clientHeight) {
-          if (!mem || mem.pinned) {
-            // Pinned / no memory → hold the bottom while content streams in
-            // (follow-bottom effect also does this; settle covers the gap
-            // before the first events commit).
-            const target = maxScrollTop(el.scrollHeight, el.clientHeight);
-            if (Math.abs(el.scrollTop - target) > 1) {
-              lastProgrammaticTop.current = target;
-              el.scrollTop = target;
-            }
-          } else if (sidOk(mem)) {
-            pinnedToBottom.current = false;
-            const target = Math.round(mem.ratio * (el.scrollHeight - el.clientHeight));
-            if (Math.abs(el.scrollTop - target) > 1) {
-              lastProgrammaticTop.current = target;
-              el.scrollTop = target;
+      // clientHeight < 40: no real box yet (the un-hide hasn't laid out, or
+      // the pane is collapsed). Every measurement taken from it is wrong;
+      // skip this frame and try the next one.
+      if (el && !userScrolled.current && el.clientHeight >= 40) {
+        // Re-check the sid each frame against the SNAPSHOT: on a fresh mount
+        // `renderedSid` is null until the hello lands, and a rotation that
+        // arrives mid-window must retire the goal (its conversation is gone).
+        const mem = usable(goal);
+        if (!mem || mem.pinned) holdRememberedAnchor.current = false;
+        if (el.scrollHeight <= el.clientHeight) {
+          // Nothing to scroll yet — the transcript hasn't arrived, or the
+          // "Loading conversation…" state is all there is. Don't spend the
+          // window waiting on an empty document: a first render slower than
+          // RESTORE_SETTLE_MS used to leave an unpinned reader at scrollTop 0,
+          // i.e. as deep in history as the document goes.
+          deadline = Math.min(hardStop, performance.now() + RESTORE_SETTLE_MS);
+        } else if (!mem || mem.pinned) {
+          // Pinned / no memory → hold the bottom while content streams in
+          // (follow-bottom effect also does this; settle covers the gap
+          // before the first events commit).
+          pinnedToBottom.current = true;
+          const target = maxScrollTop(el.scrollHeight, el.clientHeight);
+          if (Math.abs(el.scrollTop - target) > 1) {
+            lastProgrammaticTop.current = target;
+            el.scrollTop = target;
+          }
+        } else {
+          pinnedToBottom.current = false;
+          const rows = anchorRows(el);
+          const row = mem.anchorId ? findAnchorRow(rows, mem.anchorId) : null;
+          if (row) {
+            held = null; // the real thing beats whatever the fallback settled on
+            holdRememberedAnchor.current = false;
+          } else if (
+            mem.anchorId &&
+            hasMoreOlderRef.current &&
+            seekPages < ANCHOR_SEEK_PAGE_BUDGET
+          ) {
+            // The remembered message is older than the loaded window. Ask for
+            // the next page and give the loop time for the round trip. Bounded,
+            // so an anchor that no longer exists can't drag a transcript over.
+            // Count a page only when one is actually REQUESTED: `requestOlder`
+            // no-ops on a socket that isn't open (a chat opened while the
+            // reconnect backoff is still running — precisely the case this seek
+            // exists for), and counting those burned the whole budget in eight
+            // animation frames without sending anything.
+            if (requestOlder()) {
+              seekPages++;
+              // max(): the base window is already 2500ms, so assigning
+              // now + 1500 would SHORTEN a seeking restore — the opposite of
+              // the intent — and could kill it before the first page arrived.
+              deadline = Math.min(
+                hardStop,
+                Math.max(deadline, performance.now() + ANCHOR_SEEK_PAGE_MS),
+              );
             }
           }
+          const anchor = row ? { row, offset: mem.anchorOffset } : null;
+          const heldRow = !anchor && held ? findAnchorRow(rows, held.anchorId) : null;
+          const use =
+            anchor ?? (heldRow && held ? { row: heldRow, offset: held.anchorOffset } : null);
+          const range = maxScrollTop(el.scrollHeight, el.clientHeight);
+          const target = use
+            ? scrollTopForAnchor({
+                scrollTop: el.scrollTop,
+                rowTop: use.row.getBoundingClientRect().top - el.getBoundingClientRect().top,
+                anchorOffset: use.offset,
+                scrollHeight: el.scrollHeight,
+                clientHeight: el.clientHeight,
+              })
+            : // Nothing anchorable yet: place by the remembered ratio, ONCE.
+              // Clamped — iOS rubber-band can persist a slightly negative
+              // ratio, and an out-of-range target never equals the scrollTop
+              // the browser clamps it to, so the loop would re-assign (and
+              // force a reflow) every frame for the full window.
+              Math.min(Math.max(0, Math.round(mem.ratio * range)), range);
+          if (Math.abs(el.scrollTop - target) > 1) {
+            lastProgrammaticTop.current = target;
+            el.scrollTop = target;
+          }
+          // Freeze the fallback into a row identity so the next frame holds a
+          // MESSAGE rather than re-deriving from the ratio.
+          if (!use) held = anchorAt(el, rows);
         }
       }
-      if (Date.now() < deadline && !userScrolled.current) raf = requestAnimationFrame(apply);
+      if (performance.now() < deadline && !userScrolled.current) raf = requestAnimationFrame(apply);
+      else holdRememberedAnchor.current = false;
     };
     apply(); // first pass runs before paint — no flash
     return () => {
+      holdRememberedAnchor.current = false;
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [active, paneId]);
+  }, [active, paneId, showEpoch]);
 
   // After an older-history batch prepends, content grew above the viewport.
   // Pinned readers stay at the bottom (fill-viewport paging must not yank
   // them into older history). Unpinned readers keep the messages they were
   // looking at. Always stamp lastProgrammaticTop first so onScroll doesn't
   // treat the adjust as a user scroll and corrupt pin/memory.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: events is the trigger — the effect fires after the prepend renders.
+  // `events` is both the trigger AND a real read (the anchor is keyed to one
+  // commit) — no suppression needed here any more.
   useLayoutEffect(() => {
     const el = scrollRef.current;
     const a = olderAnchor.current;
-    if (el && a) {
+    // An anchor belongs to ONE commit. If `events` has moved on since it was
+    // measured (the prepend landed while hidden, and this render is some later,
+    // unrelated message), the geometry describes a document that no longer
+    // exists — applying it would yank the reader to a position computed from a
+    // stale height. Drop it; the ratio-restore loop covers the hidden case.
+    if (a && a.forEvents !== events) {
+      olderAnchor.current = null;
+      return;
+    }
+    // A prepend that lands while the pane is HIDDEN has no geometry to
+    // anchor against: every measurement is 0, so the adjust would stamp
+    // lastProgrammaticTop = 0 and throw the anchor away. Leave both alone —
+    // the restore loop re-applies the remembered ratio on return, and a ratio
+    // degrades proportionally when the document grows (which is exactly why
+    // the memory is a ratio and not an offset).
+    if (el && a && el.clientHeight >= 40) {
       const target = scrollTopAfterOlderPrepend({
         pinned: pinnedToBottom.current,
         newScrollHeight: el.scrollHeight,
@@ -1626,10 +2106,14 @@ export function ChatPane({
     if (el.scrollHeight <= el.clientHeight + 1) requestOlder();
   }, [active, events, loadingOlder, hasMoreOlder, session?.current_sid]);
 
-  const requestOlder = () => {
-    if (loadingOlderRef.current || !hasMoreOlder) return;
+  /** @returns whether a request actually went out — the anchor seek spends its
+   *  budget in REQUESTS, not attempts. */
+  const requestOlder = (): boolean => {
+    // The ref, not the state: the restore effect's seek holds this closure
+    // across many renders and must see the server's latest answer.
+    if (loadingOlderRef.current || !hasMoreOlderRef.current) return false;
     const ws = wsRef.current;
-    if (ws?.readyState !== WebSocket.OPEN) return;
+    if (ws?.readyState !== WebSocket.OPEN) return false;
     loadingOlderRef.current = true;
     setLoadingOlder(true);
     ws.send(JSON.stringify({ t: 'load-older' }));
@@ -1643,7 +2127,107 @@ export function ChatPane({
         setLoadingOlder(false);
       }
     }, 4000);
+    return true;
   };
+
+  // Coming back from a browser-tab switch / app background / bfcache restore
+  // is a show transition too — the pane's `active` never moved, but its
+  // layout (and, on some engines, its scrollTop) may have. Bumping this
+  // re-runs the restore + settling loop above.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') setShowEpoch((n) => n + 1);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('pageshow', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('pageshow', onVisible);
+    };
+  }, []);
+
+  // ── The reader always wins ────────────────────────────────────────────────
+  // The suppression window exists to ignore layout-driven scroll EVENTS, but
+  // a wheel spin or a finger drag is not layout: it is the reader taking
+  // control, and it must land even one frame after a show. Without this, a
+  // flick inside the window was silently undone by the settling loop (which
+  // only stops on `userScrolled`) and, worse, the re-pin observer could still
+  // see a stale `pinnedToBottom` and throw them back to the bottom.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pendingPick gates when the scroll container exists (the picker renders a different tree).
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !active) return;
+    const taken = () => {
+      suppressPinUntil.current = 0; // the next scroll event is theirs, and counts
+      userScrolled.current = true; // stop the settling restore
+    };
+    el.addEventListener('wheel', taken, { passive: true });
+    el.addEventListener('touchmove', taken, { passive: true });
+    return () => {
+      el.removeEventListener('wheel', taken);
+      el.removeEventListener('touchmove', taken);
+    };
+  }, [active, pendingPick]);
+
+  // ── D. Hold the bottom through ANY height change, not just React commits ──
+  // The follow-bottom effect only fires on state the component knows about
+  // (events, streaming text, …). Plenty of height arrives outside that:
+  // image and gallery thumbnails decoding late (they're lazy and have no
+  // intrinsic size), the composer regrowing after a show, fonts settling,
+  // the viewport changing. Each grows content BELOW the reader's anchor with
+  // no re-pin, which is the "comes back a little bit off" half of the bug —
+  // and the settling loop can't cover it because that loop has a 2500ms fuse.
+  //
+  // A ResizeObserver has no fuse. While the pane is VISIBLE and the reader is
+  // PINNED, any height change re-asserts the bottom. It deliberately does
+  // nothing for an unpinned reader: someone parked in history must never be
+  // yanked down by a thumbnail loading.
+  // `pendingPick` is a dependency because the harness picker renders a
+  // DIFFERENT tree with no .chat-scroll in it: an active pane that starts on
+  // the picker has a null ref here, and without re-running when the real
+  // chat mounts, the observer would never attach for that pane's whole life.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pendingPick gates when the scroll container exists.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !active) return;
+    let last = '';
+    const reassert = () => {
+      // A zero/absurdly-short box is a hidden or mid-relayout pane; measuring
+      // it produces a target of 0 and would park the reader at the top.
+      if (el.clientHeight < 40) return;
+      // Both dimensions matter: content growing (scrollHeight) and the
+      // viewport shrinking (clientHeight — composer regrowth, window resize)
+      // each move the bottom. Keying on scrollHeight alone made a pinned
+      // reader miss every pure-viewport change.
+      const key = `${el.scrollHeight}x${el.clientHeight}`;
+      if (key === last) return;
+      last = key;
+      // `pinnedToBottom` is the ONE authority on whether we may move the
+      // reader; deliberately NOT also gated on `userScrolled`. That flag stays
+      // true for the rest of the visit once the reader touches the wheel, so
+      // gating on it meant a reader who scrolled up and then came back to the
+      // bottom silently lost late-content re-pinning — while the events
+      // effect (which checks only the pin) kept following. One rule, one flag.
+      if (!pinnedToBottom.current) return;
+      const target = maxScrollTop(el.scrollHeight, el.clientHeight);
+      if (Math.abs(el.scrollTop - target) <= 1) return;
+      lastProgrammaticTop.current = target;
+      el.scrollTop = target;
+    };
+    const ro = new ResizeObserver(reassert);
+    ro.observe(el);
+    // The scroll container's own box often doesn't change when its CONTENT
+    // grows, so watch the list too — that's the element images live in.
+    //
+    // BORDER-BOX, not the default content-box: the floating composer is
+    // absolutely positioned, so its height reaches the log only as the list's
+    // bottom PADDING. A content-box observer never sees that change, which
+    // means the composer regrowing after a show — one of the exact cases this
+    // observer exists for — would leave the last message hidden behind it.
+    const list = el.querySelector('.chat-list');
+    if (list) ro.observe(list, { box: 'border-box' });
+    return () => ro.disconnect();
+  }, [active, pendingPick]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -1651,24 +2235,60 @@ export function ChatPane({
     // display:none (face/tab hide) zeroes clientHeight/scrollTop — persisting
     // that writes ratio 0 / unpinned and the next open lands in older history.
     if (!shouldPersistChatScroll({ active, clientHeight: el.clientHeight })) return;
-    // The settling restore above fires this too; a scroll AWAY from its last
-    // programmatic target is the reader taking control — stop re-restoring.
-    // Programmatic paths stamp lastProgrammaticTop BEFORE assigning scrollTop
-    // so this check sees them as non-user.
-    if (Math.abs(el.scrollTop - lastProgrammaticTop.current) > 1) userScrolled.current = true;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-    pinnedToBottom.current = nearBottom;
-    rememberChatScroll(paneId, {
-      ratio: el.scrollTop / Math.max(1, el.scrollHeight - el.clientHeight),
-      pinned: nearBottom,
-      sid: renderedSid.current,
+    // Movement WE started — a just-un-hidden pane relaying out (clientHeight
+    // is back but scrollTop and the composer height are not), or a smooth
+    // jump-to-bottom mid-glide. Acting on those is what used to unpin a
+    // visible chat and persist it, which is what made the bug stick. Still
+    // update the scroll-down arrow (it derives from current geometry and is
+    // self-correcting); just don't touch pin or memory. A real gesture has
+    // already cleared the window by the time its scroll event arrives.
+    const trustworthy = scrollEventIsTrustworthy({
+      suppressedUntil: suppressPinUntil.current,
+      now: performance.now(),
     });
+    if (trustworthy) {
+      // The settling restore above fires this too; a scroll AWAY from its last
+      // programmatic target is the reader taking control — stop re-restoring.
+      // Programmatic paths stamp lastProgrammaticTop BEFORE assigning scrollTop
+      // so this check sees them as non-user.
+      if (Math.abs(el.scrollTop - lastProgrammaticTop.current) > 1) userScrolled.current = true;
+      const range = Math.max(1, el.scrollHeight - el.clientHeight);
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+      pinnedToBottom.current = nearBottom;
+      // The ANCHOR is the position that matters (see chat-scroll.ts); the ratio
+      // rides along as the fallback for a mount whose window doesn't hold the
+      // anchored message yet. Measured only for an UNPINNED reader: a reader at
+      // the bottom is restored to the bottom, so the walk would be pure cost —
+      // and the bottom is where chats sit almost all of the time.
+      // …unless a restore is still hunting for the anchor already stored: this
+      // event is almost certainly that restore's own scrollTop write, and
+      // recording where it has got to would erase the message the reader
+      // actually parked on — permanently, and for every future open of the pane.
+      // Keep the stored anchor; pin and ratio still track reality.
+      const prev = holdRememberedAnchor.current ? recallChatScroll(paneId) : null;
+      const anchor = prev ?? (nearBottom ? null : captureAnchor(el));
+      rememberChatScroll(paneId, {
+        anchorId: anchor?.anchorId ?? null,
+        anchorOffset: anchor?.anchorOffset ?? 0,
+        // Clamped: overscroll (iOS rubber-band) reports a scrollTop outside
+        // the range, and a stored ratio outside [0,1] restores to a position
+        // the browser then clamps — leaving the restore loop re-assigning a
+        // target it can never reach.
+        ratio: Math.min(Math.max(0, el.scrollTop / range), 1),
+        pinned: nearBottom,
+        sid: renderedSid.current,
+      });
+    }
     // Hysteresis: only reveal the arrow once meaningfully scrolled up, so it
     // doesn't flicker on tiny nudges near the bottom.
     setShowScrollDown(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
     // Near the top → page in earlier messages (once events exist, so we don't
-    // fire during the initial empty/loading state).
-    if (el.scrollTop < 240 && events.length > 0) requestOlder();
+    // fire during the initial empty/loading state). Untrusted events are
+    // excluded: a just-shown pane can report scrollTop 0 while its layout
+    // settles, and paging on that would prepend a batch of history on every
+    // single tab visit to a chat the reader is pinned to the bottom of. The
+    // genuine "not enough content to scroll" case has its own effect.
+    if (trustworthy && el.scrollTop < 240 && events.length > 0) requestOlder();
   };
 
   const scrollToBottom = () => {
@@ -1676,9 +2296,31 @@ export function ChatPane({
     if (!el) return;
     pinnedToBottom.current = true;
     setShowScrollDown(false);
+    // This IS the reader taking control, and it must end the settling restore
+    // exactly as a wheel spin does. The restore holds its goal as a snapshot,
+    // so without this it would spend the rest of its window re-asserting the
+    // old parked message against the glide this button just started — and no
+    // wheel/touch event is coming to stop it, because a tap is neither.
+    userScrolled.current = true;
+    holdRememberedAnchor.current = false;
     // Record the re-pin immediately — the smooth scroll's own onScroll
     // events lag, and switching away mid-glide must not save a stale spot.
-    rememberChatScroll(paneId, { ratio: 1, pinned: true, sid: renderedSid.current });
+    // No anchor: "the bottom" is not a message, and leaving a stale one here
+    // would out-rank the pin on the next restore.
+    rememberChatScroll(paneId, {
+      anchorId: null,
+      anchorOffset: 0,
+      ratio: 1,
+      pinned: true,
+      sid: renderedSid.current,
+    });
+    // …and suppress the glide itself. A smooth scroll emits an event per
+    // frame, none of them the reader: each one used to read as "scrolled away
+    // from the programmatic target", unpinning the chat this button just
+    // pinned and persisting a mid-glide ratio if the pane was hidden before
+    // the animation finished. Grabbing the wheel mid-glide still wins — the
+    // gesture listener clears this.
+    suppressPinUntil.current = performance.now() + SMOOTH_SCROLL_SETTLE_MS;
     const target = maxScrollTop(el.scrollHeight, el.clientHeight);
     lastProgrammaticTop.current = target;
     el.scrollTo({ top: target, behavior: 'smooth' });
@@ -1727,6 +2369,99 @@ export function ChatPane({
     return { resultFor, consumed, unresolvedTools, taskDescriptions };
   }, [events]);
 
+  // ── Converting this pane into something else ─────────────────────────
+  // Shared by the legacy full-screen harness picker (below) and the empty
+  // state's "or open instead" offer, so both drive the identical routes.
+  // Declared above `body` because that memo renders the offer.
+  const [pickBusy, setPickBusy] = useState<AgentBackendId | 'terminal' | 'web' | null>(null);
+  const [pickError, setPickError] = useState<string | null>(null);
+  /**
+   * One helper for all three conversions, because they all got the same two
+   * things wrong.
+   *
+   * 1. THE WATCHDOG FIRED ON SUCCESS. Each of these used to arm a 12s timer
+   *    after a SUCCESSFUL call that set an error ("still starting — tap … to
+   *    retry") and re-enabled the strip. That was written for the old
+   *    full-screen picker, which unmounted the moment `pendingPick` cleared —
+   *    the timer was then a no-op. The empty-chat "open instead:" strip does
+   *    NOT unmount (same ChatPane, same mount), so every successful conversion
+   *    showed a false error 12 seconds later. Worse, after as-terminal /
+   *    as-web the ChatPane is merely HIDDEN, so the timer fired into a pane
+   *    the user had already left. The route now returns only once the new
+   *    runtime actually exists (see /agent-backend, /as-terminal), so a
+   *    resolved call IS the confirmation — clear busy on success, show no
+   *    error, and never contradict a conversion that worked.
+   *
+   *    A watchdog still exists, but a DIFFERENT one: neither `fetch` nor the
+   *    ptyd RPC layer sets a timeout, so a control socket that stays OPEN and
+   *    stops answering leaves the request pending forever and the strip
+   *    disabled with no error and no escape but a reload. This timer only
+   *    RE-ENABLES the strip (and says so plainly) — it never claims failure,
+   *    and it is cleared on settle and on unmount.
+   *
+   * 2. A 409 REFUSAL WAS TREATED AS A TRANSIENT ERROR. "this chat already has
+   *    messages" is the server telling us our empty-looking view is wrong;
+   *    believe it and flip hasMessages, which retires the strip instead of
+   *    leaving it armed to 409 again on the next click.
+   */
+  const pickStall = useRef<number | undefined>(undefined);
+  useEffect(
+    () => () => {
+      window.clearTimeout(pickStall.current);
+    },
+    [],
+  );
+  const runConversion = useCallback(
+    async (
+      busyKey: AgentBackendId | 'terminal' | 'web',
+      fallback: string,
+      go: () => Promise<void>,
+    ) => {
+      setPickBusy(busyKey);
+      setPickError(null);
+      window.clearTimeout(pickStall.current);
+      pickStall.current = window.setTimeout(() => {
+        setPickBusy(null);
+        setPickError('still working — tap again to retry');
+      }, CONVERT_STALL_MS);
+      try {
+        await go();
+        window.clearTimeout(pickStall.current);
+        setPickBusy(null);
+        setPickError(null);
+      } catch (e) {
+        window.clearTimeout(pickStall.current);
+        setPickBusy(null);
+        if (e instanceof ApiError && e.status === 409) {
+          // The server's answer beats our render state — see hasMessages.
+          setHasMessages(true);
+        }
+        setPickError(e instanceof Error ? e.message : fallback);
+      }
+    },
+    [],
+  );
+  const choosePick = useCallback(
+    (backend: AgentBackendId) =>
+      // 'deep' = NO house overlay. Choosing a harness by name means you
+      // want that harness as it ships — capabilities injection only.
+      runConversion(backend, 'could not start the agent', () =>
+        api.setAgentBackend(paneId, backend, 'deep'),
+      ),
+    [paneId, runConversion],
+  );
+  const chooseTerminal = useCallback(
+    () =>
+      runConversion('terminal', 'could not open the terminal', () =>
+        api.convertPaneToTerminal(paneId),
+      ),
+    [paneId, runConversion],
+  );
+  const chooseWeb = useCallback(
+    () => runConversion('web', 'could not open the web view', () => api.convertPaneToWeb(paneId)),
+    [paneId, runConversion],
+  );
+
   const body = useMemo(() => {
     if (session === undefined)
       return (
@@ -1760,6 +2495,17 @@ export function ChatPane({
       );
     }
     if (events.length === 0 && !optimisticUser && !sending) {
+      // The server SAYS there is history, we just haven't rendered it yet —
+      // history replays asynchronously, so this window opens on every
+      // reconnect. Spin; do NOT greet, and above all do not offer to convert
+      // the pane out from under a real conversation.
+      if (hasMessages)
+        return (
+          <div className="chat-empty">
+            <div className="chat-empty-spinner" aria-hidden="true" />
+            <p>Loading conversation…</p>
+          </div>
+        );
       // A live agent runner with no transcript yet is a FRESH session (the
       // transcript file only appears on the first message) — greet, don't
       // spin for 8s and then claim the session "may have ended".
@@ -1770,7 +2516,17 @@ export function ChatPane({
               ✳
             </div>
             <p className="chat-empty-title">Ready when you are</p>
-            <p className="chat-empty-hint">Send a message below to start this session.</p>
+            {/* No "send a message below" line: the composer is right there
+                with the cursor already in it, so saying so was noise that
+                pushed the one thing worth reading — the alternatives — out
+                of the eye's path. */}
+            <OpenInsteadStrip
+              busy={pickBusy}
+              error={pickError}
+              onBackend={(b) => void choosePick(b)}
+              onTerminal={() => void chooseTerminal()}
+              onWeb={() => void chooseWeb()}
+            />
           </div>
         );
       return (
@@ -1796,18 +2552,38 @@ export function ChatPane({
       );
     }
     const { resultFor, consumed } = toolIndex;
-    const renderEvent = (e: ChatEvent) => {
+    // `anchorId` is set ONLY for rows the scroll memory may anchor to, which
+    // means TOP-LEVEL rows. Rows rendered inside an expanded ActionGroup are
+    // nested under that group's own anchored box, so stamping them too would
+    // break the one property the anchor lookup relies on: that `[data-eid]`
+    // in document order have monotonically increasing bottoms (a parent's box
+    // encloses its children's). ActionGroup receives this as a one-argument
+    // callback, so its nested rows get `undefined` and stay unanchored.
+    const renderEvent = (e: ChatEvent, anchorId?: string) => {
       if (e.kind === 'tool_use') {
         // A subagent launch reads as an event ("agent X launched"), not a
         // tool call — its own bubble, mirroring the finish notice.
         if (isAgentLaunch(e))
-          return <AgentLaunchCard key={e.id} description={agentLaunchDescription(e)} />;
+          return (
+            <AgentLaunchCard
+              key={e.id}
+              description={agentLaunchDescription(e)}
+              anchorId={anchorId}
+            />
+          );
         return (
-          <ToolRow key={e.id} use={e} result={resultFor.get(e.toolUseId)} onOpen={setOpenTool} />
+          <ToolRow
+            key={e.id}
+            use={e}
+            result={resultFor.get(e.toolUseId)}
+            anchorId={anchorId}
+            onOpen={setOpenTool}
+          />
         );
       }
-      if (e.kind === 'tool_result') return <ToolRow key={e.id} result={e} onOpen={setOpenTool} />;
-      return <ChatRow key={e.id} event={e} onOpenImage={setOpenImage} />;
+      if (e.kind === 'tool_result')
+        return <ToolRow key={e.id} result={e} anchorId={anchorId} onOpen={setOpenTool} />;
+      return <ChatRow key={e.id} event={e} anchorId={anchorId} onOpenImage={setOpenImage} />;
     };
 
     // A long agentic stretch renders as ONE collapsed block instead of a
@@ -1832,7 +2608,7 @@ export function ChatPane({
     for (let i = 0; i < renderable.length; ) {
       const e = renderable[i] as ChatEvent;
       if (!isAction(e)) {
-        items.push(renderEvent(e));
+        items.push(renderEvent(e, e.id));
         i++;
         continue;
       }
@@ -1840,7 +2616,9 @@ export function ChatPane({
       while (j < renderable.length && isAction(renderable[j] as ChatEvent)) j++;
       const run = renderable.slice(i, j) as ChatEvent[];
       if (run.length < MIN_GROUP) {
-        items.push(...run.map(renderEvent));
+        // Explicit arrow, not `.map(renderEvent)`: Array#map passes the INDEX
+        // as the second argument, which is now the anchor id.
+        items.push(...run.map((ev) => renderEvent(ev, ev.id)));
       } else {
         // Key stability differs by position: a CLOSED run never grows at
         // its tail but older-history prepends can extend its head — key by
@@ -1849,11 +2627,21 @@ export function ChatPane({
         // or every new action would reset the expansion.
         const trailing = j === renderable.length;
         const id = (run[trailing ? 0 : run.length - 1] as ChatEvent).id;
+        // The SCROLL ANCHOR deliberately does not follow that rule. The key
+        // flips from first-event to last-event the moment prose lands after a
+        // trailing run — routine, and it happens right where readers sit — and
+        // an anchor that flips is an anchor that can't be found, costing a full
+        // seek on the next restore. The run's FIRST event is stable across that
+        // transition and across the run growing at its tail; only a prepended
+        // batch whose own tail is contiguous actions can move it, which is rare
+        // and degrades to the ordinary "anchor not loaded" path.
+        const anchorId = (run[0] as ChatEvent).id;
         items.push(
           <ActionGroup
             key={`group-${id}`}
             events={run}
             expanded={expandedGroups.has(id)}
+            anchorId={anchorId}
             onToggle={() =>
               setExpandedGroups((prev) => {
                 const next = new Set(prev);
@@ -1884,11 +2672,17 @@ export function ChatPane({
     connected,
     events,
     stale,
+    hasMessages,
     optimisticUser,
     sending,
     loadingOlder,
     expandedGroups,
     toolIndex,
+    pickBusy,
+    pickError,
+    choosePick,
+    chooseTerminal,
+    chooseWeb,
   ]);
 
   // The agent is working when: we're driving a turn (`sending`), tokens are
@@ -1910,13 +2704,20 @@ export function ChatPane({
   const unresolvedTool = agentWorking ? (toolIndex.unresolvedTools[0] ?? null) : null;
   const workingLabel = unresolvedTool ? `Running ${unresolvedTool.name}…` : 'Working…';
 
-  // The live roster is TRANSCRIPT-driven: every Agent/Task LAUNCH, minus the
-  // ones whose FINISH task-notification has landed (matched by tool-use-id).
-  // A background agent's own tool_result is only the IMMEDIATE launch ack, so
-  // it cannot gate "running" (that dropped every agent seconds after launch);
-  // the finish notice is the reliable end signal, and being transcript-based
-  // this survives reconnects. The `subagents` map only supplies live detail
-  // (steps / last tool) and the busy dot.
+  // The live roster is the union of two sources, and they cover each other's
+  // blind spot:
+  //
+  //  1. The SERVER's durable roster (`subagents`) — authoritative. It is held
+  //     from the launching tool_use to an explicit finish, survives turn-done
+  //     and reconnects, and is re-announced by the runner on every reconnect.
+  //     This is the one that used to be missing entirely.
+  //  2. The TRANSCRIPT — every Agent/Task launch minus the ones whose finish
+  //     landed. Still needed: it covers launches from BEFORE this server
+  //     process (or this runner) started, which the server's roster cannot
+  //     know about.
+  //
+  // Nothing is evicted on a clock any more. The old 30s stale gate is gone —
+  // see SUBAGENT_QUIET_MS.
   const now = Date.now();
   // Collect FINISH task-notifications. Prefer the exact tool-use-id, but fall
   // back to the description embedded in the summary (`Agent "<desc>" finished`)
@@ -1955,19 +2756,34 @@ export function ChatPane({
       finishByDesc.set(desc, descFinishes - 1);
       continue;
     }
-    // Backstop against roster accretion: drop a launch that's gone quiet with
-    // no parent turn driving it (see STALE_ROSTER_MS). During a turn we keep it
-    // — a just-launched or long-silent-tool subagent legitimately has no recent
-    // frame — and finish notices above still clear the clean case immediately.
-    const seenAt = subagentSeenAt.current.get(id) ?? 0;
-    if (!agentWorking && now - seenAt > STALE_ROSTER_MS) continue;
     seenAgentIds.add(id);
     const p = subagents[id];
     rosterAgents.push({
       id,
       label: desc,
       steps: p?.steps ?? 0,
-      busy: now - (subagentSeenAt.current.get(id) ?? 0) < 6_000,
+      busy: now - (p?.seenAt ?? subagentSeenAt.current.get(id) ?? 0) < SUBAGENT_QUIET_MS,
+    });
+  }
+  // …then anything the SERVER holds that the transcript didn't yield. That is
+  // the launch whose message scrolled out of the 128 KB history window (P2), or
+  // one this socket connected too late to replay — cases where the transcript
+  // simply cannot know, and the server can.
+  for (const [id, p] of Object.entries(subagents)) {
+    if (p.done || seenAgentIds.has(id) || finishedIds.has(id)) continue;
+    // A launch the TRANSCRIPT has already resolved must not be resurrected
+    // here. The foreground case is the one that bites: its completion is a
+    // tool_result, so `finishedIds` (which only collects task-notifications)
+    // says nothing about it — loop 1 correctly skipped it via finishedByResult,
+    // which also means it isn't in seenAgentIds.
+    const settled = toolIndex.resultFor.get(id);
+    if (settled && !LAUNCH_ACK_RE.test(settled.text ?? '')) continue;
+    seenAgentIds.add(id);
+    rosterAgents.push({
+      id,
+      label: p.label ?? 'subagent',
+      steps: p.steps,
+      busy: now - (p.seenAt ?? subagentSeenAt.current.get(id) ?? 0) < SUBAGENT_QUIET_MS,
     });
   }
   // Each agent's busy/quiet dot is evaluated at render time — with a silent
@@ -1985,59 +2801,6 @@ export function ChatPane({
   // Harness pick: a `--pick` pane shows the picker here (not the tab bar).
   // Agents start a runner; Terminal / Web view convert the pane (URL chrome
   // auto-focuses when url is null).
-  const [pickBusy, setPickBusy] = useState<AgentBackendId | 'terminal' | 'web' | null>(null);
-  const [pickError, setPickError] = useState<string | null>(null);
-  const choosePick = useCallback(
-    async (backend: AgentBackendId) => {
-      setPickBusy(backend);
-      setPickError(null);
-      try {
-        await api.setAgentBackend(paneId, backend);
-        // On success the pane.updated (new startup_cmd) clears pendingPick and
-        // this branch unmounts. Watchdog: if that frame never lands (a ws blip
-        // right after the respawn), recover so the picker isn't stuck disabled
-        // forever — re-enable + let the user retry. (Harmless no-op once the
-        // branch has already unmounted.)
-        window.setTimeout(() => {
-          setPickBusy(null);
-          setPickError('still starting — tap a harness to retry');
-        }, 12_000);
-      } catch (e) {
-        setPickBusy(null);
-        setPickError(e instanceof Error ? e.message : 'could not start the agent');
-      }
-    },
-    [paneId],
-  );
-  const chooseTerminal = useCallback(async () => {
-    setPickBusy('terminal');
-    setPickError(null);
-    try {
-      await api.convertPickToTerminal(paneId);
-      window.setTimeout(() => {
-        setPickBusy(null);
-        setPickError('still starting — tap Terminal to retry');
-      }, 12_000);
-    } catch (e) {
-      setPickBusy(null);
-      setPickError(e instanceof Error ? e.message : 'could not open the terminal');
-    }
-  }, [paneId]);
-  const chooseWeb = useCallback(async () => {
-    setPickBusy('web');
-    setPickError(null);
-    try {
-      await api.convertPickToWeb(paneId);
-      window.setTimeout(() => {
-        setPickBusy(null);
-        setPickError('still starting — tap Web view to retry');
-      }, 12_000);
-    } catch (e) {
-      setPickBusy(null);
-      setPickError(e instanceof Error ? e.message : 'could not open the web view');
-    }
-  }, [paneId]);
-
   if (pendingPick) {
     return (
       <div className="chat-pane">
@@ -2056,7 +2819,9 @@ export function ChatPane({
               >
                 <AgentBackendLogo backend={b.id} size={22} />
                 <span>{b.label}</span>
-                {pickBusy === b.id ? <span className="chat-harness-spin" aria-hidden="true" /> : null}
+                {pickBusy === b.id ? (
+                  <span className="chat-harness-spin" aria-hidden="true" />
+                ) : null}
               </button>
             ))}
           </div>
@@ -2227,6 +2992,9 @@ export function ChatPane({
               hidden
               onChange={onPickImages}
             />
+            {/* Inside the pill, above the input line — the correction belongs to
+                the text it changed, not to the conversation behind it. */}
+            {isMobile ? <CleanupHint cleanup={cleanup} variant="chat" /> : null}
             <div className="chat-composer-main">
               <button
                 type="button"
@@ -2246,7 +3014,12 @@ export function ChatPane({
                 ref={inputRef}
                 className="chat-input"
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  // Editing retires the undo — the stashed original no longer
+                  // matches what's in the box.
+                  resetCleanup();
+                }}
                 onPaste={onPaste}
                 onKeyDown={(e) => {
                   // Desktop: Enter sends, Shift+Enter = newline. Mobile: the
@@ -2264,6 +3037,11 @@ export function ChatPane({
                 }
                 rows={1}
               />
+              {/* Mobile only, by explicit instruction: dictation is a phone
+                  problem. Left of Send because it is the step BEFORE sending. */}
+              {isMobile ? (
+                <CleanupButton cleanup={cleanup} variant="chat" hasText={input.trim().length > 0} />
+              ) : null}
               {sending && !question ? (
                 <>
                   {/* Busy + composed text → Queue it (the server holds it and
@@ -2341,11 +3119,14 @@ export function ChatPane({
 function ActionGroup({
   events,
   expanded,
+  anchorId,
   onToggle,
   renderEvent,
 }: {
   events: ChatEvent[];
   expanded: boolean;
+  /** See ANCHOR_ATTR — the scroll memory's handle on this row. */
+  anchorId?: string | undefined;
   onToggle: () => void;
   renderEvent: (e: ChatEvent) => React.ReactNode;
 }) {
@@ -2354,8 +3135,7 @@ function ActionGroup({
   for (const e of events) {
     // Orphan tool_results (their tool_use never reached this pane) count as
     // actions too — a run of only results must not label itself '0 actions'.
-    const name =
-      e.kind === 'tool_use' ? e.name : e.kind === 'thinking' ? 'thinking' : 'result';
+    const name = e.kind === 'tool_use' ? e.name : e.kind === 'thinking' ? 'thinking' : 'result';
     counts.set(name, (counts.get(name) ?? 0) + 1);
     if (e.kind === 'tool_result' && !e.ok) failed++;
   }
@@ -2366,7 +3146,7 @@ function ActionGroup({
   const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
   const summary = top.map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(' · ');
   return (
-    <div className="chat-turn chat-turn-assistant">
+    <div className="chat-turn chat-turn-assistant" data-eid={anchorId}>
       <div className="chat-msg chat-action-group">
         <button
           type="button"
@@ -2374,20 +3154,28 @@ function ActionGroup({
           aria-expanded={expanded}
           onClick={onToggle}
         >
-          <span className={`chat-action-group-chevron${expanded ? ' is-open' : ''}`} aria-hidden="true">
+          <span
+            className={`chat-action-group-chevron${expanded ? ' is-open' : ''}`}
+            aria-hidden="true"
+          >
             ›
           </span>
           <span className="chat-action-group-count">
             {actions} action{actions === 1 ? '' : 's'}
           </span>
           <span className="chat-action-group-summary">{summary}</span>
-          {failed > 0 ? (
-            <span className="chat-action-group-failed">
-              {failed} failed
-            </span>
-          ) : null}
+          {failed > 0 ? <span className="chat-action-group-failed">{failed} failed</span> : null}
         </button>
-        {expanded ? <div className="chat-action-group-body">{events.map(renderEvent)}</div> : null}
+        {expanded ? (
+          // Explicit arrow, NOT `.map(renderEvent)`: Array#map passes the index
+          // as the second argument, which `renderEvent` reads as the anchor id —
+          // so every row inside an expanded group would render `data-eid="0"`,
+          // `data-eid="1"`, … Harmless today (the anchor scan only walks
+          // .chat-list's direct children) but it falsifies the invariant the
+          // whole scheme rests on, and it is the exact trap the sibling call
+          // site is already guarded against.
+          <div className="chat-action-group-body">{events.map((ev) => renderEvent(ev))}</div>
+        ) : null}
       </div>
     </div>
   );
@@ -2398,15 +3186,18 @@ function ActionGroup({
  *  (and re-parsing Markdown for) the entire transcript. */
 const ChatRow = memo(function ChatRow({
   event,
+  anchorId,
   onOpenImage,
 }: {
   event: ChatEvent;
+  /** See ANCHOR_ATTR — the scroll memory's handle on this row. */
+  anchorId?: string | undefined;
   onOpenImage?: OpenMedia | undefined;
 }) {
   switch (event.kind) {
     case 'user':
       return (
-        <div className="chat-turn chat-turn-user">
+        <div className="chat-turn chat-turn-user" data-eid={anchorId}>
           <div className="chat-bubble" dir="auto">
             <UserText text={event.text} onOpenImage={onOpenImage} />
           </div>
@@ -2414,7 +3205,7 @@ const ChatRow = memo(function ChatRow({
       );
     case 'assistant':
       return (
-        <div className="chat-turn chat-turn-assistant">
+        <div className="chat-turn chat-turn-assistant" data-eid={anchorId}>
           <div className="chat-msg">
             <AssistantText text={event.text} onOpenImage={onOpenImage} />
           </div>
@@ -2422,12 +3213,14 @@ const ChatRow = memo(function ChatRow({
       );
     case 'thinking':
       return (
-        <div className="chat-turn chat-turn-assistant">
-          <div className="chat-thinking" dir="auto">{event.text}</div>
+        <div className="chat-turn chat-turn-assistant" data-eid={anchorId}>
+          <div className="chat-thinking" dir="auto">
+            {event.text}
+          </div>
         </div>
       );
     case 'notice':
-      return <NoticeCard event={event} />;
+      return <NoticeCard event={event} anchorId={anchorId} />;
     // tool_use / tool_result are rendered as collapsed ToolRows in the body map
     // (paired into one row), never through ChatRow.
     default:
@@ -2451,7 +3244,9 @@ function UserText({
     <>
       {renderMessageParts(
         parts,
-        (t, key) => <span key={key}>{t}</span>,
+        (t, key) => (
+          <span key={key}>{t}</span>
+        ),
         (m) => onOpenImage?.(m),
       )}
     </>
@@ -2475,7 +3270,9 @@ function AssistantText({
     <>
       {renderMessageParts(
         parts,
-        (t, key) => <Markdown key={key} text={t} />,
+        (t, key) => (
+          <Markdown key={key} text={t} />
+        ),
         (m) => onOpenImage?.(m),
       )}
     </>
@@ -2511,7 +3308,13 @@ function ImageModal({
       ) : (
         <ZoomableImage url={url} name={name} />
       )}
-      <button type="button" className="chat-img-close" onClick={onClose} aria-label="Close" title="Close">
+      <button
+        type="button"
+        className="chat-img-close"
+        onClick={onClose}
+        aria-label="Close"
+        title="Close"
+      >
         ×
       </button>
     </div>
@@ -2649,7 +3452,11 @@ function ZoomableImage({ url, name }: { url: string; name: string }) {
     } else if (gs.mode === 'pan' && e.touches.length === 1) {
       const a = e.touches[0];
       if (!a) return;
-      apply(sRef.current, gs.startX + (a.clientX - gs.startCX), gs.startY + (a.clientY - gs.startCY));
+      apply(
+        sRef.current,
+        gs.startX + (a.clientX - gs.startCX),
+        gs.startY + (a.clientY - gs.startCY),
+      );
     }
   };
   const onTouchEnd = (e: React.TouchEvent) => {
@@ -2671,7 +3478,13 @@ function ZoomableImage({ url, name }: { url: string; name: string }) {
   const onMouseDown = (e: React.MouseEvent) => {
     if (sRef.current <= 1) return;
     e.preventDefault();
-    drag.current = { on: true, sx: e.clientX, sy: e.clientY, ox: pRef.current.x, oy: pRef.current.y };
+    drag.current = {
+      on: true,
+      sx: e.clientX,
+      sy: e.clientY,
+      ox: pRef.current.x,
+      oy: pRef.current.y,
+    };
   };
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
@@ -2758,7 +3571,10 @@ function MediaGallery({
     );
   }
   return (
-    <div className="chat-gallery" style={{ '--n': Math.min(items.length, 3) } as React.CSSProperties}>
+    <div
+      className="chat-gallery"
+      style={{ '--n': Math.min(items.length, 3) } as React.CSSProperties}
+    >
       {items.map((it, i) => {
         const video = it.media === 'video';
         return (
@@ -2818,7 +3634,8 @@ function renderMessageParts(
       media.push({ media: part.media, url: part.url, name: part.name });
     } else {
       flush();
-      if (part.kind === 'file') out.push(<FileChip key={`f-${i}`} name={part.name} url={part.url} />);
+      if (part.kind === 'file')
+        out.push(<FileChip key={`f-${i}`} name={part.name} url={part.url} />);
       else out.push(renderText(part.text, `t-${i}`));
     }
   }
@@ -2826,22 +3643,36 @@ function renderMessageParts(
   return out;
 }
 
-// Icon per notice variant — a task update vs a session reminder.
+// Icon per notice variant — a task update, a session reminder, or a muxpad
+// cron fire. The clock is deliberately the SAME glyph the nav uses for "this
+// chat has a schedule", so the mark you see on the sidebar row and the mark in
+// the transcript read as one thing.
 const NOTICE_ICON: Record<NoticeEvent['variant'], string> = {
   task: '⚙',
   reminder: 'ⓘ',
+  cron: '⏱',
 };
 
-/** Harness control message (background-task update / session reminder). */
-function NoticeCard({ event }: { event: NoticeEvent }) {
+/** Time-of-day for a cron chip, in the VIEWER's zone. The cron's own zone is
+ *  the scheduling truth, but this line answers "when did this land for me". */
+function fireTime(ts: number | null): string {
+  if (ts === null) return '';
+  return new Date(ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+/** Harness control message (background-task update / session reminder), or a
+ *  muxpad cron fire — "⏱ pr-sweep · 09:00" ahead of the prompt it delivered. */
+function NoticeCard({ event, anchorId }: { event: NoticeEvent; anchorId?: string | undefined }) {
+  const at = event.variant === 'cron' ? fireTime(event.ts) : '';
+  const detail = event.detail ?? (at || undefined);
   return (
-    <div className="chat-turn chat-turn-notice">
+    <div className="chat-turn chat-turn-notice" data-eid={anchorId}>
       <div className={`chat-sysnote chat-sysnote-${event.variant}`} title={event.text}>
         <span className="chat-sysnote-icon" aria-hidden="true">
           {NOTICE_ICON[event.variant]}
         </span>
         <span className="chat-sysnote-text">{event.text}</span>
-        {event.detail ? <span className="chat-sysnote-detail">{event.detail}</span> : null}
+        {detail ? <span className="chat-sysnote-detail">{detail}</span> : null}
       </div>
     </div>
   );
@@ -2850,10 +3681,13 @@ function NoticeCard({ event }: { event: NoticeEvent }) {
 /** Subagent LAUNCH bubble — the counterpart to the harness "…finished"
  *  notice, so a dispatch reads as one discrete event instead of folding into
  *  a "5 actions · Agent ×5" run. Same pill family as NoticeCard. */
-function AgentLaunchCard({ description }: { description: string }) {
+function AgentLaunchCard({
+  description,
+  anchorId,
+}: { description: string; anchorId?: string | undefined }) {
   const text = `Agent "${description}" launched`;
   return (
-    <div className="chat-turn chat-turn-notice">
+    <div className="chat-turn chat-turn-notice" data-eid={anchorId}>
       <div className="chat-sysnote chat-sysnote-task chat-sysnote-launch" title={text}>
         <span className="chat-sysnote-icon" aria-hidden="true">
           <SvgAgentGlyph />
@@ -2911,10 +3745,13 @@ function diffStat(diff?: ToolResultEvent['diff']): { add: number; del: number } 
 const ToolRow = memo(function ToolRow({
   use,
   result,
+  anchorId,
   onOpen,
 }: {
   use?: ToolUseEvent | undefined;
   result?: ToolResultEvent | undefined;
+  /** See ANCHOR_ATTR — the scroll memory's handle on this row. */
+  anchorId?: string | undefined;
   onOpen: (d: ToolDetail) => void;
 }) {
   const verb = use
@@ -2926,7 +3763,7 @@ const ToolRow = memo(function ToolRow({
   const err = result?.ok === false;
   const stat = diffStat(result?.diff);
   return (
-    <div className="chat-turn chat-turn-assistant">
+    <div className="chat-turn chat-turn-assistant" data-eid={anchorId}>
       <button
         type="button"
         className={`chat-toolrow${err ? ' error' : ''}`}
@@ -2951,7 +3788,15 @@ const ToolRow = memo(function ToolRow({
 function RosterSpinner() {
   return (
     <svg width="11" height="11" viewBox="0 0 16 16" aria-hidden="true">
-      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2" fill="none" opacity="0.25" />
+      <circle
+        cx="8"
+        cy="8"
+        r="6"
+        stroke="currentColor"
+        strokeWidth="2"
+        fill="none"
+        opacity="0.25"
+      />
       <path
         d="M8 2 a6 6 0 0 1 6 6"
         stroke="currentColor"

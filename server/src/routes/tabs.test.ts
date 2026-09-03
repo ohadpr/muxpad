@@ -1,21 +1,25 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import type { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { EventEmitter } from 'node:events';
-import { openDb } from '../store/db.js';
-import { EventBus } from '../events.js';
 import type { MuxpadEvent } from '@muxpad/shared';
-import { createTestApp, type TestApp } from '../test-helpers/createTestApp.js';
+import type Database from 'better-sqlite3';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { EventBus } from '../events.js';
+import { TabStore } from '../store/TabStore.js';
+import { openDb } from '../store/db.js';
+import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
 
 describe('tabs routes', () => {
   let test: TestApp;
   let tmp: string;
   let workspaceId: string;
+  let db: Database.Database;
 
   beforeEach(async () => {
     tmp = mkdtempSync(join(tmpdir(), 'muxpad-tabs-'));
-    test = await createTestApp({ db: openDb(':memory:'), dataDir: tmp });
+    db = openDb(':memory:');
+    test = await createTestApp({ db, dataDir: tmp });
     // Every tab needs a parent workspace. Spin one up fresh for each test.
     const wsRes = await test.app.request('/api/workspaces', {
       method: 'POST',
@@ -144,6 +148,35 @@ describe('tabs routes', () => {
     expect(bad.status).toBeGreaterThanOrEqual(400);
   });
 
+  it('a PATCH that fails mid-way rolls the pin back, and 400s a junk body', async () => {
+    // `{pinned:true, slug:'<taken>'}` used to persist the pin AND the position
+    // change, then report 404 from a bare catch around tabs.update — a caller
+    // told "no such tab" about a tab that had just been half-edited.
+    const a = (await (await postTab({ name: 'A' })).json()) as { id: string; slug: string };
+    const b = (await (await postTab({ name: 'B' })).json()) as { id: string; pinned?: boolean };
+    const res = await test.app.request(`/api/tabs/${b.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pinned: true, slug: a.slug }),
+    });
+    expect(res.status).toBe(409); // not the old misleading 404
+    const after = (await (await test.app.request(`/api/tabs/${b.id}`)).json()) as {
+      pinned?: boolean;
+      slug: string;
+    };
+    expect(after.pinned).toBeFalsy();
+    expect(after.slug).not.toBe(a.slug);
+
+    // A malformed body is the caller's fault: 400, not a 500 from an uncaught
+    // ZodError (the handler used to call `.parse`).
+    const junk = await test.app.request(`/api/tabs/${b.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pinned: 'yes-please' }),
+    });
+    expect(junk.status).toBe(400);
+  });
+
   it('deletes a tab', async () => {
     const created = (await (await postTab({ name: 'Dev' })).json()) as { id: string };
     const res = await test.app.request(`/api/tabs/${created.id}`, { method: 'DELETE' });
@@ -231,9 +264,9 @@ describe('tabs routes', () => {
     const srcList = (await (
       await test.app.request(`/api/tabs?workspaceId=${workspaceId}`)
     ).json()) as { id: string }[];
-    const destList = (await (
-      await test.app.request(`/api/tabs?workspaceId=${dest}`)
-    ).json()) as { id: string }[];
+    const destList = (await (await test.app.request(`/api/tabs?workspaceId=${dest}`)).json()) as {
+      id: string;
+    }[];
     expect(srcList.some((t) => t.id === tab.id)).toBe(false);
     expect(destList.some((t) => t.id === tab.id)).toBe(true);
   });
@@ -287,5 +320,119 @@ describe('tabs routes', () => {
     } finally {
       await local.cleanup();
     }
+  });
+  it('PATCHing an icon marks it sticky, permanently and one-way', async () => {
+    // The generator's hard stop. Setting an icon by hand through the picker is
+    // the ONLY way a human puts a glyph on a row, and this route is where it
+    // lands — so this is the only place the flag has to be set, and the only
+    // place it can be missed. Asserted through the HTTP surface rather than on
+    // the store, because a store method nobody calls would satisfy a unit test
+    // and still leave the picker writing an icon the model then overwrote.
+    const created = await postTab({ name: 'A' });
+    const tab = (await created.json()) as { id: string };
+    const tabs = new TabStore(db);
+    expect(tabs.isIconSticky(tab.id)).toBe(false);
+
+    const patch = (body: object) =>
+      test.app.request(`/api/tabs/${tab.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    expect((await patch({ icon: '🚀' })).status).toBe(200);
+    expect(tabs.isIconSticky(tab.id)).toBe(true);
+    expect(tabs.getById(tab.id)?.icon).toBe('🚀');
+
+    // One-way: nothing later un-sticks it. Re-picking, renaming, pinning —
+    // none of them hands the glyph back to the machine.
+    await patch({ icon: '🐛' });
+    await patch({ name: 'renamed' });
+    await patch({ pinned: true });
+    expect(tabs.isIconSticky(tab.id)).toBe(true);
+    expect(tabs.getById(tab.id)?.icon).toBe('🐛');
+  });
+
+  it('a PATCH that does not mention the icon leaves it un-sticky', async () => {
+    // Otherwise every rename, pin and layout change would quietly freeze the
+    // glyph, and the generator would never write one on any tab the user had
+    // ever touched.
+    const created = await postTab({ name: 'A' });
+    const tab = (await created.json()) as { id: string };
+    await test.app.request(`/api/tabs/${tab.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'B', pinned: true }),
+    });
+    expect(new TabStore(db).isIconSticky(tab.id)).toBe(false);
+  });
+
+  it('a new tab is born with NO icon, so the generator may give it one', async () => {
+    // Tabs used to get a random emoji here. That was not merely meaningless —
+    // a non-null icon is the generator's own hands-off signal, so the random
+    // default silently disabled content-derived icons for every tab ever made.
+    const created = await postTab({ name: 'A' });
+    const tab = (await created.json()) as { id: string; icon?: string };
+    expect(tab.icon).toBeUndefined();
+    expect(new TabStore(db).getById(tab.id)?.icon).toBeUndefined();
+  });
+  it('an EMPTY icon releases the row completely — glyph, clock AND sticky', async () => {
+    // The only way back. Stickiness is one-way against the MACHINE, not
+    // against the person who set it. Before this, `{icon: ''}` on an
+    // already-sticky row — which is every row anyone would want to clear,
+    // since picking an icon is what makes a row sticky — left `icon NULL,
+    // icon_sticky 1`: frozen forever, every generated write refused, the row
+    // pinned to its fallback glyph with no way back from any surface. That was
+    // the exact stranding the carve-out had been added to prevent.
+    const created = await postTab({ name: 'A' });
+    const tab = (await created.json()) as { id: string };
+    const tabs = new TabStore(db);
+    const patch = (body: object) =>
+      test.app.request(`/api/tabs/${tab.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    await patch({ icon: '🚀' });
+    expect(tabs.isIconSticky(tab.id)).toBe(true);
+    tabs.setIcon(tab.id, '⏰');
+    // (sticky, so that write is refused — proving the row really is locked)
+    expect(tabs.getById(tab.id)?.icon).toBe('🚀');
+
+    const res = await patch({ icon: '' });
+    expect(res.status).toBe(200);
+    expect(tabs.getById(tab.id)?.icon).toBeUndefined();
+    expect(tabs.isIconSticky(tab.id)).toBe(false);
+    expect(tabs.iconAt(tab.id)).toBeNull();
+    // …and the generator can write again, immediately — no stability window
+    // left over from a glyph that is gone.
+    expect(tabs.setIcon(tab.id, '⏰', 9_000)).toBe(true);
+    expect(tabs.getById(tab.id)?.icon).toBe('⏰');
+  });
+
+  it('the response body reports the released icon as absent', async () => {
+    // `tabs.update` writes the empty string before the release runs, so a
+    // response built from its return value would tell the client the row wears
+    // an empty-string icon.
+    const tab = (await (await postTab({ name: 'A' })).json()) as { id: string };
+    const res = await test.app.request(`/api/tabs/${tab.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ icon: '' }),
+    });
+    expect(((await res.json()) as { icon?: string }).icon).toBeUndefined();
+  });
+
+  it('an agent tab is created with NO icon, so its first glyph is free', async () => {
+    // Agent tabs used to be born wearing `✳`. That was the worst of both
+    // worlds: every one of them drew the same glyph, so the rail was already
+    // the uniform column a per-tab icon exists to avoid — and a STORED glyph
+    // costs the tab its one free icon write, so a tab whose first generation
+    // answered "ICON: KEEP" wore `✳` until its subject changed.
+    const res = await postTab({ name: 'A', bootstrap: 'agent' });
+    const tab = (await res.json()) as { id: string; icon?: string };
+    expect(tab.icon).toBeUndefined();
+    expect(new TabStore(db).getById(tab.id)?.icon).toBeUndefined();
   });
 });

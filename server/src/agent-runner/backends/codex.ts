@@ -16,6 +16,8 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { ChatEvent } from '@muxpad/shared';
+import { readAgentInstructions, wrapAgentInstructions } from '../../agent-instructions.js';
+import { readDoModeOverlay, wrapModeNote } from '../../agent-modes.js';
 import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptReader.js';
 
 // Provider ids we adopt as the transcript-log filename + hello sid must satisfy
@@ -23,10 +25,32 @@ import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptR
 // Reject a non-conforming id rather than silently breaking the pane.
 const SID_RE = /^[A-Za-z0-9._-]{1,128}$/;
 import { bold, dim } from '../ansi.js';
-import type { RunnerFrame } from '../protocol.js';
+import type { AgentMode, RunnerFrame } from '../protocol.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
 const CODEX_BIN = process.env.MUXPAD_CODEX_BIN || 'codex';
+
+/**
+ * Build the delimited preamble prepended to a NEW session's first user
+ * message — the injection mechanism for the spawn-per-turn backends
+ * (codex + cursor), neither of which has an append-instructions surface.
+ * Shared by both so they can't drift.
+ *
+ * `instructions` is the universal <dataDir>/agent-instructions.md;
+ * `modeOverlay` is <dataDir>/do-mode.md, present only in ⚡ Do mode. Both
+ * optional — with neither, the prompt is returned untouched.
+ */
+export function withSessionPreamble(
+  prompt: string,
+  instructions: string | null,
+  modeOverlay: string | null,
+): string {
+  const blocks: string[] = [];
+  if (instructions?.trim()) blocks.push(wrapAgentInstructions(instructions));
+  // Behavior after capabilities, matching the Claude backend's append order.
+  if (modeOverlay?.trim()) blocks.push(`<muxpad-mode>\n${modeOverlay.trim()}\n</muxpad-mode>`);
+  return blocks.length ? `${blocks.join('\n\n')}\n\n${prompt}` : prompt;
+}
 
 // When the pane's cwd is a git WORKTREE, the real git metadata lives in the main
 // repo's `.git` (outside the worktree). Codex's `workspace-write` sandbox makes
@@ -153,6 +177,19 @@ export function createCodexBackend(
   let liveSid = opts.requestedSid ?? randomUUID();
   let model = opts.requestedModel;
 
+  // Agent mode. Codex spawns a fresh `codex exec` per turn but RESUMES the
+  // same thread, so — exactly like Claude — the mode overlay only reaches the
+  // model as prompt material on a NEW session's first message. A mid-session
+  // switch can only be announced in-conversation: see agent-modes.ts.
+  let currentMode: AgentMode = opts.mode;
+  let pendingModeNote: string | null = null;
+  function setMode(next: AgentMode): void {
+    if (next === currentMode) return;
+    currentMode = next;
+    pendingModeNote = wrapModeNote(next, readDoModeOverlay(next));
+    log(dim(`mode → ${next} (announced to the thread on the next message)`));
+  }
+
   // Extra writable roots for the sandbox (the worktree's external git dir, if
   // any) — computed once; the cwd is fixed for a runner's lifetime.
   const extraWritableDirs = gitWorktreeExtraDirs(process.cwd());
@@ -216,7 +253,35 @@ export function createCodexBackend(
   }
 
   function buildArgs(prompt: string, useResume: boolean): string[] {
-    const head = useResume && sessionRef ? ['exec', 'resume', sessionRef] : ['exec'];
+    const resuming = useResume && !!sessionRef;
+    // Universal muxpad instructions + the ⚡ Do-mode overlay — CODEX injection
+    // mechanism: `codex exec` has NO append-instructions surface (its only
+    // hook, `-c experimental_instructions_file`, REPLACES the base prompt, and
+    // AGENTS.md lives in user-owned dirs muxpad must not write), so fall back
+    // to prepending the delimited file content to the FIRST user message of
+    // each NEW session — fresh spawns only; a resume already carries it
+    // in-thread. Read at spawn time; missing file → nothing injected, no
+    // error. The muxpad transcript records the RAW prompt (logEvent runs
+    // before this), so rendered chat history stays clean.
+    let finalPrompt = prompt;
+    if (resuming) {
+      // A mid-session mode switch: the thread already ran with the old
+      // contract, so declare the new one once, in-band.
+      if (pendingModeNote) {
+        finalPrompt = `${pendingModeNote}\n\n${prompt}`;
+        pendingModeNote = null;
+      }
+    } else {
+      // Fresh thread → the overlay lands as real preamble; any pending
+      // switch note is redundant (the preamble already states the contract).
+      pendingModeNote = null;
+      finalPrompt = withSessionPreamble(
+        prompt,
+        readAgentInstructions(),
+        readDoModeOverlay(currentMode),
+      );
+    }
+    const head = resuming ? ['exec', 'resume', sessionRef as string] : ['exec'];
     const common = [
       '--json',
       '--skip-git-repo-check',
@@ -234,7 +299,7 @@ export function createCodexBackend(
     // Make the worktree's external git dir writable so commits work in-place.
     for (const dir of extraWritableDirs) common.push('--add-dir', dir);
     if (model) common.push('-m', model);
-    return [...head, ...common, prompt];
+    return [...head, ...common, finalPrompt];
   }
 
   function finishTurn(ok: boolean, error?: string): void {
@@ -447,6 +512,7 @@ export function createCodexBackend(
     process.stdout.write('\x1b]0;✳ codex\x07');
     log(`${bold('muxpad agent')} — codex backend · session ${liveSid}`);
     log(dim(`pane ${host.paneId} · ${process.cwd()}`));
+    if (currentMode === 'do') log(dim('⚡ do mode — decisive, terse, result-first'));
     authOk = await checkAuth();
     if (!authOk) {
       log(dim('codex not logged in — run `codex login` in this pane’s terminal face'));
@@ -491,6 +557,7 @@ export function createCodexBackend(
       log(`${bold('model')} → ${m}`);
       emitStatus();
     },
+    setMode,
     answer: () => {},
     onConnected: () => {
       if (lastStatus) emit(lastStatus);

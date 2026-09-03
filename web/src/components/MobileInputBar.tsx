@@ -1,9 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
+import { useDictationCleanup } from '../lib/dictation-cleanup';
 import { planSubmit } from '../lib/mobile-submit';
 import { usePaneFace } from '../lib/pane-face';
 import { isCursorAgentCmd } from '../lib/xterm-internals';
+import { CleanupButton, CleanupHint } from './DictationCleanup';
 import './MobileInputBar.css';
 
 /**
@@ -192,6 +194,36 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
   const syncEmpty = () => {
     const el = editableRef.current;
     if (el) el.classList.toggle('is-empty', (el.textContent ?? '').length === 0);
+    setHasText((el?.textContent ?? '').trim().length > 0);
+  };
+
+  // ── Dictation cleanup ────────────────────────────────────────────────────
+  // This bar is rendered only in TabView's mobile branch, so it is already
+  // mobile-only — no viewport gate needed here (the chat composer, which
+  // renders on both, gates itself).
+  //
+  // The composer is an imperative contenteditable, so cleanup reads/writes it
+  // through the same textContent + syncEmpty path everything else here uses.
+  // NOTE the two are deliberately separate concerns: cleanup rewrites the
+  // buffer, submit() sends it. Nothing below sends.
+  const [hasText, setHasText] = useState(false);
+  const cleanup = useDictationCleanup({
+    read: () => editableRef.current?.textContent ?? '',
+    write: (text) => {
+      const el = editableRef.current;
+      if (!el) return;
+      el.textContent = text;
+      syncEmpty();
+    },
+  });
+  const { reset: resetCleanup } = cleanup;
+
+  // Typing after a cleanup retires the undo: the stashed original no longer
+  // corresponds to what's in the box, and offering to restore it would throw
+  // away edits the user just made.
+  const onEditableInput = () => {
+    syncEmpty();
+    resetCleanup();
   };
 
   const insertAtCaret = (text: string) => {
@@ -216,6 +248,10 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
       el.textContent = (el.textContent ?? '') + text;
     }
     syncEmpty();
+    // The execCommand path fires a real `input` event (which already retires
+    // the cleanup undo via onEditableInput); the textContent fallback does not.
+    // Retire it here so both paths behave the same.
+    resetCleanup();
   };
 
   // Upload image blobs to muxpad's attachments endpoint and splice the returned
@@ -314,10 +350,16 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
       el.textContent = '';
       syncEmpty();
     }
+    // The buffer is gone — an "undo cleanup" that restored the previous
+    // message into an empty composer would be a trap.
+    resetCleanup();
   };
 
   return (
     <div ref={barRef} className="mobile-input-bar" data-pane={paneId} hidden={!visible}>
+      {/* Above the keys row, not below the composer: the composer's bottom edge
+          is pinned to the keyboard, so a line under it would be off-screen. */}
+      <CleanupHint cleanup={cleanup} variant="terminal" />
       <div className="mobile-input-keys" role="toolbar" aria-label="Special keys">
         <button type="button" className="mobile-input-key" onClick={() => send('\x1b')}>
           Esc
@@ -392,9 +434,13 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
           aria-multiline="true"
           aria-label="Send to pane"
           data-placeholder="Send to pane…"
-          onInput={syncEmpty}
+          onInput={onEditableInput}
           onPaste={onPaste}
         />
+        {/* Between the composer and Send: adjacent to the text it acts on, and
+            it is a REVIEW step that happens before sending, so it reads left of
+            the send button. */}
+        <CleanupButton cleanup={cleanup} variant="terminal" hasText={hasText} />
         <button type="button" className="mobile-input-send" onClick={submit} aria-label="Send">
           Send
         </button>

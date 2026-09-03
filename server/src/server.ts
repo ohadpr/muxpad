@@ -1,17 +1,33 @@
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import type { AgentBridge } from './agent-bridge.js';
+import type { AppRegistry } from './apps/AppRegistry.js';
+import type { AppStatusProbe } from './apps/AppStatus.js';
+import type { ArchiveDb } from './archive/ArchiveDb.js';
+import type { CleanupModel } from './chat/clean-transcript.js';
+import type { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
+import { type Funnel, localFunnel } from './funnel.js';
 import type { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import type { Presence, PushService } from './push.js';
 import { agentSessionsRoutes } from './routes/agent-sessions.js';
+import { appsRoutes } from './routes/apps.js';
 import { attachmentsRoutes } from './routes/attachments.js';
+import { cleanTranscriptRoutes } from './routes/clean-transcript.js';
+import { cronsRoutes } from './routes/crons.js';
+import { eventsRoutes } from './routes/events.js';
 import { openRoutes } from './routes/open.js';
+import { paneIoRoutes } from './routes/pane-io.js';
 import { panesScopedRoutes, panesTabScopedRoutes } from './routes/panes.js';
+import { publishRoutes } from './routes/publish.js';
 import { pushRoutes } from './routes/push.js';
+import { archiveRoutes, searchRoutes } from './routes/search.js';
+import { summaryRoutes } from './routes/summary.js';
 import { tabsRoutes } from './routes/tabs.js';
 import { workspacesRoutes } from './routes/workspaces.js';
+import { sameOriginGuard } from './same-origin.js';
+import type { TabActivity } from './tab-activity.js';
 
 export interface AppDeps {
   db: Database.Database;
@@ -43,6 +59,13 @@ export interface AppDeps {
    */
   agentBridge?: AgentBridge;
   /**
+   * Shared per-tab activity recorder (the living sidebar's recency signal).
+   * The routes only need it to DROP a deleted tab's throttle memo; the ws
+   * layer owns the writes. Optional — without it the memo for a deleted tab
+   * simply lingers until restart.
+   */
+  tabActivity?: TabActivity;
+  /**
    * Web Push subscriptions + delivery (see push.ts). Optional so tests
    * that don't exercise notifications can omit it — the /api/push routes
    * simply aren't mounted then.
@@ -54,6 +77,54 @@ export interface AppDeps {
    * push).
    */
   presence?: Presence;
+  /**
+   * Session-archive index (`archive.sqlite`, see archive/). Optional so
+   * tests that don't exercise search can omit it — /api/search and
+   * /api/archive simply aren't mounted then.
+   */
+  archive?: ArchiveDb;
+  /**
+   * Publish deps (routes/publish.ts): the funnel manager that ensures the
+   * public Tailscale Funnel on publish. Optional so tests can omit it — the
+   * routes are still mounted, backed by a localFunnel that NEVER execs
+   * tailscale (nothing a test does can expose content publicly).
+   */
+  publish?: {
+    funnel: Funnel;
+    publicPort?: number;
+    /** MUXPAD_PUBLIC_BASE_URL — outranks every discovered base. See
+     *  public-base.ts for why discovery cannot be trusted for a SHAREABLE url. */
+    publicBaseUrl?: string | undefined;
+    /** Test-only override for the base reachability probe. */
+    baseProbe?: ((url: string) => Promise<import('@muxpad/shared').UrlHealth>) | undefined;
+    baseProbeTtlMs?: number | undefined;
+  };
+  /**
+   * The server-owned cron scheduler (cron/CronScheduler.ts). Optional so
+   * HTTP-only tests can omit it — /api/crons is still mounted and answers
+   * honestly (empty list, 503 on writes) rather than 404ing.
+   */
+  cronScheduler?: CronScheduler;
+  /**
+   * The app registry (apps/AppRegistry.ts) and its status probe. Optional so
+   * HTTP-only tests can omit them — /api/apps is still mounted and answers
+   * honestly: reads work against the DB, writes 503 rather than 404, and an
+   * app's `state` degrades to the enabled flag with `pty`/`health` null instead
+   * of inventing a status nothing measured.
+   */
+  apps?: { registry?: AppRegistry | undefined; status?: AppStatusProbe | undefined };
+  /**
+   * Test seam for POST /api/clean-transcript's model call. Production omits it
+   * and gets the Agent SDK Haiku completion; tests and browser-driven e2e
+   * supply a fake so no suite can ever reach the network.
+   */
+  cleanupModel?: CleanupModel;
+  /**
+   * Extra hostnames the CSRF guard trusts as an Origin, on top of loopback
+   * and "same hostname as Host". Production reads MUXPAD_ALLOWED_ORIGINS;
+   * this is the injection seam for tests. See same-origin.ts.
+   */
+  allowedOrigins?: Set<string>;
 }
 
 export function createApp(deps: AppDeps): Hono {
@@ -62,6 +133,15 @@ export function createApp(deps: AppDeps): Hono {
   // Keeps the route-level emit() calls type-clean without forcing every
   // test harness (or the WS-less HTTP smoke tests) to construct one.
   const resolved = { ...deps, events: deps.events ?? new EventBus() };
+  // CSRF: refuse a state-changing request that a foreign page made on the
+  // user's behalf. muxpad has no auth — reachability is authorization — so
+  // without this, any web page open on a tailnet browser could POST
+  // /api/apps (an arbitrary command that autostarts every boot) or
+  // /api/crons (unattended agent work across reboots) as a CORS *simple
+  // request*, with no preflight to stop it. Mounted FIRST so it covers every
+  // route below, including ones not yet written. See same-origin.ts for what
+  // is allowed and why the CLI (which sends no Origin) still works.
+  app.use('*', sameOriginGuard(deps.allowedOrigins ? { allowedOrigins: deps.allowedOrigins } : {}));
   app.get('/api/health', (c) => c.json({ ok: true }));
   // Active-device heartbeat: the web app POSTs this while foregrounded and
   // interacted-with, so push notifications hold off while you're at a device.
@@ -73,9 +153,67 @@ export function createApp(deps: AppDeps): Hono {
   app.route('/api/tabs', tabsRoutes(resolved));
   app.route('/api/tabs', panesTabScopedRoutes(resolved));
   app.route('/api/panes', panesScopedRoutes(resolved));
+  app.route('/api/panes', paneIoRoutes(resolved));
   app.route('/api/panes', attachmentsRoutes(resolved));
+  app.route('/api/panes', summaryRoutes(resolved));
   app.route('/api/open', openRoutes(resolved));
+  // Phone-dictation cleanup for the mobile composers. Read-only and
+  // side-effect-free: it hands corrected text back for the human to review.
+  app.route(
+    '/api/clean-transcript',
+    cleanTranscriptRoutes({
+      db: resolved.db,
+      dataDir: resolved.dataDir,
+      ...(resolved.cleanupModel ? { model: resolved.cleanupModel } : {}),
+    }),
+  );
+  // SSE mirror of /ws/events — curl-able subscription for scripts/agents.
+  app.route('/api/events', eventsRoutes(resolved));
   app.route('/api/agent-sessions', agentSessionsRoutes(resolved));
+  // Durable schedules (`muxpad cron`). See docs/plans/2026-08-14-muxpad-cron.md.
+  app.route(
+    '/api/crons',
+    cronsRoutes({
+      db: resolved.db,
+      cache: resolved.cache,
+      events: resolved.events,
+      ...(resolved.cronScheduler ? { scheduler: resolved.cronScheduler } : {}),
+    }),
+  );
+  // Hosted, kind one: supervised local app servers (`muxpad app`). Kind two —
+  // published artifacts — is /api/publish below. Two verbs, two kinds; they
+  // share a VIEW, never a primitive.
+  app.route(
+    '/api/apps',
+    appsRoutes({
+      db: resolved.db,
+      ...(resolved.apps?.registry ? { registry: resolved.apps.registry } : {}),
+      ...(resolved.apps?.status ? { status: resolved.apps.status } : {}),
+    }),
+  );
+  // Artifact publishing (copies into <dataDir>/public, served by the separate
+  // public-port app). Default funnel is exec-free — see AppDeps.publish.
+  app.route(
+    '/api/publish',
+    publishRoutes({
+      db: resolved.db,
+      dataDir: resolved.dataDir,
+      funnel:
+        resolved.publish?.funnel ??
+        localFunnel(resolved.publish?.publicPort ?? 7778, 'funnel not configured'),
+      publicPort: resolved.publish?.publicPort ?? 7778,
+      ...(resolved.publish?.publicBaseUrl ? { publicBaseUrl: resolved.publish.publicBaseUrl } : {}),
+      ...(resolved.publish?.baseProbe ? { baseProbe: resolved.publish.baseProbe } : {}),
+      ...(resolved.publish?.baseProbeTtlMs !== undefined
+        ? { baseProbeTtlMs: resolved.publish.baseProbeTtlMs }
+        : {}),
+    }),
+  );
   if (resolved.push) app.route('/api/push', pushRoutes(resolved.push));
+  if (resolved.archive) {
+    const archiveDeps = { db: resolved.db, archive: resolved.archive };
+    app.route('/api/search', searchRoutes(archiveDeps));
+    app.route('/api/archive', archiveRoutes(archiveDeps));
+  }
   return app;
 }

@@ -1,6 +1,6 @@
 import type { spawn as nodeSpawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatEvent } from '@muxpad/shared';
@@ -79,7 +79,7 @@ describe('codex backend', () => {
     const { spawn, calls } = fakeSpawner();
     const b = createCodexBackend(
       host,
-      { requestedSid, requestedModel: null },
+      { requestedSid, requestedModel: null, mode: 'deep' },
       { spawn, listModels: noModels },
     );
     b.start();
@@ -156,7 +156,7 @@ describe('codex backend', () => {
     const { spawn, calls } = fakeSpawner();
     const b = createCodexBackend(
       host,
-      { requestedSid: null, requestedModel: null },
+      { requestedSid: null, requestedModel: null, mode: 'deep' },
       { spawn, listModels: noModels },
     );
     b.start();
@@ -216,7 +216,7 @@ describe('codex backend', () => {
     const { spawn, calls } = fakeSpawner();
     const b = createCodexBackend(
       host,
-      { requestedSid: null, requestedModel: null },
+      { requestedSid: null, requestedModel: null, mode: 'deep' },
       {
         spawn,
         listModels: noModels,
@@ -270,12 +270,154 @@ describe('codex backend', () => {
     expect(readLog('old-thread')).toEqual([]); // old file migrated away
   });
 
+  it('prepends muxpad instructions to the FIRST message of a NEW session only', async () => {
+    writeFileSync(join(dataDir, 'agent-instructions.md'), 'use muxpad publish\n');
+    const { b, calls } = await boot();
+    b.send('hi');
+    await tick();
+    // Fresh session → delimited instructions ride the prompt arg…
+    expect(calls[1]!.args.at(-1)).toBe(
+      '<muxpad-instructions>\nuse muxpad publish\n</muxpad-instructions>\n\nhi',
+    );
+    const turn = calls[1]!.child;
+    line(turn, { type: 'thread.started', thread_id: 'thr-instr' });
+    line(turn, { type: 'item.completed', item: { type: 'agent_message', text: 'ok' } });
+    line(turn, { type: 'turn.completed' });
+    closeChild(turn, 0);
+    await tick();
+    // …but the muxpad transcript records the RAW prompt (chat stays clean).
+    expect((readLog('thr-instr')[0] as { text: string }).text).toBe('hi');
+    // The next turn RESUMES the thread → no re-injection.
+    b.send('again');
+    await tick();
+    expect(calls[2]!.args.slice(0, 3)).toEqual(['exec', 'resume', 'thr-instr']);
+    expect(calls[2]!.args.at(-1)).toBe('again');
+  });
+
+  it('missing instructions file → raw prompt, no error', async () => {
+    const { b, calls } = await boot();
+    b.send('plain');
+    await tick();
+    expect(calls[1]!.args.at(-1)).toBe('plain');
+  });
+
+  // ── ⚡ Do mode ────────────────────────────────────────────────────────────
+  // Same injection mechanism as the universal instructions (codex exec has no
+  // append-instructions surface), so it rides the same first-message preamble.
+
+  async function bootMode(mode: 'do' | 'deep', requestedSid: string | null = null) {
+    const { host, frames } = makeHost();
+    const { spawn, calls } = fakeSpawner();
+    const b = createCodexBackend(
+      host,
+      { requestedSid, requestedModel: null, mode },
+      { spawn, listModels: noModels },
+    );
+    b.start();
+    await tick();
+    closeChild(calls[0]!.child, 0);
+    await tick();
+    return { b, host, frames, calls };
+  }
+
+  it('do mode prepends the overlay after the instructions on a NEW session', async () => {
+    writeFileSync(join(dataDir, 'agent-instructions.md'), 'use muxpad publish\n');
+    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
+    const { b, calls } = await bootMode('do');
+    b.send('hi');
+    await tick();
+    expect(calls[1]!.args.at(-1)).toBe(
+      '<muxpad-instructions>\nuse muxpad publish\n</muxpad-instructions>\n\n' +
+        '<muxpad-mode>\nbe terse\n</muxpad-mode>\n\nhi',
+    );
+  });
+
+  it('deep mode injects NOTHING extra — byte-identical to the pre-mode prompt', async () => {
+    writeFileSync(join(dataDir, 'agent-instructions.md'), 'use muxpad publish\n');
+    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
+    const { b, calls } = await bootMode('deep');
+    b.send('hi');
+    await tick();
+    expect(calls[1]!.args.at(-1)).toBe(
+      '<muxpad-instructions>\nuse muxpad publish\n</muxpad-instructions>\n\nhi',
+    );
+  });
+
+  it('do mode with no do-mode.md → nothing injected, no error', async () => {
+    const { b, calls } = await bootMode('do');
+    b.send('hi');
+    await tick();
+    expect(calls[1]!.args.at(-1)).toBe('hi');
+  });
+
+  it('a mid-session switch rides ONE <muxpad-mode> note on the next resumed turn', async () => {
+    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
+    const { b, calls } = await bootMode('deep');
+    // Establish the thread so subsequent turns resume it.
+    b.send('first');
+    await tick();
+    const t1 = calls[1]!.child;
+    line(t1, { type: 'thread.started', thread_id: 'thr-mode' });
+    line(t1, { type: 'turn.completed' });
+    closeChild(t1, 0);
+    await tick();
+
+    b.setMode('do');
+    b.send('second');
+    await tick();
+    expect(calls[2]!.args.slice(0, 3)).toEqual(['exec', 'resume', 'thr-mode']);
+    expect(calls[2]!.args.at(-1)).toBe(
+      '<muxpad-mode>\nThe user switched this session to ⚡ Do mode. Follow this contract from now on:\n\nbe terse\n</muxpad-mode>\n\nsecond',
+    );
+    const t2 = calls[2]!.child;
+    line(t2, { type: 'turn.completed' });
+    closeChild(t2, 0);
+    await tick();
+
+    // ONE-TIME: the turn after it is a bare prompt again.
+    b.send('third');
+    await tick();
+    expect(calls[3]!.args.at(-1)).toBe('third');
+  });
+
+  it('re-setting the SAME mode is a no-op (no spurious note)', async () => {
+    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
+    const { b, calls } = await bootMode('deep');
+    b.send('first');
+    await tick();
+    const t1 = calls[1]!.child;
+    line(t1, { type: 'thread.started', thread_id: 'thr-same' });
+    line(t1, { type: 'turn.completed' });
+    closeChild(t1, 0);
+    await tick();
+    b.setMode('deep'); // already deep — the server sends this on every hello
+    b.send('second');
+    await tick();
+    expect(calls[2]!.args.at(-1)).toBe('second');
+  });
+
+  it('switching back to deep revokes the contract in-band', async () => {
+    const { b, calls } = await bootMode('do');
+    b.send('first');
+    await tick();
+    const t1 = calls[1]!.child;
+    line(t1, { type: 'thread.started', thread_id: 'thr-rev' });
+    line(t1, { type: 'turn.completed' });
+    closeChild(t1, 0);
+    await tick();
+    b.setMode('deep');
+    b.send('second');
+    await tick();
+    expect(calls[2]!.args.at(-1)).toMatch(/^<muxpad-mode>\n.*no longer applies/s);
+    expect(calls[2]!.args.at(-1)).toMatch(/second$/);
+  });
+
   it('advertises its model list + default in the status frame (the picker)', async () => {
     const { host, frames } = makeHost();
     const { spawn, calls } = fakeSpawner();
     const b = createCodexBackend(
       host,
-      { requestedSid: null, requestedModel: null },
+      { requestedSid: null, requestedModel: null, mode: 'deep' },
       {
         spawn,
         listModels: async () => ({
