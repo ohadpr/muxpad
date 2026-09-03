@@ -78,6 +78,92 @@ export const MAX_PANE_SUBAGENTS = 32;
 const OVERFLOW_WARN_MS = 60_000;
 
 /**
+ * How long a roster entry may show NO forward progress before the server
+ * retires it on its own authority.
+ *
+ * Deliberately generous. A healthy subagent bumps `steps` on every tool call,
+ * so minutes of total silence is already abnormal — but "abnormal" is not
+ * "dead", and a single very long tool call (a full test suite, a slow network
+ * fetch) must not cost a live agent its row. 20 minutes is far past any real
+ * tool call and far short of the multi-hour ghosts this exists to kill.
+ */
+export const SUBAGENT_STALL_MS = 20 * 60_000;
+
+/** How often the stall sweep runs. Cheap: a walk of a handful of small maps. */
+const STALL_SWEEP_MS = 60_000;
+
+/**
+ * Retire roster entries that have stopped making progress.
+ *
+ * WHY THE SERVER NEEDS ITS OWN COPY OF THIS. The runner already ends its
+ * subagents on four paths, and does it well — but a runner only picks up that
+ * code when its PANE RESPAWNS, and panes live for weeks. A pre-durable runner
+ * emits no terminal frame at all, so before this the server's mirror had
+ * exactly one escape: {@link evictOverflowEntries}, which is a bound (32), not
+ * a policy. A pane leaking 2 ghosts never reaches 32 and reads `working`
+ * forever. (Live pane, 2026-09: 2 ghosts, 13-day-old runner, an hour after
+ * both processes were killed.)
+ *
+ * WHY NOT JUST TIME-SINCE-LAST-FRAME. The runner's 5s keepalive re-announces
+ * every live entry, ghosts included, so arrival time says nothing. What the
+ * keepalive deliberately does NOT do is invent progress: it re-sends the last
+ * REAL payload unchanged. So the signal is CONTENT CHANGE, not arrival —
+ * `steps` advancing is a subagent doing something, and a frozen `steps` across
+ * 20 minutes of heartbeats is a subagent that no longer exists.
+ *
+ * Freshness per entry, most to least trustworthy:
+ *   1. `seenAt` — the runner's own last-real-activity stamp. Authoritative.
+ *   2. `changedAt` — when the SERVER last saw this entry's payload change.
+ *      The fallback for pre-`seenAt` runners, which is exactly the population
+ *      this function exists for.
+ *
+ * Reaping is not destructive and not final: nothing is killed, only unlisted.
+ * If a reaped subagent turns out to be alive, its very next progress frame
+ * re-inserts the row. A false reap costs one stale row for one tick; a missed
+ * reap costs a pane that reads `working` until someone notices and respawns it.
+ */
+export function reapStalledEntries(
+  subagents: Map<string, SubagentProgress>,
+  changedAt: Map<string, number>,
+  now: number,
+  staleMs: number = SUBAGENT_STALL_MS,
+): string[] {
+  const dropped: string[] = [];
+  for (const [id, p] of subagents) {
+    const fresh = p.seenAt ?? changedAt.get(id);
+    // No stamp of either kind: adopt `now` so the entry gets a full window
+    // from when we first noticed it, rather than being reaped on sight.
+    if (fresh === undefined) {
+      changedAt.set(id, now);
+      continue;
+    }
+    if (now - fresh > staleMs) dropped.push(id);
+  }
+  for (const id of dropped) {
+    subagents.delete(id);
+    changedAt.delete(id);
+  }
+  return dropped;
+}
+
+/**
+ * Did this frame carry real news about the subagent, or is it the keepalive
+ * re-sending what we already had? Only the former restarts the stall clock.
+ */
+export function isMaterialProgress(
+  prev: SubagentProgress | undefined,
+  next: SubagentProgress,
+): boolean {
+  if (!prev) return true;
+  return (
+    prev.steps !== next.steps ||
+    prev.lastTool !== next.lastTool ||
+    prev.label !== next.label ||
+    prev.seenAt !== next.seenAt
+  );
+}
+
+/**
  * Keep a pane's server-side roster under {@link MAX_PANE_SUBAGENTS} by dropping
  * the oldest INSERTIONS (Map iteration order). Returns the ids evicted so the
  * caller can log; empty in every healthy case.
@@ -315,6 +401,13 @@ export function attachWsServer(deps: {
     pendingQuestion: { qid: string; questions: AgentQuestion[] } | null;
     /** Latest per-task subagent progress for mid-turn (re)connects. */
     subagents: Map<string, SubagentProgress>;
+    /**
+     * When each roster entry's payload last CHANGED, by toolUseId. Not when a
+     * frame last arrived — the 5s keepalive re-sends ghosts unchanged, so
+     * arrival time cannot tell a live subagent from a dead one. Feeds
+     * {@link reapStalledEntries} for runners too old to send `seenAt`.
+     */
+    subagentChangedAt: Map<string, number>;
     /** Rate limit for the roster-overflow warning (see MAX_PANE_SUBAGENTS). */
     lastOverflowWarnAt: number;
     /** Latest session status (model, context fill, model list) for hellos. */
@@ -619,6 +712,30 @@ export function attachWsServer(deps: {
   };
   const respawnSweep = setInterval(() => void sweepDeadRunners(), RESPAWN_SWEEP_MS);
 
+  /**
+   * Unlist subagents that stopped making progress. See {@link reapStalledEntries}
+   * for why the server needs this even though the runner ends its own agents:
+   * runners are version-skewed by design and old ones never send a terminal
+   * frame, so without this a leaked entry outlives every process involved.
+   */
+  const sweepStalledSubagents = (): void => {
+    const now = Date.now();
+    for (const [paneId, conn] of agentRunners) {
+      const reaped = reapStalledEntries(conn.subagents, conn.subagentChangedAt, now);
+      if (reaped.length === 0) continue;
+      // Must look like an end to every client, or the rows linger until the
+      // next 10s session poll happens to notice (same contract as eviction).
+      for (const id of reaped)
+        bcastToPane(paneId, { t: 'subagent', progress: { toolUseId: id, steps: 0, done: true } });
+      syncSubagentCount(paneId);
+      console.warn(
+        `[ws] pane ${paneId}: retired ${reaped.length} subagent row(s) with no progress in ${Math.round(SUBAGENT_STALL_MS / 60_000)}m. Either a runner end-path leaked (stale runner build?) or the work really is over.`,
+      );
+    }
+  };
+  const stallSweep = setInterval(sweepStalledSubagents, STALL_SWEEP_MS);
+  stallSweep.unref?.();
+
   // -------------------------------------------------------------------------
   // Server-owned send queue. A user message that can't run right now (agent
   // mid-turn, or its runner between connections) is persisted to `queue` and
@@ -896,6 +1013,7 @@ export function attachWsServer(deps: {
           turnActive: false,
           pendingQuestion: null,
           subagents: new Map(),
+          subagentChangedAt: new Map(),
           lastOverflowWarnAt: 0,
           status: null,
           lastSendAt: 0,
@@ -1131,8 +1249,17 @@ export function attachWsServer(deps: {
             bcast({ t: 'question-done', qid: frame.qid });
           } else if (frame.t === 'subagent') {
             if (!frame.progress || typeof frame.progress.toolUseId !== 'string') return;
-            if (frame.progress.done) conn.subagents.delete(frame.progress.toolUseId);
-            else conn.subagents.set(frame.progress.toolUseId, frame.progress);
+            if (frame.progress.done) {
+              conn.subagents.delete(frame.progress.toolUseId);
+              conn.subagentChangedAt.delete(frame.progress.toolUseId);
+            } else {
+              // Stamp only on real news. A keepalive re-announce is byte-identical
+              // to what we hold, and must NOT restart the stall clock — otherwise
+              // a ghost keeps itself alive with the runner's own heartbeat.
+              if (isMaterialProgress(conn.subagents.get(frame.progress.toolUseId), frame.progress))
+                conn.subagentChangedAt.set(frame.progress.toolUseId, Date.now());
+              conn.subagents.set(frame.progress.toolUseId, frame.progress);
+            }
             // Independent backstop on the SERVER's copy. The runner caps its own
             // roster, but runners are version-skewed by design — they only pick
             // up new code when their pane respawns, and a pre-durable runner
@@ -1141,6 +1268,7 @@ export function attachWsServer(deps: {
             // is a bound, never a policy: it drops the OLDEST insertion, so a
             // leak can no longer render an absurd number in the status rail.
             const evicted = evictOverflowEntries(conn.subagents);
+            for (const id of evicted) conn.subagentChangedAt.delete(id);
             // An eviction must LOOK like an end to every client, or the rows
             // linger until the next 10s session poll happens to notice.
             for (const id of evicted)
@@ -1215,6 +1343,7 @@ export function attachWsServer(deps: {
           // re-announces its live roster in onConnected, so a ws blip costs at
           // most a blink, not a permanently lost subagent.)
           conn.subagents.clear();
+          conn.subagentChangedAt.clear();
           // Registry-derived, and this conn has just left the registry — so
           // this is a zero, by the same rule as everywhere else.
           syncSubagentCount(paneId);
@@ -1626,6 +1755,7 @@ export function attachWsServer(deps: {
       new Promise<void>((resolve) => {
         clearInterval(heartbeat);
         clearInterval(respawnSweep);
+        clearInterval(stallSweep);
         for (const paneId of [...probation.keys()]) clearProbation(paneId);
         for (const client of wss.clients) {
           try {

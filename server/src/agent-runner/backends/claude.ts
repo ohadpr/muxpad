@@ -80,6 +80,7 @@ export function claudeSystemPromptOption(
 
 const TASK_LIFECYCLE_SUBTYPES = new Set([
   'task_started',
+  'task_progress',
   'task_notification',
   'task_updated',
   'background_tasks_changed',
@@ -95,39 +96,75 @@ export interface TaskLifecycleMessage {
   task_id?: string;
   tool_use_id?: string;
   tasks?: Array<{ task_id: string }>;
-  patch?: { status?: string };
+  patch?: { status?: string; is_backgrounded?: boolean };
 }
 
 /** Task ids whose `task_updated` means the task is OVER. */
 const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'killed']);
 
 /**
+ * Is this launch a BACKGROUND one? Read off the launching tool_use INPUT, which
+ * is where the SDK actually states it.
+ *
+ * This has to come from a typed field, not from prose. The tool_result texts do
+ * NOT distinguish the two reliably: probe-verified (0.3.220), a FOREGROUND
+ * Agent's completion carries its own `agentId: <task_id>` trailer, and its body
+ * is the subagent's report — which, in a codebase whose agents write about
+ * launching agents, can say "async agent launched" as easily as the real ack
+ * does. Classifying on that text is how a foreground row gets marked background
+ * and becomes unreachable by every end-path that applies to it.
+ *
+ * Default when the flag is absent: sdk-tools.d.ts says of `Agent`'s
+ * `run_in_background?: boolean` — "Agents run in the background by default; you
+ * will be notified when one completes." The legacy `Task` name carries no such
+ * documented default here, so an unflagged `Task` is treated as foreground.
+ */
+export function isBackgroundLaunch(name: string, input: unknown): boolean {
+  const flag = (input as { run_in_background?: unknown } | null | undefined)?.run_in_background;
+  if (typeof flag === 'boolean') return flag;
+  return name === 'Agent';
+}
+
+/** The machine trailer the SDK appends to a FINISHED agent's tool_result
+ *  (`<usage>subagent_tokens: … tool_uses: … duration_ms: …</usage>`).
+ *  A launch ack never carries one — probe-verified both ways. */
+const COMPLETION_TRAILER_RE = /<usage>[\s\S]*?<\/usage>/;
+
+/** Is this tool_result the immediate "launched" ACK rather than a completion? */
+export function isLaunchAck(text: string): boolean {
+  return !COMPLETION_TRAILER_RE.test(text) && LAUNCH_ACK_RE.test(text);
+}
+
+/**
  * The task id a BACKGROUND launch ack carries, or null.
  *
- * Probe-verified (SDK 0.3.220, six background launches across two runs): the
- * top-level `tool_result` for a `run_in_background` Task/Agent call is always
- * shaped
+ * Probe-verified (SDK 0.3.220, seventeen background launches across four runs,
+ * counting the repro harness's): the top-level `tool_result` for a
+ * `run_in_background` Agent call is always shaped
  *
  *     Async agent launched successfully. (…internal metadata…)
  *     agentId: ae957386e1ac03ddb (internal ID - … Use SendMessage with to: '…')
+ *     The agent is working in the background. …
  *
  * This is the ONLY tool_use_id ↔ task_id binding that rides in the conversation
  * itself. The `system/task_started` binding is the SDK's, and its `tool_use_id`
  * is declared OPTIONAL — an omitted one leaves the entry with no task id, and an
  * entry with no task id is invisible to BOTH background end-paths
- * (`reconcileBackground` skips it, `doneByTaskId` cannot match it). The ack has
- * no such hole, and it doubles as proof that the launch was a BACKGROUND one.
+ * (`reconcileBackground` skips it, `doneByTaskId` cannot match it).
  */
 export function launchAckTaskId(text: string): string | null {
-  if (!LAUNCH_ACK_RE.test(text)) return null;
+  if (!isLaunchAck(text)) return null;
   return /\bagentId:\s*([A-Za-z0-9_-]+)/.exec(text)?.[1] ?? null;
 }
 
 export function applyTaskLifecycle(roster: SubagentRoster, msg: TaskLifecycleMessage): void {
   switch (msg.subtype) {
+    // Both bind task id ↔ launching tool_use. Ids we never launched (nested
+    // agents, background Bash) are ignored inside bindTask. `task_progress` is
+    // here purely as a SECOND chance at the binding: it carries the same pair,
+    // and `task_started`'s `tool_use_id` is optional.
     case 'task_started':
-      // Binds task id ↔ launching tool_use. Ids we never launched (nested
-      // agents, background Bash) are ignored inside bindTask.
+    case 'task_progress':
       if (msg.tool_use_id && msg.task_id) roster.bindTask(msg.tool_use_id, msg.task_id);
       break;
     case 'task_notification':
@@ -140,10 +177,19 @@ export function applyTaskLifecycle(roster: SubagentRoster, msg: TaskLifecycleMes
     case 'task_updated': {
       if (!msg.task_id) break;
       const status = msg.patch?.status;
-      if (status && TERMINAL_TASK_STATUSES.has(status)) roster.doneByTaskId(msg.task_id);
+      if (status && TERMINAL_TASK_STATUSES.has(status)) {
+        roster.doneByTaskId(msg.task_id);
+        break;
+      }
       // A paused task may leave the live set without dying — see pauseTask.
-      else if (status === 'paused') roster.pauseTask(msg.task_id);
+      if (status === 'paused') roster.pauseTask(msg.task_id);
       else if (status === 'running') roster.resumeTask(msg.task_id);
+      // …and so does one that has just been UN-backgrounded. The level doc lists
+      // "a foreground agent being backgrounded" as a membership change, so the
+      // inverse drops the task from the live set while the agent runs on.
+      // Absence must not kill it.
+      if (msg.patch?.is_backgrounded === false) roster.pauseTask(msg.task_id);
+      else if (msg.patch?.is_backgrounded === true) roster.resumeTask(msg.task_id);
       break;
     }
     case 'background_tasks_changed':
@@ -198,6 +244,10 @@ export function applySubagentMessage(roster: SubagentRoster, msg: SubagentStream
     return;
   }
 
+  // The SDK declares `parent_tool_use_id: string | null` on every message that
+  // has one — never optional. Match `null` exactly rather than "not a string",
+  // so a degraded frame that omits the field is ignored instead of silently
+  // treated as top level (where it could both create and retire rows).
   const parent = msg.parent_tool_use_id;
 
   // Subagent traffic (parent set): live progress on the parent Task row.
@@ -222,10 +272,13 @@ export function applySubagentMessage(roster: SubagentRoster, msg: SubagentStream
     return;
   }
 
+  if (parent !== null) return;
+
   if (msg.type === 'assistant') {
     // A Task/Agent call is a subagent LAUNCH. Roster it here, at the parent's
-    // tool_use: this is the only message carrying the description, and a
-    // background subagent's first child message can be a minute away.
+    // tool_use: this is the only message carrying the description AND the
+    // run_in_background flag, and a background subagent's first child message
+    // can be a minute away.
     for (const b of blocksOf(msg)) {
       if (
         b.type === 'tool_use' &&
@@ -233,7 +286,7 @@ export function applySubagentMessage(roster: SubagentRoster, msg: SubagentStream
         isAgentLaunchTool(b.name) &&
         typeof b.id === 'string'
       ) {
-        roster.launch(b.id, subagentLabel(b.input) || 'subagent');
+        roster.launch(b.id, subagentLabel(b.input) || 'subagent', isBackgroundLaunch(b.name, b.input));
       }
     }
     return;
@@ -247,16 +300,20 @@ export function applySubagentMessage(roster: SubagentRoster, msg: SubagentStream
     //     subagent's completion).
     //  2. the `<task-notification>` the harness injects when a BACKGROUND
     //     subagent finishes, which carries the launching tool-use-id.
-    // A background launch's immediate ack is NEITHER: it is the one place the
-    // conversation states, unambiguously and without an optional field, that
-    // this tool_use IS a background task and which task id it owns.
+    //
+    // A background launch's immediate ack is NEITHER — but telling it apart from
+    // a completion cannot rest on the launch phrase alone. Probe-verified
+    // (0.3.220): a FOREGROUND Agent's completion carries its own `agentId:`
+    // trailer and its body is the subagent's report, which in this codebase can
+    // say "async agent launched" verbatim. What separates them is the machine
+    // `<usage>` trailer only a FINISHED agent gets — see isLaunchAck.
     for (const b of blocksOf(msg)) {
       if (b.type === 'tool_result' && typeof b.tool_use_id === 'string') {
         if (!roster.has(b.tool_use_id)) continue;
         const text = blockText(b.content);
-        if (LAUNCH_ACK_RE.test(text))
-          roster.bindBackgroundTask(b.tool_use_id, launchAckTaskId(text));
-        else roster.done(b.tool_use_id);
+        const taskId = launchAckTaskId(text);
+        if (taskId) roster.bindBackgroundTask(b.tool_use_id, taskId);
+        else if (!isLaunchAck(text)) roster.done(b.tool_use_id);
       } else if (b.type === 'text' && typeof b.text === 'string') {
         const id = taskNotificationToolUseId(b.text);
         if (id) roster.done(id);
