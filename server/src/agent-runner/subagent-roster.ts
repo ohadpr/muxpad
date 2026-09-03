@@ -304,12 +304,17 @@ export class SubagentRoster {
    * never in the level set, so not one end-path can reach it. Called at the
    * turn `result`, where "it produced nothing at all" is finally decidable.
    *
-   * This is NOT the turn-clearing regression: an agent that actually started
-   * has a bound task id (background) or steps (foreground), and is untouched.
+   * This is NOT the turn-clearing regression: an agent that actually started has
+   * a bound task id, an ack marking it background, or steps — and is untouched.
+   * The `background` check is load-bearing on its own: an ack whose text carried
+   * no `agentId` leaves an entry that is known-background but unbound, and a
+   * background agent can go a long time before its first child message (P1: 44s),
+   * so at the launching turn's `result` it looks exactly like a launch that never
+   * ran.
    */
   retireUnstarted(): void {
     for (const p of [...this.entries.values()]) {
-      if (!p.taskId && p.steps === 0) this.done(p.toolUseId);
+      if (!p.taskId && !p.background && p.steps === 0) this.done(p.toolUseId);
     }
   }
 
@@ -334,8 +339,9 @@ export class SubagentRoster {
    * that a missed edge cannot wedge — an entry we have SEEN in this set and
    * that has now left it is finished, whatever else did or didn't arrive.
    *
-   * Only entries observed as background are eligible: a foreground Task never
-   * appears here, and sweeping it on absence would evict a live agent.
+   * Only entries KNOWN to be background are eligible — from their launch ack, or
+   * from a live sighting here. A foreground Task never appears in this payload,
+   * and sweeping it on absence would evict a live agent.
    *
    * It resurrects too. A task id that is live again but has no row is a RESUMED
    * agent — the level signal is the only place that shows up, since the resume

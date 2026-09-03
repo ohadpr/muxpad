@@ -390,6 +390,18 @@ describe('SubagentRoster — reconciliation against the SDK level signal', () =>
     expect(roster.size).toBe(0);
   });
 
+  it('…and neither is one whose ack carried no agentId at all', () => {
+    // Unbound AND stepless at the launching turn's result — indistinguishable
+    // from a retracted launch except for the one thing the ack told us.
+    const { roster } = make();
+    roster.launch('tu_1', 'worker');
+    roster.bindBackgroundTask('tu_1', null);
+    roster.retireUnstarted();
+    expect(roster.size).toBe(1);
+    roster.reconcileBackground([]);
+    expect(roster.size).toBe(0);
+  });
+
   it('a PAUSE suspends the sweep without forgetting the entry is background', () => {
     // A paused task (rate-limit parking) may leave the live set while still
     // being a live agent, so absence must not kill it. But the suspension has to
