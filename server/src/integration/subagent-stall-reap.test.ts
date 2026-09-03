@@ -1,4 +1,4 @@
-// THE STALL REAPER'S PRODUCTION PATH (9a9f191), end to end.
+// THE STALL REAPER'S PRODUCTION PATH, end to end.
 //
 // subagent-stall.test.ts calls `reapStalledEntries` and `isMaterialProgress`
 // directly. Nothing has ever run the layer they live inside: the 60s
@@ -20,12 +20,24 @@
 // left REAL so socket I/O and the harness's own awaits still work; only
 // `Date`, `setInterval` and `clearInterval` are faked.
 //
-// WHAT IT FINDS. The claimed property holds at the instant of the sweep (case
-// 1). It does NOT hold durably for any runner that keepalives, which is every
-// runner built since 2026-08-30 (cases 3 and 4): the reap deletes the entry,
-// which throws away the very state `isMaterialProgress` needs, so the next
-// keepalive re-announce is indistinguishable from a first sighting and the row
-// comes straight back. See the comments on those two cases.
+// WHAT IT FOUND. Against the reaper as first written (9a9f191) the claimed
+// property held only at the INSTANT of the sweep. For any runner that
+// keepalives — every runner built since 2026-08-30 — the reap deleted the entry
+// and with it the state `isMaterialProgress` needs, so the runner's next
+// re-announce read as a first sighting and the row came straight back: a
+// pre-`seenAt` ghost bought a whole fresh 20-minute lease on every
+// resurrection, and a `seenAt`-bearing one (stale on arrival) was reaped again
+// by every single sweep, flapping the count and spraying a bogus `done` a
+// minute, forever. The tombstone (fe4d544) made the reap stick, and scoping the
+// sweep to rows with no `seenAt` (ff9ac6f) kept it from durably HIDING a merely
+// quiet live agent. This file is the harness that found all of it; it now pins
+// the settled behaviour, which is:
+//
+//   pre-`seenAt` row, 20m without a content change  → retired, once, and it
+//                                                     stays retired under the
+//                                                     runner's own echoes
+//   …then one materially different frame            → back, with a fresh window
+//   `seenAt`-bearing row, however quiet             → never touched
 
 import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -252,8 +264,9 @@ describe('subagent stall reaper — the production sweep, end to end', () => {
     // Past the window. The pre-keepalive runner says nothing further.
     await fx.advance(3 * MINUTE);
 
-    // 1. The ghost is gone and 2. the live row survived — its last real
-    //    activity is ~7 minutes old, well inside the window.
+    // 1. The ghost is gone and 2. the live row survived — it is doubly safe,
+    //    both because its last real activity is ~7 minutes old and because a
+    //    `seenAt`-bearing row is out of scope entirely (ff9ac6f, last case).
     expect(fx.count()).toBe(1);
     // 3. …and the one row left is the live one, not the other way round.
     expect(donesFor(fx, 'toolu_ghost')).toHaveLength(1);
@@ -263,37 +276,44 @@ describe('subagent stall reaper — the production sweep, end to end', () => {
     expect(fx.status()).toBe('working');
   }, 60_000);
 
-  it('a reaped row that resumes real progress comes straight back', async () => {
-    // The inverse safety property the commit trades on: "reaping unlists, it
-    // never kills; a live agent's next frame re-inserts its row". Here the
-    // reaped row is a genuinely live subagent that was parked in one long tool
-    // call — the false-reap case — and it must be able to return.
+  it('a reaped row that resumes real progress comes back, with a fresh window', async () => {
+    // THE INVERSE SAFETY PROPERTY, and the thing that makes reaping a row that
+    // MIGHT be alive defensible: reaping unlists, it never kills, and one
+    // materially different frame restores the row.
+    //
+    // It has to be a pre-`seenAt` row, since ff9ac6f scoped the sweep to those
+    // (the last case in this file is why). So: a legacy runner whose subagent
+    // spends 22 minutes inside one tool call, echoing the same payload, and
+    // then comes back with its step count moved.
     const fx = await boot();
     const { runner } = fx;
-    const SLOW = liveTask('task_slow', 'slow worker');
+    const slow: SubagentProgress = {
+      toolUseId: 'toolu_slow',
+      steps: 3,
+      label: 'slow worker',
+      lastTool: 'Bash: pnpm test',
+    };
+    const announce = (over: Partial<SubagentProgress> = {}) =>
+      runner.emitRaw({ t: 'subagent', progress: { ...slow, ...over } });
 
-    await runner.feed([
-      sdk.init(),
-      ...backgroundLaunch('toolu_slow', 'task_slow', 'slow worker', [SLOW]),
-      sdk.result('success'),
-    ]);
+    await runner.feed([sdk.init(), sdk.result('success')]);
+    announce();
+    await fx.flush();
     expect(fx.count()).toBe(1);
 
-    // It is inside a single 22-minute tool call: the roster's keepalive keeps
-    // re-announcing it (unchanged, with its original seenAt), but nothing about
-    // it changes, so the server reaps it.
-    await fx.advance(SUBAGENT_STALL_MS + 2 * MINUTE);
-    expect(donesFor(fx, 'toolu_slow').length).toBeGreaterThanOrEqual(1);
+    // 22 minutes, re-announced along the way (once a minute here — the full 5s
+    // cadence is exercised in the next describe, and the echo RATE is not what
+    // the reaper reads).
+    for (let m = 0; m < 22; m++) {
+      announce();
+      await fx.advance(MINUTE);
+    }
+    expect(donesFor(fx, 'toolu_slow')).toHaveLength(1);
+    expect(fx.count()).toBe(0);
 
-    // The tool call returns and the subagent speaks again. (The row is already
-    // physically back by now — the keepalive alone re-inserts it, see the
-    // second describe — so what real progress has to buy is not PRESENCE but a
-    // restarted stall clock. That is what the rest of this case measures.)
-    await runner.feed([sdk.childActivity('toolu_slow', 'Bash', 'sleep 5')]);
-    // The roster throttles progress frames to one per 500ms and the keepalive
-    // has just sent one on this same faked millisecond, so let the next tick
-    // carry the update out.
-    await fx.advance(KEEPALIVE_MS);
+    // The tool call returns and the subagent speaks again.
+    announce({ steps: 4, lastTool: 'Read: notes.md' });
+    await fx.flush();
     expect(fx.count()).toBe(1);
     expect(fx.status()).toBe('working');
     const back = fx.chat
@@ -301,115 +321,129 @@ describe('subagent stall reaper — the production sweep, end to end', () => {
       .map((f) => f.progress as SubagentProgress)
       .filter((p) => p.toolUseId === 'toolu_slow' && !p.done)
       .pop();
-    expect(back?.steps).toBeGreaterThan(0);
-    expect(back?.lastTool).toBe('Bash: sleep 5');
+    expect(back?.steps).toBe(4);
+    expect(back?.lastTool).toBe('Read: notes.md');
 
-    // Fifteen more minutes of sweeps and keepalives with no further reap: the
-    // ONE real frame restarted the window, and the row is back for good rather
-    // than being retired again on the next tick (which is precisely what the
-    // keepalive-only resurrection in the next describe does get).
-    const reapsBefore = donesFor(fx, 'toolu_slow').length;
-    await fx.advance(15 * MINUTE);
-    expect(donesFor(fx, 'toolu_slow')).toHaveLength(reapsBefore);
+    // …and the restored row owns a FRESH window: fifteen more minutes of echoes
+    // at the new payload, no second reap. (The frame lifted the tombstone and
+    // re-stamped `changedAt` — a row that came back only to be retired again on
+    // the next tick would be no better than the flapping this replaced.)
+    for (let m = 0; m < 15; m++) {
+      announce({ steps: 4, lastTool: 'Read: notes.md' });
+      await fx.advance(MINUTE);
+    }
+    expect(donesFor(fx, 'toolu_slow')).toHaveLength(1);
     expect(fx.count()).toBe(1);
-  }, 60_000);
+  }, 120_000);
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// WHAT THE REAPER DOES NOT DO.
+// DOES THE REAP STICK?
 //
-// `reapStalledEntries` deletes the entry from `conn.subagents` AND its stamp
-// from `conn.subagentChangedAt`. That is the same state `isMaterialProgress`
-// reads to tell a keepalive re-announce from real news — so once a row is
-// reaped, its own keepalive is news by definition (`if (!prev) return true`),
-// and ws.ts re-inserts it with a fresh `changedAt`.
+// The reaper as first written (9a9f191) could not make it stick, and these two
+// cases are what found that. Reaping deleted the entry from `conn.subagents`
+// AND its stamp from `conn.subagentChangedAt` — the same state
+// `isMaterialProgress` reads to tell a keepalive echo from real news. With the
+// row gone, its own keepalive re-announce became news by definition
+// (`if (!prev) return true`), so ws.ts re-inserted it within one 5s tick, the
+// next sweep reaped it again, and the count flapped between N and N+1 forever
+// while every chat client took a bogus `done` a minute. Measured here, against
+// that build: the pre-`seenAt` ghost bought an entire FRESH 20-minute lease on
+// every resurrection, and the modern ghost (frozen `seenAt`, so stale on
+// arrival) produced one reap per sweep indefinitely. The reaper worked only for
+// runners old enough to have no keepalive at all — the population that ages out
+// and the one case 1 above covers.
 //
-// Every runner built since 2026-08-30 (cfd6fc2) re-announces every live roster
-// entry every 5 seconds, ghosts included — ws.ts's own comment says so. So for
-// every ghost a running runner is still holding, the reap is undone within one
-// keepalive tick. The two cases below measure it.
+// The fix (fe4d544) is a TOMBSTONE: the payload a row died with, kept on the
+// conn, with the insert path ignoring an echo of it and the tombstone lifting
+// on real progress. The first case below pins that and fails against 9a9f191.
+// The second pins ff9ac6f's scope decision, which the tombstone forced: a
+// suppression that sticks is also a suppression that can HIDE a live agent, so
+// the sweep no longer touches a row whose runner is new enough to say `seenAt`.
 // ───────────────────────────────────────────────────────────────────────────
-describe('subagent stall reaper — the keepalive undoes the reap', () => {
-  it('a pre-seenAt ghost returns within 5s and buys a FULL fresh 20m lease', async () => {
+describe('subagent stall reaper — the reap survives the keepalive', () => {
+  it('a pre-seenAt ghost stays retired under a keepalive that never stops', async () => {
     const fx = await boot();
     const { runner } = fx;
     const ghost: SubagentProgress = { toolUseId: 'toolu_ghost', steps: 7, label: 'ghost worker' };
-    const announce = () => runner.emitRaw({ t: 'subagent', progress: { ...ghost } });
+    const announce = (over: Partial<SubagentProgress> = {}) =>
+      runner.emitRaw({ t: 'subagent', progress: { ...ghost, ...over } });
 
     await runner.feed([sdk.init(), sdk.result('success')]);
     announce();
     await fx.flush();
     expect(fx.count()).toBe(1);
 
-    // Same as case 1, except the runner keeps keepaliving past the reap.
+    // Case 1's ghost, except the runner keeps re-announcing it past the reap.
     for (let m = 0; m < 22; m++) {
       for (let k = 0; k < MINUTE / KEEPALIVE_MS; k++) {
         announce();
         await fx.advance(KEEPALIVE_MS);
       }
     }
-    // The sweep DID fire and DID retire it…
-    expect(donesFor(fx, 'toolu_ghost').length).toBeGreaterThanOrEqual(1);
-    // …and it is back anyway. The pane reads working on a subagent that has not
-    // moved in 22 minutes — the exact state the commit set out to end.
-    expect(fx.count()).toBe(1);
-    expect(fx.status()).toBe('working');
+    // Reaped ONCE — not once per sweep — and it is still gone with the echoes
+    // still arriving.
+    expect(donesFor(fx, 'toolu_ghost')).toHaveLength(1);
+    expect(fx.count()).toBe(0);
+    expect(fx.status()).not.toBe('working');
 
-    // And it is not a flicker: the re-insert stamped a NEW changedAt, so the
-    // ghost now owns another entire 20-minute window. Nineteen more minutes of
-    // heartbeats, no further reap.
-    const donesAfterFirstLease = donesFor(fx, 'toolu_ghost').length;
+    // Nineteen more minutes of the same echo: still one reap, still zero. (This
+    // is the assertion the pre-fix build inverted — there the re-insert stamped
+    // a new `changedAt` and handed the ghost another full 20-minute lease.)
     for (let m = 0; m < 19; m++) {
       for (let k = 0; k < MINUTE / KEEPALIVE_MS; k++) {
         announce();
         await fx.advance(KEEPALIVE_MS);
       }
     }
-    expect(donesFor(fx, 'toolu_ghost')).toHaveLength(donesAfterFirstLease);
-    expect(fx.count()).toBe(1);
-  }, 120_000);
+    expect(donesFor(fx, 'toolu_ghost')).toHaveLength(1);
+    expect(fx.count()).toBe(0);
 
-  it('a modern ghost flickers once a minute forever instead of retiring', async () => {
-    // No raw frames at all here: a REAL roster entry from the REAL backend that
-    // simply never ends (a leaked end-path — the bug this all exists for),
-    // re-announced by the REAL 5s keepalive with its original `seenAt`.
+    // …and the suppression is content-based, not an id blacklist: the same id
+    // carrying REAL news (steps moved) is a live agent and gets its row back.
+    announce({ steps: 8, lastTool: 'Bash: pnpm test' });
+    await fx.flush();
+    expect(fx.count()).toBe(1);
+    expect(fx.status()).toBe('working');
+  }, 180_000);
+
+  it('a seenAt-bearing row is never reaped, however long it goes quiet', async () => {
+    // No raw frames at all here: two REAL roster entries from the REAL backend,
+    // one of which goes silent for forty minutes — a rate-limit hold, or one
+    // enormous tool call (`muxpad agent wait --timeout=3600` is a thing this
+    // codebase does). The runner knows that row is fine; the server cannot see
+    // why, because `sweepSuspended` and the rest never survive `wireProgress`.
     //
-    // Because that frozen `seenAt` outranks the server's fresh `changedAt`, the
-    // resurrected row is stale on arrival: the next sweep reaps it, the next
-    // keepalive brings it back, forever. One `done` frame and one `[ws] pane …
-    // retired 1 subagent row(s)` warning per minute, for the life of the pane.
+    // Since ff9ac6f the presence of `seenAt` is read as a CAPABILITY probe — a
+    // runner new enough to send it is new enough to end its own subagents on
+    // four paths plus the level signal — so a quiet row from one is left alone.
+    // Before that scoping, with the tombstone in place, this pane would have
+    // shown a `done` for a live agent and then kept its row hidden until it
+    // happened to speak again.
     const fx = await boot();
     const { runner } = fx;
     const LIVE = liveTask('task_live', 'live worker');
-    const DEAD = liveTask('task_dead', 'leaked worker');
+    const QUIET = liveTask('task_quiet', 'parked worker');
 
     await runner.feed([
       sdk.init(),
       ...backgroundLaunch('toolu_live', 'task_live', 'live worker', [LIVE]),
-      ...backgroundLaunch('toolu_dead', 'task_dead', 'leaked worker', [LIVE, DEAD]),
+      ...backgroundLaunch('toolu_quiet', 'task_quiet', 'parked worker', [LIVE, QUIET]),
       sdk.result('success'),
     ]);
     expect(fx.count()).toBe(2);
 
-    // 21 minutes: the live one works every 4 minutes, the leaked one never
-    // again. Nothing but the real keepalive is driving the socket.
-    for (let m = 0; m < 21; m++) {
+    // Forty minutes — twice the stall window. The live one works every 4
+    // minutes; the parked one says nothing at all, and only the real 5s
+    // keepalive keeps re-announcing it.
+    for (let m = 0; m < 40; m++) {
       await fx.advance(MINUTE);
       if (m % 4 === 3) await runner.feed([sdk.childActivity('toolu_live')]);
     }
-    const firstReap = donesFor(fx, 'toolu_dead').length;
-    expect(firstReap).toBeGreaterThanOrEqual(1);
-
-    // Five more minutes. A retirement that stuck would produce nothing further.
-    await fx.advance(5 * MINUTE);
-    const laterReaps = donesFor(fx, 'toolu_dead').length - firstReap;
-    // Instead: roughly one reap per sweep, because the row keeps coming back.
-    expect(laterReaps).toBeGreaterThanOrEqual(3);
-    // The live row is never touched.
+    expect(donesFor(fx, 'toolu_quiet')).toHaveLength(0);
     expect(donesFor(fx, 'toolu_live')).toHaveLength(0);
-    // And the count is back at the wrong number, which is where a human looking
-    // at the sidebar finds it: 2 rows, 1 real.
     expect(fx.count()).toBe(2);
-    expect(lastSessionRoster(fx)).toEqual(['toolu_dead', 'toolu_live']);
-  }, 120_000);
+    expect(lastSessionRoster(fx)).toEqual(['toolu_live', 'toolu_quiet']);
+    expect(fx.status()).toBe('working');
+  }, 180_000);
 });
