@@ -11,3 +11,8 @@ playwright-report/
 test-results/
 *.tsbuildinfo
 .worktrees/
+.pi-subagents/
+# Scratch screenshots land at the repo ROOT (design mockups, review captures).
+# Leading slash on purpose: PNGs that are real assets live inside packages
+# (web/public, docs/) and must stay tracked.
+/*.png

@@ -1,27 +1,40 @@
 import {
-  DEFAULT_TAB_ICON,
   type PaneSpec,
   type Tab,
   type Workspace,
   collectLayoutLeaves,
+  fallbackTabIcon,
 } from '@muxpad/shared';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { Suspense, lazy, useEffect, useRef, useState } from 'react';
+import { Fragment, Suspense, lazy, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../api';
+import { HOUSE_CHAT_CREATE, HOUSE_CHAT_PANE_CREATE } from '../lib/agent-backend';
 import { createDragOrigin } from '../lib/drag-origin';
 import { clearFollowTarget, setFollowTarget } from '../lib/follow-tab';
 import { getLastPaneId, setLastPaneId } from '../lib/last-visited';
-import { useDismissable } from '../lib/use-dismissable';
 import { pushUndo } from '../lib/move-undo-store';
 import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansion';
-import { PANE_DRAG_MIME, paneDragOrigin } from '../lib/pane-drag';
+import { tabRowAffordances } from '../lib/nav-row-affordances';
+import { nextCronLabel } from '../lib/next-cron-label';
+import { PANE_DRAG_MIME, type PaneDragOrigin, paneDragOrigin } from '../lib/pane-drag';
 import { reorderByDrop } from '../lib/reorder';
-import { applyTabOrder, refreshTabs, useTabs } from '../tabs';
+import { orderAfterPinnedDrop, paneDropAction } from '../lib/tab-drag';
+import { useFrozenTabOrder } from '../lib/tab-freeze';
+import { setTabUnread as setTabUnreadAction } from '../lib/tab-unread';
+import { useDismissable } from '../lib/use-dismissable';
+import { applyTabOrder, applyTabUnread, refreshTabs, useTabs } from '../tabs';
 import { useLongPress } from '../use-long-press';
 import { MAX_QUICK_SWITCH_TABS, useTabQuickSwitch } from '../use-tab-quickswitch';
-import { applyWorkspaceOrder, refreshWorkspaces, useWorkspaces } from '../workspaces';
-import { PENDING_AGENT_STARTUP } from '../lib/agent-backend';
-import { NewTabChooser } from './NewTabChooser';
+import {
+  applyWorkspaceOrder,
+  refreshWorkspaces,
+  useWorkspaces,
+  visibleWorkspaces,
+} from '../workspaces';
+import { NewTabButton } from './NewTabButton';
+import { StateChip } from './StateChip';
+import { SwipeRow } from './SwipeRow';
 import { SvgClose } from './icons';
 import './NavTree.css';
 
@@ -132,6 +145,74 @@ async function moveTabToWorkspace(args: {
   }
 }
 
+/**
+ * Move a dragged pane into `dest` — the drag-a-pane-onto-a-workspace-header
+ * gesture. The pane's pty/agent keeps running untouched; only its parent tab
+ * changes.
+ *
+ * Two shapes, because a pane that is its tab's ONLY pane effectively IS that
+ * tab: extracting it into a "new" tab would delete a tab and build an
+ * identical one, throwing away its name, icon and slug — and, if you were
+ * looking at it, dropping you on the workspace root when it vanished. So a
+ * solo pane travels as a TAB MOVE (`moveTabToWorkspace`, which brings its own
+ * undo); anything else extracts into a fresh tab over there.
+ *
+ * No navigation either way: you dropped it over there precisely because
+ * you're staying here.
+ */
+async function movePaneToNewTabIn(
+  paneId: string,
+  dest: Workspace,
+  origin: PaneDragOrigin | null,
+): Promise<void> {
+  const action = paneDropAction(origin, dest.id);
+  if (action === 'none') return; // solo pane, already a tab of this workspace
+  if (action === 'move-tab' && origin?.fromWorkspaceId) {
+    const name = (await api.getTab(origin.fromTabId).catch(() => null))?.name ?? 'this tab';
+    await moveTabToWorkspace({
+      tabId: origin.fromTabId,
+      tabName: name,
+      fromWorkspaceId: origin.fromWorkspaceId,
+      toWorkspaceId: dest.id,
+      toWorkspaceName: dest.name,
+    });
+    return;
+  }
+  try {
+    const res = await api.movePane(paneId, { newTab: true, toWorkspaceId: dest.id });
+    // Defensive: the server refuses to churn a tab's identity by extracting
+    // its only pane at home. The solo branch above means we shouldn't get
+    // here, but a stale drag origin must not look like a successful move.
+    if (res.to_tab.id === res.from_tab_id) return;
+    await Promise.all([
+      refreshTabs(dest.id),
+      ...(res.from_workspace_id && res.from_workspace_id !== dest.id
+        ? [refreshTabs(res.from_workspace_id)]
+        : []),
+      refreshWorkspaces(),
+    ]);
+    if (!res.from_tab_removed) {
+      pushUndo({
+        message: `Moved pane to “${dest.name}”`,
+        run: async () => {
+          try {
+            await api.movePane(paneId, { toTabId: res.from_tab_id });
+            await Promise.all([
+              refreshTabs(dest.id),
+              ...(res.from_workspace_id ? [refreshTabs(res.from_workspace_id)] : []),
+              refreshWorkspaces(),
+            ]);
+          } catch (err) {
+            console.error('undo pane→workspace move failed', err);
+          }
+        },
+      });
+    }
+  } catch (err) {
+    console.error('move pane→workspace failed', err);
+  }
+}
+
 /** Props spread onto a draggable row to make it reorderable. */
 interface DragItemProps {
   draggable: boolean;
@@ -156,7 +237,11 @@ interface DragItemProps {
  */
 function useListReorder(
   orderedIds: string[],
-  persist: (ids: string[]) => void,
+  /** `draggedId` / `targetId` are the two rows the gesture actually named —
+   *  the new order alone can't identify them (moving A past B changes both
+   *  their indices), and the tab list needs them to decide whether the drop
+   *  is a legal pinned-block reorder at all. */
+  persist: (ids: string[], draggedId: string, targetId: string) => void,
   opts?: {
     /** Return false to decline an otherwise-valid dragover (e.g. tab rows
      *  cede their middle band to the merge-into affordance); a declined row
@@ -215,7 +300,7 @@ function useListReorder(
         setOverId(null);
         if (!from || from === id) return;
         const next = reorderByDrop(orderedIds, from, id);
-        if (next !== orderedIds) persist(next);
+        if (next !== orderedIds) persist(next, from, id);
       },
       onDragEnd: () => {
         setDragId(null);
@@ -247,9 +332,10 @@ interface NavTreeProps {
  *     thumb-height rows, close buttons always faintly present (touch has
  *     no hover).
  *
- * Hierarchy is carried by STRUCTURE (disclosure + indent) and STATE
- * (accent rail = "you are here", red dot = "wants you"), not type-size
- * escalation — the same grammar as the rest of muxpad's chrome.
+ * Hierarchy is carried by STRUCTURE (disclosure + indent) and by two
+ * channels that never share an encoding — a solid accent block for "you are
+ * here", a left bar + faint tint + word for "what this chat is doing" (see
+ * StateChip.tsx) — not by type-size escalation.
  *
  * Every workspace is collapsible, including the active one. Expansion
  * state persists across sessions (lib/nav-expansion.ts); untouched
@@ -258,7 +344,10 @@ interface NavTreeProps {
  */
 export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigate }: NavTreeProps) {
   const navigate = useNavigate();
-  const { workspaces } = useWorkspaces();
+  // The tree lists VISIBLE workspaces only. Hidden workspaces are plumbing
+  // (a system container); nothing routes there by default.
+  const { workspaces: allWorkspaces } = useWorkspaces();
+  const workspaces = visibleWorkspaces(allWorkspaces);
   const expansion = useNavExpansion();
   // Single edit slot hoisted here so only one rename can be in flight
   // across the whole tree.
@@ -335,8 +424,45 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
         >
           {creatingWs ? 'Creating…' : '+ New workspace'}
         </button>
+        {/* Hosted lives BELOW the tree, past a hairline, because it is not part
+            of it: apps and artifacts belong to no workspace and occupy no tab —
+            that is the whole point. Rendered in both variants, so the mobile
+            sheet reaches it too. */}
+        <div className="navtree-foot">
+          <Link
+            className="navtree-foot-link"
+            to="/hosted"
+            activeProps={{ 'data-active': 'true' }}
+            onClick={() => onNavigate?.()}
+          >
+            <SvgHosted />
+            <span className="navtree-name-text">Hosted</span>
+          </Link>
+        </div>
       </div>
     </nav>
+  );
+}
+
+/** Stacked layers — "things I have put somewhere and can point a browser at".
+ *  Same 1.5px lucide-ish geometry as the rest of the nav's glyphs. */
+function SvgHosted() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 3 2 8l10 5 10-5-10-5z" />
+      <path d="M2 16l10 5 10-5" />
+      <path d="M2 12l10 5 10-5" />
+    </svg>
   );
 }
 
@@ -416,6 +542,48 @@ function WorkspaceNode({
     }
   };
 
+  // Accept a PANE dragged from the tab strip, dropped on this workspace's
+  // HEADER: the pane leaves its tab and lands in a brand-new tab here. The
+  // header is the only sensible target for "put this somewhere in that
+  // workspace" — its tab rows already mean "into THAT tab", and a workspace
+  // you're looking at from the outside has no other obvious slot.
+  //
+  // Deliberately allowed for a pane from this same workspace too: that's the
+  // ordinary "pop this pane out into its own tab" gesture, just aimed at the
+  // header rather than the pane chrome's button. The ONE case we decline is a
+  // pane that's already its tab's only pane being dropped on its own
+  // workspace — there is nothing to extract, so lighting up would promise a
+  // move that can't happen.
+  const [paneDropOver, setPaneDropOver] = useState(false);
+  const isPaneDrag = (e: React.DragEvent) =>
+    e.dataTransfer.types.includes(PANE_DRAG_MIME) &&
+    paneDropAction(paneDragOrigin.get(), workspace.id) !== 'none';
+  const onHeaderDragOver = (e: React.DragEvent) => {
+    if (!isPaneDrag(e)) return; // not ours — let the ws-reorder handlers see it
+    e.preventDefault();
+    // The group below also listens (tab drags); a pane drop is fully handled
+    // here, so don't let it bubble into a second interpretation.
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    if (!paneDropOver) setPaneDropOver(true);
+  };
+  const onHeaderDragLeave = (e: React.DragEvent) => {
+    if (paneDropOver && !e.currentTarget.contains(e.relatedTarget as Node | null)) {
+      setPaneDropOver(false);
+    }
+  };
+  // Reorder dnd for the header row — dropped while renaming (an input owns
+  // the row then, and dragging text inside it must not start a row drag).
+  const wsRowDnd = rowDnd && !isEditing ? rowDnd : undefined;
+  const onHeaderDrop = (e: React.DragEvent) => {
+    setPaneDropOver(false);
+    const paneId = e.dataTransfer.getData(PANE_DRAG_MIME);
+    if (!paneId || !isPaneDrag(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    void movePaneToNewTabIn(paneId, workspace, paneDragOrigin.get());
+  };
+
   const closeWorkspace = async (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
@@ -456,10 +624,31 @@ function WorkspaceNode({
       <div
         className="navtree-ws-row"
         data-active={isActive ? 'true' : undefined}
+        // The row's own left bar + tint. Same value the chip below is given,
+        // and given to the ROW because that is what the bar and the wash are
+        // painted on — see StateChip.css for the three-way encoding.
+        data-state={expanded ? 'idle' : (workspace.status ?? 'idle')}
         data-unread={workspace.unread ? 'true' : undefined}
         data-pressing={pressing ? 'true' : undefined}
         data-tab-drop={tabDropOver ? 'true' : undefined}
-        {...(rowDnd && !isEditing ? rowDnd : {})}
+        data-pane-drop={paneDropOver ? 'true' : undefined}
+        {...wsRowDnd}
+        // Pane drops are layered ON TOP of workspace-reorder dnd: a pane drag
+        // is claimed here and goes no further, anything else falls through to
+        // the reorder handlers spread above (hence the explicit chaining —
+        // these props would otherwise just replace them).
+        onDragOver={(e) => {
+          onHeaderDragOver(e);
+          if (!e.isPropagationStopped()) wsRowDnd?.onDragOver(e);
+        }}
+        onDragLeave={(e) => {
+          onHeaderDragLeave(e);
+          wsRowDnd?.onDragLeave(e);
+        }}
+        onDrop={(e) => {
+          onHeaderDrop(e);
+          if (!e.isPropagationStopped()) wsRowDnd?.onDrop(e);
+        }}
       >
         <button
           type="button"
@@ -526,31 +715,48 @@ function WorkspaceNode({
             }}
           >
             <span className="navtree-name-text">{workspace.name}</span>
-            {/* Rollup dot only when collapsed — expanded rows show the
-                per-tab dots, which say *which* tab wants you, so the
-                workspace-level dot would just double-signal. Mirrors the
-                tab-count chip below, which is likewise collapsed-only. */}
-            {!expanded && workspace.attention && (
-              <span className="badge-dot -inline" aria-label="needs attention" />
-            )}
           </Link>
         )}
-        {!expanded && workspace.tab_count > 0 && (
+        {/* Everything from here down stands down while the row is being
+            renamed — the same rule TabRow follows. The editing template is two
+            tracks wide, so a chip or a button left rendered resolves into an
+            IMPLICIT column and takes the width the input needs (measured: a
+            22px rename box). */}
+        {!isEditing && !expanded && workspace.tab_count > 0 && (
           // Collapsed rows surface what they're hiding — a quiet tab
           // count, file-navigator style.
           <span className="navtree-ws-count" aria-hidden="true">
             {workspace.tab_count}
           </span>
         )}
-        <button
-          type="button"
-          className="navtree-close"
-          onClick={(e) => void closeWorkspace(e)}
-          title="Close workspace"
-          aria-label={`Close workspace ${workspace.name}`}
-        >
-          <SvgClose size={13} />
-        </button>
+        {/* D2 — the workspace row's own status, and the whole reason the
+            server computes it. The per-tab marks live in TabList, which mounts
+            only while this row is EXPANDED, and the default expansion is
+            active-workspace-only: on a fresh profile every agent working in a
+            collapsed workspace was invisible, its 5s poll stopped, and the
+            live-refresh path skipped it for want of a cache entry.
+            Collapsed-ONLY, for the same reason the tab-count chip is: once the
+            tabs are listed they carry their own marks, and a rollup on top of
+            them would just double-signal. */}
+        {!isEditing && (
+          <span className="navtree-tab-controls">
+            <button
+              type="button"
+              className="navtree-close"
+              onClick={(e) => void closeWorkspace(e)}
+              title="Close workspace"
+              aria-label={`Close workspace ${workspace.name}`}
+            >
+              <SvgClose size={13} />
+            </button>
+          </span>
+        )}
+        {/* LAST cell, always — same rule as the tab rows.
+            An EXPANDED workspace says nothing here: its tabs carry their own
+            state and a rollup on top of them would double-signal. It still
+            renders an `idle` chip rather than nothing, so the cell exists in
+            the grid either way. */}
+        {!isEditing && <StateChip status={expanded ? 'idle' : workspace.status} />}
       </div>
       {expanded && (
         <TabList
@@ -591,20 +797,54 @@ function TabList({
   onNavigate,
 }: TabListProps) {
   const navigate = useNavigate();
-  const { tabs } = useTabs(workspace.id);
+  const { tabs: serverTabs } = useTabs(workspace.id);
   const [creating, setCreating] = useState(false);
 
-  // Drag-to-reorder tabs within this workspace (desktop sidebar). Reorder
-  // claims only the EDGE bands of a row — the middle band belongs to
-  // merge-into (see TabRow), so one row hosts both gestures without the
-  // drop-line and the merge ring fighting.
+  // ── The living sidebar's two blocks ─────────────────────────────────────
+  // The SERVER owns the order (pinned first in manual order, then unpinned
+  // auto-sorted by attention → recency), so the client only has to
+  // find the seam. Deriving `pinnedCount` rather than re-sorting keeps one
+  // authority for ordering and means a poll can never fight a local sort.
+  //
+  // The single exception is the tab you're LOOKING AT: it is pinned in place
+  // visually for as long as it's active (useFrozenTabOrder) and settles into
+  // its sorted position when you leave. Being in a tab is itself activity —
+  // it bumps `last_activity_at` on every turn — so without this the row under
+  // your cursor climbs the list while you use it and drags every other row
+  // with it. This moves ONE row and never writes: the server's order is
+  // untouched, and every other tab keeps re-sorting live underneath.
+  const activeTabId =
+    (isActiveWorkspace && serverTabs.find((t) => t.slug === activeTabSlug)?.id) || null;
+  const tabs = useFrozenTabOrder(serverTabs, activeTabId);
+  const pinnedCount = tabs.filter((t) => t.pinned).length;
+
+  // Pin / unpin. Optimistic only in the sense that we refetch immediately —
+  // the server may also move the tab (a newly-pinned tab goes to the end of
+  // the pinned block), so a local guess would flicker against the truth.
+  const setTabPinned = async (tab: Tab, pinned: boolean) => {
+    try {
+      await api.patchTab(tab.id, { pinned });
+      await refreshTabs(workspace.id);
+    } catch (err) {
+      console.error('pin tab failed', err);
+    }
+  };
+
+  // Drag-to-reorder is PINNED-ONLY (see lib/tab-drag for why). The hook is
+  // fed just the pinned ids, so an unpinned row can neither be dragged into
+  // the manual block nor serve as a drop target for one — there is no
+  // implicit "dropping it pins it" left. Reorder claims only the EDGE bands
+  // of a row; the middle band belongs to merge-into (see TabRow), so one row
+  // hosts both gestures without the drop-line and the merge ring fighting.
   const tabDnd = useListReorder(
-    tabs.map((t) => t.id),
-    (ids) => {
-      applyTabOrder(workspace.id, ids); // move immediately; refresh below reconciles
+    tabs.filter((t) => t.pinned).map((t) => t.id),
+    (_ids, draggedId, targetId) => {
+      const next = orderAfterPinnedDrop(tabs, draggedId, targetId);
+      if (!next) return; // not a pinned→pinned drop: nothing to persist
+      applyTabOrder(workspace.id, next.allIds); // move now; the refresh reconciles
       void (async () => {
         try {
-          await api.reorderTabs(ids);
+          await api.reorderTabs(next.pinnedIds);
         } catch (err) {
           console.error('reorder tabs failed', err);
         }
@@ -613,6 +853,31 @@ function TabList({
     },
     { claimOver: (e) => !inMergeBand(e) },
   );
+
+  // An UNPINNED row is still draggable, but the drag can only MOVE it: drop
+  // it on another workspace (WorkspaceNode's group target) to re-home it.
+  // It gets no reorder handlers, so no drop line ever appears inside the
+  // auto-sorted block — which is honest, since any order dragged into it
+  // would evaporate on the next poll.
+  const [movingTabId, setMovingTabId] = useState<string | null>(null);
+  const moveOnlyDnd = (id: string): DragItemProps => ({
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => {
+      setMovingTabId(id);
+      e.dataTransfer.effectAllowed = 'move';
+      // Some browsers refuse to start a drag with an empty dataTransfer.
+      try {
+        e.dataTransfer.setData('text/plain', id);
+      } catch {
+        /* noop */
+      }
+    },
+    onDragOver: () => {},
+    onDragLeave: () => {},
+    onDrop: () => {},
+    onDragEnd: () => setMovingTabId(null),
+    ...(movingTabId === id ? { 'data-dragging': 'true' as const } : {}),
+  });
 
   // Merge a dragged tab's panes into `dest` (the row it was dropped on).
   // The source tab dissolves; if it was the one being viewed, its TabView's
@@ -644,8 +909,7 @@ function TabList({
     try {
       const created = await api.createPane(t.id, {
         append_to_layout: true,
-        startup_cmd: PENDING_AGENT_STARTUP,
-        face: 'chat',
+        ...HOUSE_CHAT_PANE_CREATE,
       });
       await refreshTabs(workspace.id);
       setLastPaneId(t.id, created.id);
@@ -707,11 +971,35 @@ function TabList({
   // sidebar wires it (the sheet is touch; TabBar owns it in top mode).
   // tabCount 0 disables the inactive instances without breaking the
   // rules of hooks.
+  //
+  // The number↔tab mapping is FROZEN for as long as the badges are up.
+  // Before the living sidebar, tab order was the stable manual `position`,
+  // so indexing the live list was safe. Now the unpinned block re-sorts on
+  // attention/busy/recency and the 5s poll can re-derive it mid-keystroke —
+  // so a build going busy between "I read the 3" and "I pressed Ctrl+3"
+  // would land you on a different tab. Snapshotting on Ctrl-down means the
+  // number you see is the number you get, every time.
+  //
+  // (Across separate holds the unpinned numbers still move — that's the
+  // feature working. PINNING is what buys a number that means the same
+  // thing tomorrow, since pinned tabs never re-sort.)
   const quickEnabled = variant === 'sidebar' && isActiveWorkspace;
+  const [quickIds, setQuickIds] = useState<string[]>([]);
+  // "Were the badges up as of the last render?" — read before it's written
+  // below, which is exactly the question the tabCount arg needs answered.
+  const quickHeld = useRef(false);
   const showQuickNumbers = useTabQuickSwitch({
-    tabCount: quickEnabled ? tabs.length : 0,
+    // While the badges are UP, the accepted range is the snapshot's, not the
+    // live list's: a tab closed mid-hold would otherwise shrink the range and
+    // make a badge you can still see stop responding, and a tab created
+    // mid-hold would widen it past the snapshot — swallowing the chord from
+    // the focused terminal to switch to nothing.
+    tabCount: quickEnabled ? (quickHeld.current ? quickIds.length : tabs.length) : 0,
     onSwitch: (i) => {
-      const t = tabs[i];
+      // Resolve against the FROZEN snapshot, then look the tab up by id —
+      // never by live index. A tab deleted mid-hold simply no-ops.
+      const id = quickIds[i];
+      const t = id ? tabs.find((x) => x.id === id) : undefined;
       if (!t) return;
       void navigate({
         to: '/w/$wsSlug/t/$tabSlug',
@@ -719,6 +1007,16 @@ function TabList({
       });
     },
   });
+  quickHeld.current = showQuickNumbers;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `tabs` is deliberately NOT a dependency — re-snapshotting while the badges are up is the exact bug this prevents.
+  useEffect(() => {
+    setQuickIds(showQuickNumbers ? tabs.map((t) => t.id) : []);
+  }, [showQuickNumbers]);
+  /** The frozen badge number for a tab (1–9), or undefined if it has none. */
+  const quickNumberFor = (id: string): number | undefined => {
+    const i = quickIds.indexOf(id);
+    return i >= 0 && i < MAX_QUICK_SWITCH_TABS ? i + 1 : undefined;
+  };
 
   const closeTab = async (e: React.MouseEvent, tab: Tab) => {
     e.stopPropagation();
@@ -735,18 +1033,40 @@ function TabList({
     }
   };
 
-  // Manual unread toggle (context menu). `want=true` flags the attention
-  // dot; `want=false` clears it (same path as viewing the tab). Refresh
-  // both the tab list and the workspace rollup so the dot updates at once.
-  const setTabUnread = async (tab: Tab, want: boolean) => {
-    try {
-      await (want ? api.markTabUnread(tab.id) : api.markTabSeen(tab.id));
-      await refreshTabs(workspace.id);
-      await refreshWorkspaces();
-    } catch (err) {
+  // Manual unread toggle — reached from the context menu (desktop right-click
+  // and touch long-press) AND from the sheet's swipe tray. `want=true` flags
+  // the attention dot; `want=false` clears it (same path as viewing the tab).
+  //
+  // The body lives in lib/tab-unread so those surfaces cannot drift: it
+  // patches the cached row FIRST (so the bold name and the `ready` dot land on
+  // the tap's own frame instead of after the round trip, and long before the
+  // 5s poll), then writes, then refetches both the tab list and the workspace
+  // rollup to reconcile. A failed write rolls the patch back.
+  //
+  // The failure path stays console-only, matching every other write on this
+  // tree (rename, icon, pin). It is the one place the optimistic patch costs
+  // something: a write that fails now shows the mark and then silently takes
+  // it away, where the old code simply did nothing. Judged the smaller evil
+  // than a fourth bespoke toast surface for the least consequential write in
+  // the app — the mark is a reminder, not data, and the row it rolls back to
+  // is the truthful one. If this ever gets a toast it should be a generic
+  // "write failed" one shared by all of these, not one for unread alone.
+  const setTabUnread = (tab: Tab, want: boolean) =>
+    setTabUnreadAction(
+      {
+        markUnread: api.markTabUnread,
+        markSeen: api.markTabSeen,
+        patch: applyTabUnread,
+        refresh: async () => {
+          await refreshTabs(workspace.id);
+          await refreshWorkspaces();
+        },
+      },
+      tab.id,
+      want,
+    ).catch((err: unknown) => {
       console.error('set tab unread failed', err);
-    }
-  };
+    });
 
   const setTabIcon = async (tab: Tab, icon: string) => {
     try {
@@ -758,15 +1078,15 @@ function TabList({
   };
 
   // Tabs-first creation: one server call makes the tab AND its single
-  // full-size pane atomically. Always lands on the harness picker.
+  // full-size pane atomically, already running the house chat.
   const createTab = async () => {
     if (creating) return;
     setCreating(true);
     try {
-      const t = await api.createTab(workspace.id, {
-        bootstrap: 'agent',
-        backend: 'pick',
-      });
+      // Straight into the house chat — no "what do you want to open?" screen.
+      // The alternatives live in the empty chat's own "open instead:" strip,
+      // where they cost nothing until you actually want one.
+      const t = await api.createTab(workspace.id, { ...HOUSE_CHAT_CREATE });
       await refreshTabs(workspace.id);
       await refreshWorkspaces();
       onNavigate?.();
@@ -784,28 +1104,42 @@ function TabList({
   return (
     <div className="navtree-tab-list">
       {tabs.map((t, i) => (
-        <TabRow
-          key={t.id}
-          tab={t}
-          workspace={workspace}
-          isActiveTab={isActiveWorkspace && t.slug === activeTabSlug}
-          quickNumber={
-            showQuickNumbers && quickEnabled && i < MAX_QUICK_SWITCH_TABS ? i + 1 : undefined
-          }
-          variant={variant}
-          isEditing={editing?.kind === 'tab' && editing.id === t.id}
-          setEditing={setEditing}
-          onNavigate={onNavigate}
-          onClose={(e) => void closeTab(e, t)}
-          onSetUnread={(want) => void setTabUnread(t, want)}
-          onSetIcon={(icon) => void setTabIcon(t, icon)}
-          onMergeInto={(payload) => void mergeTabInto(payload, t)}
-          onAddPane={() => void addPaneToTab(t)}
-          onMovePaneHere={(paneId, sourceTabId) => void movePaneHere(paneId, sourceTabId, t)}
-          rowDnd={variant === 'sidebar' ? tabDnd(t.id) : undefined}
-        />
+        <Fragment key={t.id}>
+          {/* The seam between "you arranged these" and "these arrange
+              themselves". Only drawn when BOTH blocks exist — a hairline
+              above nothing (or below nothing) is noise, and a workspace
+              with no pins should look exactly like it did before pinning
+              existed. */}
+          {/* Purely decorative: pinnedness is already announced per-row by
+              the pin button's aria-pressed, so a semantic separator here
+              would only add a second, redundant thing for a screen reader to
+              stop on. */}
+          {i === pinnedCount && pinnedCount > 0 ? (
+            <div className="navtree-pin-divider" aria-hidden="true" />
+          ) : null}
+          <TabRow
+            tab={t}
+            workspace={workspace}
+            isActiveTab={isActiveWorkspace && t.slug === activeTabSlug}
+            quickNumber={showQuickNumbers && quickEnabled ? quickNumberFor(t.id) : undefined}
+            variant={variant}
+            isEditing={editing?.kind === 'tab' && editing.id === t.id}
+            setEditing={setEditing}
+            onNavigate={onNavigate}
+            onClose={(e) => void closeTab(e, t)}
+            onSetUnread={(want) => void setTabUnread(t, want)}
+            onSetIcon={(icon) => void setTabIcon(t, icon)}
+            onSetPinned={(want) => void setTabPinned(t, want)}
+            onMergeInto={(payload) => void mergeTabInto(payload, t)}
+            onAddPane={() => void addPaneToTab(t)}
+            onMovePaneHere={(paneId, sourceTabId) => void movePaneHere(paneId, sourceTabId, t)}
+            rowDnd={
+              variant === 'sidebar' ? (t.pinned ? tabDnd(t.id) : moveOnlyDnd(t.id)) : undefined
+            }
+          />
+        </Fragment>
       ))}
-      <NewTabChooser
+      <NewTabButton
         idleLabel={creating ? 'Creating…' : '+ New tab'}
         idleTitle="New tab"
         idleClassName="navtree-add navtree-new-tab"
@@ -850,22 +1184,43 @@ function SheetPaneList({
 }) {
   const navigate = useNavigate();
   const [panes, setPanes] = useState<PaneSpec[] | null>(null);
+  // D16: this list used to FREEZE on a failing poll — the catch kept the
+  // previous panes forever with no timeout, so a persistently failing fetch
+  // left working marks spinning on a snapshot that could be minutes old, and
+  // the "…" loading ellipsis span forever if it never loaded at all. Keeping
+  // the last good list through a BLIP is right; presenting stale state
+  // indefinitely as if it were live is not. Count consecutive failures and say
+  // so once we've clearly lost the server.
+  const [staleAfter, setStaleAfter] = useState(0);
   useEffect(() => {
     let alive = true;
-    const load = () =>
-      api
+    let fails = 0;
+    const load = () => {
+      // Don't poll into a hidden document. Unlike the tab/workspace polls this
+      // one has no visibility gate of its own, so a sheet left open in a
+      // backgrounded browser tab hit /tabs/:id every 2.5s indefinitely.
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden')
+        return Promise.resolve();
+      return api
         .getTab(tab.id)
         .then((detail) => {
-          if (alive) setPanes(detail.panes);
+          if (!alive) return;
+          fails = 0;
+          setStaleAfter(0);
+          setPanes(detail.panes);
         })
         .catch(() => {
-          // Keep the current list on a transient poll failure; only show empty
-          // if we never loaded.
-          if (alive) setPanes((prev) => prev ?? []);
+          if (!alive) return;
+          fails += 1;
+          // Two consecutive misses (~5s) is past a blip. Below that, ride it
+          // out silently rather than flashing an error at every hiccup.
+          if (fails >= 2) setStaleAfter(fails);
+          setPanes((prev) => prev ?? []);
         });
-    load();
-    // Poll while the list is open so each pane's busy/attention indicator
-    // stays live (the tab list has its own poll; this fetch is separate).
+    };
+    void load();
+    // Poll while the list is open so each pane's status mark stays live (the
+    // tab list has its own poll; this fetch is separate).
     const t = window.setInterval(load, 2500);
     return () => {
       alive = false;
@@ -915,6 +1270,14 @@ function SheetPaneList({
 
   return (
     <div className="navtree-pane-list">
+      {staleAfter > 0 ? (
+        // Say it plainly rather than let stale marks keep spinning. The list
+        // below (if we ever had one) stays visible underneath — it is still the
+        // best guess at the truth, it just isn't live any more.
+        <div className="navtree-pane-error" role="status">
+          can’t reach muxpad — retrying…
+        </div>
+      ) : null}
       {panes === null ? (
         <div className="navtree-pane-loading">…</div>
       ) : (
@@ -926,6 +1289,7 @@ function SheetPaneList({
               key={p.id}
               className="navtree-pane-row-wrap"
               data-active={active ? 'true' : undefined}
+              data-state={p.status ?? 'idle'}
             >
               <button
                 type="button"
@@ -935,17 +1299,18 @@ function SheetPaneList({
                 onClick={() => openPane(p.id)}
               >
                 <span className="navtree-pane-label">{label}</span>
-                {/* Per-pane status, same priority as the tab row: WORKING
-                    (spinner) → WANTS YOU (dot) → nothing. Tab-level only
-                    aggregates; a glance at the list should say which is running. */}
-                {p.busy ? (
-                  <span className="navtree-busy" aria-hidden="true" title="Working…">
-                    <SvgSpinner />
-                  </span>
-                ) : p.attention ? (
-                  <span className="badge-dot -inline" aria-label="needs attention" />
-                ) : null}
               </button>
+              {/* Per-pane state, in the same language as the tabs above. The
+                  tab level only aggregates; a glance at the list should say
+                  WHICH pane is running (or blocked).
+                  OUTSIDE the button, exactly as the tab rows keep it outside
+                  their link: the chip carries visually-hidden state text, and
+                  inside the button that text joins the button's ACCESSIBLE
+                  NAME — so a screen-reader user would hear the name change
+                  ("claude · api refactor" → "…, Ready for you") every time the
+                  agent started or stopped. As a sibling it is still read, just
+                  not as part of the control's name. */}
+              <StateChip status={p.status} />
               <button
                 type="button"
                 className="navtree-close"
@@ -978,6 +1343,9 @@ interface TabRowProps {
   onSetUnread: (want: boolean) => void;
   /** Set this tab's leading icon (emoji). */
   onSetIcon: (icon: string) => void;
+  /** Pin/unpin — hold this tab at the top of its workspace block in the
+   *  manual order, instead of letting it be auto-sorted. */
+  onSetPinned: (pinned: boolean) => void;
   /** A dragged TAB was dropped on this row's merge band — absorb its panes. */
   onMergeInto: (payload: TabDragPayload) => void;
   /** Create a pane in this tab and land on it (opens the harness picker). */
@@ -986,6 +1354,48 @@ interface TabRowProps {
    *  sourceTabId (from the drag mirror) feeds the follow-navigation hint. */
   onMovePaneHere: (paneId: string, sourceTabId: string | null) => void;
   rowDnd?: DragItemProps | undefined;
+}
+
+/**
+ * "This chat runs on a schedule, and next at —." The nav row's META column.
+ *
+ * NOT a status. The state channel (StateChip) holds exactly one transient,
+ * mutually-exclusive state, and it is scanned down the rows' left edge —
+ * putting a standing PROPERTY of the chat in it would both break that scan and
+ * lose to `working` the moment the cron actually fired, which is precisely
+ * when you'd want to know a schedule exists. It gets its own column instead,
+ * between the name and the state chip.
+ *
+ * It used to be a bare ⏱ beside the name, which said a schedule EXISTS but
+ * never when — so the one thing you actually want from a rail glance ("does
+ * anything run before I go out?") still cost a hover. Now the time is the
+ * mark: a dimmed clock set back from a monospace, tabular-figure time, right
+ * aligned, so `◷ 07:00` and `◷ Sun 09:00` land on the same digits. The
+ * tooltip still carries which cron and the full date.
+ *
+ * The server folds `crons` + `next_cron` into the tab row (decorateTab), so
+ * this costs no request — and no per-row query on the server either.
+ */
+function CronMark({ tab }: { tab: Tab }) {
+  const next = tab.next_cron;
+  const count = tab.crons ?? 0;
+  const label = next ? nextCronLabel(next.next_due_at) : null;
+  const title = next
+    ? `${next.name} · next ${new Date(next.next_due_at).toLocaleString()}${
+        count > 1 ? ` (+${count - 1} more)` : ''
+      }`
+    : `${count} scheduled job${count === 1 ? '' : 's'}`;
+  return (
+    <span className="navtree-cron" title={title} aria-label={title}>
+      {/* Set BACK from the time (opacity + a 5px gap) so the eye lands on the
+          digits, which are the information; the glyph only says what kind of
+          number it is. */}
+      <span className="navtree-cron-glyph" aria-hidden="true">
+        ◷
+      </span>
+      {label}
+    </span>
+  );
 }
 
 function TabRow({
@@ -1001,6 +1411,7 @@ function TabRow({
   onClose,
   onSetUnread,
   onSetIcon,
+  onSetPinned,
   onMergeInto,
   onMovePaneHere,
   onAddPane,
@@ -1027,15 +1438,15 @@ function TabRow({
   // Icon picker, anchored under the clicked icon.
   const [picker, setPicker] = useState<{ x: number; y: number } | null>(null);
   // Workspaces other than this tab's own — both the "Move to workspace…"
-  // menu targets and the legal drop targets for the drag gesture.
+  // menu targets and the legal drop targets for the drag gesture. Visible
+  // only: the hidden system workspace is never a move target.
   const { workspaces } = useWorkspaces();
-  const otherWorkspaces = workspaces.filter((w) => w.id !== workspace.id);
+  const otherWorkspaces = visibleWorkspaces(workspaces).filter((w) => w.id !== workspace.id);
 
   // Sheet-only: expand the row into its pane list (direct pane nav + the
   // mobile "New pane" home). Single-pane tabs skip all of it — tapping
   // them just opens the tab (there's nothing to pick), so no chevron.
   const paneCount = collectLayoutLeaves(tab.layout).length;
-  const sheetPicksPane = variant === 'sheet' && paneCount > 1;
   // Auto-expand the ACTIVE multi-pane tab so its panes are visible the moment
   // the navigator opens — you land already looking at where you can go. Any tab
   // the user has since explicitly toggled keeps that state across reopens (see
@@ -1043,8 +1454,12 @@ function TabRow({
   const [panesOpen, setPanesOpen] = useState(() =>
     sheetTabExpanded.has(tab.id)
       ? (sheetTabExpanded.get(tab.id) ?? false)
-      : sheetPicksPane && isActiveTab,
+      : variant === 'sheet' && paneCount > 1 && isActiveTab,
   );
+  // Which controls this row offers — one pure, unit-tested rule set rather
+  // than variant checks scattered across the JSX (see lib/nav-row-affordances).
+  const affords = tabRowAffordances({ variant, paneCount, panesOpen, isEditing });
+  const sheetPicksPane = affords.tapExpandsPanes;
   const togglePanes = () =>
     setPanesOpen((o) => {
       const next = !o;
@@ -1142,11 +1557,17 @@ function TabRow({
           },
         }
       : tabRowDnd;
-  return (
-    <>
+
+  // The row itself, identical on both variants. The sheet wraps it in a
+  // SwipeRow below; the sidebar renders it bare.
+  const row = (
     <div
       className="navtree-tab-row"
       data-active={isActiveTab ? 'true' : undefined}
+      // Drives the row's left state bar and its tint (StateChip.css). The chip
+      // at the far end of the row reads the same value; one attribute, so the
+      // three tellings of a row's state cannot disagree.
+      data-state={tab.status ?? 'idle'}
       data-unread={tab.unread ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
       data-drop-into={dropInto ? 'true' : undefined}
@@ -1165,7 +1586,7 @@ function TabRow({
           lives. Full row height; squeezing it between the name and the ×
           made every tap a coin-flip between expand/navigate/close. Only
           multi-pane tabs get it — with one pane there's nothing to pick. */}
-      {sheetPicksPane && !isEditing ? (
+      {affords.paneExpander ? (
         <button
           type="button"
           className="navtree-pane-expander"
@@ -1186,6 +1607,36 @@ function TabRow({
         // name sits on the same grid line.
         <span className="navtree-pane-expander -spacer" aria-hidden="true" />
       ) : null}
+      {/* Leading icon — its OWN grid cell now, not the first inline-flex
+            child of the link. The row is a strict four-track grid
+            (icon | name+headline | meta | status), and the only way every
+            status mark lands on one vertical line is if nothing in front of
+            it is free to size itself. Click opens the picker; a span, not a
+            button, so it can also be dragged with the row. Mouse-only by
+            design — the keyboard path is the context menu's "Change icon…". */}
+      {/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard path is the context menu's "Change icon…" item */}
+      <span
+        className="navtree-tab-icon"
+        title="Change icon"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+          setPicker({ x: r.left, y: r.bottom + 4 });
+        }}
+        onDoubleClick={(e) => {
+          // Don't let a fast double-click on the icon trip the row's
+          // rename-on-doubleclick.
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+      >
+        {/* No stored icon yet — draw a stable, per-tab stand-in rather than
+            one shared default, so a rail of not-yet-labelled rows is still
+            scannable by shape. Derived from the id, never persisted, so the
+            generator stays free to replace it. */}
+        {tab.icon ?? fallbackTabIcon(tab.id)}
+      </span>
       {isEditing ? (
         <RenameInput
           initial={tab.name}
@@ -1234,72 +1685,135 @@ function TabRow({
             onNavigate?.();
           }}
         >
-          {/* Leading icon — click to open the picker. A span (not a button)
-              since it lives inside the anchor; stop+prevent so the click
-              picks an icon instead of navigating. Mouse-only by design — the
-              keyboard-accessible path is the row context menu "Change icon…". */}
-          {/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard path is the context menu's "Change icon…" item */}
-          <span
-            className="navtree-tab-icon"
-            title="Change icon"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-              setPicker({ x: r.left, y: r.bottom + 4 });
-            }}
-            onDoubleClick={(e) => {
-              // Don't let a fast double-click on the icon trip the row's
-              // rename-on-doubleclick.
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-          >
-            {tab.icon ?? DEFAULT_TAB_ICON}
-          </span>
-          {quickNumber !== undefined && (
-            <span className="navtree-quicknum" aria-hidden="true">
-              {quickNumber}
+          {/* Line one: the name, and the two chips that qualify it. */}
+          <span className="navtree-tab-titleline">
+            {quickNumber !== undefined && (
+              <span className="navtree-quicknum" aria-hidden="true">
+                {quickNumber}
+              </span>
+            )}
+            {/* dir="auto" on the TEXT, never on the row — see
+                .navtree-name-text in NavTree.css for why alignment stays
+                pinned left while direction follows the string. */}
+            <span className="navtree-name-text" dir="auto" title={tab.name}>
+              {tab.name}
             </span>
-          )}
-          <span className="navtree-name-text" title={tab.name}>
-            {tab.name}
+            {/* Pane-count hint — SHEET ONLY, and only while the row is
+                  COLLAPSED. On mobile a one-pane tab and a five-pane tab
+                  looked identical yet behaved completely differently: tapping
+                  the former navigates into the tab, tapping the latter expands
+                  a pane list in place and navigates nowhere. The only thing
+                  distinguishing them was a 10px chevron at the far-left edge,
+                  opposite the name you actually read.
+                  This is deliberately NOT a new indicator: it is the very same
+                  `.navtree-ws-count` chip a COLLAPSED WORKSPACE row already
+                  uses, and it already means exactly "this row is hiding N
+                  children, open it to see them". Same mark, same meaning, one
+                  level down — so the row now explains its own tap behavior.
+                  Collapsed-only for the same reason the workspace chip is:
+                  once the panes are listed, the count is right there. */}
+            {affords.paneCountChip ? (
+              <span className="navtree-ws-count navtree-pane-count" aria-hidden="true">
+                {paneCount}
+              </span>
+            ) : null}
           </span>
-          {/* One status slot per row — never two glyphs competing. The states
-              are really a progression: a tab is WORKING (spinner), then maybe
-              DONE & WANTING YOU (dot), then idle. So show by priority: spinner
-              while busy, else the dot if it wants you, else nothing. The
-              spinner shows on the ACTIVE tab too — agent panes work quietly
-              for minutes on their chat face, and even in a terminal a glance
-              at the sidebar should answer "is anything still running here?"
-              (the dot still self-hides on the active tab via markSeen). */}
-          {tab.busy ? (
-            // Decorative: aria-hidden so this fast-toggling glyph doesn't churn
-            // the link's accessible name ("Home busy" → "Home" → …). title is
-            // the mouse affordance.
-            <span className="navtree-busy" aria-hidden="true" title="Working…">
-              <SvgSpinner />
+          {/* Line two: WHAT THIS CHAT IS ABOUT — one machine-written line,
+                dim, ellipsised, never wrapped. A name alone ("muxpad",
+                "Main") tells you which chat; it never tells you where you
+                left it, so re-entering a chat always cost a read of the last
+                turn. Written rarely and kept sticky on purpose (see the
+                server's headline generator): a summary that churned every
+                turn would be a second moving thing in a rail whose whole
+                point is that only one thing moves. Absent is FINE — the row
+                is simply one line tall. Never a placeholder, never an error:
+                a rail that says "couldn't summarise" on ten rows is worse
+                than a rail that says nothing. */}
+          {tab.headline ? (
+            <span className="navtree-tab-headline" dir="auto" title={tab.headline}>
+              {tab.headline}
             </span>
-          ) : tab.attention ? (
-            <span className="badge-dot -inline" aria-label="needs attention" />
           ) : null}
         </Link>
       )}
-      <button
-        type="button"
-        className="navtree-close"
-        onClick={onClose}
-        title="Close tab"
-        aria-label={`Close tab ${tab.name}`}
-      >
-        <SvgClose size={13} />
-      </button>
+      {/* Hover-revealed controls — DESKTOP ONLY, and deliberately placed
+            BEFORE both the meta cell and the status mark. Two separate
+            reasons, and the second one is a hard constraint:
+            (a) they expand from zero width on hover, and
+            anything that grows to the RIGHT of the rail drags the mark off the
+            scan line for exactly the row you happen to be pointing at. In
+            their own cell (which swallows its grid gap while collapsed) the
+            status column stays the last, fixed track in the grid, so the marks
+            hold their line under every condition — hover, focus, drag,
+            whatever;
+            (b) DOM order among grid children with explicit `grid-column`
+            must be ASCENDING by track. Grid's placement cursor only moves
+            forward, so an item pinned to a track BEHIND the cursor starts a
+            new implicit ROW. This block sits in track 3 and meta in track 4;
+            emitting meta first put the controls and the status mark on a
+            second line underneath the name — measured, and invisible to an
+            x-only alignment check, since every row broke identically.
+            Touch renders none of this: the sheet's pin, mark-unread and close
+            live under the row, behind a left swipe. */}
+      {affords.pinButton || affords.closeButton ? (
+        <span className="navtree-tab-controls">
+          {/* A pinned tab keeps its pin lit — that is the only "this is
+                pinned" signal in the rail, by design (no extra badges). */}
+          {affords.pinButton ? (
+            <button
+              type="button"
+              className={`navtree-close navtree-pin${tab.pinned ? ' is-pinned' : ''}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                onSetPinned(!tab.pinned);
+              }}
+              title={tab.pinned ? 'Unpin tab' : 'Pin tab to the top'}
+              aria-label={tab.pinned ? `Unpin tab ${tab.name}` : `Pin tab ${tab.name}`}
+              aria-pressed={tab.pinned === true}
+            >
+              <SvgPin size={12} filled={tab.pinned === true} />
+            </button>
+          ) : null}
+          {affords.closeButton ? (
+            <button
+              type="button"
+              className="navtree-close"
+              onClick={onClose}
+              title="Close tab"
+              aria-label={`Close tab ${tab.name}`}
+            >
+              <SvgClose size={13} />
+            </button>
+          ) : null}
+        </span>
+      ) : null}
+      {/* META — the third grid track. Holds the schedule and nothing else.
+            The subagent count used to ride here (as an absolutely-positioned
+            chip hanging off the status mark) and is gone: it moved the mark
+            off the scan line, and "6 agents" is a number you act on inside
+            the chat, not from the rail. */}
+      {!isEditing ? (
+        <span className="navtree-tab-meta">{tab.crons ? <CronMark tab={tab} /> : null}</span>
+      ) : null}
+      {/* The state chip — the LAST track, so nothing in front of it can push
+            it off the row's right edge. Rendered on the ACTIVE row too, and
+            deliberately: agent panes work quietly for minutes on their chat
+            face, and the one chat whose progress you are actually waiting on
+            must not be the single row that goes dark. */}
+      {!isEditing && <StateChip status={tab.status} />}
       {menu && (
         <NavContextMenu
           x={menu.x}
           y={menu.y}
           onDismiss={() => setMenu(null)}
           items={[
+            // Leads the list: on touch this menu (reached by the row's ⋯
+            // button) is the ONLY route to pin/unpin — the pin button is
+            // desktop-only. See lib/nav-row-affordances.
+            tab.pinned
+              ? { label: 'Unpin', onSelect: () => onSetPinned(false) }
+              : { label: 'Pin to top', onSelect: () => onSetPinned(true) },
             tab.unread
               ? { label: 'Mark as read', onSelect: () => onSetUnread(false) }
               : { label: 'Mark as unread', onSelect: () => onSetUnread(true) },
@@ -1353,6 +1867,34 @@ function TabRow({
         />
       )}
     </div>
+  );
+
+  return (
+    <>
+      {/* Touch wraps the row in its swipe shell; the pin, mark-unread and
+          close it reveals are the ONLY per-row actions on the sheet, and they
+          cost nothing until you ask for them. Desktop renders the row bare and
+          keeps its hover-revealed controls — a mouse has hover, so there is
+          nothing to fix there and a gesture would only be in the way.
+          Mark unread rides the SAME onSetUnread the context menu uses, so
+          touch and desktop reach one route and one optimistic patch.
+          Not while EDITING: a rename input you can swipe out from under is a
+          way to lose what you typed. */}
+      {variant === 'sheet' && !isEditing ? (
+        <SwipeRow
+          id={tab.id}
+          label={`chat ${tab.name}`}
+          pinned={tab.pinned === true}
+          unread={tab.unread === true}
+          onPin={() => onSetPinned(!tab.pinned)}
+          onSetUnread={onSetUnread}
+          onClose={() => onClose({ stopPropagation() {}, preventDefault() {} } as React.MouseEvent)}
+        >
+          {row}
+        </SwipeRow>
+      ) : (
+        row
+      )}
       {variant === 'sheet' && sheetPicksPane && panesOpen ? (
         <SheetPaneList
           tab={tab}
@@ -1363,6 +1905,22 @@ function TabRow({
       ) : null}
     </>
   );
+}
+
+/**
+ * Portal target for the row overlays.
+ *
+ * The menu and the icon picker are viewport-positioned (`position: fixed`),
+ * and they are rendered as children of a nav ROW. On the sheet that row is
+ * wrapped in a SwipeRow whose face always carries a `transform` — a
+ * transformed element becomes the containing block for its fixed descendants,
+ * and the swipe shell's `overflow: hidden` then clips them to one 46px row.
+ * Measured: `fixed; inset: 0` resolved to the row's own box. Portalling to
+ * <body> puts them back in the viewport's coordinate space, which is what
+ * their arithmetic above already assumes.
+ */
+function Overlay({ children }: { children: React.ReactNode }) {
+  return createPortal(children, document.body);
 }
 
 /** One row in a NavContextMenu. With `submenu`, the row opens a flyout of
@@ -1406,78 +1964,80 @@ function NavContextMenu({
   // viewport, so the submenu doesn't run off-screen.
   const flyoutLeft = left > window.innerWidth / 2;
   return (
-    <div
-      className="navtree-menu-backdrop"
-      onMouseDown={onDismiss}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        onDismiss();
-      }}
-    >
+    <Overlay>
       <div
-        ref={menuRef}
-        className="navtree-menu"
-        style={{ left, top }}
-        onMouseDown={(e) => e.stopPropagation()}
-        role="menu"
+        className="navtree-menu-backdrop"
+        onMouseDown={onDismiss}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onDismiss();
+        }}
       >
-        {items.map((it) =>
-          it.submenu ? (
-            <div
-              key={it.label}
-              className="navtree-menu-sub"
-              onMouseEnter={() => setOpenSub(it.label)}
-              onMouseLeave={() => setOpenSub(null)}
-            >
-              <button
-                type="button"
-                className="navtree-menu-item navtree-menu-item-parent"
-                role="menuitem"
-                aria-haspopup="menu"
-                aria-expanded={openSub === it.label}
-                onClick={() => setOpenSub((cur) => (cur === it.label ? null : it.label))}
+        <div
+          ref={menuRef}
+          className="navtree-menu"
+          style={{ left, top }}
+          onMouseDown={(e) => e.stopPropagation()}
+          role="menu"
+        >
+          {items.map((it) =>
+            it.submenu ? (
+              <div
+                key={it.label}
+                className="navtree-menu-sub"
+                onMouseEnter={() => setOpenSub(it.label)}
+                onMouseLeave={() => setOpenSub(null)}
               >
-                <span>{it.label}</span>
-                <span className="navtree-menu-caret" aria-hidden="true">
-                  ›
-                </span>
+                <button
+                  type="button"
+                  className="navtree-menu-item navtree-menu-item-parent"
+                  role="menuitem"
+                  aria-haspopup="menu"
+                  aria-expanded={openSub === it.label}
+                  onClick={() => setOpenSub((cur) => (cur === it.label ? null : it.label))}
+                >
+                  <span>{it.label}</span>
+                  <span className="navtree-menu-caret" aria-hidden="true">
+                    ›
+                  </span>
+                </button>
+                {openSub === it.label && (
+                  <div className={`navtree-submenu${flyoutLeft ? ' -left' : ''}`} role="menu">
+                    {it.submenu.map((sub) => (
+                      <button
+                        key={sub.label}
+                        type="button"
+                        className="navtree-menu-item"
+                        role="menuitem"
+                        onClick={() => {
+                          onDismiss();
+                          sub.onSelect();
+                        }}
+                      >
+                        {sub.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button
+                key={it.label}
+                type="button"
+                className={it.danger ? 'navtree-menu-item -danger' : 'navtree-menu-item'}
+                role="menuitem"
+                onClick={() => {
+                  onDismiss();
+                  it.onSelect?.();
+                }}
+              >
+                {it.label}
               </button>
-              {openSub === it.label && (
-                <div className={`navtree-submenu${flyoutLeft ? ' -left' : ''}`} role="menu">
-                  {it.submenu.map((sub) => (
-                    <button
-                      key={sub.label}
-                      type="button"
-                      className="navtree-menu-item"
-                      role="menuitem"
-                      onClick={() => {
-                        onDismiss();
-                        sub.onSelect();
-                      }}
-                    >
-                      {sub.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          ) : (
-            <button
-              key={it.label}
-              type="button"
-              className={it.danger ? 'navtree-menu-item -danger' : 'navtree-menu-item'}
-              role="menuitem"
-              onClick={() => {
-                onDismiss();
-                it.onSelect?.();
-              }}
-            >
-              {it.label}
-            </button>
-          ),
-        )}
+            ),
+          )}
+        </div>
       </div>
-    </div>
+    </Overlay>
   );
 }
 
@@ -1505,25 +2065,27 @@ function IconPicker({
   const left = Math.max(4, Math.min(x, window.innerWidth - W - 4));
   const top = Math.max(4, Math.min(y, window.innerHeight - H - 4));
   return (
-    <div
-      className="navtree-menu-backdrop"
-      onMouseDown={onDismiss}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        onDismiss();
-      }}
-    >
+    <Overlay>
       <div
-        ref={pickerRef}
-        className="navtree-emoji-popover"
-        style={{ left, top }}
-        onMouseDown={(e) => e.stopPropagation()}
+        className="navtree-menu-backdrop"
+        onMouseDown={onDismiss}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onDismiss();
+        }}
       >
-        <Suspense fallback={<div className="navtree-emoji-loading">Loading…</div>}>
-          <EmojiMartPicker theme={pickerTheme()} onPick={onPick} />
-        </Suspense>
+        <div
+          ref={pickerRef}
+          className="navtree-emoji-popover"
+          style={{ left, top }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <Suspense fallback={<div className="navtree-emoji-loading">Loading…</div>}>
+            <EmojiMartPicker theme={pickerTheme()} onPick={onPick} />
+          </Suspense>
+        </div>
       </div>
-    </div>
+    </Overlay>
   );
 }
 
@@ -1563,32 +2125,29 @@ function RenameInput({
 }
 
 /**
- * Busy spinner — a partial ring in `currentColor`, rotated by CSS (.navtree-busy).
- * The wrapper span sets the color (a muted accent that rhymes with the attention
- * dot but stays quieter) and respects prefers-reduced-motion (see NavTree.css).
+ * Pin glyph — a classic push-pin, outlined when the tab is unpinned (an
+ * offer) and filled when pinned (a state). Same silhouette either way, so
+ * toggling reads as one control changing rather than two different icons.
  */
-function SvgSpinner() {
+function SvgPin({ size = 12, filled = false }: { size?: number; filled?: boolean }) {
   return (
-    <svg width="11" height="11" viewBox="0 0 16 16" aria-hidden="true">
-      <circle
-        cx="8"
-        cy="8"
-        r="6"
-        stroke="currentColor"
-        strokeWidth="2"
-        fill="none"
-        opacity="0.25"
-      />
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true">
       <path
-        d="M8 2 a6 6 0 0 1 6 6"
+        d="M9.5 1.8 14.2 6.5l-1.6.5a2 2 0 0 0-1 .6l-1.9 2.2.6 1.3-1 1L4 7.7l1-1 1.3.6 2.2-1.9a2 2 0 0 0 .6-1l.4-1.6ZM6.9 9.1 3.2 12.8"
         stroke="currentColor"
-        strokeWidth="2"
-        fill="none"
+        strokeWidth="1.4"
         strokeLinecap="round"
+        strokeLinejoin="round"
+        fill={filled ? 'currentColor' : 'none'}
+        fillOpacity={filled ? 0.35 : 0}
       />
     </svg>
   );
 }
+
+/** Horizontal ellipsis — the universal "more actions here" mark. Used on the
+ *  mobile sheet, where the row's actions can't hide behind a hover or a
+ *  gesture and need a control you can simply see and tap. */
 
 function SvgChevronRight() {
   return (

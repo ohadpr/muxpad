@@ -1,0 +1,93 @@
+.doc-view {
+  display: flex;
+  flex-direction: column;
+  height: var(--app-height, 100svh);
+  background: var(--bg, #1a1b26);
+  color: var(--fg, #c0caf5);
+  font-family: var(--ui-font);
+}
+
+.doc-topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--chrome-h, 36px);
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-chrome);
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size-sm, 12px);
+}
+.doc-brand {
+  color: var(--fg-dim);
+  letter-spacing: 0.02em;
+}
+.doc-booting {
+  color: var(--fg-faint);
+}
+.doc-error {
+  color: var(--danger);
+}
+
+.doc-scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+/* A centered reading column — a note, not a full-bleed app. */
+.doc-page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 32px 20px 40vh; /* deep bottom pad so the last block can sit mid-screen */
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.doc-text-block {
+  width: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--ui-font);
+  font-size: 16px;
+  line-height: 1.6;
+  padding: 4px 2px;
+}
+.doc-text-block::placeholder {
+  color: var(--fg-faint);
+}
+
+.doc-add-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.doc-add-ai {
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elev);
+  color: var(--fg-dim);
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size-sm, 12px);
+  padding: 5px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.doc-add-ai:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
+  border-color: var(--accent);
+}
+.doc-add-ai:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.doc-add-hint {
+  color: var(--fg-faint);
+  font-size: 12px;
+}

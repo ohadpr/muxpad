@@ -4,7 +4,7 @@ import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { SIDENAV_MIN_WIDTH, updateSettings, useSettings } from '../settings';
 import { useMediaQuery } from '../use-media-query';
 import { useWindowAttention } from '../use-window-attention';
-import { useWorkspaces } from '../workspaces';
+import { useWorkspaces, visibleWorkspaces } from '../workspaces';
 import { Brand } from './Brand';
 import { MobileNavSwitcher } from './MobileNavSwitcher';
 import { MoveUndoToast } from './MoveUndoToast';
@@ -33,7 +33,13 @@ export function AppLayout() {
   // Favicon is driven by the cross-workspace rollup, not by the current
   // workspace's tab list, so a browser tab parked on Workspace A still
   // shows the bell when Workspace B has activity.
-  useWindowAttention(workspaces);
+  //
+  // VISIBLE workspaces only. The hidden apps container holds long-lived server
+  // panes, and a server that writes a BEL byte (a build tool's "done" chime,
+  // an ANSI-heavy log) would otherwise pin the alert favicon permanently —
+  // with no surface in which to clear it, since clearing needs a tab the
+  // navigator can reach. An alert you cannot dismiss is worse than no alert.
+  useWindowAttention(visibleWorkspaces(workspaces));
   const activeWorkspace = wsSlug ? workspaces.find((w) => w.slug === wsSlug) : null;
   const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
   const settings = useSettings();
@@ -234,28 +240,67 @@ function SidenavResizeHandle({ asideRef }: { asideRef: React.RefObject<HTMLEleme
  * fixed (icon + indent), so this is independent of the rail's current width.
  */
 function measureSidenavContentWidth(aside: HTMLElement): number {
-  const asideLeft = aside.getBoundingClientRect().left;
-  // Fixed chrome to the RIGHT of the name+bubble in the RESTING (un-hovered)
+  const asideRect = aside.getBoundingClientRect();
+  const asideLeft = asideRect.left;
+  // Fixed chrome to the RIGHT of the name+chip in the RESTING (un-hovered)
   // state — the close × is deliberately NOT reserved, so the fit width stays
-  // tight to the content: the link's right gutter (6), the row's right
-  // padding (4), the scroll container's right padding (8) and a hair of
-  // breathing room (4). The status bubble is added PER ROW below — only rows
-  // that actually carry a dot/spinner pay for it.
-  const fixedTrailing = 6 + 4 + 8 + 4;
+  // tight to the content. It is READ OFF THE DOM rather than written down: the
+  // two terms are the row's own right inset (--nt-air, and it has already been
+  // 4px and 12px) and everything outside the row (the scroll container's right
+  // padding and the rail's border). Both were written here as literals, and the
+  // first went stale the moment the rail's spacing scale moved: the row inset
+  // went 4 → 12 and this said 4. Measured, the same tree fitted to 401px
+  // instead of 404 — the whole 4px of breathing room spent and 1px of overdraft,
+  // so whether the longest name ellipsises at its own fit width comes down to
+  // sub-pixel text metrics. Reading it back off the DOM is the same arithmetic
+  // with nothing left to go stale. (It is also the DRAG CEILING, so a short
+  // measurement caps how wide the rail can be dragged, not just where
+  // double-click lands.)
+  // The state chip is added PER ROW below — only rows with something to say
+  // pay for it.
+  const probe = aside.querySelector<HTMLElement>('.navtree-tab-row, .navtree-ws-row');
+  const rowInset = probe ? Number.parseFloat(getComputedStyle(probe).paddingRight) : 12;
+  const outsideRow = probe ? asideRect.right - probe.getBoundingClientRect().right : 9;
+  // …plus a hair of breathing room, so the fitted name is not flush against
+  // the chip's own edge.
+  const fixedTrailing = rowInset + outsideRow + 4;
   let max = SIDENAV_MIN_WIDTH;
   for (const el of aside.querySelectorAll<HTMLElement>('.navtree-name-text')) {
     const nameRect = el.getBoundingClientRect();
     const left = nameRect.left - asideLeft;
-    // A status dot/spinner (or the workspace tab-count) sits just after the
-    // name, inside the same link. Its right edge minus the name's right edge
-    // is exactly margin + glyph width — and that delta holds even when the
-    // name is currently ellipsis-truncated, since the glyph trails the box.
-    const status = el.parentElement?.querySelector<HTMLElement>(
-      '.navtree-busy, .badge-dot, .navtree-ws-count',
+    // The state chip (and the workspace tab-count) trails the name, OUTSIDE the
+    // link — so search the ROW, not just the link's own parent, or every
+    // measurement comes up short and the auto-fit width clips the chip off the
+    // right edge.
+    //
+    // Measuring by right-edge delta (rather than adding a constant) is now
+    // load-bearing rather than merely convenient: the chip is no longer a fixed
+    // column but a WORD, so the amount it trails by is per-row — 25px for the
+    // working spinner, 60px for `FAILED`, 74px for `WORKING` under reduced
+    // motion, 0 for an idle row (see StateChip.css). A constant could only ever
+    // be right for one of them.
+    const row = el.closest<HTMLElement>('.navtree-tab-row, .navtree-ws-row, .navtree-pane-row');
+    const scope = row ?? el.parentElement;
+    // Take the RIGHTMOST trailing element, not the first match. `querySelector`
+    // returns document order, and a collapsed workspace row renders its
+    // tab-count chip BEFORE the state chip — so a plain query stopped at the
+    // chip and came up ~20px short on exactly the rows that have both, clipping
+    // the rail off the auto-fit width.
+    // `.navtree-status` is kept in the list on purpose: the nav rows moved to
+    // `.navtree-state`, but the Hosted list still renders a StatusMark, and a
+    // selector that silently matches nothing is exactly how this measurement
+    // broke last time.
+    const trailing = scope
+      ? [
+          ...scope.querySelectorAll<HTMLElement>(
+            '.navtree-state, .navtree-status, .navtree-ws-count',
+          ),
+        ]
+      : [];
+    const statusExtra = trailing.reduce(
+      (max, node) => Math.max(max, node.getBoundingClientRect().right - nameRect.right),
+      0,
     );
-    const statusExtra = status
-      ? Math.max(0, status.getBoundingClientRect().right - nameRect.right)
-      : 0;
     const needed = left + el.scrollWidth + statusExtra + fixedTrailing;
     if (needed > max) max = needed;
   }

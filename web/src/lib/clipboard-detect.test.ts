@@ -16,13 +16,17 @@ describe('splitClipboard', () => {
   });
 
   it('detects image-only paste with multiple images', () => {
-    const r = splitClipboard(makeData([makeItem('file', 'image/png'), makeItem('file', 'image/jpeg')]));
+    const r = splitClipboard(
+      makeData([makeItem('file', 'image/png'), makeItem('file', 'image/jpeg')]),
+    );
     expect(r.imageOnly).toBe(true);
     expect(r.imageItems).toHaveLength(2);
   });
 
   it('treats image + text as mixed (not image-only)', () => {
-    const r = splitClipboard(makeData([makeItem('file', 'image/png'), makeItem('string', 'text/plain')]));
+    const r = splitClipboard(
+      makeData([makeItem('file', 'image/png'), makeItem('string', 'text/plain')]),
+    );
     expect(r.imageOnly).toBe(false);
     expect(r.imageItems).toHaveLength(1);
   });
@@ -34,7 +38,9 @@ describe('splitClipboard', () => {
   });
 
   it('treats file (non-image) + image as mixed', () => {
-    const r = splitClipboard(makeData([makeItem('file', 'image/png'), makeItem('file', 'application/pdf')]));
+    const r = splitClipboard(
+      makeData([makeItem('file', 'image/png'), makeItem('file', 'application/pdf')]),
+    );
     expect(r.imageOnly).toBe(false);
   });
 });

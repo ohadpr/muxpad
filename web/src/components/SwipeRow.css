@@ -1,0 +1,176 @@
+/* ─── Swipe-to-reveal row (mobile sheet only) ─────────────────────────────
+   See SwipeRow.tsx for why the permanent per-row controls are gone. */
+
+.swiperow {
+  position: relative;
+  /* Clip the tray while the row covers it — without this the actions are
+     visible through the gap the rounded pill leaves at the row's edges. */
+  overflow: hidden;
+  border-radius: var(--nt-pill);
+}
+
+/* THE line that makes this work at all: the browser keeps vertical panning
+   for the scroller and hands us horizontal movement. Without it we are racing
+   iOS's scroll recognizer for the touch, and losing — it claims the gesture
+   and we get a pointercancel with the tray half open. */
+.swiperow-face {
+  position: relative;
+  touch-action: pan-y;
+  /* The face must be OPAQUE and must match the surface it slides over, or the
+     row reads as text floating above the actions rather than as a card
+     sliding off them. It takes the colour from its host rather than naming a
+     token, because a component that hardcodes its parent's background is
+     wrong the first time it's mounted somewhere else — measured: the sheet
+     sits on --bg-chrome, not --bg, so a hardcoded --bg left the swiped row a
+     visibly different shade from every row around it. */
+  background: var(--swipe-surface, var(--bg));
+  /* The face slides over the tray, so it must be opaque and above it. */
+  z-index: 1;
+  transition: transform 180ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  will-change: transform;
+}
+/* While the finger is down the row tracks it 1:1 — a transition here would put
+   the row visibly behind the thumb, which is the single thing that makes a
+   swipe feel broken. The easing above is only for the release. */
+.swiperow-face[data-dragging="true"] {
+  transition: none;
+}
+/* The sheet's rows are pills that float off the rail's edges; the sliding face
+   has to carry the same fill or the row reads as a full-bleed band the moment
+   it moves. */
+.swiperow-face .navtree-tab-row:not([data-active="true"], [data-pressing="true"], :hover) {
+  /* background-COLOR, not the shorthand: the row's state tint is painted as a
+     background-IMAGE (StateChip.css) and the shorthand would reset it. It does
+     not today — the tint's selector outweighs this one — but "it happens to
+     outweigh me" is not a thing to leave load-bearing under a swipe.
+
+     THE `:not()` IS THAT SAME WORRY WITH THE TIE ACTUALLY LOAD-BEARING. Three
+     rules in NavTree.css paint this element's background-color, and every one
+     of them is (0,2,0) — exactly this rule's own weight before the guard:
+
+       .navtree-tab-row[data-active="true"]    the selected chat's accent block
+       .navtree-tab-row[data-pressing="true"]  long-press acknowledgment
+       .navtree-tab-row:hover                  (sticky hover, on touch)
+
+     A dead heat is settled by SOURCE ORDER, and all three won only because
+     NavTree.tsx happens to import `./SwipeRow` above its own `./NavTree.css`.
+     Nothing declares that: sorting the import block, or a bundler chunking the
+     two sheets the other way round, would silently blank the selected chat on
+     every phone.
+
+     So the fix is to stop MATCHING those rows rather than to OUT-RANK them.
+     Out-ranking is what a first draft did, with `:not([data-active="true"])`
+     alone, and it is a trap dressed as a fix: that lifted this rule to (0,3,0),
+     which beat `[data-pressing]` and `:hover` at (0,2,0) and killed the
+     long-press fill on every unselected sheet row — i.e. on the only rows
+     where long-press exists at all. Naming every rule that paints this element
+     keeps the weight at (0,3,0) (a `:not()` costs its HEAVIEST argument, not
+     the sum) and makes the outcome independent of order AND of arithmetic.
+     SwipeRow.cascade.test.ts derives the required list from NavTree.css, so a
+     fourth painting rule cannot be added there without this one being updated.
+
+     Skipping those rows costs nothing the rule was buying. The face repaints a
+     row transparent because the sheet's rows are pills floating off the rail;
+     a row already painted its own fill is the case that needs no help.
+
+     `[data-drop-into]` and `[data-dragging]` are absent on purpose: drop
+     targets are gated to `variant === "sidebar"` (NavTree.tsx) and so never
+     appear inside a swipe face, and dragging sets `opacity`, not a fill. */
+  background-color: transparent;
+}
+
+.swiperow-tray {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: stretch;
+}
+/* Hidden until the row is actually open. The face covers the tray exactly, but
+   the shell is a rounded pill and the tray's buttons are square, so at fractional
+   device pixels a sliver of the red Close block bled through each row's rounded
+   corner — a column of tiny red ticks down the edge of a list where nothing was
+   swiped. `visibility` (not `display`) keeps the tray's box for the transform to
+   slide over, and it matches the `tabIndex={-1}` the buttons already carry when
+   closed: hidden from the pointer and hidden from the a11y tree together. */
+.swiperow:not([data-open="true"]) .swiperow-tray {
+  visibility: hidden;
+}
+
+.swiperow-action {
+  /* FULL row height, and as wide as SWIPE_ACTION_WIDTH — past the 44px floor
+     on both axes, and wide enough that the label fits without truncation.
+     These are the only tap targets in the tray, so they can afford to be
+     generous — but only as generous as three of them fit on a 375px phone
+     without the tray taking more than half the row, which is why the number
+     came down when the third arrived (see SWIPE_ACTION_WIDTH).
+
+     The number is NOT written here. SwipeRow.tsx publishes
+     `--swipe-action-width` from the SWIPE_ACTION_WIDTH constant, because the
+     same value also drives SWIPE_TRAY_WIDTH — how far the row slides, where
+     the release latches, and what swipe-axis.test.ts asserts about tap-target
+     size. A literal here could drift from the arithmetic and the tray would
+     stop lining up with the row. The fallback is only for a stray
+     `.swiperow-action` rendered outside this component. */
+  width: var(--swipe-action-width, 59px);
+  border: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  /* White on both fills: these are solid action blocks, not chrome, and they
+     must not restyle themselves per theme (the meaning is fixed). */
+  color: #fff;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.swiperow-action-glyph {
+  font-size: 15px;
+  line-height: 1;
+}
+/* Pin is a slate blue-grey, not the theme accent: the accent already means
+   "you are here" everywhere else in the nav, and a big accent block sliding
+   out under a row would read as a selection. */
+.swiperow-action.-pin {
+  background: #5b6478;
+}
+/* Mark unread/read. Teal: it has to be legible as "not Pin" and "not Close" in
+   the half-second the tray is sliding, and hue is the only channel doing that
+   work (all three blocks are the same size, at the same height, in the same
+   type). Teal sits far enough from Pin's blue-grey to read as a different
+   thing, and is unambiguous against Close for every kind of colour vision —
+   which the obvious alternative, the green of the `ready` state this button
+   produces, would not be sitting directly beside a red block. 5.1:1 on white,
+   so the label clears AA at 12.5px like the other two. */
+.swiperow-action.-unread {
+  background: #2c7a80;
+}
+/* Close is red because it destroys — the same meaning the desktop ×'s
+   danger-red hover carries. */
+.swiperow-action.-close {
+  background: #b8433c;
+}
+/* Armed: one tap turned it into a confirmation. Darker and heavier, so the
+   state change is unmistakable — the button you are about to press twice must
+   not look like the one you pressed once. */
+.swiperow-action.-close[data-armed="true"] {
+  background: #8c2a24;
+}
+.swiperow-action:active {
+  filter: brightness(0.88);
+}
+
+/* Reduced motion: the row still has to move (the movement IS the affordance —
+   there is no other way to show what is underneath), but it arrives at once
+   rather than easing across. */
+@media (prefers-reduced-motion: reduce) {
+  .swiperow-face {
+    transition: none;
+  }
+}

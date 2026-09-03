@@ -80,10 +80,7 @@ export function spliceLayoutAtTarget(
  *   - the server's `pruneDeadPanes` (keep only ids in a validity set) — load-
  *     time / migration cleanup.
  */
-export function pruneLayout(
-  layout: LayoutNode,
-  keep: (paneId: string) => boolean,
-): LayoutNode {
+export function pruneLayout(layout: LayoutNode, keep: (paneId: string) => boolean): LayoutNode {
   if (layout === '' || layout == null) return '';
   if (typeof layout === 'string') return keep(layout) ? layout : '';
   const first = pruneLayout(layout.first, keep);

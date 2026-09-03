@@ -30,6 +30,24 @@ interface UseLongPressResult {
 }
 
 /**
+ * Should a `pointerleave` abort an in-flight hold?
+ *
+ * NO for touch. A touch pointer gets implicit pointer capture, so "the finger
+ * left the element" cannot genuinely happen mid-hold — every touch
+ * pointerleave we see is either the trailing one at pointerup (harmless;
+ * `cancel` already ran) or the browser re-targeting because the pressed row
+ * restyled under the finger, which iOS does. Aborting on it only ever
+ * destroys a legitimate hold, and real aborts still arrive as `pointermove`
+ * (a scroll crossing the move threshold) or `pointercancel`.
+ *
+ * YES for mouse/pen, where the pointer really can wander off the target and
+ * the press should not count.
+ */
+export function pointerLeaveAborts(pointerType: string): boolean {
+  return pointerType !== 'touch';
+}
+
+/**
  * Touch long-press gesture. Mobile analogue of desktop cmd-click. Arms a
  * timer on touch pointerdown; after `ms` (cancelled if the pointer moves
  * past `moveThreshold` or lifts first) sets an "armed" flag. The actual
@@ -109,7 +127,8 @@ export function useLongPress({
         armed.current = false;
         cancel();
       },
-      onPointerLeave: () => {
+      onPointerLeave: (e) => {
+        if (!pointerLeaveAborts(e.pointerType)) return;
         armed.current = false;
         cancel();
       },

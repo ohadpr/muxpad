@@ -4,6 +4,7 @@ import type { MuxpadEvent } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import webpush from 'web-push';
 import type { EventBus } from './events.js';
+import { AppStore } from './store/AppStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
@@ -35,6 +36,39 @@ export interface PushPayload {
   pane_id?: string;
   /** Coalescing key — repeat notifications with the same tag replace. */
   tag?: string;
+}
+
+/**
+ * How long the push service holds an undelivered message for a device it
+ * can't currently reach.
+ *
+ * Was 300s, which quietly made push useless for the case it exists to serve:
+ * a phone asleep in a pocket, on a flaky cell, or simply off for a bit misses
+ * the window and the "your agent is waiting on you" ping is dropped with no
+ * retry and no trace. An hour is the point where the notification stops being
+ * useful and starts being archaeology — an agent that asked a question 90
+ * minutes ago is either finished or long stalled, and buzzing then is noise.
+ *
+ * An hour of holding is only safe because of `topicFor()` below: without
+ * collapsing, a device that comes back after 30 minutes would get every
+ * queued ping at once.
+ */
+const PUSH_TTL_SECONDS = 3600;
+
+/**
+ * Collapse key. The push service keeps only the LATEST undelivered message
+ * per (subscription, topic) — so a pane that rang five times while the phone
+ * was unreachable delivers one current notification instead of a five-deep
+ * stack of stale ones. We reuse the payload's `tag` (the pane id for pane
+ * notifications), which is already the client-side collapse key, so the
+ * server-side and client-side coalescing agree.
+ *
+ * The Topic header is constrained to <=32 base64url characters; anything that
+ * doesn't fit is dropped rather than risking a 400 from the push service.
+ */
+function topicFor(tag: string | undefined): string | undefined {
+  if (!tag) return undefined;
+  return /^[A-Za-z0-9_-]{1,32}$/.test(tag) ? tag : undefined;
 }
 
 interface VapidKeys {
@@ -106,10 +140,20 @@ export class PushService {
       .prepare('SELECT endpoint, subscription FROM push_subscriptions')
       .all() as SubscriptionRow[];
     const body = JSON.stringify(payload);
+    const topic = topicFor(payload.tag);
     await Promise.all(
       rows.map(async (row) => {
         try {
-          await webpush.sendNotification(JSON.parse(row.subscription), body, { TTL: 300 });
+          await webpush.sendNotification(JSON.parse(row.subscription), body, {
+            TTL: PUSH_TTL_SECONDS,
+            // Every push muxpad sends is "a human is being waited on" — the
+            // notifier already suppresses anything the user can see for
+            // themselves (see Presence). `normal` lets a dozing device defer
+            // delivery to its next wake-up, which is exactly the latency this
+            // whole path exists to avoid.
+            urgency: 'high',
+            ...(topic ? { topic } : {}),
+          });
         } catch (err) {
           const status = (err as { statusCode?: number }).statusCode;
           if (status === 404 || status === 410 || status === 401 || status === 403) {
@@ -140,7 +184,114 @@ function loadOrCreateVapidKeys(dataDir: string): VapidKeys {
  * every pane-triggered notification (BEL attention, chat turn-done, agent
  * question) lands the tap on the right tab. Callers supply only the body.
  */
-export type PaneNotifier = (paneId: string, body: string) => void;
+export type PaneNotifier = (
+  paneId: string,
+  body: string,
+  /** A live label for the pane, when the caller has a better one than the DB
+   *  row can give (the pty title/foreground command). */
+  opts?: { label?: string | undefined },
+) => void;
+
+/**
+ * The name a HUMAN would call this pane, mirroring the web's `paneLabel`
+ * (TabView.tsx): pinned name → url host → live pty title → foreground command.
+ * `live` supplies the two runtime fields, which sit in the ptyd cache rather
+ * than on the row.
+ *
+ * Returns null when nothing but a POSITION is available. The web falls back to
+ * "Pane N" there, but in a notification title that token is pure noise unless
+ * it's actually disambiguating something — the caller decides.
+ */
+export function paneLabel(
+  // Read-only structural view of a pane row. Fields are optional so callers can
+  // pass either a decorated PaneSpec or a hand-built stub; `| undefined` on each
+  // is required under exactOptionalPropertyTypes, since a full pane row declares
+  // these as present-but-possibly-undefined rather than absent.
+  pane: {
+    name?: string | null | undefined;
+    kind?: string | undefined;
+    url?: string | null | undefined;
+  },
+  live?: { title?: string | null; fg?: string | null },
+): string | null {
+  const custom = pane.name?.trim();
+  if (custom) return custom;
+  if (pane.kind === 'url' && pane.url) {
+    try {
+      return new URL(pane.url).hostname;
+    } catch {
+      return pane.url;
+    }
+  }
+  return live?.title?.trim() || live?.fg?.trim() || null;
+}
+
+/**
+ * The notification title: "<pane> · <tab>", or just "<tab>".
+ *
+ * Pulled out as a pure function because the rule is the whole point and it is
+ * easy to get subtly wrong. Qualify with the pane when it says something the
+ * tab name doesn't; fall back to a position ONLY when there are siblings to
+ * disambiguate from (a lone "Pane 1 · muxpad" is noise on a phone's one line).
+ */
+export function notificationTitle(input: {
+  tabName: string | null;
+  label: string | null;
+  position: number;
+  siblings: number;
+}): string {
+  const { tabName, label, position, siblings } = input;
+  if (!tabName) return 'muxpad';
+  // A negative position means "not in its own tab's list" — a row read while it
+  // was being deleted. Printing "Pane <siblings+1>" there names a pane that
+  // cannot exist; say nothing instead.
+  const named = label?.trim() || (siblings > 1 && position >= 0 ? `Pane ${position + 1}` : null);
+  if (!named) return tabName;
+  if (named.toLowerCase() === tabName.trim().toLowerCase()) return tabName;
+  return `${named} · ${tabName}`;
+}
+
+/**
+ * Where a notification about `paneId` should LAND.
+ *
+ * Pure, because the rule is the whole feature and every branch of it is a
+ * user-visible bug when it is wrong:
+ *
+ *   APP PANE      An app registered with `muxpad app` runs in a pane inside the
+ *                 HIDDEN `· apps ·` container. `/w/<hidden>/t/<tab>` is a route
+ *                 the navigator refuses to show — WorkspaceShell detects it and
+ *                 bounces to `/hosted`, so the user who tapped "could not be
+ *                 restarted" got dumped on a LIST and had to find the app
+ *                 again. Address the app directly instead, on its logs tab:
+ *                 that pane's terminal IS the log, and the notification is
+ *                 always about the process failing.
+ *   HIDDEN, NO    Shouldn't exist (the apps container is the only hidden one),
+ *   APP ROW       but a dangling pane must not deep-link into limbo either.
+ *   NORMAL        `/w/<ws>/t/<tab>?ptab=&pane=` plus the warm-path hints.
+ *   UNRESOLVABLE  the root. No hints — a tab_id the client can't place would
+ *                 arm the pane-focus store for a tab it will never show, and
+ *                 that store then ambushes the next visit to it.
+ */
+export function paneDeepLink(input: {
+  wsSlug: string | null;
+  tabSlug: string | null;
+  tabId: string | null;
+  paneId: string;
+  /** The pane's workspace is a hidden system container. */
+  hiddenWorkspace: boolean;
+  /** Slug of the registered app this pane serves, if any. */
+  appSlug: string | null;
+}): { url: string; tab_id?: string; pane_id?: string } {
+  if (input.appSlug) {
+    return { url: `/hosted/a/${encodeURIComponent(input.appSlug)}?logs=true` };
+  }
+  if (input.hiddenWorkspace) return { url: '/hosted' };
+  if (!input.wsSlug || !input.tabSlug || !input.tabId) return { url: '/' };
+  const url =
+    `/w/${encodeURIComponent(input.wsSlug)}/t/${encodeURIComponent(input.tabSlug)}` +
+    `?ptab=${encodeURIComponent(input.tabId)}&pane=${encodeURIComponent(input.paneId)}`;
+  return { url, tab_id: input.tabId, pane_id: input.paneId };
+}
 
 /**
  * "Is the user actively at a device right now?" — fed by a client-side
@@ -165,26 +316,48 @@ export function createPaneNotifier(
   db: Database.Database,
   push: PushService,
   presence?: Presence,
+  /** Live pty title / foreground command for a pane (the ptyd cache). */
+  liveLabel?: (paneId: string) => { title?: string | null; fg?: string | null },
 ): PaneNotifier {
   const panes = new PaneStore(db);
   const tabs = new TabStore(db);
   const workspaces = new WorkspaceStore(db);
-  return (paneId, body) => {
+  const apps = new AppStore(db);
+  return (paneId, body, opts) => {
     // Hold the push while the user is active on any device — they can see it.
     if (presence?.isActive()) return;
     const pane = panes.getById(paneId);
     const tab = pane ? tabs.getById(pane.tab_id) : null;
     const ws = tab ? workspaces.getById(tabs.getWorkspaceId(tab.id) ?? '') : null;
+    // Which pane rang, in the TITLE. A tab with three agent panes produced
+    // three notifications titled identically ("muxpad", "muxpad", "muxpad")
+    // with bodies like "finished its turn" that named nothing — the user could
+    // not tell which pane wanted them without tapping each.
+    const siblings = tab ? panes.listByTab(tab.id) : [];
+    const idx = siblings.findIndex((p) => p.id === paneId);
+    // Where the tap lands. Not always the owning tab — see paneDeepLink.
+    const target = paneDeepLink({
+      wsSlug: ws ? ws.slug : null,
+      tabSlug: tab ? tab.slug : null,
+      tabId: tab ? tab.id : null,
+      paneId,
+      hiddenWorkspace: !!ws?.hidden,
+      appSlug: apps.getByPane(paneId)?.slug ?? null,
+    });
     void push.send({
-      // Title is just the tab name — the workspace ("— Personal") was noise on
-      // a phone's one line; ws is still resolved below for the deep-link slug.
-      title: tab ? tab.name : 'muxpad',
+      // "pane · tab" — the workspace ("— Personal") was noise on a phone's one
+      // line; ws is resolved above for the deep-link slug and the hidden check.
+      title: notificationTitle({
+        tabName: tab ? tab.name : null,
+        label: pane ? opts?.label?.trim() || paneLabel(pane, liveLabel?.(paneId)) : null,
+        // Negative when the pane is not in its own tab list (a row read mid-
+        // delete). notificationTitle reads that as "no position" rather than
+        // inventing a "Pane N+1" that cannot exist.
+        position: idx,
+        siblings: siblings.length,
+      }),
       body,
-      url:
-        tab && ws
-          ? `/w/${ws.slug}/t/${tab.slug}?ptab=${encodeURIComponent(tab.id)}&pane=${encodeURIComponent(paneId)}`
-          : '/',
-      ...(tab ? { tab_id: tab.id, pane_id: paneId } : {}),
+      ...target,
       tag: paneId,
     });
   };
@@ -214,9 +387,11 @@ export function attachAttentionPush(opts: {
   /** Injectable clock for tests. */
   now?: () => number;
   graceMs?: number;
+  /** Live pty title / foreground command (the ptyd cache). */
+  liveLabel?: (paneId: string) => { title?: string | null; fg?: string | null };
 }): () => void {
-  const { events, db, push, presence, now = Date.now, graceMs = 15_000 } = opts;
-  const notify = createPaneNotifier(db, push, presence);
+  const { events, db, push, presence, now = Date.now, graceMs = 15_000, liveLabel } = opts;
+  const notify = createPaneNotifier(db, push, presence, liveLabel);
   const lastAttention = new Map<string, boolean>();
   const bootAt = now();
 
@@ -237,7 +412,10 @@ export function attachAttentionPush(opts: {
     if (prev === undefined && now() - bootAt < graceMs) return; // restart replay — baseline only
     if (prev === true || !attention) return; // not a rising edge
 
-    const paneLabel = e.pane.name ?? e.pane.title ?? e.pane.foreground_cmd ?? 'a pane';
-    notify(e.pane.id, `${paneLabel} wants your attention`);
+    // The live label beats anything the notifier can read off the row alone;
+    // it rides `opts` into the TITLE rather than being spliced into the body,
+    // so it isn't repeated when the notifier already qualifies the title.
+    const label = e.pane.name ?? e.pane.title ?? e.pane.foreground_cmd ?? undefined;
+    notify(e.pane.id, 'wants your attention', { label });
   });
 }

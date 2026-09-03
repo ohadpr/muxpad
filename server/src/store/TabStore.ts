@@ -1,7 +1,7 @@
-import type Database from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
+import type { LayoutNode, Tab } from '@muxpad/shared';
+import type Database from 'better-sqlite3';
 import { monotonicFactory } from 'ulid';
-import { type LayoutNode, type Tab, randomTabIcon } from '@muxpad/shared';
 
 const ulid = monotonicFactory();
 
@@ -27,6 +27,13 @@ interface TabRow {
   layout: string;
   view_mode: string;
   workspace_id: string;
+  pinned: number;
+  last_activity_at: number | null;
+  headline: string | null;
+  headline_at: number | null;
+  name_sticky: number;
+  icon_sticky: number;
+  icon_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -43,14 +50,23 @@ export class TabStore {
     const id = ulid();
     const slug = this.uniqueSlug();
     const now = Date.now();
-    // New tabs get a random icon by default (the picker can change it).
-    const icon = input.icon ?? randomTabIcon();
+    // A new tab has NO icon, and the rail renders `fallbackTabIcon(tab.id)`
+    // until it gets one — derived from the id, so it is stable per row and
+    // mostly distinct across rows, and stored nowhere. (NOT `DEFAULT_TAB_ICON`,
+    // which is one constant glyph and would turn the icon column into an
+    // undifferentiated stripe.)
+    //
+    // This used to be `randomTabIcon()`, which was worse than
+    // meaningless: an icon nobody chose is what the generator reads as "this
+    // tab already has one, hands off", so a random default did not merely fail
+    // to describe the tab — it permanently prevented anything from describing
+    // it. The icon now arrives from the chat's own subject (chat/headline.ts)
+    // or from the picker, and both of those are better than a dice roll.
+    const icon = input.icon ?? null;
     const maxPos =
       (
         this.db
-          .prepare(
-            'SELECT COALESCE(MAX(position), -1) AS m FROM tabs WHERE workspace_id = ?',
-          )
+          .prepare('SELECT COALESCE(MAX(position), -1) AS m FROM tabs WHERE workspace_id = ?')
           .get(input.workspace_id) as { m: number } | undefined
       )?.m ?? -1;
     // NEW tabs default to the tabbed presentation: a tab is primarily "one
@@ -62,7 +78,7 @@ export class TabStore {
     const view_mode = 'tabbed' as const;
     this.db
       .prepare(
-        'INSERT INTO tabs (id, slug, name, icon, layout, workspace_id, view_mode, created_at, updated_at, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO tabs (id, slug, name, icon, layout, workspace_id, view_mode, created_at, updated_at, position, last_activity_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         id,
@@ -75,20 +91,35 @@ export class TabStore {
         now,
         now,
         maxPos + 1,
+        now,
       );
     return {
       id,
       slug,
       name: input.name,
-      icon,
+      // Same rule as `row()`: absent, not null. A tab with no icon adds
+      // nothing to the payload and nothing to the client's change-dedup
+      // signature.
+      ...(icon ? { icon } : {}),
       layout: input.layout,
       view_mode,
+      pinned: false,
+      // A brand-new tab has had nothing happen in it yet — but it IS the most
+      // recent thing the user did, and sorting it last (null = never) would
+      // bury a just-created tab at the bottom of its workspace. Stamp it.
+      last_activity_at: now,
       created_at: now,
       updated_at: now,
     };
   }
 
-  /** Replace tab ordering across the listed ids within a workspace. */
+  /**
+   * Replace tab ordering across the listed ids within a workspace. Only the
+   * PINNED block is manually ordered in the sidebar (unpinned tabs are
+   * auto-sorted at read time), so in practice `ids` is the pinned set — but
+   * `position` is still written for every id passed, and remains the final
+   * deterministic tiebreak for unpinned tabs.
+   */
   reorder(ids: string[]): void {
     const update = this.db.prepare('UPDATE tabs SET position = ? WHERE id = ?');
     this.db.transaction(() => {
@@ -117,9 +148,9 @@ export class TabStore {
    * events. Returns undefined for an unknown id.
    */
   getWorkspaceId(id: string): string | undefined {
-    const row = this.db
-      .prepare('SELECT workspace_id FROM tabs WHERE id = ?')
-      .get(id) as { workspace_id: string } | undefined;
+    const row = this.db.prepare('SELECT workspace_id FROM tabs WHERE id = ?').get(id) as
+      | { workspace_id: string }
+      | undefined;
     return row?.workspace_id;
   }
 
@@ -217,6 +248,20 @@ export class TabStore {
   }
 
   /**
+   * Is this ONE tab manually flagged unread? A dedicated read because `row()`
+   * deliberately doesn't hydrate the flag onto `Tab` (the list routes compute
+   * the rolled-up `unread` themselves, and a half-populated field on getById
+   * would be a trap — it silently reads `undefined`, which is exactly how the
+   * per-pane /seen route's tab-clearing check failed the first time).
+   */
+  isUnread(id: string): boolean {
+    const row = this.db.prepare('SELECT unread FROM tabs WHERE id = ?').get(id) as
+      | { unread: number }
+      | undefined;
+    return !!row?.unread;
+  }
+
+  /**
    * Ids of the tabs in a workspace currently flagged unread, as one query
    * so the list/rollup routes can fold the flag without an N+1 of reads.
    */
@@ -225,6 +270,164 @@ export class TabStore {
       .prepare('SELECT id FROM tabs WHERE workspace_id = ? AND unread = 1')
       .all(workspaceId) as { id: string }[];
     return new Set(rows.map((r) => r.id));
+  }
+
+  /**
+   * Pin (or unpin) a tab. Pinned tabs hold the top of their workspace's
+   * sidebar block in the user's manual drag order; unpinned tabs below the
+   * divider are auto-sorted by blocked/attention → recency (busy was dropped
+   * from the sort: a working tab is not more urgent than a recent one, and
+   * churning the order under a spinner made the list unreadable). Pinning is
+   * therefore the way to opt a tab OUT of the shuffling. Best-effort: a
+   * missing id is a silent no-op (same contract as setUnread).
+   */
+  setPinned(id: string, pinned: boolean): void {
+    this.db.prepare('UPDATE tabs SET pinned = ? WHERE id = ?').run(pinned ? 1 : 0, id);
+  }
+
+  /**
+   * Stamp the tab's last-activity time. Deliberately NOT touching
+   * `updated_at`: that tracks structural edits (name/layout/icon) and clients
+   * key cache invalidation off it — an every-minute pty bump would churn it.
+   * Callers throttle (see tab-activity.ts); this is the raw write.
+   */
+  touchActivity(id: string, at: number = Date.now()): void {
+    this.db.prepare('UPDATE tabs SET last_activity_at = ? WHERE id = ?').run(at, id);
+  }
+
+  /**
+   * Write the nav row's second line, stamping the rate limiter's clock in the
+   * same statement so the two can never disagree.
+   *
+   * Its own method rather than a field on `update()` for the reason
+   * `touchActivity` is: `update()` bumps `updated_at`, which clients key cache
+   * invalidation off, and a headline is not a structural edit to the tab.
+   */
+  setHeadline(id: string, headline: string, at: number = Date.now()): void {
+    this.db
+      .prepare('UPDATE tabs SET headline = ?, headline_at = ? WHERE id = ?')
+      .run(headline, at, id);
+  }
+
+  /**
+   * Advance the headline rate limiter WITHOUT writing a line.
+   *
+   * The clock must move on every ATTEMPT, not every success — otherwise a
+   * chat that keeps coming back "unchanged", and more importantly one whose
+   * model call keeps FAILING, is retried on every finished turn forever. The
+   * expensive thing is the call, so the call is what the limiter counts.
+   */
+  touchHeadlineAt(id: string, at: number = Date.now()): void {
+    this.db.prepare('UPDATE tabs SET headline_at = ? WHERE id = ?').run(at, id);
+  }
+
+  /** When this tab's headline was last written; null if never. */
+  headlineAt(id: string): number | null {
+    const r = this.db.prepare('SELECT headline_at FROM tabs WHERE id = ?').get(id) as
+      | { headline_at: number | null }
+      | undefined;
+    return r?.headline_at ?? null;
+  }
+
+  /**
+   * "The user named this one." One-way by design: there is no unset. A tab
+   * you have deliberately named should never be renamed out from under you,
+   * and no plausible flow wants to hand that authority back to the machine.
+   */
+  setNameSticky(id: string): void {
+    this.db.prepare('UPDATE tabs SET name_sticky = 1 WHERE id = ?').run(id);
+  }
+
+  isNameSticky(id: string): boolean {
+    const r = this.db.prepare('SELECT name_sticky FROM tabs WHERE id = ?').get(id) as
+      | { name_sticky: number }
+      | undefined;
+    return !!r?.name_sticky;
+  }
+
+  /**
+   * "The user chose this glyph." One-way, like `setNameSticky`, and for a
+   * sharper version of the same reason: the icon is how a row is found by
+   * shape, so an icon you deliberately picked changing under you is worse than
+   * a name doing it. There is no unset.
+   *
+   * Its own flag rather than a second meaning for `name_sticky`: renaming a
+   * tab and choosing its glyph are separate acts, and doing one should not
+   * silently freeze the other.
+   */
+  setIconSticky(id: string): void {
+    this.db.prepare('UPDATE tabs SET icon_sticky = 1 WHERE id = ?').run(id);
+  }
+
+  isIconSticky(id: string): boolean {
+    const r = this.db.prepare('SELECT icon_sticky FROM tabs WHERE id = ?').get(id) as
+      | { icon_sticky: number }
+      | undefined;
+    return !!r?.icon_sticky;
+  }
+
+  /**
+   * Write a GENERATED icon, stamping the anti-drift clock in the same
+   * statement so the two can never disagree. Returns whether it wrote.
+   *
+   * Deliberately not `update()`: that bumps `updated_at`, which clients key
+   * cache invalidation off. Same split, and the same reasoning, as
+   * `setHeadline`.
+   *
+   * THE STICKY CHECK IS IN THE SQL, not left to the caller, because the caller
+   * physically cannot do it safely. A generation reads the flag, then awaits a
+   * model call — a CLI subprocess, up to 30 seconds — and only then writes. A
+   * user picking an icon from the rail during that window would have their
+   * choice silently destroyed, and since the PATCH sets `icon_sticky = 1` on
+   * its way through, the row would afterwards be frozen on the GENERATOR's
+   * glyph forever: the sticky flag protecting the very value it was set to
+   * prevent. The predicate has to be evaluated at write time, in the same
+   * statement, and SQLite is the only place that is true.
+   */
+  setIcon(id: string, icon: string, at: number = Date.now()): boolean {
+    const r = this.db
+      .prepare('UPDATE tabs SET icon = ?, icon_at = ? WHERE id = ? AND icon_sticky = 0')
+      .run(icon, at, id);
+    return r.changes > 0;
+  }
+
+  /**
+   * Hand the icon back to the machine: no glyph, no clock, no sticky flag.
+   *
+   * The counterpart to `PATCH {icon: ''}` and the ONLY thing that lowers
+   * `icon_sticky`. Stickiness is otherwise one-way by design, but "one-way"
+   * has to mean "the generator can never take it back", not "the user can
+   * never change their mind" — and clearing your own icon is about as explicit
+   * as changing your mind gets.
+   *
+   * Without this the carve-out was a trap that did the opposite of its
+   * docstring. `{icon: ''}` on a row that was ALREADY sticky — which is every
+   * row anyone would want to clear, since picking an icon is what makes a row
+   * sticky — left `icon = NULL, icon_sticky = 1`: frozen forever, `setIcon`
+   * refusing every write, the row pinned to the fallback glyph with no way
+   * back from any surface. Exactly the stranding the carve-out was added to
+   * prevent.
+   *
+   * All three columns move together because any two of them without the third
+   * is a state with no meaning: a clock for a glyph that is gone, or a sticky
+   * flag guarding nothing.
+   */
+  releaseIcon(id: string): void {
+    this.db
+      .prepare('UPDATE tabs SET icon = NULL, icon_at = NULL, icon_sticky = 0 WHERE id = ?')
+      .run(id);
+  }
+
+  /**
+   * When this tab's icon was last written by the generator; null if it never
+   * was — which means whatever glyph the row wears is a placeholder nobody
+   * chose (see the ESTABLISHED note in chat/headline.ts).
+   */
+  iconAt(id: string): number | null {
+    const r = this.db.prepare('SELECT icon_at FROM tabs WHERE id = ?').get(id) as
+      | { icon_at: number | null }
+      | undefined;
+    return r?.icon_at ?? null;
   }
 
   private row(r: unknown): Tab | null {
@@ -237,6 +440,21 @@ export class TabStore {
       ...(x.icon ? { icon: x.icon } : {}),
       layout: JSON.parse(x.layout),
       view_mode: x.view_mode === 'tabbed' ? 'tabbed' : 'split',
+      pinned: !!x.pinned,
+      // Null (never observed) is a real state and stays null — see the
+      // migration note; the ordering sinks nulls rather than faking a time.
+      last_activity_at: x.last_activity_at ?? null,
+      // Same rule: null means "never summarised", which is permanent for any
+      // tab without an agent session. Only present when non-null, so a chat
+      // that has no headline adds nothing to the payload — and nothing to the
+      // client's change-dedup signature.
+      ...(x.headline ? { headline: x.headline } : {}),
+      ...(x.name_sticky ? { name_sticky: true } : {}),
+      // `icon_sticky` is deliberately NOT surfaced. Nothing on the client
+      // branches on it — the picker sets it as a side effect of PATCHing an
+      // icon, and the rail renders whatever glyph it is handed — so adding it
+      // would only widen the payload and the change-dedup signature for a
+      // field no renderer reads.
       created_at: x.created_at,
       updated_at: x.updated_at,
     };

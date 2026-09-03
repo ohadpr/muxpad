@@ -17,6 +17,7 @@
     "@hono/node-server": "^1.13.7",
     "@muxpad/shared": "workspace:*",
     "better-sqlite3": "^11.5.0",
+    "cron-parser": "^5.10.0",
     "hono": "^4.6.10",
     "node-pty": "^1.0.0",
     "ulid": "^2.3.0",
@@ -29,6 +30,7 @@
     "@types/node": "^22.9.0",
     "@types/web-push": "^3.6.4",
     "@types/ws": "^8.5.13",
+    "playwright": "1.62.1",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vitest": "^2.1.4"
