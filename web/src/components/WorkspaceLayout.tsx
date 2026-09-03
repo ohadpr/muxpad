@@ -1,6 +1,7 @@
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import { HOUSE_CHAT_CREATE } from '../lib/agent-backend';
 import { getLastTabSlug } from '../lib/last-visited';
 import { TabView } from '../pages/TabView';
 import { refreshTabs, useTabs } from '../tabs';
@@ -103,9 +104,11 @@ export function WorkspaceShell({ wsSlug, isActive }: WorkspaceShellProps) {
           className="btn btn-primary"
           onClick={async () => {
             try {
-              // Tabs-first: the server creates the tab with a full-size
-              // terminal pane atomically, so the user lands on a live shell.
-              const t = await api.createTab(workspace.id, { bootstrap: 'shell' });
+              // Tabs-first: the server creates the tab with its single
+              // full-size pane atomically. Same HOUSE_CHAT_CREATE as every
+              // other "+ New tab" — this button is worded identically to the
+              // sidebar's, so it must not quietly create something else.
+              const t = await api.createTab(workspace.id, { ...HOUSE_CHAT_CREATE });
               await refreshTabs(workspace.id);
               void navigate({
                 to: '/w/$wsSlug/t/$tabSlug',

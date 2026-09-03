@@ -1,7 +1,7 @@
 // Converting a chat pane into something else (a raw harness, a terminal, a
 // web view). The precondition is ZERO MESSAGES and it is enforced here, on
 // the server — the "open instead" strip only decides what to OFFER.
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PaneSpec, Tab } from '@muxpad/shared';
@@ -94,6 +94,82 @@ describe('pane conversion — the zero-message gate', () => {
     });
   });
 
+  it('carries the launch card’s FOLDER and MODEL into the spawned session', async () => {
+    // The two things the user decides at the moment of picking. Both have to
+    // reach the process, not just the UI: the model rides the startup command
+    // (which is what a respawn re-runs) and the folder is persisted on the row
+    // (which is what a respawn spawns in).
+    const { pane } = await houseChat();
+    const dir = join(tmp, 'work');
+    mkdirSync(dir, { recursive: true });
+    const res = await test.app.request(`/api/panes/${pane.id}/agent-backend`, {
+      method: 'POST',
+      ...json({ backend: 'codex', mode: 'deep', cwd: dir, model: 'gpt-5-codex' }),
+    });
+    expect(res.status).toBe(204);
+    expect(row(pane.id).startup_cmd).toBe("muxpad agent --backend codex --model 'gpt-5-codex'");
+    expect(
+      (db.prepare('SELECT cwd FROM panes WHERE id = ?').get(pane.id) as { cwd: string }).cwd,
+    ).toBe(dir);
+  });
+
+  it('omitting the model leaves NO --model pin — the harness keeps its own default', async () => {
+    const { pane } = await houseChat();
+    const res = await test.app.request(`/api/panes/${pane.id}/agent-backend`, {
+      method: 'POST',
+      ...json({ backend: 'claude', mode: 'deep' }),
+    });
+    expect(res.status).toBe(204);
+    expect(row(pane.id).startup_cmd).toBe('muxpad agent');
+  });
+
+  it('snaps the chosen folder up to its project root, like every other agent spawn', async () => {
+    const { pane } = await houseChat();
+    const root = join(tmp, 'repo');
+    mkdirSync(join(root, '.git'), { recursive: true });
+    const sub = join(root, 'src');
+    mkdirSync(sub, { recursive: true });
+    await test.app.request(`/api/panes/${pane.id}/agent-backend`, {
+      method: 'POST',
+      ...json({ backend: 'claude', mode: 'deep', cwd: sub }),
+    });
+    expect(
+      (db.prepare('SELECT cwd FROM panes WHERE id = ?').get(pane.id) as { cwd: string }).cwd,
+    ).toBe(root);
+  });
+
+  it('rejects a bad folder or a shell-metacharacter model — with the pane untouched', async () => {
+    const { pane } = await houseChat();
+    const before = row(pane.id);
+    for (const body of [
+      { backend: 'claude', cwd: 'relative/path' },
+      { backend: 'claude', cwd: join(tmp, 'does-not-exist') },
+      // The model is baked into a command that runs through a shell.
+      { backend: 'claude', model: 'opus; rm -rf /' },
+      { backend: 'claude', model: '$(whoami)' },
+    ]) {
+      const res = await test.app.request(`/api/panes/${pane.id}/agent-backend`, {
+        method: 'POST',
+        ...json(body),
+      });
+      expect(res.status).toBe(400);
+    }
+    // A refused request must never leave the pane converted, or dead between a
+    // kill and a respawn that never happened.
+    expect(row(pane.id)).toEqual(before);
+  });
+
+  it('accepts a model id with brackets — real ids have them', async () => {
+    const { pane } = await houseChat();
+    const res = await test.app.request(`/api/panes/${pane.id}/agent-backend`, {
+      method: 'POST',
+      ...json({ backend: 'claude', mode: 'deep', model: 'claude-opus-4-8[1m]' }),
+    });
+    expect(res.status).toBe(204);
+    // Single-quoted so zsh's nomatch cannot glob-error on the brackets.
+    expect(row(pane.id).startup_cmd).toBe("muxpad agent --model 'claude-opus-4-8[1m]'");
+  });
+
   it('converts an empty chat to a terminal and to a web view', async () => {
     const a = await houseChat();
     expect(
@@ -117,9 +193,12 @@ describe('pane conversion — the zero-message gate', () => {
         ...json({ backend: 'codex' }),
       });
       expect(res.status).toBe(409);
-      const body = (await res.json()) as { error: { message: string } };
+      const body = (await res.json()) as { error: { message: string; code: string } };
       // Human sentence, not jargon — it renders straight into the UI.
       expect(body.error.message).toBe('this chat already has messages — open a new tab instead');
+      // …and a machine code, because the client must tell this 409 apart from
+      // the mid-turn one: only THIS one means "your empty view is wrong".
+      expect(body.error.code).toBe('has_messages');
     }
     // …and nothing was mutated.
     expect(row(pane.id)).toMatchObject({ startup_cmd: 'muxpad agent --mode do', kind: 'shell' });
@@ -165,9 +244,11 @@ describe('pane conversion — the zero-message gate', () => {
         ...json({ backend: 'codex' }),
       });
       expect(res.status).toBe(409);
-      expect(((await res.json()) as { error: { message: string } }).error.message).toMatch(
-        /mid-turn/,
-      );
+      const body = (await res.json()) as { error: { message: string; code: string } };
+      expect(body.error.message).toMatch(/mid-turn/);
+      // A DIFFERENT code: this chat really is empty, so the client must not
+      // conclude it has history and retire the offer for good.
+      expect(body.error.code).toBe('mid_turn');
     }
     expect(row(pane.id)).toMatchObject({ startup_cmd: 'muxpad agent --mode do', kind: 'shell' });
     // Once the turn ends, the same conversion is allowed again.
@@ -215,7 +296,7 @@ describe('pane conversion — the zero-message gate', () => {
     const res = await test.app.request(`/api/panes/${p.id}/as-terminal`, { method: 'POST' });
     expect(res.status).toBe(409);
     expect((await res.json()) as { error: { message: string } }).toMatchObject({
-      error: { message: 'only an agent chat can be converted' },
+      error: { code: 'not_an_agent', message: 'only an agent chat can be converted' },
     });
   });
 

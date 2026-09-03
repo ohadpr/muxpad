@@ -13,6 +13,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AgentBridge } from '../agent-bridge.js';
 import { applyModeToStartupCmd } from '../agent-modes.js';
+import { agentStartupCmd } from '../agent-tab.js';
 import { agentPaneHasMessages } from '../chat/has-messages.js';
 import type { EventBus } from '../events.js';
 import { queuePaneKill } from '../pane-reaper.js';
@@ -102,17 +103,29 @@ function conversionRefusal(
   db: Database.Database,
   p: PaneSpec,
   bridge?: AgentBridge | undefined,
-): string | null {
+): { code: string; message: string } | null {
   if (p.kind !== 'shell' || !(p.startup_cmd?.startsWith('muxpad agent') ?? false)) {
-    return 'only an agent chat can be converted';
+    return { code: 'not_an_agent', message: 'only an agent chat can be converted' };
   }
+  // The CODE matters, not just the sentence. The client's empty state decides
+  // what it believes about this chat from the answer: `has_messages` is the
+  // server correcting our "this chat is empty" render (so the offer must
+  // retire), while `mid_turn` is a WAIT — the chat really is empty and the
+  // offer should come back when the turn ends. Sniffing the prose to tell
+  // those apart would break the first time the wording improved.
   if (agentPaneHasMessages(db, p.id)) {
-    return 'this chat already has messages — open a new tab instead';
+    return {
+      code: 'has_messages',
+      message: 'this chat already has messages — open a new tab instead',
+    };
   }
   const live = bridge?.turnActive(p.id) === true;
   const persisted = new AgentSessionStore(db).getByPane(p.id)?.status === 'running';
   if (live || persisted) {
-    return 'this chat is mid-turn — wait for it to finish, or open a new tab';
+    return {
+      code: 'mid_turn',
+      message: 'this chat is mid-turn — wait for it to finish, or open a new tab',
+    };
   }
   return null;
 }
@@ -765,7 +778,7 @@ export function panesScopedRoutes(deps: {
     // conversionRefusal for the two conditions and why the zero-message one
     // is enforced server-side rather than trusted from the UI.
     const refusal = conversionRefusal(deps.db, p, deps.agentBridge);
-    if (refusal) return c.json({ error: { code: 'conflict', message: refusal } }, 409);
+    if (refusal) return c.json({ error: refusal }, 409);
     const body = z
       .object({
         backend: z.enum(['claude', 'codex', 'cursor']),
@@ -775,17 +788,58 @@ export function panesScopedRoutes(deps: {
         // session instead" affordance passes 'deep' explicitly: a raw
         // harness is exactly the harness, with no house contract on top.
         mode: AgentModeSchema.optional(),
+        // Where the session starts. The launch picker offers this at the
+        // moment of choosing — the one moment the user is actually thinking
+        // about it — instead of deferring it to a menu they must already know
+        // exists. Omitted = keep the pane's current folder.
+        cwd: z.string().min(1).optional(),
+        // Which model to pin. Baked into `startup_cmd`, which runs through a
+        // shell, so the charset is gated exactly as the tabs route gates it:
+        // ids like 'claude-opus-4-8[1m]' pass, shell metacharacters cannot.
+        // Omitted = no `--model` flag = whatever the harness's own default is.
+        model: z
+          .string()
+          .regex(/^[A-Za-z0-9._[\]-]{1,64}$/)
+          .optional(),
       })
       .safeParse(await c.req.json().catch(() => ({})));
     if (!body.success)
       return c.json(
-        { error: { code: 'bad_request', message: 'backend must be claude|codex|cursor' } },
+        {
+          error: {
+            code: 'bad_request',
+            message: 'backend must be claude|codex|cursor (and model must be a plain model id)',
+          },
+        },
         400,
       );
     const backend = body.data.backend;
     const nextMode: AgentMode = body.data.mode ?? p.mode;
-    const base = `muxpad agent${backend === 'claude' ? '' : ` --backend ${backend}`}`;
-    const startupCmd = applyModeToStartupCmd(base, nextMode) ?? base;
+    // Resolve the folder BEFORE anything is killed: a bad path must 400 with
+    // the pane still running, not leave it dead between a kill and a refused
+    // respawn. Same rules as POST /:id/cwd — expand `~`, require absolute,
+    // require an existing directory — then snap to the project root so the
+    // session lands with its rules/MCP/repo, as every other agent spawn does.
+    let nextCwd = p.cwd;
+    if (body.data.cwd !== undefined) {
+      const dir = body.data.cwd.replace(/^~(?=\/|$)/, homedir());
+      if (!dir.startsWith('/'))
+        return c.json(
+          { error: { code: 'bad_request', message: 'cwd must be an absolute path' } },
+          400,
+        );
+      try {
+        if (!statSync(dir).isDirectory()) throw new Error('not a dir');
+      } catch {
+        return c.json({ error: { code: 'bad_request', message: `not a directory: ${dir}` } }, 400);
+      }
+      nextCwd = agentCwd(dir);
+    }
+    const startupCmd = agentStartupCmd({
+      backend,
+      mode: nextMode,
+      ...(body.data.model !== undefined ? { model: body.data.model } : {}),
+    });
     const workspaceId = tabs.getWorkspaceId(p.tab_id);
     // SPAWN FIRST, PERSIST AFTER. The conversion used to be written to the DB
     // before ensurePane, so a ptyd outage returned 503 with the row ALREADY
@@ -805,7 +859,7 @@ export function panesScopedRoutes(deps: {
         id: p.id,
         shell: p.shell ?? defaultShell,
         startup_cmd: startupCmd,
-        cwd: safeCwd(p.cwd),
+        cwd: safeCwd(nextCwd),
         env: p.env,
         tab_id: p.tab_id,
         ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
@@ -825,6 +879,13 @@ export function panesScopedRoutes(deps: {
       if (nextMode !== p.mode) panes.setMode(id, nextMode);
       panes.setStartupCmd(id, startupCmd);
       panes.setFace(id, 'chat');
+      if (nextCwd !== p.cwd && nextCwd) {
+        panes.updateCwd(id, nextCwd);
+        // A different folder is a different project: anything queued against
+        // the old one must not drain into the new session. Same reasoning as
+        // POST /:id/cwd, which is the other way a pane changes folder.
+        new AgentQueueStore(deps.db).clear(id);
+      }
     })();
     const refreshed = panes.getById(id);
     if (refreshed)
@@ -845,7 +906,7 @@ export function panesScopedRoutes(deps: {
     const p = panes.getById(id);
     if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
     const refusal = conversionRefusal(deps.db, p, deps.agentBridge);
-    if (refusal) return c.json({ error: { code: 'conflict', message: refusal } }, 409);
+    if (refusal) return c.json({ error: refusal }, 409);
     const workspaceId = tabs.getWorkspaceId(p.tab_id);
     // Spawn first, persist after — see the note on /agent-backend. A 503 here
     // must leave the pane an agent chat, not a half-converted row the client
@@ -899,7 +960,7 @@ export function panesScopedRoutes(deps: {
     const p = panes.getById(id);
     if (!p) return c.json({ error: { code: 'not_found', message: 'pane not found' } }, 404);
     const refusal = conversionRefusal(deps.db, p, deps.agentBridge);
-    if (refusal) return c.json({ error: { code: 'conflict', message: refusal } }, 409);
+    if (refusal) return c.json({ error: refusal }, 409);
     try {
       await deps.ptyd.closePtyClients(id);
     } catch {

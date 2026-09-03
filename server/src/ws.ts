@@ -4,6 +4,7 @@ import { parseCronMarker, sanitizeAgentStatus } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { AgentBridge } from './agent-bridge.js';
+import { recordModelCatalog } from './agent-model-catalog.js';
 import {
   type AgentQuestion,
   CLOSE_RUNNER_DISPLACED,
@@ -1167,6 +1168,10 @@ export function attachWsServer(deps: {
             // must still carry the last known list.
             const clean = sanitizeAgentStatus(frame);
             if (!clean) return;
+            // Remember this backend's model list so the LAUNCH picker (which
+            // runs before any session exists) can offer real models instead of
+            // only "Default". See agent-model-catalog.ts.
+            recordModelCatalog(deps.db, conn.backend, clean.models);
             const merged = {
               t: 'status' as const,
               ...clean,
