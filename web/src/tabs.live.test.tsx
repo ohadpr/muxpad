@@ -1,6 +1,6 @@
 // `act` from 'react', not 'react-dom/test-utils' — the latter is deprecated in
 // 18.3 and logs a warning on every use.
-import type { MuxpadEvent, Tab } from '@muxpad/shared';
+import { type MuxpadEvent, MuxpadEventSchema, type Tab } from '@muxpad/shared';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -80,7 +80,18 @@ async function mount(useTabs: (ws: string) => { tabs: Tab[] }): Promise<void> {
   });
 }
 
-const emit = async (e: MuxpadEvent) => {
+/**
+ * Push a `tab.updated` through the handlers, THROUGH THE REAL SCHEMA first.
+ *
+ * `MuxpadEventSchema.parse` is what the live socket runs (web/src/events.ts),
+ * and it strips unknown keys — so parsing here is what keeps this file honest
+ * about the one assumption the splice rests on: that the event carries a fully
+ * decorated row. A hand-cast object would let the test keep passing after
+ * `TabSchema` lost `headline` or `icon`, with the splice quietly blanking the
+ * field on every client until the poll.
+ */
+const emitTab = async (t: Tab) => {
+  const e = MuxpadEventSchema.parse({ type: 'tab.updated', tab: t });
   await act(async () => {
     for (const h of [...handlers]) h(e);
   });
@@ -111,10 +122,7 @@ describe('a tab.updated repaints the row it names', () => {
     await mount(mod.useTabs);
     expect(listTabs).toHaveBeenCalledTimes(1);
 
-    await emit({
-      type: 'tab.updated',
-      tab: tab('t2', { headline: 'wiring the cron scheduler into boot', icon: '⏱️' }),
-    } as MuxpadEvent);
+    await emitTab(tab('t2', { headline: 'wiring the cron scheduler into boot', icon: '⏱️' }));
 
     // The row the renderer holds, not merely the cache behind it.
     expect(seen.find((t) => t.id === 't2')?.headline).toBe('wiring the cron scheduler into boot');
@@ -139,10 +147,7 @@ describe('a tab.updated repaints the row it names', () => {
     });
     await mount(mod.useTabs);
 
-    await emit({
-      type: 'tab.updated',
-      tab: tab('t3', { headline: 'just did something', last_activity_at: 9_999 }),
-    } as MuxpadEvent);
+    await emitTab(tab('t3', { headline: 'just did something', last_activity_at: 9_999 }));
 
     // The update landed (without which the order assertion above is satisfied
     // by doing nothing at all) and it landed WHERE THE ROW ALREADY WAS.
@@ -160,12 +165,12 @@ describe('a tab.updated repaints the row it names', () => {
     await mount(mod.useTabs);
     const before = seen;
 
-    await emit({ type: 'tab.updated', tab: tab('elsewhere', { headline: 'nope' }) } as MuxpadEvent);
+    await emitTab(tab('elsewhere', { headline: 'nope' }));
     // Same array identity: no listener was called, so nothing re-rendered.
     expect(seen).toBe(before);
 
     // Paired with the positive, so this cannot pass by handling nothing.
-    await emit({ type: 'tab.updated', tab: tab('t1', { headline: 'yes' }) } as MuxpadEvent);
+    await emitTab(tab('t1', { headline: 'yes' }));
     expect(seen).not.toBe(before);
     expect(seen[0]?.headline).toBe('yes');
     expect(listTabs).toHaveBeenCalledTimes(1);
@@ -189,7 +194,7 @@ describe('a PIN flip is the one change a patch cannot make', () => {
       expect(listTabs).toHaveBeenCalledTimes(1);
 
       rows = [tab('t2', { pinned: true }), tab('t1')];
-      await emit({ type: 'tab.updated', tab: tab('t2', { pinned: true }) } as MuxpadEvent);
+      await emitTab(tab('t2', { pinned: true }));
       // Debounced with the pane.updated path, so nothing has gone out yet.
       expect(listTabs).toHaveBeenCalledTimes(1);
       await act(async () => {
@@ -201,6 +206,59 @@ describe('a PIN flip is the one change a patch cannot make', () => {
       expect(seen.map((t) => t.id)).toEqual(['t2', 't1']);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it('re-queues the refetch when a splice supersedes it mid-flight', async () => {
+    // `applyTabRow` bumps the per-workspace version so an older poll cannot
+    // land on top of a newer event. That guard had a hole under it: a
+    // superseded `refreshTabs` simply RETURNED, so the answer vanished. For
+    // the pin path — where the refetch is the only thing that can fix the
+    // divider — a single unrelated event arriving mid-flight left the list
+    // wrong until the 5s poll, and forever with the poll stopped.
+    //
+    // Before this commit the hole was hard to reach (only a user's own drag
+    // bumped the version); wiring tab.updated into the cache made ordinary
+    // background traffic enter it.
+    vi.useFakeTimers();
+    try {
+      rows = [tab('t1'), tab('t2')];
+      const mod = await import('./tabs');
+      await act(async () => {
+        await mod.refreshTabs(WS);
+      });
+      await mount(mod.useTabs);
+
+      // Hold the pin refetch open so an unrelated event can overtake it.
+      let releaseFetch: (() => void) | null = null;
+      listTabs.mockImplementationOnce(async () => {
+        await new Promise<void>((r) => {
+          releaseFetch = r;
+        });
+        return rows;
+      });
+
+      rows = [tab('t2', { pinned: true }), tab('t1')];
+      await emitTab(tab('t2', { pinned: true }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      expect(listTabs).toHaveBeenCalledTimes(2); // in flight, blocked
+
+      // An ordinary headline for the OTHER row, arriving before it lands.
+      await emitTab(tab('t1', { headline: 'unrelated' }));
+      await act(async () => {
+        (releaseFetch as unknown as () => void)();
+        await vi.advanceTimersByTimeAsync(300);
+      });
+
+      // The superseded answer was discarded AND retried, so the order is right.
+      expect(listTabs).toHaveBeenCalledTimes(3);
+      expect(seen.map((t) => t.id)).toEqual(['t2', 't1']);
+    } finally {
+      vi.useRealTimers();
+      listTabs.mockReset();
+      listTabs.mockImplementation(async () => rows);
     }
   });
 });

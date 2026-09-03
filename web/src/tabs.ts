@@ -35,8 +35,30 @@ export async function refreshTabs(workspaceId: string): Promise<void> {
   const myVersion = (versions.get(workspaceId) ?? 0) + 1;
   versions.set(workspaceId, myVersion);
   const next = await api.listTabs(workspaceId);
+  if ((versions.get(workspaceId) ?? 0) > myVersion) {
+    // A newer writer superseded us, so this answer is stale and MUST NOT land.
+    //
+    // But it must not simply evaporate either, and it used to. Two things
+    // changed that from theory into a real hazard: `applyTabRow` bumps the
+    // version on every server-pushed row, so the window is now entered by
+    // ordinary background traffic rather than only by a user's own drag; and
+    // this function is what the pinned-tab escape hatch relies on to fix the
+    // divider, so a discarded answer there leaves the list visibly wrong until
+    // the 5s poll — indefinitely for a collapsed workspace or a hidden
+    // document, which is the exact case the live path exists to serve.
+    //
+    // So: re-queue on the shared debounce rather than return silently. It
+    // cannot spin — the retry is only armed by an actual discard.
+    pendingWorkspaceRefresh.add(workspaceId);
+    scheduleLiveRefresh();
+    // `settledAt` is deliberately NOT stamped: the list did not land, so
+    // nothing about the cache got fresher. Marking it fresh here is what let a
+    // superseded fetch satisfy `freshTabs`, which resolves a tab's slug — a
+    // cold load of a just-created tab could answer "tab not found" and
+    // navigate away from it (pages/TabView.tsx).
+    return;
+  }
   settledAt.set(workspaceId, Date.now());
-  if ((versions.get(workspaceId) ?? 0) > myVersion) return; // a newer call superseded us
   caches.set(workspaceId, next);
   const subs = listenersByWs.get(workspaceId);
   if (subs) for (const fn of subs) fn(next);
@@ -119,6 +141,20 @@ function scheduleLiveRefresh(): void {
  * divider in the wrong place until the next poll. That case — a pin toggled
  * on another device — takes the refetch instead. (The local pin button already
  * refetches on its own; this is for the echo.)
+ *
+ * ─── The known, priced race ──────────────────────────────────────────────
+ * Replacing the row wholesale can briefly undo `applyTabUnread`'s optimistic
+ * patch: between the mark-unread tap and its own refetch, an UNRELATED
+ * `tab.updated` for that tab (a headline landing, an activity bump) carries
+ * the server's pre-write `unread`, and the splice writes it. `POST /unread`
+ * emits nothing, so the write's own echo is not the problem — only a
+ * coincident one, inside a window one round trip wide.
+ *
+ * Left alone deliberately. It is self-correcting — `setTabUnread` refetches,
+ * and the server's answer is right — so the visible cost is a bold name
+ * flickering once, where the fix is a local-intent map with its own lifetime
+ * and expiry (lib/tab-view-mode has one, and it is not small). Recorded so
+ * that if it is ever actually seen, it is a known trade rather than a mystery.
  */
 function applyTabRow(next: Tab): void {
   for (const [wsId, list] of caches) {
