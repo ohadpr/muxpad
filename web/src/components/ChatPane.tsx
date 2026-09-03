@@ -2954,9 +2954,30 @@ export function ChatPane({
           </div>
         );
       }
+      // NOT an sdk writer. A conversion passes THROUGH here: the convert route
+      // kills the old runner, teardown sets writer='none', and the pane sits in
+      // this branch until the new runner hellos. So this is exactly the window
+      // the receipt exists to cover, and it used to render nothing at all —
+      // press "Start Claude", watch the card vanish, and get "Waiting for the
+      // first message…" or, past the 8s stale timer, "This session may have
+      // ended." That is the original complaint ("it doesn't seem to do
+      // anything") reappearing in the gap between the two runners.
       return (
         <div className="chat-empty">
-          {stale ? (
+          {converted ? (
+            <output className="chat-convert-confirm">
+              <AgentBackendLogo backend={converted.backend} size={14} />
+              <span>
+                Starting {backendLabel(converted.backend)}
+                {converted.model ? ` · ${converted.model}` : ''}
+                {converted.cwd ? ` · ${converted.cwd}` : ''}
+              </span>
+            </output>
+          ) : null}
+          {convertRefusal ? (
+            <output className="chat-convert-refusal">{convertRefusal}</output>
+          ) : null}
+          {stale && !converted ? (
             <>
               <div className="chat-empty-mark" aria-hidden="true">
                 ✳
@@ -2970,7 +2991,9 @@ export function ChatPane({
           ) : (
             <>
               <div className="chat-empty-spinner" aria-hidden="true" />
-              <p>Waiting for the first message…</p>
+              {/* A respawn in flight is not a wait for the user's first
+                  message — say which one is happening. */}
+              <p>{converted ? 'Starting the session…' : 'Waiting for the first message…'}</p>
             </>
           )}
         </div>
@@ -3311,6 +3334,13 @@ export function ChatPane({
             </button>
           </div>
           {pickError ? <p className="chat-harness-error">{pickError}</p> : null}
+          {/* A 409 sets convertRefusal, not pickError, and also clears the
+              staged card. Without this the refusal was SWALLOWED here: tap a
+              harness, press Start, the card closes and the screen is otherwise
+              unchanged — which is the original "it doesn't seem to do anything"
+              bug, re-created in the one screen whose own comment says it must
+              not be the place with the old behaviour. */}
+          {convertRefusal ? <p className="chat-harness-error">{convertRefusal}</p> : null}
         </div>
       </div>
     );
