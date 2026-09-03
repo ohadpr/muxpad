@@ -832,11 +832,37 @@ export function isPlausibleHeadline(s: string): boolean {
  * And on top of all four, the prompt is told to answer KEEP unless the current
  * glyph is actively misleading (see `iconAsk`), so the cheap path is stillness.
  *
- * ─── The ONLY free write is onto a BARE row ───────────────────────────────
+ * ─── There is NO free write, not even onto a bare row ─────────────────────
  *
- * Conditions 2 and 4 are about displacing a glyph the reader can already see.
- * A row with no icon at all has nothing to displace and nothing to unlearn, so
- * it takes the first valid emoji offered.
+ * Condition 2 is about displacing a glyph the reader can already see, so a row
+ * with no icon has no clock to run down: `isIconFrozen` returns false for it.
+ * Condition 4 is NOT about displacement, and it applies to every row.
+ *
+ * A draft had the bare row taking the first valid emoji offered, on the
+ * reasoning that there is nothing there to unlearn. That is true about the
+ * READER and false about the GENERATION, which is what condition 4 is actually
+ * screening. The reply that offers the glyph is the same reply we just judged,
+ * and when we reject its LABEL we are saying it answered the conversation
+ * instead of labelling it — the observed failure being a chat where the model
+ * replied `I'm not familiar with muxpad — is that an internal tool?`. A reply
+ * we distrust that far has not understood the subject well enough to pick a
+ * line, and it has not understood it well enough to pick a picture either. The
+ * bare row made that the cheap path rather than the blocked one: the label was
+ * thrown away and the glyph from the same breath was stamped and then frozen
+ * for six hours.
+ *
+ * Bare is also not the edge case it sounds like. New tabs are born with no
+ * icon (TabStore.create), agent tabs no longer get a `✳` and cron tabs no
+ * longer get a `⏱`, and the rail draws `fallbackTabIcon` for the gap — so an
+ * install's rows are overwhelmingly bare, and a rule that only bites on
+ * non-bare rows barely bites at all.
+ *
+ * Nothing is lost by closing it. A first icon still lands on the first reply
+ * whose label we accept, which for a row with no headline is its first
+ * successful generation; the interval between attempts is HEADLINE_MIN_
+ * INTERVAL_MS, not six hours. The only case removed is "keep the line, take
+ * the glyph", and that case is exactly the one where the reply told us it had
+ * nothing new to say about what the chat is about.
  *
  * A previous draft drew the line somewhere else: at PROVENANCE. Anything we had
  * not written ourselves was a "placeholder" — the `✳` a bootstrapped agent tab
@@ -853,15 +879,16 @@ export function isPlausibleHeadline(s: string): boolean {
  * ambiguity in this file resolves: PREFER KEEPING. A glyph the user can see is
  * a glyph that changes only under the full rule, whoever put it there.
  *
- * That costs nothing where it might seem to. A brand-new tab wearing `✳` has no
- * headline yet, so its first accepted label IS a change and carries the icon
- * with it — new tabs are labelled on their first successful generation, exactly
- * as before. What it buys is that a chat which has settled on a subject keeps
+ * That costs nothing where it might seem to. A brand-new tab has no headline
+ * yet, so its first accepted label IS a change and carries the icon with it —
+ * new tabs are labelled on their first successful generation, exactly as
+ * before. What it buys is that a chat which has settled on a subject keeps
  * whatever glyph it is wearing until the subject actually moves.
  *
- * A pleasant side effect of condition 4: an icon can only ever land as part of
- * a reply whose LABEL we also accepted. A generation we distrusted enough to
- * reject the line from never gets to pick the picture either.
+ * The whole rule reduces to one sentence: an icon only ever lands as part of a
+ * reply whose LABEL we also accepted. A generation we distrusted enough to
+ * reject the line from never gets to pick the picture either — on any row,
+ * wearing anything or nothing.
  */
 
 /**
@@ -935,12 +962,13 @@ export function chooseIcon(c: IconChoiceInput): string | null {
   if (s === null) return null;
   // Compared in canonical form, so a bare `⚙` proposed against a stored `⚙️`
   // reads as the agreement it is rather than as a change.
-  if (s === (c.current === null ? null : normalizeTabIcon(c.current))) return null;
-  // A BARE row is the only free write. Any glyph the reader can already see —
-  // ours, a creation default, or something they chose before there was a flag
-  // to record it — moves only alongside a new headline. We cannot tell those
-  // apart, so we treat them all like the one we would least like to churn.
-  if (c.current === null) return s;
+  if (c.current !== null && s === normalizeTabIcon(c.current)) return null;
+  // Condition 4, and it has NO exemption. A bare row is not a free write: the
+  // gate is not "is there something here to unlearn" but "did we believe this
+  // reply", and the answer to that is the headline's own verdict. Whatever the
+  // row is wearing — ours, a creation default, something the user chose before
+  // there was a flag to record it, or nothing at all — the glyph moves only
+  // beside a label we accepted from the same breath.
   return c.headlineChanged ? s : null;
 }
 
@@ -1095,25 +1123,12 @@ export async function maybeWriteHeadline(
   // already says something true keeps saying it; a row that says nothing keeps
   // saying nothing until a reply comes back that is actually a label.
   const { headline: next, reason } = parseHeadline(reply, existing);
-  // The icon is decided from the SAME reply and gated on the headline's own
-  // verdict — condition 5 of the rule above. Note the order: `next` first,
-  // because "did the label move?" is an input to "may the glyph move?".
-  const chosenIcon = chooseIcon({
-    frozen: iconFrozen,
-    current: existingIcon,
-    proposed: splitGenerationFields(reply).icon,
-    headlineChanged: next !== null,
-  });
-  // Written before the early return below, so a KEEP on the label does not
-  // silently discard a FIRST icon for a row that has none. That is the one
-  // case where the two outputs genuinely come apart: a chat whose subject has
-  // been stable long enough to keep its line can still be meeting the icon
-  // generator for the first time. `headlineChanged` guards only REPLACEMENT.
-  //
-  // `setIcon` re-checks stickiness in its own UPDATE and reports whether it
-  // wrote, so a user who picked an icon while the model was thinking wins —
-  // and the result we return says nothing changed, because nothing did.
-  const nextIcon = chosenIcon !== null && tabs.setIcon(tabId, chosenIcon, now) ? chosenIcon : null;
+  // NO ICON IS DECIDED ON THIS PATH. `chooseIcon` requires a new headline
+  // (condition 4, no exemption), so a reply that produced none cannot produce
+  // a glyph either — and the check therefore belongs above the write, not
+  // inside it. An earlier version computed and STAMPED the icon before this
+  // return, which is how a reply we had just rejected as a conversational
+  // opener still got to freeze its emoji onto the row for six hours.
   if (next === null) {
     if (reason && reason !== 'sentinel' && reason !== 'unchanged') {
       // One line, at most once per tab per interval (the clock below is what
@@ -1124,8 +1139,22 @@ export async function maybeWriteHeadline(
       );
     }
     tabs.touchHeadlineAt(tabId, now);
-    return { headline: null, icon: nextIcon };
+    return WROTE_NOTHING();
   }
+  // The icon is decided from the SAME reply and gated on the headline's own
+  // verdict. `headlineChanged` is `true` by construction here; it stays an
+  // explicit input so `chooseIcon` remains a total function of its inputs and
+  // testable on its own, rather than a rule half-encoded in its caller.
+  const chosenIcon = chooseIcon({
+    frozen: iconFrozen,
+    current: existingIcon,
+    proposed: splitGenerationFields(reply).icon,
+    headlineChanged: true,
+  });
+  // `setIcon` re-checks stickiness in its own UPDATE and reports whether it
+  // wrote, so a user who picked an icon while the model was thinking wins —
+  // and the result we return says nothing changed, because nothing did.
+  const nextIcon = chosenIcon !== null && tabs.setIcon(tabId, chosenIcon, now) ? chosenIcon : null;
   tabs.setHeadline(tabId, next, now);
   return { headline: next, icon: nextIcon };
 }
@@ -1190,11 +1219,11 @@ export function sweepImplausibleHeadlines(db: Database.Database): { cleared: str
  * un-freeze icons the generator had just written.
  *
  * Nothing needs backfilling because nothing is blocking. Eligibility lives in
- * `chooseIcon`, which treats any glyph it did not write as replaceable as soon
- * as the chat's headline moves, and a row with no icon at all as a free write.
- * Old rows are already eligible under both branches, and the rail draws
- * `fallbackTabIcon` for the bare ones — distinct per tab, derived rather than
- * stored, so it is unambiguously not a choice anyone made.
+ * `chooseIcon`, and its one condition is the same for every row, glyph or no
+ * glyph: the chat's headline has to move. Old rows clear that on their next
+ * accepted label, and until then the rail draws `fallbackTabIcon` for the bare
+ * ones — distinct per tab, derived rather than stored, so it is unambiguously
+ * not a choice anyone made.
  *
  * The globals key `tab_icon_backfill_v1` is left set on installs that ran the
  * first version. It is inert, and reusing it would be a trap.
