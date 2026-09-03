@@ -38,27 +38,44 @@
 /* The sheet's rows are pills that float off the rail's edges; the sliding face
    has to carry the same fill or the row reads as a full-bleed band the moment
    it moves. */
-.swiperow-face .navtree-tab-row:not([data-active="true"]) {
+.swiperow-face .navtree-tab-row:not([data-active="true"], [data-pressing="true"], :hover) {
   /* background-COLOR, not the shorthand: the row's state tint is painted as a
      background-IMAGE (StateChip.css) and the shorthand would reset it. It does
      not today — the tint's selector outweighs this one — but "it happens to
      outweigh me" is not a thing to leave load-bearing under a swipe.
 
-     `:not([data-active="true"])` is the same worry with the tie ACTUALLY
-     load-bearing rather than merely possible. The selected row's accent block
-     is `.navtree-tab-row[data-active="true"] { background-color: var(--accent) }`
-     (NavTree.css), which without this guard is (0,2,0) against this rule's
-     (0,2,0) — a dead heat decided by source order, i.e. by the fact that
-     NavTree.tsx happens to import `./SwipeRow` above `./NavTree.css`. Sorting
-     those imports, or a bundler chunking the two sheets the other way round,
-     would silently make the selected chat transparent on mobile. The guard
-     both raises this rule to (0,3,0) and stops it matching the active row at
-     all, so the outcome no longer depends on which sheet lands last.
+     THE `:not()` IS THAT SAME WORRY WITH THE TIE ACTUALLY LOAD-BEARING. Three
+     rules in NavTree.css paint this element's background-color, and every one
+     of them is (0,2,0) — exactly this rule's own weight before the guard:
 
-     Excluding the active row costs nothing the rest of the rule was buying:
-     the reason the face repaints a transparent row is that the sheet's rows
-     are pills floating off the rail, and a row that is ALREADY painted a solid
-     accent pill is exactly the case that needs no help. */
+       .navtree-tab-row[data-active="true"]    the selected chat's accent block
+       .navtree-tab-row[data-pressing="true"]  long-press acknowledgment
+       .navtree-tab-row:hover                  (sticky hover, on touch)
+
+     A dead heat is settled by SOURCE ORDER, and all three won only because
+     NavTree.tsx happens to import `./SwipeRow` above its own `./NavTree.css`.
+     Nothing declares that: sorting the import block, or a bundler chunking the
+     two sheets the other way round, would silently blank the selected chat on
+     every phone.
+
+     So the fix is to stop MATCHING those rows rather than to OUT-RANK them.
+     Out-ranking is what a first draft did, with `:not([data-active="true"])`
+     alone, and it is a trap dressed as a fix: that lifted this rule to (0,3,0),
+     which beat `[data-pressing]` and `:hover` at (0,2,0) and killed the
+     long-press fill on every unselected sheet row — i.e. on the only rows
+     where long-press exists at all. Naming every rule that paints this element
+     keeps the weight at (0,3,0) (a `:not()` costs its HEAVIEST argument, not
+     the sum) and makes the outcome independent of order AND of arithmetic.
+     SwipeRow.cascade.test.ts derives the required list from NavTree.css, so a
+     fourth painting rule cannot be added there without this one being updated.
+
+     Skipping those rows costs nothing the rule was buying. The face repaints a
+     row transparent because the sheet's rows are pills floating off the rail;
+     a row already painted its own fill is the case that needs no help.
+
+     `[data-drop-into]` and `[data-dragging]` are absent on purpose: drop
+     targets are gated to `variant === "sidebar"` (NavTree.tsx) and so never
+     appear inside a swipe face, and dragging sets `opacity`, not a fill. */
   background-color: transparent;
 }
 
