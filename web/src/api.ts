@@ -1,4 +1,5 @@
 import type { AgentMode, LayoutNode, PaneSpec, Tab, UrlHealth, Workspace } from '@muxpad/shared';
+import type { WorkspaceTabs } from './lib/nav-search';
 
 /**
  * Turn a failed response into something a human can read.
@@ -95,6 +96,28 @@ export interface AgentLaunchOptions {
   home: string;
 }
 
+/** One `/api/search` hit: where it was said, and the FTS5 snippet of it. */
+export interface ArchiveSearchHit {
+  sid: string;
+  ts: number;
+  role: string;
+  snippet: string;
+  session?: {
+    sid: string;
+    pane_id: string | null;
+    cwd: string | null;
+    assistant: string | null;
+  };
+}
+
+export interface ArchiveSearchResponse {
+  query: string;
+  /** True when the raw FTS5 expression didn't parse and the server retried it
+   *  as a quoted phrase — the results are still real, just less precise. */
+  fallback: boolean;
+  hits: ArchiveSearchHit[];
+}
+
 export interface MovePaneResult {
   pane: PaneSpec | null;
   from_tab_id: string;
@@ -143,6 +166,31 @@ export const api = {
 
   listTabs: (workspaceId: string) =>
     req<Tab[]>(`/api/tabs?workspaceId=${encodeURIComponent(workspaceId)}`),
+
+  /**
+   * EVERY visible workspace's tabs, grouped, in ONE request — the corpus the
+   * sidebar's search box matches against.
+   *
+   * Deliberately not a fan-out of `listTabs` per workspace: `useTabs` only
+   * fetches a workspace once something mounts for it, and a collapsed
+   * workspace never has. Issuing N requests to fill that gap is exactly the
+   * cold-load cost the per-workspace caches exist to avoid, so this is one
+   * request, taken lazily on first focus of the box.
+   */
+  listAllTabs: () => req<{ workspaces: WorkspaceTabs[] }>('/api/tabs/all'),
+
+  /**
+   * Full-text search over archived session transcripts — the search box's
+   * "In messages" tier.
+   *
+   * OPTIONAL ENDPOINT. `/api/search` is mounted only when the archive exists
+   * (server.ts), so a 404 here is a normal configuration, not a failure: the
+   * caller stands the whole tier down and keeps the instant tier working.
+   */
+  searchMessages: (q: string, limit = 8) =>
+    req<ArchiveSearchResponse>(
+      `/api/search?q=${encodeURIComponent(q)}&limit=${encodeURIComponent(String(limit))}`,
+    ),
 
   createTab: (
     workspaceId: string,
