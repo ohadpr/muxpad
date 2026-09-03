@@ -12,11 +12,13 @@
 // background subagents launched across several turns, outliving the turns that
 // launched them, plus a nested launch — and dumps every raw message.
 //
-// Then it REPLAYS the captured stream through the real SubagentRoster with the
-// real dispatch rules and prints the roster's final count next to the truth the
-// stream itself proves. That last step is the verdict: if the replayed count is
-// not zero once every task has notified completion, the leak is runner-side and
-// this capture is its reproduction.
+// Then it REPLAYS the captured stream through a compact mirror of the roster
+// rules and prints the final count next to the truth the stream itself proves.
+// That is a convenience verdict for a FRESH capture, so the probe can answer on
+// its own. The authoritative replay is
+// src/agent-runner/backends/claude.replay.test.ts, which runs committed
+// captures through the REAL dispatch — prefer it whenever the two disagree, and
+// treat a disagreement as this mirror having drifted.
 //
 // Isolated by construction: its own cwd under /tmp, `settingSources: []` (no
 // user/project settings, no CLAUDE.md, no MCP), and it never reads or writes
@@ -45,7 +47,7 @@ const SECONDS = Number(flag('seconds', '300'));
 const MODEL = flag('model', 'sonnet');
 const WORK = flag('cwd', `/tmp/muxpad-sdk-probe-${Date.now()}`);
 // `--stop-after <sec>`: interrupt the FIRST turn this many seconds in, with
-// background subagents outstanding. The roster's fourth end-path (retireAll on
+// background subagents outstanding. The roster's Stop end-path (retireForeground on
 // a Stop) rests on the claim that a Stop takes its background tasks down with
 // it; this is how that claim gets checked rather than assumed.
 const STOP_AFTER = flag('stop-after', null) ? Number(flag('stop-after', '0')) : null;
@@ -57,6 +59,11 @@ const STOP_AFTER = flag('stop-after', null) ? Number(flag('stop-after', '0')) : 
 // plain node, and so the rules being tested are visible in one screen.
 // ───────────────────────────────────────────────────────────────────────────
 const LAUNCH_ACK_RE = /agent launched successfully|async agent launched/i;
+// The launch ack's `agentId:` IS the task id, and its presence is positive
+// proof the launch was BACKGROUND. Verified on 11/11 background launches
+// across two captures. This is the roster's primary binding — a tool_result in
+// the conversation, so no optional field and no ordering hazard.
+const ACK_AGENT_ID_RE = /\bagentId:\s*([A-Za-z0-9_-]+)/;
 const TERMINAL = new Set(['completed', 'failed', 'killed']);
 
 function makeRoster(trace) {
@@ -89,14 +96,24 @@ function makeRoster(trace) {
       p.steps++;
     },
     has: (id) => entries.has(id),
+    /** From the launch ACK: binds the task id AND marks the row background. */
+    bindBackgroundTask(toolUseId, taskId) {
+      const p = entries.get(toolUseId);
+      if (!p) return;
+      p.background = true;
+      if (taskId) {
+        p.taskId = taskId;
+        remember(taskId, p);
+      }
+      say(`  = bind(ack) ${toolUseId} ↔ ${taskId ?? 'NO-AGENT-ID'} [background]`);
+    },
+    /** From `system/task_started`: binds only. Says nothing about background. */
     bindTask(toolUseId, taskId) {
       const p = entries.get(toolUseId);
       if (!p) return;
-      if (p.taskId !== taskId) p.background = false;
       p.taskId = taskId;
-      if (lastLevel.has(taskId)) p.background = true;
       remember(taskId, p);
-      say(`  = bind ${toolUseId} ↔ ${taskId}`);
+      say(`  = bind(start) ${toolUseId} ↔ ${taskId}`);
     },
     doneByTaskId(taskId) {
       for (const p of entries.values()) if (p.taskId === taskId) return done(p.toolUseId);
@@ -107,16 +124,19 @@ function makeRoster(trace) {
     retireUnstarted() {
       for (const p of [...entries.values()]) if (!p.taskId && p.steps === 0) done(p.toolUseId);
     },
-    retireAll(reason) {
-      if (entries.size) say(`  ⏹ retireAll (${reason})`);
-      for (const id of [...entries.keys()]) done(id);
+    /** Retire only rows NOT known to be background tasks. */
+    retireForeground(reason) {
+      const fg = [...entries.values()].filter((p) => !p.background);
+      if (fg.length) say(`  ⏹ retireForeground ${fg.length} (${reason})`);
+      for (const p of fg) done(p.toolUseId);
     },
     reconcileBackground(ids) {
       lastLevel = new Set(ids);
       for (const p of [...entries.values()]) {
-        if (!p.taskId) continue;
-        if (lastLevel.has(p.taskId)) p.background = true;
-        else if (p.background) done(p.toolUseId);
+        if (p.taskId && lastLevel.has(p.taskId)) continue;
+        // An unbound BACKGROUND row can still be settled by an EMPTY level:
+        // "nothing is running in the background" is a fact about the whole set.
+        if (p.background && (p.taskId || lastLevel.size === 0)) done(p.toolUseId);
       }
       for (const taskId of lastLevel) {
         const k = known.get(taskId);
@@ -141,7 +161,7 @@ function replay(messages) {
   const r = makeRoster(trace);
   // The runner sets this in `stop()` and clears it at the turn `result`. The
   // capture's own "[Request interrupted by user]" marker is the same edge, so
-  // a --stop-after run replays through the retireAll('stopped') path exactly as
+  // a --stop-after run replays through the retireForeground('stopped') path as
   // the runner would.
   let interruptRequested = false;
   const launched = new Set();
@@ -198,15 +218,21 @@ function replay(messages) {
             const text = Array.isArray(b.content)
               ? b.content.map((x) => (x.type === 'text' ? x.text : '')).join(' ')
               : String(b.content ?? '');
-            if (LAUNCH_ACK_RE.test(text)) continue;
+            if (LAUNCH_ACK_RE.test(text)) {
+              // Not an end — a BACKGROUND launch's ack, and the binding.
+              r.bindBackgroundTask(b.tool_use_id, text.match(ACK_AGENT_ID_RE)?.[1] ?? null);
+              continue;
+            }
             r.done(b.tool_use_id);
           }
         }
       }
     } else if (msg.type === 'result') {
       r.retireUnstarted();
-      if (interruptRequested) r.retireAll('stopped');
-      else if (msg.subtype !== 'success') r.retireAll('turn failed');
+      // Foreground-only: a Stop announces every task it kills, and background
+      // tasks from earlier turns demonstrably survive it (probe --stop-after).
+      if (interruptRequested) r.retireForeground('stopped');
+      else if (msg.subtype !== 'success') r.retireForeground('turn failed');
       interruptRequested = false;
     }
   }

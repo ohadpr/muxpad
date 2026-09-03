@@ -66,8 +66,21 @@ export const sdk = {
     };
   },
 
-  /** The immediate "launched" ack. NOT a completion — the runner must skip it. */
-  launchAck(toolUseId: string) {
+  /**
+   * The immediate "launched" ack. NOT a completion — the runner must skip it as
+   * an end — but it IS the launch's positive proof of being BACKGROUND, and it
+   * carries the task id as `agentId:`. Verbatim from the captures (11/11
+   * background launches across two runs, agentId always equal to the
+   * `task_started` task_id), because the runner binds off this text.
+   *
+   * `taskId: null` scripts the shape with the `agentId:` line absent — the
+   * ONLY ack shape the live SDK never produced, kept so the roster's behaviour
+   * with no id at all stays pinned.
+   */
+  launchAck(toolUseId: string, taskId: string | null = null) {
+    const agentIdLine = taskId
+      ? `\nagentId: ${taskId} (internal ID - do not mention to user. Use SendMessage with to: '${taskId}', summary: '<5-10 word recap>' to continue this agent.)`
+      : '';
     return {
       type: 'user' as const,
       parent_tool_use_id: null,
@@ -82,7 +95,7 @@ export const sdk = {
             content: [
               {
                 type: 'text' as const,
-                text: 'Async agent launched successfully. (This tool result is internal metadata — never quote or paste it.)',
+                text: `Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)${agentIdLine}\nThe agent is working in the background. You will be notified automatically when it completes.\noutput_file: /tmp/tasks/${taskId ?? 'unknown'}.output`,
               },
             ],
           },
@@ -269,7 +282,7 @@ export function backgroundLaunch(
     sdk.launchToolUse(toolUseId, description),
     sdk.level(liveAfter),
     sdk.taskStarted(taskId, toolUseId, description),
-    sdk.launchAck(toolUseId),
+    sdk.launchAck(toolUseId, taskId),
   ];
 }
 
