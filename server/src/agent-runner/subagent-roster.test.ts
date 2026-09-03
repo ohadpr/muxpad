@@ -440,6 +440,35 @@ describe('SubagentRoster — reconciliation against the SDK level signal', () =>
     expect(roster.size).toBe(0);
   });
 
+  it('a task_started arriving AFTER the ack does not undo the ack', () => {
+    // The observed order is level → task_started → ack, but the SDK only
+    // promises the level precedes the bookends; it says nothing about the ack.
+    // If task_started lands last it must not clear what the ack established, or
+    // the entry silently loses the sweep for the rest of its life.
+    const { roster } = make();
+    roster.launch('tu_1', 'worker');
+    roster.bindBackgroundTask('tu_1', null); // ack first, and with no agentId…
+    roster.bindTask('tu_1', 'task_1'); // …then task_started supplies the id
+    // No level payload has named task_1, so only the ack's evidence stands
+    // between this entry and immortality.
+    roster.reconcileBackground(['task_other']);
+    expect(roster.size).toBe(0);
+  });
+
+  it('a REBIND to a different task still re-earns the flag', () => {
+    // The guard that first-bind case must not weaken: once this tool_use names a
+    // DIFFERENT task, a level payload predating the new binding must not sweep it.
+    const { roster } = make();
+    roster.launch('tu_1', 'worker');
+    roster.bindBackgroundTask('tu_1', 'task_old');
+    roster.bindTask('tu_1', 'task_new'); // level has never mentioned task_new
+    roster.reconcileBackground(['task_other']);
+    expect(roster.size).toBe(1);
+    roster.reconcileBackground(['task_new']);
+    roster.reconcileBackground([]);
+    expect(roster.size).toBe(0);
+  });
+
   it('an empty live set does NOT retire a FOREGROUND entry', () => {
     // A foreground Task is absent from that payload by design, at every moment
     // of its life. Only an entry we KNOW is background may be deduced away.

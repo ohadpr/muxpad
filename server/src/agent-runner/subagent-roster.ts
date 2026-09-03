@@ -210,10 +210,16 @@ export class SubagentRoster {
   bindTask(toolUseId: string, taskId: string): void {
     const p = this.entries.get(toolUseId);
     if (!p) return;
-    // A REBIND (this tool_use now names a different task) must re-earn the
+    // A REBIND (this tool_use already named a DIFFERENT task) must re-earn the
     // background flag from scratch: carrying it over would let a level payload
     // that predates the new binding sweep a live entry.
-    if (p.taskId !== taskId) {
+    //
+    // A FIRST bind must not: `task_started` can land after the launch ack, and
+    // clearing the flag there would throw away the one piece of positive
+    // evidence we have — the ack saying outright that this is a background
+    // agent — leaving the entry unsweepable unless a level payload happens to
+    // name it in the same instant.
+    if (p.taskId !== undefined && p.taskId !== taskId) {
       p.background = false;
       p.sweepSuspended = false;
     }
