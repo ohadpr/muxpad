@@ -563,14 +563,17 @@ describe('chooseIcon — what may actually be written (conditions 3 and 4)', () 
     expect(chooseIcon({ ...base, current: null })).toBe('🐛');
   });
 
-  it('writes a first icon even when the LABEL was kept', () => {
-    // The one case where the two outputs come apart, and the reason the write
-    // path sets the icon before the headline's early return. A chat whose
-    // subject has been stable long enough to keep its line is exactly the
-    // chat that still needs its first glyph — every tab that existed before
-    // this feature is in that state right after the backfill. If this were
-    // gated on `headlineChanged`, a settled chat would never get an icon.
-    expect(chooseIcon({ ...base, current: null, headlineChanged: false })).toBe('🐛');
+  it('refuses a first icon when the LABEL was not accepted', () => {
+    // THE BARE-ROW BRANCH, and the defect this rule was rewritten for. A row
+    // with no glyph is not a free write: the question condition 4 asks is not
+    // "is there something here to unlearn" but "did we believe this reply",
+    // and the headline's verdict is the only answer we have. A reply we
+    // rejected as a conversational opener — `I'm not familiar with muxpad…` —
+    // used to have its LABEL thrown away and its ICON stamped and frozen for
+    // six hours, because this branch returned before the check.
+    //
+    // Bare is the common case, not the edge: new tabs are born with no icon.
+    expect(chooseIcon({ ...base, current: null, headlineChanged: false })).toBeNull();
   });
 
   it('will NOT replace an existing icon while the headline stood still', () => {
@@ -804,8 +807,22 @@ describe('chooseIcon — a visible glyph is a visible glyph, whoever put it ther
 
   it('canonicalises what it returns', () => {
     // A bare text-presentation glyph is stored in the form that renders as a
-    // picture, so the rail is not half colour and half monochrome.
-    expect(chooseIcon({ ...base, current: null, proposed: '⚙' })).toBe('⚙\uFE0F');
+    // picture, so the rail is not half colour and half monochrome. (This
+    // describe's `base` holds the label still, so the write is enabled
+    // explicitly — canonicalisation is about the VALUE, not about the gate.)
+    expect(chooseIcon({ ...base, current: null, headlineChanged: true, proposed: '⚙' })).toBe(
+      '⚙\uFE0F',
+    );
+  });
+
+  it('applies the label gate to a BARE row exactly as to a wearing one', () => {
+    // The rule this describe block is named for used to have one hole in it,
+    // and it was the widest one available: `current: null` returned the
+    // proposal BEFORE the gate ran — and a bare row is what every tab is now
+    // born as. Same sentence for every row: glyph or no glyph, the picture
+    // moves only beside a label we accepted.
+    expect(chooseIcon({ ...base, current: null })).toBeNull();
+    expect(chooseIcon({ ...base, current: null, headlineChanged: true })).toBe('🐛');
   });
 
   it('reads a bare proposal against a stored VS16 spelling as agreement', () => {

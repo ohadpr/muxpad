@@ -488,20 +488,54 @@ describe('maybeWriteHeadline — the icon, and what must never move it', () => {
     expect(tabs.getById(tabId)?.icon).toBe('⏰');
   });
 
-  it('gives a FIRST icon even when the line is kept', async () => {
-    // The one case where the two outputs come apart: a settled chat that has
-    // never had a glyph. Every tab that existed before this feature is in
-    // exactly this state right after the backfill, so gating the first icon on
-    // a headline change would have meant they never got one.
+  it('withholds a FIRST icon too when the line is kept', async () => {
+    // The BARE row, end to end. It used to be the one case where the two
+    // outputs came apart — and the write path stamped the glyph BEFORE the
+    // headline's early return to make that possible, which is precisely how a
+    // reply we rejected outright still got to choose the picture.
+    //
+    // A KEEP is not a rejection, so this is the gentlest version of the case;
+    // it is here because it is the branch that made the rejection case
+    // reachable. The delay it costs is one accepted label, not six hours.
     tabs.setHeadline(tabId, 'cron restart persistence', 1_000);
     const out = await maybeWriteHeadline(db, tabId, paneId, reply('KEEP', '⏰'), {
       now: 1_000 + HEADLINE_MIN_INTERVAL_MS,
     });
-    expect(out.headline).toBeNull();
-    expect(out.icon).toBe('⏰');
-    expect(tabs.getById(tabId)?.icon).toBe('⏰');
+    expect(out).toEqual({ headline: null, icon: null });
+    expect(tabs.getById(tabId)?.icon).toBeUndefined();
     // The line really was kept.
     expect(tabs.getById(tabId)?.headline).toBe('cron restart persistence');
+    // …and the very next reply that DOES move the label brings the glyph.
+    const moved = await maybeWriteHeadline(db, tabId, paneId, reply('bambu slicing', '⏰'), {
+      now: 1_000 + 3 * HEADLINE_MIN_INTERVAL_MS,
+    });
+    expect(moved).toEqual({ headline: 'bambu slicing', icon: '⏰' });
+  });
+
+  it('a rejected reply cannot stamp an icon onto a BARE row', async () => {
+    // THE DEFECT, reproduced. `BUG` is verbatim from the user's own sidebar: a
+    // conversational opener the model returned instead of a label. Its LABEL
+    // is rejected — and its ICON used to be accepted anyway, written, and then
+    // frozen for ICON_MIN_STABLE_MS, because `chooseIcon` returned the
+    // proposal before the gate whenever the row had no glyph yet, and the
+    // write path called `setIcon` above the rejection's early return.
+    //
+    // A bare row is not an exotic state: TabStore.create leaves the icon NULL
+    // and the rail draws `fallbackTabIcon` over the gap, so this was the
+    // ordinary path, not a corner of one.
+    expect(tabs.getById(tabId)?.icon).toBeUndefined();
+    const out = await maybeWriteHeadline(db, tabId, paneId, reply(BUG_LINE, '⏰'), {
+      now: 1_000,
+    });
+    expect(out).toEqual({ headline: null, icon: null });
+    expect(tabs.getById(tabId)?.icon).toBeUndefined();
+    // Nothing was stamped, so nothing is frozen: the row is free the moment a
+    // reply we believe comes along.
+    expect(tabs.iconAt(tabId)).toBeNull();
+    const good = await maybeWriteHeadline(db, tabId, paneId, reply('cron restarts', '⏰'), {
+      now: 1_000 + 2 * HEADLINE_MIN_INTERVAL_MS,
+    });
+    expect(good).toEqual({ headline: 'cron restarts', icon: '⏰' });
   });
 
   it('KEEPS a glyph of unknown provenance until the label moves', async () => {
