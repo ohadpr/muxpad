@@ -104,16 +104,16 @@ describe('SubagentRoster — every end-path announces itself', () => {
     expect(sent).toHaveLength(before);
   });
 
-  it('3: retireAll clears a STOPPED turn’s background tasks (the immortality bug)', () => {
-    // A Stop kills background subagents, and that death produces no
-    // tool_result and no finish notice — so without this the entries would
-    // never leave, the pane would read `working` forever, and the keepalive
-    // would re-announce ghosts every 5s for the life of the session.
+  it('3: retireForeground clears a STOPPED turn’s FOREGROUND subagents', () => {
+    // Their death produces no tool_result and no finish notice — so without
+    // this the entries would never leave, the pane would read `working`
+    // forever, and the keepalive would re-announce ghosts every 5s for the
+    // life of the session.
     const { roster, sent, tick } = make();
     roster.launch('tu_a', 'a');
     roster.launch('tu_b', 'b');
     tick(1_000);
-    roster.retireAll('stopped');
+    roster.retireForeground('stopped');
     expect(roster.size).toBe(0);
     const terminal = sent.filter((p) => p.done);
     expect(terminal.map((p) => p.toolUseId).sort()).toEqual(['tu_a', 'tu_b']);
@@ -148,10 +148,30 @@ describe('SubagentRoster — every end-path announces itself', () => {
     expect(roster.size).toBe(2);
   });
 
-  it('retireAll on an empty roster is silent', () => {
+  it('retireForeground on an empty roster is silent', () => {
     const { roster, sent } = make();
-    roster.retireAll('turn failed');
+    roster.retireForeground('turn failed');
     expect(sent).toHaveLength(0);
+  });
+
+  it('4: a Stop does NOT take the BACKGROUND agents of earlier turns', () => {
+    // Live probe (`--stop-after`, 2026-09): an interrupt kills the interrupted
+    // turn's tasks and ANNOUNCES each one, while the level payload emitted at
+    // the same instant still lists the background tasks earlier turns launched
+    // — which go on to finish normally (measured 19s and 28s later). The old
+    // retireAll deleted those live agents, so the pane read BELOW the truth.
+    const { roster, tick } = make();
+    roster.launch('tu_bg', 'a long runner from turn 1');
+    roster.bindBackgroundTask('tu_bg', 'task_bg');
+    roster.launch('tu_fg', 'a foreground Task in the stopped turn');
+    tick(1_000);
+
+    roster.retireForeground('stopped');
+    expect(roster.values().map((p) => p.toolUseId)).toEqual(['tu_bg']);
+
+    // …and it still ends on its own terms, later.
+    roster.reconcileBackground([]);
+    expect(roster.size).toBe(0);
   });
 
   it('the map cannot grow across many stopped turns', () => {
@@ -162,7 +182,7 @@ describe('SubagentRoster — every end-path announces itself', () => {
       roster.launch(`tu_${turn}`, `worker ${turn}`);
       tick(1_000);
       roster.flush();
-      roster.retireAll('stopped');
+      roster.retireForeground('stopped');
     }
     expect(roster.size).toBe(0);
   });
@@ -339,6 +359,101 @@ describe('SubagentRoster — reconciliation against the SDK level signal', () =>
     expect(roster.size).toBe(0);
     roster.reconcileBackground([]);
     roster.announceAll();
+    expect(roster.size).toBe(0);
+  });
+
+  it('an ACK-bound entry is sweepable at once — no live sighting required', () => {
+    // The hole this closes. `background` used to be earned ONLY by being seen in
+    // a live level payload, and the only binding was `task_started`, whose
+    // `tool_use_id` the SDK declares optional. Miss the sighting or the bind and
+    // the entry is invisible to the sweep AND to doneByTaskId — immortal, with
+    // steps ticking up, which is exactly what the live pane showed.
+    const { roster } = make();
+    roster.launch('tu_1', 'worker');
+    roster.bindBackgroundTask('tu_1', 'task_1'); // its launch ack: agentId: task_1
+    // Not one level payload has ever named it, and none needs to.
+    roster.reconcileBackground(['task_other']);
+    expect(roster.size).toBe(0);
+  });
+
+  it('an ACK-bound entry is never mistaken for a launch that did not run', () => {
+    // A background agent can go a long time before its first child message
+    // (P1: 44s), so at the launching turn's `result` it has zero steps. The ack
+    // bind is what tells retireUnstarted it is real.
+    const { roster } = make();
+    roster.launch('tu_1', 'worker');
+    roster.bindBackgroundTask('tu_1', 'task_1');
+    roster.retireUnstarted();
+    expect(roster.size).toBe(1);
+    roster.reconcileBackground(['task_1']);
+    roster.reconcileBackground([]);
+    expect(roster.size).toBe(0);
+  });
+
+  it('a PAUSE suspends the sweep without forgetting the entry is background', () => {
+    // A paused task (rate-limit parking) may leave the live set while still
+    // being a live agent, so absence must not kill it. But the suspension has to
+    // be its own flag: clearing `background` would ALSO undo the ack's knowledge,
+    // and an agent that never gets another live sighting would lose the sweep
+    // for the rest of the session.
+    const { roster } = make();
+    roster.launch('tu_1', 'worker');
+    roster.bindBackgroundTask('tu_1', 'task_1');
+    roster.pauseTask('task_1');
+    roster.reconcileBackground([]); // parked, not dead
+    expect(roster.size).toBe(1);
+
+    roster.resumeTask('task_1');
+    roster.reconcileBackground([]); // now absence means what it says
+    expect(roster.size).toBe(0);
+  });
+
+  it('a pause is also lifted by simply being seen live again', () => {
+    const { roster } = make();
+    roster.launch('tu_1', 'worker');
+    roster.bindBackgroundTask('tu_1', 'task_1');
+    roster.pauseTask('task_1');
+    roster.reconcileBackground(['task_1']);
+    roster.reconcileBackground([]);
+    expect(roster.size).toBe(0);
+  });
+
+  it('an EMPTY live set retires a background entry that was never bound', () => {
+    // Worst case the SDK's own declarations allow: the ack says "launched" but
+    // carries no agentId, `task_started` omits its optional tool_use_id, and so
+    // does `task_notification`. Nothing ties the row to a task id, so no
+    // id-keyed end-path exists — but "no background task is running" is a fact
+    // about the whole set, and this row is a background task. That is a
+    // deduction from the level signal, not a guess about the row.
+    const { roster, tick } = make();
+    roster.launch('tu_1', 'unbindable worker');
+    roster.bindBackgroundTask('tu_1', null); // ack with no agentId
+    tick(600);
+    roster.activity('tu_1', 'Bash: pnpm test'); // it plainly ran
+
+    // Other tasks running says nothing about this one — it must survive.
+    roster.reconcileBackground(['task_someone_else']);
+    roster.retireUnstarted();
+    expect(roster.size).toBe(1);
+
+    roster.reconcileBackground([]);
+    expect(roster.size).toBe(0);
+  });
+
+  it('an empty live set does NOT retire a FOREGROUND entry', () => {
+    // A foreground Task is absent from that payload by design, at every moment
+    // of its life. Only an entry we KNOW is background may be deduced away.
+    const { roster } = make();
+    roster.launch('tu_fg', 'foreground worker');
+    roster.reconcileBackground([]);
+    expect(roster.size).toBe(1);
+  });
+
+  it('bindBackgroundTask ignores ids it never launched', () => {
+    // A NESTED agent's launch ack rides its parent's stream, not this one — but
+    // belt and braces: nothing outside a top-level launch can create a row.
+    const { roster } = make();
+    roster.bindBackgroundTask('tu_nested', 'task_nested');
     expect(roster.size).toBe(0);
   });
 

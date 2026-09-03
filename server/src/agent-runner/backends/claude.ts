@@ -101,6 +101,28 @@ export interface TaskLifecycleMessage {
 /** Task ids whose `task_updated` means the task is OVER. */
 const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'killed']);
 
+/**
+ * The task id a BACKGROUND launch ack carries, or null.
+ *
+ * Probe-verified (SDK 0.3.220, six background launches across two runs): the
+ * top-level `tool_result` for a `run_in_background` Task/Agent call is always
+ * shaped
+ *
+ *     Async agent launched successfully. (…internal metadata…)
+ *     agentId: ae957386e1ac03ddb (internal ID - … Use SendMessage with to: '…')
+ *
+ * This is the ONLY tool_use_id ↔ task_id binding that rides in the conversation
+ * itself. The `system/task_started` binding is the SDK's, and its `tool_use_id`
+ * is declared OPTIONAL — an omitted one leaves the entry with no task id, and an
+ * entry with no task id is invisible to BOTH background end-paths
+ * (`reconcileBackground` skips it, `doneByTaskId` cannot match it). The ack has
+ * no such hole, and it doubles as proof that the launch was a BACKGROUND one.
+ */
+export function launchAckTaskId(text: string): string | null {
+  if (!LAUNCH_ACK_RE.test(text)) return null;
+  return /\bagentId:\s*([A-Za-z0-9_-]+)/.exec(text)?.[1] ?? null;
+}
+
 export function applyTaskLifecycle(roster: SubagentRoster, msg: TaskLifecycleMessage): void {
   switch (msg.subtype) {
     case 'task_started':
@@ -121,12 +143,157 @@ export function applyTaskLifecycle(roster: SubagentRoster, msg: TaskLifecycleMes
       if (status && TERMINAL_TASK_STATUSES.has(status)) roster.doneByTaskId(msg.task_id);
       // A paused task may leave the live set without dying — see pauseTask.
       else if (status === 'paused') roster.pauseTask(msg.task_id);
+      else if (status === 'running') roster.resumeTask(msg.task_id);
       break;
     }
     case 'background_tasks_changed':
       roster.reconcileBackground((msg.tasks ?? []).map((t) => t.task_id));
       break;
   }
+}
+
+/** The SDK message fields the roster reads. Deliberately structural, so a
+ *  RECORDED stream can be replayed through this verbatim. */
+export interface SubagentStreamMessage {
+  type: string;
+  subtype?: string;
+  parent_tool_use_id?: string | null;
+  message?: { content?: unknown };
+}
+
+type ContentBlock = {
+  type?: string;
+  id?: string;
+  name?: string;
+  input?: unknown;
+  text?: string;
+  tool_use_id?: string;
+  content?: unknown;
+};
+
+function blocksOf(msg: SubagentStreamMessage): ContentBlock[] {
+  const c = msg.message?.content;
+  if (typeof c === 'string') return [{ type: 'text', text: c }];
+  return Array.isArray(c) ? (c as ContentBlock[]) : [];
+}
+
+/**
+ * EVERY roster mutation the SDK message stream can cause, in one place.
+ *
+ * Extracted from the session loop for one reason: the loop is unreachable from a
+ * test (constructing the backend spawns a real SDK session), and the roster's
+ * end-paths have now been got wrong twice while its unit tests — which speak the
+ * roster's own API, not the SDK's — stayed green. This function speaks the SDK's
+ * wire shapes, so `claude.replay.test.ts` can drive it with message streams
+ * RECORDED from a real 0.3.220 session and assert the roster empties.
+ *
+ * Turn-boundary work lives in {@link applyTurnResult}: it needs the turn's own
+ * state (was it interrupted?), not just the message.
+ */
+export function applySubagentMessage(roster: SubagentRoster, msg: SubagentStreamMessage): void {
+  if (msg.type === 'system') {
+    if (msg.subtype && isTaskLifecycle(msg.subtype)) {
+      applyTaskLifecycle(roster, msg as unknown as TaskLifecycleMessage);
+    }
+    return;
+  }
+
+  const parent = msg.parent_tool_use_id;
+
+  // Subagent traffic (parent set): live progress on the parent Task row.
+  //
+  // NOTE this stream also carries NESTED agents' traffic, tagged with the nested
+  // tool_use id (probe-verified, 0.3.220). Those ids are not in the roster and
+  // `activity` ignores them — a grandchild's launch AND its end both live inside
+  // its parent's stream, so an adopted one could never be retired. That adoption
+  // is what made `agents:` climb forever.
+  if (typeof parent === 'string') {
+    if (msg.type !== 'assistant' && msg.type !== 'user') return;
+    let lastTool: string | undefined;
+    if (msg.type === 'assistant') {
+      for (const b of blocksOf(msg)) {
+        if (b.type === 'tool_use' && b.name) {
+          const arg = summarizeToolInput(b.name, b.input);
+          lastTool = arg ? `${b.name}: ${arg}` : b.name;
+        }
+      }
+    }
+    roster.activity(parent, lastTool);
+    return;
+  }
+
+  if (msg.type === 'assistant') {
+    // A Task/Agent call is a subagent LAUNCH. Roster it here, at the parent's
+    // tool_use: this is the only message carrying the description, and a
+    // background subagent's first child message can be a minute away.
+    for (const b of blocksOf(msg)) {
+      if (
+        b.type === 'tool_use' &&
+        b.name &&
+        isAgentLaunchTool(b.name) &&
+        typeof b.id === 'string'
+      ) {
+        roster.launch(b.id, subagentLabel(b.input) || 'subagent');
+      }
+    }
+    return;
+  }
+
+  if (msg.type === 'user') {
+    // TOP-LEVEL user traffic is where a subagent's END shows up, in two shapes —
+    // both must retire the entry, or a finished agent lingers forever now that
+    // nothing expires it on a timer:
+    //  1. the parent's own tool_result for the Task call (a FOREGROUND
+    //     subagent's completion).
+    //  2. the `<task-notification>` the harness injects when a BACKGROUND
+    //     subagent finishes, which carries the launching tool-use-id.
+    // A background launch's immediate ack is NEITHER: it is the one place the
+    // conversation states, unambiguously and without an optional field, that
+    // this tool_use IS a background task and which task id it owns.
+    for (const b of blocksOf(msg)) {
+      if (b.type === 'tool_result' && typeof b.tool_use_id === 'string') {
+        if (!roster.has(b.tool_use_id)) continue;
+        const text = blockText(b.content);
+        if (LAUNCH_ACK_RE.test(text))
+          roster.bindBackgroundTask(b.tool_use_id, launchAckTaskId(text));
+        else roster.done(b.tool_use_id);
+      } else if (b.type === 'text' && typeof b.text === 'string') {
+        const id = taskNotificationToolUseId(b.text);
+        if (id) roster.done(id);
+      }
+    }
+  }
+}
+
+/**
+ * The roster work a turn `result` does. Exported for the same reason as
+ * {@link applySubagentMessage}: it is policy, and policy the loop hides is
+ * policy nothing tests.
+ *
+ * Emphatically does NOT clear the roster on a successful turn: a
+ * `run_in_background` Task routinely outlives the turn that launched it, and
+ * clearing here is what made those subagents vanish from the sidebar the instant
+ * the turn ended.
+ */
+export function applyTurnResult(
+  roster: SubagentRoster,
+  subtype: string,
+  interrupted: boolean,
+): void {
+  // Push any throttled-but-unsent progress.
+  roster.flush();
+  // A `Task` tool_use that never actually ran — a retracted refusal leg, a call
+  // the harness dropped — produces no task_started, no tool_result and no child
+  // traffic, so no end-path can reach it. The turn's end is where "it produced
+  // nothing at all" becomes decidable.
+  roster.retireUnstarted();
+  // …and a turn that was STOPPED or FAILED takes its FOREGROUND subagents down
+  // with it silently. Its BACKGROUND ones are a different matter: the SDK
+  // announces the kills it makes and the level payload at the interrupt still
+  // lists the agents earlier turns launched, which keep running. See
+  // retireForeground — retiring everything here was deleting live agents.
+  if (interrupted) roster.retireForeground('stopped');
+  else if (subtype !== 'success') roster.retireForeground('turn failed');
 }
 
 export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): AgentBackend {
@@ -659,8 +826,9 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
             inTurn = false;
             // This path ends the turn WITHOUT a `result`, so the retirement in
             // the result branch never runs. Do it here too, or a Stop that
-            // needed the fallback leaves immortal roster entries.
-            subagents.retireAll('stop failed — turn state reset');
+            // needed the fallback leaves immortal roster entries. Foreground
+            // only, for the reason retireForeground gives.
+            subagents.retireForeground('stop failed — turn state reset');
             emit({ t: 'turn-done', ok: false, error: 'stop failed — turn state reset' });
           }
         }, 10_000);
@@ -743,6 +911,10 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
 
     for await (const msg of session) {
       lastSessionActivityAt = Date.now();
+      // The roster's whole view of the stream, in one testable place. The
+      // branches below own the pane's LOG and the wire frames; this owns
+      // membership, and nothing else is allowed to touch it.
+      applySubagentMessage(subagents, msg as unknown as SubagentStreamMessage);
       if (msg.type === 'system' && msg.subtype === 'init') {
         log(dim(`ready · ${msg.model} · ${msg.tools.length} tools`));
         // Init reports the concrete resolved model (e.g. 'claude-opus-4-8').
@@ -760,7 +932,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           emit(hello());
         }
       } else if (msg.type === 'system' && isTaskLifecycle(msg.subtype)) {
-        applyTaskLifecycle(subagents, msg as TaskLifecycleMessage);
+        // Roster handled above; nothing else to do with these.
       } else if (msg.type === 'stream_event') {
         const evt = msg.event as {
           type?: string;
@@ -807,66 +979,10 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           } else if (block.type === 'tool_use') {
             const arg = summarizeToolInput(block.name, block.input);
             log(`${dim('⚙')} ${block.name}${arg ? dim(` ${arg}`) : ''}`);
-            // A Task/Agent call is a subagent LAUNCH. Roster it here, at the
-            // parent's tool_use: this is the only message that carries the
-            // description, and a background subagent's first child message can
-            // arrive seconds later (or, for a very long first tool call, not
-            // for a minute — see the P1 note above).
-            if (isAgentLaunchTool(block.name) && typeof block.id === 'string') {
-              subagents.launch(block.id, subagentLabel(block.input) || 'subagent');
-            }
           }
         }
         // Keep the LATEST prose-bearing assistant message as the turn's summary.
         if (msgText) lastAssistantText = msgText;
-      } else if (
-        (msg.type === 'assistant' || msg.type === 'user') &&
-        typeof msg.parent_tool_use_id === 'string'
-      ) {
-        // Subagent traffic: surface live progress on the parent Task row.
-        //
-        // NOTE this stream also carries NESTED agents' traffic, tagged with the
-        // nested tool_use id (SDK 0.3.220, probe-verified). Those ids are not in
-        // the roster and `activity` ignores them — a grandchild's launch and its
-        // end both live inside its parent's stream, so an adopted one could
-        // never be retired. That adoption is what made `agents:` climb forever.
-        let lastTool: string | undefined;
-        if (msg.type === 'assistant') {
-          for (const block of msg.message.content ?? []) {
-            if (block.type === 'tool_use') {
-              const arg = summarizeToolInput(block.name, block.input);
-              lastTool = arg ? `${block.name}: ${arg}` : block.name;
-            }
-          }
-        }
-        subagents.activity(msg.parent_tool_use_id, lastTool);
-      } else if (msg.type === 'user' && msg.parent_tool_use_id === null) {
-        // TOP-LEVEL user traffic is where a subagent's END shows up, in two
-        // shapes — both must retire the roster entry, or a finished agent
-        // lingers forever now that nothing expires it on a timer:
-        //  1. the parent's own tool_result for the Task call (a FOREGROUND
-        //     subagent's completion). A background launch's immediate
-        //     "agent launched successfully" ack is NOT a completion — reading
-        //     it as one is the bug that used to drop every background agent
-        //     one second after launch.
-        //  2. the `<task-notification>` the harness injects when a BACKGROUND
-        //     subagent finishes, which carries the launching tool-use-id.
-        const content = msg.message.content;
-        if (typeof content === 'string') {
-          const id = taskNotificationToolUseId(content);
-          if (id) subagents.done(id);
-        } else {
-          for (const block of content ?? []) {
-            if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
-              if (!subagents.has(block.tool_use_id)) continue;
-              if (LAUNCH_ACK_RE.test(blockText(block.content))) continue;
-              subagents.done(block.tool_use_id);
-            } else if (block.type === 'text') {
-              const id = taskNotificationToolUseId(block.text);
-              if (id) subagents.done(id);
-            }
-          }
-        }
       } else if (msg.type === 'result') {
         inTurn = false;
         // Belt-and-braces: no question outlives its turn.
@@ -874,18 +990,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         // Push any throttled-but-unsent progress. Deliberately does NOT drop
         // entries: a run_in_background Task routinely outlives the turn that
         // launched it, and clearing here is what made those subagents vanish.
-        subagents.flush();
-        // A `Task` tool_use that never actually ran — a retracted refusal leg,
-        // a call the harness dropped — produces no task_started, no
-        // tool_result and no child traffic, so no end-path can reach it. The
-        // turn's end is where "it produced nothing at all" becomes decidable.
-        subagents.retireUnstarted();
-        // …but a turn that was STOPPED or FAILED takes its background tasks
-        // down with it, and those deaths announce themselves nowhere: no
-        // tool_result, no finish notice. Retire them explicitly or they are
-        // immortal (there is no decay timer left to catch them).
-        if (interruptRequested) subagents.retireAll('stopped');
-        else if (msg.subtype !== 'success') subagents.retireAll('turn failed');
+        applyTurnResult(subagents, msg.subtype, interruptRequested);
         const ok = msg.subtype === 'success' || interruptRequested;
         const secs = (msg.duration_ms / 1000).toFixed(1);
         const summary = notifySnippet(lastAssistantText);
