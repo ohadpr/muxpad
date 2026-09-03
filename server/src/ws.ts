@@ -126,6 +126,7 @@ export function reapStalledEntries(
   subagents: Map<string, SubagentProgress>,
   changedAt: Map<string, number>,
   now: number,
+  reaped?: Map<string, SubagentProgress>,
   staleMs: number = SUBAGENT_STALL_MS,
 ): string[] {
   const dropped: string[] = [];
@@ -140,6 +141,11 @@ export function reapStalledEntries(
     if (now - fresh > staleMs) dropped.push(id);
   }
   for (const id of dropped) {
+    // Record what the row looked like at death BEFORE dropping it: the
+    // tombstone is what lets the insert path tell a keepalive echo of this
+    // exact payload from the row genuinely coming back to life.
+    const p = subagents.get(id);
+    if (reaped && p) reaped.set(id, p);
     subagents.delete(id);
     changedAt.delete(id);
   }
@@ -408,6 +414,24 @@ export function attachWsServer(deps: {
      * {@link reapStalledEntries} for runners too old to send `seenAt`.
      */
     subagentChangedAt: Map<string, number>;
+    /**
+     * Rows this server retired for stalling, and the payload they carried when
+     * we did. A TOMBSTONE, and the reason the reaper terminates.
+     *
+     * Reaping alone is not enough: a keepalive-era runner re-announces its
+     * whole roster every 5s and knows nothing about our decision, so a reaped
+     * row reappears within one tick, gets re-reaped by the next sweep, and the
+     * pane's count blinks between N and N+1 forever — spraying a bogus `done`
+     * at every chat client each minute. Suppressing the re-announce is what
+     * makes the reap stick.
+     *
+     * The tombstone is NOT permanent, and that is the whole safety argument for
+     * reaping something that might be alive: it is lifted the moment the row
+     * shows real progress (see {@link isMaterialProgress}), so a subagent that
+     * was merely parked — a rate-limit hold, one enormous tool call — gets its
+     * row back on its very next step rather than staying invisible.
+     */
+    subagentReaped: Map<string, SubagentProgress>;
     /** Rate limit for the roster-overflow warning (see MAX_PANE_SUBAGENTS). */
     lastOverflowWarnAt: number;
     /** Latest session status (model, context fill, model list) for hellos. */
@@ -721,7 +745,7 @@ export function attachWsServer(deps: {
   const sweepStalledSubagents = (): void => {
     const now = Date.now();
     for (const [paneId, conn] of agentRunners) {
-      const reaped = reapStalledEntries(conn.subagents, conn.subagentChangedAt, now);
+      const reaped = reapStalledEntries(conn.subagents, conn.subagentChangedAt, now, conn.subagentReaped);
       if (reaped.length === 0) continue;
       // Must look like an end to every client, or the rows linger until the
       // next 10s session poll happens to notice (same contract as eviction).
@@ -1014,6 +1038,7 @@ export function attachWsServer(deps: {
           pendingQuestion: null,
           subagents: new Map(),
           subagentChangedAt: new Map(),
+          subagentReaped: new Map(),
           lastOverflowWarnAt: 0,
           status: null,
           lastSendAt: 0,
@@ -1252,13 +1277,24 @@ export function attachWsServer(deps: {
             if (frame.progress.done) {
               conn.subagents.delete(frame.progress.toolUseId);
               conn.subagentChangedAt.delete(frame.progress.toolUseId);
+              conn.subagentReaped.delete(frame.progress.toolUseId);
             } else {
+              const id = frame.progress.toolUseId;
+              const tomb = conn.subagentReaped.get(id);
+              if (tomb !== undefined) {
+                // We retired this row for stalling. The runner does not know
+                // that and keeps re-announcing it every 5s. Ignore the echo —
+                // otherwise the reap never sticks and the count flaps forever.
+                // Real progress lifts the tombstone and the row comes back.
+                if (!isMaterialProgress(tomb, frame.progress)) return;
+                conn.subagentReaped.delete(id);
+              }
               // Stamp only on real news. A keepalive re-announce is byte-identical
               // to what we hold, and must NOT restart the stall clock — otherwise
               // a ghost keeps itself alive with the runner's own heartbeat.
-              if (isMaterialProgress(conn.subagents.get(frame.progress.toolUseId), frame.progress))
-                conn.subagentChangedAt.set(frame.progress.toolUseId, Date.now());
-              conn.subagents.set(frame.progress.toolUseId, frame.progress);
+              if (isMaterialProgress(conn.subagents.get(id), frame.progress))
+                conn.subagentChangedAt.set(id, Date.now());
+              conn.subagents.set(id, frame.progress);
             }
             // Independent backstop on the SERVER's copy. The runner caps its own
             // roster, but runners are version-skewed by design — they only pick
@@ -1344,6 +1380,7 @@ export function attachWsServer(deps: {
           // most a blink, not a permanently lost subagent.)
           conn.subagents.clear();
           conn.subagentChangedAt.clear();
+          conn.subagentReaped.clear();
           // Registry-derived, and this conn has just left the registry — so
           // this is a zero, by the same rule as everywhere else.
           syncSubagentCount(paneId);

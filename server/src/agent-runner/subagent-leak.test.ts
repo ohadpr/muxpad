@@ -591,14 +591,20 @@ describe('subagent count — SDK shapes the declarations permit', () => {
       sdk.level([A]),
       sdk.taskStarted('task_a', null, 'idless worker'),
       sdk.launchAck('toolu_a', null),
-      sdk.childActivity('toolu_a'),
+      // Deliberately NO child activity: steps stay at 0 through the turn's
+      // `result`. That is the load-bearing case — a background agent takes up
+      // to 44s to reach its first child message, so a stepless row at `result`
+      // is the NORMAL state of a freshly launched agent, not a dead one. If the
+      // bare ack fails to mark the entry `launchAcked`, `retireUnstarted` kills
+      // it here and the count reads 0 below. Restore a `childActivity` line and
+      // this test passes against that bug — steps alone would spare it.
       sdk.result('success'),
     ]);
-    expectCount(fx, runner, 1, 'running');
+    expectCount(fx, runner, 1, 'a bare ack still proves the launch happened');
 
-    // `retireUnstarted` deliberately spares it (it has steps), and no task-keyed
-    // path can find it. Only the level signal going EMPTY — "no background task
-    // is running at all" — can settle it.
+    // `retireUnstarted` spares it (it was ACKED, though it has no steps and no
+    // task id), and no task-keyed path can find it. Only the level signal going
+    // EMPTY — "no background task is running at all" — can settle it.
     await runner.feed([
       sdk.level([]),
       sdk.taskUpdated('task_a', 'completed'),
