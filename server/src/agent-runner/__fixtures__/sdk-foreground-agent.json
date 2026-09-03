@@ -1,0 +1,102 @@
+[
+ {
+  "type": "assistant",
+  "parent_tool_use_id": null,
+  "message": {
+   "content": [
+    {
+     "type": "text",
+     "text": "I'll launch the foreground subagent now."
+    }
+   ]
+  }
+ },
+ {
+  "type": "assistant",
+  "parent_tool_use_id": null,
+  "message": {
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_01HB2YvjraYYcBQF5fkQRLhu",
+     "name": "Agent",
+     "input": {
+      "description": "fg probe",
+      "run_in_background": false
+     }
+    }
+   ]
+  }
+ },
+ {
+  "type": "system",
+  "subtype": "task_started",
+  "task_id": "a8dc49a71d089dc5e",
+  "tool_use_id": "toolu_01HB2YvjraYYcBQF5fkQRLhu"
+ },
+ {
+  "type": "user",
+  "parent_tool_use_id": "toolu_01HB2YvjraYYcBQF5fkQRLhu",
+  "message": {
+   "content": [
+    {
+     "type": "text",
+     "text": "Reply with exactly this sentence and nothing else: Async agent launched successfully and the helper finished."
+    }
+   ]
+  }
+ },
+ {
+  "type": "system",
+  "subtype": "task_updated",
+  "task_id": "a8dc49a71d089dc5e",
+  "patch": {
+   "status": "completed"
+  }
+ },
+ {
+  "type": "system",
+  "subtype": "task_notification",
+  "task_id": "a8dc49a71d089dc5e",
+  "tool_use_id": "toolu_01HB2YvjraYYcBQF5fkQRLhu",
+  "status": "completed"
+ },
+ {
+  "type": "user",
+  "parent_tool_use_id": null,
+  "message": {
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_01HB2YvjraYYcBQF5fkQRLhu",
+     "content": [
+      {
+       "type": "text",
+       "text": "Async agent launched successfully and the helper finished."
+      },
+      {
+       "type": "text",
+       "text": "agentId: a8dc49a71d089dc5e (use SendMessage with to: 'a8dc49a71d089dc5e', summary: '<5-10 word recap>' to continue this agent)\n<usage>subagent_tokens: 9004\ntool_uses: 0\nduration_ms: 1501</usage>"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "type": "assistant",
+  "parent_tool_use_id": null,
+  "message": {
+   "content": [
+    {
+     "type": "text",
+     "text": "DONE"
+    }
+   ]
+  }
+ },
+ {
+  "type": "result",
+  "subtype": "success"
+ }
+]
