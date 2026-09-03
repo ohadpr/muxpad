@@ -38,11 +38,27 @@
 /* The sheet's rows are pills that float off the rail's edges; the sliding face
    has to carry the same fill or the row reads as a full-bleed band the moment
    it moves. */
-.swiperow-face .navtree-tab-row {
+.swiperow-face .navtree-tab-row:not([data-active="true"]) {
   /* background-COLOR, not the shorthand: the row's state tint is painted as a
      background-IMAGE (StateChip.css) and the shorthand would reset it. It does
      not today — the tint's selector outweighs this one — but "it happens to
-     outweigh me" is not a thing to leave load-bearing under a swipe. */
+     outweigh me" is not a thing to leave load-bearing under a swipe.
+
+     `:not([data-active="true"])` is the same worry with the tie ACTUALLY
+     load-bearing rather than merely possible. The selected row's accent block
+     is `.navtree-tab-row[data-active="true"] { background-color: var(--accent) }`
+     (NavTree.css), which without this guard is (0,2,0) against this rule's
+     (0,2,0) — a dead heat decided by source order, i.e. by the fact that
+     NavTree.tsx happens to import `./SwipeRow` above `./NavTree.css`. Sorting
+     those imports, or a bundler chunking the two sheets the other way round,
+     would silently make the selected chat transparent on mobile. The guard
+     both raises this rule to (0,3,0) and stops it matching the active row at
+     all, so the outcome no longer depends on which sheet lands last.
+
+     Excluding the active row costs nothing the rest of the rule was buying:
+     the reason the face repaints a transparent row is that the sheet's rows
+     are pills floating off the rail, and a row that is ALREADY painted a solid
+     accent pill is exactly the case that needs no help. */
   background-color: transparent;
 }
 
