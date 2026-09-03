@@ -40,8 +40,8 @@ A pane can hold a **chat-native agent session**: the conversation renders as HTM
 
 - **Universal instructions.** muxpad writes `~/.muxpad/agent-instructions.md` on every boot and injects it into every session on every backend, so `muxpad search`, `muxpad publish` and `muxpad cron` are capabilities the agent knows it has. `CLAUDE.md` only reaches Claude; this is how the other two learn. Your own additions go in `~/.muxpad/agent-notes.md`, which muxpad creates once and never touches again. Claude gets it through the SDK's native system-prompt append; codex and cursor have no append surface, so it is prepended as a delimited block to the first message of each new session.
 - **Two modes.** `deep` is the baseline — the harness as it ships, plus the instructions above. `do` overlays a short "be decisive and terse" contract from `~/.muxpad/do-mode.md`. Switching mid-session is honest about its limits: no harness can rewrite a live system prompt, so the switch takes effect properly on the next respawn and is announced in-conversation until then.
-- **Questions come back as chips.** An agent that calls `ask_user` parks the pane in `blocked` and renders tappable options. Answering resolves the blocked tool call.
-- **Background subagents are tracked.** The roster is server-owned and durable — an entry leaves when its subagent reports done or its runner dies, not on a decay timer, because a background subagent can sit silent in one tool call for a minute while plainly alive.
+- **Questions come back as chips** (claude backend only). `ask_user` is registered by the Claude backend alone — `codex` and `cursor` expose no question tool — and an agent that calls it parks the pane in `blocked` and renders tappable options. Answering resolves the blocked tool call.
+- **Background subagents are tracked.** The roster is server-owned, and an entry leaves when its subagent reports done or its runner dies, not on a decay timer — because a background subagent can sit silent in one tool call for a minute while plainly alive. It lives in memory on the runner's connection (bounded, oldest evicted), so unlike the session itself it does not survive a main-server restart.
 - **A terminal Claude session can be adopted.** `muxpad claude [args…]` launches the real CLI in a pane, passes your flags straight through, and registers the session so the same conversation can be read and driven from the web chat.
 
 <p align="center">
@@ -85,7 +85,7 @@ The second line of a tab row is a one-line **headline** describing what that con
 
 ## Memory, and things that outlive a tab
 
-- **`muxpad search`** — agent sessions are mirrored into `~/.muxpad/archive/` and indexed into an SQLite **FTS5** table. All three backends, plus Claude's subagent sidechains, plus sessions muxpad never launched: a 15-minute sweep walks `~/.claude/projects` as well as muxpad's own logs, so a `muxpad claude` TUI pane and a session you started by hand both end up in there. Nothing in the archive is ever pruned or overwritten — when a source is rewritten by a `/compact`, the current mirror is sealed as `<sid>.v2.jsonl` and a fresh one starts at byte 0. (It is append-only *from the moment archiving first saw a file*; history a source discarded before that is gone.) `muxpad search "query"` is a real FTS5 MATCH with snippets, falling back to a phrase match on bad syntax; `--sessions` lists sessions. CLI only — there is no search UI in the browser.
+- **`muxpad search`** — agent sessions are mirrored into `~/.muxpad/archive/` and indexed into an SQLite **FTS5** table. All three backends, plus Claude's subagent sidechains, plus sessions muxpad never launched: a 15-minute sweep walks `~/.claude/projects` as well as muxpad's own logs, so a `muxpad claude` TUI pane and a session you started by hand both end up in there. Nothing in the archive is ever pruned or overwritten — when a source is rewritten by a `/compact`, the current mirror is sealed as `<sid>.v1.jsonl` (then `.v2`, and so on) and a fresh one starts at byte 0. (It is append-only *from the moment archiving first saw a file*; history a source discarded before that is gone.) `muxpad search "query"` is a real FTS5 MATCH with snippets, falling back to a phrase match on bad syntax; `--sessions` lists sessions. CLI only — there is no search UI in the browser.
 - **`muxpad app`** — a long-running local web server muxpad keeps alive with no tab of its own. An app is a supervised pane in a hidden workspace: ptyd owns the process, so it survives a main-server restart; the command restarts on crash; the state you see is *measured* (`starting`, `running`, `unreachable`, `stopped`, `gave up`), not assumed.
 
 ## Publishing something someone else can open
@@ -107,7 +107,9 @@ muxpad publish --list                            # slug, files, bytes, versions
 
 **What the link is:** a real public URL, served by a *second* listener on its own port — the one `tailscale funnel` is pointed at, so the funnel never touches the unauthenticated UI. Anyone who has the link can open it, with no tailnet and no account. That is the whole point of the feature, and it is also the thing to be careful about: the access control on an unnamed artifact is that its slug is unguessable, and a named slug is a URL you are choosing to hand out. Publishing something is publishing it — check what is in the directory.
 
-**What the link is not:** it is not your muxpad. The artifact listener carries no API, no WebSocket and no directory listings, its root deliberately 404s, and every response is sandboxed by CSP *without* `allow-same-origin` so one artifact cannot read another's storage. And **apps are never exposed this way** — muxpad only ever funnels `~/.muxpad/public/`. Until a funnel or tunnel is actually configured the listener is loopback-only, and `publish` says so rather than handing you a link that works only on your own machine.
+**What the link is not:** it is not your muxpad. The artifact listener carries no API, no WebSocket and no directory listings, its root deliberately 404s, and every response is sandboxed by CSP *without* `allow-same-origin` so one artifact cannot read another's storage. And **apps are never exposed this way** — muxpad only ever funnels `~/.muxpad/public/`.
+
+> **`publish` turns the funnel on for you.** The artifact listener binds loopback, but if a `tailscale` binary is on the PATH the first `muxpad publish` runs `tailscale funnel --bg --https=8443` against it — no prompt, no confirmation. That is how the link becomes shareable, and it is worth knowing before the first time you run it. With no tailscale and nothing configured, `publish` still prints the loopback link on stdout and warns on **stderr** that it only works on this machine; take the warning seriously, because the link itself looks fine.
 
 <p align="center">
   <img src="docs/artifact.webp" alt="a published report as the recipient sees it, on the public URL" width="860" />
@@ -133,7 +135,7 @@ muxpad cron run pr-sweep     # fire it now; test before you trust it
 muxpad cron list             # schedule, next due, last run, failure streak
 ```
 
-`--at` takes a cron expression or a phrase (`daily at 09:00`, `every 30m`); `--tz` pins an IANA zone. A fire lands either in an existing pane (`--pane`) or in a fresh agent tab per run (`--new-tab`), which is what most recurring jobs want. Because `next_due_at` is persisted, the scheduler survives every restart and **catches up** after downtime: `--catchup=once` (default) collapses everything missed into one fire carrying an `[N missed]` marker, `all` replays them through the pane's queue in order, `skip` drops them but records the outage in the run history rather than going silent. `--overlap`, `--quiet`, `--max-open` and `--on-context` cover the rest of the awkward cases (a fire arriving mid-turn, a fire arriving while you are typing, a fire arriving past 80% context fill). Three consecutive failures disable a cron and push a notification.
+`--at` takes a cron expression or a phrase (`daily at 09:00`, `every 30m`); `--tz` pins an IANA zone. A fire lands either in an existing pane (`--pane`) or in a fresh agent tab per run (`--new-tab`), which is what most recurring jobs want. Because `next_due_at` is persisted, the scheduler survives every restart and **catches up** after downtime: `--catchup=once` (default) collapses everything missed into one fire whose cron marker carries `missed="N"`, `all` replays them through the pane's queue in order, `skip` drops them but records the outage in the run history rather than going silent. `--overlap`, `--quiet`, `--max-open` and `--on-context` cover the rest of the awkward cases (a fire arriving mid-turn, a fire arriving while you are typing, a fire arriving past 80% context fill). Three consecutive failures disable a cron and push a notification.
 
 The reason this exists rather than leaning on a harness's own scheduler: those fire inside one session's context, expire after about a week, lose every fire that came due while the machine was asleep, and are invisible from anywhere else. muxpad's is in SQLite, never expires, and is editable from any pane.
 
@@ -160,14 +162,14 @@ muxpad watch --types=agent_turn         # stream the event bus, one line per eve
 
 muxpad runs on phones — iOS Safari and Chrome on Android. The mobile story is two halves and it only works with both: **see what needs you**, and **answer it from there**.
 
-The navigator is the same state rail in a sheet, so "what wants me?" is one tap from anywhere — including from workspaces you have collapsed. Open the row and you get the full conversation and a real composer, so a decision that arrived while you were out is a decision you can actually make.
+The navigator is the same state rail in a panel that drops down from the chrome bar, so "what wants me?" is one tap from anywhere — including from workspaces you have collapsed. Open the row and you get the full conversation and a real composer, so a decision that arrived while you were out is a decision you can actually make.
 
 <p align="center">
   <img src="docs/mobile-nav.webp" alt="the navigator sheet on a phone, showing the same state rail across five workspaces" width="270" />
   <img src="docs/mobile-chat.webp" alt="the same agent question on a phone, with tappable options and the composer" width="270" />
 </p>
 
-For terminal panes: a single-finger **tap** goes through to the TUI's mouse reporting, so Claude Code clicks keep working, while a single-finger *drag* past a threshold scrolls the scrollback; two fingers always scroll, with no tap detection to lose. The composer bar above the keyboard sends a line with a trailing CR, and a row of keys above it produces what iOS keyboards can't: Esc, Tab, ↑, ↓, ^C. There is a one-tap **dictation cleanup** button on the composer that repairs what the speech recogniser misheard, with undo. Installed to the home screen it takes Web Push, so a blocked agent or a finished turn can buzz your phone; VAPID keys are generated into `~/.muxpad/vapid.json` on first use and there is nothing to configure.
+For terminal panes: a single-finger **tap** goes through to the TUI's mouse reporting, so Claude Code clicks keep working, while a single-finger *drag* past a threshold scrolls the scrollback; two fingers always scroll, with no tap detection to lose. The composer bar above the keyboard sends the line and its CR as two writes ~50 ms apart, deliberately, so Claude Code's paste-coalescing doesn't swallow the newline; a row of keys above it produces what iOS keyboards can't: Esc, Tab, ↑, ↓, ^C and jump-to-bottom. There is a one-tap **dictation cleanup** button on the composer that repairs what the speech recogniser misheard, with undo. Installed to the home screen it takes Web Push, so a blocked agent or a finished turn can buzz your phone; VAPID keys are generated into `~/.muxpad/vapid.json` on first use and there is nothing to configure.
 
 Mobile is for checking in on a session you started elsewhere. Long sessions still want a real keyboard.
 
@@ -191,9 +193,9 @@ Mobile is for checking in on a session you started elsewhere. Long sessions stil
 - macOS or Linux (the cwd-tracking path uses `lsof`)
 - Node 22+
 - pnpm 10+ (`corepack enable && corepack prepare pnpm@10.30.1 --activate`, or `brew install pnpm`)
-- `curl` and `jq` — every HTTP verb of the `muxpad` CLI needs them, so the whole "drive muxpad from inside muxpad" section is dead without `jq`
+- `curl` and `jq` — effectively every HTTP verb of the `muxpad` CLI needs them (`muxpad claude` is the one that parses its response without `jq`), so the whole "drive muxpad from inside muxpad" section is dead without `jq`
 
-Agent panes additionally need whichever backends you intend to use on the PATH: `claude`, `codex`, `cursor-agent`.
+Agent panes need `codex` and/or `cursor-agent` on the PATH if you intend to use those backends. The **claude** backend does not need anything on the PATH — it runs through `@anthropic-ai/claude-agent-sdk`, which brings its own binary and uses your existing login. A PATH `claude` is needed only for `muxpad claude`, the TUI adoption path.
 
 ## Install
 
@@ -213,7 +215,7 @@ Logs go to `~/.muxpad/server.log` and `~/.muxpad/ptyd.log`. For auto-start on re
 
 `stop` and `restart` leave ptyd alone by default; `--all` includes it, **which kills every pane**.
 
-`/` has no page of its own: it sends you to your first workspace, or — if you have none — creates one with a starter tab and shell pane and drops you in it. The workspace switcher in the header is the overview. Split the pane from its chrome, or with `muxpad pane new --cmd=…` from inside it.
+`/` has no page of its own: it sends you to your first workspace, or — if you have none — creates one with a starter tab and shell pane and drops you in it. The state rail is the overview: the persistent sidebar on desktop (there is no top bar once you are inside a workspace), the drop-down navigator on mobile. Split the pane from its chrome, or with `muxpad pane new --cmd=…` from inside it.
 
 ### Troubleshooting
 
@@ -240,7 +242,7 @@ One practical wrinkle: `tailscale funnel` puts the artifact listener on **:8443*
 | `MUXPAD_PUBLIC_PORT` | `7778` | The artifact-only listener. |
 | `MUXPAD_PUBLIC_HOST` | `127.0.0.1` | Bind address for that listener. Loopback by default because the funnel proxies to it; nothing else needs to reach it. |
 | `MUXPAD_PUBLIC_BASE_URL` | (unset) | Origin published links are built from. Set this once you have a permanent domain; it outranks every discovered value. |
-| `MUXPAD_NO_FUNNEL` | (unset) | `1` disables all `tailscale` exec on publish. For isolated / test instances. |
+| `MUXPAD_NO_FUNNEL` | (unset) | `1` stops the **server** exec'ing `tailscale`. The `muxpad publish` CLI does not read it and still tries to bring a funnel up itself, so an isolated instance wants the CLI kept away from publishing too. |
 | `MUXPAD_TAILSCALE_SERVE` | (unset) | `1` binds to `127.0.0.1` and fronts the daemon via `tailscale serve` (see below). |
 | `MUXPAD_ALLOWED_ORIGINS` | (unset) | Comma-separated extra **hostnames** allowed to make **writes** and open **WebSockets** (scheme and port are ignored, so one entry covers every port on that host). Every state-changing request and every `/ws/*` upgrade must come from an `Origin` that is loopback, matches the request's `Host`, or is listed here — a foreign page must not be able to POST an autostarting app into your muxpad or open a socket into a live terminal. The CLI and the agent runner send no `Origin` and are unaffected. Set this only if a reverse proxy rewrites `Host`; the 403 names the variable. See `server/src/same-origin.ts`. |
 
