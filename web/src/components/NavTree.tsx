@@ -32,6 +32,7 @@ import {
   useWorkspaces,
   visibleWorkspaces,
 } from '../workspaces';
+import { NavSearch } from './NavSearch';
 import { NewTabButton } from './NewTabButton';
 import { StateChip } from './StateChip';
 import { SwipeRow } from './SwipeRow';
@@ -402,7 +403,10 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
           <span className="navtree-section-label">Workspaces</span>
         </div>
       )}
-      <div className="navtree-scroll">
+      {/* The box owns `.navtree-scroll` (it swaps the tree for its results
+          while it has a query), so it renders a fragment and the scroller
+          stays a direct flex child of this nav. */}
+      <NavSearch variant={variant} onNavigate={onNavigate}>
         {workspaces.map((w) => (
           <WorkspaceNode
             key={w.id}
@@ -442,7 +446,7 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
             <span className="navtree-name-text">Hosted</span>
           </Link>
         </div>
-      </div>
+      </NavSearch>
     </nav>
   );
 }
