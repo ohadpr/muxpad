@@ -1,0 +1,500 @@
+[
+ {
+  "type": "assistant",
+  "parent_tool_use_id": null,
+  "message": {
+   "content": [
+    {
+     "type": "text",
+     "text": "I'll launch the 3 subagents now."
+    }
+   ]
+  }
+ },
+ {
+  "type": "assistant",
+  "parent_tool_use_id": null,
+  "message": {
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_01XnrvLpvPxFWLSuFx5EM969",
+     "name": "Agent",
+     "input": {
+      "description": "Sleep and write file 1"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "type": "system",
+  "subtype": "background_tasks_changed",
+  "tasks": [
+   {
+    "task_id": "ae957386e1ac03ddb",
+    "task_type": "local_agent"
+   }
+  ]
+ },
+ {
+  "type": "system",
+  "subtype": "task_started",
+  "task_id": "ae957386e1ac03ddb",
+  "tool_use_id": "toolu_01XnrvLpvPxFWLSuFx5EM969"
+ },
+ {
+  "type": "user",
+  "parent_tool_use_id": null,
+  "message": {
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_01XnrvLpvPxFWLSuFx5EM969",
+     "content": [
+      {
+       "type": "text",
+       "text": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)\nagentId: ae957386e1ac03ddb (internal ID - do not mention to user. Use SendMessage with to: 'ae957386e1ac03ddb', summary: '<5-10 word recap>' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes. You know nothing about its results until that notification arrives — do not report, assume, or predict them; continue other work or respond to the user in the meantime.\nDo"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "type": "assistant",
+  "parent_tool_use_id": null,
+  "message": {
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_01P1TUuUrLkHAJNLiUPrCBGJ",
+     "name": "Agent",
+     "input": {
+      "description": "Sleep and write file 2"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "type": "system",
+  "subtype": "background_tasks_changed",
+  "tasks": [
+   {
+    "task_id": "ae957386e1ac03ddb",
+    "task_type": "local_agent"
+   },
+   {
+    "task_id": "aba81525915725d9d",
+    "task_type": "local_agent"
+   }
+  ]
+ },
+ {
+  "type": "system",
+  "subtype": "task_started",
+  "task_id": "aba81525915725d9d",
+  "tool_use_id": "toolu_01P1TUuUrLkHAJNLiUPrCBGJ"
+ },
+ {
+  "type": "user",
+  "parent_tool_use_id": null,
+  "message": {
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_01P1TUuUrLkHAJNLiUPrCBGJ",
+     "content": [
+      {
+       "type": "text",
+       "text": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)\nagentId: aba81525915725d9d (internal ID - do not mention to user. Use SendMessage with to: 'aba81525915725d9d', summary: '<5-10 word recap>' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes. You know nothing about its results until that notification arrives — do not report, assume, or predict them; continue other work or respond to the user in the meantime.\nDo"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "type": "assistant",
+  "parent_tool_use_id": "toolu_01XnrvLpvPxFWLSuFx5EM969",
+  "message": {
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_01QPqdLqtHJq1DwKDkk4MVEo",
+     "name": "Bash",
+     "input": {
+      "description": "Sleep then write file"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "type": "assistant",
+  "parent_tool_use_id": null,
+  "message": {
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_01VMYcyc1825L2ER9fKJVfYj",
+     "name": "Agent",
+     "input": {
+      "description": "Sleep and write file 3"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "type": "system",
+  "subtype": "background_tasks_changed",
+  "tasks": [
+   {
+    "task_id": "ae957386e1ac03ddb",
+    "task_type": "local_agent"
+   },
+   {
+    "task_id": "aba81525915725d9d",
+    "task_type": "local_agent"
+   },
+   {
+    "task_id": "a0c303529174359c0",
+    "task_type": "local_agent"
+   }
+  ]
+ },
+ {
+  "type": "system",
+  "subtype": "task_started",
+  "task_id": "a0c303529174359c0",
+  "tool_use_id": "toolu_01VMYcyc1825L2ER9fKJVfYj"
+ },
+ {
+  "type": "user",
+  "parent_tool_use_id": null,
+  "message": {
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_01VMYcyc1825L2ER9fKJVfYj",
+     "content": [
+      {
+       "type": "text",
+       "text": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)\nagentId: a0c303529174359c0 (internal ID - do not mention to user. Use SendMessage with to: 'a0c303529174359c0', summary: '<5-10 word recap>' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes. You know nothing about its results until that notification arrives — do not report, assume, or predict them; continue other work or respond to the user in the meantime.\nDo"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "type": "assistant",
+  "parent_tool_use_id": "toolu_01P1TUuUrLkHAJNLiUPrCBGJ",
+  "message": {
+   "content": [
+    {
+     "type": "text",
+     "text": "I'll run the command."
+    }
+   ]
+  }
+ },
+ {
+  "type": "assistant",
+  "parent_tool_use_id": "toolu_01P1TUuUrLkHAJNLiUPrCBGJ",
+  "message": {
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_01J49RpiyK1Gw4BZUfxsd5cP",
+     "name": "Bash",
+     "input": {
+      "description": "Sleep 14s then write file"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "type": "assistant",
+  "parent_tool_use_id": null,
+  "message": {
+   "content": [
+    {
+     "type": "text",
+     "text": "LAUNCHED"
+    }
+   ]
+  }
+ },
+ {
+  "type": "result",
+  "subtype": "success"
+ },
+ {
+  "type": "assistant",
+  "parent_tool_use_id": "toolu_01VMYcyc1825L2ER9fKJVfYj",
+  "message": {
+   "content": [
+    {
+     "type": "text",
+     "text": "I'll run the command as specified."
+    }
+   ]
+  }
+ },
+ {
+  "type": "assistant",
+  "parent_tool_use_id": "toolu_01VMYcyc1825L2ER9fKJVfYj",
+  "message": {
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_01QGW5eY8Vc5PNK2YBXkveRX",
+     "name": "Bash",
+     "input": {
+      "description": "Sleep 21 seconds then write file"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "type": "system",
+  "subtype": "task_started",
+  "task_id": "bw8eof1jg",
+  "tool_use_id": "toolu_01QPqdLqtHJq1DwKDkk4MVEo"
+ },
+ {
+  "type": "system",
+  "subtype": "task_started",
+  "task_id": "buye6gy44",
+  "tool_use_id": "toolu_01J49RpiyK1Gw4BZUfxsd5cP"
+ },
+ {
+  "type": "system",
+  "subtype": "task_started",
+  "task_id": "bvxvbwze7",
+  "tool_use_id": "toolu_01QGW5eY8Vc5PNK2YBXkveRX"
+ },
+ {
+  "type": "system",
+  "subtype": "task_notification",
+  "task_id": "bw8eof1jg",
+  "tool_use_id": "toolu_01QPqdLqtHJq1DwKDkk4MVEo",
+  "status": "completed"
+ },
+ {
+  "type": "user",
+  "parent_tool_use_id": "toolu_01XnrvLpvPxFWLSuFx5EM969",
+  "message": {
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_01QPqdLqtHJq1DwKDkk4MVEo",
+     "content": "(Bash completed with no output)"
+    }
+   ]
+  }
+ },
+ {
+  "type": "assistant",
+  "parent_tool_use_id": "toolu_01XnrvLpvPxFWLSuFx5EM969",
+  "message": {
+   "content": [
+    {
+     "type": "text",
+     "text": "done"
+    }
+   ]
+  }
+ },
+ {
+  "type": "system",
+  "subtype": "background_tasks_changed",
+  "tasks": [
+   {
+    "task_id": "aba81525915725d9d",
+    "task_type": "local_agent"
+   },
+   {
+    "task_id": "a0c303529174359c0",
+    "task_type": "local_agent"
+   }
+  ]
+ },
+ {
+  "type": "system",
+  "subtype": "task_updated",
+  "task_id": "ae957386e1ac03ddb",
+  "patch": {
+   "status": "completed"
+  }
+ },
+ {
+  "type": "system",
+  "subtype": "task_notification",
+  "task_id": "ae957386e1ac03ddb",
+  "tool_use_id": "toolu_01XnrvLpvPxFWLSuFx5EM969",
+  "status": "completed"
+ },
+ {
+  "type": "assistant",
+  "parent_tool_use_id": null,
+  "message": {
+   "content": [
+    {
+     "type": "text",
+     "text": "Agent 1 finished: done. Agents 2 and 3 are still running."
+    }
+   ]
+  }
+ },
+ {
+  "type": "result",
+  "subtype": "success"
+ },
+ {
+  "type": "system",
+  "subtype": "task_notification",
+  "task_id": "buye6gy44",
+  "tool_use_id": "toolu_01J49RpiyK1Gw4BZUfxsd5cP",
+  "status": "completed"
+ },
+ {
+  "type": "user",
+  "parent_tool_use_id": "toolu_01P1TUuUrLkHAJNLiUPrCBGJ",
+  "message": {
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_01J49RpiyK1Gw4BZUfxsd5cP",
+     "content": "(Bash completed with no output)"
+    }
+   ]
+  }
+ },
+ {
+  "type": "assistant",
+  "parent_tool_use_id": "toolu_01P1TUuUrLkHAJNLiUPrCBGJ",
+  "message": {
+   "content": [
+    {
+     "type": "text",
+     "text": "done"
+    }
+   ]
+  }
+ },
+ {
+  "type": "system",
+  "subtype": "background_tasks_changed",
+  "tasks": [
+   {
+    "task_id": "a0c303529174359c0",
+    "task_type": "local_agent"
+   }
+  ]
+ },
+ {
+  "type": "system",
+  "subtype": "task_updated",
+  "task_id": "aba81525915725d9d",
+  "patch": {
+   "status": "completed"
+  }
+ },
+ {
+  "type": "system",
+  "subtype": "task_notification",
+  "task_id": "aba81525915725d9d",
+  "tool_use_id": "toolu_01P1TUuUrLkHAJNLiUPrCBGJ",
+  "status": "completed"
+ },
+ {
+  "type": "assistant",
+  "parent_tool_use_id": null,
+  "message": {
+   "content": [
+    {
+     "type": "text",
+     "text": "Agent 2 finished: done. Agent 3 is still running."
+    }
+   ]
+  }
+ },
+ {
+  "type": "result",
+  "subtype": "success"
+ },
+ {
+  "type": "system",
+  "subtype": "task_notification",
+  "task_id": "bvxvbwze7",
+  "tool_use_id": "toolu_01QGW5eY8Vc5PNK2YBXkveRX",
+  "status": "completed"
+ },
+ {
+  "type": "user",
+  "parent_tool_use_id": "toolu_01VMYcyc1825L2ER9fKJVfYj",
+  "message": {
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_01QGW5eY8Vc5PNK2YBXkveRX",
+     "content": "(Bash completed with no output)"
+    }
+   ]
+  }
+ },
+ {
+  "type": "assistant",
+  "parent_tool_use_id": "toolu_01VMYcyc1825L2ER9fKJVfYj",
+  "message": {
+   "content": [
+    {
+     "type": "text",
+     "text": "done"
+    }
+   ]
+  }
+ },
+ {
+  "type": "system",
+  "subtype": "background_tasks_changed",
+  "tasks": []
+ },
+ {
+  "type": "system",
+  "subtype": "task_updated",
+  "task_id": "a0c303529174359c0",
+  "patch": {
+   "status": "completed"
+  }
+ },
+ {
+  "type": "system",
+  "subtype": "task_notification",
+  "task_id": "a0c303529174359c0",
+  "tool_use_id": "toolu_01VMYcyc1825L2ER9fKJVfYj",
+  "status": "completed"
+ },
+ {
+  "type": "assistant",
+  "parent_tool_use_id": null,
+  "message": {
+   "content": [
+    {
+     "type": "text",
+     "text": "All 3 agents finished, each replying `done`. Files written: `/tmp/probe/work/agent-1.txt`, `agent-2.txt`, `agent-3.txt`."
+    }
+   ]
+  }
+ },
+ {
+  "type": "result",
+  "subtype": "success"
+ }
+]
