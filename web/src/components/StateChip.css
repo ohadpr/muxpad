@@ -1,0 +1,274 @@
+/* ─── The navigator row's state language ──────────────────────────────────
+   ONE file for all three tellings of a row's state, because they only make
+   sense together:
+
+     BAR    3px on the row's left edge, at a fixed x on every row — the
+            vertical scan line. Idle rows keep the track and paint nothing, so
+            a row changing state never shifts anything.
+     TINT   a very faint wash of the same hue across the whole row — the
+            peripheral signal. Subtle enough that a screenful isn't loud;
+            present enough to catch at the edge of vision.
+     CHIP   a word (or, for `working`, a spinner) at the row's right edge —
+            the telling you read on purpose. See StateChip.tsx.
+
+   Two rules hold the whole thing up:
+
+   1. ONLY `working` moves. Nothing else in the rail animates — not ready, not
+      blocked, not the selected row. So anything moving means the same thing,
+      and a still rail means nothing is running.
+   2. SELECTION IS NOT A STATE. Where you are and what the machine is doing are
+      different kinds of fact and must not share an encoding: state is bar +
+      tint + chip, selection is a SOLID accent block (NavTree.css). A selected
+      row therefore drops its bar and its tint — but KEEPS its chip, redrawn in
+      the block's own ink, because the chat you are looking at is the one whose
+      progress matters most and it must not be the one row that loses its
+      signal.
+
+   ─── The tint values, and how they were derived ─────────────────────────
+   The wash is an ALPHA over whatever surface the row sits on (the desktop
+   rail's --bg-tabbar, the sheet's --bg-chrome), never a mix into --bg: it has
+   to composite correctly over three different surfaces plus the hover fill,
+   and an opaque mix computed against the wrong one is visibly off.
+
+   It is carried in `background-image` while hover/selection live in
+   `background-color`, so hovering a working row shows BOTH — the tint is not
+   something a pointer can take away.
+
+   The two alphas (--status-wash, and --status-chip-wash for the chip's fill)
+   are STEPPED for light and dark rather than shared. Measured as ΔE76 against
+   every theme's real rail (--bg-tabbar) and sheet (--bg-chrome) surfaces, all
+   four states: 10% over a light surface lands ΔE 4.2–7.7, and 12% over a dark
+   one lands 5.2–15.8. Both ranges are wide because the four hues are not
+   equally far from their surface — `dead` is grey and sits at the bottom of
+   both, which is right (it is the state with least to say), and amber over the
+   near-black acme-dark sheet sits at the top. The dark step is nominally
+   stronger on purpose: CIELAB is not uniform near black, so equal ΔE down
+   there is visibly LESS, and the dark rail is a large dim field the eye is
+   adapted to. Both numbers were then looked at on screen, at both variants and
+   both themes, which is the only test that actually decides "faint".
+
+   Chip INK is `color-mix(--state-hue --status-ink-mix, --fg)` — one formula
+   that darkens the hue on light themes and lightens it on dark ones, because
+   --fg points the right way in both. Measured contrast of the ink against the
+   chip's own fill, on every theme × both surfaces × all four states: 4.6–6.9
+   at the shipped mixes (50% light / 55% dark), so the whole family clears AA
+   for small text. The hue is diluted by half on light themes and that is
+   deliberate — the chip is a LABEL and must be readable; the undiluted hue is
+   carried by the bar and the tint, which have no text on them to protect.
+
+   The BAR and the SPINNER carry the undiluted hue and measure 3.3–8.9 against
+   the row they sit on, clearing the 3:1 that WCAG 1.4.11 asks of a non-text
+   indicator. The floor is amber, which is why --status-working is a step
+   darker than the rest of the light palette (see styles.css): `working` is the
+   one state that draws NO word by default, so its ring is the entire signal
+   and cannot be the one that falls under. */
+
+/* Hue per state, set once and inherited. Declared on the ROW (which paints the
+   bar and the tint) and on the CHIP (which paints the word), so the chip is
+   still correct if it is ever rendered outside a stateful row. */
+.navtree-state[data-state="working"],
+.navtree-tab-row[data-state="working"],
+.navtree-ws-row[data-state="working"],
+.navtree-pane-row-wrap[data-state="working"] {
+  --state-hue: var(--status-working);
+}
+.navtree-state[data-state="ready"],
+.navtree-tab-row[data-state="ready"],
+.navtree-ws-row[data-state="ready"],
+.navtree-pane-row-wrap[data-state="ready"] {
+  --state-hue: var(--status-ready);
+}
+.navtree-state[data-state="blocked"],
+.navtree-tab-row[data-state="blocked"],
+.navtree-ws-row[data-state="blocked"],
+.navtree-pane-row-wrap[data-state="blocked"] {
+  --state-hue: var(--status-blocked);
+}
+.navtree-state[data-state="dead"],
+.navtree-tab-row[data-state="dead"],
+.navtree-ws-row[data-state="dead"],
+.navtree-pane-row-wrap[data-state="dead"] {
+  /* NOT --status-quiet: that token doubles as the working ring's track and is
+     tuned to recede. A dead runner still has to be findable. */
+  --state-hue: var(--status-dead);
+}
+
+/* ─── 1 · The left state bar ────────────────────────────────────────────── */
+
+/* The track is RESERVED on every row, idle included (transparent), so a row
+   going idle → working paints a bar instead of moving anything. */
+.navtree-tab-row::before,
+.navtree-ws-row::before,
+.navtree-pane-row-wrap::before {
+  content: "";
+  position: absolute;
+  /* FROZEN at the scale's hairline step (--nt-pad, 4px). This x is the one the
+     whole rail is read against — every row's bar, and by extension the icon
+     chips beside them, agree on it to 0.00px — so it is named rather than
+     re-derived, and the spacing pass that opened up the row's RIGHT edge
+     deliberately did not touch it. */
+  left: var(--nt-pad);
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 2px;
+  background: transparent;
+  pointer-events: none;
+}
+/* SELECTION WINS OUTRIGHT — and it wins by never painting, rather than by
+   painting and then being overridden. A selected row is a solid block; a bar or
+   a tint on top of it would say two things in one channel (rule 2 above).
+   Stated as an exclusion in the PAINT selector on purpose: written as a
+   separate `background: transparent` override it LOST the cascade, because
+   `[data-state]:not([data-state="idle"])` counts two attribute selectors and
+   `[data-active="true"]` counts one. Measured, on screen: an amber bar and an
+   amber wash sitting on the violet block. One rule decides, so there is no
+   race to lose. (Workspace rows are excepted — nothing fills an active
+   workspace header; at most it accents the NAME of a collapsed one. There is
+   no block for a tint to collide with, so their state still paints.) */
+.navtree-tab-row[data-state]:not([data-state="idle"]):not([data-active="true"])::before,
+.navtree-ws-row[data-state]:not([data-state="idle"])::before,
+.navtree-pane-row-wrap[data-state]:not([data-state="idle"]):not([data-active="true"])::before {
+  background: var(--state-hue);
+}
+
+/* ─── 2 · The row tint ──────────────────────────────────────────────────── */
+
+/* `background-image`, so the hover `background-color` underneath it still
+   shows and the two never fight over one property. */
+.navtree-tab-row[data-state]:not([data-state="idle"]):not([data-active="true"]),
+.navtree-ws-row[data-state]:not([data-state="idle"]),
+.navtree-pane-row-wrap[data-state]:not([data-state="idle"]):not([data-active="true"]) {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--state-hue) var(--status-wash), transparent),
+    color-mix(in srgb, var(--state-hue) var(--status-wash), transparent)
+  );
+}
+
+/* ─── 3 · The chip ──────────────────────────────────────────────────────── */
+
+/* Height is pinned to the same 18px the old status mark used, so the chip can
+   never become the tallest thing in a one-line row and drive its height.
+
+   The WIDTH is free, and that is a TRADE, not a win. The fixed 22px column
+   this replaced (30px with its gutter) was charged to every row whether or not
+   it drew anything. Re-measured in a real engine at the desktop rail's
+   metrics, chip + its step of air (--nt-air, 12px — see the spacing scale in
+   NavTree.css; it was the 8px gutter until the chip was found to be sitting
+   4px off the row's edge): idle 0px, working 25px, `YOU` 45px, `READY` 58px,
+   `FAILED` 60px, and `WORKING` 74px under reduced motion. So idle and working
+   rows hand width back to the name and the three worded states take more than
+   the column ever did — a `dead` row with a schedule is where names truncate
+   first. It is the right side of the trade because idle is the majority of
+   rows, and because a row that has something to say has earned the space to
+   say it. */
+.navtree-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 18px;
+  line-height: 0;
+}
+/* An idle chip is `:empty` — no width, and (in NavTree.css) no gutter either. */
+.navtree-state-word {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: var(--ui-font);
+  font-size: 9.5px;
+  line-height: 13px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--state-hue) var(--status-chip-wash), transparent);
+  color: color-mix(in srgb, var(--state-hue) var(--status-ink-mix), var(--fg));
+}
+.navtree[data-variant="sheet"] .navtree-state-word {
+  font-size: 10px;
+  line-height: 14px;
+}
+
+/* The spinner — the rail's ONE moving thing. A ring rather than a labelled
+   chip because `working` is the single state that needs no word: a turning
+   ring is read as "in progress" without being read at all. */
+.navtree-state-spin {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--state-hue) 26%, transparent);
+  border-top-color: var(--state-hue);
+  animation: navtree-state-spin 0.8s linear infinite;
+}
+.navtree[data-variant="sheet"] .navtree-state-spin {
+  width: 14px;
+  height: 14px;
+  flex-basis: 14px;
+}
+@keyframes navtree-state-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* The reduced-motion twin, hidden while motion is allowed. Both are always in
+   the DOM; the media query below is the only thing that chooses. */
+.navtree-state-word.-motion-sub {
+  display: none;
+}
+
+/* ─── The chip on a SELECTED row ────────────────────────────────────────── */
+
+/* Drawn in the block's own ink (--accent-fg is, by definition, the colour the
+   theme guarantees legible on --accent), with the chip's fill traded for a
+   hairline so nothing competes with the solid block. The hue is gone here and
+   that is the correct trade: on one row, legibility beats the colour channel,
+   and the word still says which state it is. The SPINNER survives unchanged
+   in shape and motion — losing it on the one chat whose progress you are
+   actually waiting on would be the worst place in the rail to go quiet. */
+.navtree-tab-row[data-active="true"] .navtree-state-word,
+.navtree-pane-row-wrap[data-active="true"] .navtree-state-word {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-fg) 40%, transparent);
+  color: var(--accent-fg);
+}
+.navtree-tab-row[data-active="true"] .navtree-state-spin,
+.navtree-pane-row-wrap[data-active="true"] .navtree-state-spin {
+  border-color: color-mix(in srgb, var(--accent-fg) 30%, transparent);
+  border-top-color: var(--accent-fg);
+}
+
+/* ─── Reduced motion ────────────────────────────────────────────────────── */
+
+/* The spinner degrades into the LABELLED variant — the word WORKING in the
+   same chip as the other three states. Not a static ring (indistinguishable
+   from a decoration) and not a fainter mark (it would make the busiest row the
+   quietest thing on screen). */
+@media (prefers-reduced-motion: reduce) {
+  .navtree-state-spin {
+    display: none;
+  }
+  .navtree-state-word.-motion-sub {
+    display: inline-block;
+  }
+}
+
+/* ─── Screen readers ────────────────────────────────────────────────────── */
+
+/* Every non-idle row announces its state, `working` included — the chip sits
+   outside the row's link, so this cannot churn the link's accessible name the
+   way a mark inside it did. Not a live region: state changes should be found
+   when the row is read, not shouted while you are somewhere else. */
+.navtree-state-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

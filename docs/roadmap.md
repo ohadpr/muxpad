@@ -17,7 +17,14 @@ separate list of v1 review debt.
    Fixes "who's running the notes server?". Also the reliable home for dynamic
    artifact previews. _Discussion in progress._
 
-3. **Web chat pane** — a ChatGPT-style chat served as an iframe pane,
+3. **`muxpad cron`** — a server-owned scheduler that fires prompts into the
+   existing agent send queue, replacing the SDK's session-scoped `CronCreate`
+   (which drifts context, can't catch up after downtime, expires at 7 days, is
+   invisible, and is Claude-only). The injection half is already built; this is
+   one table + one tick loop. Plan:
+   `docs/plans/2026-08-14-muxpad-cron.md`.
+
+4. **Web chat pane** — a ChatGPT-style chat served as an iframe pane,
    Claude-powered. Leading option: a small assistant-ui + Vercel AI SDK page
    (iframe-clean, no DB/auth); `claude-code-webui` for the agentic flavor.
    Independent of 1–2; cheap as a standalone spike.

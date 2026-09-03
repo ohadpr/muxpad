@@ -114,7 +114,7 @@ const MIGRATIONS: Migration[] = [
     // in the DB (not ptyd's runtime) so it survives restarts and needs no
     // ptyd round-trip; cleared when the tab is next viewed (markSeen).
     version: 7,
-    sql: `ALTER TABLE tabs ADD COLUMN unread INTEGER NOT NULL DEFAULT 0;`,
+    sql: 'ALTER TABLE tabs ADD COLUMN unread INTEGER NOT NULL DEFAULT 0;',
   },
   {
     // Per-tab icon. Adds the column, then backfills: lift a leading emoji
@@ -122,7 +122,7 @@ const MIGRATIONS: Migration[] = [
     // convention) so the navigator's icon column is consistent and we
     // don't double up; tabs without a leading emoji get a random icon.
     version: 8,
-    sql: `ALTER TABLE tabs ADD COLUMN icon TEXT;`,
+    sql: 'ALTER TABLE tabs ADD COLUMN icon TEXT;',
     apply: (db) => {
       const rows = db.prepare('SELECT id, name FROM tabs').all() as {
         id: string;
@@ -275,15 +275,265 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX agent_queue_pane ON agent_queue(pane_id, seq);
     `,
   },
+  {
+    // Two additive pieces, originally added for the (since-retired) resident
+    // pane primitive and kept because both are generally useful:
+    //   globals — a tiny server-side KV for singleton pointers and one-shot
+    //     migration markers. Server-side, not localStorage: a "have we run
+    //     this once" marker is meaningless if it's per-device.
+    //   workspaces.hidden — system-container flag, excluding a workspace
+    //     from the sidebar tree (GET /api/workspaces filters it unless
+    //     ?all=1). Still the mechanism for any non-user-facing container.
+    version: 19,
+    sql: `
+      CREATE TABLE globals (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      ALTER TABLE workspaces ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
+  {
+    // Append-only session registry (docs/plans/2026-08-28-session-archive.md
+    // §1). `agent_sessions` is a LIVE table — lineage resets on fresh launch
+    // and the row cascade-deletes with its pane — so the pane↔sid history was
+    // being lost even where the transcript survives. Every place a sid becomes
+    // known (register / recordSessionId / attachRunner) upserts here; rows are
+    // never deleted. Deliberately no pane FK: history must survive pane
+    // deletion.
+    version: 20,
+    sql: `
+      CREATE TABLE session_history (
+        sid        TEXT PRIMARY KEY,
+        pane_id    TEXT,
+        assistant  TEXT,
+        cwd        TEXT,
+        first_seen INTEGER,
+        last_seen  INTEGER
+      );
+    `,
+  },
+  {
+    // Step 1 of the UX evolution — two independent, purely additive pieces:
+    //
+    //   panes.mode          — agent behavior mode (⚡ do / 🧠 deep). Default
+    //     'deep' is EXACTLY today's behavior (no overlay injected at all), so
+    //     every existing pane keeps running unchanged after the migration.
+    //
+    //   tabs.pinned         — manual "keep this at the top" flag. Default 0,
+    //     so on upgrade every tab lands in the auto-sorted block, which is
+    //     the pre-migration ordering degraded gracefully (position order is
+    //     still the final tiebreak).
+    //   tabs.last_activity_at — epoch ms of the last turn/send/pty activity.
+    //     Deliberately NULLABLE with no backfill: "we have never observed
+    //     activity here" is a real, distinguishable state, and inventing a
+    //     timestamp (created_at, or now()) would fabricate an ordering the
+    //     user never produced. Null sorts LAST in the recency block (see
+    //     routes/tabs.ts), so untouched tabs sink instead of jumping around.
+    version: 21,
+    sql: `
+      ALTER TABLE panes ADD COLUMN mode TEXT NOT NULL DEFAULT 'deep';
+      ALTER TABLE tabs ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE tabs ADD COLUMN last_activity_at INTEGER;
+    `,
+  },
+  {
+    // `muxpad cron` — the server-owned scheduler
+    // (docs/plans/2026-08-14-muxpad-cron.md). Two tables:
+    //
+    //   crons     — the schedules themselves. `next_due_at` is PERSISTED, not
+    //     held in memory: that single choice is what makes the scheduler
+    //     restart-safe and catch-up capable, which is the whole reason this
+    //     exists rather than leaning on a harness's session-scoped cron.
+    //   cron_runs — the run log. Turns "it just didn't run" from silence into
+    //     a record. Trimmed to the newest CRON_RUNS_KEEP rows per cron on
+    //     every insert, so a 30-minute cron can't grow it without bound.
+    //
+    // `jitter_ms` is a per-cron offset (deterministic, derived from the id)
+    // added to every nominal slot, so a dozen daily crons don't all fire in
+    // the same second. It is STORED rather than recomputed because
+    // `next_due_at` carries it: the nominal slot is recovered exactly as
+    // next_due_at - jitter_ms, with no re-derivation to drift.
+    //
+    // Deliberately NO foreign key on `target_pane`: a deleted pane must
+    // DISABLE its cron (with a push), not silently delete the schedule the
+    // user wrote — and the run history has to outlive the pane it ran in, the
+    // same reasoning as session_history (v20).
+    version: 22,
+    sql: `
+      CREATE TABLE crons (
+        id               TEXT PRIMARY KEY,
+        name             TEXT NOT NULL,
+        schedule         TEXT NOT NULL,
+        tz               TEXT NOT NULL,
+        prompt           TEXT NOT NULL,
+        target_kind      TEXT NOT NULL,
+        target_pane      TEXT,
+        workspace_id     TEXT,
+        cwd              TEXT,
+        model            TEXT,
+        backend          TEXT,
+        mode             TEXT,
+        enabled          INTEGER NOT NULL DEFAULT 1,
+        catchup          TEXT NOT NULL DEFAULT 'once',
+        overlap          TEXT NOT NULL DEFAULT 'skip',
+        on_context       TEXT NOT NULL DEFAULT 'fire',
+        quiet_mins       INTEGER NOT NULL DEFAULT 0,
+        jitter_ms        INTEGER NOT NULL DEFAULT 0,
+        max_open         INTEGER NOT NULL DEFAULT 1,
+        close_when_done  INTEGER NOT NULL DEFAULT 0,
+        open_tabs        TEXT NOT NULL DEFAULT '[]',
+        next_due_at      INTEGER NOT NULL,
+        last_fire_at     INTEGER,
+        last_status      TEXT,
+        fail_streak      INTEGER NOT NULL DEFAULT 0,
+        created_at       INTEGER NOT NULL
+      );
+      CREATE INDEX crons_due ON crons(enabled, next_due_at);
+      CREATE INDEX crons_target_pane ON crons(target_pane);
+      CREATE TABLE cron_runs (
+        id           TEXT PRIMARY KEY,
+        cron_id      TEXT NOT NULL,
+        due_at       INTEGER NOT NULL,
+        fired_at     INTEGER NOT NULL,
+        target_pane  TEXT,
+        target_tab   TEXT,
+        outcome      TEXT NOT NULL,
+        detail       TEXT
+      );
+      CREATE INDEX cron_runs_cron ON cron_runs(cron_id, fired_at DESC);
+    `,
+  },
+  {
+    // APPS — the Hosted surface's first kind
+    // (docs/plans/2026-08-30-hosted.md). A registry of long-running local web
+    // servers muxpad supervises, so an app stops costing a permanent TAB just
+    // to keep its process alive.
+    //
+    // `pane_id` is the whole design in one column. An app IS a supervised pane
+    // — one living in a HIDDEN workspace, so it has no presence in the tab
+    // tree — and that pane is what ptyd keeps alive across main-server
+    // restarts. Deliberately NO foreign key: a pane deleted out from under an
+    // app must leave the registry row intact so the app can be rebuilt, not
+    // silently cascade the user's app definition away. The reconciler nulls
+    // the column when the pane is gone and materialises a fresh one.
+    //
+    // NULLABLE `pane_id` is therefore a real, expected state ("registered but
+    // not materialised"), not an anomaly: `app add --no-start`, a stopped app,
+    // and the window between a boot and the first reconcile all live there.
+    //
+    // Two switches, not one, because they answer different questions:
+    //   enabled    is it supposed to be RUNNING right now? (`app start`/`stop`)
+    //   autostart  should a BOOT bring it up? (a scratch app you start by hand)
+    // Collapsing them would make "stop it, but bring it back tomorrow"
+    // unexpressible.
+    //
+    // The UNIQUE index on pane_id is partial (`WHERE pane_id IS NOT NULL`) so
+    // any number of apps may sit unmaterialised, but one pane can never be
+    // claimed by two registry rows — the state that would have two supervisors
+    // fighting over one pty.
+    version: 23,
+    sql: `
+      CREATE TABLE apps (
+        id          TEXT PRIMARY KEY,
+        slug        TEXT UNIQUE NOT NULL,
+        name        TEXT NOT NULL,
+        cwd         TEXT NOT NULL,
+        command     TEXT NOT NULL,
+        url         TEXT NOT NULL,
+        autostart   INTEGER NOT NULL DEFAULT 1,
+        enabled     INTEGER NOT NULL DEFAULT 1,
+        pane_id     TEXT,
+        created_at  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL
+      );
+      CREATE UNIQUE INDEX apps_pane ON apps(pane_id) WHERE pane_id IS NOT NULL;
+    `,
+  },
+  {
+    // The nav row's second line, and the auto-namer's hard stop.
+    //
+    //   tabs.headline — ONE line saying what this chat is currently about,
+    //     written by a cheap model from the transcript (chat/headline.ts).
+    //     Nullable with no backfill, because "we have never summarised this
+    //     chat" is a real and permanent state: a tab with no agent session
+    //     never gets one, and the rail simply renders a one-line row. An
+    //     empty string would be a different (and wrong) claim — that we
+    //     summarised it and it came out blank.
+    //
+    //   tabs.headline_at — when that line was last written. This is the
+    //     rate limiter's clock, and it is PERSISTED for the same reason the
+    //     cron scheduler persists next_due_at: an in-memory timestamp resets
+    //     on every server restart, and a restart is exactly the moment a
+    //     rate limiter must not forget itself (a bounce loop would otherwise
+    //     re-summarise every chat on every boot).
+    //
+    //   tabs.name_sticky — the user has named this tab by hand. Permanent.
+    //     This replaces an in-memory Map in ws.ts whose own comment conceded
+    //     the flaw: after a restart it treated every existing auto-name as
+    //     user-given, so the guard held only by the accident that a manual
+    //     name matched neither the bootstrap sentinel nor the last title.
+    //     Backfilled to 0, which is the safe direction — a tab wrongly
+    //     marked not-sticky can be re-stickied by renaming it once; a tab
+    //     wrongly marked sticky can never be auto-named again.
+    version: 24,
+    sql: `
+      ALTER TABLE tabs ADD COLUMN headline TEXT;
+      ALTER TABLE tabs ADD COLUMN headline_at INTEGER;
+      ALTER TABLE tabs ADD COLUMN name_sticky INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
+  {
+    // The tab ICON becomes content-derived, chosen by the same model call that
+    // writes the headline (chat/headline.ts). Two columns, mirroring the two
+    // the headline needed:
+    //
+    //   tabs.icon_sticky — the user has chosen this icon by hand. Permanent,
+    //     one-way, and it outranks everything: exactly the `name_sticky`
+    //     contract, for exactly the same reason. The sidebar work flagged this
+    //     gap explicitly ("no content-derived icon path exists; if one is
+    //     added it must consult name_sticky"), and an icon deserves its own
+    //     flag rather than riding the name's — renaming a tab and choosing its
+    //     glyph are different acts, and one should not silently freeze the
+    //     other. Backfilled to 0, the safe direction: a tab wrongly marked
+    //     not-sticky can be re-stickied by picking its icon once, while a tab
+    //     wrongly marked sticky can never be given a meaningful one again.
+    //
+    //   tabs.icon_at — when the generated icon was last WRITTEN. Not an
+    //     attempt clock (that is headline_at, shared, because it is one model
+    //     call): this measures how long the current glyph has been sitting
+    //     there, and it is the anti-drift window. Persisted for the same
+    //     reason headline_at is — a restart is exactly when a stability window
+    //     must not forget itself. NULL means "this icon did not come from the
+    //     generator", which for every pre-existing row means the random one it
+    //     was born with.
+    version: 25,
+    sql: `
+      ALTER TABLE tabs ADD COLUMN icon_sticky INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE tabs ADD COLUMN icon_at INTEGER;
+    `,
+  },
 ];
 
-export function runMigrations(db: Database.Database): void {
+/** Highest version in the migration list. Exported so a test can assert the
+ *  recorded version without hard-coding a number that drifts. */
+export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
+
+/**
+ * @param opts.upTo Stop after this version instead of migrating to the head.
+ *   TEST-ONLY: it exists so a migration test can build a genuinely OLD
+ *   database and then upgrade it, rather than building a current-schema DB and
+ *   asserting things about it (which proves nothing about the upgrade path).
+ *   Production always calls this with no options.
+ */
+export function runMigrations(db: Database.Database, opts?: { upTo?: number }): void {
   db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)');
   const row = db
     .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
     .get() as { version: number } | undefined;
   const current = row?.version ?? 0;
   for (const m of MIGRATIONS) {
+    if (opts?.upTo !== undefined && m.version > opts.upTo) break;
     if (m.version <= current) continue;
     db.transaction(() => {
       if (m.sql) db.exec(m.sql);

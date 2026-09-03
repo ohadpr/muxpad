@@ -1,10 +1,11 @@
 import type { AppUrl } from '@muxpad/shared';
 import { useEffect, useRef, useState } from 'react';
 import { subscribe } from '../events';
-import { isMixedContentUrl, probeUrl, requestFace } from '../lib/face-switch';
+import { type UrlLiveness, isMixedContentUrl, probeUrlLive, requestFace } from '../lib/face-switch';
 import { announceOverlayOpen, onOtherOverlayOpen } from '../lib/overlays';
 import { normalizePaneUrl, usePaneFace } from '../lib/pane-face';
 import { useDismissable } from '../lib/use-dismissable';
+import { webDeadBadge, webDeadMessage } from '../lib/web-face-health';
 import './PaneWebSwitch.css';
 
 /**
@@ -69,25 +70,31 @@ export function PaneFaceMenuList({
     };
   }, [paneId]);
 
-  // Reachability, checked once per open for every URL on offer. true = alive,
-  // false = nothing answered, undefined = still checking (rendered neutral).
-  const [alive, setAlive] = useState<Record<string, boolean>>({});
+  // Reachability, checked once per open for every URL on offer. A missing
+  // entry means "still checking" and renders neutral.
+  //
+  // probeUrlLive, not the browser's blind probeUrl: an opaque no-cors response
+  // has no readable status, so an app behind `tailscale serve` whose backend
+  // had stopped still answered (502 from the live proxy) and this menu listed
+  // it as perfectly healthy. The server-side probe reads the real status; see
+  // face-switch.ts for how much authority each probe gets.
+  const [health, setHealth] = useState<Record<string, UrlLiveness>>({});
   useEffect(() => {
     let on = true;
     const targets = [...new Set(appUrls.map((a) => a.url))];
     for (const target of targets) {
-      // Mixed-content URLs are skipped: the probe fetch is itself blocked by
-      // the browser, so its failure means "blocked", not "offline" — they
-      // get their own badge in urlItem instead of a liveness verdict.
+      // Mixed-content URLs are skipped: whatever their liveness, an https page
+      // cannot EMBED them, which is the actionable fact — they get their own
+      // badge in urlItem instead of a liveness verdict.
       if (isMixedContentUrl(target)) continue;
-      void probeUrl(target).then((ok) => {
-        if (on) setAlive((m) => ({ ...m, [target]: ok }));
+      void probeUrlLive(paneId, target).then((r) => {
+        if (on) setHealth((m) => ({ ...m, [target]: r }));
       });
     }
     return () => {
       on = false;
     };
-  }, [appUrls]);
+  }, [appUrls, paneId]);
 
   const pick = (nextFace: 'terminal' | 'web' | 'chat', nextUrl?: string) => {
     requestFace({ paneId, face: nextFace, url: nextUrl ?? null });
@@ -108,7 +115,8 @@ export function PaneFaceMenuList({
     // refused by the browser (mixed content) even when the server is fine.
     // Say so — "offline" would send the user debugging a healthy server.
     const blocked = isMixedContentUrl(target);
-    const dead = !blocked && alive[target] === false;
+    const h = health[target];
+    const dead = !blocked && h !== undefined && !h.alive;
     return (
       <button
         key={target}
@@ -119,8 +127,8 @@ export function PaneFaceMenuList({
         title={
           blocked
             ? `${target} — this muxpad page is https, so the browser blocks embedding plain-http URLs. Serve it over https (e.g. tailscale serve) to embed it.`
-            : dead
-              ? `${target} — nothing is responding here right now`
+            : dead && h
+              ? webDeadMessage(h.reason, h.status, target)
               : target
         }
       >
@@ -131,8 +139,8 @@ export function PaneFaceMenuList({
         </span>
         {blocked ? (
           <span className="pane-web-switch-note">http · blocked</span>
-        ) : dead ? (
-          <span className="pane-web-switch-note">offline</span>
+        ) : dead && h ? (
+          <span className="pane-web-switch-note">{webDeadBadge(h.reason)}</span>
         ) : badge ? (
           <span className="pane-web-switch-badge">{badge}</span>
         ) : null}
@@ -204,9 +212,7 @@ export function PaneFaceMenuList({
           role="menuitem"
           className="pane-web-switch-item"
           onClick={() => {
-            window.dispatchEvent(
-              new CustomEvent('muxpad:reload-url-pane', { detail: { paneId } }),
-            );
+            window.dispatchEvent(new CustomEvent('muxpad:reload-url-pane', { detail: { paneId } }));
             onClose();
           }}
         >

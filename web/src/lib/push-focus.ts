@@ -7,18 +7,43 @@
 //   2. The tab already has a different active pane, so the `?pane` URL seed is
 //      ignored (TabView only seeds mobileActiveId from the URL when it's null).
 // Set on push-navigate; consumed exactly once by the tab it targets.
-let pending: { tabId: string; paneId: string } | null = null;
+let pending: { tabId: string; paneId: string; at: number } | null = null;
 
-export function setPushFocusPane(tabId: string, paneId: string): void {
-  pending = { tabId, paneId };
+/**
+ * How long an unconsumed entry stays armed.
+ *
+ * It is only ever consumed by the ONE tab it names, and there is no guarantee
+ * that tab is ever rendered: a tap whose target tab was deleted from another
+ * device leaves the slot loaded indefinitely, and it then fires on some
+ * unrelated later visit — this store FORCES the active pane, overriding both
+ * the URL and what the user last had open. (The tap also writes last-visited,
+ * which has no expiry; that one is a soft default the user's next pane switch
+ * overwrites, so it needs none.) A tap is consumed within a second or two of
+ * arriving, so anything past this window is stale by definition. Matches
+ * PUSH_TARGET_TTL_MS — same event, same expiry.
+ */
+export const PUSH_FOCUS_TTL_MS = 120_000;
+
+export function setPushFocusPane(tabId: string, paneId: string, now = Date.now()): void {
+  pending = { tabId, paneId, at: now };
 }
 
-/** Return + clear the pending focus pane iff it targets `tabId`. */
-export function consumePushFocusPane(tabId: string): string | null {
-  if (pending?.tabId === tabId) {
-    const { paneId } = pending;
+/** Return + clear the pending focus pane iff it targets `tabId` and is fresh. */
+export function consumePushFocusPane(tabId: string, now = Date.now()): string | null {
+  if (!pending) return null;
+  if (now - pending.at > PUSH_FOCUS_TTL_MS) {
+    // Expired. Drop it here rather than only on a matching read — otherwise a
+    // target for a tab that never renders sits armed forever.
     pending = null;
-    return paneId;
+    return null;
   }
-  return null;
+  if (pending.tabId !== tabId) return null;
+  const { paneId } = pending;
+  pending = null;
+  return paneId;
+}
+
+/** Test seam — clear the slot between cases. */
+export function resetPushFocusPane(): void {
+  pending = null;
 }

@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>muxpad — status UI variant picker</title>
+    <style>
+      :root {
+        --bg: #1a1b26;
+        --bg-elev: #1f2335;
+        --bg-chrome: #16161e;
+        --fg: #c0caf5;
+        --fg-dim: #a9b1d6;
+        --fg-faint: #565f89;
+        --border: #292e42;
+        --border-strong: #3b4261;
+        --accent: #7aa2f7;
+        --danger: #f7768e;
+        --font: ui-sans-serif, system-ui, -apple-system, sans-serif;
+        --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: #0e0f14;
+        color: var(--fg);
+        font-family: var(--font);
+        -webkit-font-smoothing: antialiased;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* ── Picker chrome ── */
+      .picker {
+        position: sticky;
+        top: 0;
+        z-index: 50;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px 18px;
+        align-items: center;
+        padding: 12px 16px;
+        background: color-mix(in srgb, var(--bg-chrome) 92%, #000);
+        border-bottom: 1px solid var(--border);
+        backdrop-filter: blur(12px);
+      }
+      .picker h1 {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 650;
+        letter-spacing: -0.01em;
+        color: var(--fg-dim);
+        white-space: nowrap;
+      }
+      .seg-ctrl {
+        display: inline-flex;
+        border: 1px solid var(--border-strong);
+        border-radius: 9px;
+        overflow: hidden;
+        background: var(--bg);
+      }
+      .seg-ctrl button {
+        appearance: none;
+        border: none;
+        background: transparent;
+        color: var(--fg-faint);
+        font: inherit;
+        font-size: 12.5px;
+        font-weight: 550;
+        padding: 7px 12px;
+        cursor: pointer;
+        transition: background 120ms ease, color 120ms ease;
+      }
+      .seg-ctrl button + button {
+        border-left: 1px solid var(--border);
+      }
+      .seg-ctrl button[aria-pressed='true'] {
+        background: color-mix(in srgb, var(--accent) 22%, var(--bg));
+        color: var(--fg);
+      }
+      .seg-ctrl button:hover:not([aria-pressed='true']) {
+        color: var(--fg-dim);
+        background: color-mix(in srgb, var(--fg) 4%, transparent);
+      }
+      .picker-hint {
+        margin-left: auto;
+        color: var(--fg-faint);
+        font-size: 12px;
+        max-width: 380px;
+        line-height: 1.35;
+      }
+      .picker-hint strong { color: var(--fg-dim); font-weight: 600; }
+
+      /* ── Stage ── */
+      .stage {
+        flex: 1;
+        display: flex;
+        justify-content: center;
+        padding: 22px 16px 40px;
+      }
+      .phone {
+        width: min(520px, 100%);
+        height: min(720px, calc(100vh - 100px));
+        display: flex;
+        flex-direction: column;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        overflow: hidden;
+        background: var(--bg);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+      }
+      .phone-top {
+        flex: 0 0 auto;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border);
+        background: var(--bg-chrome);
+        font-size: 12px;
+        color: var(--fg-faint);
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .phone-top .badge {
+        color: var(--accent);
+        font-weight: 650;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        font-size: 10.5px;
+      }
+      .msgs {
+        flex: 1;
+        overflow: auto;
+        padding: 18px 16px 120px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .bubble-user {
+        align-self: flex-end;
+        max-width: 78%;
+        padding: 8px 12px;
+        border-radius: 14px;
+        background: color-mix(in srgb, var(--fg) 9%, var(--bg));
+        font-size: 13.5px;
+        line-height: 1.45;
+      }
+      .bubble-asst {
+        align-self: stretch;
+        font-size: 13.5px;
+        line-height: 1.55;
+      }
+      .working {
+        display: none;
+        align-items: center;
+        gap: 8px;
+        color: var(--fg-dim);
+        font-size: 13px;
+      }
+      body[data-scene='busy'][data-variant='today'] .working,
+      body[data-scene='busy'][data-variant='a'] .working {
+        display: inline-flex;
+      }
+      .dots { display: inline-flex; gap: 3px; }
+      .dots i {
+        width: 5px; height: 5px; border-radius: 50%;
+        background: var(--accent);
+        animation: bounce 1s infinite ease-in-out;
+      }
+      .dots i:nth-child(2) { animation-delay: 0.15s; }
+      .dots i:nth-child(3) { animation-delay: 0.3s; }
+      @keyframes bounce {
+        0%, 80%, 100% { opacity: 0.35; transform: translateY(0); }
+        40% { opacity: 1; transform: translateY(-2px); }
+      }
+
+      .composer-wrap {
+        position: relative;
+        flex: 0 0 auto;
+        margin-top: auto;
+        padding: 0 10px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        background: linear-gradient(to top, var(--bg) 70%, transparent);
+      }
+      .composer {
+        display: flex;
+        align-items: flex-end;
+        gap: 8px;
+        padding: 8px 10px;
+        border: 1px solid var(--border-strong);
+        border-radius: 16px;
+        background: color-mix(in srgb, var(--bg-chrome) 92%, transparent);
+      }
+      .composer .ph {
+        flex: 1;
+        color: var(--fg-faint);
+        font-size: 13.5px;
+        padding: 6px 4px;
+      }
+      .send {
+        width: 28px; height: 28px; border-radius: 50%;
+        background: var(--accent);
+        border: none;
+        flex: 0 0 auto;
+      }
+      body[data-scene='busy'] .send {
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--danger) 85%, #000);
+      }
+
+      .spin {
+        width: 11px; height: 11px; border-radius: 50%;
+        border: 1.5px solid color-mix(in srgb, var(--accent) 35%, transparent);
+        border-top-color: var(--accent);
+        animation: spin 0.8s linear infinite;
+        flex: 0 0 auto;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+
+      /* Hide all variant chrome by default; show by body[data-variant] */
+      .v { display: none !important; }
+      body[data-variant='today'] .v-today,
+      body[data-variant='a'] .v-a,
+      body[data-variant='b'] .v-b,
+      body[data-variant='c'] .v-c { display: flex !important; }
+
+      /* Today */
+      .v-today {
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
+        padding: 0 2px;
+      }
+      .roster {
+        width: fit-content;
+        max-width: 220px;
+        padding: 4px 6px;
+        border: 1px solid color-mix(in srgb, var(--border-strong) 60%, transparent);
+        border-radius: 10px;
+        background: color-mix(in srgb, var(--bg-chrome) 55%, transparent);
+        font-size: 11px;
+        color: var(--fg-faint);
+        align-items: center;
+        gap: 6px;
+      }
+      body[data-scene='idle'] .roster { display: none !important; }
+      .roster b { color: color-mix(in srgb, var(--fg) 82%, transparent); font-weight: 600; }
+      .chips-row { display: flex; gap: 5px; align-items: center; }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 9px;
+        border: 1px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--bg-chrome) 60%, transparent);
+        color: var(--fg-faint);
+        font-size: 10.5px;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+      .chip.folder {
+        border-radius: 6px;
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--fg-dim);
+        background: var(--bg-elev);
+        border-color: var(--border);
+      }
+
+      /* A + C segmented */
+      .seg {
+        align-self: flex-end;
+        margin-left: auto;
+        border: 1px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
+        border-radius: 10px;
+        overflow: hidden;
+        background: color-mix(in srgb, var(--bg-chrome) 70%, transparent);
+      }
+      .seg > button {
+        appearance: none;
+        border: none;
+        background: transparent;
+        color: var(--fg-faint);
+        font: inherit;
+        font-size: 11px;
+        padding: 5px 10px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        white-space: nowrap;
+      }
+      .seg > button + button {
+        border-left: 1px solid color-mix(in srgb, var(--border-strong) 55%, transparent);
+      }
+      .seg .live {
+        color: var(--accent);
+        font-weight: 600;
+      }
+      .seg .mono { font-family: var(--mono); font-size: 10.5px; }
+      body[data-scene='idle'] .seg .live-cell { display: none !important; }
+
+      /* B status chip + panel */
+      .v-b {
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 6px;
+        position: relative;
+      }
+      .status-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 11px 5px 8px;
+        border: 1px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--bg-chrome) 70%, transparent);
+        color: var(--fg-faint);
+        font-size: 11px;
+        cursor: pointer;
+        max-width: 100%;
+      }
+      body[data-scene='busy'] .status-chip {
+        border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+        background: color-mix(in srgb, var(--accent) 10%, var(--bg-chrome));
+        color: var(--fg-dim);
+      }
+      .status-chip .pulse {
+        width: 7px; height: 7px; border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+        animation: pulse 1.6s ease-out infinite;
+      }
+      body[data-scene='idle'] .status-chip .pulse,
+      body[data-scene='idle'] .status-chip .busy-label,
+      body[data-scene='busy'] .status-chip .idle-label { display: none; }
+      body[data-scene='idle'] .status-chip .idle-label { display: inline; }
+      @keyframes pulse {
+        70% { box-shadow: 0 0 0 7px transparent; }
+        100% { box-shadow: 0 0 0 0 transparent; }
+      }
+      .status-chip .sep { opacity: 0.35; }
+      .status-chip .strong { color: var(--fg); font-weight: 600; }
+      .panel {
+        display: none;
+        width: min(260px, 92vw);
+        padding: 6px;
+        border: 1px solid var(--border-strong);
+        border-radius: 10px;
+        background: var(--bg-elev);
+        box-shadow: 0 10px 28px rgba(0,0,0,0.45);
+        font-size: 11.5px;
+        flex-direction: column;
+      }
+      .v-b[data-open='true'] .panel { display: flex; }
+      .panel .sec {
+        padding: 5px 8px 3px;
+        color: var(--fg-faint);
+        font-size: 10px;
+        font-weight: 650;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .panel .row {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 5px 8px;
+        border-radius: 6px;
+        color: var(--fg-dim);
+      }
+      .panel .row.busy { color: var(--fg); }
+      body[data-scene='idle'] .panel .now-sec,
+      body[data-scene='idle'] .panel .busy-rows { display: none; }
+
+      /* Popovers for A/C segment taps (lightweight mock) */
+      .pop {
+        display: none;
+        position: absolute;
+        right: 10px;
+        bottom: 62px;
+        z-index: 20;
+        width: min(260px, 88vw);
+        padding: 6px;
+        border: 1px solid var(--border-strong);
+        border-radius: 10px;
+        background: var(--bg-elev);
+        box-shadow: 0 10px 28px rgba(0,0,0,0.45);
+        font-size: 11.5px;
+        flex-direction: column;
+      }
+      .pop[data-open='true'] { display: flex; }
+      .pop .sec {
+        padding: 5px 8px 3px;
+        color: var(--fg-faint);
+        font-size: 10px;
+        font-weight: 650;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .pop .row {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 6px 8px;
+        border-radius: 6px;
+        color: var(--fg-dim);
+      }
+      .pop .row:hover { background: color-mix(in srgb, var(--fg) 5%, transparent); }
+      .asst-idle { display: none; }
+      body[data-scene='idle'] .asst-busy { display: none; }
+      body[data-scene='idle'] .asst-idle { display: block; }
+      body[data-scene='busy'] .asst-idle { display: none; }
+    </style>
+  </head>
+  <body data-variant="c" data-scene="busy">
+    <header class="picker">
+      <h1>Status UI</h1>
+      <div class="seg-ctrl" role="tablist" aria-label="Variant">
+        <button type="button" data-variant="today" aria-pressed="false">Today</button>
+        <button type="button" data-variant="a" aria-pressed="false">A · Segment</button>
+        <button type="button" data-variant="b" aria-pressed="false">B · Chip</button>
+        <button type="button" data-variant="c" aria-pressed="true">C · Hybrid</button>
+      </div>
+      <div class="seg-ctrl" role="tablist" aria-label="Scene">
+        <button type="button" data-scene="busy" aria-pressed="true">Busy</button>
+        <button type="button" data-scene="idle" aria-pressed="false">Idle</button>
+      </div>
+      <p class="picker-hint" id="hint">
+        <strong>C · Hybrid</strong> — segmented bar; live cell carries Working · N agents; no transcript Working row.
+      </p>
+    </header>
+
+    <div class="stage">
+      <div class="phone">
+        <div class="phone-top">
+          <span>agent · muxpad</span>
+          <span class="badge" id="badge">C · Hybrid</span>
+        </div>
+        <div class="msgs">
+          <div class="bubble-user">Investigate the scroll bug across devices</div>
+          <div class="bubble-asst asst-busy">Looking at ChatPane restore + fill-viewport paging…</div>
+          <div class="bubble-asst asst-idle">
+            Fixed: hide no longer corrupts scroll memory, and pinned readers stay at the bottom while older history pages in.
+          </div>
+          <div class="working">
+            <span class="dots"><i></i><i></i><i></i></span>
+            Running Bash…
+          </div>
+        </div>
+
+        <div class="composer-wrap">
+          <!-- Popovers shared by A/C -->
+          <div class="pop" id="pop-agents" data-open="false">
+            <div class="sec">Running</div>
+            <div class="row"><span class="spin"></span> Parent · Running Bash…</div>
+            <div class="row"><span class="spin"></span> Trace scroll restore</div>
+            <div class="row"><span class="spin"></span> Diff chat-scroll helpers</div>
+          </div>
+          <div class="pop" id="pop-model" data-open="false">
+            <div class="sec">Model</div>
+            <div class="row">Sonnet 4 ✓</div>
+            <div class="row">Opus 4</div>
+            <div class="row">Haiku 3.5</div>
+            <div class="sec">Session</div>
+            <div class="row">Compact conversation</div>
+            <div class="row">Clear conversation</div>
+          </div>
+          <div class="pop" id="pop-folder" data-open="false">
+            <div class="sec">Folder</div>
+            <div class="row" style="font-family:var(--mono);font-size:11px;word-break:break-all">/Users/you/…/muxpad</div>
+            <div class="row">Switch & start fresh…</div>
+          </div>
+
+          <!-- TODAY -->
+          <div class="v v-today">
+            <div class="roster"><span class="spin"></span> <b>2 subagents</b> ▸</div>
+            <div class="chips-row">
+              <button type="button" class="chip folder" data-pop="pop-folder">muxpad</button>
+              <button type="button" class="chip" data-pop="pop-model">Sonnet 4 · 42%</button>
+            </div>
+          </div>
+
+          <!-- A -->
+          <div class="v v-a seg">
+            <button type="button" data-pop="pop-folder"><span class="mono">muxpad</span></button>
+            <button type="button" data-pop="pop-model">Sonnet 4 · 42%</button>
+            <button type="button" class="live live-cell" data-pop="pop-agents"><span class="spin"></span> 2 agents</button>
+          </div>
+
+          <!-- B -->
+          <div class="v v-b" id="vb" data-open="false">
+            <div class="panel">
+              <div class="sec now-sec">Now</div>
+              <div class="busy-rows">
+                <div class="row busy"><span class="spin"></span> Parent · Running Bash…</div>
+                <div class="row busy"><span class="spin"></span> Trace scroll restore</div>
+                <div class="row busy"><span class="spin"></span> Diff chat-scroll helpers</div>
+              </div>
+              <div class="sec">Session</div>
+              <div class="row">Sonnet 4 · context 42%</div>
+              <div class="row">…/muxpad</div>
+              <div class="row">Compact · Clear</div>
+            </div>
+            <button type="button" class="status-chip" id="b-chip">
+              <span class="pulse"></span>
+              <span class="busy-label"><span class="strong">Working</span><span class="sep"> · </span>2 agents<span class="sep"> · </span></span>
+              <span class="idle-label"><span class="strong">Sonnet 4</span><span class="sep"> · </span>42%<span class="sep"> · </span></span>
+              <span class="busy-label">Sonnet 4</span>
+              <span class="idle-label">muxpad</span>
+            </button>
+          </div>
+
+          <!-- C -->
+          <div class="v v-c seg">
+            <button type="button" data-pop="pop-folder"><span class="mono">muxpad</span></button>
+            <button type="button" data-pop="pop-model">Sonnet 4 · 42%</button>
+            <button type="button" class="live live-cell" data-pop="pop-agents"><span class="spin"></span> Working · 2 agents</button>
+          </div>
+
+          <div class="composer">
+            <div class="ph">Message Claude…</div>
+            <button class="send" type="button" aria-label="send or stop"></button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const HINTS = {
+        today:
+          '<strong>Today</strong> — separate roster + folder + model chips. Working row in the transcript.',
+        a: '<strong>A · Segment</strong> — one bar (folder · model · agents). Working row stays in the transcript.',
+        b: '<strong>B · Chip</strong> — one status pill; tap opens a unified panel. No transcript Working row.',
+        c: '<strong>C · Hybrid</strong> — segmented bar; live cell carries Working · N agents; no transcript Working row.',
+      };
+      const LABELS = {
+        today: 'Today',
+        a: 'A · Segment',
+        b: 'B · Chip',
+        c: 'C · Hybrid',
+      };
+
+      function closePops() {
+        for (const p of document.querySelectorAll('.pop')) p.dataset.open = 'false';
+        document.getElementById('vb').dataset.open = 'false';
+      }
+
+      function setVariant(v) {
+        document.body.dataset.variant = v;
+        for (const b of document.querySelectorAll('[data-variant]')) {
+          b.setAttribute('aria-pressed', String(b.dataset.variant === v));
+        }
+        document.getElementById('hint').innerHTML = HINTS[v];
+        document.getElementById('badge').textContent = LABELS[v];
+        closePops();
+        location.hash = v + '-' + document.body.dataset.scene;
+      }
+
+      function setScene(s) {
+        document.body.dataset.scene = s;
+        for (const b of document.querySelectorAll('[data-scene]')) {
+          b.setAttribute('aria-pressed', String(b.dataset.scene === s));
+        }
+        closePops();
+        location.hash = document.body.dataset.variant + '-' + s;
+      }
+
+      for (const b of document.querySelectorAll('.picker [data-variant]')) {
+        b.addEventListener('click', () => setVariant(b.dataset.variant));
+      }
+      for (const b of document.querySelectorAll('.picker [data-scene]')) {
+        b.addEventListener('click', () => setScene(b.dataset.scene));
+      }
+
+      document.getElementById('b-chip').addEventListener('click', () => {
+        const vb = document.getElementById('vb');
+        vb.dataset.open = vb.dataset.open === 'true' ? 'false' : 'true';
+        for (const p of document.querySelectorAll('.pop')) p.dataset.open = 'false';
+      });
+
+      document.querySelectorAll('[data-pop]').forEach((el) => {
+        el.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const id = el.getAttribute('data-pop');
+          const pop = document.getElementById(id);
+          const open = pop.dataset.open === 'true';
+          closePops();
+          if (!open) pop.dataset.open = 'true';
+        });
+      });
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closePops();
+        if (e.key === '1') setVariant('today');
+        if (e.key === '2') setVariant('a');
+        if (e.key === '3') setVariant('b');
+        if (e.key === '4') setVariant('c');
+        if (e.key === 'i') setScene('idle');
+        if (e.key === 'b' && !e.metaKey && !e.ctrlKey) setScene('busy');
+      });
+
+      // Restore from hash: #c-busy
+      const m = /^#?(today|a|b|c)-(busy|idle)$/.exec(location.hash);
+      if (m) {
+        setVariant(m[1]);
+        setScene(m[2]);
+      } else {
+        setVariant('c');
+        setScene('busy');
+      }
+    </script>
+  </body>
+</html>

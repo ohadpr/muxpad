@@ -12,7 +12,9 @@ import { type MuxpadEvent, MuxpadEventSchema } from '@muxpad/shared';
  *
  * Two subscription channels:
  *   - subscribe(handler)            — every validated MuxpadEvent
- *   - subscribeReconnect(handler)   — fires on every successful (re)connect
+ *   - subscribeReconnect(handler)   — fires on every successful RE-connect
+ *                                     (not on the first connect: nothing was
+ *                                     missed yet, and boot already fetches)
  *
  * Bad event payloads are dropped with a warning, never thrown, so a
  * single broken event can't tear down the stream.
@@ -25,6 +27,14 @@ let started = false;
 const eventHandlers = new Set<EventHandler>();
 const reconnectHandlers = new Set<ReconnectHandler>();
 let reconnectDelayMs = 250;
+/**
+ * The FIRST open is a connect, not a re-connect. Handlers exist to recover
+ * events missed during a gap, and there is no gap before the first connect —
+ * every consumer's mount-time fetch is already in flight or done. Firing them
+ * anyway meant the socket handshake (a few ms after boot, same origin) kicked
+ * off a duplicate `GET /api/workspaces?all=1` on every single cold load.
+ */
+let everConnected = false;
 
 function endpoint(): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -35,6 +45,10 @@ function connect(): void {
   ws = new WebSocket(endpoint());
   ws.onopen = () => {
     reconnectDelayMs = 250;
+    if (!everConnected) {
+      everConnected = true;
+      return;
+    }
     for (const h of reconnectHandlers) {
       try {
         h();

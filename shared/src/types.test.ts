@@ -1,5 +1,13 @@
-import { describe, it, expect } from 'vitest';
-import { WorkspaceSchema, PaneSpecSchema, LayoutNodeSchema } from './types';
+import { describe, expect, it } from 'vitest';
+import {
+  LayoutNodeSchema,
+  PaneSpecSchema,
+  type PaneStatus,
+  STATUS_ORDER,
+  WorkspaceSchema,
+  maxStatus,
+  rollupStatus,
+} from './types';
 
 describe('domain schemas', () => {
   it('parses a leaf layout node', () => {
@@ -49,5 +57,28 @@ describe('domain schemas', () => {
       tab_count: 0,
     });
     expect(w.slug).toBe('dev');
+  });
+
+  it('rolls statuses up in STATUS_ORDER precedence', () => {
+    expect(rollupStatus([])).toBe('idle');
+    expect(rollupStatus(['idle', 'ready', 'working'])).toBe('working');
+    // dead outranks done: "it crashed" must not be masked by "it finished".
+    expect(rollupStatus(['ready', 'dead'])).toBe('dead');
+    expect(rollupStatus(['dead', 'blocked', 'working'])).toBe('blocked');
+    expect(STATUS_ORDER.indexOf('dead')).toBeLessThan(STATUS_ORDER.indexOf('ready'));
+  });
+
+  it('clamps an UNKNOWN status to the bottom instead of letting it win', () => {
+    // `indexOf` returns -1 for a value not in STATUS_ORDER, which compares as
+    // the HIGHEST precedence — so one unrecognised string (a newer server, a
+    // hand-built row) used to outrank `blocked` and swallow every real signal
+    // in the rollup. Losing information about the unknown is fine; losing the
+    // whole status rail is not.
+    const bogus = 'sideways' as PaneStatus;
+    expect(maxStatus('blocked', bogus)).toBe('blocked');
+    expect(maxStatus(bogus, 'blocked')).toBe('blocked');
+    expect(maxStatus('idle', bogus)).toBe('idle');
+    expect(rollupStatus([bogus, 'working'])).toBe('working');
+    expect(rollupStatus([bogus])).toBe('idle');
   });
 });

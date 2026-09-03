@@ -1,0 +1,268 @@
+/* A light, document-native chat. No boxed viewport, no heavy chrome — prose
+   that flows with the page. The owning block supplies the left indent/rail. */
+.doc-chat {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 0 4px;
+}
+
+.doc-chat-log {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 4px 0 8px;
+}
+
+.doc-chat-hint {
+  color: var(--fg-faint);
+  font-style: italic;
+  font-size: 14px;
+}
+
+.doc-chat-msg {
+  font-family: var(--ui-font);
+  font-size: 15px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+/* The prompt: a quiet inset chip that shrinks to its content, so it reads as
+   "what I asked" without a second accent rail fighting the block's. */
+.doc-chat-user {
+  align-self: flex-start;
+  color: var(--fg-dim);
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  border-radius: 10px;
+  padding: 6px 11px;
+}
+
+/* The deliverable: primary prose, full width. */
+.doc-chat-assistant {
+  align-self: stretch;
+  color: var(--fg);
+}
+
+/* Markdown inside an assistant message — tight vertical rhythm so it reads as
+   one flowing reply, not a stack of default-margined HTML. */
+.doc-chat-assistant :first-child {
+  margin-top: 0;
+}
+.doc-chat-assistant :last-child {
+  margin-bottom: 0;
+}
+.doc-chat-assistant p {
+  margin: 0 0 8px;
+}
+.doc-chat-assistant ul,
+.doc-chat-assistant ol {
+  margin: 4px 0 8px;
+  padding-left: 22px;
+}
+.doc-chat-assistant li {
+  margin: 2px 0;
+}
+.doc-chat-assistant h1,
+.doc-chat-assistant h2,
+.doc-chat-assistant h3 {
+  font-size: 1.02em;
+  font-weight: 650;
+  margin: 12px 0 6px;
+}
+.doc-chat-assistant code {
+  font-family: var(--chrome-font);
+  font-size: 0.9em;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.doc-chat-assistant pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 6px 0 10px;
+}
+.doc-chat-assistant pre code {
+  border: none;
+  padding: 0;
+  background: none;
+}
+.doc-chat-assistant a {
+  color: var(--accent);
+}
+.doc-chat-assistant table {
+  border-collapse: collapse;
+  margin: 6px 0;
+}
+.doc-chat-assistant th,
+.doc-chat-assistant td {
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+  text-align: left;
+}
+
+.doc-chat-caret {
+  display: inline-block;
+  width: 7px;
+  height: 1.05em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: doc-chat-blink 1s step-end infinite;
+}
+@keyframes doc-chat-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.doc-chat-thinking-dot {
+  color: var(--fg-faint);
+  font-size: 16px;
+  letter-spacing: 2px;
+}
+
+/* Agent "work" — thinking / tool calls. Hidden by default (opt-in), rendered
+   small and dim when revealed so it never competes with the deliverable. */
+.doc-chat-work {
+  color: var(--fg-faint);
+  font-family: var(--chrome-font);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.doc-chat-notice {
+  color: var(--fg-faint);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.doc-chat-img {
+  max-width: 320px;
+  max-height: 240px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  display: block;
+  margin: 6px 0;
+}
+.doc-chat-file {
+  color: var(--accent);
+  text-decoration: none;
+  word-break: break-all;
+}
+.doc-chat-file:hover {
+  text-decoration: underline;
+}
+
+/* The input, clearly articulated as a place to type: a soft inset field with a
+   real border + a ⏎ send hint, distinct from the transcript prose above it. */
+.doc-chat-composer-wrap {
+  position: relative;
+  margin-top: 2px;
+}
+.doc-chat-composer {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
+  color: var(--fg);
+  font-family: var(--ui-font);
+  font-size: 15px;
+  line-height: 1.5;
+  padding: 9px 40px 9px 12px;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.doc-chat-composer::placeholder {
+  color: var(--fg-faint);
+}
+.doc-chat-composer:focus {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  background: var(--bg);
+}
+.doc-chat-composer:disabled {
+  opacity: 0.6;
+}
+/* A quiet ⏎ affordance so the box reads unmistakably as an input. */
+.doc-chat-send-hint {
+  position: absolute;
+  right: 10px;
+  bottom: 9px;
+  color: var(--fg-faint);
+  font-family: var(--chrome-font);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.doc-chat-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+}
+.doc-chat-work-toggle {
+  border: none;
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+  font-family: var(--chrome-font);
+  font-size: 11px;
+  padding: 0;
+}
+.doc-chat-work-toggle:hover {
+  color: var(--fg-dim);
+}
+.doc-chat-stop {
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  font-family: var(--chrome-font);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+.doc-chat-stop:hover {
+  background: var(--bg-hover);
+}
+
+/* Agent question (ask_user) — tappable option chips inline in the flow. */
+.doc-chat-question {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 0;
+}
+.doc-chat-q-text {
+  color: var(--fg);
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+.doc-chat-q-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.doc-chat-q-opt {
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elev);
+  color: var(--fg);
+  cursor: pointer;
+  font-family: var(--ui-font);
+  font-size: 13px;
+  padding: 5px 12px;
+  border-radius: 8px;
+}
+.doc-chat-q-opt:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}

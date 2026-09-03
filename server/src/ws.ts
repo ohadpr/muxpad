@@ -1,5 +1,6 @@
 import type { Server } from 'node:http';
-import { sanitizeAgentStatus } from '@muxpad/shared';
+import type { Duplex } from 'node:stream';
+import { parseCronMarker, sanitizeAgentStatus } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { AgentBridge } from './agent-bridge.js';
@@ -13,20 +14,37 @@ import {
   parseFrame,
 } from './agent-runner/protocol.js';
 import { TranscriptTail, identityNormalize, muxpadLocate } from './chat/TranscriptReader.js';
+import { agentPaneHasMessages } from './chat/has-messages.js';
 import type { EventBus } from './events.js';
 import { hasProjectContext } from './project-root.js';
-import { type PtydCache, decoratePane } from './ptyd-cache.js';
+import { type PtydCache, decoratePane, decorateTab } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { proxyAttach } from './ptyd-client/proxyAttach.js';
 import type { PaneNotifier } from './push.js';
+import {
+  RESPAWN_COOLDOWN_MS,
+  RESPAWN_MAX_ATTEMPTS,
+  RESPAWN_PROBATION_MS,
+  RESPAWN_STARTUP_GRACE_MS,
+  RESPAWN_SWEEP_MS,
+} from './respawn-policy.js';
 import { safeCwd } from './safe-cwd.js';
+import { checkOrigin, parseAllowedOrigins } from './same-origin.js';
 import { AgentQueueStore } from './store/AgentQueueStore.js';
 import { AgentSessionStore } from './store/AgentSessionStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
+import { TabActivity } from './tab-activity.js';
 
 export interface WsServerHandle {
   close(): Promise<void>;
+  /**
+   * Run one dead-runner sweep now. Exposed so a test can drive the supervision
+   * pass deterministically — its real cadence (20s sweep, 45s cooldown) makes
+   * it untestable otherwise, and the ptyd-outage behaviour is exactly the part
+   * that must not regress. Single-flight, same as the timer's call.
+   */
+  sweepDeadRunners(): Promise<void>;
 }
 
 // Initial chat history window: only the last ~128 KB of the transcript ship on
@@ -45,6 +63,110 @@ const INTERACTIVE_PUSH_SUPPRESS_MS = 2 * 60_000;
 // or a runaway client / HTTP caller.
 const MAX_QUEUED_SENDS = 200;
 
+/**
+ * Hard bound on the SERVER's mirror of a pane's subagent roster. The runner
+ * enforces its own cap (SubagentRoster.MAX_ROSTER_ENTRIES) — this is the
+ * independent one, because runners are version-skewed by design: a pane keeps
+ * its old runner process until it respawns, and a pre-durable runner never
+ * emits a terminal frame, so this map only ever grew. Deliberately the same
+ * number, so the two agree about what "absurd" means.
+ */
+export const MAX_PANE_SUBAGENTS = 32;
+
+/** Rate limit for the roster-overflow warning, per pane. */
+const OVERFLOW_WARN_MS = 60_000;
+
+/**
+ * Keep a pane's server-side roster under {@link MAX_PANE_SUBAGENTS} by dropping
+ * the oldest INSERTIONS (Map iteration order). Returns the ids evicted so the
+ * caller can log; empty in every healthy case.
+ */
+export function evictOverflowEntries(subagents: Map<string, unknown>): string[] {
+  const dropped: string[] = [];
+  while (subagents.size > MAX_PANE_SUBAGENTS) {
+    const oldest = subagents.keys().next();
+    if (oldest.done) break;
+    subagents.delete(oldest.value);
+    dropped.push(oldest.value);
+  }
+  return dropped;
+}
+
+/**
+ * Say no to an upgrade before it becomes a WebSocket.
+ *
+ * The socket is still a raw TCP stream here — `ws` has not touched it — so the
+ * refusal is a hand-written HTTP response. It must be a real one and not a bare
+ * `socket.destroy()`: a browser reports a destroyed socket as an opaque
+ * connection error, while a 403 shows up in devtools with a body naming the
+ * escape hatch. That is the difference between "muxpad is broken" and "muxpad
+ * told me exactly which env var to set".
+ *
+ * Nothing in here may throw. A raw upgrade socket has no 'error' listener yet,
+ * and an unhandled 'error' on a net.Socket is a process-level throw — a peer
+ * that resets while we write the 403 would take the whole server down, which
+ * would be a far better attack than the one we are closing. Hence the no-op
+ * listener before the write, and the try/catch around both calls.
+ */
+function refuseUpgrade(socket: Duplex, why: string): void {
+  socket.on('error', () => {
+    // The peer is being refused; a reset mid-write is expected, not news.
+  });
+  const body = JSON.stringify({
+    error: {
+      code: 'cross_origin_refused',
+      message: `cross-origin WebSocket upgrade refused (${why}); set MUXPAD_ALLOWED_ORIGINS to allow this origin`,
+    },
+  });
+  // write-then-destroy delivers this body whole — measured against a client
+  // that never reads, truncation only starts around 8 MB, where write() starts
+  // returning false. Keep the body small (it is a fixed ~250 bytes) or switch
+  // to socket.end(), which flushes but leaves the socket alive until the peer
+  // closes it — a worse trade for a refusal an attacker can repeat.
+  const head = [
+    'HTTP/1.1 403 Forbidden',
+    'Connection: close',
+    'Content-Type: application/json',
+    `Content-Length: ${Buffer.byteLength(body)}`,
+  ].join('\r\n');
+  try {
+    socket.write(`${head}\r\n\r\n${body}`);
+  } catch {
+    // socket already gone
+  }
+  try {
+    socket.destroy();
+  } catch {
+    // already destroyed
+  }
+}
+
+/**
+ * Rate limiter for the refusal log. One line per offending origin per minute:
+ * enough to diagnose a lockout, not enough for a page (or a wedged client of
+ * the user's own) reconnecting in a loop to fill the log with the same line.
+ */
+function makeRefusalLogger(log: (line: string) => void): (origin: string, why: string) => void {
+  const lastLoggedAt = new Map<string, number>();
+  const WINDOW_MS = 60_000;
+  return (origin, why) => {
+    const now = Date.now();
+    const previous = lastLoggedAt.get(origin);
+    if (previous !== undefined && now - previous < WINDOW_MS) return;
+    // Unbounded growth would be a (very slow) leak, and a caller that varies
+    // its Origin per request defeats the key anyway. The map only exists to
+    // suppress repeats, so dropping the whole thing when it gets silly costs
+    // at most one extra log line. Cleared BEFORE the set, or the origin that
+    // tripped the limit would be evicted immediately and log again next time —
+    // which is exactly the flood this is here to stop.
+    if (lastLoggedAt.size > 256) lastLoggedAt.clear();
+    lastLoggedAt.set(origin, now);
+    log(
+      `muxpad: refused WebSocket upgrade from ${origin} — ${why}. If this is your own front end, add its origin to MUXPAD_ALLOWED_ORIGINS.`,
+    );
+  };
+}
+
 export function attachWsServer(deps: {
   http: Server;
   db: Database.Database;
@@ -61,10 +183,32 @@ export function attachWsServer(deps: {
    * and push-less deployments omit it.
    */
   notifyPane?: PaneNotifier;
+  /**
+   * Shared per-tab activity recorder (the living sidebar's recency signal).
+   * Optional so existing tests can omit it; when absent this module builds
+   * its own, which only costs a duplicate throttle window.
+   */
+  tabActivity?: TabActivity;
+  /**
+   * Extra hostnames the upgrade guard trusts as an Origin, on top of loopback
+   * and "same hostname as Host". Production omits it and the guard reads
+   * MUXPAD_ALLOWED_ORIGINS; this is the injection seam for tests. Same shape
+   * and same meaning as AppDeps.allowedOrigins — deliberately, since both feed
+   * the one predicate in same-origin.ts.
+   */
+  allowedOrigins?: Set<string>;
+  /** Refusal sink. Defaults to console.warn; tests pass a collector. */
+  logRefusal?: (line: string) => void;
 }): WsServerHandle {
   const wss = new WebSocketServer({ noServer: true });
+  const allowedOrigins =
+    deps.allowedOrigins ?? parseAllowedOrigins(process.env.MUXPAD_ALLOWED_ORIGINS);
+  const logRefusal = makeRefusalLogger(deps.logRefusal ?? ((line: string) => console.warn(line)));
   const panes = new PaneStore(deps.db);
   const tabs = new TabStore(deps.db);
+  // Living sidebar: bumps `tabs.last_activity_at`. Forced for discrete
+  // moments (turn done, user send), throttled for raw pty chatter.
+  const activity = deps.tabActivity ?? new TabActivity(deps.db);
   const agents = new AgentSessionStore(deps.db);
   // Server-owned queue of user messages waiting for a busy/reconnecting agent.
   // The server drains it one message per turn (see drainQueue), so a queue keeps
@@ -107,10 +251,19 @@ export function attachWsServer(deps: {
   };
   // Auto-name agent panes/tabs from the session's AI title (the `ai-title`
   // records Claude appends to the transcript after the first turn and on topic
-  // shifts). A user-given name always wins: we only overwrite a null name or
-  // one WE set from an earlier title — tracked here in memory, so after a
-  // server restart an existing auto-name is treated as user-given (titles
-  // change rarely; losing one update beats clobbering a manual rename).
+  // shifts).
+  //
+  // A USER-GIVEN NAME WINS PERMANENTLY, and that is now a persisted fact
+  // (`tabs.name_sticky`, set by PATCH /api/tabs whenever a name is supplied)
+  // rather than the in-memory map it used to be. The map's own comment
+  // conceded the flaw: after a restart every existing auto-name was treated as
+  // user-given, so the guard held only by the accident that a manual name
+  // matched neither the bootstrap sentinel nor the last title — and a tab
+  // renamed BACK to something the namer had once produced was fair game again.
+  //
+  // The in-memory map survives for PANES (which have no sticky column and use
+  // `name === null` as their sentinel) and as the "we set this one" record for
+  // tabs within a process lifetime.
   const autoTitledPanes = new Map<string, string>();
   const autoTitledTabs = new Map<string, string>();
   const applyAiTitle = (paneId: string, rawTitle: string) => {
@@ -134,11 +287,14 @@ export function attachWsServer(deps: {
     // and the tab still wears the bootstrap default or our previous title.
     const tab = tabs.getById(pane.tab_id);
     if (!tab || panes.listByTab(tab.id).length !== 1) return;
+    // The one check that outranks everything else, restart included.
+    if (tabs.isNameSticky(tab.id)) return;
     if (tab.name === 'agent' || tab.name === autoTitledTabs.get(tab.id)) {
       if (tab.name !== title) {
         const updated = tabs.update(tab.id, { name: title });
         autoTitledTabs.set(tab.id, title);
-        if (updated) deps.events.emit({ type: 'tab.updated', tab: updated });
+        if (updated)
+          deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, updated) });
       } else {
         autoTitledTabs.set(tab.id, title);
       }
@@ -151,17 +307,64 @@ export function attachWsServer(deps: {
   interface AgentRunnerConn {
     ws: WebSocket;
     sid: string | null;
+    /** Which harness drives this pane (claude|codex|cursor); set at hello. */
+    backend: string;
     turnActive: boolean;
     /** Question awaiting the user, so a (re)connecting chat client can render it. */
     pendingQuestion: { qid: string; questions: AgentQuestion[] } | null;
     /** Latest per-task subagent progress for mid-turn (re)connects. */
     subagents: Map<string, SubagentProgress>;
+    /** Rate limit for the roster-overflow warning (see MAX_PANE_SUBAGENTS). */
+    lastOverflowWarnAt: number;
     /** Latest session status (model, context fill, model list) for hellos. */
     status: (RunnerFrame & { t: 'status' }) | null;
     /** When the last chat send was relayed — see the stop handler's gate. */
     lastSendAt: number;
+    /**
+     * When the last HUMAN message was relayed. Distinct from `lastSendAt`,
+     * which any relay bumps: a cron fire is a relay but nobody is sitting
+     * there. Provenance is read off the message itself (a cron fire carries
+     * its marker), so it survives the durable queue and a server restart —
+     * there is no in-memory flag to lose.
+     *
+     * Two consumers, both of which mean "is a human present?": the turn-done
+     * push gate (an autonomous turn SHOULD push — you weren't watching) and
+     * the cron `quiet_mins` policy (don't barge into a live conversation).
+     */
+    lastHumanSendAt: number;
   }
+  // A message that carries a cron fire marker was written by the scheduler,
+  // not typed by anyone. One predicate, shared by both relay paths.
+  const isHumanMessage = (text: string) => parseCronMarker(text) === null;
   const agentRunners = new Map<string, AgentRunnerConn>();
+  /**
+   * The bus edge for an OPTIMISTIC turn start — the moment the server relays a
+   * send and claims `turnActive` before the runner's own `turn-start` echoes
+   * back. Without it that round trip is dark to every subscriber: `turn_active`
+   * reads true, `busy` reads false, and no `agent_turn` fires (D14). The
+   * runner's real turn-start emits a second `start` a beat later; `start` is
+   * idempotent for every consumer (a waiter is already waiting, the Archiver
+   * dedupes by sid), so a duplicate is strictly better than a gap.
+   */
+  const emitOptimisticTurnStart = (paneId: string): void => {
+    const conn = agentRunners.get(paneId);
+    if (!conn) return;
+    // Mirror the optimism into the PERSISTED turn state too. The runner's real
+    // `turn-start` sets this, but it's a round trip away, and readers of the
+    // row — PaneWebSwitch, `muxpad agent list`, conversionRefusal's mid-turn
+    // guard — would meanwhile see 'idle' for a turn that has already been
+    // relayed. Same D14 lesson as the cache/bus mirroring above: the three
+    // views of "is it running" must not disagree for the length of a round
+    // trip. Idempotent; the runner's turn-start writes the same value.
+    agents.setStatus(paneId, 'running');
+    deps.events.emit({
+      type: 'agent_turn',
+      pane_id: paneId,
+      phase: 'start',
+      sid: conn.sid,
+      backend: conn.backend,
+    });
+  };
   const sendToRunner = (paneId: string, frame: ServerFrame): boolean => {
     const r = agentRunners.get(paneId);
     if (!r || r.ws.readyState !== WebSocket.OPEN) return false;
@@ -178,8 +381,35 @@ export function attachWsServer(deps: {
       const r = submitSend(paneId, text);
       return r.status === 'rejected'
         ? { ok: false, reason: r.reason ?? 'could not send' }
-        : { ok: true };
+        : { ok: true, queued: r.status === 'queued' };
     };
+    // Real turn state for the HTTP layer (`agent wait`): the registry's
+    // turnActive, not pty-output `busy`.
+    deps.agentBridge.turnActive = (paneId) => agentRunners.get(paneId)?.turnActive ?? null;
+    // Mode switches from PATCH /api/panes/:id reach the live runner here.
+    // False just means "no runner right now" — the row + startup_cmd already
+    // carry the mode, so the next respawn is correct either way.
+    deps.agentBridge.setMode = (paneId, mode) => sendToRunner(paneId, { t: 'mode', mode });
+    // The UNWRAPPED queue answer, for the cron scheduler's run history. Same
+    // single injection path as `send` above — it just doesn't flatten
+    // 'sent'/'queued' into one boolean, because a run log that can't tell "it
+    // ran" from "it's waiting behind a turn" is most of the way back to the
+    // silent failure this whole thing exists to escape.
+    deps.agentBridge.submitSend = (paneId, text) => submitSend(paneId, text);
+    // Registry reads the cron policies key on. All null/false with no runner
+    // connected, which every caller treats as "unknown → don't block on it".
+    deps.agentBridge.contextPct = (paneId) =>
+      agentRunners.get(paneId)?.status?.context?.pct ?? null;
+    deps.agentBridge.lastSendAt = (paneId) => {
+      const conn = agentRunners.get(paneId);
+      // The HUMAN send, not any relay: a cron's own fire must not count as
+      // "the user is right here", or a 5-minute cron with quiet_mins set would
+      // defer itself forever. 0 is the never-sent sentinel — report it as
+      // "unknown", not as 1970.
+      return conn && conn.lastHumanSendAt > 0 ? conn.lastHumanSendAt : null;
+    };
+    deps.agentBridge.slash = (paneId, cmd) => sendToRunner(paneId, { t: 'slash', cmd });
+    deps.agentBridge.blocked = (paneId) => !!agentRunners.get(paneId)?.pendingQuestion;
   }
 
   // -------------------------------------------------------------------------
@@ -194,16 +424,51 @@ export function attachWsServer(deps: {
   // attempts (a booting runner takes seconds to register) and a give-up cap
   // so a crash-looping runner (broken build, bad model) converges to a
   // visible "agent exited" instead of an infinite kill/spawn loop. A runner
-  // registering (hello) resets its pane's record.
-  const RESPAWN_SWEEP_MS = 20_000;
-  const RESPAWN_COOLDOWN_MS = 45_000;
-  const RESPAWN_MAX_ATTEMPTS = 3;
+  // that registers (hello) AND then stays up for the probation window resets
+  // its pane's record.
+  //
+  // Probation, not the bare hello, is what makes the cap bite. A runner whose
+  // session can't start (`--resume` of a sid the harness no longer has) still
+  // connects and says hello before it dies a second later — clearing the record
+  // there re-armed the counter on every cycle, so a pane crash-looped on the
+  // sweep interval forever, attempts stuck at 1. Recovery means STAYING alive.
+  // The four rails (sweep/cooldown/cap/probation) live in respawn-policy.ts —
+  // shared verbatim with the serve supervisor, so tuning one can't silently
+  // diverge from the other. Only the liveness PROBE differs between them.
+  //
+  // A resume against a session id the harness can't find is not a transient
+  // crash — retrying the same command is guaranteed to fail identically. The
+  // sweep drops `--resume` once and brings the pane back as a fresh session in
+  // the same cwd instead of burning the attempt budget on a certainty.
+  const DEAD_SESSION_RE = /No conversation found with session ID/i;
   interface RespawnState {
     attempts: number;
     lastAt: number;
     gaveUp: boolean;
+    /** Last fatal frame from this pane's runner (cleared once acted on). */
+    fatal?: string | undefined;
+    /** We already dropped a dead `--resume` from this pane's startup_cmd. */
+    healed?: boolean;
   }
   const respawns = new Map<string, RespawnState>();
+  // Pending "the runner survived probation" timers, keyed by pane.
+  const probation = new Map<string, ReturnType<typeof setTimeout>>();
+  const clearProbation = (paneId: string) => {
+    const t = probation.get(paneId);
+    if (t) {
+      clearTimeout(t);
+      probation.delete(paneId);
+    }
+  };
+  const armProbation = (paneId: string) => {
+    clearProbation(paneId);
+    const t = setTimeout(() => {
+      probation.delete(paneId);
+      respawns.delete(paneId);
+    }, RESPAWN_PROBATION_MS);
+    t.unref?.();
+    probation.set(paneId, t);
+  };
   const agentExitedMessage = (paneId: string) =>
     `agent exited — automatic restarts failed; see ~/.muxpad/agent-logs/${paneId}.log, then rerun \`muxpad agent\` from the pane's terminal face`;
   // Single-flight: a slow ptyd must not stack overlapping sweeps.
@@ -227,7 +492,7 @@ export function attachWsServer(deps: {
         // A just-created pane may not have typed its startup command yet —
         // the foreground probe would misread the bare shell as a dead
         // runner and bounce a healthy boot.
-        if (Date.now() - pane.created_at < 30_000) continue;
+        if (Date.now() - pane.created_at < RESPAWN_STARTUP_GRACE_MS) continue;
         const st = respawns.get(pane.id) ?? { attempts: 0, lastAt: 0, gaveUp: false };
         if (st.gaveUp) continue;
         if (Date.now() - st.lastAt < RESPAWN_COOLDOWN_MS) continue;
@@ -235,18 +500,67 @@ export function attachWsServer(deps: {
         // reconnect) still owns the pty foreground — leave it alone, it
         // re-registers on its own. Only a shell prompt (or a pane ptyd
         // doesn't even have) is a dead runner.
+        //
+        // A THROW IS NOT DEATH. `getForegroundCommand` only rejects when the
+        // ptyd socket isn't OPEN (see PtydClient.call) — an unknown pane
+        // RESOLVES with `cmd: null`. So a rejection means LIVENESS UNKNOWN,
+        // and judging it "dead" would let a multi-minute ptyd outage burn
+        // every agent pane's whole attempt budget, mark healthy panes dead
+        // and — worse — permanently clear their durable send queues. Skip the
+        // pane entirely: no attempt spent, no cooldown anchor moved, retried
+        // on the next sweep once ptyd is back. Same distinction the serve
+        // supervisor makes with `hasPane`.
         let fg: string | null = null;
         try {
           fg = await deps.ptyd.getForegroundCommand(pane.id);
         } catch {
-          fg = null; // ptyd unreachable or pane unknown — treat as dead
+          continue;
         }
         if (fg?.includes('agent-runner')) continue;
+        // ── The runner really is gone. Only NOW may we change anything. ──
+        //
+        // Dead-session self-heal: the runner told us (fatal) that its resume
+        // target is gone from the harness's store — a bridged session, a
+        // pruned transcript, a sid that never got a message. Strip `--resume`
+        // so the respawn lands a NEW session in the same cwd/backend/model,
+        // and let it use the normal attempt budget from there. The old sid
+        // stays in the agent session's lineage; nothing is deleted.
+        //
+        // This block sits BELOW the fg probe on purpose. Above it, a ptyd
+        // outage — the case the probe's `continue` exists to survive — still
+        // rewrote startup_cmd, threw the resume target away for good and
+        // shouted a notice at every open chat client, all for a pane whose
+        // liveness we had just decided we could not judge.
+        const deadSid = st.fatal !== undefined && DEAD_SESSION_RE.test(st.fatal);
+        if (deadSid && !st.healed) {
+          const cmd = pane.startup_cmd ?? '';
+          const fresh = cmd.replace(/\s--resume\s+[A-Za-z0-9._-]+/, '');
+          if (fresh !== cmd) {
+            // Clear the fatal only when we ACT on it. Clearing unconditionally
+            // (as this used to) forgot the diagnosis on a command with no
+            // `--resume` to strip, so a later respawn that did grow one would
+            // never be healed.
+            st.fatal = undefined;
+            st.healed = true;
+            st.attempts = 0;
+            respawns.set(pane.id, st);
+            panes.setStartupCmd(pane.id, fresh);
+            emitPaneUpdated(pane.id);
+            bcastToPane(pane.id, {
+              t: 'notice',
+              message:
+                'previous session not found on disk — starting a fresh one in the same folder…',
+            });
+          }
+        }
         st.lastAt = Date.now();
         st.attempts += 1;
         respawns.set(pane.id, st);
         if (st.attempts > RESPAWN_MAX_ATTEMPTS) {
           st.gaveUp = true;
+          // The pane is DEAD, not idle. Surface it in the nav (a × in the
+          // status rail) instead of leaving a corpse that merely looks quiet.
+          deps.cache.setDead(pane.id, true);
           bcastToPane(pane.id, { t: 'error', message: agentExitedMessage(pane.id) });
           // The agent is dead for good — drop its orphaned queue so the pending
           // bubbles don't linger, and a much-later hand-restart (a fresh session)
@@ -268,7 +582,9 @@ export function attachWsServer(deps: {
           await deps.ptyd.ensurePane({
             id: pane.id,
             shell: pane.shell ?? process.env.SHELL ?? '/bin/zsh',
-            startup_cmd: pane.startup_cmd,
+            // Re-read: the dead-session heal above may have just rewritten it,
+            // and typing the stale `--resume` would reproduce the same fatal.
+            startup_cmd: panes.getById(pane.id)?.startup_cmd ?? pane.startup_cmd,
             cwd: safeCwd(pane.cwd),
             env: pane.env,
             tab_id: pane.tab_id,
@@ -311,8 +627,15 @@ export function attachWsServer(deps: {
     if (sendToRunner(paneId, { t: 'send', text: next.text })) {
       // Claim busy immediately: the runner's turn-start reaffirms it, but a
       // second drain must not fire before it echoes back.
+      //
+      // D14: this used to set turnActive WITHOUT touching the cache or the bus,
+      // so for a whole round trip `turn_active` read true while `busy` read
+      // false and no event fired at all. Mirror the optimism into both.
       conn.turnActive = true;
       conn.lastSendAt = Date.now();
+      if (isHumanMessage(next.text)) conn.lastHumanSendAt = conn.lastSendAt;
+      deps.cache.setAgentBusy(paneId, true);
+      emitOptimisticTurnStart(paneId);
       queue.remove(next.id, paneId);
       broadcastQueue(paneId);
     }
@@ -331,12 +654,22 @@ export function attachWsServer(deps: {
     if (!t) return { status: 'rejected', reason: 'empty message' };
     const pane = panes.getById(paneId);
     if (!pane) return { status: 'rejected', reason: 'pane not found' };
+    // Living sidebar: the user addressing this pane is a discrete, deliberate
+    // act — forced, like turn-done. Recorded before the accept/queue/reject
+    // branch on purpose: a message the user MEANT to send is activity even if
+    // the agent turns out to be dead.
+    activity.touchTab(pane.tab_id, { force: true });
     const conn = agentRunners.get(paneId);
     // Fast path: agent free and nothing queued ahead of it → run immediately.
     if (conn && !conn.turnActive && queue.count(paneId) === 0) {
       if (sendToRunner(paneId, { t: 'send', text: t })) {
         conn.turnActive = true; // optimistic; runner's turn-start reaffirms
         conn.lastSendAt = Date.now();
+        if (isHumanMessage(t)) conn.lastHumanSendAt = conn.lastSendAt;
+        // Same D14 mirroring as drainQueue: turn state, pane status and the
+        // bus must not disagree for the duration of the round trip.
+        deps.cache.setAgentBusy(paneId, true);
+        emitOptimisticTurnStart(paneId);
         return { status: 'sent' };
       }
       // Relay lost a race with the socket close → fall through and queue it.
@@ -396,6 +729,54 @@ export function attachWsServer(deps: {
 
   deps.http.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://x');
+    // CSRF for WebSockets. FIRST, above the path dispatch, so it covers every
+    // arm below — /ws/pane/:id, /ws/agent-runner/:paneId, /ws/chat/:paneId,
+    // /ws/events — and any arm added later without anyone remembering this.
+    //
+    // Why it is needed at all: muxpad has no auth (reachability is
+    // authorization, bounded by the tailnet), the HTTP guard in same-origin.ts
+    // exempts GET, and a WS handshake IS a GET that never reaches Hono anyway.
+    // So until this, any page the user visited while their browser sat on the
+    // tailnet could open /ws/pane/<id> and write OP_INPUT frames straight into
+    // a live shell. Browsers apply no CORS to WebSockets; they do send Origin.
+    // Exactly the same predicate as the HTTP guard, so there is one policy.
+    //
+    // MISSING Origin STAYS ALLOWED, same as HTTP, and here is the check of
+    // that reasoning for this path specifically — every non-browser WS client
+    // in the repo, traced:
+    //
+    //   - the agent runner (agent-runner/index.ts) opens
+    //     `new WebSocket(MUXPAD_API_URL→ws + /ws/agent-runner/:paneId)` with
+    //     the `ws` library and no options, which sends NO Origin. It also
+    //     reconnects forever across every `muxpad restart`, so refusing it
+    //     would not fail loudly — it would spin.
+    //   - the `muxpad` CLI never opens a WebSocket at all; `muxpad events`
+    //     curls the SSE mirror at /api/events (guarded as a GET, i.e. not).
+    //   - every server-side test client is `ws` on 127.0.0.1: no Origin, and
+    //     loopback besides.
+    //
+    // and no browser reaches this branch: RFC 6455 §4.1 makes Origin
+    // mandatory for browser clients, and Chrome/Firefox/Safari all send it on
+    // every `new WebSocket()`. So "no Origin" means "not a page", which is the
+    // whole population this guard is aimed at. A non-browser attacker who can
+    // already reach port 7777 on the tailnet is outside the threat model by
+    // construction — they could equally curl the API.
+    // Node types unknown headers as string | string[]; a repeated header
+    // arrives as an array. Take the first — a browser sends exactly one.
+    const rawSecFetchSite = req.headers['sec-fetch-site'];
+    const verdict = checkOrigin(
+      {
+        origin: req.headers.origin,
+        host: req.headers.host,
+        secFetchSite: Array.isArray(rawSecFetchSite) ? rawSecFetchSite[0] : rawSecFetchSite,
+      },
+      allowedOrigins,
+    );
+    if (!verdict.ok) {
+      logRefusal(req.headers.origin ?? '(no origin)', `${verdict.why} on ${url.pathname}`);
+      refuseUpgrade(socket, verdict.why);
+      return;
+    }
     // App-level event stream. One socket per browser; receives JSON-encoded
     // MuxpadEvent frames for structural state changes (panes/tabs/workspaces).
     // PTY I/O still goes through /ws/pane/:id below.
@@ -464,16 +845,30 @@ export function attachWsServer(deps: {
         const conn: AgentRunnerConn = {
           ws,
           sid: null,
+          backend: 'claude',
           turnActive: false,
           pendingQuestion: null,
           subagents: new Map(),
+          lastOverflowWarnAt: 0,
           status: null,
           lastSendAt: 0,
+          lastHumanSendAt: 0,
         };
         agentRunners.set(paneId, conn);
         const bcast = (obj: unknown) => bcastToPane(paneId, obj);
         const emitChange = () =>
           deps.events.emit({ type: 'agent_session.updated', pane_id: paneId });
+        // Turn lifecycle on the GLOBAL bus (spec A4): a supervisor watching N
+        // workers holds one /ws/events (or /api/events SSE) subscription
+        // instead of N chat sockets. Ids only — content stays off the bus.
+        const emitTurn = (phase: 'start' | 'done' | 'fatal') =>
+          deps.events.emit({
+            type: 'agent_turn',
+            pane_id: paneId,
+            phase,
+            sid: conn.sid,
+            backend: conn.backend,
+          });
         ws.on('message', (data) => {
           // A displaced socket can still deliver in-flight frames during the
           // close handshake — a stale runner's state must not leak into the
@@ -505,10 +900,15 @@ export function attachWsServer(deps: {
             // legacy runner = claude. Validated against the allowlist so it's
             // safe both as a DB label AND baked into the self-heal shell cmd.
             const backendId = isBackendId(frame.backend) ? frame.backend : 'claude';
-            // A registered runner is proof of recovery — forget any respawn
-            // attempts (including a give-up: the user restarting it by hand
-            // re-arms supervision).
-            respawns.delete(paneId);
+            conn.backend = backendId;
+            // Registering is a claim of recovery, not proof of it: a runner
+            // that can't resume its session says hello and dies seconds later.
+            // Clear the respawn record only after it has held the pane for the
+            // probation window (the close handler cancels the timer). A pane
+            // that had already given up is the exception — a hand-restart is a
+            // deliberate act by the user, so re-arm supervision immediately.
+            if (respawns.get(paneId)?.gaveUp) respawns.delete(paneId);
+            else armProbation(paneId);
             agents.attachRunner({
               pane_id: paneId,
               cwd: frame.cwd,
@@ -516,7 +916,15 @@ export function attachWsServer(deps: {
               assistant: backendId,
             });
             if (conn.turnActive) agents.setStatus(paneId, 'running');
+            // This pane's "working" now comes from the RUNNER REGISTRY, not
+            // from pty output. Registering flips that gate (see
+            // PtydCache.getStatus) — otherwise the runner's own terminal log
+            // keeps the pane lit while it idles, and a silently-thinking agent
+            // reads idle because it prints nothing.
+            deps.cache.setRunnerOwned(paneId, true);
             deps.cache.setAgentBusy(paneId, conn.turnActive);
+            // A hand-restart is a fresh claim on the pane: it is no longer dead.
+            deps.cache.setDead(paneId, false);
             // A NEW runner attaching (fresh `muxpad agent`, or a resume under
             // a different sid) is the "this pane is chat now" signal — flip
             // the persisted face on every device. A RECONNECT of the same
@@ -527,14 +935,20 @@ export function attachWsServer(deps: {
             // (tabs route or a previous rewrite) — never from the ws frame —
             // so no new injection surface; the single-quoted form is the
             // tabs-route shape, the bare form a hand-typed `muxpad agent`.
-            const prevCmd = panes.getById(paneId)?.startup_cmd ?? '';
+            const prevPane = panes.getById(paneId);
+            const prevCmd = prevPane?.startup_cmd ?? '';
             const modelMatch = prevCmd.match(/--model ('[^']*'|[^\s']+)/);
             const modelPart = modelMatch ? ` --model ${modelMatch[1]}` : '';
             // Preserve the backend selector across the rewrite. Claude stays
             // implicit (bare `muxpad agent …`) so existing panes' startup_cmd
             // never churns; codex/cursor get an explicit, allowlist-safe flag.
             const backendPart = backendId === 'claude' ? '' : ` --backend ${backendId}`;
-            const selfHealCmd = `muxpad agent${backendPart}${modelPart} --resume ${frame.sid}`;
+            // Agent mode, taken from the PANE ROW (the source of truth), not
+            // parsed back out of the previous command — a PATCH may have just
+            // changed it. 'deep' stays implicit for the same
+            // never-churn-existing-panes reason as claude above.
+            const modePart = prevPane?.mode === 'do' ? ' --mode do' : '';
+            const selfHealCmd = `muxpad agent${backendPart}${modePart}${modelPart} --resume ${frame.sid}`;
             const isReconnect = prevCmd === selfHealCmd;
             // Self-heal: the pane's startup command now resumes THIS session,
             // so the pane survives ptyd restarts and reboots.
@@ -546,8 +960,24 @@ export function attachWsServer(deps: {
             // A mid-turn reconnect: already-open chat clients still show an
             // idle composer (their session frame doesn't change shape), so
             // re-broadcast the running state — idempotent client-side.
-            if (conn.turnActive) bcast({ t: 'turn-start' });
+            // The bus edge matters as much as the chat one: the server's
+            // per-connection state was rebuilt from nothing, so to every bus
+            // subscriber (a supervisor, `muxpad agent wait`, the Archiver)
+            // this IS the start of the turn they can observe. Without it a
+            // waiter that attached across the reconnect blocks to timeout on
+            // a turn that will only ever emit `done`.
+            if (conn.turnActive) {
+              bcast({ t: 'turn-start' });
+              emitTurn('start');
+            }
             emitChange();
+            // Converge the runner on the DB's mode. A runner that booted from
+            // a startup_cmd predating a mode change (or a hand-typed `muxpad
+            // agent`) would otherwise run the wrong contract until its next
+            // respawn. Equal-mode frames are a no-op backend-side, so the
+            // common case costs nothing; a genuine mismatch surfaces as the
+            // one-time <muxpad-mode> note on the next message.
+            if (prevPane) sendToRunner(paneId, { t: 'mode', mode: prevPane.mode });
             // Runner is back — resume feeding any queue that was waiting for it
             // (server restart, ws blip, crash+respawn). No-op if it reconnected
             // mid-turn (turnActive) or the queue is empty.
@@ -561,6 +991,7 @@ export function attachWsServer(deps: {
             // every open view refetch the session twice per turn.
             deps.cache.setAgentBusy(paneId, true);
             bcast({ t: 'turn-start' });
+            emitTurn('start');
           } else if (frame.t === 'stream') {
             if (typeof frame.delta !== 'string') return;
             appendStreamBuf(paneId, frame.delta);
@@ -568,7 +999,16 @@ export function attachWsServer(deps: {
           } else if (frame.t === 'turn-done') {
             conn.turnActive = false;
             conn.pendingQuestion = null;
-            conn.subagents.clear();
+            // No question outlives its turn (the runner resolves them all on
+            // interrupt/result), so the blocked state can't either.
+            deps.cache.setBlocked(paneId, false);
+            // conn.subagents is deliberately NOT cleared here. A
+            // run_in_background Task routinely outlives the turn that launched
+            // it; wiping the roster at turn-done is exactly what made those
+            // subagents vanish from the sidebar and the in-pane list the moment
+            // the turn ended — with no way to rebuild, since the roster rode
+            // only the (now-empty) session snapshot. Entries leave on their
+            // runner's `done` frame or on teardown, and nowhere else.
             streamBufs.delete(paneId);
             agents.setStatus(paneId, 'idle');
             deps.cache.setAgentBusy(paneId, false);
@@ -577,6 +1017,12 @@ export function attachWsServer(deps: {
               ok: frame.ok !== false,
               ...(frame.error ? { error: frame.error } : {}),
             });
+            // `done` regardless of ok — the turn ENDED (an errored turn is
+            // still a finished wait); a dying runner reports `fatal` below.
+            emitTurn('done');
+            // Living sidebar: a finished turn is the single most meaningful
+            // "something happened here" signal, so it bypasses the throttle.
+            activity.touchPane(paneId, { force: true });
             // Chat-native agents never ring BEL, so the attention-push path
             // can't see them — notify turn completion here instead. Gated on
             // interactivity: a turn answered within the suppress window of
@@ -584,7 +1030,7 @@ export function attachWsServer(deps: {
             // driving (every reply would buzz their phone mid-chat).
             // Long-running turns (the user walked away) and autonomous
             // wakeup/cron turns (no recent send) do push.
-            if (Date.now() - conn.lastSendAt > INTERACTIVE_PUSH_SUPPRESS_MS) {
+            if (Date.now() - conn.lastHumanSendAt > INTERACTIVE_PUSH_SUPPRESS_MS) {
               // Prefer a snippet of what the agent actually said over the
               // generic "finished its turn".
               deps.notifyPane?.(
@@ -605,6 +1051,16 @@ export function attachWsServer(deps: {
           } else if (frame.t === 'question') {
             if (typeof frame.qid !== 'string' || !Array.isArray(frame.questions)) return;
             conn.pendingQuestion = { qid: frame.qid, questions: frame.questions };
+            // D5: "needs input" had NO representation in the nav. The question
+            // reached chat sockets and a push and touched nothing else, so a
+            // chat parked on ask_user read as plain idle in the sidebar — the
+            // highest-value missing state. It is now the top-precedence one.
+            // No emitPaneUpdated here: setBlocked fans a `paneChange` on the
+            // status edge, and the main entry already forwards that as a
+            // DECORATED pane.updated. Emitting again would double every
+            // blocked edge on the bus — invisible to the web client (which
+            // dedups) but wrong for anything counting edges.
+            deps.cache.setBlocked(paneId, true);
             bcast({ t: 'question', qid: frame.qid, questions: frame.questions });
             const q = frame.questions[0]?.question;
             deps.notifyPane?.(
@@ -613,15 +1069,37 @@ export function attachWsServer(deps: {
             );
           } else if (frame.t === 'question-done') {
             if (conn.pendingQuestion?.qid === frame.qid) conn.pendingQuestion = null;
+            if (!conn.pendingQuestion) deps.cache.setBlocked(paneId, false);
             bcast({ t: 'question-done', qid: frame.qid });
           } else if (frame.t === 'subagent') {
             if (!frame.progress || typeof frame.progress.toolUseId !== 'string') return;
-            conn.subagents.set(frame.progress.toolUseId, frame.progress);
-            // Keep the nav spinner lit while a BACKGROUND subagent works past
-            // the parent turn. Only out of turn: during a turn the turn's own
-            // busy already covers it, and poking then would make the spinner
-            // linger after every synchronous-subagent turn (see pokeSubagentBusy).
-            if (!conn.turnActive) deps.cache.pokeSubagentBusy(paneId);
+            if (frame.progress.done) conn.subagents.delete(frame.progress.toolUseId);
+            else conn.subagents.set(frame.progress.toolUseId, frame.progress);
+            // Independent backstop on the SERVER's copy. The runner caps its own
+            // roster, but runners are version-skewed by design — they only pick
+            // up new code when their pane respawns, and a pre-durable runner
+            // never sends a `done` frame at all, so this map grew for the life
+            // of the process (live pane, 2026-08: 19 entries, 7 real). The cap
+            // is a bound, never a policy: it drops the OLDEST insertion, so a
+            // leak can no longer render an absurd number in the status rail.
+            const evicted = evictOverflowEntries(conn.subagents);
+            // An eviction must LOOK like an end to every client, or the rows
+            // linger until the next 10s session poll happens to notice.
+            for (const id of evicted)
+              bcast({ t: 'subagent', progress: { toolUseId: id, steps: 0, done: true } });
+            // Loud, but once a minute per pane: a leaking runner sends one of
+            // these per frame, and the log must stay readable.
+            if (evicted.length > 0 && Date.now() - conn.lastOverflowWarnAt > OVERFLOW_WARN_MS) {
+              conn.lastOverflowWarnAt = Date.now();
+              console.warn(
+                `[ws] pane ${paneId}: subagent roster over ${MAX_PANE_SUBAGENTS} — evicting the oldest entries. A runner end-path is leaking (stale runner build?).`,
+              );
+            }
+            // The roster is a status SOURCE, not a decaying hint: a non-empty
+            // roster means "work is running here" whether or not a turn is.
+            // setSubagentCount is edge-triggered on the COUNT, so the runner's
+            // 5s keepalive (which re-sends the same ids) fans no events.
+            deps.cache.setSubagentCount(paneId, conn.subagents.size);
             bcast({ t: 'subagent', progress: frame.progress });
           } else if (frame.t === 'status') {
             // Validate off the wire — version-skewed runners are NORMAL
@@ -645,22 +1123,45 @@ export function attachWsServer(deps: {
             // transcript-tail path: user-given names always win.
             if (typeof frame.title === 'string') applyAiTitle(paneId, frame.title);
           } else if (frame.t === 'fatal') {
+            // A fatal means this runner is on its way out — it never survives
+            // probation, so cancel the pending "recovered" timer and hand the
+            // reason to the sweep, which decides between a plain retry and the
+            // dead-session heal.
+            clearProbation(paneId);
+            const st = respawns.get(paneId) ?? { attempts: 0, lastAt: 0, gaveUp: false };
+            st.fatal = typeof frame.error === 'string' ? frame.error : '';
+            respawns.set(paneId, st);
             bcast({ t: 'error', message: `agent exited: ${frame.error}` });
+            emitTurn('fatal');
           }
         });
         const teardown = () => {
           // Only tear down if this socket is still the registered runner —
           // a replaced (old) socket must not detach its successor.
           if (agentRunners.get(paneId) !== conn) return;
+          // It didn't hold the pane for the probation window — leave the
+          // respawn record standing so the attempt budget keeps counting.
+          clearProbation(paneId);
           agentRunners.delete(paneId);
           agents.detachRunner(paneId);
+          deps.cache.setRunnerOwned(paneId, false);
           deps.cache.setAgentBusy(paneId, false);
-          // Runner gone → drop any lingering background-subagent busy now
-          // rather than letting its decay timer hold the spinner ~15s.
-          deps.cache.clearSubagentBusy(paneId);
+          deps.cache.setBlocked(paneId, false);
+          // The runner's death is the ONE thing besides a finish notice that
+          // retires roster entries: its subagents die with the process, and
+          // nothing else will ever report them done. (A reconnecting runner
+          // re-announces its live roster in onConnected, so a ws blip costs at
+          // most a blink, not a permanently lost subagent.)
+          conn.subagents.clear();
+          deps.cache.setSubagentCount(paneId, 0);
           streamBufs.delete(paneId);
           if (conn.turnActive) {
+            conn.turnActive = false;
             bcast({ t: 'turn-done', ok: false, error: 'agent disconnected' });
+            // Balance the pair on the GLOBAL bus too. A SIGKILLed runner used
+            // to emit `start` and never `done`, so `muxpad agent wait` blocked
+            // to timeout and the Archiver missed its realtime enqueue.
+            emitTurn('done');
           }
           emitChange();
         };
@@ -719,18 +1220,66 @@ export function attachWsServer(deps: {
         let tail: TranscriptTail | null = null;
         let tailSid: string | null = null;
         let lastHello = '';
+        // Mode last delivered to this socket — the gate for the pane.updated
+        // subscription below.
+        let lastSentMode: 'do' | 'deep' = 'deep';
+        // "Has anything been said here?" — shipped on the session frame so the
+        // empty-state UI never has to GUESS from `events.length`, which is 0
+        // for a beat on every reconnect while history replays asynchronously.
+        // That guess made the "open instead" offer flash over real
+        // conversations. Using the SAME predicate the conversion routes
+        // enforce also means the offer and the server's refusal can never
+        // disagree.
+        //
+        // Cached per sid and latched: messages don't un-say themselves, so
+        // once it's true we stop re-reading the transcript. While it's false
+        // the check short-circuits cheaply (no session row, or no transcript
+        // file yet), so a quiet chat costs nothing on the 10s poll either.
+        let msgProbeSid: string | null = null;
+        let msgProbeResult = false;
+        const paneHasMessages = (sid: string | null): boolean => {
+          if (!sid) return false;
+          if (msgProbeSid === sid && msgProbeResult) return true;
+          if (msgProbeSid !== sid) {
+            msgProbeSid = sid;
+            msgProbeResult = false;
+          }
+          msgProbeResult = agentPaneHasMessages(deps.db, chatPaneId);
+          return msgProbeResult;
+        };
         const syncSession = (first: boolean) => {
           const session = agents.getByPane(chatPaneId);
+          // The pane's agent mode rides the session frame so every open chat
+          // view learns about a switch. There is deliberately NO chat-header
+          // control for it (a claim this comment used to make): mode is chosen
+          // at pane creation, and switches come from the CLI / automation via
+          // PATCH /api/panes/:id {mode}. That endpoint stays, and so does this
+          // relay — a CLI-driven switch must live-update every device rather
+          // than wait for a respawn. The 10s poll below re-reads the row and
+          // the hello signature includes `mode`, so a change re-pushes.
+          const paneMode = panes.getById(chatPaneId)?.mode ?? 'deep';
+          const hasMessages = paneHasMessages(session?.current_sid ?? null);
           const hello = JSON.stringify({
             sid: session?.current_sid ?? null,
             writer: session?.writer ?? null,
             view: session?.view_mode ?? null,
+            mode: paneMode,
+            hasMessages,
             // Re-send when the working dir changes (folder switch → respawn →
             // re-hello) so the chat header's folder chip updates.
             cwd: deps.cache.getCwd(chatPaneId) ?? session?.cwd ?? null,
+            // MEMBERSHIP fingerprint of the durable subagent roster. Without it
+            // the 10s poll below could never push a later snapshot: a socket
+            // that connected before a background subagent launched would keep
+            // matching its old hello forever, so only a brand-new socket ever
+            // learned about the roster — and it used to be empty by then.
+            // Ids only, sorted: progress churn (steps/lastTool) and the
+            // runner's keepalive must NOT re-push the whole session frame.
+            subagents: [...(agentRunners.get(chatPaneId)?.subagents.keys() ?? [])].sort().join(','),
           });
           if (first || hello !== lastHello) {
             lastHello = hello;
+            lastSentMode = paneMode;
             const runner = agentRunners.get(chatPaneId);
             const turnRunning = runner?.turnActive === true;
             const streamText = streamBufs.get(chatPaneId);
@@ -738,6 +1287,8 @@ export function attachWsServer(deps: {
             send({
               t: 'session',
               session,
+              mode: paneMode,
+              hasMessages,
               turnRunning,
               // Server-owned pending queue so a (re)connecting or reloaded
               // client renders the same bubbles — the queue is authoritative
@@ -781,6 +1332,15 @@ export function attachWsServer(deps: {
         syncSession(true);
         const unsubEvents = deps.events.subscribe((e) => {
           if (e.type === 'agent_session.updated' && e.pane_id === chatPaneId) syncSession(false);
+          // A mode PATCH from another device fans out as pane.updated. Gate
+          // hard on the mode actually differing: pane.updated also fires on
+          // every busy/title/cwd churn, and re-running syncSession on all of
+          // those would burn two SQLite reads per output burst for a value
+          // that changes maybe twice a day.
+          else if (e.type === 'pane.updated' && e.pane.id === chatPaneId) {
+            const m = e.pane.mode ?? 'deep';
+            if (m !== lastSentMode) syncSession(false);
+          }
         });
         const sessionPoll = setInterval(() => syncSession(false), 10_000);
         const teardown = () => {
@@ -974,7 +1534,16 @@ export function attachWsServer(deps: {
             replay,
             // Discount the echo the user's own typing produces from busy
             // detection (see PtydCache.noteInput / markBusy).
-            onInput: () => deps.cache.noteInput(pane.id),
+            onInput: () => {
+              deps.cache.noteInput(pane.id);
+              // Living sidebar: typing in a terminal pane is activity too.
+              // THROTTLED (one DB write per tab per 60s) — this fires per
+              // keystroke frame, so it is exactly the noisy signal the
+              // throttle exists for. pane.tab_id is captured at upgrade time
+              // and is stale only if the pane was moved mid-attach, which
+              // costs at most one bump on the wrong tab.
+              activity.touchTab(pane.tab_id);
+            },
           });
         })
         .catch(() => {
@@ -988,10 +1557,12 @@ export function attachWsServer(deps: {
   });
 
   return {
+    sweepDeadRunners,
     close: () =>
       new Promise<void>((resolve) => {
         clearInterval(heartbeat);
         clearInterval(respawnSweep);
+        for (const paneId of [...probation.keys()]) clearProbation(paneId);
         for (const client of wss.clients) {
           try {
             client.terminate();

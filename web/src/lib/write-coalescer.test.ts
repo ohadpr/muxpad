@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { ChunkedWriter, SyncBlockExtractor } from './write-coalescer';
 
 describe('ChunkedWriter', () => {
@@ -9,7 +9,10 @@ describe('ChunkedWriter', () => {
   beforeEach(() => {
     writes = [];
     // Synchronous RAF for deterministic tests.
-    raf = (cb) => { cb(0); return 0; };
+    raf = (cb) => {
+      cb(0);
+      return 0;
+    };
     writer = new ChunkedWriter((s) => writes.push(s), { chunkSize: 8, raf });
   });
 
@@ -38,7 +41,10 @@ describe('SyncBlockExtractor', () => {
 
   beforeEach(() => {
     writes = [];
-    raf = (cb) => { cb(0); return 0; };
+    raf = (cb) => {
+      cb(0);
+      return 0;
+    };
     extractor = new SyncBlockExtractor((s) => writes.push(s), { raf });
   });
 

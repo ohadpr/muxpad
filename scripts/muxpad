@@ -26,12 +26,45 @@ PTYD_SOCKET="${MUXPAD_PTYD_SOCKET:-$DATA_DIR/ptyd.sock}"
 
 mkdir -p "$DATA_DIR"
 
+# ─── launchd awareness ───────────────────────────────────────────────────────
+# When the daemons run as launchd jobs (docs/launchd.md), launchd owns the
+# processes and there are no pid files. A pid-file-only check then reports
+# "not running" for a daemon that has been up for days — and `start` happily
+# spawns a SECOND one to fight over :7777 and the ptyd socket. Ask launchctl
+# first, and route stop/restart through it so we never race KeepAlive (which
+# would just resurrect whatever we killed).
+LAUNCHD_MAIN="dev.muxpad"
+LAUNCHD_PTYD="dev.muxpad.ptyd"
+
+launchd_loaded() {
+  launchctl print "gui/$UID/$1" >/dev/null 2>&1
+}
+
+# Echo the job's pid; empty when the job isn't loaded or isn't running.
+launchd_pid() {
+  launchctl print "gui/$UID/$1" 2>/dev/null |
+    awk -F'= ' '/^[[:space:]]*pid = /{gsub(/[^0-9]/, "", $2); print $2; exit}'
+}
+
 is_running() {
+  [ -n "$(launchd_pid "$LAUNCHD_MAIN")" ] && return 0
   [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
 }
 
 is_ptyd_running() {
+  [ -n "$(launchd_pid "$LAUNCHD_PTYD")" ] && return 0
   [ -f "$PID_FILE_PTYD" ] && kill -0 "$(cat "$PID_FILE_PTYD")" 2>/dev/null
+}
+
+# Which pid to show/signal for a daemon: launchd's if it owns it, else ours.
+running_pid() {
+  local label="$1" pid_file="$2" pid
+  pid="$(launchd_pid "$label")"
+  if [ -n "$pid" ]; then
+    echo "$pid"
+    return
+  fi
+  [ -f "$pid_file" ] && cat "$pid_file"
 }
 
 # Send SIGTERM, wait, escalate to SIGKILL. Removes the pid file at the end.
@@ -118,7 +151,18 @@ resolve_host() {
 
 cmd_start() {
   if is_running; then
-    echo "already running (PID $(cat "$PID_FILE"))"
+    echo "already running (PID $(running_pid "$LAUNCHD_MAIN" "$PID_FILE"))"
+    cmd_status
+    return
+  fi
+
+  # Loaded-but-stopped launchd jobs: hand the start back to launchd instead of
+  # spawning a rival copy it doesn't supervise.
+  if launchd_loaded "$LAUNCHD_MAIN"; then
+    echo "launchd-managed — kickstarting the jobs"
+    launchd_loaded "$LAUNCHD_PTYD" && launchctl kickstart "gui/$UID/$LAUNCHD_PTYD" >/dev/null 2>&1 || true
+    launchctl kickstart "gui/$UID/$LAUNCHD_MAIN" >/dev/null 2>&1 || true
+    sleep 0.6
     cmd_status
     return
   fi
@@ -267,6 +311,25 @@ cmd_stop() {
   if [ "$stop_all" = "1" ]; then
     teardown_tailscale_serve
   fi
+
+  # Under launchd, KeepAlive respawns anything we SIGTERM — a plain kill would
+  # look like it worked and the daemon would be back a second later. Booting
+  # the job out is the real stop; it stays down until `muxpad start` (kickstart
+  # via the bootstrap below) or the next login.
+  if launchd_loaded "$LAUNCHD_MAIN"; then
+    echo "muxpad: launchd job $LAUNCHD_MAIN — booting out"
+    launchctl bootout "gui/$UID/$LAUNCHD_MAIN" 2>/dev/null || true
+    if [ "$stop_all" = "1" ] && launchd_loaded "$LAUNCHD_PTYD"; then
+      echo "ptyd: launchd job $LAUNCHD_PTYD — booting out (this kills every pane)"
+      launchctl bootout "gui/$UID/$LAUNCHD_PTYD" 2>/dev/null || true
+      [ -S "$PTYD_SOCKET" ] && rm -f "$PTYD_SOCKET"
+    elif is_ptyd_running; then
+      echo "ptyd: still running (PID $(running_pid "$LAUNCHD_PTYD" "$PID_FILE_PTYD")) — use 'muxpad stop --all' to stop it too"
+    fi
+    echo "note: both jobs come back at next login (RunAtLoad); re-arm now with 'muxpad start'"
+    return
+  fi
+
   stop_pid_file "muxpad" "$PID_FILE"
 
   if [ "$stop_all" = "1" ]; then
@@ -275,7 +338,7 @@ cmd_stop() {
     [ -S "$PTYD_SOCKET" ] && rm -f "$PTYD_SOCKET"
   else
     if is_ptyd_running; then
-      echo "ptyd: still running (PID $(cat "$PID_FILE_PTYD")) — use 'muxpad stop --all' to stop it too"
+      echo "ptyd: still running (PID $(running_pid "$LAUNCHD_PTYD" "$PID_FILE_PTYD")) — use 'muxpad stop --all' to stop it too"
     fi
   fi
 }
@@ -288,6 +351,21 @@ cmd_restart() {
       *) echo "muxpad restart: unknown flag '$a'" >&2; exit 1 ;;
     esac
   done
+
+  # launchd restarts a job in place (`kickstart -k`) without ever leaving it
+  # stopped, so there's no window for KeepAlive to race a manual start. Same
+  # rule as by hand: main only, unless --all — bouncing ptyd kills every pane.
+  if launchd_loaded "$LAUNCHD_MAIN"; then
+    if [ "$restart_all" = "1" ] && launchd_loaded "$LAUNCHD_PTYD"; then
+      echo "restarting $LAUNCHD_PTYD (kills every pane)"
+      launchctl kickstart -k "gui/$UID/$LAUNCHD_PTYD" >/dev/null
+    fi
+    echo "restarting $LAUNCHD_MAIN"
+    launchctl kickstart -k "gui/$UID/$LAUNCHD_MAIN" >/dev/null
+    sleep 0.6
+    cmd_status
+    return
+  fi
 
   if [ "$restart_all" = "1" ]; then
     cmd_stop --all || true
@@ -302,10 +380,11 @@ cmd_status() {
   # muxpad
   if is_running; then
     local pid url
-    pid="$(cat "$PID_FILE")"
+    pid="$(running_pid "$LAUNCHD_MAIN" "$PID_FILE")"
     url="$(grep -oE 'http://[^[:space:]]+' "$LOG_FILE" 2>/dev/null | tail -1 || true)"
     echo "muxpad:"
     echo "  running (PID $pid)"
+    launchd_loaded "$LAUNCHD_MAIN" && echo "  owner: launchd ($LAUNCHD_MAIN, KeepAlive)"
     [ -n "$url" ] && echo "  url:  $url"
     echo "  log:  $LOG_FILE"
     echo "  data: $DATA_DIR"
@@ -316,9 +395,10 @@ cmd_status() {
   # ptyd
   if is_ptyd_running; then
     local pid
-    pid="$(cat "$PID_FILE_PTYD")"
+    pid="$(running_pid "$LAUNCHD_PTYD" "$PID_FILE_PTYD")"
     echo "ptyd:"
     echo "  running (PID $pid)"
+    launchd_loaded "$LAUNCHD_PTYD" && echo "  owner:  launchd ($LAUNCHD_PTYD, KeepAlive)"
     echo "  socket: $PTYD_SOCKET"
     echo "  log:    $LOG_FILE_PTYD"
   else
@@ -666,8 +746,10 @@ cmd_workspace_list() {
   res="$(http_request GET /api/workspaces)"
   print_table "$res" \
     'ID:.id' \
-    'NAME:.name' \
-    'TABS:.tab_count'
+    'STATUS:(.status // "idle")' \
+    'AGENTS:(.agents // 0)' \
+    'TABS:.tab_count' \
+    'NAME:.name'
 }
 
 cmd_workspace_delete() {
@@ -740,8 +822,14 @@ cmd_tab_list() {
   fi
   local res
   res="$(http_request GET "/api/tabs?workspaceId=$workspace_id")"
+  # STATUS/AGENTS/PIN are what the living sidebar shows; the CLI listed only
+  # id + name, so a scripted or terminal-only view of a workspace could not
+  # tell a tab waiting on an answer from an empty one.
   print_table "$res" \
     'ID:.id' \
+    'PIN:(if .pinned then "*" else "" end)' \
+    'STATUS:(.status // (if .busy then "working" else "idle" end))' \
+    'AGENTS:(.agents // 0)' \
     'NAME:.name'
 }
 
@@ -782,13 +870,36 @@ cmd_tab() {
 
 # ─── pane ───────────────────────────────────────────────────────────────────
 
+# Refuse to DEFAULT new panes into a hidden system tab:
+# its layout is never shown in any sidebar, so a pane grafted there silently
+# vanishes. Fires only when --tab came from the MUXPAD_TAB_ID env default —
+# an explicit --tab is always honored. The check keys on the sibling
+# MUXPAD_WORKSPACE_ID env var (set together with MUXPAD_TAB_ID by ptyd), one
+# cheap lookup; when jq is missing or the lookup fails, err on permissive.
+guard_hidden_default_tab() {
+  [ -n "${MUXPAD_WORKSPACE_ID:-}" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  local hidden
+  hidden="$(http_request GET '/api/workspaces?all=1' 2>/dev/null |
+    jq -r --arg id "$MUXPAD_WORKSPACE_ID" \
+      '[.[] | select(.id == $id)] | (.[0].hidden // false) | tostring' 2>/dev/null || echo false)"
+  if [ "$hidden" = "true" ]; then
+    echo "muxpad: you're in the hidden system tab — a pane created here would be invisible; pass --tab=<id> (and --target=<paneId>) to place it in a visible tab" >&2
+    exit 1
+  fi
+}
+
 cmd_pane_new() {
   reset_flags tab cmd cwd direction target name
   parse_flags tab cmd cwd direction target name -- "$@"
-  local tab_id="${FLAG_tab:-${MUXPAD_TAB_ID:-}}"
+  local tab_id="${FLAG_tab:-}"
   if [ -z "$tab_id" ]; then
-    echo "muxpad: --tab=<id> required (no MUXPAD_TAB_ID in env)" >&2
-    exit 1
+    tab_id="${MUXPAD_TAB_ID:-}"
+    if [ -z "$tab_id" ]; then
+      echo "muxpad: --tab=<id> required (no MUXPAD_TAB_ID in env)" >&2
+      exit 1
+    fi
+    guard_hidden_default_tab
   fi
   # Map the spatial direction to the server's (direction, position) wire
   # format. Server thinks in (row/column axis, before/after target);
@@ -857,6 +968,44 @@ cmd_pane_rename() {
 }
 
 cmd_pane_list() {
+  # --all: flat list of every pane across all workspaces (the supervisor's
+  # "org chart"), one line each:
+  #   <pane-id>  <ws>/<tab>  <face>  <status>  <title|foreground_cmd>
+  #
+  # <status> is the pane's FULL five-state status (blocked|working|dead|ready|
+  # idle), not the old busy/idle pair. `busy` is a deprecated alias for exactly
+  # one of those five (working), so printing it collapsed "waiting on you",
+  # "the runner died" and "finished, unreviewed" all into "idle" — the three
+  # states a supervisor most needs to see. The `// (if .busy …)` fallback is for
+  # an older server that ships `busy` but no `status`: its working panes still
+  # read "working", everything else "idle".
+  local a rest=()
+  local all=0
+  for a in "$@"; do
+    case "$a" in
+      --all) all=1 ;;
+      *) rest+=("$a") ;;
+    esac
+  done
+  if [ "$all" = "1" ]; then
+    local res
+    res="$(http_request GET /api/panes)"
+    if [ "$JSON_OUTPUT" = "1" ]; then
+      printf '%s\n' "$res"
+      return
+    fi
+    # Match print_table's empty-result behaviour — this branch hand-rolls its
+    # output (one line per pane, no columns) and used to print nothing at all,
+    # which reads as "the command broke" rather than "no panes".
+    if [ "$(printf '%s' "$res" | jq 'length')" = "0" ]; then
+      printf '%s(none)%s\n' "$C_DIM" "$C_RESET"
+      return
+    fi
+    printf '%s' "$res" | jq -r '.[] |
+      "\(.id)  \(.workspace_name)/\(.tab_name)  \(.face)  \(.status // (if .busy then "working" else "idle" end))  \(.name // .title // .foreground_cmd // .url // "")"'
+    return
+  fi
+  set -- ${rest[@]+"${rest[@]}"}
   reset_flags tab
   parse_flags tab -- "$@"
   local tab_id="${FLAG_tab:-${MUXPAD_TAB_ID:-}}"
@@ -903,10 +1052,14 @@ cmd_pane_open() {
     exit 1
   fi
   local url="${POSITIONAL[0]}"
-  local tab_id="${FLAG_tab:-${MUXPAD_TAB_ID:-}}"
+  local tab_id="${FLAG_tab:-}"
   if [ -z "$tab_id" ]; then
-    echo "muxpad: --tab=<id> required (no MUXPAD_TAB_ID in env)" >&2
-    exit 1
+    tab_id="${MUXPAD_TAB_ID:-}"
+    if [ -z "$tab_id" ]; then
+      echo "muxpad: --tab=<id> required (no MUXPAD_TAB_ID in env)" >&2
+      exit 1
+    fi
+    guard_hidden_default_tab
   fi
   # Same direction → (axis, position) translation as cmd_pane_new.
   local axis position
@@ -932,22 +1085,140 @@ cmd_pane_open() {
   print_created pane "$res"
 }
 
+# `muxpad pane read [<id>]` — print a terminal pane's scrollback (the ring
+# buffer a fresh attach would replay), ANSI-stripped so it's grep-able.
+# --raw keeps the escape sequences; --lines=N trims to the last N lines.
+cmd_pane_read() {
+  local id='' lines='' raw=0 a no_more_flags=0
+  for a in "$@"; do
+    if [ "$no_more_flags" = "1" ]; then
+      id="$a"
+      continue
+    fi
+    case "$a" in
+      --) no_more_flags=1 ;; # end of flags — the rest is positional verbatim
+      --lines=*) lines="${a#--lines=}" ;;
+      --raw) raw=1 ;;
+      --*) echo "muxpad: unknown flag '$a'" >&2; exit 1 ;;
+      *) id="$a" ;;
+    esac
+  done
+  id="${id:-${MUXPAD_PANE_ID:-}}"
+  if [ -z "$id" ]; then
+    echo "usage: muxpad pane read [<id>] [--lines=N] [--raw]   (id defaults to MUXPAD_PANE_ID)" >&2
+    exit 1
+  fi
+  local qs=''
+  [ -n "$lines" ] && qs="?lines=$lines"
+  if [ "$raw" = "1" ]; then
+    if [ -n "$qs" ]; then qs+='&raw=1'; else qs='?raw=1'; fi
+  fi
+  http_request GET "/api/panes/$id/scrollback$qs"
+}
+
+# `muxpad pane send <id> "text"` — type into a terminal pane's live pty.
+# Appends Enter by default (the dominant use is "run this command");
+# --no-enter inverts. --key=<name> (repeatable) sends named keys instead:
+# enter, esc, tab, up, down, left, right, ctrl-a … ctrl-z. Refused (400)
+# by the server when the pane has no live pty.
+cmd_pane_send() {
+  local id='' text='' have_text=0 enter=1 a no_more_flags=0
+  local keys=()
+  for a in "$@"; do
+    # `--` ends flag parsing so text that itself starts with '-' can be sent:
+    #   muxpad pane send <id> -- "--help"
+    if [ "$no_more_flags" = "0" ]; then
+      case "$a" in
+        --) no_more_flags=1; continue ;;
+        --no-enter) enter=0; continue ;;
+        --key=*) keys+=("${a#--key=}"); continue ;;
+        --*) echo "muxpad: unknown flag '$a'" >&2; exit 1 ;;
+      esac
+    fi
+    if [ -z "$id" ]; then
+      id="$a"
+    elif [ "$have_text" = "0" ]; then
+      text="$a"; have_text=1
+    else
+      echo "muxpad pane send: too many arguments" >&2
+      exit 1
+    fi
+  done
+  if [ -z "$id" ] || { [ "$have_text" = "0" ] && [ "${#keys[@]}" = "0" ]; }; then
+    echo 'usage: muxpad pane send <id> "text" [--no-enter]' >&2
+    echo '       muxpad pane send <id> --key=<name> [--key=<name>…]' >&2
+    exit 1
+  fi
+  if [ "$have_text" = "1" ] && [ "${#keys[@]}" -gt 0 ]; then
+    echo "muxpad pane send: text and --key are mutually exclusive" >&2
+    exit 1
+  fi
+  local body
+  if [ "${#keys[@]}" -gt 0 ]; then
+    local keys_json
+    keys_json="$(printf '%s\n' "${keys[@]}" | jq -R . | jq -sc .)"
+    body="{\"keys\":$keys_json}"
+  else
+    local enter_json=false
+    [ "$enter" = "1" ] && enter_json=true
+    body="{\"text\":$(json_string "$text"),\"enter\":$enter_json}"
+  fi
+  http_request POST "/api/panes/$id/input" "$body" >/dev/null
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '{"sent":"%s"}\n' "$id"
+  else
+    printf '%s✓%s input sent to %s\n' "$C_GREEN" "$C_RESET" "$id"
+  fi
+}
+
+# `muxpad pane summarize [<id>]` — 1–2 sentence deliverable summary of an
+# agent pane's conversation (the same summary the doc surface's collapsed
+# agent block shows). Best-effort server-side; empty when there's nothing.
+cmd_pane_summarize() {
+  reset_flags
+  parse_flags -- "$@"
+  local id="${POSITIONAL[0]:-${MUXPAD_PANE_ID:-}}"
+  if [ -z "$id" ]; then
+    echo "usage: muxpad pane summarize [<id>]   (id defaults to MUXPAD_PANE_ID)" >&2
+    exit 1
+  fi
+  local res
+  res="$(http_request POST "/api/panes/$id/summarize")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$res"
+    return
+  fi
+  local title summary
+  title="$(printf '%s' "$res" | jq -r '.title // empty')"
+  summary="$(printf '%s' "$res" | jq -r '.summary // empty')"
+  [ -n "$title" ] && printf '%s%s%s\n' "$C_BOLD" "$title" "$C_RESET"
+  if [ -n "$summary" ]; then
+    printf '%s\n' "$summary"
+  else
+    printf '%s(no summary — pane has no agent conversation yet)%s\n' "$C_DIM" "$C_RESET"
+  fi
+  printf '%s' "$res" | jq -r '.artifacts[]? | "  artifact: \(.)"'
+}
+
 cmd_pane() {
   local verb="${1:-}"
   if [ -z "$verb" ]; then
-    echo "usage: muxpad pane {new|list|delete|open|rename}" >&2
+    echo "usage: muxpad pane {new|list|read|send|delete|open|rename|summarize}" >&2
     exit 1
   fi
   shift
   case "$verb" in
     new) cmd_pane_new "$@" ;;
     list) cmd_pane_list "$@" ;;
+    read) cmd_pane_read "$@" ;;
+    send) cmd_pane_send "$@" ;;
     delete) cmd_pane_delete "$@" ;;
     open) cmd_pane_open "$@" ;;
     rename) cmd_pane_rename "$@" ;;
+    summarize) cmd_pane_summarize "$@" ;;
     *)
       echo "muxpad: unknown pane verb '$verb'" >&2
-      echo "usage: muxpad pane {new|list|delete|open|rename}" >&2
+      echo "usage: muxpad pane {new|list|read|send|delete|open|rename|summarize}" >&2
       exit 1
       ;;
   esac
@@ -988,6 +1259,42 @@ cmd_open() {
   else
     printf '%s✓%s requested external open: %s\n' "$C_GREEN" "$C_RESET" "$url"
   fi
+}
+
+# `muxpad watch [--types=a,b]` — stream the daemon's event bus to stdout,
+# one event per line, until killed. This is `tail -f` over the whole mosaic:
+# pane/tab/workspace changes plus agent_turn start/done/fatal. Curls the SSE
+# mirror (GET /api/events) rather than holding a WS open — bash-friendly.
+# --types filters server-side; --json prints the raw MuxpadEvent JSON,
+# default is a compact human one-liner per event.
+cmd_watch() {
+  reset_flags types
+  parse_flags types -- "$@"
+  require_api_url
+  local qs=''
+  [ -n "${FLAG_types:-}" ] && qs="?types=$FLAG_types"
+  # -N: no output buffering — events must land as they happen, not in 4k
+  # chunks. SSE frames are `data: <json>` lines; comments (`: hb`
+  # heartbeats, `: connected` handshake) and blank separators are dropped.
+  local line payload
+  curl -sN "${MUXPAD_API_URL%/}/api/events$qs" | while IFS= read -r line; do
+    case "$line" in
+      data:*)
+        payload="${line#data:}"
+        payload="${payload# }"
+        if [ "$JSON_OUTPUT" = "1" ]; then
+          printf '%s\n' "$payload"
+        else
+          printf '%s' "$payload" | jq -r '
+            if .type == "agent_turn" then
+              "\(.type)  \(.pane_id)  \(.phase)  \(.backend)\(if .sid then "  sid=\(.sid)" else "" end)"
+            else
+              "\(.type)  \(.pane_id // .pane.id // .tab_id // .tab.id // .workspace_id // .workspace.id // .url // "")"
+            end'
+        fi
+        ;;
+    esac
+  done
 }
 
 # `muxpad app-url <url> [--label=<text>]` declares the web app THIS pane is
@@ -1106,14 +1413,17 @@ cmd_claude() {
     exit 1
   fi
 
-  # Respect user-supplied --session-id / --settings; only inject ours when
-  # absent.
-  local user_has_sid=0 user_has_settings=0 user_is_resume=0 a
+  # Respect user-supplied --session-id / --settings / system-prompt flags;
+  # only inject ours when absent.
+  local user_has_sid=0 user_has_settings=0 user_is_resume=0 user_has_sysprompt=0 a
   for a in "$@"; do
     case "$a" in
       --session-id|--session-id=*) user_has_sid=1 ;;
       --settings|--settings=*) user_has_settings=1 ;;
       --resume|--resume=*|-r|--continue|-c) user_is_resume=1 ;;
+      --system-prompt|--system-prompt=*|--system-prompt-file|--system-prompt-file=*|\
+      --append-system-prompt|--append-system-prompt=*|--append-system-prompt-file|--append-system-prompt-file=*)
+        user_has_sysprompt=1 ;;
     esac
   done
 
@@ -1137,6 +1447,39 @@ cmd_claude() {
     extra+=(--settings "$settings_file")
   else
     echo "muxpad claude: --settings supplied; skipping hook injection (this session won't be web-switchable)" >&2
+  fi
+
+  # Universal muxpad instructions — the server-GENERATED
+  # <dataDir>/agent-instructions.md followed by the user's
+  # <dataDir>/agent-notes.md, the same order every backend injects them in.
+  # Appended via claude's native --append-system-prompt, which works for the
+  # interactive TUI too. Skipped when the user passed any system-prompt flag of
+  # their own; a missing/empty file simply contributes nothing (never an error).
+  #
+  # ⚡ Do mode rides the SAME flag, appended after the instructions (behavior
+  # last, matching the SDK backend's append order). The pane's mode is read
+  # from the API with a tolerant grep — jq is NOT required for `muxpad claude`
+  # and adding a hard dependency here would break launching the TUI on a box
+  # without it. Every step is best-effort: a down server, an old server with
+  # no `mode` field, or a missing file all fall through to Deep, which is the
+  # historical behavior.
+  if [ "$user_has_sysprompt" = "0" ]; then
+    local sysprompt="" part
+    for part in agent-instructions.md agent-notes.md; do
+      [ -s "$DATA_DIR/$part" ] || continue
+      sysprompt="${sysprompt:+$sysprompt$'\n\n'}$(cat "$DATA_DIR/$part")"
+    done
+    if [ -s "$DATA_DIR/do-mode.md" ] && [ -n "${MUXPAD_API_URL:-}" ]; then
+      local pane_mode
+      pane_mode="$(curl -sS --max-time 3 \
+        "${MUXPAD_API_URL%/}/api/panes/$MUXPAD_PANE_ID" 2>/dev/null \
+        | grep -o '"mode"[[:space:]]*:[[:space:]]*"[a-z]*"' \
+        | head -1 | grep -o '[a-z]*"$' | tr -d '"')" || pane_mode=""
+      if [ "$pane_mode" = "do" ]; then
+        sysprompt="${sysprompt:+$sysprompt$'\n\n'}$(cat "$DATA_DIR/do-mode.md")"
+      fi
+    fi
+    [ -n "$sysprompt" ] && extra+=(--append-system-prompt "$sysprompt")
   fi
 
   # Pre-register (best-effort; the launch must succeed even if the daemon is
@@ -1174,17 +1517,46 @@ cmd_claude() {
 # processing immediately, and prints the tab's URL. The runner needs a couple
 # of seconds to boot inside the fresh pane, so the send polls until accepted.
 cmd_agent_new() {
-  reset_flags workspace cwd name model
-  parse_flags workspace cwd name model -- "$@"
+  reset_flags workspace cwd name model mode
+  parse_flags workspace cwd name model mode -- "$@"
   local message="${POSITIONAL[0]:-}"
   if [ -z "$message" ]; then
-    echo 'usage: muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] "first message"' >&2
+    echo 'usage: muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] [--mode=do|deep] "first message"' >&2
     exit 1
   fi
-  local workspace_id="${FLAG_workspace:-${MUXPAD_WORKSPACE_ID:-}}"
+  # Agent behavior mode (see agent-modes.ts): 'do' overlays the terse,
+  # decisive contract; 'deep' (the default) is muxpad's historical behavior.
+  # Validated HERE as well as server-side so a typo fails loudly instead of
+  # silently spawning a deep-mode worker you asked to be fast.
+  case "${FLAG_mode:-deep}" in
+    do|deep) ;;
+    *) echo "muxpad: --mode must be 'do' or 'deep' (got '$FLAG_mode')" >&2; exit 1 ;;
+  esac
+  local workspace_id="${FLAG_workspace:-}"
   if [ -z "$workspace_id" ]; then
-    echo "muxpad: --workspace=<id> required (no MUXPAD_WORKSPACE_ID in env)" >&2
-    exit 1
+    workspace_id="${MUXPAD_WORKSPACE_ID:-}"
+    if [ -z "$workspace_id" ]; then
+      echo "muxpad: --workspace=<id> required (no MUXPAD_WORKSPACE_ID in env)" >&2
+      exit 1
+    fi
+    # A pane living in a hidden system workspace inherits a hidden
+    # MUXPAD_WORKSPACE_ID — a worker spawned there would be an invisible tab
+    # no sidebar ever shows. Only the CLI knows the id was a
+    # defaulted env value rather than an explicit --workspace, so the
+    # fallback lives here, not on the server: delegation must just work,
+    # while explicit targeting (even of a hidden workspace) stays untouched.
+    local ws_all hidden
+    ws_all="$(http_request GET '/api/workspaces?all=1')"
+    hidden="$(printf '%s' "$ws_all" | jq -r --arg id "$workspace_id" \
+      '[.[] | select(.id == $id)] | (.[0].hidden // false) | tostring')"
+    if [ "$hidden" = "true" ]; then
+      workspace_id="$(printf '%s' "$ws_all" | jq -r '[.[] | select(.hidden | not)][0].id // empty')"
+      if [ -z "$workspace_id" ]; then
+        echo "muxpad: current workspace is the hidden system workspace and no visible workspace exists — create one (muxpad workspace new) or pass --workspace=<id>" >&2
+        exit 1
+      fi
+      echo "muxpad: current workspace is hidden — spawning the worker in the first visible workspace (pass --workspace=<id> to target another)" >&2
+    fi
   fi
   local cwd="${FLAG_cwd:-$PWD}"
   local body
@@ -1195,6 +1567,8 @@ cmd_agent_new() {
   # Model rides the pane's startup command (`muxpad agent --model <m>`), so it
   # also survives ptyd restarts / resumes. Server-validated charset.
   [ -n "${FLAG_model:-}" ] && body+=",\"model\":$(json_string "$FLAG_model")"
+  # Mode rides the pane row AND its startup command, so a respawn keeps it.
+  [ -n "${FLAG_mode:-}" ] && body+=",\"mode\":$(json_string "$FLAG_mode")"
   body+='}'
   local tab_json tab_id tab_slug
   tab_json="$(http_request POST /api/tabs "$body")"
@@ -1227,8 +1601,10 @@ cmd_agent_new() {
   done
   rm -f "$tmp"
   # Compose a clickable URL (wildcard bind isn't connectable — show loopback).
+  # ?all=1: an explicitly-targeted hidden workspace is filtered from the
+  # default list, and a silent empty slug would break the printed URL.
   local ws_slug base url
-  ws_slug="$(http_request GET /api/workspaces | jq -r --arg id "$workspace_id" '.[] | select(.id == $id) | .slug')"
+  ws_slug="$(http_request GET '/api/workspaces?all=1' | jq -r --arg id "$workspace_id" '.[] | select(.id == $id) | .slug')"
   base="${MUXPAD_API_URL%/}"
   base="${base/0.0.0.0/127.0.0.1}"
   url="$base/w/${ws_slug:-$workspace_id}/t/$tab_slug"
@@ -1243,14 +1619,222 @@ cmd_agent_new() {
   fi
 }
 
-cmd_agent() {
-  # `muxpad agent new …` is the HTTP launcher; anything else is the in-pane
-  # runner itself (including the server-written `muxpad agent --resume <sid>`).
-  if [ "${1:-}" = "new" ]; then
-    shift
-    cmd_agent_new "$@"
-    return
+# `muxpad agent list` — every tracked agent session across all panes.
+cmd_agent_list() {
+  local res
+  res="$(http_request GET /api/agent-sessions)"
+  # TURN, not STATUS. `agent_sessions.status` is running|idle — the session's
+  # TURN state — and is a different vocabulary from the pane/tab/workspace
+  # `status` (blocked|working|dead|ready|idle) the other list commands print.
+  # Two meanings under one column header is how a supervisor misreads its own
+  # org chart, so the narrower one gets the narrower name.
+  print_table "$res" \
+    'PANE:.pane_id' \
+    'BACKEND:.assistant' \
+    'MODE:(.mode // "deep")' \
+    'TURN:.status' \
+    'VIEW:.view_mode' \
+    'SID:(.current_sid // "-")'
+}
+
+# `muxpad agent send <paneId> "message"` — deliver a message to the pane's
+# agent runner via the server-side queue. Exit codes: 0 sent, 0 queued
+# (behind an in-flight turn; noted on stderr), 1 rejected (reason printed).
+cmd_agent_send() {
+  reset_flags
+  parse_flags -- "$@"
+  if [ "${#POSITIONAL[@]}" -lt 2 ]; then
+    echo 'usage: muxpad agent send <paneId> "message"' >&2
+    exit 1
   fi
+  require_api_url
+  local pane_id="${POSITIONAL[0]}"
+  local message="${POSITIONAL[1]}"
+  # Drive curl directly (not http_request): a 409 rejection carries
+  # {ok:false, reason} — we want the reason on stderr + exit 1, not the
+  # generic HTTP-error dump.
+  local tmp status
+  tmp="$(mktemp)"
+  status="$(curl -sS -o "$tmp" -w '%{http_code}' \
+    -X POST -H 'content-type: application/json' \
+    --data "{\"text\":$(json_string "$message")}" \
+    "${MUXPAD_API_URL%/}/api/agent-sessions/$pane_id/send" || echo 000)"
+  if [ "$status" = "202" ]; then
+    local queued
+    queued="$(jq -r '.queued // false' "$tmp" 2>/dev/null || echo false)"
+    rm -f "$tmp"
+    if [ "$queued" = "true" ]; then
+      echo "muxpad: agent busy — message queued, will run after the current turn" >&2
+    fi
+    if [ "$JSON_OUTPUT" = "1" ]; then
+      printf '{"ok":true,"queued":%s}\n' "$queued"
+    else
+      printf '%s✓%s message %s to %s\n' "$C_GREEN" "$C_RESET" \
+        "$([ "$queued" = "true" ] && echo queued || echo sent)" "$pane_id"
+    fi
+    return 0
+  fi
+  local reason
+  reason="$(jq -r '.reason // empty' "$tmp" 2>/dev/null || true)"
+  rm -f "$tmp"
+  printf '%smuxpad: agent send rejected (HTTP %s)%s%s\n' \
+    "$C_RED" "$status" "${reason:+ — $reason}" "$C_RESET" >&2
+  exit 1
+}
+
+# `muxpad agent transcript <paneId> [--tail=N]` — last N normalized transcript
+# events as JSONL (role, text, tool-use summaries), whatever the backend.
+cmd_agent_transcript() {
+  reset_flags tail
+  parse_flags tail -- "$@"
+  local pane_id="${POSITIONAL[0]:-}"
+  if [ -z "$pane_id" ]; then
+    echo 'usage: muxpad agent transcript <paneId> [--tail=N]' >&2
+    exit 1
+  fi
+  local qs=''
+  [ -n "${FLAG_tail:-}" ] && qs="?tail=$FLAG_tail"
+  http_request GET "/api/agent-sessions/$pane_id/transcript$qs"
+}
+
+# `muxpad agent wait <paneId> [--timeout=SEC]` — block until the pane's agent
+# finishes its turn: the orchestration workhorse (run it in the background via
+# Bash and get re-invoked when a worker finishes — tokenless waiting).
+# Exit codes: 0 turn done (or agent already idle), 2 the pane's runner
+# reported fatal, 3 --timeout elapsed, 1 plumbing failure (stream died, pane
+# has no agent session).
+#
+# Idle detection reads `turn_active` from GET /api/agent-sessions/by-pane —
+# the runner registry's REAL turn state. Deliberately not the pane `busy`
+# flag: busy also trips on raw pty output activity, so a worker whose
+# terminal streams (dev-server logs) would read busy forever and the wait
+# would never take its already-idle exit. A pane with no agent session at
+# all is an error (exit 1), not "already idle".
+#
+# Race-free by ordering: SUBSCRIBE FIRST (the server writes its `: connected`
+# handshake only after our bus subscription is registered), and only then read
+# the pane's current turn state — a turn that ends between the check and the
+# subscription is impossible; one that ended before the check reads as idle.
+cmd_agent_wait() {
+  reset_flags timeout
+  parse_flags timeout -- "$@"
+  local pane_id="${POSITIONAL[0]:-}"
+  if [ -z "$pane_id" ]; then
+    echo 'usage: muxpad agent wait <paneId> [--timeout=SEC]' >&2
+    exit 1
+  fi
+  require_api_url
+  local timeout="${FLAG_timeout:-}"
+  if [ -n "$timeout" ] && ! [[ "$timeout" =~ ^[0-9]+$ ]]; then
+    echo "muxpad: --timeout must be a whole number of seconds (got '$timeout')" >&2
+    exit 1
+  fi
+  local tmpdir fifo curl_pid=''
+  tmpdir="$(mktemp -d)"
+  fifo="$tmpdir/events"
+  mkfifo "$fifo"
+  # shellcheck disable=SC2064  # expand tmpdir now; curl_pid is late-bound
+  trap "kill \"\$curl_pid\" 2>/dev/null; rm -rf '$tmpdir'" EXIT
+  # An untrapped INT/TERM kills the shell WITHOUT running the EXIT trap —
+  # the fifo/tmpdir would leak. Convert signals into an exit, which fires it.
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  # 1. Subscribe FIRST. The fifo write-open and our read-open rendezvous,
+  #    so no events are lost between curl starting and us reading.
+  curl -sN "${MUXPAD_API_URL%/}/api/events?types=agent_turn" > "$fifo" &
+  curl_pid=$!
+  # Detach from job control so the EXIT-trap kill doesn't print a
+  # "Terminated" job notice over our own output.
+  disown "$curl_pid" 2>/dev/null || true
+  exec 3< "$fifo"
+  local deadline='' checked=0 line payload phase rc
+  [ -n "$timeout" ] && deadline=$((SECONDS + timeout))
+  while :; do
+    rc=0
+    if [ -n "$deadline" ]; then
+      local remaining=$((deadline - SECONDS))
+      [ "$remaining" -le 0 ] && exit 3
+      IFS= read -r -t "$remaining" line <&3 || rc=$?
+    else
+      IFS= read -r line <&3 || rc=$?
+    fi
+    if [ "$rc" -ne 0 ]; then
+      # `read -t` reports timeout as >128 on bash 4+, but as plain 1 on the
+      # macOS stock bash 3.2 — the deadline is the portable signal.
+      if [ -n "$deadline" ] && [ "$SECONDS" -ge "$deadline" ]; then
+        echo "muxpad: timed out after ${timeout}s waiting on $pane_id" >&2
+        exit 3
+      fi
+      [ "$rc" -gt 128 ] && exit 3 # read timed out (racing the deadline)
+      echo "muxpad: event stream closed — is the daemon up at $MUXPAD_API_URL?" >&2
+      exit 1
+    fi
+    # An event line may beat the busy check below (it fired between the
+    # server subscribing us and us checking) — handle it first, never drop it.
+    case "$line" in
+      data:*)
+        payload="${line#data:}"
+        payload="${payload# }"
+        phase="$(printf '%s' "$payload" | jq -r --arg id "$pane_id" \
+          'select(.type == "agent_turn" and .pane_id == $id) | .phase' 2>/dev/null || true)"
+        case "$phase" in
+          done)
+            if [ "$JSON_OUTPUT" = "1" ]; then
+              printf '{"pane_id":%s,"result":"done"}\n' "$(json_string "$pane_id")"
+            else
+              printf '%s✓%s agent turn done (%s)\n' "$C_GREEN" "$C_RESET" "$pane_id"
+            fi
+            exit 0
+            ;;
+          fatal)
+            echo "muxpad: agent in pane $pane_id reported fatal" >&2
+            exit 2
+            ;;
+        esac
+        ;;
+    esac
+    # 2. First line from the server = subscription confirmed → NOW read the
+    #    current turn state once. Already idle (or between turns) returns
+    #    immediately; from here on the stream alone decides.
+    if [ "$checked" = "0" ]; then
+      checked=1
+      local state_tmp state_status turn
+      state_tmp="$tmpdir/state"
+      state_status="$(curl -sS -o "$state_tmp" -w '%{http_code}' \
+        "${MUXPAD_API_URL%/}/api/agent-sessions/by-pane/$pane_id" || echo 000)"
+      if [ "$state_status" = "404" ]; then
+        echo "muxpad: no agent session for pane $pane_id — agent wait only works on agent panes" >&2
+        exit 1
+      fi
+      if [ "$state_status" != "200" ]; then
+        echo "muxpad: could not read agent state for $pane_id (HTTP $state_status)" >&2
+        exit 1
+      fi
+      # turn_active is the runner's real turn state (never pty `busy`).
+      turn="$(jq -r '.turn_active // false | tostring' "$state_tmp" 2>/dev/null || echo false)"
+      if [ "$turn" != "true" ]; then
+        if [ "$JSON_OUTPUT" = "1" ]; then
+          printf '{"pane_id":%s,"result":"idle"}\n' "$(json_string "$pane_id")"
+        else
+          printf '%s✓%s agent already idle (%s)\n' "$C_GREEN" "$C_RESET" "$pane_id"
+        fi
+        exit 0
+      fi
+    fi
+  done
+}
+
+cmd_agent() {
+  # `muxpad agent new|list|send|transcript|wait …` are HTTP verbs; anything else is
+  # the in-pane runner itself (including the server-written
+  # `muxpad agent --resume <sid>`).
+  case "${1:-}" in
+    new) shift; cmd_agent_new "$@"; return ;;
+    list) shift; require_jq; cmd_agent_list "$@"; return ;;
+    send) shift; require_jq; cmd_agent_send "$@"; return ;;
+    transcript) shift; require_jq; cmd_agent_transcript "$@"; return ;;
+    wait) shift; require_jq; cmd_agent_wait "$@"; return ;;
+  esac
   if [ -z "${MUXPAD_PANE_ID:-}" ]; then
     echo "muxpad agent: must be run inside a muxpad pane (no MUXPAD_PANE_ID)" >&2
     exit 1
@@ -1261,6 +1845,745 @@ cmd_agent() {
     exit 1
   fi
   exec node "$runner" "$@"
+}
+
+
+# ─── cron ──────────────────────────────────────────────────────────────────
+# `muxpad cron` — durable, server-owned schedules
+# (docs/plans/2026-08-14-muxpad-cron.md). Unlike a harness's built-in cron,
+# these survive restarts, catch up after downtime, never expire, are visible
+# from anywhere, and can be fired by hand before you trust them.
+
+# Resolve a --pane value to a pane id. Accepts an id verbatim, the pane's
+# `name`, or empty (= this pane, $MUXPAD_PANE_ID) — typing a ulid is miserable,
+# and the natural gesture is running `muxpad cron new` from inside the pane you
+# mean.
+cron_resolve_pane() {
+  local ref="$1"
+  if [ -z "$ref" ]; then
+    if [ -z "${MUXPAD_PANE_ID:-}" ]; then
+      echo "muxpad: --pane with no value means THIS pane, but MUXPAD_PANE_ID is unset (not inside a muxpad pane)" >&2
+      exit 1
+    fi
+    printf '%s' "$MUXPAD_PANE_ID"
+    return
+  fi
+  local panes match
+  panes="$(http_request GET /api/panes)"
+  match="$(printf '%s' "$panes" | jq -r --arg r "$ref" \
+    '[.[] | select(.id == $r)] | .[0].id // empty')"
+  if [ -z "$match" ]; then
+    match="$(printf '%s' "$panes" | jq -r --arg r "$ref" \
+      '[.[] | select((.name // "") == $r)] | .[0].id // empty')"
+  fi
+  if [ -z "$match" ]; then
+    echo "muxpad: no pane with id or name '$ref' (try: muxpad pane list --all)" >&2
+    exit 1
+  fi
+  printf '%s' "$match"
+}
+
+cmd_cron_new() {
+  # `--pane` and `--new-tab` are BARE mode flags (parse_flags would eat the
+  # next argument as their value), so pre-strip them the way cmd_search does
+  # with --sessions. `--pane=<id|name>` still comes through parse_flags.
+  # Pre-strip the flags parse_flags can't take: BARE mode flags (it would eat
+  # the next argument as their value) and hyphenated names (it evals
+  # FLAG_<name>=, and `FLAG_on-context` is not a legal shell variable).
+  local a rest=() target='' pane_ref='' close_flag='' on_context='' max_open=''
+  for a in "$@"; do
+    case "$a" in
+      --pane) target=pane ;;
+      --pane=*) target=pane; pane_ref="${a#--pane=}" ;;
+      --new-tab) target=new-tab ;;
+      --no-close) close_flag=false ;;
+      --close) close_flag=true ;;
+      --on-context=*) on_context="${a#--on-context=}" ;;
+      --max-open=*) max_open="${a#--max-open=}" ;;
+      *) rest+=("$a") ;;
+    esac
+  done
+  set -- ${rest[@]+"${rest[@]}"}
+  reset_flags name at tz workspace cwd model backend mode catchup overlap quiet
+  parse_flags name at tz workspace cwd model backend mode catchup overlap quiet -- "$@"
+  local prompt="${POSITIONAL[0]:-}"
+  if [ -z "$target" ] || [ -z "${FLAG_at:-}" ] || [ -z "$prompt" ]; then
+    cat >&2 <<'USAGE'
+usage: muxpad cron new --name=<name> --at='<cron expr | daily at 09:00 | every 30m>'
+         (--pane[=<id|name>] | --new-tab [--workspace=<id>])
+         [--tz=America/Los_Angeles] [--cwd=<dir>] [--model=<m>] [--backend=claude|codex|cursor]
+         [--mode=do|deep] [--catchup=once|skip|all] [--overlap=skip|queue]
+         [--on-context=fire|compact-first|rotate|skip] [--quiet=<mins>]
+         [--max-open=<n>] [--no-close] "prompt"
+
+  --pane with no value targets THIS pane ($MUXPAD_PANE_ID) — the usual gesture.
+  --new-tab spawns a fresh agent tab per fire (clean context, no drift) and
+  closes it when the run finishes cleanly; --no-close keeps it.
+USAGE
+    exit 1
+  fi
+  local name="${FLAG_name:-}"
+  if [ -z "$name" ]; then
+    echo "muxpad: --name=<name> required" >&2
+    exit 1
+  fi
+  local body
+  body="{\"name\":$(json_string "$name"),\"schedule\":$(json_string "$FLAG_at"),\"prompt\":$(json_string "$prompt")"
+  if [ "$target" = "pane" ]; then
+    local pane_id
+    pane_id="$(cron_resolve_pane "$pane_ref")"
+    body+=",\"target_kind\":\"pane\",\"target_pane\":$(json_string "$pane_id")"
+  else
+    local workspace_id="${FLAG_workspace:-${MUXPAD_WORKSPACE_ID:-}}"
+    if [ -z "$workspace_id" ]; then
+      echo "muxpad: --workspace=<id> required for --new-tab (no MUXPAD_WORKSPACE_ID in env)" >&2
+      exit 1
+    fi
+    body+=",\"target_kind\":\"new-tab\",\"workspace_id\":$(json_string "$workspace_id")"
+    body+=",\"cwd\":$(json_string "${FLAG_cwd:-$PWD}")"
+  fi
+  [ -n "${FLAG_tz:-}" ] && body+=",\"tz\":$(json_string "$FLAG_tz")"
+  [ -n "${FLAG_model:-}" ] && body+=",\"model\":$(json_string "$FLAG_model")"
+  [ -n "${FLAG_backend:-}" ] && body+=",\"backend\":$(json_string "$FLAG_backend")"
+  [ -n "${FLAG_mode:-}" ] && body+=",\"mode\":$(json_string "$FLAG_mode")"
+  [ -n "${FLAG_catchup:-}" ] && body+=",\"catchup\":$(json_string "$FLAG_catchup")"
+  [ -n "${FLAG_overlap:-}" ] && body+=",\"overlap\":$(json_string "$FLAG_overlap")"
+  [ -n "$on_context" ] && body+=",\"on_context\":$(json_string "$on_context")"
+  # Numeric fields go in unquoted — validate here so a typo is a CLI error
+  # rather than a 400 from the server.
+  if [ -n "${FLAG_quiet:-}" ]; then
+    case "$FLAG_quiet" in (*[!0-9]*|'') echo "muxpad: --quiet must be a whole number of minutes" >&2; exit 1 ;; esac
+    body+=",\"quiet_mins\":$FLAG_quiet"
+  fi
+  if [ -n "$max_open" ]; then
+    case "$max_open" in (*[!0-9]*|'') echo "muxpad: --max-open must be a whole number" >&2; exit 1 ;; esac
+    body+=",\"max_open\":$max_open"
+  fi
+  [ -n "$close_flag" ] && body+=",\"close_when_done\":$close_flag"
+  body+='}'
+  local res
+  res="$(http_request POST /api/crons "$body")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$res"
+    return
+  fi
+  printf '%s✓%s cron created\n' "$C_GREEN" "$C_RESET"
+  printf '  %sid:%s       %s\n' "$C_DIM" "$C_RESET" "$(printf '%s' "$res" | jq -r '.id')"
+  printf '  %sschedule:%s %s (%s)\n' "$C_DIM" "$C_RESET" \
+    "$(printf '%s' "$res" | jq -r '.schedule')" "$(printf '%s' "$res" | jq -r '.tz')"
+  printf '  %snext:%s     %s\n' "$C_DIM" "$C_RESET" \
+    "$(printf '%s' "$res" | jq -r '.next_due_at | (. / 1000 | strflocaltime("%a %d %b %H:%M"))')"
+  printf '  %stest it:%s  muxpad cron run %s\n' "$C_DIM" "$C_RESET" "$name"
+}
+
+cmd_cron_list() {
+  local res
+  res="$(http_request GET /api/crons)"
+  print_table "$res" \
+    'NAME:.name' \
+    'SCHEDULE:.schedule' \
+    'TZ:.tz' \
+    'TARGET:(if .target_kind == "pane" then "pane " + (.target_pane // "?") else "new-tab" end)' \
+    'ON:(if .enabled then "yes" else "no" end)' \
+    'NEXT:(.next_due_at / 1000 | strflocaltime("%a %d %b %H:%M"))' \
+    'LAST:(if .last_fire_at then (.last_fire_at / 1000 | strflocaltime("%d %b %H:%M")) else "-" end)' \
+    'STATUS:(.last_status // "-")' \
+    'FAILS:(.fail_streak | tostring)' \
+    'ID:.id'
+}
+
+cmd_cron_show() {
+  local ref="${1:-}"
+  if [ -z "$ref" ]; then
+    echo 'usage: muxpad cron show <id|name>' >&2
+    exit 1
+  fi
+  local res
+  res="$(http_request GET "/api/crons/$ref")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$res"
+    return
+  fi
+  printf '%s' "$res" | jq -r '
+    "name:      \(.name)",
+    "id:        \(.id)",
+    "schedule:  \(.schedule)  (\(.tz))",
+    "target:    \(if .target_kind == "pane" then "pane " + (.target_pane // "?") else "new-tab in workspace " + (.workspace_id // "?") end)",
+    "enabled:   \(.enabled)",
+    "policies:  catchup=\(.catchup) overlap=\(.overlap) on_context=\(.on_context) quiet=\(.quiet_mins)m" +
+      (if .target_kind == "new-tab" then " max_open=\(.max_open) close_when_done=\(.close_when_done)" else "" end),
+    "next due:  \(.next_due_at / 1000 | strflocaltime("%a %d %b %Y %H:%M"))",
+    "last:      \(if .last_fire_at then (.last_fire_at / 1000 | strflocaltime("%a %d %b %H:%M")) + "  " + (.last_status // "") else "never" end)",
+    "fails:     \(.fail_streak)",
+    "",
+    "prompt:",
+    (.prompt | split("\n") | map("  " + .) | join("\n")),
+    "",
+    "runs:"'
+  printf '%s' "$res" | jq -r '.runs // [] |
+    if length == 0 then "  (none yet)"
+    else .[] | "  \(.fired_at / 1000 | strflocaltime("%d %b %H:%M"))  \(.outcome)\(if .detail then "  — " + .detail else "" end)"
+    end'
+}
+
+cmd_cron_run() {
+  local ref="${1:-}"
+  if [ -z "$ref" ]; then
+    echo 'usage: muxpad cron run <id|name>' >&2
+    exit 1
+  fi
+  local res
+  res="$(http_request POST "/api/crons/$ref/run" '{}')"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$res"
+    return
+  fi
+  local outcome detail
+  outcome="$(printf '%s' "$res" | jq -r '.outcome // "?"')"
+  detail="$(printf '%s' "$res" | jq -r '.detail // empty')"
+  case "$outcome" in
+    sent|queued)
+      printf '%s✓%s fired — %s%s\n' "$C_GREEN" "$C_RESET" "$outcome" "${detail:+ ($detail)}"
+      ;;
+    *)
+      printf '%s✗%s not delivered — %s%s\n' "$C_RED" "$C_RESET" "$outcome" "${detail:+ ($detail)}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+cron_set_enabled() {
+  local ref="$1" enabled="$2" verb="$3"
+  if [ -z "$ref" ]; then
+    echo "usage: muxpad cron $verb <id|name>" >&2
+    exit 1
+  fi
+  local res
+  res="$(http_request PATCH "/api/crons/$ref" "{\"enabled\":$enabled}")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$res"
+    return
+  fi
+  local cron_name state
+  cron_name="$(printf '%s' "$res" | jq -r '.name')"
+  if [ "$enabled" = true ]; then
+    state="resumed — next $(printf '%s' "$res" | jq -r '.next_due_at / 1000 | strflocaltime("%a %d %b %H:%M")')"
+  else
+    state='paused'
+  fi
+  printf '%s✓%s %s %s\n' "$C_GREEN" "$C_RESET" "$cron_name" "$state"
+}
+
+cmd_cron_rm() {
+  local ref="${1:-}"
+  if [ -z "$ref" ]; then
+    echo 'usage: muxpad cron rm <id|name>' >&2
+    exit 1
+  fi
+  http_request DELETE "/api/crons/$ref" >/dev/null
+  printf '%s✓%s cron %s removed\n' "$C_GREEN" "$C_RESET" "$ref"
+}
+
+cmd_cron() {
+  require_jq
+  case "${1:-}" in
+    new) shift; cmd_cron_new "$@" ;;
+    list|ls) shift; cmd_cron_list "$@" ;;
+    show) shift; cmd_cron_show "$@" ;;
+    run) shift; cmd_cron_run "$@" ;;
+    pause) shift; cron_set_enabled "${1:-}" false pause ;;
+    resume) shift; cron_set_enabled "${1:-}" true resume ;;
+    rm|delete) shift; cmd_cron_rm "$@" ;;
+    *)
+      cat >&2 <<'USAGE'
+usage: muxpad cron <command>
+
+  new     create a schedule (see `muxpad cron new` for flags)
+  list    every schedule: target, next due, last run, failure streak
+  show    one schedule in full, with its run history
+  run     fire it NOW — test it before you trust it
+  pause   stop firing (keeps the schedule)
+  resume  start firing again, re-anchored to the next slot
+  rm      delete it
+USAGE
+      exit 1
+      ;;
+  esac
+}
+
+# `muxpad search "query" [--limit=N]` — full-text search across every
+# archived agent session (the muxpad-owned raw transcript mirrors, see
+# docs/plans/2026-08-28-session-archive.md). The query is a raw FTS5 MATCH
+# expression (AND/OR/NEAR/"phrases"); a syntax error server-side falls back
+# to a plain phrase match. `muxpad search --sessions [--cwd=X]` lists the
+# archived sessions instead.
+cmd_search() {
+  # `--sessions` is a bare mode flag, not a --key=value pair — pre-strip it.
+  local mode=search
+  local rest=()
+  for a in "$@"; do
+    case "$a" in
+      --sessions) mode=sessions ;;
+      *) rest+=("$a") ;;
+    esac
+  done
+  if [ "$mode" = "sessions" ]; then
+    reset_flags cwd limit
+    parse_flags cwd limit -- "${rest[@]+"${rest[@]}"}"
+    local qs="?limit=${FLAG_limit:-100}"
+    [ -n "$FLAG_cwd" ] && qs="$qs&cwd=$(jq -rn --arg v "$FLAG_cwd" '$v|@uri')"
+    local res
+    res="$(http_request GET "/api/archive/sessions$qs")"
+    if [ "$JSON_OUTPUT" = "1" ]; then
+      printf '%s\n' "$res"
+      return
+    fi
+    print_table "$(printf '%s' "$res" | jq '.sessions')" \
+      'SID:.sid' \
+      'BACKEND:(.assistant // "-")' \
+      'PANE:(.pane_id // "-")' \
+      'CWD:(.cwd // "-")' \
+      'LAST:(if .last_ts then (.last_ts / 1000 | strflocaltime("%Y-%m-%d %H:%M")) else "-" end)'
+    return
+  fi
+  reset_flags limit sid role
+  parse_flags limit sid role -- "${rest[@]+"${rest[@]}"}"
+  local query="${POSITIONAL[0]:-}"
+  if [ -z "$query" ]; then
+    echo 'usage: muxpad search "query" [--limit=N] [--sid=SID] [--role=ROLE] | muxpad search --sessions [--cwd=X]' >&2
+    exit 1
+  fi
+  # Mirror the server's 1 KiB cap client-side: FTS5 evaluates the expression
+  # synchronously and a huge one freezes the server's main thread.
+  if [ "${#query}" -gt 1024 ]; then
+    echo 'muxpad: search query too long (max 1024 bytes)' >&2
+    exit 1
+  fi
+  local qs="?q=$(jq -rn --arg v "$query" '$v|@uri')&limit=${FLAG_limit:-20}"
+  [ -n "$FLAG_sid" ] && qs="$qs&sid=$(jq -rn --arg v "$FLAG_sid" '$v|@uri')"
+  [ -n "$FLAG_role" ] && qs="$qs&role=$(jq -rn --arg v "$FLAG_role" '$v|@uri')"
+  local res
+  res="$(http_request GET "/api/search$qs")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$res"
+    return
+  fi
+  if [ "$(printf '%s' "$res" | jq '.hits | length')" = "0" ]; then
+    echo "no matches"
+    return
+  fi
+  # One block per hit: snippet, then dim provenance line.
+  printf '%s' "$res" | jq -r '.hits[] | [
+      (.snippet | gsub("[\n\t]+"; " ")),
+      (.sid + "  " + .role
+        + (if .ts then "  " + (.ts / 1000 | strflocaltime("%Y-%m-%d %H:%M")) else "" end)
+        + (if .session.cwd then "  " + .session.cwd else "" end))
+    ] | @tsv' |
+    while IFS=$'\t' read -r snippet prov; do
+      printf '%s\n' "$snippet"
+      printf '  %s%s%s\n' "$C_DIM" "$prov" "$C_RESET"
+    done
+}
+
+# ─── publish ────────────────────────────────────────────────────────────────
+# Host a file or directory at a PUBLIC internet URL (Tailscale Funnel → the
+# dedicated public static port). The URL is the one thing printed on stdout,
+# so `url=$(muxpad publish report.html)` just works; warnings go to stderr.
+
+# Locate the tailscale binary: MUXPAD_TAILSCALE_BIN (tests stub it — the
+# real one must never run there) > PATH > the macOS app bundle. Prints the
+# path, or nothing when unavailable. Always exits 0.
+find_tailscale() {
+  if [ -n "${MUXPAD_TAILSCALE_BIN:-}" ]; then
+    [ -x "$MUXPAD_TAILSCALE_BIN" ] && echo "$MUXPAD_TAILSCALE_BIN"
+    return 0
+  fi
+  if command -v tailscale >/dev/null 2>&1; then
+    echo tailscale
+    return 0
+  fi
+  if [ -x "/Applications/Tailscale.app/Contents/MacOS/Tailscale" ]; then
+    echo "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+  fi
+  return 0
+}
+
+# Best-effort public-base-url discovery from THIS shell. The daemon runs
+# under launchd, where the macOS Tailscale app CLI refuses to run (CLIError
+# 3) — but it works fine from user/pane shells. So the CLI ensures the
+# funnel and reads Self.DNSName here, and hands the server a
+# `public_base_url` hint to persist. EVERY failure is silent (empty output):
+# the server's fallback chain (persisted globals → local URL + warning)
+# copes without us.
+publish_base_url() {
+  local ts dns
+  ts="$(find_tailscale)"
+  [ -z "$ts" ] && return 0
+  local pport="${MUXPAD_PUBLIC_PORT:-7778}"
+  # Idempotent on tailscaled's side; re-running with the same mapping no-ops.
+  "$ts" funnel --bg --https=8443 "http://127.0.0.1:$pport" >/dev/null 2>&1 || true
+  dns="$("$ts" status --json 2>/dev/null | jq -r '.Self.DNSName // empty' 2>/dev/null | sed 's/\.*$//')" || true
+  [ -n "$dns" ] && printf 'https://%s:8443' "$dns"
+  return 0
+}
+
+cmd_publish() {
+  # Bare mode flags (like `search --sessions`) — pre-strip them.
+  # Bare mode flags AND the hyphenated `--set-base` are pre-stripped: parse_flags
+  # eval-assigns `FLAG_<name>`, and `FLAG_set-base` is not a legal shell
+  # identifier — `reset_flags` fails outright on it, taking every `publish`
+  # invocation down with it. Same trap the cron verbs pre-strip around.
+  local mode=publish
+  local rest=()
+  local set_base=''
+  local a
+  while [ $# -gt 0 ]; do
+    a="$1"
+    case "$a" in
+      --list) mode=list ;;
+      --base) mode=base ;;
+      --clear-base) mode=clear-base ;;
+      --set-base=*) set_base="${a#--set-base=}" ;;
+      --set-base)
+        shift
+        set_base="${1:-}"
+        [ -z "$set_base" ] && { echo 'muxpad publish: --set-base requires a url' >&2; exit 1; }
+        ;;
+      *) rest+=("$a") ;;
+    esac
+    shift
+  done
+  reset_flags name rm update
+  parse_flags name rm update -- "${rest[@]+"${rest[@]}"}"
+
+  # `--set-base <url>` pins the origin every published link is built from.
+  #
+  # This exists because Tailscale Funnel's :8443 is blocked outbound on many
+  # real networks, so a discovered funnel url yields links that work for you and
+  # fail for whoever you send them to. Point this at a tunnel on standard :443
+  # (or a permanent domain) and every surface — publish output, `--list`, the
+  # Hosted UI — follows. A permanent domain is better set once in the daemon's
+  # MUXPAD_PUBLIC_BASE_URL, which outranks this pin.
+  if [ -n "$set_base" ]; then
+    local res
+    res="$(http_request PUT /api/publish/base "{\"url\":$(json_string "$set_base")}")"
+    if [ "$JSON_OUTPUT" = "1" ]; then printf '%s\n' "$res"; return; fi
+    printf '%s✓%s public base is now %s\n' "$C_GREEN" "$C_RESET" \
+      "$(printf '%s' "$res" | jq -r '.url')"
+    local w
+    w="$(printf '%s' "$res" | jq -r '.warning // empty')"
+    [ -n "$w" ] && printf '%smuxpad: %s%s\n' "$C_DIM" "$w" "$C_RESET" >&2
+    return
+  fi
+
+  if [ "$mode" = "clear-base" ]; then
+    local res
+    res="$(http_request DELETE /api/publish/base)"
+    printf '%s✓%s pin cleared; base is now %s\n' "$C_GREEN" "$C_RESET" \
+      "$(printf '%s' "$res" | jq -r '.url // "(none — links are local-only)"')"
+    return
+  fi
+
+  # `--base` shows what every link is being built from, and why.
+  if [ "$mode" = "base" ]; then
+    local res
+    res="$(http_request GET /api/publish/base)"
+    if [ "$JSON_OUTPUT" = "1" ]; then printf '%s\n' "$res"; return; fi
+    printf '%s' "$res" | jq -r '
+      "  base:      \(.url // "(none — links would be local-only)")",
+      "  from:      \(.source)",
+      "  reachable: \(if .reachable == null then "not checked" else .reachable end)"
+    '
+    local w
+    w="$(printf '%s' "$res" | jq -r '.warning // empty')"
+    [ -n "$w" ] && printf '  %swarning:   %s%s\n' "$C_DIM" "$w" "$C_RESET"
+    printf '  %scandidates (highest first):%s\n' "$C_DIM" "$C_RESET"
+    printf '%s' "$res" | jq -r '.candidates[] | "    \(.source)\t\(.url)"'
+    return
+  fi
+
+  if [ "$mode" = "list" ]; then
+    local res
+    res="$(http_request GET /api/publish)"
+    if [ "$JSON_OUTPUT" = "1" ]; then
+      printf '%s\n' "$res"
+      return
+    fi
+    print_table "$(printf '%s' "$res" | jq '.publishes')" \
+      'SLUG:.slug' \
+      'FILES:(.files | tostring)' \
+      'BYTES:(.bytes | tostring)' \
+      'VERS:((.versions // []) | length | tostring)' \
+      'CREATED:(.created / 1000 | strflocaltime("%Y-%m-%d %H:%M"))'
+    return
+  fi
+
+  if [ -n "$FLAG_rm" ]; then
+    http_request DELETE "/api/publish/$FLAG_rm" >/dev/null
+    echo "removed $FLAG_rm"
+    return
+  fi
+
+  # `--update <slug>` is `--name` with the create path CLOSED: the slug must
+  # already exist. That is the whole point — `--name` creates-or-replaces, so a
+  # typo quietly mints a NEW artifact (this is how six near-identical
+  # `acme-creative*` slugs came to exist instead of six versions of one), while
+  # --update turns the same typo into a readable 404.
+  local update_slug="${FLAG_update:-}"
+  if [ -n "$update_slug" ] && [ -n "$FLAG_name" ] && [ "$update_slug" != "$FLAG_name" ]; then
+    echo 'muxpad publish: --update and --name disagree; pass just one' >&2
+    exit 1
+  fi
+
+  local src="${POSITIONAL[0]:-}"
+  if [ -z "$src" ]; then
+    echo 'usage: muxpad publish <file-or-dir> [--name=slug | --update=slug] | --list | --rm <slug>' >&2
+    exit 1
+  fi
+  # The server requires an absolute path — resolve relative ones here.
+  case "$src" in
+    /*) ;;
+    *) src="$PWD/$src" ;;
+  esac
+  local body base_url slug
+  base_url="$(publish_base_url)"
+  slug="${update_slug:-$FLAG_name}"
+  body="{\"path\":$(json_string "$src")"
+  [ -n "$slug" ] && body="$body,\"name\":$(json_string "$slug")"
+  [ -n "$update_slug" ] && body="$body,\"update\":true"
+  [ -n "$base_url" ] && body="$body,\"public_base_url\":$(json_string "$base_url")"
+  body="$body}"
+  local res
+  res="$(http_request POST /api/publish "$body")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$res"
+    return
+  fi
+  local warning
+  warning="$(printf '%s' "$res" | jq -r '.warning // empty')"
+  [ -n "$warning" ] && printf '%smuxpad: %s%s\n' "$C_DIM" "$warning" "$C_RESET" >&2
+  # stdout is JUST the URL — script-friendly.
+  printf '%s' "$res" | jq -r '.url'
+}
+
+# ─── muxpad app — registered local web servers ───────────────────────────────
+#
+# An APP is a long-running local web server muxpad supervises WITHOUT it
+# occupying a tab. Under the hood it is a `muxpad serve` pane in a hidden
+# workspace: ptyd owns the process (so it survives a main-server restart), the
+# serve wrapper restarts a crashing command, and the serve supervisor rebuilds
+# the pty after a ptyd restart.
+#
+# `muxpad app` and `muxpad publish` are deliberately SEPARATE verbs. An app is a
+# private process; an artifact is public bytes. They share the Hosted view, not
+# a primitive.
+
+cmd_app_add() {
+  # Bare mode flags are pre-stripped: parse_flags treats `--foo` (no '=') as
+  # taking the NEXT argument as its value, and `FLAG_no-start` is not a legal
+  # shell variable name anyway. Same shape as `cron new`.
+  local rest=() start_flag='' autostart_flag='' a
+  for a in "$@"; do
+    case "$a" in
+      --no-start) start_flag=false ;;
+      --no-autostart) autostart_flag=false ;;
+      *) rest+=("$a") ;;
+    esac
+  done
+  reset_flags name cwd url slug
+  parse_flags name cwd url slug -- "${rest[@]+"${rest[@]}"}"
+  local url="${FLAG_url:-}"
+  # Everything after the flags (or after a bare --) is the command, verbatim.
+  local cmdv=("${POSITIONAL[@]:-}")
+  if [ -z "$url" ] || [ "${#POSITIONAL[@]}" -lt 1 ]; then
+    cat >&2 <<'USAGE'
+usage: muxpad app add --url=<url> [--name=<name>] [--slug=<slug>] [--cwd=<dir>]
+                      [--no-start] [--no-autostart] -- <command...>
+
+  e.g. muxpad app add --name=Notes --url=https://host.ts.net:4322 \
+         --cwd=~/notes -- ./start
+USAGE
+    exit 1
+  fi
+  local cwd="${FLAG_cwd:-$PWD}"
+  # `--cwd=~/notes` does NOT tilde-expand: neither bash nor zsh expands `~`
+  # after an `=` in a non-assignment word, so the shell hands us the literal
+  # string and the naive relative-path branch below would turn it into
+  # `$PWD/~/notes`, which the server rejects as "no such directory". Expand a
+  # leading `~/` ourselves — it is the form every example uses.
+  case "$cwd" in
+    '~') cwd="$HOME" ;;
+    '~/'*) cwd="$HOME/${cwd#'~/'}" ;;
+  esac
+  case "$cwd" in
+    /*) ;;
+    *) cwd="$PWD/$cwd" ;;
+  esac
+  local name="${FLAG_name:-$(basename "$cwd")}"
+  # Re-join the command into ONE line, which is what the server stores and the
+  # pane's shell runs. Each word is re-quoted with %q: the words arrived here
+  # already split by the caller's shell, so pasting them back together raw
+  # would silently destroy the original quoting —
+  #   `-- node app.js --msg "hello world"`  became  `node app.js --msg hello world`
+  # and anything containing a space, `;`, `$` or `*` was re-interpreted inside
+  # the pane. %q is the only way to rebuild a line that means what was typed.
+  local command_str=''
+  local a
+  for a in "${cmdv[@]}"; do
+    [ -n "$command_str" ] && command_str+=' '
+    command_str+="$(printf '%q' "$a")"
+  done
+
+  local body
+  body="{\"name\":$(json_string "$name"),\"cwd\":$(json_string "$cwd")"
+  body="$body,\"command\":$(json_string "$command_str"),\"url\":$(json_string "$url")"
+  [ -n "$FLAG_slug" ] && body="$body,\"slug\":$(json_string "$FLAG_slug")"
+  [ -n "$start_flag" ] && body="$body,\"start\":false"
+  [ -n "$autostart_flag" ] && body="$body,\"autostart\":false"
+  body="$body}"
+
+  local res
+  res="$(http_request POST /api/apps "$body")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$res"
+    return
+  fi
+  printf '%s✓%s app registered\n' "$C_GREEN" "$C_RESET"
+  printf '  %sslug:%s   %s\n' "$C_DIM" "$C_RESET" "$(printf '%s' "$res" | jq -r '.slug')"
+  printf '  %sstate:%s  %s\n' "$C_DIM" "$C_RESET" "$(printf '%s' "$res" | jq -r '.state')"
+  printf '  %surl:%s    %s\n' "$C_DIM" "$C_RESET" "$(printf '%s' "$res" | jq -r '.url')"
+}
+
+cmd_app_list() {
+  local res
+  res="$(http_request GET /api/apps)"
+  # WHY carries the url-health reason, but ONLY where it is a diagnosis. For a
+  # stopped app nothing is supposed to answer, so echoing "unreachable" there
+  # reads as a fault the user just caused on purpose; for a running one the
+  # reason is "ok", which is noise beside STATE.
+  print_table "$(printf '%s' "$res" | jq '.apps')" \
+    'SLUG:.slug' \
+    'STATE:.state' \
+    'URL:.url' \
+    'WHY:(if (.state == "stopped" or .state == "running") then "-" else (.health.reason // "-") end)' \
+    'CWD:.cwd' \
+    'NAME:.name'
+}
+
+cmd_app_show() {
+  local ref="${1:-}"
+  if [ -z "$ref" ]; then
+    echo 'usage: muxpad app show <slug|id>' >&2
+    exit 1
+  fi
+  local res
+  res="$(http_request GET "/api/apps/$ref")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$res"
+    return
+  fi
+  printf '%s\n' "$res" | jq -r '
+    "  slug:      \(.slug)",
+    "  name:      \(.name)",
+    "  state:     \(.state)",
+    "  url:       \(.url)",
+    "  cwd:       \(.cwd)",
+    "  command:   \(.command)",
+    "  autostart: \(.autostart)",
+    "  pty:       \(if .pty == null then "unknown (ptyd unreachable)" else .pty end)",
+    "  health:    \(if .health == null then "not probed" else "\(.health.reason) \(.health.status // "")" end)",
+    "  pane:      \(.pane_id // "-")"
+  '
+}
+
+# start | stop share a shape: POST /api/apps/<ref>/<verb>, print the new state.
+app_lifecycle() {
+  local verb="$1" ref="${2:-}"
+  if [ -z "$ref" ]; then
+    echo "usage: muxpad app $verb <slug|id>" >&2
+    exit 1
+  fi
+  local res
+  res="$(http_request POST "/api/apps/$ref/$verb")"
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    printf '%s\n' "$res"
+    return
+  fi
+  printf '%s✓%s %s → %s\n' "$C_GREEN" "$C_RESET" \
+    "$(printf '%s' "$res" | jq -r '.slug')" "$(printf '%s' "$res" | jq -r '.state')"
+}
+
+cmd_app_rm() {
+  local ref="${1:-}"
+  if [ -z "$ref" ]; then
+    echo 'usage: muxpad app rm <slug|id>' >&2
+    exit 1
+  fi
+  http_request DELETE "/api/apps/$ref" >/dev/null
+  printf '%s✓%s app %s removed\n' "$C_GREEN" "$C_RESET" "$ref"
+}
+
+# `app logs` prints the app's pane scrollback — the app IS a pane, so its logs
+# are that pane's terminal. Reuses `pane read` rather than growing a second
+# scrollback path.
+cmd_app_logs() {
+  # `--raw` is bare — pre-strip it (see cmd_app_add).
+  local rest=() raw='' a
+  for a in "$@"; do
+    case "$a" in
+      --raw) raw=1 ;;
+      *) rest+=("$a") ;;
+    esac
+  done
+  reset_flags lines
+  parse_flags lines -- "${rest[@]+"${rest[@]}"}"
+  local ref="${POSITIONAL[0]:-}"
+  if [ -z "$ref" ]; then
+    echo 'usage: muxpad app logs <slug|id> [--lines=N] [--raw]' >&2
+    exit 1
+  fi
+  local pane
+  pane="$(http_request GET "/api/apps/$ref" | jq -r '.pane_id // empty')"
+  if [ -z "$pane" ]; then
+    echo "muxpad: $ref is not running — no logs (start it first)" >&2
+    exit 1
+  fi
+  local args=("$pane")
+  [ -n "$FLAG_lines" ] && args+=("--lines=$FLAG_lines")
+  [ -n "$raw" ] && args+=(--raw)
+  cmd_pane_read "${args[@]}"
+}
+
+cmd_app() {
+  require_jq
+  case "${1:-}" in
+    add|new) shift; cmd_app_add "$@" ;;
+    list|ls) shift; cmd_app_list "$@" ;;
+    show) shift; cmd_app_show "$@" ;;
+    start) shift; app_lifecycle start "${1:-}" ;;
+    stop) shift; app_lifecycle stop "${1:-}" ;;
+    restart) shift; app_lifecycle stop "${1:-}" >/dev/null; app_lifecycle start "${1:-}" ;;
+    logs) shift; cmd_app_logs "$@" ;;
+    rm|delete) shift; cmd_app_rm "$@" ;;
+    *)
+      cat >&2 <<'USAGE'
+usage: muxpad app <command>
+
+  add      register a local web server muxpad keeps running, with NO tab
+  list     every app: slug, state, url, why-not-reachable, cwd, name
+  show     one app in full, including the measured pty + health signals
+  start    bring it up (and keep it up)
+  stop     take it down and leave it down
+  restart  stop then start
+  logs     the app's pane scrollback — an app IS a pane underneath
+  rm       unregister it and take it down
+
+`muxpad publish` is the other verb: static bytes at a PUBLIC url. An app is a
+private process; they share the Hosted view, not a primitive.
+USAGE
+      exit 1
+      ;;
+  esac
 }
 
 # Internal: SessionStart hook target installed by `muxpad claude`. Reads the
@@ -1309,11 +2632,11 @@ daemon control:
 
 HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
   workspace new [--name=<name>]
-  workspace list
+  workspace list                              id, status, agents, tab count, name
   workspace delete <id>
 
   tab new       [--workspace=<id>] [--name=<name>] [--bootstrap=shell|agent] [--cwd=<dir>]
-  tab list      [--workspace=<id>]
+  tab list      [--workspace=<id>]            id, pin, status, agents, name
   tab delete    <id>
 
   pane new      [--tab=<id>] [--cmd=<cmd>] [--cwd=<cwd>] [--name=<name>]
@@ -1326,9 +2649,34 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                               at the root.
   pane open     [--tab=<id>] [--direction=…] [--target=<id>] <url>
                                               iframe pane, same placement rules
-  pane list     [--tab=<id>]
+  pane list     [--tab=<id>] | --all          --all: every pane across all
+                                              workspaces, one line each:
+                                              <id> <ws>/<tab> <face> <status> <title>
+  pane read     [<id>] [--lines=N] [--raw]    print a terminal pane's scrollback,
+                                              ANSI-stripped (grep-able); --raw
+                                              keeps escapes, --lines trims to the
+                                              last N lines. id defaults to
+                                              MUXPAD_PANE_ID.
+  pane send     <id> "text" [--no-enter]      type into a terminal pane's live
+                                              pty; appends Enter unless
+                                              --no-enter. Refused if the pane
+                                              has no running pty. Use `--` before
+                                              text that starts with a dash.
+  pane send     <id> --key=<name> [...]       send named keys instead of text
+                                              (repeatable): enter esc tab up
+                                              down left right ctrl-a…ctrl-z
+                                              e.g. --key=ctrl-c
+  pane summarize [<id>]                       1–2 sentence deliverable summary
+                                              of an agent pane's conversation
   pane delete   <id>
   pane rename   [<id>] <name>                 id defaults to MUXPAD_PANE_ID
+
+  watch [--types=a,b]                stream the daemon's event bus to stdout,
+                                     one event per line, until killed —
+                                     pane/tab/workspace changes plus
+                                     agent_turn start/done/fatal. --types
+                                     filters (e.g. --types=agent_turn);
+                                     --json prints raw MuxpadEvent JSON.
 
   open <url>                         open <url> in a new real browser tab
                                      (like macOS `open` / Linux `xdg-open`).
@@ -1357,14 +2705,125 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      log. Auto-resumes across ptyd restarts via
                                      the pane's saved startup command.
   agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>]
-            [--model=<model>] "message"
+            [--model=<model>] [--mode=do|deep] "message"
                                      create an agent tab, send the first
                                      message so it starts working immediately,
                                      and print the tab's URL. cwd defaults to
                                      $PWD; workspace to MUXPAD_WORKSPACE_ID.
                                      --name labels the tab (skips AI auto-
                                      rename); --model pins the session model
-                                     (e.g. 'claude-opus-4-8[1m]').
+                                     (e.g. 'claude-opus-4-8[1m]'); --mode=do
+                                     starts it in Do mode (decisive, terse,
+                                     result-first) instead of the Deep default.
+  agent list                         every tracked agent session (pane id,
+                                     backend, mode, TURN, view, session id).
+                                     TURN is the session's running|idle turn
+                                     state — NOT the five-state pane/tab
+                                     `status` the list commands above print.
+  agent send <paneId> "message"      deliver a message to a pane's agent via
+                                     the server queue. exit 0 = sent/queued
+                                     (queued noted on stderr), 1 = rejected
+                                     (reason printed).
+  agent transcript <paneId> [--tail=N]
+                                     last N normalized transcript events as
+                                     JSONL (role, text, tool-use summaries) —
+                                     same shape for every backend.
+  agent wait <paneId> [--timeout=SEC]
+                                     block until that pane's agent finishes
+                                     its turn (run in the background to wait
+                                     tokenlessly). Keyed on real turn state,
+                                     not pty output. exit 0 = done or already
+                                     idle, 1 = not an agent pane, 2 = agent
+                                     fatal, 3 = timeout.
+  cron new --name=<n> --at='<schedule>' (--pane[=<id|name>] | --new-tab)
+           [--tz=<IANA>] [--cwd=<dir>] [--model=<m>] [--backend=<b>]
+           [--mode=do|deep] [--catchup=once|skip|all] [--overlap=skip|queue]
+           [--on-context=fire|compact-first|rotate|skip] [--quiet=<mins>]
+           [--max-open=<n>] [--no-close] "prompt"
+                                     a DURABLE schedule owned by muxpad, not by
+                                     an agent session: survives restarts,
+                                     catches up after downtime, never expires,
+                                     visible and editable from anywhere.
+                                     --at takes a cron expression ('0 9 * * 1-5')
+                                     or a phrase ('daily at 09:00', 'weekdays
+                                     at 09:00', 'every 30m'). --pane with no
+                                     value = THIS pane. --new-tab spawns a
+                                     fresh agent tab per fire (clean context)
+                                     and closes it when the run finishes.
+  cron list                          name, schedule, target, next due, last run,
+                                     last status, failure streak
+  cron show <id|name>                one schedule in full + its run history
+  cron run <id|name>                 fire it NOW — test before you trust it
+  cron pause|resume <id|name>        stop/start firing (resume re-anchors, so a
+                                     long pause doesn't replay)
+  cron rm <id|name>                  delete it
+  app add --url=<url> [--name=<n>] [--slug=<s>] [--cwd=<dir>]
+          [--no-start] [--no-autostart] -- <command...>
+                                     register a local web server muxpad keeps
+                                     running WITHOUT it occupying a tab. It runs
+                                     as a supervised pane in a hidden workspace:
+                                     ptyd owns the process (survives a server
+                                     restart), the command is restarted on
+                                     crash, and the pty is rebuilt after a ptyd
+                                     restart. Private — tailnet only.
+                                     e.g. muxpad app add --name=Notes \
+                                            --url=https://host.ts.net:4322 \
+                                            --cwd=~/notes -- ./start
+  app list                           slug, state, url, why-not-reachable, cwd.
+                                     state is MEASURED: starting | running |
+                                     unreachable | stopped | gave up.
+  app show <slug>                    one app in full, with the raw pty and
+                                     health signals behind its state
+  app start|stop|restart <slug>      stop leaves it down until you start it
+  app logs <slug> [--lines=N] [--raw]
+                                     the app's pane scrollback — an app IS a
+                                     pane underneath
+  app rm <slug>                      unregister and take it down
+
+  publish <file-or-dir> [--name=slug]
+                                     host a copy of the file/dir at a PUBLIC
+                                     internet URL (Tailscale Funnel, no
+                                     tailnet needed to view) and print that
+                                     URL on stdout. A lone .html file becomes
+                                     the slug's index page. --name pins the
+                                     slug ([a-z0-9-]); republishing a named
+                                     slug replaces it and rotates the previous
+                                     copy to /<slug>@2/ (3 kept). Random slugs
+                                     are unguessable (8 hex chars).
+  publish --update=<slug> <file-or-dir>
+                                     replace an EXISTING artifact. Unlike
+                                     --name it refuses to create, so a typo is
+                                     an error instead of a seventh near-
+                                     identical slug. Run `publish --list` first
+                                     and reuse the slug when updating the same
+                                     thing.
+  publish --list                     list published artifacts (slug, files,
+                                     bytes, versions, created)
+  publish --rm <slug>                unpublish, versions included (the funnel
+                                     stays up; run
+                                     `tailscale funnel --https=8443 off` to
+                                     close it entirely)
+  publish --base                     show the origin every published link is
+                                     built from, whether it is answering, and
+                                     the full candidate list
+  publish --set-base=<https://…>     pin that origin. Tailscale Funnel's :8443
+                                     is blocked outbound on many real networks,
+                                     so a discovered funnel URL gives links that
+                                     work for YOU and fail for whoever you send
+                                     them to. Point this at a tunnel on standard
+                                     :443 (or a permanent domain) and publish
+                                     output, --list and the Hosted view all
+                                     follow. A permanent domain is better set
+                                     once as MUXPAD_PUBLIC_BASE_URL on the
+                                     daemon, which outranks this pin.
+  publish --clear-base               drop the pin and fall back to discovery
+  search "query" [--limit=N] [--sid=SID] [--role=ROLE]
+                                     full-text search across every archived
+                                     agent session (FTS5 query syntax; falls
+                                     back to a phrase match on bad syntax)
+  search --sessions [--cwd=X] [--limit=N]
+                                     list archived sessions (sid, backend,
+                                     pane, cwd, last activity)
   claude [claude args...]            launch Claude Code in THIS pane as a
                                      muxpad-tracked session so it can be viewed
                                      and driven from the web chat (and switched
@@ -1396,7 +2855,7 @@ USAGE
 # into the HTTP branch.
 needs_http() {
   case "$1" in
-    workspace|tab|pane|open) return 0 ;;
+    workspace|tab|pane|open|watch|search|publish|app) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -1421,10 +2880,15 @@ case "$VERB" in
   tab) cmd_tab "${ARGS[@]:1}" ;;
   pane) cmd_pane "${ARGS[@]:1}" ;;
   open) cmd_open "${ARGS[@]:1}" ;;
+  watch) cmd_watch "${ARGS[@]:1}" ;;
   app-url) cmd_app_url "${ARGS[@]:1}" ;;
+  app) cmd_app "${ARGS[@]:1}" ;;
   serve) cmd_serve "${ARGS[@]:1}" ;;
   claude) cmd_claude "${ARGS[@]:1}" ;;
   agent) cmd_agent "${ARGS[@]:1}" ;;
+  cron) cmd_cron "${ARGS[@]:1}" ;;
+  search) cmd_search "${ARGS[@]:1}" ;;
+  publish) cmd_publish "${ARGS[@]:1}" ;;
   _agent-hook) cmd_agent_hook ;;
   ''|help|-h|--help) usage; [ "$VERB" = '' ] && exit 1 || exit 0 ;;
   *)

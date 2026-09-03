@@ -5,3 +5,5 @@ export * from './layout.js';
 export * from './ink-replay.js';
 export * from './tab-icons.js';
 export * from './attachments.js';
+export * from './cron.js';
+export * from './hosted.js';

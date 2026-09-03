@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
-import { runMigrations } from './migrations.js';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { TabStore } from './TabStore.js';
 import { WorkspaceStore } from './WorkspaceStore.js';
+import { runMigrations } from './migrations.js';
 
 describe('TabStore', () => {
   let store: TabStore;

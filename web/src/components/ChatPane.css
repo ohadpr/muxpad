@@ -15,7 +15,6 @@
   --chat-accent-fg: var(--accent-fg, #0b0c12);
   --chat-danger: var(--danger, #f7768e);
   --chat-user-bubble: color-mix(in srgb, var(--fg, #d7dae0) 9%, var(--bg, #12131a));
-  --chat-gutter-w: 26px;
   --chat-gutter-gap: 14px;
 
   display: flex;
@@ -48,6 +47,13 @@
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
+  /* Explicitly OFF. The browser's own scroll anchoring tries to hold the
+     reader's position when content above them resizes — which sounds like
+     what we want, but it fights the pinned-to-bottom re-assert (the
+     ResizeObserver in ChatPane): the engine pulls back toward the anchored
+     node in the same frame we push to the bottom, and which wins is not
+     specified. One owner of scroll position, and it's ours. */
+  overflow-anchor: none;
   scrollbar-width: thin;
   scrollbar-color: var(--chat-border-strong) transparent;
 }
@@ -155,30 +161,6 @@
 
 .chat-turn-user {
   justify-content: flex-end;
-}
-
-/* Assistant avatar dot + aligned continuation gutter (thinking / tools sit
-   under the same left rail, like one grouped ChatGPT turn). */
-.chat-avatar,
-.chat-gutter {
-  flex: 0 0 var(--chat-gutter-w);
-  width: var(--chat-gutter-w);
-  height: var(--chat-gutter-w);
-}
-.chat-avatar {
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  font-size: 13px;
-  line-height: 1;
-  color: var(--chat-accent-fg);
-  background: linear-gradient(
-    150deg,
-    var(--chat-accent),
-    color-mix(in srgb, var(--chat-accent) 58%, #000)
-  );
-  box-shadow: 0 2px 8px -3px color-mix(in srgb, var(--chat-accent) 65%, transparent);
-  margin-top: 1px;
 }
 
 /* Assistant message: full width, no bubble — text on the page. */
@@ -364,6 +346,13 @@
 .chat-md img {
   max-width: 100%;
   border-radius: 8px;
+  /* Reserve space BEFORE the bytes land. Without an intrinsic size a lazy
+     image occupies 0px until it decodes, then suddenly grows — shoving
+     everything below it down and leaving a pinned reader short of the
+     bottom ("comes back a little bit off"). A 3:2 placeholder is wrong for
+     any given image but far less wrong than zero, and it collapses to the
+     real ratio the moment dimensions are known. */
+  aspect-ratio: auto 3 / 2;
 }
 
 /* User message: soft raised bubble, ChatGPT-style. */
@@ -796,6 +785,15 @@
 .chat-sysnote-task .chat-sysnote-icon {
   color: var(--chat-accent);
 }
+/* A cron fire. Deliberately the same quiet pill as the other notices — the
+   point is "this turn was started by a schedule, not by you", which is a fact
+   about the message, not an alert. The clock matches the nav-row ⏱. */
+.chat-sysnote-cron .chat-sysnote-icon {
+  color: var(--chat-accent);
+}
+.chat-sysnote-cron .chat-sysnote-text {
+  font-variant-numeric: tabular-nums;
+}
 
 /* ── Diffs ─────────────────────────────────────────────────────────────── */
 .chat-diff {
@@ -1097,60 +1095,12 @@
   color: var(--chat-danger, #e5484d);
 }
 
-/* ── Footer status strip ───────────────────────────────────────────────── */
-.chat-footer {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 16px 8px;
-  color: var(--chat-faint);
-  font-size: 11.5px;
-  background: var(--chat-bg);
-}
-.chat-footer-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.chat-resume {
-  border: 1px solid var(--chat-border);
-  background: transparent;
-  color: var(--chat-dim);
-  font-family: inherit;
-  font-size: 11.5px;
-  padding: 3px 11px;
-  border-radius: 999px;
-  cursor: pointer;
-  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
-}
-.chat-resume:hover {
-  border-color: color-mix(in srgb, var(--chat-accent) 60%, var(--chat-border));
-  color: var(--chat-fg);
-  background: color-mix(in srgb, var(--chat-accent) 10%, transparent);
-}
-.chat-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex: 0 0 auto;
-}
-.chat-dot.on {
-  background: #3fb950;
-  box-shadow: 0 0 0 3px rgba(63, 185, 80, 0.18);
-}
-.chat-dot.off {
-  background: var(--chat-faint);
-}
-
 @media (prefers-reduced-motion: reduce) {
   .chat-turn,
   .chat-empty-spinner {
     animation: none;
   }
   .chat-send,
-  .chat-resume,
   .chat-composer {
     transition: none;
   }
@@ -1375,6 +1325,16 @@
   height: auto;
   max-width: 240px;
   max-height: 240px;
+  /* Thumbnails are lazy (loading="lazy"), so they contribute 0 height until
+     they decode and then jump to up to 240px — shoving everything below them
+     down and leaving a pinned reader short of the bottom. A ratio gives the
+     undecoded image a real box (default sizing: the largest 1:1 box that fits
+     300×150, i.e. 150×150, clamped by the maxes above). `auto` means the
+     image's OWN ratio wins the moment it reports one, so this governs only
+     the pre-decode gap and can never squash a real thumbnail — which is why
+     there's no min-height here: that would outlive the load and stretch
+     anything wider than 2:1. */
+  aspect-ratio: auto 1 / 1;
 }
 .chat-img-thumb:hover {
   border-color: var(--chat-accent);
@@ -1403,7 +1363,7 @@
   pointer-events: none;
 }
 .chat-media-play::after {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   margin: auto;
@@ -1543,6 +1503,102 @@
   background: rgba(0, 0, 0, 0.7);
 }
 
+/* ── "or open instead" — the alternatives, in the empty state ─────────────
+   Sits under the greeting where the eye already is. Quiet in tone (it is the
+   secondary path) but built from real buttons, not text links: the first
+   version was a tiny strip above the composer and read as decoration rather
+   than something you could press — especially on a phone. */
+.chat-open-instead {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-top: 22px;
+  width: 100%;
+}
+.chat-open-instead-lbl {
+  color: var(--fg-faint, #6f7488);
+  font-family: var(--chrome-font, inherit);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+}
+.chat-open-instead-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 420px;
+}
+.chat-open-instead-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  /* ≥44px tall including the border — Apple's minimum comfortable touch
+     target, which the old 20px text links were less than half of. */
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--border-strong, #3b4261) 65%, transparent);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg-dim, #a9b1d6);
+  font-family: var(--chrome-font, inherit);
+  font-size: 13px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+.chat-open-instead-btn svg {
+  flex: 0 0 auto;
+  /* The logos are the only colour here; keep them level with the label
+     rather than shouting over the house chat you're already in. */
+  opacity: 0.8;
+}
+.chat-open-instead-btn:hover:not(:disabled),
+.chat-open-instead-btn:active:not(:disabled) {
+  color: var(--fg, #d7dae0);
+  background: color-mix(in srgb, var(--fg, #d7dae0) 6%, transparent);
+  border-color: color-mix(in srgb, var(--border-strong, #3b4261) 100%, transparent);
+}
+.chat-open-instead-btn:hover:not(:disabled) svg {
+  opacity: 1;
+}
+.chat-open-instead-btn:focus-visible {
+  outline: 1px solid var(--accent, #7aa2f7);
+  outline-offset: 1px;
+}
+/* One conversion at a time — the rest dim while a respawn is in flight. */
+.chat-open-instead-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.chat-open-instead-btn[aria-busy="true"] {
+  opacity: 1;
+  color: var(--accent, #7aa2f7);
+  border-color: color-mix(in srgb, var(--accent, #7aa2f7) 55%, transparent);
+}
+.chat-open-instead-error {
+  max-width: 420px;
+  text-align: center;
+  color: var(--danger, #f7768e);
+  font-family: var(--chrome-font, inherit);
+  font-size: 12px;
+  line-height: 1.45;
+}
+/* Phones: two comfortable rows beat one cramped line. */
+@media (max-width: 520px) {
+  .chat-open-instead-row {
+    gap: 7px;
+  }
+  .chat-open-instead-btn {
+    padding: 10px 12px;
+    font-size: 12.5px;
+  }
+}
+
 /* Option C status bar: one segmented strip (folder | model | live) above
    the composer. Each segment opens its own upward panel; only one at a time. */
 .chat-status-bar {
@@ -1564,10 +1620,6 @@
   display: flex;
   min-width: 0;
   flex: 1 1 auto;
-}
-/* Live cell keeps its full label; folder/model absorb the squeeze. */
-.chat-status-seg-wrap:has(> .chat-status-seg.-live) {
-  flex: 0 0 auto;
 }
 .chat-status-seg-wrap + .chat-status-seg-wrap {
   border-left: 1px solid color-mix(in srgb, var(--border-strong, #3b4261) 55%, transparent);
@@ -1597,9 +1649,6 @@
 .chat-status-seg.is-open {
   color: var(--fg, #d7dae0);
   background: color-mix(in srgb, var(--fg, #d7dae0) 5%, transparent);
-}
-.chat-status-seg.-warn {
-  color: color-mix(in srgb, var(--danger, #f7768e) 70%, var(--fg-dim, #a9b1d6));
 }
 .chat-status-seg.-live {
   /* Never shrink or ellipsize — "N agents" must fit whole. */
@@ -1637,11 +1686,6 @@
   min-width: max-content;
   overflow: visible;
   text-overflow: clip;
-}
-.chat-status-warn {
-  flex: 0 0 auto;
-  font-weight: 800;
-  color: var(--danger, #f7768e);
 }
 .chat-status-menu {
   position: absolute;
@@ -1835,7 +1879,7 @@
   opacity: 0.5;
   cursor: default;
 }
-.chat-harness-btn[aria-busy='true'] {
+.chat-harness-btn[aria-busy="true"] {
   opacity: 1;
   border-color: var(--accent);
 }
@@ -1880,7 +1924,7 @@
   opacity: 0.5;
   cursor: default;
 }
-.chat-harness-quiet[aria-busy='true'] {
+.chat-harness-quiet[aria-busy="true"] {
   opacity: 1;
   border-color: color-mix(in srgb, var(--border-strong, #3b4261) 70%, var(--accent, #7aa2f7));
 }
@@ -1908,42 +1952,11 @@
   font-size: 13px;
 }
 
-/* Working-directory chip in the chat header + its switcher popover. */
+/* Working-directory switcher popover (opened from the status bar's folder
+   segment). */
 .chat-folder {
   position: relative;
   display: inline-flex;
-}
-.chat-folder-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 220px;
-  padding: 3px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-elev);
-  color: var(--fg-dim);
-  font-family: var(--chrome-font);
-  font-size: var(--chrome-size);
-  cursor: pointer;
-}
-.chat-folder-chip:hover {
-  color: var(--fg);
-  border-color: var(--accent);
-}
-.chat-folder-chip.-warn {
-  color: color-mix(in srgb, var(--danger, #d9534f) 70%, var(--fg-dim));
-  border-color: color-mix(in srgb, var(--danger, #d9534f) 35%, var(--border));
-}
-.chat-folder-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.chat-folder-warn {
-  flex: 0 0 auto;
-  font-weight: 800;
-  color: var(--danger, #d9534f);
 }
 .chat-folder-menu {
   position: absolute;

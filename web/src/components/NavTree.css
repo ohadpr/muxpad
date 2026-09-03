@@ -10,24 +10,61 @@
 
    Both variants render a flat list, Slack-rail style: workspaces are
    quiet bold headers (a disclosure chevron + name, no fill) with their
-   tabs indented below. Selection is a ROUNDED PILL inset from the rail's
-   edges — hover is a faint pill, the active tab is one crisp solid-accent
-   pill. Hierarchy comes from indent + weight + that single strong anchor,
-   not from bands, rails, and guide-lines stacked together.
+   tabs indented below. Hierarchy comes from indent + weight + one strong
+   anchor, not from bands, rails, and guide-lines stacked together.
 
-   Visual grammar shared with the rest of muxpad's chrome:
+   TWO channels, and they never borrow each other's encoding — that
+   separation is the thing the whole rail rests on:
+
+     WHERE YOU ARE      a SOLID accent block (active tab, active pane,
+                        Hosted). Filled, never a wash.
+     WHAT IT IS DOING   a 3px bar on the left edge + a very faint tint of
+                        the same hue + a word (or a spinner) on the right.
+                        Always a wash, never filled. See StateChip.css.
+
+   The rest of the grammar:
      bold name, no fill       = workspace header
-     faint accent tint        = active workspace, collapsed ("you are in")
-     solid accent pill        = active tab ("you are here") — the one
-                                dominant anchor in the list
+     bold text                = unread
      faint pill on hover      = hover affordance
-     red dot                  = "wants you"
    ────────────────────────────────────────────────────────────────────── */
 
+/* ─── Rail width ──────────────────────────────────────────────────────────
+   280px, up from 240px.
+
+   Measured, not guessed. The redesign was drawn and approved against a 330px
+   rail; muxpad's was 240px, and the deficit lands entirely on the name. A row
+   must fit: icon (22 + 8 gutter) + name + meta + rail (22 + 8 gutter). On a
+   row with a schedule the meta is a real 79px (`◷ Wed 09:00` at 10.5px
+   monospace, plus its gutter), which left the name 74px at 240px — and a
+   14-character name needs 96px in the nav font. That is exactly why "Reading
+   List" rendered as "Reading …".
+
+   At 280px the same worst-case row gives the name 114px, and a row without a
+   schedule gets 193px (~27 characters). Still 50px narrower than the rail the
+   design was approved at, so it is a compromise, not a capitulation — and it
+   is one line to revert if the workspace wants the 40px back more than the
+   sidebar wants readable names.
+
+   Both figures predate the spacing scale below, and every row is poorer for
+   it: the icon column grew 10px and the row's right inset grew 8px, so an idle
+   row loses 18px, and a row that DRAWS a chip loses another 4 (the chip's
+   leading space stepped from the gutter to air) for 22. Measured in a real
+   engine at 280px afterwards, a `ready` row with no schedule leaves the name
+   149px of track before it ellipsises — a character or two fewer than before.
+   That is the price of the fix, and it is the right way round: a name that
+   truncates a character earlier costs a glance, while a chip welded to the
+   row's edge costs the rail its rhythm on every row at once.
+
+   None of this reasons about the rail being RESIZABLE, and it should: the user
+   drags it, and SIDENAV_MIN_WIDTH (settings.ts) is 160px. The worst-case row —
+   `WORKING` under reduced motion, plus a schedule, plus revealed hover
+   controls — now needs 247px before the name track reaches zero, against 225px
+   before. Below that the auto tracks overflow the row box and .navtree-scroll
+   clips them; that was true before this pass and is 22px truer now. */
 .navtree {
   /* Row metrics + surfaces are the only things the variants disagree on. */
   --nt-row-ws: 32px;
-  --nt-row-tab: 30px;
+  --nt-row-tab: 34px;
   --nt-hit: 24px; /* square hit target for the close button */
   --nt-disc: 18px; /* disclosure chevron column — narrow; the glyph is tiny */
   /* Tab leading-icon column. Tuned so a tab's icon lands directly under the
@@ -35,6 +72,94 @@
      hierarchy cue, so no extra text-column indent is spent. */
   --nt-indent: 12px;
   --nt-pill: 6px; /* selection/hover pill corner radius */
+
+  /* ─── The row's spacing scale ──────────────────────────────────────────
+     Every horizontal gap inside a nav row is one of exactly three steps off
+     a 4px base, and which step a gap gets is decided by WHAT it separates:
+
+       4px   --nt-pad     the row's own left inset, and the state bar's inset
+                          from the row edge. The hairline step: it separates
+                          a row's box from a mark that belongs to that box.
+       8px   --nt-gutter  between two CONTENT columns (name ↔ schedule ↔
+                          controls). The reading step.
+      12px   --nt-air     between content and either ANCHOR — the icon chip
+                          at the row's head, the state chip at its tail — and
+                          the row's own right inset. The breathing step.
+
+     The rule that makes it a scale rather than three numbers: AIR WRAPS THE
+     ANCHORS. The two chips are the fixed points a scan uses (one is the
+     column's hard left edge, the other the state column), and a fixed point
+     the eye lands on needs more room around it than two columns of text need
+     between them. Both defects this replaces were the same mistake in two
+     places — the anchors were given the CONTENT step, or none at all:
+
+       · the spinner sat 4px from the row's right edge, which on the selected
+         row is 4px from a solid accent block's border-radius, and read as
+         touching it;
+       · the icon chip was given `margin-right: var(--nt-gutter)` — a margin
+         that never applied, because --nt-col-icon was a FIXED 22px track and
+         a fixed track does not grow for its item's margin. Measured in a real
+         engine: 2.00px from the chip's right edge to the name's first glyph,
+         not the 8px the declaration claimed. The track is now derived
+         (`chip + air`), so the gap is a property of the scale and cannot be
+         silently swallowed by a track size again.
+
+     The SELECTED row deliberately gets the SAME inset, not more. A filled
+     block does read a touch tighter than an open row at equal padding, and
+     the usual answer is to give the block a little extra — but the extra
+     would move the state chip on exactly one row, and the whole rail rests on
+     the chips (and the icon chips) sitting on unmoving vertical lines. So the
+     air is sized for the WORST case, which is the block: 12px is what the
+     accent row wants, and the open rows inherit it. */
+  --nt-pad: 4px;
+  --nt-air: 12px;
+
+  /* ─── The row grid ─────────────────────────────────────────────────────
+     Four tracks, and NOTHING absolutely positioned:
+
+       icon (chip + air) │ name + headline (1fr, min-width 0) │ meta (auto) │ state auto
+
+     The state cell is LAST, so nothing in front of it can push it off the
+     row's right edge, and it is AUTO rather than a fixed column. It used to be
+     a fixed 22px track holding a drawn mark — charged to every row whether or
+     not it drew anything, which on the majority (idle) rows meant 30px of
+     permanently blank rail taken from the name. The scan line moved to the
+     rows' LEFT edge (the 3px state bar in StateChip.css), which is both where
+     a scan starts and a place no content can ever shift; the right-hand cell
+     is now a word you read on purpose, and it costs width only when there is
+     something to say.
+
+     The ICON track is DERIVED, not written: it is exactly the chip plus one
+     step of air, so the chip's left edge (the column's hard anchor) and the
+     name's first glyph are both consequences of the scale. It was a literal
+     22px against a 20px chip, which is where the 2px gap came from — and the
+     `margin-right: var(--nt-gutter)` on the icon that was meant to open that
+     gap could never do it, because a FIXED track does not grow for its item's
+     margin. Deriving it removes the whole class of bug: there is no second
+     number left to disagree with the first. */
+  --nt-col-icon: calc(var(--nt-chip) + var(--nt-air));
+  /* The icon's BOX HEIGHT, pinned to one line of title text. It is the width
+     that has to be a fixed track; the height must not exceed the text line, or
+     a one-line row becomes icon-driven and its single line floats with more
+     space above it than a two-line row's first line gets — which is the
+     ragged rhythm, measured as 14px of leading against 11px. */
+  --nt-icon-h: 18px;
+  /* The chip: a uniform rounded container behind every icon, and the column's
+     real anchor (see .navtree-tab-icon). Bigger than the glyph on purpose —
+     an inset is the whole point, or a full-bleed tile merges with the chip and
+     the density cue is back. Bigger than --nt-icon-h too, which it can afford
+     to be because it is painted by a pseudo-element and so does not enter the
+     row's height calculation. */
+  --nt-chip: 20px;
+  --nt-chip-radius: 5px;
+  /* Floor for the meta cell, wide enough that `◷ 07:00` and `◷ Sun 09:00`
+     right-align on the same digits instead of jittering row to row. A FLOOR,
+     not a reservation: rows with no schedule collapse it to zero (and swallow
+     its gutter), because a 240px rail cannot afford 62px of permanent blank. */
+  --nt-col-meta: 46px;
+  /* 8px, not the prototype's 10px: that prototype's rail was 330px wide and
+     this one is 240px. At 10px the gutters alone ate 40px of a 207px row. */
+  --nt-gutter: 8px;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -49,10 +174,25 @@
 }
 .navtree[data-variant="sheet"] {
   --nt-row-ws: 44px;
-  --nt-row-tab: 42px;
+  /* Floor only — a row with a headline is ~58px. Never below 44px: that is
+     the smallest thing a thumb can hit reliably, and these rows ARE the
+     targets. */
+  --nt-row-tab: 46px;
   --nt-hit: 32px;
   --nt-disc: 24px;
   --nt-indent: 28px;
+  --nt-icon-h: 20px;
+  --nt-chip: 24px;
+  --nt-chip-radius: 6px;
+  --nt-col-meta: 52px;
+  --nt-gutter: 10px;
+  /* The scale steps up with everything else on the sheet (gutter 8 → 10, icon
+     chip 20 → 24), so the air does too: 14px, still one clear step above the
+     gutter. --nt-col-icon is derived from both, so it follows on its own —
+     the sheet's literal 26px against a 24px chip is gone. */
+  --nt-air: 14px;
+  /* What a swiped row slides over — see SwipeRow.css. */
+  --swipe-surface: var(--bg-chrome);
   font-size: 15px;
 }
 
@@ -121,18 +261,44 @@
 
 /* ─── Workspace row (banded header) ──────────────────────────────────── */
 
+/* Same grid discipline as the tab rows, for the same reason and with the same
+   RIGHT edge: disclosure │ name (1fr) │ count │ controls │ state. Only then
+   does a collapsed workspace's chip land where its tabs' chips do. (In the old
+   flex row the × came AFTER the mark, so hovering the header shoved its mark
+   18px left, and the workspace mark sat 4px off every tab mark below it even at
+   rest — hence the pile of compensating margins this replaces.) */
 .navtree-ws-row {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: var(--nt-disc) minmax(0, 1fr) auto auto auto;
   align-items: center;
+  column-gap: 4px;
   height: var(--nt-row-ws);
-  padding: 0 4px;
+  /* Right inset is AIR, left is the row's own 4px pad — the workspace row's
+     head is a disclosure chevron with a hit box of its own, not an anchor
+     chip, so it wants the hairline step; its tail is a state chip like every
+     other row's, and its INSET is what puts that chip on the same column as
+     every tab chip below it.
+     One difference, and it is the `column-gap: 4px` above rather than anything
+     here: grid charges that gap between every pair of adjacent tracks, so this
+     row's chip LEADS by air + 4 (16px, 18 on the sheet) where a tab row's leads
+     by exactly air. Bigger than the floor, on the row kind with the shortest
+     names, and it does not move the column — so it is left alone rather than
+     zeroed, which would also close the disclosure→name gap. */
+  padding: 0 var(--nt-air) 0 var(--nt-pad);
   border-radius: var(--nt-pill);
   font-weight: 600;
   color: var(--fg);
 }
+.navtree-ws-row:has(.navtree-rename) {
+  grid-template-columns: var(--nt-disc) minmax(0, 1fr);
+}
 .navtree-ws-row:hover {
-  background: var(--bg-hover);
+  /* background-COLOR, never the shorthand: the row's state tint is painted as
+     a background-IMAGE (see StateChip.css) so that hovering a working row
+     shows both. A shorthand here would silently reset it. Same everywhere a
+     nav row takes a fill. */
+  background-color: var(--bg-hover);
 }
 /* Active workspace: the bold name alone marks it — the active TAB's tint
    pill is the dominant anchor, so a competing fill on the header would
@@ -188,7 +354,7 @@
 .navtree-ws-row[data-pressing="true"],
 .navtree-tab-row[data-pressing="true"],
 .navtree[data-variant="sheet"] .navtree-ws-row[data-pressing="true"] {
-  background: var(--bg-hover);
+  background-color: var(--bg-hover);
 }
 
 /* Drag-to-reorder (desktop sidebar). The row carries the drag; the dragged
@@ -226,11 +392,13 @@
 .navtree-tab-row[data-drop-edge="bottom"]::after {
   bottom: -1px;
 }
-/* A tab is being dragged over this workspace row — light the whole row as a
-   drop basin (distinct from the thin reorder line above, which means "insert
-   between rows"). */
-.navtree-ws-row[data-tab-drop="true"] {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+/* Something is being dragged over this workspace row — light the whole row as
+   a drop basin (distinct from the thin reorder line above, which means "insert
+   between rows"). A TAB dropped here moves to this workspace; a PANE dropped
+   here gets a new tab in it. One drop-target language, whatever is hovering. */
+.navtree-ws-row[data-tab-drop="true"],
+.navtree-ws-row[data-pane-drop="true"] {
+  background-color: color-mix(in srgb, var(--accent) 18%, transparent);
   box-shadow: inset 0 0 0 1px var(--accent);
   border-radius: 4px;
 }
@@ -238,7 +406,7 @@
    the row's middle band (merge). Same accent ring language as the
    workspace rows' move-tab-here affordance. */
 .navtree-tab-row[data-drop-into="true"] {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background-color: color-mix(in srgb, var(--accent) 18%, transparent);
   box-shadow: inset 0 0 0 1px var(--accent);
   border-radius: var(--nt-pill);
 }
@@ -250,74 +418,105 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  /* Carries dir="auto" (see NavTree.tsx), which gives an RTL name the correct
+     glyph order and puts its ellipsis at the correct end. But `dir` also sets
+     the inline base direction, and an RTL block's text would then sit flush
+     against the RIGHT edge of its track — so "שלום עולם" started 39px to the
+     right of every Latin name in the list, measured. Alignment is the one
+     thing that must NOT follow the text's direction here: this is a nav list,
+     and a reader scans its left edge regardless of what any individual name is
+     written in. So direction is automatic and alignment is pinned left, which
+     is what every mixed-direction sidebar (Slack, Telegram, WhatsApp) does. */
+  text-align: left;
 }
 
-/* ─── Busy spinner ──────────────────────────────────────────────────────
-   "This tab's app is working." A different channel from .badge-dot
-   ("wants you"): the spinner says "in progress" and clears itself when the
-   output stream goes quiet. Sits inline to the right of the name; never
-   shrinks. Neutral grey (the machine/working channel) — NOT accent, which is
-   reserved for the "concerns you" channel (selection pill + attention dot). */
-.navtree-busy {
-  flex: 0 0 auto;
+/* ─── State cell ────────────────────────────────────────────────────────
+   The chip itself — and the row's left bar and tint with it — lives in
+   StateChip.css, which is where the whole state language is described. What
+   belongs HERE is only how its cell sits inside a nav row.
+
+   The nav rows are the ONLY surface that speaks this language. The tab strip,
+   the tab-bar dropdown and the mobile switcher still draw a StatusMark: those
+   are single-item chrome, with no column of rows to scan and no room for a
+   word, which is exactly what a compact glyph is for. */
+/* Pinned to the LAST track by explicit line number (negative lines count from
+   the grid's end), not by DOM order. Half the items in front of it are
+   conditional — the pane-count chip, the workspace's tab count, the meta cell
+   — and with pure auto-placement a row that happened to be missing one would
+   shuffle its chip a track to the left. `-2 / -1` is the last column of
+   whatever template the variant declared, always.
+
+   Everything else auto-flows into the free tracks around these two. */
+.navtree-tab-row > .navtree-state,
+.navtree-ws-row > .navtree-state {
+  grid-column: -2 / -1;
+  /* Height pinned to the text line for the same reason the icon's is: at
+     anything taller, a one-line row becomes CHIP-driven and picks up leading a
+     two-line row never gets. The chip's contents (a 15px word, a 13px ring)
+     both sit inside this. */
+  height: 18px;
+  justify-self: end;
+}
+/* AIR, not the gutter: the chip is an anchor, and what sits in front of it is
+   an ellipsised name that ends wherever the truncation lands. At the gutter
+   step a long name's `…` came within 8px of the word chip and the two read as
+   one run. The space belongs to the ITEM, so an idle (empty) chip can decline
+   to pay it — the same rule the meta cell follows, and the reason an idle row
+   still spends its full width on the name. */
+.navtree-tab-row > .navtree-state:not(:empty),
+.navtree-ws-row > .navtree-state:not(:empty) {
+  margin-left: var(--nt-air);
+}
+/* Meta is pinned too, and pinned INSIDE the controls — so its right edge is
+   the rail's left edge and nothing can move it.
+   Found by the layout pass: a PINNED tab keeps its pin lit at rest, which
+   gave that row's control cell 26px of width, which pushed its meta cell 26px
+   left of every other row's. `◷ 23:30` on a pinned row and `◷ Wed 09:00` on an
+   unpinned one then ended 26px apart — the exact misalignment the meta column
+   exists to prevent. Controls now expand into the NAME (which is elastic and
+   already ellipsises) instead of into the times (which are a column). */
+.navtree-tab-row > .navtree-tab-meta {
+  grid-column: -3 / -2;
+}
+/* Tab rows put the controls in front of the meta cell (track 3 of 5); the
+   WORKSPACE row has no meta cell but does have an auto-placed count chip that
+   lands in track 3, so its controls go one further along. Pinning both to the
+   same line collided the controls with the chip and pushed the mark onto a
+   second grid row whenever a workspace was collapsed. */
+.navtree-tab-row > .navtree-tab-controls {
+  grid-column: -4 / -3;
+}
+.navtree-ws-row > .navtree-tab-controls {
+  grid-column: -3 / -2;
+}
+
+/* The hover-revealed control group. Zero-width at rest AND pulling back its
+   own gutter, so a resting row measures exactly the four specified tracks and
+   the name keeps the width. On reveal it expands leftward — into the name, not
+   into the rail — which is why the status mark never moves. */
+.navtree-tab-controls {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  /* Muted accent — a quieter cousin of the attention dot it shares a slot
-     with: same hue family so the two "rhyme", but desaturated toward neutral
-     (and a thin animated ring vs the dot's solid fill) so "working" still
-     reads distinct from "wants you". */
-  color: color-mix(in srgb, var(--accent) 60%, var(--fg-dim));
-  line-height: 0;
-  /* Sit just after the name with a little breathing room (on top of the row's
-     5px flex gap) — not jammed against the text, not flung to the right edge.
-     Matches the attention dot below. */
-  margin-left: 4px;
-  /* Optical nudge: flex align-items:center centers the icon's BOX, but text
-     glyphs sit low within their line box, so a box-centered icon reads ~1px
-     high against the label. Drop it to sit on the text's optical center. */
-  position: relative;
-  top: 1px;
+  /* No `gap`: a gap between two ZERO-WIDTH buttons is still charged, so a
+     resting row paid 2px for a cell with nothing in it. The revealed spacing
+     is a margin on the second button instead, which costs nothing until there
+     is a second button to space. */
+  gap: 0;
+  /* Declines its gutter while it has no width to separate. */
+  margin-left: 0;
 }
-
-/* The inline attention dot shares the spinner's status slot and the same
-   flex-box-centering quirk — box-centered, so it reads ~1px high against the
-   text. Give it the identical optical nudge so dot and spinner sit level.
-   `right: auto` is load-bearing: the base .badge-dot (absolute variant) sets
-   `right: 6px`, which `position: relative` here would otherwise reactivate and
-   shove the dot 6px left into the text. */
-.navtree-tab-link .badge-dot.-inline,
-.navtree-ws-name .badge-dot.-inline {
-  position: relative;
-  top: 1px;
-  right: auto;
-  /* A little breathing room after the name (atop the flex gap), not flush-right. */
-  margin-left: 4px;
+/* …and the spacing between them is charged only once they have width. */
+.navtree-tab-row:hover > .navtree-tab-controls > * + *,
+.navtree-tab-row:focus-within > .navtree-tab-controls > * + *,
+.navtree-ws-row:hover > .navtree-tab-controls > * + *,
+.navtree-ws-row:focus-within > .navtree-tab-controls > * + * {
+  margin-left: 2px;
 }
-.navtree-busy svg {
-  animation: navtree-spin 0.8s linear infinite;
-  transform-origin: center;
-}
-@keyframes navtree-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-/* Honor reduced-motion: drop the rotation, keep a static (but visible)
-   indicator via a gentle opacity pulse instead of a spin. */
-@media (prefers-reduced-motion: reduce) {
-  .navtree-busy svg {
-    animation: navtree-busy-pulse 1.6s ease-in-out infinite;
-  }
-  @keyframes navtree-busy-pulse {
-    0%,
-    100% {
-      opacity: 0.4;
-    }
-    50% {
-      opacity: 1;
-    }
-  }
+.navtree-tab-row:hover > .navtree-tab-controls,
+.navtree-tab-row:focus-within > .navtree-tab-controls,
+.navtree-ws-row:hover > .navtree-tab-controls,
+.navtree-ws-row:focus-within > .navtree-tab-controls {
+  margin-left: var(--nt-gutter);
 }
 
 /* Quiet tab-count chip on collapsed rows — says what's folded away. */
@@ -351,51 +550,143 @@
   padding-bottom: 2px;
 }
 
+/* THE grid (see --nt-col-* above for why). Column order is DOM order, and the
+   trailing `auto` track between meta and state is the hover-revealed control
+   group — it collapses to zero and swallows its own gutter, so at rest the row
+   is exactly the four specified tracks. */
 .navtree-tab-row {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: var(--nt-col-icon) minmax(0, 1fr) auto auto auto;
   align-items: center;
-  gap: 4px;
-  height: var(--nt-row-tab);
-  padding: 0 4px;
+  /* The gutter is an item MARGIN, not `column-gap`. A gap is charged between
+     every pair of adjacent tracks whether or not the track between them has
+     any content, so on a row with no schedule and no revealed control — which
+     is most rows — two dead 8px gutters were being billed against the name.
+     On a 207px row that is 8% of the width the name has to work with. As a
+     margin it belongs to the item, so an EMPTY item can decline to pay it. */
+  column-gap: 0;
+  min-height: var(--nt-row-tab);
+  /* The indent that steps a tab under its workspace name used to be the
+     link's padding-left. In the grid it has to be the ROW's, or the icon
+     column starts at the pill edge and the hierarchy step disappears. */
+  /* 8px: a one-line row is then 8 + 18 + 8 = 34px, exactly --nt-row-tab, so
+     it is NOT floor-clamped and its leading matches a two-line row's.
+     LEFT is the row's 4px pad plus the hierarchy indent, and it is frozen:
+     the icon chip's left edge is the one x in this tree that every row agrees
+     on to 0.00px, and it is this number. RIGHT is one step of air, so the
+     state chip clears the row's edge — and, on the selected row, the accent
+     block's rounded corner. */
+  padding: 8px var(--nt-air) 8px calc(var(--nt-pad) + var(--nt-indent));
   border-radius: var(--nt-pill);
   color: var(--fg-dim);
   font-weight: 500;
 }
+/* Sheet: the pane-disclosure chevron LEADS the row, so it needs its own track
+   in front of the icon. Rendered (as a zero-content spacer) on every sheet row
+   so single- and multi-pane tabs share one grid. No control tracks — touch
+   rows carry no permanent buttons at all. */
+.navtree[data-variant="sheet"] .navtree-tab-row {
+  grid-template-columns: var(--nt-disc) var(--nt-col-icon) minmax(0, 1fr) auto auto;
+  /* COLLAPSING, not reserving: a row with no headline is a genuinely shorter
+     one-line row, because most rows have no headline until the generator has
+     run and a column of empty reserved lines reads as broken.
+
+     The rhythm comes from ONE padding rule serving both shapes. Before, the
+     46px floor was doing the work: a single-line row (30px of content) sat in
+     a 46px box — 13px of space above and below its text — while a two-line row
+     used its declared 5px. Every gap in the list was therefore a different
+     size depending on its neighbours' shapes, which is the ragged rhythm.
+     Now both shapes pay the same 11px, and the floor only guarantees the touch
+     target: one line lands on 44px (the floor, 2px of slack), two lines on
+     59px. Two heights, both deterministic, and the difference is exactly one
+     line of headline — which is what makes it read as deliberate. */
+  /* 12px: a one-line row is then 12 + 20 + 12 = 44px, exactly the touch floor,
+     so it is not floor-clamped and both shapes lead identically. */
+  padding-top: 12px;
+  padding-bottom: 12px;
+  /* No indent term: on the sheet the leading disclosure track IS the indent.
+     (padding-right is inherited from the rule above — one air token, both
+     variants.) */
+  padding-left: var(--nt-pad);
+  min-height: 44px;
+}
+/* Renaming collapses the row to icon + input: the meta, controls and status
+   all stand down, and a 5-track template would strand the input in one narrow
+   cell. */
+.navtree-tab-row:has(.navtree-rename) {
+  grid-template-columns: var(--nt-col-icon) minmax(0, 1fr);
+}
+/* No --nt-disc track: while editing, neither the expander nor its spacer is
+   rendered (both are gated on !isEditing), so a leading disclosure track left
+   the icon in it and squeezed the input into 26px. */
+.navtree[data-variant="sheet"] .navtree-tab-row:has(.navtree-rename) {
+  grid-template-columns: var(--nt-col-icon) minmax(0, 1fr);
+}
+/* The icon carries NO margin. The gap to the name is the slack inside its own
+   grid track (--nt-col-icon = chip + air), which is the only place it can live
+   and still be honoured: a fixed track does not grow for its item's margin, so
+   the `margin-right: var(--nt-gutter)` that used to be declared here bought
+   exactly 0px and the measured gap was the track's 2px of slack. */
 .navtree-tab-row:hover {
   color: var(--fg);
-  background: var(--bg-hover);
+  background-color: var(--bg-hover);
 }
-/* Active TAB = the CONTAINER of the pane you're in: a SOFT accent-tint pill
-   with accent-tinted name text ("this branch is open"). Deliberately lighter
-   than the active PANE's pill below, so the leaf you're actually viewing stays
-   the dominant anchor and the two levels never read as identical (they used
-   to). No left-rail (it floated disconnected in the indent); no bold (weight
-   now means unread and nothing else). */
+/* Active TAB = the row you are in: a SOLID accent block with the accent's own
+   ink. It was a 14% accent TINT, and a tint is no longer available to it —
+   every non-idle row now carries a faint tint of its state hue (StateChip.css),
+   and "where I am" and "what the machine is doing" cannot share an encoding
+   without the rail becoming unreadable the moment the row you are on starts
+   working. A solid block is unmistakably not a wash, at any tint strength, on
+   any theme.
+   Still no left-rail (it floated disconnected in the indent) and no bold —
+   weight means unread and nothing else. */
 .navtree-tab-row[data-active="true"] {
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+  background-color: var(--accent);
+  color: var(--accent-fg);
 }
 .navtree-tab-row[data-active="true"] .navtree-name-text {
-  color: color-mix(in srgb, var(--accent) 75%, var(--fg));
+  color: var(--accent-fg);
 }
+/* Hover on the row you are already on has almost nothing to say, so it says it
+   quietly: a nudge of the block's own ink into the fill, rather than a second
+   colour. */
 .navtree-tab-row[data-active="true"]:hover {
-  background: color-mix(in srgb, var(--accent) 20%, var(--bg));
+  background-color: color-mix(in srgb, var(--accent) 88%, var(--accent-fg));
 }
+/* Everything else the row carries is re-inked against the block. These are all
+   elements whose resting colour is derived from --fg or --accent, both of
+   which are now the wrong side of the fill: on a solid accent row the only
+   colour guaranteed legible is the one the theme nominates for exactly that
+   job. (The icon chip keeps its geometry untouched — only what it is mixed
+   FROM changes.) */
+.navtree-tab-row[data-active="true"] .navtree-tab-icon::before {
+  background: color-mix(in srgb, var(--accent-fg) 18%, transparent);
+}
+.navtree-tab-row[data-active="true"] .navtree-quicknum {
+  background: color-mix(in srgb, var(--accent-fg) 22%, transparent);
+  color: var(--accent-fg);
+}
+.navtree-tab-row[data-active="true"] .navtree-close {
+  color: color-mix(in srgb, var(--accent-fg) 78%, var(--accent));
+}
+/* The close × and the pin are re-inked too — but their rules live down in the
+   Pin affordance section, NOT here. `.navtree-tab-row:hover .navtree-pin.is-pinned`
+   is (0,4,0), the same weight as an override written here would be, and it is
+   declared ~240 lines further down, so it would win the tie on source order and
+   paint the pinned tab's glyph in --accent ON an --accent block. Measured:
+   1.00:1, an invisible glyph inside a visible hover square. */
 
+/* The 1fr cell: two stacked lines, both of which must be free to ellipsise.
+   `min-width: 0` is load-bearing — a grid item's default `min-width: auto` is
+   its min-CONTENT width, so without it a long chat name refuses to shrink and
+   pushes the meta and status tracks off the rail entirely. */
 .navtree-tab-link {
-  flex: 1;
   min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 100%;
-  /* Indent tab text past the workspace name, so the parent→child step
-     reads from alignment alone (replaces the old guide hairline). */
-  padding-left: var(--nt-indent);
-
-  /* Trailing gutter so the name never kisses the pill edge once the close
-     button collapses away — keeps a touch of breathing room on the right. */
-  padding-right: 6px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
   color: inherit;
   text-decoration: none;
   -webkit-touch-callout: none;
@@ -404,6 +695,72 @@
 }
 .navtree-tab-link:hover {
   text-decoration: none;
+}
+/* Line one — name, plus the chips that qualify it. */
+.navtree-tab-titleline {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  line-height: 18px;
+}
+
+/* ─── Headline (line two) ─────────────────────────────────────────────────
+   WHAT this chat is currently about. One line, dim, ellipsised, NEVER wrapped
+   — a rail whose rows changed height with the length of a summary would stop
+   being scannable, which is the only thing it is for. Two steps down from the
+   name in both size and colour so the eye still lands on the name first; this
+   is the answer to "which of these do I want", not the thing you read.
+
+   Absent renders nothing at all: the row is simply one line tall. There is no
+   placeholder and no error state here by design (see the schema note on
+   `headline`). */
+.navtree-tab-headline {
+  /* Same bidi treatment as the name — automatic direction, pinned alignment. */
+  text-align: left;
+  font-size: 11.5px;
+  line-height: 15px;
+  color: var(--fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.navtree[data-variant="sheet"] .navtree-tab-titleline {
+  line-height: 20px;
+}
+.navtree[data-variant="sheet"] .navtree-tab-headline {
+  font-size: 12px;
+  line-height: 16px;
+}
+/* On the active row the headline is drawn in the block's own ink, for the same
+   measured reason as the schedule above: every step down from it — a mix
+   toward the accent, or the `opacity: 0.75` this replaced — lands 11.5px text
+   between 3.4:1 and 4.4:1 on the five themes, and the version before this
+   redesign was already failing at 3.9 on two of them. The hierarchy is carried
+   by size and weight instead (11.5px regular under a 14px medium), which is
+   the one step that costs no contrast. */
+.navtree-tab-row[data-active="true"] .navtree-tab-headline {
+  color: var(--accent-fg);
+}
+
+/* ─── Meta column ─────────────────────────────────────────────────────────
+   The schedule, and nothing else. Right-aligned against the status rail so the
+   times form their own column. Collapses to nothing — gutter included — on the
+   rows that have no schedule, which is most of them. */
+.navtree-tab-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+}
+.navtree-tab-meta:not(:empty) {
+  min-width: var(--nt-col-meta);
+  margin-left: var(--nt-gutter);
+}
+/* No schedule: no width AND no gutter. Most rows are this one. */
+.navtree-tab-meta:empty {
+  margin-left: 0;
 }
 
 /* Ctrl-held quick-switch chip (sidebar only) — same accent chip language
@@ -426,16 +783,70 @@
   line-height: 1;
 }
 
+/* ─── Schedule mark (◷ 07:00) ─────────────────────────────────────────────
+   "This chat runs on a schedule, and next at —". A PROPERTY of the tab, so it
+   sits in its own meta column rather than in the status rail, which holds one
+   transient state (and which a cron would lose to the moment it actually
+   fired — precisely when you'd want to know a schedule exists).
+
+   MONOSPACE with tabular figures, and right-aligned, so `◷ 07:00` and
+   `◷ Sun 09:00` stack with their digits on the same vertical lines. A
+   proportional font would make every row's time a different width and the
+   column would read as noise. `baseline` alignment, not centre: the glyph and
+   the digits have very different cap heights.
+
+   `flex: 0 0 auto` so an ellipsised name shrinks around it rather than
+   pushing it out of the row. */
+.navtree-cron {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  font-family: var(--chrome-font);
+  font-size: 10.5px;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+/* Set BACK from the digits: the glyph only says what KIND of number follows,
+   so it shouldn't compete with the number itself. */
+.navtree-cron-glyph {
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.6;
+  /* The glyph renders as coloured emoji on some platforms; force the text
+     presentation so it matches the rest of the row's monochrome chrome. */
+  font-variant-emoji: text;
+}
+/* On the solid block the schedule is drawn in the block's OWN ink, not a mix
+   back toward it. Every mix that keeps a visible step down from the name lands
+   this 10.5px text between 3.2:1 and 4.0:1 depending on theme (measured on all
+   five); only the undiluted ink clears 4.5. The hierarchy it gives up is paid
+   for by size — 10.5px monospace under a 14px name — which is a step that
+   costs no contrast. */
+.navtree-tab-row[data-active="true"] .navtree-cron {
+  color: var(--accent-fg);
+}
+/* The glyph is aria-hidden decoration next to the digits that carry the
+   meaning, but at the resting 0.6 it composites to ~2:1 on the block. */
+.navtree-tab-row[data-active="true"] .navtree-cron-glyph {
+  opacity: 0.8;
+}
+.navtree[data-variant="sheet"] .navtree-cron {
+  font-size: 11.5px;
+}
+
 /* ─── Close affordance (per-row) ─────────────────────────────────────── */
 
 .navtree-close {
   /* Collapsed to zero width while hidden so it doesn't steal room from the
-     tab name; the negative margin swallows the row's flex gap so the name
-     gets the full width back. It only claims its hit-area on hover/focus
-     (below), where it visibly pushes the name in. */
+     tab name. It only claims its hit-area on hover/focus (below), where it
+     visibly pushes the name in — never the rail, which is why the whole group
+     sits in a track BEFORE the status column. */
   flex: 0 0 0;
   width: 0;
-  margin-left: -4px;
   /* 18px square when revealed — the exact box the strip tabs' × uses; the
      row is taller, so it centers as an inset square (not a full-height slab). */
   height: 18px;
@@ -457,19 +868,14 @@
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
-/* Touch has no hover — keep close faintly present (and sized) on the sheet. */
-/* Sheet: the leading pane-expander supplies the tab indent — adding the
-   text indent on top floated names mid-row and made pane children render
-   LEFT of their parent. */
-.navtree[data-variant="sheet"] .navtree-tab-link {
-  padding-left: 0;
-}
-
-.navtree[data-variant="sheet"] .navtree-close {
+/* Sheet: WORKSPACE and PANE rows keep their × (both are still flex rows and
+   neither is swipeable). TAB rows on the sheet render no × at all — pin,
+   mark-unread and close live under the row behind a left swipe. */
+.navtree[data-variant="sheet"] .navtree-ws-row .navtree-close,
+.navtree[data-variant="sheet"] .navtree-pane-row-wrap .navtree-close {
   flex-basis: var(--nt-hit);
   width: var(--nt-hit);
   height: var(--nt-hit); /* touch needs the full hit square */
-  margin-left: 0;
   /* Kept faint so the always-on column of ×'s recedes to a hint instead of a
      heavy stripe down the edge — the full hit-square is still there, it's just
      quiet until you reach for it (press → full below). */
@@ -477,7 +883,6 @@
 }
 /* The row you're on gets a slightly more present × — it's the one you're most
    likely to close, so it shouldn't need hunting. */
-.navtree[data-variant="sheet"] .navtree-tab-row[data-active="true"] .navtree-close,
 .navtree[data-variant="sheet"] .navtree-ws-row[data-active="true"] .navtree-close,
 .navtree[data-variant="sheet"] .navtree-pane-row-wrap[data-active="true"] .navtree-close {
   opacity: 0.4;
@@ -490,7 +895,6 @@
 .navtree-close:focus-visible {
   flex-basis: 18px;
   width: 18px;
-  margin-left: 0;
   opacity: 1;
 }
 /* Same hover grammar as the strip tabs' ×: quiet hover square, danger-red
@@ -499,6 +903,94 @@
   background: var(--bg-hover);
   color: var(--danger);
   opacity: 1;
+}
+
+/* ─── Pin affordance (DESKTOP sidebar only) ──────────────────────────── */
+/* Rides the .navtree-close reveal machinery above — zero-width at rest, its
+   hit area claimed only on hover/focus — and overrides only what must differ:
+   pinning is not destructive, so it never goes danger-red, and a pinned tab's
+   button reads accent while hovered so you can tell which way it will toggle.
+
+   It is NOT lit at rest any more. A pinned tab used to keep its pin
+   permanently visible as the "this is pinned" marker, which was redundant
+   twice over: pinned-ness is already conveyed by POSITION (the pinned block
+   sits above the divider), and the resting glyph cost 26px of name width on
+   exactly the rows the user pinned because they matter most. On a 240px rail
+   that is the difference between "Reading List" and "Reading …". It also
+   collided with the meta column — a pinned tab with a schedule rendered
+   `📌 ◷ 23:30`, two unrelated marks reading as one chip.
+
+   Touch never renders this button; the sheet's swipe tray owns pin/unpin. */
+.navtree-pin:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+.navtree-tab-row:hover .navtree-pin.is-pinned,
+.navtree-tab-row:focus-within .navtree-pin.is-pinned {
+  color: var(--accent);
+}
+
+/* ─── …and both buttons, re-inked on the SELECTED row ────────────────────
+   Declared HERE, at the bottom of the section, and not up with the rest of the
+   active-row overrides: `.navtree-tab-row:hover .navtree-pin.is-pinned` above
+   is (0,4,0), and so is any override written with `[data-active="true"]`, so
+   the tie is settled by source order. Written 240 lines earlier it LOST, and a
+   pinned active tab drew its pin in --accent on an --accent block — 1.00:1,
+   an invisible glyph inside a perfectly visible hover square. */
+.navtree-tab-row[data-active="true"] .navtree-close,
+.navtree-tab-row[data-active="true"] .navtree-pin.is-pinned {
+  color: color-mix(in srgb, var(--accent-fg) 78%, var(--accent));
+}
+/* The pin is not destructive; it only has to be visible. */
+.navtree-tab-row[data-active="true"] .navtree-pin:hover,
+.navtree-tab-row[data-active="true"] .navtree-pin.is-pinned:hover {
+  background-color: color-mix(in srgb, var(--accent-fg) 22%, transparent);
+  color: var(--accent-fg);
+}
+/* The × keeps its destructive red wherever it lives — but red on the accent
+   block is unreadable, so the square behind it inverts to the block's ink and
+   the glyph stays --danger against THAT. Declared last so it wins for the one
+   button that is not a pin. */
+.navtree-tab-row[data-active="true"] button.navtree-close:not(.navtree-pin):hover,
+.navtree-pane-row-wrap[data-active="true"] .navtree-close:hover {
+  background-color: var(--accent-fg);
+  color: var(--danger);
+}
+
+/* Two more things that sit ON the solid block and derive their colour from
+   --fg / --bg tokens that are now the wrong side of it. Both render on the
+   SHEET's active tab row: the pane chevron measured 1.4:1 on acme, and the
+   count chip is an OPAQUE --bg-hover blob, so it needs its fill replaced and
+   not just its ink. */
+.navtree-tab-row[data-active="true"] .navtree-pane-expander {
+  color: color-mix(in srgb, var(--accent-fg) 80%, var(--accent));
+}
+.navtree-tab-row[data-active="true"] .navtree-ws-count {
+  background: color-mix(in srgb, var(--accent-fg) 20%, transparent);
+  color: var(--accent-fg);
+}
+
+/* Pane-count hint on a collapsed multi-pane row (sheet). Same chip as
+   .navtree-ws-count on a collapsed workspace — reused verbatim so it carries
+   the meaning it already has ("N children hidden in here"); this only stops
+   it from being squeezed by a long tab name. */
+.navtree-pane-count {
+  flex: 0 0 auto;
+  margin-right: 0;
+  margin-left: 2px;
+}
+
+/* The seam between the pinned block and the auto-sorted one. A hairline with
+   generous air, not a labelled section header: the sidebar is already dense,
+   and the two blocks explain themselves once you've pinned something. */
+.navtree-pin-divider {
+  height: 1px;
+  margin: 5px 10px 5px 22px;
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--border-strong, #3b4261) 80%, transparent),
+    transparent
+  );
 }
 
 /* ─── Sheet pane list (mobile: tab row expands into its panes) ───────── */
@@ -541,16 +1033,48 @@
 .navtree-pane-list {
   display: flex;
   flex-direction: column;
-  /* One hierarchy step DEEPER than the tab name — children must never
-     sit left of their parent. Right padding matches the tab row's (4px) so
-     the pane × lands in the SAME column as the tab ×. */
-  padding: 2px 4px 6px 64px;
+  /* LEFT is DERIVED, so the 18px hierarchy step survives a change to the icon
+     column. A tab name starts at `pad + disc + col-icon` inside the list; a
+     pane label has to start 18px further in, and the pane button contributes
+     8px of its own padding — so the list's inset is that sum minus the 8px the
+     button already pays. Written as a literal (64px) it silently shrank to a
+     6px step the moment the icon track grew.
+     RIGHT is ZERO: the row's own air lives on .navtree-pane-row-wrap below, so
+     the pane's accent block ends on the same x as a tab row's block instead of
+     4px short of it, and the rightmost ink in every sheet row lands on one
+     vertical line. */
+  padding: 2px 0 6px calc(var(--nt-pad) + var(--nt-disc) + var(--nt-col-icon) + 18px - 8px);
 }
 /* Pane row = navigable pill + trailing × sibling (can't nest the × in the
    row's own <button>). The wrap owns the flex row + the hover-reveal. */
 .navtree-pane-row-wrap {
   display: flex;
   align-items: center;
+  /* Anchor for the row's own left state bar (StateChip.css) — pane rows speak
+     the same state language as the tabs above them, one indent deeper. */
+  position: relative;
+  /* Same air a tab row's padding gives its tail, on the row's own box rather
+     than on the list, because THIS is the box that paints the accent block
+     when the pane is the one you are in. On the list it was outside the block
+     and bought the block nothing. */
+  padding-right: var(--nt-air);
+}
+/* The chip trails the button, which grows; no fixed track down here, because a
+   pane list is short and never scanned as a column of its own. A sibling of the
+   button rather than a child — see NavTree.tsx for why — so its space is a
+   margin on the WRAP's flex line, and an idle (empty) chip pays nothing. Air,
+   not the gutter, for the same reason as the tab rows': the thing in front of
+   it is a label that ends at its truncation point. */
+.navtree-pane-row-wrap > .navtree-state:not(:empty) {
+  margin-left: var(--nt-air);
+}
+/* Re-inked against the solid block, same rule as the tab row's controls. */
+.navtree-pane-row-wrap[data-active="true"] .navtree-close {
+  color: color-mix(in srgb, var(--accent-fg) 78%, var(--accent));
+}
+.navtree-pane-row-wrap[data-active="true"] .navtree-close:hover {
+  background-color: var(--accent-fg);
+  color: var(--danger);
 }
 .navtree-pane-row-wrap .navtree-pane-row {
   flex: 1 1 auto;
@@ -581,21 +1105,24 @@
   -webkit-tap-highlight-color: transparent;
 }
 .navtree-pane-row:active {
-  background: var(--bg-hover);
+  background-color: var(--bg-hover);
 }
 /* The pane you're currently viewing shares the active TAB's exact language — a
-   full-row soft accent pill + accent-tinted text — just one indent deeper, so
-   the relationship reads from POSITION (parent tab, child pane below it), not
-   from a different colour or shape. The pill lives on the WRAP so it spans the
-   whole row, × included, exactly like the tab (an inset chip that stopped short
-   of the × was what made them feel like two different things). A hair stronger
-   than the tab since it's the actual focus. No bold — weight means unread. */
+   full-row SOLID accent block with the accent's own ink — just one indent
+   deeper, so the relationship reads from POSITION (parent tab, child pane
+   below it), not from a different colour or shape. It used to be a slightly
+   STRONGER tint than the tab's, which is exactly the distinction that stopped
+   being available: tints now mean state, and two levels of selection told
+   apart by 4% of accent were never a real distinction anyway. The block lives
+   on the WRAP so it spans the whole row, × included, exactly like the tab (an
+   inset chip that stopped short of the × was what made them feel like two
+   different things). No bold — weight means unread. */
 .navtree-pane-row-wrap[data-active="true"] {
-  background: color-mix(in srgb, var(--accent) 18%, var(--bg));
+  background-color: var(--accent);
   border-radius: var(--nt-pill);
 }
 .navtree-pane-row[data-active="true"] .navtree-pane-label {
-  color: color-mix(in srgb, var(--accent) 75%, var(--fg));
+  color: var(--accent-fg);
 }
 
 /* Unread = "done, unreviewed" — an agent finished a turn here while you weren't
@@ -605,14 +1132,18 @@
 .navtree-pane-row[data-unread="true"] .navtree-pane-label {
   font-weight: 700;
 }
-.navtree-ws-row[data-unread="true"] .navtree-name-text {
-  font-weight: 700;
-}
+/* The WORKSPACE-level unread bold is deliberately gone. `unread` bolded pane +
+   tab + workspace simultaneously — the exact triple-signal the attention dot
+   already refuses (it renders on collapsed workspace rows only, so it never
+   repeats what an expanded tab is already saying). Pane and tab keep the bold;
+   the workspace row now says the same thing once, in the status rail. */
 .navtree-pane-label {
-  /* Shrink-to-content (not flex:1) so the working/attention indicator sits
-     right AFTER the name — same as the tab row — instead of being flung to
-     the sidebar's right edge. */
-  flex: 0 1 auto;
+  /* GROW, so the status column that follows is pushed to the row's right edge
+     and lands on the same vertical line as every tab and workspace mark. It was
+     `flex: 0 1 auto` when the glyph was meant to trail the name — which is
+     precisely what made the old rail unscannable. */
+  flex: 1 1 auto;
+  text-align: left;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -622,8 +1153,15 @@
   padding: 4px 8px;
   color: var(--fg-faint);
 }
-.navtree-new-pane {
-  margin: 2px 0 0;
+/* Shown when the pane-list poll has missed repeatedly (D16). Any marks still
+   rendered below are a stale snapshot, so this has to be legible rather than a
+   whisper — but it is a transient condition, not an error the user caused, so
+   it stays --fg-dim rather than --danger. */
+.navtree-pane-error {
+  padding: 4px 8px;
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-style: italic;
 }
 
 /* ─── Inline rename (sidebar) ────────────────────────────────────────── */
@@ -702,7 +1240,7 @@
 }
 .navtree-menu-caret {
   color: var(--fg-faint);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1;
 }
 .navtree-submenu {
@@ -729,29 +1267,79 @@
 /* ─── Tab leading icon + picker ──────────────────────────────────────── */
 
 /* Fixed leading column so every tab row has a glyph in the same place. */
+/* ─── The icon chip ───────────────────────────────────────────────────────
+   A uniform rounded container behind every tab icon, and the reason it exists
+   is measured rather than felt.
+
+   Every earlier attempt anchored on the glyph. That fails because emoji ink is
+   a property of the artwork, not of geometry: scanned out of a real screenshot
+   of the real list, the ink LEFT EDGES already agreed to within 1px, but the
+   ink COVERAGE of the box ran from 11% (🩺) to 47.9% (📶) — a 4.4× range. The
+   eye anchors on where ink is dense, so a solid tile reads as starting at the
+   column edge while a thin diagonal key reads as starting somewhere in the
+   middle, and no amount of aligning or resizing reaches that.
+
+   The chip replaces the thing being anchored on. Its edge is a DOM box, so it
+   is identical on every row by construction — spread 0, not 1px — and the
+   glyph's density stops mattering because it is no longer the leftmost thing
+   in the column.
+
+   Three properties it must hold:
+
+   1. The chip is INSET from the glyph, not flush with it. If a full-bleed tile
+      filled the chip edge to edge the two would merge and the density cue
+      would be back. 24px chip / 16px glyph on the sheet, 20/14 on the rail.
+   2. It must not change the row height, which is pinned to the text line (see
+      --nt-icon-h). So the chip is painted by a pseudo-element and the element's
+      LAYOUT box stays one line tall; the chip's extra 2px above and below
+      spills into the row's 12px padding and costs nothing.
+   3. It must not read as a button. No border, no shadow, and — unlike the old
+      icon — no hover fill. Clicking the icon still opens the picker (the
+      keyboard path remains the context menu's "Change icon…"), but a resting
+      list must not look like a row of tappable squares. */
 .navtree-tab-icon {
   flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
+  position: relative;
+  /* WIDTH is the chip, so the glyph centres over it. The grid TRACK stays
+     --nt-col-icon and is wider, which is what keeps the text column exactly
+     where it is; the element simply sits at the track's left edge. */
+  width: var(--nt-chip);
+  justify-self: start;
+  /* HEIGHT stays one line of title text. The chip is bigger than this and
+     overflows deliberately — see (2) above — which is why there is no
+     `overflow: hidden` here any more. It is not needed: the glyph is clamped
+     to an absolute size well inside the chip and cannot reach the name. */
+  height: var(--nt-icon-h);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  /* A hair larger than the label so the emoji reads as a proper icon,
-     not shrunk-down text. */
-  font-size: 1.2em;
+  /* Absolute, not an inherited `em`: the rendered size must be one number for
+     every glyph and every variant, and must stay inside the chip. */
+  font-size: 14px;
   line-height: 1;
-  border-radius: 4px;
   cursor: pointer;
   -webkit-user-select: none;
   user-select: none;
 }
-.navtree[data-variant="sheet"] .navtree-tab-icon {
-  width: 26px;
-  height: 26px;
-  font-size: 1.25em;
+/* The chip itself. Behind the glyph, centred on it, and inert. */
+.navtree-tab-icon::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: var(--nt-chip);
+  height: var(--nt-chip);
+  border-radius: var(--nt-chip-radius);
+  /* Derived from the row's own foreground, so it lands as a low-contrast
+     container on the warm cream and the dark violet alike without either
+     theme needing its own value. Deliberately quieter than the hover wash
+     (--bg-hover) and the active row's 14% accent pill, so the chip recedes
+     into whichever state the row is in rather than competing with it. */
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
 }
-.navtree-tab-icon:hover {
-  background: color-mix(in srgb, var(--fg) 12%, transparent);
+.navtree[data-variant="sheet"] .navtree-tab-icon {
+  font-size: 16px;
 }
 
 /* Positioned wrapper for the emoji-mart picker (which brings its own
@@ -825,8 +1413,10 @@
 .sidenav {
   /* flex-basis is overridden inline with the persisted/dragged width; this
      is just the fallback before React mounts. grow/shrink stay 0 so the rail
-     holds whatever width the user dragged. */
-  flex: 0 0 240px;
+     holds whatever width the user dragged. Kept in step with
+     settings.ts DEFAULTS.sidebarWidth so the rail doesn't visibly jump on
+     mount for a fresh profile. */
+  flex: 0 0 280px;
   /* min-width:0 caps the flex AUTOMATIC minimum (default min-width:auto
      = content min-content size). Without it, the rename <input>'s
      intrinsic width raises the sidebar's min-content above 240px and
@@ -949,28 +1539,47 @@ body.sidenav-resizing iframe {
   box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.22);
 }
 
-/* The transient Terminal/Agent choice row — appears in place of the quiet
-   "+ New tab" action only while choosing. Equal-width ghost-chip BUTTONS
-   (bordered, centered, identical) so both read as flavors of one action. */
-.navtree-new-row {
+/* ─── Foot: Hosted ───────────────────────────────────────────────────── */
+
+/* Below the tree, past a hairline. Hosted is deliberately NOT a workspace
+   row: apps and artifacts belong to no workspace and occupy no tab, and
+   indenting them into the tree would imply a containment that doesn't
+   exist. The hairline + top margin says "different kind of destination",
+   the same way the group separators say "different workspace". */
+.navtree-foot {
+  margin: 14px 8px 0 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.navtree-foot-link {
   display: flex;
-  gap: 6px;
-  padding: 4px 8px 6px;
-}
-.navtree-new-row .navtree-add {
-  flex: 1 1 0;
-  padding: 5px 0;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: transparent;
+  align-items: center;
+  gap: 8px;
+  height: var(--nt-row-tab);
+  padding: 0 8px;
+  border-radius: var(--nt-pill);
   color: var(--fg-dim);
-  font-size: var(--chrome-size-sm, 12px);
-  text-align: center;
-  cursor: pointer;
-  transition: color 80ms ease, border-color 80ms ease, background 80ms ease;
+  text-decoration: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
-.navtree-new-row .navtree-add:hover:not(:disabled) {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+.navtree-foot-link svg {
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+.navtree-foot-link:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+/* Same "you are here" anchor as the active tab — one grammar for selection
+   across the whole navigator. */
+.navtree-foot-link[data-active="true"] {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.navtree-foot-link[data-active="true"] svg {
+  opacity: 1;
+}
+.navtree-foot-link[data-active="true"]:hover {
+  background: var(--accent);
 }
