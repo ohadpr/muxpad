@@ -320,6 +320,71 @@ describe('subagent count — the SDK message stream, end to end', () => {
     expectCount(fx, runner, 0, 'A finished');
   });
 
+  it('a DISPLACED runner hands the count to its successor, whose own work counts', async () => {
+    // Displacement is NOT the reconnect above. A respawned runner can register
+    // BEFORE the old socket's close fires, and the old conn's teardown then
+    // refuses to act (it would detach its successor) — so the teardown that
+    // zeroes the count never runs. My reconnect case goes through teardown and
+    // could never have caught this; roster-server found it and fixed it by
+    // deriving the count from the REGISTERED conn at every registry mutation.
+    //
+    // What this adds on top of their coverage is a REAL roster on both sides:
+    // the predecessor is a live backend that still believes in its subagents,
+    // and the successor goes on to launch its own through the real dispatch. The
+    // count has to follow the registered runner in both directions — drop the
+    // predecessor's entirely, then track the successor's from zero.
+    const fx = await boot();
+    const first = await startFakeRunner({ port: fx.port, paneId: fx.paneId, sid: SID });
+    const A = liveTask('task_a');
+    const B = liveTask('task_b');
+    await first.feed([
+      sdk.init(),
+      ...backgroundLaunch('toolu_a', 'task_a', 'A', [A]),
+      ...backgroundLaunch('toolu_b', 'task_b', 'B', [A, B]),
+      sdk.result('success'),
+    ]);
+    expectCount(fx, first, 2, 'predecessor has two running');
+
+    // A second runner process takes the pane over while the first socket is
+    // still open. Awaiting the 4001 close is a deterministic barrier for "the
+    // swap happened" rather than a guess at a sleep.
+    const displaced = new Promise<void>((r) => {
+      const t = setInterval(() => {
+        if (!first.connected()) {
+          clearInterval(t);
+          r();
+        }
+      }, 10);
+    });
+    const second = await startFakeRunner({ port: fx.port, paneId: fx.paneId, sid: SID });
+    const prev = cleanup;
+    cleanup = async () => {
+      await second.kill().catch(() => {});
+      await first.kill().catch(() => {});
+      if (prev) await prev();
+    };
+    await displaced;
+
+    // The predecessor still BELIEVES in its two subagents — it is a live process
+    // with a live roster until it exits. The pane must not care: the successor
+    // is the registered runner and its roster is empty.
+    expect(counts(fx, first).runner).toBe(2);
+    expect(fx.cache.getSubagentCount(fx.paneId)).toBe(0);
+    expect(fx.cache.getStatus(fx.paneId, false)).not.toBe('working');
+
+    // …and the successor's OWN launches count from zero, neither inheriting the
+    // predecessor's two nor being suppressed by them.
+    const C = liveTask('task_c');
+    await second.feed([
+      sdk.init(),
+      ...backgroundLaunch('toolu_c', 'task_c', 'C', [C]),
+      sdk.result('success'),
+    ]);
+    expectCount(fx, second, 1, 'the successor counts its own work');
+    await second.feed(backgroundFinish('toolu_c', 'task_c', []));
+    expectCount(fx, second, 0, 'and drains to zero');
+  });
+
   it('runner death zeroes the pane', async () => {
     const fx = await bootPair();
     const { runner } = fx;
