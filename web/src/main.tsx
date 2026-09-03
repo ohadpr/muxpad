@@ -209,11 +209,15 @@ subscribe((e) => {
       void refreshWorkspaces();
       return;
     case 'tab.updated':
-      // tab.updated doesn't carry workspace_id on the schema. Refresh
-      // the workspace list as a coarse fallback; the 5s poll on the
-      // active workspace's tab cache will pick up the name/slug change
-      // shortly, and TabView's own subscriber handles updates for the
-      // currently-viewed tab synchronously.
+      // The ROW itself is not this router's job: tabs.ts subscribes to
+      // tab.updated directly and splices the (already decorated) tab into
+      // every cache slot holding it, so a rename, a headline or an icon
+      // repaints on arrival. TabView's own subscriber handles the
+      // currently-viewed tab.
+      //
+      // What's left here is the workspace list, which tab.updated cannot
+      // address precisely — the event carries no workspace_id — so the
+      // rollup (attention dots, counts) is refreshed wholesale.
       void refreshWorkspaces();
       return;
     case 'pane.added':
