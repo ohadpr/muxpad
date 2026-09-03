@@ -2,8 +2,16 @@ import type { SubagentProgress } from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
 import fanout from '../__fixtures__/sdk-background-fanout.json' with { type: 'json' };
 import nested from '../__fixtures__/sdk-background-nested-multiturn.json' with { type: 'json' };
+import foreground from '../__fixtures__/sdk-foreground-agent.json' with { type: 'json' };
 import { SubagentRoster } from '../subagent-roster.js';
-import { type SubagentStreamMessage, applySubagentMessage, applyTurnResult } from './claude.js';
+import {
+  type SubagentStreamMessage,
+  applySubagentMessage,
+  applyTurnResult,
+  isBackgroundLaunch,
+  isLaunchAck,
+  launchAckTaskId,
+} from './claude.js';
 
 /**
  * REPLAY tests: the roster driven by message streams RECORDED from a real
@@ -105,6 +113,7 @@ function withoutOptionalToolUseIds(frames: readonly Frame[]): Frame[] {
 const FIXTURES: Array<[string, readonly Frame[], number]> = [
   ['a three-agent background fan-out', fanout as unknown as Frame[], 3],
   ['launches across three turns, with nesting', nested as unknown as Frame[], 3],
+  ['a FOREGROUND agent whose report reads like an ack', foreground as unknown as Frame[], 1],
 ];
 
 describe.each(FIXTURES)('replaying a real SDK stream — %s', (_name, frames, topLevelLaunches) => {
@@ -158,6 +167,133 @@ describe.each(FIXTURES)('replaying a real SDK stream — %s', (_name, frames, to
     const closed = new Set<string>();
     for (const p of sent) (p.done ? closed : opened).add(p.toolUseId);
     expect([...opened].sort()).toEqual([...closed].sort());
+  });
+});
+
+describe('an ack and a completion are told apart structurally, not by prose', () => {
+  // The sdk-foreground-agent capture is deliberately adversarial and REAL: a
+  // `run_in_background: false` Agent whose subagent was told to reply
+  // "Async agent launched successfully and the helper finished." Its
+  // tool_result therefore matches the ack phrase AND carries its own
+  // `agentId:` trailer — the two things a launch ack was being recognised by.
+  const frames = foreground as unknown as Frame[];
+
+  function ackText(): string {
+    for (const f of frames) {
+      if (f.type !== 'user' || f.parent_tool_use_id !== null) continue;
+      for (const b of (f.message?.content ?? []) as Array<Record<string, unknown>>) {
+        if (b.type === 'tool_result') {
+          return ((b.content ?? []) as Array<{ text?: string }>).map((x) => x.text ?? '').join(' ');
+        }
+      }
+    }
+    throw new Error('fixture has no top-level tool_result');
+  }
+
+  it('the capture really does contain both traps', () => {
+    const text = ackText();
+    expect(text).toMatch(/[Aa]sync agent launched successfully/);
+    expect(text).toMatch(/agentId: [a-z0-9]+/);
+    expect(text).toMatch(/<usage>/); // …and the thing that gives it away
+  });
+
+  it('is NOT read as a launch ack, so its tool_result still retires the row', () => {
+    // With the SDK's optional ids omitted, the tool_result is the ONLY end-path
+    // left. Reading it as an ack marks a foreground row background: immune to
+    // its own completion, immune to retireForeground, and only reachable by an
+    // empty level payload that a foreground-only session never emits.
+    expect(isLaunchAck(ackText())).toBe(false);
+    expect(launchAckTaskId(ackText())).toBeNull();
+    const { roster } = replay(withoutOptionalToolUseIds(frames));
+    expect(roster.size).toBe(0);
+  });
+
+  it('a real background ack IS read as one', () => {
+    const bg = (fanout as unknown as Frame[]).flatMap((f) => {
+      if (f.type !== 'user' || f.parent_tool_use_id !== null) return [];
+      return ((f.message?.content ?? []) as Array<Record<string, unknown>>)
+        .filter((b) => b.type === 'tool_result')
+        .map((b) =>
+          ((b.content ?? []) as Array<{ text?: string }>).map((x) => x.text ?? '').join(' '),
+        );
+    });
+    expect(bg.length).toBe(3);
+    for (const text of bg) {
+      expect(isLaunchAck(text)).toBe(true);
+      expect(launchAckTaskId(text)).toMatch(/^[a-z0-9]+$/);
+    }
+  });
+});
+
+describe('backgroundness comes from the launch input, not the text', () => {
+  it('reads run_in_background, defaulting Agent to background', () => {
+    // sdk-tools.d.ts: "Agents run in the background by default; you will be
+    // notified when one completes. Set to false to run this agent synchronously".
+    expect(isBackgroundLaunch('Agent', { run_in_background: true })).toBe(true);
+    expect(isBackgroundLaunch('Agent', { run_in_background: false })).toBe(false);
+    expect(isBackgroundLaunch('Agent', { description: 'x' })).toBe(true);
+    // The legacy `Task` name has no such documented default here.
+    expect(isBackgroundLaunch('Task', {})).toBe(false);
+    expect(isBackgroundLaunch('Task', { run_in_background: true })).toBe(true);
+    expect(isBackgroundLaunch('Agent', undefined)).toBe(true);
+  });
+
+  it('the captures carry the flag on every top-level launch', () => {
+    for (const frames of [fanout, nested, foreground] as unknown as Frame[][]) {
+      for (const f of frames) {
+        if (f.type !== 'assistant' || f.parent_tool_use_id !== null) continue;
+        for (const b of (f.message?.content ?? []) as Array<Record<string, unknown>>) {
+          if (b.type === 'tool_use' && (b.name === 'Agent' || b.name === 'Task')) {
+            expect(typeof (b.input as { run_in_background?: unknown }).run_in_background).toBe(
+              'boolean',
+            );
+          }
+        }
+      }
+    }
+  });
+});
+
+describe('a Stop keeps the fleet and takes only the turn’s foreground work', () => {
+  it('spares background rows, retires foreground ones', () => {
+    // The fleet shape: agents launched over earlier turns, still running, while
+    // THIS turn is stopped. Driven through the same two functions the loop uses.
+    const { roster } = makeRoster();
+    // Everything up to the fan-out's first turn `result`: three background
+    // agents launched, started and acked, none of them finished.
+    const upToFirstResult = (fanout as unknown as Frame[]).slice(
+      0,
+      (fanout as unknown as Frame[]).findIndex((f) => f.type === 'result'),
+    );
+    for (const f of upToFirstResult) applySubagentMessage(roster, f);
+    const backgroundRows = roster.size;
+    expect(backgroundRows).toBe(3);
+
+    // …plus a foreground Task, working, in the turn that is about to be stopped.
+    applySubagentMessage(roster, {
+      type: 'assistant',
+      parent_tool_use_id: null,
+      message: {
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_fg',
+            name: 'Agent',
+            input: { description: 'blocking helper', run_in_background: false },
+          },
+        ],
+      },
+    });
+    applySubagentMessage(roster, {
+      type: 'assistant',
+      parent_tool_use_id: 'toolu_fg',
+      message: { content: [{ type: 'tool_use', id: 'toolu_x', name: 'Read', input: {} }] },
+    });
+    expect(roster.size).toBe(backgroundRows + 1);
+
+    applyTurnResult(roster, 'error_during_execution', true);
+    expect(roster.values().some((p) => p.toolUseId === 'toolu_fg')).toBe(false);
+    expect(roster.size).toBe(backgroundRows);
   });
 });
 
