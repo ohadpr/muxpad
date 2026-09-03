@@ -43,6 +43,18 @@ export interface FakeRunner {
   readonly sent: RunnerFrame[];
   /** Log lines the backend wrote to the pane's terminal face. */
   readonly logs: string[];
+  /**
+   * Put a HAND-WRITTEN frame on the runner's live socket, bypassing the backend
+   * and its roster.
+   *
+   * The one thing the real backend can no longer produce: a PRE-DURABLE
+   * runner's `subagent` frame, which carries no `seenAt` (that field landed
+   * 2026-08-30 — bce4cb4). That population is exactly what the server's stall
+   * reaper's `changedAt` fallback exists for, and a pane keeps its old runner
+   * process for weeks, so it has to be expressible on the SAME connection as a
+   * live, real-roster subagent.
+   */
+  emitRaw(frame: unknown): void;
   /** Drop the socket WITHOUT reconnecting — a ws blip / server restart. */
   disconnect(): Promise<void>;
   /** Reconnect after {@link disconnect} (re-hello + onConnected re-announce). */
@@ -150,6 +162,9 @@ export async function startFakeRunner(opts: FakeRunnerOptions): Promise<FakeRunn
       await sdk.settle();
       // …and let the frames the loop emitted reach the server.
       await new Promise((r) => setTimeout(r, 30));
+    },
+    emitRaw(frame) {
+      if (sock?.readyState === WebSocket.OPEN) sock.send(JSON.stringify(frame));
     },
     async disconnect() {
       const s = sock;

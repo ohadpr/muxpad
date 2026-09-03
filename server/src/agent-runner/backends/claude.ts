@@ -313,7 +313,14 @@ export function applySubagentMessage(roster: SubagentRoster, msg: SubagentStream
         const text = blockText(b.content);
         const taskId = launchAckTaskId(text);
         if (taskId) roster.bindBackgroundTask(b.tool_use_id, taskId);
-        else if (!isLaunchAck(text)) roster.done(b.tool_use_id);
+        // An ack that says "launched" but carries no `agentId:` still PROVES the
+        // launch happened, which is the fact `retireUnstarted` needs. Binding a
+        // null task id records exactly that: acked, not yet bound. Drop this
+        // branch and `launchAcked` becomes unreachable — the turn's `result`
+        // then retires a live background agent that simply has not reached its
+        // first child message yet (probe: up to 44s).
+        else if (isLaunchAck(text)) roster.bindBackgroundTask(b.tool_use_id, null);
+        else roster.done(b.tool_use_id);
       } else if (b.type === 'text' && typeof b.text === 'string') {
         const id = taskNotificationToolUseId(b.text);
         if (id) roster.done(id);
