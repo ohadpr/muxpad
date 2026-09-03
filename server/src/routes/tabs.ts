@@ -37,7 +37,8 @@ export function tabsRoutes(deps: {
   const app = new Hono();
   const tabs = new TabStore(deps.db);
   const panes = new PaneStore(deps.db);
-  // Only for refusing hidden system containers as a move/merge destination.
+  // Refusing hidden system containers as a move/merge destination, and
+  // enumerating the VISIBLE ones for the cross-workspace `/all` read.
   const workspaces = new WorkspaceStore(deps.db);
 
   app.post('/', async (c) => {
@@ -104,15 +105,23 @@ export function tabsRoutes(deps: {
     return c.json(created.tab, 201);
   });
 
-  app.get('/', (c) => {
-    const workspaceId = c.req.query('workspaceId');
-    if (!workspaceId) {
-      return c.json(
-        { error: { code: 'bad_request', message: 'workspaceId query param required' } },
-        400,
-      );
-    }
-    const list = tabs.listByWorkspace(workspaceId);
+  /**
+   * The living sidebar's order for ONE workspace's decorated rows.
+   *
+   * PINNED tabs first, in the user's manual drag order (`raw` arrives
+   * position-sorted, so a stable partition preserves it). Then the rest,
+   * auto-sorted: needs-attention → most recently active, with position and id
+   * as the final tiebreaks so the order is TOTAL and can't jitter between two
+   * renders of identical data.
+   *
+   * Sorting here rather than in the client means every consumer (web, sheet,
+   * CLI, a future surface) sees one authoritative order, and the
+   * recency/attention inputs never have to be re-derived. Shared by the
+   * per-workspace list and the cross-workspace `?all=1` read so the search
+   * results and the tree can never disagree about which tab comes first.
+   */
+  function orderedForWorkspace(workspaceId: string): Tab[] {
+    const raw = tabs.listByWorkspace(workspaceId);
     // Fold in the two independent per-tab signals:
     //   attention (red dot, "wants you NOW") = any pane rang BEL since you
     //     last interacted. Purely runtime.
@@ -125,29 +134,52 @@ export function tabsRoutes(deps: {
     // decoratePane) — every tab.updated / tab.added emitter routes through it
     // too, so the list and the live events can't describe a tab differently.
     const manualUnreadIds = tabs.unreadIdsByWorkspace(workspaceId);
-    // One cron query for the whole workspace (see cronsByTab) — the sidebar
-    // polls this route every 5s, so a per-row lookup would be the hottest
-    // query in the app.
+    // One cron query per workspace (see cronsByTab) — the sidebar polls this
+    // route every 5s, so a per-row lookup would be the hottest query in the app.
     const cronIds = cronsByTab(deps.db, workspaceId);
-    const decorated = list.map((t) =>
-      decorateTab(deps.cache, deps.db, t, manualUnreadIds, cronIds),
-    );
-    // ── The living sidebar's order ────────────────────────────────────────
-    // PINNED tabs first, in the user's manual drag order (`list` already
-    // arrives position-sorted, so a stable partition preserves it). Then the
-    // rest, auto-sorted: needs-attention → most recently active, with
-    // position and id as the final tiebreaks so the order is TOTAL and can't
-    // jitter between two renders of identical data.
-    //
-    // Sorting here rather than in the client means every consumer (web,
-    // sheet, CLI, a future surface) sees one authoritative order, and the
-    // recency/attention inputs never have to be re-derived.
-    const positions = new Map(list.map((t, i) => [t.id, i]));
+    const decorated = raw.map((t) => decorateTab(deps.cache, deps.db, t, manualUnreadIds, cronIds));
+    const positions = new Map(raw.map((t, i) => [t.id, i]));
     const pinned = decorated.filter((t) => t.pinned);
     const rest = decorated
       .filter((t) => !t.pinned)
       .sort((a, b) => compareUnpinnedTabs(a, b, positions));
-    return c.json([...pinned, ...rest]);
+    return [...pinned, ...rest];
+  }
+
+  /**
+   * Every VISIBLE workspace's tabs in ONE request — the instant tier of the
+   * sidebar's search box (web/src/components/NavSearch.tsx).
+   *
+   * The search has to match across workspaces the user has never expanded, and
+   * `useTabs` only ever fetches a workspace once something mounts for it. The
+   * alternative was a fan-out of one `GET /api/tabs?workspaceId=…` per
+   * workspace on mount, which is precisely the mobile cold-load cost the
+   * per-workspace caches and the mount coalescer exist to avoid. One request,
+   * fetched lazily on first focus of the box, keeps first paint untouched.
+   *
+   * Grouped rather than flattened because the client needs the workspace's
+   * NAME (it is a matchable field) and its SLUG (half the route a result
+   * navigates to), and `Tab` carries neither.
+   */
+  app.get('/all', (c) => {
+    const list = workspaces.list().map((w) => ({
+      id: w.id,
+      slug: w.slug,
+      name: w.name,
+      tabs: orderedForWorkspace(w.id),
+    }));
+    return c.json({ workspaces: list });
+  });
+
+  app.get('/', (c) => {
+    const workspaceId = c.req.query('workspaceId');
+    if (!workspaceId) {
+      return c.json(
+        { error: { code: 'bad_request', message: 'workspaceId query param required' } },
+        400,
+      );
+    }
+    return c.json(orderedForWorkspace(workspaceId));
   });
 
   // Mark every pane in a tab as "seen". Called by the web client when

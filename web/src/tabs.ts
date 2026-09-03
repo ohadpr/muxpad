@@ -65,6 +65,19 @@ export async function refreshTabs(workspaceId: string): Promise<void> {
 }
 
 /**
+ * Whatever tabs are already cached for a workspace, with NO fetch of any kind.
+ *
+ * The sidebar search box's fallback corpus: the box's real source is one
+ * cross-workspace read taken on first focus, and until that lands the first
+ * keystroke has to match against something. These slots hold every workspace
+ * the user has actually expanded — which on any real session is the ones they
+ * are most likely to be looking for.
+ */
+export function cachedTabsFor(workspaceId: string): Tab[] {
+  return caches.get(workspaceId) ?? [];
+}
+
+/**
  * A tab list that is current "enough", without a guaranteed round trip.
  *
  * For callers that want to re-derive something from the server's list (e.g.

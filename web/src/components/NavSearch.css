@@ -1,0 +1,244 @@
+/* ──────────────────────────────────────────────────────────────────────
+   NavSearch — the box at the head of the rail, and the result list that
+   takes the tree's place while it has anything in it.
+
+   Deliberately its OWN class namespace rather than a reuse of
+   `.navtree-tab-row`: those rows carry a three-channel state encoding
+   (left bar + wash + chip) tuned for a list you SCAN, and two of the
+   three tests that guard it (SwipeRow.cascade, StateChip) read the rule
+   set out of NavTree.css by selector shape. A result list is a list you
+   READ, once, for a couple of seconds — it wants a highlight and a hit
+   snippet, not a status rail — so it gets its own small sheet instead of
+   a fourth qualifier on theirs.
+   ────────────────────────────────────────────────────────────────────── */
+
+.navsearch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* Sits between the brand hairline and the tree, matching the scroller's
+     own left/right insets so the box lines up with the rows under it. */
+  margin: 6px 8px 2px 4px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-elev);
+  /* The rail is resizable down to 160px; the box must shrink with it rather
+     than push the scroller's tracks around. */
+  min-width: 0;
+}
+.navsearch:focus-within {
+  border-color: var(--accent);
+}
+
+.navsearch-glyph {
+  flex: none;
+  color: var(--fg-faint);
+}
+
+.navsearch-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--ui-font);
+  font-size: var(--chrome-size);
+  /* 32px on desktop; the sheet raises it below. iOS zooms a focused field
+     whose text is under 16px, which is why the mobile variant also bumps the
+     FONT — a taller box alone does not prevent the zoom. */
+  height: 30px;
+  padding: 0;
+}
+.navsearch-input::placeholder {
+  color: var(--fg-faint);
+}
+/* Chromium paints its own clear button on a field with a value when the UA
+   thinks it is a search field; we draw our own, so make sure there is only
+   ever one. */
+.navsearch-input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.navsearch-clear {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg-faint);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.navsearch-clear:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+/* ─── Mobile ────────────────────────────────────────────────────────────
+   The sheet is a thumb surface: a taller box, a 16px field (below that iOS
+   zooms the whole page on focus and the user has to pinch back out), and a
+   clear button at the 24px minimum tap target. */
+.navsearch[data-variant="sheet"] {
+  margin: 4px 10px 6px;
+  padding: 0 10px;
+}
+.navsearch[data-variant="sheet"] .navsearch-input {
+  height: 40px;
+  font-size: 16px;
+}
+.navsearch[data-variant="sheet"] .navsearch-clear {
+  width: 26px;
+  height: 26px;
+  font-size: 18px;
+}
+
+/* ─── Results ───────────────────────────────────────────────────────── */
+
+.navsearch-results {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.navsearch-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px 5px 6px;
+  border-radius: var(--nt-pill, 6px);
+  cursor: pointer;
+  /* The rows are driven from the input (combobox + aria-activedescendant),
+     so a stray text selection while the pointer crosses them is only noise. */
+  user-select: none;
+}
+/* ONE highlight, and it follows the keyboard cursor — which the pointer also
+   moves (onMouseMove), so hover and selection can never disagree about which
+   row Enter would open. */
+.navsearch-row[data-cursor="true"] {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.navsearch-row-icon {
+  font-size: 14px;
+  line-height: 1;
+  text-align: center;
+}
+
+.navsearch-row-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.navsearch-row-title,
+.navsearch-row-snippet,
+.navsearch-row-sub {
+  /* One line each, ellipsised. A result row that wraps turns a five-row list
+     into a wall and moves everything under the cursor as you type. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.navsearch-row-title {
+  font-size: var(--chrome-size);
+  color: var(--fg);
+}
+.navsearch-row-snippet {
+  font-size: var(--chrome-size-sm);
+  color: var(--fg-dim);
+}
+.navsearch-row-sub {
+  font-size: var(--chrome-size-sm);
+  color: var(--fg-faint);
+}
+.navsearch-row-ws {
+  color: var(--fg-dim);
+}
+.navsearch-row-dot {
+  margin: 0 4px;
+}
+.navsearch-row[data-cursor="true"] .navsearch-row-title,
+.navsearch-row[data-cursor="true"] .navsearch-row-snippet,
+.navsearch-row[data-cursor="true"] .navsearch-row-sub,
+.navsearch-row[data-cursor="true"] .navsearch-row-ws {
+  color: var(--accent-fg);
+}
+
+/* The matched run. `<mark>` for the semantics; the UA's yellow block is
+   replaced outright — in a rail this narrow a filled highlight is louder than
+   the row it sits in, so weight and colour carry it instead. */
+.navsearch-hit {
+  background: transparent;
+  color: var(--accent);
+  font-weight: 600;
+}
+.navsearch-row[data-cursor="true"] .navsearch-hit {
+  color: var(--accent-fg);
+  text-decoration: underline;
+}
+
+/* A single dot, no word: see the comment at its render site for why the
+   StateChip is deliberately not used here. */
+.navsearch-row-state {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-quiet);
+}
+.navsearch-row-state[data-state="working"] {
+  background: var(--status-working);
+}
+.navsearch-row-state[data-state="blocked"] {
+  background: var(--status-blocked);
+}
+.navsearch-row-state[data-state="ready"] {
+  background: var(--status-ready);
+}
+.navsearch-row-state[data-state="dead"] {
+  background: var(--status-dead);
+}
+
+/* The seam between "chats" and "what was said in them". A labelled hairline,
+   because the two tiers answer different questions and a result list that
+   mixed them without saying so would read as one ranking that had gone
+   wrong. */
+.navsearch-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 6px 4px;
+  color: var(--fg-faint);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.navsearch-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.navsearch-empty {
+  padding: 10px 8px;
+  color: var(--fg-faint);
+  font-size: var(--chrome-size-sm);
+}
+
+.navtree[data-variant="sheet"] .navsearch-row {
+  /* Thumb height, matching the sheet's own tab rows. */
+  padding: 9px 10px;
+  gap: 10px;
+}
