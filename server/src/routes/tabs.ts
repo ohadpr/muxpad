@@ -92,11 +92,14 @@ export function tabsRoutes(deps: {
       // was the worst of both worlds: every one of them drew the same glyph,
       // so the rail was already the uniform column a per-tab icon exists to
       // avoid — and because a STORED glyph is one the generator must ask
-      // permission to replace (chat/headline.ts), it also cost the tab its one
-      // free icon write. A tab whose first generation happened to answer
-      // "ICON: KEEP" wore `✳` until its subject changed. Left bare, the rail
-      // draws a stable per-tab stand-in and the first good generation lands
-      // unconditionally.
+      // permission to replace (chat/headline.ts), a tab whose first generation
+      // answered "ICON: KEEP" wore `✳` until its subject changed. Left bare,
+      // the rail draws a stable per-tab stand-in — derived from the tab id, so
+      // distinct per row and stored nowhere — and the first generation that
+      // produces a real LABEL brings the glyph with it. (There is no "free
+      // first write" any more: `chooseIcon` requires a new headline on every
+      // row, bare or not. A bare row's advantage is that it has no headline
+      // either, so its first accepted label is by definition a change.)
     });
     return c.json(created.tab, 201);
   });

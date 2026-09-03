@@ -515,7 +515,7 @@ describe('isIconFrozen — when the glyph is off-limits (conditions 1 and 2)', (
 
   it('a row we have never written is never frozen', () => {
     // Bare, or wearing a PLACEHOLDER — the ✳ a bootstrapped agent tab is
-    // created with, the ⏱ a cron tab gets, anything left from before this
+    // was created with, the ⏱ a cron tab got, anything left from before this
     // feature. `icon_at` is null for all of them and none is a glyph the
     // reader has learned.
     expect(isIconFrozen({ ...base, iconAt: null })).toBe(false);
@@ -577,7 +577,7 @@ describe('chooseIcon — what may actually be written (conditions 3 and 4)', () 
   });
 
   it('will NOT replace an existing icon while the headline stood still', () => {
-    // Condition 5, and the structural reason churn is impossible rather than
+    // Condition 4, and the structural reason churn is impossible rather than
     // merely unlikely. A subject that genuinely moved moves the LABEL first —
     // that is what the label is for. A new glyph beside a kept line is the
     // model preferring a different picture of the same thing, which is the
@@ -775,7 +775,7 @@ describe('chooseIcon — a visible glyph is a visible glyph, whoever put it ther
   };
 
   it('will NOT displace a creation default while the label stood still', () => {
-    // `✳` is what a bootstrapped agent tab is created with, `⏱` what a cron tab
+    // `✳` is what a bootstrapped agent tab USED to be created with, `⏱` what a cron tab
     // gets. It is tempting to call those free to replace — nobody chose them.
     // But we cannot tell them from an icon the user picked by hand before there
     // was a flag to record it, and churning THAT on the first turn after an
