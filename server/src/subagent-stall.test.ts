@@ -40,19 +40,30 @@ describe('reapStalledEntries', () => {
     expect(subagents.size).toBe(1);
   });
 
-  it('trusts the runner`s seenAt over our own stamp', () => {
-    // Our stamp is old (we have not seen the payload change), but the runner
-    // reports recent real activity: a long silent tool call. Keep the row.
-    const subagents = new Map([['a', p({ toolUseId: 'a', seenAt: T0 + 59 * 60_000 })]]);
+  it('NEVER touches a row from a runner that sends seenAt, however stale', () => {
+    // The scope rule, and the most important test in this file. A runner new
+    // enough to stamp `seenAt` ends its own subagents and knows things we
+    // cannot see: which rows are parked behind a rate limit (hours), and that
+    // silence may be one enormous tool call (`agent wait --timeout=3600` is a
+    // thing this codebase does). Silence is not evidence at the server, so we
+    // do not act on it. Reaping here would hide a LIVE agent's row and read
+    // the pane as idle while real work runs.
+    const parked = p({ toolUseId: 'a', steps: 3, seenAt: T0 });
+    const subagents = new Map([['a', parked]]);
     const changed = new Map([['a', T0]]);
-    expect(reapStalledEntries(subagents, changed, T0 + 60 * 60_000)).toEqual([]);
+    const hoursLater = T0 + 6 * 60 * 60_000;
+    expect(reapStalledEntries(subagents, changed, hoursLater)).toEqual([]);
+    expect(subagents.size).toBe(1);
   });
 
-  it('reaps an entry whose seenAt is past the window', () => {
-    const subagents = new Map([['a', p({ toolUseId: 'a', seenAt: T0 })]]);
-    const changed = new Map<string, number>();
-    expect(reapStalledEntries(subagents, changed, T0 + SUBAGENT_STALL_MS + 1)).toEqual(['a']);
-    expect(subagents.size).toBe(0);
+  it('reaps a stalled pre-seenAt row on the same clock that spares a modern one', () => {
+    // Same silence, same window, opposite verdicts — the ONLY difference is
+    // whether the runner is capable of cleaning up after itself.
+    const now = T0 + SUBAGENT_STALL_MS + 1;
+    const old = new Map([['old', p({ toolUseId: 'old', steps: 2 })]]);
+    const modern = new Map([['new', p({ toolUseId: 'new', steps: 2, seenAt: T0 })]]);
+    expect(reapStalledEntries(old, new Map([['old', T0]]), now)).toEqual(['old']);
+    expect(reapStalledEntries(modern, new Map([['new', T0]]), now)).toEqual([]);
   });
 
   it('reaps a pre-seenAt ghost on our own frozen-payload stamp', () => {
@@ -168,15 +179,18 @@ describe('the reap must STICK against a live keepalive', () => {
     }
   });
 
-  it('reaping a row whose seenAt is frozen does not re-arm on its own echo', () => {
-    // The keepalive-era shape specifically: `seenAt` IS present but frozen, so
-    // the freshness check would reap it again every single sweep.
-    const frozen = p({ toolUseId: 'g', steps: 9, seenAt: T0 });
-    const subagents = new Map([['g', frozen]]);
+  it('the tombstone map is bounded, like every other roster map', () => {
+    // A ghost never speaks again, so its tombstone is released by nothing and
+    // would live as long as the connection — and connections live for weeks.
+    const subagents = new Map<string, SubagentProgress>();
+    const changed = new Map<string, number>();
     const reaped = new Map<string, SubagentProgress>();
-    const now = T0 + SUBAGENT_STALL_MS + 1;
-
-    expect(reapStalledEntries(subagents, new Map(), now, reaped)).toEqual(['g']);
-    expect(isMaterialProgress(reaped.get('g'), keepaliveEcho(frozen))).toBe(false);
+    for (let i = 0; i < 100; i++) {
+      subagents.set(`g${i}`, p({ toolUseId: `g${i}`, steps: 1 }));
+      changed.set(`g${i}`, T0);
+    }
+    reapStalledEntries(subagents, changed, T0 + SUBAGENT_STALL_MS + 1, reaped);
+    expect(subagents.size).toBe(0);
+    expect(reaped.size).toBeLessThanOrEqual(32);
   });
 });

@@ -111,16 +111,31 @@ const STALL_SWEEP_MS = 60_000;
  * `steps` advancing is a subagent doing something, and a frozen `steps` across
  * 20 minutes of heartbeats is a subagent that no longer exists.
  *
- * Freshness per entry, most to least trustworthy:
- *   1. `seenAt` — the runner's own last-real-activity stamp. Authoritative.
- *   2. `changedAt` — when the SERVER last saw this entry's payload change.
- *      The fallback for pre-`seenAt` runners, which is exactly the population
- *      this function exists for.
+ * SCOPE — ONLY rows from runners too old to send `seenAt`. This is the whole
+ * safety argument, and it is narrow on purpose.
  *
- * Reaping is not destructive and not final: nothing is killed, only unlisted.
- * If a reaped subagent turns out to be alive, its very next progress frame
- * re-inserts the row. A false reap costs one stale row for one tick; a missed
- * reap costs a pane that reads `working` until someone notices and respawns it.
+ * A modern runner does not need us. It ends its subagents on four paths plus an
+ * authoritative LEVEL signal (`system/background_tasks_changed` carries the full
+ * live set), and it knows two things the server cannot see: which rows are
+ * PARKED behind a rate limit — `sweepSuspended`, whose own comment is "absence
+ * must never be the thing that kills a running subagent" — and that a row's
+ * silence may just be one enormous tool call. Neither survives `wireProgress`.
+ * So silence, at the server, is not evidence: a rate-limit hold runs for hours
+ * and `muxpad agent wait --timeout=3600` is a thing this very codebase does.
+ * Second-guessing a modern runner from silence trades a rare leak for a common
+ * false negative on a perfectly healthy agent — and a false negative here hides
+ * a LIVE agent's row and reads the pane as idle while real work runs.
+ *
+ * A pre-`seenAt` runner is the opposite case: it has no terminal frame at all,
+ * no level reconciliation, and no keepalive. Its leaks are permanent by
+ * construction, its `changedAt` is a true "nothing has happened since", and
+ * nothing else in the system can ever clean up after it. That is the population
+ * worth acting on, and the only one.
+ *
+ * Reaping is not destructive: nothing is killed, only unlisted. A reaped row
+ * returns on its next materially-different frame. But note the tombstone makes
+ * that return conditional on real progress rather than automatic — which is
+ * exactly why this must not fire on runners whose quiet rows are legitimate.
  */
 export function reapStalledEntries(
   subagents: Map<string, SubagentProgress>,
@@ -131,9 +146,14 @@ export function reapStalledEntries(
 ): string[] {
   const dropped: string[] = [];
   for (const [id, p] of subagents) {
-    const fresh = p.seenAt ?? changedAt.get(id);
-    // No stamp of either kind: adopt `now` so the entry gets a full window
-    // from when we first noticed it, rather than being reaped on sight.
+    // `seenAt` present ⟹ a runner new enough to end its own subagents and to
+    // know which of them are legitimately quiet. Leave it alone; see the scope
+    // note above. This is a capability probe, not a freshness read — we never
+    // compare against `seenAt`, we only ask whether the field exists.
+    if (p.seenAt !== undefined) continue;
+    const fresh = changedAt.get(id);
+    // No stamp: adopt `now` so the entry gets a full window from when we first
+    // noticed it, rather than being reaped on sight.
     if (fresh === undefined) {
       changedAt.set(id, now);
       continue;
@@ -145,7 +165,20 @@ export function reapStalledEntries(
     // tombstone is what lets the insert path tell a keepalive echo of this
     // exact payload from the row genuinely coming back to life.
     const p = subagents.get(id);
-    if (reaped && p) reaped.set(id, p);
+    if (reaped && p) {
+      reaped.set(id, p);
+      // A bound, not a policy — same reasoning as MAX_PANE_SUBAGENTS. A
+      // tombstone is released by a `done`, by real progress, or by teardown;
+      // the ghost this exists for does none of those, so its entry would
+      // otherwise live as long as the connection, and connections live weeks.
+      // Dropping the oldest only risks one more reap/echo cycle for a row
+      // nobody has heard from in a very long time.
+      while (reaped.size > MAX_PANE_SUBAGENTS) {
+        const oldest = reaped.keys().next();
+        if (oldest.done) break;
+        reaped.delete(oldest.value);
+      }
+    }
     subagents.delete(id);
     changedAt.delete(id);
   }
@@ -745,7 +778,12 @@ export function attachWsServer(deps: {
   const sweepStalledSubagents = (): void => {
     const now = Date.now();
     for (const [paneId, conn] of agentRunners) {
-      const reaped = reapStalledEntries(conn.subagents, conn.subagentChangedAt, now, conn.subagentReaped);
+      const reaped = reapStalledEntries(
+        conn.subagents,
+        conn.subagentChangedAt,
+        now,
+        conn.subagentReaped,
+      );
       if (reaped.length === 0) continue;
       // Must look like an end to every client, or the rows linger until the
       // next 10s session poll happens to notice (same contract as eviction).
