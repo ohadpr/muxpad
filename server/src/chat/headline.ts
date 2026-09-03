@@ -507,6 +507,13 @@ export interface IconPromptState {
  * nothing (the reply is one token either way) and buys two things: the model
  * spends its attention on the label instead of on a decision it does not have,
  * and the prompt stops containing a claim that is not true.
+ *
+ * It removes the case it CAN remove, not every case. `chooseIcon` also gates on
+ * the headline's own verdict (condition 4), which is not known until the reply
+ * exists — so "The row has no icon yet. Choose one." is still an ask whose
+ * answer is dropped whenever the same reply's label is rejected or kept. That
+ * is unavoidable at prompt time and is not the same defect: the frozen case was
+ * knowable in advance and was being asked anyway.
  */
 function iconAsk(icon: IconPromptState): string {
   if (icon.frozen) {
@@ -806,8 +813,8 @@ export function isPlausibleHeadline(s: string): boolean {
  * find by shape has to still be that shape tomorrow. So the icon is set once
  * and then defended much harder than the line under it.
  *
- * THE RULE, in full. A glyph already on the row changes only if ALL of these
- * hold:
+ * THE RULE, in full. The row's glyph changes — is written at all, whether it is
+ * displacing something or filling a blank — only if ALL of these hold:
  *
  *   1. The user has never set it by hand. `icon_sticky` is one-way and
  *      absolute — the same contract as `name_sticky`, which the sidebar work
@@ -851,24 +858,47 @@ export function isPlausibleHeadline(s: string): boolean {
  * thrown away and the glyph from the same breath was stamped and then frozen
  * for six hours.
  *
- * Bare is also not the edge case it sounds like. New tabs are born with no
- * icon (TabStore.create), agent tabs no longer get a `✳` and cron tabs no
- * longer get a `⏱`, and the rail draws `fallbackTabIcon` for the gap — so an
- * install's rows are overwhelmingly bare, and a rule that only bites on
- * non-bare rows barely bites at all.
+ * Bare is also not the edge case it sounds like. Every tab created since the
+ * random default was removed is born with no icon (TabStore.create), agent
+ * tabs are created bare (routes/tabs.ts) and so are cron tabs
+ * (CronScheduler.ts), and the rail draws `fallbackTabIcon` for the gap. On the
+ * install this was found on, 24 of 25 live rows had `icon = NULL` — so a rule
+ * that only bit on non-bare rows barely bit at all. (Installs old enough to
+ * have run migration 8 also carry rows stamped with a random glyph; those were
+ * never bare and were always governed by the full rule.)
  *
- * Nothing is lost by closing it. A first icon still lands on the first reply
- * whose label we accept, which for a row with no headline is its first
- * successful generation; the interval between attempts is HEADLINE_MIN_
- * INTERVAL_MS, not six hours. The only case removed is "keep the line, take
- * the glyph", and that case is exactly the one where the reply told us it had
- * nothing new to say about what the chat is about.
+ * ─── WHAT CLOSING IT COSTS, honestly ──────────────────────────────────────
+ *
+ * A brand-new tab loses nothing: it has no headline either, so its first
+ * accepted label is by definition a change and carries the glyph along.
+ *
+ * A SETTLED row does pay, and the price is not bounded. The only trigger for
+ * an icon is now an accepted label, and a chat whose subject has stopped
+ * moving answers `LABEL: KEEP` indefinitely — so a row that is bare AND
+ * settled can stay bare for as long as the conversation stays on topic. Two
+ * ways in: a row whose subject settled before it ever got a glyph, and
+ * `PATCH /tabs/:id {icon: ''}`, which releases a user-chosen icon back to the
+ * machine (TabStore.releaseIcon) and now hands it back to a machine that may
+ * not pick it up for a long while. Neither leaves a blank row — the rail draws
+ * `fallbackTabIcon` — but "hand it back" does mean "and wait for the subject
+ * to move".
+ *
+ * That is the deliberate trade, and the alternative was considered: split the
+ * null-headline verdict into REJECTED versus KEEP/unchanged, and let a bare
+ * row take a glyph from a reply we trusted but that had nothing new to say.
+ * It fixes the stranding and still blocks the defect. It was not taken because
+ * it puts back the one thing that made the defect possible — a second, softer
+ * path into `setIcon` for exactly the rows that have no glyph to protect them
+ * — in exchange for filling a blank slightly sooner on a chat that is, by
+ * construction, not being worked on. One sentence for every row is worth more
+ * than that. Revisit if bare-and-settled rows are ever actually seen to
+ * accumulate.
  *
  * A previous draft drew the line somewhere else: at PROVENANCE. Anything we had
  * not written ourselves was a "placeholder" — the `✳` a bootstrapped agent tab
- * is created with, the `⏱` a cron tab gets, the leading emoji lifted off a pane
- * title, the random glyphs from before this feature — and displacing one was
- * free. That is wrong, and the reason is that provenance is exactly what we do
+ * was then created with, the `⏱` a cron tab then got, the leading emoji lifted
+ * off a pane title, the random glyphs from before this feature — and displacing
+ * one was free. That is wrong, and the reason is that provenance is exactly what we do
  * not know. Before `icon_sticky` existed nothing recorded who put a glyph on a
  * row, so "we did not write it" covers both the machine defaults AND every icon
  * the user chose by hand in the year before there was a flag to record it. A
@@ -1220,10 +1250,12 @@ export function sweepImplausibleHeadlines(db: Database.Database): { cleared: str
  *
  * Nothing needs backfilling because nothing is blocking. Eligibility lives in
  * `chooseIcon`, and its one condition is the same for every row, glyph or no
- * glyph: the chat's headline has to move. Old rows clear that on their next
- * accepted label, and until then the rail draws `fallbackTabIcon` for the bare
- * ones — distinct per tab, derived rather than stored, so it is unambiguously
- * not a choice anyone made.
+ * glyph: the chat's headline has to move. Old rows become eligible the moment
+ * one does — which for a chat still being worked on is soon, and for one that
+ * has settled may be a long time (see the cost note beside the rule). Until
+ * then the rail draws `fallbackTabIcon` for the bare ones — distinct per tab,
+ * derived rather than stored, so it is unambiguously not a choice anyone
+ * made.
  *
  * The globals key `tab_icon_backfill_v1` is left set on installs that ran the
  * first version. It is inert, and reusing it would be a trap.
