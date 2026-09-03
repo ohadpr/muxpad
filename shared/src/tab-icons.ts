@@ -4,10 +4,16 @@
  * always has a consistent leading glyph (vs. emoji-in-name, which left
  * half the rows bare).
  *
- * A new tab starts with NO icon and the rail renders DEFAULT_TAB_ICON for it,
- * until either the headline generator picks one from what the chat is actually
- * about (server/src/chat/headline.ts) or the user picks one by hand from the
- * full emoji keyboard. Tabs used to be born with a RANDOM icon from the list
+ * A new tab starts with NO icon and the rail renders `fallbackTabIcon(tab.id)`
+ * for it — derived from the id rather than stored, so it is stable per row and
+ * mostly distinct across rows — until either the headline generator picks one
+ * from what the chat is actually about (server/src/chat/headline.ts) or the
+ * user picks one by hand from the full emoji keyboard. It is NOT
+ * `DEFAULT_TAB_ICON`: one constant glyph down the whole column defeats the
+ * point of having a column, which is why that constant is now reached only by
+ * the unreachable index branches of the two pickers below.
+ *
+ * Tabs used to be born with a RANDOM icon from the list
  * below, which is why several unrelated chats ended up all wearing 👍 and 🗝 —
  * and, worse, why none of them could ever be given a meaningful one: "this tab
  * already has an icon" is the generator's own hands-off signal.
