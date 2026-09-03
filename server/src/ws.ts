@@ -338,6 +338,23 @@ export function attachWsServer(deps: {
   const isHumanMessage = (text: string) => parseCronMarker(text) === null;
   const agentRunners = new Map<string, AgentRunnerConn>();
   /**
+   * Publish the pane's subagent count to the cache — the number `GET /api/panes`
+   * renders as `agents:` and `getStatus` reads as "working".
+   *
+   * DERIVED, never independently maintained: it is always the REGISTERED
+   * runner's roster size, and zero when no runner owns the pane. That
+   * one-liner is the whole point — the count used to be written from the
+   * `subagent` frame handler and cleared only from teardown, which gave it a
+   * lifecycle of its own. Teardown is deliberately muted for a DISPLACED
+   * runner (a replaced socket must not detach its successor), so a runner that
+   * was replaced rather than closed left its count standing with nothing alive
+   * that could ever retire it: the pane rendered a dead process's subagents
+   * forever and read `working` for good — a spinner with no way back.
+   */
+  const syncSubagentCount = (paneId: string): void => {
+    deps.cache.setSubagentCount(paneId, agentRunners.get(paneId)?.subagents.size ?? 0);
+  };
+  /**
    * The bus edge for an OPTIMISTIC turn start — the moment the server relays a
    * send and claims `turnActive` before the runner's own `turn-start` echoes
    * back. Without it that round trip is dark to every subscriber: `turn_active`
@@ -855,6 +872,17 @@ export function attachWsServer(deps: {
           lastHumanSendAt: 0,
         };
         agentRunners.set(paneId, conn);
+        // THIS runner owns the pane's per-connection state from this instant,
+        // and it starts empty. Anything the previous connection left in the
+        // CACHE has to go with it — the displaced conn's teardown is a no-op by
+        // design (see the guard in teardown), so this is the only place that
+        // can retire it. Both fields are rebuilt within a beat by the runner's
+        // own `onConnected` re-announce (roster + any question it is really
+        // holding), so a plain ws blip costs a blink, not a lost subagent. What
+        // it buys is that a REPLACED runner can no longer bequeath a phantom
+        // `agents: N` / stuck `working` (or a stuck `blocked`) to its successor.
+        syncSubagentCount(paneId);
+        deps.cache.setBlocked(paneId, false);
         const bcast = (obj: unknown) => bcastToPane(paneId, obj);
         const emitChange = () =>
           deps.events.emit({ type: 'agent_session.updated', pane_id: paneId });
@@ -1099,7 +1127,7 @@ export function attachWsServer(deps: {
             // roster means "work is running here" whether or not a turn is.
             // setSubagentCount is edge-triggered on the COUNT, so the runner's
             // 5s keepalive (which re-sends the same ids) fans no events.
-            deps.cache.setSubagentCount(paneId, conn.subagents.size);
+            syncSubagentCount(paneId);
             bcast({ t: 'subagent', progress: frame.progress });
           } else if (frame.t === 'status') {
             // Validate off the wire — version-skewed runners are NORMAL
@@ -1153,7 +1181,9 @@ export function attachWsServer(deps: {
           // re-announces its live roster in onConnected, so a ws blip costs at
           // most a blink, not a permanently lost subagent.)
           conn.subagents.clear();
-          deps.cache.setSubagentCount(paneId, 0);
+          // Registry-derived, and this conn has just left the registry — so
+          // this is a zero, by the same rule as everywhere else.
+          syncSubagentCount(paneId);
           streamBufs.delete(paneId);
           if (conn.turnActive) {
             conn.turnActive = false;
