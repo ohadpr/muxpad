@@ -77,10 +77,78 @@ export async function freshTabs(workspaceId: string): Promise<Tab[]> {
 let liveRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 const pendingWorkspaceRefresh = new Set<string>();
 const lastPaneStatus = new Map<string, string>();
+
+/** Coalesce every queued workspace refetch into one pass, 250ms out. */
+function scheduleLiveRefresh(): void {
+  if (liveRefreshTimer !== null) return;
+  liveRefreshTimer = setTimeout(() => {
+    liveRefreshTimer = null;
+    const wss = [...pendingWorkspaceRefresh];
+    pendingWorkspaceRefresh.clear();
+    for (const wsId of wss) void refreshTabs(wsId);
+    // Keep the collapsed-workspace attention rollup live too.
+    void refreshWorkspaces();
+  }, 250);
+}
+
+/**
+ * Merge a server-pushed tab row into every cache slot holding it.
+ *
+ * ─── Why a PATCH and not a refetch ───────────────────────────────────────
+ * `tab.updated` used to reach this module not at all: main.tsx handled it
+ * with `refreshWorkspaces()` alone, so a renamed tab, a new headline or a new
+ * icon sat invisible until the 5s poll — and indefinitely for a workspace
+ * whose poll is stopped (collapsed, or the document hidden). HeadlineWriter
+ * emits the event precisely to avoid that wait, and the wait happened anyway.
+ *
+ * The event already carries the whole decorated row (every emitter goes
+ * through `decorateTab` for exactly this reason), so there is nothing to fetch:
+ * splicing it in is a round trip saved AND — the part that matters more —
+ * it leaves the ARRAY ORDER alone. The server owns the order (pinned block,
+ * then attention → recency) and the client only renders the sequence it was
+ * given, so an in-place replacement cannot make a row jump under the cursor.
+ * A refetch here would have: `tab.updated` also fires on every
+ * `last_activity_at` write, so wiring this to a refetch would have turned the
+ * unpinned block into a list that re-sorts on every finished turn, at the
+ * debounce rate, everywhere except the one frozen active row.
+ *
+ * ─── The one thing a patch cannot do ─────────────────────────────────────
+ * `pinned` is the single field of the row that the ORDER has to agree with:
+ * NavTree draws the pinned/unpinned divider at `tabs.filter(t => t.pinned)
+ * .length`, so a flip patched into the middle of the list would put the
+ * divider in the wrong place until the next poll. That case — a pin toggled
+ * on another device — takes the refetch instead. (The local pin button already
+ * refetches on its own; this is for the echo.)
+ */
+function applyTabRow(next: Tab): void {
+  for (const [wsId, list] of caches) {
+    const i = list.findIndex((t) => t.id === next.id);
+    if (i < 0) continue;
+    const prev = list[i] as Tab;
+    if ((prev.pinned ?? false) !== (next.pinned ?? false)) {
+      pendingWorkspaceRefresh.add(wsId);
+      scheduleLiveRefresh();
+      continue;
+    }
+    const merged = [...list];
+    merged[i] = next;
+    // Same version bump as applyTabOrder / applyTabUnread: a poll that started
+    // before this event must not land after it and undo it.
+    versions.set(wsId, (versions.get(wsId) ?? 0) + 1);
+    caches.set(wsId, merged);
+    const subs = listenersByWs.get(wsId);
+    if (subs) for (const fn of subs) fn(merged);
+  }
+}
+
 const unsubLiveRefresh = subscribe((e) => {
   // Forget a removed pane's signature so a recreated id starts clean.
   if (e.type === 'pane.removed') {
     lastPaneStatus.delete(e.pane_id);
+    return;
+  }
+  if (e.type === 'tab.updated') {
+    applyTabRow(e.tab);
     return;
   }
   if (e.type !== 'pane.updated') return;
@@ -99,15 +167,7 @@ const unsubLiveRefresh = subscribe((e) => {
   for (const [wsId, list] of caches) {
     if (list.some((t) => t.id === e.tab_id)) pendingWorkspaceRefresh.add(wsId);
   }
-  if (liveRefreshTimer !== null) return;
-  liveRefreshTimer = setTimeout(() => {
-    liveRefreshTimer = null;
-    const wss = [...pendingWorkspaceRefresh];
-    pendingWorkspaceRefresh.clear();
-    for (const wsId of wss) void refreshTabs(wsId);
-    // Keep the collapsed-workspace attention rollup live too.
-    void refreshWorkspaces();
-  }, 250);
+  scheduleLiveRefresh();
 });
 // Events don't replay across a reconnect, and pane.updated only fires on busy
 // edges — so a transition missed during a disconnect would stay deduped in
