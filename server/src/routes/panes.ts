@@ -797,9 +797,16 @@ export function panesScopedRoutes(deps: {
         // shell, so the charset is gated exactly as the tabs route gates it:
         // ids like 'claude-opus-4-8[1m]' pass, shell metacharacters cannot.
         // Omitted = no `--model` flag = whatever the harness's own default is.
+        // The leading-dash exclusion is not cosmetic: the charset alone admits
+        // `--dangerously-skip-permissions`, which reaches the runner as
+        // `muxpad agent --model '--dangerously-skip-permissions'` and is taken
+        // as the model VALUE. Not RCE (the value is single-quoted and the
+        // charset has no quote, space, $ or backtick), but a flag-shaped model
+        // is never a real model, so reject the shape outright.
         model: z
           .string()
           .regex(/^[A-Za-z0-9._[\]-]{1,64}$/)
+          .refine((m) => !m.startsWith('-'), 'a model id cannot start with "-"')
           .optional(),
       })
       .safeParse(await c.req.json().catch(() => ({})));
