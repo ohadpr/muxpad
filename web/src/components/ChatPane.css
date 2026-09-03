@@ -2024,3 +2024,312 @@
   opacity: 0.6;
   cursor: default;
 }
+
+/* ── Making a conversion visible ───────────────────────────────────────────
+   Picking a harness on an empty chat converts the pane IN PLACE: same pane,
+   same position, same greeting. It used to leave the screen byte-identical, so
+   the button read as dead. Three pieces fix that, all in the empty state:
+   the mark now carries the harness's own logo, a line under the greeting names
+   the harness and its folder, and a transient confirmation says what just
+   started. */
+
+/* The mark carrying a brand logo drops the accent gradient: Claude's orange
+   and Codex's green are the point, and they cannot be read on top of it. */
+.chat-empty-mark.-logo {
+  background: var(--chat-elev, var(--bg-elev));
+  border: 1px solid var(--chat-border, var(--border));
+  box-shadow: none;
+  color: var(--chat-dim, var(--fg-dim));
+}
+
+.chat-empty-ident {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: -4px;
+  font-family: var(--chrome-font, inherit);
+  font-size: 12.5px;
+}
+.chat-empty-ident-name {
+  color: var(--fg-dim, #a9b1d6);
+  font-weight: 600;
+}
+.chat-empty-ident-cwd {
+  font-family: var(--mono-font, monospace);
+  font-size: 11.5px;
+  color: var(--fg-faint, #6f7488);
+  word-break: break-all;
+}
+
+/* "Now running Codex · ~/dev/muxpad" — the receipt. Accent-tinted so it reads
+   as an answer to the tap rather than as an error, and it fades itself out
+   (see CONVERT_CONFIRM_MS) instead of needing dismissal. */
+.chat-convert-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  /* min() not a bare 420px: the empty state is only ~342px wide on a phone,
+     and a fixed max-width let the receipt (which carries a full path) run off
+     the right edge of the screen. */
+  max-width: min(420px, 100%);
+  box-sizing: border-box;
+  margin-top: 6px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent, #7aa2f7) 45%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent, #7aa2f7) 12%, transparent);
+  color: var(--fg, #d7dae0);
+  font-family: var(--chrome-font, inherit);
+  font-size: 12.5px;
+  line-height: 1.35;
+  text-align: left;
+  animation: chat-convert-in 160ms ease-out;
+}
+.chat-convert-confirm svg {
+  flex: 0 0 auto;
+}
+/* A working directory is one long unbreakable token; let it break anywhere
+   rather than widen the box past the viewport. */
+.chat-convert-confirm span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+@keyframes chat-convert-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-convert-confirm {
+    animation: none;
+  }
+}
+
+/* The server's refusal ("this chat already has messages"). Rendered by BOTH
+   empty-state branches, because a 409 is exactly what moves the user from one
+   to the other — see convertRefusal in ChatPane.tsx. */
+.chat-convert-refusal {
+  max-width: min(420px, 100%);
+  box-sizing: border-box;
+  margin-top: 6px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger, #f7768e) 45%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--danger, #f7768e) 10%, transparent);
+  color: var(--danger, #f7768e);
+  font-family: var(--chrome-font, inherit);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+/* ── The launch card ───────────────────────────────────────────────────────
+   Opened by tapping a harness in the "or open instead" strip; replaces the
+   strip in place so nothing else on screen moves. Folder and model arrive
+   pre-answered, so it stays one tap for anyone who doesn't care. */
+.chat-launch-card {
+  width: 100%;
+  max-width: 420px;
+  box-sizing: border-box;
+  margin-top: 18px;
+  padding: 12px;
+  border: 1px solid var(--border-strong, #3b4261);
+  border-radius: 12px;
+  background: var(--bg-elev, #1a1b26);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  text-align: left;
+}
+.chat-launch-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chat-launch-title {
+  font-family: var(--chrome-font, inherit);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg, #d7dae0);
+}
+.chat-launch-sub {
+  flex: 1 1 auto;
+  font-family: var(--chrome-font, inherit);
+  font-size: 11.5px;
+  color: var(--fg-faint, #6f7488);
+}
+.chat-launch-cancel {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  margin: -10px -8px -10px 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-faint, #6f7488);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.chat-launch-cancel:hover:not(:disabled) {
+  color: var(--fg, #d7dae0);
+}
+.chat-launch-section {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.chat-launch-lbl {
+  font-family: var(--chrome-font, inherit);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-faint, #6f7488);
+}
+.chat-launch-note {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--fg-faint, #6f7488);
+}
+.chat-launch-models {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chat-launch-model {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--border-strong, #3b4261) 65%, transparent);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--fg-dim, #a9b1d6);
+  font-family: var(--chrome-font, inherit);
+  font-size: 12.5px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+.chat-launch-model:hover:not(:disabled) {
+  color: var(--fg, #d7dae0);
+  background: color-mix(in srgb, var(--fg, #d7dae0) 6%, transparent);
+}
+/* Selection is aria-pressed, so the visual state and the announced state can
+   never drift apart. */
+.chat-launch-model[aria-pressed="true"] {
+  color: var(--accent, #7aa2f7);
+  border-color: color-mix(in srgb, var(--accent, #7aa2f7) 65%, transparent);
+  background: color-mix(in srgb, var(--accent, #7aa2f7) 12%, transparent);
+}
+.chat-launch-model:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.chat-launch-model:focus-visible,
+.chat-folder-chip:focus-visible,
+.chat-launch-go:focus-visible,
+.chat-launch-cancel:focus-visible {
+  outline: 1px solid var(--accent, #7aa2f7);
+  outline-offset: 1px;
+}
+.chat-launch-go {
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid var(--accent, #7aa2f7);
+  border-radius: 10px;
+  background: var(--accent, #7aa2f7);
+  color: #fff;
+  font-family: var(--chrome-font, inherit);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.chat-launch-go:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ── Folder chooser (shared: launch card + the session menu's switcher) ──── */
+.chat-folder-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.chat-folder-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chat-folder-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-height: 44px;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--border-strong, #3b4261) 65%, transparent);
+  border-radius: 9px;
+  background: transparent;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+.chat-folder-chip-name {
+  font-family: var(--chrome-font, inherit);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg-dim, #a9b1d6);
+  line-height: 1.15;
+}
+/* The basename alone is ambiguous across worktrees; the `~`-path is what tells
+   two `muxpad` folders apart. Clamped so a deep path can't stretch the row. */
+.chat-folder-chip-path {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono-font, monospace);
+  font-size: 10.5px;
+  color: var(--fg-faint, #6f7488);
+  line-height: 1.15;
+}
+.chat-folder-chip:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fg, #d7dae0) 6%, transparent);
+}
+.chat-folder-chip:hover:not(:disabled) .chat-folder-chip-name {
+  color: var(--fg, #d7dae0);
+}
+.chat-folder-chip[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--accent, #7aa2f7) 65%, transparent);
+  background: color-mix(in srgb, var(--accent, #7aa2f7) 12%, transparent);
+}
+.chat-folder-chip[aria-pressed="true"] .chat-folder-chip-name {
+  color: var(--accent, #7aa2f7);
+}
+.chat-folder-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* The card's path field is full-width; the session menu's popover already
+   constrains it. */
+.chat-launch-card .chat-folder-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+@media (max-width: 520px) {
+  .chat-launch-card {
+    max-width: none;
+  }
+  .chat-folder-chip-path {
+    max-width: 18ch;
+  }
+}

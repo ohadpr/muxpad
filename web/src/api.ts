@@ -9,16 +9,22 @@ import type { AgentMode, LayoutNode, PaneSpec, Tab, UrlHealth, Workspace } from 
  * when the envelope is there; fall back to the status for anything else
  * (HTML error pages, proxies, an empty body).
  */
-async function errorMessage(res: Response): Promise<string> {
+async function errorEnvelope(res: Response): Promise<{ message: string; code: string | null }> {
   const text = await res.text().catch(() => '');
   try {
-    const body = JSON.parse(text) as { error?: { message?: unknown } };
+    const body = JSON.parse(text) as { error?: { message?: unknown; code?: unknown } };
     const m = body?.error?.message;
-    if (typeof m === 'string' && m.trim()) return m;
+    const code = typeof body?.error?.code === 'string' ? body.error.code : null;
+    if (typeof m === 'string' && m.trim()) return { message: m, code };
   } catch {
     // not our envelope — fall through
   }
-  return text.trim() ? `${res.status} ${text.slice(0, 200)}` : `request failed (${res.status})`;
+  return {
+    message: text.trim()
+      ? `${res.status} ${text.slice(0, 200)}`
+      : `request failed (${res.status})`,
+    code: null,
+  };
 }
 
 /**
@@ -32,10 +38,21 @@ async function errorMessage(res: Response): Promise<string> {
  */
 export class ApiError extends Error {
   readonly status: number;
-  constructor(message: string, status: number) {
+  /**
+   * The envelope's machine-readable `code`, when it had one.
+   *
+   * The status alone is too coarse for the refusals that matter: `has_messages`
+   * and `mid_turn` are both 409 and mean opposite things to the UI (one says
+   * "your view of this chat is wrong", the other says "not yet"). The
+   * alternative — matching on the human sentence — breaks the first time the
+   * wording is improved.
+   */
+  readonly code: string | null;
+  constructor(message: string, status: number, code: string | null = null) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -49,13 +66,35 @@ export async function req<T>(input: RequestInfo, init?: RequestInit): Promise<T>
       ...(init?.headers ?? {}),
     },
   });
-  if (!res.ok) throw new ApiError(await errorMessage(res), res.status);
+  if (!res.ok) {
+    const { message, code } = await errorEnvelope(res);
+    throw new ApiError(message, res.status, code);
+  }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
 export interface TabWithPanes extends Tab {
   panes: PaneSpec[];
+}
+
+/** A folder the user has recently worked in — a one-tap option in the
+ *  launch card. `path` is already snapped to its project root, so the chip
+ *  and the session that starts from it name the same directory. */
+export interface RecentFolder {
+  path: string;
+  name: string;
+  /** `~`-relative form, for the chip's second line. */
+  short: string;
+  hasProject: boolean;
+}
+
+export interface AgentLaunchOptions {
+  folders: RecentFolder[];
+  /** Per-backend model lists, absent for a backend that has never run here —
+   *  the card then offers only the harness's own default, which is honest. */
+  models: Record<string, Array<{ value: string; displayName: string; resolvedModel?: string }>>;
+  home: string;
 }
 
 export interface MovePaneResult {
@@ -194,19 +233,31 @@ export const api = {
 
   deletePane: (id: string) => req<void>(`/api/panes/${id}`, { method: 'DELETE' }),
 
-  /** Choose the harness for a pending ('muxpad agent --pick') agent pane —
-   *  sets the backend + respawns the runner. */
+  /** Choose the harness for an EMPTY agent pane — sets the backend (and,
+   *  optionally, the folder and model it starts with) and respawns the runner. */
   setAgentBackend: (
     paneId: string,
     backend: 'claude' | 'codex' | 'cursor',
     /** Omit to keep the pane's current overlay; pass 'deep' for a RAW
      *  session of the harness (no house contract on top). */
     mode?: AgentMode,
+    /** Chosen at the moment of picking, in the launch card. Omit either to
+     *  keep the pane's folder / let the harness pick its own model. */
+    start?: { cwd?: string | undefined; model?: string | undefined },
   ) =>
     req<void>(`/api/panes/${paneId}/agent-backend`, {
       method: 'POST',
-      body: JSON.stringify({ backend, ...(mode ? { mode } : {}) }),
+      body: JSON.stringify({
+        backend,
+        ...(mode ? { mode } : {}),
+        ...(start?.cwd ? { cwd: start.cwd } : {}),
+        ...(start?.model ? { model: start.model } : {}),
+      }),
     }),
+
+  /** Folder + model choices for the empty chat's launch card, in one read.
+   *  See server/src/routes/agent-launch.ts for why they travel together. */
+  agentLaunchOptions: () => req<AgentLaunchOptions>('/api/agent-launch/options'),
 
   /** Convert an agent pane into a plain terminal (clears the startup command,
    *  flips to the terminal face, respawns). */
