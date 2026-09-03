@@ -29,8 +29,16 @@ import { type HeadlineModel, agentSdkHeadlineModel, maybeWriteHeadline } from '.
  *    behave like it.
  *
  * Emits `tab.updated` when EITHER output changed, so the sidebar picks it up
- * live rather than on its next 5s poll. Nothing is emitted for a KEEP on both,
- * which is the common case — a no-op turn costs the client nothing.
+ * live rather than on its next 5s poll. That liveness is not free by virtue of
+ * emitting: the client has to be listening, and for a long time it was not —
+ * `tab.updated` reached only the workspace-rollup refresh, so this event bought
+ * nothing and a headline appeared whenever the poll next came round. The other
+ * half lives in `web/src/tabs.ts` (`applyTabRow`), which splices the decorated
+ * row straight into the per-workspace cache. Emitting here without that is a
+ * comment, not a feature.
+ *
+ * Nothing is emitted for a KEEP on both, which is the common case — a no-op
+ * turn costs the client nothing.
  */
 export class HeadlineWriter {
   private readonly db: Database.Database;
@@ -97,12 +105,18 @@ export class HeadlineWriter {
       glossary: this.glossary(),
     })
       .then(({ headline, icon }) => {
-        // EITHER output landing is worth a repaint, and they move
-        // independently: the common shape after a subject shift is a new line
-        // with the same glyph, but a tab meeting the icon generator for the
-        // first time can just as easily get a new glyph under a KEPT line.
-        // Testing only `headline` here would have left that second case
-        // invisible until the sidebar's next 5s poll.
+        // EITHER output landing is worth a repaint. The common shape after a
+        // subject shift is a new line with the SAME glyph, so the first
+        // disjunct carries almost every real emit.
+        //
+        // The second is currently unreachable, and deliberately kept: an icon
+        // can only land beside a headline we accepted (chat/headline.ts,
+        // condition 4 — it has no bare-row exemption any more), so `icon`
+        // non-null implies `headline` non-null today. Writing the condition as
+        // `!headline` would encode that coupling HERE, in the plumbing, where
+        // nothing states or tests it; the generator is free to decouple the
+        // two outputs again and this line should not be what breaks. It costs
+        // one `&&`.
         if (!headline && !icon) return;
         const tab = new TabStore(this.db).getById(tabId);
         if (!tab) return;
