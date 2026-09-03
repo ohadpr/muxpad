@@ -130,7 +130,7 @@ describe('agent modes over HTTP', () => {
       method: 'POST',
       ...json({ backend: 'claude' }),
     });
-    expect(pick.status).toBe(204);
+    expect(pick.status).toBe(200);
     expect(paneRow(pane.id).startup_cmd).toBe('muxpad agent --mode do');
   });
 
@@ -149,7 +149,7 @@ describe('agent modes over HTTP', () => {
       method: 'POST',
       ...json({ backend: 'cursor' }),
     });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
     expect(paneRow(pane.id).startup_cmd).toBe('muxpad agent --backend cursor --mode do');
   });
 

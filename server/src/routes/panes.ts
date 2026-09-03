@@ -901,7 +901,18 @@ export function panesScopedRoutes(deps: {
         tab_id: refreshed.tab_id,
         pane: decoratePane(deps.cache, refreshed),
       });
-    return c.body(null, 204);
+    // Return what was ACTUALLY used, not what was asked for. `agentCwd` snaps
+    // the request to the project root, so a client echoing its own input can
+    // name a different folder than the session got -- the confirmation said
+    // `.../muxpad/src` while the greeting said `.../muxpad`: two folders on
+    // screen for one conversion. The resolved values are the only honest thing
+    // to show, and the caller cannot compute them.
+    return c.json({
+      backend,
+      mode: nextMode,
+      cwd: nextCwd ?? null,
+      model: body.data.model ?? null,
+    });
   });
 
   // Convert an EMPTY agent chat into a plain terminal. Same gate as
