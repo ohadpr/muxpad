@@ -215,10 +215,13 @@ describe('server-side subagent mirror', () => {
     await waitUntil(() => cache.getSubagentCount(paneId) === 3);
 
     // A new runner process takes the pane over while the old socket is still
-    // open — the server displaces it with 4001.
+    // open — the server displaces it with 4001. That close is initiated inside
+    // the successor's upgrade, so awaiting it is a deterministic barrier for
+    // "the swap has happened" (a fixed sleep would be a guess about a machine).
+    const displaced = new Promise<number>((r) => first.once('close', (code) => r(code)));
     const second = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
     second.send(hello(2));
-    await new Promise((r) => setTimeout(r, 250));
+    expect(await displaced).toBe(4001);
 
     // The live runner has no subagents, so neither may the pane.
     expect(await chatRoster(port, paneId)).toEqual([]);
@@ -243,11 +246,56 @@ describe('server-side subagent mirror', () => {
     );
     await waitUntil(() => cache.getStatus(paneId, false) === 'blocked');
 
+    const displaced = new Promise<number>((r) => first.once('close', (code) => r(code)));
     const second = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
     second.send(hello(2));
-    await new Promise((r) => setTimeout(r, 250));
+    expect(await displaced).toBe(4001);
     expect(cache.getStatus(paneId, false)).toBe('idle');
     second.close();
+  });
+
+  it('a runner displaced MID-TURN still closes its turn on the bus', async () => {
+    // The same muted-teardown hole, one field over. `muxpad agent wait` and the
+    // Archiver's realtime enqueue key on a balanced start/done pair; a runner
+    // replaced mid-turn emitted `start` and never `done`, so both blocked to
+    // timeout on a turn that ended the moment the process was told to exit.
+    const { port, paneId, cache } = await boot();
+    const evSock = await openSock(`ws://127.0.0.1:${port}/ws/events`);
+    const turns: Array<{ phase: string; sid: string | null }> = [];
+    evSock.on('message', (data) => {
+      const e = JSON.parse(String(data)) as {
+        type?: string;
+        pane_id?: string;
+        phase?: string;
+        sid?: string | null;
+      };
+      if (e.type === 'agent_turn' && e.pane_id === paneId)
+        turns.push({ phase: e.phase ?? '', sid: e.sid ?? null });
+    });
+
+    const first = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    first.send(hello(1));
+    first.send(JSON.stringify({ t: 'turn-start' }));
+    await waitUntil(() => turns.length === 1);
+    expect(turns).toEqual([{ phase: 'start', sid: SID }]);
+
+    // Its successor arrives before the old socket's close is processed.
+    const displaced = new Promise<number>((r) => first.once('close', (code) => r(code)));
+    const second = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    expect(await displaced).toBe(4001);
+    await waitUntil(() => turns.length === 2);
+    expect(turns[1]).toEqual({ phase: 'done', sid: SID });
+    // …and the pane is no longer lit by a turn nobody is running.
+    expect(cache.getStatus(paneId, false)).toBe('idle');
+
+    // The successor hellos MID-TURN of its own: that is a new, observable
+    // start, and the pair stays balanced.
+    second.send(hello(2, true));
+    await waitUntil(() => turns.length === 3);
+    expect(turns[2]).toEqual({ phase: 'start', sid: SID });
+    expect(cache.getStatus(paneId, false)).toBe('working');
+    second.close();
+    evSock.close();
   });
 
   it('a runner death mid-turn clears the roster and the pane stops spinning', async () => {
