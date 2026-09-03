@@ -2,6 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { MuxpadEvent } from '@muxpad/shared';
+
+type TabUpdated = Extract<MuxpadEvent, { type: 'tab.updated' }>;
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../events.js';
@@ -113,7 +115,17 @@ describe('HeadlineWriter — the wiring between a finished turn and the rail', (
     return w;
   }
 
-  const tabUpdates = () => seen.filter((e) => e.type === 'tab.updated');
+  /**
+   * The `tab.updated` events emitted so far, NARROWED.
+   *
+   * Typed rather than left as `MuxpadEvent`, because the alternative idiom —
+   * `expect(ev?.type === 'tab.updated' && ev.tab.x).toBeDefined()` — is a
+   * tautology the moment the guard is false: `expect(false).toBeDefined()`
+   * passes. A predicate here means every assertion below reads the field it
+   * says it reads.
+   */
+  const tabUpdates = (): TabUpdated[] =>
+    seen.filter((e): e is TabUpdated => e.type === 'tab.updated');
 
   describe('the per-tab in-flight guard', () => {
     it('collapses a burst of turns in ONE tab to a single generation', async () => {
@@ -145,24 +157,26 @@ describe('HeadlineWriter — the wiring between a finished turn and the rail', (
       // The guard is a Set keyed by tab. A global flag would look identical in
       // the test above and would mean one slow agent starves every other
       // chat's rail — worse on exactly the install that needs the rail most.
-      const a = makeChat('A');
-      const b = makeChat('B');
-      const inFlight = new Set<string>();
+      const chats = ['A', 'B', 'C'].map(makeChat);
+      // A real counter, not a set of stringified sizes: the point is the PEAK,
+      // and it has to stay honest for more than two overlapping calls and for
+      // releases that arrive out of order.
+      let live = 0;
       let maxConcurrent = 0;
       const releases: Array<() => void> = [];
       const w = run(async () => {
-        inFlight.add(String(inFlight.size));
-        maxConcurrent = Math.max(maxConcurrent, inFlight.size);
+        live += 1;
+        maxConcurrent = Math.max(maxConcurrent, live);
         await new Promise<void>((r) => releases.push(r));
-        inFlight.clear();
+        live -= 1;
         return 'LABEL: cron restart persistence\nICON: ⏱';
       });
 
-      events.emit(turnDone(a.paneId));
-      events.emit(turnDone(b.paneId));
-      expect(maxConcurrent).toBe(2);
+      for (const c of chats) events.emit(turnDone(c.paneId));
+      expect(maxConcurrent).toBe(chats.length);
       for (const r of releases) r();
       await w.idle();
+      expect(live).toBe(0);
     });
 
     it('releases the guard so the NEXT turn is generated too', async () => {
@@ -198,13 +212,13 @@ describe('HeadlineWriter — the wiring between a finished turn and the rail', (
       events.emit(turnDone(paneId));
       await w.idle();
 
-      const [ev] = tabUpdates();
-      expect(ev).toBeDefined();
-      expect(ev?.type === 'tab.updated' && ev.tab.id).toBe(tabId);
-      expect(ev?.type === 'tab.updated' && ev.tab.headline).toBe('cron restart persistence');
+      expect(tabUpdates()).toHaveLength(1);
+      const ev = tabUpdates()[0] as TabUpdated;
+      expect(ev.tab.id).toBe(tabId);
+      expect(ev.tab.headline).toBe('cron restart persistence');
       // Decorated, not the raw store row: clients coalesce the event onto their
       // cached tab, so a missing rollup field BLANKS the status rail.
-      expect(ev?.type === 'tab.updated' && ev.tab.status).toBeDefined();
+      expect(ev.tab.status).toBeDefined();
     });
 
     it('carries the ICON on the same event as the headline', async () => {
@@ -221,10 +235,10 @@ describe('HeadlineWriter — the wiring between a finished turn and the rail', (
       events.emit(turnDone(paneId));
       await w.idle();
 
-      const [ev] = tabUpdates();
       expect(tabUpdates()).toHaveLength(1);
-      expect(ev?.type === 'tab.updated' && ev.tab.icon).toBe('⏱️');
-      expect(ev?.type === 'tab.updated' && ev.tab.headline).toBe('cron restart persistence');
+      const ev = tabUpdates()[0] as TabUpdated;
+      expect(ev.tab.icon).toBe('⏱️');
+      expect(ev.tab.headline).toBe('cron restart persistence');
     });
 
     it('says NOTHING when the reply keeps both', async () => {
@@ -285,6 +299,10 @@ describe('HeadlineWriter — the wiring between a finished turn and the rail', (
       });
       events.emit({ ...turnDone(paneId), phase: 'start' } as MuxpadEvent);
       events.emit({ ...turnDone(paneId), phase: 'fatal' } as MuxpadEvent);
+      // …and the other half of the same guard. The bus carries pane, tab and
+      // workspace traffic too, and this class must not read `pane_id` off an
+      // event that has none.
+      events.emit({ type: 'pane.removed', pane_id: paneId, tab_id: 'whatever' } as MuxpadEvent);
       await w.idle();
       expect(calls).toBe(0);
     });

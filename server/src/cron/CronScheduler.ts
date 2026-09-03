@@ -490,9 +490,10 @@ export class CronScheduler {
       name: cron.name,
       bootstrap: 'agent',
       // No icon — see the note on the same omission in routes/tabs.ts. A
-      // stored `⏱` made every scheduled tab identical AND spent the free icon
-      // write the generator needs to give this one a glyph about its actual
-      // subject, which is far more useful than "this is a cron".
+      // stored `⏱` made every scheduled tab identical AND stood in the way of
+      // the glyph the generator would give this one about its actual subject,
+      // which is far more useful than "this is a cron": a stored glyph is one
+      // the generator has to displace rather than fill.
 
       ...(cron.cwd ? { cwd: cron.cwd } : {}),
       ...(cron.model ? { model: cron.model } : {}),
