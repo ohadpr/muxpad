@@ -475,7 +475,7 @@ describe('maybeWriteHeadline — the icon, and what must never move it', () => {
   });
 
   it('refuses to move the glyph when the LINE stood still', async () => {
-    // Anti-drift condition 5, end to end. Past the window, a valid new emoji,
+    // Anti-drift condition 4, end to end. Past the window, a valid new emoji,
     // and the model saying KEEP to the label — which means the subject did not
     // move, which means the picture of it has no business moving either.
     await maybeWriteHeadline(db, tabId, paneId, reply('cron restart persistence', '⏰'), {
@@ -573,10 +573,10 @@ describe('maybeWriteHeadline — the icon, and what must never move it', () => {
   });
 
   it('a brand-new tab is still labelled on its FIRST successful generation', async () => {
-    // What makes "prefer keeping" free rather than costly. A fresh tab wears
-    // `✳` and has no headline, so its first accepted label IS a change and
-    // carries the glyph along — no upgrade in behaviour was traded away for
-    // the conservatism above.
+    // What makes "prefer keeping" cheap rather than costly. This one is seeded
+    // with `✳` to stand for a tab that HAS a glyph of unknown provenance (tabs
+    // are created bare now); the point is that it also has no headline, so its
+    // first accepted label IS a change and carries the glyph along.
     const id = tabs.create({ name: 'Fresh', workspace_id: workspaceId, layout: 'p' }).id;
     const pane = new PaneStore(db).create({ tab_id: id }).id;
     new AgentSessionStore(db).register({
