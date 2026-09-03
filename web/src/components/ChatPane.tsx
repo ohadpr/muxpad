@@ -28,8 +28,13 @@ import {
 } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ApiError, api } from '../api';
-import { AGENT_BACKENDS, type AgentBackendId } from '../lib/agent-backend';
+import { type AgentLaunchOptions, type RecentFolder, api } from '../api';
+import {
+  AGENT_BACKENDS,
+  type AgentBackendId,
+  backendLabel,
+  conversionFailure,
+} from '../lib/agent-backend';
 import {
   type MessagePart,
   composeOutgoingMessage,
@@ -244,6 +249,294 @@ interface RosterAgent {
   busy: boolean;
 }
 
+/** Trim a trailing slash so `/a/b` and `/a/b/` compare equal. */
+const normPath = (s: string) => s.replace(/\/+$/, '') || '/';
+
+/**
+ * Choose a folder: one-tap chips for the places you've recently worked, plus a
+ * field for anywhere else.
+ *
+ * ONE implementation, two callers — the session menu's "Switch folder" panel
+ * and the launch card. They differ only in what the commit button says and what
+ * it does with the value, so the *choosing* is shared: a second folder UI would
+ * be the same drift that gave four "+" buttons three different meanings.
+ *
+ * Chips SET the field rather than committing. Both callers restart a session on
+ * commit, so a chip that fired immediately would be a destructive one-tap
+ * target sitting under a thumb.
+ */
+export function FolderChoice({
+  inputId,
+  value,
+  onChange,
+  onSubmit,
+  folders,
+  current,
+  disabled,
+}: {
+  inputId: string;
+  value: string;
+  onChange: (next: string) => void;
+  /** Enter in the field. Omitted = Enter does nothing (card has its own button). */
+  onSubmit?: (() => void) | undefined;
+  folders: RecentFolder[];
+  /** The pane's folder right now — always offered, even if it isn't "recent". */
+  current: string | null;
+  disabled?: boolean;
+}) {
+  // The current folder leads the row: keeping things where they are is the
+  // most likely answer, and it must never be the one option you can't tap.
+  const chips: RecentFolder[] = [];
+  const seen = new Set<string>();
+  const push = (f: RecentFolder) => {
+    if (seen.has(normPath(f.path))) return;
+    seen.add(normPath(f.path));
+    chips.push(f);
+  };
+  if (current) {
+    const known = folders.find((f) => normPath(f.path) === normPath(current));
+    push(
+      known ?? {
+        path: current,
+        name: current.split('/').filter(Boolean).pop() || current,
+        short: current,
+        hasProject: true,
+      },
+    );
+  }
+  for (const f of folders) push(f);
+  const selected = normPath(value.trim());
+  return (
+    <div className="chat-folder-choice">
+      {chips.length > 0 ? (
+        <div className="chat-folder-chips">
+          {chips.map((f) => (
+            <button
+              key={f.path}
+              type="button"
+              className="chat-folder-chip"
+              aria-pressed={normPath(f.path) === selected}
+              disabled={disabled}
+              title={f.path}
+              onClick={() => onChange(f.path)}
+            >
+              <span className="chat-folder-chip-name">{f.name}</span>
+              {/* The bare basename is ambiguous across worktrees — the
+                  `~`-relative path underneath is what tells them apart. */}
+              <span className="chat-folder-chip-path">{f.short}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <input
+        id={inputId}
+        className="chat-folder-input"
+        value={value}
+        spellCheck={false}
+        disabled={disabled}
+        aria-label="Working folder path"
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && onSubmit) {
+            e.preventDefault();
+            onSubmit();
+          }
+        }}
+      />
+    </div>
+  );
+}
+
+/**
+ * "Start Claude here, on this model" — the setup step between tapping a harness
+ * and it starting.
+ *
+ * WHY IT EXISTS. Tapping Claude/Codex/Cursor used to convert the pane in place
+ * and instantly: same pane, same position, same greeting. Nothing visibly
+ * happened, so it read as a dead button. And folder + model — the two things
+ * you are obviously deciding at that exact moment — were deferred to a session
+ * menu behind the model chip, discoverable only if you already knew.
+ *
+ * So the tap now opens this card instead of firing. It is still ONE TAP for
+ * anyone who doesn't care: both fields arrive pre-answered (the pane's current
+ * folder; the harness's own default model), so "Start" is immediately correct.
+ */
+export function HarnessLaunchCard({
+  backend,
+  folders,
+  models,
+  paneCwd,
+  cwd,
+  setCwd,
+  model,
+  setModel,
+  busy,
+  error,
+  onCancel,
+  onStart,
+}: {
+  backend: AgentBackendId;
+  folders: RecentFolder[];
+  models: Array<{ value: string; displayName: string; resolvedModel?: string }>;
+  /** Where the pane is NOW — always a chip, even when it isn't "recent", so
+   *  "leave it where it is" is never the one option you can't tap. */
+  paneCwd: string | null;
+  cwd: string;
+  setCwd: (v: string) => void;
+  model: string | null;
+  setModel: (v: string | null) => void;
+  busy: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onStart: () => void;
+}) {
+  const label = backendLabel(backend);
+  // Only warn about missing project context when we actually KNOW — i.e. the
+  // chosen path is one the server described. A typed path we haven't asked
+  // about gets no warning rather than a guessed one.
+  const known = folders.find((f) => normPath(f.path) === normPath(cwd.trim()));
+  // Claude's own model list contains a literal `default` entry, and this card
+  // already HAS a Default pill that means "pass no --model at all". Showing
+  // both drew two identical buttons, one of which would have pinned the
+  // string 'default' as if it were a model id.
+  const pinnable = models.filter((m) => m.value !== 'default');
+  return (
+    // A labelled SECTION, not a dialog: the card is inline and non-modal — it
+    // traps nothing and simply replaces the strip it grew out of — so the
+    // semantic element carries the label rather than an ARIA role.
+    <section className="chat-launch-card" aria-label={`Start ${label}`}>
+      <div className="chat-launch-head">
+        <AgentBackendLogo backend={backend} size={18} />
+        <span className="chat-launch-title">{label}</span>
+        <span className="chat-launch-sub">raw session — no house contract</span>
+        <button
+          type="button"
+          className="chat-launch-cancel"
+          onClick={onCancel}
+          disabled={busy}
+          aria-label="Cancel"
+        >
+          ✕
+        </button>
+      </div>
+
+      <div className="chat-launch-section">
+        <div className="chat-launch-lbl">Folder</div>
+        <FolderChoice
+          inputId={`launch-cwd-${backend}`}
+          value={cwd}
+          onChange={setCwd}
+          onSubmit={onStart}
+          folders={folders}
+          current={paneCwd}
+          disabled={busy}
+        />
+        {known && !known.hasProject ? (
+          <div className="chat-launch-note">
+            No project context here — no git repo, AGENTS.md, or .mcp.json up the tree.
+          </div>
+        ) : null}
+      </div>
+
+      <div className="chat-launch-section">
+        <div className="chat-launch-lbl">Model</div>
+        <div className="chat-launch-models">
+          <button
+            type="button"
+            className="chat-launch-model"
+            aria-pressed={model === null}
+            disabled={busy}
+            onClick={() => setModel(null)}
+          >
+            Default
+          </button>
+          {pinnable.map((m) => (
+            <button
+              key={m.value}
+              type="button"
+              className="chat-launch-model"
+              aria-pressed={model === m.value}
+              disabled={busy}
+              title={m.resolvedModel ?? m.value}
+              onClick={() => setModel(m.value)}
+            >
+              {m.displayName}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <button type="button" className="chat-launch-go" disabled={busy} onClick={onStart}>
+        {busy ? `Starting ${label}…` : `Start ${label}`}
+      </button>
+      {error ? <output className="chat-open-instead-error">{error}</output> : null}
+    </section>
+  );
+}
+
+/** What a conversion that LANDED says about itself. Held for CONVERT_CONFIRM_MS. */
+export interface ConversionReceipt {
+  backend: AgentBackendId;
+  cwd: string;
+  model: string | null;
+}
+
+/**
+ * The empty chat's greeting — and the whole reason a conversion is visible.
+ *
+ * Converting a pane's harness changes nothing about WHERE it is: same pane,
+ * same position, same size. So the only place the change can show is the one
+ * thing the user is looking at, and this used to be a generic `✳ Ready when
+ * you are` that was byte-identical before and after. It now carries the
+ * harness's own mark and names it, with the folder underneath — so Claude → Codex
+ * is legible at a glance, permanently, not just for the length of a toast.
+ *
+ * The toast is here too, because "permanently different" and "something just
+ * happened" are different jobs: the identity line answers *what is this*, the
+ * receipt answers *did my tap do anything*. Both are needed; neither replaces
+ * the other.
+ *
+ * Exported for tests — this is the assertion surface for "a converted pane
+ * looks different".
+ */
+export function ChatReadyGreeting({
+  assistant,
+  cwd,
+  converted,
+  refusal,
+}: {
+  assistant: string | undefined;
+  cwd: string | null;
+  converted: ConversionReceipt | null;
+  refusal: string | null;
+}) {
+  return (
+    <>
+      <div className="chat-empty-mark -logo" aria-hidden="true">
+        <AgentBackendLogo backend={backendFromAssistant(assistant)} size={26} />
+      </div>
+      <p className="chat-empty-title">Ready when you are</p>
+      <p className="chat-empty-ident">
+        <span className="chat-empty-ident-name">{assistantLabel(assistant)}</span>
+        {cwd ? <span className="chat-empty-ident-cwd">{cwd}</span> : null}
+      </p>
+      {converted ? (
+        // <output> is the live region for "result of the thing you just
+        // pressed" — announced without stealing focus from the composer.
+        <output className="chat-convert-confirm">
+          <AgentBackendLogo backend={converted.backend} size={14} />
+          <span>
+            Now running {backendLabel(converted.backend)}
+            {converted.model ? ` · ${converted.model}` : ''}
+            {converted.cwd ? ` · ${converted.cwd}` : ''}
+          </span>
+        </output>
+      ) : null}
+      {refusal ? <output className="chat-convert-refusal">{refusal}</output> : null}
+    </>
+  );
+}
+
 /**
  * "or open instead" — the alternatives to the house chat, shown in the empty
  * state directly under the greeting.
@@ -260,7 +553,9 @@ interface RosterAgent {
  * moment you say something, this is not a decision you're making any more.
  *
  * The three harnesses open a RAW session (the harness as it ships, no house
- * contract). Terminal and Web view convert the pane to those plain surfaces.
+ * contract). Tapping one does NOT convert on the spot — it opens the launch
+ * card (folder + model, both pre-answered), and the card's button converts.
+ * Terminal and Web view have nothing to configure, so they still fire directly.
  * All five are the same server-side respawn, which refuses (cleanly) on any
  * chat that already has messages.
  */
@@ -365,11 +660,23 @@ function SessionBar({
   const [draft, setDraft] = useState(folder?.cwd ?? '');
   const [folderBusy, setFolderBusy] = useState(false);
   const [folderErr, setFolderErr] = useState<string | null>(null);
+  // Recent folders for the chips — the SAME list the launch card offers, from
+  // the same endpoint. Fetched only when this panel is actually opened.
+  const [recent, setRecent] = useState<RecentFolder[]>([]);
+  const recentFetched = useRef(false);
   useEffect(() => {
     if (panel === 'folder' && folder) {
       setDraft(folder.cwd);
       setFolderErr(null);
     }
+    if (panel !== 'folder' || recentFetched.current) return;
+    recentFetched.current = true;
+    void api
+      .agentLaunchOptions()
+      .then((o) => setRecent(o.folders))
+      .catch(() => {
+        // Chips are a shortcut; the path field is the guaranteed way in.
+      });
   }, [panel, folder]);
   const norm = (s: string) => s.replace(/\/+$/, '');
   const folderBase = folder ? norm(folder.cwd).split('/').pop() || folder.cwd : '';
@@ -435,22 +742,16 @@ function SessionBar({
         <label className="chat-folder-lbl" htmlFor={`fld-${paneId}`}>
           Switch folder — starts a fresh agent here
         </label>
-        <input
-          id={`fld-${paneId}`}
-          className="chat-folder-input"
+        {/* Same chooser as the launch card (see FolderChoice) — one folder UI,
+            so "the places I work" are one tap from both. */}
+        <FolderChoice
+          inputId={`fld-${paneId}`}
           value={draft}
-          spellCheck={false}
-          // biome-ignore lint/a11y/noAutofocus: opened by an explicit user click
-          autoFocus
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              void submitFolder();
-            } else if (e.key === 'Escape') {
-              setPanel(null);
-            }
-          }}
+          onChange={setDraft}
+          onSubmit={() => void submitFolder()}
+          folders={recent}
+          current={folder.cwd}
+          disabled={folderBusy}
         />
         {folderErr ? <div className="chat-folder-error">{folderErr}</div> : null}
         <button
@@ -810,6 +1111,11 @@ const SUBAGENT_QUIET_MS = 15_000;
  *  and deliberately NOT an error claim: it only gives the user their button
  *  back when neither fetch nor the ptyd RPC layer has a timeout of its own. */
 const CONVERT_STALL_MS = 60_000;
+
+/** How long the "now running X" confirmation stays up after a conversion.
+ *  Long enough to read on a phone you were not staring at; short enough that
+ *  it is gone by the time you have typed your first message. */
+const CONVERT_CONFIRM_MS = 8_000;
 
 /** '.ext' when the filename carries a renderable image extension — the
  *  picker's fallback for providers that report an empty MIME type (mirrors
@@ -2376,6 +2682,40 @@ export function ChatPane({
   const [pickBusy, setPickBusy] = useState<AgentBackendId | 'terminal' | 'web' | null>(null);
   const [pickError, setPickError] = useState<string | null>(null);
   /**
+   * The harness the user tapped, with its (pre-answered) folder and model,
+   * waiting on "Start". Non-null = the launch card is open in place of the
+   * strip. Nothing has been sent to the server yet — this is the step that
+   * used to not exist, when a tap converted the pane instantly and invisibly.
+   */
+  const [staged, setStaged] = useState<{
+    backend: AgentBackendId;
+    cwd: string;
+    model: string | null;
+  } | null>(null);
+  /** Recent folders + per-backend model lists for the card. Fetched once, and
+   *  only for a chat that is actually showing the offer. */
+  const [launchOptions, setLaunchOptions] = useState<AgentLaunchOptions | null>(null);
+  const launchFetched = useRef(false);
+  const wantLaunchOptions = staged !== null;
+  useEffect(() => {
+    if (!wantLaunchOptions || launchFetched.current) return;
+    launchFetched.current = true;
+    let cancelled = false;
+    void api
+      .agentLaunchOptions()
+      .then((o) => {
+        if (!cancelled) setLaunchOptions(o);
+      })
+      .catch(() => {
+        // Suggestions are a convenience: with none, the card still shows the
+        // pane's own folder and "Default", which is a complete answer. Do not
+        // block the card on this, and do not shout about it.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [wantLaunchOptions]);
+  /**
    * One helper for all three conversions, because they all got the same two
    * things wrong.
    *
@@ -2411,6 +2751,28 @@ export function ChatPane({
     },
     [],
   );
+  /**
+   * The REFUSAL, kept apart from `pickError`.
+   *
+   * A 409 flips `hasMessages`, and that immediately re-routes the empty state
+   * to the "Loading conversation…" spinner — which used to be rendered by a
+   * branch that knows nothing about `pickError`, so the server's explanation
+   * ("this chat already has messages — open a new tab instead") was set and
+   * then thrown away in the same tick. The user saw the strip vanish and a
+   * spinner appear, which reads as the app agreeing with them. This one is
+   * sticky and is rendered by BOTH branches.
+   */
+  const [convertRefusal, setConvertRefusal] = useState<string | null>(null);
+  /** A conversion that LANDED, held briefly so the change is announced rather
+   *  than merely being true. Cleared on a timer — see CONVERT_CONFIRM_MS. */
+  const [converted, setConverted] = useState<ConversionReceipt | null>(null);
+  const confirmTimer = useRef<number | undefined>(undefined);
+  useEffect(
+    () => () => {
+      window.clearTimeout(confirmTimer.current);
+    },
+    [],
+  );
   const runConversion = useCallback(
     async (
       busyKey: AgentBackendId | 'terminal' | 'web',
@@ -2419,6 +2781,7 @@ export function ChatPane({
     ) => {
       setPickBusy(busyKey);
       setPickError(null);
+      setConvertRefusal(null);
       window.clearTimeout(pickStall.current);
       pickStall.current = window.setTimeout(() => {
         setPickBusy(null);
@@ -2429,27 +2792,56 @@ export function ChatPane({
         window.clearTimeout(pickStall.current);
         setPickBusy(null);
         setPickError(null);
+        return true;
       } catch (e) {
         window.clearTimeout(pickStall.current);
         setPickBusy(null);
-        if (e instanceof ApiError && e.status === 409) {
-          // The server's answer beats our render state — see hasMessages.
-          setHasMessages(true);
+        const { message, refused, hasMessages: nowHasMessages } = conversionFailure(e, fallback);
+        if (refused) {
+          // The refusal owns the message — putting it in `pickError` too
+          // printed the same sentence twice, once in the sticky banner and
+          // once under the strip.
+          setConvertRefusal(message);
+          setStaged(null);
+        } else {
+          setPickError(message);
         }
-        setPickError(e instanceof Error ? e.message : fallback);
+        // Only `has_messages` corrects our render: the server is telling us the
+        // chat we drew as empty is not. A `mid_turn` refusal leaves the empty
+        // state alone — the offer is legitimately available again in a moment.
+        if (nowHasMessages) setHasMessages(true);
+        return false;
       }
     },
     [],
   );
-  const choosePick = useCallback(
-    (backend: AgentBackendId) =>
+  /**
+   * Commit the staged harness: convert, then SAY SO.
+   *
+   * The identity change (logo, name, folder line in the greeting) lands on its
+   * own when the new runner hellos — but that is a few seconds away and looks
+   * like nothing happening. The confirmation is immediate and names exactly
+   * what was started, including the folder and model the user just chose, so a
+   * mis-tap is legible instead of silent.
+   */
+  const startStaged = useCallback(async () => {
+    if (!staged) return;
+    const { backend, cwd, model } = staged;
+    const dir = cwd.trim();
+    const ok = await runConversion(backend, 'could not start the agent', () =>
       // 'deep' = NO house overlay. Choosing a harness by name means you
       // want that harness as it ships — capabilities injection only.
-      runConversion(backend, 'could not start the agent', () =>
-        api.setAgentBackend(paneId, backend, 'deep'),
-      ),
-    [paneId, runConversion],
-  );
+      api.setAgentBackend(paneId, backend, 'deep', {
+        ...(dir ? { cwd: dir } : {}),
+        ...(model ? { model } : {}),
+      }),
+    );
+    if (!ok) return;
+    setStaged(null);
+    setConverted({ backend, cwd: dir, model });
+    window.clearTimeout(confirmTimer.current);
+    confirmTimer.current = window.setTimeout(() => setConverted(null), CONVERT_CONFIRM_MS);
+  }, [staged, paneId, runConversion]);
   const chooseTerminal = useCallback(
     () =>
       runConversion('terminal', 'could not open the terminal', () =>
@@ -2502,6 +2894,11 @@ export function ChatPane({
       if (hasMessages)
         return (
           <div className="chat-empty">
+            {/* The refusal rides THIS branch too — a 409 is precisely what
+                lands the user here, and dropping it was the whole bug. */}
+            {convertRefusal ? (
+              <output className="chat-convert-refusal">{convertRefusal}</output>
+            ) : null}
             <div className="chat-empty-spinner" aria-hidden="true" />
             <p>Loading conversation…</p>
           </div>
@@ -2509,26 +2906,54 @@ export function ChatPane({
       // A live agent runner with no transcript yet is a FRESH session (the
       // transcript file only appears on the first message) — greet, don't
       // spin for 8s and then claim the session "may have ended".
-      if (session.writer === 'sdk')
+      if (session.writer === 'sdk') {
         return (
           <div className="chat-empty">
-            <div className="chat-empty-mark" aria-hidden="true">
-              ✳
-            </div>
-            <p className="chat-empty-title">Ready when you are</p>
+            <ChatReadyGreeting
+              assistant={session.assistant}
+              cwd={folder?.cwd ?? null}
+              converted={converted}
+              refusal={convertRefusal}
+            />
             {/* No "send a message below" line: the composer is right there
                 with the cursor already in it, so saying so was noise that
                 pushed the one thing worth reading — the alternatives — out
                 of the eye's path. */}
-            <OpenInsteadStrip
-              busy={pickBusy}
-              error={pickError}
-              onBackend={(b) => void choosePick(b)}
-              onTerminal={() => void chooseTerminal()}
-              onWeb={() => void chooseWeb()}
-            />
+            {staged ? (
+              <HarnessLaunchCard
+                backend={staged.backend}
+                folders={launchOptions?.folders ?? []}
+                models={launchOptions?.models[staged.backend] ?? []}
+                paneCwd={folder?.cwd ?? null}
+                cwd={staged.cwd}
+                setCwd={(v) => setStaged((s) => (s ? { ...s, cwd: v } : s))}
+                model={staged.model}
+                setModel={(v) => setStaged((s) => (s ? { ...s, model: v } : s))}
+                busy={pickBusy !== null}
+                error={pickError}
+                onCancel={() => {
+                  setStaged(null);
+                  setPickError(null);
+                }}
+                onStart={() => void startStaged()}
+              />
+            ) : queue.length === 0 ? (
+              <OpenInsteadStrip
+                busy={pickBusy}
+                error={pickError}
+                onBackend={(b) => setStaged({ backend: b, cwd: folder?.cwd ?? '', model: null })}
+                onTerminal={() => void chooseTerminal()}
+                onWeb={() => void chooseWeb()}
+              />
+            ) : // Messages are parked waiting for this agent: the chat is not
+            // empty in any sense the user would recognise, and converting
+            // would respawn the runner out from under them. The server would
+            // NOT refuse (the queue is not a transcript), so this gate is the
+            // only thing standing between a stray tap and a lost message.
+            null}
           </div>
         );
+      }
       return (
         <div className="chat-empty">
           {stale ? (
@@ -2680,7 +3105,13 @@ export function ChatPane({
     toolIndex,
     pickBusy,
     pickError,
-    choosePick,
+    staged,
+    launchOptions,
+    converted,
+    convertRefusal,
+    startStaged,
+    folder,
+    queue,
     chooseTerminal,
     chooseWeb,
   ]);
@@ -2807,24 +3238,48 @@ export function ChatPane({
         <div className="chat-empty chat-harness-pick">
           <p className="chat-empty-title">What do you want to open?</p>
           <p className="chat-empty-hint">Pick an agent, or open a terminal / web view</p>
-          <div className="chat-harness-choices">
-            {AGENT_BACKENDS.map((b) => (
-              <button
-                key={b.id}
-                type="button"
-                className="chat-harness-btn"
-                disabled={pickBusy !== null}
-                aria-busy={pickBusy === b.id}
-                onClick={() => void choosePick(b.id)}
-              >
-                <AgentBackendLogo backend={b.id} size={22} />
-                <span>{b.label}</span>
-                {pickBusy === b.id ? (
-                  <span className="chat-harness-spin" aria-hidden="true" />
-                ) : null}
-              </button>
-            ))}
-          </div>
+          {/* Same two-step as the empty-chat strip: an agent choice opens the
+              launch card (folder + model) rather than starting blind. This
+              legacy screen only exists for panes created before the chooser was
+              retired, but it must not be the one place with the old behavior. */}
+          {staged ? (
+            <HarnessLaunchCard
+              backend={staged.backend}
+              folders={launchOptions?.folders ?? []}
+              models={launchOptions?.models[staged.backend] ?? []}
+              paneCwd={folder?.cwd ?? null}
+              cwd={staged.cwd}
+              setCwd={(v) => setStaged((s) => (s ? { ...s, cwd: v } : s))}
+              model={staged.model}
+              setModel={(v) => setStaged((s) => (s ? { ...s, model: v } : s))}
+              busy={pickBusy !== null}
+              error={pickError}
+              onCancel={() => {
+                setStaged(null);
+                setPickError(null);
+              }}
+              onStart={() => void startStaged()}
+            />
+          ) : (
+            <div className="chat-harness-choices">
+              {AGENT_BACKENDS.map((b) => (
+                <button
+                  key={b.id}
+                  type="button"
+                  className="chat-harness-btn"
+                  disabled={pickBusy !== null}
+                  aria-busy={pickBusy === b.id}
+                  onClick={() => setStaged({ backend: b.id, cwd: folder?.cwd ?? '', model: null })}
+                >
+                  <AgentBackendLogo backend={b.id} size={22} />
+                  <span>{b.label}</span>
+                  {pickBusy === b.id ? (
+                    <span className="chat-harness-spin" aria-hidden="true" />
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="chat-harness-or">
             <button
               type="button"

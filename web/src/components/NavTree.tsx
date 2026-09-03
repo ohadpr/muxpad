@@ -377,8 +377,11 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
     try {
       // Bootstrap workspace + first tab-with-pane in one go so the user
       // lands somewhere usable (the server creates the pane atomically).
+      // The first tab is the HOUSE CHAT — identical to what the per-workspace
+      // "+ New tab" below creates, so the two `+` buttons in this same tree
+      // can no longer disagree about what a new thing is.
       const w = await api.createWorkspace();
-      const t = await api.createTab(w.id, { bootstrap: 'shell' });
+      const t = await api.createTab(w.id, { ...HOUSE_CHAT_CREATE });
       await refreshWorkspaces();
       onNavigate?.();
       void navigate({ to: '/w/$wsSlug/t/$tabSlug', params: { wsSlug: w.slug, tabSlug: t.slug } });

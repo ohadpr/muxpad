@@ -11,6 +11,7 @@ import { type Funnel, localFunnel } from './funnel.js';
 import type { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import type { Presence, PushService } from './push.js';
+import { agentLaunchRoutes } from './routes/agent-launch.js';
 import { agentSessionsRoutes } from './routes/agent-sessions.js';
 import { appsRoutes } from './routes/apps.js';
 import { attachmentsRoutes } from './routes/attachments.js';
@@ -170,6 +171,9 @@ export function createApp(deps: AppDeps): Hono {
   // SSE mirror of /ws/events — curl-able subscription for scripts/agents.
   app.route('/api/events', eventsRoutes(resolved));
   app.route('/api/agent-sessions', agentSessionsRoutes(resolved));
+  // What the empty chat's harness picker needs to offer folder + model at the
+  // moment of choosing, in one read (see routes/agent-launch.ts).
+  app.route('/api/agent-launch', agentLaunchRoutes(resolved));
   // Durable schedules (`muxpad cron`). See docs/plans/2026-08-14-muxpad-cron.md.
   app.route(
     '/api/crons',
