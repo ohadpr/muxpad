@@ -109,3 +109,74 @@ describe('reapStalledEntries', () => {
     expect(reapStalledEntries(new Map(), new Map(), T0)).toEqual([]);
   });
 });
+
+describe('the reap must STICK against a live keepalive', () => {
+  // The failure this guards: a keepalive-era runner re-announces its whole
+  // roster every 5s and knows nothing about the server's decision to retire a
+  // row. Without a tombstone the row returns within one tick, the next sweep
+  // reaps it again, and the pane's count blinks forever while every chat client
+  // takes a bogus `done` every minute.
+  //
+  // These tests drive the same sequence the frame handler implements, so they
+  // fail if the suppression is removed from either side.
+  const keepaliveEcho = (p: SubagentProgress): SubagentProgress => ({ ...p });
+
+  it('a reaped row does NOT come back on the keepalive echo', () => {
+    const ghost = p({ toolUseId: 'g', steps: 4, lastTool: 'Bash: sleep' });
+    const subagents = new Map([['g', ghost]]);
+    const changed = new Map([['g', T0]]);
+    const reaped = new Map<string, SubagentProgress>();
+
+    expect(reapStalledEntries(subagents, changed, T0 + SUBAGENT_STALL_MS + 1, reaped)).toEqual(['g']);
+    expect(reaped.get('g')).toEqual(ghost); // tombstone captured the payload
+
+    // Five seconds later the runner re-announces it, unchanged.
+    const echo = keepaliveEcho(ghost);
+    expect(isMaterialProgress(reaped.get('g'), echo)).toBe(false); // → handler ignores it
+    expect(subagents.size).toBe(0);
+  });
+
+  it('but a row that resumes real work DOES come back', () => {
+    const parked = p({ toolUseId: 'g', steps: 4 });
+    const subagents = new Map([['g', parked]]);
+    const changed = new Map([['g', T0]]);
+    const reaped = new Map<string, SubagentProgress>();
+    reapStalledEntries(subagents, changed, T0 + SUBAGENT_STALL_MS + 1, reaped);
+
+    // It was only parked — a rate-limit hold, or one enormous tool call. Its
+    // next step must lift the tombstone, or a live agent stays invisible.
+    const resumed = p({ toolUseId: 'g', steps: 5, lastTool: 'Read' });
+    expect(isMaterialProgress(reaped.get('g'), resumed)).toBe(true);
+    reaped.delete('g');
+    subagents.set('g', resumed);
+    expect(subagents.size).toBe(1);
+    expect(reaped.size).toBe(0);
+  });
+
+  it('a stalled row is reaped exactly once, not once per sweep', () => {
+    const subagents = new Map([['g', p({ toolUseId: 'g', steps: 2 })]]);
+    const changed = new Map([['g', T0]]);
+    const reaped = new Map<string, SubagentProgress>();
+    let now = T0 + SUBAGENT_STALL_MS + 1;
+
+    expect(reapStalledEntries(subagents, changed, now, reaped)).toEqual(['g']);
+    // Subsequent sweeps, with the runner still echoing (and the handler still
+    // suppressing), must find nothing left to announce.
+    for (let i = 0; i < 5; i++) {
+      now += 60_000;
+      expect(reapStalledEntries(subagents, changed, now, reaped)).toEqual([]);
+    }
+  });
+
+  it('reaping a row whose seenAt is frozen does not re-arm on its own echo', () => {
+    // The keepalive-era shape specifically: `seenAt` IS present but frozen, so
+    // the freshness check would reap it again every single sweep.
+    const frozen = p({ toolUseId: 'g', steps: 9, seenAt: T0 });
+    const subagents = new Map([['g', frozen]]);
+    const reaped = new Map<string, SubagentProgress>();
+    const now = T0 + SUBAGENT_STALL_MS + 1;
+
+    expect(reapStalledEntries(subagents, new Map(), now, reaped)).toEqual(['g']);
+    expect(isMaterialProgress(reaped.get('g'), keepaliveEcho(frozen))).toBe(false);
+  });
+});
