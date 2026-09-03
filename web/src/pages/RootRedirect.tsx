@@ -1,6 +1,7 @@
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef } from 'react';
 import { api } from '../api';
+import { HOUSE_CHAT_CREATE } from '../lib/agent-backend';
 import { useDocumentTitle } from '../use-document-title';
 import { refreshWorkspaces, visibleWorkspaces } from '../workspaces';
 
@@ -55,9 +56,15 @@ export function RootRedirect() {
       // No workspaces — bootstrap one so the user is never stuck on a
       // blank page. Mirrors the create-from-dropdown flow: workspace +
       // tab-with-pane (created atomically server-side), then navigate.
+      //
+      // First run lands in the HOUSE CHAT, same as every other `+`. It used to
+      // land in a bare shell, which made "what muxpad is" depend on which door
+      // you came through. If the harness can't start, the empty chat's own
+      // strip offers Terminal — so the escape hatch is on screen, labelled,
+      // rather than being the silent default.
       try {
         const w = await api.createWorkspace();
-        const t = await api.createTab(w.id, { bootstrap: 'shell' });
+        const t = await api.createTab(w.id, { ...HOUSE_CHAT_CREATE });
         await refreshWorkspaces();
         if (cancelled) return;
         void navigate({
