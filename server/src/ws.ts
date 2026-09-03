@@ -845,6 +845,35 @@ export function attachWsServer(deps: {
         const prev = agentRunners.get(paneId);
         if (prev) {
           agentRunners.delete(paneId);
+          // A displaced runner's TURN dies with it, and this is the only place
+          // that can say so. Teardown — which closes the turn out on a plain
+          // disconnect — refuses to act for a socket that is no longer the
+          // registered one, so a runner replaced MID-TURN used to emit `start`
+          // and never `done`: `muxpad agent wait` and the Archiver's realtime
+          // enqueue both block to timeout on a turn that ended when the process
+          // was told to exit. Same shape as teardown's, with this conn's own
+          // sid/backend (the successor's are not known yet, and would be a lie).
+          if (prev.turnActive) {
+            prev.turnActive = false;
+            deps.cache.setAgentBusy(paneId, false);
+            bcastToPane(paneId, {
+              t: 'turn-done',
+              ok: false,
+              error: 'agent replaced by a newer runner',
+            });
+            deps.events.emit({
+              type: 'agent_turn',
+              pane_id: paneId,
+              phase: 'done',
+              sid: prev.sid,
+              backend: prev.backend,
+            });
+          }
+          // The dead runner's half-streamed sentence is not the successor's.
+          // Teardown drops it on every other exit path; without this a chat
+          // socket that (re)connects while the NEW runner is mid-turn renders
+          // the corpse's partial text as the live stream.
+          streamBufs.delete(paneId);
           const stale = prev.ws;
           try {
             stale.close(CLOSE_RUNNER_DISPLACED, 'replaced by a newer runner for this pane');
