@@ -11,12 +11,13 @@
    MesloLGS NF is the canonical Powerlevel10k Nerd Font, converted from the
    upstream TTFs with fontTools (`flavor = 'woff2'`): 2.55 MB → 1.03 MB each.
    Chrome on macOS often can't reach user-installed fonts under ~/Library/Fonts,
-   so we ship our own copy for reliable Nerd Font glyphs. It stays HERE (eager
-   declarations, lazy bytes) rather than in terminal-fonts.css because
-   ExternalOpenToasts.css names it directly, outside the terminal-font setting.
+   so we ship our own copy for reliable Nerd Font glyphs. Eager declarations,
+   lazy bytes: the @font-face is declared here but nothing downloads until a
+   rule actually uses the family, and ExternalOpenToasts.css names it directly.
 
-   The other three terminal-font choices live in terminal-fonts.css, which is
-   imported on demand — see the note there. */
+   It is the ONLY terminal-adjacent webfont left. The font picker and its three
+   self-hosted families (terminal-fonts.css) are gone; the terminal is Menlo, a
+   system font on every platform muxpad runs on — see settings.ts TERMINAL_FONT. */
 
 @font-face {
   font-family: "MesloLGS NF";
