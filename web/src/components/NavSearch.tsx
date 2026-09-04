@@ -88,12 +88,25 @@ export function NavSearch({
   variant,
   onNavigate,
   children,
+  box = true,
+  onDismissBox,
 }: {
   variant: NavTreeVariantName;
   /** Called right before any navigation — the mobile sheet uses it to dismiss. */
   onNavigate?: (() => void) | undefined;
   /** The tree, shown whenever the box is empty. */
   children: ReactNode;
+  /**
+   * Whether the FIELD is on screen. Always true on the desktop rail, where the
+   * box is permanent chrome. The mobile sheet toggles it: search there is a
+   * glyph in the one top bar, and the field takes that bar's place when you
+   * tap it — so the resting rail is a bar and a column of chats, and never two
+   * rows of chrome deep.
+   */
+  box?: boolean;
+  /** Sheet only: the field asked to be put away (Escape on an empty query, or
+   *  the back button). The caller owns `box`, so it does the dismissing. */
+  onDismissBox?: (() => void) | undefined;
 }) {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
@@ -250,6 +263,34 @@ export function NavSearch({
     return () => window.removeEventListener('keydown', onKey);
   }, [variant]);
 
+  // A field that has been put away must not keep filtering the list behind it.
+  // The query is state in here, so the collapse has to reach in and reset it —
+  // otherwise reopening the box would show yesterday's results, and (worse) a
+  // collapsed box would leave the scroller showing a result list with no
+  // visible field explaining why.
+  //
+  // Seeded from `box` rather than from `false`, which is the whole subtlety:
+  // this effect must focus the field when it is REVEALED and never on mount.
+  // The desktop rail's box is permanent chrome (`box` is true from the first
+  // render), and a plain `if (box) focus()` here put the caret in the search
+  // field — accent ring and all — every time the app loaded. Measured: it was
+  // the ONLY pixel that moved on the desktop rail in this whole pass.
+  const wasOpen = useRef(box);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed to the box OPENING/CLOSING; `query` is what this resets, so depending on it would clear the field on every keystroke.
+  useEffect(() => {
+    if (box) {
+      if (!wasOpen.current) inputRef.current?.focus();
+      wasOpen.current = true;
+      return;
+    }
+    wasOpen.current = false;
+    if (query) {
+      setQuery('');
+      setCursor(0);
+      setHits([]);
+    }
+  }, [box]);
+
   const clear = () => {
     setQuery('');
     setCursor(0);
@@ -306,64 +347,85 @@ export function NavSearch({
     if (e.key === 'Escape') {
       e.preventDefault();
       // Clear first, blur second — one Esc to abandon the query, another to
-      // give the keyboard back to whatever you were doing.
+      // give the keyboard back to whatever you were doing. On a collapsible
+      // box the second Esc also puts the field away, since there is nowhere
+      // else for focus to sensibly go on a sheet.
       if (query) clear();
-      else inputRef.current?.blur();
+      else {
+        inputRef.current?.blur();
+        onDismissBox?.();
+      }
     }
   };
 
   return (
     <>
-      <div className="navsearch" data-variant={variant}>
-        <SvgSearch />
-        <input
-          ref={inputRef}
-          className="navsearch-input"
-          // NOT type="search": WebKit's native clear affordance and its own
-          // Escape handling both sit on top of the keyboard contract above.
-          type="text"
-          inputMode="search"
-          enterKeyHint="go"
-          placeholder="Search chats"
-          aria-label="Search chats"
-          role="combobox"
-          aria-expanded={active}
-          aria-autocomplete="list"
-          // `aria-controls` is required of the role and so is stated
-          // unconditionally, even though the listbox only exists while there is
-          // a query — `aria-expanded={false}` is what tells the reader so.
-          // The ACTIVE DESCENDANT is not: pointing it at a row id that is not
-          // in the document is a reader announcing nothing at all.
-          aria-controls={listId}
-          {...(active && rowCount > 0
-            ? { 'aria-activedescendant': `${listId}-${safeCursor}` }
-            : {})}
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="off"
-          spellCheck={false}
-          value={query}
-          onFocus={loadCorpus}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setCursor(0);
-          }}
-          onKeyDown={onKeyDown}
-        />
-        {query ? (
-          <button
-            type="button"
-            className="navsearch-clear"
-            aria-label="Clear search"
-            onClick={() => {
-              clear();
-              focusBox();
+      {box ? (
+        <div className="navsearch" data-variant={variant}>
+          <SvgSearch />
+          <input
+            ref={inputRef}
+            className="navsearch-input"
+            // NOT type="search": WebKit's native clear affordance and its own
+            // Escape handling both sit on top of the keyboard contract above.
+            type="text"
+            inputMode="search"
+            enterKeyHint="go"
+            placeholder="Search chats"
+            aria-label="Search chats"
+            role="combobox"
+            aria-expanded={active}
+            aria-autocomplete="list"
+            // `aria-controls` is required of the role and so is stated
+            // unconditionally, even though the listbox only exists while there is
+            // a query — `aria-expanded={false}` is what tells the reader so.
+            // The ACTIVE DESCENDANT is not: pointing it at a row id that is not
+            // in the document is a reader announcing nothing at all.
+            aria-controls={listId}
+            {...(active && rowCount > 0
+              ? { 'aria-activedescendant': `${listId}-${safeCursor}` }
+              : {})}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            value={query}
+            onFocus={loadCorpus}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setCursor(0);
             }}
-          >
-            ×
-          </button>
-        ) : null}
-      </div>
+            onKeyDown={onKeyDown}
+          />
+          {query ? (
+            <button
+              type="button"
+              className="navsearch-clear"
+              aria-label="Clear search"
+              onClick={() => {
+                clear();
+                focusBox();
+              }}
+            >
+              ×
+            </button>
+          ) : null}
+          {/* Only on a collapsible box: the way back out. The desktop rail's box
+            is permanent chrome and has nothing to dismiss to. */}
+          {onDismissBox ? (
+            <button
+              type="button"
+              className="navsearch-done"
+              onClick={() => {
+                clear();
+                onDismissBox();
+              }}
+            >
+              Done
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       <div className="navtree-scroll">
         {active ? (
           // The combobox pattern: the INPUT keeps focus and points at the
