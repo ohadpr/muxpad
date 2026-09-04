@@ -382,6 +382,39 @@ async function wheelUp(page: Page, notches: number): Promise<void> {
   }
 }
 
+/**
+ * A small wheel nudge — the "let me re-read that last line" gesture, not a
+ * scroll back into history. One notch is ~120px in Chromium, well past the
+ * component's 40px live-follow threshold and well inside the newest message
+ * still being on screen. That gap is where the round-three bug lived.
+ */
+async function nudgeUp(page: Page, px: number): Promise<void> {
+  const box = await page.locator('.chat-scroll').boundingBox();
+  if (box) await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -px);
+  await sleep(500);
+}
+
+/**
+ * Is the NEWEST message at least partly on screen — i.e. would the reader say
+ * they had read to the end of the conversation?
+ *
+ * This is the product question the re-entry policy turns on, and it is
+ * deliberately not "how many pixels from the bottom": at rest the newest
+ * message's end already sits ~130px above the fold, because the floating
+ * composer reserves that much list padding.
+ */
+async function newestMessageOnScreen(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const el = document.querySelector('.chat-scroll');
+    if (!el) return false;
+    const rows = el.querySelectorAll('.chat-list > [data-eid]');
+    const last = rows[rows.length - 1];
+    if (!last) return false;
+    return last.getBoundingClientRect().top < el.getBoundingClientRect().bottom;
+  });
+}
+
 /** Switch to the other tab and back — the display:none hide/show the report is about. */
 async function hideAndShow(page: Page, inst: Instance): Promise<void> {
   await page.click(`a[href="/w/${inst.ws}/t/${inst.otherTab.slug}"]`);
@@ -455,6 +488,62 @@ describe('chat scroll position across a hide/show', () => {
     // eslint-disable-next-line no-console
     console.log('[append while away] parked', parked, '→', returned, await scrollState(page));
     expect(returned?.tag).toBe(parked?.tag);
+  }, 180_000);
+
+  // ── Round three ───────────────────────────────────────────────────────────
+  // "often i'll come to a tab and its just scrolled up a bunch and i need to
+  // scroll down to the most recent message."
+  //
+  // Rounds one and two both went into the restore MECHANISM, and the report
+  // survived both — because the mechanism was never wrong. It restored, exactly
+  // and faithfully, the position it had been told to remember. What was wrong is
+  // WHICH position got remembered: `pinnedToBottom`, a 40px threshold that
+  // exists to answer "should live output scroll itself into view while I am
+  // watching?", was persisted as the answer to a completely different question —
+  // "where should re-opening this tab put me?".
+  //
+  // So one wheel notch (≈120px, the gesture for re-reading the last line) filed
+  // the reader under "parked in older history" and anchored them to the message
+  // they were reading. Invisible until the agent talks. Then the anchor is
+  // restored — perfectly — some thirty messages above the newest one.
+  //
+  // Every test above parks the reader DEEP (parkInHistory wheels to the very top
+  // and back), so all of them exercise a reader who really is reading history.
+  // None covered the far more common state in between: caught up, but not
+  // pixel-pinned. That omission is exactly the size of the bug.
+  it('a reader who nudged one notch off the bottom is CAUGHT UP, not parked', async (t) => {
+    if (noBrowser) return t.skip();
+    const inst = instance!;
+    const page = await ctx!.newPage();
+    await page.goto(`${inst.origin}/w/${inst.ws}/t/${inst.chatTab.slug}`);
+    await chatSettled(page);
+    expect((await scrollState(page))!.fromBottom).toBeLessThan(40);
+
+    await nudgeUp(page, 120);
+
+    // The precondition, asserted rather than assumed: the reader is no longer
+    // pinned for live-follow purposes (which is correct — a nudged reader
+    // should not have the log scrolling itself under them) …
+    const nudged = await scrollState(page);
+    expect(nudged!.fromBottom).toBeGreaterThan(40);
+    // … and yet the newest message is plainly on screen. Any human would say
+    // they are caught up. This is the state the old code mis-filed.
+    expect(await newestMessageOnScreen(page)).toBe(true);
+
+    // Away, the agent runs a turn, back.
+    await page.click(`a[href="/w/${inst.ws}/t/${inst.otherTab.slug}"]`);
+    await page.waitForSelector('.xterm', { timeout: 15_000 });
+    await sleep(700);
+    inst.appendMessages(12);
+    await sleep(1500);
+    await page.click(`a[href="/w/${inst.ws}/t/${inst.chatTab.slug}"]`);
+    await restoreSettled(page);
+
+    const returned = await scrollState(page);
+    // eslint-disable-next-line no-console
+    console.log('[nudged + agent talked] nudged', nudged, '→', returned, await topMessage(page));
+    // The whole complaint: they must NOT come back parked twelve messages up.
+    expect(returned!.fromBottom).toBeLessThan(40);
   }, 180_000);
 
   it('a reader parked in history survives a reload', async (t) => {

@@ -33,7 +33,38 @@
  * tail; anything older has to be paged back in first — see the seek in
  * ChatPane's restore effect).
  *
- * `pinned` readers keep the follow-new-messages behavior; the sid guards
+ * ── WHY "CAUGHT UP", NOT "PINNED" ────────────────────────────────────────────
+ * Anchoring to a message fixed the MECHANISM: whatever position we remember, we
+ * restore it exactly. The report kept coming back anyway, because the position
+ * being remembered was wrong — and it was wrong for a reader who had not
+ * knowingly scrolled anywhere.
+ *
+ * `pinnedToBottom` in the component answers "should live output scroll itself
+ * into view while I am watching?", and its threshold is deliberately tight
+ * (40 px): auto-scrolling someone who nudged up a line is obnoxious. That flag
+ * used to be persisted AS THE RE-ENTRY POLICY too — and re-entry is a different
+ * question, answered on a different timescale. One wheel notch off the bottom
+ * (Chromium: ~120 px, i.e. a single trackpad nudge to re-read the last line)
+ * stored `pinned: false` plus an anchor on the newest message. That is harmless
+ * while nothing arrives. Then the agent runs a ten-minute turn, and the SAME
+ * anchor — faithfully, exactly restored — is now thirty messages above the
+ * newest one. Measured: 120 px off the bottom, 30 messages arrive, reopen lands
+ * 5701 px up. Verbatim the report: "scrolled up a bunch and I need to scroll
+ * down to the most recent message."
+ *
+ * So the two questions are split, and only the second is remembered:
+ *
+ *   CAUGHT UP  ⇔  the newest message is at least partly ON SCREEN.
+ *
+ * A caught-up reader opens at the newest message, however much arrived while
+ * they were away — they had read to the end, so the end is where they belong. A
+ * reader who is NOT caught up scrolled back past the newest message on purpose;
+ * they keep their exact spot, anchored to the message they were reading, no
+ * matter what arrives. Stated in messages rather than pixels, because "am I at
+ * the end of the conversation" is a fact about the conversation, and pixels stop
+ * meaning anything the moment the document grows.
+ *
+ * `caughtUp` readers keep the follow-new-messages behavior; the sid guards
  * staleness — a cleared/rotated session forgets the spot.
  *
  * Persistence is gated by `shouldPersistChatScroll`: a display:none hide
@@ -45,24 +76,35 @@
  * Module map + debounced sessionStorage write-through (reloads keep it),
  * LRU-bounded so a long cockpit session that visits many panes doesn't grow
  * it forever (pane deletion has no client-side hook to evict on). Storage key
- * is versioned (`:v3` — v2 entries carry no anchor, and reading them would
- * silently keep the ratio behaviour this file exists to retire).
+ * is versioned (`:v4` — v2 entries carry no anchor, and v3 entries carry
+ * `pinned`, which named the 40 px live-follow threshold rather than "had read
+ * to the end". Reading either would silently keep the behaviour this file
+ * exists to retire — and a v3 entry is precisely a reader stranded mid-log,
+ * so inheriting one would carry the bug across the fix that removes it).
  */
 export interface ChatScrollMem {
   /**
    * Event id of the message under the viewport top, and how far its top sat
    * ABOVE that line (so normally <= 0). null when nothing was measurable —
-   * then `ratio` is all we have.
+   * then `ratio` is all we have. Always null for a caught-up reader: "the
+   * newest message" is not a fixed message, and pinning it to one is the bug.
    */
   anchorId: string | null;
   anchorOffset: number;
   /** 0..1 fraction of (scrollHeight - clientHeight). Fallback only. */
   ratio: number;
-  pinned: boolean;
+  /**
+   * Had the reader read to the END of the conversation when they left?
+   *
+   * NOT the component's `pinnedToBottom` (see the header): that one governs
+   * live auto-scroll at a 40 px threshold, and persisting it made a single
+   * wheel nudge park a reader in history forever.
+   */
+  caughtUp: boolean;
   sid: string | null;
 }
 
-const KEY = 'muxpad:chat-scroll:v3';
+const KEY = 'muxpad:chat-scroll:v4';
 const MAX_ENTRIES = 50;
 
 const mem: Map<string, ChatScrollMem> = (() => {
@@ -151,9 +193,43 @@ export function scrollTopAfterOlderPrepend(opts: {
   return Math.min(Math.max(0, raw), maxScrollTop(opts.newScrollHeight, opts.clientHeight));
 }
 
-/** Pin policy on (re)activation: no memory → follow bottom (fresh / other device). */
-export function pinnedFromMemory(mem: ChatScrollMem | null): boolean {
-  return !mem || mem.pinned;
+/**
+ * Where re-opening a chat lands: at the newest message, or back at the
+ * remembered one? No memory → newest (fresh mount / another device).
+ *
+ * Reads `caughtUp`, NOT a pin: see the header. This is the whole re-entry
+ * policy, and it is deliberately the only thing that decides it.
+ */
+export function opensAtNewest(mem: ChatScrollMem | null): boolean {
+  return !mem || mem.caughtUp;
+}
+
+/**
+ * Was the reader at the END of the conversation — i.e. is the newest message
+ * at least partly on screen?
+ *
+ * `lastRowTop` is the newest anchored row's top relative to the scroll
+ * viewport's top; null when there are no rows to measure (an empty chat, or a
+ * hidden pane whose boxes have collapsed), in which case the caller's pin state
+ * is the best available answer.
+ *
+ * A message-shaped question, on purpose. The alternative — "within N pixels of
+ * the bottom" — cannot distinguish a reader who has read to the end from one
+ * who happens to be near it, and the distance to the bottom is not even
+ * constant at rest: the floating composer reserves ~130 px of list padding, so
+ * a reader AT the bottom already sits that far from the last message's end.
+ *
+ * A message taller than the viewport is the interesting edge: a reader at its
+ * top is caught up by this rule, and returning lands them at its end. That is
+ * the right answer — they had scrolled back past nothing.
+ */
+export function readerIsCaughtUp(opts: {
+  lastRowTop: number | null;
+  clientHeight: number;
+  nearBottom: boolean;
+}): boolean {
+  if (opts.lastRowTop === null) return opts.nearBottom;
+  return opts.lastRowTop < opts.clientHeight;
 }
 
 /**
