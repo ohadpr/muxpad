@@ -30,7 +30,13 @@ import {
   triggerWheelMouseEvent,
   wheelInputForPty,
 } from '../lib/xterm-internals';
-import { type Theme, ensureTerminalFonts, getSettings, useSettings } from '../settings';
+import {
+  type Theme,
+  ensureTerminalFonts,
+  getSettings,
+  useResolvedTheme,
+  useSettings,
+} from '../settings';
 import './XtermPane.css';
 
 // Debug logging: enable via URL flag (?debug=1) OR localStorage
@@ -123,6 +129,8 @@ export function XtermPane({
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
   const settings = useSettings();
+  // The painted theme, not the stored one — see useResolvedTheme.
+  const resolvedTheme = useResolvedTheme();
   const wsRef = useRef<WebSocket | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -1679,7 +1687,7 @@ export function XtermPane({
     if (!term || !fit) return;
     term.options.fontFamily = settings.fontFamily;
     term.options.fontSize = settings.fontSize;
-    term.options.theme = themeFor(settings.theme);
+    term.options.theme = themeFor(resolvedTheme);
     const timerIds: number[] = [];
     let disposed = false;
     void ensureTerminalFonts(settings.fontFamily)
@@ -1709,7 +1717,7 @@ export function XtermPane({
       disposed = true;
       for (const id of timerIds) window.clearTimeout(id);
     };
-  }, [settings.fontFamily, settings.fontSize, settings.theme]);
+  }, [settings.fontFamily, settings.fontSize, resolvedTheme]);
 
   return (
     <div
