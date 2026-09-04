@@ -126,8 +126,20 @@
   flex-direction: column;
   /* svh: stable across iOS URL-bar collapse, same reasoning as the app
      shell. The bottom margin leaves a band of scrim so "tap outside to
-     dismiss" always has somewhere to land. */
-  max-height: calc(100svh - var(--mns-panel-top) - 48px);
+     dismiss" always has somewhere to land.
+
+     …and `min()` with --mns-avail-h, which MobileNavSwitcher.tsx sets from
+     the VISUAL viewport while the sheet is open. svh is a LAYOUT unit and
+     the software keyboard does not shrink the layout viewport (iOS Safari
+     always; Chrome since interactive-widget defaulted to resizes-visual), so
+     without this the panel keeps its full height, .navtree-scroll gets no
+     overflow, and every result row below the keyboard line is unreachable
+     rather than merely off-screen. The fallback keeps the cap at the svh
+     value on browsers with no visualViewport. */
+  max-height: min(
+    calc(100svh - var(--mns-panel-top) - 48px),
+    var(--mns-avail-h, calc(100svh - var(--mns-panel-top) - 48px))
+  );
   /* Chrome surface — the panel is an extension of the bar it hangs
      from, and gives the bg-elev workspace cards the same figure/ground
      contrast the desktop sidebar has. */

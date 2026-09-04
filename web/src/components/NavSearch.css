@@ -84,13 +84,18 @@
 /* ─── Mobile ────────────────────────────────────────────────────────────
    The sheet is a thumb surface: a taller box, a 16px field (below that iOS
    zooms the whole page on focus and the user has to pinch back out), and a
-   clear button at the 24px minimum tap target. */
+   clear button at the 24px minimum tap target.
+
+   44px, not 40: that is the touch floor the sheet's own tab rows are built
+   to (12 + --nt-icon-h + 12, pinned by NavTree.spacing.test.ts), and the one
+   control you are meant to hit FIRST should not be the shortest target in
+   the panel. */
 .navsearch[data-variant="sheet"] {
   margin: 4px 10px 6px;
   padding: 0 10px;
 }
 .navsearch[data-variant="sheet"] .navsearch-input {
-  height: 40px;
+  height: 44px;
   font-size: 16px;
 }
 .navsearch[data-variant="sheet"] .navsearch-clear {
