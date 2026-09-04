@@ -1,10 +1,17 @@
 import { useEffect, useState } from 'react';
 
-export type Theme = 'tokyo-night' | 'dracula' | 'github-light' | 'acme' | 'acme-dark';
+export type Theme =
+  | 'tokyo-night'
+  | 'dracula'
+  | 'alucard'
+  | 'github-light'
+  | 'acme'
+  | 'acme-dark';
 
 export const THEMES: { value: Theme; label: string }[] = [
   { value: 'tokyo-night', label: 'Tokyo Night' },
   { value: 'dracula', label: 'Dracula' },
+  { value: 'alucard', label: 'Alucard (Dracula Light)' },
   { value: 'github-light', label: 'GitHub Light' },
   { value: 'acme', label: 'Acme' },
   { value: 'acme-dark', label: 'Acme Dark' },
@@ -64,6 +71,15 @@ export interface Settings {
   themeLight: Theme;
   /** Used while following the system and it reports dark. */
   themeDark: Theme;
+  /**
+   * Which generation of the system-matching PAIR defaults this install has
+   * seen. The pair shipped for one release defaulting to Acme/Acme Dark before
+   * moving to Dracula/Alucard; without this marker the stored Acme pair would
+   * outrank the new default forever, and a fresh install and a day-old one
+   * would follow the system differently. Bumping it re-homes only an
+   * untouched pair — see read().
+   */
+  themePairV: number;
   // Persisted width of the desktop sidebar. The upper bound is enforced live
   // while dragging (never wider than the longest tab name + its status/close
   // icon needs); this stored value is only sanity-clamped on read.
@@ -93,8 +109,12 @@ const DEFAULTS: Settings = {
   // silently starting to repaint it at sunset would be a surprise, not a
   // feature.
   followSystem: false,
-  themeLight: 'acme',
-  themeDark: 'acme-dark',
+  // The system-matching pair is Dracula and its own light counterpart, so a
+  // sunrise flip reads as the same theme in daylight rather than as a
+  // different product.
+  themeLight: 'alucard',
+  themeDark: 'dracula',
+  themePairV: 2,
   sidebarWidth: 280,
 };
 
@@ -118,6 +138,32 @@ function readTheme(raw: unknown, fallback: Theme, ok?: (t: Theme) => boolean): T
   return ok && !ok(t) ? fallback : t;
 }
 
+/** The v1 pair defaults, kept only so the migration can recognise an
+ *  untouched one. Never used as a value. */
+const PAIR_V1 = { themeLight: 'acme' as Theme, themeDark: 'acme-dark' as Theme };
+
+/**
+ * Resolve the system-matching pair, migrating an install that never chose one.
+ *
+ * Only an UNTOUCHED v1 pair is re-homed: if the stored values still match the
+ * old defaults exactly, they are a default rather than a decision, so they move
+ * to the new one. Anything else the user actually picked is kept, which is why
+ * this cannot simply overwrite on version bump.
+ */
+function pairFor(parsed: Partial<Settings>): {
+  themeLight: Theme;
+  themeDark: Theme;
+  themePairV: number;
+} {
+  const light = readTheme(parsed.themeLight, DEFAULTS.themeLight, (t) => !DARK_THEMES.has(t));
+  const dark = readTheme(parsed.themeDark, DEFAULTS.themeDark, (t) => DARK_THEMES.has(t));
+  const seen = typeof parsed.themePairV === 'number' ? parsed.themePairV : 1;
+  if (seen < 2 && light === PAIR_V1.themeLight && dark === PAIR_V1.themeDark) {
+    return { themeLight: DEFAULTS.themeLight, themeDark: DEFAULTS.themeDark, themePairV: 2 };
+  }
+  return { themeLight: light, themeDark: dark, themePairV: 2 };
+}
+
 function read(): Settings {
   try {
     let raw = localStorage.getItem(KEY);
@@ -138,8 +184,7 @@ function read(): Settings {
       fontFamily: typeof parsed.fontFamily === 'string' ? parsed.fontFamily : DEFAULTS.fontFamily,
       theme: readTheme(parsed.theme, DEFAULTS.theme),
       followSystem: parsed.followSystem === true,
-      themeLight: readTheme(parsed.themeLight, DEFAULTS.themeLight, (t) => !DARK_THEMES.has(t)),
-      themeDark: readTheme(parsed.themeDark, DEFAULTS.themeDark, (t) => DARK_THEMES.has(t)),
+      ...pairFor(parsed),
       sidebarWidth:
         typeof parsed.sidebarWidth === 'number' && Number.isFinite(parsed.sidebarWidth)
           ? Math.min(SIDENAV_MAX_WIDTH, Math.max(SIDENAV_MIN_WIDTH, parsed.sidebarWidth))

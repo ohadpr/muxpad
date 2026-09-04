@@ -17,8 +17,9 @@ const withTheme = (over: Partial<Settings>): Settings =>
     fontFamily: 'Menlo, Monaco, monospace',
     theme: 'acme',
     followSystem: false,
-    themeLight: 'acme',
-    themeDark: 'acme-dark',
+    themeLight: 'alucard',
+    themeDark: 'dracula',
+    themePairV: 2,
     sidebarWidth: 280,
     ...over,
   }) as Settings;
@@ -78,8 +79,9 @@ describe('settings', () => {
       fontFamily: 'Menlo, Monaco, monospace',
       theme: 'acme',
       followSystem: false,
-      themeLight: 'acme',
-      themeDark: 'acme-dark',
+      themeLight: 'alucard',
+      themeDark: 'dracula',
+      themePairV: 2,
       sidebarWidth: 280,
     });
   });
@@ -131,5 +133,58 @@ describe('following the system light/dark setting', () => {
     const s = fresh.getSettings();
     expect(fresh.DARK_THEMES.has(s.themeDark)).toBe(true);
     expect(DARK_THEMES.has(s.themeLight)).toBe(false);
+  });
+});
+
+describe('the Dracula/Alucard system-matching pair', () => {
+  it('defaults to Dracula and its own light counterpart', async () => {
+    localStorage.clear();
+    vi.resetModules();
+    const fresh = await import('./settings');
+    const s = fresh.getSettings();
+    expect(s.themeDark).toBe('dracula');
+    expect(s.themeLight).toBe('alucard');
+  });
+
+  it('re-homes an UNTOUCHED Acme pair from the previous release', async () => {
+    // The pair shipped for one release defaulting to Acme/Acme Dark. A stored
+    // value equal to that default is a default, not a decision.
+    localStorage.setItem(
+      'muxpad.settings.v1',
+      JSON.stringify({ followSystem: true, themeLight: 'acme', themeDark: 'acme-dark' }),
+    );
+    vi.resetModules();
+    const fresh = await import('./settings');
+    expect(fresh.getSettings().themeLight).toBe('alucard');
+    expect(fresh.getSettings().themeDark).toBe('dracula');
+  });
+
+  it('keeps a pair the user actually chose', async () => {
+    localStorage.setItem(
+      'muxpad.settings.v1',
+      JSON.stringify({ followSystem: true, themeLight: 'github-light', themeDark: 'tokyo-night' }),
+    );
+    vi.resetModules();
+    const fresh = await import('./settings');
+    expect(fresh.getSettings().themeLight).toBe('github-light');
+    expect(fresh.getSettings().themeDark).toBe('tokyo-night');
+  });
+
+  it('does not re-home twice once the marker is stamped', async () => {
+    // Someone who deliberately picks Acme AFTER the migration keeps it.
+    localStorage.setItem(
+      'muxpad.settings.v1',
+      JSON.stringify({ themeLight: 'acme', themeDark: 'acme-dark', themePairV: 2 }),
+    );
+    vi.resetModules();
+    const fresh = await import('./settings');
+    expect(fresh.getSettings().themeLight).toBe('acme');
+    expect(fresh.getSettings().themeDark).toBe('acme-dark');
+  });
+
+  it('classifies alucard as a light theme', async () => {
+    const fresh = await import('./settings');
+    expect(fresh.DARK_THEMES.has('alucard')).toBe(false);
+    expect(fresh.LIGHT_THEME_CHOICES.some((t) => t.value === 'alucard')).toBe(true);
   });
 });
