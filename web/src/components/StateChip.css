@@ -218,6 +218,43 @@
   display: none;
 }
 
+/* ─── 4 · MARK mode — the mobile rail's one bit ──────────────────────────
+   The sheet's rail does not speak the vocabulary above. Five states collapse
+   to ONE BIT there (wants-you, or not), so the whole encoding is:
+
+     blocked  this dot — the only PERMANENT mark anywhere in that list
+     working  the spinner above, unchanged, because it is transient and
+              a turning ring is already read without being read
+     ready    nothing here; the name's WEIGHT carries it
+     dead     nothing here
+     idle     no element at all (StateChip returns null)
+
+   No word chip, no fill, no ring around it. A dot is the smallest object that
+   can mean "here" and it costs the row nothing else. Its hue is the same
+   --state-hue the bar and the chip use, undiluted — this IS the signal, so it
+   carries the full-strength colour rather than the chip's readable-text mix. */
+.navtree-state[data-mode="mark"] {
+  /* No fixed height: the mark is the only thing in the box and the row is a
+     flex line, so it centres on the row's own axis. */
+  height: auto;
+  gap: 0;
+}
+.navtree-state-dot {
+  flex: 0 0 9px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--state-hue);
+}
+/* The prototype's ring, which is a step SMALLER than the chip-mode sheet
+   spinner: in mark mode it stands alone at the row's trailing edge rather than
+   beside a word, so it needs less presence to read. */
+.navtree[data-variant="sheet"] .navtree-state[data-mode="mark"] .navtree-state-spin {
+  width: 13px;
+  height: 13px;
+  flex-basis: 13px;
+}
+
 /* ─── The chip on a SELECTED row ────────────────────────────────────────── */
 
 /* Drawn in the block's own ink (--accent-fg is, by definition, the colour the
