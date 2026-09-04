@@ -16,6 +16,8 @@ import {
 } from '@muxpad/shared';
 import {
   type ChangeEvent,
+  type ComponentProps,
+  Fragment,
   type ReactNode,
   isValidElement,
   memo,
@@ -41,6 +43,19 @@ import {
   splitMessageAttachments,
 } from '../lib/attachments';
 import { showFolderChip } from '../lib/nav-row-affordances';
+import {
+  type HighlightRun,
+  highlightRuns,
+  queryTerms,
+  rehypeSearchHighlight,
+} from '../lib/search-highlight';
+import {
+  SEARCH_JUMP_EVENT,
+  type SearchJump,
+  jumpMayBeOlder,
+  pickSearchTarget,
+  takeSearchJump,
+} from '../lib/search-jump';
 import { AgentBackendLogo, backendFromAssistant } from './AgentLogos';
 import { SvgAgentGlyph, SvgGlobe, SvgTerminalGlyph } from './PaneWebSwitch';
 
@@ -51,6 +66,8 @@ import {
   ANCHOR_SEEK_PAGE_MS,
   RESTORE_HARD_STOP_MS,
   RESTORE_SETTLE_MS,
+  SEARCH_JUMP_DEADLINE_MS,
+  SEARCH_JUMP_SETTLE_MS,
   SHOW_SETTLE_MS,
   SMOOTH_SCROLL_SETTLE_MS,
   firstVisibleRow,
@@ -63,7 +80,9 @@ import {
   scrollMemorySidMatches,
   scrollTopAfterOlderPrepend,
   scrollTopForAnchor,
+  scrollTopForSearchHit,
   shouldPersistChatScroll,
+  shouldRememberPosition,
 } from '../lib/chat-scroll';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
 import { useDictationCleanup } from '../lib/dictation-cleanup';
@@ -164,14 +183,72 @@ const MD_COMPONENTS: Components = {
   pre: ({ node: _node, ...props }) => <pre dir="ltr" {...props} />,
 };
 
-/** Renders (possibly partial/streaming) markdown for assistant messages. */
-function Markdown({ text }: { text: string }) {
+/**
+ * Renders (possibly partial/streaming) markdown for assistant messages.
+ *
+ * `hl`, when present, is the search terms this message was landed on for. It
+ * becomes a rehype pass rather than anything done to `text`: see
+ * lib/search-highlight for why the highlight has to happen after parsing.
+ * Absent (the overwhelmingly common case) the plugin list is `undefined` and
+ * the pipeline is byte-for-byte what it was.
+ */
+function Markdown({ text, hl }: { text: string; hl?: readonly string[] | undefined }) {
+  // Rebuilt only when the TERMS change, not per render: handing react-markdown
+  // a fresh plugin array each time re-runs the whole pipeline, and this
+  // component renders on every streaming frame.
+  const rehypePlugins = useMemo(
+    () =>
+      hl && hl.length > 0
+        ? // The plugin walks a structurally-typed subset of hast (it only needs
+          //  `children` and `value`); unified's own `Pluggable` is generic over
+          //  the full node types, and the web package deliberately doesn't take
+          //  a dependency on them to describe two fields. Cast at this one
+          //  boundary rather than pulling in the type packages.
+          ([rehypeSearchHighlight(hl)] as ComponentProps<typeof ReactMarkdown>['rehypePlugins'])
+        : undefined,
+    [hl],
+  );
   return (
     <div className="chat-md" dir="auto">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={rehypePlugins}
+        components={MD_COMPONENTS}
+      >
         {text}
       </ReactMarkdown>
     </div>
+  );
+}
+
+/**
+ * Plain (non-markdown) message text with the search terms marked.
+ *
+ * The `<mark>` is the same `.chat-hit` the markdown path emits, so a hit reads
+ * identically whether it landed in a user bubble, a thinking block or an
+ * assistant answer. No `dangerouslySetInnerHTML` anywhere on either route: the
+ * runs are strings and React escapes them.
+ */
+function HighlightedText({ text, hl }: { text: string; hl?: readonly string[] | undefined }) {
+  const runs = useMemo<HighlightRun[] | null>(
+    () => (hl && hl.length > 0 ? highlightRuns(text, hl) : null),
+    [text, hl],
+  );
+  if (!runs || !runs.some((r) => r.hit)) return <>{text}</>;
+  return (
+    <>
+      {runs.map((run, i) =>
+        run.hit ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: the runs have no identity of their own and the whole message is re-split whenever text or terms change.
+          <mark className="chat-hit" key={i}>
+            {run.text}
+          </mark>
+        ) : (
+          // biome-ignore lint/suspicious/noArrayIndexKey: see above.
+          <Fragment key={i}>{run.text}</Fragment>
+        ),
+      )}
+    </>
   );
 }
 
@@ -1145,6 +1222,11 @@ function imageExtFromName(name: string): string | null {
  */
 const ANCHOR_ATTR = 'data-eid';
 
+/** The "no search jump" terms list. A module-level constant so `jumpTerms` has
+ *  a STABLE identity when there is no jump — `ChatRow` is memoised on it, and a
+ *  fresh `[]` every render would defeat that for the whole transcript. */
+const NO_TERMS: readonly string[] = [];
+
 /**
  * The anchored rows of a chat, in document order.
  *
@@ -1300,6 +1382,23 @@ export function ChatPane({
   // good. Cleared by the restore itself; a real gesture ends the restore, which
   // clears it too.
   const holdRememberedAnchor = useRef(false);
+  // ── Search jump ───────────────────────────────────────────────────────────
+  // The message-tier search hit this pane was opened for, or null. Component
+  // state, never storage: a highlight is a property of one visit and must not
+  // survive a reload (see lib/search-jump).
+  const [jump, setJump] = useState<SearchJump | null>(null);
+  // We looked, we paged, and the message is not in reach — say so instead of
+  // navigating to a chat that looks like nothing happened.
+  const [jumpMissed, setJumpMissed] = useState(false);
+  // True from the moment a jump starts until the reader takes the pane back.
+  // While it is set `onScroll` records NOTHING: a jump is a destination the
+  // user asked for from the search box, not the place they were reading, and
+  // letting it overwrite the memory would make the next ORDINARY open of this
+  // chat land on the search hit. See shouldRememberPosition in chat-scroll.ts.
+  const searchJumpHold = useRef(false);
+  // Older pages spent hunting for this jump's message. Bounded like the
+  // restore's anchor seek, and reset per jump (and by "keep looking").
+  const jumpSeekPages = useRef(0);
   // Live mirror of `active` for the WS message handler's closures (which
   // capture it at subscription time) — see the turn-done seen-clear.
   const activeRef = useRef(active);
@@ -1941,6 +2040,10 @@ export function ChatPane({
     // Whatever happens below, the composed text is leaving (or being answered
     // with) — a lingering "undo cleanup" would offer to restore it afterwards.
     resetCleanup();
+    // Same for a search highlight: sending is the clearest possible statement
+    // that you are done reading the result you were brought here for. Covers
+    // the paths `onChange` doesn't — dictation, and the mobile send button.
+    clearJump();
     // Attachment paths ride along at the END of the message — the agent reads
     // the path, not the pixels. The draft box stays clean prose.
     const attachmentPaths = chips.map((c) => c.path);
@@ -2475,6 +2578,220 @@ export function ChatPane({
     return true;
   };
 
+  // ── Search jump ───────────────────────────────────────────────────────────
+  // "When you take me to a search result, highlight the term on the page you
+  // took me to." Everything below serves one sentence, in four parts: claim the
+  // hit, find the message it names, put it on screen, and get out of the way.
+  //
+  // Only the MESSAGE tier ever gets here — an instant (name/headline/workspace)
+  // hit carries nothing, because the term may not be in the transcript at all.
+  // See lib/search-jump for that argument in full.
+
+  /** The terms to light up. Stable per jump, because `ChatRow` is memoised on
+   *  it and a fresh array every render would re-parse the message's markdown on
+   *  every subagent progress frame. */
+  const jumpTerms = useMemo(() => (jump ? queryTerms(jump.query) : NO_TERMS), [jump]);
+
+  /**
+   * Which loaded message the hit names — null while it is still off the end of
+   * the loaded window (the seek below is what fixes that) or genuinely absent.
+   *
+   * A jump is dropped outright when the rendered sid disagrees with the one the
+   * archive matched in: a `/clear` or a resume rotation makes this a different
+   * conversation, and lighting up a coincidental occurrence in it would claim
+   * the search found something it did not.
+   */
+  const jumpTargetId = useMemo(() => {
+    if (!jump || jumpTerms.length === 0) return null;
+    if (!scrollMemorySidMatches(jump.sid, renderedSid.current)) return null;
+    return pickSearchTarget(events, { terms: jumpTerms, ts: jump.ts });
+  }, [jump, jumpTerms, events]);
+
+  const clearJump = useCallback(() => {
+    // Releasing the hold is the important half: from here on this is an
+    // ordinary reader at an ordinary scroll position, and `onScroll` may
+    // record it again.
+    searchJumpHold.current = false;
+    jumpSeekPages.current = 0;
+    setJump(null);
+    setJumpMissed(false);
+  }, []);
+
+  // Claim a pending jump. Both routes exist because the destination pane may or
+  // may not be mounted when the result is clicked: the map covers "opened a
+  // chat in a workspace I hadn't visited", the event covers "jumped inside the
+  // tab I was already looking at".
+  //
+  // Claiming takes the scroll away from the restore loop deliberately —
+  // `userScrolled` is what stops that loop, and a jump and a restore both
+  // writing scrollTop would fight for the whole settling window. The jump wins:
+  // it is the thing the user just asked for.
+  useEffect(() => {
+    if (!active) return;
+    const claim = (j: SearchJump) => {
+      jumpSeekPages.current = 0;
+      searchJumpHold.current = true;
+      userScrolled.current = true;
+      holdRememberedAnchor.current = false;
+      pinnedToBottom.current = false;
+      setJumpMissed(false);
+      setJump(j);
+    };
+    const claimed = takeSearchJump(paneId);
+    if (claimed) claim(claimed);
+    const onJump = (e: Event) => {
+      const detail = (e as CustomEvent<SearchJump>).detail;
+      if (!detail || detail.paneId !== paneId) return;
+      // Consume the mailbox copy too, so a remount can't replay it.
+      takeSearchJump(paneId);
+      claim(detail);
+    };
+    window.addEventListener(SEARCH_JUMP_EVENT, onJump);
+    return () => window.removeEventListener(SEARCH_JUMP_EVENT, onJump);
+  }, [active, paneId]);
+
+  // ── Dismissal ─────────────────────────────────────────────────────────────
+  // A highlight answers a question ("where is it?"). It has to go when the
+  // question has been answered, and the honest signals for that are all things
+  // the READER does — not a timer, which would either blink out while they are
+  // still reading or leave the chat lit up long after they stopped caring.
+  //
+  //   · leaving the pane (here) — the visit the search started is over;
+  //   · Escape — the universal "I'm done with this";
+  //   · typing or sending — you are using the chat now, not reading a result;
+  //   · scrolling the hit off screen — you have moved on within the chat;
+  //   · a new jump — it supersedes;
+  //   · a reload — it was never persisted anywhere.
+  //
+  // Leaving covers the long tail: nothing here can still be lit an hour later,
+  // because an hour later you have looked at something else.
+  const jumpWasActive = useRef(active);
+  useEffect(() => {
+    if (jumpWasActive.current && !active) clearJump();
+    jumpWasActive.current = active;
+  }, [active, clearJump]);
+
+  useEffect(() => {
+    if (!jump || !active) return;
+    const onKey = (e: KeyboardEvent) => {
+      // A modal owns Escape while it is up — closing the lightbox should not
+      // also throw away the highlight underneath it.
+      if (e.key === 'Escape' && !openTool && !openImage) clearJump();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [jump, active, openTool, openImage, clearJump]);
+
+  // Scrolled away. An IntersectionObserver rather than a scroll handler so the
+  // rule is "the hit left the screen", not "the reader scrolled N pixels" —
+  // and armed only AFTER the row has actually been seen, so the placement's own
+  // motion (which starts with the row off screen) can't dismiss the highlight
+  // before it has been shown.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!jump || !jumpTargetId || !active || !el) return;
+    const row = el.querySelector('[data-search-hit]');
+    if (!row) return;
+    let seen = false;
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) seen = true;
+          else if (seen) clearJump();
+        }
+      },
+      { root: el },
+    );
+    io.observe(row);
+    return () => io.disconnect();
+  }, [jump, jumpTargetId, active, clearJump]);
+
+  // ── Placement ─────────────────────────────────────────────────────────────
+  // Put the MARK on screen, and keep it there while the document settles.
+  //
+  // The target is the highlighted run, not the message: a hit two thousand
+  // pixels into a long answer is not "brought into view" by showing the top of
+  // that answer. Re-asserted for a short window for the same reason the restore
+  // loop is — markdown commits, images decode, and the seek's own pages can
+  // still be landing — and it stops the instant a wheel or a finger arrives,
+  // because that listener clears `searchJumpHold`.
+  //
+  // `scrollTop` is assigned directly, never `scrollIntoView`: the convention in
+  // this file is to stamp `lastProgrammaticTop` BEFORE moving, and
+  // `scrollIntoView` cannot say where it landed — so every frame of it would
+  // read as the reader taking control.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!active || !el || !jumpTargetId || !searchJumpHold.current) return;
+    let raf = 0;
+    const until = performance.now() + SEARCH_JUMP_SETTLE_MS;
+    // The loop's own scroll events are not the reader's; a real gesture clears
+    // this and takes over (see "the reader always wins").
+    suppressPinUntil.current = until;
+    pinnedToBottom.current = false;
+    const place = () => {
+      raf = 0;
+      if (!searchJumpHold.current) return;
+      const row = el.querySelector('[data-search-hit]');
+      // Fall back to the ROW when the mark isn't there: an attachment-only
+      // message, or a match that a re-render has momentarily dropped. Landing
+      // on the right message beats not moving at all.
+      const hit = row?.querySelector('.chat-hit') ?? row;
+      if (hit && el.clientHeight >= 40) {
+        const target = scrollTopForSearchHit({
+          scrollTop: el.scrollTop,
+          hitTop: hit.getBoundingClientRect().top - el.getBoundingClientRect().top,
+          scrollHeight: el.scrollHeight,
+          clientHeight: el.clientHeight,
+        });
+        if (Math.abs(el.scrollTop - target) > 1) {
+          lastProgrammaticTop.current = target;
+          el.scrollTop = target;
+        }
+      }
+      if (performance.now() < until) raf = requestAnimationFrame(place);
+    };
+    place(); // before paint — the reader never sees the pre-jump position
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [active, jumpTargetId]);
+
+  // ── Seek ──────────────────────────────────────────────────────────────────
+  // The transcript opens on the server's 128 KB tail and archives run to tens
+  // of megabytes, so a hit from last week is simply not in the document. Page
+  // backwards until it is — bounded by the same budget the anchor restore uses
+  // (8 pages ≈ 1 MB), because paging is a byte cursor walking backward and
+  // there is no "give me the page containing this message" on the wire.
+  //
+  // Self-driving: each answered page changes `events`, which re-runs this. When
+  // it runs out — budget spent, history exhausted, or the hit's timestamp is
+  // already INSIDE the loaded range and it still isn't there (a subagent
+  // sidechain, which the archive indexes and the chat view doesn't render) —
+  // it says so rather than leaving the reader on a chat where nothing happened.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: same rule the restore effect's seek follows — `requestOlder` is re-created every render and listing it would re-run this on every frame of a live turn, re-requesting pages the last render already asked for.
+  useEffect(() => {
+    if (!jump || !active || jumpTargetId || jumpMissed || loadingOlder) return;
+    if (
+      !hasMoreOlder ||
+      !jumpMayBeOlder(events, jump.ts) ||
+      jumpSeekPages.current >= ANCHOR_SEEK_PAGE_BUDGET
+    ) {
+      setJumpMissed(true);
+      return;
+    }
+    if (requestOlder()) jumpSeekPages.current++;
+  }, [jump, active, jumpTargetId, jumpMissed, loadingOlder, hasMoreOlder, events]);
+
+  // Backstop for the seek stalling silently — a socket that never opened, or a
+  // server build with no `load-older`. Without it the reader is left on a chat
+  // that looks like the search did nothing.
+  useEffect(() => {
+    if (!jump || jumpTargetId || jumpMissed) return;
+    const t = window.setTimeout(() => setJumpMissed(true), SEARCH_JUMP_DEADLINE_MS);
+    return () => window.clearTimeout(t);
+  }, [jump, jumpTargetId, jumpMissed]);
+
   // Coming back from a browser-tab switch / app background / bfcache restore
   // is a show transition too — the pane's `active` never moved, but its
   // layout (and, on some engines, its scrollTop) may have. Bumping this
@@ -2505,6 +2822,12 @@ export function ChatPane({
     const taken = () => {
       suppressPinUntil.current = 0; // the next scroll event is theirs, and counts
       userScrolled.current = true; // stop the settling restore
+      // …and end a search jump's hold on the scroll memory. Up to this moment
+      // the pane was showing a result; from here the reader is reading, and
+      // where they choose to be is exactly what the memory is for. The
+      // HIGHLIGHT stays — it goes when the hit leaves the screen, not when they
+      // scroll a line to read around it.
+      searchJumpHold.current = false;
     };
     el.addEventListener('wheel', taken, { passive: true });
     el.addEventListener('touchmove', taken, { passive: true });
@@ -2621,17 +2944,24 @@ export function ChatPane({
       // `caughtUp: true` would retire the very goal the hold exists to protect.
       const prev = holdRememberedAnchor.current ? recallChatScroll(paneId) : null;
       const anchor = prev ?? (caughtUp ? null : captureAnchor(el));
-      rememberChatScroll(paneId, {
-        anchorId: anchor?.anchorId ?? null,
-        anchorOffset: anchor?.anchorOffset ?? 0,
-        // Clamped: overscroll (iOS rubber-band) reports a scrollTop outside
-        // the range, and a stored ratio outside [0,1] restores to a position
-        // the browser then clamps — leaving the restore loop re-assigning a
-        // target it can never reach.
-        ratio: Math.min(Math.max(0, el.scrollTop / range), 1),
-        caughtUp: prev ? prev.caughtUp : caughtUp,
-        sid: renderedSid.current,
-      });
+      // …and the THIRD case: a search jump is an explicit destination, not a
+      // reading position, so it records nothing at all and whatever was
+      // remembered before the search still stands. Deliberately below the pin
+      // update (live-follow describes the pane as it actually is) and above the
+      // write. See shouldRememberPosition in chat-scroll.ts.
+      if (shouldRememberPosition({ searchJumpActive: searchJumpHold.current })) {
+        rememberChatScroll(paneId, {
+          anchorId: anchor?.anchorId ?? null,
+          anchorOffset: anchor?.anchorOffset ?? 0,
+          // Clamped: overscroll (iOS rubber-band) reports a scrollTop outside
+          // the range, and a stored ratio outside [0,1] restores to a position
+          // the browser then clamps — leaving the restore loop re-assigning a
+          // target it can never reach.
+          ratio: Math.min(Math.max(0, el.scrollTop / range), 1),
+          caughtUp: prev ? prev.caughtUp : caughtUp,
+          sid: renderedSid.current,
+        });
+      }
     }
     // Hysteresis: only reveal the arrow once meaningfully scrolled up, so it
     // doesn't flicker on tiny nudges near the bottom.
@@ -3088,6 +3418,11 @@ export function ChatPane({
     // encloses its children's). ActionGroup receives this as a one-argument
     // callback, so its nested rows get `undefined` and stay unanchored.
     const renderEvent = (e: ChatEvent, anchorId?: string) => {
+      // Exactly one row is ever highlighted, and every other row is handed the
+      // same stable `undefined` — which is what keeps `ChatRow`'s memo intact,
+      // so a jump re-renders one message instead of re-parsing the markdown of
+      // the whole transcript.
+      const hl = jumpTargetId && e.id === jumpTargetId ? jumpTerms : undefined;
       if (e.kind === 'tool_use') {
         // A subagent launch reads as an event ("agent X launched"), not a
         // tool call — its own bubble, mirroring the finish notice.
@@ -3111,7 +3446,9 @@ export function ChatPane({
       }
       if (e.kind === 'tool_result')
         return <ToolRow key={e.id} result={e} anchorId={anchorId} onOpen={setOpenTool} />;
-      return <ChatRow key={e.id} event={e} anchorId={anchorId} onOpenImage={setOpenImage} />;
+      return (
+        <ChatRow key={e.id} event={e} anchorId={anchorId} onOpenImage={setOpenImage} hl={hl} />
+      );
     };
 
     // A long agentic stretch renders as ONE collapsed block instead of a
@@ -3164,11 +3501,19 @@ export function ChatPane({
         // batch whose own tail is contiguous actions can move it, which is rare
         // and degrades to the ordinary "anchor not loaded" path.
         const anchorId = (run[0] as ChatEvent).id;
+        // A `thinking` block is an ACTION, so it folds into a run — and the
+        // archive indexes thinking, so a search can legitimately land inside a
+        // collapsed one. Force the run open in that case: a highlight nobody
+        // can see is the same as no highlight, and this is the one place the
+        // fold has to yield to something the user explicitly asked for. Not
+        // written into `expandedGroups`, so the fold snaps back the moment the
+        // highlight is dismissed rather than leaving the chat rearranged.
+        const holdsHit = !!jumpTargetId && run.some((ev) => ev.id === jumpTargetId);
         items.push(
           <ActionGroup
             key={`group-${id}`}
             events={run}
-            expanded={expandedGroups.has(id)}
+            expanded={expandedGroups.has(id) || holdsHit}
             anchorId={anchorId}
             onToggle={() =>
               setExpandedGroups((prev) => {
@@ -3205,6 +3550,8 @@ export function ChatPane({
     sending,
     loadingOlder,
     expandedGroups,
+    jumpTargetId,
+    jumpTerms,
     toolIndex,
     pickBusy,
     pickError,
@@ -3428,6 +3775,40 @@ export function ChatPane({
 
   return (
     <div className="chat-pane">
+      {/* We were asked to show WHERE the term is, and could not — so say so.
+          Silently landing on an unchanged chat is the one outcome that reads as
+          a broken search. Floats over the transcript rather than sitting in the
+          flow: inserting a strip would reflow the log and move the very scroll
+          position the jump is trying to hold. */}
+      {jump && jumpMissed && !jumpTargetId ? (
+        <output className="chat-search-missed">
+          <span className="chat-search-missed-text" dir="auto">
+            {hasMoreOlder
+              ? `“${jump.query}” is further back than the history loaded here.`
+              : `“${jump.query}” isn’t in this conversation’s messages.`}
+          </span>
+          {hasMoreOlder ? (
+            <button
+              type="button"
+              className="chat-search-missed-more"
+              onClick={() => {
+                jumpSeekPages.current = 0;
+                setJumpMissed(false);
+              }}
+            >
+              Keep looking
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="chat-search-missed-close"
+            aria-label="Dismiss"
+            onClick={clearJump}
+          >
+            ×
+          </button>
+        </output>
+      ) : null}
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
         <div
           className="chat-list"
@@ -3584,6 +3965,10 @@ export function ChatPane({
                   // Editing retires the undo — the stashed original no longer
                   // matches what's in the box.
                   resetCleanup();
+                  // …and it retires a search highlight. Typing into the
+                  // composer means you have stopped reading the result you were
+                  // brought here for and started using the chat.
+                  clearJump();
                 }}
                 onPaste={onPaste}
                 onKeyDown={(e) => {
@@ -3753,39 +4138,53 @@ const ChatRow = memo(function ChatRow({
   event,
   anchorId,
   onOpenImage,
+  hl,
 }: {
   event: ChatEvent;
   /** See ANCHOR_ATTR — the scroll memory's handle on this row. */
   anchorId?: string | undefined;
   onOpenImage?: OpenMedia | undefined;
+  /**
+   * Search terms to light up, passed ONLY to the one row a search jump landed
+   * on. Every other row gets `undefined`, so `memo` holds and a jump re-renders
+   * (and re-parses the markdown of) exactly one message rather than the whole
+   * transcript. The array is memoised per query upstream, so a stable
+   * `undefined`/reference is what the comparison sees.
+   */
+  hl?: readonly string[] | undefined;
 }) {
+  // The row itself is marked, not just the words in it. "Which message" is
+  // half the answer to "where is the term", and it must survive a hit that is
+  // scrolled just off the top of the viewport, a colour-blind reader, and a
+  // forced-colours mode that flattens the marks. See .chat-turn[data-search-hit].
+  const found = hl && hl.length > 0 ? 'true' : undefined;
   switch (event.kind) {
     case 'user':
       return (
-        <div className="chat-turn chat-turn-user" data-eid={anchorId}>
+        <div className="chat-turn chat-turn-user" data-eid={anchorId} data-search-hit={found}>
           <div className="chat-bubble" dir="auto">
-            <UserText text={event.text} onOpenImage={onOpenImage} />
+            <UserText text={event.text} onOpenImage={onOpenImage} hl={hl} />
           </div>
         </div>
       );
     case 'assistant':
       return (
-        <div className="chat-turn chat-turn-assistant" data-eid={anchorId}>
+        <div className="chat-turn chat-turn-assistant" data-eid={anchorId} data-search-hit={found}>
           <div className="chat-msg">
-            <AssistantText text={event.text} onOpenImage={onOpenImage} />
+            <AssistantText text={event.text} onOpenImage={onOpenImage} hl={hl} />
           </div>
         </div>
       );
     case 'thinking':
       return (
-        <div className="chat-turn chat-turn-assistant" data-eid={anchorId}>
+        <div className="chat-turn chat-turn-assistant" data-eid={anchorId} data-search-hit={found}>
           <div className="chat-thinking" dir="auto">
-            {event.text}
+            <HighlightedText text={event.text} hl={hl} />
           </div>
         </div>
       );
     case 'notice':
-      return <NoticeCard event={event} anchorId={anchorId} />;
+      return <NoticeCard event={event} anchorId={anchorId} hl={hl} />;
     // tool_use / tool_result are rendered as collapsed ToolRows in the body map
     // (paired into one row), never through ChatRow.
     default:
@@ -3799,18 +4198,23 @@ const ChatRow = memo(function ChatRow({
 function UserText({
   text,
   onOpenImage,
+  hl,
 }: {
   text: string;
   onOpenImage?: OpenMedia | undefined;
+  hl?: readonly string[] | undefined;
 }) {
   const parts = splitMessageAttachments(text);
-  if (parts.length === 1 && parts[0]?.kind === 'text') return <>{text}</>;
+  if (parts.length === 1 && parts[0]?.kind === 'text')
+    return <HighlightedText text={text} hl={hl} />;
   return (
     <>
       {renderMessageParts(
         parts,
         (t, key) => (
-          <span key={key}>{t}</span>
+          <span key={key}>
+            <HighlightedText text={t} hl={hl} />
+          </span>
         ),
         (m) => onOpenImage?.(m),
       )}
@@ -3825,18 +4229,20 @@ function UserText({
 function AssistantText({
   text,
   onOpenImage,
+  hl,
 }: {
   text: string;
   onOpenImage?: OpenMedia | undefined;
+  hl?: readonly string[] | undefined;
 }) {
   const parts = splitMessageAttachments(text);
-  if (parts.length === 1 && parts[0]?.kind === 'text') return <Markdown text={text} />;
+  if (parts.length === 1 && parts[0]?.kind === 'text') return <Markdown text={text} hl={hl} />;
   return (
     <>
       {renderMessageParts(
         parts,
         (t, key) => (
-          <Markdown key={key} text={t} />
+          <Markdown key={key} text={t} hl={hl} />
         ),
         (m) => onOpenImage?.(m),
       )}
@@ -4227,16 +4633,30 @@ function fireTime(ts: number | null): string {
 
 /** Harness control message (background-task update / session reminder), or a
  *  muxpad cron fire — "⏱ pr-sweep · 09:00" ahead of the prompt it delivered. */
-function NoticeCard({ event, anchorId }: { event: NoticeEvent; anchorId?: string | undefined }) {
+function NoticeCard({
+  event,
+  anchorId,
+  hl,
+}: {
+  event: NoticeEvent;
+  anchorId?: string | undefined;
+  hl?: readonly string[] | undefined;
+}) {
   const at = event.variant === 'cron' ? fireTime(event.ts) : '';
   const detail = event.detail ?? (at || undefined);
   return (
-    <div className="chat-turn chat-turn-notice" data-eid={anchorId}>
+    <div
+      className="chat-turn chat-turn-notice"
+      data-eid={anchorId}
+      data-search-hit={hl && hl.length > 0 ? 'true' : undefined}
+    >
       <div className={`chat-sysnote chat-sysnote-${event.variant}`} title={event.text}>
         <span className="chat-sysnote-icon" aria-hidden="true">
           {NOTICE_ICON[event.variant]}
         </span>
-        <span className="chat-sysnote-text">{event.text}</span>
+        <span className="chat-sysnote-text">
+          <HighlightedText text={event.text} hl={hl} />
+        </span>
         {detail ? <span className="chat-sysnote-detail">{detail}</span> : null}
       </div>
     </div>
