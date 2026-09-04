@@ -12,6 +12,36 @@ export const THEMES: { value: Theme; label: string }[] = [
 
 const VALID_THEMES = new Set<Theme>(THEMES.map((t) => t.value));
 
+/**
+ * Which themes are dark. Needed because "follow the system" cannot be a theme
+ * id: with five themes and no 1:1 pairing (acme has acme-dark, but dracula and
+ * tokyo-night have no light counterpart), any fixed pair would be arbitrary —
+ * a dracula user would be handed GitHub Light at sunrise. So the preference is
+ * a separate flag plus a chosen theme for each side.
+ */
+export const DARK_THEMES = new Set<Theme>(['tokyo-night', 'dracula', 'acme-dark']);
+
+export const LIGHT_THEME_CHOICES = THEMES.filter((t) => !DARK_THEMES.has(t.value));
+export const DARK_THEME_CHOICES = THEMES.filter((t) => DARK_THEMES.has(t.value));
+
+/** The media query the OS answers. One string, so the listener and the read
+ *  can never drift apart. */
+export const DARK_QUERY = '(prefers-color-scheme: dark)';
+
+export function systemPrefersDark(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  return window.matchMedia(DARK_QUERY).matches;
+}
+
+/**
+ * The theme actually painted, given the settings and what the OS reports.
+ * Pure, so the resolution rule is testable without a DOM.
+ */
+export function resolveTheme(s: Settings, prefersDark: boolean): Theme {
+  if (!s.followSystem) return s.theme;
+  return prefersDark ? s.themeDark : s.themeLight;
+}
+
 // Old theme ids that no longer exist — migrate to the closest replacement.
 const THEME_ALIASES: Record<string, Theme> = {
   dark: 'tokyo-night',
@@ -28,6 +58,12 @@ export interface Settings {
   fontSize: number;
   fontFamily: string;
   theme: Theme;
+  /** Follow the OS light/dark setting instead of the fixed `theme`. */
+  followSystem: boolean;
+  /** Used while following the system and it reports light. */
+  themeLight: Theme;
+  /** Used while following the system and it reports dark. */
+  themeDark: Theme;
   // Persisted width of the desktop sidebar. The upper bound is enforced live
   // while dragging (never wider than the longest tab name + its status/close
   // icon needs); this stored value is only sanity-clamped on read.
@@ -53,11 +89,34 @@ const DEFAULTS: Settings = {
   fontSize: 14,
   fontFamily: 'Menlo, Monaco, monospace',
   theme: 'acme',
+  // Off by default: an existing install has a theme it chose deliberately, and
+  // silently starting to repaint it at sunset would be a surprise, not a
+  // feature.
+  followSystem: false,
+  themeLight: 'acme',
+  themeDark: 'acme-dark',
   sidebarWidth: 280,
 };
 
 const KEY = 'muxpad.settings.v1';
 const LEGACY_KEY = 'webagents.settings.v1';
+
+/**
+ * Parse a stored theme id, honouring the alias table. `ok` additionally rejects
+ * a valid theme that is wrong for its SLOT — a stored themeDark of 'acme'
+ * would otherwise paint a cream UI at midnight, which is the one thing the
+ * whole feature exists to avoid.
+ */
+function readTheme(raw: unknown, fallback: Theme, ok?: (t: Theme) => boolean): Theme {
+  if (typeof raw !== 'string') return fallback;
+  const t = VALID_THEMES.has(raw as Theme)
+    ? (raw as Theme)
+    : raw in THEME_ALIASES
+      ? (THEME_ALIASES[raw] as Theme)
+      : null;
+  if (t === null) return fallback;
+  return ok && !ok(t) ? fallback : t;
+}
 
 function read(): Settings {
   try {
@@ -77,13 +136,10 @@ function read(): Settings {
     return {
       fontSize: typeof parsed.fontSize === 'number' ? parsed.fontSize : DEFAULTS.fontSize,
       fontFamily: typeof parsed.fontFamily === 'string' ? parsed.fontFamily : DEFAULTS.fontFamily,
-      theme: ((): Theme => {
-        const t = parsed.theme;
-        if (typeof t !== 'string') return DEFAULTS.theme;
-        if (VALID_THEMES.has(t as Theme)) return t as Theme;
-        if (t in THEME_ALIASES) return THEME_ALIASES[t] as Theme;
-        return DEFAULTS.theme;
-      })(),
+      theme: readTheme(parsed.theme, DEFAULTS.theme),
+      followSystem: parsed.followSystem === true,
+      themeLight: readTheme(parsed.themeLight, DEFAULTS.themeLight, (t) => !DARK_THEMES.has(t)),
+      themeDark: readTheme(parsed.themeDark, DEFAULTS.themeDark, (t) => DARK_THEMES.has(t)),
       sidebarWidth:
         typeof parsed.sidebarWidth === 'number' && Number.isFinite(parsed.sidebarWidth)
           ? Math.min(SIDENAV_MAX_WIDTH, Math.max(SIDENAV_MIN_WIDTH, parsed.sidebarWidth))
@@ -100,7 +156,27 @@ let current: Settings = typeof window === 'undefined' ? DEFAULTS : read();
 
 function applyToDocument(s: Settings) {
   if (typeof document === 'undefined') return;
-  document.documentElement.dataset.theme = s.theme;
+  document.documentElement.dataset.theme = resolveTheme(s, systemPrefersDark());
+}
+
+/**
+ * Repaint when the OS flips, without a reload. Registered once at module load
+ * rather than per-component: the theme is a document-level fact, and a
+ * component-scoped listener would stop working the moment that component
+ * unmounted (the settings popover is mounted only while open).
+ *
+ * Listeners are notified too, so anything reading `useSettings` re-renders —
+ * XtermPane rebuilds its terminal palette from the resolved theme.
+ */
+if (typeof window !== 'undefined' && window.matchMedia) {
+  const mq = window.matchMedia(DARK_QUERY);
+  const onFlip = () => {
+    if (!current.followSystem) return;
+    applyToDocument(current);
+    for (const fn of listeners) fn({ ...current });
+  };
+  if (mq.addEventListener) mq.addEventListener('change', onFlip);
+  else mq.addListener?.(onFlip); // Safari < 14
 }
 
 if (typeof window !== 'undefined') {
@@ -156,6 +232,33 @@ export function ensureTerminalFonts(family: string): Promise<unknown> {
 // Start the fetch at boot for someone who already picked one of these, so the
 // stylesheet is usually in place before the first XtermPane measures anything.
 if (typeof window !== 'undefined') void ensureTerminalFonts(current.fontFamily);
+
+/**
+ * The theme actually painted right now — `settings.theme`, or whichever side of
+ * the pair the OS is asking for.
+ *
+ * Anything that derives COLOUR must use this rather than `settings.theme`.
+ * XtermPane builds its terminal palette here, and keying that effect on
+ * `settings.theme` would leave terminals on the old palette after a system
+ * flip: the stored theme did not change, only the resolution did.
+ */
+export function useResolvedTheme(): Theme {
+  const s = useSettings();
+  const [prefersDark, setPrefersDark] = useState(systemPrefersDark);
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const mq = window.matchMedia(DARK_QUERY);
+    const onFlip = () => setPrefersDark(mq.matches);
+    onFlip(); // the OS may have flipped between first render and this effect
+    if (mq.addEventListener) {
+      mq.addEventListener('change', onFlip);
+      return () => mq.removeEventListener('change', onFlip);
+    }
+    mq.addListener?.(onFlip);
+    return () => mq.removeListener?.(onFlip);
+  }, []);
+  return resolveTheme(s, prefersDark);
+}
 
 export function useSettings(): Settings {
   const [state, setState] = useState<Settings>(current);
