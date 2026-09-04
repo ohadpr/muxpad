@@ -141,50 +141,50 @@
   --hit-rule: #7a7f2a;
 }
 
-/* Alucard — Dracula's own light counterpart, held back off the bright cream
-   the upstream palette uses (#fffbeb). Same family: the violet accent is
-   Alucard's #644ac9 stepped one notch darker so white sits on it at 7:1, and
-   the reds/greens are its hues rather than GitHub's, so switching between this
-   and Dracula at sunrise reads as the same theme in daylight rather than as a
-   different product.
+/* Alucard — Dracula in daylight. COOL, not cream.
+   Upstream's Alucard is a warm #fffbeb, and a first pass followed it. Rendered
+   in the actual app it read as beige mush: a dimmer Acme, not Dracula's
+   sibling, because Dracula's identity is a blue-purple charcoal (#282a36) and
+   the warm parchment threw away the one thing that made them a pair. Its
+   surfaces also sat inside a narrow tan band (bg/chrome/border within a few
+   points of each other), so nothing separated from anything.
 
-   The surface is parchment, not paper. A pure-white light theme beside a
-   #282a36 dark one is a jarring pair to be flipped between automatically, and
-   this is the pair the system-matching default ships with — so the light side
-   is deliberately the dimmest of the three light themes (#f2ece0 against
-   Acme's #fdf6ea and GitHub's #ffffff). */
+   So: a lavender-tinted white, cool like the dark side, with the surfaces
+   actually stepped apart and white elevation available above the page. The
+   accent is Dracula's violet taken down only as far as white-on-it needs
+   (6.38:1) — enough to stay violet rather than becoming indigo. */
 [data-theme="alucard"] {
-  --bg: #f2ece0;
-  --bg-elev: #ece5d6;
-  --bg-hover: #e0d7c4;
-  --bg-chrome: #ece5d6;
-  --bg-tabbar: #ddd3bd;
-  --fg: #25242f;
-  --fg-dim: #565169;
+  --bg: #f5f4fb;
+  --bg-elev: #ffffff;
+  --bg-hover: #e2ddf5;
+  --bg-chrome: #edecf7;
+  --bg-tabbar: #ddd8ef;
+  --fg: #232135;
+  --fg-dim: #4e496b;
   /* Decorative only — see the --hit-* note in :root; never text. */
-  --fg-faint: #8b8496;
-  --border: #d7cdb8;
-  --border-strong: #b5aa92;
-  --xterm-bg: #f2ece0;
-  --xterm-fg: #25242f;
-  --danger: #c0392b;
-  --accent: #5a41c4;
+  --fg-faint: #8b86a5;
+  --border: #ddd8ee;
+  --border-strong: #b8b0d4;
+  --xterm-bg: #f5f4fb;
+  --xterm-fg: #232135;
+  --danger: #c62828;
+  --accent: #6641d6;
   --accent-fg: #ffffff;
-  /* Light re-step (see :root), warm --status-quiet to match the parchment —
-     the same split github-light documents against Acme. */
-  --status-blocked: #c0392b;
+  /* Light re-step (see :root), on a COOL surface — so --status-quiet is the
+     lavender-grey counterpart of github-light's neutral, not Acme's warm one. */
+  --status-blocked: #c62828;
   --status-working: #8a6410;
-  --status-ready: #186b3a;
-  --status-quiet: #a79e8b;
-  --status-dead: #6a6578;
+  --status-ready: #1a6b3d;
+  --status-quiet: #a9a3c0;
+  --status-dead: #6b6684;
   --status-wash: 10%;
   --status-chip-wash: 18%;
   --status-ink-mix: 50%;
   /* Dracula's #f1fa8c is a pale wash on a light surface; this is that hue
-     brought down until the ink clears 10:1 on it, with the rule carrying the
+     brought down until the ink clears 11:1 on it, with the rule carrying the
      boundary the fill cannot (see :root). */
-  --hit-bg: #f0d868;
-  --hit-ink: #25242f;
+  --hit-bg: #f2dc6a;
+  --hit-ink: #232135;
   --hit-rule: #7d6410;
 }
 
