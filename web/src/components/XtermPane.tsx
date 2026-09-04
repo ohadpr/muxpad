@@ -91,10 +91,10 @@ const XTERM_THEMES: Record<
   // Dracula's cursor/selection hues brought to the light surface, so a
   // sunrise flip changes the paper and not the personality.
   alucard: {
-    background: '#f2ece0',
-    foreground: '#25242f',
-    cursor: '#5a41c4',
-    selectionBackground: '#dcd0f5',
+    background: '#f5f4fb',
+    foreground: '#232135',
+    cursor: '#6641d6',
+    selectionBackground: '#ddd4f7',
   },
   'github-light': {
     background: '#ffffff',
