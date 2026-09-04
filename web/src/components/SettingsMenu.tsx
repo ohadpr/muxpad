@@ -2,10 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { type PushState, disablePush, enablePush, getPushState, sendTestPush } from '../lib/push';
 import { useDismissable } from '../lib/use-dismissable';
 import {
-  DARK_THEME_CHOICES,
-  LIGHT_THEME_CHOICES,
-  THEMES,
-  type Theme,
+  THEME_CHOICES,
+  type ThemeChoice,
   updateSettings,
   useSettings,
 } from '../settings';
@@ -32,66 +30,19 @@ export function SettingsMenu() {
       {open && (
         <div className="settings-popover">
           <div className="settings-row">
-            <label htmlFor="theme-auto">Match system</label>
-            <input
-              id="theme-auto"
-              type="checkbox"
-              checked={settings.followSystem}
-              onChange={(e) => updateSettings({ followSystem: e.target.checked })}
-            />
+            <label htmlFor="theme">Theme</label>
+            <select
+              id="theme"
+              value={settings.theme}
+              onChange={(e) => updateSettings({ theme: e.target.value as ThemeChoice })}
+            >
+              {THEME_CHOICES.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
           </div>
-
-          {/* Two pickers rather than one, because "follow the system" cannot be
-              a sixth theme id: with no 1:1 light/dark pairing across the five,
-              any fixed mapping would be arbitrary — a Dracula user would be
-              handed GitHub Light at sunrise. */}
-          {settings.followSystem ? (
-            <>
-              <div className="settings-row">
-                <label htmlFor="theme-light">When light</label>
-                <select
-                  id="theme-light"
-                  value={settings.themeLight}
-                  onChange={(e) => updateSettings({ themeLight: e.target.value as Theme })}
-                >
-                  {LIGHT_THEME_CHOICES.map((t) => (
-                    <option key={t.value} value={t.value}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="settings-row">
-                <label htmlFor="theme-dark">When dark</label>
-                <select
-                  id="theme-dark"
-                  value={settings.themeDark}
-                  onChange={(e) => updateSettings({ themeDark: e.target.value as Theme })}
-                >
-                  {DARK_THEME_CHOICES.map((t) => (
-                    <option key={t.value} value={t.value}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </>
-          ) : (
-            <div className="settings-row">
-              <label htmlFor="theme">Theme</label>
-              <select
-                id="theme"
-                value={settings.theme}
-                onChange={(e) => updateSettings({ theme: e.target.value as Theme })}
-              >
-                {THEMES.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
 
           <div className="settings-row">
             <label htmlFor="font-size">Font size</label>

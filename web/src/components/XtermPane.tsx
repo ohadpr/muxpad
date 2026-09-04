@@ -33,6 +33,8 @@ import {
 import {
   type Theme,
   TERMINAL_FONT,
+  resolveTheme,
+  systemPrefersDark,
   getSettings,
   useResolvedTheme,
   useSettings,
@@ -170,6 +172,8 @@ export function XtermPane({
 
     const { fontSize, theme } = getSettings();
     const fontFamily = TERMINAL_FONT;
+    // `theme` may be 'system'; the palette map is keyed by real themes only.
+    const initialTheme = resolveTheme(theme, systemPrefersDark());
     // Open a clicked link directly, no confirm. A terminal surfaces URLs two
     // independent ways and each needs its own opener:
     //   1. Plain-text URLs the WebLinksAddon detects by regex (below).
@@ -191,7 +195,7 @@ export function XtermPane({
       fontFamily,
       fontSize,
       cursorBlink: true,
-      theme: themeFor(theme),
+      theme: themeFor(initialTheme),
       allowProposedApi: true,
       linkHandler: { activate: (_event, uri) => openUri(uri) },
     });
