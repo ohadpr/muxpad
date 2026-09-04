@@ -6,7 +6,8 @@ import {
   SMOOTH_SCROLL_SETTLE_MS,
   firstVisibleRow,
   maxScrollTop,
-  pinnedFromMemory,
+  opensAtNewest,
+  readerIsCaughtUp,
   recallChatScroll,
   rememberChatScroll,
   scrollEventIsTrustworthy,
@@ -18,7 +19,7 @@ import {
 
 /** A remembered position, with the anchor fields defaulted. */
 function memo(over: Partial<ChatScrollMem> = {}): ChatScrollMem {
-  return { anchorId: null, anchorOffset: 0, ratio: 0.5, pinned: false, sid: null, ...over };
+  return { anchorId: null, anchorOffset: 0, ratio: 0.5, caughtUp: false, sid: null, ...over };
 }
 
 describe('shouldPersistChatScroll', () => {
@@ -64,17 +65,87 @@ describe('scrollTopAfterOlderPrepend', () => {
   });
 });
 
-describe('pinnedFromMemory', () => {
-  it('defaults to pinned when nothing was remembered (fresh / other device)', () => {
-    expect(pinnedFromMemory(null)).toBe(true);
+describe('opensAtNewest', () => {
+  it('defaults to the newest message when nothing was remembered (fresh / other device)', () => {
+    expect(opensAtNewest(null)).toBe(true);
   });
 
-  it('honours an explicit unpinned memory', () => {
-    expect(pinnedFromMemory(memo({ ratio: 0.3, pinned: false, sid: 's1' }))).toBe(false);
+  it('honours a reader who had scrolled back past the newest message', () => {
+    expect(opensAtNewest(memo({ ratio: 0.3, caughtUp: false, sid: 's1' }))).toBe(false);
   });
 
-  it('re-pins when memory says pinned', () => {
-    expect(pinnedFromMemory(memo({ ratio: 1, pinned: true, sid: 's1' }))).toBe(true);
+  it('opens at the newest message when the reader had read to the end', () => {
+    expect(opensAtNewest(memo({ ratio: 1, caughtUp: true, sid: 's1' }))).toBe(true);
+  });
+});
+
+describe('readerIsCaughtUp', () => {
+  // The reported bug, in its smallest honest form.
+  //
+  // Geometry from the real component (1100×800 viewport, an ordinary chat):
+  // sitting AT the bottom puts the newest message's top at 502 — it does not
+  // reach the fold, because the floating composer reserves ~130px of list
+  // padding beneath it. Nudge the wheel one notch (Chromium: ~120px) to re-read
+  // the last line and the top moves to 622: still plainly on screen, still the
+  // message being read — but 120 > the 40px live-follow threshold, so the old
+  // code filed the reader under "parked in history" and anchored them to that
+  // message forever. Nothing about that is visible until the agent talks; then
+  // the anchor is faithfully restored thirty messages above the newest one.
+  it('a one-notch nudge off the bottom is still CAUGHT UP', () => {
+    expect(readerIsCaughtUp({ lastRowTop: 622, clientHeight: 800, nearBottom: false })).toBe(true);
+  });
+
+  it('resting at the bottom is caught up', () => {
+    expect(readerIsCaughtUp({ lastRowTop: 502, clientHeight: 800, nearBottom: true })).toBe(true);
+  });
+
+  it('is caught up while reading a newest message taller than the viewport', () => {
+    // Its top is AT the viewport top and it runs off the bottom: the reader has
+    // scrolled back past nothing, so returning to its end is right.
+    expect(readerIsCaughtUp({ lastRowTop: 0, clientHeight: 800, nearBottom: false })).toBe(true);
+  });
+
+  it('is NOT caught up once the newest message is off the bottom of the screen', () => {
+    // One 400px wheel notch already does this — the reader can no longer see
+    // the newest message, so they are reading history and keep their place.
+    expect(readerIsCaughtUp({ lastRowTop: 902, clientHeight: 800, nearBottom: false })).toBe(false);
+  });
+
+  it('is NOT caught up when parked deep in older history', () => {
+    expect(readerIsCaughtUp({ lastRowTop: 5200, clientHeight: 800, nearBottom: false })).toBe(
+      false,
+    );
+  });
+
+  it('falls back to the pin when there is nothing to measure', () => {
+    // Empty chat, or a pane whose boxes collapsed under display:none.
+    expect(readerIsCaughtUp({ lastRowTop: null, clientHeight: 800, nearBottom: true })).toBe(true);
+    expect(readerIsCaughtUp({ lastRowTop: null, clientHeight: 0, nearBottom: false })).toBe(false);
+  });
+});
+
+describe('the stored re-entry policy is not the live-follow pin', () => {
+  // Two rounds of fixes went into the restore MECHANISM (visibility threading,
+  // then anchoring to a message id instead of a scroll ratio) and the report
+  // survived both, because the mechanism was never what was wrong: it restored
+  // exactly what it was told to. What was wrong is that the thing it was told
+  // came from `pinnedToBottom`, a 40px live-auto-scroll threshold, being reused
+  // as the answer to a different question — where should re-opening this tab
+  // land? This is the guard that the two are no longer the same value.
+  it('a reader 120px off the bottom is unpinned for LIVE follow but caught up for RE-ENTRY', () => {
+    const nearBottom = 120 < 40; // the component's live-follow test — false
+    expect(nearBottom).toBe(false);
+    const caughtUp = readerIsCaughtUp({ lastRowTop: 622, clientHeight: 800, nearBottom });
+    expect(caughtUp).toBe(true);
+    // …and "caught up" is what a re-open consults, so the newest message wins
+    // over the message they happened to be nudged onto.
+    expect(opensAtNewest(memo({ caughtUp, anchorId: 'e196', sid: 's1' }))).toBe(true);
+  });
+
+  it('still keeps a genuinely scrolled-back reader exactly where they were', () => {
+    const caughtUp = readerIsCaughtUp({ lastRowTop: 5200, clientHeight: 800, nearBottom: false });
+    expect(caughtUp).toBe(false);
+    expect(opensAtNewest(memo({ caughtUp, anchorId: 'e170', sid: 's1' }))).toBe(false);
   });
 });
 
@@ -115,7 +186,7 @@ describe('rememberChatScroll hide corruption', () => {
         clientHeight: 0,
       })
     ) {
-      rememberChatScroll('pane-x', memo({ ratio: 0, pinned: false, sid: 's1' }));
+      rememberChatScroll('pane-x', memo({ ratio: 0, caughtUp: false, sid: 's1' }));
     }
     expect(recallChatScroll('pane-x')).toBeNull();
   });

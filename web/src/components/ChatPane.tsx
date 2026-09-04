@@ -55,7 +55,8 @@ import {
   SMOOTH_SCROLL_SETTLE_MS,
   firstVisibleRow,
   maxScrollTop,
-  pinnedFromMemory,
+  opensAtNewest,
+  readerIsCaughtUp,
   recallChatScroll,
   rememberChatScroll,
   scrollEventIsTrustworthy,
@@ -1168,6 +1169,36 @@ function anchorRows(el: HTMLElement): HTMLElement[] {
 }
 
 /**
+ * The NEWEST anchored row, or null if the chat has none.
+ *
+ * A backwards walk from the list's last child rather than `anchorRows(el)`,
+ * because this runs on every trusted scroll event and only the last row is
+ * wanted. The rows below it are the un-anchored live furniture — the streaming
+ * preview, the working indicator, the queued strip — of which there are at most
+ * a handful, so the walk is O(1) in practice where collecting every row is O(n).
+ */
+function lastAnchorRow(el: HTMLElement): HTMLElement | null {
+  const list = el.querySelector('.chat-list');
+  for (let n = list?.lastElementChild ?? null; n; n = n.previousElementSibling) {
+    if (n instanceof HTMLElement && n.hasAttribute(ANCHOR_ATTR)) return n;
+  }
+  return null;
+}
+
+/**
+ * Is the reader at the end of the conversation — is the newest message on
+ * screen? This, not the pin, is what a re-open consults. See chat-scroll.ts.
+ */
+function measureCaughtUp(el: HTMLElement, nearBottom: boolean): boolean {
+  const last = lastAnchorRow(el);
+  return readerIsCaughtUp({
+    lastRowTop: last ? last.getBoundingClientRect().top - el.getBoundingClientRect().top : null,
+    clientHeight: el.clientHeight,
+    nearBottom,
+  });
+}
+
+/**
  * Which message the reader is looking at, and how far its top sits above the
  * viewport top. `null` when there is nothing anchorable (empty chat, or a
  * hidden pane whose boxes have all collapsed).
@@ -2241,7 +2272,7 @@ export function ChatPane({
     // remembered message back in (see the seek below) lost its target before
     // the first page even arrived.
     const goal = usable(recallChatScroll(paneId));
-    pinnedToBottom.current = pinnedFromMemory(goal);
+    pinnedToBottom.current = opensAtNewest(goal);
     // While a goal ANCHOR is still outstanding, `onScroll` must not overwrite it
     // in the store. Every scrollTop this loop writes produces a trustworthy
     // scroll event once the 250ms show-settle window closes, and that event
@@ -2250,7 +2281,7 @@ export function ChatPane({
     // (permanently, and for every future open of the pane) before the first page
     // landed. Cleared the moment the anchor is applied, the goal is retired, or
     // the reader takes over.
-    holdRememberedAnchor.current = !!goal && !goal.pinned && !!goal.anchorId;
+    holdRememberedAnchor.current = !!goal && !goal.caughtUp && !!goal.anchorId;
     let raf = 0;
     const startedAt = performance.now();
     let deadline = startedAt + RESTORE_SETTLE_MS;
@@ -2277,7 +2308,7 @@ export function ChatPane({
         // `renderedSid` is null until the hello lands, and a rotation that
         // arrives mid-window must retire the goal (its conversation is gone).
         const mem = usable(goal);
-        if (!mem || mem.pinned) holdRememberedAnchor.current = false;
+        if (!mem || mem.caughtUp) holdRememberedAnchor.current = false;
         if (el.scrollHeight <= el.clientHeight) {
           // Nothing to scroll yet — the transcript hasn't arrived, or the
           // "Loading conversation…" state is all there is. Don't spend the
@@ -2285,10 +2316,10 @@ export function ChatPane({
           // RESTORE_SETTLE_MS used to leave an unpinned reader at scrollTop 0,
           // i.e. as deep in history as the document goes.
           deadline = Math.min(hardStop, performance.now() + RESTORE_SETTLE_MS);
-        } else if (!mem || mem.pinned) {
-          // Pinned / no memory → hold the bottom while content streams in
-          // (follow-bottom effect also does this; settle covers the gap
-          // before the first events commit).
+        } else if (!mem || mem.caughtUp) {
+          // Caught up / no memory → hold the NEWEST message while content
+          // streams in (follow-bottom effect also does this; settle covers the
+          // gap before the first events commit).
           pinnedToBottom.current = true;
           const target = maxScrollTop(el.scrollHeight, el.clientHeight);
           if (Math.abs(el.scrollTop - target) > 1) {
@@ -2568,19 +2599,28 @@ export function ChatPane({
       if (Math.abs(el.scrollTop - lastProgrammaticTop.current) > 1) userScrolled.current = true;
       const range = Math.max(1, el.scrollHeight - el.clientHeight);
       const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+      // LIVE follow, and only that. Tight on purpose — nudge up one line and
+      // the log stops scrolling itself under you. Deliberately NOT the value
+      // that gets remembered: see `caughtUp` below and chat-scroll.ts.
       pinnedToBottom.current = nearBottom;
+      // RE-ENTRY policy: had they read to the end? A caught-up reader is
+      // remembered as "open at the newest message", so a turn that lands while
+      // they are away can't strand them thirty messages up.
+      const caughtUp = measureCaughtUp(el, nearBottom);
       // The ANCHOR is the position that matters (see chat-scroll.ts); the ratio
       // rides along as the fallback for a mount whose window doesn't hold the
-      // anchored message yet. Measured only for an UNPINNED reader: a reader at
-      // the bottom is restored to the bottom, so the walk would be pure cost —
-      // and the bottom is where chats sit almost all of the time.
+      // anchored message yet. Measured only for a reader who is NOT caught up:
+      // a caught-up reader is restored to the newest message, so the walk would
+      // be pure cost — and caught up is what chats are almost all of the time.
       // …unless a restore is still hunting for the anchor already stored: this
       // event is almost certainly that restore's own scrollTop write, and
       // recording where it has got to would erase the message the reader
       // actually parked on — permanently, and for every future open of the pane.
-      // Keep the stored anchor; pin and ratio still track reality.
+      // Keep the stored anchor AND the caught-up verdict it belongs to: a
+      // mid-seek frame can transiently sit at the tail, and letting that write
+      // `caughtUp: true` would retire the very goal the hold exists to protect.
       const prev = holdRememberedAnchor.current ? recallChatScroll(paneId) : null;
-      const anchor = prev ?? (nearBottom ? null : captureAnchor(el));
+      const anchor = prev ?? (caughtUp ? null : captureAnchor(el));
       rememberChatScroll(paneId, {
         anchorId: anchor?.anchorId ?? null,
         anchorOffset: anchor?.anchorOffset ?? 0,
@@ -2589,7 +2629,7 @@ export function ChatPane({
         // the browser then clamps — leaving the restore loop re-assigning a
         // target it can never reach.
         ratio: Math.min(Math.max(0, el.scrollTop / range), 1),
-        pinned: nearBottom,
+        caughtUp: prev ? prev.caughtUp : caughtUp,
         sid: renderedSid.current,
       });
     }
@@ -2620,12 +2660,12 @@ export function ChatPane({
     // Record the re-pin immediately — the smooth scroll's own onScroll
     // events lag, and switching away mid-glide must not save a stale spot.
     // No anchor: "the bottom" is not a message, and leaving a stale one here
-    // would out-rank the pin on the next restore.
+    // would out-rank the caught-up verdict on the next restore.
     rememberChatScroll(paneId, {
       anchorId: null,
       anchorOffset: 0,
       ratio: 1,
-      pinned: true,
+      caughtUp: true,
       sid: renderedSid.current,
     });
     // …and suppress the glide itself. A smooth scroll emits an event per
