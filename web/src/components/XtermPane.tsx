@@ -32,7 +32,7 @@ import {
 } from '../lib/xterm-internals';
 import {
   type Theme,
-  ensureTerminalFonts,
+  TERMINAL_FONT,
   getSettings,
   useResolvedTheme,
   useSettings,
@@ -168,7 +168,8 @@ export function XtermPane({
     const container = containerRef.current;
     if (!container) return;
 
-    const { fontFamily, fontSize, theme } = getSettings();
+    const { fontSize, theme } = getSettings();
+    const fontFamily = TERMINAL_FONT;
     // Open a clicked link directly, no confirm. A terminal surfaces URLs two
     // independent ways and each needs its own opener:
     //   1. Plain-text URLs the WebLinksAddon detects by regex (below).
@@ -383,19 +384,10 @@ export function XtermPane({
       requestAnimationFrame(initialFit);
     };
     tryOpenTermRef.current = openTerm;
-    // ensureTerminalFonts first: the webfont families are declared in a CSS
-    // chunk that is only imported when one of them is selected, and asking
-    // document.fonts for a family with no @font-face yet resolves instantly
-    // with nothing — xterm would then measure Menlo's cell and re-measure
-    // (garbled) once the real font swapped in.
-    void ensureTerminalFonts(fontFamily)
-      .then(() => document.fonts.load(`${fontSize}px ${fontFamily}`))
-      .catch(() => {
-        // ignore — open anyway
-      })
-      .finally(() => {
-        openTerm();
-      });
+    // Menlo is a system font, so there is no webfont to wait for and no
+    // measure-then-remeasure hazard: open immediately. This used to await a
+    // lazily-imported @font-face chunk before xterm could size a cell.
+    openTerm();
 
     let intentionallyClosed = false;
     let paneExited = false;
@@ -1693,13 +1685,16 @@ export function XtermPane({
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
-    term.options.fontFamily = settings.fontFamily;
+    term.options.fontFamily = TERMINAL_FONT;
     term.options.fontSize = settings.fontSize;
     term.options.theme = themeFor(resolvedTheme);
     const timerIds: number[] = [];
     let disposed = false;
-    void ensureTerminalFonts(settings.fontFamily)
-      .then(() => document.fonts.load(`${settings.fontSize}px ${settings.fontFamily}`))
+    void document.fonts
+      .load(`${settings.fontSize}px ${TERMINAL_FONT}`)
+      .catch(() => {
+        // a system font that will not load is not recoverable here; refit anyway
+      })
       .finally(() => {
         if (disposed) return;
         const t = termRef.current;
@@ -1725,7 +1720,7 @@ export function XtermPane({
       disposed = true;
       for (const id of timerIds) window.clearTimeout(id);
     };
-  }, [settings.fontFamily, settings.fontSize, resolvedTheme]);
+  }, [settings.fontSize, resolvedTheme]);
 
   return (
     <div

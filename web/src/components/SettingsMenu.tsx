@@ -3,8 +3,6 @@ import { type PushState, disablePush, enablePush, getPushState, sendTestPush } f
 import { useDismissable } from '../lib/use-dismissable';
 import {
   DARK_THEME_CHOICES,
-  FONT_FAMILIES,
-  FONT_FAMILY_LABELS,
   LIGHT_THEME_CHOICES,
   THEMES,
   type Theme,
@@ -124,21 +122,6 @@ export function SettingsMenu() {
                 +
               </button>
             </div>
-          </div>
-
-          <div className="settings-row">
-            <label htmlFor="font-family">Font</label>
-            <select
-              id="font-family"
-              value={settings.fontFamily}
-              onChange={(e) => updateSettings({ fontFamily: e.target.value })}
-            >
-              {FONT_FAMILIES.map((f) => (
-                <option key={f} value={f}>
-                  {FONT_FAMILY_LABELS[f] ?? f}
-                </option>
-              ))}
-            </select>
           </div>
 
           <PushRow />
