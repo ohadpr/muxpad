@@ -1,27 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  DARK_THEMES,
-  DARK_THEME_CHOICES,
-  LIGHT_THEME_CHOICES,
-  type Settings,
-  THEMES,
-  type Theme,
+  SYSTEM_PAIR,
+  THEME_CHOICES,
   resolveTheme,
   updateSettings,
 } from './settings';
-
-/** A Settings value for the pure resolver; only the theme fields matter. */
-const withTheme = (over: Partial<Settings>): Settings =>
-  ({
-    fontSize: 14,
-    theme: 'acme',
-    followSystem: false,
-    themeLight: 'alucard',
-    themeDark: 'dracula',
-    themePairV: 2,
-    sidebarWidth: 280,
-    ...over,
-  }) as Settings;
 
 describe('settings', () => {
   beforeEach(() => {
@@ -56,7 +39,7 @@ describe('settings', () => {
     localStorage.setItem('muxpad.settings.v1', JSON.stringify({ theme: 'not-a-theme' }));
     vi.resetModules();
     const { getSettings: get } = await import('./settings');
-    expect(get().theme).toBe('acme');
+    expect(get().theme).toBe('system');
   });
 
   it('back-fills defaults when older settings lack a key', async () => {
@@ -74,114 +57,56 @@ describe('settings', () => {
     const { getSettings: get } = await import('./settings');
     expect(get()).toEqual({
       fontSize: 14,
-      theme: 'acme',
-      followSystem: false,
-      themeLight: 'alucard',
-      themeDark: 'dracula',
-      themePairV: 2,
+      theme: 'system',
       sidebarWidth: 280,
     });
   });
 });
 
-describe('following the system light/dark setting', () => {
-  it('ignores the system while followSystem is off', () => {
-    const s = withTheme({ theme: 'dracula', followSystem: false });
-    expect(resolveTheme(s, true)).toBe('dracula');
-    expect(resolveTheme(s, false)).toBe('dracula');
+describe('the System theme option', () => {
+  it('resolves to the Dracula pair, and only when chosen', () => {
+    expect(resolveTheme('system', true)).toBe(SYSTEM_PAIR.dark);
+    expect(resolveTheme('system', false)).toBe(SYSTEM_PAIR.light);
+    expect(SYSTEM_PAIR.dark).toBe('dracula');
+    expect(SYSTEM_PAIR.light).toBe('alucard');
   });
 
-  it('picks the side of the pair the OS is asking for', () => {
-    const s = withTheme({
-      theme: 'dracula',
-      followSystem: true,
-      themeLight: 'github-light',
-      themeDark: 'tokyo-night',
-    });
-    expect(resolveTheme(s, true)).toBe('tokyo-night');
-    expect(resolveTheme(s, false)).toBe('github-light');
-    // The fixed `theme` is RETAINED, not overwritten, so unticking the box
-    // returns you to what you had rather than to whichever side last painted.
-    expect(s.theme).toBe('dracula');
+  it('leaves an explicit theme alone whatever the OS says', () => {
+    expect(resolveTheme('dracula', false)).toBe('dracula');
+    expect(resolveTheme('acme', true)).toBe('acme');
   });
 
-  it('classifies every theme as exactly one of light or dark', () => {
-    // Missing from both lists = unreachable in the paired pickers; in both =
-    // offered twice. Either way the picker lies about what is available.
-    for (const t of THEMES) {
-      const inLight = LIGHT_THEME_CHOICES.some((c) => c.value === t.value);
-      const inDark = DARK_THEME_CHOICES.some((c) => c.value === t.value);
-      expect(inLight !== inDark).toBe(true);
+  it('offers System first in the picker, then every real theme', () => {
+    expect(THEME_CHOICES[0]?.value).toBe('system');
+    expect(THEME_CHOICES.filter((c) => c.value === 'system')).toHaveLength(1);
+    for (const t of ['dracula', 'alucard', 'acme', 'acme-dark', 'tokyo-night', 'github-light']) {
+      expect(THEME_CHOICES.some((c) => c.value === t)).toBe(true);
     }
-    expect(DARK_THEME_CHOICES.length).toBeGreaterThan(0);
-    expect(LIGHT_THEME_CHOICES.length).toBeGreaterThan(0);
   });
 
-  it('rejects a stored theme that is wrong for its slot', async () => {
-    // A themeDark of 'acme' would paint a cream UI at midnight — precisely
-    // what this feature exists to prevent. Validation is on READ, so a
-    // hand-edited or downgraded localStorage cannot produce it.
-    localStorage.setItem(
-      'muxpad.settings.v1',
-      JSON.stringify({ followSystem: true, themeDark: 'acme', themeLight: 'tokyo-night' }),
-    );
-    vi.resetModules();
-    const fresh = await import('./settings');
-    const s = fresh.getSettings();
-    expect(fresh.DARK_THEMES.has(s.themeDark)).toBe(true);
-    expect(DARK_THEMES.has(s.themeLight)).toBe(false);
-  });
-});
-
-describe('the Dracula/Alucard system-matching pair', () => {
-  it('defaults to Dracula and its own light counterpart', async () => {
+  it('defaults to System', async () => {
     localStorage.clear();
     vi.resetModules();
     const fresh = await import('./settings');
-    const s = fresh.getSettings();
-    expect(s.themeDark).toBe('dracula');
-    expect(s.themeLight).toBe('alucard');
+    expect(fresh.getSettings().theme).toBe('system');
   });
 
-  it('re-homes an UNTOUCHED Acme pair from the previous release', async () => {
-    // The pair shipped for one release defaulting to Acme/Acme Dark. A stored
-    // value equal to that default is a default, not a decision.
+  it('migrates the retired followSystem flag to the System choice', async () => {
+    // It shipped briefly as a flag plus a theme per side. An install carrying
+    // it must land on 'system', not on whichever side was stored.
     localStorage.setItem(
       'muxpad.settings.v1',
       JSON.stringify({ followSystem: true, themeLight: 'acme', themeDark: 'acme-dark' }),
     );
     vi.resetModules();
     const fresh = await import('./settings');
-    expect(fresh.getSettings().themeLight).toBe('alucard');
-    expect(fresh.getSettings().themeDark).toBe('dracula');
+    expect(fresh.getSettings().theme).toBe('system');
   });
 
-  it('keeps a pair the user actually chose', async () => {
-    localStorage.setItem(
-      'muxpad.settings.v1',
-      JSON.stringify({ followSystem: true, themeLight: 'github-light', themeDark: 'tokyo-night' }),
-    );
+  it('keeps an explicit theme from before the flag existed', async () => {
+    localStorage.setItem('muxpad.settings.v1', JSON.stringify({ theme: 'tokyo-night' }));
     vi.resetModules();
     const fresh = await import('./settings');
-    expect(fresh.getSettings().themeLight).toBe('github-light');
-    expect(fresh.getSettings().themeDark).toBe('tokyo-night');
-  });
-
-  it('does not re-home twice once the marker is stamped', async () => {
-    // Someone who deliberately picks Acme AFTER the migration keeps it.
-    localStorage.setItem(
-      'muxpad.settings.v1',
-      JSON.stringify({ themeLight: 'acme', themeDark: 'acme-dark', themePairV: 2 }),
-    );
-    vi.resetModules();
-    const fresh = await import('./settings');
-    expect(fresh.getSettings().themeLight).toBe('acme');
-    expect(fresh.getSettings().themeDark).toBe('acme-dark');
-  });
-
-  it('classifies alucard as a light theme', async () => {
-    const fresh = await import('./settings');
-    expect(fresh.DARK_THEMES.has('alucard')).toBe(false);
-    expect(fresh.LIGHT_THEME_CHOICES.some((t) => t.value === 'alucard')).toBe(true);
+    expect(fresh.getSettings().theme).toBe('tokyo-night');
   });
 });

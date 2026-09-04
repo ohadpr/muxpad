@@ -8,6 +8,17 @@ export type Theme =
   | 'acme'
   | 'acme-dark';
 
+/** What the picker offers: a theme, or "whatever the OS is doing". */
+export type ThemeChoice = Theme | 'system';
+
+/**
+ * The pair "System" resolves to. Fixed rather than configurable: two extra
+ * pickers to express a preference almost nobody holds is a worse trade than
+ * one obvious entry in one list, and Dracula is the only theme here that has a
+ * real light counterpart built to match it.
+ */
+export const SYSTEM_PAIR = { light: 'alucard', dark: 'dracula' } as const;
+
 export const THEMES: { value: Theme; label: string }[] = [
   { value: 'tokyo-night', label: 'Tokyo Night' },
   { value: 'dracula', label: 'Dracula' },
@@ -19,17 +30,11 @@ export const THEMES: { value: Theme; label: string }[] = [
 
 const VALID_THEMES = new Set<Theme>(THEMES.map((t) => t.value));
 
-/**
- * Which themes are dark. Needed because "follow the system" cannot be a theme
- * id: with five themes and no 1:1 pairing (acme has acme-dark, but dracula and
- * tokyo-night have no light counterpart), any fixed pair would be arbitrary —
- * a dracula user would be handed GitHub Light at sunrise. So the preference is
- * a separate flag plus a chosen theme for each side.
- */
-export const DARK_THEMES = new Set<Theme>(['tokyo-night', 'dracula', 'acme-dark']);
-
-export const LIGHT_THEME_CHOICES = THEMES.filter((t) => !DARK_THEMES.has(t.value));
-export const DARK_THEME_CHOICES = THEMES.filter((t) => DARK_THEMES.has(t.value));
+/** The picker's options: System first, because it is the recommended default. */
+export const THEME_CHOICES: { value: ThemeChoice; label: string }[] = [
+  { value: 'system', label: 'System (Dracula / Alucard)' },
+  ...THEMES,
+];
 
 /** The media query the OS answers. One string, so the listener and the read
  *  can never drift apart. */
@@ -41,12 +46,12 @@ export function systemPrefersDark(): boolean {
 }
 
 /**
- * The theme actually painted, given the settings and what the OS reports.
+ * The theme actually painted, given the choice and what the OS reports.
  * Pure, so the resolution rule is testable without a DOM.
  */
-export function resolveTheme(s: Settings, prefersDark: boolean): Theme {
-  if (!s.followSystem) return s.theme;
-  return prefersDark ? s.themeDark : s.themeLight;
+export function resolveTheme(choice: ThemeChoice, prefersDark: boolean): Theme {
+  if (choice !== 'system') return choice;
+  return prefersDark ? SYSTEM_PAIR.dark : SYSTEM_PAIR.light;
 }
 
 // Old theme ids that no longer exist — migrate to the closest replacement.
@@ -63,22 +68,7 @@ const THEME_ALIASES: Record<string, Theme> = {
 
 export interface Settings {
   fontSize: number;
-  theme: Theme;
-  /** Follow the OS light/dark setting instead of the fixed `theme`. */
-  followSystem: boolean;
-  /** Used while following the system and it reports light. */
-  themeLight: Theme;
-  /** Used while following the system and it reports dark. */
-  themeDark: Theme;
-  /**
-   * Which generation of the system-matching PAIR defaults this install has
-   * seen. The pair shipped for one release defaulting to Acme/Acme Dark before
-   * moving to Dracula/Alucard; without this marker the stored Acme pair would
-   * outrank the new default forever, and a fresh install and a day-old one
-   * would follow the system differently. Bumping it re-homes only an
-   * untouched pair — see read().
-   */
-  themePairV: number;
+  theme: ThemeChoice;
   // Persisted width of the desktop sidebar. The upper bound is enforced live
   // while dragging (never wider than the longest tab name + its status/close
   // icon needs); this stored value is only sanity-clamped on read.
@@ -102,64 +92,34 @@ export const SIDENAV_MAX_WIDTH = 640;
 
 const DEFAULTS: Settings = {
   fontSize: 14,
-  theme: 'acme',
-  // Off by default: an existing install has a theme it chose deliberately, and
-  // silently starting to repaint it at sunset would be a surprise, not a
-  // feature.
-  followSystem: false,
-  // The system-matching pair is Dracula and its own light counterpart, so a
-  // sunrise flip reads as the same theme in daylight rather than as a
-  // different product.
-  themeLight: 'alucard',
-  themeDark: 'dracula',
-  themePairV: 2,
+  // System by default: it is the option most people want, and it is the one
+  // pair in this list built to be flipped between.
+  theme: 'system',
   sidebarWidth: 280,
 };
 
 const KEY = 'muxpad.settings.v1';
 const LEGACY_KEY = 'webagents.settings.v1';
 
-/**
- * Parse a stored theme id, honouring the alias table. `ok` additionally rejects
- * a valid theme that is wrong for its SLOT — a stored themeDark of 'acme'
- * would otherwise paint a cream UI at midnight, which is the one thing the
- * whole feature exists to avoid.
- */
-function readTheme(raw: unknown, fallback: Theme, ok?: (t: Theme) => boolean): Theme {
-  if (typeof raw !== 'string') return fallback;
-  const t = VALID_THEMES.has(raw as Theme)
-    ? (raw as Theme)
-    : raw in THEME_ALIASES
-      ? (THEME_ALIASES[raw] as Theme)
-      : null;
-  if (t === null) return fallback;
-  return ok && !ok(t) ? fallback : t;
-}
-
-/** The v1 pair defaults, kept only so the migration can recognise an
- *  untouched one. Never used as a value. */
-const PAIR_V1 = { themeLight: 'acme' as Theme, themeDark: 'acme-dark' as Theme };
 
 /**
- * Resolve the system-matching pair, migrating an install that never chose one.
+ * Resolve the stored theme choice, migrating the two shapes that came before.
  *
- * Only an UNTOUCHED v1 pair is re-homed: if the stored values still match the
- * old defaults exactly, they are a default rather than a decision, so they move
- * to the new one. Anything else the user actually picked is kept, which is why
- * this cannot simply overwrite on version bump.
+ * The system preference briefly shipped as a `followSystem` flag plus a chosen
+ * theme per side. That is gone — it was two extra controls for a preference
+ * almost nobody holds — so an install carrying the flag becomes plain
+ * 'system', and its per-side picks are dropped rather than honoured: keeping
+ * them would mean keeping the machinery that read them.
  */
-function pairFor(parsed: Partial<Settings>): {
-  themeLight: Theme;
-  themeDark: Theme;
-  themePairV: number;
-} {
-  const light = readTheme(parsed.themeLight, DEFAULTS.themeLight, (t) => !DARK_THEMES.has(t));
-  const dark = readTheme(parsed.themeDark, DEFAULTS.themeDark, (t) => DARK_THEMES.has(t));
-  const seen = typeof parsed.themePairV === 'number' ? parsed.themePairV : 1;
-  if (seen < 2 && light === PAIR_V1.themeLight && dark === PAIR_V1.themeDark) {
-    return { themeLight: DEFAULTS.themeLight, themeDark: DEFAULTS.themeDark, themePairV: 2 };
-  }
-  return { themeLight: light, themeDark: dark, themePairV: 2 };
+function readChoice(parsed: Partial<Settings> & { followSystem?: unknown }): ThemeChoice {
+  if (parsed.followSystem === true) return 'system';
+  const raw = parsed.theme;
+  if (raw === 'system') return 'system';
+  if (typeof raw !== 'string') return DEFAULTS.theme;
+  if (VALID_THEMES.has(raw as Theme)) return raw as Theme;
+  if (raw in THEME_ALIASES) return THEME_ALIASES[raw] as Theme;
+  // Unknown id — the default, which is 'system'.
+  return DEFAULTS.theme;
 }
 
 function read(): Settings {
@@ -179,9 +139,7 @@ function read(): Settings {
     const parsed = JSON.parse(raw) as Partial<Settings>;
     return {
       fontSize: typeof parsed.fontSize === 'number' ? parsed.fontSize : DEFAULTS.fontSize,
-      theme: readTheme(parsed.theme, DEFAULTS.theme),
-      followSystem: parsed.followSystem === true,
-      ...pairFor(parsed),
+      theme: readChoice(parsed),
       sidebarWidth:
         typeof parsed.sidebarWidth === 'number' && Number.isFinite(parsed.sidebarWidth)
           ? Math.min(SIDENAV_MAX_WIDTH, Math.max(SIDENAV_MIN_WIDTH, parsed.sidebarWidth))
@@ -198,7 +156,7 @@ let current: Settings = typeof window === 'undefined' ? DEFAULTS : read();
 
 function applyToDocument(s: Settings) {
   if (typeof document === 'undefined') return;
-  document.documentElement.dataset.theme = resolveTheme(s, systemPrefersDark());
+  document.documentElement.dataset.theme = resolveTheme(s.theme, systemPrefersDark());
 }
 
 /**
@@ -213,7 +171,7 @@ function applyToDocument(s: Settings) {
 if (typeof window !== 'undefined' && window.matchMedia) {
   const mq = window.matchMedia(DARK_QUERY);
   const onFlip = () => {
-    if (!current.followSystem) return;
+    if (current.theme !== 'system') return;
     applyToDocument(current);
     for (const fn of listeners) fn({ ...current });
   };
@@ -264,7 +222,7 @@ export function useResolvedTheme(): Theme {
     mq.addListener?.(onFlip);
     return () => mq.removeListener?.(onFlip);
   }, []);
-  return resolveTheme(s, prefersDark);
+  return resolveTheme(s.theme, prefersDark);
 }
 
 export function useSettings(): Settings {
