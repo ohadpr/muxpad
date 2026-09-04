@@ -14,7 +14,6 @@ import {
 const withTheme = (over: Partial<Settings>): Settings =>
   ({
     fontSize: 14,
-    fontFamily: 'Menlo, Monaco, monospace',
     theme: 'acme',
     followSystem: false,
     themeLight: 'alucard',
@@ -67,7 +66,6 @@ describe('settings', () => {
     const s = get();
     expect(s.theme).toBe('dracula');
     expect(s.fontSize).toBe(14);
-    expect(s.fontFamily).toBe('Menlo, Monaco, monospace');
   });
 
   it('falls back to defaults for a corrupt localStorage blob', async () => {
@@ -76,7 +74,6 @@ describe('settings', () => {
     const { getSettings: get } = await import('./settings');
     expect(get()).toEqual({
       fontSize: 14,
-      fontFamily: 'Menlo, Monaco, monospace',
       theme: 'acme',
       followSystem: false,
       themeLight: 'alucard',

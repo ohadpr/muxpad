@@ -63,7 +63,6 @@ const THEME_ALIASES: Record<string, Theme> = {
 
 export interface Settings {
   fontSize: number;
-  fontFamily: string;
   theme: Theme;
   /** Follow the OS light/dark setting instead of the fixed `theme`. */
   followSystem: boolean;
@@ -103,7 +102,6 @@ export const SIDENAV_MAX_WIDTH = 640;
 
 const DEFAULTS: Settings = {
   fontSize: 14,
-  fontFamily: 'Menlo, Monaco, monospace',
   theme: 'acme',
   // Off by default: an existing install has a theme it chose deliberately, and
   // silently starting to repaint it at sunset would be a surprise, not a
@@ -181,7 +179,6 @@ function read(): Settings {
     const parsed = JSON.parse(raw) as Partial<Settings>;
     return {
       fontSize: typeof parsed.fontSize === 'number' ? parsed.fontSize : DEFAULTS.fontSize,
-      fontFamily: typeof parsed.fontFamily === 'string' ? parsed.fontFamily : DEFAULTS.fontFamily,
       theme: readTheme(parsed.theme, DEFAULTS.theme),
       followSystem: parsed.followSystem === true,
       ...pairFor(parsed),
@@ -236,57 +233,22 @@ export function updateSettings(patch: Partial<Settings>): void {
   current = { ...current, ...patch };
   localStorage.setItem(KEY, JSON.stringify(current));
   applyToDocument(current);
-  void ensureTerminalFonts(current.fontFamily);
   for (const fn of listeners) fn(current);
 }
 
 /**
- * The terminal-font families that need a webfont downloaded. Menlo is a system
- * font on every platform muxpad runs on, and MesloLGS NF is declared eagerly
- * in fonts.css, so neither is here.
- */
-const WEBFONT_FAMILIES = new Set([
-  '"JetBrains Mono", Menlo, monospace',
-  '"Fira Code", Menlo, monospace',
-  '"IBM Plex Mono", Menlo, monospace',
-]);
-
-let terminalFontsChunk: Promise<unknown> | null = null;
-
-/**
- * Pull in the terminal-font @font-face declarations, once, and only if the
- * selected family actually needs them. They are ~25 KB of render-blocking CSS
- * (36 faces × unicode-range) that the default install never uses — see
- * terminal-fonts.css.
+ * The terminal font. Not a setting.
  *
- * Resolves when the stylesheet is applied, so callers that measure glyphs
- * (XtermPane, which sizes its grid from the font) can wait for the
- * declarations to exist before asking document.fonts to load them. Awaiting a
- * family we don't ship resolves immediately.
+ * It was a five-way picker backed by three self-hosted webfont families —
+ * ~25 KB of render-blocking CSS (36 faces x unicode-range) lazily imported,
+ * plus a document.fonts round trip that terminal startup had to await before
+ * xterm could measure a cell, or it would measure Menlo and re-measure
+ * (garbled) when the real font swapped in. Menlo is a system font on every
+ * platform muxpad runs on, so choosing it removes the chunk, the await and
+ * the re-measure entirely.
  */
-export function ensureTerminalFonts(family: string): Promise<unknown> {
-  if (!WEBFONT_FAMILIES.has(family)) return Promise.resolve();
-  terminalFontsChunk ??= import('./terminal-fonts.css').catch(() => {
-    // Chunk fetch failed (offline, mid-deploy). The family falls back to
-    // Menlo; a later load retries because we keep no failed promise.
-    terminalFontsChunk = null;
-  });
-  return terminalFontsChunk;
-}
+export const TERMINAL_FONT = 'Menlo, Monaco, monospace';
 
-// Start the fetch at boot for someone who already picked one of these, so the
-// stylesheet is usually in place before the first XtermPane measures anything.
-if (typeof window !== 'undefined') void ensureTerminalFonts(current.fontFamily);
-
-/**
- * The theme actually painted right now — `settings.theme`, or whichever side of
- * the pair the OS is asking for.
- *
- * Anything that derives COLOUR must use this rather than `settings.theme`.
- * XtermPane builds its terminal palette here, and keying that effect on
- * `settings.theme` would leave terminals on the old palette after a system
- * flip: the stored theme did not change, only the resolution did.
- */
 export function useResolvedTheme(): Theme {
   const s = useSettings();
   const [prefersDark, setPrefersDark] = useState(systemPrefersDark);
@@ -315,22 +277,3 @@ export function useSettings(): Settings {
   }, []);
   return state;
 }
-
-// Curated list — visually distinct fonts only. Dropped near-duplicates of
-// Menlo (SF Mono, System UI Mono, Source Code Pro) since at body sizes they
-// look near-identical.
-export const FONT_FAMILIES = [
-  'Menlo, Monaco, monospace',
-  '"MesloLGS NF", Menlo, monospace',
-  '"JetBrains Mono", Menlo, monospace',
-  '"Fira Code", Menlo, monospace',
-  '"IBM Plex Mono", Menlo, monospace',
-];
-
-export const FONT_FAMILY_LABELS: Record<string, string> = {
-  'Menlo, Monaco, monospace': 'Menlo (default)',
-  '"MesloLGS NF", Menlo, monospace': 'MesloLGS Nerd Font',
-  '"JetBrains Mono", Menlo, monospace': 'JetBrains Mono',
-  '"Fira Code", Menlo, monospace': 'Fira Code',
-  '"IBM Plex Mono", Menlo, monospace': 'IBM Plex Mono',
-};
