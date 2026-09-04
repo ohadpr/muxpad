@@ -21,11 +21,23 @@
  *    other one-gesture route on touch. Long-press still opens the full context
  *    menu where the OS lets it through; it is a bonus path, never the only one.
  *
- * The pane-count chip exists because a one-pane and a five-pane row looked
- * identical on the sheet yet behaved completely differently on tap (navigate
- * vs expand-in-place). It is the SAME chip a collapsed workspace row uses,
- * so it adds no new visual vocabulary — only the meaning it already carries:
- * "N children are hidden in here."
+ * ─── What the sheet's rail rebuild deleted here ──────────────────────────
+ * `paneCountChip` is GONE, and with it the rule that a multi-pane row's TAP
+ * expands instead of navigating.
+ *
+ * The sheet rail now spends its marks on one thing: does this chat want you?
+ * A pane count is a property, not an answer to that, and a chip on every
+ * multi-pane row was a second permanent mark competing with the one that
+ * matters. The accepted cost is stated plainly: a two-pane chat now looks
+ * exactly like a one-pane chat.
+ *
+ * Tapping the row therefore OPENS it, on every row, with no exceptions to
+ * learn — which is what a one-line list of chats should do. The pane list is
+ * still reachable, and is still the only route to a second pane on mobile
+ * (TabView's mobile branch has no pane switcher of its own), so the expander
+ * survives as a small trailing chevron on multi-pane rows. It is COLLAPSED by
+ * default now: the sheet opens on a flat list of chats, not on one chat's
+ * children.
  */
 export type NavTreeVariantName = 'sidebar' | 'sheet';
 
@@ -34,27 +46,20 @@ export interface TabRowAffordances {
   pinButton: boolean;
   /** Hover-revealed close × (desktop only — touch swipes instead). */
   closeButton: boolean;
-  /** Leading chevron that expands the row into its pane list (touch only). */
+  /** Trailing chevron that expands the row into its pane list (touch only). */
   paneExpander: boolean;
-  /** Subtle "N panes" chip — the one hint that a tap will expand, not navigate. */
-  paneCountChip: boolean;
-  /** Tapping the row's NAME expands the pane list instead of navigating. */
-  tapExpandsPanes: boolean;
 }
 
 export function tabRowAffordances(opts: {
   variant: NavTreeVariantName;
   paneCount: number;
-  /** The sheet row is currently expanded into its pane list. */
-  panesOpen: boolean;
   /** The row is showing its inline rename input — all controls stand down. */
   isEditing: boolean;
 }): TabRowAffordances {
-  const { variant, paneCount, panesOpen, isEditing } = opts;
-  const sheet = variant === 'sheet';
+  const { variant, paneCount, isEditing } = opts;
   // A single-pane tab has nothing to pick between, so it never expands — it
   // just opens, which is the behavior that felt right all along.
-  const picksPane = sheet && paneCount > 1;
+  const picksPane = variant === 'sheet' && paneCount > 1;
   return {
     pinButton: variant === 'sidebar' && !isEditing,
     // Touch rows carry NO permanent controls at all now — see the swipe note
@@ -62,10 +67,6 @@ export function tabRowAffordances(opts: {
     // and close live under the row, revealed by a left swipe.
     closeButton: variant === 'sidebar' && !isEditing,
     paneExpander: picksPane && !isEditing,
-    // Collapsed-only, mirroring the workspace chip: once the panes are listed
-    // below, the count is right there and the chip would just double-signal.
-    paneCountChip: picksPane && !panesOpen,
-    tapExpandsPanes: picksPane,
   };
 }
 

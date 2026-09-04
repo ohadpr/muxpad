@@ -1,20 +1,21 @@
 /* ──────────────────────────────────────────────────────────────────────
    NavTree — the workspace/tab navigator tree.
 
-   One component, two chrome homes:
-     [data-variant='sidebar'] — persistent desktop left rail. Dense
-       file-navigator rows; close buttons appear on hover.
-     [data-variant='sheet']   — content of the mobile drop-down panel.
-       Thumb-height rows; close buttons always faintly present (touch
-       has no hover).
+   TWO SURFACES, and they FORKED. Everything from here down to "THE MOBILE
+   RAIL" (at the foot of this file) is the DESKTOP left rail; the sheet's chat
+   rows are that final section, and it overrides most of what is below. The
+   sheet still borrows the pane rows, the workspace-picker row's close button
+   and the "+ New workspace" action from here, which is why the two live in one
+   file rather than two.
 
-   Both variants render a flat list, Slack-rail style: workspaces are
+   The desktop rail renders a flat list, Slack-rail style: workspaces are
    quiet bold headers (a disclosure chevron + name, no fill) with their
    tabs indented below. Hierarchy comes from indent + weight + one strong
    anchor, not from bands, rails, and guide-lines stacked together.
 
    TWO channels, and they never borrow each other's encoding — that
-   separation is the thing the whole rail rests on:
+   separation is the thing the DESKTOP rail rests on (the mobile one deletes
+   both and keeps a single bit; see its own section):
 
      WHERE YOU ARE      a SOLID accent block (active tab, active pane,
                         Hosted). Filled, never a wash.
@@ -172,52 +173,59 @@
   font-size: 14px;
   color: var(--fg);
 }
+/* ─── The MOBILE RAIL's own scale ─────────────────────────────────────────
+   The sheet does not inherit the rail's three-step scale, because it no longer
+   has the columns that scale exists to align. Its row is a flex LINE with two
+   fixed points — the leading emoji and the trailing mark — and four numbers
+   describe it completely:
+
+     14px  --nt-rail-lead    the row's leading inset. Every emoji box starts
+                             here, on every row, and that x is the one hard
+                             edge the whole list is read against.
+     20px  --nt-rail-emoji   the emoji BOX. Fixed, not auto: emoji advance
+                             widths differ (🏗️ carries a variation selector,
+                             ✈️ does not), so an auto box moves the name's x a
+                             pixel or two per row — which is exactly the jitter
+                             that stops a column being one.
+      8px  --nt-rail-gap     emoji ↔ name. Deliberately TIGHT (the rail's own
+                             gutter is 8 and its air is 12): the emoji and the
+                             name are one object, not two columns.
+     12px  --nt-rail-trail   the row's trailing inset.
+
+   So every name starts at 14 + 20 + 8 = 42px, on every row, in every script.
+
+   The old sheet tokens (--nt-row-ws, --nt-disc, --nt-indent, --nt-chip-radius,
+   --nt-col-meta) are GONE from here: the workspace rows, the leading
+   disclosure track, the tab indent, the icon plate and the schedule column
+   they sized do not exist on this surface any more. --nt-air/--nt-gutter stay
+   because the sheet's PANE rows are still built from them. */
 .navtree[data-variant="sheet"] {
-  --nt-row-ws: 44px;
-  /* Floor only — a row with a headline is ~58px. Never below 44px: that is
-     the smallest thing a thumb can hit reliably, and these rows ARE the
-     targets. */
-  --nt-row-tab: 46px;
+  --nt-rail-lead: 14px;
+  --nt-rail-trail: 12px;
+  --nt-rail-emoji: 20px;
+  --nt-rail-gap: 8px;
+  /* Exactly the touch floor. Not a floor with slack above it — one number, so
+     the list has no rhythm to lose. */
+  --nt-rail-h: 44px;
+  --nt-row-tab: 44px;
   --nt-hit: 32px;
-  --nt-disc: 24px;
-  --nt-indent: 28px;
   --nt-icon-h: 20px;
   --nt-chip: 24px;
-  --nt-chip-radius: 6px;
-  --nt-col-meta: 52px;
   --nt-gutter: 10px;
-  /* The scale steps up with everything else on the sheet (gutter 8 → 10, icon
-     chip 20 → 24), so the air does too: 14px, still one clear step above the
-     gutter. --nt-col-icon is derived from both, so it follows on its own —
-     the sheet's literal 26px against a 24px chip is gone. */
   --nt-air: 14px;
   /* What a swiped row slides over — see SwipeRow.css. */
   --swipe-surface: var(--bg-chrome);
   font-size: 15px;
 }
 
-/* ─── Section header ─────────────────────────────────────────────────── */
-
-/* Inset bottom hairline so the header is separated from the list the same
-   way the workspace groups are separated from each other — the margin
-   matches the scroll's 8px inset so all the tree's dividers line up. */
-.navtree-section {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  margin: 0 8px;
-  padding: 12px 2px 8px 4px;
-  border-bottom: 1px solid var(--border);
-}
-.navtree-section-label {
-  flex: 1;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--fg-faint);
-  user-select: none;
-}
+/* ─── Section header — DELETED ────────────────────────────────────────────
+   `.navtree-section` was the sheet's "WORKSPACES" caption plus its hairline:
+   an uppercase --fg-faint label (3.03:1 light / 2.91:1 dark, so it failed AA
+   outright) sitting above a list, saying what the list obviously was. It cost
+   a row of chrome and a rule to tell you nothing. The sheet's one top bar
+   (.navtree-bar below) names the workspace you are IN, which is the thing that
+   was actually missing, and the desktop rail never rendered the caption at
+   all. Nothing replaces it. */
 
 /* ─── Scroll region + workspace groups ───────────────────────────────── */
 
@@ -241,11 +249,12 @@
 .navtree[data-variant="sidebar"] .navtree-scroll {
   padding-top: 8px;
 }
+/* FULL BLEED. The 8px horizontal inset is gone, and with it the idea that the
+   rows float off the rail's edges: the selected row is a band that runs edge to
+   edge, and an inset pill is itself a floating object — a list whose one
+   surface floats teaches the eye that the rows float too. */
 .navtree[data-variant="sheet"] .navtree-scroll {
-  padding: 2px 8px 14px;
-}
-.navtree[data-variant="sheet"] .navtree-section {
-  padding: 12px 6px 6px 8px;
+  padding: 2px 0 14px;
 }
 
 /* Workspaces read as a flat list of quiet bold headers (chevron + name,
@@ -519,12 +528,18 @@
   margin-left: var(--nt-gutter);
 }
 
-/* Quiet tab-count chip on collapsed rows — says what's folded away. */
+/* Quiet tab-count chip on collapsed rows — says what's folded away.
+   --fg-dim, NOT --fg-faint: the faint token measures 3.03:1 on the light rail
+   and 2.91:1 on the dark one and fails WCAG AA outright, and this is 10px TEXT
+   — the size at which a failing ratio is least forgivable. --fg-dim clears 4.5
+   on every theme. "Quiet" is bought by the size and the chip's own fill, not
+   by an ink nobody can read. (The token is fine where it inks a GLYPH — a
+   chevron or a ×, which are held to 3:1 as non-text indicators.) */
 .navtree-ws-count {
   flex: 0 0 auto;
   font-size: 10px;
   line-height: 1;
-  color: var(--fg-faint);
+  color: var(--fg-dim);
   background: var(--bg-hover);
   border-radius: 8px;
   padding: 3px 6px;
@@ -582,45 +597,10 @@
   color: var(--fg-dim);
   font-weight: 500;
 }
-/* Sheet: the pane-disclosure chevron LEADS the row, so it needs its own track
-   in front of the icon. Rendered (as a zero-content spacer) on every sheet row
-   so single- and multi-pane tabs share one grid. No control tracks — touch
-   rows carry no permanent buttons at all. */
-.navtree[data-variant="sheet"] .navtree-tab-row {
-  grid-template-columns: var(--nt-disc) var(--nt-col-icon) minmax(0, 1fr) auto auto;
-  /* COLLAPSING, not reserving: a row with no headline is a genuinely shorter
-     one-line row, because most rows have no headline until the generator has
-     run and a column of empty reserved lines reads as broken.
-
-     The rhythm comes from ONE padding rule serving both shapes. Before, the
-     46px floor was doing the work: a single-line row (30px of content) sat in
-     a 46px box — 13px of space above and below its text — while a two-line row
-     used its declared 5px. Every gap in the list was therefore a different
-     size depending on its neighbours' shapes, which is the ragged rhythm.
-     Now both shapes pay the same 11px, and the floor only guarantees the touch
-     target: one line lands on 44px (the floor, 2px of slack), two lines on
-     59px. Two heights, both deterministic, and the difference is exactly one
-     line of headline — which is what makes it read as deliberate. */
-  /* 12px: a one-line row is then 12 + 20 + 12 = 44px, exactly the touch floor,
-     so it is not floor-clamped and both shapes lead identically. */
-  padding-top: 12px;
-  padding-bottom: 12px;
-  /* No indent term: on the sheet the leading disclosure track IS the indent.
-     (padding-right is inherited from the rule above — one air token, both
-     variants.) */
-  padding-left: var(--nt-pad);
-  min-height: 44px;
-}
 /* Renaming collapses the row to icon + input: the meta, controls and status
    all stand down, and a 5-track template would strand the input in one narrow
    cell. */
 .navtree-tab-row:has(.navtree-rename) {
-  grid-template-columns: var(--nt-col-icon) minmax(0, 1fr);
-}
-/* No --nt-disc track: while editing, neither the expander nor its spacer is
-   rendered (both are gated on !isEditing), so a leading disclosure track left
-   the icon in it and squeezed the input into 26px. */
-.navtree[data-variant="sheet"] .navtree-tab-row:has(.navtree-rename) {
   grid-template-columns: var(--nt-col-icon) minmax(0, 1fr);
 }
 /* The icon carries NO margin. The gap to the name is the slack inside its own
@@ -726,13 +706,8 @@
   text-overflow: ellipsis;
   min-width: 0;
 }
-.navtree[data-variant="sheet"] .navtree-tab-titleline {
-  line-height: 20px;
-}
-.navtree[data-variant="sheet"] .navtree-tab-headline {
-  font-size: 12px;
-  line-height: 16px;
-}
+/* The sheet's headline overrides are gone with the headline itself: the mobile
+   rail is one line per chat, and that is what the deletion bought. */
 /* On the active row the headline is drawn in the block's own ink, for the same
    measured reason as the schedule above: every step down from it — a mix
    toward the accent, or the `opacity: 0.75` this replaced — lands 11.5px text
@@ -807,7 +782,9 @@
   line-height: 1.2;
   letter-spacing: 0.02em;
   font-variant-numeric: tabular-nums;
-  color: var(--fg-faint);
+  /* --fg-dim, not --fg-faint: see .navtree-ws-count. 10.5px text at 3.03:1 is
+     the worst combination of the two failures in this sheet. */
+  color: var(--fg-dim);
   white-space: nowrap;
 }
 /* Set BACK from the digits: the glyph only says what KIND of number follows,
@@ -834,9 +811,11 @@
 .navtree-tab-row[data-active="true"] .navtree-cron-glyph {
   opacity: 0.8;
 }
-.navtree[data-variant="sheet"] .navtree-cron {
-  font-size: 11.5px;
-}
+/* No sheet override: the schedule is a desktop-rail column now. On the mobile
+   rail it was a permanent mark on a standing PROPERTY of a chat, in a list
+   whose one job is to say which chats want you. A scheduled chat there looks
+   like an idle one — an accepted loss; the schedule is set and read inside the
+   chat. */
 
 /* ─── Close affordance (per-row) ─────────────────────────────────────── */
 
@@ -868,10 +847,10 @@
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
-/* Sheet: WORKSPACE and PANE rows keep their × (both are still flex rows and
-   neither is swipeable). TAB rows on the sheet render no × at all — pin,
-   mark-unread and close live under the row behind a left swipe. */
-.navtree[data-variant="sheet"] .navtree-ws-row .navtree-close,
+/* Sheet: the WORKSPACE-PICKER and PANE rows keep their × (neither is
+   swipeable). CHAT rows on the sheet render no × at all — pin, mark-unread and
+   close live under the row behind a left swipe. */
+.navtree[data-variant="sheet"] .navtree-wspick-row .navtree-close,
 .navtree[data-variant="sheet"] .navtree-pane-row-wrap .navtree-close {
   flex-basis: var(--nt-hit);
   width: var(--nt-hit);
@@ -883,10 +862,11 @@
 }
 /* The row you're on gets a slightly more present × — it's the one you're most
    likely to close, so it shouldn't need hunting. */
-.navtree[data-variant="sheet"] .navtree-ws-row[data-active="true"] .navtree-close,
+.navtree[data-variant="sheet"] .navtree-wspick-row[data-active="true"] .navtree-close,
 .navtree[data-variant="sheet"] .navtree-pane-row-wrap[data-active="true"] .navtree-close {
   opacity: 0.4;
 }
+.navtree-wspick-row:hover .navtree-close,
 .navtree-ws-row:hover .navtree-close,
 .navtree-ws-row:focus-within .navtree-close,
 .navtree-tab-row:hover .navtree-close,
@@ -970,15 +950,12 @@
   color: var(--accent-fg);
 }
 
-/* Pane-count hint on a collapsed multi-pane row (sheet). Same chip as
-   .navtree-ws-count on a collapsed workspace — reused verbatim so it carries
-   the meaning it already has ("N children hidden in here"); this only stops
-   it from being squeezed by a long tab name. */
-.navtree-pane-count {
-  flex: 0 0 auto;
-  margin-right: 0;
-  margin-left: 2px;
-}
+/* The pane-count chip (`.navtree-pane-count`) is DELETED. It was the sheet's
+   only hint that a row would expand rather than navigate — and the tap rule it
+   explained is gone too: every sheet row now simply opens its chat, and the
+   pane list is behind a chevron. The accepted cost is that a two-pane chat
+   looks exactly like a one-pane chat, which is the point: the rail spends its
+   marks on one question, and a pane count does not answer it. */
 
 /* The seam between the pinned block and the auto-sorted one. A hairline with
    generous air, not a labelled section header: the sidebar is already dense,
@@ -995,20 +972,19 @@
 
 /* ─── Sheet pane list (mobile: tab row expands into its panes) ───────── */
 
-/* Expander chevron LEADING sheet tab rows — same left-edge grammar and
-   rotation as the workspace disclosure, full row height so the thumb
-   target is generous and clearly separated from the name (navigate) and
-   the × (close) on the right. */
+/* Expander chevron. It no longer LEADS the row — see the mobile-rail section
+   at the foot of this file: a leading disclosure track was charged to every
+   row (chevron-less rows carried an identical-width `.-spacer` twin, now
+   deleted along with this rule's leading geometry) and it pushed the emoji,
+   the rail's one hard leading edge, 24px in. It trails now, on multi-pane rows
+   only, inside `.navtree-rail-tail`, which is where its size is set. */
 .navtree-pane-expander {
-  flex: 0 0 40px;
-  align-self: stretch;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   background: transparent;
   border: none;
   padding: 0;
-  margin-left: -6px; /* claw back some of the tab indent for the target */
   color: var(--fg-faint);
   cursor: pointer;
   border-radius: 4px;
@@ -1017,10 +993,6 @@
 }
 .navtree-pane-expander:active {
   background: var(--bg-hover);
-}
-/* Inert indent twin for chevron-less rows. */
-.navtree-pane-expander.-spacer {
-  pointer-events: none;
 }
 
 .navtree-pane-expander[data-open="true"] svg {
@@ -1151,7 +1123,8 @@
 }
 .navtree-pane-loading {
   padding: 4px 8px;
-  color: var(--fg-faint);
+  /* Text, so --fg-dim — see .navtree-ws-count for the measured reason. */
+  color: var(--fg-dim);
 }
 /* Shown when the pane-list poll has missed repeatedly (D16). Any marks still
    rendered below are a stale snapshot, so this has to be legible rather than a
@@ -1582,4 +1555,397 @@ body.sidenav-resizing iframe {
 }
 .navtree-foot-link[data-active="true"]:hover {
   background: var(--accent);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE MOBILE RAIL
+   ══════════════════════════════════════════════════════════════════════════
+
+   Everything below is `[data-variant="sheet"]` and applies to nothing else.
+   It is a FORK of the rows above, not a set of tweaks to them, and that is the
+   deliberate choice: the desktop rail is a pointer surface 280px wide with
+   hover and a mosaic behind it, and the sheet is a 390px thumb surface where
+   the list is the whole navigator. A shipped sheet row carried twelve channels
+   — emoji, name, headline, state bar, state tint, state dot, state word,
+   unread weight, pin glyph, pane count, cron time, chevron. Twelve is busy at
+   any weight in any palette, so what follows is mostly deletion.
+
+   Written LAST in the file on purpose. Several of these rules tie on
+   specificity with the desktop rules they replace (both are one class plus one
+   attribute against the same element); source order settles a tie, and the
+   variant fork has to win it.
+
+   ─── The rule the whole thing rests on ─────────────────────────────────────
+   FIVE STATES COLLAPSE TO ONE BIT: wants-you, or not.
+
+     blocked  a 9px dot — the only permanent mark in the list
+     working  the spinner, and nothing else. Transient by definition.
+     ready    the NAME'S WEIGHT. No mark of its own.
+     dead     nothing.
+     idle     nothing — and no element either (StateChip's `mark` mode).
+
+   No row tints, no left state bars, no word chips, no marks on idle rows: a
+   mark on every row is not a signal. The headline is gone (it is what made
+   every row two lines, and it exists in search results and in the chat).
+   Pinning is ORDER, not a glyph. Nothing lives in the scroller that is not a
+   chat.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── The one top bar ─────────────────────────────────────────────────────
+   Everything that used to be a ROW in the scroller and was not a chat is a
+   control here: the workspace (name + caret, opens the picker), search (a
+   glyph that swaps this whole bar for the field — never two bars deep), and
+   "+" (a new chat in the workspace named to its left). */
+.navtree-bar {
+  flex: 0 0 52px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 52px;
+  padding-inline: var(--nt-rail-lead) var(--nt-rail-trail);
+  color: var(--fg);
+}
+.navtree-bar-ws {
+  /* Takes the slack, so the two glyphs sit against the trailing edge. */
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.navtree-bar-wsname {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  /* The one place in the rail that is heavier than a chat name at rest. It is
+     a title, not a row. */
+  font-weight: 640;
+}
+.navtree-bar-caret {
+  flex: 0 0 auto;
+  transition: transform 120ms ease;
+}
+.navtree-bar-caret[data-open="true"] {
+  transform: rotate(180deg);
+}
+.navtree-bar-icon {
+  flex: 0 0 auto;
+  /* 40px hit square for a 19px glyph — under the row floor because these are
+     aimed at deliberately, not scrolled past, and a 44px square each would
+     push the workspace name off its own bar. */
+  inline-size: 40px;
+  block-size: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-inline: -8px;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--fg-dim);
+  cursor: pointer;
+  border-radius: 8px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.navtree-bar-icon:active {
+  background: var(--bg-hover);
+}
+.navtree-bar-icon:disabled {
+  opacity: 0.4;
+}
+/* The search field takes the BAR's place rather than stacking under it, so it
+   sits on the bar's own metrics. */
+.navsearch[data-variant="sheet"] {
+  margin-block: 6px;
+  margin-inline: var(--nt-rail-lead) var(--nt-rail-trail);
+}
+.navsearch-done {
+  flex: none;
+  background: transparent;
+  border: 0;
+  padding: 0 2px;
+  color: var(--accent);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+/* ─── The chat row ────────────────────────────────────────────────────────
+   A flex LINE, not a grid. The grid existed to hold four columns on one x;
+   there are two fixed points left (the emoji and the trailing mark) and a name
+   between them, and — see the bidi note below — the name must NOT be given a
+   track with slack in it. */
+.navtree[data-variant="sheet"] .navtree-tab-row {
+  display: flex;
+  align-items: center;
+  gap: var(--nt-rail-gap);
+  block-size: var(--nt-rail-h);
+  min-block-size: var(--nt-rail-h);
+  padding-block: 0;
+  padding-inline: var(--nt-rail-lead) var(--nt-rail-trail);
+  /* FULL BLEED: no radius anywhere on a sheet row. A radius here is also what
+     let the swipe tray's red Close block bleed through the row's corners as a
+     column of tiny ticks (SwipeRow.css hides the closed tray for the same
+     defect); with the band square there is nothing to leak through. */
+  border-radius: 0;
+  color: var(--fg);
+  font-weight: 400;
+}
+/* The swipe shell is the row's real outer box on this surface, so it has to be
+   square too — the shell CLIPS, and a rounded clip on a square band cuts the
+   band's own corners off. */
+.navtree[data-variant="sheet"] .swiperow {
+  border-radius: 0;
+}
+/* Renaming: the input takes the whole line beside the emoji. */
+.navtree[data-variant="sheet"] .navtree-tab-row:has(.navtree-rename) {
+  display: flex;
+}
+
+/* ─── The emoji ───────────────────────────────────────────────────────────
+   Kept, because it is the fastest recognition token in the list — faster than
+   reading a Hebrew name — and it is the one channel the brief protects.
+
+   The PLATE behind it is deleted. On the desktop rail the chip is load-bearing
+   (emoji ink coverage runs 11%–48%, so a glyph's own edge is not a column
+   edge, and the chip replaces the thing being anchored on). Here the emoji sits
+   in a FIXED 20px box at a fixed 14px from the row's edge, so the box already
+   is the column edge — and a plate on every row is one more mark on every row,
+   which is the rule this rail is built on.
+
+   `inset-block-start: -1px` is an optical lift: emoji artwork sits low against
+   a Latin baseline and reads as sagging next to 15px text. */
+.navtree[data-variant="sheet"] .navtree-tab-icon {
+  flex: 0 0 var(--nt-rail-emoji);
+  inline-size: var(--nt-rail-emoji);
+  block-size: var(--nt-rail-emoji);
+  font-size: 17px;
+  line-height: 1;
+  text-align: center;
+  position: relative;
+  inset-block-start: -1px;
+  /* Above the stretched link below, or tapping the emoji navigates instead of
+     opening the picker. */
+  z-index: 1;
+}
+.navtree[data-variant="sheet"] .navtree-tab-icon::before {
+  content: none;
+}
+
+/* ─── The name, and THE BIDI FIX ──────────────────────────────────────────
+   `dir="auto"` is KEPT on the name (NavTree.tsx). It is the only thing that
+   gets two separate things right: the glyph ORDER inside a Hebrew name, and
+   which END its ellipsis lands on when it is too long (a Hebrew name must
+   truncate at its own logical end, which is the visual LEFT).
+
+   What is removed is the BOX's ability to misplace it. `dir` also sets the CSS
+   `direction`; `direction` is what `text-align`'s initial `start` resolves
+   against; and a `flex: 1` name hands a five-character Hebrew name a 250px box
+   to be aligned inside. So it settled against the row's TRAILING edge, a
+   quarter of a metre from its own emoji, while every Latin name stayed at the
+   leading edge — measured on the shipped sheet at 280px of first-glyph spread
+   across a 390px rail. There was no column for the eye to run down, which is
+   most of why the rows read as floating once the tints and bars were cut.
+
+   THE FIX IS NOT THE OBVIOUS ONE, and that was settled by measuring rather
+   than by reasoning:
+     · `unicode-bidi: plaintext` + `text-align: start` on a `direction: ltr`
+       box does NOT pin it in Chrome — `start` resolves against the
+       plaintext-derived paragraph direction, and the spread stayed at ~290px.
+       `text-align: match-parent` does not pin it either.
+     · Forcing the box to `direction: ltr` (plaintext + `text-align: left`, or
+       an inner <bdi>) DOES pin it, and pays for it by moving a long Hebrew
+       name's ellipsis to the wrong end.
+
+   So: keep dir="auto" and take away the slack. `flex: 0 1 auto` makes the box
+   the width of its own text, so there is nothing for alignment to spend; the
+   trailing marks push themselves to the row's end with their OWN
+   `margin-inline-start: auto` (see .navtree-rail-tail). That margin must never
+   live here: `margin-inline-end: auto` on a name whose dir="auto" resolved to
+   rtl maps to margin-LEFT and re-creates the original bug wearing a logical
+   property. When a name IS long enough to overflow, the box fills the track
+   and alignment is a no-op again, because overflowing text starts at the
+   clipping edge either way. */
+.navtree[data-variant="sheet"] .navtree-tab-link {
+  flex: 0 1 auto;
+  min-inline-size: 0;
+  display: block;
+  overflow: hidden;
+}
+.navtree[data-variant="sheet"] .navtree-tab-link .navtree-name-text {
+  display: block;
+  /* Alignment is NOT pinned here, unlike the desktop rail's `text-align: left`
+     — the box has no slack to align inside, so pinning it would be a no-op
+     that hid the real mechanism. */
+  text-align: unset;
+  font-size: 15px;
+  line-height: 20px;
+}
+/* THE STRETCHED LINK. The name's box now stops at its text, which would leave
+   most of a 390px row untappable — the row IS the target on a thumb surface.
+   A zero-ink pseudo-element covers the row; the emoji and the trailing
+   controls are lifted above it (z-index) so they keep their own taps. */
+.navtree[data-variant="sheet"] .navtree-tab-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+/* Unread = "done, unreviewed". On this rail it is also how `ready` is told at
+   all, which is why the weight step is a big one: 400 → 700, not 500 → 600. */
+.navtree[data-variant="sheet"] .navtree-tab-row[data-unread="true"] .navtree-name-text {
+  font-weight: 700;
+}
+
+/* ─── The trailing marks ──────────────────────────────────────────────────
+   ONE wrapper, and it renders only when it has something in it — an idle row
+   has no element here at all. The auto margin lives on the WRAPPER and not on
+   each mark: two auto margins on one flex line SHARE the free space, and the
+   chevron would float into the middle of the row. */
+.navtree-rail-tail {
+  position: relative;
+  z-index: 1;
+  margin-inline-start: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  /* Never squeezed by a long name: the name shrinks (flex: 0 1 auto), the
+     marks do not. */
+  flex: 0 0 auto;
+}
+.navtree-rail-mark {
+  display: inline-flex;
+  align-items: center;
+}
+/* The pane chevron, trailing. It leads the row on no surface any more: a
+   leading disclosure track was charged to EVERY row (chevron-less rows carried
+   a spacer to keep the column) and it pushed the emoji — the rail's one hard
+   leading edge — 24px in. Multi-pane rows only, so most rows never draw it. */
+.navtree[data-variant="sheet"] .navtree-rail-tail .navtree-pane-expander {
+  flex: 0 0 28px;
+  align-self: center;
+  inline-size: 28px;
+  block-size: 28px;
+  margin-inline: 0;
+  color: var(--fg-dim);
+}
+.navtree[data-variant="sheet"] .navtree-rail-tail .navtree-pane-expander[data-open="true"] svg {
+  transform: rotate(90deg);
+}
+
+/* ─── Selection ───────────────────────────────────────────────────────────
+   A FULL-BLEED BAND, and a quiet one. Two changes from the desktop rail, both
+   deliberate:
+
+   1. Full bleed, not an inset pill. An inset pill is itself a floating object,
+      and a list whose one surface floats teaches the eye that the rows float
+      too — which is exactly what the deletions above left it doing.
+   2. A 20% wash of the accent rather than a SOLID accent slab. On the desktop
+      rail the slab has to out-shout four other channels; here it is competing
+      with one dot, so a saturated block is the loudest thing on a screen whose
+      whole point is that almost nothing is loud. The name keeps --fg, which
+      is also what stops selection from needing its own ink everywhere.
+
+   `background-color`, never the shorthand — see StateChip.css. */
+.navtree[data-variant="sheet"] .navtree-tab-row[data-active="true"] {
+  background-color: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--fg);
+}
+/* The desktop rail re-inks everything on its row against --accent-fg, because
+   its selection is a solid accent block. Ours is a wash over the rail's own
+   surface, so --fg is still the right ink and those overrides have to stand
+   down — all of them tie at (0,3,0) or below against these. */
+.navtree[data-variant="sheet"] .navtree-tab-row[data-active="true"] .navtree-name-text {
+  color: var(--fg);
+  /* A step of weight, not a colour: "you are here" and "unread" must stay
+     distinguishable, and 640 sits clearly under the unread 700. */
+  font-weight: 640;
+}
+.navtree[data-variant="sheet"] .navtree-tab-row[data-active="true"] .navtree-pane-expander {
+  color: var(--fg-dim);
+}
+/* Long-press acknowledgment. Kept below the selection rule so a press on the
+   row you are already on does not blank its band. */
+.navtree[data-variant="sheet"] .navtree-tab-row[data-pressing="true"]:not([data-active="true"]) {
+  background-color: var(--bg-hover);
+}
+
+/* ─── The workspace picker ────────────────────────────────────────────────
+   What the bar's `Name ⌄` swaps the chat list for. Same row shape as the chats
+   — 44px, full bleed, one trailing mark — so it reads as the same list showing
+   a different thing. It keeps a permanent ×, unlike a chat row: this is a
+   surface you arrive at on purpose and leave immediately, not one you scroll
+   past, so the mis-tap argument that moved the chat rows' × behind a swipe does
+   not apply, and closing a workspace has no other route on touch. */
+.navtree-wspick-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--nt-rail-gap);
+  block-size: var(--nt-rail-h);
+  padding-inline: var(--nt-rail-lead) var(--nt-rail-trail);
+}
+.navtree-wspick-row[data-active="true"] {
+  background-color: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.navtree-wspick-row[data-pressing="true"]:not([data-active="true"]) {
+  background-color: var(--bg-hover);
+}
+.navtree-wspick-name {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  text-align: start;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.navtree-wspick-row[data-active="true"] .navtree-name-text {
+  font-weight: 640;
+}
+/* The picker's tail marks sit beside a name that GROWS (this list has no bidi
+   column to protect — every row is one workspace name, and the × is the fixed
+   point), so they need no auto margin of their own. */
+.navtree-wspick-row > .navtree-rail-mark {
+  flex: 0 0 auto;
+  margin-inline-start: var(--nt-rail-gap);
+}
+
+/* ─── The sheet's pane list, re-indented ──────────────────────────────────
+   The hierarchy step is still 18px under where a tab NAME starts — but a tab
+   name starts at lead + emoji + gap now, not at pad + disclosure + icon-track,
+   because the leading disclosure column is gone. Derived from the same tokens
+   the rows use, so the step cannot silently shrink again. The 8px subtraction
+   is the pane button's own padding, which already pays part of the indent. */
+.navtree[data-variant="sheet"] .navtree-pane-list {
+  padding-inline-start: calc(
+    var(--nt-rail-lead) +
+    var(--nt-rail-emoji) +
+    var(--nt-rail-gap) +
+    18px -
+    8px
+  );
+  padding-inline-end: 0;
 }
