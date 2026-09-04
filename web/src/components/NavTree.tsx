@@ -613,7 +613,7 @@ function SheetRail({
             type="button"
             className="navtree-bar-icon"
             onClick={() => setSearching(true)}
-            aria-label="Search chats"
+            aria-label="Search"
           >
             <SvgSearchGlyph />
           </button>

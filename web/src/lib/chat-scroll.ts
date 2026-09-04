@@ -166,6 +166,40 @@ export function shouldPersistChatScroll(opts: {
 }
 
 /**
+ * May a trusted scroll event WRITE the remembered position?
+ *
+ * ── THE THIRD CASE ───────────────────────────────────────────────────────────
+ * The header above describes two kinds of reader, and the whole re-entry policy
+ * is deciding between them: a CAUGHT-UP reader opens at the newest message, a
+ * SCROLLED-BACK reader keeps their exact spot. Both are descriptions of where
+ * someone was READING.
+ *
+ * A search jump is neither. It is an explicit, one-shot destination the user
+ * asked for from somewhere else entirely — "take me to the message that says
+ * X" — and it lands wherever that message happens to be, usually deep in
+ * history. Left ungated, the jump's own scrollTop writes produce scroll events
+ * like any other, and each one would record "parked at message X, not caught
+ * up". The next ORDINARY open of that chat — a click on the tab tomorrow, with
+ * no search involved — would then faithfully restore a reader who had read to
+ * the end to a message from three weeks ago. That is the exact bug the
+ * caught-up rule was introduced to kill, re-entering through a different door.
+ *
+ * So a jump records NOTHING, and whatever was remembered before the search
+ * stands. A reader who was caught up is still caught up; one who was parked
+ * mid-history is still parked there.
+ *
+ * The hold is released the moment the reader does something with the pane —
+ * a wheel spin, a drag, dismissing the highlight — because at that point they
+ * are no longer being shown a search result, they are reading, and where they
+ * choose to be is exactly what the memory is for. Time does not release it:
+ * a reader who studies the hit for two minutes and leaves has still not told us
+ * anything about where they want to resume.
+ */
+export function shouldRememberPosition(opts: { searchJumpActive: boolean }): boolean {
+  return !opts.searchJumpActive;
+}
+
+/**
  * After an older-history batch prepends, where should `scrollTop` land?
  * Pinned readers stay at the bottom (follow new messages). Unpinned readers
  * keep the same messages under the viewport via the classic height-delta
@@ -345,6 +379,63 @@ export function scrollTopForAnchor(opts: {
   const raw = opts.scrollTop + (opts.rowTop - opts.anchorOffset);
   return Math.min(Math.max(0, raw), maxScrollTop(opts.scrollHeight, opts.clientHeight));
 }
+
+/**
+ * Where a search hit should sit in the viewport, as a fraction from the top.
+ *
+ * Not the top (a message flush against the viewport edge looks like it was
+ * scrolled past, and there is no way to tell whether the conversation above it
+ * is the reason you are here) and not the middle (which wastes the screen on a
+ * long answer, pushing the rest of the message you came to read off the
+ * bottom). A third of the way down leaves a line or two of the preceding turn
+ * visible as context and still gives the message itself most of the screen.
+ */
+const SEARCH_HIT_VIEW_FRACTION = 1 / 3;
+
+/**
+ * Where `scrollTop` must land to bring a search hit into view.
+ *
+ * `hitTop` is the matched run's top relative to the scroll viewport's top —
+ * the MARK, not the message, when there is one: a hit two thousand pixels down
+ * a long assistant answer is not "brought into view" by putting the top of
+ * that answer on screen.
+ *
+ * CLAMPED, for the reason every other target in this file is: the caller
+ * stamps the result as `lastProgrammaticTop`, and a value the browser then
+ * clamps would never equal the real scrollTop — so the very next scroll event
+ * would read as the reader taking control.
+ */
+export function scrollTopForSearchHit(opts: {
+  scrollTop: number;
+  hitTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+}): number {
+  const raw = opts.scrollTop + opts.hitTop - opts.clientHeight * SEARCH_HIT_VIEW_FRACTION;
+  return Math.min(Math.max(0, Math.round(raw)), maxScrollTop(opts.scrollHeight, opts.clientHeight));
+}
+
+/**
+ * How long the jump-to-hit placement keeps re-asserting itself.
+ *
+ * Same problem the restore loop has, for the same reason: the document is
+ * still settling when the target first renders (markdown commits, images
+ * decode, older pages the seek asked for are still landing), so a one-shot
+ * scroll drifts. Shorter than RESTORE_SETTLE_MS because by the time a jump
+ * places anything the transcript is already loaded — this window only has to
+ * cover the last of the layout. It ends early the instant the reader scrolls.
+ */
+export const SEARCH_JUMP_SETTLE_MS = 1200;
+
+/**
+ * How long a jump may go unresolved before we admit we cannot find it.
+ *
+ * The seek below is driven by arriving history, so a socket that never opens
+ * (or a server with no `load-older` handler) would leave the reader on a chat
+ * that looks like the search did nothing at all. This is the backstop that
+ * turns that silence into a sentence.
+ */
+export const SEARCH_JUMP_DEADLINE_MS = 15_000;
 
 /**
  * How many older-history pages a restore may request while hunting for the

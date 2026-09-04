@@ -63,7 +63,15 @@ const SCORE = {
   pinnedBoost: 5,
 } as const;
 
-function escapeRegExp(s: string): string {
+/**
+ * Neutralise every RegExp metacharacter in `s`.
+ *
+ * Exported because the CHAT-side highlight (lib/search-highlight) must escape
+ * the same way this file does: a query is user text, and `a.*b` or an unclosed
+ * `(` reaching `new RegExp` is either a crash or a match on something the user
+ * never asked about.
+ */
+export function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 

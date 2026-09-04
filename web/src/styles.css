@@ -63,6 +63,37 @@
      which darkens the ink on light themes and lightens it on dark ones. Tuned
      to clear 4.5:1 against the chip's own fill on every theme and surface. */
   --status-ink-mix: 55%;
+
+  /* ─── Search-hit highlight ─────────────────────────────────────────────
+     What a term looks like once you have been taken to the message that says
+     it (components/ChatPane.css `.chat-hit`). Its own token trio, not
+     --accent: the accent is already the "this is selected / this has focus"
+     colour throughout the app, and a found word is neither — reusing it would
+     make a highlighted run inside a focused pane say two different things in
+     the same hue. A held marker instead, which is what a highlighter IS.
+
+     Three tokens because a highlight has three jobs and one colour cannot do
+     all of them:
+       · --hit-bg    the fill;
+       · --hit-ink   the text ON the fill (>= 4.5:1 against it in every theme;
+                     measured 11:1+, because the fill is a strong colour and
+                     the ink is near-black by construction);
+       · --hit-rule  the edge. Load-bearing on the LIGHT themes and nowhere
+                     else: a yellow fill on white is a difference in HUE, not
+                     in luminance (measured 1.28:1 on acme, 1.43:1 on
+                     github-light), so the fill alone would fail non-text
+                     contrast and would vanish entirely for a reader who
+                     cannot separate those hues. The rule carries the boundary
+                     there (4.87:1 / 5.52:1 against the page). On the dark
+                     themes the fill already clears it on its own (10.5–12.7:1)
+                     and the rule is just definition.
+
+     Deliberately NOT --fg-faint anywhere in this: it measures 3.03:1 on light
+     and 2.91:1 on dark, which fails text contrast — and a highlight nobody can
+     read is worse than none, because it claims to have answered the question. */
+  --hit-bg: #f2c55c;
+  --hit-ink: #141520;
+  --hit-rule: #8a5e00;
 }
 
 /* Tokyo Night — saturated deep navy with a vivid blue accent. */
@@ -82,6 +113,9 @@
   --danger: #f7768e;
   --accent: #7aa2f7;
   --accent-fg: #1a1b26;
+  --hit-bg: #f2c55c;
+  --hit-ink: #141520;
+  --hit-rule: #8a5e00;
 }
 
 /* Dracula — grey-purple base with vivid purple/pink accents. The standout
@@ -102,6 +136,9 @@
   --danger: #ff5555;
   --accent: #bd93f9;
   --accent-fg: #282a36;
+  --hit-bg: #f1fa8c;
+  --hit-ink: #1e1f29;
+  --hit-rule: #7a7f2a;
 }
 
 /* GitHub Light — crisp pure white. The "well-lit room" theme. */
@@ -143,6 +180,9 @@
   --status-wash: 10%;
   --status-chip-wash: 18%;
   --status-ink-mix: 50%;
+  --hit-bg: #ffd33d;
+  --hit-ink: #1f2328;
+  --hit-rule: #9a6700;
 }
 
 /* Acme — warm cream paper with a vivid violet brand accent. Inspired by
@@ -177,6 +217,9 @@
   --status-wash: 10%;
   --status-chip-wash: 18%;
   --status-ink-mix: 50%;
+  --hit-bg: #ffd85e;
+  --hit-ink: #0d0d12;
+  --hit-rule: #8a5a00;
 }
 
 /* Acme Dark — calm dark surfaces with a hint of violet, brand-violet
@@ -198,6 +241,9 @@
   --danger: #ff7a99;
   --accent: #9d85f5;
   --accent-fg: #221547;
+  --hit-bg: #f5c85a;
+  --hit-ink: #1a1035;
+  --hit-rule: #8a5e00;
 }
 
 * {
