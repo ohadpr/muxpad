@@ -14,7 +14,9 @@ import {
   scrollMemorySidMatches,
   scrollTopAfterOlderPrepend,
   scrollTopForAnchor,
+  scrollTopForSearchHit,
   shouldPersistChatScroll,
+  shouldRememberPosition,
 } from './chat-scroll';
 
 /** A remembered position, with the anchor fields defaulted. */
@@ -440,5 +442,120 @@ describe('the remembered shape', () => {
   it('still refuses an entry with no usable ratio at all', () => {
     rememberChatScroll('p3', { ...memo(), ratio: Number.NaN });
     expect(recallChatScroll('p3')).toBeNull();
+  });
+});
+
+// ── The third case: an explicit destination ─────────────────────────────────
+// A caught-up reader opens at the newest message; a scrolled-back reader keeps
+// their exact spot. A SEARCH JUMP is neither — it is a place the user asked to
+// be taken from somewhere else entirely, and it lands wherever the matched
+// message happens to be. The rules below are what stop it from being mistaken
+// for a reading position.
+
+describe('shouldRememberPosition — a search jump is not a reading position', () => {
+  it('records nothing while a jump is in flight', () => {
+    expect(shouldRememberPosition({ searchJumpActive: true })).toBe(false);
+  });
+
+  it('records normally once the reader has taken the pane back', () => {
+    expect(shouldRememberPosition({ searchJumpActive: false })).toBe(true);
+  });
+});
+
+describe('a search jump does not poison the next ordinary open', () => {
+  it('leaves a CAUGHT-UP reader caught up, however deep the jump landed', () => {
+    // The reader had read to the end of pane-j and left.
+    rememberChatScroll('pane-j', memo({ anchorId: null, ratio: 1, caughtUp: true, sid: 's1' }));
+
+    // They search, follow a message hit, and land three weeks up the log. The
+    // jump's own scrollTop writes fire onScroll like any other motion — each
+    // one would record "parked at an ancient message, not caught up".
+    for (const scrollTop of [0.05, 0.06, 0.07]) {
+      if (shouldRememberPosition({ searchJumpActive: true })) {
+        rememberChatScroll(
+          'pane-j',
+          memo({ anchorId: 'evt#ancient', ratio: scrollTop, caughtUp: false, sid: 's1' }),
+        );
+      }
+    }
+
+    // Tomorrow they click the tab, with no search involved. They must land at
+    // the newest message, exactly as they would have without the search.
+    const next = recallChatScroll('pane-j');
+    expect(opensAtNewest(next)).toBe(true);
+    expect(next?.anchorId).toBeNull();
+    expect(next?.ratio).toBe(1);
+  });
+
+  it('leaves a SCROLLED-BACK reader on the message they had parked on', () => {
+    // The other half: a jump must not overwrite a real parked spot either.
+    rememberChatScroll(
+      'pane-k',
+      memo({ anchorId: 'evt#parked', anchorOffset: -120, ratio: 0.4, caughtUp: false, sid: 's1' }),
+    );
+    if (shouldRememberPosition({ searchJumpActive: true })) {
+      rememberChatScroll('pane-k', memo({ anchorId: 'evt#hit', ratio: 0.01, sid: 's1' }));
+    }
+    const next = recallChatScroll('pane-k');
+    expect(opensAtNewest(next)).toBe(false);
+    expect(next?.anchorId).toBe('evt#parked');
+    expect(next?.anchorOffset).toBe(-120);
+  });
+
+  it('starts recording again the moment the reader scrolls for themselves', () => {
+    // The hold is released by a real gesture (see the wheel/touch listener in
+    // ChatPane): from there this is an ordinary reader at an ordinary
+    // position, and where they choose to be is exactly what the memory is for.
+    rememberChatScroll('pane-l', memo({ ratio: 1, caughtUp: true, sid: 's1' }));
+    const readerTookOver = false; // …then a wheel event cleared the hold
+    if (shouldRememberPosition({ searchJumpActive: readerTookOver })) {
+      rememberChatScroll(
+        'pane-l',
+        memo({ anchorId: 'evt#reading-here', ratio: 0.3, caughtUp: false, sid: 's1' }),
+      );
+    }
+    const next = recallChatScroll('pane-l');
+    expect(opensAtNewest(next)).toBe(false);
+    expect(next?.anchorId).toBe('evt#reading-here');
+  });
+
+  it('writes nothing at all when there was no memory to protect', () => {
+    // A jump into a chat this browser has never opened must not invent one:
+    // the next ordinary open should still get the default (newest message).
+    if (shouldRememberPosition({ searchJumpActive: true })) {
+      rememberChatScroll('pane-m', memo({ anchorId: 'evt#hit', ratio: 0.02, caughtUp: false }));
+    }
+    expect(opensAtNewest(recallChatScroll('pane-m'))).toBe(true);
+  });
+});
+
+describe('scrollTopForSearchHit — putting the matched run on screen', () => {
+  const page = { scrollHeight: 10_000, clientHeight: 900 };
+
+  it('parks the hit a third of the way down, leaving context above it', () => {
+    // hitTop 600 means the mark is 600px below the viewport top right now;
+    // it should end up at 300 (= 900/3), so scrollTop moves by +300.
+    expect(scrollTopForSearchHit({ scrollTop: 4000, hitTop: 600, ...page })).toBe(4300);
+  });
+
+  it('scrolls UP for a hit above the viewport', () => {
+    expect(scrollTopForSearchHit({ scrollTop: 4000, hitTop: -1000, ...page })).toBe(2700);
+  });
+
+  it('clamps at the top rather than going negative', () => {
+    // A hit in the first message: the browser would clamp to 0 anyway, and an
+    // unclamped target stamped as lastProgrammaticTop would make the very next
+    // scroll event read as the reader taking control.
+    expect(scrollTopForSearchHit({ scrollTop: 10, hitTop: -500, ...page })).toBe(0);
+  });
+
+  it('clamps at the bottom of the scrollable range', () => {
+    expect(scrollTopForSearchHit({ scrollTop: 9000, hitTop: 5000, ...page })).toBe(
+      maxScrollTop(page.scrollHeight, page.clientHeight),
+    );
+  });
+
+  it('is a no-op when the hit already sits at the target line', () => {
+    expect(scrollTopForSearchHit({ scrollTop: 4000, hitTop: 300, ...page })).toBe(4000);
   });
 });

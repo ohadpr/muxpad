@@ -15,6 +15,7 @@ import {
   splitHighlight,
   toSearchableTabs,
 } from '../lib/nav-search';
+import { requestSearchJump } from '../lib/search-jump';
 import { cachedTabsFor } from '../tabs';
 import { useWorkspaces, visibleWorkspaces } from '../workspaces';
 import './NavSearch.css';
@@ -297,7 +298,18 @@ export function NavSearch({
     setHits([]);
   };
 
-  const openTab = (tab: SearchableTab, paneId?: string) => {
+  /**
+   * Go to a result.
+   *
+   * `hit` is present only for the MESSAGE tier, and that asymmetry is the
+   * design, not an omission. A message hit knows the term is in the transcript
+   * — the archive found it there — so the term rides along and gets lit up in
+   * the message it was found in (lib/search-jump). A tab/headline/workspace hit
+   * knows nothing of the kind: the word may never have been said in that chat,
+   * so nothing is carried, the chat opens exactly as it would from the tree,
+   * and its remembered scroll position is untouched.
+   */
+  const openTab = (tab: SearchableTab, paneId?: string, hit?: ArchiveSearchHit) => {
     if (paneId) {
       // Same handoff the sheet's pane list uses: persist first (a not-yet-
       // mounted TabView reads it on mount), then tell a mounted one live.
@@ -305,6 +317,17 @@ export function NavSearch({
       window.dispatchEvent(
         new CustomEvent('muxpad:select-pane', { detail: { tabId: tab.tabId, paneId } }),
       );
+      if (hit) {
+        requestSearchJump({
+          paneId,
+          // The RAW query, not the trimmed-and-tokenised one: the chat splits
+          // it into terms itself, and if it can't find the message it quotes
+          // this back at the user, who should see what they typed.
+          query: query.trim(),
+          sid: hit.sid,
+          ts: hit.ts,
+        });
+      }
     }
     clear();
     inputRef.current?.blur();
@@ -322,7 +345,7 @@ export function NavSearch({
       return;
     }
     const msgRow = messageRows[i - tabMatches.length];
-    if (msgRow) openTab(msgRow.tab, msgRow.paneId);
+    if (msgRow) openTab(msgRow.tab, msgRow.paneId, msgRow.hit);
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -371,8 +394,8 @@ export function NavSearch({
             type="text"
             inputMode="search"
             enterKeyHint="go"
-            placeholder="Search chats"
-            aria-label="Search chats"
+            placeholder="Search"
+            aria-label="Search"
             role="combobox"
             aria-expanded={active}
             aria-autocomplete="list"
@@ -470,7 +493,7 @@ export function NavSearch({
                   id={`${listId}-${idx}`}
                   selected={idx === safeCursor}
                   onHover={() => setCursor(idx)}
-                  onPick={() => openTab(row.tab, row.paneId)}
+                  onPick={() => openTab(row.tab, row.paneId, row.hit)}
                 />
               );
             })}
