@@ -1,5 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { updateSettings } from './settings';
+import {
+  DARK_THEMES,
+  DARK_THEME_CHOICES,
+  LIGHT_THEME_CHOICES,
+  type Settings,
+  THEMES,
+  type Theme,
+  resolveTheme,
+  updateSettings,
+} from './settings';
+
+/** A Settings value for the pure resolver; only the theme fields matter. */
+const withTheme = (over: Partial<Settings>): Settings =>
+  ({
+    fontSize: 14,
+    fontFamily: 'Menlo, Monaco, monospace',
+    theme: 'acme',
+    followSystem: false,
+    themeLight: 'acme',
+    themeDark: 'acme-dark',
+    sidebarWidth: 280,
+    ...over,
+  }) as Settings;
 
 describe('settings', () => {
   beforeEach(() => {
@@ -55,7 +77,59 @@ describe('settings', () => {
       fontSize: 14,
       fontFamily: 'Menlo, Monaco, monospace',
       theme: 'acme',
+      followSystem: false,
+      themeLight: 'acme',
+      themeDark: 'acme-dark',
       sidebarWidth: 280,
     });
+  });
+});
+
+describe('following the system light/dark setting', () => {
+  it('ignores the system while followSystem is off', () => {
+    const s = withTheme({ theme: 'dracula', followSystem: false });
+    expect(resolveTheme(s, true)).toBe('dracula');
+    expect(resolveTheme(s, false)).toBe('dracula');
+  });
+
+  it('picks the side of the pair the OS is asking for', () => {
+    const s = withTheme({
+      theme: 'dracula',
+      followSystem: true,
+      themeLight: 'github-light',
+      themeDark: 'tokyo-night',
+    });
+    expect(resolveTheme(s, true)).toBe('tokyo-night');
+    expect(resolveTheme(s, false)).toBe('github-light');
+    // The fixed `theme` is RETAINED, not overwritten, so unticking the box
+    // returns you to what you had rather than to whichever side last painted.
+    expect(s.theme).toBe('dracula');
+  });
+
+  it('classifies every theme as exactly one of light or dark', () => {
+    // Missing from both lists = unreachable in the paired pickers; in both =
+    // offered twice. Either way the picker lies about what is available.
+    for (const t of THEMES) {
+      const inLight = LIGHT_THEME_CHOICES.some((c) => c.value === t.value);
+      const inDark = DARK_THEME_CHOICES.some((c) => c.value === t.value);
+      expect(inLight !== inDark).toBe(true);
+    }
+    expect(DARK_THEME_CHOICES.length).toBeGreaterThan(0);
+    expect(LIGHT_THEME_CHOICES.length).toBeGreaterThan(0);
+  });
+
+  it('rejects a stored theme that is wrong for its slot', async () => {
+    // A themeDark of 'acme' would paint a cream UI at midnight — precisely
+    // what this feature exists to prevent. Validation is on READ, so a
+    // hand-edited or downgraded localStorage cannot produce it.
+    localStorage.setItem(
+      'muxpad.settings.v1',
+      JSON.stringify({ followSystem: true, themeDark: 'acme', themeLight: 'tokyo-night' }),
+    );
+    vi.resetModules();
+    const fresh = await import('./settings');
+    const s = fresh.getSettings();
+    expect(fresh.DARK_THEMES.has(s.themeDark)).toBe(true);
+    expect(DARK_THEMES.has(s.themeLight)).toBe(false);
   });
 });
