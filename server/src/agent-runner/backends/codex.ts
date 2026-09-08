@@ -17,6 +17,7 @@ import { isAbsolute, join, resolve, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { ChatEvent } from '@muxpad/shared';
 import { readAgentInstructions, wrapAgentInstructions } from '../../agent-instructions.js';
+import { codexHome, readCodexDefaultModel, readCodexModels } from '../../codex-models.js';
 import { readDoModeOverlay, wrapModeNote } from '../../agent-modes.js';
 import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptReader.js';
 
@@ -123,41 +124,15 @@ export interface BackendDeps {
   listModels?: ModelFetch;
 }
 
-/** Read Codex's cached model catalog (+ config default) — best-effort. */
+/** Read Codex's cached model catalog (+ config default) — best-effort.
+ *  The parsing lives in codex-models.ts so the launch picker can use the same
+ *  reader without needing a live session to have reported one. */
 function codexModelFetch(): {
   models: Array<{ value: string; displayName: string }>;
   defaultModel: string | null;
 } {
-  const home = process.env.CODEX_HOME || join(homedir(), '.codex');
-  let models: Array<{ value: string; displayName: string }> = [];
-  let defaultModel: string | null = null;
-  try {
-    const cache = JSON.parse(readFileSync(join(home, 'models_cache.json'), 'utf8')) as {
-      models?: Array<{
-        slug?: string;
-        display_name?: string;
-        visibility?: string;
-        supported_in_api?: boolean;
-      }>;
-    };
-    models = (cache.models ?? [])
-      .filter(
-        (m) =>
-          m.visibility === 'list' && m.supported_in_api !== false && typeof m.slug === 'string',
-      )
-      .map((m) => ({ value: m.slug as string, displayName: m.display_name || (m.slug as string) }));
-  } catch {
-    // no cache / unreadable — picker just won't show
-  }
-  try {
-    const match = readFileSync(join(home, 'config.toml'), 'utf8').match(
-      /^\s*model\s*=\s*"([^"]+)"/m,
-    );
-    defaultModel = match?.[1] ?? null;
-  } catch {
-    // no config — leave default null
-  }
-  return { models, defaultModel };
+  const home = codexHome();
+  return { models: readCodexModels(home), defaultModel: readCodexDefaultModel(home) };
 }
 
 export function createCodexBackend(
