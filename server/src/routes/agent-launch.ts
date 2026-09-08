@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { type CatalogModel, readModelCatalog } from '../agent-model-catalog.js';
+import { readCodexModels } from '../codex-models.js';
 import { agentCwd, hasProjectContext } from '../project-root.js';
 
 /** How many recent folders the launch picker offers as one-tap chips. Enough
@@ -128,6 +129,15 @@ export function agentLaunchRoutes(deps: { db: Database.Database }): Hono {
       const list = catalog[b];
       if (list && list.length > 0) models[b] = list;
     }
+    // Codex is read LIVE rather than remembered. The catalog exists to avoid
+    // spawning a process at pick time, but Codex's list is a JSON file the CLI
+    // keeps on disk — one stat and one parse, no session. Going through the
+    // catalog for it cost the FIRST launch on any machine: with no Codex pane
+    // ever run, the picker offered only "Default" while the real list sat in a
+    // readable file. It also went stale, which is how a newly released model
+    // was present on disk and unpickable in the UI on release day.
+    const codexLive = readCodexModels();
+    if (codexLive.length > 0) models.codex = codexLive;
     return c.json({ folders: recentFolders(deps.db), models, home: homedir() });
   });
 

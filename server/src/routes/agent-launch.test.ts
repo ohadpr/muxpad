@@ -125,12 +125,20 @@ describe('GET /api/agent-launch/options', () => {
   let test: TestApp;
   let db: ReturnType<typeof openDb>;
   let tmp: string;
+  let prevCodexHome: string | undefined;
   beforeEach(async () => {
     tmp = realpathSync(mkdtempSync(join(tmpdir(), 'muxpad-launchopts-')));
+    // The route reads Codex's real on-disk model list. Point CODEX_HOME at an
+    // empty dir so the suite's result does not depend on which models this
+    // machine happens to have cached.
+    prevCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = tmp;
     db = openDb(':memory:');
     test = await createTestApp({ db, dataDir: tmp });
   });
   afterEach(async () => {
+    if (prevCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = prevCodexHome;
     await test.cleanup();
     rmSync(tmp, { recursive: true, force: true });
   });
