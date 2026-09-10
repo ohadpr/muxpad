@@ -565,6 +565,107 @@ describe('chat scroll position across a hide/show', () => {
     expect(returned?.tag).toBe(parked?.tag);
   }, 180_000);
 
+  // ── Round four ────────────────────────────────────────────────────────────
+  // "whenever i open muxpad it resets my scroll position."
+  //
+  // Note the trigger: OPENING THE APP. Every test above returns to the chat
+  // through a door that keeps the browsing context alive — a tab switch, a
+  // background/foreground, even a reload (F5 replaces the document but the tab,
+  // and therefore its sessionStorage, is the same one). The memory lived in
+  // sessionStorage, so all of them passed, honestly, for three rounds.
+  //
+  // A cold open is the one door that does not: closing the window and launching
+  // muxpad again gets a NEW browsing context, whose sessionStorage is empty by
+  // specification. Every pane fell back to its default. The reader had lost
+  // nothing gradually and nothing subtly — the whole store was simply gone.
+  //
+  // Modelled here as a new PAGE in the SAME context, which is exactly what a
+  // relaunched PWA or a reopened tab is: origin storage (localStorage) intact,
+  // sessionStorage fresh. A new CONTEXT would be a different browser profile —
+  // which SHOULD have no memory, and is asserted as such below.
+  it('a reader parked in history survives a COLD OPEN (new tab, same profile)', async (t) => {
+    if (noBrowser) return t.skip();
+    const inst = instance!;
+    const page = await ctx!.newPage();
+    await page.goto(`${inst.origin}/w/${inst.ws}/t/${inst.chatTab.slug}`);
+    await chatSettled(page);
+    await parkInHistory(page);
+    const parked = await topMessage(page);
+    expect(parked).not.toBeNull();
+    // The debounced write-through is on a 250ms timer; leaving before it fires
+    // would prove nothing about storage.
+    await sleep(600);
+
+    // Close the tab entirely. This is the step a reload does NOT perform, and
+    // the whole difference between this test and the reload one above.
+    await page.close();
+    const reopened = await ctx!.newPage();
+    // The precondition, asserted rather than assumed: the new tab really does
+    // start with an empty sessionStorage, so anything restored below came from
+    // storage that outlives a browsing context.
+    await reopened.goto(`${inst.origin}/w/${inst.ws}/t/${inst.chatTab.slug}`);
+    expect(await reopened.evaluate(() => sessionStorage.length)).toBe(0);
+    await chatSettled(reopened);
+    await restoreSettled(reopened);
+
+    const returned = await topMessage(reopened);
+    // eslint-disable-next-line no-console
+    console.log('[cold open] parked', parked, '→', returned, await scrollState(reopened));
+    expect(returned?.tag).toBe(parked?.tag);
+  }, 240_000);
+
+  it('a caught-up reader cold-opens at the NEWEST message, which is not a reset', async (t) => {
+    if (noBrowser) return t.skip();
+    // The other half of the rule, and the reason "it reset my scroll" has to be
+    // read carefully: a reader who had read to the END belongs at the end, no
+    // matter how they come back. Persisting across cold opens must not turn a
+    // caught-up reader into a parked one.
+    const inst = instance!;
+    const page = await ctx!.newPage();
+    await page.goto(`${inst.origin}/w/${inst.ws}/t/${inst.chatTab.slug}`);
+    await chatSettled(page);
+    expect((await scrollState(page))!.fromBottom).toBeLessThan(40);
+    await sleep(600);
+
+    await page.close();
+    const reopened = await ctx!.newPage();
+    await reopened.goto(`${inst.origin}/w/${inst.ws}/t/${inst.chatTab.slug}`);
+    await chatSettled(reopened);
+    await restoreSettled(reopened);
+
+    const state = await scrollState(reopened);
+    // eslint-disable-next-line no-console
+    console.log('[cold open, caught up]', state, await topMessage(reopened));
+    expect(state!.fromBottom).toBeLessThan(40);
+  }, 240_000);
+
+  it('a DIFFERENT browser profile starts with no memory at all', async (t) => {
+    if (noBrowser) return t.skip();
+    // The boundary of the fix. A fresh context is a different device as far as
+    // the app is concerned; it has nothing to restore and must land at the
+    // newest message rather than inventing a position.
+    const inst = instance!;
+    const page = await ctx!.newPage();
+    await page.goto(`${inst.origin}/w/${inst.ws}/t/${inst.chatTab.slug}`);
+    await chatSettled(page);
+    await parkInHistory(page);
+    await sleep(600);
+
+    const stranger = await browser!.newContext({ viewport: { width: 1100, height: 800 } });
+    try {
+      const fresh = await stranger.newPage();
+      await fresh.goto(`${inst.origin}/w/${inst.ws}/t/${inst.chatTab.slug}`);
+      await chatSettled(fresh);
+      await restoreSettled(fresh);
+      const state = await scrollState(fresh);
+      // eslint-disable-next-line no-console
+      console.log('[fresh profile]', state, await topMessage(fresh));
+      expect(state!.fromBottom).toBeLessThan(40);
+    } finally {
+      await stranger.close();
+    }
+  }, 240_000);
+
   it('a reader parked in history survives a browser-tab background/foreground', async (t) => {
     if (noBrowser) return t.skip();
     const inst = instance!;

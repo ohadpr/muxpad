@@ -73,14 +73,43 @@
  * `scrollTopAfterOlderPrepend` so pinned readers stay at the bottom instead
  * of being height-delta'd mid-log (which used to unpin via onScroll).
  *
- * Module map + debounced sessionStorage write-through (reloads keep it),
- * LRU-bounded so a long cockpit session that visits many panes doesn't grow
- * it forever (pane deletion has no client-side hook to evict on). Storage key
- * is versioned (`:v4` — v2 entries carry no anchor, and v3 entries carry
- * `pinned`, which named the 40 px live-follow threshold rather than "had read
- * to the end". Reading either would silently keep the behaviour this file
- * exists to retire — and a v3 entry is precisely a reader stranded mid-log,
- * so inheriting one would carry the bug across the fix that removes it).
+ * ── WHY localStorage, NOT sessionStorage ─────────────────────────────────────
+ * "Whenever i open muxpad it resets my scroll position."
+ *
+ * Note the trigger: OPENING THE APP. The three rounds above all chased the
+ * position across doors that keep the browsing context alive — a tab switch, a
+ * background/foreground, a reload (F5 replaces the document, but the TAB, and
+ * therefore its sessionStorage, is the same one). This store used to be
+ * sessionStorage, and its own comment claimed "reloads keep it", which was
+ * true. That is exactly why every previous round tested clean.
+ *
+ * A cold open is the one door that does not keep the context: quit the PWA,
+ * close the window, launch muxpad again, and the new context's sessionStorage
+ * is empty BY SPECIFICATION. Not degraded, not stale — absent. Every pane fell
+ * back to its default, which for a reader parked in history reads exactly like
+ * "it reset my scroll position". Measured on the real stack: parked at message
+ * 69, cold-opened at message 194 (the bottom).
+ *
+ * So the memory outlives the browsing context, like every other per-device
+ * preference here (settings, nav expansion, last-visited, and the terminal
+ * pane's own scroll ratio in `pane-scroll.ts`, which has always been
+ * localStorage).
+ *
+ * The key is NOT re-versioned for this. `:v4` names the SHAPE of an entry, and
+ * the shape is unchanged — v2 entries carry no anchor and v3 entries carry
+ * `pinned` (the 40 px live-follow threshold masquerading as "had read to the
+ * end"), so inheriting either would carry a bug across the fix that removed it.
+ * A v4 entry is the post-fix shape and inheriting one is exactly what we want:
+ * the storage TIER changed, not the meaning. Bumping would instead throw away
+ * every reader's position once, to fix a bug about throwing away every reader's
+ * position — and would make the migration below unable to see what it migrates.
+ *
+ * Bounded two ways, because localStorage does not clean up after itself the way
+ * a dying session used to: an LRU cap of 50 entries (pane deletion has no
+ * client-side hook to evict on) AND an age cutoff, so a pane read once a
+ * quarter ago cannot resurrect a position from a conversation that has since
+ * been cleared. A pruned entry degrades to "no memory" → the newest message,
+ * never to a wrong position.
  */
 export interface ChatScrollMem {
   /**
@@ -107,21 +136,132 @@ export interface ChatScrollMem {
 const KEY = 'muxpad:chat-scroll:v4';
 const MAX_ENTRIES = 50;
 
-const mem: Map<string, ChatScrollMem> = (() => {
+/**
+ * How long a remembered position stays worth restoring.
+ *
+ * The LRU cap alone was enough when the store died with the session. It is not
+ * enough now: 50 entries persist indefinitely, and the panes they name can be
+ * deleted, their sessions cleared, their anchored messages long since scrolled
+ * out of any window the server will ever hand back. Two weeks is well past any
+ * plausible "I was reading that, I'll come back to it" and short enough that a
+ * pane you have not opened since last month simply opens at the newest message
+ * — which is the correct default, not a reset.
+ *
+ * Staleness is a hygiene rule, not a correctness one: the sid guard already
+ * blocks a rotated session, and an anchor that cannot be found inside
+ * ANCHOR_SEEK_PAGE_BUDGET pages falls back to the tail. Nothing here can turn
+ * an old entry into a WRONG position; the cutoff just stops us trying.
+ */
+const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * What actually goes in storage: the public memory plus WHEN it was written.
+ *
+ * `at` is stamped by `rememberChatScroll` rather than supplied by callers —
+ * the component has no business knowing the store has an expiry policy, and a
+ * field it had to remember to set is a field it would eventually forget.
+ */
+interface StoredMem extends ChatScrollMem {
+  at: number;
+}
+
+/**
+ * Parse a serialised store, dropping anything malformed or expired.
+ *
+ * Defensive per-entry rather than all-or-nothing: this blob now survives
+ * upgrades indefinitely, so one bad entry must not cost the reader all fifty.
+ */
+function parseEntries(raw: string | null, now: number): [string, StoredMem][] {
+  if (!raw) return [];
   try {
-    const raw = sessionStorage.getItem(KEY);
-    return new Map(raw ? (JSON.parse(raw) as [string, ChatScrollMem][]) : []);
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const out: [string, StoredMem][] = [];
+    for (const entry of parsed) {
+      if (!Array.isArray(entry) || typeof entry[0] !== 'string') continue;
+      const m = entry[1] as (ChatScrollMem & { at?: unknown }) | null;
+      if (!m || typeof m !== 'object') continue;
+      // A missing `at` is an entry from before this file stamped one — i.e. one
+      // inherited from sessionStorage, which BY CONSTRUCTION cannot be older
+      // than the browsing context that just ended. Treat it as fresh. Reading
+      // it as epoch 0 would expire the entire migration on arrival, so the
+      // fix's first act would be the very reset it exists to prevent.
+      const at = typeof m.at === 'number' && Number.isFinite(m.at) ? m.at : now;
+      if (now - at > MAX_AGE_MS) continue;
+      out.push([entry[0], { ...m, at }]);
+    }
+    return out;
   } catch {
-    return new Map();
+    return [];
   }
+}
+
+const mem: Map<string, StoredMem> = (() => {
+  const now = Date.now();
+  let entries: [string, StoredMem][] = [];
+  try {
+    entries = parseEntries(localStorage.getItem(KEY), now);
+  } catch {
+    // private mode / storage disabled — the in-memory map still covers this tab
+  }
+  // ── MIGRATION ───────────────────────────────────────────────────────────
+  // Adopt whatever the sessionStorage era left in THIS tab, so shipping the
+  // fix is not itself the last reset. Read-and-clear: once it is in the
+  // durable store the session copy is only a second source of truth. Entries
+  // localStorage already knows about win — they are the ones written by a
+  // build that understood this store — and the legacy ones go in FRONT,
+  // because insertion order here IS the LRU order and they are the older
+  // writes.
+  try {
+    const legacy = sessionStorage.getItem(KEY);
+    if (legacy) {
+      sessionStorage.removeItem(KEY);
+      const known = new Set(entries.map(([id]) => id));
+      entries = [...parseEntries(legacy, now).filter(([id]) => !known.has(id)), ...entries];
+    }
+  } catch {
+    // no sessionStorage to migrate from
+  }
+  return new Map(entries.slice(-MAX_ENTRIES));
 })();
 
 let flushTimer: number | undefined;
 
+/**
+ * Write the map through to localStorage, preserving panes we know nothing
+ * about.
+ *
+ * ── TWO WINDOWS ─────────────────────────────────────────────────────────────
+ * sessionStorage was per-tab, so this never came up. localStorage is shared by
+ * every muxpad window on the origin, and each one serialises its WHOLE map —
+ * so a naive `setItem([...mem])` from window B would delete window A's memory
+ * for panes B has never even opened. That is the real hazard, and it is not
+ * "last writer wins" at all; it is one window silently forgetting on another's
+ * behalf. Hence the read-merge-write: foreign keys are carried over untouched.
+ *
+ * For a pane BOTH windows have open, last-writer-wins is kept deliberately.
+ * There is no better answer available — two windows genuinely are two places
+ * the same reader was — and both candidates are a position that reader
+ * actually occupied, so the loser costs them a scroll, never a wrong belief
+ * about where they were. Guarding it would mean per-window keys, which would
+ * hand the same reader two different answers for the same chat.
+ */
+function flush(): void {
+  try {
+    const now = Date.now();
+    const foreign = parseEntries(localStorage.getItem(KEY), now).filter(([id]) => !mem.has(id));
+    // Ours last: `slice(-MAX_ENTRIES)` keeps the tail, so a crowded store
+    // evicts other windows' stale panes before this window's live ones.
+    localStorage.setItem(KEY, JSON.stringify([...foreign, ...mem].slice(-MAX_ENTRIES)));
+  } catch {
+    // quota / private mode — the in-memory map still covers this session
+  }
+}
+
 export function rememberChatScroll(paneId: string, m: ChatScrollMem): void {
   // Delete-then-set makes insertion order an LRU order.
   mem.delete(paneId);
-  mem.set(paneId, m);
+  mem.set(paneId, { ...m, at: Date.now() });
   while (mem.size > MAX_ENTRIES) {
     const oldest = mem.keys().next().value;
     if (oldest === undefined) break;
@@ -129,17 +269,18 @@ export function rememberChatScroll(paneId: string, m: ChatScrollMem): void {
   }
   // Debounced write-through: scroll events fire per frame.
   window.clearTimeout(flushTimer);
-  flushTimer = window.setTimeout(() => {
-    try {
-      sessionStorage.setItem(KEY, JSON.stringify([...mem]));
-    } catch {
-      // quota / private mode — the in-memory map still covers this session
-    }
-  }, 250);
+  flushTimer = window.setTimeout(flush, 250);
 }
 
 export function recallChatScroll(paneId: string): ChatScrollMem | null {
   const m = mem.get(paneId);
+  // Expiry is re-checked on READ, not just at load: a cockpit window stays open
+  // for days, so the map in front of us can age past the cutoff without the
+  // module ever re-initialising.
+  if (m && Date.now() - m.at > MAX_AGE_MS) {
+    mem.delete(paneId);
+    return null;
+  }
   // A non-finite ratio (an older format, or a divide-by-zero that escaped)
   // coerces to scrollTop 0 and dumps the reader at the TOP of the chat. Treat
   // it as no memory. The anchor fields are normalised rather than rejected —
