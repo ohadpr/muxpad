@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ANCHOR_SEEK_PAGE_BUDGET,
   type ChatScrollMem,
@@ -557,5 +557,241 @@ describe('scrollTopForSearchHit — putting the matched run on screen', () => {
 
   it('is a no-op when the hit already sits at the target line', () => {
     expect(scrollTopForSearchHit({ scrollTop: 4000, hitTop: 300, ...page })).toBe(4000);
+  });
+});
+
+// ── Round four: the store has to outlive the browsing context ───────────────
+// "Whenever i open muxpad it resets my scroll position."
+//
+// Every earlier round returned to the chat through a door that keeps the tab
+// alive — a tab switch, a background/foreground, a reload. sessionStorage
+// survives all of those, so all of them passed. It does not survive OPENING
+// THE APP, which is the only trigger the report ever named.
+
+/** The key is deliberately NOT re-versioned: the tier changed, not the shape. */
+const STORE_KEY = 'muxpad:chat-scroll:v4';
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Wait out the 250 ms debounced write-through. */
+const flushed = () => new Promise((r) => setTimeout(r, 320));
+
+/** An entry as it sits in storage, with an explicit age. */
+function stored(over: Partial<ChatScrollMem> & { at?: number } = {}) {
+  return { ...memo(), at: Date.now(), ...over };
+}
+
+describe('remembered position across a cold open', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+    vi.resetModules();
+  });
+
+  it('survives a COLD OPEN — a new tab starts with NO sessionStorage', async () => {
+    rememberChatScroll(
+      'pane-cold',
+      memo({ anchorId: 'evt#7', anchorOffset: -120, ratio: 0.31, caughtUp: false, sid: 's1' }),
+    );
+    await flushed();
+
+    // The cold open. A relaunched PWA / reopened window gets a NEW browsing
+    // context, whose sessionStorage is empty by specification; localStorage is
+    // origin-scoped and is all that is left to restore from.
+    sessionStorage.clear();
+    vi.resetModules();
+    const { recallChatScroll: recall } = await import('./chat-scroll');
+
+    const got = recall('pane-cold');
+    expect(got?.anchorId).toBe('evt#7');
+    expect(got?.anchorOffset).toBe(-120);
+    expect(got?.caughtUp).toBe(false);
+  });
+
+  it('adopts the sessionStorage era, so shipping the fix is not the LAST reset', async () => {
+    // Exactly what the pre-fix build wrote: same key, same v4 shape, no `at`.
+    sessionStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        [
+          'pane-legacy',
+          { anchorId: 'evt#3', anchorOffset: -10, ratio: 0.4, caughtUp: false, sid: 's1' },
+        ],
+      ]),
+    );
+    vi.resetModules();
+    const { recallChatScroll: recall, rememberChatScroll: remember } = await import(
+      './chat-scroll'
+    );
+
+    expect(recall('pane-legacy')?.anchorId).toBe('evt#3');
+    // Read-and-clear: once it is in the durable store, the session copy is only
+    // a second source of truth.
+    expect(sessionStorage.getItem(STORE_KEY)).toBeNull();
+
+    // …and it is carried forward into localStorage on the next write, so the
+    // NEXT cold open still has it.
+    remember('pane-other', memo());
+    await flushed();
+    expect(localStorage.getItem(STORE_KEY)).toContain('pane-legacy');
+  });
+
+  it('prefers what localStorage already knows over a stale session copy', async () => {
+    localStorage.setItem(STORE_KEY, JSON.stringify([['p', stored({ anchorId: 'new' })]]));
+    sessionStorage.setItem(STORE_KEY, JSON.stringify([['p', memo({ anchorId: 'old' })]]));
+    vi.resetModules();
+    const { recallChatScroll: recall } = await import('./chat-scroll');
+    expect(recall('p')?.anchorId).toBe('new');
+  });
+
+  it('a fresh browser profile has nothing, and opens at the newest message', async () => {
+    // The boundary: no memory is not a reset, it is the correct default.
+    vi.resetModules();
+    const { recallChatScroll: recall, opensAtNewest: newest } = await import('./chat-scroll');
+    expect(recall('never-seen')).toBeNull();
+    expect(newest(recall('never-seen'))).toBe(true);
+  });
+});
+
+describe('staleness — localStorage does not clean up after itself', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+    vi.resetModules();
+  });
+
+  it('forgets a position older than the cutoff', async () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        ['pane-ancient', stored({ anchorId: 'evt#1', at: Date.now() - 15 * DAY_MS })],
+      ]),
+    );
+    vi.resetModules();
+    const { recallChatScroll: recall } = await import('./chat-scroll');
+    expect(recall('pane-ancient')).toBeNull();
+  });
+
+  it('degrades a stale entry to the NEWEST message, never to a wrong position', async () => {
+    // The property that matters. `caughtUp: false` + an anchor is "parked in
+    // history"; expiring it must not leave a half-honoured memory that parks
+    // the reader somewhere arbitrary.
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        [
+          'pane-ancient',
+          stored({ anchorId: 'evt#1', caughtUp: false, at: Date.now() - 60 * DAY_MS }),
+        ],
+      ]),
+    );
+    vi.resetModules();
+    const { recallChatScroll: recall, opensAtNewest: newest } = await import('./chat-scroll');
+    expect(newest(recall('pane-ancient'))).toBe(true);
+  });
+
+  it('keeps a position from within the cutoff', async () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([['pane-recent', stored({ anchorId: 'evt#2', at: Date.now() - 3 * DAY_MS })]]),
+    );
+    vi.resetModules();
+    const { recallChatScroll: recall } = await import('./chat-scroll');
+    expect(recall('pane-recent')?.anchorId).toBe('evt#2');
+  });
+
+  it('expires on READ too — a cockpit window stays open for days', async () => {
+    vi.resetModules();
+    const { recallChatScroll: recall, rememberChatScroll: remember } = await import(
+      './chat-scroll'
+    );
+    remember('pane-live', memo({ anchorId: 'evt#5' }));
+    expect(recall('pane-live')?.anchorId).toBe('evt#5');
+    // Time passes without the module ever re-initialising.
+    vi.setSystemTime(Date.now() + 15 * DAY_MS);
+    try {
+      expect(recall('pane-live')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops one corrupt entry rather than the reader’s whole store', async () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([['good', stored({ anchorId: 'evt#9' })], ['bad', null], 'not-an-entry']),
+    );
+    vi.resetModules();
+    const { recallChatScroll: recall } = await import('./chat-scroll');
+    expect(recall('good')?.anchorId).toBe('evt#9');
+    expect(recall('bad')).toBeNull();
+  });
+});
+
+describe('two muxpad windows share one localStorage', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+    vi.resetModules();
+  });
+
+  it('does not delete a pane the OTHER window remembers', async () => {
+    // Each window serialises its WHOLE map, so a naive write would forget
+    // panes it has simply never opened. That is not last-writer-wins, it is
+    // one window forgetting on another's behalf.
+    const { rememberChatScroll: remember } = await import('./chat-scroll');
+    remember('pane-mine', memo({ anchorId: 'mine' }));
+    // The other window — already running, so this never passed through our
+    // module init — flushes its own map before our debounce fires.
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([['pane-theirs', stored({ anchorId: 'theirs' })]]),
+    );
+    await flushed();
+
+    const ids = (JSON.parse(localStorage.getItem(STORE_KEY) ?? '[]') as [string, unknown][]).map(
+      ([id]) => id,
+    );
+    expect(ids).toContain('pane-mine');
+    expect(ids).toContain('pane-theirs');
+  });
+
+  it('lets the last writer win for a pane BOTH windows have open', async () => {
+    // Deliberate. Two windows are two places the same reader was; both answers
+    // are a position they actually occupied, so the loser costs a scroll, not a
+    // wrong belief about where they were.
+    const { rememberChatScroll: remember, recallChatScroll: recall } = await import(
+      './chat-scroll'
+    );
+    remember('shared', memo({ anchorId: 'first' }));
+    remember('shared', memo({ anchorId: 'second' }));
+    await flushed();
+    expect(recall('shared')?.anchorId).toBe('second');
+    expect(localStorage.getItem(STORE_KEY)).toContain('second');
+  });
+});
+
+describe('storage that refuses to store', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+    vi.resetModules();
+  });
+
+  it('degrades to memory-only on quota / private mode', async () => {
+    const { rememberChatScroll: remember, recallChatScroll: recall } = await import(
+      './chat-scroll'
+    );
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError');
+    });
+    try {
+      remember('pane-q', memo({ anchorId: 'evt#4' }));
+      await flushed();
+      // The write failed; this session still remembers, which is exactly what
+      // sessionStorage-era code promised too.
+      expect(recall('pane-q')?.anchorId).toBe('evt#4');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
