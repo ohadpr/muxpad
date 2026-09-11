@@ -79,7 +79,7 @@ describe('codex backend', () => {
     const { spawn, calls } = fakeSpawner();
     const b = createCodexBackend(
       host,
-      { requestedSid, requestedModel: null, mode: 'deep' },
+      { requestedSid, requestedModel: null, mode: 'agent' },
       { spawn, listModels: noModels },
     );
     b.start();
@@ -156,7 +156,7 @@ describe('codex backend', () => {
     const { spawn, calls } = fakeSpawner();
     const b = createCodexBackend(
       host,
-      { requestedSid: null, requestedModel: null, mode: 'deep' },
+      { requestedSid: null, requestedModel: null, mode: 'agent' },
       { spawn, listModels: noModels },
     );
     b.start();
@@ -216,7 +216,7 @@ describe('codex backend', () => {
     const { spawn, calls } = fakeSpawner();
     const b = createCodexBackend(
       host,
-      { requestedSid: null, requestedModel: null, mode: 'deep' },
+      { requestedSid: null, requestedModel: null, mode: 'agent' },
       {
         spawn,
         listModels: noModels,
@@ -301,11 +301,11 @@ describe('codex backend', () => {
     expect(calls[1]!.args.at(-1)).toBe('plain');
   });
 
-  // ── ⚡ Do mode ────────────────────────────────────────────────────────────
+  // ── Chat mode ───────────────────────────────────────────────────────────
   // Same injection mechanism as the universal instructions (codex exec has no
   // append-instructions surface), so it rides the same first-message preamble.
 
-  async function bootMode(mode: 'do' | 'deep', requestedSid: string | null = null) {
+  async function bootMode(mode: 'chat' | 'agent', requestedSid: string | null = null) {
     const { host, frames } = makeHost();
     const { spawn, calls } = fakeSpawner();
     const b = createCodexBackend(
@@ -322,8 +322,8 @@ describe('codex backend', () => {
 
   it('do mode prepends the overlay after the instructions on a NEW session', async () => {
     writeFileSync(join(dataDir, 'agent-instructions.md'), 'use muxpad publish\n');
-    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
-    const { b, calls } = await bootMode('do');
+    writeFileSync(join(dataDir, 'chat-mode.md'), 'be terse\n');
+    const { b, calls } = await bootMode('chat');
     b.send('hi');
     await tick();
     expect(calls[1]!.args.at(-1)).toBe(
@@ -334,8 +334,8 @@ describe('codex backend', () => {
 
   it('deep mode injects NOTHING extra — byte-identical to the pre-mode prompt', async () => {
     writeFileSync(join(dataDir, 'agent-instructions.md'), 'use muxpad publish\n');
-    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
-    const { b, calls } = await bootMode('deep');
+    writeFileSync(join(dataDir, 'chat-mode.md'), 'be terse\n');
+    const { b, calls } = await bootMode('agent');
     b.send('hi');
     await tick();
     expect(calls[1]!.args.at(-1)).toBe(
@@ -343,16 +343,16 @@ describe('codex backend', () => {
     );
   });
 
-  it('do mode with no do-mode.md → nothing injected, no error', async () => {
-    const { b, calls } = await bootMode('do');
+  it('chat mode with no chat-mode.md → nothing injected, no error', async () => {
+    const { b, calls } = await bootMode('chat');
     b.send('hi');
     await tick();
     expect(calls[1]!.args.at(-1)).toBe('hi');
   });
 
   it('a mid-session switch rides ONE <muxpad-mode> note on the next resumed turn', async () => {
-    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
-    const { b, calls } = await bootMode('deep');
+    writeFileSync(join(dataDir, 'chat-mode.md'), 'be terse\n');
+    const { b, calls } = await bootMode('agent');
     // Establish the thread so subsequent turns resume it.
     b.send('first');
     await tick();
@@ -362,12 +362,12 @@ describe('codex backend', () => {
     closeChild(t1, 0);
     await tick();
 
-    b.setMode('do');
+    b.setMode('chat');
     b.send('second');
     await tick();
     expect(calls[2]!.args.slice(0, 3)).toEqual(['exec', 'resume', 'thr-mode']);
     expect(calls[2]!.args.at(-1)).toBe(
-      '<muxpad-mode>\nThe user switched this session to ⚡ Do mode. Follow this contract from now on:\n\nbe terse\n</muxpad-mode>\n\nsecond',
+      '<muxpad-mode>\nThe user switched this session to Chat mode. Follow this contract from now on:\n\nbe terse\n</muxpad-mode>\n\nsecond',
     );
     const t2 = calls[2]!.child;
     line(t2, { type: 'turn.completed' });
@@ -381,8 +381,8 @@ describe('codex backend', () => {
   });
 
   it('re-setting the SAME mode is a no-op (no spurious note)', async () => {
-    writeFileSync(join(dataDir, 'do-mode.md'), 'be terse\n');
-    const { b, calls } = await bootMode('deep');
+    writeFileSync(join(dataDir, 'chat-mode.md'), 'be terse\n');
+    const { b, calls } = await bootMode('agent');
     b.send('first');
     await tick();
     const t1 = calls[1]!.child;
@@ -390,14 +390,14 @@ describe('codex backend', () => {
     line(t1, { type: 'turn.completed' });
     closeChild(t1, 0);
     await tick();
-    b.setMode('deep'); // already deep — the server sends this on every hello
+    b.setMode('agent'); // already agent — the server sends this on every hello
     b.send('second');
     await tick();
     expect(calls[2]!.args.at(-1)).toBe('second');
   });
 
   it('switching back to deep revokes the contract in-band', async () => {
-    const { b, calls } = await bootMode('do');
+    const { b, calls } = await bootMode('chat');
     b.send('first');
     await tick();
     const t1 = calls[1]!.child;
@@ -405,7 +405,7 @@ describe('codex backend', () => {
     line(t1, { type: 'turn.completed' });
     closeChild(t1, 0);
     await tick();
-    b.setMode('deep');
+    b.setMode('agent');
     b.send('second');
     await tick();
     expect(calls[2]!.args.at(-1)).toMatch(/^<muxpad-mode>\n.*no longer applies/s);
@@ -417,7 +417,7 @@ describe('codex backend', () => {
     const { spawn, calls } = fakeSpawner();
     const b = createCodexBackend(
       host,
-      { requestedSid: null, requestedModel: null, mode: 'deep' },
+      { requestedSid: null, requestedModel: null, mode: 'agent' },
       {
         spawn,
         listModels: async () => ({

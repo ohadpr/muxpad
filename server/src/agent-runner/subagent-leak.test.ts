@@ -52,7 +52,7 @@ import { type SpawnedPtyd, spawnPtyd } from '../test-helpers/spawnPtyd.js';
 import { attachWsServer } from '../ws.js';
 
 // Never touch the real ~/.muxpad: the backend reads agent-instructions.md and
-// do-mode.md from the data dir at construction, and the runner writes a log
+// chat-mode.md from the data dir at construction, and the runner writes a log
 // there. Point both at a throwaway directory for the whole file.
 let dataDir: string;
 beforeAll(() => {

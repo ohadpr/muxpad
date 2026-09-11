@@ -1,4 +1,9 @@
-import { type AgentMode, DEFAULT_AGENT_MODE, type PaneSpec } from '@muxpad/shared';
+import {
+  type AgentMode,
+  BASELINE_AGENT_MODE,
+  type PaneSpec,
+  coerceAgentMode,
+} from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { monotonicFactory } from 'ulid';
 
@@ -44,7 +49,15 @@ export class PaneStore {
     const startup_cmd = input.startup_cmd ?? null;
     const env = input.env ?? null;
     const face = input.face ?? 'terminal';
-    const mode = input.mode ?? DEFAULT_AGENT_MODE;
+    // BASELINE, not DEFAULT_AGENT_MODE. This creates EVERY pane — plain
+    // terminals, URL panes, split panes — and most of them have no agent in
+    // them at all; stamping the house mode on a bare shell would make
+    // `muxpad claude` (which reads this row to decide whether to
+    // --append-system-prompt the contract) overlay a session the user
+    // launched by hand. Callers that are genuinely creating an AGENT pane
+    // pass DEFAULT_AGENT_MODE explicitly — agent-tab.ts and the pane-create
+    // route both do.
+    const mode = input.mode ?? BASELINE_AGENT_MODE;
     this.db
       .prepare(
         'INSERT INTO panes (id, tab_id, kind, url, shell, startup_cmd, cwd, env, face, mode, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -266,15 +279,18 @@ export class PaneStore {
       face: x.face ?? 'terminal',
       face_url: x.face_url ?? null,
       unread: !!x.unread,
-      // Anything unrecognized (or a NULL from a row written before the
-      // column) reads as the safe default: 'deep' = today's behavior.
-      mode: x.mode === 'do' ? 'do' : DEFAULT_AGENT_MODE,
+      // Anything unrecognized (a NULL from before the column existed, a
+      // pre-rename 'do'/'deep' written by an older build someone downgraded
+      // to and back) reads through the tolerant coercion, then falls to the
+      // BASELINE — 'agent', nothing injected. A row can therefore never
+      // surface a value AgentModeSchema would reject.
+      mode: coerceAgentMode(x.mode) ?? BASELINE_AGENT_MODE,
       created_at: x.created_at,
     };
   }
 
   /**
-   * Set the pane's agent behavior mode (⚡ do / 🧠 deep). Pure SQLite — the
+   * Set the pane's agent mode (Chat / Agent). Pure SQLite — the
    * live session is told separately (a `mode` frame relayed to its runner);
    * see agent-modes.ts for why a running session can only be NOTIFIED, not
    * re-prompted.

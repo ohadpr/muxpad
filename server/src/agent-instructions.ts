@@ -140,6 +140,37 @@ their screen.**
 - Leave nothing running. Before you report, check for servers and browser
   processes you started and kill them.
 
+## The two modes: Chat and Agent
+
+Every agent pane is in one of exactly two modes. These are the NAMES — use
+them, in the UI and when you talk about a pane. There is no "Do mode" or
+"Deep mode"; those were the old internal spellings and they are gone.
+
+- **Chat mode** (\`chat\`) — muxpad's own assistant. On top of these
+  instructions it carries a short house contract (\`<dataDir>/chat-mode.md\`):
+  decisive, brief, result-first, delegates the legwork. This is what a new tab
+  opens as, and it is the DEFAULT for anything you create.
+- **Agent mode** (\`agent\`) — the harness exactly as it ships, with no muxpad
+  contract on top. You choose the backend, the folder and the model at launch.
+  This is what "open Claude / Codex / Cursor" gives you.
+
+Yes, Chat mode is also agent-powered. The names describe the ARRANGEMENT, not
+the engine.
+
+Where it appears: \`--mode=chat|agent\` on \`muxpad agent new\` and
+\`muxpad cron new\`, the \`MODE\` column of \`muxpad agent list\`, and
+\`PATCH /api/panes/:id {"mode":"chat"}\`. A pane with no recorded mode reads as
+\`agent\` — "nothing was overlaid" — which is why a plain terminal is never in
+Chat mode.
+
+**Switching a LIVE session is weaker than starting one in that mode.** No
+harness can rewrite a running session's system prompt, so a switch updates the
+pane row, rewrites its startup command for the next respawn, and delivers the
+new contract as a one-time \`<muxpad-mode>\` note in the conversation — which a
+long session can drift from, like any instruction. If the mode genuinely
+matters for a piece of work, open a NEW pane in it rather than switching this
+one.
+
 ## Working across panes
 
 Other agents and terminals are running alongside you. The map:
@@ -192,7 +223,8 @@ export function agentInstructionsPath(dataDir: string): string {
 
 /**
  * sha256 of every `agent-instructions.md` default this project ever shipped,
- * oldest first (c2110d5, edb661b, ccfbebc, 3ab5df2, 6d66549), recovered by
+ * oldest first (c2110d5, edb661b, ccfbebc, 3ab5df2, 6d66549, and the
+ * pre-chat/agent-rename revision — bare and bannered), recovered by
  * evaluating AGENT_INSTRUCTIONS_SEED at each revision of this file. The
  * CURRENT seed is added at use — together they are every byte sequence muxpad
  * can have written here.
@@ -208,6 +240,8 @@ export const SHIPPED_INSTRUCTIONS_DEFAULTS: readonly string[] = [
   '277aae4ac82196b5360b5d78570ec7b17cc907ea9cb7b588d199bb88985b2efb',
   '81bc702c727c66bc3302178b264fe2bbc69a1d055c457e02e3e2c45eded4908d',
   '423da5969cfd0a4cfc24c0bb8a2a156f291699a37e860988885afa9bbfca324c',
+  'c0e9d3b51218b971cad82fde696445ad07999e4280883a551891c9cdc0f2a571',
+  '961728f1599ca6a80ffae036d6d09767751be447d552b40dd232d8e3c0779200',
 ];
 
 /** What the one-shot migration needs to know about this file: anything on

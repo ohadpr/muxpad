@@ -111,7 +111,7 @@ describe('/api/crons', () => {
     expect(body.close_when_done).toBe(false);
   });
 
-  it('defaults a NEW-TAB cron to ⚡ Do and close-when-done', async () => {
+  it('defaults a NEW-TAB cron to Chat mode and close-when-done', async () => {
     // A scheduled job's report wants terse + result-first; and every session is
     // archived + FTS-searchable, so closing a finished cron tab loses nothing.
     const { body } = await create({
@@ -119,7 +119,7 @@ describe('/api/crons', () => {
       target_pane: undefined,
       workspace_id: wsId,
     });
-    expect(body.mode).toBe('do');
+    expect(body.mode).toBe('chat');
     expect(body.close_when_done).toBe(true);
     expect(body.max_open).toBe(1);
   });

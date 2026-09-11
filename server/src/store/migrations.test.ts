@@ -170,7 +170,10 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
   it('adds panes.mode defaulting to deep (= exactly the pre-migration behavior)', () => {
     const db = new Database(':memory:');
     db.pragma('foreign_keys = OFF');
-    runMigrations(db);
+    // Stopped AT v21: this is about the column v21 created, in v21's
+    // vocabulary. v26 renamed those values (see its own block below), and
+    // running past it here would be testing two steps at once.
+    runMigrations(db, { upTo: 21 });
     // Insert with the PRE-v21 column set — a row written by old code must
     // still land on 'deep' rather than NULL or 'do'.
     db.prepare(
@@ -256,7 +259,11 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       unknown
     >;
     expect(pane.startup_cmd).toBe('muxpad agent');
-    expect(pane.mode).toBe('deep');
+    // v21 gave it 'deep'; v26 renamed that to 'agent' and left the bare
+    // command alone — Agent mode is still the absence of the flag, so this
+    // pane's behaviour is unchanged across BOTH steps.
+    expect(pane.mode).toBe('agent');
+    expect(pane.startup_cmd).toBe('muxpad agent');
 
     // Idempotent: re-running on the now-current DB changes nothing.
     runMigrations(db);
@@ -406,7 +413,7 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
       .get() as { version: number };
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
-    expect(LATEST_SCHEMA_VERSION).toBe(25);
+    expect(LATEST_SCHEMA_VERSION).toBe(26);
   });
 });
 
@@ -525,5 +532,145 @@ describe('migrations v25 — content-derived tab icons', () => {
       icon_sticky: 1,
       icon_at: 99,
     });
+  });
+});
+
+describe('migrations v26 — ⚡ do / 🧠 deep become Chat / Agent', () => {
+  /** A v25 database (pre-rename) with one workspace and one tab to hang panes
+   *  off. `upTo: 25` is what makes this a real upgrade test rather than a
+   *  current-schema DB pretending to be old. */
+  function v25(): Database.Database {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 25 });
+    db.prepare(
+      `INSERT INTO workspaces (id, slug, name, position, created_at, updated_at)
+       VALUES ('w1', 'w', 'w', 0, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at)
+       VALUES ('t1', 't', 't', '""', 'w1', 0, 0, 0)`,
+    ).run();
+    return db;
+  }
+
+  function addPane(db: Database.Database, id: string, mode: string, cmd: string | null): void {
+    db.prepare(
+      `INSERT INTO panes (id, tab_id, shell, startup_cmd, cwd, mode, created_at)
+       VALUES (?, 't1', '/bin/zsh', ?, '/tmp', ?, 0)`,
+    ).run(id, cmd, mode);
+  }
+
+  const paneRow = (db: Database.Database, id: string) =>
+    db.prepare('SELECT mode, startup_cmd FROM panes WHERE id = ?').get(id) as {
+      mode: string;
+      startup_cmd: string | null;
+    };
+
+  it('migrates a real `do` row AND its `--mode do` command together', () => {
+    // The headline case: the row and the startup command are two halves of
+    // one fact, and a migration that moved only one of them would produce a
+    // pane that REPORTS Chat and RESPAWNS as Agent.
+    const db = v25();
+    addPane(db, 'p1', 'do', 'muxpad agent --mode do --resume sid-1');
+    runMigrations(db);
+    expect(paneRow(db, 'p1')).toEqual({
+      mode: 'chat',
+      startup_cmd: 'muxpad agent --mode chat --resume sid-1',
+    });
+  });
+
+  it('migrates a `deep` row and STRIPS its `--mode deep` command', () => {
+    // Agent mode is the absence of the flag, so the explicit form converges
+    // on the canonical one rather than becoming `--mode agent`.
+    const db = v25();
+    addPane(db, 'p1', 'deep', 'muxpad agent --mode deep --resume sid-2');
+    runMigrations(db);
+    expect(paneRow(db, 'p1')).toEqual({
+      mode: 'agent',
+      startup_cmd: 'muxpad agent --resume sid-2',
+    });
+  });
+
+  it('leaves a bare `muxpad agent` command byte-identical', () => {
+    // Every pane created before modes existed carries this. Its meaning is
+    // unchanged by the rename, so the row must not churn.
+    const db = v25();
+    addPane(db, 'p1', 'deep', 'muxpad agent');
+    runMigrations(db);
+    expect(paneRow(db, 'p1')).toEqual({ mode: 'agent', startup_cmd: 'muxpad agent' });
+  });
+
+  it('keeps the canonical flag order when --backend and --model are present', () => {
+    // ws.ts's self-heal rewrite composes `muxpad agent --backend X --mode Y
+    // --model Z` and compares it to the stored command to tell a reconnect
+    // from a new runner. A migration that reordered the flags would make
+    // every hello look like a new runner and re-flip the pane's face.
+    const db = v25();
+    addPane(db, 'p1', 'do', "muxpad agent --backend codex --mode do --model 'gpt-5.5'");
+    runMigrations(db);
+    expect(paneRow(db, 'p1').startup_cmd).toBe(
+      "muxpad agent --backend codex --mode chat --model 'gpt-5.5'",
+    );
+  });
+
+  it('leaves a PENDING `muxpad agent --pick` command alone (row still migrates)', () => {
+    // Four call sites compare that literal verbatim; inserting a flag wedges
+    // the harness picker. The mode lives on the row until one is chosen.
+    const db = v25();
+    addPane(db, 'p1', 'do', 'muxpad agent --pick');
+    runMigrations(db);
+    expect(paneRow(db, 'p1')).toEqual({ mode: 'chat', startup_cmd: 'muxpad agent --pick' });
+  });
+
+  it('lands every unrecognised value on the baseline — never on one the schema rejects', () => {
+    // NOT NULL since v21 (which backfilled), so a literal NULL is
+    // unreachable here — the migration still guards it, because the cost of
+    // the guard is a clause and the cost of being wrong is a pane that reads
+    // as a value the schema rejects.
+    const db = v25();
+    addPane(db, 'p-junk', 'turbo', null);
+    addPane(db, 'p-empty', '', null);
+    runMigrations(db);
+    for (const id of ['p-junk', 'p-empty']) {
+      // 'agent' = nothing injected. The only honest reading of "no mode
+      // recorded" — claiming Chat would assert a contract nobody applied.
+      expect(paneRow(db, id).mode).toBe('agent');
+    }
+    const modes = (db.prepare('SELECT DISTINCT mode FROM panes').all() as { mode: string }[]).map(
+      (r) => r.mode,
+    );
+    expect(modes.every((m) => m === 'chat' || m === 'agent')).toBe(true);
+  });
+
+  it('leaves a NON-agent pane’s startup command untouched', () => {
+    const db = v25();
+    addPane(db, 'p1', 'deep', 'npm run dev -- --mode deep');
+    runMigrations(db);
+    expect(paneRow(db, 'p1').startup_cmd).toBe('npm run dev -- --mode deep');
+  });
+
+  it('is idempotent', () => {
+    const db = v25();
+    addPane(db, 'p1', 'do', 'muxpad agent --mode do');
+    runMigrations(db);
+    const once = paneRow(db, 'p1');
+    runMigrations(db);
+    expect(paneRow(db, 'p1')).toEqual(once);
+  });
+
+  it('does NOT rewrite crons.mode — those rows are read through a coercion', () => {
+    // A user's schedule is theirs; the column is free text read at fire time
+    // and a stored 'do' still means Chat. Rewriting it would buy nothing and
+    // touch rows the rename has no business touching.
+    const db = v25();
+    db.prepare(
+      `INSERT INTO crons (id, name, schedule, tz, prompt, target_kind, mode, next_due_at,
+                          jitter_ms, created_at)
+       VALUES ('c1', 'c', '0 9 * * *', 'UTC', 'p', 'new-tab', 'do', 0, 0, 0)`,
+    ).run();
+    runMigrations(db);
+    expect(
+      (db.prepare("SELECT mode FROM crons WHERE id = 'c1'").get() as { mode: string }).mode,
+    ).toBe('do');
   });
 });

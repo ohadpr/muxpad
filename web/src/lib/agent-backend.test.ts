@@ -11,19 +11,21 @@ import {
   isPendingHarnessPick,
 } from './agent-backend';
 
-describe('the house chat', () => {
-  it('is a claude agent pane wearing the house overlay, with NO pinned model', () => {
-    expect(HOUSE_CHAT_CREATE).toEqual({ bootstrap: 'agent', backend: 'claude', mode: 'do' });
+describe('what a new tab opens as', () => {
+  it('is a claude agent pane in CHAT mode, with NO pinned model', () => {
+    expect(HOUSE_CHAT_CREATE).toEqual({ bootstrap: 'agent', backend: 'claude', mode: 'chat' });
     // A pinned model here would silently override the account default and go
     // stale as models ship.
     expect(JSON.stringify(HOUSE_CHAT_CREATE)).not.toContain('model');
   });
 
-  it('the pane form runs the same command a house-chat TAB runs', () => {
+  it('the pane form runs the same command a new-Chat TAB runs', () => {
+    // The row and the command must agree: `mode` is what the UI renders and
+    // what `muxpad claude` reads, `--mode chat` is what a respawn boots.
     expect(HOUSE_CHAT_PANE_CREATE).toEqual({
-      startup_cmd: 'muxpad agent --mode do',
+      startup_cmd: 'muxpad agent --mode chat',
       face: 'chat',
-      mode: 'do',
+      mode: 'chat',
     });
   });
 
@@ -35,7 +37,7 @@ describe('the house chat', () => {
   it('still recognises a legacy --pick pane', () => {
     expect(isPendingHarnessPick('muxpad agent --pick')).toBe(true);
     expect(isPendingHarnessPick('muxpad agent --backend codex --pick')).toBe(true);
-    expect(isPendingHarnessPick('muxpad agent --mode do')).toBe(false);
+    expect(isPendingHarnessPick('muxpad agent --mode chat')).toBe(false);
     expect(isPendingHarnessPick(null)).toBe(false);
   });
 });

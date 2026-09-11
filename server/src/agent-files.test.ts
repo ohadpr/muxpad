@@ -126,7 +126,7 @@ describe('migrateAgentFileEdits — nothing the user wrote may be lost', () => {
   let dir: string;
   let db: Database.Database;
   const instructions = (): string => join(dir, 'agent-instructions.md');
-  const doMode = (): string => join(dir, 'do-mode.md');
+  const chatMode = (): string => join(dir, 'chat-mode.md');
   const baks = (): string[] => readdirSync(dir).filter((f) => f.endsWith('.bak'));
 
   const FILES: readonly MigratedFile[] = [
@@ -135,7 +135,7 @@ describe('migrateAgentFileEdits — nothing the user wrote may be lost', () => {
       knownDefaults: [sha256(V1), sha256(V2)],
       appendToNotes: true,
     },
-    { name: 'do-mode.md', knownDefaults: [sha256('# do\nbe brief\n')], appendToNotes: false },
+    { name: 'chat-mode.md', knownDefaults: [sha256('# chat\nbe brief\n')], appendToNotes: false },
   ];
   const migrate = () => migrateAgentFileEdits({ db, dataDir: dir, files: FILES });
   /** The rescued file NAMES — the detail (backup path, whether it reached the
@@ -189,7 +189,7 @@ describe('migrateAgentFileEdits — nothing the user wrote may be lost', () => {
 
   it('reports what it moved and where, so the boot can say so out loud', () => {
     writeFileSync(instructions(), `${V1}\nmy own section\n`);
-    writeFileSync(doMode(), '# my own contract\n');
+    writeFileSync(chatMode(), '# my own contract\n');
     const { rescued } = migrate();
     expect(rescued).toHaveLength(2);
     for (const r of rescued) {
@@ -197,7 +197,7 @@ describe('migrateAgentFileEdits — nothing the user wrote may be lost', () => {
       expect(r.backup.startsWith(join(dir, r.name))).toBe(true);
     }
     expect(rescued.find((r) => r.name === 'agent-instructions.md')?.intoNotes).toBe(true);
-    expect(rescued.find((r) => r.name === 'do-mode.md')?.intoNotes).toBe(false);
+    expect(rescued.find((r) => r.name === 'chat-mode.md')?.intoNotes).toBe(false);
     expect(readdirSync(dir)).not.toContain('agent-notes.md.tmp'); // no litter
   });
 
@@ -234,20 +234,20 @@ describe('migrateAgentFileEdits — nothing the user wrote may be lost', () => {
     expect(existsSync(agentNotesPath(dir))).toBe(false);
   });
 
-  it('an edited do-mode.md is kept as a .bak and NOT folded into the notes', () => {
-    // Its contract only applies in ⚡ Do mode; the notes go into every session.
-    writeFileSync(doMode(), '# my own contract\nbe brutal\n');
-    expect(rescuedNames(migrate())).toEqual(['do-mode.md']);
+  it('an edited chat-mode.md is kept as a .bak and NOT folded into the notes', () => {
+    // Its contract only applies in Chat mode; the notes go into every session.
+    writeFileSync(chatMode(), '# my own contract\nbe brutal\n');
+    expect(rescuedNames(migrate())).toEqual(['chat-mode.md']);
     expect(baks()).toHaveLength(1);
-    expect(baks()[0]).toMatch(/^do-mode\.md\.pre-notes-/);
+    expect(baks()[0]).toMatch(/^chat-mode\.md\.pre-notes-/);
     expect(existsSync(agentNotesPath(dir))).toBe(false);
-    expect(existsSync(doMode())).toBe(false);
+    expect(existsSync(chatMode())).toBe(false);
   });
 
   it('rescues both files in one pass', () => {
     writeFileSync(instructions(), `${V1}\nmine\n`);
-    writeFileSync(doMode(), '# my own contract\n');
-    expect(rescuedNames(migrate())).toEqual(['agent-instructions.md', 'do-mode.md']);
+    writeFileSync(chatMode(), '# my own contract\n');
+    expect(rescuedNames(migrate())).toEqual(['agent-instructions.md', 'chat-mode.md']);
     expect(baks()).toHaveLength(2);
   });
 

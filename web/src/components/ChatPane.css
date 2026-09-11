@@ -1842,6 +1842,54 @@
   font-size: 10.5px;
   line-height: 1.35;
 }
+/* Mode chip (Chat / Agent). Never ellipsized: both labels are one short word,
+   and a truncated "Ch…" would be worse than no chip at all. */
+.chat-status-seg.-mode {
+  width: auto;
+  max-width: none;
+  min-width: max-content;
+  flex: 0 0 auto;
+}
+/* Chat mode is the house arrangement, so it carries the accent; Agent mode
+   stays in the bar's normal muted ink. This is a SECOND channel on top of the
+   glyph and the word — never the only one. */
+.chat-status-seg.-mode .chat-status-seg-label {
+  font-weight: 600;
+}
+/* `.chat-status-menu` is POSITIONING ONLY — every menu in this bar draws its
+   own card (see .chat-live-menu / .chat-session-menu / .chat-folder-menu).
+   Inheriting only the position left this one floating over the transcript
+   with no surface at all. */
+.chat-mode-menu {
+  display: flex;
+  flex-direction: column;
+  width: 268px;
+  max-width: 78vw;
+  padding: 4px;
+  border: 1px solid var(--border-strong, #3b4261);
+  border-radius: 8px;
+  background: var(--bg-elev, #1a1b26);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+/* The honest caveat about a mid-session switch. Sits INSIDE the menu, right
+   under the two choices, because that is where the decision is made — a
+   footnote elsewhere would be read after the fact, if ever. */
+.chat-mode-caveat {
+  margin: 4px 0 2px;
+  padding: 7px 10px 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border-strong, #3b4261) 55%, transparent);
+  color: var(--fg-faint, #6f7488);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+.chat-mode-caveat strong {
+  color: var(--fg-dim, #9aa0b4);
+  font-weight: 600;
+}
+.chat-session-item[aria-busy="true"] .chat-session-item-label::after {
+  content: " …";
+}
+
 /* Concrete resolved model id under an alias (e.g. Opus → claude-opus-4-8):
    monospace so the exact version reads unambiguously. */
 .chat-model-id {

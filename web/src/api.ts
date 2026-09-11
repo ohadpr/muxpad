@@ -204,7 +204,8 @@ export const api = {
       // Which agent backend an 'agent' bootstrap runs. 'pick' creates it pending
       // (harness chosen in the chat page); default claude.
       backend?: 'claude' | 'codex' | 'cursor' | 'pick';
-      /** Agent behavior mode for an 'agent' bootstrap (default 'deep'). */
+      /** Agent mode for an 'agent' bootstrap. Omitted → the server's
+       *  DEFAULT_AGENT_MODE, which is 'chat'. */
       mode?: AgentMode;
     } = {},
   ) =>
@@ -264,8 +265,10 @@ export const api = {
       env?: Record<string, string> | null;
       inherit_cwd_from?: string;
       face?: 'terminal' | 'web' | 'chat';
-      /** Behavior overlay for an agent pane: 'do' = the house chat, 'deep' =
-       *  a raw harness session. Internal plumbing; never named in the UI. */
+      /** Agent mode for an agent pane: 'chat' = Chat mode (muxpad's
+       *  assistant, house contract overlaid), 'agent' = Agent mode (the
+       *  harness as it ships). Omitted → derived from the startup command's
+       *  own --mode flag, else the server default. */
       mode?: AgentMode;
       /** Server places the pane atomically (root append) — for callers
        *  without a local layout to patch (CLI, the nav sheet). */
@@ -284,8 +287,8 @@ export const api = {
   setAgentBackend: (
     paneId: string,
     backend: 'claude' | 'codex' | 'cursor',
-    /** Omit to keep the pane's current overlay; pass 'deep' for a RAW
-     *  session of the harness (no house contract on top). */
+    /** Omit to keep the pane's current mode; pass 'agent' for Agent mode —
+     *  the harness exactly as it ships, no house contract on top. */
     mode?: AgentMode,
     /** Chosen at the moment of picking, in the launch card. Omit either to
      *  keep the pane's folder / let the harness pick its own model. */
@@ -364,9 +367,10 @@ export const api = {
       name?: string | null;
       face?: 'terminal' | 'web' | 'chat';
       face_url?: string | null;
-      /** Agent behavior mode. Takes effect immediately for the NEXT message
-       *  (the live session gets a one-time in-band note; the full
-       *  system-prompt overlay lands on the pane's next respawn). */
+      /** Agent mode (Chat / Agent). Takes effect from the NEXT message: the
+       *  live session gets a one-time in-band note, because no harness can
+       *  rewrite a running session's system prompt. The full system-prompt
+       *  overlay lands on the pane's next respawn. The mode chip says so. */
       mode?: AgentMode;
     },
   ) =>

@@ -2,7 +2,8 @@ import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import type { AgentMode, LayoutNode, PaneSpec } from '@muxpad/shared';
 import {
-  AgentModeSchema,
+  AgentModeInputSchema,
+  DEFAULT_AGENT_MODE,
   appendLeafToLayout,
   removeLeafFromLayout,
   spliceLayoutAtTarget,
@@ -12,7 +13,7 @@ import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AgentBridge } from '../agent-bridge.js';
-import { applyModeToStartupCmd } from '../agent-modes.js';
+import { applyModeToStartupCmd, modeFromStartupCmd } from '../agent-modes.js';
 import { agentStartupCmd } from '../agent-tab.js';
 import { agentPaneHasMessages } from '../chat/has-messages.js';
 import type { EventBus } from '../events.js';
@@ -204,12 +205,13 @@ export function panesTabScopedRoutes(deps: {
         inherit_cwd_from: z.string().optional(),
         // Which face the pane opens on — agent panes land directly on chat.
         face: z.enum(['terminal', 'web', 'chat']).optional(),
-        // Behavior overlay for an agent pane: 'do' = the house chat (carries
-        // the <dataDir>/do-mode.md contract), 'deep' = a raw session of the
-        // harness with capabilities injection only. Internal plumbing — the
-        // UI never names these; it offers "the house chat" vs "Claude /
-        // Codex / Cursor".
-        mode: AgentModeSchema.optional(),
+        // Agent mode for an agent pane: 'chat' = Chat mode (muxpad's own
+        // assistant, carrying the <dataDir>/chat-mode.md contract), 'agent' =
+        // Agent mode, the harness exactly as it ships with capabilities
+        // injection only. Omitted → derived from the startup command's own
+        // `--mode` flag, and failing that DEFAULT_AGENT_MODE. Accepts the
+        // pre-rename 'do'/'deep' from a version-skewed caller.
+        mode: AgentModeInputSchema.optional(),
         // Layout placement controls. Off by default — the UI patches the
         // tab's layout in a separate request after creating the pane. When
         // `append_to_layout` is true the server places the new pane atomically:
@@ -302,14 +304,29 @@ export function panesTabScopedRoutes(deps: {
     // root so it starts with project context (rules/MCP), not a random subdir.
     const isAgent = body.face === 'chat' || (body.startup_cmd?.startsWith('muxpad agent') ?? false);
     const resolvedCwd = isAgent ? agentCwd(safeCwd(cwd)) : safeCwd(cwd);
+    // THE ROW AND THE COMMAND MUST AGREE. The row is what the UI and
+    // `muxpad claude` read; the command is what a respawn actually boots. An
+    // API caller can supply either, both, or neither, so resolve once and
+    // write both from the same value:
+    //   explicit `mode`  wins (and is baked into the command),
+    //   else the command's own `--mode` flag is believed,
+    //   else DEFAULT_AGENT_MODE — the flip — and the flag is added to match.
+    // The old code stamped `mode` on the row and left the command alone,
+    // which could hand back a pane that reported Chat and respawned as Agent.
+    const agentMode: AgentMode | undefined = isAgent
+      ? (body.mode ?? modeFromStartupCmd(body.startup_cmd) ?? DEFAULT_AGENT_MODE)
+      : undefined;
+    const startupCmd = agentMode
+      ? applyModeToStartupCmd(body.startup_cmd ?? null, agentMode)
+      : (body.startup_cmd ?? null);
     const pane = panes.create({
       tab_id: tabId,
       shell: body.shell ?? defaultShell,
       cwd: resolvedCwd,
-      startup_cmd: body.startup_cmd ?? null,
+      startup_cmd: startupCmd,
       env: body.env ?? null,
       ...(body.face ? { face: body.face } : {}),
-      ...(isAgent && body.mode ? { mode: body.mode } : {}),
+      ...(agentMode ? { mode: agentMode } : {}),
     });
     deps.events.emit({ type: 'pane.added', tab_id: tabId, pane: decoratePane(deps.cache, pane) });
     if (body.append_to_layout) {
@@ -460,9 +477,11 @@ export function panesScopedRoutes(deps: {
         // Same iframe sink as `url`, so same http(s) gate — but '' / null are
         // the legitimate "clear the web face" signals and must pass through.
         face_url: httpUrl.or(z.literal('')).nullable().optional(),
-        // Agent behavior mode (⚡ do / 🧠 deep). See the handler below for the
-        // mid-session semantics — deliberately NOT a respawn.
-        mode: AgentModeSchema.optional(),
+        // Agent mode (Chat / Agent). See the handler below for the
+        // mid-session semantics — deliberately NOT a respawn. Accepts the
+        // pre-rename 'do'/'deep': rejecting a version-skewed client's PATCH
+        // would leave it unable to change a pane's mode at all.
+        mode: AgentModeInputSchema.optional(),
       })
       // safeParse (not parse): a rejected url/face_url must 400, not 500.
       .safeParse(await c.req.json().catch(() => ({})));
@@ -476,7 +495,7 @@ export function panesScopedRoutes(deps: {
     const patch = body.data;
 
     // ── VALIDATE EVERYTHING FIRST, THEN MUTATE ──────────────────────────────
-    // This handler used to interleave the two: `{name:'renamed', mode:'do'}`
+    // This handler used to interleave the two: `{name:'renamed', mode:'chat'}`
     // against a non-agent pane persisted the rename and THEN returned 400, so
     // the caller saw a failure while half its patch had landed and no
     // pane.updated was emitted to tell anyone. A PATCH is one edit — it applies
@@ -782,12 +801,13 @@ export function panesScopedRoutes(deps: {
     const body = z
       .object({
         backend: z.enum(['claude', 'codex', 'cursor']),
-        // Which behavior overlay the new session runs. Omitted = keep the
-        // pane's current one (the legacy harness-picker path, where the pane
-        // was created with its mode already decided). The "open a RAW
-        // session instead" affordance passes 'deep' explicitly: a raw
-        // harness is exactly the harness, with no house contract on top.
-        mode: AgentModeSchema.optional(),
+        // Which mode the new session runs in. Omitted = keep the pane's
+        // current one (the legacy harness-picker path, where the pane was
+        // created with its mode already decided). The "or open instead:
+        // Claude · Codex · Cursor" affordance passes 'agent' explicitly —
+        // choosing a harness BY NAME means you want that harness, not
+        // muxpad's assistant wearing it.
+        mode: AgentModeInputSchema.optional(),
         // Where the session starts. The launch picker offers this at the
         // moment of choosing — the one moment the user is actually thinking
         // about it — instead of deferring it to a menu they must already know

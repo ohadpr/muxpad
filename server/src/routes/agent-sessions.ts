@@ -1,4 +1,4 @@
-import { type ChatEvent, normalizeTranscriptLine } from '@muxpad/shared';
+import { BASELINE_AGENT_MODE, type ChatEvent, normalizeTranscriptLine } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -114,14 +114,14 @@ export function agentSessionsRoutes(deps: {
   const turnActive = (paneId: string): boolean => deps.agentBridge?.turnActive(paneId) === true;
 
   // Every tracked session. `mode` is joined in from the PANE row (the source
-  // of truth for ⚡ do / 🧠 deep) rather than duplicated onto agent_sessions:
+  // of truth for Chat / Agent mode) rather than duplicated onto agent_sessions:
   // the mode belongs to the pane and must survive a session being re-minted.
   app.get('/', (c) => {
     const panes = new PaneStore(deps.db);
     return c.json(
       store.list().map((s) => ({
         ...s,
-        mode: panes.getById(s.pane_id)?.mode ?? 'deep',
+        mode: panes.getById(s.pane_id)?.mode ?? BASELINE_AGENT_MODE,
         turn_active: turnActive(s.pane_id),
       })),
     );

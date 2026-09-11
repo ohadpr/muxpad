@@ -100,7 +100,7 @@ export async function startFakeRunner(opts: FakeRunnerOptions): Promise<FakeRunn
   const backend = createClaudeBackend(host, {
     requestedSid: opts.sid ?? null,
     requestedModel: null,
-    mode: 'deep',
+    mode: 'agent',
   });
   const sdk = fakeSession();
 
