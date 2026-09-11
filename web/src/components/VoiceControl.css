@@ -1,0 +1,197 @@
+/* Voice mode's chrome. Follows ChatPane.css's conventions exactly: flat
+   kebab-case blocks, `-modifier` / `is-state` classes, color-mix tints over
+   the --chat-* tokens, 36px round ghost buttons. */
+
+.voice-btn {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--chat-dim);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+
+.voice-btn:hover:not(:disabled) {
+  color: var(--chat-fg);
+  background: color-mix(in srgb, var(--chat-fg) 8%, transparent);
+}
+
+.voice-btn:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.voice-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.voice-btn:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Live: the round button becomes an unmistakable stop. Filled, not ghost —
+   this is the one control on screen that costs money to ignore. */
+.voice-btn.is-live {
+  color: var(--chat-accent-fg, #fff);
+  background: var(--chat-danger);
+}
+
+.voice-btn.is-live:hover {
+  color: var(--chat-accent-fg, #fff);
+  background: color-mix(in srgb, var(--chat-danger) 85%, #000);
+}
+
+/* ── The live bar ─────────────────────────────────────────────────────────── */
+
+.voice-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 5px 8px 5px 12px;
+  margin: 0 0 6px;
+  border: 1px solid var(--chat-border);
+  border-radius: 10px;
+  background: var(--chat-elev);
+  font-family: var(--chrome-font);
+  font-size: 12px;
+  color: var(--chat-dim);
+}
+
+.voice-bar.-live {
+  border-color: color-mix(in srgb, var(--chat-accent) 45%, var(--chat-border));
+  background: color-mix(in srgb, var(--chat-accent) 7%, var(--chat-elev));
+}
+
+.voice-bar.-error {
+  border-color: color-mix(in srgb, var(--chat-danger) 45%, var(--chat-border));
+  background: color-mix(in srgb, var(--chat-danger) 7%, var(--chat-elev));
+  color: var(--chat-fg);
+}
+
+.voice-bar-state {
+  font-weight: 600;
+  color: var(--chat-fg);
+  min-width: 74px; /* reserve the widest label so the clock never jitters */
+}
+
+/* Tabular so the seconds don't shuffle the row every tick. */
+.voice-bar-clock,
+.voice-bar-budget {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.voice-bar-budget {
+  margin-left: auto;
+  color: var(--chat-faint);
+}
+
+.voice-bar-msg {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.voice-bar-stop,
+.voice-bar-dismiss {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.voice-bar-stop {
+  margin-left: 8px;
+  color: #fff;
+  background: var(--chat-danger);
+}
+
+.voice-bar-stop:hover {
+  background: color-mix(in srgb, var(--chat-danger) 85%, #000);
+}
+
+.voice-bar-dismiss {
+  color: var(--chat-dim);
+  background: transparent;
+  border-color: var(--chat-border);
+}
+
+.voice-bar-dismiss:hover {
+  color: var(--chat-fg);
+  background: var(--chat-hit-bg, color-mix(in srgb, var(--chat-fg) 8%, transparent));
+}
+
+/* ── The dot: one element, four meanings ──────────────────────────────────── */
+
+.voice-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--chat-dim);
+}
+
+/* Connecting — a slow pulse that reads as "not yet". */
+.voice-bar.-connecting .voice-dot {
+  background: var(--chat-faint);
+  animation: voice-pulse 1.4s ease-in-out infinite;
+}
+
+/* Listening — the mic is open. Steady, so it does not compete for attention
+   with the two states that mean something is happening. */
+.voice-bar.-listening .voice-dot {
+  background: var(--chat-accent);
+}
+
+/* Working — the agent has the request. */
+.voice-bar.-thinking .voice-dot {
+  background: #d19a3a;
+  animation: voice-pulse 1s ease-in-out infinite;
+}
+
+/* Speaking — fastest pulse, because it is the one state where the user should
+   wait a beat before talking over it. */
+.voice-bar.-speaking .voice-dot {
+  background: var(--chat-accent);
+  animation: voice-pulse 0.6s ease-in-out infinite;
+}
+
+@keyframes voice-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.72);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-bar .voice-dot {
+    animation: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .voice-bar-state {
+    min-width: 0;
+  }
+  .voice-bar-budget {
+    display: none; /* the clock is the number that matters on a phone */
+  }
+}
