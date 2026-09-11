@@ -107,38 +107,30 @@ describe('the reply tool is registered, and it is the voice', () => {
     await fx.stop();
   });
 
-  it('is registered in AGENT mode too — a mid-session switch cannot add tools', async () => {
-    // `mcpServers` is fixed at query() construction exactly like `systemPrompt`
-    // (agent-modes.ts). A pane that launched in Agent mode and was switched to
-    // Chat would otherwise be a Chat session with no voice at all.
+  it('is NOT registered in AGENT mode — agent mode is raw', async () => {
+    // It used to be registered in both modes, described as inert in Agent,
+    // because mcpServers is fixed at query() construction and a mid-session
+    // switch cannot add tools. Measured against a live Opus, that cost more
+    // than it bought: 3 of 5 Agent turns called it anyway and then wrote a
+    // closing recap for an audience they believed could not see them, so the
+    // user read the same answer twice, the second time in the third person.
+    // Re-wording the description to "do not call me" took that to 0 of 7 — but
+    // a description is a request, and not offering the tool is a guarantee.
     const fx = boot('agent');
-    expect(() => fakeMcpTool('reply')).not.toThrow();
+    expect(() => fakeMcpTool('reply')).toThrow();
+    // The other two muxpad tools are mode-independent and stay.
+    expect(() => fakeMcpTool('ask_user')).not.toThrow();
+    expect(() => fakeMcpTool('show_files')).not.toThrow();
     await fx.stop();
   });
 
-  it('…but AGENT mode is told the tool is inert there, not that text is private', async () => {
-    // Measured against a live Opus: with the Chat-mode wording in both modes,
-    // three of five Agent-mode turns called `reply` and the user read the
-    // answer twice — once as the reply, then again as the third-person recap
-    // the model wrote believing nobody would see it. With this wording, zero
-    // of seven did. A tool description is a system-prompt-strength
-    // instruction; in Agent mode "your plain text is a private scratchpad" is
-    // simply false.
-    const fx = boot('agent');
-    const desc = fakeMcpTool('reply').description;
-    expect(desc).toMatch(/AGENT MODE/);
-    expect(desc).toMatch(/do not call this tool/i);
-    expect(desc).not.toMatch(/your ONLY voice/i);
-    await fx.stop();
-  });
-
-  it('exposes the two descriptions as a pure function, so both can be pinned', () => {
-    expect(replyToolDescription('chat')).toMatch(/only voice/i);
+  it('exposes the description as a pure function, so the contract can be pinned', () => {
+    expect(replyToolDescription()).toMatch(/only voice/i);
     // The closing-summary rule: a live model ended almost every Chat turn with
     // "Done — reported to the user…", written to an audience it knew could not
-    // read it.
-    expect(replyToolDescription('chat')).toMatch(/do not write a closing summary/i);
-    expect(replyToolDescription('agent')).toMatch(/sees it twice/i);
+    // read it. (Measured: the rule did not change the behaviour — the fold
+    // does — but it is true and cheap, so it stays.)
+    expect(replyToolDescription()).toMatch(/do not write a closing summary/i);
   });
 
   it('hands back the fixed ack sentinel the normalizer recognises', async () => {

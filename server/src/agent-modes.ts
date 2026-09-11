@@ -273,11 +273,20 @@ export function modeFromStartupCmd(cmd: string | null | undefined): AgentMode | 
  * the absence of the overlay, so there is nothing to restate.
  */
 export function wrapModeNote(mode: AgentMode, overlay: string | null): string {
+  // A switch INTO Chat mid-session must not tell the model to use the `reply`
+  // tool: tools are fixed at query() construction, so a session that launched
+  // in Agent mode does not have one and never will. Naming it would send the
+  // model looking for a tool that is not there. What it gets instead is the
+  // harness guard — the turn's final text is promoted into a real bubble — so
+  // it should simply write its answer as its last words. That is one bubble a
+  // turn rather than two to four, which is precisely why a mid-session switch
+  // is documented as weaker than a fresh pane.
+  const chatBody = overlay
+    ? `The user switched this session to Chat mode. Follow this contract from now on:\n\n${overlay.trim()}`
+    : 'The user switched this session to Chat mode: be decisive, act on reasonable assumptions, delegate legwork to subagents, reply in at most 3 sentences, result first with no narration, and ask only when truly blocked on something hard to reverse.';
   const body =
     mode === 'chat'
-      ? overlay
-        ? `The user switched this session to Chat mode. Follow this contract from now on:\n\n${overlay.trim()}`
-        : 'The user switched this session to Chat mode: be decisive, act on reasonable assumptions, delegate legwork to subagents, reply in at most 3 sentences, result first with no narration, and ask only when truly blocked on something hard to reverse.'
+      ? `${chatBody}\n\nThis session has no reply tool — it started in Agent mode and tools cannot be added to a running session. Write your answer as ordinary text and make it the LAST thing in your turn; muxpad delivers it. Everything you write before it is working-out the user does not read.`
       : 'The user switched this session to Agent mode. Any previous Chat-mode contract (terse, result-only, act-without-asking) no longer applies — resume your normal, thorough default behavior.';
   return `<muxpad-mode>\n${body}\n</muxpad-mode>`;
 }
