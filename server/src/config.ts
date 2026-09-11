@@ -40,6 +40,54 @@ export interface Config {
    * which is a database pin rather than config).
    */
   publicBaseUrl?: string;
+  /**
+   * Voice mode's non-secret settings. The API KEY IS DELIBERATELY NOT HERE —
+   * see {@link voiceApiKey}.
+   */
+  voice: VoiceSettings;
+}
+
+/** Everything about voice mode that is safe to hold in a plain object. */
+export interface VoiceSettings {
+  /** TTS voice name. MUXPAD_VOICE_NAME. */
+  voice: string;
+  /** Hard per-session wall-clock ceiling. MUXPAD_VOICE_SESSION_MINUTES. */
+  sessionTtlMs: number;
+  /** Daily minute ceiling. MUXPAD_VOICE_DAILY_MINUTES. */
+  dailyCapMinutes: number;
+}
+
+/** A positive number from the environment, or the default. Rejects junk and
+ *  zero/negative rather than silently disabling a cap. */
+function positiveNumber(raw: string | undefined, fallback: number): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+export function loadVoiceSettings(env: NodeJS.ProcessEnv = process.env): VoiceSettings {
+  return {
+    voice: env.MUXPAD_VOICE_NAME?.trim() || 'marin',
+    sessionTtlMs: Math.round(positiveNumber(env.MUXPAD_VOICE_SESSION_MINUTES, 10) * 60_000),
+    dailyCapMinutes: positiveNumber(env.MUXPAD_VOICE_DAILY_MINUTES, 60),
+  };
+}
+
+/**
+ * The OpenAI key for voice mode — muxpad's first real secret.
+ *
+ * A FUNCTION, not a field on {@link Config}, on purpose. Everything else in this
+ * file is a plain value that any future `console.log(config)`, health endpoint,
+ * crash dump or `muxpad doctor` could reasonably print. A key that lives only
+ * inside a call, read at the one call site that builds the OpenAI transport
+ * (voice/live.ts), cannot be printed by a line nobody thought about.
+ *
+ * MUXPAD_OPENAI_API_KEY first so a user who already exports OPENAI_API_KEY for
+ * some other tool can point muxpad at a separate, budget-capped project key
+ * without disturbing it.
+ */
+export function voiceApiKey(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const key = env.MUXPAD_OPENAI_API_KEY?.trim() || env.OPENAI_API_KEY?.trim();
+  return key || undefined;
 }
 
 export function loadConfig(): Config {
@@ -76,6 +124,7 @@ export function loadConfig(): Config {
     publicPort: Number(process.env.MUXPAD_PUBLIC_PORT ?? 7778),
     publicHost: process.env.MUXPAD_PUBLIC_HOST ?? '127.0.0.1',
     funnelEnabled: process.env.MUXPAD_NO_FUNNEL !== '1',
+    voice: loadVoiceSettings(),
     ...(process.env.MUXPAD_PUBLIC_BASE_URL
       ? { publicBaseUrl: process.env.MUXPAD_PUBLIC_BASE_URL }
       : {}),

@@ -332,6 +332,17 @@ export function attachWsServer(deps: {
   allowedOrigins?: Set<string>;
   /** Refusal sink. Defaults to console.warn; tests pass a collector. */
   logRefusal?: (line: string) => void;
+  /**
+   * Called whenever a pane's set of live chat sockets changes size, with the new
+   * count. Voice mode is the only subscriber: a paid, wall-clock-billed session
+   * must not outlive the chat view that started it, and this socket closing is
+   * the earliest evidence the server gets that a phone was backgrounded or a tab
+   * was closed. Deliberately a raw count and not a "disconnected" callback —
+   * whether a momentary drop should hang up is a POLICY question, and policy
+   * belongs with the thing that owns the money (VoiceSessionManager), not in the
+   * socket layer.
+   */
+  onChatPresence?: (paneId: string, clients: number) => void;
 }): WsServerHandle {
   const wss = new WebSocketServer({ noServer: true });
   const allowedOrigins =
@@ -1517,9 +1528,15 @@ export function attachWsServer(deps: {
           chatClients.set(chatPaneId, clients);
         }
         clients.add(send);
+        deps.onChatPresence?.(chatPaneId, clients.size);
         const unregister = () => {
           clients.delete(send);
-          if (clients.size === 0) chatClients.delete(chatPaneId);
+          const remaining = clients.size;
+          if (remaining === 0) chatClients.delete(chatPaneId);
+          // Fires on BOTH 'close' and 'error' below, so it must stay idempotent
+          // — reporting the same count twice is harmless; reporting it never
+          // would leave a paid voice session running with nobody listening.
+          deps.onChatPresence?.(chatPaneId, remaining);
         };
         ws.on('close', unregister);
         ws.on('error', unregister);
