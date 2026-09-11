@@ -158,7 +158,27 @@ export interface FakeMcpTool {
   name: string;
   description: string;
   inputSchema: unknown;
-  handler: (args: never) => Promise<{ content: Array<{ type: string; text: string }> }>;
+  handler: (
+    args: never,
+    extra?: unknown,
+  ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+}
+
+/**
+ * The MCP `extra` the live SDK hands an in-process tool handler, with the
+ * Claude tool_use id in the place it actually appears.
+ *
+ * Live-probed (SDK 0.3.220): the handler's second argument is MCP's
+ * RequestHandlerExtra and carries `_meta['claudecode/toolUseId']`. The runner
+ * reads the id from there to stamp a `speak` frame with the reply's TRANSCRIPT
+ * identity, so a test that omitted it would exercise only the fallback.
+ */
+export function mcpExtra(toolUseId: string): unknown {
+  return {
+    signal: new AbortController().signal,
+    _meta: { 'claudecode/toolUseId': toolUseId, progressToken: 2 },
+    requestId: 2,
+  };
 }
 
 let registeredTools: FakeMcpTool[] = [];

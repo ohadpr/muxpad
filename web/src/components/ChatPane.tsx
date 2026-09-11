@@ -1228,6 +1228,20 @@ type ServerMsg =
   | { t: 'pong' }
   | { t: 'turn-start' }
   | { t: 'stream'; delta: string }
+  // ── Speech, and why nothing below handles it ──────────────────────────────
+  // The agent's `reply` calls, relayed the instant they exist, for a consumer
+  // that has to ACT on them — a voice layer that must start speaking before
+  // the sentence is finished.
+  //
+  // THIS COMPONENT DELIBERATELY HAS NO BRANCH FOR EITHER KIND, and that is the
+  // mechanism, not an omission. A reply reaches this UI exactly one way: it
+  // lands in the transcript and arrives as an `events` batch. If these frames
+  // also drew something, every reply would render twice — once from here,
+  // racing, and once from the transcript. They are declared so the contract is
+  // written down where a future reader of the message loop will look for it,
+  // and so adding a handler is a visible decision rather than an accident.
+  | { t: 'speak'; id: string; text: string; n: number }
+  | { t: 'speak-delta'; id: string; delta: string }
   | { t: 'turn-done'; ok: boolean; error?: string }
   | { t: 'question'; qid: string; questions: AgentQuestion[] }
   | { t: 'question-done'; qid: string }

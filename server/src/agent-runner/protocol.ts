@@ -53,6 +53,50 @@ export type RunnerFrame =
     }
   | { t: 'turn-start' }
   | { t: 'stream'; delta: string }
+  | {
+      /**
+       * A `reply` — the agent's actual SPEECH — delivered the moment it exists,
+       * for a consumer that has to ACT on it rather than draw it.
+       *
+       * This is NOT a render path and must never become one. Replies reach an
+       * open chat exactly one way: the transcript, tailed by TranscriptReader.
+       * That path is authoritative, it survives reload, and it is the only one
+       * the chat UI reads — so the chat UI has no branch for this frame kind
+       * and therefore cannot double-render it. The separation is structural,
+       * not a dedupe rule somebody has to keep correct.
+       *
+       * It exists because the transcript path cannot serve SPEECH. A reply is
+       * only in the transcript once the whole tool_use block has been
+       * generated, plus up to one 250 ms poll — so a voice turn could not open
+       * its mouth until the agent had finished the entire sentence. Here the
+       * text is on the wire the instant the tool runs.
+       *
+       * `id` is the reply's TRANSCRIPT identity (its tool_use id), which is
+       * what `normalizeTranscriptLine` builds the chat event's id from — so a
+       * consumer can tie a spoken reply to the bubble that renders for it.
+       */
+      t: 'speak';
+      id: string;
+      text: string;
+      /** 1-based position within the turn; the contract asks for 2–4. */
+      n: number;
+    }
+  | {
+      /**
+       * A reply's text as it is being GENERATED, under the same `id` as the
+       * `speak` that will follow. Decoded from the tool call's
+       * `input_json_delta` chunks (see reply-stream.ts), which the loop used to
+       * discard because it filtered the token stream to `text_delta` only.
+       *
+       * This is what lets speech start mid-reply instead of after it. A
+       * consumer that ignores these and waits for `speak` is still correct,
+       * just slower — which is the right failure mode for a frame kind whose
+       * only job is latency.
+       */
+      t: 'speak-delta';
+      id: string;
+      delta: string;
+    }
   | { t: 'turn-done'; ok: boolean; error?: string; summary?: string }
   | {
       /** The session is blocked on the user: render these as tappable chips. */
