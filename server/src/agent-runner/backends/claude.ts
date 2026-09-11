@@ -31,6 +31,13 @@ import { findTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
 import type { AgentMode, AgentQuestion, RunnerFrame } from '../protocol.js';
 import { ReplyBlockTracker, replyToolUseId } from '../reply-stream.js';
+import {
+  classifyAction,
+  denialNote,
+  gateEnabled,
+  gateQuestion,
+  isApproval,
+} from '../reversibility.js';
 import { SubagentRoster } from '../subagent-roster.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
@@ -477,6 +484,30 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     }
   }
 
+  /**
+   * Put a question to the user and BLOCK until it is resolved.
+   *
+   * Extracted from `ask_user` so the reversibility gate can reuse the exact
+   * same machinery — same frame, same tappable chips, same `blocked` pane
+   * status, same push, same re-delivery on reconnect. A second approval UI
+   * would be a second set of bugs and a second thing for the user to learn.
+   *
+   * Resolves with `null` when the question is DISMISSED rather than answered
+   * (Stop, or runner shutdown). There is no timer: see the gate's note on why
+   * an unanswered question must not lapse.
+   */
+  function askUser(questions: AgentQuestion[]): Promise<Array<{
+    question: string;
+    answers: string[];
+  }> | null> {
+    const qid = randomUUID();
+    return new Promise((resolve) => {
+      const frame = { t: 'question', qid, questions } as const;
+      pendingQuestions.set(qid, { qid, frame, resolve });
+      emit(frame);
+    });
+  }
+
   const OptionSchema = z.object({
     label: z.string().min(1).max(80).describe('Concise display text (1–5 words)'),
     description: z.string().max(300).optional().describe('What choosing this means'),
@@ -497,7 +528,6 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     'Ask the user 1–3 multiple-choice questions when you are blocked on a decision only they can make. Each question renders as tappable options in the muxpad chat UI (the user may also type a custom answer). Use it sparingly: for reversible choices with a sensible default, proceed without asking.',
     { questions: z.array(QuestionSchema).min(1).max(3) },
     async (args) => {
-      const qid = randomUUID();
       const questions: AgentQuestion[] = args.questions.map((qq) => ({
         question: qq.question,
         header: qq.header,
@@ -508,13 +538,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         })),
       }));
       log(`${bold('? asking user')} ${questions.map((qq) => qq.header).join(', ')}`);
-      const answers = await new Promise<Array<{ question: string; answers: string[] }> | null>(
-        (resolve) => {
-          const frame = { t: 'question', qid, questions } as const;
-          pendingQuestions.set(qid, { qid, frame, resolve });
-          emit(frame);
-        },
-      );
+      const answers = await askUser(questions);
       if (!answers) {
         return {
           content: [
@@ -844,8 +868,104 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     readChatModeOverlay(currentMode),
   );
 
+  // -------------------------------------------------------------------------
+  // THE REVERSIBILITY GATE. The verb list and its reasoning live in
+  // ../reversibility.ts; this is the wiring, and the three decisions the
+  // wiring makes.
+  //
+  // 1. WHERE IT SITS: `hooks.PreToolUse`, not `canUseTool`. `canUseTool` is the
+  //    surface you would reach for and it is UNAVAILABLE here — muxpad runs
+  //    `permissionMode: 'bypassPermissions'` (yolo parity, and the reason no
+  //    permission prompt can wedge a headless turn) and bypass never consults
+  //    it. PreToolUse is the one that still fires, and all three properties the
+  //    gate needs are live-probed against SDK 0.3.220 rather than assumed: the
+  //    hook FIRES under bypass; an `await` inside it genuinely HOLDS the tool
+  //    call (measured to 150 s with no default timeout cutting in); and
+  //    `permissionDecision:'deny'` actually stops execution — the probed
+  //    command never ran, and the reason came back to the model as an error
+  //    tool_result it reported rather than retried.
+  //
+  // 2. HOW IT LOOKS: `ask_user`'s existing `{t:'question'}` frame — the same
+  //    tappable chips, the same `blocked` pane status, the same push, the same
+  //    re-delivery after a reconnect. No second approval UI.
+  //
+  // 3. WHAT EXPIRY DOES: NOTHING. There is no timer, and that is the whole
+  //    point. Grok Bot's approval cards lapse into DENIAL while the push that
+  //    was supposed to summon you fails to arrive, so unattended work dies
+  //    quietly and you never learn you were asked. Here an unanswered gate
+  //    just waits — the pane sits `blocked` (top precedence in the nav), the
+  //    push has already fired, and the question is re-delivered to every
+  //    client that reconnects. A parked turn is VISIBLE; a silently denied one
+  //    is not. The only things that resolve a gate other than an answer are
+  //    Stop and shutdown, and both mean DENY: dismissal fails closed, always.
+  //    (The `timeout` below exists solely so a future SDK default can never
+  //    answer on the user's behalf; the contract is "no expiry".)
+  const gateOn = gateEnabled(opts.mode, process.env);
+  if (gateOn) log(dim('reversibility gate on — irreversible actions will ask first'));
+
   const options: Options = {
     cwd: process.cwd(),
+    ...(gateOn
+      ? {
+          hooks: {
+            PreToolUse: [
+              {
+                timeout: 604_800,
+                hooks: [
+                  async (input, _toolUseId, { signal }) => {
+                    const pre = input as { tool_name?: string; tool_input?: unknown };
+                    if (typeof pre.tool_name !== 'string') return { continue: true };
+                    const action = classifyAction(pre.tool_name, pre.tool_input);
+                    // The frictionless path, and by far the common one: reads,
+                    // builds, tests, local edits, commits — no frame, no chip,
+                    // no pause. A gate that fires on those is a gate people
+                    // learn to dismiss without reading.
+                    if (!action) return { continue: true };
+                    log(
+                      `${bold('⛔ gate')} ${action.verb} — ${dim(action.detail)} ${dim('(waiting for you; this will not time out)')}`,
+                    );
+                    const answers = await Promise.race([
+                      askUser([gateQuestion(action)]),
+                      // If the SDK ever DOES abort a hook, it has stopped
+                      // waiting for our decision — so there is no decision left
+                      // to make except the safe one.
+                      new Promise<null>((resolve) => {
+                        if (signal.aborted) resolve(null);
+                        else signal.addEventListener('abort', () => resolve(null), { once: true });
+                      }),
+                    ]);
+                    if (isApproval(answers)) {
+                      log(dim(`gate: approved — ${action.detail}`));
+                      return {
+                        hookSpecificOutput: {
+                          hookEventName: 'PreToolUse' as const,
+                          permissionDecision: 'allow' as const,
+                          permissionDecisionReason: 'The user approved this.',
+                        },
+                      };
+                    }
+                    // The user's own words, when they typed instead of tapping
+                    // ("not to main — use a branch"), reach the model as the
+                    // reason. A correction is worth more than a refusal.
+                    const note = denialNote(answers);
+                    log(dim(`gate: declined — ${action.detail}${note ? ` (${note})` : ''}`));
+                    return {
+                      hookSpecificOutput: {
+                        hookEventName: 'PreToolUse' as const,
+                        permissionDecision: 'deny' as const,
+                        permissionDecisionReason: note
+                          ? `The user declined this and said: ${note}. Do not retry it as-is; follow what they said, or tell them what you need.`
+                          : 'The user declined this action. Do not retry it. Tell them it was declined and what you would do instead.',
+                      },
+                    };
+                  },
+                ],
+              },
+            ],
+          },
+        }
+      : {}),
+    ...(resumeSid ? { resume: resumeSid } : { sessionId: sid }),
     // Yolo parity with `muxpad claude --dangerously-skip-permissions`. The SDK
     // auto-approves every tool call under bypass (canUseTool is never consulted
     // — spike-verified), so no permission prompt can wedge a headless turn.
