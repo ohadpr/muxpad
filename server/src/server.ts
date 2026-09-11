@@ -26,9 +26,11 @@ import { pushRoutes } from './routes/push.js';
 import { archiveRoutes, searchRoutes } from './routes/search.js';
 import { summaryRoutes } from './routes/summary.js';
 import { tabsRoutes } from './routes/tabs.js';
+import { voiceRoutes } from './routes/voice.js';
 import { workspacesRoutes } from './routes/workspaces.js';
 import { sameOriginGuard } from './same-origin.js';
 import type { TabActivity } from './tab-activity.js';
+import type { VoiceSessionManager } from './voice/VoiceSessionManager.js';
 
 export interface AppDeps {
   db: Database.Database;
@@ -121,6 +123,14 @@ export interface AppDeps {
    */
   cleanupModel?: CleanupModel;
   /**
+   * Voice mode's session manager (voice/VoiceSessionManager.ts) — the SDP relay
+   * plus every cost control. Optional: without it /api/voice is still mounted
+   * and answers `configured: false` / 503, which is renderable. An install with
+   * no MUXPAD_OPENAI_API_KEY reaches the same answer through a manager that has
+   * no transport, so the "voice is off" path is one behaviour, not two.
+   */
+  voice?: VoiceSessionManager;
+  /**
    * Extra hostnames the CSRF guard trusts as an Origin, on top of loopback
    * and "same hostname as Host". Production reads MUXPAD_ALLOWED_ORIGINS;
    * this is the injection seam for tests. See same-origin.ts.
@@ -168,6 +178,9 @@ export function createApp(deps: AppDeps): Hono {
       ...(resolved.cleanupModel ? { model: resolved.cleanupModel } : {}),
     }),
   );
+  // Voice mode's SDP relay + its cost controls. Always mounted (see
+  // routes/voice.ts): "no API key" must be an answer, not a 404.
+  app.route('/api/voice', voiceRoutes({ voice: resolved.voice }));
   // SSE mirror of /ws/events — curl-able subscription for scripts/agents.
   app.route('/api/events', eventsRoutes(resolved));
   app.route('/api/agent-sessions', agentSessionsRoutes(resolved));

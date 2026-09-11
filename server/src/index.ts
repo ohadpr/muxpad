@@ -14,9 +14,10 @@ import { ArchiveDb } from './archive/ArchiveDb.js';
 import { Archiver } from './archive/Archiver.js';
 import { HeadlineWriter } from './chat/HeadlineWriter.js';
 import { projectsDir } from './chat/TranscriptReader.js';
+import { glossaryCache } from './chat/glossary.js';
 import { sweepImplausibleHeadlines } from './chat/headline.js';
 import { paneCarryover } from './chat/summarize.js';
-import { loadConfig } from './config.js';
+import { loadConfig, voiceApiKey } from './config.js';
 import { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
 import { createTailscaleFunnel, localFunnel } from './funnel.js';
@@ -29,10 +30,13 @@ import { releaseResidentPane } from './resident-release.js';
 import { startServeSupervisor } from './serve-supervisor.js';
 import { createApp } from './server.js';
 import { mountStaticWeb } from './static-assets.js';
+import { GlobalsStore } from './store/GlobalsStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { openDb } from './store/db.js';
 import { TabActivity } from './tab-activity.js';
+import { VoiceSessionManager, glossaryInstructions } from './voice/VoiceSessionManager.js';
+import { openAiVoiceTransport } from './voice/live.js';
 import { attachWsServer } from './ws.js';
 
 const config = loadConfig();
@@ -261,6 +265,41 @@ const cronScheduler = new CronScheduler({
 // The registry only creates/destroys the pane; keeping it ALIVE is the serve
 // supervisor's job below, which is why there is no second process supervisor
 // here — one dying with the main server would take every app down on deploy.
+// Voice mode. The server's ONLY job in a call is the SDP offer→answer relay at
+// session start (the audio is browser↔OpenAI, peer to peer) — plus every cost
+// control, because this is the first feature muxpad has that bills by wall
+// clock and the first endpoint that can spend the user's money. See
+// voice/VoiceSessionManager.ts for the caps and why each one exists.
+//
+// Built unconditionally, even with no key: the manager then reports itself
+// unconfigured and refuses with 503, which the UI can render. The key is read
+// here, at the one call site that needs it, and closed over by the transport —
+// it is never put on `config` and never logged.
+const voiceKey = voiceApiKey();
+const voiceGlossary = glossaryCache(db, config.dataDir);
+const voiceTransport = voiceKey ? openAiVoiceTransport(voiceKey) : null;
+const voice = new VoiceSessionManager({
+  globals: new GlobalsStore(db),
+  ...(voiceTransport
+    ? { exchange: voiceTransport.exchange, closeRemote: voiceTransport.close }
+    : {}),
+  // The same glossary the dictation-cleanup endpoint uses, behind the same
+  // cache. A live voice model mishears "muxpad" as "Max pad" for exactly the
+  // reason iOS dictation does, so it gets the same list rather than a second
+  // one that can drift out of sync with this install's names.
+  instructions: glossaryInstructions(voiceGlossary),
+  paneExists: (id) => paneStore.getById(id) !== undefined,
+  voice: config.voice.voice,
+  sessionTtlMs: config.voice.sessionTtlMs,
+  dailyCapMinutes: config.voice.dailyCapMinutes,
+});
+// A deleted pane can't hang up, so close its call immediately — no grace, there
+// is nothing to reconnect to. (The softer case, a chat socket merely dropping,
+// comes through `onChatPresence` on the ws layer below.)
+events.subscribe((e) => {
+  if (e.type === 'pane.removed') voice.notePaneRemoved(e.pane_id);
+});
+
 const appRegistry = createAppRegistry({ db, ptyd, events });
 // Late-bound so the status probe can read the supervisor's give-up ledger:
 // the supervisor is constructed after the ws layer, and the probe is needed
@@ -290,6 +329,7 @@ const app = createApp({
     ...(config.publicBaseUrl ? { publicBaseUrl: config.publicBaseUrl } : {}),
   },
   apps: { registry: appRegistry, status: appStatus },
+  voice,
 });
 
 // Static asset serving (CSS, JS, fonts, images) from the built web bundle,
@@ -342,6 +382,8 @@ const wsServer = attachWsServer({
   agentBridge,
   tabActivity,
   notifyPane,
+  // A wall-clock-billed call must not outlive the chat view that started it.
+  onChatPresence: (paneId, clients) => voice.noteChatPresence(paneId, clients),
 });
 
 // Straggler prevention: retry pane kills that failed in transit, and (once
@@ -453,6 +495,11 @@ const shutdown = async () => {
   // Stop queueing archive work; in-flight copies finish or resume next boot
   // (offsets only advance past complete lines, so a cut mid-copy is safe).
   archiver?.stop();
+  // Settle any live voice call FIRST, before anything slow: it is the only
+  // thing shutting down here that keeps costing money after we're gone, and
+  // getting its minutes onto the books is what stops the next boot from
+  // charging the full session limit for it (see recoverOrphan).
+  voice.dispose();
   // Stop the cron tick — anything it started now would be an orphan.
   cronScheduler.stop();
   // Stop respawning app servers — we're on our way out; anything we started
