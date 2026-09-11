@@ -25,6 +25,7 @@ import { WebSocket } from 'ws';
 import { createClaudeBackend } from '../agent-runner/backends/claude.js';
 import type { AgentBackend, RunnerHost } from '../agent-runner/backends/types.js';
 import {
+  type AgentMode,
   CLOSE_RUNNER_DISPLACED,
   type RunnerFrame,
   type ServerFrame,
@@ -71,6 +72,10 @@ export interface FakeRunnerOptions {
   sid?: string | null;
   /** Auto-reconnect like the real harness (default false — tests step it). */
   autoReconnect?: boolean;
+  /** The pane's agent mode. Default 'agent' — the pre-modes baseline, so every
+   *  existing test keeps the behaviour it was written against. Chat-mode tests
+   *  pass 'chat': the reply guard only applies there. */
+  mode?: AgentMode;
 }
 
 /** Boot a fake runner and wait for its hello to land. */
@@ -100,7 +105,7 @@ export async function startFakeRunner(opts: FakeRunnerOptions): Promise<FakeRunn
   const backend = createClaudeBackend(host, {
     requestedSid: opts.sid ?? null,
     requestedModel: null,
-    mode: 'agent',
+    mode: opts.mode ?? 'agent',
   });
   const sdk = fakeSession();
 

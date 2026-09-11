@@ -3,9 +3,10 @@ import type { Duplex } from 'node:stream';
 import {
   type AgentMode,
   BASELINE_AGENT_MODE,
+  isBootstrapTabName,
+  modeForBackend,
   parseCronMarker,
   sanitizeAgentStatus,
-  isBootstrapTabName,
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -1180,7 +1181,23 @@ export function attachWsServer(deps: {
             // (tabs route or a previous rewrite) — never from the ws frame —
             // so no new injection surface; the single-quoted form is the
             // tabs-route shape, the bare form a hand-typed `muxpad agent`.
-            const prevPane = panes.getById(paneId);
+            let prevPane = panes.getById(paneId);
+            // Chat is Claude; picking another harness IS picking Agent mode
+            // (modeForBackend — the one coercion point). Every door that
+            // decides a mode already runs through it, but a ROW can still
+            // arrive here saying 'chat' on a codex/cursor pane: one created
+            // before the rule, or a hand-typed startup command. The hello is
+            // the moment we learn which harness is ACTUALLY running, so it is
+            // where such a row gets settled — the mode is corrected, the
+            // startup_cmd loses its `--mode chat` below, and `pane.updated`
+            // re-renders the chip. No UI, no notice: the state just stops
+            // existing.
+            const settledMode = modeForBackend(prevPane?.mode, backendId);
+            if (prevPane && settledMode !== prevPane.mode) {
+              panes.setMode(paneId, settledMode);
+              prevPane = panes.getById(paneId) ?? prevPane;
+              emitPaneUpdated(paneId);
+            }
             const prevCmd = prevPane?.startup_cmd ?? '';
             const modelMatch = prevCmd.match(/--model ('[^']*'|[^\s']+)/);
             const modelPart = modelMatch ? ` --model ${modelMatch[1]}` : '';

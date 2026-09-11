@@ -61,6 +61,22 @@ describe('chat-mode.md generation', () => {
     expect(CHAT_MODE_SEED).toMatch(/blocked/i);
     expect(CHAT_MODE_SEED).toMatch(/reverse/i);
   });
+
+  it('the seed states the VOICE contract, which is the mechanism not a plea', () => {
+    // The prompt used to ask for brevity and nothing enforced it. The seed's
+    // job now is to explain the harness the model is actually running in: a
+    // private scratchpad, one tool that is the only way out, and what a reply
+    // should contain. If these clauses go, the runner's `reply` tool is a
+    // surprise rather than a contract.
+    expect(CHAT_MODE_SEED).toMatch(/scratchpad|never sees|inner monologue/i);
+    expect(CHAT_MODE_SEED).toMatch(/`reply`/);
+    expect(CHAT_MODE_SEED).toMatch(/only voice|only channel/i);
+    // Outcome plus artifact — "done" on its own is the failure mode.
+    expect(CHAT_MODE_SEED).toMatch(/not evidence/i);
+    expect(CHAT_MODE_SEED).toMatch(/artifact|destination|link/i);
+    // Several short calls, not one welded paragraph.
+    expect(CHAT_MODE_SEED).toMatch(/separate\s+\\?`?reply|two to four/i);
+  });
 });
 
 describe('readChatModeOverlay', () => {

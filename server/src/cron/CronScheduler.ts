@@ -516,6 +516,12 @@ export class CronScheduler {
       // coerced rather than compared: a pre-rename 'deep' still means Agent
       // mode, a 'do' still means Chat, and anything else — including null —
       // falls to the default.
+      //
+      // Not re-checked against `cron.backend` here: bootstrapTab runs every
+      // mode through modeForBackend, so a codex/cursor cron lands in Agent
+      // mode whatever the row says. Enforcing it twice would let the two
+      // copies drift; the row stays as the user wrote it because the backend
+      // on a schedule is editable and the mode is only read at fire time.
       mode: coerceAgentMode(cron.mode) ?? DEFAULT_AGENT_MODE,
     });
     if (!created.pane) return { outcome: 'error', detail: 'tab bootstrap produced no pane' };

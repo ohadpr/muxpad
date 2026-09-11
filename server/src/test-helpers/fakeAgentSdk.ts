@@ -42,6 +42,7 @@ export function fakeSession(): FakeSession {
 /** Drop the session between tests. */
 export function resetFakeAgentSdk(): void {
   current = null;
+  registeredTools = [];
 }
 
 /** A settle marker: a `system` message with a subtype the loop ignores. */
@@ -152,8 +153,41 @@ export function query(args: { prompt: unknown; options?: Record<string, unknown>
   return current;
 }
 
-/** The in-process MCP server factory — the backend only stores the result. */
+/** One in-process MCP tool as the backend registered it. */
+export interface FakeMcpTool {
+  name: string;
+  description: string;
+  inputSchema: unknown;
+  handler: (args: never) => Promise<{ content: Array<{ type: string; text: string }> }>;
+}
+
+let registeredTools: FakeMcpTool[] = [];
+
+/**
+ * The tools the backend handed to `createSdkMcpServer`, so a test can CALL one
+ * the way the live SDK would.
+ *
+ * This is the only way to exercise an in-process tool: the real SDK invokes the
+ * handler out-of-band from the message stream, so a scripted stream alone can
+ * never reach it — and `reply` is now the entire user-facing output path of
+ * Chat mode. Feeding the tool_use MESSAGE without invoking the handler would
+ * test a transcript shape while leaving the handler (and the reply counter the
+ * turn-end guard reads) completely untested.
+ */
+export function fakeMcpTool(name: string): FakeMcpTool {
+  const t = registeredTools.find((x) => x.name === name);
+  if (!t) {
+    throw new Error(
+      `fakeAgentSdk: no tool '${name}' registered (have: ${registeredTools.map((x) => x.name).join(', ') || 'none'})`,
+    );
+  }
+  return t;
+}
+
+/** The in-process MCP server factory. Records the tools (see fakeMcpTool). */
 export function createSdkMcpServer(config: unknown): unknown {
+  const tools = (config as { tools?: FakeMcpTool[] })?.tools;
+  if (Array.isArray(tools)) registeredTools = tools;
   return { type: 'sdk', name: (config as { name?: string })?.name ?? 'fake', instance: {} };
 }
 
