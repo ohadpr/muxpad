@@ -497,7 +497,7 @@ function SvgHosted() {
   );
 }
 
-/** Make a house chat in `workspace` and go there. Shared by the sheet's bar
+/** Make a new Chat in `workspace` and go there. Shared by the sheet's bar
  *  "+" and the desktop rail's "+ New tab" so the two cannot disagree about
  *  what a new chat is. */
 async function createHouseTab(
@@ -506,7 +506,7 @@ async function createHouseTab(
   onNavigate?: (() => void) | undefined,
 ): Promise<void> {
   // Tabs-first creation: one server call makes the tab AND its single
-  // full-size pane atomically, already running the house chat. No "what do you
+  // full-size pane atomically, already running in Chat mode. No "what do you
   // want to open?" screen — the alternatives live in the empty chat's own
   // "open instead:" strip, where they cost nothing until you want one.
   const t = await api.createTab(workspace.id, { ...HOUSE_CHAT_CREATE });
@@ -698,7 +698,7 @@ function SheetWorkspaceList({
     if (creating) return;
     setCreating(true);
     try {
-      // Bootstrap workspace + first house chat in one go so you land somewhere
+      // Bootstrap workspace + first Chat in one go so you land somewhere
       // usable — identical to what the bar's "+" makes inside a workspace.
       const w = await api.createWorkspace();
       await createHouseTab(w, navigate, onNavigate);

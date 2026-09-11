@@ -23,7 +23,7 @@ import {
 } from '@muxpad/shared';
 import { z } from 'zod';
 import { readAgentInstructions } from '../../agent-instructions.js';
-import { readDoModeOverlay, wrapModeNote } from '../../agent-modes.js';
+import { readChatModeOverlay, wrapModeNote } from '../../agent-modes.js';
 import { findTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
 import type { AgentMode, AgentQuestion, RunnerFrame } from '../protocol.js';
@@ -39,8 +39,8 @@ const DEFAULT_AGENT_MODEL = 'opus';
 
 /**
  * The universal muxpad instructions (<dataDir>/agent-instructions.md) PLUS —
- * when the pane launched in ⚡ Do mode — the Do-mode overlay
- * (<dataDir>/do-mode.md), as an SDK `systemPrompt` option.
+ * when the pane launched in Chat mode — the Chat-mode overlay
+ * (<dataDir>/chat-mode.md), as an SDK `systemPrompt` option.
  *
  * Injection mechanism for the CLAUDE backend, identical for both blocks: the
  * Agent SDK's NATIVE preset+append — the default claude_code system prompt
@@ -286,7 +286,11 @@ export function applySubagentMessage(roster: SubagentRoster, msg: SubagentStream
         isAgentLaunchTool(b.name) &&
         typeof b.id === 'string'
       ) {
-        roster.launch(b.id, subagentLabel(b.input) || 'subagent', isBackgroundLaunch(b.name, b.input));
+        roster.launch(
+          b.id,
+          subagentLabel(b.input) || 'subagent',
+          isBackgroundLaunch(b.name, b.input),
+        );
       }
     }
     return;
@@ -375,7 +379,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   function setMode(next: AgentMode): void {
     if (next === currentMode) return;
     currentMode = next;
-    pendingModeNote = wrapModeNote(next, readDoModeOverlay(next));
+    pendingModeNote = wrapModeNote(next, readChatModeOverlay(next));
     log(dim(`mode → ${next} (applies from the next message; the live system prompt is fixed)`));
   }
 
@@ -684,11 +688,11 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // Universal muxpad instructions + the launch mode's overlay, read at
   // injection time (session construction). Applies to fresh AND resumed
   // sessions alike — it's session-level system-prompt material, not a
-  // message. 'deep' contributes nothing, so a deep pane's prompt is byte-for-
-  // byte what it was before modes existed.
+  // message. Agent mode contributes nothing, so an Agent-mode pane's prompt
+  // is byte-for-byte what it was before modes existed.
   const muxpadSystemPrompt = claudeSystemPromptOption(
     readAgentInstructions(),
-    readDoModeOverlay(currentMode),
+    readChatModeOverlay(currentMode),
   );
 
   const options: Options = {
@@ -947,9 +951,9 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     process.stdout.write('\x1b]0;✳ agent\x07');
     log(`${bold('muxpad agent')} — session ${sid}${resumeSid ? ' (resumed)' : ''}`);
     log(dim(`pane ${host.paneId} · ${process.cwd()}`));
-    // Only announced for 'do': a deep pane's log stays byte-identical to the
-    // pre-modes output.
-    if (currentMode === 'do') log(dim('⚡ do mode — decisive, terse, result-first'));
+    // Only announced for Chat mode: an Agent-mode pane's log stays
+    // byte-identical to the pre-modes output.
+    if (currentMode === 'chat') log(dim('chat mode — decisive, terse, result-first'));
     log(dim('drive this session from the pane’s Chat face; this log is the terminal face'));
 
     // A turn can also start WITHOUT a user send: scheduled wakeups and crons

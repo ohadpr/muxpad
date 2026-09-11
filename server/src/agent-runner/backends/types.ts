@@ -27,11 +27,12 @@ export interface BackendOptions {
   /** `--model <id>`: pin the session model (null = backend default). */
   requestedModel: string | null;
   /**
-   * `--mode do|deep`: the pane's agent behavior mode at LAUNCH. This is the
-   * only point at which a mode can reach the session as real system-prompt
+   * `--mode chat|agent`: the pane's agent mode at LAUNCH. This is the only
+   * point at which a mode can reach the session as real system-prompt
    * material; a later switch arrives as a `mode` frame and can only be
    * delivered in-conversation (see AgentBackend.setMode / agent-modes.ts).
-   * Absent flag = 'deep' = exactly the pre-mode behavior.
+   * Absent flag = BASELINE_AGENT_MODE ('agent') = exactly the pre-mode
+   * behavior.
    */
   mode: AgentMode;
 }

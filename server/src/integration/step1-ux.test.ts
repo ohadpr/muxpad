@@ -3,7 +3,7 @@
 // pattern agent-wait.test.ts uses). Everything here is torn down in afterAll —
 // no live daemon, no ~/.muxpad, its own data dir and ephemeral port.
 //
-// Covers the seams the unit tests can't: a do-mode pane's startup command +
+// Covers the seams the unit tests can't: a Chat-mode pane's startup command +
 // the mode frame the server pushes to a connecting runner, the documented
 // mid-session switch behavior, turn-done bumping the tab's last_activity_at,
 // and GET /api/tabs carrying pinned + ordering data.
@@ -138,53 +138,71 @@ describe('Step 1 e2e — agent modes + the living sidebar', () => {
 
   // ── Feature A ───────────────────────────────────────────────────────────
 
-  it('a do-mode pane carries the overlay flag and the runner is told its mode on hello', async () => {
-    const { paneId } = await agentTab({ mode: 'do' });
-    expect(startupCmd(paneId)).toBe('muxpad agent --mode do');
+  it('a Chat-mode pane carries the overlay flag and the runner is told its mode on hello', async () => {
+    // No `mode` in the body: Chat is the DEFAULT, which is the whole point of
+    // the flip — the common path gets the house contract without asking.
+    const { paneId } = await agentTab();
+    expect(startupCmd(paneId)).toBe('muxpad agent --mode chat');
 
-    const { received } = await connectRunner(paneId, 'sid-do-1');
+    const { received } = await connectRunner(paneId, 'sid-chat-1');
     // The server converges every connecting runner on the DB's mode, so a
     // runner that booted from a stale command can't run the wrong contract.
-    expect(received.filter((f) => f.t === 'mode')).toEqual([{ t: 'mode', mode: 'do' }]);
+    expect(received.filter((f) => f.t === 'mode')).toEqual([{ t: 'mode', mode: 'chat' }]);
     // …and the self-heal rewrite preserves the flag alongside --resume.
-    expect(startupCmd(paneId)).toBe('muxpad agent --mode do --resume sid-do-1');
+    expect(startupCmd(paneId)).toBe('muxpad agent --mode chat --resume sid-chat-1');
   });
 
-  it('a deep pane is byte-for-byte the pre-mode shape and is told "deep"', async () => {
-    const { paneId } = await agentTab();
+  it('an Agent-mode pane is byte-for-byte the pre-mode shape and is told "agent"', async () => {
+    const { paneId } = await agentTab({ mode: 'agent' });
     expect(startupCmd(paneId)).toBe('muxpad agent');
-    const { received } = await connectRunner(paneId, 'sid-deep-1');
-    expect(received.filter((f) => f.t === 'mode')).toEqual([{ t: 'mode', mode: 'deep' }]);
-    expect(startupCmd(paneId)).toBe('muxpad agent --resume sid-deep-1');
+    const { received } = await connectRunner(paneId, 'sid-agent-1');
+    expect(received.filter((f) => f.t === 'mode')).toEqual([{ t: 'mode', mode: 'agent' }]);
+    expect(startupCmd(paneId)).toBe('muxpad agent --resume sid-agent-1');
+  });
+
+  it('accepts a version-skewed `--mode do` over HTTP rather than wedging the pane', async () => {
+    // A CLI or script pinned to the pre-rename vocabulary must still be able
+    // to create and configure a pane. Rejecting it would leave the caller
+    // with a pane it cannot put into the mode it asked for.
+    const { paneId } = await agentTab({ mode: 'do' });
+    expect(startupCmd(paneId)).toBe('muxpad agent --mode chat');
+    const patched = await api<{ mode: string }>(`/api/panes/${paneId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ mode: 'deep' }),
+    });
+    expect(patched.mode).toBe('agent');
+    expect(startupCmd(paneId)).toBe('muxpad agent');
   });
 
   it('a mid-session switch behaves exactly as documented: notify now, overlay on respawn', async () => {
-    const { paneId } = await agentTab();
+    const { paneId } = await agentTab({ mode: 'agent' });
     const { received } = await connectRunner(paneId, 'sid-switch');
     const before = received.length;
 
     const patched = await api<{ mode: string }>(`/api/panes/${paneId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ mode: 'do' }),
+      body: JSON.stringify({ mode: 'chat' }),
     });
     await settle();
 
-    expect(patched.mode).toBe('do');
+    expect(patched.mode).toBe('chat');
     // 1. The live runner is NOTIFIED (it will prepend one <muxpad-mode> note).
-    expect(received.slice(before)).toEqual([{ t: 'mode', mode: 'do' }]);
+    //    This is the WEAKER half the chip's menu warns about: a message, not
+    //    a system prompt.
+    expect(received.slice(before)).toEqual([{ t: 'mode', mode: 'chat' }]);
     // 2. The next RESPAWN gets the real system-prompt overlay — and the
     //    session is preserved (--resume intact), i.e. no respawn happened now.
-    expect(startupCmd(paneId)).toBe('muxpad agent --mode do --resume sid-switch');
+    expect(startupCmd(paneId)).toBe('muxpad agent --mode chat --resume sid-switch');
   });
 
   it('a switch with no runner connected still persists and arms the respawn', async () => {
-    const { paneId } = await agentTab();
-    await api(`/api/panes/${paneId}`, { method: 'PATCH', body: JSON.stringify({ mode: 'do' }) });
-    expect(startupCmd(paneId)).toBe('muxpad agent --mode do');
+    const { paneId } = await agentTab({ mode: 'agent' });
+    await api(`/api/panes/${paneId}`, { method: 'PATCH', body: JSON.stringify({ mode: 'chat' }) });
+    expect(startupCmd(paneId)).toBe('muxpad agent --mode chat');
   });
 
   it('the chat socket delivers the pane mode and re-pushes it on a switch', async () => {
-    const { paneId } = await agentTab({ mode: 'do' });
+    const { paneId } = await agentTab({ mode: 'chat' });
     await connectRunner(paneId, 'sid-chat');
     const chat = new WebSocket(`${base().replace('http', 'ws')}/ws/chat/${paneId}`);
     const frames: Array<Record<string, unknown>> = [];
@@ -195,12 +213,13 @@ describe('Step 1 e2e — agent modes + the living sidebar', () => {
     });
     openSockets.push(chat);
     await settle();
-    expect(frames.find((f) => f.t === 'session')?.mode).toBe('do');
+    // This frame is what the chat's mode CHIP renders from.
+    expect(frames.find((f) => f.t === 'session')?.mode).toBe('chat');
 
-    await api(`/api/panes/${paneId}`, { method: 'PATCH', body: JSON.stringify({ mode: 'deep' }) });
+    await api(`/api/panes/${paneId}`, { method: 'PATCH', body: JSON.stringify({ mode: 'agent' }) });
     await settle();
     const sessionFrames = frames.filter((f) => f.t === 'session');
-    expect(sessionFrames.at(-1)?.mode).toBe('deep');
+    expect(sessionFrames.at(-1)?.mode).toBe('agent');
     chat.close();
   });
 
@@ -211,7 +230,7 @@ describe('Step 1 e2e — agent modes + the living sidebar', () => {
     // events.length === 0, which is true for a beat on EVERY reconnect while
     // history replays — so the "or open instead" offer flashed over real
     // conversations, and a click in that window hit a destructive route.
-    const { paneId } = await agentTab({ mode: 'do' });
+    const { paneId } = await agentTab({ mode: 'chat' });
     await connectRunner(paneId, 'sid-hasmsg');
     const chat = new WebSocket(`${base().replace('http', 'ws')}/ws/chat/${paneId}`);
     const frames: Array<Record<string, unknown>> = [];

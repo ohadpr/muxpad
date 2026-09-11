@@ -6,7 +6,13 @@
 // of "how you make an agent tab" is how the two would drift on the next change
 // to the startup-command shape. The route now calls these; nothing about its
 // behaviour changed.
-import type { AgentMode, LayoutNode, PaneSpec, Tab } from '@muxpad/shared';
+import {
+  type AgentMode,
+  DEFAULT_AGENT_MODE,
+  type LayoutNode,
+  type PaneSpec,
+  type Tab,
+} from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import type { EventBus } from './events.js';
 import { queuePaneKill } from './pane-reaper.js';
@@ -56,7 +62,10 @@ export function agentStartupCmd(opts: {
   // compare against it verbatim.
   if (opts.backend === 'pick') return 'muxpad agent --pick';
   const backendPart = opts.backend && opts.backend !== 'claude' ? ` --backend ${opts.backend}` : '';
-  const modePart = opts.mode === 'do' ? ' --mode do' : '';
+  // Agent mode is the ABSENCE of the flag (agent-modes.ts), which is what
+  // keeps every pre-rename bare `muxpad agent` command meaning exactly what it
+  // always meant.
+  const modePart = opts.mode === 'chat' ? ' --mode chat' : '';
   // Single-quoted model so zsh's nomatch can't glob-error on ids with brackets
   // ('claude-opus-4-8[1m]'); the charset gate upstream makes the quoting safe.
   const modelPart = opts.model ? ` --model '${opts.model}'` : '';
@@ -75,6 +84,13 @@ export async function bootstrapTab(
   const tabs = new TabStore(deps.db);
   const panes = new PaneStore(deps.db);
   const agent = input.bootstrap === 'agent';
+  // An agent bootstrap that doesn't name a mode gets the DEFAULT — Chat.
+  // This is the one place the flipped default actually lands: the CLI
+  // (`muxpad agent new`), the API, the cron scheduler's new-tab fire and the
+  // web app all bootstrap through here, so "a new agent tab is a Chat" holds
+  // no matter which door it came in. A non-agent bootstrap stays on the
+  // baseline (PaneStore.create) — there is no agent in it to contract with.
+  const mode: AgentMode | undefined = agent ? (input.mode ?? DEFAULT_AGENT_MODE) : undefined;
   const created = deps.db.transaction(() => {
     let tab = tabs.create({
       name: input.name as string,
@@ -89,12 +105,12 @@ export async function bootstrapTab(
       // Agent panes snap up to the git root so they start with project context.
       cwd: agent ? agentCwd(safeCwd(input.cwd)) : safeCwd(input.cwd),
       startup_cmd: agent
-        ? agentStartupCmd({ backend: input.backend, mode: input.mode, model: input.model })
+        ? agentStartupCmd({ backend: input.backend, mode, model: input.model })
         : null,
       // Agent tabs land directly on the chat face; the (hidden) terminal face
       // spawns the pty underneath, which runs the startup command.
       face: agent ? 'chat' : 'terminal',
-      ...(agent && input.mode ? { mode: input.mode } : {}),
+      ...(mode ? { mode } : {}),
     });
     tab = tabs.update(tab.id, { layout: pane.id }) ?? tab;
     return { tab, pane };

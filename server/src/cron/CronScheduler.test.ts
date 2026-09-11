@@ -463,13 +463,13 @@ describe('CronScheduler', () => {
 
   // ── new-tab mode ──────────────────────────────────────────────────────
 
-  it('new-tab mode creates an agent tab in Do mode and sends into it', async () => {
+  it('new-tab mode creates an agent tab in Chat mode and sends into it', async () => {
     const s = scheduler();
     const cron = makeCron(s, {
       target_kind: 'new-tab',
       target_pane: null,
       workspace_id: wsId,
-      mode: 'do',
+      mode: 'chat',
       cwd: '/tmp',
     });
     runAt(cron);
@@ -480,8 +480,8 @@ describe('CronScheduler', () => {
     const tab = new TabStore(db).getById(run?.target_tab as string);
     expect(tab?.name).toBe('job');
     const pane = new PaneStore(db).listByTab(tab?.id as string)[0];
-    // A scheduled job's report wants terse + result-first — the ⚡ Do contract.
-    expect(pane?.startup_cmd).toBe('muxpad agent --mode do');
+    // A scheduled job's report wants terse + result-first — the Chat contract.
+    expect(pane?.startup_cmd).toBe('muxpad agent --mode chat');
     expect(sent[0]?.paneId).toBe(pane?.id);
   });
 
