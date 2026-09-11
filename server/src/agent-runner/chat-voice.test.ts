@@ -29,7 +29,12 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => import('../test-helpers/fakeAgen
 
 import { createClaudeBackend, replyToolDescription } from '../agent-runner/backends/claude.js';
 import type { RunnerHost } from '../agent-runner/backends/types.js';
-import { fakeMcpTool, fakeSession, resetFakeAgentSdk } from '../test-helpers/fakeAgentSdk.js';
+import {
+  fakeMcpTool,
+  fakeSession,
+  mcpExtra,
+  resetFakeAgentSdk,
+} from '../test-helpers/fakeAgentSdk.js';
 import { sdk } from '../test-helpers/sdkScript.js';
 import type { AgentMode, RunnerFrame } from './protocol.js';
 
@@ -72,11 +77,12 @@ function boot(mode: AgentMode = 'chat') {
       await session.settle();
       await new Promise((r) => setTimeout(r, 10));
     },
-    /** Call `reply` exactly as the SDK would, and feed the two messages the
-     *  transcript gets for it. */
+    /** Call `reply` exactly as the SDK would — including the MCP `extra` that
+     *  carries the tool_use id — and feed the two messages the transcript gets
+     *  for it. */
     async reply(text: string, toolUseId = `toolu_r${Math.random().toString(36).slice(2, 8)}`) {
       await this.feed([sdk.replyToolUse(toolUseId, text)]);
-      const res = await fakeMcpTool('reply').handler({ text } as never);
+      const res = await fakeMcpTool('reply').handler({ text } as never, mcpExtra(toolUseId));
       await this.feed([sdk.replyAck(toolUseId)]);
       return res;
     },
@@ -344,6 +350,221 @@ describe('THE GUARD — a human-initiated turn never ends in silence', () => {
     expect(fx.sent.filter((f) => f.t === 'turn-start')).toHaveLength(1);
     await fx.feed([sdk.result('success')]);
     expect(fx.sent.filter((f) => f.t === 'turn-done')).toHaveLength(1);
+    await fx.stop();
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// SPEECH ON THE WIRE — the frame a voice layer listens on.
+//
+// This is the half the reply tool used to be missing. A reply reached an open
+// chat exactly one way — the transcript, tailed every 250 ms — and that path
+// cannot serve speech, because the reply is only IN the transcript once the
+// whole tool_use block has finished generating. A voice turn could not open
+// its mouth until the agent had stopped talking.
+//
+// The frames here fix the latency. The property that must NOT break while they
+// do it is the one the old no-frame comment was protecting: a reply renders
+// exactly once, from the transcript. Which is why `speak` is a DISTINCT KIND
+// the chat UI has no branch for, rather than a second delivery on `stream`
+// (the scratchpad, suppressed on purpose) or a dedupe rule two sides have to
+// keep agreeing on.
+// ───────────────────────────────────────────────────────────────────────────
+
+const speaks = (sent: RunnerFrame[]) =>
+  sent.filter((f): f is RunnerFrame & { t: 'speak' } => f.t === 'speak');
+const speakDeltas = (sent: RunnerFrame[]) =>
+  sent.filter((f): f is RunnerFrame & { t: 'speak-delta' } => f.t === 'speak-delta');
+
+describe('a reply reaches the wire the moment it exists', () => {
+  it('emits ONE speak frame per reply, carrying its text', async () => {
+    const fx = boot('chat');
+    await fx.send('where did it go');
+    await fx.reply('~/Documents/Invoices/2026-09.pdf');
+    await fx.feed([sdk.result('success')]);
+    expect(speaks(fx.sent)).toHaveLength(1);
+    expect(speaks(fx.sent)[0]?.text).toBe('~/Documents/Invoices/2026-09.pdf');
+    await fx.stop();
+  });
+
+  it('carries the reply’s TRANSCRIPT identity, so a consumer can correlate', async () => {
+    // The id is the tool_use id — the same thing normalizeTranscriptLine
+    // derives the rendered event's id from. Read out of MCP's `_meta`, which
+    // is where the live SDK puts it.
+    const fx = boot('chat');
+    await fx.send('hi');
+    await fx.reply('done', 'toolu_01ABCDEF');
+    expect(speaks(fx.sent)[0]?.id).toBe('toolu_01ABCDEF');
+    await fx.stop();
+  });
+
+  it('still speaks when the SDK gives no id — a rename costs correlation, not the reply', async () => {
+    const fx = boot('chat');
+    await fx.send('hi');
+    // No `extra` at all: the shape an older/newer SDK might hand us.
+    await fx.feed([sdk.replyToolUse('toolu_x', 'shipped')]);
+    await fakeMcpTool('reply').handler({ text: 'shipped' } as never);
+    expect(speaks(fx.sent)).toHaveLength(1);
+    expect(speaks(fx.sent)[0]?.text).toBe('shipped');
+    expect(speaks(fx.sent)[0]?.id).toBeTruthy();
+    await fx.stop();
+  });
+
+  it('numbers the replies of a turn, so a consumer can speak them in order', async () => {
+    const fx = boot('chat');
+    await fx.send('count the words');
+    await fx.reply('848 words across 6 files.');
+    await fx.reply('One note: the calls ran in parallel.');
+    await fx.feed([sdk.result('success')]);
+    expect(speaks(fx.sent).map((f) => f.n)).toEqual([1, 2]);
+    await fx.stop();
+  });
+
+  it('an EMPTY reply is not speech', async () => {
+    const fx = boot('chat');
+    await fx.send('hi');
+    await fakeMcpTool('reply').handler({ text: '   ' } as never, mcpExtra('toolu_blank'));
+    expect(speaks(fx.sent)).toHaveLength(0);
+    await fx.stop();
+  });
+});
+
+describe('speech STARTS before the reply is finished', () => {
+  // The whole reason the frame exists. These chunks are the live-probed
+  // fragmentation of one reply's tool argument (see sdk.replyStream).
+  const CHUNKS = [
+    '',
+    '{"text": "Landed in',
+    ' ~/Documents/',
+    'Invoices/2',
+    '026-09.',
+    'pdf — \\"quoted',
+    '\\" and a new',
+    'line',
+    '\\nhere."}',
+  ];
+
+  it('forwards the argument deltas as they arrive, under the reply’s id', async () => {
+    const fx = boot('chat');
+    await fx.send('where did it go');
+    await fx.feed(sdk.replyStream('toolu_01STREAM', CHUNKS));
+    const deltas = speakDeltas(fx.sent);
+    expect(deltas.length).toBeGreaterThan(1);
+    expect(new Set(deltas.map((d) => d.id))).toEqual(new Set(['toolu_01STREAM']));
+    // Concatenating them yields the reply, JSON escapes decoded.
+    expect(deltas.map((d) => d.delta).join('')).toBe(
+      'Landed in ~/Documents/Invoices/2026-09.pdf — "quoted" and a newline\nhere.',
+    );
+    await fx.stop();
+  });
+
+  it('the first delta lands BEFORE the tool call runs — that is the entire point', async () => {
+    const fx = boot('chat');
+    await fx.send('where did it go');
+    await fx.feed(sdk.replyStream('toolu_01STREAM', CHUNKS));
+    // Not one `speak` yet: the handler has not been invoked.
+    expect(speaks(fx.sent)).toHaveLength(0);
+    expect(speakDeltas(fx.sent).length).toBeGreaterThan(0);
+    const firstDeltaAt = fx.sent.findIndex((f) => f.t === 'speak-delta');
+    await fakeMcpTool('reply').handler(
+      { text: 'Landed in ~/Documents/Invoices/2026-09.pdf' } as never,
+      mcpExtra('toolu_01STREAM'),
+    );
+    const speakAt = fx.sent.findIndex((f) => f.t === 'speak');
+    expect(firstDeltaAt).toBeGreaterThanOrEqual(0);
+    expect(speakAt).toBeGreaterThan(firstDeltaAt);
+    await fx.stop();
+  });
+
+  it('does NOT mistake another tool’s arguments for speech', async () => {
+    // A voice layer reading a Bash command aloud is the failure this prevents.
+    const fx = boot('chat');
+    await fx.send('clean up');
+    await fx.feed([
+      {
+        type: 'stream_event',
+        parent_tool_use_id: null,
+        event: {
+          type: 'content_block_start',
+          index: 1,
+          content_block: { type: 'tool_use', id: 'toolu_b', name: 'Bash', input: {} },
+        },
+      },
+      {
+        type: 'stream_event',
+        parent_tool_use_id: null,
+        event: {
+          type: 'content_block_delta',
+          index: 1,
+          delta: { type: 'input_json_delta', partial_json: '{"command": "rm -rf /"}' },
+        },
+      },
+    ]);
+    expect(speakDeltas(fx.sent)).toHaveLength(0);
+    await fx.stop();
+  });
+
+  it('a SUBAGENT’s reply stream is not this session’s speech', async () => {
+    const fx = boot('chat');
+    await fx.send('go');
+    const child = sdk
+      .replyStream('toolu_child', ['{"text": "from a subagent"}'])
+      .map((m) => ({ ...m, parent_tool_use_id: 'toolu_parent' }));
+    await fx.feed(child);
+    expect(speakDeltas(fx.sent)).toHaveLength(0);
+    await fx.stop();
+  });
+});
+
+describe('the frames cannot double-render a reply', () => {
+  it('speech NEVER rides the `stream` kind — that is the suppressed scratchpad', async () => {
+    // The Chat UI hides `stream` on purpose (plain text is the private
+    // scratchpad in Chat mode). Putting a reply on it would be invisible here
+    // and a duplicate bubble anywhere that does render it.
+    const fx = boot('chat');
+    await fx.send('hi');
+    await fx.feed(sdk.replyStream('toolu_s', ['{"text": "spoken"}']));
+    await fx.reply('spoken', 'toolu_s2');
+    expect(fx.sent.filter((f) => f.t === 'stream')).toHaveLength(0);
+    await fx.stop();
+  });
+
+  it('a reply produces speech frames and NOTHING that the chat renders', async () => {
+    // The kinds a chat client draws a message from are `stream` (scratchpad,
+    // suppressed) and the transcript `events` batch the server sends — never a
+    // runner frame. So the exhaustive check is: the runner's output for a
+    // replying turn contains only turn lifecycle + speech.
+    const fx = boot('chat');
+    await fx.send('hi');
+    await fx.feed(sdk.replyStream('toolu_s', ['{"text": "done"}']));
+    await fx.reply('done', 'toolu_s');
+    await fx.feed([sdk.result('success')]);
+    const kinds = new Set(fx.sent.map((f) => f.t));
+    // Decoration, not conversation: the header meter and the self-generated
+    // pane title. Neither can put a bubble in the thread.
+    kinds.delete('status');
+    kinds.delete('title');
+    expect(kinds).toEqual(new Set(['turn-start', 'speak-delta', 'speak', 'turn-done']));
+    await fx.stop();
+  });
+
+  it('plain assistant text still streams as `stream`, and is never speech', async () => {
+    // The scratchpad path must be untouched: it is how the mid-turn reconnect
+    // preview and the Agent-mode voice work.
+    const fx = boot('chat');
+    await fx.send('hi');
+    await fx.feed([sdk.textStream('thinking out loud')]);
+    expect(fx.sent.filter((f) => f.t === 'stream')).toHaveLength(1);
+    expect(speaks(fx.sent)).toHaveLength(0);
+    expect(speakDeltas(fx.sent)).toHaveLength(0);
+    await fx.stop();
+  });
+
+  it('AGENT mode has no reply tool, so it emits no speech at all', async () => {
+    const fx = boot('agent');
+    await fx.send('hi');
+    await fx.feed([sdk.text('Filed it.'), sdk.result('success')]);
+    expect(speaks(fx.sent)).toHaveLength(0);
     await fx.stop();
   });
 });

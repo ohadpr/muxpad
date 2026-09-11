@@ -301,6 +301,71 @@ export const sdk = {
     };
   },
 
+  /**
+   * The PARTIAL-MESSAGE stream of a `reply` being generated — the token path a
+   * voice layer listens on.
+   *
+   * Live-probed, SDK 0.3.220 (2026-09-11), same discipline as everything else
+   * here. The exact observed sequence for one reply, envelope included:
+   *
+   *   {type:'stream_event', parent_tool_use_id:null, event:{
+   *      type:'content_block_start', index:1,
+   *      content_block:{type:'tool_use', id:'toolu_01FF…',
+   *                     name:'mcp__muxpad__reply', input:{},
+   *                     caller:{type:'direct'}}}}
+   *   …event:{type:'content_block_delta', index:1,
+   *           delta:{type:'input_json_delta', partial_json:''}}
+   *   …partial_json:'{"text": "Landed in'   ← note the SPACE after the colon
+   *   …partial_json:' ~/Documents/'
+   *   …partial_json:'pdf — \\"quoted'        ← escapes split at the model's whim
+   *   …partial_json:'\\nhere."}'
+   *   {…event:{type:'content_block_stop', index:1}}
+   *
+   * `chunks` are fed verbatim, so a test writes the JSON fragmentation it wants
+   * to pin (mid-escape boundaries included) rather than a tidy version of it.
+   */
+  replyStream(toolUseId: string, chunks: string[], index = 1) {
+    const wrap = (event: unknown) => ({
+      type: 'stream_event' as const,
+      parent_tool_use_id: null,
+      session_id: SESSION_ID,
+      uuid: uuid(),
+      event,
+    });
+    return [
+      wrap({
+        type: 'content_block_start',
+        index,
+        content_block: {
+          type: 'tool_use',
+          id: toolUseId,
+          name: 'mcp__muxpad__reply',
+          input: {},
+          caller: { type: 'direct' },
+        },
+      }),
+      ...chunks.map((partial_json) =>
+        wrap({
+          type: 'content_block_delta',
+          index,
+          delta: { type: 'input_json_delta', partial_json },
+        }),
+      ),
+      wrap({ type: 'content_block_stop', index }),
+    ];
+  },
+
+  /** A plain assistant TEXT stream event — the scratchpad's token path. */
+  textStream(text: string, index = 0) {
+    return {
+      type: 'stream_event' as const,
+      parent_tool_use_id: null,
+      session_id: SESSION_ID,
+      uuid: uuid(),
+      event: { type: 'content_block_delta', index, delta: { type: 'text_delta', text } },
+    };
+  },
+
   /** The turn `result`. */
   result(subtype: 'success' | 'error_during_execution' | 'error_max_turns' = 'success') {
     return {
