@@ -17,9 +17,9 @@ import { isAbsolute, join, resolve, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { ChatEvent } from '@muxpad/shared';
 import { readAgentInstructions, wrapAgentInstructions } from '../../agent-instructions.js';
-import { codexHome, readCodexDefaultModel, readCodexModels } from '../../codex-models.js';
-import { readDoModeOverlay, wrapModeNote } from '../../agent-modes.js';
+import { readChatModeOverlay, wrapModeNote } from '../../agent-modes.js';
 import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptReader.js';
+import { codexHome, readCodexDefaultModel, readCodexModels } from '../../codex-models.js';
 
 // Provider ids we adopt as the transcript-log filename + hello sid must satisfy
 // the server's charset gate, or the hello is rejected and the pane goes dark.
@@ -38,7 +38,7 @@ const CODEX_BIN = process.env.MUXPAD_CODEX_BIN || 'codex';
  * Shared by both so they can't drift.
  *
  * `instructions` is the universal <dataDir>/agent-instructions.md;
- * `modeOverlay` is <dataDir>/do-mode.md, present only in ⚡ Do mode. Both
+ * `modeOverlay` is <dataDir>/chat-mode.md, present only in Chat mode. Both
  * optional — with neither, the prompt is returned untouched.
  */
 export function withSessionPreamble(
@@ -161,7 +161,7 @@ export function createCodexBackend(
   function setMode(next: AgentMode): void {
     if (next === currentMode) return;
     currentMode = next;
-    pendingModeNote = wrapModeNote(next, readDoModeOverlay(next));
+    pendingModeNote = wrapModeNote(next, readChatModeOverlay(next));
     log(dim(`mode → ${next} (announced to the thread on the next message)`));
   }
 
@@ -229,7 +229,7 @@ export function createCodexBackend(
 
   function buildArgs(prompt: string, useResume: boolean): string[] {
     const resuming = useResume && !!sessionRef;
-    // Universal muxpad instructions + the ⚡ Do-mode overlay — CODEX injection
+    // Universal muxpad instructions + the Chat-mode overlay — CODEX injection
     // mechanism: `codex exec` has NO append-instructions surface (its only
     // hook, `-c experimental_instructions_file`, REPLACES the base prompt, and
     // AGENTS.md lives in user-owned dirs muxpad must not write), so fall back
@@ -253,7 +253,7 @@ export function createCodexBackend(
       finalPrompt = withSessionPreamble(
         prompt,
         readAgentInstructions(),
-        readDoModeOverlay(currentMode),
+        readChatModeOverlay(currentMode),
       );
     }
     const head = resuming ? ['exec', 'resume', sessionRef as string] : ['exec'];
@@ -487,7 +487,7 @@ export function createCodexBackend(
     process.stdout.write('\x1b]0;✳ codex\x07');
     log(`${bold('muxpad agent')} — codex backend · session ${liveSid}`);
     log(dim(`pane ${host.paneId} · ${process.cwd()}`));
-    if (currentMode === 'do') log(dim('⚡ do mode — decisive, terse, result-first'));
+    if (currentMode === 'chat') log(dim('chat mode — decisive, terse, result-first'));
     authOk = await checkAuth();
     if (!authOk) {
       log(dim('codex not logged in — run `codex login` in this pane’s terminal face'));

@@ -1,5 +1,6 @@
 import { type LayoutNode, pruneLayout, randomTabIcon, splitLeadingEmoji } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
+import { applyModeToStartupCmd } from '../agent-modes.js';
 
 interface Migration {
   version: number;
@@ -316,9 +317,10 @@ const MIGRATIONS: Migration[] = [
   {
     // Step 1 of the UX evolution — two independent, purely additive pieces:
     //
-    //   panes.mode          — agent behavior mode (⚡ do / 🧠 deep). Default
-    //     'deep' is EXACTLY today's behavior (no overlay injected at all), so
-    //     every existing pane keeps running unchanged after the migration.
+    //   panes.mode          — agent behavior mode, then spelled 'do'/'deep'
+    //     (renamed to 'chat'/'agent' in v26). Default 'deep' is EXACTLY
+    //     today's behavior (no overlay injected at all), so every existing
+    //     pane keeps running unchanged after the migration.
     //
     //   tabs.pinned         — manual "keep this at the top" flag. Default 0,
     //     so on upgrade every tab lands in the auto-sorted block, which is
@@ -512,6 +514,59 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE tabs ADD COLUMN icon_sticky INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE tabs ADD COLUMN icon_at INTEGER;
     `,
+  },
+  {
+    // The two agent modes get their user-facing names: 'do' → 'chat',
+    // 'deep' → 'agent' (see shared/types.ts AgentModeSchema). Purely a rename
+    // of the STORED vocabulary — no pane's behaviour changes here.
+    //
+    // The value lives in two places and BOTH have to move together, or a pane
+    // reads one mode and boots in another:
+    //
+    //   panes.mode        — the authoritative row. Rewritten below. Anything
+    //     unrecognised (a NULL from before v21, a value from a future build
+    //     someone downgraded out of) lands on 'agent', the baseline: it is the
+    //     only reading of "no mode recorded" that doesn't claim a contract was
+    //     overlaid when it wasn't.
+    //
+    //   panes.startup_cmd — `muxpad agent … --mode do|deep`, which is what a
+    //     RESPAWN actually boots from. Rewritten via applyModeToStartupCmd so
+    //     the flag ordering stays byte-identical to what ws.ts's self-heal
+    //     rewrite composes (a different order reads as a new runner on every
+    //     hello and re-flips the pane's face).
+    //
+    // Agent mode stays expressed by the ABSENCE of the flag, so a bare
+    // `muxpad agent` — every pane that predates modes entirely — is already
+    // correct and is left untouched. `--mode deep` is STRIPPED rather than
+    // rewritten to `--mode agent`: same meaning, and it converges those rows
+    // onto the one canonical spelling.
+    //
+    // crons.mode is deliberately NOT migrated. It is nullable free text read
+    // at fire time through a tolerant normalizer (CronScheduler), a stored
+    // 'do'/'deep' keeps meaning exactly what it meant, and rewriting user
+    // rows for a cosmetic rename buys nothing.
+    //
+    // Note on the column DEFAULT: v21 created it as `DEFAULT 'deep'`, and
+    // SQLite cannot alter a default without rebuilding the table. It is
+    // unreachable — PaneStore.create is the only INSERT and always supplies
+    // the value — and PaneStore.row() normalizes anything unrecognised to the
+    // baseline, so a row can never surface a value the schema rejects. Not
+    // worth a full table rebuild.
+    version: 26,
+    apply: (db) => {
+      db.prepare("UPDATE panes SET mode = 'chat' WHERE mode = 'do'").run();
+      db.prepare("UPDATE panes SET mode = 'agent' WHERE mode IS NULL OR mode <> 'chat'").run();
+      const rows = db
+        .prepare(
+          "SELECT id, mode, startup_cmd FROM panes WHERE startup_cmd LIKE 'muxpad agent%--mode %'",
+        )
+        .all() as Array<{ id: string; mode: string; startup_cmd: string | null }>;
+      const update = db.prepare('UPDATE panes SET startup_cmd = ? WHERE id = ?');
+      for (const r of rows) {
+        const next = applyModeToStartupCmd(r.startup_cmd, r.mode === 'chat' ? 'chat' : 'agent');
+        if (next !== r.startup_cmd) update.run(next, r.id);
+      }
+    },
   },
 ];
 

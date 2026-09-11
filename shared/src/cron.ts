@@ -40,9 +40,13 @@ export const CronSchema = z.object({
   cwd: z.string().nullable(),
   model: z.string().nullable(),
   backend: z.string().nullable(),
-  /** Agent behavior overlay for a new-tab fire ('do' by default — a scheduled
-   *  job's report wants terse and result-first). Ignored in pane mode, where
-   *  the fire inherits the pane's live session and its existing mode. */
+  /** Agent mode for a new-tab fire ('chat' by default — a scheduled job's
+   *  report wants terse and result-first). Ignored for a pane target, where
+   *  the fire inherits the pane's live session and its existing mode.
+   *
+   *  Free text, read through `coerceAgentMode` at fire time: these rows were
+   *  deliberately left un-migrated by the chat/agent rename, so a schedule
+   *  written before it still says 'do'/'deep' and still means the same thing. */
   mode: z.string().nullable(),
   enabled: z.boolean(),
   catchup: CronCatchupSchema,

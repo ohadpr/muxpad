@@ -306,7 +306,7 @@ describe('panes routes', () => {
     ).json()) as { id: string; name: string | null };
     const res = await test.app.request(`/api/panes/${shell.id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ name: 'renamed', mode: 'do' }),
+      body: JSON.stringify({ name: 'renamed', mode: 'chat' }),
       headers: { 'content-type': 'application/json' },
     });
     expect(res.status).toBe(400);

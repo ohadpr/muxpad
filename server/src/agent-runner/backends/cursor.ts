@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import type { ChatEvent } from '@muxpad/shared';
 import { readAgentInstructions } from '../../agent-instructions.js';
-import { readDoModeOverlay, wrapModeNote } from '../../agent-modes.js';
+import { readChatModeOverlay, wrapModeNote } from '../../agent-modes.js';
 import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
 import type { AgentMode, RunnerFrame } from '../protocol.js';
@@ -77,7 +77,7 @@ export function createCursorBackend(
   function setMode(next: AgentMode): void {
     if (next === currentMode) return;
     currentMode = next;
-    pendingModeNote = wrapModeNote(next, readDoModeOverlay(next));
+    pendingModeNote = wrapModeNote(next, readChatModeOverlay(next));
     log(dim(`mode → ${next} (announced to the session on the next message)`));
   }
 
@@ -181,7 +181,7 @@ export function createCursorBackend(
       'disabled',
     ];
     const resuming = useResume && !!sessionRef;
-    // Universal muxpad instructions + the ⚡ Do-mode overlay — CURSOR injection
+    // Universal muxpad instructions + the Chat-mode overlay — CURSOR injection
     // mechanism: cursor-agent has NO system-prompt/instructions flag (checked
     // `--help`; its rules live in user-owned .cursor/rules dirs muxpad must
     // not write), so — same fallback as codex — prepend the delimited file
@@ -200,7 +200,7 @@ export function createCursorBackend(
       finalPrompt = withSessionPreamble(
         prompt,
         readAgentInstructions(),
-        readDoModeOverlay(currentMode),
+        readChatModeOverlay(currentMode),
       );
     }
     if (resuming) args.push('--resume', sessionRef as string);
@@ -470,7 +470,7 @@ export function createCursorBackend(
     process.stdout.write('\x1b]0;✳ cursor\x07');
     log(`${bold('muxpad agent')} — cursor backend · session ${liveSid}`);
     log(dim(`pane ${host.paneId} · ${process.cwd()}`));
-    if (currentMode === 'do') log(dim('⚡ do mode — decisive, terse, result-first'));
+    if (currentMode === 'chat') log(dim('chat mode — decisive, terse, result-first'));
     authOk = await checkAuth();
     if (!authOk)
       log(dim('cursor-agent not logged in — run `cursor-agent login` in the terminal face'));
