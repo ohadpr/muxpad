@@ -256,6 +256,51 @@ export const sdk = {
     };
   },
 
+  /**
+   * A `reply` tool call — Chat mode's only user-facing output.
+   *
+   * Shaped exactly like any other in-process MCP tool_use: the SDK prefixes
+   * them `mcp__<server>__<tool>`, which is why REPLY_TOOL_NAME is
+   * `mcp__muxpad__reply`. Feeding this message reproduces what the TRANSCRIPT
+   * gets; the handler itself is invoked separately (fakeMcpTool), because the
+   * live SDK calls it out-of-band from the message stream and a test that only
+   * fed the message would leave the whole handler untested.
+   */
+  replyToolUse(toolUseId: string, text: string) {
+    return {
+      type: 'assistant' as const,
+      parent_tool_use_id: null,
+      session_id: SESSION_ID,
+      uuid: uuid(),
+      message: {
+        model: 'claude-opus-4-8',
+        content: [
+          { type: 'tool_use' as const, id: toolUseId, name: 'mcp__muxpad__reply', input: { text } },
+        ],
+      },
+    };
+  },
+
+  /** The tool_result a `reply` gets back — the fixed REPLY_ACK sentinel. */
+  replyAck(toolUseId: string) {
+    return {
+      type: 'user' as const,
+      parent_tool_use_id: null,
+      session_id: SESSION_ID,
+      uuid: uuid(),
+      message: {
+        role: 'user' as const,
+        content: [
+          {
+            type: 'tool_result' as const,
+            tool_use_id: toolUseId,
+            content: [{ type: 'text', text: 'Delivered to the user. [muxpad-reply]' }],
+          },
+        ],
+      },
+    };
+  },
+
   /** The turn `result`. */
   result(subtype: 'success' | 'error_during_execution' | 'error_max_turns' = 'success') {
     return {
