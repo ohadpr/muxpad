@@ -137,7 +137,13 @@ export function buildVoiceInstructions(glossary: readonly string[]): string {
 /** What we send OpenAI as `session`. Serialized straight into the request. */
 export interface VoiceSessionConfig {
   model: string;
-  voice: string;
+  /**
+   * The voice is nested under `audio.output` — a root-level `voice` is rejected
+   * with `Unknown parameter: 'session.voice'`. Typed as the real shape rather
+   * than flattened, so the fake transport in tests cannot accept a body the
+   * live API would refuse: that mismatch is exactly how this shipped wrong.
+   */
+  audio: { output: { voice: string } };
   instructions: string;
   /**
    * `client` delegation: the browser drives the conversation over the data
