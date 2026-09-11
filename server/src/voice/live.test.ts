@@ -67,7 +67,7 @@ describe('openAiVoiceTransport', () => {
         sdp: 'v=0 offer',
         session: {
           model: VOICE_MODEL,
-          voice: 'marin',
+          audio: { output: { voice: 'marin' } },
           instructions: 'be brief',
           delegation: { type: 'client' },
         },
@@ -83,7 +83,7 @@ describe('openAiVoiceTransport', () => {
     expect(JSON.parse(String(call.init.body))).toEqual({
       session: {
         model: 'gpt-live-1',
-        voice: 'marin',
+        audio: { output: { voice: 'marin' } },
         instructions: 'be brief',
         delegation: { type: 'client' },
       },
@@ -97,7 +97,7 @@ describe('openAiVoiceTransport', () => {
         sdp: 'v=0 offer',
         session: {
           model: VOICE_MODEL,
-          voice: 'marin',
+          audio: { output: { voice: 'marin' } },
           instructions: 'x',
           delegation: { type: 'client' },
         },

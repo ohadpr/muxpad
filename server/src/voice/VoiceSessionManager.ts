@@ -328,7 +328,12 @@ export class VoiceSessionManager {
           sdp,
           session: {
             model: VOICE_MODEL,
-            voice: this.voice,
+            // The voice lives under audio.output, NOT at session root. A root
+            // `voice` is rejected outright: `Unknown parameter: 'session.voice'`
+            // (HTTP 400, observed against the live API on the first real call —
+            // every test passed with it at the root, because the upstream was
+            // a fake that never validated the shape).
+            audio: { output: { voice: this.voice } },
             instructions: this.instructions(),
             delegation: { type: 'client' },
           },
