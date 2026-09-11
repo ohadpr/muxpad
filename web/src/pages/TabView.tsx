@@ -759,7 +759,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
       if (!tab) return;
       const created = await api.createPane(tab.id, {
         ...(sourcePaneId ? { inherit_cwd_from: sourcePaneId } : {}),
-        // New panes are the house chat, same as new tabs. The alternatives
+        // New panes open in Chat mode, same as new tabs. The alternatives
         // (raw Claude/Codex/Cursor, terminal, web) live in the empty chat's
         // own "open instead:" strip.
         ...HOUSE_CHAT_PANE_CREATE,

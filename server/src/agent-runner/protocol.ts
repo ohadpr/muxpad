@@ -4,20 +4,28 @@
 // server relays chat clients' sends/stops to it and fans its turn lifecycle
 // back out to every open chat view of the pane.
 
-import type {
-  AgentMode,
-  AgentQuestion,
-  AgentSessionStatus,
-  SubagentProgress,
+import {
+  type AgentMode,
+  type AgentQuestion,
+  type AgentSessionStatus,
+  type SubagentProgress,
+  coerceAgentMode,
 } from '@muxpad/shared';
 
 export type { AgentMode, AgentQuestion, AgentSessionStatus, SubagentProgress };
 
-/** Narrow an off-the-wire value to an AgentMode. Same shape as isBackendId:
- *  the value can reach a shell (`muxpad agent --mode do` in a startup_cmd),
- *  so only these two literals may ever pass. */
-export function isAgentMode(v: unknown): v is AgentMode {
-  return v === 'do' || v === 'deep';
+/** Narrow an off-the-wire value to an AgentMode, accepting the pre-rename
+ *  'do'/'deep' spellings and normalizing them. The value can reach a shell
+ *  (`muxpad agent --mode chat` in a startup_cmd), so only the four known
+ *  literals may ever pass — everything else returns null and the caller keeps
+ *  its current mode.
+ *
+ *  Legacy tolerance is load-bearing in BOTH directions of a version skew: a
+ *  runner started from a startup_cmd an older server wrote sees `--mode do`,
+ *  and a server that has been upgraded under a live runner relays a `mode`
+ *  frame the runner must not ignore. */
+export function parseAgentMode(v: unknown): AgentMode | null {
+  return coerceAgentMode(v);
 }
 
 /** Which agent CLI/SDK drives a pane's session. The runner declares it in its

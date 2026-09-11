@@ -1456,27 +1456,34 @@ cmd_claude() {
   # interactive TUI too. Skipped when the user passed any system-prompt flag of
   # their own; a missing/empty file simply contributes nothing (never an error).
   #
-  # ⚡ Do mode rides the SAME flag, appended after the instructions (behavior
+  # Chat mode rides the SAME flag, appended after the instructions (behavior
   # last, matching the SDK backend's append order). The pane's mode is read
   # from the API with a tolerant grep — jq is NOT required for `muxpad claude`
   # and adding a hard dependency here would break launching the TUI on a box
   # without it. Every step is best-effort: a down server, an old server with
-  # no `mode` field, or a missing file all fall through to Deep, which is the
-  # historical behavior.
+  # no `mode` field, or a missing file all fall through to AGENT mode, which
+  # is the historical behavior.
+  #
+  # This is why the pane-row default had to stay 'agent' when the CREATION
+  # default flipped to 'chat': a `muxpad claude` typed into a plain terminal
+  # reads THIS row, and a shell pane stamped 'chat' would have silently
+  # overlaid muxpad's contract on a session the user launched by hand. Only a
+  # pane explicitly put in Chat mode gets the overlay. The pre-rename 'do' is
+  # still honoured for one release, for a pane row an older server wrote.
   if [ "$user_has_sysprompt" = "0" ]; then
     local sysprompt="" part
     for part in agent-instructions.md agent-notes.md; do
       [ -s "$DATA_DIR/$part" ] || continue
       sysprompt="${sysprompt:+$sysprompt$'\n\n'}$(cat "$DATA_DIR/$part")"
     done
-    if [ -s "$DATA_DIR/do-mode.md" ] && [ -n "${MUXPAD_API_URL:-}" ]; then
+    if [ -s "$DATA_DIR/chat-mode.md" ] && [ -n "${MUXPAD_API_URL:-}" ]; then
       local pane_mode
       pane_mode="$(curl -sS --max-time 3 \
         "${MUXPAD_API_URL%/}/api/panes/$MUXPAD_PANE_ID" 2>/dev/null \
         | grep -o '"mode"[[:space:]]*:[[:space:]]*"[a-z]*"' \
         | head -1 | grep -o '[a-z]*"$' | tr -d '"')" || pane_mode=""
-      if [ "$pane_mode" = "do" ]; then
-        sysprompt="${sysprompt:+$sysprompt$'\n\n'}$(cat "$DATA_DIR/do-mode.md")"
+      if [ "$pane_mode" = "chat" ] || [ "$pane_mode" = "do" ]; then
+        sysprompt="${sysprompt:+$sysprompt$'\n\n'}$(cat "$DATA_DIR/chat-mode.md")"
       fi
     fi
     [ -n "$sysprompt" ] && extra+=(--append-system-prompt "$sysprompt")
@@ -1521,16 +1528,22 @@ cmd_agent_new() {
   parse_flags workspace cwd name model mode -- "$@"
   local message="${POSITIONAL[0]:-}"
   if [ -z "$message" ]; then
-    echo 'usage: muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] [--mode=do|deep] "first message"' >&2
+    echo 'usage: muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] [--mode=chat|agent] "first message"' >&2
     exit 1
   fi
-  # Agent behavior mode (see agent-modes.ts): 'do' overlays the terse,
-  # decisive contract; 'deep' (the default) is muxpad's historical behavior.
+  # Agent mode (see agent-modes.ts): 'chat' overlays muxpad's terse, decisive
+  # contract; 'agent' is the harness exactly as it ships. Omitted = the
+  # server's default, which is 'chat' — a spawned worker is muxpad asking for
+  # work to be done, not a harness someone sat down at.
+  #
   # Validated HERE as well as server-side so a typo fails loudly instead of
-  # silently spawning a deep-mode worker you asked to be fast.
-  case "${FLAG_mode:-deep}" in
-    do|deep) ;;
-    *) echo "muxpad: --mode must be 'do' or 'deep' (got '$FLAG_mode')" >&2; exit 1 ;;
+  # silently spawning a worker in the wrong mode. The pre-rename 'do'/'deep'
+  # still pass: this script and the server upgrade together, but a checked-out
+  # older copy of it (or a script someone wrote against it) must not start
+  # failing.
+  case "${FLAG_mode:-chat}" in
+    chat|agent|do|deep) ;;
+    *) echo "muxpad: --mode must be 'chat' or 'agent' (got '$FLAG_mode')" >&2; exit 1 ;;
   esac
   local workspace_id="${FLAG_workspace:-}"
   if [ -z "$workspace_id" ]; then
@@ -1631,7 +1644,7 @@ cmd_agent_list() {
   print_table "$res" \
     'PANE:.pane_id' \
     'BACKEND:.assistant' \
-    'MODE:(.mode // "deep")' \
+    'MODE:(.mode // "agent")' \
     'TURN:.status' \
     'VIEW:.view_mode' \
     'SID:(.current_sid // "-")'
@@ -1912,7 +1925,7 @@ cmd_cron_new() {
 usage: muxpad cron new --name=<name> --at='<cron expr | daily at 09:00 | every 30m>'
          (--pane[=<id|name>] | --new-tab [--workspace=<id>])
          [--tz=America/Los_Angeles] [--cwd=<dir>] [--model=<m>] [--backend=claude|codex|cursor]
-         [--mode=do|deep] [--catchup=once|skip|all] [--overlap=skip|queue]
+         [--mode=chat|agent] [--catchup=once|skip|all] [--overlap=skip|queue]
          [--on-context=fire|compact-first|rotate|skip] [--quiet=<mins>]
          [--max-open=<n>] [--no-close] "prompt"
 
@@ -2705,16 +2718,18 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      log. Auto-resumes across ptyd restarts via
                                      the pane's saved startup command.
   agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>]
-            [--model=<model>] [--mode=do|deep] "message"
+            [--model=<model>] [--mode=chat|agent] "message"
                                      create an agent tab, send the first
                                      message so it starts working immediately,
                                      and print the tab's URL. cwd defaults to
                                      $PWD; workspace to MUXPAD_WORKSPACE_ID.
                                      --name labels the tab (skips AI auto-
                                      rename); --model pins the session model
-                                     (e.g. 'claude-opus-4-8[1m]'); --mode=do
-                                     starts it in Do mode (decisive, terse,
-                                     result-first) instead of the Deep default.
+                                     (e.g. 'claude-opus-4-8[1m]'); --mode
+                                     picks Chat mode (muxpad's assistant —
+                                     decisive, terse, result-first; the
+                                     default) or Agent mode (the harness as
+                                     it ships, no muxpad contract).
   agent list                         every tracked agent session (pane id,
                                      backend, mode, TURN, view, session id).
                                      TURN is the session's running|idle turn
@@ -2737,7 +2752,7 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      fatal, 3 = timeout.
   cron new --name=<n> --at='<schedule>' (--pane[=<id|name>] | --new-tab)
            [--tz=<IANA>] [--cwd=<dir>] [--model=<m>] [--backend=<b>]
-           [--mode=do|deep] [--catchup=once|skip|all] [--overlap=skip|queue]
+           [--mode=chat|agent] [--catchup=once|skip|all] [--overlap=skip|queue]
            [--on-context=fire|compact-first|rotate|skip] [--quiet=<mins>]
            [--max-open=<n>] [--no-close] "prompt"
                                      a DURABLE schedule owned by muxpad, not by

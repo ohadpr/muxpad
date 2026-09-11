@@ -17,6 +17,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { BASELINE_AGENT_MODE } from '@muxpad/shared';
 import WebSocket from 'ws';
 import { dim } from './ansi.js';
 import { createBackend } from './backends/index.js';
@@ -26,8 +27,8 @@ import {
   CLOSE_RUNNER_DISPLACED,
   type RunnerFrame,
   type ServerFrame,
-  isAgentMode,
   isBackendId,
+  parseAgentMode,
   parseFrame,
 } from './protocol.js';
 
@@ -49,11 +50,19 @@ let requestedModel: string | null = null;
 // --backend <id> selects the agent CLI/SDK (default claude). Baked into the
 // pane's startup_cmd by the tabs route + the server's self-heal rewrite.
 let requestedBackend: 'claude' | 'codex' | 'cursor' = 'claude';
-// --mode do|deep selects the agent behavior overlay at LAUNCH. Written into
-// the pane's startup_cmd by the tabs route + the server's self-heal rewrite,
-// so a respawn boots in the pane's current mode. Absent/invalid = 'deep' =
-// exactly the pre-mode behavior.
-let requestedMode: AgentMode = 'deep';
+// --mode chat|agent selects the agent mode at LAUNCH. Written into the pane's
+// startup_cmd by the tabs route + the server's self-heal rewrite, so a
+// respawn boots in the pane's current mode.
+//
+// ABSENT OR INVALID = BASELINE_AGENT_MODE ('agent') = exactly the pre-mode
+// behavior, and that is deliberate even though the pane-level DEFAULT is now
+// Chat. A bare `muxpad agent` is what every pane created before modes existed
+// still carries, plus anything hand-typed in a terminal; making the flag's
+// absence mean "overlay the house contract" would have silently re-prompted
+// all of them on their next respawn. The default is applied where a pane is
+// CREATED (agent-tab.ts), which is the only place that knows it is a new
+// choice rather than an old row.
+let requestedMode: AgentMode = BASELINE_AGENT_MODE;
 {
   const args = process.argv.slice(2);
   const i = args.indexOf('--resume');
@@ -64,7 +73,10 @@ let requestedMode: AgentMode = 'deep';
   if (b !== -1 && isBackendId(args[b + 1]))
     requestedBackend = args[b + 1] as typeof requestedBackend;
   const md = args.indexOf('--mode');
-  if (md !== -1 && isAgentMode(args[md + 1])) requestedMode = args[md + 1] as AgentMode;
+  // Through the tolerant parser: a startup_cmd written by a pre-rename server
+  // says `--mode do`, and a runner that rejected it would boot the pane in the
+  // wrong mode rather than merely logging a complaint.
+  if (md !== -1) requestedMode = parseAgentMode(args[md + 1]) ?? requestedMode;
 }
 // --pick: the pane was created "Agent" without a harness chosen yet. Start NO
 // session — just idle so the chat face can show its harness picker; picking one
@@ -221,8 +233,11 @@ function connect(): void {
       b.stop();
     } else if (frame.t === 'mode') {
       // Validated here (not trusted off the wire) — the same value can end up
-      // in a shell-typed startup_cmd on the server side.
-      if (isAgentMode(frame.mode)) b.setMode(frame.mode);
+      // in a shell-typed startup_cmd on the server side. Tolerant of the
+      // pre-rename spellings so a server upgraded under a live runner can
+      // still switch it.
+      const next = parseAgentMode(frame.mode);
+      if (next) b.setMode(next);
     } else if (frame.t === 'answer') {
       b.answer(frame.qid, frame.answers);
     }

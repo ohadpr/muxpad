@@ -1,6 +1,6 @@
 import type { Tab } from '@muxpad/shared';
 import {
-  AgentModeSchema,
+  AgentModeInputSchema,
   LayoutNodeSchema,
   appendLeafToLayout,
   collectLayoutLeaves,
@@ -67,11 +67,13 @@ export function tabsRoutes(deps: {
         // Allowlisted enum → safe to bake into the startup_cmd shell string.
         // 'pick' = created pending, harness chosen later in the chat page.
         backend: z.enum(['claude', 'codex', 'cursor', 'pick']).optional(),
-        // Agent behavior mode for an 'agent' bootstrap (⚡ do / 🧠 deep;
-        // default deep = today's behavior). Rides the pane row AND the
+        // Agent mode for an 'agent' bootstrap (Chat / Agent). Omitted →
+        // DEFAULT_AGENT_MODE (Chat), applied in bootstrapTab so every door
+        // into "make me an agent tab" agrees. Rides the pane row AND the
         // startup_cmd, so it survives respawns. Allowlisted enum → safe to
-        // bake into the shell string.
-        mode: AgentModeSchema.optional(),
+        // bake into the shell string; accepts the pre-rename 'do'/'deep' so a
+        // version-skewed `muxpad agent new --mode=do` still lands.
+        mode: AgentModeInputSchema.optional(),
       })
       .parse(await c.req.json().catch(() => ({})));
     // Agent tabs get a deliberate name + mark (auto-renamed to the session's

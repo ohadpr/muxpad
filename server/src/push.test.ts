@@ -25,7 +25,7 @@ function makePane(id: string, tabId: string, attention: boolean): PaneSpec {
     url: null,
     shell: '/bin/zsh',
     startup_cmd: null,
-    mode: 'deep',
+    mode: 'agent',
     cwd: '/tmp',
     env: null,
     created_at: 0,

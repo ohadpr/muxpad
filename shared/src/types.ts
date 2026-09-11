@@ -67,17 +67,88 @@ export type UrlHealth = z.infer<typeof UrlHealthSchema>;
 export type UrlHealthReason = UrlHealth['reason'];
 
 /**
- * How an agent pane is asked to behave. 'deep' is the historical (and
- * default) behavior — no extra system-prompt material at all. 'do' overlays
- * the generated `<dataDir>/do-mode.md` contract on top of the harness's
- * normal prompt: decisive, terse, result-first.
+ * How an agent pane is ARRANGED. Two modes, both user-facing and both named
+ * in the UI:
  *
- * Stored per PANE (agent sessions are pane-scoped), never per tab — the
- * sidebar deliberately doesn't surface it.
+ *   'chat'   **Chat mode** — muxpad's own assistant. The house contract
+ *            (`<dataDir>/chat-mode.md`) is overlaid on top of the harness's
+ *            normal system prompt: decisive, terse, result-first, delegates.
+ *            What a new tab opens as, and the DEFAULT.
+ *   'agent'  **Agent mode** — the harness exactly as it ships, with no muxpad
+ *            contract on top. You choose the backend, the working folder and
+ *            the model at launch.
+ *
+ * Yes, Chat is also agent-powered. The names describe the ARRANGEMENT (a
+ * house assistant vs. a raw harness you configured), not the engine — a
+ * deliberate, accepted trade for two words a person can actually say.
+ *
+ * Stored per PANE (agent sessions are pane-scoped), never per tab. Surfaced
+ * in the chat's bottom-right chip row beside the folder and model chips —
+ * NOT in the sidebar rail, which runs on a strict one-bit (status) budget.
+ *
+ * WIRE COMPATIBILITY. These values were called 'do' and 'deep' until the
+ * rename; stored rows were migrated (migrations.ts v26) but a version-skewed
+ * CLI/runner can still SEND the old spellings, so every inbound seam parses
+ * through {@link AgentModeInputSchema} / {@link coerceAgentMode} rather than
+ * rejecting and wedging a pane.
  */
-export const AgentModeSchema = z.enum(['do', 'deep']);
+export const AgentModeSchema = z.enum(['chat', 'agent']);
 export type AgentMode = z.infer<typeof AgentModeSchema>;
-export const DEFAULT_AGENT_MODE: AgentMode = 'deep';
+
+/**
+ * What a NEW agent pane opens in when the caller doesn't say: Chat mode.
+ *
+ * Deliberately NOT the same constant as {@link BASELINE_AGENT_MODE}. This one
+ * is a CHOICE made at creation ("what should a new thing be?"); that one is a
+ * READING of missing data ("what does a row with no recorded mode mean?").
+ * They used to be one value, which is exactly why flipping the default was
+ * dangerous: it would have silently re-interpreted every pre-existing row.
+ */
+export const DEFAULT_AGENT_MODE: AgentMode = 'chat';
+
+/**
+ * What an ABSENT or unrecognised mode means: 'agent' — inject nothing.
+ *
+ * This is the historical, pre-modes behaviour, and it is the only safe reading
+ * of a row (or a `muxpad agent` startup command) that predates a mode being
+ * recorded: claiming 'chat' would assert a contract that was never actually
+ * put in front of the model. Also what a non-agent pane (plain terminal, URL
+ * pane, a `muxpad claude` TUI wrapper) carries, so nothing gets overlaid on a
+ * session the user launched by hand.
+ */
+export const BASELINE_AGENT_MODE: AgentMode = 'agent';
+
+/** Pre-rename spellings, still accepted on every inbound seam for one release. */
+const LEGACY_AGENT_MODES: Readonly<Record<string, AgentMode>> = { do: 'chat', deep: 'agent' };
+
+/**
+ * Narrow an off-the-wire / off-the-command-line value to an AgentMode,
+ * accepting the pre-rename spellings. Returns null for anything else — the
+ * caller decides whether that is a 400 or a fall-back to
+ * {@link BASELINE_AGENT_MODE}.
+ */
+export function coerceAgentMode(v: unknown): AgentMode | null {
+  if (v === 'chat' || v === 'agent') return v;
+  if (typeof v === 'string' && v in LEGACY_AGENT_MODES) return LEGACY_AGENT_MODES[v] as AgentMode;
+  return null;
+}
+
+/**
+ * The schema for a mode arriving from OUTSIDE (an HTTP body, a CLI flag).
+ * Accepts the legacy spellings and normalizes them, so a version-skewed
+ * `muxpad agent new --mode=do` keeps working instead of 400ing and leaving the
+ * caller with a pane it can't configure. Output is always a current value.
+ */
+export const AgentModeInputSchema = z
+  .enum(['chat', 'agent', 'do', 'deep'])
+  .transform((v): AgentMode => (coerceAgentMode(v) as AgentMode) ?? BASELINE_AGENT_MODE);
+
+/** User-facing label for a mode. ONE table, so the chip, the menu and any
+ *  future surface can never disagree about what these are called. */
+export const AGENT_MODE_LABELS: Readonly<Record<AgentMode, string>> = {
+  chat: 'Chat',
+  agent: 'Agent',
+};
 
 /**
  * The ONE status a pane/tab/workspace is in. Five states, mutually exclusive,
@@ -186,10 +257,13 @@ export const PaneSpecSchema = z.object({
   // events). `face_url` is the web face's chosen URL.
   face: z.enum(['terminal', 'web', 'chat']).default('terminal'),
   face_url: z.string().nullable().default(null),
-  // Agent behavior mode (⚡ Do / 🧠 Deep). Meaningful only for agent panes;
-  // every other pane carries the 'deep' default and ignores it. Persisted so
-  // the choice survives respawns and follows the user across devices.
-  mode: AgentModeSchema.default('deep'),
+  // Agent mode (Chat / Agent). Meaningful only for agent panes; every other
+  // pane carries the BASELINE ('agent' — nothing injected) and ignores it.
+  // Persisted so the choice survives respawns and follows the user across
+  // devices. Defaults to the BASELINE, not to DEFAULT_AGENT_MODE: an absent
+  // value describes an existing row, and the honest reading of "no mode
+  // recorded" is "no contract was overlaid".
+  mode: AgentModeInputSchema.default(BASELINE_AGENT_MODE),
   // Runtime-only fields decorated by the route layer.
   title: z.string().nullable().optional(),
   foreground_cmd: z.string().nullable().optional(),

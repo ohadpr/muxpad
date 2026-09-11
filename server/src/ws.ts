@@ -1,6 +1,11 @@
 import type { Server } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { parseCronMarker, sanitizeAgentStatus } from '@muxpad/shared';
+import {
+  type AgentMode,
+  BASELINE_AGENT_MODE,
+  parseCronMarker,
+  sanitizeAgentStatus,
+} from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { AgentBridge } from './agent-bridge.js';
@@ -1184,9 +1189,9 @@ export function attachWsServer(deps: {
             const backendPart = backendId === 'claude' ? '' : ` --backend ${backendId}`;
             // Agent mode, taken from the PANE ROW (the source of truth), not
             // parsed back out of the previous command — a PATCH may have just
-            // changed it. 'deep' stays implicit for the same
+            // changed it. Agent mode stays implicit for the same
             // never-churn-existing-panes reason as claude above.
-            const modePart = prevPane?.mode === 'do' ? ' --mode do' : '';
+            const modePart = prevPane?.mode === 'chat' ? ' --mode chat' : '';
             const selfHealCmd = `muxpad agent${backendPart}${modePart}${modelPart} --resume ${frame.sid}`;
             const isReconnect = prevCmd === selfHealCmd;
             // Self-heal: the pane's startup command now resumes THIS session,
@@ -1490,7 +1495,7 @@ export function attachWsServer(deps: {
         let lastHello = '';
         // Mode last delivered to this socket — the gate for the pane.updated
         // subscription below.
-        let lastSentMode: 'do' | 'deep' = 'deep';
+        let lastSentMode: AgentMode = BASELINE_AGENT_MODE;
         // "Has anything been said here?" — shipped on the session frame so the
         // empty-state UI never has to GUESS from `events.length`, which is 0
         // for a beat on every reconnect while history replays asynchronously.
@@ -1518,14 +1523,17 @@ export function attachWsServer(deps: {
         const syncSession = (first: boolean) => {
           const session = agents.getByPane(chatPaneId);
           // The pane's agent mode rides the session frame so every open chat
-          // view learns about a switch. There is deliberately NO chat-header
-          // control for it (a claim this comment used to make): mode is chosen
-          // at pane creation, and switches come from the CLI / automation via
-          // PATCH /api/panes/:id {mode}. That endpoint stays, and so does this
-          // relay — a CLI-driven switch must live-update every device rather
-          // than wait for a respawn. The 10s poll below re-reads the row and
-          // the hello signature includes `mode`, so a change re-pushes.
-          const paneMode = panes.getById(chatPaneId)?.mode ?? 'deep';
+          // view learns about a switch — the chip in the composer's status bar
+          // renders straight off this, and so does a switch made from another
+          // device, the CLI, or automation via PATCH /api/panes/:id {mode}.
+          // The 10s poll below re-reads the row and the hello signature
+          // includes `mode`, so a change re-pushes.
+          //
+          // BASELINE, not the default: the `??` only fires when the pane row
+          // has gone (a delete racing this socket), and inventing "Chat" for a
+          // pane we can no longer read would put a contract claim on screen
+          // with nothing behind it.
+          const paneMode = panes.getById(chatPaneId)?.mode ?? BASELINE_AGENT_MODE;
           const hasMessages = paneHasMessages(session?.current_sid ?? null);
           const hello = JSON.stringify({
             sid: session?.current_sid ?? null,
@@ -1606,7 +1614,7 @@ export function attachWsServer(deps: {
           // those would burn two SQLite reads per output burst for a value
           // that changes maybe twice a day.
           else if (e.type === 'pane.updated' && e.pane.id === chatPaneId) {
-            const m = e.pane.mode ?? 'deep';
+            const m = e.pane.mode ?? BASELINE_AGENT_MODE;
             if (m !== lastSentMode) syncSession(false);
           }
         });

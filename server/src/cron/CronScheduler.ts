@@ -12,7 +12,14 @@
 // are all inherited for free, and its return value is the ONLY honest answer to
 // "did that land?". Ignoring that return value would rebuild silent failure one
 // layer up, which is the entire thing this replaces (§6 risk 1).
-import { type Cron, type CronRun, messageIsFromCron, renderCronMarker } from '@muxpad/shared';
+import {
+  type Cron,
+  type CronRun,
+  DEFAULT_AGENT_MODE,
+  coerceAgentMode,
+  messageIsFromCron,
+  renderCronMarker,
+} from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { bootstrapTab, deleteTabCascade } from '../agent-tab.js';
 import { wrapCarryover } from '../chat/summarize.js';
@@ -499,9 +506,17 @@ export class CronScheduler {
       ...(cron.model ? { model: cron.model } : {}),
       ...(cron.backend === 'codex' || cron.backend === 'cursor' ? { backend: cron.backend } : {}),
       // A scheduled job's report wants terse and result-first — exactly the
-      // ⚡ Do contract — so new-tab fires default to it. Pane mode inherits
-      // the pane's own mode instead; there is nothing to choose there.
-      mode: cron.mode === 'deep' ? 'deep' : 'do',
+      // Chat-mode contract — so new-tab fires default to it. Pane mode
+      // inherits the pane's own mode instead; there is nothing to choose
+      // there.
+      //
+      // `cron.mode` is NULLABLE FREE TEXT read straight off the row, and cron
+      // rows were deliberately NOT migrated by the rename (they are the
+      // user's schedules, and the column is only ever read here). So it is
+      // coerced rather than compared: a pre-rename 'deep' still means Agent
+      // mode, a 'do' still means Chat, and anything else — including null —
+      // falls to the default.
+      mode: coerceAgentMode(cron.mode) ?? DEFAULT_AGENT_MODE,
     });
     if (!created.pane) return { outcome: 'error', detail: 'tab bootstrap produced no pane' };
     const paneId = created.pane.id;

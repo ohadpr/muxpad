@@ -1,4 +1,4 @@
-// Converting a chat pane into something else (a raw harness, a terminal, a
+// Converting a chat pane into something else (a Agent-mode harness, a terminal, a
 // web view). The precondition is ZERO MESSAGES and it is enforced here, on
 // the server — the "open instead" strip only decides what to OFFER.
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
@@ -49,12 +49,12 @@ describe('pane conversion — the zero-message gate', () => {
     body: JSON.stringify(body),
   });
 
-  /** A house chat, exactly as the `+` button creates one. */
-  async function houseChat() {
+  /** A Chat-mode pane, exactly as the `+` button creates one. */
+  async function newChat() {
     const t = (await (
       await test.app.request('/api/tabs', {
         method: 'POST',
-        ...json({ workspace_id: wsId, bootstrap: 'agent', backend: 'claude', mode: 'do' }),
+        ...json({ workspace_id: wsId, bootstrap: 'agent', backend: 'claude', mode: 'chat' }),
       })
     ).json()) as Tab;
     const detail = (await (await test.app.request(`/api/tabs/${t.id}`)).json()) as {
@@ -71,25 +71,25 @@ describe('pane conversion — the zero-message gate', () => {
       face: string;
     };
 
-  it('the house chat is claude, house overlay, and NO pinned model', async () => {
-    const { pane } = await houseChat();
+  it('a new Chat-mode pane is claude, Chat mode, and NO pinned model', async () => {
+    const { pane } = await newChat();
     // A pinned --model would silently override the account default and go
-    // stale as models ship; the house chat runs Claude's own default.
-    expect(row(pane.id).startup_cmd).toBe('muxpad agent --mode do');
+    // stale as models ship; a new Chat runs Claude's own default.
+    expect(row(pane.id).startup_cmd).toBe('muxpad agent --mode chat');
     expect(row(pane.id).startup_cmd).not.toContain('--model');
-    expect(pane.mode).toBe('do');
+    expect(pane.mode).toBe('chat');
   });
 
-  it('converts an EMPTY house chat to a raw harness with NO overlay', async () => {
-    const { pane } = await houseChat();
+  it('converts an EMPTY Chat-mode pane to Agent mode, with NO overlay', async () => {
+    const { pane } = await newChat();
     const res = await test.app.request(`/api/panes/${pane.id}/agent-backend`, {
       method: 'POST',
-      ...json({ backend: 'codex', mode: 'deep' }),
+      ...json({ backend: 'codex', mode: 'agent' }),
     });
     expect(res.status).toBe(200);
-    // Raw = the harness as it ships: no --mode flag, and the row says deep.
+    // Agent mode = the harness as it ships: no --mode flag, and the row says so.
     expect(row(pane.id)).toMatchObject({
-      mode: 'deep',
+      mode: 'agent',
       startup_cmd: 'muxpad agent --backend codex',
     });
   });
@@ -99,12 +99,12 @@ describe('pane conversion — the zero-message gate', () => {
     // reach the process, not just the UI: the model rides the startup command
     // (which is what a respawn re-runs) and the folder is persisted on the row
     // (which is what a respawn spawns in).
-    const { pane } = await houseChat();
+    const { pane } = await newChat();
     const dir = join(tmp, 'work');
     mkdirSync(dir, { recursive: true });
     const res = await test.app.request(`/api/panes/${pane.id}/agent-backend`, {
       method: 'POST',
-      ...json({ backend: 'codex', mode: 'deep', cwd: dir, model: 'gpt-5-codex' }),
+      ...json({ backend: 'codex', mode: 'agent', cwd: dir, model: 'gpt-5-codex' }),
     });
     expect(res.status).toBe(200);
     expect(row(pane.id).startup_cmd).toBe("muxpad agent --backend codex --model 'gpt-5-codex'");
@@ -114,24 +114,24 @@ describe('pane conversion — the zero-message gate', () => {
   });
 
   it('omitting the model leaves NO --model pin — the harness keeps its own default', async () => {
-    const { pane } = await houseChat();
+    const { pane } = await newChat();
     const res = await test.app.request(`/api/panes/${pane.id}/agent-backend`, {
       method: 'POST',
-      ...json({ backend: 'claude', mode: 'deep' }),
+      ...json({ backend: 'claude', mode: 'agent' }),
     });
     expect(res.status).toBe(200);
     expect(row(pane.id).startup_cmd).toBe('muxpad agent');
   });
 
   it('snaps the chosen folder up to its project root, like every other agent spawn', async () => {
-    const { pane } = await houseChat();
+    const { pane } = await newChat();
     const root = join(tmp, 'repo');
     mkdirSync(join(root, '.git'), { recursive: true });
     const sub = join(root, 'src');
     mkdirSync(sub, { recursive: true });
     await test.app.request(`/api/panes/${pane.id}/agent-backend`, {
       method: 'POST',
-      ...json({ backend: 'claude', mode: 'deep', cwd: sub }),
+      ...json({ backend: 'claude', mode: 'agent', cwd: sub }),
     });
     expect(
       (db.prepare('SELECT cwd FROM panes WHERE id = ?').get(pane.id) as { cwd: string }).cwd,
@@ -139,7 +139,7 @@ describe('pane conversion — the zero-message gate', () => {
   });
 
   it('rejects a bad folder or a shell-metacharacter model — with the pane untouched', async () => {
-    const { pane } = await houseChat();
+    const { pane } = await newChat();
     const before = row(pane.id);
     for (const body of [
       { backend: 'claude', cwd: 'relative/path' },
@@ -160,10 +160,10 @@ describe('pane conversion — the zero-message gate', () => {
   });
 
   it('accepts a model id with brackets — real ids have them', async () => {
-    const { pane } = await houseChat();
+    const { pane } = await newChat();
     const res = await test.app.request(`/api/panes/${pane.id}/agent-backend`, {
       method: 'POST',
-      ...json({ backend: 'claude', mode: 'deep', model: 'claude-opus-4-8[1m]' }),
+      ...json({ backend: 'claude', mode: 'agent', model: 'claude-opus-4-8[1m]' }),
     });
     expect(res.status).toBe(200);
     // Single-quoted so zsh's nomatch cannot glob-error on the brackets.
@@ -171,13 +171,13 @@ describe('pane conversion — the zero-message gate', () => {
   });
 
   it('converts an empty chat to a terminal and to a web view', async () => {
-    const a = await houseChat();
+    const a = await newChat();
     expect(
       (await test.app.request(`/api/panes/${a.pane.id}/as-terminal`, { method: 'POST' })).status,
     ).toBe(204);
     expect(row(a.pane.id)).toMatchObject({ startup_cmd: null, face: 'terminal' });
 
-    const b = await houseChat();
+    const b = await newChat();
     expect(
       (await test.app.request(`/api/panes/${b.pane.id}/as-web`, { method: 'POST' })).status,
     ).toBe(204);
@@ -185,7 +185,7 @@ describe('pane conversion — the zero-message gate', () => {
   });
 
   it('REFUSES once the chat has a queued message, with a human reason', async () => {
-    const { pane } = await houseChat();
+    const { pane } = await newChat();
     new AgentQueueStore(db).enqueue(pane.id, 'do the thing');
     for (const route of ['agent-backend', 'as-terminal', 'as-web']) {
       const res = await test.app.request(`/api/panes/${pane.id}/${route}`, {
@@ -201,11 +201,11 @@ describe('pane conversion — the zero-message gate', () => {
       expect(body.error.code).toBe('has_messages');
     }
     // …and nothing was mutated.
-    expect(row(pane.id)).toMatchObject({ startup_cmd: 'muxpad agent --mode do', kind: 'shell' });
+    expect(row(pane.id)).toMatchObject({ startup_cmd: 'muxpad agent --mode chat', kind: 'shell' });
   });
 
   it('a session that merely STARTED is still convertible — starting isn’t speaking', async () => {
-    const { pane } = await houseChat();
+    const { pane } = await newChat();
     // The runner registered and minted a sid, but no message was ever sent
     // (no transcript file). That is the exact state a new tab sits in.
     new AgentSessionStore(db).attachRunner({
@@ -216,7 +216,7 @@ describe('pane conversion — the zero-message gate', () => {
     });
     const res = await test.app.request(`/api/panes/${pane.id}/agent-backend`, {
       method: 'POST',
-      ...json({ backend: 'cursor', mode: 'deep' }),
+      ...json({ backend: 'cursor', mode: 'agent' }),
     });
     expect(res.status).toBe(200);
   });
@@ -229,7 +229,7 @@ describe('pane conversion — the zero-message gate', () => {
     // state and its "open instead:" strip — a click there used to kill the
     // runner mid-turn. `agent_sessions.status` is the persisted mirror of the
     // live registry's turnActive; either saying 'running' refuses.
-    const { pane } = await houseChat();
+    const { pane } = await newChat();
     const sessions = new AgentSessionStore(db);
     sessions.attachRunner({
       pane_id: pane.id,
@@ -250,25 +250,25 @@ describe('pane conversion — the zero-message gate', () => {
       // conclude it has history and retire the offer for good.
       expect(body.error.code).toBe('mid_turn');
     }
-    expect(row(pane.id)).toMatchObject({ startup_cmd: 'muxpad agent --mode do', kind: 'shell' });
+    expect(row(pane.id)).toMatchObject({ startup_cmd: 'muxpad agent --mode chat', kind: 'shell' });
     // Once the turn ends, the same conversion is allowed again.
     sessions.setStatus(pane.id, 'idle');
     const ok = await test.app.request(`/api/panes/${pane.id}/agent-backend`, {
       method: 'POST',
-      ...json({ backend: 'cursor', mode: 'deep' }),
+      ...json({ backend: 'cursor', mode: 'agent' }),
     });
     expect(ok.status).toBe(200);
     // Status alone would pass against a route that did nothing. The point of
     // this case is that a STARTED session is still convertible, so assert the
     // conversion actually landed.
     expect(row(pane.id)).toMatchObject({
-      mode: 'deep',
+      mode: 'agent',
       startup_cmd: 'muxpad agent --backend cursor',
     });
   });
 
   it('REFUSES a chat with a real transcript — a live conversation is never nuked', async () => {
-    const { pane } = await houseChat();
+    const { pane } = await newChat();
     const sid = 'thr-live-1';
     // A codex/cursor session writes the muxpad-normalized log, which
     // muxpadLocate finds under <dataDir>/agent-transcripts.
@@ -283,11 +283,11 @@ describe('pane conversion — the zero-message gate', () => {
     });
     const res = await test.app.request(`/api/panes/${pane.id}/agent-backend`, {
       method: 'POST',
-      ...json({ backend: 'cursor', mode: 'deep' }),
+      ...json({ backend: 'cursor', mode: 'agent' }),
     });
     expect(res.status).toBe(409);
     // The pane is untouched — same harness, same overlay.
-    expect(row(pane.id).startup_cmd).toBe('muxpad agent --mode do');
+    expect(row(pane.id).startup_cmd).toBe('muxpad agent --mode chat');
   });
 
   it('refuses a non-agent pane — a terminal you are working in is never converted', async () => {
@@ -326,22 +326,24 @@ describe('pane conversion — the zero-message gate', () => {
     expect(res.status).toBe(200);
     // The whole point: the legacy chooser is REPLACED. Asserting only the
     // status let this pass while `muxpad agent --pick` stayed in the row.
-    expect(row(pane.id).startup_cmd).toBe('muxpad agent');
+    // The pane was bootstrapped without a mode, so it carries the DEFAULT —
+    // Chat — and picking a harness bakes that into the real command.
+    expect(row(pane.id).startup_cmd).toBe('muxpad agent --mode chat');
   });
 
   it('returns what it RESOLVED, not what was asked for', async () => {
     // The client echoes this back as "Now running X · model · folder". It used
     // to echo its own input, which names a different folder than the session
     // got whenever agentCwd snaps the request to a project root.
-    const { pane } = await houseChat();
+    const { pane } = await newChat();
     const res = await test.app.request(`/api/panes/${pane.id}/agent-backend`, {
       method: 'POST',
-      ...json({ backend: 'claude', mode: 'deep', model: 'claude-sonnet-4-5' }),
+      ...json({ backend: 'claude', mode: 'agent', model: 'claude-sonnet-4-5' }),
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({
       backend: 'claude',
-      mode: 'deep',
+      mode: 'agent',
       model: 'claude-sonnet-4-5',
     });
   });
@@ -350,7 +352,7 @@ describe('pane conversion — the zero-message gate', () => {
     // The charset alone admits `--dangerously-skip-permissions`, which reaches
     // the runner as the VALUE of --model. Not RCE (single-quoted, no shell
     // metacharacters in the charset) but never a real model id.
-    const { pane } = await houseChat();
+    const { pane } = await newChat();
     const res = await test.app.request(`/api/panes/${pane.id}/agent-backend`, {
       method: 'POST',
       ...json({ backend: 'claude', model: '--dangerously-skip-permissions' }),

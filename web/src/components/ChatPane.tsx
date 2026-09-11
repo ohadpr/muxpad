@@ -1,4 +1,5 @@
 import {
+  AGENT_MODE_LABELS,
   type AgentMode,
   type AgentQuestion,
   type AgentSessionStatus,
@@ -318,7 +319,45 @@ function SvgFolder({ size = 13 }: { size?: number }) {
   );
 }
 
-type StatusPanel = 'folder' | 'model' | 'live' | null;
+/** The mode chip's glyph. Two shapes, not one shape in two colours: Chat is a
+ *  speech bubble (you are talking to muxpad's assistant), Agent is a bare
+ *  terminal caret (the harness, as it ships). Colour alone would be invisible
+ *  to anyone who can't see the hue difference at 12px. */
+function SvgModeGlyph({ mode, size = 12 }: { mode: AgentMode; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" fill="none">
+      {mode === 'chat' ? (
+        <path
+          stroke="currentColor"
+          strokeWidth="1.3"
+          strokeLinejoin="round"
+          d="M2.5 4.2c0-.9.7-1.6 1.6-1.6h7.8c.9 0 1.6.7 1.6 1.6v4.9c0 .9-.7 1.6-1.6 1.6H6.9L3.7 13.2v-2.5h-1.2V4.2Z"
+        />
+      ) : (
+        <>
+          <path
+            stroke="currentColor"
+            strokeWidth="1.3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="m3.4 5.1 2.6 2.6-2.6 2.6M7.9 11.2h4.7"
+          />
+          <rect
+            x="1.4"
+            y="2.4"
+            width="13.2"
+            height="11.2"
+            rx="1.6"
+            stroke="currentColor"
+            strokeWidth="1.2"
+          />
+        </>
+      )}
+    </svg>
+  );
+}
+
+type StatusPanel = 'mode' | 'folder' | 'model' | 'live' | null;
 
 interface RosterAgent {
   id: string;
@@ -493,7 +532,7 @@ export function HarnessLaunchCard({
       <div className="chat-launch-head">
         <AgentBackendLogo backend={backend} size={18} />
         <span className="chat-launch-title">{label}</span>
-        <span className="chat-launch-sub">raw session — no house contract</span>
+        <span className="chat-launch-sub">Agent mode — no muxpad contract</span>
         <button
           type="button"
           className="chat-launch-cancel"
@@ -623,7 +662,7 @@ export function ChatReadyGreeting({
 }
 
 /**
- * "or open instead" — the alternatives to the house chat, shown in the empty
+ * "or open instead" — the alternatives to a new Chat, shown in the empty
  * state directly under the greeting.
  *
  * This replaced a full-screen "What do you want to open?" chooser. That
@@ -637,8 +676,8 @@ export function ChatReadyGreeting({
  * it IS the secondary path. And it exists only while the chat is empty: the
  * moment you say something, this is not a decision you're making any more.
  *
- * The three harnesses open a RAW session (the harness as it ships, no house
- * contract). Tapping one does NOT convert on the spot — it opens the launch
+ * The three harnesses open the pane in AGENT MODE (the harness as it ships,
+ * no muxpad contract). Tapping one does NOT convert on the spot — it opens the launch
  * card (folder + model, both pre-answered), and the card's button converts.
  * Terminal and Web view have nothing to configure, so they still fire directly.
  * All five are the same server-side respawn, which refuses (cleanly) on any
@@ -668,7 +707,7 @@ function OpenInsteadStrip({
             className="chat-open-instead-btn"
             disabled={busy !== null}
             aria-busy={busy === b.id}
-            title={`Open a raw ${b.label} session in this pane`}
+            title={`Open ${b.label} in Agent mode — the harness as it ships`}
             onClick={() => onBackend(b.id)}
           >
             <AgentBackendLogo backend={b.id} size={18} />
@@ -706,10 +745,27 @@ function OpenInsteadStrip({
 }
 
 /**
+ * The two modes, as the menu lists them. Description is the WHOLE pitch —
+ * these two sentences are the only place the vocabulary is explained, so they
+ * have to carry it.
+ */
+const MODE_CHOICES: ReadonlyArray<{ id: AgentMode; label: string; desc: string }> = [
+  { id: 'chat', label: 'Chat', desc: 'muxpad’s assistant — decisive, brief, delegates.' },
+  { id: 'agent', label: 'Agent', desc: 'The harness as it ships — no muxpad contract.' },
+];
+
+/**
  * Status bar: one segmented strip above the composer —
- * folder | model · ctx | agents (when any). Each segment opens its own
+ * mode | folder | model · ctx | agents (when any). Each segment opens its own
  * upward panel; only one panel at a time. Parent-turn busy state stays in
  * the transcript Working… row; this agents cell is subagents only.
+ *
+ * WHY MODE LIVES HERE. It used to be deliberately hidden — internal plumbing
+ * with no UI at all. Once the two modes got names a person can say (Chat /
+ * Agent) that stopped being defensible: the pane's arrangement is part of its
+ * identity, and identity already lives in this row. It is NOT in the sidebar
+ * rail, which runs on a strict one-bit (status) budget; adding a second
+ * channel there is how a rail becomes a dashboard.
  */
 function SessionBar({
   paneId,
@@ -719,6 +775,8 @@ function SessionBar({
   send,
   liveLabel,
   agents,
+  mode,
+  onModeSwitched,
 }: {
   paneId: string;
   folder: { cwd: string; hasProject: boolean } | null;
@@ -727,6 +785,11 @@ function SessionBar({
   send: (obj: unknown) => void;
   liveLabel: string | null;
   agents: RosterAgent[];
+  /** The pane's mode, or null when the server hasn't told us — no chip. */
+  mode: AgentMode | null;
+  /** Optimistic local echo + the "here is what actually just happened" notice.
+   *  The authoritative value still arrives on the next session frame. */
+  onModeSwitched: (next: AgentMode) => void;
 }) {
   const [panel, setPanel] = useState<StatusPanel>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -739,7 +802,32 @@ function SessionBar({
     if (panel === 'live' && !liveLabel) setPanel(null);
     else if (panel === 'model' && !status) setPanel(null);
     else if (panel === 'folder' && !folder) setPanel(null);
-  }, [panel, liveLabel, status, folder]);
+    else if (panel === 'mode' && !mode) setPanel(null);
+  }, [panel, liveLabel, status, folder, mode]);
+
+  // ── Mode switcher state ──────────────────────────────────────────────
+  const [modeBusy, setModeBusy] = useState<AgentMode | null>(null);
+  const [modeErr, setModeErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (panel !== 'mode') setModeErr(null);
+  }, [panel]);
+  const switchMode = async (next: AgentMode) => {
+    if (modeBusy || next === mode) {
+      setPanel(null);
+      return;
+    }
+    setModeBusy(next);
+    setModeErr(null);
+    try {
+      await api.patchPane(paneId, { mode: next });
+      onModeSwitched(next);
+      setPanel(null);
+    } catch (e) {
+      setModeErr(e instanceof Error ? e.message : 'could not switch mode');
+    } finally {
+      setModeBusy(null);
+    }
+  };
 
   // ── Folder switcher state ────────────────────────────────────────────
   const [draft, setDraft] = useState(folder?.cwd ?? '');
@@ -853,6 +941,58 @@ function SessionBar({
 
   return (
     <div className="chat-status-bar" ref={wrapRef}>
+      {mode ? (
+        <div className="chat-status-seg-wrap">
+          <button
+            type="button"
+            className={`chat-status-seg -mode${panel === 'mode' ? ' is-open' : ''}`}
+            onClick={() => toggle('mode')}
+            aria-haspopup="menu"
+            aria-expanded={panel === 'mode'}
+            title={`${AGENT_MODE_LABELS[mode]} mode — ${
+              MODE_CHOICES.find((m) => m.id === mode)?.desc ?? ''
+            }`}
+          >
+            <SvgModeGlyph mode={mode} />
+            <span className="chat-status-seg-label">{AGENT_MODE_LABELS[mode]}</span>
+          </button>
+          {panel === 'mode' ? (
+            <div className="chat-status-menu chat-mode-menu" role="menu">
+              <div className="chat-session-head">Mode</div>
+              {MODE_CHOICES.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  role="menuitem"
+                  className={`chat-session-item${m.id === mode ? ' is-active' : ''}`}
+                  disabled={modeBusy !== null}
+                  aria-busy={modeBusy === m.id}
+                  onClick={() => void switchMode(m.id)}
+                >
+                  <span className="chat-session-item-label">{m.label}</span>
+                  <span className="chat-session-item-desc">{m.desc}</span>
+                </button>
+              ))}
+              {/* THE SWITCH MUST NOT LIE. No harness can rewrite a live
+                  session's system prompt (agent-modes.ts documents the
+                  evidence, backend by backend), so switching an existing
+                  conversation is genuinely weaker than opening a new pane in
+                  that mode: the new contract arrives as a message, and a long
+                  session drifts from a message the way it drifts from any
+                  instruction. Saying so here is cheaper than the support cost
+                  of a toggle that silently under-delivers. */}
+              <p className="chat-mode-caveat">
+                Switching takes hold from your <strong>next message</strong> — a running session’s
+                system prompt can’t be rewritten, so it arrives as an instruction in the
+                conversation. A long chat can drift from it. A <strong>new pane</strong> in this
+                mode (or this pane’s next restart) gets the real thing.
+              </p>
+              {modeErr ? <output className="chat-folder-error">{modeErr}</output> : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       {folderChipVisible && folder ? (
         <div className="chat-status-seg-wrap">
           <button
@@ -1530,6 +1670,11 @@ export function ChatPane({
   // TRUE — "assume there is history until told otherwise" — so a slow first
   // frame can never flash the alternatives over someone's conversation.
   const [hasMessages, setHasMessages] = useState(true);
+  // The pane's agent mode (Chat / Agent), from the session frame. NULL means
+  // "not told yet" and is rendered as NO chip at all — an older server omits
+  // the field, and drawing "Agent" for it would put a confident claim about
+  // this pane's arrangement on screen with nothing behind it.
+  const [mode, setMode] = useState<AgentMode | null>(null);
   // The text of the in-flight send, held so a socket death before the ack
   // can restore it into the composer instead of losing it.
   const pendingText = useRef('');
@@ -1638,6 +1783,11 @@ export function ChatPane({
         // a stale chip would keep offering controls that go nowhere.
         setAgentStatus(msg.status ?? null);
         setFolder(msg.cwd ? { cwd: msg.cwd, hasProject: msg.hasProject ?? false } : null);
+        // The pane's mode. Authoritative on every (re)connect and re-pushed
+        // whenever it changes anywhere — another device, the CLI, automation
+        // — so the chip follows a switch live instead of waiting for a
+        // reload. Absent → stay null → no chip (see the state declaration).
+        setMode(msg.mode ?? null);
         // Absent (older server) → assume history: never flash the offer.
         setHasMessages(msg.hasMessages !== false);
         // Server-owned pending queue: authoritative on every (re)connect.
@@ -3223,9 +3373,9 @@ export function ChatPane({
     // started.
     let resolved: { cwd: string | null; model: string | null } | null = null;
     const ok = await runConversion(backend, 'could not start the agent', async () => {
-      // 'deep' = NO house overlay. Choosing a harness by name means you
+      // 'agent' = Agent mode, NO house overlay. Choosing a harness by name means you
       // want that harness as it ships — capabilities injection only.
-      resolved = await api.setAgentBackend(paneId, backend, 'deep', {
+      resolved = await api.setAgentBackend(paneId, backend, 'agent', {
         ...(dir ? { cwd: dir } : {}),
         ...(model ? { model } : {}),
       });
@@ -3920,6 +4070,21 @@ export function ChatPane({
             {...(session?.assistant ? { assistant: session.assistant } : {})}
             liveLabel={liveLabel}
             agents={rosterAgents}
+            mode={mode}
+            onModeSwitched={(next) => {
+              // Echo locally so the chip flips on the tap rather than on the
+              // next session frame (up to a 10s poll away when nothing else
+              // is happening); the frame then confirms it.
+              setMode(next);
+              // The receipt states the WEAKER truth, not the flattering one.
+              // A confirmation that just said "Chat mode" would be the lie
+              // the menu's caveat exists to prevent — and this is the moment
+              // the user is actually reading.
+              setNotice({
+                text: `${AGENT_MODE_LABELS[next]} mode — from your next message. A new pane in this mode gets the full contract.`,
+                tone: 'info',
+              });
+            }}
             send={(obj) => {
               const sock = wsRef.current;
               if (!sock || sock.readyState !== WebSocket.OPEN) {

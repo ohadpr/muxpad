@@ -6,7 +6,7 @@ import { serve } from '@hono/node-server';
 import { createAgentBridge } from './agent-bridge.js';
 import { ensureAgentNotes, migrateAgentFileEdits } from './agent-files.js';
 import { INSTRUCTIONS_MIGRATION, seedAgentInstructions } from './agent-instructions.js';
-import { DO_MODE_MIGRATION, seedDoMode } from './agent-modes.js';
+import { CHAT_MODE_MIGRATION, retireLegacyChatModeFile, seedChatMode } from './agent-modes.js';
 import { createAppRegistry, startAppReconciler } from './apps/AppRegistry.js';
 import { createAppStatusProbe } from './apps/AppStatus.js';
 import { adoptServePanes } from './apps/adopt-serve-panes.js';
@@ -38,7 +38,7 @@ import { attachWsServer } from './ws.js';
 const config = loadConfig();
 mkdirSync(config.dataDir, { recursive: true });
 const db = openDb(join(config.dataDir, 'db.sqlite'));
-// The prompt files (agent-files.ts). agent-instructions.md and do-mode.md are
+// The prompt files (agent-files.ts). agent-instructions.md and chat-mode.md are
 // GENERATED — rewritten from source here on every boot, so they always describe
 // this build — and agent-notes.md is the user's, created once and never touched.
 // The migration runs FIRST and exactly once: it rescues anything the user had
@@ -50,7 +50,7 @@ const db = openDb(join(config.dataDir, 'db.sqlite'));
 const rescue = migrateAgentFileEdits({
   db,
   dataDir: config.dataDir,
-  files: [INSTRUCTIONS_MIGRATION, DO_MODE_MIGRATION],
+  files: [INSTRUCTIONS_MIGRATION, CHAT_MODE_MIGRATION],
 });
 for (const r of rescue.rescued)
   console.log(
@@ -58,13 +58,18 @@ for (const r of rescue.rescued)
   );
 if (rescue.safe) {
   seedAgentInstructions(config.dataDir);
-  seedDoMode(config.dataDir);
+  seedChatMode(config.dataDir);
+  // ⚡ Do mode became Chat mode, and its overlay file moved do-mode.md →
+  // chat-mode.md. Clear the old copy away so the data dir doesn't hold two
+  // contract-shaped files with no way to tell which one is live. Only ever
+  // removes muxpad's OWN generated text; an edited one stays put.
+  retireLegacyChatModeFile(config.dataDir);
 } else {
   // Something of the user's is still in a generated file's path and could not
   // be moved. Say so: the alternative is instructions that silently stop
   // tracking the build, with nothing anywhere explaining why.
   console.warn(
-    `muxpad: could not move your older agent-instructions.md / do-mode.md aside in ${config.dataDir}, so they were NOT regenerated (check permissions). Retrying next start.`,
+    `muxpad: could not move your older agent-instructions.md / chat-mode.md aside in ${config.dataDir}, so they were NOT regenerated (check permissions). Retrying next start.`,
   );
 }
 ensureAgentNotes(config.dataDir);
