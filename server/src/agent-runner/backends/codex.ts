@@ -17,7 +17,6 @@ import { isAbsolute, join, resolve, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { ChatEvent } from '@muxpad/shared';
 import { readAgentInstructions, wrapAgentInstructions } from '../../agent-instructions.js';
-import { readChatModeOverlay, wrapModeNote } from '../../agent-modes.js';
 import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptReader.js';
 import { codexHome, readCodexDefaultModel, readCodexModels } from '../../codex-models.js';
 
@@ -152,17 +151,27 @@ export function createCodexBackend(
   let liveSid = opts.requestedSid ?? randomUUID();
   let model = opts.requestedModel;
 
-  // Agent mode. Codex spawns a fresh `codex exec` per turn but RESUMES the
-  // same thread, so — exactly like Claude — the mode overlay only reaches the
-  // model as prompt material on a NEW session's first message. A mid-session
-  // switch can only be announced in-conversation: see agent-modes.ts.
-  let currentMode: AgentMode = opts.mode;
-  let pendingModeNote: string | null = null;
+  // Agent mode — and for codex there is only ONE.
+  //
+  // Chat mode's defining mechanism is now the in-process `reply` tool (the
+  // agent's only user-facing voice; see chat-events.ts and backends/claude.ts).
+  // `codex exec` has no in-process tool surface at all, so it cannot host that
+  // tool and cannot deliver Chat mode — only a prompt that ASKS for brevity,
+  // which is exactly the thing that demonstrably did not work. The old
+  // first-message overlay preamble is therefore retired here rather than left
+  // as a half-implementation wearing a "Chat" chip.
+  //
+  // Every door that decides a mode already enforces this (modeForBackend), and
+  // ws.ts corrects a stale row on hello. This is the last line of defence: a
+  // runner booted from a hand-typed `muxpad agent --backend codex --mode chat`
+  // announces the downgrade in the pane's own log rather than pretending.
+  if (opts.mode === 'chat') {
+    log(dim('chat mode is Claude-only (no in-process reply tool here) — running in Agent mode'));
+  }
   function setMode(next: AgentMode): void {
-    if (next === currentMode) return;
-    currentMode = next;
-    pendingModeNote = wrapModeNote(next, readChatModeOverlay(next));
-    log(dim(`mode → ${next} (announced to the thread on the next message)`));
+    if (next === 'chat') {
+      log(dim('chat mode is Claude-only — this codex session stays in Agent mode'));
+    }
   }
 
   // Extra writable roots for the sandbox (the worktree's external git dir, if
@@ -229,33 +238,21 @@ export function createCodexBackend(
 
   function buildArgs(prompt: string, useResume: boolean): string[] {
     const resuming = useResume && !!sessionRef;
-    // Universal muxpad instructions + the Chat-mode overlay — CODEX injection
-    // mechanism: `codex exec` has NO append-instructions surface (its only
-    // hook, `-c experimental_instructions_file`, REPLACES the base prompt, and
+    // Universal muxpad instructions — CODEX injection mechanism: `codex exec`
+    // has NO append-instructions surface (its only hook,
+    // `-c experimental_instructions_file`, REPLACES the base prompt, and
     // AGENTS.md lives in user-owned dirs muxpad must not write), so fall back
     // to prepending the delimited file content to the FIRST user message of
     // each NEW session — fresh spawns only; a resume already carries it
     // in-thread. Read at spawn time; missing file → nothing injected, no
     // error. The muxpad transcript records the RAW prompt (logEvent runs
     // before this), so rendered chat history stays clean.
-    let finalPrompt = prompt;
-    if (resuming) {
-      // A mid-session mode switch: the thread already ran with the old
-      // contract, so declare the new one once, in-band.
-      if (pendingModeNote) {
-        finalPrompt = `${pendingModeNote}\n\n${prompt}`;
-        pendingModeNote = null;
-      }
-    } else {
-      // Fresh thread → the overlay lands as real preamble; any pending
-      // switch note is redundant (the preamble already states the contract).
-      pendingModeNote = null;
-      finalPrompt = withSessionPreamble(
-        prompt,
-        readAgentInstructions(),
-        readChatModeOverlay(currentMode),
-      );
-    }
+    //
+    // NO mode overlay rides along any more: codex is Agent-mode only, and
+    // Agent mode is by definition the harness exactly as it ships.
+    const finalPrompt = resuming
+      ? prompt
+      : withSessionPreamble(prompt, readAgentInstructions(), null);
     const head = resuming ? ['exec', 'resume', sessionRef as string] : ['exec'];
     const common = [
       '--json',
@@ -487,7 +484,6 @@ export function createCodexBackend(
     process.stdout.write('\x1b]0;✳ codex\x07');
     log(`${bold('muxpad agent')} — codex backend · session ${liveSid}`);
     log(dim(`pane ${host.paneId} · ${process.cwd()}`));
-    if (currentMode === 'chat') log(dim('chat mode — decisive, terse, result-first'));
     authOk = await checkAuth();
     if (!authOk) {
       log(dim('codex not logged in — run `codex login` in this pane’s terminal face'));

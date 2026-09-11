@@ -6,6 +6,7 @@
 // See docs/plans/2026-07-01-web-chat-session-switching.md.
 
 import { parseCronMarker } from './cron.js';
+import type { AgentMode } from './types.js';
 
 export interface StructuredPatchHunk {
   oldStart: number;
@@ -35,6 +36,24 @@ export interface AssistantTextEvent extends Base {
   kind: 'assistant';
   text: string;
   model?: string;
+  /**
+   * How this text reached the user. Absent = ordinary assistant prose, which
+   * is user-facing in Agent mode and in every pre-Chat-voice transcript.
+   *
+   *  'reply'    — the agent called muxpad's {@link REPLY_TOOL_NAME} tool. This
+   *               is deliberate speech, and the ONLY kind in Chat mode. Set by
+   *               {@link normalizeTranscriptLine}, so it survives a reload and
+   *               is indexed by the archive as assistant text (a tool_use row
+   *               would not be — see Archiver's INDEXED_KINDS).
+   *  'private'  — Chat mode demoted plain assistant text to the private
+   *               scratchpad. Set by the CLIENT's voice transform at render
+   *               time, never written to disk: the transcript and the archive
+   *               keep the full record, the UI folds it away.
+   *  'fallback' — the harness guard promoted this text because a turn a human
+   *               was waiting on ended with no reply call at all. See
+   *               {@link needsReplyFallback}.
+   */
+  voice?: 'reply' | 'private' | 'fallback';
 }
 export interface ThinkingEvent extends Base {
   kind: 'thinking';
@@ -82,6 +101,86 @@ export type ChatEvent =
   | ToolUseEvent
   | ToolResultEvent
   | NoticeEvent;
+
+// ── Chat mode's voice: the `reply` tool ─────────────────────────────────────
+// In Chat mode the agent's plain assistant text is an INNER MONOLOGUE the user
+// never sees — a private scratchpad — and `reply` is its only voice. Reasoning
+// is unlimited and free; every user-facing word costs a deliberate tool call.
+// Deliberation is HIDDEN, not summarised.
+//
+// These three constants are the contract between the runner (which registers
+// the tool, backends/claude.ts) and everything that reads a transcript back
+// (the normalizer below, the web chat, the archive). Two hand-kept copies of a
+// tool name is how a reply silently starts rendering as a raw tool row.
+
+/** The tool's on-the-wire name. The Agent SDK prefixes in-process MCP tools
+ *  `mcp__<server>__<tool>`, and our server is `muxpad`. Matched EXACTLY — a
+ *  user's own MCP server exposing a `reply` tool must never be promoted into
+ *  muxpad's chat bubbles. */
+export const REPLY_TOOL_NAME = 'mcp__muxpad__reply';
+
+/**
+ * What the tool hands back to the model — and the marker the normalizer drops.
+ *
+ * A reply's tool_use is rendered as the assistant's MESSAGE, not as a tool row,
+ * so its paired tool_result has nothing to attach to and would surface as an
+ * orphan "result" row under every single reply. The ack is a fixed sentinel
+ * precisely so one stateless line of JSONL can be recognised as that plumbing:
+ * a transcript line carries a `tool_use_id` but not the tool's NAME.
+ */
+export const REPLY_ACK = 'Delivered to the user. [muxpad-reply]';
+
+export function isReplyTool(name: string | undefined | null): boolean {
+  return name === REPLY_TOOL_NAME;
+}
+
+/** The text a `reply` call is delivering, or '' if the input is malformed. */
+export function replyTextOf(input: unknown): string {
+  if (input && typeof input === 'object') {
+    const t = (input as { text?: unknown }).text;
+    if (typeof t === 'string') return t;
+  }
+  return '';
+}
+
+/**
+ * THE GUARD, as one predicate — did this turn leave a waiting human in silence?
+ *
+ * xAI's Grok Bot spends ~800 prompt words on "ack ≠ delivery" and its single
+ * most-reported bug is still the agent reasoning about replying, never calling
+ * the tool, and the user seeing nothing: "A scheduled routine can mark
+ * succeeded and still never show a message. The work ran. Status is ok. I get
+ * no chat bubble." A prompt cannot make this true; a harness can. So this is
+ * decided in CODE at the turn-result boundary.
+ *
+ * It lives in @muxpad/shared with exactly one rule and two callers — the
+ * runner (which turns a fired guard into the push/notification summary) and the
+ * chat renderer (which promotes the turn's final text into a real bubble). If
+ * those two disagreed, a user would get a push about a message that isn't in
+ * the chat, or a bubble the notification never mentioned.
+ *
+ * The distinction that matters: a SELF-INITIATED wake — a cron fire, a
+ * background subagent finishing, a scheduled wakeup — legitimately ends silent.
+ * Nobody is waiting. A turn a human started may not.
+ */
+export function needsReplyFallback(turn: {
+  mode: AgentMode;
+  /** Did a person (or another agent's `muxpad agent send`) start this turn? */
+  humanInitiated: boolean;
+  /** How many `reply` calls the turn made. */
+  replies: number;
+  /** The user pressed Stop — silence is what they asked for. */
+  interrupted?: boolean;
+  /** The turn errored; the UI already says so, and inventing prose over an
+   *  error reads as the agent papering over a crash. */
+  failed?: boolean;
+}): boolean {
+  // Agent mode never needs this: plain assistant text IS the voice there.
+  if (turn.mode !== 'chat') return false;
+  if (!turn.humanInitiated) return false;
+  if (turn.interrupted || turn.failed) return false;
+  return turn.replies === 0;
+}
 
 /**
  * One multiple-choice question an agent poses to the user mid-turn (the
@@ -463,6 +562,11 @@ export function normalizeTranscriptLine(line: unknown): ChatEvent[] {
         ) {
           const b = block as { tool_use_id?: string; is_error?: boolean; content?: unknown };
           const text = flattenContent(b.content);
+          // The `reply` tool's ack — pure plumbing for a call that is already
+          // rendered as the assistant's own message. Its tool_use never becomes
+          // a tool row, so keeping this would put an orphan "result" row under
+          // every reply. See REPLY_ACK for why the match is on a sentinel.
+          if (text.trim() === REPLY_ACK) return;
           out.push({
             kind: 'tool_result',
             id: `${uuid}:${i}`,
@@ -501,6 +605,26 @@ export function normalizeTranscriptLine(line: unknown): ChatEvent[] {
       } else if (b.type === 'thinking' && typeof b.thinking === 'string') {
         if (b.thinking.trim()) out.push({ kind: 'thinking', id, ts, text: b.thinking });
       } else if (b.type === 'tool_use') {
+        // A `reply` call IS the assistant speaking — normalize it to assistant
+        // TEXT here rather than leaving it a tool row. Doing it in the
+        // normalizer (not at render time) is what makes a reply behave like
+        // every other message everywhere at once: the archive indexes it
+        // (INDEXED_KINDS covers 'assistant', not 'tool_use'), search can jump
+        // to it, the scroll memory can anchor on it, `muxpad agent transcript`
+        // prints it, and the headline writer reads it.
+        if (isReplyTool(b.name)) {
+          const spoken = replyTextOf(b.input);
+          if (spoken.trim())
+            out.push({
+              kind: 'assistant',
+              id,
+              ts,
+              text: spoken,
+              voice: 'reply',
+              ...(model ? { model } : {}),
+            });
+          return;
+        }
         out.push({
           kind: 'tool_use',
           id,

@@ -15,8 +15,11 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import {
   LAUNCH_ACK_RE,
+  REPLY_ACK,
   blockText,
   isAgentLaunchTool,
+  needsReplyFallback,
+  parseCronMarker,
   subagentLabel,
   summarizeToolInput,
   taskNotificationToolUseId,
@@ -553,6 +556,63 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   );
 
   // -------------------------------------------------------------------------
+  // reply: the agent's VOICE in Chat mode.
+  //
+  // The mechanism, not the plea. `chat-mode.md` has asked for brevity since
+  // modes shipped and it demonstrably is not enough — you send the agent to do
+  // something and it writes back two pages of deliberation and asks a question
+  // it could have answered itself. Asking a model to be brief costs it nothing.
+  //
+  // What works is making deliberation FREE and speech EXPENSIVE: plain
+  // assistant text becomes a private scratchpad the user never sees, and the
+  // only way to reach them is a deliberate tool call. Reasoning stays
+  // unlimited; every user-facing word is now a decision.
+  //
+  // Registered UNCONDITIONALLY, in both modes, even though only Chat mode
+  // hides plain text. A pane that launched in Agent mode and was switched to
+  // Chat mid-session cannot gain new tools — `mcpServers` is fixed at query()
+  // construction, exactly like `systemPrompt` — and a Chat-mode session with no
+  // `reply` tool is a session with no voice at all. In Agent mode the tool is
+  // simply an unused one, and a reply that does arrive still renders as a
+  // normal message (see normalizeTranscriptLine).
+  //
+  // Counting lives here because this is the only place a reply can happen, and
+  // the turn-result guard below needs the count.
+  // -------------------------------------------------------------------------
+  let repliesThisTurn = 0;
+  let lastReplyText = '';
+  const replyTool = tool(
+    'reply',
+    [
+      'Say something to the user. This is your ONLY voice: your plain assistant text is a private scratchpad they never see, and nothing is delivered until it is the content of a reply call.',
+      'Most replies are a sentence or two. Lead with the OUTCOME and the ARTIFACT — the destination a file landed in, the link, the command to run — not a narration of what you did. "Done" on its own is not evidence.',
+      'Several short calls beat one welded paragraph: send two to four, like quick texts, when there is genuinely more than one thing to say.',
+    ].join(' '),
+    {
+      text: z
+        .string()
+        .min(1)
+        .max(4000)
+        .describe('What the user reads. Markdown renders; keep it short.'),
+    },
+    async (args) => {
+      const text = args.text.trim();
+      if (!text) return { content: [{ type: 'text' as const, text: REPLY_ACK }] };
+      repliesThisTurn++;
+      lastReplyText = text;
+      // Feed the self-titler too: in Chat mode the plain text it would
+      // otherwise read is scratchpad, and a title drawn from scratchpad
+      // describes the agent's process rather than the conversation.
+      if (!titleGenerated && firstAssistantText.length < 500) firstAssistantText += `${text}\n`;
+      log(`${bold('↪ reply')} ${text.length > 200 ? `${text.slice(0, 200)}…` : text}`);
+      // No wire frame: the call is in the transcript, and the transcript tail
+      // is already how every other message reaches an open chat. A second
+      // delivery path would race it and render the reply twice.
+      return { content: [{ type: 'text' as const, text: REPLY_ACK }] };
+    },
+  );
+
+  // -------------------------------------------------------------------------
   // Subagent roster. Subagent messages arrive on the same stream with
   // parent_tool_use_id set; count them per task and forward throttled live
   // progress so the chat's Task row shows "running · N steps · lastTool"
@@ -590,6 +650,17 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // The current turn's most recent assistant prose — rides along on turn-done so
   // the push notification can say WHAT the agent finished with, not just "done".
   let lastAssistantText = '';
+  /**
+   * Was the CURRENT turn started by somebody who is waiting for an answer?
+   *
+   * True for a real chat send and for another agent's `muxpad agent send` (both
+   * arrive as queued user text, and both have a waiter). False for an
+   * autonomous turn — a scheduled wakeup, a background subagent completing, a
+   * cron fire — and false for a slash command, which is an instruction to the
+   * session rather than a question to the agent. This is the input to the
+   * reply guard; see needsReplyFallback.
+   */
+  let turnHuman = false;
 
   /** One-line snippet of assistant prose for a push body — strip the loudest
    *  markdown, collapse whitespace, truncate. Empty → undefined (caller falls
@@ -654,6 +725,15 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         inTurn = true;
         interruptRequested = false;
         lastAssistantText = '';
+        repliesThisTurn = 0;
+        lastReplyText = '';
+        // A cron fire is a relay, not a person: the scheduler wrote it and
+        // nobody is sitting there, so it may legitimately end silent. Read off
+        // the message itself (the marker rides the text), exactly as ws.ts's
+        // `isHumanMessage` does — a flag would be lost across the durable queue
+        // and a server restart. A slash command is the user talking to the
+        // SESSION (`/compact`, `/clear`), not asking the agent anything.
+        turnHuman = parseCronMarker(text) === null && !text.startsWith('/');
         emit({ t: 'turn-start' });
         log(`${bold('▸ user')} ${text.length > 200 ? `${text.slice(0, 200)}…` : text}`);
         // A pending mode switch rides the next REAL message. Slash commands
@@ -713,7 +793,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     mcpServers: {
       muxpad: createSdkMcpServer({
         name: 'muxpad',
-        tools: [askUserTool, showFilesTool],
+        tools: [askUserTool, showFilesTool, replyTool],
         alwaysLoad: true,
       }),
     },
@@ -973,6 +1053,13 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       inTurn = true;
       interruptRequested = false;
       lastAssistantText = '';
+      repliesThisTurn = 0;
+      lastReplyText = '';
+      // Nobody asked for this turn, so nobody is owed an answer for it — the
+      // reply guard stays out of the way. (This is the distinction xAI's
+      // harness never drew: they applied "you must always reply" everywhere,
+      // which is unenforceable, instead of enforcing it where it is true.)
+      turnHuman = false;
       emit({ t: 'turn-start' });
       log(dim('▸ autonomous turn (wakeup/cron/background)'));
     };
@@ -1061,7 +1148,38 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         applyTurnResult(subagents, msg.subtype, interruptRequested);
         const ok = msg.subtype === 'success' || interruptRequested;
         const secs = (msg.duration_ms / 1000).toFixed(1);
-        const summary = notifySnippet(lastAssistantText);
+        // ── THE GUARD ─────────────────────────────────────────────────────
+        // A user who sent a message must never get silence. If a turn a human
+        // was waiting on ends with zero reply calls, the harness speaks for the
+        // agent — falling back to the turn's final assistant text rather than
+        // inventing anything, because the fallback has to be something the
+        // agent actually said.
+        //
+        // This half owns the LIVE consequences: the pane log (so the miss is
+        // auditable rather than invisible) and the push/notification body,
+        // which used to read the last assistant text and must now prefer what
+        // was actually spoken. The rendered half lives in the chat client's
+        // voice transform, which applies the SAME predicate to the same
+        // transcript so a reload shows exactly this text as a real message.
+        const guarded = needsReplyFallback({
+          mode: currentMode,
+          humanInitiated: turnHuman,
+          replies: repliesThisTurn,
+          interrupted: interruptRequested,
+          failed: msg.subtype !== 'success',
+        });
+        if (guarded) {
+          log(
+            dim(
+              lastAssistantText.trim()
+                ? '⚠ turn ended with no reply — speaking its final note for it'
+                : '⚠ turn ended with no reply and nothing to fall back on',
+            ),
+          );
+        }
+        // Spoken text wins over scratchpad text for the push body; the guard's
+        // fallback is the scratchpad, promoted on purpose.
+        const summary = notifySnippet(lastReplyText || lastAssistantText);
         if (interruptRequested) {
           log(dim(`⏹ stopped after ${secs}s`));
           emit({ t: 'turn-done', ok: true, ...(summary ? { summary } : {}) });

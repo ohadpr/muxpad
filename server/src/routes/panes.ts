@@ -5,6 +5,7 @@ import {
   AgentModeInputSchema,
   DEFAULT_AGENT_MODE,
   appendLeafToLayout,
+  modeForBackend,
   removeLeafFromLayout,
   spliceLayoutAtTarget,
   splitLeadingEmoji,
@@ -313,8 +314,15 @@ export function panesTabScopedRoutes(deps: {
     //   else DEFAULT_AGENT_MODE — the flip — and the flag is added to match.
     // The old code stamped `mode` on the row and left the command alone,
     // which could hand back a pane that reported Chat and respawned as Agent.
+    // …and Chat mode is CLAUDE-ONLY (modeForBackend): the backend is whatever
+    // the caller's own startup command selected, so a `--backend codex` pane
+    // lands in Agent mode no matter what `mode` says.
+    const requestedBackend = body.startup_cmd?.match(/--backend (claude|codex|cursor)/)?.[1];
     const agentMode: AgentMode | undefined = isAgent
-      ? (body.mode ?? modeFromStartupCmd(body.startup_cmd) ?? DEFAULT_AGENT_MODE)
+      ? modeForBackend(
+          body.mode ?? modeFromStartupCmd(body.startup_cmd) ?? DEFAULT_AGENT_MODE,
+          requestedBackend,
+        )
       : undefined;
     const startupCmd = agentMode
       ? applyModeToStartupCmd(body.startup_cmd ?? null, agentMode)
@@ -502,6 +510,12 @@ export function panesScopedRoutes(deps: {
     // whole or not at all. Every semantic check runs here, before the first
     // write; the writes themselves go in one transaction below.
     const isAgentPane = p.face === 'chat' || (p.startup_cmd?.startsWith('muxpad agent') ?? false);
+    // Choosing a non-Claude harness IS choosing Agent mode (modeForBackend) —
+    // so a `mode: 'chat'` patch against a codex/cursor pane resolves to Agent
+    // rather than 400ing. Collapsed, not handled: the response carries the mode
+    // the pane actually has, which is the only thing the caller needs.
+    const paneBackend = p.startup_cmd?.match(/--backend (claude|codex|cursor)/)?.[1] ?? 'claude';
+    if (patch.mode !== undefined) patch.mode = modeForBackend(patch.mode, paneBackend);
     const modeChanged = patch.mode !== undefined && patch.mode !== p.mode;
     if (modeChanged && !isAgentPane) {
       return c.json(
@@ -841,7 +855,11 @@ export function panesScopedRoutes(deps: {
         400,
       );
     const backend = body.data.backend;
-    const nextMode: AgentMode = body.data.mode ?? p.mode;
+    // Chat mode is CLAUDE-ONLY (modeForBackend). This is the exact moment a
+    // harness is chosen, so it is where the rule has to bite: picking Codex or
+    // Cursor from the launch card converts the pane to Agent mode even if it
+    // was created as a Chat pane (which every `--pick` pane is).
+    const nextMode: AgentMode = modeForBackend(body.data.mode ?? p.mode, backend);
     // Resolve the folder BEFORE anything is killed: a bad path must 400 with
     // the pane still running, not leave it dead between a kill and a refused
     // respawn. Same rules as POST /:id/cwd — expand `~`, require absolute,

@@ -8,10 +8,10 @@
 // behaviour changed.
 import {
   type AgentMode,
-  DEFAULT_AGENT_MODE,
   type LayoutNode,
   type PaneSpec,
   type Tab,
+  modeForBackend,
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import type { EventBus } from './events.js';
@@ -90,7 +90,11 @@ export async function bootstrapTab(
   // web app all bootstrap through here, so "a new agent tab is a Chat" holds
   // no matter which door it came in. A non-agent bootstrap stays on the
   // baseline (PaneStore.create) — there is no agent in it to contract with.
-  const mode: AgentMode | undefined = agent ? (input.mode ?? DEFAULT_AGENT_MODE) : undefined;
+  //
+  // …except that Chat mode is CLAUDE-ONLY (modeForBackend): a codex/cursor
+  // bootstrap lands in Agent mode whatever the caller asked for, because
+  // neither harness can host the `reply` tool Chat mode is built on.
+  const mode: AgentMode | undefined = agent ? modeForBackend(input.mode, input.backend) : undefined;
   const created = deps.db.transaction(() => {
     let tab = tabs.create({
       name: input.name as string,

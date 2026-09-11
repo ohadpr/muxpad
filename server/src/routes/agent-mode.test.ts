@@ -118,10 +118,18 @@ describe('agent modes over HTTP', () => {
   });
 
   it('mode + backend + model compose in the canonical flag order', async () => {
+    const { pane } = await agentTab({ mode: 'chat', backend: 'claude', model: 'opus' });
+    expect(paneRow(pane.id).startup_cmd).toBe("muxpad agent --mode chat --model 'opus'");
+  });
+
+  it('asking for codex + chat gives codex in AGENT mode — the one coercion point', async () => {
+    // Chat IS Claude (modeForBackend): the mode is built on the in-process
+    // `reply` tool, which codex/cursor cannot host. Choosing a non-Claude
+    // harness therefore IS choosing Agent mode. Collapsed, not refused — and
+    // the row and the command agree, so nothing downstream can read "Chat".
     const { pane } = await agentTab({ mode: 'chat', backend: 'codex', model: 'gpt-5.5' });
-    expect(paneRow(pane.id).startup_cmd).toBe(
-      "muxpad agent --backend codex --mode chat --model 'gpt-5.5'",
-    );
+    expect(pane.mode).toBe('agent');
+    expect(paneRow(pane.id).startup_cmd).toBe("muxpad agent --backend codex --model 'gpt-5.5'");
   });
 
   it('a pending harness-pick pane keeps the exact `muxpad agent --pick` literal', async () => {
@@ -172,10 +180,25 @@ describe('agent modes over HTTP', () => {
     const { pane } = await agentTab({ mode: 'chat', backend: 'pick' });
     const res = await test.app.request(`/api/panes/${pane.id}/agent-backend`, {
       method: 'POST',
+      ...json({ backend: 'claude' }),
+    });
+    expect(res.status).toBe(200);
+    expect(paneRow(pane.id).startup_cmd).toBe('muxpad agent --mode chat');
+  });
+
+  it('picking cursor on a CHAT pane moves it to Agent mode, row and command both', async () => {
+    // Every `--pick` pane is created in Chat mode, so this is the ordinary
+    // path, not an edge case: picking a non-Claude harness is how you choose
+    // Agent mode. The response reports the mode the pane actually has.
+    const { pane } = await agentTab({ mode: 'chat', backend: 'pick' });
+    const res = await test.app.request(`/api/panes/${pane.id}/agent-backend`, {
+      method: 'POST',
       ...json({ backend: 'cursor' }),
     });
     expect(res.status).toBe(200);
-    expect(paneRow(pane.id).startup_cmd).toBe('muxpad agent --backend cursor --mode chat');
+    expect(((await res.json()) as { mode: string }).mode).toBe('agent');
+    expect(paneRow(pane.id).mode).toBe('agent');
+    expect(paneRow(pane.id).startup_cmd).toBe('muxpad agent --backend cursor');
   });
 
   it('a non-agent (shell) tab’s pane still reads Agent and ignores the flag', async () => {
@@ -195,6 +218,19 @@ describe('agent modes over HTTP', () => {
   });
 
   // ── PATCH validation ────────────────────────────────────────────────────
+
+  it('a mode:chat PATCH on a codex pane resolves to Agent, not a 400', async () => {
+    // Collapsed, not handled: there is no ceremony around a state that cannot
+    // exist. The caller learns what happened from the pane it gets back.
+    const { pane } = await agentTab({ mode: 'agent', backend: 'codex' });
+    const res = await test.app.request(`/api/panes/${pane.id}`, {
+      method: 'PATCH',
+      ...json({ mode: 'chat' }),
+    });
+    expect(res.status).toBe(200);
+    expect(paneRow(pane.id).mode).toBe('agent');
+    expect(paneRow(pane.id).startup_cmd).toBe('muxpad agent --backend codex');
+  });
 
   it('rejects an unknown mode with 400', async () => {
     const { pane } = await agentTab();

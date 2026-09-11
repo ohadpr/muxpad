@@ -43,6 +43,7 @@ import {
   composeOutgoingMessage,
   splitMessageAttachments,
 } from '../lib/attachments';
+import { applyChatVoice, chatVoiceActive, isPrivateReasoning } from '../lib/chat-voice';
 import { showFolderChip } from '../lib/nav-row-affordances';
 import {
   type HighlightRun,
@@ -750,8 +751,15 @@ function OpenInsteadStrip({
  * have to carry it.
  */
 const MODE_CHOICES: ReadonlyArray<{ id: AgentMode; label: string; desc: string }> = [
-  { id: 'chat', label: 'Chat', desc: 'muxpad’s assistant — decisive, brief, delegates.' },
-  { id: 'agent', label: 'Agent', desc: 'The harness as it ships — no muxpad contract.' },
+  // Chat doesn't name a harness on purpose: it IS Claude, and which engine is
+  // underneath is not a choice you make here (see modeForBackend). Agent is
+  // where you pick one.
+  {
+    id: 'chat',
+    label: 'Chat',
+    desc: 'muxpad’s assistant — decisive, brief, speaks only when it has something.',
+  },
+  { id: 'agent', label: 'Agent', desc: 'Pick the harness — as it ships, no muxpad contract.' },
 ];
 
 /**
@@ -3121,6 +3129,22 @@ export function ChatPane({
     }
   }, [events, optimisticUser]);
 
+  // CHAT MODE'S VOICE. In Chat mode the agent's plain text is a private
+  // scratchpad and its `reply` calls are the conversation; this decides which
+  // events are messages and which fold into the "N actions" rows. Presentation
+  // ONLY — `events` (and the transcript, and the archive) still hold every
+  // word, which is what makes the fold auditable rather than a disappearance.
+  //
+  // `sending` is the live-turn signal: it goes true synchronously on send and
+  // on turn-start, false on turn-done, so the guard's promotion lands exactly
+  // when the turn closes rather than flickering mid-turn.
+  const voiceOpts = useMemo(
+    () => ({ mode, turnActive: sending, assistant: session?.assistant }),
+    [mode, sending, session?.assistant],
+  );
+  const voiceOn = chatVoiceActive(voiceOpts);
+  const voiced = useMemo(() => applyChatVoice(events, voiceOpts), [events, voiceOpts]);
+
   // ONE tool-resolution index for everything below (and one place for the
   // "a tool_use is resolved when a tool_result shares its toolUseId" rule).
   // resultFor pairs each call with its result (the collapsed row opens both
@@ -3551,12 +3575,20 @@ export function ChatPane({
     // count ticks live; the working label names the running tool) —
     // rendering it unfolded made blocks visibly "merge" when the turn
     // closed, which read as a glitch.
-    const renderable = events.filter((e) => !(e.kind === 'tool_result' && consumed.has(e.id)));
+    const renderable = voiced.filter((e) => !(e.kind === 'tool_result' && consumed.has(e.id)));
     // Agent launches break runs (like prose) so each renders as its own
     // launch bubble — never buried inside a "5 actions · Agent ×5" fold.
+    //
+    // In Chat mode, demoted assistant prose is an action too: that is the
+    // whole mechanism — deliberation goes where tool calls go, one tap from
+    // being read in full, and only a deliberate `reply` breaks the run as a
+    // real message.
     const isAction = (e: ChatEvent) =>
       !isAgentLaunch(e) &&
-      (e.kind === 'tool_use' || e.kind === 'tool_result' || e.kind === 'thinking');
+      (e.kind === 'tool_use' ||
+        e.kind === 'tool_result' ||
+        e.kind === 'thinking' ||
+        isPrivateReasoning(e));
     // Fold from TWO actions up — real transcripts are full of 2-3 action
     // stretches between prose, and leaving those inline read as "folding
     // doesn't work". A lone action stays inline.
@@ -3636,6 +3668,7 @@ export function ChatPane({
     session,
     connected,
     events,
+    voiced,
     stale,
     hasMessages,
     optimisticUser,
@@ -3916,7 +3949,13 @@ export function ChatPane({
           ) : null}
           {agentWorking && !question ? (
             <div className="chat-turn chat-turn-assistant">
-              {streamingText ? (
+              {/* In Chat mode the token stream IS the private scratchpad — the
+                  `reply` tool's argument streams as input_json, which the
+                  runner does not forward — so showing it would put reasoning on
+                  screen live and then take it back at turn end. The working
+                  indicator is what a Chat-mode turn shows instead, and it names
+                  the running tool so a silent pane never reads as stuck. */}
+              {streamingText && !voiceOn ? (
                 <div className="chat-msg">
                   <Markdown text={streamingText} />
                   <span className="chat-cursor" aria-hidden="true" />
@@ -4178,7 +4217,18 @@ function ActionGroup({
   for (const e of events) {
     // Orphan tool_results (their tool_use never reached this pane) count as
     // actions too — a run of only results must not label itself '0 actions'.
-    const name = e.kind === 'tool_use' ? e.name : e.kind === 'thinking' ? 'thinking' : 'result';
+    const name =
+      e.kind === 'tool_use'
+        ? e.name
+        : e.kind === 'thinking'
+          ? 'thinking'
+          : // Chat mode's demoted prose. Named in the header so the fold
+            // advertises that reasoning is in there — "12 actions · Bash ×6"
+            // with nothing else said would be the disappearance this is
+            // deliberately not.
+            e.kind === 'assistant'
+            ? 'notes'
+            : 'result';
     counts.set(name, (counts.get(name) ?? 0) + 1);
     if (e.kind === 'tool_result' && !e.ok) failed++;
   }
@@ -4261,8 +4311,32 @@ const ChatRow = memo(function ChatRow({
         </div>
       );
     case 'assistant':
+      // Chat mode's private scratchpad: the same muted treatment extended
+      // thinking gets, folded inside an action run. The text is rendered in
+      // full — collapse, never drop.
+      if (event.voice === 'private')
+        return (
+          <div
+            className="chat-turn chat-turn-assistant"
+            data-eid={anchorId}
+            data-search-hit={found}
+          >
+            <div className="chat-thinking" dir="auto">
+              <HighlightedText text={event.text} hl={hl} />
+            </div>
+          </div>
+        );
       return (
-        <div className="chat-turn chat-turn-assistant" data-eid={anchorId} data-search-hit={found}>
+        <div
+          className="chat-turn chat-turn-assistant"
+          data-eid={anchorId}
+          data-search-hit={found}
+          // The guard spoke, not the agent. Marked in the DOM rather than
+          // dressed up in prose: "the harness had to say this for it" is worth
+          // being able to see (and to grep for in a screenshot-driven bug
+          // report) without putting an apology in the conversation.
+          data-voice={event.voice === 'fallback' ? 'fallback' : undefined}
+        >
           <div className="chat-msg">
             <AssistantText text={event.text} onOpenImage={onOpenImage} hl={hl} />
           </div>

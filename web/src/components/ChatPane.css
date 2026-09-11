@@ -499,6 +499,16 @@
 }
 
 /* Reasoning aside: dimmed, italic, smaller, quiet left rail. */
+/* A message the HARNESS spoke because the turn ended without a `reply` call
+   (chat-voice.ts). It is the agent's own final words, promoted — so it reads as
+   a normal message — but the dotted rule says "nobody chose to send this",
+   which is the difference between a reply and a fallback. Muted enough to be a
+   footnote, present enough that a screenshot shows it. */
+.chat-turn-assistant[data-voice="fallback"] .chat-msg {
+  border-left: 2px dotted var(--chat-border-strong);
+  padding-left: 10px;
+}
+
 .chat-thinking {
   flex: 1 1 auto;
   min-width: 0;

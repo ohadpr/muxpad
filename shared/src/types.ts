@@ -178,6 +178,50 @@ export const AGENT_MODE_LABELS: Readonly<Record<AgentMode, string>> = {
 };
 
 /**
+ * THE ONE COERCION POINT: mode and backend are not independent.
+ *
+ *   Chat  = Claude, implicitly. The harness is not a choice you make — the
+ *           pane just says "Chat".
+ *   Agent = you pick the harness (claude | codex | cursor), plus folder and
+ *           model.
+ *
+ * So choosing a non-Claude harness IS choosing Agent mode, and that is the
+ * whole rule. It is not a restriction bolted onto two free variables; it is
+ * what the two words mean.
+ *
+ * The mechanism underneath, for anyone wondering why it can't be otherwise:
+ * Chat mode is built on the in-process `reply` tool (the agent's only
+ * user-facing voice — see chat-events.ts), hosted by the Agent SDK's in-process
+ * MCP server. `codex exec` and `cursor-agent` have no in-process tool surface
+ * at all, so "codex in Chat mode" could only ever be a chip promising something
+ * the harness cannot do.
+ *
+ * Every door that decides a mode runs its answer through here — bootstrapTab,
+ * POST /api/tabs, POST /api/panes, PATCH /api/panes/:id, POST
+ * /:id/agent-backend, the cron scheduler's new-tab fire, `muxpad agent new
+ * --mode=` — and so does ws.ts when a runner's hello reveals which harness is
+ * ACTUALLY running (the one place an old row or a hand-typed startup command
+ * can be found out). No UI is built around the collapse: the state simply
+ * cannot persist.
+ *
+ * `null`/`undefined` backend means "not chosen yet" (a `--pick` pane) or
+ * "claude, by omission" — both keep the requested mode; `/agent-backend`
+ * re-resolves at the moment a harness is actually picked.
+ */
+export function modeForBackend(
+  mode: AgentMode | null | undefined,
+  backend: string | null | undefined,
+): AgentMode {
+  const requested = mode ?? DEFAULT_AGENT_MODE;
+  return backendSupportsChatMode(backend) ? requested : BASELINE_AGENT_MODE;
+}
+
+/** Can this backend actually deliver Chat mode? See {@link modeForBackend}. */
+export function backendSupportsChatMode(backend: string | null | undefined): boolean {
+  return backend !== 'codex' && backend !== 'cursor';
+}
+
+/**
  * The ONE status a pane/tab/workspace is in. Five states, mutually exclusive,
  * evaluated in this precedence — highest first:
  *
