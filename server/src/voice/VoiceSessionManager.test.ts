@@ -95,7 +95,7 @@ describe('VoiceSessionManager', () => {
     const offer = offerAt(exchange, 0);
     expect(offer.sdp).toBe('v=0 offer');
     expect(offer.session.model).toBe(VOICE_MODEL);
-    expect(offer.session.voice).toBe('cedar');
+    expect(offer.session.audio.output.voice).toBe('cedar');
     expect(offer.session.delegation).toEqual({ type: 'client' });
     // The glossary rides on the instructions — that is the whole "Max pad" fix.
     expect(offer.session.instructions).toContain('muxpad');
