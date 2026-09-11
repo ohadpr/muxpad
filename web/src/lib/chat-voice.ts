@@ -111,13 +111,21 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
 
     let replies = 0;
     let lastProse = -1;
+    // Did the user press Stop inside this turn? The harness writes
+    // "[Request interrupted by user]" into the transcript and the normalizer
+    // turns it into an `interrupted` notice — the only durable signal a
+    // RELOADED client has. Without it this pass promoted the scratchpad of a
+    // turn the user deliberately cut short, putting words on screen the agent
+    // never chose to say while the runner (which knows) stayed silent.
+    let interrupted = false;
     for (let i = from + 1; i < to; i++) {
       const e = out[i];
+      if (e?.kind === 'notice' && e.variant === 'interrupted') interrupted = true;
       if (e?.kind !== 'assistant') continue;
       if (e.voice === 'reply') replies++;
       else lastProse = i;
     }
-    if (!needsReplyFallback({ mode: 'chat', humanInitiated: true, replies })) continue;
+    if (!needsReplyFallback({ mode: 'chat', humanInitiated: true, replies, interrupted })) continue;
     // Nothing the agent actually wrote → nothing to promote. The harness logs
     // the miss; inventing a sentence here would be the one thing this whole
     // mechanism exists to avoid.
@@ -134,4 +142,25 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
  *  can't disagree about a given row. */
 export function isPrivateReasoning(e: ChatEvent): boolean {
   return e.kind === 'assistant' && e.voice === 'private';
+}
+
+/** Real transcripts are full of 2–3 action stretches between prose, and
+ *  leaving those inline read as "folding doesn't work". A lone action stays
+ *  inline. */
+const MIN_GROUP = 2;
+
+/**
+ * Does this run of consecutive actions collapse behind an "N actions" header?
+ *
+ * Length is the ordinary rule — and Chat mode's demoted prose is the
+ * exception that overrides it. A lone tool row rendered inline is a nicety; a
+ * lone scratchpad block rendered inline is a broken promise. Chat mode tells
+ * the model its plain text is "a private scratchpad the user never sees", and
+ * a live Opus ends nearly every turn with exactly one trailing self-narration
+ * ("Done — 848 words total, reported to the user…"). Measured: EVERY live
+ * Chat-mode turn that spoke wrote one, and the length rule left it sitting
+ * visible right under the reply.
+ */
+export function foldsAsActionRun(run: readonly ChatEvent[]): boolean {
+  return run.length >= MIN_GROUP || run.some(isPrivateReasoning);
 }
