@@ -632,23 +632,37 @@ export interface ConversionReceipt {
 export function ChatReadyGreeting({
   assistant,
   cwd,
+  mode,
   converted,
   refusal,
 }: {
   assistant: string | undefined;
   cwd: string | null;
+  /** The pane's mode. Chat identifies as Chat, not as the harness under it. */
+  mode: AgentMode | null;
   converted: ConversionReceipt | null;
   refusal: string | null;
 }) {
+  // CHAT DOES NOT NAME ITS HARNESS OR ITS FOLDER. Chat IS Claude — that is a
+  // fact about the implementation, not a choice the user made, and printing
+  // "Claude" here invited the reasonable question of why a thing called Chat
+  // says Claude. The folder goes for the same reason: in Chat mode it is not
+  // something you picked, and showing a path implies a control that isn't
+  // there. Agent mode still names both, because there they ARE your choices.
+  const isChat = mode === 'chat';
   return (
     <>
       <div className="chat-empty-mark -logo" aria-hidden="true">
-        <AgentBackendLogo backend={backendFromAssistant(assistant)} size={26} />
+        {isChat ? <SvgModeGlyph mode="chat" /> : (
+          <AgentBackendLogo backend={backendFromAssistant(assistant)} size={26} />
+        )}
       </div>
       <p className="chat-empty-title">Ready when you are</p>
       <p className="chat-empty-ident">
-        <span className="chat-empty-ident-name">{assistantLabel(assistant)}</span>
-        {cwd ? <span className="chat-empty-ident-cwd">{cwd}</span> : null}
+        <span className="chat-empty-ident-name">
+          {isChat ? 'Chat' : assistantLabel(assistant)}
+        </span>
+        {!isChat && cwd ? <span className="chat-empty-ident-cwd">{cwd}</span> : null}
       </p>
       {converted ? (
         // <output> is the live region for "result of the thing you just
@@ -704,7 +718,12 @@ function OpenInsteadStrip({
 }) {
   return (
     <div className="chat-open-instead">
-      <div className="chat-open-instead-lbl">or open instead</div>
+      {/* "Agent mode" NAMES THE THING, and that matters here more than
+          anywhere: the first button is Claude, and a bare "Claude" sitting
+          under a Chat that is already Claude reads as an inexplicable
+          duplicate. Labelled as Agent mode it reads as what it is — the same
+          harness, raw, with the folder and model yours to choose. */}
+      <div className="chat-open-instead-lbl">or open in Agent mode</div>
       <div className="chat-open-instead-row">
         {AGENT_BACKENDS.map((b) => (
           <button
@@ -887,7 +906,10 @@ function SessionBar({
   //
   // The folder is not lost: it moves into the session menu (the model chip),
   // which still lists the full path and opens the same switcher.
-  const folderChipVisible = showFolderChip(folder);
+  // Chat mode surfaces no folder control at all — see ChatReadyGreeting. The
+  // path is still reachable (the session menu behind the model chip lists it),
+  // it just isn't presented as a dial in the mode that doesn't have one.
+  const folderChipVisible = mode !== 'chat' && showFolderChip(folder);
   const folderPanel =
     folder && panel === 'folder' ? (
       <div className="chat-status-menu chat-folder-menu" role="dialog">
@@ -3431,6 +3453,7 @@ export function ChatPane({
             <ChatReadyGreeting
               assistant={session.assistant}
               cwd={folder?.cwd ?? null}
+              mode={mode}
               converted={converted}
               refusal={convertRefusal}
             />
