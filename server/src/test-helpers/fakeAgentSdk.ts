@@ -181,6 +181,38 @@ export function mcpExtra(toolUseId: string): unknown {
   };
 }
 
+/**
+ * A hook callback the backend registered, invoked the way the SDK invokes it.
+ *
+ * The reversibility gate is a `PreToolUse` hook, and hooks — like in-process
+ * MCP tools — are called out-of-band from the message stream, so a scripted
+ * stream alone can never reach one. Without this the gate's entire decision
+ * path (classify → ask → allow/deny) would be untested.
+ */
+export function fakeHook(
+  event: string,
+): (input: unknown, toolUseId?: string, options?: { signal: AbortSignal }) => Promise<unknown> {
+  const matchers = (current?.options?.hooks as Record<string, Array<{ hooks: unknown[] }>>)?.[
+    event
+  ];
+  const hook = matchers?.[0]?.hooks?.[0];
+  if (typeof hook !== 'function') {
+    throw new Error(`fakeAgentSdk: no ${event} hook registered`);
+  }
+  return (input, toolUseId, options) =>
+    (hook as (i: unknown, t: unknown, o: unknown) => Promise<unknown>)(
+      input,
+      toolUseId,
+      options ?? { signal: new AbortController().signal },
+    );
+}
+
+/** True when the backend registered any hook for `event`. */
+export function hasFakeHook(event: string): boolean {
+  const matchers = (current?.options?.hooks as Record<string, unknown[]> | undefined)?.[event];
+  return Array.isArray(matchers) && matchers.length > 0;
+}
+
 let registeredTools: FakeMcpTool[] = [];
 
 /**
