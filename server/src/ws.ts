@@ -1258,6 +1258,31 @@ export function attachWsServer(deps: {
             if (typeof frame.delta !== 'string') return;
             appendStreamBuf(paneId, frame.delta);
             bcast({ t: 'stream', delta: frame.delta });
+          } else if (frame.t === 'speak' || frame.t === 'speak-delta') {
+            // The agent's SPEECH, relayed the moment it exists, for a consumer
+            // that has to act on it (voice) rather than draw it.
+            //
+            // Relayed and NOTHING ELSE — deliberately. It does not touch
+            // `streamBufs`: that buffer is the scratchpad preview the chat
+            // replays on a mid-turn reconnect, and a reply is not scratchpad.
+            // It does not touch turn state, unread, or the push body; those are
+            // already decided at turn-done from the same replies. The one job
+            // here is latency.
+            //
+            // It also cannot double-render. The chat client's frame handler is
+            // an if/else chain with no branch for these kinds, so the text UI
+            // ignores them structurally — not by deduping against the
+            // transcript, which would be a rule two sides have to keep
+            // agreeing on. The transcript tail stays the only thing that draws
+            // a reply bubble.
+            if (typeof frame.id !== 'string' || !frame.id) return;
+            if (frame.t === 'speak') {
+              if (typeof frame.text !== 'string' || !frame.text) return;
+              bcast({ t: 'speak', id: frame.id, text: frame.text, n: frame.n });
+            } else {
+              if (typeof frame.delta !== 'string' || !frame.delta) return;
+              bcast({ t: 'speak-delta', id: frame.id, delta: frame.delta });
+            }
           } else if (frame.t === 'turn-done') {
             conn.turnActive = false;
             conn.pendingQuestion = null;
