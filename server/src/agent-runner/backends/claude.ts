@@ -88,17 +88,7 @@ export function claudeSystemPromptOption(
  * Exported for tests: constructing the backend spawns a real SDK session, so
  * the description-building is the testable seam.
  */
-export function replyToolDescription(mode: AgentMode): string {
-  if (mode !== 'chat') {
-    return [
-      "muxpad's Chat-mode voice. THIS SESSION IS IN AGENT MODE, so you do not need it:",
-      'your ordinary assistant text already reaches the user exactly as it always has.',
-      'Do not call this tool — just write your answer as normal text. Calling it delivers',
-      'your message a SECOND time, on top of the text you wrote, and the user sees it twice.',
-      'It becomes your voice only if muxpad tells you, in a <muxpad-mode> note, that the',
-      'session has switched to Chat mode.',
-    ].join(' ');
-  }
+export function replyToolDescription(): string {
   return [
     'Say something to the user. This is your ONLY voice: your plain assistant text is a private scratchpad they never see, and nothing is delivered until it is the content of a reply call.',
     'Most replies are a sentence or two. Lead with the OUTCOME and the ARTIFACT — the destination a file landed in, the link, the command to run — not a narration of what you did. "Done" on its own is not evidence.',
@@ -640,7 +630,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   let firstReplyText = '';
   const replyTool = tool(
     'reply',
-    replyToolDescription(opts.mode),
+    replyToolDescription(),
     {
       text: z
         .string()
@@ -846,7 +836,24 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     mcpServers: {
       muxpad: createSdkMcpServer({
         name: 'muxpad',
-        tools: [askUserTool, showFilesTool, replyTool],
+        // AGENT MODE IS RAW: no reply tool at all. It used to be registered in
+        // both modes, described as inert in Agent, because `mcpServers` is fixed
+        // at query() construction and a mid-session switch cannot add tools.
+        // That bought a mid-session switch its voice and cost something worse —
+        // a tool the model can see, cannot verify the description of, and DID
+        // call: 3 of 5 live Agent turns called it and then wrote a closing recap
+        // for an audience they believed could not see them, so the user got the
+        // same answer twice, the second time in the third person. Describing a
+        // tool as "do not use me" is not a mechanism. Not offering it is.
+        //
+        // A session switched INTO Chat mid-run therefore has no reply tool. It
+        // is not mute: every turn ends with zero replies, so the harness guard
+        // promotes the turn's final text into a real bubble. One bubble a turn
+        // instead of two to four — which is exactly the documented contract that
+        // a mid-session switch is weaker than a fresh pane, and the switch note
+        // now says so in those terms rather than naming a tool that isn't there.
+        tools:
+          opts.mode === 'chat' ? [askUserTool, showFilesTool, replyTool] : [askUserTool, showFilesTool],
         alwaysLoad: true,
       }),
     },
