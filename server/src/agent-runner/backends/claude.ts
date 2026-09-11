@@ -30,6 +30,7 @@ import { readChatModeOverlay, wrapModeNote } from '../../agent-modes.js';
 import { findTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
 import type { AgentMode, AgentQuestion, RunnerFrame } from '../protocol.js';
+import { ReplyBlockTracker, replyToolUseId } from '../reply-stream.js';
 import { SubagentRoster } from '../subagent-roster.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
@@ -622,6 +623,9 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // the turn-result guard below needs the count.
   // -------------------------------------------------------------------------
   let repliesThisTurn = 0;
+  // Reply tool calls currently being GENERATED, so their argument deltas can be
+  // decoded into speakable text before the call runs (see reply-stream.ts).
+  const replyBlocks = new ReplyBlockTracker();
   // The turn's FIRST reply, not its last. The contract asks for a short run of
   // two to four quick texts that LEADS with the outcome — so on a real turn
   // the last one is routinely the caveat ("one note: the calls ran in
@@ -638,7 +642,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         .max(4000)
         .describe('What the user reads. Markdown renders; keep it short.'),
     },
-    async (args) => {
+    async (args, extra) => {
       const text = args.text.trim();
       if (!text) return { content: [{ type: 'text' as const, text: REPLY_ACK }] };
       repliesThisTurn++;
@@ -648,9 +652,31 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       // describes the agent's process rather than the conversation.
       if (!titleGenerated && firstAssistantText.length < 500) firstAssistantText += `${text}\n`;
       log(`${bold('↪ reply')} ${text.length > 200 ? `${text.slice(0, 200)}…` : text}`);
-      // No wire frame: the call is in the transcript, and the transcript tail
-      // is already how every other message reaches an open chat. A second
-      // delivery path would race it and render the reply twice.
+      // ── The wire frame ────────────────────────────────────────────────────
+      // This used to emit NOTHING, and the reasoning was sound for text: the
+      // call is already in the transcript, the transcript tail is how every
+      // message reaches an open chat, and a second DELIVERY path would race it
+      // and render the reply twice.
+      //
+      // It does not survive voice. The transcript only has this reply once the
+      // whole tool_use block finished generating, and the chat only learns
+      // within 250 ms of that — so a voice turn could not start speaking until
+      // the agent had stopped talking. `speak` is not a second delivery path:
+      // it is a SIGNAL, on a frame kind the chat UI has no branch for, so it
+      // cannot draw a bubble however badly a consumer behaves. The transcript
+      // remains the one thing that renders.
+      //
+      // The id is the reply's transcript identity, read from MCP's `_meta`
+      // (live-probed — see replyToolUseId), so a consumer can line a spoken
+      // reply up with the bubble that appears for it. Missing id → a null,
+      // never a throw: an SDK that renames that key costs us correlation, not
+      // the reply.
+      emit({
+        t: 'speak',
+        id: replyToolUseId(extra) ?? randomUUID(),
+        text,
+        n: repliesThisTurn,
+      });
       return { content: [{ type: 'text' as const, text: REPLY_ACK }] };
     },
   );
@@ -820,7 +846,6 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
 
   const options: Options = {
     cwd: process.cwd(),
-    ...(resumeSid ? { resume: resumeSid } : { sessionId: sid }),
     // Yolo parity with `muxpad claude --dangerously-skip-permissions`. The SDK
     // auto-approves every tool call under bypass (canUseTool is never consulted
     // — spike-verified), so no permission prompt can wedge a headless turn.
@@ -853,7 +878,9 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         // a mid-session switch is weaker than a fresh pane, and the switch note
         // now says so in those terms rather than naming a tool that isn't there.
         tools:
-          opts.mode === 'chat' ? [askUserTool, showFilesTool, replyTool] : [askUserTool, showFilesTool],
+          opts.mode === 'chat'
+            ? [askUserTool, showFilesTool, replyTool]
+            : [askUserTool, showFilesTool],
         alwaysLoad: true,
       }),
     },
@@ -1151,7 +1178,9 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       } else if (msg.type === 'stream_event') {
         const evt = msg.event as {
           type?: string;
-          delta?: { type?: string; text?: string };
+          index?: number;
+          content_block?: unknown;
+          delta?: { type?: string; text?: string; partial_json?: string };
         };
         if (msg.parent_tool_use_id === null) {
           // ANY main-thread stream event means a turn is under way — not just a
@@ -1172,6 +1201,26 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
             typeof evt.delta.text === 'string'
           ) {
             emit({ t: 'stream', delta: evt.delta.text });
+          }
+          // A `reply` being TYPED. Its text is a tool ARGUMENT, so it arrives
+          // as `input_json_delta` — which this branch used to drop on the
+          // floor, because the filter above only ever looked for `text_delta`.
+          // That discarded stream is the difference between a voice turn that
+          // starts speaking with the first phrase and one that waits for the
+          // agent to finish the paragraph. See reply-stream.ts for the decoder
+          // and the live-probed shapes.
+          else if (evt.type === 'content_block_start' && typeof evt.index === 'number') {
+            replyBlocks.start(evt.index, evt.content_block);
+          } else if (
+            evt.type === 'content_block_delta' &&
+            evt.delta?.type === 'input_json_delta' &&
+            typeof evt.delta.partial_json === 'string' &&
+            typeof evt.index === 'number'
+          ) {
+            const spoken = replyBlocks.delta(evt.index, evt.delta.partial_json);
+            if (spoken) emit({ t: 'speak-delta', id: spoken.id, delta: spoken.delta });
+          } else if (evt.type === 'content_block_stop' && typeof evt.index === 'number') {
+            replyBlocks.stop(evt.index);
           }
         }
       } else if (msg.type === 'assistant' && msg.parent_tool_use_id === null) {
@@ -1200,6 +1249,9 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         if (msgText) lastAssistantText = msgText;
       } else if (msg.type === 'result') {
         inTurn = false;
+        // A half-generated reply block cannot outlive the turn that was typing
+        // it — its index will be reused by the next turn's blocks.
+        replyBlocks.clear();
         // Belt-and-braces: no question outlives its turn.
         resolveAllQuestions('interrupted');
         // Push any throttled-but-unsent progress. Deliberately does NOT drop
