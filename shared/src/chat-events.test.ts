@@ -6,6 +6,7 @@ import {
   REPLY_TOOL_NAME,
   blockText,
   isAgentLaunchTool,
+  isInterruptMarker,
   needsReplyFallback,
   normalizeTranscriptLine,
   sanitizeAgentStatus,
@@ -425,6 +426,57 @@ describe('the reply tool in a transcript', () => {
         }),
       ),
     ).toEqual(['tool_result']);
+  });
+});
+
+describe('the interrupt marker — a Stop, as the transcript records it', () => {
+  it('recognises both harness spellings, and nothing else', () => {
+    expect(isInterruptMarker('[Request interrupted by user]')).toBe(true);
+    expect(isInterruptMarker('[Request interrupted by user for tool use]')).toBe(true);
+    expect(isInterruptMarker('  [Request interrupted by user]')).toBe(true);
+    expect(isInterruptMarker('the [Request interrupted by user] line')).toBe(false);
+    expect(isInterruptMarker('Request interrupted')).toBe(false);
+  });
+
+  it('turns a BARE-STRING interrupt into a stopped notice', () => {
+    expect(
+      normalizeTranscriptLine({
+        type: 'user',
+        uuid: 'u1',
+        timestamp: TS,
+        message: { role: 'user', content: '[Request interrupted by user]' },
+      }),
+    ).toEqual([{ kind: 'notice', id: 'u1', ts: MS, variant: 'interrupted', text: 'Stopped' }]);
+  });
+
+  it('turns a BLOCK-ARRAY interrupt into a stopped notice', () => {
+    // The shape a Stop lands in when it interrupts a tool call — live-verified.
+    // This branch used to read tool_result blocks ONLY, so the marker was
+    // dropped whole and a reloaded chat had no idea the turn was stopped.
+    expect(
+      normalizeTranscriptLine({
+        type: 'user',
+        uuid: 'u1',
+        timestamp: TS,
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }],
+        },
+      }),
+    ).toEqual([{ kind: 'notice', id: 'u1:0', ts: MS, variant: 'interrupted', text: 'Stopped' }]);
+  });
+
+  it('leaves an ordinary user message alone', () => {
+    expect(
+      kinds(
+        normalizeTranscriptLine({
+          type: 'user',
+          uuid: 'u1',
+          timestamp: TS,
+          message: { role: 'user', content: 'stop asking me that' },
+        }),
+      ),
+    ).toEqual(['user']);
   });
 });
 

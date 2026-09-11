@@ -27,7 +27,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 // Must precede the fakeRunner import — constructing the backend calls query().
 vi.mock('@anthropic-ai/claude-agent-sdk', () => import('../test-helpers/fakeAgentSdk.js'));
 
-import { createClaudeBackend } from '../agent-runner/backends/claude.js';
+import { createClaudeBackend, replyToolDescription } from '../agent-runner/backends/claude.js';
 import type { RunnerHost } from '../agent-runner/backends/types.js';
 import { fakeMcpTool, fakeSession, resetFakeAgentSdk } from '../test-helpers/fakeAgentSdk.js';
 import { sdk } from '../test-helpers/sdkScript.js';
@@ -114,6 +114,31 @@ describe('the reply tool is registered, and it is the voice', () => {
     const fx = boot('agent');
     expect(() => fakeMcpTool('reply')).not.toThrow();
     await fx.stop();
+  });
+
+  it('…but AGENT mode is told the tool is inert there, not that text is private', async () => {
+    // Measured against a live Opus: with the Chat-mode wording in both modes,
+    // three of five Agent-mode turns called `reply` and the user read the
+    // answer twice — once as the reply, then again as the third-person recap
+    // the model wrote believing nobody would see it. With this wording, zero
+    // of seven did. A tool description is a system-prompt-strength
+    // instruction; in Agent mode "your plain text is a private scratchpad" is
+    // simply false.
+    const fx = boot('agent');
+    const desc = fakeMcpTool('reply').description;
+    expect(desc).toMatch(/AGENT MODE/);
+    expect(desc).toMatch(/do not call this tool/i);
+    expect(desc).not.toMatch(/your ONLY voice/i);
+    await fx.stop();
+  });
+
+  it('exposes the two descriptions as a pure function, so both can be pinned', () => {
+    expect(replyToolDescription('chat')).toMatch(/only voice/i);
+    // The closing-summary rule: a live model ended almost every Chat turn with
+    // "Done — reported to the user…", written to an audience it knew could not
+    // read it.
+    expect(replyToolDescription('chat')).toMatch(/do not write a closing summary/i);
+    expect(replyToolDescription('agent')).toMatch(/sees it twice/i);
   });
 
   it('hands back the fixed ack sentinel the normalizer recognises', async () => {
@@ -217,6 +242,20 @@ describe('THE GUARD — a human-initiated turn never ends in silence', () => {
     expect(guardFired(fx.logs)).toBe(false);
     // The push body is what was SPOKEN, not the scratchpad that preceded it.
     expect(turnDone(fx.sent).at(-1)?.summary).toBe('~/Documents/Invoices/2026-09.pdf');
+    await fx.stop();
+  });
+
+  it('the push body quotes the FIRST reply of a multi-reply turn, not the last', async () => {
+    // The contract asks for two to four quick texts that LEAD with the
+    // outcome, so the trailing one is routinely the caveat. Measured on live
+    // turns: "848 words total across 6 files" followed by "one note: the calls
+    // ran in parallel" — and the notification used to buzz with the note.
+    const fx = boot('chat');
+    await fx.send('count the words');
+    await fx.reply('848 words total across 6 files.');
+    await fx.reply('One note: the calls ran in parallel, so the sleeps overlapped.');
+    await fx.feed([sdk.result('success')]);
+    expect(turnDone(fx.sent).at(-1)?.summary).toBe('848 words total across 6 files.');
     await fx.stop();
   });
 
