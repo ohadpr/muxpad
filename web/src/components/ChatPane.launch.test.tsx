@@ -28,7 +28,7 @@ const FOLDERS: RecentFolder[] = [
 describe('the empty chat names what is running in it', () => {
   const greet = (assistant: string, cwd: string | null = '/Users/me/dev/muxpad') =>
     html(
-      <ChatReadyGreeting assistant={assistant} cwd={cwd} converted={null} refusal={null} />,
+      <ChatReadyGreeting mode="agent" assistant={assistant} cwd={cwd} converted={null} refusal={null} />,
     );
 
   it('a Codex pane and a Claude pane do not render the same thing', () => {
@@ -47,7 +47,7 @@ describe('the empty chat names what is running in it', () => {
 
   it('confirms a conversion, naming the harness, model and folder chosen', () => {
     const out = html(
-      <ChatReadyGreeting
+      <ChatReadyGreeting mode="agent"
         assistant="codex"
         cwd="/Users/me/dev/muxpad"
         converted={{ backend: 'codex', cwd: '/Users/me/dev/muxpad', model: 'gpt-5-codex' }}
@@ -63,7 +63,7 @@ describe('the empty chat names what is running in it', () => {
 
   it('omits the model from the receipt when none was pinned', () => {
     const out = html(
-      <ChatReadyGreeting
+      <ChatReadyGreeting mode="agent"
         assistant="claude"
         cwd="/Users/me/dev/muxpad"
         converted={{ backend: 'claude', cwd: '/Users/me/dev/muxpad', model: null }}
@@ -76,7 +76,7 @@ describe('the empty chat names what is running in it', () => {
 
   it('surfaces the server’s refusal verbatim', () => {
     const out = html(
-      <ChatReadyGreeting
+      <ChatReadyGreeting mode="agent"
         assistant="claude"
         cwd={null}
         converted={null}
@@ -266,5 +266,40 @@ describe('the empty state’s wiring', () => {
     // The server refuses on a TRANSCRIPT; a parked send is not one, so nothing
     // downstream would stop a tap from respawning the runner under it.
     expect(src).toContain('queue.length === 0 ? (');
+  });
+});
+
+describe('ChatReadyGreeting — Chat does not name its harness', () => {
+  it('identifies as Chat, not as Claude, and shows no folder', () => {
+    // Chat IS Claude, but that is an implementation fact rather than a choice
+    // the user made — printing "Claude" under a heading called Chat invites
+    // the obvious question. The folder goes for the same reason: in Chat mode
+    // nobody picked it, so showing a path implies a control that isn't there.
+    const html = renderToStaticMarkup(
+      <ChatReadyGreeting
+        mode="chat"
+        assistant="claude"
+        cwd="/Users/me/dev/muxpad"
+        converted={null}
+        refusal={null}
+      />,
+    );
+    expect(html).toContain('Chat');
+    expect(html).not.toContain('Claude');
+    expect(html).not.toContain('/Users/me/dev/muxpad');
+  });
+
+  it('Agent mode still names both — there they ARE your choices', () => {
+    const html = renderToStaticMarkup(
+      <ChatReadyGreeting
+        mode="agent"
+        assistant="claude"
+        cwd="/Users/me/dev/muxpad"
+        converted={null}
+        refusal={null}
+      />,
+    );
+    expect(html).toContain('Claude');
+    expect(html).toContain('/Users/me/dev/muxpad');
   });
 });
