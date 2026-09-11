@@ -83,8 +83,15 @@ export interface NoticeEvent extends Base {
   /** 'cron' is muxpad's own: a scheduled fire landed in this conversation.
    *  It is NOT a status — the pane's existing `working` covers the activity —
    *  just a durable "this turn was started by pr-sweep, not by you" chip in
-   *  the transcript where the message actually is. */
-  variant: 'task' | 'reminder' | 'cron';
+   *  the transcript where the message actually is.
+   *
+   *  'interrupted' is the harness's own "[Request interrupted by user]" —
+   *  the durable record that a turn was STOPPED. Chat mode's reply guard
+   *  reads it (see applyChatVoice): a stopped turn is silence the user asked
+   *  for, so its scratchpad must never be promoted into a bubble. Without a
+   *  transcript-level marker a reload cannot tell a stopped turn from a
+   *  silent one, and the two halves of the guard would disagree. */
+  variant: 'task' | 'reminder' | 'cron' | 'interrupted';
   text: string;
   /** Secondary line, e.g. a task-notification's status. */
   detail?: string;
@@ -132,6 +139,25 @@ export const REPLY_ACK = 'Delivered to the user. [muxpad-reply]';
 
 export function isReplyTool(name: string | undefined | null): boolean {
   return name === REPLY_TOOL_NAME;
+}
+
+/**
+ * The harness's own record that a turn was STOPPED — Claude Code writes it as
+ * a user-role text block (`[Request interrupted by user]`, or `…by user for
+ * tool use]` when the interrupt landed inside a tool call).
+ *
+ * It is recognised here, in the normalizer's vocabulary, because the reply
+ * guard needs it on BOTH sides. The runner knows a turn was interrupted from
+ * its own `interruptRequested` flag and correctly stays quiet
+ * ({@link needsReplyFallback}'s `interrupted` rule). The chat client has only
+ * the transcript — and before this marker was recognised, a reload (or the
+ * render right after Stop) saw a human turn with zero replies and promoted
+ * the agent's private scratchpad into a real bubble. Pressing Stop would put
+ * words on screen that the agent never chose to say, which is the one thing
+ * this whole mechanism exists to prevent.
+ */
+export function isInterruptMarker(text: string): boolean {
+  return /^\s*\[Request interrupted by user\b/.test(text);
 }
 
 /** The text a `reply` call is delivering, or '' if the input is malformed. */
@@ -397,6 +423,10 @@ function wholeTagContent(content: string, tag: string): string | null {
  * including messages that merely have a reminder prepended/appended around what
  * the human typed — so only standalone control messages are intercepted.
  */
+function interruptNotice(id: string, ts: number | null): NoticeEvent {
+  return { kind: 'notice', id, ts, variant: 'interrupted', text: 'Stopped' };
+}
+
 function parseNotice(content: string, id: string, ts: number | null): NoticeEvent | null {
   const task = wholeTagContent(content, 'task-notification');
   if (task !== null) {
@@ -543,6 +573,7 @@ export function normalizeTranscriptLine(line: unknown): ChatEvent[] {
     if (typeof content === 'string') {
       if (!content.trim() || isPlumbingUserText(content)) return [];
       const id = uuid || `u:${ts}`;
+      if (isInterruptMarker(content)) return [interruptNotice(id, ts)];
       const notice = parseNotice(content, id, ts);
       if (notice) return [notice];
       // A cron fire is a user message with a leading marker block — chip +
@@ -555,6 +586,21 @@ export function normalizeTranscriptLine(line: unknown): ChatEvent[] {
       const out: ChatEvent[] = [];
       const diff = diffOf(raw);
       content.forEach((block, i) => {
+        // The interrupt marker arrives in EITHER shape — a bare string when the
+        // turn was stopped between steps, a one-element text block when it was
+        // stopped inside a tool call. The array form used to be dropped whole
+        // (this branch only ever read tool_result blocks), so the stop left no
+        // trace at all in the rendered transcript.
+        if (
+          block &&
+          typeof block === 'object' &&
+          (block as { type?: string }).type === 'text' &&
+          typeof (block as { text?: unknown }).text === 'string' &&
+          isInterruptMarker((block as { text: string }).text)
+        ) {
+          out.push(interruptNotice(`${uuid}:${i}`, ts));
+          return;
+        }
         if (
           block &&
           typeof block === 'object' &&

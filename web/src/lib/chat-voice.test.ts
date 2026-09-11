@@ -4,6 +4,7 @@ import {
   type ChatVoiceOpts,
   applyChatVoice,
   chatVoiceActive,
+  foldsAsActionRun,
   isPrivateReasoning,
 } from './chat-voice';
 
@@ -25,6 +26,14 @@ const cronChip = (): ChatEvent => ({
   ts: 0,
   variant: 'cron',
   text: 'pr-sweep',
+});
+/** The harness's "[Request interrupted by user]", as the normalizer emits it. */
+const stopped = (): ChatEvent => ({
+  kind: 'notice',
+  id: id(),
+  ts: 0,
+  variant: 'interrupted',
+  text: 'Stopped',
 });
 const toolUse = (name: string): ChatEvent => ({
   kind: 'tool_use',
@@ -178,9 +187,59 @@ describe('THE GUARD — the render half', () => {
     expect(voices([user('do it'), toolUse('Bash')])).toEqual(['user', 'tool_use']);
   });
 
+  it('does NOT fire for a turn the user STOPPED — silence is what they asked for', () => {
+    // Live repro: a Chat-mode turn was cut short mid-tool-call, and this pass
+    // promoted the agent's scratchpad ("All files read. Now the sleep.") into
+    // a real bubble — words it never chose to say — while the runner, which
+    // knows the turn was interrupted, correctly stayed silent. The interrupt
+    // notice is the transcript-level signal that survives a reload.
+    expect(voices([user('do it'), prose('working on it'), stopped()])).toEqual([
+      'user',
+      'private',
+      'notice',
+    ]);
+  });
+
+  it('still guards the NEXT turn after a stopped one', () => {
+    expect(
+      voices([user('one'), prose('cut short'), stopped(), user('two'), prose('forgot to reply')]),
+    ).toEqual(['user', 'private', 'notice', 'user', 'fallback']);
+  });
+
   it('each turn is judged on its own', () => {
     expect(voices([user('one'), reply('done one'), user('two'), prose('forgot to reply')])).toEqual(
       ['user', 'reply', 'user', 'fallback'],
     );
+  });
+});
+
+describe('foldsAsActionRun — private reasoning is never left inline', () => {
+  const priv = (text: string): ChatEvent => ({
+    kind: 'assistant',
+    id: id(),
+    ts: 0,
+    text,
+    voice: 'private',
+  });
+
+  it('folds a LONE scratchpad block — the shape a real turn ends in', () => {
+    // Live repro (Chat mode): two replies, then one trailing note — "Both
+    // edits are done; nothing further to track. Task complete." — which the
+    // length rule left sitting visible under the answer. Every live turn that
+    // spoke ended in exactly this shape.
+    expect(foldsAsActionRun([priv('Both edits are done. Task complete.')])).toBe(true);
+  });
+
+  it('still leaves a LONE tool row inline', () => {
+    expect(foldsAsActionRun([toolUse('Bash')])).toBe(false);
+  });
+
+  it('folds any run of two or more, private prose or not', () => {
+    expect(foldsAsActionRun([toolUse('Bash'), toolUse('Read')])).toBe(true);
+    expect(foldsAsActionRun([toolUse('Bash'), priv('thinking out loud')])).toBe(true);
+  });
+
+  it('folds nothing when there is nothing', () => {
+    expect(foldsAsActionRun([])).toBe(false);
   });
 });

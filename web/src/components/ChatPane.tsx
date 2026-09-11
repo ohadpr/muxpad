@@ -43,7 +43,12 @@ import {
   composeOutgoingMessage,
   splitMessageAttachments,
 } from '../lib/attachments';
-import { applyChatVoice, chatVoiceActive, isPrivateReasoning } from '../lib/chat-voice';
+import {
+  applyChatVoice,
+  chatVoiceActive,
+  foldsAsActionRun,
+  isPrivateReasoning,
+} from '../lib/chat-voice';
 import { showFolderChip } from '../lib/nav-row-affordances';
 import {
   type HighlightRun,
@@ -3589,10 +3594,10 @@ export function ChatPane({
         e.kind === 'tool_result' ||
         e.kind === 'thinking' ||
         isPrivateReasoning(e));
-    // Fold from TWO actions up — real transcripts are full of 2-3 action
-    // stretches between prose, and leaving those inline read as "folding
-    // doesn't work". A lone action stays inline.
-    const MIN_GROUP = 2;
+    // Fold from TWO actions up — except a run carrying Chat mode's demoted
+    // prose, which folds even alone. The rule lives in chat-voice.ts
+    // (foldsAsActionRun) next to the demotion that creates those events, so
+    // the two can be pinned together by a test.
     const items: React.ReactNode[] = [];
     for (let i = 0; i < renderable.length; ) {
       const e = renderable[i] as ChatEvent;
@@ -3604,7 +3609,7 @@ export function ChatPane({
       let j = i;
       while (j < renderable.length && isAction(renderable[j] as ChatEvent)) j++;
       const run = renderable.slice(i, j) as ChatEvent[];
-      if (run.length < MIN_GROUP) {
+      if (!foldsAsActionRun(run)) {
         // Explicit arrow, not `.map(renderEvent)`: Array#map passes the INDEX
         // as the second argument, which is now the anchor id.
         items.push(...run.map((ev) => renderEvent(ev, ev.id)));
@@ -4789,6 +4794,7 @@ const NOTICE_ICON: Record<NoticeEvent['variant'], string> = {
   task: '⚙',
   reminder: 'ⓘ',
   cron: '⏱',
+  interrupted: '⏹',
 };
 
 /** Time-of-day for a cron chip, in the VIEWER's zone. The cron's own zone is

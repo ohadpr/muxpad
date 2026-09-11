@@ -69,6 +69,44 @@ export function claudeSystemPromptOption(
   return append ? { type: 'preset', preset: 'claude_code', append } : undefined;
 }
 
+/**
+ * The `reply` tool's description, built from the session's LAUNCH mode.
+ *
+ * A tool description is a system-prompt-strength instruction, and this one used
+ * to open with "your plain assistant text is a private scratchpad they never
+ * see" in both modes. In Agent mode that is false — plain text is the voice
+ * there — and a live Claude, with no way to check, believed it: measured over
+ * live Agent-mode turns, three of five called `reply` and then ALSO wrote a
+ * closing recap for an audience they thought did not exist, so the user read
+ * the same answer twice, the second time in the third person. With the wording
+ * below, zero of seven did.
+ *
+ * Agent mode therefore gets a description that says plainly what is true of
+ * it. The tool stays registered (a mid-session switch cannot add tools) but it
+ * now advertises itself as inert until the switch note says otherwise.
+ *
+ * Exported for tests: constructing the backend spawns a real SDK session, so
+ * the description-building is the testable seam.
+ */
+export function replyToolDescription(mode: AgentMode): string {
+  if (mode !== 'chat') {
+    return [
+      "muxpad's Chat-mode voice. THIS SESSION IS IN AGENT MODE, so you do not need it:",
+      'your ordinary assistant text already reaches the user exactly as it always has.',
+      'Do not call this tool — just write your answer as normal text. Calling it delivers',
+      'your message a SECOND time, on top of the text you wrote, and the user sees it twice.',
+      'It becomes your voice only if muxpad tells you, in a <muxpad-mode> note, that the',
+      'session has switched to Chat mode.',
+    ].join(' ');
+  }
+  return [
+    'Say something to the user. This is your ONLY voice: your plain assistant text is a private scratchpad they never see, and nothing is delivered until it is the content of a reply call.',
+    'Most replies are a sentence or two. Lead with the OUTCOME and the ARTIFACT — the destination a file landed in, the link, the command to run — not a narration of what you did. "Done" on its own is not evidence.',
+    'Several short calls beat one welded paragraph: send two to four, like quick texts, when there is genuinely more than one thing to say.',
+    'When your last reply is sent the turn is over: do not write a closing summary of what you just said. Nobody reads it.',
+  ].join(' ');
+}
+
 // ─── The SDK's task lifecycle → the subagent roster ─────────────────────────
 // The SDK reports background work on its own channel, independent of the
 // message stream: `task_started` / `task_notification` / `task_updated` edges
@@ -572,22 +610,37 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // hides plain text. A pane that launched in Agent mode and was switched to
   // Chat mid-session cannot gain new tools — `mcpServers` is fixed at query()
   // construction, exactly like `systemPrompt` — and a Chat-mode session with no
-  // `reply` tool is a session with no voice at all. In Agent mode the tool is
-  // simply an unused one, and a reply that does arrive still renders as a
-  // normal message (see normalizeTranscriptLine).
+  // `reply` tool is a session with no voice at all.
+  //
+  // …but "in Agent mode the tool is simply an unused one" was WRONG, and a
+  // live model proved it: THREE of five Agent-mode turns called `reply`,
+  // because the description asserted "your plain assistant text is a private
+  // scratchpad they never see" — which in Agent mode is a lie the model has no
+  // way to check. The user saw the answer twice: once as the reply bubble,
+  // then again as a third-person recap ("Told the user, and offered to…"),
+  // because the model wrote its closing prose believing nobody would read it.
+  //
+  // So the DESCRIPTION is built per-session from the launch mode. It is the
+  // one lever available: the text is fixed at query() construction alongside
+  // `systemPrompt` and `mcpServers`, and the launch mode is exactly what the
+  // system prompt was built from, so the two always agree. A mid-session
+  // switch still gets its tool (see wrapModeNote, which restates the contract
+  // in-conversation and, in the agent→chat direction, is the thing that
+  // overrides this description).
   //
   // Counting lives here because this is the only place a reply can happen, and
   // the turn-result guard below needs the count.
   // -------------------------------------------------------------------------
   let repliesThisTurn = 0;
-  let lastReplyText = '';
+  // The turn's FIRST reply, not its last. The contract asks for a short run of
+  // two to four quick texts that LEADS with the outcome — so on a real turn
+  // the last one is routinely the caveat ("one note: the calls ran in
+  // parallel") and the first one is the answer. A push that quotes the
+  // trailing aside tells the user the least useful thing the agent said.
+  let firstReplyText = '';
   const replyTool = tool(
     'reply',
-    [
-      'Say something to the user. This is your ONLY voice: your plain assistant text is a private scratchpad they never see, and nothing is delivered until it is the content of a reply call.',
-      'Most replies are a sentence or two. Lead with the OUTCOME and the ARTIFACT — the destination a file landed in, the link, the command to run — not a narration of what you did. "Done" on its own is not evidence.',
-      'Several short calls beat one welded paragraph: send two to four, like quick texts, when there is genuinely more than one thing to say.',
-    ].join(' '),
+    replyToolDescription(opts.mode),
     {
       text: z
         .string()
@@ -599,7 +652,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       const text = args.text.trim();
       if (!text) return { content: [{ type: 'text' as const, text: REPLY_ACK }] };
       repliesThisTurn++;
-      lastReplyText = text;
+      if (!firstReplyText) firstReplyText = text;
       // Feed the self-titler too: in Chat mode the plain text it would
       // otherwise read is scratchpad, and a title drawn from scratchpad
       // describes the agent's process rather than the conversation.
@@ -726,7 +779,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         interruptRequested = false;
         lastAssistantText = '';
         repliesThisTurn = 0;
-        lastReplyText = '';
+        firstReplyText = '';
         // A cron fire is a relay, not a person: the scheduler wrote it and
         // nobody is sitting there, so it may legitimately end silent. Read off
         // the message itself (the marker rides the text), exactly as ws.ts's
@@ -1054,7 +1107,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       interruptRequested = false;
       lastAssistantText = '';
       repliesThisTurn = 0;
-      lastReplyText = '';
+      firstReplyText = '';
       // Nobody asked for this turn, so nobody is owed an answer for it — the
       // reply guard stays out of the way. (This is the distinction xAI's
       // harness never drew: they applied "you must always reply" everywhere,
@@ -1179,7 +1232,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         }
         // Spoken text wins over scratchpad text for the push body; the guard's
         // fallback is the scratchpad, promoted on purpose.
-        const summary = notifySnippet(lastReplyText || lastAssistantText);
+        const summary = notifySnippet(firstReplyText || lastAssistantText);
         if (interruptRequested) {
           log(dim(`⏹ stopped after ${secs}s`));
           emit({ t: 'turn-done', ok: true, ...(summary ? { summary } : {}) });
