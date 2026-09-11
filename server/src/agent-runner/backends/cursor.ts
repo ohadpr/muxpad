@@ -14,7 +14,6 @@ import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import type { ChatEvent } from '@muxpad/shared';
 import { readAgentInstructions } from '../../agent-instructions.js';
-import { readChatModeOverlay, wrapModeNote } from '../../agent-modes.js';
 import { appendTranscriptEvent, migrateTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
 import type { AgentMode, RunnerFrame } from '../protocol.js';
@@ -69,16 +68,17 @@ export function createCursorBackend(
   let liveSid = opts.requestedSid ?? randomUUID();
   let model = opts.requestedModel;
 
-  // Agent mode — identical contract to codex (see agent-modes.ts): the
-  // overlay is prompt material only on a NEW session's first message; a
-  // mid-session switch is announced once, in-band, on the next message.
-  let currentMode: AgentMode = opts.mode;
-  let pendingModeNote: string | null = null;
+  // Agent mode — and for cursor there is only ONE, identical to codex's
+  // reasoning: Chat mode is built on the in-process `reply` tool, cursor-agent
+  // has no in-process tool surface, so it cannot deliver Chat mode and will
+  // not claim to. See backends/codex.ts for the full note.
+  if (opts.mode === 'chat') {
+    log(dim('chat mode is Claude-only (no in-process reply tool here) — running in Agent mode'));
+  }
   function setMode(next: AgentMode): void {
-    if (next === currentMode) return;
-    currentMode = next;
-    pendingModeNote = wrapModeNote(next, readChatModeOverlay(next));
-    log(dim(`mode → ${next} (announced to the session on the next message)`));
+    if (next === 'chat') {
+      log(dim('chat mode is Claude-only — this cursor session stays in Agent mode'));
+    }
   }
 
   const queue: string[] = [];
@@ -181,28 +181,19 @@ export function createCursorBackend(
       'disabled',
     ];
     const resuming = useResume && !!sessionRef;
-    // Universal muxpad instructions + the Chat-mode overlay — CURSOR injection
-    // mechanism: cursor-agent has NO system-prompt/instructions flag (checked
-    // `--help`; its rules live in user-owned .cursor/rules dirs muxpad must
-    // not write), so — same fallback as codex — prepend the delimited file
-    // content to the FIRST user message of each NEW session (fresh spawns
-    // only; resumes carry it in-thread). Read at spawn time; missing file →
-    // nothing injected, no error. The muxpad transcript records the RAW
-    // prompt (logEvent runs before this), so rendered chat history stays clean.
-    let finalPrompt = prompt;
-    if (resuming) {
-      if (pendingModeNote) {
-        finalPrompt = `${pendingModeNote}\n\n${prompt}`;
-        pendingModeNote = null;
-      }
-    } else {
-      pendingModeNote = null; // the fresh preamble already states the contract
-      finalPrompt = withSessionPreamble(
-        prompt,
-        readAgentInstructions(),
-        readChatModeOverlay(currentMode),
-      );
-    }
+    // Universal muxpad instructions — CURSOR injection mechanism:
+    // cursor-agent has NO system-prompt/instructions flag (checked `--help`;
+    // its rules live in user-owned .cursor/rules dirs muxpad must not write),
+    // so — same fallback as codex — prepend the delimited file content to the
+    // FIRST user message of each NEW session (fresh spawns only; resumes carry
+    // it in-thread). Read at spawn time; missing file → nothing injected, no
+    // error. The muxpad transcript records the RAW prompt (logEvent runs
+    // before this), so rendered chat history stays clean.
+    //
+    // NO mode overlay: cursor is Agent-mode only — see currentMode above.
+    const finalPrompt = resuming
+      ? prompt
+      : withSessionPreamble(prompt, readAgentInstructions(), null);
     if (resuming) args.push('--resume', sessionRef as string);
     if (model) args.push('--model', model);
     args.push(finalPrompt);
@@ -470,7 +461,6 @@ export function createCursorBackend(
     process.stdout.write('\x1b]0;✳ cursor\x07');
     log(`${bold('muxpad agent')} — cursor backend · session ${liveSid}`);
     log(dim(`pane ${host.paneId} · ${process.cwd()}`));
-    if (currentMode === 'chat') log(dim('chat mode — decisive, terse, result-first'));
     authOk = await checkAuth();
     if (!authOk)
       log(dim('cursor-agent not logged in — run `cursor-agent login` in the terminal face'));
