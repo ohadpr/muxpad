@@ -5,6 +5,7 @@ import {
   BASELINE_AGENT_MODE,
   parseCronMarker,
   sanitizeAgentStatus,
+  isBootstrapTabName,
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -420,7 +421,7 @@ export function attachWsServer(deps: {
     if (!tab || panes.listByTab(tab.id).length !== 1) return;
     // The one check that outranks everything else, restart included.
     if (tabs.isNameSticky(tab.id)) return;
-    if (tab.name === 'agent' || tab.name === autoTitledTabs.get(tab.id)) {
+    if (isBootstrapTabName(tab.name) || tab.name === autoTitledTabs.get(tab.id)) {
       if (tab.name !== title) {
         const updated = tabs.update(tab.id, { name: title });
         autoTitledTabs.set(tab.id, title);

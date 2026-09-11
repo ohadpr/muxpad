@@ -92,6 +92,33 @@ export type UrlHealthReason = UrlHealth['reason'];
  * through {@link AgentModeInputSchema} / {@link coerceAgentMode} rather than
  * rejecting and wedging a pane.
  */
+/**
+ * What a freshly bootstrapped agent tab is called until the auto-titler names
+ * it from the conversation.
+ *
+ * It used to be the literal string `'agent'`, which became actively confusing
+ * the day "Agent" started naming a MODE: a new tab that defaults to CHAT mode
+ * was sitting in the rail labelled "agent".
+ *
+ * This doubles as the auto-titler's SENTINEL — ws.ts renames a tab only while
+ * it still wears this name (or the title ws itself last set), so a name the
+ * user typed is never overwritten. Both spellings must therefore be honoured:
+ * a tab created before this change still says `'agent'` on disk and must stay
+ * renameable, which is why {@link isBootstrapTabName} exists rather than a
+ * bare `===`. No migration: these names are transient by design, and rewriting
+ * user-visible rows to fix a label nobody will see for long is not worth a
+ * schema version.
+ */
+export const BOOTSTRAP_TAB_NAME = 'New chat';
+
+/** Legacy bootstrap names still in the wild — see {@link BOOTSTRAP_TAB_NAME}. */
+const LEGACY_BOOTSTRAP_TAB_NAMES = new Set(['agent']);
+
+export function isBootstrapTabName(name: string | null | undefined): boolean {
+  if (!name) return false;
+  return name === BOOTSTRAP_TAB_NAME || LEGACY_BOOTSTRAP_TAB_NAMES.has(name);
+}
+
 export const AgentModeSchema = z.enum(['chat', 'agent']);
 export type AgentMode = z.infer<typeof AgentModeSchema>;
 

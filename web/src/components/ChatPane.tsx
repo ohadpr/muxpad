@@ -357,7 +357,7 @@ function SvgModeGlyph({ mode, size = 12 }: { mode: AgentMode; size?: number }) {
   );
 }
 
-type StatusPanel = 'mode' | 'folder' | 'model' | 'live' | null;
+type StatusPanel = 'folder' | 'model' | 'live' | null;
 
 interface RosterAgent {
   id: string;
@@ -776,7 +776,6 @@ function SessionBar({
   liveLabel,
   agents,
   mode,
-  onModeSwitched,
 }: {
   paneId: string;
   folder: { cwd: string; hasProject: boolean } | null;
@@ -789,7 +788,6 @@ function SessionBar({
   mode: AgentMode | null;
   /** Optimistic local echo + the "here is what actually just happened" notice.
    *  The authoritative value still arrives on the next session frame. */
-  onModeSwitched: (next: AgentMode) => void;
 }) {
   const [panel, setPanel] = useState<StatusPanel>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -802,32 +800,7 @@ function SessionBar({
     if (panel === 'live' && !liveLabel) setPanel(null);
     else if (panel === 'model' && !status) setPanel(null);
     else if (panel === 'folder' && !folder) setPanel(null);
-    else if (panel === 'mode' && !mode) setPanel(null);
   }, [panel, liveLabel, status, folder, mode]);
-
-  // ── Mode switcher state ──────────────────────────────────────────────
-  const [modeBusy, setModeBusy] = useState<AgentMode | null>(null);
-  const [modeErr, setModeErr] = useState<string | null>(null);
-  useEffect(() => {
-    if (panel !== 'mode') setModeErr(null);
-  }, [panel]);
-  const switchMode = async (next: AgentMode) => {
-    if (modeBusy || next === mode) {
-      setPanel(null);
-      return;
-    }
-    setModeBusy(next);
-    setModeErr(null);
-    try {
-      await api.patchPane(paneId, { mode: next });
-      onModeSwitched(next);
-      setPanel(null);
-    } catch (e) {
-      setModeErr(e instanceof Error ? e.message : 'could not switch mode');
-    } finally {
-      setModeBusy(null);
-    }
-  };
 
   // ── Folder switcher state ────────────────────────────────────────────
   const [draft, setDraft] = useState(folder?.cwd ?? '');
@@ -941,55 +914,24 @@ function SessionBar({
 
   return (
     <div className="chat-status-bar" ref={wrapRef}>
+      {/* INDICATOR, NOT A SWITCH. This reads which mode the pane is in and
+          stops there — no menu, no toggle. Switching mid-session was built and
+          then removed: no harness can rewrite a live session's system prompt
+          (agent-modes.ts documents the evidence backend by backend), so the new
+          contract could only ever arrive as a message the conversation drifts
+          from. A control that under-delivers on its own label is worse than no
+          control — a new pane in the mode you want gets the real thing, and
+          that is the only honest way to change it. The mode is still settable
+          at creation and over the API; it just isn't a button here. */}
       {mode ? (
-        <div className="chat-status-seg-wrap">
-          <button
-            type="button"
-            className={`chat-status-seg -mode${panel === 'mode' ? ' is-open' : ''}`}
-            onClick={() => toggle('mode')}
-            aria-haspopup="menu"
-            aria-expanded={panel === 'mode'}
-            title={`${AGENT_MODE_LABELS[mode]} mode — ${
-              MODE_CHOICES.find((m) => m.id === mode)?.desc ?? ''
-            }`}
-          >
-            <SvgModeGlyph mode={mode} />
-            <span className="chat-status-seg-label">{AGENT_MODE_LABELS[mode]}</span>
-          </button>
-          {panel === 'mode' ? (
-            <div className="chat-status-menu chat-mode-menu" role="menu">
-              <div className="chat-session-head">Mode</div>
-              {MODE_CHOICES.map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  role="menuitem"
-                  className={`chat-session-item${m.id === mode ? ' is-active' : ''}`}
-                  disabled={modeBusy !== null}
-                  aria-busy={modeBusy === m.id}
-                  onClick={() => void switchMode(m.id)}
-                >
-                  <span className="chat-session-item-label">{m.label}</span>
-                  <span className="chat-session-item-desc">{m.desc}</span>
-                </button>
-              ))}
-              {/* THE SWITCH MUST NOT LIE. No harness can rewrite a live
-                  session's system prompt (agent-modes.ts documents the
-                  evidence, backend by backend), so switching an existing
-                  conversation is genuinely weaker than opening a new pane in
-                  that mode: the new contract arrives as a message, and a long
-                  session drifts from a message the way it drifts from any
-                  instruction. Saying so here is cheaper than the support cost
-                  of a toggle that silently under-delivers. */}
-              <p className="chat-mode-caveat">
-                Switching takes hold from your <strong>next message</strong> — a running session’s
-                system prompt can’t be rewritten, so it arrives as an instruction in the
-                conversation. A long chat can drift from it. A <strong>new pane</strong> in this
-                mode (or this pane’s next restart) gets the real thing.
-              </p>
-              {modeErr ? <output className="chat-folder-error">{modeErr}</output> : null}
-            </div>
-          ) : null}
+        <div
+          className="chat-status-seg -mode -static"
+          title={`${AGENT_MODE_LABELS[mode]} mode — ${
+            MODE_CHOICES.find((m) => m.id === mode)?.desc ?? ''
+          }`}
+        >
+          <SvgModeGlyph mode={mode} />
+          <span className="chat-status-seg-label">{AGENT_MODE_LABELS[mode]}</span>
         </div>
       ) : null}
 
@@ -4071,20 +4013,6 @@ export function ChatPane({
             liveLabel={liveLabel}
             agents={rosterAgents}
             mode={mode}
-            onModeSwitched={(next) => {
-              // Echo locally so the chip flips on the tap rather than on the
-              // next session frame (up to a 10s poll away when nothing else
-              // is happening); the frame then confirms it.
-              setMode(next);
-              // The receipt states the WEAKER truth, not the flattering one.
-              // A confirmation that just said "Chat mode" would be the lie
-              // the menu's caveat exists to prevent — and this is the moment
-              // the user is actually reading.
-              setNotice({
-                text: `${AGENT_MODE_LABELS[next]} mode — from your next message. A new pane in this mode gets the full contract.`,
-                tone: 'info',
-              });
-            }}
             send={(obj) => {
               const sock = wsRef.current;
               if (!sock || sock.readyState !== WebSocket.OPEN) {
