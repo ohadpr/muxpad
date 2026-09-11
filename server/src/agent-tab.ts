@@ -33,7 +33,7 @@ export interface BootstrapTabDeps {
 
 export interface BootstrapTabInput {
   workspace_id: string;
-  /** Tab name. Omit for the bootstrap defaults ('agent' / a random name). */
+  /** Tab name. Omit for the bootstrap defaults (BOOTSTRAP_TAB_NAME / a random name). */
   name?: string | undefined;
   layout?: LayoutNode | undefined;
   bootstrap?: 'shell' | 'agent' | undefined;
