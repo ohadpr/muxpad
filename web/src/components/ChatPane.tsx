@@ -50,6 +50,9 @@ import {
   isPrivateReasoning,
 } from '../lib/chat-voice';
 import { showFolderChip } from '../lib/nav-row-affordances';
+import type { AgentLink } from '../lib/voice/session';
+import { useVoice } from '../lib/voice/use-voice';
+import { VoiceBar, VoiceControl } from './VoiceControl';
 import {
   type HighlightRun,
   highlightRuns,
@@ -1543,6 +1546,15 @@ export function ChatPane({
   const activeRef = useRef(active);
   activeRef.current = active;
   const wsRef = useRef<WebSocket | null>(null);
+  // Voice mode's tap on the frame stream.
+  //
+  // Voice needs to SEE every server frame (it speaks `speak`/`question` and
+  // narrates progress from the rest) without this component growing a second
+  // renderer for them. A listener set is the smallest thing that does that:
+  // the frames still flow through the same `if (msg.t === …)` chain untouched,
+  // and the voice layer reads a copy. Note this is emphatically NOT a place to
+  // render from — see the ServerMsg comment on `speak`.
+  const frameTaps = useRef(new Set<(raw: unknown) => void>());
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Composer draft, persisted per pane: switching sidebar tabs unmounts the
@@ -1728,6 +1740,16 @@ export function ChatPane({
       // transcript read stalling the pong) must not read as a zombie while
       // stream deltas are flowing.
       lastPongAt.current = Date.now();
+      // Voice's read-only copy, before any branch below can mutate state. It
+      // never renders; it decides what to SAY. A throwing tap must not take
+      // the chat down with it.
+      for (const tap of frameTaps.current) {
+        try {
+          tap(msg);
+        } catch {
+          // a broken voice session is not a broken chat
+        }
+      }
       if (msg.t === 'session') {
         // Session-id changed under the same pane (/clear starts fresh, a
         // resume rotates ids): the rendered log belongs to the OLD id — wipe
@@ -3194,6 +3216,27 @@ export function ChatPane({
   const voiceOn = chatVoiceActive(voiceOpts);
   const voiced = useMemo(() => applyChatVoice(events, voiceOpts), [events, voiceOpts]);
 
+  // ── SPOKEN voice (GPT-Live) ────────────────────────────────────────────────
+  //
+  // Reuses `voiceOn` — the SAME predicate that decides Chat mode's written
+  // voice — so the mic can never appear in Agent mode, and can never appear on
+  // a backend Chat mode doesn't support. One predicate, no second door.
+  //
+  // The link below is the ONLY path from the voice layer to the agent, and it
+  // is the path the composer already uses: `{t:'send'}` and `{t:'stop'}` on
+  // this pane's socket. A spoken request therefore lands in the transcript
+  // verbatim, queues behind a busy agent like any other, and shows on screen
+  // while the model paraphrases it aloud.
+  const agentLink: AgentLink = {
+    send: (text: string) => dispatchSend(text),
+    stop,
+    onFrame: (cb) => {
+      frameTaps.current.add(cb);
+      return () => frameTaps.current.delete(cb);
+    },
+  };
+  const voice = useVoice({ paneId, enabled: voiceOn, agent: agentLink });
+
   // ONE tool-resolution index for everything below (and one place for the
   // "a tool_use is resolved when a tool_result shares its toolUseId" rule).
   // resultFor pairs each call with its result (the collapsed row opens both
@@ -4094,6 +4137,19 @@ export function ChatPane({
               {notice.text}
             </div>
           ) : null}
+          {voiceOn ? (
+            <VoiceBar
+              state={voice.state}
+              detail={voice.detail}
+              status={voice.status}
+              supported={voice.supported}
+              minutesLeft={voice.minutesLeft}
+              elapsedMs={voice.elapsedMs}
+              onStart={voice.start}
+              onStop={() => voice.stop('user')}
+              onDismiss={() => voice.stop('user')}
+            />
+          ) : null}
           <SessionBar
             paneId={paneId}
             folder={folder}
@@ -4138,6 +4194,20 @@ export function ChatPane({
                   <SvgCamera />
                 )}
               </button>
+              {/* Chat mode only — Agent mode is raw, and `voiceOn` is the same
+                  predicate that governs Chat mode's written voice. */}
+              {voiceOn ? (
+                <VoiceControl
+                  state={voice.state}
+                  detail={voice.detail}
+                  status={voice.status}
+                  supported={voice.supported}
+                  minutesLeft={voice.minutesLeft}
+                  elapsedMs={voice.elapsedMs}
+                  onStart={voice.start}
+                  onStop={() => voice.stop('user')}
+                />
+              ) : null}
               <textarea
                 ref={inputRef}
                 className="chat-input"
