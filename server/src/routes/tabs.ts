@@ -5,6 +5,7 @@ import {
   appendLeafToLayout,
   collectLayoutLeaves,
   rollupStatus,
+  BOOTSTRAP_TAB_NAME,
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
@@ -81,7 +82,7 @@ export function tabsRoutes(deps: {
     // random-name default. Rows, events and the eager ptyd spawn live in
     // bootstrapTab — shared verbatim with the cron scheduler's new-tab mode.
     const name =
-      body.name?.trim() || (body.bootstrap === 'agent' ? 'agent' : randomWorkspaceName());
+      body.name?.trim() || (body.bootstrap === 'agent' ? BOOTSTRAP_TAB_NAME : randomWorkspaceName());
     const created = await bootstrapTab(deps, {
       workspace_id: body.workspace_id,
       name,
