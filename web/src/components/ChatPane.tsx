@@ -4143,7 +4143,11 @@ export function ChatPane({
                 placeholder={
                   question
                     ? 'Type an answer, or tap an option…'
-                    : `Message ${assistantLabel(session?.assistant)}…`
+                    : // Chat is addressed as Chat. Naming the harness here was
+                      // the same slip as the greeting: "Message Claude…" under a
+                      // pane that calls itself Chat, in the one mode where the
+                      // harness is not a thing the user chose.
+                      `Message ${mode === 'chat' ? 'Chat' : assistantLabel(session?.assistant)}…`
                 }
                 rows={1}
               />
