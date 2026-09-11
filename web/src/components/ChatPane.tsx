@@ -830,7 +830,7 @@ function SessionBar({
   // segment remounts with stale panel === 'live'|'model'|'folder'.
   useEffect(() => {
     if (panel === 'live' && !liveLabel) setPanel(null);
-    else if (panel === 'model' && !status) setPanel(null);
+    else if (panel === 'model' && (!status || mode === 'chat')) setPanel(null);
     else if (panel === 'folder' && !folder) setPanel(null);
   }, [panel, liveLabel, status, folder, mode]);
 
@@ -986,7 +986,15 @@ function SessionBar({
         </div>
       ) : null}
 
-      {status || assistant ? (
+      {/* CHAT SHOWS NO MODEL AND NO CONTEXT METER. Both are dials, and Chat
+          has none: it runs the default model and compacts itself. A percentage
+          is worse than merely redundant — it is a number that asks to be
+          watched, in the one mode whose whole promise is that you do not have
+          to. `/compact` and `/clear` are slash commands typed in the composer,
+          so nothing here is the only way to reach them. Agent mode keeps the
+          chip: there the model IS your choice and the meter is the budget you
+          are spending. */}
+      {mode !== 'chat' && (status || assistant) ? (
         <div className="chat-status-seg-wrap">
           <button
             type="button"
