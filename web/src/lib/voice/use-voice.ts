@@ -26,6 +26,7 @@ import {
   ScreenWakeLock,
   endReasonMessage,
   isMicDenial,
+  isSilentlyBlocked,
   onBackgrounded,
   requestMic,
   unlockPlayback,
@@ -135,10 +136,14 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
 
   const enableSound = useCallback(async () => {
     const el = voiceAudioElement();
+    // Unmute FIRST. "Tap to hear" that only calls play() is useless against the
+    // failure it exists for — an element that is already playing, muted.
+    el.muted = false;
+    el.volume = 1;
     try {
       await el.play();
       clearSoundCheck();
-      setMuted(false);
+      setMuted(isSilentlyBlocked(el));
     } catch {
       setMuted(true);
     }
@@ -153,11 +158,12 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
     // Both inside the gesture, both before any await that we control.
     void unlockPlayback(audioEl);
     setMuted(false);
-    // If the element is still not playing shortly after the remote track lands,
+    // If the element still isn't AUDIBLE shortly after the remote track lands,
     // treat it as blocked and offer the tap. Cheap poll beats guessing which of
-    // play()'s several rejection paths fired.
+    // play()'s several rejection paths fired. `paused` alone was not enough:
+    // the failure that actually shipped left the element playing and muted.
     const soundCheck = window.setTimeout(() => {
-      if (audioEl.srcObject && audioEl.paused) setMuted(true);
+      if (isSilentlyBlocked(audioEl)) setMuted(true);
     }, 2500);
     soundCheckRef.current = soundCheck;
     const micPromise = requestMic();
@@ -188,6 +194,11 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
         const session = new VoiceSession({
           transport,
           agent: stableAgent.current,
+          // Loud on purpose. The `text`-instead-of-`content` bug rejected every
+          // append for a whole release and produced not one observable symptom
+          // except a voice that never answered; a console warning would have
+          // named it in a minute.
+          onProtocolError: (line) => console.warn('[voice] model rejected an event:', line),
           onState: (s, d) => {
             setState(s);
             if (d) setDetail(d);

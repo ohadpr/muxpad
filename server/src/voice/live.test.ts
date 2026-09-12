@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  DELEGATION_POLICY,
   INTERRUPTION_POLICY,
   VOICE_MODEL,
   VoiceError,
@@ -31,6 +32,15 @@ describe('buildVoiceInstructions', () => {
 
   it('degrades to "(none)" rather than an empty list on a fresh install', () => {
     expect(buildVoiceInstructions([])).toContain('(none)');
+  });
+
+  it('tells the model to say something before it goes quiet for minutes', () => {
+    // There are no built-in fillers in this API. A delegation with no spoken
+    // hand-off is indistinguishable, on a phone, from a dropped call.
+    const out = buildVoiceInstructions([]);
+    expect(out).toContain(DELEGATION_POLICY);
+    expect(DELEGATION_POLICY).toMatch(/never hand off in silence/);
+    expect(DELEGATION_POLICY).toMatch(/MINUTES/);
   });
 });
 

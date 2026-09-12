@@ -43,7 +43,14 @@ import { chunkForAppend } from './chunk';
 import { type DelegationContext, DelegationRegistry } from './delegation';
 import { MicGate } from './mic-gate';
 import type { AppendIntent, InboundEvent, OutboundEvent } from './protocol';
-import { channelOf, isDelegationCreated, isTranscriptDelta } from './protocol';
+import {
+  channelOf,
+  describeSessionError,
+  isAppendAck,
+  isDelegationCreated,
+  isSessionError,
+  isTranscriptDelta,
+} from './protocol';
 import { SpeakBridge, parseChatFrame } from './speak-bridge';
 import { TranscriptBuffer, type Utterance, reconstructRequest } from './transcript';
 import type { TransportState, VoiceTransport } from './transport';
@@ -85,8 +92,20 @@ export const SETTLE_QUIET_MS = 600;
 /** Never hold a delegation longer than this before dispatching what we have.
  *  A trailing subordinate clause is a smaller loss than a dead-air pause. */
 export const SETTLE_MAX_MS = 2500;
-/** Cadence of "still working" thinking appends during a long turn. */
+/** Cadence of the "still working" append during a long turn. SPOKEN — see
+ *  {@link VoiceSession.armHeartbeat}. */
 export const HEARTBEAT_MS = 25_000;
+/**
+ * How long we give the model to say something of its own after a dispatch
+ * before we hand it a filler to speak.
+ *
+ * GPT-Live has NO built-in fillers; whatever the user hears while an agent
+ * works, we put there. In practice the model does volunteer one line off the
+ * back of `session.delegation.created` ("okay, I'm gonna pass that to the
+ * agent, hang on") — so speaking unconditionally would talk over it. Hence a
+ * short grace: fill only the silence that is actually silent.
+ */
+export const DISPATCH_FILLER_MS = 1500;
 /** Silence on the output transcript after which we stop calling it speaking. */
 export const SPEAKING_DECAY_MS = 900;
 
@@ -99,10 +118,15 @@ export interface VoiceSessionOpts {
   settleQuietMs?: number;
   settleMaxMs?: number;
   heartbeatMs?: number;
+  dispatchFillerMs?: number;
   /** Include the model's last line as context in the dispatched request. */
   withContext?: boolean;
   /** Diagnostics, off by default. */
   onTrace?: (line: string) => void;
+  /** An `error` event from the model's wire, already summarised to one line.
+   *  Wire this to something a human will actually see: a rejected append is
+   *  invisible from every other angle. */
+  onProtocolError?: (line: string) => void;
 }
 
 /** Counters worth asserting on in tests and worth showing in a debug panel.
@@ -114,6 +138,11 @@ export interface VoiceSessionStats {
   appendsSent: number;
   requestsDispatched: number;
   bargeIns: number;
+  /** Appends the model acknowledged. `appendsSent` without `appendsAcked` is
+   *  the exact signature of the `text`-instead-of-`content` bug. */
+  appendsAcked: number;
+  /** `error` events received. Anything but zero is a bug on our side. */
+  protocolErrors: number;
 }
 
 export class VoiceSession {
@@ -128,8 +157,13 @@ export class VoiceSession {
   private readonly settleQuietMs: number;
   private readonly settleMaxMs: number;
   private readonly heartbeatMs: number;
+  private readonly dispatchFillerMs: number;
   private readonly withContext: boolean;
   private readonly trace: (line: string) => void;
+  private readonly onProtocolError: (line: string) => void;
+  /** Stamped on every outbound append so a rejection can be traced back to the
+   *  append that caused it rather than merely counted. */
+  private eventSeq = 0;
 
   private unsubs: Array<() => void> = [];
   /** Nothing may be sent before `session.started`. Appends produced earlier
@@ -148,6 +182,7 @@ export class VoiceSession {
   private speakingTimer: number | null = null;
   private settleTimer: number | null = null;
   private heartbeatTimer: number | null = null;
+  private fillerTimer: number | null = null;
   private lastInputDeltaAt = 0;
   /**
    * Which delegation owns the agent turn currently on the wire.
@@ -179,6 +214,8 @@ export class VoiceSession {
     appendsSent: 0,
     requestsDispatched: 0,
     bargeIns: 0,
+    appendsAcked: 0,
+    protocolErrors: 0,
   };
 
   constructor(opts: VoiceSessionOpts) {
@@ -190,8 +227,10 @@ export class VoiceSession {
     this.settleQuietMs = opts.settleQuietMs ?? SETTLE_QUIET_MS;
     this.settleMaxMs = opts.settleMaxMs ?? SETTLE_MAX_MS;
     this.heartbeatMs = opts.heartbeatMs ?? HEARTBEAT_MS;
+    this.dispatchFillerMs = opts.dispatchFillerMs ?? DISPATCH_FILLER_MS;
     this.withContext = opts.withContext ?? true;
     this.trace = opts.onTrace ?? (() => {});
+    this.onProtocolError = opts.onProtocolError ?? (() => {});
   }
 
   /** Subscribe to both wires. Safe to call once. */
@@ -235,6 +274,20 @@ export class VoiceSession {
     }
     if (isDelegationCreated(e)) {
       this.onDelegation(e.delegation.id, e.delegation.target, e.offset_ms);
+      return;
+    }
+    if (isAppendAck(e)) {
+      this.stats.appendsAcked += 1;
+      return;
+    }
+    // NEVER swallow this. An append refused here is an answer the user will
+    // never hear, and it is otherwise completely silent — no throw, no state
+    // change, no missing frame anywhere else in the system.
+    if (isSessionError(e)) {
+      this.stats.protocolErrors += 1;
+      const line = describeSessionError(e);
+      this.trace(`model error: ${line}`);
+      this.onProtocolError(line);
     }
   }
 
@@ -270,6 +323,7 @@ export class VoiceSession {
     this.bridge.reset();
     this.clearSettle();
     this.clearHeartbeat();
+    this.clearFiller();
     // The new task owns no turn yet — in particular it does NOT inherit the
     // one we just stopped.
     this.turnBinding = null;
@@ -339,6 +393,7 @@ export class VoiceSession {
     this.turnBinding = { ctxId: ctx.id, state: 'awaiting' };
     this.trace(`dispatched ${ctx.id}: ${r.text.slice(0, 80)}`);
     this.emit(ctx, { kind: 'thinking', text: `Asked the agent: ${r.text}` });
+    this.armFiller(ctx);
     this.armHeartbeat(ctx);
   }
 
@@ -349,8 +404,41 @@ export class VoiceSession {
 
   // ── Long work ─────────────────────────────────────────────────────────────
 
-  /** A turn that runs for minutes must keep saying so, or the model concludes
-   *  the client died and moves the conversation on without us. */
+  /**
+   * Say SOMETHING once the request is on its way — but only into real silence.
+   *
+   * There are no built-in fillers in this API: every sound the user hears while
+   * an agent works is one we asked for. The model does usually volunteer a line
+   * of its own off `session.delegation.created`, so this waits a beat and fires
+   * only if it didn't — the alternative is two voices saying "hang on" over
+   * each other, which is worse than the dead air it was meant to fix.
+   */
+  private armFiller(ctx: DelegationContext): void {
+    this.clearFiller();
+    const dispatchedAt = this.sched.now();
+    this.fillerTimer = this.sched.setTimeout(() => {
+      this.fillerTimer = null;
+      if (this.disposed || this.registry.isStale(ctx)) return;
+      // The model has spoken since we dispatched; it has already covered this.
+      if (this.lastOutputAt >= dispatchedAt) return;
+      this.emit(ctx, { kind: 'commentary', text: 'On it — this will take a moment.' });
+    }, this.dispatchFillerMs);
+  }
+
+  private clearFiller(): void {
+    if (this.fillerTimer != null) this.sched.clearTimeout(this.fillerTimer);
+    this.fillerTimer = null;
+  }
+
+  /**
+   * A turn that runs for minutes must keep saying so — ALOUD.
+   *
+   * This was a `thinking` append, which is silent by definition, so a
+   * three-minute agent turn was three minutes of dead air with a progress note
+   * the user could not hear. Commentary is the channel that reaches the
+   * speaker; the wording is deliberately an aside rather than an answer, so the
+   * model paraphrases it as one.
+   */
   private armHeartbeat(ctx: DelegationContext): void {
     this.clearHeartbeat();
     this.heartbeatTimer = this.sched.setTimeout(() => {
@@ -358,8 +446,8 @@ export class VoiceSession {
       if (this.disposed || this.registry.isStale(ctx)) return;
       const secs = Math.round((this.sched.now() - ctx.claimedAt) / 1000);
       this.emit(ctx, {
-        kind: 'thinking',
-        text: `Still working — ${secs}s so far, no answer yet.`,
+        kind: 'commentary',
+        text: `Still working on it — ${secs} seconds in, no answer yet.`,
       });
       this.armHeartbeat(ctx);
     }, this.heartbeatMs);
@@ -403,6 +491,7 @@ export class VoiceSession {
         // Emit first, THEN finish: finishing makes the context stale, which is
         // precisely what would swallow the final answer.
         this.clearHeartbeat();
+        this.clearFiller();
         this.turnBinding = null;
         this.registry.finish(ctx.id);
       }
@@ -444,6 +533,7 @@ export class VoiceSession {
     // The conversation has moved: anything still in flight is now stale.
     this.registry.bumpRevision();
     this.clearHeartbeat();
+    this.clearFiller();
     this.turnRunning = false;
     this.trace('barge-in — stopped the agent turn');
   }
@@ -462,8 +552,16 @@ export class VoiceSession {
     }
     const type =
       intent.kind === 'thinking' ? 'session.thinking.append' : 'session.commentary.append';
-    for (const text of chunkForAppend(intent.text)) {
-      const ev = { type, delegation_id: ctx.id, text } as OutboundEvent;
+    for (const content of chunkForAppend(intent.text)) {
+      // `content`, NOT `text` — see protocol.ts. `event_id` is ours to choose
+      // and comes back on any `error` as `client_event_id`, which is the only
+      // way to name the append that was refused.
+      const ev = {
+        type,
+        event_id: `mux_${++this.eventSeq}`,
+        delegation_id: ctx.id,
+        content,
+      } as OutboundEvent;
       if (!this.started) this.outbound.push(ev);
       else {
         this.t.send(ev);
@@ -533,6 +631,7 @@ export class VoiceSession {
     this.disposed = true;
     this.clearSettle();
     this.clearHeartbeat();
+    this.clearFiller();
     if (this.speakingTimer != null) this.sched.clearTimeout(this.speakingTimer);
     this.speakingTimer = null;
     for (const u of this.unsubs) u();
