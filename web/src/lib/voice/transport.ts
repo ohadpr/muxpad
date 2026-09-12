@@ -138,6 +138,13 @@ export async function createRtcTransport(deps: RtcTransportDeps): Promise<RtcTra
     // Wrapping the track ourselves is correct in both cases.
     const stream = ev.streams[0] ?? new MediaStream([ev.track]);
     deps.audioEl.srcObject = stream;
+    // Belt and braces, at the ONE point in the system where audio exists and is
+    // about to be played. An element left muted by a failed unlock upstream
+    // produces a session that is perfect on every instrument and silent in the
+    // only place that matters; this line costs nothing and closes that door for
+    // good.
+    deps.audioEl.muted = false;
+    deps.audioEl.volume = 1;
 
     // Retry once on the next tick: Safari can refuse a play() issued from
     // inside the ontrack callback itself while still allowing the same call a
