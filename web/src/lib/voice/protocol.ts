@@ -73,27 +73,97 @@ export type InboundEvent =
   | SessionStartedEvent
   | TranscriptDeltaEvent
   | DelegationCreatedEvent
+  | SessionErrorEvent
   | UnknownInboundEvent;
+
+/** The acknowledgement for an append. Carries `client_event_id` when we
+ *  stamped one, which is what lets a rejected append be named rather than
+ *  merely counted. */
+export const APPEND_ACK_TYPES = new Set([
+  'session.thinking.appended',
+  'session.commentary.appended',
+  'session.instructions.appended',
+]);
+
+export function isAppendAck(e: InboundEvent): boolean {
+  return APPEND_ACK_TYPES.has(e.type);
+}
+
+/**
+ * THE PAYLOAD FIELD IS `content`. NOT `text`.
+ *
+ * This one word was the whole feature. Both append verbs shipped sending
+ * `text`, and the API answered EVERY one of them with
+ *
+ *   {"type":"error","error":{"code":"missing_required_parameter",
+ *    "message":"Missing required parameter: 'content'.","param":"content"}}
+ *
+ * — on the data channel, where nothing was listening (see
+ * {@link SessionErrorEvent}). So the session looked perfect from every angle we
+ * could see: transcripts flowed, delegations were claimed, requests reached the
+ * agent, appends were "sent" — and not one of them ever reached the model, so
+ * the agent's answers were never spoken. Verified against a live session; the
+ * same append with `content` is acknowledged and read aloud.
+ */
 
 /** Silent progress. The model folds it into its understanding of the world
  *  without speaking it, so it is the right place for "the agent started",
- *  heartbeats on long work, and anything derived from Chat mode's PRIVATE
+ *  the request we dispatched, and anything derived from Chat mode's PRIVATE
  *  scratchpad — which must never be spoken. */
 export interface ThinkingAppend {
   type: 'session.thinking.append';
+  /** Ours to choose. Echoed back on any `error` as `client_event_id`. */
+  event_id?: string;
   delegation_id: string;
-  text: string;
+  content: string;
 }
 
 /** Spoken. Multiple appends per delegation are explicitly supported, and that
  *  is the mechanism for narrating an agent over the minutes it works. */
 export interface CommentaryAppend {
   type: 'session.commentary.append';
+  /** Ours to choose. Echoed back on any `error` as `client_event_id`. */
+  event_id?: string;
   delegation_id: string;
-  text: string;
+  content: string;
 }
 
 export type OutboundEvent = ThinkingAppend | CommentaryAppend;
+
+/**
+ * An append we sent was refused, or the session itself faulted.
+ *
+ * THIS EXISTS BECAUSE IT WAS MISSING. The client parsed every inbound event and
+ * silently discarded anything it did not recognise, which included `error` —
+ * so a protocol mistake that rejected 100% of our appends produced no log line,
+ * no counter and no UI. An error channel nobody reads is the same as no error
+ * channel at all.
+ */
+export interface SessionErrorEvent {
+  type: 'error';
+  error: {
+    type?: string;
+    code?: string;
+    message?: string;
+    param?: string;
+    /** The `event_id` WE put on the offending client event, when we set one. */
+    client_event_id?: string;
+  };
+}
+
+export function isSessionError(e: InboundEvent): e is SessionErrorEvent {
+  const err = (e as SessionErrorEvent).error;
+  return e.type === 'error' && !!err && typeof err === 'object';
+}
+
+/** One line, safe to log, never empty. */
+export function describeSessionError(e: SessionErrorEvent): string {
+  const { code, message, param, client_event_id } = e.error;
+  const parts = [message || code || 'unspecified error'];
+  if (param) parts.push(`(param: ${param})`);
+  if (client_event_id) parts.push(`[for ${client_event_id}]`);
+  return parts.join(' ');
+}
 
 /** What the session wants said or noted, before a delegation id is stamped on
  *  it and before it is chunked. The bridge that turns chat frames into these

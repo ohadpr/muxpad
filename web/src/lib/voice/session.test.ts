@@ -12,6 +12,7 @@ import { MicGate } from './mic-gate';
 import { APPEND_TOKEN_CAP, type InboundEvent, type OutboundEvent } from './protocol';
 import {
   type AgentLink,
+  DISPATCH_FILLER_MS,
   SETTLE_MAX_MS,
   SETTLE_QUIET_MS,
   type Scheduler,
@@ -130,7 +131,13 @@ function fakeAgent(): FakeAgent {
 
 // ── Harness ─────────────────────────────────────────────────────────────────
 
-function harness(opts: { withContext?: boolean; micGate?: MicGate } = {}) {
+function harness(
+  opts: {
+    withContext?: boolean;
+    micGate?: MicGate;
+    onProtocolError?: (line: string) => void;
+  } = {},
+) {
   const clock = new FakeClock();
   const transport = fakeTransport();
   const agent = fakeAgent();
@@ -142,6 +149,7 @@ function harness(opts: { withContext?: boolean; micGate?: MicGate } = {}) {
     onState: (s) => states.push(s),
     withContext: opts.withContext ?? false,
     ...(opts.micGate ? { micGate: opts.micGate } : {}),
+    ...(opts.onProtocolError ? { onProtocolError: opts.onProtocolError } : {}),
   });
   session.start();
 
@@ -159,9 +167,9 @@ function harness(opts: { withContext?: boolean; micGate?: MicGate } = {}) {
     });
 
   const commentary = () =>
-    transport.sent.filter((e) => e.type === 'session.commentary.append').map((e) => e.text);
+    transport.sent.filter((e) => e.type === 'session.commentary.append').map((e) => e.content);
   const thinking = () =>
-    transport.sent.filter((e) => e.type === 'session.thinking.append').map((e) => e.text);
+    transport.sent.filter((e) => e.type === 'session.thinking.append').map((e) => e.content);
 
   return {
     clock,
@@ -347,11 +355,11 @@ describe('stale results are dropped, not spoken', () => {
     h.settle();
     h.agent.frame({ t: 'turn-start' });
     h.clock.advance(30_000);
-    const beats = h.thinking().filter((t) => t.includes('Still working')).length;
+    const beats = h.commentary().filter((t) => t.includes('Still working')).length;
     expect(beats).toBeGreaterThan(0);
     h.agent.frame({ t: 'turn-done', ok: true });
     h.clock.advance(120_000);
-    expect(h.thinking().filter((t) => t.includes('Still working')).length).toBe(beats);
+    expect(h.commentary().filter((t) => t.includes('Still working')).length).toBe(beats);
   });
 });
 
@@ -412,9 +420,10 @@ describe('narrating an agent that takes minutes', () => {
     h.settle();
     h.agent.frame({ t: 'turn-start' });
     expect(h.session.state).toBe('thinking');
-    // Two minutes of work, and the session is still alive and still narrating.
+    // Two minutes of work, and the session is still alive and still narrating —
+    // ALOUD. A silent `thinking` heartbeat is two minutes of dead air.
     h.clock.advance(120_000);
-    expect(h.thinking().filter((t) => t.includes('Still working')).length).toBeGreaterThanOrEqual(
+    expect(h.commentary().filter((t) => t.includes('Still working')).length).toBeGreaterThanOrEqual(
       4,
     );
   });
@@ -429,7 +438,9 @@ describe('narrating an agent that takes minutes', () => {
     h.agent.frame({ t: 'speak-delta', id: 'r1', delta: 'Found the bug. ' });
     h.agent.frame({ t: 'speak-delta', id: 'r1', delta: 'Fixing it now. ' });
     h.agent.frame({ t: 'speak', id: 'r1', text: 'Found the bug. Fixing it now. Done.' });
-    expect(h.commentary()).toEqual(['Found the bug.', 'Fixing it now.', 'Done.']);
+    // The leading entry is the dispatch filler (the model said nothing of its
+    // own here); the answer follows it, split at sentence boundaries.
+    expect(h.commentary().slice(1)).toEqual(['Found the bug.', 'Fixing it now.', 'Done.']);
   });
 
   it('speaks a question — that is the agent needing you', () => {
@@ -463,7 +474,7 @@ describe('narrating an agent that takes minutes', () => {
     h.agent.frame({ t: 'turn-start' });
     h.agent.frame({ t: 'stream', delta: 'The user is probably wrong about this.' });
     h.agent.frame({ t: 'stream', delta: ' I will not say that out loud.' });
-    const everything = h.transport.sent.map((e) => e.text).join(' ');
+    const everything = h.transport.sent.map((e) => e.content).join(' ');
     expect(everything).not.toContain('probably wrong');
     expect(everything).not.toContain('out loud');
   });
@@ -686,5 +697,137 @@ describe('a custom mic gate is honoured', () => {
     h.agent.frame({ t: 'turn-start' });
     h.hear('no', 10_000, 10_050);
     expect(h.agent.stops).toBe(1);
+  });
+});
+
+// ── The three ways voice mode shipped silent ────────────────────────────────
+//
+// Every one of these was invisible in production: no throw, no failed frame, no
+// state change. They are here because "it looks like it is working" is exactly
+// what each of them looked like.
+
+describe('the append wire format', () => {
+  it('sends the payload as `content` — `text` is rejected by the model, silently', () => {
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.agent.frame({ t: 'turn-start' });
+    h.agent.frame({ t: 'speak', id: 'r1', text: 'They pass.', n: 1 });
+
+    expect(h.transport.sent.length).toBeGreaterThan(0);
+    for (const e of h.transport.sent) {
+      expect(typeof e.content).toBe('string');
+      expect(e.content.length).toBeGreaterThan(0);
+      // The whole bug, in one assertion: an append carrying `text` is answered
+      // with `missing_required_parameter: 'content'` and never reaches the model.
+      expect(e).not.toHaveProperty('text');
+    }
+  });
+
+  it('stamps an event_id so a rejection can be traced to the append that caused it', () => {
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    const ids = h.transport.sent.map((e) => e.event_id);
+    expect(ids.every((id) => typeof id === 'string' && id.length > 0)).toBe(true);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe('errors on the model wire are never swallowed', () => {
+  it('surfaces a rejected append instead of discarding it as an unknown event', () => {
+    const seen: string[] = [];
+    const h = harness({ onProtocolError: (l) => seen.push(l) });
+    h.started();
+    h.transport.emit({
+      type: 'error',
+      error: {
+        type: 'invalid_request_error',
+        code: 'missing_required_parameter',
+        message: "Missing required parameter: 'content'.",
+        param: 'content',
+        client_event_id: 'mux_1',
+      },
+    });
+    expect(h.session.stats.protocolErrors).toBe(1);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain("Missing required parameter: 'content'.");
+    expect(seen[0]).toContain('mux_1');
+  });
+
+  it('counts acknowledgements, so sent-without-acked is visible', () => {
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    expect(h.session.stats.appendsSent).toBeGreaterThan(0);
+    expect(h.session.stats.appendsAcked).toBe(0);
+    h.transport.emit({ type: 'session.thinking.appended', client_event_id: 'mux_1' });
+    h.transport.emit({ type: 'session.commentary.appended', client_event_id: 'mux_2' });
+    expect(h.session.stats.appendsAcked).toBe(2);
+  });
+
+  it('an error does not end the session or change the UI state', () => {
+    const h = harness();
+    h.started();
+    const before = h.session.state;
+    h.transport.emit({ type: 'error', error: { message: 'nope' } });
+    expect(h.session.state).toBe(before);
+  });
+});
+
+describe('filling the silence while an agent works', () => {
+  it('speaks a filler shortly after dispatch — there are no built-in ones', () => {
+    const h = harness();
+    h.started();
+    h.hear('do a big thing.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.clock.advance(SETTLE_QUIET_MS + 10);
+    expect(h.agent.sends).toHaveLength(1);
+    // Nothing spoken yet — the model is given a beat to say something itself.
+    expect(h.commentary()).toEqual([]);
+    h.clock.advance(DISPATCH_FILLER_MS + 10);
+    expect(h.commentary().join(' ')).toMatch(/on it/i);
+  });
+
+  it('stays quiet when the model already spoke for itself — no two voices', () => {
+    const h = harness();
+    h.started();
+    h.hear('do a big thing.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.clock.advance(SETTLE_QUIET_MS + 10);
+    // The model volunteers its own "hang on" off the delegation, as it does.
+    h.speaks('Okay, hang on.', 2200, 2600);
+    h.clock.advance(DISPATCH_FILLER_MS + 10);
+    expect(h.commentary()).toEqual([]);
+  });
+
+  it('drops the filler when the user has already moved on', () => {
+    const h = harness();
+    h.started();
+    h.hear('do a big thing.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.clock.advance(SETTLE_QUIET_MS + 10);
+    h.hear('no, something else.', 3000, 4000);
+    h.delegate('d2', 4100);
+    h.clock.advance(DISPATCH_FILLER_MS + 10);
+    expect(h.commentary().filter((t) => /on it/i.test(t))).toEqual([]);
+  });
+
+  it('the long-work heartbeat is SPOKEN, not a silent thinking note', () => {
+    const h = harness();
+    h.started();
+    h.hear('do a long thing.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.agent.frame({ t: 'turn-start' });
+    h.clock.advance(60_000);
+    expect(h.commentary().filter((t) => t.includes('Still working')).length).toBeGreaterThan(0);
+    expect(h.thinking().filter((t) => t.includes('Still working'))).toEqual([]);
   });
 });

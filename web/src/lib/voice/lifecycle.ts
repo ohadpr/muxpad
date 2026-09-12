@@ -106,31 +106,76 @@ export function voiceAudioElement(): HTMLAudioElement {
 }
 
 /**
+ * 25ms of silence, inline: a 444-byte mono 8kHz PCM WAV.
+ *
+ * IT HAS TO BE A REAL SOURCE, AND IT HAS TO HAVE SAMPLES. `play()` on a media
+ * element with NO source at all does not resolve and does not reject — the
+ * resource selection algorithm ends in NETWORK_EMPTY and the promise sits
+ * PENDING FOR THE LIFE OF THE PAGE (verified in Chrome; the same shape in
+ * Safari). Nothing after that `await` ever runs, which is precisely how this
+ * file left the output element muted forever. A zero-length `data` chunk is not
+ * good enough either — some decoders error on it, and an error here is a
+ * rejected play() on the one code path that must not have one.
+ */
+const SILENT_WAV =
+  'data:audio/wav;base64,UklGRrQBAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YZABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+
+/**
  * Unlock playback inside a gesture, and resume any AudioContext that has
  * drifted. Safe to call on every gesture; cheap and idempotent.
  *
  * The muted-play trick is what actually flips Safari's per-element permission
  * bit: play a silent element inside the gesture, immediately pause it, and the
  * element is blessed for the rest of the page's life.
+ *
+ * ═══ THE BUG THIS FUNCTION SHIPPED WITH, BECAUSE IT IS WORTH REMEMBERING ═══
+ *
+ * It set `el.muted = true`, awaited `el.play()` on a source-less element — a
+ * promise that never settles, see {@link SILENT_WAV} — and so never reached the
+ * `el.muted = false` two lines below. The shared element stayed MUTED for the
+ * whole life of the page. Everything downstream then worked perfectly: the
+ * remote track arrived, `srcObject` was set, `play()` resolved, `paused` went
+ * false, RTP flowed, transcripts scrolled past — and the user heard NOTHING,
+ * with no error anywhere and no "tap to hear" affordance, because that
+ * affordance keyed off `paused` and the element was playing. Silently. Muted.
+ *
+ * Hence: a real source to play, and `muted`/`volume` restored in a `finally`
+ * that no failure path can skip.
  */
 export async function unlockPlayback(el: HTMLAudioElement, ctx?: AudioContext | null) {
   try {
-    if (!el.srcObject) {
-      el.muted = true;
+    if (el.srcObject) {
       await el.play();
-      el.pause();
-      el.muted = false;
     } else {
-      await el.play();
+      el.muted = true;
+      el.src = SILENT_WAV;
+      try {
+        await el.play();
+        el.pause();
+      } finally {
+        el.removeAttribute('src');
+        el.load();
+      }
     }
   } catch {
     // Denied autoplay is survivable — the ontrack handler retries.
+  } finally {
+    // The one line that must run no matter which path got here.
+    el.muted = false;
+    el.volume = 1;
   }
   // 'interrupted' is iOS-only and absent from the TS union, hence the cast.
   const state = ctx?.state as string | undefined;
   if (ctx && (state === 'suspended' || state === 'interrupted')) {
     await ctx.resume().catch(() => {});
   }
+}
+
+/** True when the element is receiving audio it cannot make audible — either
+ *  refused playback or left muted. Both are the same thing to a user on a
+ *  phone: a live session making no sound. */
+export function isSilentlyBlocked(el: HTMLAudioElement): boolean {
+  return !!el.srcObject && (el.paused || el.muted || el.volume === 0);
 }
 
 interface WakeLockSentinelLike {

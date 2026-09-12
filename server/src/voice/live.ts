@@ -41,6 +41,23 @@ export const DEFAULT_VOICE = 'marin';
 export const INTERRUPTION_POLICY =
   'Interruption policy: Stop speaking when the user interrupts. Listen to what they say.';
 
+/**
+ * What to do about the minutes an agent turn takes.
+ *
+ * A coding agent answers in MINUTES; this model answers in milliseconds. Left
+ * to itself it delegates and then goes quiet, and the user — who is holding a
+ * phone with nothing on screen — hears an unbroken silence they cannot tell
+ * from a dropped call. There is no built-in filler in this API, so the only
+ * ways to make a sound are this instruction and the client's own appends.
+ */
+export const DELEGATION_POLICY = [
+  'Anything about this user’s code, repos, files, panes or running work goes to the agent —',
+  'delegate it rather than guessing. The agent takes MINUTES, not seconds.',
+  'The moment you hand something over, say one short line so the user knows you heard them',
+  '("on it", "let me check") — never hand off in silence. While you wait, stay conversational:',
+  'answer anything else they ask, and keep it brief. Say results in your own words when they arrive.',
+].join('\n');
+
 /** How long we wait on the SDP exchange. An offer/answer is one small HTTP
  *  round trip; if it hasn't landed in 15s the user is staring at a dead mic
  *  button and an honest failure beats a longer wait. */
@@ -121,6 +138,12 @@ export function buildVoiceInstructions(glossary: readonly string[]): string {
     'say so.',
     '',
     INTERRUPTION_POLICY,
+    '',
+    // THERE ARE NO BUILT-IN FILLERS. Every sound made while the agent works is
+    // one somebody asked for — the client sends a spoken filler if this line
+    // fails to produce one, but the model's own words are better than ours, so
+    // ask for them first. See session.ts's dispatch filler for the backstop.
+    DELEGATION_POLICY,
     '',
     // Same reasoning as chat/clean-transcript.ts: the multi-word mishearings are
     // the ones that need naming, because each word is ordinary English and only
