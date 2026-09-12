@@ -129,12 +129,22 @@ export async function createRtcTransport(deps: RtcTransportDeps): Promise<RtcTra
   for (const track of deps.micStream.getAudioTracks()) pc.addTrack(track, deps.micStream);
 
   pc.ontrack = (ev: RTCTrackEvent) => {
-    const [stream] = ev.streams;
-    if (stream) deps.audioEl.srcObject = stream;
-    // Autoplay can still be refused even after a gesture if the element was
-    // never played; a rejected promise here is not fatal, the caller's gesture
-    // handler retries play() on the same element.
-    void deps.audioEl.play?.().catch(() => {});
+    // NEVER require ev.streams. OpenAI's answer carries `a=msid-semantic:WMS *`,
+    // and a track arriving with no associated stream is a normal outcome of
+    // that — the browser hands you the track and an EMPTY streams array. The
+    // original code only attached when a stream was present, so the remote
+    // audio was received and then dropped on the floor: the session looked
+    // perfect from the sending side (it hears you) and was silent coming back.
+    // Wrapping the track ourselves is correct in both cases.
+    const stream = ev.streams[0] ?? new MediaStream([ev.track]);
+    deps.audioEl.srcObject = stream;
+
+    // Retry once on the next tick: Safari can refuse a play() issued from
+    // inside the ontrack callback itself while still allowing the same call a
+    // moment later on an element a gesture has already blessed.
+    const tryPlay = () => void deps.audioEl.play?.().catch(() => {});
+    tryPlay();
+    setTimeout(tryPlay, 150);
   };
 
   pc.onconnectionstatechange = () => {

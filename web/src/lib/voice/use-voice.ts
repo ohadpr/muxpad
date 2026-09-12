@@ -56,6 +56,10 @@ export interface UseVoiceResult {
   /** MUST be called straight from a click handler. */
   start: () => void;
   stop: (reason?: EndReason) => void;
+  /** Audio arrived but the browser refused to play it — offer a tap. */
+  muted: boolean;
+  /** Unblock playback. MUST be called straight from a click handler. */
+  enableSound: () => Promise<void>;
 }
 
 const hasVoiceApis = () =>
@@ -117,6 +121,29 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
     void fetchVoiceStatus().then(setStatus);
   }, []);
 
+  // Playback can be refused even after a gesture (Safari ties permission to the
+  // ELEMENT, and an element that has never played is not blessed). On a phone
+  // that failure is invisible — you talk, it answers, you hear nothing — so it
+  // has to become a tappable affordance rather than a console warning.
+  const [muted, setMuted] = useState(false);
+  const soundCheckRef = useRef<number | undefined>(undefined);
+
+  const clearSoundCheck = () => {
+    if (soundCheckRef.current !== undefined) window.clearTimeout(soundCheckRef.current);
+    soundCheckRef.current = undefined;
+  };
+
+  const enableSound = useCallback(async () => {
+    const el = voiceAudioElement();
+    try {
+      await el.play();
+      clearSoundCheck();
+      setMuted(false);
+    } catch {
+      setMuted(true);
+    }
+  }, []);
+
   const start = useCallback(() => {
     if (!enabled || !supported || sessionRef.current) return;
     setDetail(null);
@@ -125,6 +152,14 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
     const audioEl = voiceAudioElement();
     // Both inside the gesture, both before any await that we control.
     void unlockPlayback(audioEl);
+    setMuted(false);
+    // If the element is still not playing shortly after the remote track lands,
+    // treat it as blocked and offer the tap. Cheap poll beats guessing which of
+    // play()'s several rejection paths fired.
+    const soundCheck = window.setTimeout(() => {
+      if (audioEl.srcObject && audioEl.paused) setMuted(true);
+    }, 2500);
+    soundCheckRef.current = soundCheck;
     const micPromise = requestMic();
 
     void (async () => {
@@ -220,5 +255,9 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
     elapsedMs,
     start,
     stop,
+    /** True when audio arrived but the browser refused to play it. */
+    muted,
+    /** Call from a user gesture to unblock playback. */
+    enableSound,
   };
 }
