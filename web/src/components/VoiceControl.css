@@ -195,3 +195,19 @@
     display: none; /* the clock is the number that matters on a phone */
   }
 }
+
+/* "Tap to hear" — shown when audio is arriving and the browser refused to play
+   it. Styled as the bar's primary word, in the slot the state label occupies,
+   because in that moment it IS the state: the session is fine, the sound is
+   not. */
+.voice-bar-unmute {
+  font: inherit;
+  font-weight: 650;
+  color: var(--accent-fg);
+  background: var(--accent);
+  border: 0;
+  border-radius: 999px;
+  padding: 4px 12px;
+  min-height: 30px;
+  cursor: pointer;
+}
