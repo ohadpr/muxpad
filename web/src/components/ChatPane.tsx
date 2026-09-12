@@ -4147,6 +4147,8 @@ export function ChatPane({
               elapsedMs={voice.elapsedMs}
               onStart={voice.start}
               onStop={() => voice.stop('user')}
+              muted={voice.muted}
+              onEnableSound={() => void voice.enableSound()}
               onDismiss={() => voice.stop('user')}
             />
           ) : null}

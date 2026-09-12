@@ -158,6 +158,10 @@ export function VoiceControl({
 
 export interface VoiceBarProps extends VoiceControlProps {
   onDismiss: () => void;
+  /** Audio is arriving but the browser refused to play it. */
+  muted?: boolean;
+  /** Unblock playback — must run straight from this click. */
+  onEnableSound?: () => void;
 }
 
 /**
@@ -170,7 +174,8 @@ export interface VoiceBarProps extends VoiceControlProps {
  * copy, not the main exit.
  */
 export function VoiceBar(props: VoiceBarProps) {
-  const { state, detail, minutesLeft, elapsedMs, onStop, onDismiss } = props;
+  const { state, detail, minutesLeft, elapsedMs, onStop, onDismiss, muted, onEnableSound } =
+    props;
   const live = isLive(state);
   if (!live && !detail) return null;
 
@@ -190,7 +195,17 @@ export function VoiceBar(props: VoiceBarProps) {
     // biome-ignore lint/a11y/useSemanticElements: same — a live region for session state, not a form result.
     <div className={`voice-bar -live -${state}`} role="status" data-testid="voice-bar">
       <span className="voice-dot" aria-hidden="true" />
-      <span className="voice-bar-state">{stateLabel(state)}</span>
+      {/* Refused playback is INVISIBLE on a phone — you talk, it answers, you
+          hear nothing, and there is no console to check. Safari ties the
+          permission to the element rather than the page, so the fix is one tap
+          from a real gesture; it just has to be offered. */}
+      {muted && onEnableSound ? (
+        <button type="button" className="voice-bar-unmute" onClick={onEnableSound}>
+          Tap to hear
+        </button>
+      ) : (
+        <span className="voice-bar-state">{stateLabel(state)}</span>
+      )}
       <span className="voice-bar-clock" title="Time in this session">
         {clockOf(elapsedMs)}
       </span>
