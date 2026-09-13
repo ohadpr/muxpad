@@ -179,6 +179,103 @@ describe('agent-runner relay', () => {
     chat2.close();
   });
 
+  // ── turn-start carries the message that started it ────────────────────────
+  //
+  // The CORRELATION IDENTIFIER. Chat frames are a flat per-pane stream with no
+  // send id on them, so a client with two requests in flight — the voice layer,
+  // which can have one task running and another queued — cannot otherwise tell
+  // whose answer a `speak` is. Guessing "the first turn-start after my send"
+  // mis-attributes the moment anyone else sends into the same pane.
+  it('stamps turn-start with the send that started the turn', async () => {
+    const { port, paneId } = await boot();
+    const { sock: runner } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: false }));
+    const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
+    await fromChat.next((f) => f.t === 'session');
+
+    chat.send(JSON.stringify({ t: 'send', text: 'run the tests' }));
+    await fromChat.next((f) => f.t === 'send-ack');
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    const start = await fromChat.next((f) => f.t === 'turn-start');
+    expect(start.text).toBe('run the tests');
+
+    runner.close();
+    chat.close();
+  });
+
+  it('stamps each queued send onto its OWN turn, in order', async () => {
+    const { port, paneId } = await boot();
+    const { sock: runner } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: false }));
+    const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
+    await fromChat.next((f) => f.t === 'session');
+
+    chat.send(JSON.stringify({ t: 'send', text: 'first task' }));
+    await fromChat.next((f) => f.t === 'send-ack');
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await fromChat.next((f) => f.t === 'turn-start' && f.text === 'first task');
+
+    // A second send mid-turn is parked in the server's queue…
+    chat.send(JSON.stringify({ t: 'send', text: 'second task' }));
+    await fromChat.next((f) => f.t === 'queued');
+    // …and drains when the first turn ends, carrying its own stamp.
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true }));
+    await fromChat.next((f) => f.t === 'turn-done');
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await fromChat.next((f) => f.t === 'turn-start' && f.text === 'second task');
+    // Two turns, two different stamps — never the same message twice.
+    const stamps = fromChat.frames.filter((f) => f.t === 'turn-start').map((f) => f.text);
+    expect(stamps).toEqual(['first task', 'second task']);
+
+    runner.close();
+    chat.close();
+  });
+
+  it('leaves turn-start unstamped for a turn nobody sent', async () => {
+    const { port, paneId } = await boot();
+    const { sock: runner } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: false }));
+    const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
+    await fromChat.next((f) => f.t === 'session');
+
+    // A cron fire or a wakeup inside the persistent SDK session: the turn starts
+    // with no send behind it. An unstamped turn is what tells a voice client
+    // "this one is not yours" — stamping it with a stale message would hand the
+    // autonomous turn's output to whatever the user last asked for.
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    const start = await fromChat.next((f) => f.t === 'turn-start');
+    expect(start.text).toBeUndefined();
+
+    runner.close();
+    chat.close();
+  });
+
+  it('consumes the stamp, so the NEXT turn cannot inherit it', async () => {
+    const { port, paneId } = await boot();
+    const { sock: runner } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: false }));
+    const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
+    await fromChat.next((f) => f.t === 'session');
+
+    chat.send(JSON.stringify({ t: 'send', text: 'the only send' }));
+    await fromChat.next((f) => f.t === 'send-ack');
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await fromChat.next((f) => f.t === 'turn-start' && f.text === 'the only send');
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true }));
+    await fromChat.next((f) => f.t === 'turn-done');
+
+    // A second turn with no send behind it must not re-use the last message —
+    // that would hand an autonomous turn's output to whatever the user last
+    // asked for, which is the mis-attribution the stamp exists to prevent.
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await fromChat.next((f) => f.t === 'turn-start' && f.text === undefined);
+    const stamps = fromChat.frames.filter((f) => f.t === 'turn-start').map((f) => f.text);
+    expect(stamps).toEqual(['the only send', undefined]);
+
+    runner.close();
+    chat.close();
+  });
+
   it('idle stop with no recent send resyncs only the requesting socket', async () => {
     const { port, paneId } = await boot();
     const { sock: runner, rx: fromServer } = await openSock(
