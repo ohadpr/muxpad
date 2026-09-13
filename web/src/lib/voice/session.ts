@@ -1,46 +1,103 @@
 // THE DELEGATION LOOP.
 //
 // Everything else in this folder is a part; this is the machine. It owns one
-// live conversation: transcript in, delegations claimed, requests dispatched to
-// the Chat pane over the socket that already exists, results narrated back as
+// live conversation: transcript in, tasks claimed, requests dispatched to the
+// Chat pane over the socket that already exists, results narrated back as
 // appends.
 //
 // ═══ THE ONE IDEA THAT SHAPES ALL OF IT ═══
 //
 // AN AGENT TURN TAKES MINUTES. A VOICE MODEL WILL NOT WAIT.
 //
-// So there is no point in the code where a delegation is "handled" — no
-// await that spans the work, no promise resolved with an answer. A delegation
-// is ACKNOWLEDGED in milliseconds with a silent `thinking` append (which is
-// what lets the model say "on it" in its own words), the request goes out on
-// the chat socket, and then results arrive over the following minutes as
-// `commentary` appends against the same delegation id. Multiple appends per
-// delegation are explicitly supported; that support IS the feature.
+// So there is no point in the code where a task is "handled" — no await that
+// spans the work, no promise resolved with an answer. A task is ACKNOWLEDGED in
+// milliseconds with a silent `thinking` append (which is what lets the model say
+// "on it" in its own words), the request goes out on the chat socket, and then
+// results arrive over the following minutes as appends against the same task id.
 //
-// ═══ THE FOUR THINGS THAT GO WRONG, AND WHERE EACH IS HANDLED ═══
+// ═══ AND THE ONE THAT USED TO BE MISSING: TALKING IS FREE ═══
 //
-//   DUPLICATE DELEGATION. Delivery is not exactly-once. Claimed in
-//     delegation.ts before any work starts; a second delivery of an id we have
-//     ever seen returns null and we do nothing at all.
-//   NO TASK TEXT. `session.delegation.created` is metadata. The utterance is
-//     rebuilt from transcript deltas by transcript.ts, joined on `offset_ms`.
-//   THE SENTENCE ISN'T FINISHED YET. The delegation can and does beat the
-//     transcript. Hence the SETTLE WINDOW below: hold briefly for quiet, then
-//     take what we have. Bounded, because the alternative to a slightly
-//     truncated request is no request.
-//   THE USER MOVED ON. Revisions. Every deferred path re-checks staleness
-//     before it acts, and a superseded delegation's results are dropped rather
-//     than spoken over a conversation that has changed topic.
+// SPEAKING IS NOT A KILL SWITCH. This session used to fire `{t:'stop'}` at the
+// agent whenever the user made a noise over a running turn, and to invalidate
+// everything in flight whenever a second delegation arrived. Together those made
+// the product unusable in the way that matters most: you could not ask "how's it
+// going?" without destroying the work you were asking about.
+//
+// The rule now is LiveKit's, in their words: INTERRUPTING IS NOT CANCELLING.
+// Barge-in is about the floor — who is talking — and has nothing to do with
+// whether work continues. Nova Sonic states the invariant we hold ourselves to:
+// no automatic cancellation on new user input, and a result that was asked for
+// is delivered even if the user has since changed their mind about wanting it.
+//
+// ═══ THREE SEPARATE DECISIONS, KEPT SEPARATE ═══
+//
+//   IDENTITY + STATUS lives in delegation.ts as a durable task record with a
+//     stable id and an explicit lifecycle. Nothing here infers liveness from
+//     anything but that status.
+//   ARRIVAL POLICY — what happens when a request lands on a busy agent — is
+//     named, per-arrival, and defaults to ENQUEUE (see cancel.ts). It is not a
+//     global constant, and it is emphatically not "always supersede", which is
+//     what shipped.
+//   DELIVERY POLICY — when an append is allowed to reach the model — is
+//     delivery.ts, and defaults to holding until the user stops talking.
+//
+// The revision counter survives all of this as a FENCING TOKEN over spoken
+// output, which is the one job it was ever good at. Cancellation is cooperative:
+// a stopped turn can still emit its tail, and the fence is what stops that tail
+// being spoken. It decides nothing about what runs.
+//
+// ═══ ATTRIBUTION, WHICH OVERLAP MAKES HARDER, NOT EASIER ═══
+//
+// Chat frames carry no task id — `/ws/chat/:paneId` is one flat stream per pane.
+// With one task in flight you could get away with "attribute to the open one".
+// With two you cannot: answer A would be spoken as the answer to question B,
+// confidently, which is worse than the bug this change fixes.
+//
+// The load-bearing fact is that THE SERVER RUNS ONE TURN AT A TIME. `submitSend`
+// starts a turn only when the agent is idle and the queue is empty; everything
+// else is persisted and drained strictly FIFO on `turn-done`. So turns are
+// serial, their order is submit order, and attribution reduces to "which of my
+// requests owns the turn that is running right now". That is answered two ways,
+// best first:
+//
+//   1. BY TEXT. The server stamps its `turn-start` broadcast with the message
+//      that started the turn — a correlation identifier in the Hohpe & Woolf
+//      sense, chosen because it is the one field both ends already agree on. An
+//      exact match against a request of ours binds it; NO MATCH MEANS THE TURN
+//      IS SOMEONE ELSE'S — the user typing in the same pane, a cron, a wakeup —
+//      and we bind nothing and stay silent. That is what lets the user type into
+//      the pane while voice is live without the two fighting over the turn.
+//   2. BY ORDER. Against a server that doesn't stamp it, fall back to the FIFO
+//      head of our own pipeline, which is right whenever the pane is ours alone.
+//
+// One request is bound at a time; binding only happens when nothing is bound
+// (a mid-turn reconnect re-broadcasts `turn-start`, and that must not re-bind);
+// `turn-done` releases it. Frames with no binding are dropped.
 //
 // ═══ WHAT IS NOT HERE ═══
 //
-// No DOM, no WebRTC, no fetch, no real timers. The transport, the agent link
-// and the clock are all injected, which is what lets a full session — connect,
-// speak, delegate, narrate, interrupt — run in a unit test against a fake data
-// channel.
+// No DOM, no WebRTC, no fetch, no real timers. The transport, the agent link and
+// the clock are all injected, which is what lets a full session — connect,
+// speak, delegate, queue a second task, narrate both, cancel — run in a unit
+// test against a fake data channel.
+//
+// Also not here: SPOKEN REFERENCE RESOLUTION. "that thing I asked about
+// earlier" is not resolved to a task anywhere in this folder, on purpose — it is
+// unsolved and it is its own module. The task records are ordered, live and
+// addressable so that such a module stays possible; do not sprinkle heuristics
+// for it through this file.
 
+import { type ArrivalPolicy, arrivalPolicyFor } from './cancel';
 import { chunkForAppend } from './chunk';
-import { type DelegationContext, DelegationRegistry } from './delegation';
+import { DelegationRegistry, type VoiceTask } from './delegation';
+import {
+  type DeliveryPolicy,
+  DeliveryQueue,
+  FLOOR_POLL_MS,
+  IDLE_QUIET_MS,
+  conversationMovedOn,
+  reanchorInstruction,
+} from './delivery';
 import { MicGate } from './mic-gate';
 import type { AppendIntent, InboundEvent, OutboundEvent } from './protocol';
 import {
@@ -51,7 +108,7 @@ import {
   isSessionError,
   isTranscriptDelta,
 } from './protocol';
-import { SpeakBridge, parseChatFrame } from './speak-bridge';
+import { SpeakBridge, type VoiceChatFrame, parseChatFrame } from './speak-bridge';
 import { TranscriptBuffer, type Utterance, reconstructRequest } from './transcript';
 import type { TransportState, VoiceTransport } from './transport';
 
@@ -66,9 +123,22 @@ export type VoiceUiState = 'connecting' | 'listening' | 'thinking' | 'speaking' 
 export interface AgentLink {
   /** Fire a `{t:'send'}`. False when the socket isn't open. */
   send(text: string): boolean;
-  /** Fire a `{t:'stop'}`. The existing hook — it writes a durable interrupted
-   *  notice, which is exactly what a barge-in should leave behind. */
+  /** Fire a `{t:'stop'}`. A REQUEST, not a guarantee — cancellation is
+   *  cooperative, the turn takes a moment to die and can still emit a final
+   *  reply on the way out. It also writes a durable interrupted notice, which
+   *  is exactly what an explicit cancel should leave behind and exactly why
+   *  nothing but an explicit cancel may call it. */
   stop(): void;
+  /**
+   * Drop one of OUR still-queued sends before it runs (`{t:'queue-cancel'}`).
+   *
+   * Optional: a link without it degrades to "the cancelled backlog runs
+   * anyway", which is not a crash. Needed because `stop()` only reaches the
+   * turn CURRENTLY running — with tasks queueing behind each other, stopping
+   * the running one and letting its successors fire is a surprising way to
+   * honour "stop".
+   */
+  cancelQueued?(id: string): void;
   /** Every frame from the chat socket, unparsed. */
   onFrame(cb: (raw: unknown) => void): () => void;
 }
@@ -89,10 +159,21 @@ export const realScheduler: Scheduler = {
 /** Quiet, in wall-clock ms, that means the user has stopped talking and the
  *  request can be taken as written. */
 export const SETTLE_QUIET_MS = 600;
-/** Never hold a delegation longer than this before dispatching what we have.
+/** Never hold a task longer than this before dispatching what we have.
  *  A trailing subordinate clause is a smaller loss than a dead-air pause. */
 export const SETTLE_MAX_MS = 2500;
-/** Cadence of the "still working" append during a long turn. SPOKEN — see
+/**
+ * Quiet before the cancel probe will rule on an utterance.
+ *
+ * LONGER THAN THE SETTLE WINDOW, on purpose. The settle window decides what to
+ * SEND, and being early there costs a truncated request. This window decides
+ * whether to THROW WORK AWAY, and being early there cancels on the word "stop"
+ * in "stop the dev server". It sits above a natural intra-phrase pause and
+ * below the 1200ms gap at which transcript.ts calls it a new utterance, so by
+ * the time it fires the sentence is as finished as this protocol can tell us.
+ */
+export const CANCEL_PROBE_QUIET_MS = 900;
+/** Cadence of the "still working" update during a long turn. SPOKEN — see
  *  {@link VoiceSession.armHeartbeat}. */
 export const HEARTBEAT_MS = 25_000;
 /**
@@ -108,6 +189,15 @@ export const HEARTBEAT_MS = 25_000;
 export const DISPATCH_FILLER_MS = 1500;
 /** Silence on the output transcript after which we stop calling it speaking. */
 export const SPEAKING_DECAY_MS = 900;
+/**
+ * After an explicit cancel, ignore further cancels for this long.
+ *
+ * A cancel reaches us twice by design — once when the model delegates it, and
+ * again from the transcript backstop a beat later. Without this the user hears
+ * "Stopped." twice and we fire a second, pointless `{t:'stop'}` at whatever
+ * turn has started since.
+ */
+export const CANCEL_DEBOUNCE_MS = 4000;
 
 export interface VoiceSessionOpts {
   transport: VoiceTransport;
@@ -117,8 +207,11 @@ export interface VoiceSessionOpts {
   micGate?: MicGate;
   settleQuietMs?: number;
   settleMaxMs?: number;
+  cancelProbeQuietMs?: number;
   heartbeatMs?: number;
   dispatchFillerMs?: number;
+  /** Quiet on the input transcript before a held append is released. */
+  idleQuietMs?: number;
   /** Include the model's last line as context in the dispatched request. */
   withContext?: boolean;
   /** Diagnostics, off by default. */
@@ -137,12 +230,65 @@ export interface VoiceSessionStats {
   staleDrops: number;
   appendsSent: number;
   requestsDispatched: number;
-  bargeIns: number;
+  /** Explicit cancels honoured. This is the ONLY counter that can be non-zero
+   *  while the user still has work running, and every increment threw some
+   *  away — so it is the first number to look at when someone says "it keeps
+   *  stopping". */
+  cancels: number;
+  /** Requests that landed behind work already in flight — i.e. the whole point
+   *  of the change: tasks that QUEUED instead of cancelling. */
+  tasksQueued: number;
+  /** Tasks whose reconstructed request was identical to something already in
+   *  flight, and were therefore not dispatched a second time. */
+  duplicateRequests: number;
+  /** Appends held because the user was mid-sentence. Non-zero means the
+   *  delivery policy earned its keep. */
+  deliveriesHeld: number;
+  /** Results that needed re-anchoring because the conversation had moved on. */
+  reanchored: number;
   /** Appends the model acknowledged. `appendsSent` without `appendsAcked` is
    *  the exact signature of the `text`-instead-of-`content` bug. */
   appendsAcked: number;
   /** `error` events received. Anything but zero is a bug on our side. */
   protocolErrors: number;
+}
+
+/**
+ * Tool names out of a live `events` batch, for the progress update.
+ *
+ * READS `name` AND NOTHING ELSE. An events batch also carries the agent's plain
+ * text, which in Chat mode is a PRIVATE scratchpad the user is promised they
+ * will never be shown — so this function must never grow a branch that touches
+ * anything but a tool_use's name. Returns the LAST tool in the batch, which is
+ * the one currently running.
+ */
+/**
+ * Is this frame carrying the ANSWER, as opposed to progress about it?
+ *
+ * The `final` leg of Pipecat's three-message envelope. Only a final is
+ * re-anchored when the conversation has moved on; doing it for progress
+ * updates prefixes every heartbeat with "the conversation has moved on", which
+ * is both untrue and expensive. Measured in a live session: without this gate,
+ * five of five commentary appends were re-anchored, four of them wrongly.
+ */
+function isFinalFrame(frame: VoiceChatFrame): boolean {
+  return (
+    frame.t === 'speak' ||
+    frame.t === 'speak-delta' ||
+    frame.t === 'turn-done' ||
+    frame.t === 'error'
+  );
+}
+
+export function latestToolName(raw: unknown): string | null {
+  const f = raw as { t?: unknown; events?: unknown };
+  if (f?.t !== 'events' || !Array.isArray(f.events)) return null;
+  let name: string | null = null;
+  for (const e of f.events) {
+    const ev = e as { kind?: unknown; name?: unknown };
+    if (ev?.kind === 'tool_use' && typeof ev.name === 'string' && ev.name) name = ev.name;
+  }
+  return name;
 }
 
 export class VoiceSession {
@@ -153,11 +299,14 @@ export class VoiceSession {
   private readonly buf = new TranscriptBuffer();
   private readonly registry = new DelegationRegistry();
   private readonly bridge = new SpeakBridge();
+  private readonly pending = new DeliveryQueue<VoiceTask>();
   private readonly onStateCb: (s: VoiceUiState, detail?: string) => void;
   private readonly settleQuietMs: number;
   private readonly settleMaxMs: number;
+  private readonly cancelProbeQuietMs: number;
   private readonly heartbeatMs: number;
   private readonly dispatchFillerMs: number;
+  private readonly idleQuietMs: number;
   private readonly withContext: boolean;
   private readonly trace: (line: string) => void;
   private readonly onProtocolError: (line: string) => void;
@@ -179,33 +328,34 @@ export class VoiceSession {
    *  is true, and a session would open in the `speaking` state having never
    *  heard a word. */
   private lastOutputAt = Number.NEGATIVE_INFINITY;
+  private lastInputDeltaAt = Number.NEGATIVE_INFINITY;
   private speakingTimer: number | null = null;
-  private settleTimer: number | null = null;
+  /** One settle timer PER task — two can be settling at once now, and a single
+   *  shared handle would silently cancel the first one's dispatch. */
+  private settleTimers = new Map<string, number>();
   private heartbeatTimer: number | null = null;
   private fillerTimer: number | null = null;
-  private lastInputDeltaAt = 0;
+  private cancelProbeTimer: number | null = null;
+  private floorTimer: number | null = null;
+
   /**
-   * Which delegation owns the agent turn currently on the wire.
+   * Our dispatched requests, in the order the server will run them.
    *
-   * Chat frames carry NO delegation id — they are a flat per-pane stream — so
-   * "the newest open delegation" is not enough to attribute a `speak` to. The
-   * counter-example that forced this: delegation A dispatches and its turn
-   * starts; the user changes their mind; B supersedes A and we `{t:'stop'}`
-   * A's turn. A's turn takes a moment to die and emits its final reply — which
-   * "attribute to whatever is active" would speak as if it were B's answer,
-   * i.e. confidently answer the question the user just withdrew, with the
-   * answer to a different one.
-   *
-   * So a delegation adopts exactly ONE turn: the first `turn-start` after its
-   * own dispatch. Until that arrives it is `awaiting` and admits nothing; after
-   * its turn ends the binding is dropped. Frames belonging to any other turn —
-   * the superseded one, or one the user started by typing — have no owner and
-   * are dropped.
+   * The mirror of the server's own serial queue, and the mirror is what makes
+   * attribution possible at all. Entries are live registry records, so their
+   * `status` is the single source of truth about each one.
    */
-  private turnBinding: { ctxId: string; state: 'awaiting' | 'bound' } | null = null;
-  /** Utterances already counted as a barge-in, so one interruption sends one
-   *  `{t:'stop'}` rather than one per delta. */
-  private barged = new WeakSet<Utterance>();
+  private pipeline: VoiceTask[] = [];
+  /** The task that owns the turn currently on the wire, or null when the
+   *  running turn is not ours (typed, cron, wakeup) or nothing is running. */
+  private bound: VoiceTask | null = null;
+  /** Last tool the bound turn started, for the progress update. Name only. */
+  private lastTool: string | null = null;
+  private lastCancelAt = Number.NEGATIVE_INFINITY;
+
+  /** Utterances the cancel probe has already ruled on, so one sentence is
+   *  judged once rather than once per delta. */
+  private judged = new WeakSet<Utterance>();
 
   readonly stats: VoiceSessionStats = {
     delegationsClaimed: 0,
@@ -213,7 +363,11 @@ export class VoiceSession {
     staleDrops: 0,
     appendsSent: 0,
     requestsDispatched: 0,
-    bargeIns: 0,
+    cancels: 0,
+    tasksQueued: 0,
+    duplicateRequests: 0,
+    deliveriesHeld: 0,
+    reanchored: 0,
     appendsAcked: 0,
     protocolErrors: 0,
   };
@@ -226,8 +380,10 @@ export class VoiceSession {
     this.onStateCb = opts.onState;
     this.settleQuietMs = opts.settleQuietMs ?? SETTLE_QUIET_MS;
     this.settleMaxMs = opts.settleMaxMs ?? SETTLE_MAX_MS;
+    this.cancelProbeQuietMs = opts.cancelProbeQuietMs ?? CANCEL_PROBE_QUIET_MS;
     this.heartbeatMs = opts.heartbeatMs ?? HEARTBEAT_MS;
     this.dispatchFillerMs = opts.dispatchFillerMs ?? DISPATCH_FILLER_MS;
+    this.idleQuietMs = opts.idleQuietMs ?? IDLE_QUIET_MS;
     this.withContext = opts.withContext ?? true;
     this.trace = opts.onTrace ?? (() => {});
     this.onProtocolError = opts.onProtocolError ?? (() => {});
@@ -243,6 +399,20 @@ export class VoiceSession {
 
   get state(): VoiceUiState {
     return this.uiState;
+  }
+
+  /**
+   * What is running and what is waiting, newest last.
+   *
+   * The client-side answer to `get_running_tasks()`. On this transport the
+   * model cannot call a tool — `delegation: {type:'client'}` gives it exactly
+   * one verb — so instead of a tool it can call, the same information is PUSHED
+   * to it as silent context whenever it changes (see `describePipeline`). Same
+   * outcome, one fewer round trip: "what are you working on?" is answerable
+   * from what the model already holds, and never reaches the agent.
+   */
+  get tasks(): ReadonlyArray<{ id: string; status: VoiceTask['status']; request: string }> {
+    return this.pipeline.map((t) => ({ id: t.id, status: t.status, request: t.request }));
   }
 
   // ── The model's wire ──────────────────────────────────────────────────────
@@ -266,8 +436,7 @@ export class VoiceSession {
         this.gate.observedOutput(e.end_ms);
         this.armSpeakingDecay();
       } else {
-        this.lastInputDeltaAt = this.sched.now();
-        this.maybeBargeIn(seg);
+        this.armCancelProbe(seg);
       }
       this.recomputeState();
       return;
@@ -294,74 +463,70 @@ export class VoiceSession {
   /**
    * A delegation arrived. Claim it or drop it — there is no third option, and
    * in particular there is no "handle it anyway, probably fine".
+   *
+   * NOTHING IS STOPPED HERE, and nothing is invalidated. This used to bump the
+   * fence and `{t:'stop'}` the running turn on the theory that a new task
+   * replaces the old one. It doesn't: the user asking a second thing is the
+   * ordinary case, and the server queue exists precisely so it can be served
+   * without abandoning the first.
    */
   private onDelegation(id: string, target: string, offsetMs: number): void {
     if (target !== 'client') {
       this.trace(`delegation ${id} not for us (${target})`);
       return;
     }
-    // Check BEFORE bumping. Bumping on a duplicate would invalidate the
-    // ORIGINAL claim's revision and silently discard the results of work that
-    // is already correctly under way — a duplicate delivery must be inert.
+    // Check BEFORE claiming. A duplicate delivery must be completely inert —
+    // it must not touch the original claim's state in any way.
     if (this.registry.hasSeen(id)) {
       this.stats.duplicatesRefused += 1;
       this.trace(`delegation ${id} duplicate — refused`);
       return;
     }
 
-    // A genuinely new task supersedes whatever was in flight.
-    const prior = this.registry.active();
-    this.registry.bumpRevision();
-    const ctx = this.registry.claim(id, { now: this.sched.now(), offsetMs });
-    if (!ctx) return; // unreachable given hasSeen above; cheap to be sure
+    const task = this.registry.claim(id, { now: this.sched.now(), offsetMs });
+    if (!task) return; // unreachable given hasSeen above; cheap to be sure
     this.stats.delegationsClaimed += 1;
-
-    if (prior) {
-      this.registry.finish(prior.id);
-      if (this.turnRunning) this.agent.stop();
-    }
-    this.bridge.reset();
-    this.clearSettle();
-    this.clearHeartbeat();
-    this.clearFiller();
-    // The new task owns no turn yet — in particular it does NOT inherit the
-    // one we just stopped.
-    this.turnBinding = null;
 
     // Acknowledge NOW. Silent, because the model narrates in its own voice;
     // this only tells it that work exists so it stops waiting on us.
-    this.emit(ctx, { kind: 'thinking', text: 'Picking this up — passing it to the agent now.' });
-    this.scheduleSettle(ctx);
+    this.emitNow(task, {
+      kind: 'thinking',
+      text: 'Picking this up — passing it to the agent now.',
+    });
+    this.scheduleSettle(task);
   }
 
   // ── The settle window ─────────────────────────────────────────────────────
 
-  private scheduleSettle(ctx: DelegationContext): void {
-    this.clearSettle();
-    this.settleTimer = this.sched.setTimeout(() => {
-      this.settleTimer = null;
-      this.settle(ctx);
-    }, this.settleQuietMs);
+  private scheduleSettle(task: VoiceTask): void {
+    this.clearSettle(task.id);
+    this.settleTimers.set(
+      task.id,
+      this.sched.setTimeout(() => {
+        this.settleTimers.delete(task.id);
+        this.settle(task);
+      }, this.settleQuietMs),
+    );
   }
 
   /**
-   * Decide what was actually asked, and send it.
+   * Decide what was actually asked, apply the arrival policy, and send it.
    *
-   * Re-checks staleness first — the canonical check, and the reason a user who
-   * changes their mind inside the settle window never has the abandoned
-   * request dispatched at all.
+   * Re-checks staleness first. With supersession gone, stale means the task was
+   * closed — by an explicit cancel, or by teardown — and a cancelled request
+   * must not be dispatched after the fact.
    */
-  private settle(ctx: DelegationContext): void {
+  private settle(task: VoiceTask): void {
     if (this.disposed) return;
-    if (this.registry.isStale(ctx)) {
+    if (this.registry.isStale(task)) {
       this.stats.staleDrops += 1;
-      this.trace(`settle ${ctx.id} dropped — stale`);
+      this.trace(`settle ${task.id} dropped — stale`);
       return;
     }
-    const elapsed = this.sched.now() - ctx.claimedAt;
+    const elapsed = this.sched.now() - task.claimedAt;
     const quietFor = this.sched.now() - this.lastInputDeltaAt;
     const r = reconstructRequest(this.buf, {
-      offsetMs: ctx.offsetMs,
+      offsetMs: task.offsetMs,
       withContext: this.withContext,
     });
     // Still mid-sentence and still within budget → give the transcript another
@@ -369,37 +534,121 @@ export class VoiceSession {
     // punctuation: once they stop talking we take what we have regardless.
     const worthWaiting = !r.complete && quietFor < this.settleQuietMs;
     if (worthWaiting && elapsed < this.settleMaxMs) {
-      this.scheduleSettle(ctx);
+      this.scheduleSettle(task);
       return;
     }
     if (!r.text) {
-      this.emit(ctx, {
+      this.deliver(task, {
         kind: 'commentary',
         text: 'I didn’t catch that — can you say it again?',
       });
-      this.registry.finish(ctx.id);
+      this.registry.setStatus(task.id, 'failed');
       return;
     }
+
+    // ── THE ARRIVAL POLICY, chosen per arrival ──────────────────────────────
+    //
+    // `interrupt` here means the utterance WAS the instruction to abandon the
+    // running work, so it is not a task at all and never reaches the agent.
+    // This is the model-visible cancel path: GPT-Live delegated it, we route it
+    // to the cancel machinery instead of to Claude. (On this transport the
+    // model has no `cancel_task` tool to call — `delegation: {type:'client'}`
+    // gives it one verb — so a delegated cancel IS the tool call, expressed in
+    // the only vocabulary the wire has.)
+    const policy: ArrivalPolicy = arrivalPolicyFor(r.utterance?.text ?? r.text);
+    if (policy === 'interrupt') {
+      this.trace(`settle ${task.id} is a cancel, not a task`);
+      this.cancel(task, 'delegated');
+      return;
+    }
+
+    // TWO DELEGATIONS, ONE SENTENCE. `segmentAt` joins on a timestamp, and two
+    // delegations fired either side of one pause both land on the same
+    // utterance. Now that the second no longer supersedes the first, dispatching
+    // both means two agent turns doing identical work — and the user hearing the
+    // same answer twice.
+    const already = this.pipeline.find((d) => d.request.trim() === r.text.trim());
+    if (already) {
+      this.stats.duplicateRequests += 1;
+      this.trace(`settle ${task.id} duplicates in-flight request — not dispatched`);
+      this.emitNow(task, {
+        kind: 'thinking',
+        text: 'That is the same thing already in flight — not asking twice.',
+      });
+      this.registry.setStatus(task.id, 'completed');
+      return;
+    }
+
     if (!this.agent.send(r.text)) {
-      this.emit(ctx, {
+      this.deliver(task, {
         kind: 'commentary',
         text: 'I can’t reach the chat right now — the connection dropped.',
       });
-      this.registry.finish(ctx.id);
+      this.registry.setStatus(task.id, 'failed');
       return;
     }
+
     this.stats.requestsDispatched += 1;
-    // From here, the next `turn-start` on the chat socket is OURS.
-    this.turnBinding = { ctxId: ctx.id, state: 'awaiting' };
-    this.trace(`dispatched ${ctx.id}: ${r.text.slice(0, 80)}`);
-    this.emit(ctx, { kind: 'thinking', text: `Asked the agent: ${r.text}` });
-    this.armFiller(ctx);
-    this.armHeartbeat(ctx);
+    const behind = this.pipeline.length;
+    if (behind > 0) this.stats.tasksQueued += 1;
+    task.request = r.text;
+    task.dispatchedAt = this.sched.now();
+    task.wasQueued = behind > 0;
+    task.status = 'queued';
+    this.pipeline.push(task);
+    this.trace(`dispatched ${task.id}: ${r.text.slice(0, 80)}`);
+
+    // ── THE `started` MESSAGE, and the sentence that earns its place ─────────
+    //
+    // Pipecat added the "do not call it again" line after shipping the bug it
+    // prevents: a model handed a tool that has not returned calls it again, and
+    // then invents a plausible result. Our equivalent failure is re-delegating
+    // the same request to Claude, which costs minutes and money and produces
+    // two contradictory answers. So the acknowledgement says, explicitly, that
+    // the answer is coming and must not be guessed.
+    this.emitNow(task, {
+      kind: 'thinking',
+      text: [
+        `Sent to the agent: ${r.text}`,
+        'It is running now and will take minutes, not seconds.',
+        'Do not send this again and do not invent a result —',
+        'I will hand you the answer here the moment it exists.',
+      ].join(' '),
+    });
+    this.emitNow(task, { kind: 'thinking', text: this.describePipeline() });
+    this.armFiller(task, behind > 0);
+    this.armHeartbeat();
   }
 
-  private clearSettle(): void {
-    if (this.settleTimer != null) this.sched.clearTimeout(this.settleTimer);
-    this.settleTimer = null;
+  private clearSettle(id?: string): void {
+    if (id === undefined) {
+      for (const h of this.settleTimers.values()) this.sched.clearTimeout(h);
+      this.settleTimers.clear();
+      return;
+    }
+    const h = this.settleTimers.get(id);
+    if (h != null) this.sched.clearTimeout(h);
+    this.settleTimers.delete(id);
+  }
+
+  /**
+   * The running-task snapshot, pushed to the model as silent context.
+   *
+   * This is the substitute for a `get_running_tasks()` tool the model cannot
+   * call on this transport, and it is what makes "how's it going?" answerable
+   * WITHOUT touching the agent — which is the entire point of the change.
+   */
+  private describePipeline(): string {
+    if (this.pipeline.length === 0) return 'Nothing is running for the agent right now.';
+    const lines = this.pipeline.map((t, i) => {
+      const what = t.request.length > 100 ? `${t.request.slice(0, 97)}…` : t.request;
+      return `${i + 1}. [${t.status}] ${what}`;
+    });
+    return [
+      'Agent work in flight, in the order it will run.',
+      'Use this to answer questions about progress yourself — never delegate those:',
+      ...lines,
+    ].join('\n');
   }
 
   // ── Long work ─────────────────────────────────────────────────────────────
@@ -413,15 +662,20 @@ export class VoiceSession {
    * only if it didn't — the alternative is two voices saying "hang on" over
    * each other, which is worse than the dead air it was meant to fix.
    */
-  private armFiller(ctx: DelegationContext): void {
+  private armFiller(task: VoiceTask, queued: boolean): void {
     this.clearFiller();
     const dispatchedAt = this.sched.now();
     this.fillerTimer = this.sched.setTimeout(() => {
       this.fillerTimer = null;
-      if (this.disposed || this.registry.isStale(ctx)) return;
+      if (this.disposed || this.registry.isStale(task)) return;
       // The model has spoken since we dispatched; it has already covered this.
       if (this.lastOutputAt >= dispatchedAt) return;
-      this.emit(ctx, { kind: 'commentary', text: 'On it — this will take a moment.' });
+      this.deliver(task, {
+        kind: 'commentary',
+        text: queued
+          ? 'Queued that behind what the agent is already doing.'
+          : 'On it — this will take a moment.',
+      });
     }, this.dispatchFillerMs);
   }
 
@@ -438,19 +692,43 @@ export class VoiceSession {
    * the user could not hear. Commentary is the channel that reaches the
    * speaker; the wording is deliberately an aside rather than an answer, so the
    * model paraphrases it as one.
+   *
+   * ONE TIMER FOR THE WHOLE SESSION, not one per task. With tasks overlapping,
+   * per-task heartbeats would stack and narrate the same single running turn
+   * several times over. It reports the BOUND task — the one actually on the
+   * wire — names the tool it is running if we know it, and says how much is
+   * waiting behind it. That backlog line is the only way a hands-free user can
+   * tell "queued" from "ignored".
    */
-  private armHeartbeat(ctx: DelegationContext): void {
-    this.clearHeartbeat();
+  private armHeartbeat(): void {
+    if (this.heartbeatTimer != null) return; // already ticking
     this.heartbeatTimer = this.sched.setTimeout(() => {
       this.heartbeatTimer = null;
-      if (this.disposed || this.registry.isStale(ctx)) return;
-      const secs = Math.round((this.sched.now() - ctx.claimedAt) / 1000);
-      this.emit(ctx, {
-        kind: 'commentary',
-        text: `Still working on it — ${secs} seconds in, no answer yet.`,
-      });
-      this.armHeartbeat(ctx);
+      if (this.disposed) return;
+      this.beat();
+      if (this.pipeline.length > 0) this.armHeartbeat();
     }, this.heartbeatMs);
+  }
+
+  private beat(): void {
+    const task = this.bound;
+    // `input_required` is NOT working: the agent is blocked on a question the
+    // user has already been asked, aloud. Repeating "still working" over an
+    // unanswered question reads as a session that isn't listening.
+    if (!task || task.status !== 'working') return;
+    if (this.registry.isStale(task)) return;
+    const secs = Math.round((this.sched.now() - task.claimedAt) / 1000);
+    const tool = this.lastTool ? `, currently running ${this.lastTool}` : '';
+    const waiting = this.pipeline.length - 1;
+    const behind =
+      waiting > 0
+        ? ` ${waiting} more ${waiting === 1 ? 'request is' : 'requests are'} queued behind it.`
+        : '';
+    task.intermediatesSent += 1;
+    this.deliver(task, {
+      kind: 'commentary',
+      text: `Still working on it — ${secs} seconds in${tool}, no answer yet.${behind}`,
+    });
   }
 
   private clearHeartbeat(): void {
@@ -461,105 +739,362 @@ export class VoiceSession {
   // ── The agent's wire ──────────────────────────────────────────────────────
 
   /**
-   * Chat frames become appends against the ACTIVE delegation.
+   * Chat frames become appends against the task whose turn they belong to —
+   * see the header for how that is decided.
    *
-   * A turn the user started by TYPING has no delegation to attach to, and its
-   * frames are therefore dropped rather than narrated — appends require a
-   * delegation_id, and inventing one to speak text nobody asked the voice
-   * session about would be both invalid and rude.
+   * A turn the user started by TYPING owns none of our tasks, and its frames
+   * are therefore dropped rather than narrated. That is what lets the two input
+   * methods share a pane: the typed conversation renders on screen exactly as
+   * it always did, and the voice session simply has nothing to say about it.
    */
   private onChatFrame(raw: unknown): void {
     if (this.disposed) return;
+
+    // Tool names for the progress update. Read off the RAW frame and never
+    // handed to the speak bridge: an events batch also carries the private
+    // scratchpad, and the bridge's job is deciding what gets SPOKEN.
+    const tool = latestToolName(raw);
+    if (tool && this.bound) this.lastTool = tool;
+
     const frame = parseChatFrame(raw);
     if (!frame) return;
+
+    // Bind BEFORE the bridge runs, so `turn-start`'s own intent lands against
+    // the task that turn belongs to rather than the previous one.
+    if (frame.t === 'turn-start') this.bindTurn(frame.text);
+    if (frame.t === 'queued') this.noteQueued(frame.id, frame.text);
+    if (frame.t === 'question' && this.bound) {
+      this.registry.setStatus(this.bound.id, 'input_required');
+    }
+    if (frame.t === 'question-done' && this.bound?.status === 'input_required') {
+      this.registry.setStatus(this.bound.id, 'working');
+    }
+
     const intents = this.bridge.onFrame(frame);
     this.turnRunning = this.bridge.isTurnRunning();
 
-    const ctx = this.registry.active();
-    const binding = ctx && this.turnBinding?.ctxId === ctx.id ? this.turnBinding : null;
-    // The first turn-start after our own dispatch is the turn we asked for.
-    if (frame.t === 'turn-start' && binding?.state === 'awaiting') binding.state = 'bound';
-    const bound = binding?.state === 'bound';
-    // `queued` is the server telling us OUR send is parked behind a busy
-    // agent, so it is admissible before any turn-start — it is the only frame
-    // that legitimately describes a turn that has not begun.
-    const admissible = !!ctx && (bound || frame.t === 'queued');
-
-    if (admissible && ctx) {
-      for (const intent of intents) this.emit(ctx, intent);
-      if (bound && (frame.t === 'turn-done' || frame.t === 'error')) {
-        // Emit first, THEN finish: finishing makes the context stale, which is
+    const task = this.targetFor(frame);
+    if (task) {
+      // Pipecat's envelope: `started` (the dispatch ack), `intermediate`
+      // (progress) and `final` (the result). Only a FINAL needs re-anchoring —
+      // a progress update is itself part of the current beat of conversation,
+      // and prefixing every heartbeat with "the conversation has moved on"
+      // both wastes context and teaches the model that it always has.
+      const final = isFinalFrame(frame);
+      for (const intent of intents)
+        this.deliver(task, intent, this.policyFor(frame, intent), final);
+      if (frame.t === 'turn-done' || frame.t === 'error') {
+        // Deliver first, THEN retire: retiring makes the task stale, which is
         // precisely what would swallow the final answer.
-        this.clearHeartbeat();
-        this.clearFiller();
-        this.turnBinding = null;
-        this.registry.finish(ctx.id);
+        const ok = frame.t === 'turn-done' ? frame.ok : false;
+        this.retire(task, ok ? 'completed' : 'failed');
       }
     } else if (intents.length) {
       this.stats.staleDrops += intents.length;
-      this.trace(`frame ${frame.t} dropped — belongs to no open delegation`);
+      this.trace(`frame ${frame.t} dropped — belongs to no open task`);
     }
     this.recomputeState();
   }
 
-  // ── Barge-in ──────────────────────────────────────────────────────────────
+  /**
+   * Delivery policy per frame. Default is to wait for the floor.
+   *
+   * The two escalations are the things that are worthless late: the agent
+   * BLOCKED on a question only the human can answer (it is not working, it is
+   * waiting, and every second of delay is a second of nothing happening), and a
+   * hard failure. Everything else — answers included — can wait the half second
+   * it takes the user to finish their sentence.
+   */
+  private policyFor(frame: VoiceChatFrame, intent: AppendIntent): DeliveryPolicy {
+    if (intent.kind === 'thinking') return 'silent';
+    if (frame.t === 'question') return 'interrupt';
+    if (frame.t === 'error') return 'interrupt';
+    if (frame.t === 'turn-done' && !frame.ok) return 'interrupt';
+    return 'when_idle';
+  }
 
   /**
-   * There is no barge-in event and nothing to flush: the model handles its own
-   * turn-taking, and the audio is already on the peer connection. The only
-   * thing WE owe a barge-in is stopping the agent, because a turn the user has
-   * talked over is work nobody is waiting for.
+   * Which task does this frame speak for?
    *
-   * Gated hard. `{t:'stop'}` throws away minutes of real work and writes a
-   * durable interrupted notice, so it must not fire on a cough, and it must
-   * not fire on the model's own echo coming back through the microphone.
+   * `queued` is the odd one out and the only frame that legitimately describes
+   * a turn that has not begun: it is the server telling us OUR send was parked,
+   * and it names the send, so it resolves to that request rather than to
+   * whatever is running. Everything else belongs to the bound turn.
    */
-  private maybeBargeIn(seg: Utterance): void {
-    if (!this.turnRunning || this.barged.has(seg)) return;
-    const verdict = this.gate.judge({
-      startMs: seg.startMs,
-      endMs: seg.endMs,
-      text: seg.text,
-    });
-    if (verdict !== 'accept') {
-      this.trace(`input ignored (${verdict})`);
+  private targetFor(frame: VoiceChatFrame): VoiceTask | undefined {
+    if (frame.t === 'queued') return this.matchPending(frame.text);
+    if (frame.t === 'error' && !this.bound) {
+      // A send the server REFUSED (no runner, queue full). No turn will ever
+      // start for it, so nothing would ever retire it — attribute to our oldest
+      // undispatched request so the failure is spoken and the slot is released.
+      return this.pipeline.find((x) => x.status === 'queued');
+    }
+    return this.bound ?? undefined;
+  }
+
+  /**
+   * A turn started. Decide whether it is ours, and if so, whose.
+   *
+   * Only ever binds when nothing is bound: a mid-turn reconnect re-broadcasts
+   * `turn-start` for a turn that is already running, and re-binding there would
+   * hand the running turn to the NEXT queued request — which would then be
+   * closed by a `turn-done` it never earned.
+   */
+  private bindTurn(text?: string): void {
+    if (this.bound) return;
+    const waiting = this.pipeline.filter((d) => d.status === 'queued');
+    if (waiting.length === 0) return;
+    let owner: VoiceTask | undefined;
+    if (typeof text === 'string' && text.trim()) {
+      // Exact text match, oldest first — the server stamped the turn, so a
+      // non-match is PROOF the turn is someone else's, not a reason to guess.
+      const t = text.trim();
+      owner = waiting.find((d) => d.request.trim() === t);
+      if (!owner) {
+        this.trace('turn-start belongs to another sender — not binding');
+        return;
+      }
+    } else {
+      // Unstamped (older server): fall back to submit order, which is the order
+      // the server runs them in.
+      owner = waiting[0];
+    }
+    if (!owner) return;
+    owner.status = 'working';
+    owner.queueId = null;
+    this.bound = owner;
+    this.lastTool = null;
+    this.trace(`bound turn to ${owner.id}`);
+    // A task that waited its turn starts in total silence otherwise, and with
+    // two answers coming the user has no way to tell which is which.
+    if (owner.wasQueued) {
+      this.deliver(owner, {
+        kind: 'commentary',
+        text: `Starting the next one now: ${owner.request.slice(0, 120)}`,
+      });
+    }
+    this.emitNow(owner, { kind: 'thinking', text: this.describePipeline() });
+  }
+
+  /** The server parked one of our sends. Remember its queue row id so an
+   *  explicit cancel can drop it before it ever runs. */
+  private noteQueued(id: string, text: string): void {
+    const d = this.matchPending(text);
+    if (d) d.queueId = id;
+  }
+
+  private matchPending(text: string): VoiceTask | undefined {
+    const t = (text ?? '').trim();
+    return this.pipeline.find((d) => d.status === 'queued' && d.request.trim() === t);
+  }
+
+  /** This task's work is over. Status first so diagnostics can tell "answered"
+   *  from "cancelled", then release its slot in the pipeline. */
+  private retire(task: VoiceTask, status: 'completed' | 'failed'): void {
+    this.registry.setStatus(task.id, status);
+    this.pipeline = this.pipeline.filter((d) => d.id !== task.id);
+    if (this.bound?.id === task.id) this.bound = null;
+    this.lastTool = null;
+    if (this.pipeline.length === 0) this.clearHeartbeat();
+  }
+
+  // ── Cancelling, which is the ONLY thing that stops the agent ───────────────
+
+  /**
+   * The user said something. Decide — after the sentence has finished — whether
+   * it was an instruction to abandon the running work.
+   *
+   * THIS IS A BACKSTOP, NOT THE MAIN PATH. The main path is the model: it hears
+   * "stop", delegates it, and `settle` routes it to `cancel` (see the arrival
+   * policy there). But the model is also told to handle conversational asides
+   * itself, and a bare "stop" reads like one — so if the only cancel route were
+   * a delegation, cancelling would sometimes be unreachable, which is worse than
+   * this being here.
+   *
+   * THE DEBOUNCE IS THE POINT. Judging deltas as they arrive cancels on the word
+   * "stop" in "stop the dev server", which is a task. So the probe re-arms on
+   * every delta of the same utterance and only rules once the user has gone
+   * quiet. The echo gate guards it as well — a sub-300ms blip and the model's
+   * own voice coming back through the microphone are both refused — because
+   * this is the only path that can throw work away.
+   */
+  private armCancelProbe(seg: Utterance): void {
+    this.lastInputDeltaAt = this.sched.now();
+    if (this.cancelProbeTimer != null) this.sched.clearTimeout(this.cancelProbeTimer);
+    this.cancelProbeTimer = this.sched.setTimeout(() => {
+      this.cancelProbeTimer = null;
+      this.judgeForCancel(seg);
+    }, this.cancelProbeQuietMs);
+    // The user talking is what holds the floor, so their falling silent is what
+    // releases it. Poll rather than wait for an event that may never come.
+    this.armFloorPoll();
+  }
+
+  private judgeForCancel(seg: Utterance): void {
+    if (this.disposed || this.judged.has(seg)) return;
+    // Nothing of ours to abandon and nothing running: this is just talking, and
+    // talking is free.
+    if (!this.turnRunning && this.pipeline.length === 0) return;
+    if (arrivalPolicyFor(seg.text) !== 'interrupt') {
+      this.trace('utterance is not a cancel — agent keeps working');
       return;
     }
-    this.barged.add(seg);
-    this.stats.bargeIns += 1;
-    this.agent.stop();
-    const ctx = this.registry.active();
-    if (ctx) this.registry.finish(ctx.id);
-    // The conversation has moved: anything still in flight is now stale.
+    const verdict = this.gate.judge({ startMs: seg.startMs, endMs: seg.endMs, text: seg.text });
+    if (verdict !== 'accept') {
+      this.trace(`cancel ignored (${verdict})`);
+      return;
+    }
+    this.judged.add(seg);
+    this.cancel(this.bound ?? this.registry.active(), 'spoken');
+  }
+
+  /**
+   * Abandon everything in flight.
+   *
+   * Three things have to happen and all three matter: the RUNNING turn is asked
+   * to stop, the sends still sitting in the server's queue are dropped (or the
+   * backlog runs on regardless, which is not what anyone means by "stop"), and
+   * the fence bumps so the tail of the dying turn is never spoken.
+   *
+   * COOPERATIVE, and the fence is why that is survivable. `{t:'stop'}` is a
+   * request; the turn may still emit a final reply on its way out. We cannot
+   * un-run it, so we refuse to speak it.
+   *
+   * `speakUnder` is the task the confirmation goes out on — appends need a task
+   * id, and a cancel with no audible acknowledgement is a cancel the user cannot
+   * tell landed.
+   */
+  private cancel(speakUnder: VoiceTask | undefined, source: 'spoken' | 'delegated'): void {
+    const now = this.sched.now();
+    const repeat = now - this.lastCancelAt < CANCEL_DEBOUNCE_MS;
+    this.lastCancelAt = now;
+    if (repeat) {
+      // The same cancel arriving by the other door. Close the task that carried
+      // it and say nothing more.
+      if (speakUnder) this.registry.setStatus(speakUnder.id, 'cancelled');
+      this.trace(`cancel (${source}) suppressed — already cancelled`);
+      return;
+    }
+
+    // Interrupt: a cancel confirmation is worthless late, and the user who just
+    // said "stop" is by definition not mid-sentence.
+    if (speakUnder && !this.registry.isStale(speakUnder)) {
+      this.emitNow(speakUnder, {
+        kind: 'commentary',
+        text: 'Stopped. The agent has been interrupted, and nothing is queued behind it.',
+      });
+    }
+
+    if (this.turnRunning) this.agent.stop();
+    for (const d of this.pipeline) {
+      if (d.queueId && this.agent.cancelQueued) this.agent.cancelQueued(d.queueId);
+    }
+    for (const d of this.pipeline) this.registry.setStatus(d.id, 'cancelled');
+    if (speakUnder) this.registry.setStatus(speakUnder.id, 'cancelled');
+    this.pipeline = [];
+    this.bound = null;
+    this.lastTool = null;
+    // Anything still held for delivery belonged to work that no longer exists.
+    this.pending.clear();
+    // Everything claimed before now is abandoned; a late reply from the dying
+    // turn finds itself behind the fence and is never spoken.
     this.registry.bumpRevision();
+    this.bridge.reset();
+    this.clearSettle();
     this.clearHeartbeat();
     this.clearFiller();
     this.turnRunning = false;
-    this.trace('barge-in — stopped the agent turn');
+    this.stats.cancels += 1;
+    this.trace(`cancelled (${source})`);
+    this.recomputeState();
   }
 
   // ── Sending ───────────────────────────────────────────────────────────────
 
   /**
-   * The one exit to the model. Checks staleness, stamps the delegation id,
-   * splits to the 500-token cap, and queues if the session hasn't started.
+   * Hand an append to the model, honouring the delivery policy.
+   *
+   * `silent` (thinking) goes immediately — it cannot interrupt anyone, and
+   * holding it would leave the model answering from a stale picture of the
+   * world, which is worse than any interruption. `interrupt` goes immediately
+   * because it is worthless late. `when_idle` — the default, and everything
+   * that is an ANSWER — waits for the user to stop talking.
    */
-  private emit(ctx: DelegationContext, intent: AppendIntent): void {
-    if (this.registry.isStale(ctx)) {
-      this.stats.staleDrops += 1;
-      this.trace(`append dropped — stale (${ctx.id})`);
+  private deliver(
+    task: VoiceTask,
+    intent: AppendIntent,
+    policy?: DeliveryPolicy,
+    final = false,
+  ): void {
+    const p: DeliveryPolicy = policy ?? (intent.kind === 'thinking' ? 'silent' : 'when_idle');
+    if (p !== 'when_idle') {
+      this.emitNow(task, intent, final);
       return;
     }
-    const type =
-      intent.kind === 'thinking' ? 'session.thinking.append' : 'session.commentary.append';
-    for (const content of chunkForAppend(intent.text)) {
+    this.pending.push({ item: task, intent, policy: p, queuedAt: this.sched.now(), final });
+    this.flushFloor();
+  }
+
+  /** Release everything the floor is now free for, oldest first. */
+  private flushFloor(): void {
+    if (this.disposed) return;
+    const ready = this.pending.release(this.sched.now(), this.lastInputDeltaAt, this.idleQuietMs);
+    for (const held of ready) this.emitNow(held.item, held.intent, held.final);
+    if (this.pending.size > 0) {
+      this.stats.deliveriesHeld += 1;
+      this.armFloorPoll();
+    }
+  }
+
+  private armFloorPoll(): void {
+    if (this.floorTimer != null || this.pending.size === 0) return;
+    this.floorTimer = this.sched.setTimeout(() => {
+      this.floorTimer = null;
+      this.flushFloor();
+    }, FLOOR_POLL_MS);
+  }
+
+  /**
+   * The one exit to the model. Checks the fence, re-anchors a late result,
+   * stamps the task id, splits to the 500-token cap, and queues if the session
+   * hasn't started.
+   */
+  private emitNow(task: VoiceTask, intent: AppendIntent, final = false): void {
+    if (this.registry.isStale(task)) {
+      this.stats.staleDrops += 1;
+      this.trace(`append dropped — stale (${task.id})`);
+      return;
+    }
+    // A RESULT arriving into a conversation that has moved on needs a frame, or
+    // the model blurts it as a non-sequitur. Protocol bookkeeping does NOT
+    // count as movement — see delivery.ts.
+    if (
+      final &&
+      intent.kind === 'commentary' &&
+      task.dispatchedAt > 0 &&
+      conversationMovedOn({
+        dispatchedAt: task.dispatchedAt,
+        intermediatesSent: task.intermediatesSent,
+        lastInputDeltaAt: this.lastInputDeltaAt,
+        lastOutputAt: this.lastOutputAt,
+      })
+    ) {
+      this.stats.reanchored += 1;
+      this.write(task, 'thinking', reanchorInstruction(task.request));
+    }
+    this.write(task, intent.kind, intent.text);
+  }
+
+  private write(task: VoiceTask, kind: 'thinking' | 'commentary', text: string): void {
+    const type = kind === 'thinking' ? 'session.thinking.append' : 'session.commentary.append';
+    for (const content of chunkForAppend(text)) {
       // `content`, NOT `text` — see protocol.ts. `event_id` is ours to choose
       // and comes back on any `error` as `client_event_id`, which is the only
       // way to name the append that was refused.
       const ev = {
         type,
         event_id: `mux_${++this.eventSeq}`,
-        delegation_id: ctx.id,
+        delegation_id: task.id,
         content,
       } as OutboundEvent;
       if (!this.started) this.outbound.push(ev);
@@ -624,18 +1159,31 @@ export class VoiceSession {
     this.recomputeState();
   }
 
-  /** Terminal. Every timer cleared, every subscription dropped, the registry
-   *  bumped so anything that somehow survives finds itself stale. */
+  /**
+   * Terminal. Every timer cleared, every subscription dropped, the fence bumped
+   * so anything that somehow survives finds itself stale.
+   *
+   * NOTHING IS STOPPED. Hanging up the phone must not kill the agent: a turn the
+   * user asked for keeps running and lands in the chat pane, where they can read
+   * it. Ending a voice call is not cancelling the work.
+   */
   dispose(reason?: string): void {
     if (this.disposed) return;
     this.disposed = true;
     this.clearSettle();
     this.clearHeartbeat();
     this.clearFiller();
+    if (this.cancelProbeTimer != null) this.sched.clearTimeout(this.cancelProbeTimer);
+    this.cancelProbeTimer = null;
+    if (this.floorTimer != null) this.sched.clearTimeout(this.floorTimer);
+    this.floorTimer = null;
     if (this.speakingTimer != null) this.sched.clearTimeout(this.speakingTimer);
     this.speakingTimer = null;
     for (const u of this.unsubs) u();
     this.unsubs = [];
+    this.pipeline = [];
+    this.bound = null;
+    this.pending.clear();
     this.registry.reset();
     this.bridge.reset();
     this.buf.reset();

@@ -51,11 +51,40 @@ export const INTERRUPTION_POLICY =
  * ways to make a sound are this instruction and the client's own appends.
  */
 export const DELEGATION_POLICY = [
-  'Anything about this user’s code, repos, files, panes or running work goes to the agent —',
-  'delegate it rather than guessing. The agent takes MINUTES, not seconds.',
-  'The moment you hand something over, say one short line so the user knows you heard them',
-  '("on it", "let me check") — never hand off in silence. While you wait, stay conversational:',
-  'answer anything else they ask, and keep it brief. Say results in your own words when they arrive.',
+  'Anything that asks for NEW work on this user’s code, repos, files, panes or running',
+  'processes goes to the agent — delegate it rather than guessing. The agent takes',
+  'MINUTES, not seconds. The moment you hand something over, say one short line so the',
+  'user knows you heard them ("on it", "let me check") — never hand off in silence.',
+  '',
+  // ─ The rule the whole feature turns on ─────────────────────────────────────
+  // Delegating is the ONLY thing that costs the user an agent turn, so the line
+  // between "this is work" and "this is talking" is the line between a product
+  // that can be used hands-free and one that punishes you for speaking. The
+  // previous version of this prompt said only "stay conversational", which was
+  // not a rule, and the model delegated follow-up questions about work it had
+  // already delegated — each one queueing another pointless turn.
+  'WHILE THE AGENT IS WORKING, KEEP TALKING TO THE USER AND DO NOT DELEGATE AGAIN',
+  'unless they are asking for genuinely NEW work. Questions about progress ("how’s it',
+  'going?", "what’s it doing?", "is it done?", "how long?"), comments, reactions and',
+  'thinking aloud are YOURS to answer from what you already know — I keep you supplied',
+  'with the list of what is running and what it is doing. Never hand those to the agent:',
+  'the agent cannot answer a question about itself while it is busy answering the last one.',
+  '',
+  // A second task no longer cancels the first (the client queues it server-side),
+  // so the model must stop implying that it does.
+  'A second request does NOT cancel the first. It queues, and both get done in order.',
+  'Say so plainly — "I’ll queue that behind the current one" — rather than implying',
+  'you have dropped what was already running.',
+  '',
+  // Cancelling is the one destructive act available, so it gets an explicit,
+  // narrow instruction rather than being left to inference.
+  'If — and only if — the user unmistakably asks to ABANDON the running work ("stop",',
+  '"cancel that", "never mind"), delegate exactly that phrase and nothing else; I will',
+  'stop the agent and confirm. Never treat a correction, a new idea or an impatient',
+  'noise as a cancellation: if they want something else as well, that is a second task.',
+  '',
+  'Say results in your own words when they arrive. If the conversation has moved on by',
+  'then, finish what you are saying first and deliver the result at the end.',
 ].join('\n');
 
 /** How long we wait on the SDP exchange. An offer/answer is one small HTTP

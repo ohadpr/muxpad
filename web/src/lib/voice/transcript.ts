@@ -142,6 +142,95 @@ export class TranscriptBuffer {
 /** How far back to look for conversational context around a delegation. */
 export const CONTEXT_WINDOW_MS = 30_000;
 
+/**
+ * Model speech that is really OUR narration coming back at us.
+ *
+ * The context lead exists to catch the model's half of a split request — it
+ * delegates mid-sentence ("sure, let me check — ") and without that half the
+ * user's half is a bare "yeah, do it". It is NOT meant to catch the progress
+ * updates we feed the model ourselves.
+ *
+ * MEASURED, not theorised. In a live session the lead picked up was
+ * `(voice — you had just said: "Still waiting, 26 seconds in. Nothing back
+ * yet.")`, which then went to Claude as the context for "also check the router
+ * file" — our own heartbeat, laundered through the model's voice, prepended to
+ * a request the user has to read in the chat pane. These patterns match the
+ * strings session.ts generates, so this is a filter on our own output rather
+ * than a guess about English.
+ */
+const OUR_NARRATION =
+  /still (working|waiting)|seconds in|no answer yet|queued (that|behind)|starting the next one|on it —|this will take a moment|the agent has been interrupted|requests? (is|are) queued/i;
+
+/**
+ * Openers that mean "this sentence does not stand on its own".
+ *
+ * The context lead is for the utterance that cannot be read without the
+ * model's half — "yeah, do it", "that one too", "the second one". A
+ * self-contained instruction does not need it and is actively harmed by it.
+ */
+const ANAPHORIC_OPENERS = new Set([
+  'yeah',
+  'yes',
+  'yep',
+  'yup',
+  'sure',
+  'ok',
+  'okay',
+  'please',
+  'no',
+  'nope',
+  'nah',
+  'do',
+  'go',
+  'that',
+  'this',
+  'those',
+  'these',
+  'it',
+  'them',
+  'both',
+  'either',
+  'same',
+  'again',
+  'first',
+  'second',
+  'third',
+  'one',
+]);
+
+/**
+ * Does this utterance need the model's previous line to make sense?
+ *
+ * WHY THIS IS A TEST AND NOT ALWAYS-ON. Context used to be attached to every
+ * request, which was fine when the model's last line was a question it had just
+ * asked. It stopped being fine the moment the session started narrating
+ * progress: measured live, a perfectly self-contained "also check the router
+ * file for me" reached Claude as
+ *
+ *   (voice — you had just said: "It's still running. I don't have any results
+ *   yet, but I'll tell you as soon as they're in.")
+ *   Also check the router file for me
+ *
+ * — a progress paraphrase prepended to the request, in the chat pane, where the
+ * user reads it. Note that a string filter cannot fix this: the model PARAPHRASES
+ * our heartbeat in its own words, so there is nothing fixed to match on. The
+ * only reliable signal is the user's own sentence.
+ *
+ * Biased toward INCLUDING context: a needless lead is noise, a missing one can
+ * make the request unanswerable.
+ */
+export function needsContext(asked: string): boolean {
+  const words = asked
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0) return false;
+  if (words.length <= 5) return true;
+  return ANAPHORIC_OPENERS.has(words[0] as string);
+}
+
 export interface ReconstructOpts {
   /** The delegation's `offset_ms`. */
   offsetMs: number;
@@ -173,13 +262,15 @@ export function reconstructRequest(buf: TranscriptBuffer, opts: ReconstructOpts)
   const asked = normalizeUtterance(utterance?.text ?? '');
   if (!asked) return { text: '', utterance, complete: false };
   const complete = looksComplete(asked);
-  if (!opts.withContext) return { text: asked, utterance, complete };
+  if (!opts.withContext || !needsContext(asked)) return { text: asked, utterance, complete };
 
   const window = opts.contextWindowMs ?? CONTEXT_WINDOW_MS;
   const said = buf
     .contextBefore('output', utterance?.startMs ?? opts.offsetMs, window)
     .map((s) => normalizeUtterance(s.text))
-    .filter(Boolean);
+    .filter(Boolean)
+    // Our own progress narration is not conversational context — see above.
+    .filter((s) => !OUR_NARRATION.test(s));
   const lead = said[said.length - 1];
   const text = lead ? `(voice — you had just said: "${lead}")\n\n${asked}` : asked;
   return { text, utterance, complete };
