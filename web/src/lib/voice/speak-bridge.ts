@@ -55,7 +55,15 @@ const MAX_PENDING_CHARS = 220;
  *  that adding a frame to the chat protocol does NOT silently start speaking
  *  it. Parsed from unknown at the boundary (`parseChatFrame`). */
 export type VoiceChatFrame =
-  | { t: 'turn-start' }
+  /**
+   * `text` is the CORRELATION IDENTIFIER: the message that started this turn,
+   * stamped by the server. Chat frames carry no task id — this stream is flat,
+   * one per pane — so with two voice tasks overlapping, this field is the only
+   * thing that says which one's answer is about to arrive. Optional because an
+   * older server does not send it and a turn nobody sent (cron, wakeup) has no
+   * message to name; both cases are handled in session.ts.
+   */
+  | { t: 'turn-start'; text?: string }
   | { t: 'speak'; id: string; text: string; n: number }
   | { t: 'speak-delta'; id: string; delta: string }
   | { t: 'turn-done'; ok: boolean; error?: string }
@@ -166,8 +174,15 @@ export class SpeakBridge {
     return this.turnRunning;
   }
 
-  /** Drop per-reply state between delegations so ids cannot collide across
-   *  turns and a stale pending buffer cannot leak into the next answer. */
+  /**
+   * Drop per-reply state.
+   *
+   * Called on an explicit cancel and on teardown — NOT, as it once was, on
+   * every new delegation. Tasks overlap now, and wiping this mid-turn would
+   * discard the pending tail of a reply that is still streaming for work the
+   * user has not abandoned. Reply ids are the agent's `toolu_*` tool-use ids,
+   * which are unique per call, so nothing collides across turns either way.
+   */
   reset(): void {
     this.replies.clear();
     this.turnRunning = false;

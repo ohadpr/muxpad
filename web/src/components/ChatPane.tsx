@@ -1229,7 +1229,11 @@ type ServerMsg =
   | { t: 'older-done'; hasMore: boolean }
   | { t: 'send-ack' }
   | { t: 'pong' }
-  | { t: 'turn-start' }
+  // `text` is the message that started this turn, stamped by the server. This
+  // component ignores it — the transcript already draws the user bubble — but
+  // the voice layer needs it to tell WHOSE answer is coming when it has two
+  // requests in flight at once. See session.ts's attribution.
+  | { t: 'turn-start'; text?: string }
   | { t: 'stream'; delta: string }
   // ── Speech, and why nothing below handles it ──────────────────────────────
   // The agent's `reply` calls, relayed the instant they exist, for a consumer
@@ -3230,6 +3234,13 @@ export function ChatPane({
   const agentLink: AgentLink = {
     send: (text: string) => dispatchSend(text),
     stop,
+    // An explicit spoken cancel must reach the BACKLOG too, not just the turn
+    // on the wire — `stop` only touches what is running, and honouring "stop"
+    // by killing one turn and then firing the next queued one at the agent is
+    // not what anybody means. Same server-owned queue the pending bubbles use.
+    cancelQueued: (id: string) => {
+      cancelQueued(id);
+    },
     onFrame: (cb) => {
       frameTaps.current.add(cb);
       return () => frameTaps.current.delete(cb);

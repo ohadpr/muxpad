@@ -501,6 +501,23 @@ export function attachWsServer(deps: {
      * the cron `quiet_mins` policy (don't barge into a live conversation).
      */
     lastHumanSendAt: number;
+    /**
+     * The message we last relayed and whose turn has NOT started yet.
+     *
+     * A CORRELATION IDENTIFIER, and the only one available. Chat frames are a
+     * flat per-pane stream with no send id on them, so a client with two
+     * requests in flight — the voice layer, which can now have a task running
+     * and another queued behind it — cannot tell whose answer a `speak` is. It
+     * used to guess "the first turn-start after my send", which silently
+     * mis-attributes the moment anyone ELSE sends into the same pane (the user
+     * typing, a cron, a wakeup): the guess binds the typed turn to the voice
+     * request and speaks the wrong answer to the wrong question.
+     *
+     * Stamped onto the `turn-start` broadcast and CONSUMED there, so a turn
+     * that no send started — a cron fire inside the SDK session, a wakeup —
+     * carries no text and is correctly attributed to nobody.
+     */
+    pendingSendText: string | null;
   }
   // A message that carries a cron fire marker was written by the scheduler,
   // not typed by anyone. One predicate, shared by both relay paths.
@@ -848,6 +865,7 @@ export function attachWsServer(deps: {
       // false and no event fired at all. Mirror the optimism into both.
       conn.turnActive = true;
       conn.lastSendAt = Date.now();
+      conn.pendingSendText = next.text;
       if (isHumanMessage(next.text)) conn.lastHumanSendAt = conn.lastSendAt;
       deps.cache.setAgentBusy(paneId, true);
       emitOptimisticTurnStart(paneId);
@@ -880,6 +898,7 @@ export function attachWsServer(deps: {
       if (sendToRunner(paneId, { t: 'send', text: t })) {
         conn.turnActive = true; // optimistic; runner's turn-start reaffirms
         conn.lastSendAt = Date.now();
+        conn.pendingSendText = t;
         if (isHumanMessage(t)) conn.lastHumanSendAt = conn.lastSendAt;
         // Same D14 mirroring as drainQueue: turn state, pane status and the
         // bus must not disagree for the duration of the round trip.
@@ -1099,6 +1118,7 @@ export function attachWsServer(deps: {
           status: null,
           lastSendAt: 0,
           lastHumanSendAt: 0,
+          pendingSendText: null,
         };
         agentRunners.set(paneId, conn);
         // THIS runner owns the pane's per-connection state from this instant,
@@ -1263,7 +1283,13 @@ export function attachWsServer(deps: {
             // event; no agent_session.updated here — emitting per turn made
             // every open view refetch the session twice per turn.
             deps.cache.setAgentBusy(paneId, true);
-            bcast({ t: 'turn-start' });
+            // Stamp the turn with the message that started it, and CONSUME the
+            // stamp — see `pendingSendText`. A turn with no pending send (cron,
+            // wakeup, a resume that picks up mid-thought) broadcasts bare, which
+            // is what tells a listening client "this one isn't yours".
+            const startedBy = conn.pendingSendText;
+            conn.pendingSendText = null;
+            bcast({ t: 'turn-start', ...(startedBy ? { text: startedBy } : {}) });
             emitTurn('start');
           } else if (frame.t === 'stream') {
             if (typeof frame.delta !== 'string') return;

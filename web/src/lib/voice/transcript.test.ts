@@ -162,6 +162,53 @@ describe('reconstructRequest', () => {
     expect(r.text).toBe('run the tests.');
   });
 
+  // MEASURED IN A LIVE SESSION. The heartbeat says "still working, 26 seconds
+  // in"; the model reads it aloud; it lands on the output transcript; and the
+  // next request went to Claude as
+  //   (voice — you had just said: "Still waiting, 26 seconds in…")
+  //   Also check the router file
+  // — our own progress note, laundered through the model's voice, prepended to
+  // a request the user has to read in the chat pane.
+  it('does NOT quote our own progress narration back as conversational context', () => {
+    const b = new TranscriptBuffer();
+    b.push('output', d('Still waiting, 26 seconds in. Nothing back yet.', 0, 2000));
+    b.push('input', d('also check the router file.', 3000, 4200));
+    const r = reconstructRequest(b, { offsetMs: 4300, withContext: true });
+    expect(r.text).toBe('also check the router file.');
+  });
+
+  it('still quotes a REAL lead-in from the same window', () => {
+    const b = new TranscriptBuffer();
+    b.push('output', d('Still working on it — 26 seconds in, no answer yet.', 0, 2000));
+    // A pause past GAP_MS, so this is a separate utterance rather than the tail
+    // of the progress note. (Said without a pause, the two are one utterance and
+    // BOTH are dropped — losing context is the safe direction to fail.)
+    b.push('output', d('Want me to check the router too?', 3500, 4500));
+    b.push('input', d('yeah, do that.', 5000, 5800));
+    const r = reconstructRequest(b, { offsetMs: 5900, withContext: true });
+    expect(r.text).toContain('Want me to check the router too?');
+    expect(r.text).not.toContain('26 seconds in');
+  });
+
+  // MEASURED LIVE, twice. A string filter is not enough: the model paraphrases
+  // our heartbeat in its own words, so the only reliable signal is whether the
+  // USER's sentence stands on its own.
+  it('omits context for a self-contained instruction', () => {
+    const b = new TranscriptBuffer();
+    b.push('output', d('It’s still running, I’ll tell you as soon as results are in.', 0, 3000));
+    b.push('input', d('also check the router file for me.', 4500, 6000));
+    const r = reconstructRequest(b, { offsetMs: 6100, withContext: true });
+    expect(r.text).toBe('also check the router file for me.');
+  });
+
+  it('keeps context for an utterance that cannot stand alone', () => {
+    const b = new TranscriptBuffer();
+    b.push('output', d('Want me to check the router too?', 0, 2000));
+    b.push('input', d('yeah, do that one.', 3500, 4500));
+    const r = reconstructRequest(b, { offsetMs: 4600, withContext: true });
+    expect(r.text).toContain('Want me to check the router too?');
+  });
+
   it('omits context when not asked for it', () => {
     const b = new TranscriptBuffer();
     b.push('output', d('Want me to run it?', 0, 2000));
