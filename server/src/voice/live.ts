@@ -87,6 +87,31 @@ export const DELEGATION_POLICY = [
   'then, finish what you are saying first and deliver the result at the end.',
 ].join('\n');
 
+/**
+ * The ONE exception to "do not delegate while the agent is working".
+ *
+ * An agent that hits an irreversible command — `git push`, `rm -rf` — stops and
+ * asks. Until the answer arrives the pane is `blocked` and NOTHING moves. That
+ * is also, by definition, a moment when the agent is "working", so the rule
+ * above tells the model to keep the user's answer to itself, and the run this
+ * was written from did exactly that: the question was read out, the user said
+ * "yes, go ahead and push it", and the session sat blocked until it ended.
+ *
+ * The client cannot fix this end alone. A delegation event carries no text —
+ * the request is reconstructed from the user's own transcript — so if the model
+ * does not hand the answer over, there is nothing for the client to route.
+ */
+export const QUESTION_POLICY = [
+  'WHEN I TELL YOU THE AGENT IS WAITING ON THE USER, the next thing they say is an ANSWER,',
+  'and you must hand it over immediately — this is the one case where you delegate while',
+  'the agent is busy. Nothing moves until you do: the agent has stopped and is holding an',
+  'irreversible command until a human answers.',
+  '',
+  'Read the options out and ask them to say one of those words exactly. If they say',
+  'something else, hand that over too, word for word — do not tidy it into a yes or a no.',
+  'Never answer on their behalf, and never assume approval from silence or from a noise.',
+].join('\n');
+
 /** How long we wait on the SDP exchange. An offer/answer is one small HTTP
  *  round trip; if it hasn't landed in 15s the user is staring at a dead mic
  *  button and an honest failure beats a longer wait. */
@@ -173,6 +198,8 @@ export function buildVoiceInstructions(glossary: readonly string[]): string {
     // fails to produce one, but the model's own words are better than ours, so
     // ask for them first. See session.ts's dispatch filler for the backstop.
     DELEGATION_POLICY,
+    '',
+    QUESTION_POLICY,
     '',
     // Same reasoning as chat/clean-transcript.ts: the multi-word mishearings are
     // the ones that need naming, because each word is ordinary English and only

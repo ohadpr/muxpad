@@ -103,6 +103,8 @@ interface FakeAgent extends AgentLink {
   stops: number;
   /** Queue rows dropped via `{t:'queue-cancel'}`. */
   cancelled: string[];
+  /** `{t:'answer'}` frames — the only thing that unblocks a gated agent. */
+  answers: Array<{ qid: string; answers: Array<{ question: string; answers: string[] }> }>;
   frame(f: unknown): void;
   online: boolean;
 }
@@ -113,6 +115,7 @@ function fakeAgent(): FakeAgent {
     sends: [],
     stops: 0,
     cancelled: [],
+    answers: [],
     online: true,
     send(text) {
       if (!a.online) return false;
@@ -124,6 +127,9 @@ function fakeAgent(): FakeAgent {
     },
     cancelQueued(id) {
       a.cancelled.push(id);
+    },
+    answer(qid, answers) {
+      a.answers.push({ qid, answers });
     },
     onFrame(cb) {
       cbs.add(cb);
@@ -1288,5 +1294,140 @@ describe('the model always knows what is running', () => {
     h.delegate('d1', 2100);
     h.settle();
     expect(h.thinking().join(' ')).toMatch(/do not invent a result/i);
+  });
+});
+
+// ── Answering a blocked agent ───────────────────────────────────────────────
+//
+// A `{t:'question'}` — an `ask_user`, or the reversibility gate holding a
+// `git push` — stops the agent dead. The turn is still open, so the server
+// QUEUES any `{t:'send'}` that arrives behind it; the only frame that releases
+// the gate is `{t:'answer'}`. Verified against a live session before these
+// tests existed: the question was spoken, the user said "yes, go ahead and push
+// it", it went out as a `send`, the server queued it, and the pane stayed
+// `blocked` until the session expired.
+
+/** The real frame the gate raises, labels and curly apostrophe included. */
+const GATE_FRAME = {
+  t: 'question',
+  qid: 'gate-1',
+  questions: [
+    {
+      question:
+        'This publishes commits to the remote. Anyone with access can fetch them from that moment. Go ahead?',
+      header: 'Push',
+      multiSelect: false,
+      options: [
+        { label: 'Do it', description: 'git push origin HEAD' },
+        {
+          label: 'Don’t',
+          description: 'The agent is told you declined, and carries on without it.',
+        },
+      ],
+    },
+  ],
+};
+
+/** Dispatch a request, bind its turn, and have the agent block on the gate. */
+function blockedOnGate() {
+  const h = harness();
+  h.started();
+  h.hear('push the branch.', 1000, 2000);
+  h.delegate('d1', 2100);
+  h.settle();
+  h.turnStart('push the branch.');
+  h.agent.frame(GATE_FRAME);
+  return h;
+}
+
+describe('a spoken answer reaches the gate', () => {
+  it('speaks the question AND names the words to say back', () => {
+    const h = blockedOnGate();
+    const spoken = h.commentary().join(' ');
+    expect(spoken).toContain('The agent is waiting on you.');
+    expect(spoken).toContain('Go ahead?');
+    // Exact matching is only usable if the user is told which words to use.
+    expect(spoken).toMatch(/one of those words exactly/i);
+    expect(spoken).toContain('"Do it"');
+  });
+
+  it('sends {t:answer} — NOT a {t:send} that the server would queue behind the question', () => {
+    const h = blockedOnGate();
+    h.hear('do it.', 9000, 9600);
+    h.delegate('d2', 9700);
+    h.settle();
+    expect(h.agent.answers).toEqual([
+      {
+        qid: 'gate-1',
+        answers: [{ question: GATE_FRAME.questions[0]?.question, answers: ['Do it'] }],
+      },
+    ]);
+    // The whole bug: this used to be a send, and a send never unblocks a gate.
+    expect(h.agent.sends).toEqual(['push the branch.']);
+    expect(h.session.stats.questionsAnswered).toBe(1);
+  });
+
+  it('forwards words that match no option verbatim — which the gate reads as a denial with a reason', () => {
+    const h = blockedOnGate();
+    h.hear('not to main, use a branch.', 9000, 9800);
+    h.delegate('d2', 9900);
+    h.settle();
+    expect(h.agent.answers[0]?.answers[0]?.answers).toEqual(['not to main, use a branch.']);
+    expect(h.agent.sends).toEqual(['push the branch.']);
+  });
+
+  it('never turns a refusal into the affirmative', () => {
+    const h = blockedOnGate();
+    h.hear("don't do it.", 9000, 9600);
+    h.delegate('d2', 9700);
+    h.settle();
+    // Anything that is not exactly the affirmative label must not be it.
+    expect(h.agent.answers[0]?.answers[0]?.answers).not.toEqual(['Do it']);
+  });
+
+  it('does not dispatch the answer as agent work, and says what it did', () => {
+    const h = blockedOnGate();
+    h.hear('do it.', 9000, 9600);
+    h.delegate('d2', 9700);
+    h.settle();
+    // An answer releases the running turn; it is not a second task, so it must
+    // not appear in the running-work snapshot the model narrates from.
+    expect(h.session.tasks.some((t) => t.status === 'queued')).toBe(false);
+    expect(h.commentary().join(' ')).toContain('Answered: Do it.');
+  });
+
+  it('stops treating speech as an answer once the question is done', () => {
+    const h = blockedOnGate();
+    h.agent.frame({ t: 'question-done', qid: 'gate-1' });
+    h.hear('now run the tests.', 9000, 9800);
+    h.delegate('d2', 9900);
+    h.settle();
+    expect(h.agent.answers).toEqual([]);
+    expect(h.agent.sends).toEqual(['push the branch.', 'now run the tests.']);
+  });
+
+  it('still treats an unmistakable "stop" as a cancel, not as an answer', () => {
+    const h = blockedOnGate();
+    h.hear('stop.', 9000, 9400);
+    h.delegate('d2', 9500);
+    h.settle();
+    h.probe();
+    expect(h.agent.answers).toEqual([]);
+    expect(h.agent.stops).toBe(1);
+  });
+
+  it('the heartbeat stays quiet while the agent is blocked', () => {
+    const h = harness({ heartbeatMs: 5000 });
+    h.started();
+    h.hear('push the branch.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('push the branch.');
+    h.agent.frame(GATE_FRAME);
+    const before = h.commentary().length;
+    h.clock.advance(60_000);
+    // "Still working on it" over an unanswered question reads as a session that
+    // is not listening.
+    expect(h.commentary().slice(before).join(' ')).not.toMatch(/still working/i);
   });
 });
