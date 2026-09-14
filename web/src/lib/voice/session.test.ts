@@ -673,6 +673,19 @@ describe('a request cancelled from the chat UI does not haunt the pipeline', () 
     expect(h.commentary().join(' ')).toContain('Deployed.');
   });
 
+  it('does not retire a request that was re-parked under a new row', () => {
+    // `editQueued` is a `queue-cancel` plus a fresh send, so an edit that
+    // leaves the text unchanged takes the row away and gives a new one back.
+    // The write-off has to be revocable, or the edit kills the work.
+    const h = parked();
+    h.agent.frame({ t: 'queue', items: [] });
+    h.clock.advance(500);
+    h.agent.frame({ t: 'queued', id: 'q2', text: 'and then deploy it.' });
+    h.agent.frame({ t: 'queue', items: [{ id: 'q2', text: 'and then deploy it.' }] });
+    h.clock.advance(6000);
+    expect(h.session.tasks.map((t) => t.id)).toEqual(['dA', 'dB']);
+  });
+
   it('leaves a fast-path send alone — it was never in the queue to begin with', () => {
     // A send that went out while the agent was idle never becomes a queue row,
     // so its absence from the list means nothing. Reading it as a cancellation
