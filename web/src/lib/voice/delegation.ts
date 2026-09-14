@@ -220,7 +220,23 @@ export class DelegationRegistry {
    * mean "do not speak on behalf of this task".
    */
   isStale(task: VoiceTask): boolean {
-    return this.currentRevision() !== task.revision || !this.live.has(task.id);
+    return this.isFenced(task) || !this.live.has(task.id);
+  }
+
+  /**
+   * The FENCE half of {@link isStale}, on its own: has the user explicitly
+   * abandoned everything claimed before this task?
+   *
+   * For an append that was ACCEPTED while the task was live and is only now
+   * being released — one held for the floor by delivery.ts — this is the right
+   * question and `isStale` is the wrong one. Retiring a task is not a reason to
+   * swallow the message that retired it: that is precisely how "the agent's
+   * turn failed" and "I didn't catch that" became dead air. An explicit cancel
+   * still silences them, both through this and because cancelling clears the
+   * held queue outright.
+   */
+  isFenced(task: VoiceTask): boolean {
+    return this.currentRevision() !== task.revision;
   }
 
   /** The live record for an id, if it has not reached a terminal state. */

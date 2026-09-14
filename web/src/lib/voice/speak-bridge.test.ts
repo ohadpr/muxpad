@@ -214,12 +214,27 @@ describe('failures are spoken', () => {
     expect(spoken(out)).toHaveLength(1);
   });
 
-  it('a server error is spoken and ends the turn', () => {
+  it('a server error is spoken but does NOT end the running turn', () => {
+    // An `error` is the server refusing a SEND far more often than it is the
+    // running turn dying — queue cap, dead runner, read-only pane — and it
+    // arrives on the sending socket with a turn of ours running happily. Ending
+    // the turn here made session.ts's explicit cancel skip `agent.stop()`, so
+    // "stop" stopped nothing at all. Only `turn-done` ends a turn.
     const b = new SpeakBridge();
     b.onFrame({ t: 'turn-start' });
     const out = b.onFrame({ t: 'error', message: 'socket closed' });
     expect(spoken(out).join(' ')).toContain('socket closed');
+    expect(b.isTurnRunning()).toBe(true);
+    b.onFrame({ t: 'turn-done', ok: false, error: 'agent disconnected' });
     expect(b.isTurnRunning()).toBe(false);
+  });
+
+  it('bounds the per-reply dedupe state it keeps for the life of the session', () => {
+    // It used to keep every reply's full text forever (pruned only on cancel or
+    // teardown), so an hours-long hands-free session grew without limit.
+    const b = new SpeakBridge({ maxTrackedReplies: 4 });
+    for (let i = 0; i < 40; i++) b.onFrame({ t: 'speak', id: `r${i}`, text: `answer ${i}.`, n: 1 });
+    expect(b.tracked).toBe(4);
   });
 
   it('a non-fatal notice is silent', () => {
