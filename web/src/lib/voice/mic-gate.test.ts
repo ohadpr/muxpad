@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { MIN_UTTERANCE_MS, MicGate, POST_PLAYBACK_GATE_MS } from './mic-gate';
+import {
+  MIN_CANCEL_UTTERANCE_MS,
+  MIN_UTTERANCE_MS,
+  MicGate,
+  POST_PLAYBACK_GATE_MS,
+} from './mic-gate';
 
 const u = (startMs: number, endMs: number, text = 'something') => ({ startMs, endMs, text });
 
@@ -81,26 +86,40 @@ describe('tunability', () => {
 
 // ── THE UTTERANCE THE BACKSTOP EXISTS FOR ───────────────────────────────────
 //
-// Both filters were declining a bare spoken "stop": one syllable is a coin toss
-// against a 300ms floor, and cancelling OVER the model — which is how anyone
-// cancels anything — starts inside the echo window by definition. Neither is
-// loosened globally; a cancel-shaped utterance is judged on evidence its text
-// supplies directly.
+// Both filters were declining a bare spoken "stop". Measured off captured live
+// sessions: a delta's span is a fixed 200ms quantum and a bare "stop" is ONE
+// delta, so the 300ms floor rejected every one-word cancel deterministically —
+// and cancelling OVER the model, which is how anyone cancels anything, starts
+// inside the echo window by definition. Neither filter is loosened globally; a
+// cancel-shaped utterance is judged on evidence its text supplies directly.
 
 describe('a cancel-shaped utterance is judged on its text, not its length', () => {
   const cancel = { cancelShaped: true } as const;
 
-  it('accepts a "stop" far too short to pass the generic floor', () => {
+  it('accepts a bare "stop" at the transcriber’s ONE-DELTA span of 200ms', () => {
+    // THE MEASURED CASE. `end_ms - start_ms` on a live delta is a fixed 200ms
+    // quantisation bucket (32/32 deltas across two captured sessions), and a
+    // bare spoken "stop" — 525ms of real audio — arrives as exactly one delta.
+    // So this span is what EVERY one-word cancel reports, and the 300ms floor
+    // was rejecting all of them deterministically rather than occasionally.
     const g = new MicGate();
     expect(g.judge(u(1000, 1200, 'stop'))).toBe('too-short');
     expect(g.judge(u(1000, 1200, 'stop'), cancel)).toBe('accept');
   });
 
-  it('still refuses one too short to be a word at all', () => {
-    // A transcriber can hallucinate a word onto a burst of noise. That is what
-    // the residual floor is for — not for modelling how long "stop" takes.
+  it('still refuses a span smaller than one quantum — a degenerate segment', () => {
+    // The floor that survives is not about how long "stop" takes to say; it is
+    // about a span the transcriber cannot legitimately have produced.
     const g = new MicGate();
     expect(g.judge(u(1000, 1050, 'stop'), cancel)).toBe('too-short');
+    expect(g.judge(u(1000, 1000, 'stop'), cancel)).toBe('too-short');
+  });
+
+  it('keeps the cancel floor below one quantum, or every bare cancel dies', () => {
+    // A guard on the constant itself: at or above 200 this filter rejects
+    // every single-delta utterance, which is every one-word cancel there is.
+    expect(MIN_CANCEL_UTTERANCE_MS).toBeGreaterThan(0);
+    expect(MIN_CANCEL_UTTERANCE_MS).toBeLessThan(200);
   });
 
   it('accepts a cancel spoken OVER the model when the model did not say it', () => {

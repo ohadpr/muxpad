@@ -28,17 +28,32 @@
 // ═══ AND THE CASE BOTH FILTERS WERE GETTING EXACTLY WRONG ═══
 //
 // The backstop they guard exists for ONE utterance: a bare spoken "stop". Both
-// filters were declining precisely that.
+// filters were declining precisely that, and the first was declining it ALWAYS.
 //
-//   · A crisp "stop" is one syllable. Against a 300ms floor it is a coin toss,
-//     and every loss is a cancel the user has to repeat.
-//   · "stop" said OVER the model — the normal way any human cancels anything —
-//     starts, by definition, inside the 700ms post-playback window. Barging in
-//     is not an edge case here; it is the case.
+// MEASURED, off captured live gpt-live-1 runs rather than reasoned about:
 //
-// So the whole backstop was reachable mainly when the user waited politely for
-// silence and then enunciated, which is not what someone does when the agent
-// is doing the wrong thing.
+//   · `end_ms - start_ms` ON A DELTA IS NOT A DURATION. It is a fixed 200ms
+//     quantisation bucket. Across two live sessions every one of 32 input
+//     deltas was exactly 200ms wide and every boundary fell on a multiple of
+//     200 — a 7-second sentence arrives as 17 deltas of 200ms, not as deltas
+//     whose widths track the words.
+//   · A BARE "stop" IS ONE DELTA. In the captured cancel run, 525ms of audio
+//     (`say -v Samantha "Stop."`, duration confirmed with `afinfo`) produced
+//     exactly one input delta: `{"delta":" Stop"}`.
+//
+// Together those say a bare spoken "stop" reports a 200ms span — every time,
+// whoever says it, however slowly. Against a 300ms floor that is not a coin
+// toss, it is a DETERMINISTIC REJECTION of every single-delta utterance, which
+// is what a one-word cancel always is. The filter was never measuring speech.
+// It was counting deltas, and it demanded at least two.
+//
+//   · The echo gate then took the rest: "stop" said OVER the model — the normal
+//     way any human cancels anything — starts, by definition, inside the 700ms
+//     post-playback window. Barging in is not an edge case here; it is the case.
+//
+// So the backstop was reachable only when the user waited for silence and then
+// said something longer than one word, which is not what anyone does when the
+// agent is doing the wrong thing.
 //
 // THE FIX IS NOT A SMALLER NUMBER. Both filters are proxies for a question the
 // TEXT answers directly once cancel.ts has ruled on it, and the proxies are
@@ -55,31 +70,36 @@
 //     model's output transcript. So a cancel-shaped utterance inside the
 //     window is gated only if the model's own recent speech CONTAINS it.
 //
-// A NUMBER WE DO NOT HAVE. The right floor for a real spoken "stop" is an
-// empirical question — `endMs - startMs` off a live session — and it has not
-// been measured; these stamps come from the API's own segmentation, so the
-// VAD's padding likely dominates the phonetics anyway. Nothing below depends
-// on knowing it: the cancel-shaped path is decided by TEXT, and
-// MIN_CANCEL_UTTERANCE_MS is deliberately far below any plausible answer so
-// that it rejects degenerate segments rather than short words. If it is ever
-// measured, the number to revisit is that one, and the generic 300ms floor,
-// which no longer stands between the user and a cancel.
+// WHAT THE MEASUREMENT DOES AND DOES NOT SETTLE. It settles the shape: any
+// floor above one 200ms quantum rejects every single-delta utterance outright,
+// so the floor on the cancel path must sit below 200. It does NOT give a real
+// distribution of spoken-"stop" lengths, because the API never reports one —
+// the stamps are its own segmentation grid and the phonetics are invisible
+// through them. That is fine, because nothing below depends on a duration: the
+// cancel path is decided by TEXT, and the surviving floor only has to reject a
+// span too small to be even one quantum.
 
 /** How long after the model stops speaking to distrust the microphone. */
 export const POST_PLAYBACK_GATE_MS = 700;
 
-/** Shorter than this is not an interruption. */
+/**
+ * Shorter than this is not an interruption.
+ *
+ * Read it as "at least two transcript deltas" — see the header. It is not
+ * consulted on the cancel path any more, which is the only path that reaches
+ * this class today.
+ */
 export const MIN_UTTERANCE_MS = 300;
 
 /**
  * The floor for an utterance that cancel.ts has already matched, whole, against
  * its closed set.
  *
- * NOT a model of how long "stop" takes to say — see the header. It is the
- * length below which a transcribed WORD is more likely to be a hallucination
- * over a burst of noise than a thing somebody said. Being wrong high here costs
- * a repetition; being wrong low costs minutes of work, so it sits well below
- * any plausible utterance.
+ * NOT a model of how long "stop" takes to say — the API cannot tell us that.
+ * It is below one 200ms quantisation bucket, which is what a real one-word
+ * utterance reports, and above zero, which is what a degenerate or empty
+ * segment reports. Anything at or above 200 would reject every bare cancel
+ * there is; anything at zero would let a zero-width artefact kill a turn.
  */
 export const MIN_CANCEL_UTTERANCE_MS = 120;
 
