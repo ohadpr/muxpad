@@ -79,6 +79,23 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
   const sessionRef = useRef<VoiceSession | null>(null);
   const closeTransport = useRef<(() => void) | null>(null);
   const remoteId = useRef<string | null>(null);
+  /**
+   * The server's deadline for this call, and the timer that honours it.
+   *
+   * THE SERVER CANNOT HANG THE CALL UP. Audio is browser↔OpenAI, peer to peer;
+   * muxpad is only in the SDP handshake. So when the TTL fires, or when the
+   * daily budget the TTL was clamped to runs out, the server stops COUNTING and
+   * makes a best-effort DELETE upstream — and that is the whole of its power.
+   * If the browser ignores `expiresAt`, the call carries on.
+   *
+   * Measured, before this existed: with the cap set to one minute, the manager
+   * logged "closed session after its 1-minute limit" at 60s and froze the meter
+   * at exactly 1.0 — and the model was still answering out loud at 76s. The cap
+   * was not merely exceeded, it was exceeded INVISIBLY, because the local meter
+   * had stopped. Reading the deadline is what makes the ceiling real.
+   */
+  const deadline = useRef<number | null>(null);
+  const expiryTimer = useRef<number | undefined>(undefined);
   const wakeLock = useRef<ScreenWakeLock | null>(null);
   const unBackground = useRef<(() => void) | null>(null);
   // The agent link is re-created on every ChatPane render; the session must not
@@ -86,9 +103,17 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
   // socket without being torn down and rebuilt.
   const agentRef = useRef(agent);
   agentRef.current = agent;
+  // EVERY verb the link offers has to be forwarded here, not just the two the
+  // session happened to need first. This wrapper silently dropped `cancelQueued`
+  // and `answer`, and because both are optional on AgentLink nothing failed to
+  // compile — it just meant a spoken "stop" left the backlog running, and a
+  // spoken answer to a blocked agent went out as a `send` that the server
+  // queued behind the very question it was answering.
   const stableAgent = useRef<AgentLink>({
     send: (t) => agentRef.current.send(t),
     stop: () => agentRef.current.stop(),
+    cancelQueued: (id) => agentRef.current.cancelQueued?.(id),
+    answer: (qid, answers) => agentRef.current.answer?.(qid, answers),
     onFrame: (cb) => agentRef.current.onFrame(cb),
   });
 
@@ -103,7 +128,16 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
     refreshStatus();
   }, [refreshStatus]);
 
+  /** Re-entry guard. `stop` disposes the session, and disposing it fires
+   *  `onState('ended')`, which now calls `stop` — once, not forever. */
+  const ending = useRef(false);
+
   const stop = useCallback((reason: EndReason = 'user') => {
+    if (ending.current) return;
+    ending.current = true;
+    if (expiryTimer.current !== undefined) window.clearTimeout(expiryTimer.current);
+    expiryTimer.current = undefined;
+    deadline.current = null;
     unBackground.current?.();
     unBackground.current = null;
     wakeLock.current?.release();
@@ -120,6 +154,7 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
     setState('off');
     setDetail(reason === 'user' ? null : endReasonMessage(reason));
     void fetchVoiceStatus().then(setStatus);
+    ending.current = false;
   }, []);
 
   // Playback can be refused even after a gesture (Safari ties permission to the
@@ -186,6 +221,7 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
           exchangeSdp: async (offer) => {
             const answer = await createVoiceSession(paneId, offer);
             remoteId.current = answer.sessionId;
+            deadline.current = answer.expiresAt;
             return { sdp: answer.sdp, sessionId: answer.sessionId };
           },
         });
@@ -204,14 +240,37 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
             if (d) setDetail(d);
             // A transport that dies takes the session with it; don't leave the
             // meter running or the mic light on.
-            if (s === 'ended') {
+            //
+            // THE METER IS THE POINT, and it used to be the half that was
+            // missing. This branch released the wake lock and stopped there, so
+            // a dropped connection — wifi gone, peer connection failed, the tab
+            // losing its network — left `remoteId` set and the server session
+            // OPEN. Nothing then fired `DELETE /api/voice/session/:id`, so the
+            // call went on billing until the TTL expired, up to ten minutes of
+            // a call nobody was on. Measured against a live session: after the
+            // peer connection was closed the UI said "ended" while
+            // /api/voice/status still reported `live: true` and a climbing
+            // meter. `stop()` is the only path that hangs up; take it.
+            if (s === 'ended' || s === 'error') {
               wakeLock.current?.release();
               wakeLock.current = null;
+              stop('transport-failed');
             }
           },
         });
         session.start();
         sessionRef.current = session;
+
+        // Hang up ON the server's deadline, not after it. `settle` clamps what
+        // it charges to this instant anyway, so every second past it is spend
+        // nobody is counting. Fires immediately if the deadline has already
+        // passed, which is the right answer to a clock that disagrees.
+        if (deadline.current != null) {
+          expiryTimer.current = window.setTimeout(
+            () => stop('expired'),
+            Math.max(0, deadline.current - Date.now()),
+          );
+        }
 
         wakeLock.current = new ScreenWakeLock();
         void wakeLock.current.acquire();

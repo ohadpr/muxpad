@@ -112,6 +112,13 @@ export function parseChatFrame(u: unknown): VoiceChatFrame | null {
  * header is dropped — it is a two-word UI label that adds nothing aloud.
  * Capped at a handful of options: past that, listing them is worse than
  * asking the user to look at the screen, which the chat pane is showing.
+ *
+ * IT ASKS FOR THE LABEL BY NAME, and that is load-bearing rather than fussy.
+ * The answer is matched against the option labels EXACTLY (question.ts), because
+ * anything looser approves things the user refused — "Don't do it" contains "Do
+ * it". Exact matching is only usable if the user knows which words to say, so
+ * the question tells them. An answer in any other form still works; it just
+ * travels as free text, which for a gate means "no, and here is why".
  */
 export function describeQuestion(questions: readonly VoiceQuestion[]): string {
   const parts: string[] = [];
@@ -121,7 +128,12 @@ export function describeQuestion(questions: readonly VoiceQuestion[]): string {
       q.options.length > opts.length ? ` (and ${q.options.length - opts.length} more)` : '';
     parts.push(opts.length ? `${q.question} Options: ${opts.join('; ')}${more}.` : q.question);
   }
-  return `The agent is waiting on you. ${parts.join(' ')}`;
+  const labels = questions[0]?.options.slice(0, 5).map((o) => `"${o.label}"`) ?? [];
+  const how =
+    labels.length >= 2
+      ? ` Answer by saying one of those words exactly — ${labels.join(' or ')}.`
+      : '';
+  return `The agent is waiting on you. ${parts.join(' ')}${how}`;
 }
 
 /** The longest common prefix of two strings. */

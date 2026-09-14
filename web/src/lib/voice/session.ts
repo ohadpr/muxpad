@@ -108,6 +108,7 @@ import {
   isSessionError,
   isTranscriptDelta,
 } from './protocol';
+import { type PendingQuestion, answersFor, describeAnswer } from './question';
 import { SpeakBridge, type VoiceChatFrame, parseChatFrame } from './speak-bridge';
 import { TranscriptBuffer, type Utterance, reconstructRequest } from './transcript';
 import type { TransportState, VoiceTransport } from './transport';
@@ -139,6 +140,20 @@ export interface AgentLink {
    * honour "stop".
    */
   cancelQueued?(id: string): void;
+  /**
+   * Answer an open agent question (`{t:'answer'}`) — an `ask_user`, or the
+   * reversibility gate holding an irreversible command.
+   *
+   * A BLOCKED AGENT CANNOT BE UNBLOCKED BY `send`. A question is raised inside
+   * a turn that is still running, so the server queues any `send` that arrives
+   * behind it (ws.ts `submitSend`) and the gate goes on waiting for an answer
+   * that is now stuck in line behind the thing it would have released. Without
+   * this verb a spoken "do it" is a deadlock, not an approval.
+   *
+   * Optional only so a link that predates it still type-checks; a session
+   * without it can speak a question but never answer one.
+   */
+  answer?(qid: string, answers: Array<{ question: string; answers: string[] }>): void;
   /** Every frame from the chat socket, unparsed. */
   onFrame(cb: (raw: unknown) => void): () => void;
 }
@@ -241,6 +256,9 @@ export interface VoiceSessionStats {
   /** Tasks whose reconstructed request was identical to something already in
    *  flight, and were therefore not dispatched a second time. */
   duplicateRequests: number;
+  /** Utterances routed to an open agent question instead of being dispatched as
+   *  new work. A blocked agent is released by these and by nothing else. */
+  questionsAnswered: number;
   /** Appends held because the user was mid-sentence. Non-zero means the
    *  delivery policy earned its keep. */
   deliveriesHeld: number;
@@ -352,6 +370,14 @@ export class VoiceSession {
   /** Last tool the bound turn started, for the progress update. Name only. */
   private lastTool: string | null = null;
   private lastCancelAt = Number.NEGATIVE_INFINITY;
+  /**
+   * The agent question currently waiting on the user, if any.
+   *
+   * Held for exactly as long as the agent is blocked on it, because while it is
+   * set the NEXT thing the user says is an answer rather than a new request —
+   * see `settle`. Cleared by `question-done`, and on teardown.
+   */
+  private pendingQuestion: PendingQuestion | null = null;
 
   /** Utterances the cancel probe has already ruled on, so one sentence is
    *  judged once rather than once per delta. */
@@ -366,6 +392,7 @@ export class VoiceSession {
     cancels: 0,
     tasksQueued: 0,
     duplicateRequests: 0,
+    questionsAnswered: 0,
     deliveriesHeld: 0,
     reanchored: 0,
     appendsAcked: 0,
@@ -562,6 +589,16 @@ export class VoiceSession {
       return;
     }
 
+    // ── A BLOCKED AGENT WANTS AN ANSWER, NOT A NEW REQUEST ──────────────────
+    //
+    // Checked AFTER the cancel probe on purpose: "stop" said over an open
+    // question means abandon the work, not answer it, and the gate fails closed
+    // on an interrupted question anyway.
+    if (this.pendingQuestion) {
+      this.answerPending(task, r.utterance?.text ?? r.text);
+      return;
+    }
+
     // TWO DELEGATIONS, ONE SENTENCE. `segmentAt` joins on a timestamp, and two
     // delegations fired either side of one pause both land on the same
     // utterance. Now that the second no longer supersedes the first, dispatching
@@ -618,6 +655,45 @@ export class VoiceSession {
     this.emitNow(task, { kind: 'thinking', text: this.describePipeline() });
     this.armFiller(task, behind > 0);
     this.armHeartbeat();
+  }
+
+  /**
+   * Send what the user just said back as the answer to the open question.
+   *
+   * NOT A TASK. Nothing is dispatched, nothing joins the pipeline and no
+   * heartbeat is armed: answering a question does not start an agent turn, it
+   * UNBLOCKS the one already running. The task record the delegation created is
+   * retired immediately so it never shows up in the running-work snapshot as a
+   * phantom request the model would then narrate.
+   *
+   * The mapping from speech to option is question.ts's, and it fails closed:
+   * anything that is not plainly one of the labels is forwarded verbatim, which
+   * every consumer of an answer already treats as "not the affirmative".
+   */
+  private answerPending(task: VoiceTask, spoken: string): void {
+    const pending = this.pendingQuestion;
+    if (!pending) return;
+    if (!this.agent.answer) {
+      // A link with no answer verb cannot unblock the agent, and sending this
+      // as a request would queue it behind the very question it answers. Say so
+      // rather than silently deadlocking.
+      this.deliver(task, {
+        kind: 'commentary',
+        text: 'I can’t answer that from here — tap one of the options on screen.',
+      });
+      this.registry.setStatus(task.id, 'failed');
+      return;
+    }
+    const answers = answersFor(spoken, pending);
+    this.agent.answer(pending.qid, answers);
+    this.stats.questionsAnswered += 1;
+    this.trace(`answered ${pending.qid}: ${JSON.stringify(answers[0]?.answers ?? [])}`);
+    // Clear optimistically. `question-done` confirms it, but the agent may take
+    // a beat to send one and a second utterance in that window must not be read
+    // as a second answer to a question that is already resolved.
+    this.pendingQuestion = null;
+    this.deliver(task, { kind: 'commentary', text: describeAnswer(spoken, pending) });
+    this.registry.setStatus(task.id, 'completed');
   }
 
   private clearSettle(id?: string): void {
@@ -763,11 +839,17 @@ export class VoiceSession {
     // the task that turn belongs to rather than the previous one.
     if (frame.t === 'turn-start') this.bindTurn(frame.text);
     if (frame.t === 'queued') this.noteQueued(frame.id, frame.text);
-    if (frame.t === 'question' && this.bound) {
-      this.registry.setStatus(this.bound.id, 'input_required');
+    // The question is remembered whether or not it belongs to a task of OURS: a
+    // turn the user TYPED can block the pane just as hard, and once it has, the
+    // only thing that moves is an answer. Speaking one should work either way.
+    if (frame.t === 'question') {
+      this.pendingQuestion = { qid: frame.qid, questions: frame.questions };
+      if (this.bound) this.registry.setStatus(this.bound.id, 'input_required');
     }
-    if (frame.t === 'question-done' && this.bound?.status === 'input_required') {
-      this.registry.setStatus(this.bound.id, 'working');
+    if (frame.t === 'question-done') {
+      if (this.pendingQuestion?.qid === frame.qid) this.pendingQuestion = null;
+      if (this.bound?.status === 'input_required')
+        this.registry.setStatus(this.bound.id, 'working');
     }
 
     const intents = this.bridge.onFrame(frame);
@@ -1183,6 +1265,7 @@ export class VoiceSession {
     this.unsubs = [];
     this.pipeline = [];
     this.bound = null;
+    this.pendingQuestion = null;
     this.pending.clear();
     this.registry.reset();
     this.bridge.reset();
