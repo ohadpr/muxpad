@@ -21,8 +21,7 @@ describe('cancels', () => {
     'abort',
     'never mind',
     'nevermind',
-    'never mind that',
-    'forget it',
+    'forget that',
     'forget about that',
     'scratch that',
     'abandon that',
@@ -32,7 +31,7 @@ describe('cancels', () => {
     'okay — no, wait, stop',
     'actually, never mind',
     'hey, cancel that',
-    'no no, forget it',
+    'no no, forget that',
     // Trailing politeness likewise.
     'stop please',
     'cancel that for now',
@@ -108,6 +107,55 @@ describe('the vocabulary is small and auditable', () => {
       expect(CANCEL_VOCABULARY).not.toContain(risky);
       expect(isExplicitCancel(risky)).toBe(false);
     }
+  });
+
+  it('applies that same test back to itself — the dismissals of a REMARK are out', () => {
+    // "ugh, forget it" and "never mind that" dismiss something just SAID at
+    // least as often as they abandon work. Both had a near-identical survivor
+    // in the set, so removing them costs a repetition, not a capability.
+    for (const risky of ['forget it', 'never mind that']) {
+      expect(CANCEL_VOCABULARY).not.toContain(risky);
+      expect(isExplicitCancel(risky)).toBe(false);
+    }
+    // …and the survivors that make that trade cheap are still there.
+    expect(isExplicitCancel('never mind')).toBe(true);
+    expect(isExplicitCancel('forget that')).toBe(true);
+  });
+});
+
+describe('a cancel in another language is a CANCEL, not a new agent task', () => {
+  // The set was English-only, so these fell through to `enqueue` and were sent
+  // to Claude AS WORK: the user asking for the work to stop got another turn
+  // of it. Recognising them is strictly better than the no-op that was the
+  // floor for this fix, and the whole-utterance closed-set rule is what keeps
+  // it as safe as the English half.
+  const foreign = ['עצור', 'תעצור', 'תפסיק', 'די', 'מספיק', 'בטל', 'para', 'basta', 'cancela'];
+  for (const phrase of foreign) {
+    it(`cancels on "${phrase}" and does not dispatch it`, () => {
+      expect(isExplicitCancel(phrase)).toBe(true);
+      expect(arrivalPolicyFor(phrase)).toBe('interrupt');
+    });
+  }
+
+  it('still refuses a foreign cancel word with an object — that is a task', () => {
+    // Exactly the "stop the dev server" rule, in Hebrew and Spanish.
+    expect(isExplicitCancel('עצור את השרת')).toBe(false);
+    expect(isExplicitCancel('para el servidor de desarrollo')).toBe(false);
+  });
+
+  it('excludes the "drop it" class in every language too', () => {
+    for (const risky of ['עזוב', 'עזוב את זה', 'dejalo', 'déjalo', 'olvidalo']) {
+      expect(isExplicitCancel(risky)).toBe(false);
+    }
+  });
+
+  it('normalises non-Latin text instead of deleting it', () => {
+    // The old normaliser stripped everything outside [a-z0-9], so a Hebrew
+    // sentence became the empty string. Punctuation and accents still go.
+    expect(isExplicitCancel('עצור!')).toBe(true);
+    expect(isExplicitCancel('deténte')).toBe(true);
+    // A real Hebrew REQUEST must still be a request.
+    expect(arrivalPolicyFor('תריץ את הטסטים בבקשה')).toBe('enqueue');
   });
 });
 

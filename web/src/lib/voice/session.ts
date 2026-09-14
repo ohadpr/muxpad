@@ -98,7 +98,7 @@ import {
   conversationMovedOn,
   reanchorInstruction,
 } from './delivery';
-import { MicGate } from './mic-gate';
+import { ECHO_LOOKBACK_MS, MicGate } from './mic-gate';
 import type { AppendIntent, InboundEvent, OutboundEvent } from './protocol';
 import {
   channelOf,
@@ -1164,13 +1164,37 @@ export class VoiceSession {
       this.trace('utterance is not a cancel — agent keeps working');
       return;
     }
-    const verdict = this.gate.judge({ startMs: seg.startMs, endMs: seg.endMs, text: seg.text });
+    // The gate is told what cancel.ts just concluded, and handed the model's
+    // own recent speech. Both change which question it asks: this utterance is
+    // the ONE the backstop exists for, and a bare "stop" over the model's voice
+    // is short and inside the echo window by construction — so judging it on
+    // length and timing alone declined it in exactly the two situations anyone
+    // actually cancels in. See mic-gate.ts.
+    const verdict = this.gate.judge(
+      { startMs: seg.startMs, endMs: seg.endMs, text: seg.text },
+      { cancelShaped: true, recentOutput: this.recentModelSpeech(seg.startMs) },
+    );
     if (verdict !== 'accept') {
       this.trace(`cancel ignored (${verdict})`);
       return;
     }
     this.judged.add(seg);
     this.cancel(this.bound ?? this.registry.active(), 'spoken');
+  }
+
+  /**
+   * What the model said in the moments before `atMs`, for the echo test.
+   *
+   * Deliberately narrow: an echo comes back within a beat or not at all, and a
+   * longer memory starts refusing genuine cancels on the grounds that the model
+   * used the word "stop" a minute ago.
+   */
+  private recentModelSpeech(atMs: number): string {
+    return this.buf
+      .segments('output')
+      .filter((s) => s.endMs >= atMs - ECHO_LOOKBACK_MS && s.startMs <= atMs + 1)
+      .map((s) => s.text)
+      .join(' ');
   }
 
   /**
