@@ -1044,7 +1044,13 @@ export class VoiceSession {
    *  explicit cancel can drop it before it ever runs. */
   private noteQueued(id: string, text: string): void {
     const d = this.matchPending(text);
-    if (d) d.queueId = id;
+    if (!d) return;
+    d.queueId = id;
+    // A NEW row for a task we had already written off. `editQueued` in the chat
+    // UI is a `queue-cancel` plus a fresh send, so an unchanged edit re-parks
+    // the same request under a new row id — and the pending orphan check would
+    // then retire work that is very much alive.
+    this.clearOrphanTimer(d.id);
   }
 
   /**
@@ -1068,7 +1074,12 @@ export class VoiceSession {
     const live = new Set(items.map((i) => i.id));
     for (const task of this.pipeline) {
       if (task.status !== 'queued' || !task.queueId) continue;
-      if (live.has(task.queueId)) continue;
+      if (live.has(task.queueId)) {
+        // Still parked. If we had written it off, we were wrong — a row can
+        // reappear in the list after a reconnect resync.
+        this.clearOrphanTimer(task.id);
+        continue;
+      }
       if (this.orphanTimers.has(task.id)) continue;
       const id = task.id;
       this.orphanTimers.set(
@@ -1139,9 +1150,11 @@ export class VoiceSession {
    * THE DEBOUNCE IS THE POINT. Judging deltas as they arrive cancels on the word
    * "stop" in "stop the dev server", which is a task. So the probe re-arms on
    * every delta of the same utterance and only rules once the user has gone
-   * quiet. The echo gate guards it as well — a sub-300ms blip and the model's
+   * quiet. The mic gate guards it as well — a degenerate blip and the model's
    * own voice coming back through the microphone are both refused — because
-   * this is the only path that can throw work away.
+   * this is the only path that can throw work away. What the gate does NOT do
+   * any more is refuse a cancel for being short or for being spoken over the
+   * model, which are the two things it was refusing most; see mic-gate.ts.
    */
   private armCancelProbe(seg: Utterance): void {
     this.lastInputDeltaAt = this.sched.now();
