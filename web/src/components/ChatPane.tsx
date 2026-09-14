@@ -50,9 +50,6 @@ import {
   isPrivateReasoning,
 } from '../lib/chat-voice';
 import { showFolderChip } from '../lib/nav-row-affordances';
-import type { AgentLink } from '../lib/voice/session';
-import { useVoice } from '../lib/voice/use-voice';
-import { VoiceBar, VoiceControl } from './VoiceControl';
 import {
   type HighlightRun,
   highlightRuns,
@@ -66,8 +63,11 @@ import {
   pickSearchTarget,
   takeSearchJump,
 } from '../lib/search-jump';
+import type { AgentLink } from '../lib/voice/session';
+import { useVoice } from '../lib/voice/use-voice';
 import { AgentBackendLogo, backendFromAssistant } from './AgentLogos';
 import { SvgAgentGlyph, SvgGlobe, SvgTerminalGlyph } from './PaneWebSwitch';
+import { VoiceBar, VoiceControl } from './VoiceControl';
 
 /** Open a media item in the lightbox (image or video). */
 type OpenMedia = (m: { url: string; name: string; video: boolean }) => void;
@@ -656,15 +656,15 @@ export function ChatReadyGreeting({
   return (
     <>
       <div className="chat-empty-mark -logo" aria-hidden="true">
-        {isChat ? <SvgModeGlyph mode="chat" /> : (
+        {isChat ? (
+          <SvgModeGlyph mode="chat" />
+        ) : (
           <AgentBackendLogo backend={backendFromAssistant(assistant)} size={26} />
         )}
       </div>
       <p className="chat-empty-title">Ready when you are</p>
       <p className="chat-empty-ident">
-        <span className="chat-empty-ident-name">
-          {isChat ? 'Chat' : assistantLabel(assistant)}
-        </span>
+        <span className="chat-empty-ident-name">{isChat ? 'Chat' : assistantLabel(assistant)}</span>
         {!isChat && cwd ? <span className="chat-empty-ident-cwd">{cwd}</span> : null}
       </p>
       {converted ? (
@@ -3241,6 +3241,11 @@ export function ChatPane({
     cancelQueued: (id: string) => {
       cancelQueued(id);
     },
+    // The same frame the QuestionCard's chips send. A gate question raised
+    // mid-turn blocks the pane until this arrives, and a `send` cannot take its
+    // place — the server queues that behind the running turn, so the answer
+    // would wait on the question it was meant to release.
+    answer: answerQuestion,
     onFrame: (cb) => {
       frameTaps.current.add(cb);
       return () => frameTaps.current.delete(cb);
