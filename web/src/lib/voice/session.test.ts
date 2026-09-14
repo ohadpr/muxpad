@@ -520,6 +520,219 @@ describe('ATTRIBUTION with two tasks in flight', () => {
   });
 });
 
+// ── THE FOUR WAYS A TASK USED TO BE ANSWERED BY THE WRONG TURN, OR BY NONE ──
+//
+// Every one of these is the same shape: a frame that says nothing about WHICH
+// request it concerns being used to close, bind or fail one anyway.
+
+describe('an unstamped turn-start is not evidence of an old server', () => {
+  it('binds nothing once this server has been seen to stamp', () => {
+    const h = harness();
+    h.started();
+    // One stamped turn is all the proof needed that this server stamps.
+    h.hear('first thing.', 1000, 2000);
+    h.delegate('dA', 2100);
+    h.settle();
+    h.turnStart('first thing.');
+    h.agent.frame({ t: 'turn-done', ok: true });
+
+    // A second request goes out and is waiting its turn…
+    h.hear('second thing.', 4000, 6000);
+    h.delegate('dB', 6100);
+    h.settle();
+
+    // …and the runner reconnects mid-turn on SOMEONE ELSE'S turn (the user
+    // typing, a cron). The server rebuilt its state from nothing, so it cannot
+    // name the message any more and re-broadcasts a bare turn-start. Reading
+    // that as "old server, bind by submit order" hands a live foreign turn to
+    // our queued request — which then speaks its output and is closed by a
+    // turn-done it never earned.
+    h.turnStart();
+    h.agent.frame({ t: 'speak', id: 'rX', text: 'Contents of the directory.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+
+    expect(h.everything()).not.toContain('Contents of the directory.');
+    expect(h.session.tasks.map((t) => t.status)).toEqual(['queued']);
+
+    // And our own turn, when it is named, still binds and still speaks.
+    h.turnStart('second thing.');
+    h.agent.frame({ t: 'speak', id: 'rB', text: 'Did the second.', n: 1 });
+    expect(h.commentary().join(' ')).toContain('Did the second.');
+  });
+
+  it('still falls back to submit order against a server that has never stamped', () => {
+    // The legacy path is not removed, only narrowed: with no stamped turn ever
+    // seen, order is still the best available answer.
+    const h = harness();
+    h.started();
+    h.hear('first thing.', 1000, 2000);
+    h.delegate('dA', 2100);
+    h.settle();
+    h.turnStart();
+    h.agent.frame({ t: 'speak', id: 'rA', text: 'Did the first.', n: 1 });
+    expect(h.transport.sent.find((e) => e.content.includes('Did the first.'))?.delegation_id).toBe(
+      'dA',
+    );
+  });
+});
+
+describe('an `error` is about a REJECTED SEND, not about the running turn', () => {
+  /** A running task A, plus a task B the server parked behind it. */
+  const twoInFlight = () => {
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('dA', 2100);
+    h.settle();
+    h.turnStart('run the tests.');
+    h.hear('and then deploy it.', 4000, 6000);
+    h.delegate('dB', 6100);
+    h.settle();
+    return h;
+  };
+
+  it('does not fail the live turn or drop its answer', () => {
+    const h = twoInFlight();
+    // The server refuses the SECOND send — queue cap, in this case. It arrives
+    // on the same socket, mid-turn, and says nothing about which send it means.
+    h.agent.frame({ t: 'error', message: 'too many queued messages (max 20)' });
+
+    // The running turn is untouched and its answer is still spoken under it.
+    h.agent.frame({ t: 'speak', id: 'rA', text: 'All 801 pass.', n: 1 });
+    expect(h.transport.sent.find((e) => e.content.includes('All 801 pass.'))?.delegation_id).toBe(
+      'dA',
+    );
+    h.agent.frame({ t: 'turn-done', ok: true });
+    expect(h.session.tasks.map((t) => t.id)).toEqual([]);
+  });
+
+  it('retires the rejected request instead of leaving it queued forever', () => {
+    const h = twoInFlight();
+    h.agent.frame({ t: 'error', message: 'too many queued messages (max 20)' });
+    h.clock.advance(1000); // let the held delivery reach the floor
+    // The failure is spoken, and it is spoken under the request it is about.
+    const said = h.transport.sent.find((e) => e.content.includes('too many queued messages'));
+    expect(said?.delegation_id).toBe('dB');
+    // …and B is gone from the pipeline rather than blocking it forever.
+    expect(h.session.tasks.map((t) => t.id)).toEqual(['dA']);
+  });
+
+  it('does not silently disarm the cancel', () => {
+    // The compounding failure: `error` used to clear `turnRunning`, and the
+    // explicit-cancel path gates `agent.stop()` on it. So a rejected send made
+    // the very next "stop" stop nothing at all, silently.
+    const h = twoInFlight();
+    h.agent.frame({ t: 'error', message: 'too many queued messages (max 20)' });
+    h.hear('stop', 20_000, 20_800);
+    h.probe();
+    expect(h.agent.stops).toBe(1);
+  });
+});
+
+describe('a request cancelled from the chat UI does not haunt the pipeline', () => {
+  /** A running task A and a task B parked in the server's queue as row q1. */
+  const parked = () => {
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('dA', 2100);
+    h.settle();
+    h.turnStart('run the tests.');
+    h.hear('and then deploy it.', 4000, 6000);
+    h.delegate('dB', 6100);
+    h.settle();
+    h.agent.frame({ t: 'queued', id: 'q1', text: 'and then deploy it.' });
+    h.agent.frame({ t: 'queue', items: [{ id: 'q1', text: 'and then deploy it.' }] });
+    return h;
+  };
+
+  it('retires a task whose queue row was dropped', () => {
+    const h = parked();
+    // The user taps × on the pending bubble in the chat UI. The server drops the
+    // row and rebroadcasts the queue — and that is the ONLY thing it sends. No
+    // turn-start will ever name this request and no turn-done will ever close
+    // it, so before this fix it stayed `queued` for the life of the session.
+    h.agent.frame({ t: 'queue', items: [] });
+    h.clock.advance(6000);
+    expect(h.session.tasks.map((t) => t.id)).toEqual(['dA']);
+    expect(h.commentary().join(' ')).toContain('cancelled before it ran');
+  });
+
+  it('does NOT mistake a drain for a cancellation', () => {
+    // The row leaves the queue for two reasons and the broadcast does not say
+    // which. A drain removes it and rebroadcasts BEFORE the runner's turn-start
+    // echoes back, so the grace window is what keeps this from retiring work
+    // that is about to run.
+    const h = parked();
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.agent.frame({ t: 'queue', items: [] });
+    h.agent.frame({ t: 'turn-start', text: 'and then deploy it.' });
+    h.clock.advance(6000);
+    expect(h.session.tasks.map((t) => [t.id, t.status])).toEqual([['dB', 'working']]);
+    h.agent.frame({ t: 'speak', id: 'rB', text: 'Deployed.', n: 1 });
+    expect(h.commentary().join(' ')).toContain('Deployed.');
+  });
+
+  it('leaves a fast-path send alone — it was never in the queue to begin with', () => {
+    // A send that went out while the agent was idle never becomes a queue row,
+    // so its absence from the list means nothing. Reading it as a cancellation
+    // would retire every request we ever dispatched.
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('dA', 2100);
+    h.settle();
+    h.agent.frame({ t: 'queue', items: [] });
+    h.clock.advance(6000);
+    expect(h.session.tasks.map((t) => t.id)).toEqual(['dA']);
+  });
+});
+
+describe('a message held for the floor is not deleted by the retirement that produced it', () => {
+  it('speaks the answer that arrived while the user was mid-sentence', () => {
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('run the tests.');
+
+    // The user starts saying something else, so the floor is busy…
+    h.hear('so anyway I was thinking', 5000, 6000);
+    // …and that is exactly when the answer lands.
+    h.agent.frame({ t: 'speak', id: 'r1', text: 'All 801 pass.', n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+    expect(h.commentary().join(' ')).not.toContain('All 801 pass.');
+
+    // The turn-done retired the task. Re-testing full staleness when the floor
+    // frees up drops the answer the retirement was announcing — which is the
+    // whole bug. Only the fence may retract a held append.
+    h.clock.advance(2000);
+    expect(h.commentary().join(' ')).toContain('All 801 pass.');
+  });
+
+  it('still says "I can’t reach the chat right now" when the floor was busy', () => {
+    const h = harness();
+    h.started();
+    h.agent.online = false;
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    // The user carries on talking, so the settle lands on a busy floor.
+    h.clock.advance(400);
+    h.hear(' now.', 2000, 2400);
+    h.clock.advance(300);
+    expect(h.agent.sends).toEqual([]);
+    h.clock.advance(2000);
+    expect(h.commentary().join(' ')).toContain('can’t reach the chat');
+  });
+
+  // The FENCE — the half of the staleness test that still applies to a held
+  // append — is pinned by 'never speaks the tail of the turn it just killed'
+  // above, plus `cancel`'s outright `pending.clear()`. A held item cannot in
+  // practice outlive a SPOKEN cancel: both wait on input quiet and the floor's
+  // 600ms always wins the 900ms cancel probe.
+});
+
 describe('the settle window — the delegation beats the transcript', () => {
   it('waits for a sentence that is still arriving', () => {
     const h = harness();

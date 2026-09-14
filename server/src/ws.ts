@@ -516,6 +516,23 @@ export function attachWsServer(deps: {
      * Stamped onto the `turn-start` broadcast and CONSUMED there, so a turn
      * that no send started — a cron fire inside the SDK session, a wakeup —
      * carries no text and is correctly attributed to nobody.
+     *
+     * SINGLE USE, AND CLEARED BY EVERY PATH THAT ENDS THE SEND IT NAMES —
+     * not just by the turn-start that consumes it. It used to be cleared ONLY
+     * on consumption, which left it standing whenever a relayed send died
+     * before its turn began: a Stop that cancels a runner-queued send makes the
+     * runner emit a bare `turn-done` with no preceding `turn-start`, and the
+     * stamp survived it. The next AUTONOMOUS turn — a cron, a wakeup — then
+     * broadcast a `turn-start` wearing a dead send's text, and a voice client
+     * bound its still-waiting task to the cron's turn and spoke the cron's
+     * output as the answer to the user's question. That is the exact failure
+     * the stamp exists to prevent, so clearing it is part of the invariant:
+     * a stamp names a send that can still start a turn, or it is null.
+     *
+     * Why the text and not the queue row id: the id would be a better
+     * correlation key, but it is also one the client cannot always have — a
+     * send on the idle fast path never becomes a queue row, so it has no id to
+     * match on. The text is the one field both ends hold in every case.
      */
     pendingSendText: string | null;
   }
@@ -1323,6 +1340,13 @@ export function attachWsServer(deps: {
           } else if (frame.t === 'turn-done') {
             conn.turnActive = false;
             conn.pendingQuestion = null;
+            // Retire the correlation stamp with the turn. Normally turn-start
+            // already consumed it, but a `turn-done` can arrive with NO
+            // preceding `turn-start` — a Stop that cancels a send the runner
+            // had queued reports exactly that — and the stamp would otherwise
+            // outlive the send it names and be worn by the next autonomous
+            // turn. See `pendingSendText`.
+            conn.pendingSendText = null;
             // No question outlives its turn (the runner resolves them all on
             // interrupt/result), so the blocked state can't either.
             deps.cache.setBlocked(paneId, false);
@@ -1508,6 +1532,10 @@ export function attachWsServer(deps: {
           // this is a zero, by the same rule as everywhere else.
           syncSubagentCount(paneId);
           streamBufs.delete(paneId);
+          // The dead runner's in-flight send dies with it; its stamp must not
+          // outlive it (this conn object is still reachable from a closure
+          // until GC, and a resurrected one starts from a fresh record anyway).
+          conn.pendingSendText = null;
           if (conn.turnActive) {
             conn.turnActive = false;
             bcast({ t: 'turn-done', ok: false, error: 'agent disconnected' });
@@ -1744,6 +1772,16 @@ export function attachWsServer(deps: {
             const conn = agentRunners.get(chatPaneId);
             const sendInFlight = conn ? Date.now() - conn.lastSendAt < 15_000 : false;
             if (conn && (conn.turnActive || sendInFlight)) {
+              // A Stop ABANDONS the relayed send: the runner either interrupts
+              // the turn it started or cancels it before it starts, and in the
+              // second case the only frame that comes back is a bare
+              // `turn-done`. Drop the stamp now — the send it names is over
+              // either way, and an un-retired stamp gets worn by the next
+              // autonomous turn (see `pendingSendText`). Erring toward "no
+              // stamp" is deliberate: an unstamped turn-start binds nothing,
+              // which is silence; a wrongly stamped one speaks a cron's output
+              // as the answer to the user's question.
+              conn.pendingSendText = null;
               sendToRunner(chatPaneId, { t: 'stop' });
             } else {
               send({ t: 'turn-done', ok: true });
