@@ -983,20 +983,51 @@ describe('explicit cancel', () => {
     expect(h.agent.stops).toBe(0);
   });
 
-  it('does NOT fire on a sub-300ms blip', () => {
+  it('does NOT fire on a degenerate blip too short to be a word at all', () => {
     const h = running();
-    h.hear('stop', 10_000, 10_120);
+    h.hear('stop', 10_000, 10_060);
     h.probe();
     expect(h.agent.stops).toBe(0);
+  });
+
+  it('DOES fire on a short, crisp "stop" — the one utterance this exists for', () => {
+    // A bare "stop" is one syllable and routinely lands under the 300ms floor
+    // that a generic barge-in filter wants. Declining it there left only the
+    // model-delegated path, which is exactly the path the backstop exists
+    // because the model may not take.
+    const h = running();
+    h.hear('stop', 10_000, 10_220);
+    h.probe();
+    expect(h.agent.stops).toBe(1);
+  });
+
+  it('DOES fire on a "stop" spoken OVER the model — the normal way anyone cancels', () => {
+    const h = running();
+    // The model is mid-sentence about something else…
+    h.speaks('so the next thing I would look at is the router file', 8000, 10_000);
+    // …and the user cuts in, which by definition starts inside the echo window.
+    h.hear('stop', 10_100, 10_600);
+    h.probe();
+    expect(h.agent.stops).toBe(1);
   });
 
   it('does NOT fire on the model’s own echo coming back through the mic', () => {
     const h = running();
     h.speaks('Stop?', 8000, 10_000);
-    // Echo, transcribed 100ms after the model stopped.
+    // Echo, transcribed 100ms after the model stopped. The model really did
+    // just say this word, which is the direct evidence the time window was
+    // only ever standing in for.
     h.hear('stop', 10_100, 11_500);
     h.probe();
     expect(h.agent.stops).toBe(0);
+  });
+
+  it('does not mistake our own "Stopped." narration for the user saying "stop"', () => {
+    const h = running();
+    h.speaks('Stopped. The agent has been interrupted.', 8000, 10_000);
+    h.hear('stop', 10_100, 10_600);
+    h.probe();
+    expect(h.agent.stops).toBe(1);
   });
 
   it('does nothing when there is no work at all — "stop" is then just a word', () => {
@@ -1013,7 +1044,6 @@ describe('explicit cancel', () => {
     // would both mis-read the fragments and fire repeatedly.
     h.hear('never', 10_000, 10_400);
     h.hear(' mind', 10_400, 10_800);
-    h.hear(' that', 10_800, 11_200);
     h.probe();
     h.probe();
     expect(h.agent.stops).toBe(1);
@@ -1157,7 +1187,9 @@ describe('dispose', () => {
 
 describe('a custom mic gate is honoured', () => {
   it('a wide-open gate lets a very short cancel through', () => {
-    const h = harness({ micGate: new MicGate({ minUtteranceMs: 1, postPlaybackMs: 0 }) });
+    const h = harness({
+      micGate: new MicGate({ minUtteranceMs: 1, minCancelUtteranceMs: 1, postPlaybackMs: 0 }),
+    });
     h.started();
     h.hear('do a long thing.', 1000, 2000);
     h.delegate('d1', 2100);
@@ -1169,7 +1201,9 @@ describe('a custom mic gate is honoured', () => {
   });
 
   it('…and a wide-open gate still refuses a non-cancel', () => {
-    const h = harness({ micGate: new MicGate({ minUtteranceMs: 1, postPlaybackMs: 0 }) });
+    const h = harness({
+      micGate: new MicGate({ minUtteranceMs: 1, minCancelUtteranceMs: 1, postPlaybackMs: 0 }),
+    });
     h.started();
     h.hear('do a long thing.', 1000, 2000);
     h.delegate('d1', 2100);

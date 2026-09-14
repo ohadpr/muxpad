@@ -32,6 +32,28 @@
 // drop the index?" / "drop it." is a plausible exchange, and answering it by
 // killing a turn is exactly the failure this module is built to avoid.
 //
+// THE SAME TEST, APPLIED BACK TO THE SET ITSELF. "forget it" and "never mind
+// that" were in it, and they fail it: both are ordinary dismissals of a REMARK
+// ("ugh, forget it") at least as often as they are instructions to abandon
+// work. They are gone. The test for removing an entry rather than merely
+// doubting it is that a near-identical entry survives — "forget that" and
+// "forget about it" for the first, "never mind" for the second — so the user
+// who genuinely means to cancel still lands it, and the worst case is the one
+// repetition this file's asymmetry says is cheap. (By that test the whole
+// forget/never-mind family is arguable and only these two are clear; shrinking
+// it further would leave no spoken path at all for a real intent, which is a
+// different and worse failure.)
+//
+// ENGLISH IS NOT THE ONLY LANGUAGE ANYONE SPEAKS AT THIS THING. The set was
+// English-only, and the consequence was not "a foreign cancel is ignored" —
+// it was that a Spanish or Hebrew "stop" fell through to `enqueue` and was
+// SENT TO CLAUDE AS WORK. The user asking for the work to stop got a new agent
+// turn instead, which is the worst of the three possible outcomes. A small,
+// closed set of non-English cancel imperatives is below, held to exactly the
+// same standard: whole utterance, no object we don't recognise, and nothing
+// with an ordinary second meaning ("déjalo", "olvídalo", "עזוב" are all the
+// "drop it" class and are all excluded for the same reason "drop it" is).
+//
 // This file is pure and synchronous. The DEBOUNCE — the part where you wait for
 // the sentence to finish before judging it, so "stop" does not fire before "the
 // dev server" has arrived — lives in session.ts, because it needs a clock.
@@ -116,15 +138,35 @@ const CANCEL_PHRASES = new Set([
   'abort the task',
   'never mind',
   'nevermind',
-  'never mind that',
   'never mind it',
-  'forget it',
   'forget that',
   'forget about it',
   'forget about that',
   'scratch that',
   'abandon it',
   'abandon that',
+  // ── Not English. See the header. ────────────────────────────────────────
+  //
+  // Held to the same rule, which is what keeps them safe: a WHOLE utterance,
+  // and only forms whose bare use in a working session is unambiguous. A
+  // Spanish "para" as an entire sentence is "stop"; embedded in one it is the
+  // preposition, and an embedded match cannot happen here by construction.
+  // Nothing from the "leave it / drop it" class in any language.
+  //
+  // Hebrew — stop / stop it / that's enough / cancel.
+  'עצור',
+  'תעצור',
+  'עצור את זה',
+  'תפסיק',
+  'די',
+  'מספיק',
+  'בטל',
+  'תבטל',
+  // Spanish — stop / that's enough / cancel it / stop yourself.
+  'para',
+  'basta',
+  'cancela',
+  'detente',
 ]);
 
 /**
@@ -136,15 +178,29 @@ const CANCEL_PHRASES = new Set([
  */
 const MAX_WORDS = 6;
 
-/** Lowercase, de-curl, strip punctuation, collapse whitespace. */
+/**
+ * Lowercase, fold accents, de-curl, strip punctuation, collapse whitespace.
+ *
+ * LETTERS, NOT ASCII. This used to strip everything outside `[a-z0-9]`, which
+ * deleted every Hebrew, Cyrillic, Greek and CJK character in the utterance —
+ * so a Hebrew sentence normalised to the empty string and every question about
+ * it was answered "no" by accident rather than on the evidence. Accents are
+ * folded (NFD, then drop the combining marks) so "detente" and "deténte" are
+ * the same utterance, which is the same courtesy the apostrophe rule extends
+ * to contractions.
+ */
 function normalize(text: string): string {
   return (
     text
       .toLowerCase()
+      .normalize('NFD')
+      // Combining marks only — the base letters survive, so this folds accents
+      // and Hebrew niqqud without touching the words.
+      .replace(/\p{M}+/gu, '')
       // Apostrophes are DELETED, not spaced: "you're" must become "youre", not
       // "you re", or the closed-set match below never fires on a contraction.
       .replace(/['’‘`´]/g, '')
-      .replace(/[^a-z0-9\s]+/g, ' ')
+      .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
       .replace(/\s+/g, ' ')
       .trim()
   );

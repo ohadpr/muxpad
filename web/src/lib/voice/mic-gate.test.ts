@@ -78,3 +78,68 @@ describe('tunability', () => {
     expect(g.judge(u(1060, 1080))).toBe('accept');
   });
 });
+
+// ── THE UTTERANCE THE BACKSTOP EXISTS FOR ───────────────────────────────────
+//
+// Both filters were declining a bare spoken "stop": one syllable is a coin toss
+// against a 300ms floor, and cancelling OVER the model — which is how anyone
+// cancels anything — starts inside the echo window by definition. Neither is
+// loosened globally; a cancel-shaped utterance is judged on evidence its text
+// supplies directly.
+
+describe('a cancel-shaped utterance is judged on its text, not its length', () => {
+  const cancel = { cancelShaped: true } as const;
+
+  it('accepts a "stop" far too short to pass the generic floor', () => {
+    const g = new MicGate();
+    expect(g.judge(u(1000, 1200, 'stop'))).toBe('too-short');
+    expect(g.judge(u(1000, 1200, 'stop'), cancel)).toBe('accept');
+  });
+
+  it('still refuses one too short to be a word at all', () => {
+    // A transcriber can hallucinate a word onto a burst of noise. That is what
+    // the residual floor is for — not for modelling how long "stop" takes.
+    const g = new MicGate();
+    expect(g.judge(u(1000, 1050, 'stop'), cancel)).toBe('too-short');
+  });
+
+  it('accepts a cancel spoken OVER the model when the model did not say it', () => {
+    const g = new MicGate();
+    g.observedOutput(5000);
+    expect(g.judge(u(5100, 5600, 'stop'))).toBe('echo-gated');
+    g.observedOutput(5000);
+    expect(
+      g.judge(u(5100, 5600, 'stop'), {
+        cancelShaped: true,
+        recentOutput: 'the next thing I would look at is the router file',
+      }),
+    ).toBe('accept');
+  });
+
+  it('refuses one the model demonstrably just said', () => {
+    const g = new MicGate();
+    g.observedOutput(5000);
+    expect(
+      g.judge(u(5100, 5600, 'stop'), { cancelShaped: true, recentOutput: 'should I stop?' }),
+    ).toBe('echo-gated');
+  });
+
+  it('matches whole words — our own "Stopped." is not the user saying "stop"', () => {
+    const g = new MicGate();
+    g.observedOutput(5000);
+    expect(
+      g.judge(u(5100, 5600, 'stop'), {
+        cancelShaped: true,
+        recentOutput: 'Stopped. The agent has been interrupted.',
+      }),
+    ).toBe('accept');
+  });
+
+  it('does not consult the echo test at all once the window has passed', () => {
+    const g = new MicGate();
+    g.observedOutput(5000);
+    expect(
+      g.judge(u(9000, 9500, 'stop'), { cancelShaped: true, recentOutput: 'I will stop.' }),
+    ).toBe('accept');
+  });
+});
