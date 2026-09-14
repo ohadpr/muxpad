@@ -213,6 +213,21 @@ export const SPEAKING_DECAY_MS = 900;
  * turn has started since.
  */
 export const CANCEL_DEBOUNCE_MS = 4000;
+/**
+ * Grace between one of our sends leaving the server's queue and calling it
+ * cancelled.
+ *
+ * A row leaves the queue for TWO reasons and the broadcast does not say which:
+ * it was dropped (`queue-cancel` from the chat UI, or `editQueued`, which is a
+ * cancel plus a re-send), or it was drained into a turn that is starting right
+ * now. The drain removes the row and broadcasts BEFORE the runner's
+ * `turn-start` echoes back, so a disappearance has to be given long enough for
+ * that echo to arrive before it can be read as a cancellation. A round trip is
+ * milliseconds; this is three orders of magnitude of slack, and the cost of
+ * being wrong in the safe direction is only that a cancelled task is retired a
+ * few seconds late.
+ */
+export const QUEUE_DROP_GRACE_MS = 4000;
 
 export interface VoiceSessionOpts {
   transport: VoiceTransport;
@@ -355,15 +370,35 @@ export class VoiceSession {
   private fillerTimer: number | null = null;
   private cancelProbeTimer: number | null = null;
   private floorTimer: number | null = null;
+  /** One per task whose queue row has vanished, pending the grace window that
+   *  tells "it started" from "it was cancelled". See {@link reconcileQueue}. */
+  private orphanTimers = new Map<string, number>();
 
   /**
    * Our dispatched requests, in the order the server will run them.
    *
    * The mirror of the server's own serial queue, and the mirror is what makes
-   * attribution possible at all. Entries are live registry records, so their
-   * `status` is the single source of truth about each one.
+   * attribution possible at all. Entries are live registry records, and every
+   * status change goes through `registry.setStatus` — the registry is the one
+   * place a status moves, so "who closed this task?" has exactly one answer.
    */
   private pipeline: VoiceTask[] = [];
+  /**
+   * Has this server ever stamped a `turn-start` with the message that started
+   * it? A LATCH, and it only ever goes up.
+   *
+   * `bindTurn` falls back to submit order on an unstamped turn-start, on the
+   * theory that the only thing that produces one is a server too old to stamp.
+   * That is not true: the server re-broadcasts a BARE `turn-start` when a
+   * runner reconnects mid-turn (it rebuilt its per-connection state from
+   * nothing, so it genuinely cannot name the message any more). Without this
+   * latch that broadcast reaches the order fallback and binds whatever is at
+   * the head of our pipeline — to a turn that is already running, for someone
+   * else's request. One stamped turn proves the server stamps; after that, an
+   * unstamped one means "this turn has no name", and a turn with no name is
+   * not ours.
+   */
+  private serverStampsTurns = false;
   /** The task that owns the turn currently on the wire, or null when the
    *  running turn is not ours (typed, cron, wakeup) or nothing is running. */
   private bound: VoiceTask | null = null;
@@ -565,6 +600,10 @@ export class VoiceSession {
       return;
     }
     if (!r.text) {
+      // Deliver, THEN retire — and the delivery survives the retirement because
+      // `flushFloor` re-checks only the fence. Both halves matter: this message
+      // is held for the floor by default, so it is routinely released after the
+      // `failed` below has already made the task stale.
       this.deliver(task, {
         kind: 'commentary',
         text: 'I didn’t catch that — can you say it again?',
@@ -631,7 +670,7 @@ export class VoiceSession {
     task.request = r.text;
     task.dispatchedAt = this.sched.now();
     task.wasQueued = behind > 0;
-    task.status = 'queued';
+    this.registry.setStatus(task.id, 'queued');
     this.pipeline.push(task);
     this.trace(`dispatched ${task.id}: ${r.text.slice(0, 80)}`);
 
@@ -782,7 +821,13 @@ export class VoiceSession {
       this.heartbeatTimer = null;
       if (this.disposed) return;
       this.beat();
-      if (this.pipeline.length > 0) this.armHeartbeat();
+      // RE-ARM ONLY WHILE THERE IS A TURN TO NARRATE. This used to re-arm on a
+      // non-empty pipeline, which is a different condition and a weaker one: a
+      // task that is queued but not bound cannot produce a beat (`beat` needs a
+      // bound, working task), so a pipeline holding nothing but queued work
+      // rescheduled a no-op forever. `bindTurn` re-arms when a turn of ours
+      // actually starts, which is the moment the heartbeat means something.
+      if (this.bound) this.armHeartbeat();
     }, this.heartbeatMs);
   }
 
@@ -839,6 +884,7 @@ export class VoiceSession {
     // the task that turn belongs to rather than the previous one.
     if (frame.t === 'turn-start') this.bindTurn(frame.text);
     if (frame.t === 'queued') this.noteQueued(frame.id, frame.text);
+    if (frame.t === 'queue') this.reconcileQueue(frame.items ?? []);
     // The question is remembered whether or not it belongs to a task of OURS: a
     // turn the user TYPED can block the pane just as hard, and once it has, the
     // only thing that moves is an answer. Speaking one should work either way.
@@ -865,12 +911,15 @@ export class VoiceSession {
       const final = isFinalFrame(frame);
       for (const intent of intents)
         this.deliver(task, intent, this.policyFor(frame, intent), final);
-      if (frame.t === 'turn-done' || frame.t === 'error') {
-        // Deliver first, THEN retire: retiring makes the task stale, which is
-        // precisely what would swallow the final answer.
-        const ok = frame.t === 'turn-done' ? frame.ok : false;
-        this.retire(task, ok ? 'completed' : 'failed');
-      }
+      // Deliver first, THEN retire — the ordering is load-bearing, and so is
+      // the fact that a HELD delivery outlives the retirement (see
+      // `registry.isFenced`): retiring is what makes a task stale, and a stale
+      // task's appends are dropped.
+      //
+      // ONLY `turn-done` RETIRES THE RUNNING TURN. An `error` does not, even
+      // though it is a final frame: see `targetFor`.
+      if (frame.t === 'turn-done') this.retire(task, frame.ok ? 'completed' : 'failed');
+      if (frame.t === 'error' && task.status === 'queued') this.retire(task, 'failed');
     } else if (intents.length) {
       this.stats.staleDrops += intents.length;
       this.trace(`frame ${frame.t} dropped — belongs to no open task`);
@@ -902,14 +951,29 @@ export class VoiceSession {
    * a turn that has not begun: it is the server telling us OUR send was parked,
    * and it names the send, so it resolves to that request rather than to
    * whatever is running. Everything else belongs to the bound turn.
+   *
+   * ═══ AN `error` IS ABOUT A REJECTED SEND, NOT ABOUT THE RUNNING TURN ═══
+   *
+   * The server emits `{t:'error'}` on the SENDING socket for every send it
+   * refuses — the queue cap, a runner whose respawns gave up, a read-only
+   * pane — and that rejection can land while a turn of ours is running
+   * perfectly well. Attributing it to the bound turn (which is what "everything
+   * else belongs to the bound turn" used to do) failed the live task, threw
+   * away the answer it was about to produce, and left the REJECTED request
+   * sitting in the pipeline as `queued` forever: exactly backwards on both
+   * counts.
+   *
+   * So an error resolves to our oldest UNDISPATCHED request — the only kind of
+   * task a rejection can be about — whether or not something is bound. The one
+   * `error` that really is about the running turn is the agent dying, and that
+   * path broadcasts its own `turn-done` a beat later, which retires it
+   * properly. Falling back to the bound task when we have nothing queued keeps
+   * the failure audible without retiring anything (see `onChatFrame`).
    */
   private targetFor(frame: VoiceChatFrame): VoiceTask | undefined {
     if (frame.t === 'queued') return this.matchPending(frame.text);
-    if (frame.t === 'error' && !this.bound) {
-      // A send the server REFUSED (no runner, queue full). No turn will ever
-      // start for it, so nothing would ever retire it — attribute to our oldest
-      // undispatched request so the failure is spoken and the slot is released.
-      return this.pipeline.find((x) => x.status === 'queued');
+    if (frame.t === 'error') {
+      return this.pipeline.find((x) => x.status === 'queued') ?? this.bound ?? undefined;
     }
     return this.bound ?? undefined;
   }
@@ -923,27 +987,41 @@ export class VoiceSession {
    * closed by a `turn-done` it never earned.
    */
   private bindTurn(text?: string): void {
+    const stamped = typeof text === 'string' && text.trim().length > 0;
+    // Latch BEFORE the early returns: a stamped turn-start proves the server
+    // stamps even when it belongs to somebody else entirely (the user typing
+    // into the same pane), and that proof is what the latch is for.
+    if (stamped) this.serverStampsTurns = true;
     if (this.bound) return;
     const waiting = this.pipeline.filter((d) => d.status === 'queued');
     if (waiting.length === 0) return;
     let owner: VoiceTask | undefined;
-    if (typeof text === 'string' && text.trim()) {
+    if (stamped) {
       // Exact text match, oldest first — the server stamped the turn, so a
       // non-match is PROOF the turn is someone else's, not a reason to guess.
-      const t = text.trim();
+      const t = (text as string).trim();
       owner = waiting.find((d) => d.request.trim() === t);
       if (!owner) {
         this.trace('turn-start belongs to another sender — not binding');
         return;
       }
+    } else if (this.serverStampsTurns) {
+      // This server stamps, and this turn arrived without one. It is a
+      // mid-turn runner reconnect re-announcing a turn that is ALREADY
+      // running — for whoever started it, which is a question the server can no
+      // longer answer. Guessing here re-binds a live turn to the next queued
+      // request, which is then closed by a `turn-done` it never earned.
+      this.trace('unstamped turn-start from a stamping server — not binding');
+      return;
     } else {
       // Unstamped (older server): fall back to submit order, which is the order
       // the server runs them in.
       owner = waiting[0];
     }
     if (!owner) return;
-    owner.status = 'working';
+    this.registry.setStatus(owner.id, 'working');
     owner.queueId = null;
+    this.clearOrphanTimer(owner.id);
     this.bound = owner;
     this.lastTool = null;
     this.trace(`bound turn to ${owner.id}`);
@@ -956,6 +1034,10 @@ export class VoiceSession {
       });
     }
     this.emitNow(owner, { kind: 'thinking', text: this.describePipeline() });
+    // A task that sat behind someone else's turn stopped the heartbeat when
+    // the last tick found nothing bound; its own turn starting is what makes
+    // the heartbeat meaningful again.
+    this.armHeartbeat();
   }
 
   /** The server parked one of our sends. Remember its queue row id so an
@@ -965,6 +1047,66 @@ export class VoiceSession {
     if (d) d.queueId = id;
   }
 
+  /**
+   * The pane's pending queue changed. Notice anything of OURS that vanished
+   * from it without ever running.
+   *
+   * THE HOLE THIS CLOSES. A `queue-cancel` from the chat UI — the × on a
+   * pending bubble, and `editQueued`, which is a cancel plus a re-send — drops
+   * the row and rebroadcasts the queue. Nothing else is sent: no `turn-start`
+   * will ever name that request and no `turn-done` will ever close it. The
+   * task therefore sat in our pipeline as `queued` forever — re-arming the
+   * heartbeat, inflating the running-work snapshot we push to the model, and
+   * available to be mis-bound by a later turn.
+   *
+   * Only tasks we KNOW were parked (they have a queue row id) are considered;
+   * a send that went out on the idle fast path never appears in this list at
+   * all, and treating its absence as a cancellation would retire every task we
+   * ever dispatched.
+   */
+  private reconcileQueue(items: ReadonlyArray<{ id: string }>): void {
+    const live = new Set(items.map((i) => i.id));
+    for (const task of this.pipeline) {
+      if (task.status !== 'queued' || !task.queueId) continue;
+      if (live.has(task.queueId)) continue;
+      if (this.orphanTimers.has(task.id)) continue;
+      const id = task.id;
+      this.orphanTimers.set(
+        id,
+        this.sched.setTimeout(() => {
+          this.orphanTimers.delete(id);
+          this.settleOrphan(task);
+        }, QUEUE_DROP_GRACE_MS),
+      );
+    }
+  }
+
+  /** The grace window is up. If the task still hasn't started, its row was
+   *  dropped rather than drained — say so and release the slot. */
+  private settleOrphan(task: VoiceTask): void {
+    if (this.disposed) return;
+    if (!this.pipeline.some((d) => d.id === task.id)) return;
+    // It started (or finished) after all — the disappearance was a drain.
+    if (task.status !== 'queued') return;
+    this.trace(`task ${task.id} dropped from the server queue — cancelled elsewhere`);
+    this.deliver(task, {
+      kind: 'commentary',
+      text: `That request was cancelled before it ran: ${task.request.slice(0, 120)}`,
+    });
+    this.retire(task, 'cancelled');
+  }
+
+  private clearOrphanTimer(id: string): void {
+    const h = this.orphanTimers.get(id);
+    if (h != null) this.sched.clearTimeout(h);
+    this.orphanTimers.delete(id);
+  }
+
+  private clearOrphanTimers(): void {
+    for (const h of this.orphanTimers.values()) this.sched.clearTimeout(h);
+    this.orphanTimers.clear();
+  }
+
   private matchPending(text: string): VoiceTask | undefined {
     const t = (text ?? '').trim();
     return this.pipeline.find((d) => d.status === 'queued' && d.request.trim() === t);
@@ -972,9 +1114,10 @@ export class VoiceSession {
 
   /** This task's work is over. Status first so diagnostics can tell "answered"
    *  from "cancelled", then release its slot in the pipeline. */
-  private retire(task: VoiceTask, status: 'completed' | 'failed'): void {
+  private retire(task: VoiceTask, status: 'completed' | 'failed' | 'cancelled'): void {
     this.registry.setStatus(task.id, status);
     this.pipeline = this.pipeline.filter((d) => d.id !== task.id);
+    this.clearOrphanTimer(task.id);
     if (this.bound?.id === task.id) this.bound = null;
     this.lastTool = null;
     if (this.pipeline.length === 0) this.clearHeartbeat();
@@ -1085,6 +1228,7 @@ export class VoiceSession {
     this.clearSettle();
     this.clearHeartbeat();
     this.clearFiller();
+    this.clearOrphanTimers();
     this.turnRunning = false;
     this.stats.cancels += 1;
     this.trace(`cancelled (${source})`);
@@ -1117,11 +1261,23 @@ export class VoiceSession {
     this.flushFloor();
   }
 
-  /** Release everything the floor is now free for, oldest first. */
+  /**
+   * Release everything the floor is now free for, oldest first.
+   *
+   * `wasHeld` is what stops the floor from turning a delay into a deletion.
+   * These appends were accepted while their task was live; by the time the
+   * floor frees up the task has routinely been retired — by the very
+   * `turn-done` that produced the append, or by the `setStatus(…, 'failed')`
+   * that follows a settle failure two lines later. Re-testing full staleness
+   * here would drop exactly those, which is how "the agent's turn failed",
+   * "I didn't catch that — can you say it again?" and "I can't reach the chat
+   * right now" all became dead air. The FENCE still applies, and an explicit
+   * cancel clears this queue outright, so an abandoned task still says nothing.
+   */
   private flushFloor(): void {
     if (this.disposed) return;
     const ready = this.pending.release(this.sched.now(), this.lastInputDeltaAt, this.idleQuietMs);
-    for (const held of ready) this.emitNow(held.item, held.intent, held.final);
+    for (const held of ready) this.emitNow(held.item, held.intent, held.final, true);
     if (this.pending.size > 0) {
       this.stats.deliveriesHeld += 1;
       this.armFloorPoll();
@@ -1141,8 +1297,10 @@ export class VoiceSession {
    * stamps the task id, splits to the 500-token cap, and queues if the session
    * hasn't started.
    */
-  private emitNow(task: VoiceTask, intent: AppendIntent, final = false): void {
-    if (this.registry.isStale(task)) {
+  private emitNow(task: VoiceTask, intent: AppendIntent, final = false, wasHeld = false): void {
+    // A held append was already judged deliverable when it was queued; the only
+    // thing that may retract it afterwards is the fence. See `flushFloor`.
+    if (wasHeld ? this.registry.isFenced(task) : this.registry.isStale(task)) {
       this.stats.staleDrops += 1;
       this.trace(`append dropped — stale (${task.id})`);
       return;
@@ -1255,6 +1413,7 @@ export class VoiceSession {
     this.clearSettle();
     this.clearHeartbeat();
     this.clearFiller();
+    this.clearOrphanTimers();
     if (this.cancelProbeTimer != null) this.sched.clearTimeout(this.cancelProbeTimer);
     this.cancelProbeTimer = null;
     if (this.floorTimer != null) this.sched.clearTimeout(this.floorTimer);

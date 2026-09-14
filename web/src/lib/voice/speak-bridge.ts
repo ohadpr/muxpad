@@ -70,6 +70,17 @@ export type VoiceChatFrame =
   | { t: 'question'; qid: string; questions: VoiceQuestion[] }
   | { t: 'question-done'; qid: string }
   | { t: 'queued'; id: string; text: string }
+  /**
+   * The pane's ENTIRE pending queue, rebroadcast whenever it changes.
+   *
+   * Says NOTHING aloud — it is pure bookkeeping, and it is here because it is
+   * the only frame that can report a send DISAPPEARING. `queued` announces a
+   * send being parked; nothing announces one being dropped, so a request the
+   * user cancelled from the chat UI (or `editQueued`, which cancels and
+   * re-sends) left the voice layer holding a task that would never run and
+   * never be retired. session.ts reconciles its pipeline against this.
+   */
+  | { t: 'queue'; items: Array<{ id: string; text: string }> }
   | { t: 'subagent'; progress: { label?: string; lastTool?: string; done?: boolean } }
   | { t: 'error'; message: string }
   | { t: 'notice'; message: string }
@@ -90,6 +101,7 @@ const FRAME_KINDS = new Set([
   'question',
   'question-done',
   'queued',
+  'queue',
   'subagent',
   'error',
   'notice',
@@ -161,9 +173,23 @@ interface ReplyState {
   finalized: boolean;
 }
 
+/**
+ * How many replies to remember dedupe state for.
+ *
+ * The state per reply is its FULL text (the prefix comparison needs it), and
+ * it was only ever dropped on an explicit cancel or teardown — so a long
+ * hands-free session accumulated every word the agent had ever said, forever.
+ * Reply ids are `toolu_*` tool-use ids and a reply is finished within its own
+ * turn, so the only thing this bound can cost is a re-emitted tail on a
+ * pathologically late delta for a reply from dozens of replies ago.
+ */
+const MAX_TRACKED_REPLIES = 64;
+
 export interface SpeakBridgeOpts {
   /** Override the sentence-flush threshold (tests). */
   maxPendingChars?: number;
+  /** Override the reply-state cap (tests). */
+  maxTrackedReplies?: number;
 }
 
 /**
@@ -174,12 +200,19 @@ export interface SpeakBridgeOpts {
 export class SpeakBridge {
   private readonly replies = new Map<string, ReplyState>();
   private readonly maxPending: number;
+  private readonly maxReplies: number;
   /** Does the agent currently owe us an answer? Drives the "still working"
    *  heartbeat the session schedules. */
   private turnRunning = false;
 
   constructor(opts: SpeakBridgeOpts = {}) {
     this.maxPending = opts.maxPendingChars ?? MAX_PENDING_CHARS;
+    this.maxReplies = opts.maxTrackedReplies ?? MAX_TRACKED_REPLIES;
+  }
+
+  /** Live reply-state entries. Exposed so the cap is assertable. */
+  get tracked(): number {
+    return this.replies.size;
   }
 
   isTurnRunning(): boolean {
@@ -249,13 +282,21 @@ export class SpeakBridge {
         ];
 
       case 'error':
-        this.turnRunning = false;
+        // NOTE WHAT THIS DOES NOT DO: it does not end the turn.
+        //
+        // `{t:'error'}` is overwhelmingly the server REFUSING A SEND — queue
+        // cap, a runner whose respawns gave up, a read-only pane — and it
+        // arrives on the sending socket while a completely different turn may
+        // be running happily. Clearing `turnRunning` here made a later explicit
+        // cancel skip `agent.stop()` (session.ts gates the stop on it), so
+        // "stop" silently stopped nothing. A turn ends on `turn-done`, which a
+        // genuine agent death also sends, and nowhere else.
         return [{ kind: 'commentary', text: `Something went wrong: ${frame.message}` }];
 
       case 'notice':
         return [{ kind: 'thinking', text: frame.message }];
 
-      // `stream` and `question-done` are handled by falling through to
+      // `stream`, `queue` and `question-done` are handled by falling through to
       // nothing, and that is the decision, not an omission — see the header.
       default:
         return [];
@@ -267,6 +308,12 @@ export class SpeakBridge {
     if (!s) {
       s = { emitted: '', pending: '', finalized: false };
       this.replies.set(id, s);
+      // Map iteration is insertion-ordered, so the oldest reply is the head.
+      while (this.replies.size > this.maxReplies) {
+        const oldest = this.replies.keys().next().value;
+        if (oldest === undefined) break;
+        this.replies.delete(oldest);
+      }
     }
     return s;
   }
