@@ -190,23 +190,10 @@ describe('turn-start correlation stamp', () => {
     expect(starts(chat.frames).at(-1)).toEqual({ t: 'turn-start' });
   });
 
-  it('a runner that dies mid-send does not bequeath its stamp to the next turn', async () => {
-    // Not a regression pin so much as the invariant stated from the other end:
-    // the successor's per-connection state starts empty, so there is nothing
-    // for a dead runner's stamp to ride in on.
-    const { paneId, runner, chat } = await wired('sid-stamp-death');
-    chat.sock.send(JSON.stringify({ t: 'send', text: 'deploy it' }));
-    await waitFor('the send to reach the runner', () => count(runner.frames, 'send') === 1);
-    runner.sock.close();
-
-    const back = await open(`/ws/agent-runner/${paneId}`);
-    back.sock.send(
-      JSON.stringify({ t: 'hello', sid: 'sid-stamp-death', cwd: tmp, pid: 2, turnActive: false }),
-    );
-    await waitFor('the new runner to be converged', () => count(back.frames, 'mode') === 1);
-    const before = count(chat.frames, 'turn-start');
-    back.sock.send(JSON.stringify({ t: 'turn-start' }));
-    await waitFor('the new runner’s turn-start', () => count(chat.frames, 'turn-start') > before);
-    expect(starts(chat.frames).at(-1)).toEqual({ t: 'turn-start' });
-  });
+  // A fourth case — a runner DYING mid-send — is deliberately not tested here.
+  // The successor's per-connection state starts empty, so there is nothing for a
+  // dead runner's stamp to ride in on and the assertion passes with or without
+  // the teardown clear: it pins nothing, and the socket-replacement dance it
+  // needs is the slowest thing in this file. The clear stays in ws.ts because it
+  // is correct and free, not because a test demands it.
 });
