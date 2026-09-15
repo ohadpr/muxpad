@@ -56,7 +56,12 @@ describe('chat-mode.md generation', () => {
     expect(CHAT_MODE_SEED).toMatch(/decisive/i);
     expect(CHAT_MODE_SEED).toMatch(/subagent/i);
     expect(CHAT_MODE_SEED).toMatch(/3 sentences/i);
-    expect(CHAT_MODE_SEED).toMatch(/no preamble|no narration/i);
+    // Stated positively now ("the first sentence is the answer, never a
+    // preamble") rather than as a bare prohibition — Anthropic documents
+    // negative instructions as underperforming, and our one live test of a
+    // negative rule moved zero of seven turns. The CLAUSE is still pinned;
+    // only its polarity is free.
+    expect(CHAT_MODE_SEED).toMatch(/preamble|narrat/i);
     expect(CHAT_MODE_SEED).toMatch(/one line/i);
     expect(CHAT_MODE_SEED).toMatch(/blocked/i);
     expect(CHAT_MODE_SEED).toMatch(/reverse/i);
@@ -76,6 +81,69 @@ describe('chat-mode.md generation', () => {
     expect(CHAT_MODE_SEED).toMatch(/artifact|destination|link/i);
     // Several short calls, not one welded paragraph.
     expect(CHAT_MODE_SEED).toMatch(/separate\s+\\?`?reply|two to four/i);
+  });
+
+  it('the seed tells the model what the SCREEN already renders', () => {
+    // The largest free lever, and the one we did not pull at all: measured
+    // over 148 live reply calls the median reply ran 900 chars, and the bulk
+    // of that length was prose restating things the chat was already drawing.
+    // Cursor's prompt does this ("the user can view your full code changes in
+    // the editor"); Codex does it ("the harness already displays it"). These
+    // assertions pin the INVENTORY, by name, because a reply only shrinks if
+    // the model knows what it is redundant with.
+    expect(CHAT_MODE_SEED).toMatch(/screen already shows/i);
+    expect(CHAT_MODE_SEED).toMatch(/tool call is a row|every tool call/i);
+    expect(CHAT_MODE_SEED).toMatch(/diff/i);
+    expect(CHAT_MODE_SEED).toMatch(/subagent/i);
+    expect(CHAT_MODE_SEED).toMatch(/fold/i);
+    expect(CHAT_MODE_SEED).toMatch(/show_files/);
+    // …and the conclusion the inventory exists to support.
+    expect(CHAT_MODE_SEED).toMatch(/instead of repeating|restating/i);
+  });
+
+  it('the seed carries EXEMPLARS, and they are drastically shorter than 900', () => {
+    // Few-shot only works when the exemplars are drastically shorter than the
+    // behavior being corrected — a "compliant" 600-char example teaches 600
+    // chars. Instruction and exemplars must also AGREE: the prose asks for one
+    // to three lines, so every exemplar has to fit in one to three lines.
+    const quoted = CHAT_MODE_SEED.split('\n')
+      .filter((l) => l.trimStart().startsWith('> '))
+      .map((l) => l.trimStart().slice(2).trim());
+    expect(quoted.length).toBeGreaterThanOrEqual(3);
+    for (const ex of quoted) expect(ex.length).toBeLessThanOrEqual(200);
+    expect(CHAT_MODE_SEED).toMatch(/one to three lines/i);
+  });
+
+  it('the seed bounds the TURN, not just the message, and routes the rest', () => {
+    // Measured: the first cut of this contract cut the reply COUNT (3 → 1 per
+    // turn) without cutting the words — the model welded the same 1,300
+    // characters into one message, so the per-reply median went UP. Length has
+    // to be bounded per TURN, and the detail it displaces needs somewhere to
+    // go, or brevity is just repackaging.
+    expect(CHAT_MODE_SEED).toMatch(/whole turn/i);
+    expect(CHAT_MODE_SEED).toMatch(/\b400 characters/);
+    // The shape rules that the measurement said were doing the damage: a
+    // surveyed list of every consideration, and document furniture.
+    expect(CHAT_MODE_SEED).toMatch(/one claim, not a survey/i);
+    expect(CHAT_MODE_SEED).toMatch(/prose, not a document/i);
+    // Route it, don't suppress it: offer the rest, or write a file and link it.
+    expect(CHAT_MODE_SEED).toMatch(/offer them|want them\?/i);
+    expect(CHAT_MODE_SEED).toMatch(/write it to a\s+file/i);
+  });
+
+  it('the seed names the EXEMPTIONS — brevity is a default, not a cap', () => {
+    // Forced conciseness has a measured cost (hallucination resistance drops
+    // when models are squeezed), and muxpad has a reversibility gate whose
+    // whole job is to state an irreversible action in full. So the escape
+    // hatches are named, not left to judgement.
+    expect(CHAT_MODE_SEED).toMatch(/in full/i);
+    expect(CHAT_MODE_SEED).toMatch(/error/i);
+    expect(CHAT_MODE_SEED).toMatch(/security|data-loss/i);
+    expect(CHAT_MODE_SEED).toMatch(/irreversible/i);
+    expect(CHAT_MODE_SEED).toMatch(/explain|walk me through|list all/i);
+    // "default, not a cap" is the framing that keeps the list from reading as
+    // decoration the model can skip.
+    expect(CHAT_MODE_SEED).toMatch(/default, not a (cap|ceiling)/i);
   });
 });
 

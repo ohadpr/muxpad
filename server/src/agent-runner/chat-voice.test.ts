@@ -131,12 +131,33 @@ describe('the reply tool is registered, and it is the voice', () => {
   });
 
   it('exposes the description as a pure function, so the contract can be pinned', () => {
-    expect(replyToolDescription()).toMatch(/only voice/i);
-    // The closing-summary rule: a live model ended almost every Chat turn with
-    // "Done — reported to the user…", written to an audience it knew could not
-    // read it. (Measured: the rule did not change the behaviour — the fold
-    // does — but it is true and cheap, so it stays.)
-    expect(replyToolDescription()).toMatch(/do not write a closing summary/i);
+    const d = replyToolDescription();
+    expect(d).toMatch(/only voice/i);
+    // The closing-summary rule used to be spelled "do not write a closing
+    // summary of what you just said". Its own test comment recorded that it
+    // MEASURED ZERO — the fold is what actually stopped the recap — and
+    // Anthropic documents negative instructions as underperforming, so it is
+    // now stated as the fact it rests on: the turn ends with the last reply.
+    expect(d).toMatch(/your reply ends the turn/i);
+    // CADENCE, not just length. "Two to four short texts" measured a median of
+    // THREE replies per turn at ~1,600 chars each on a live session — the model
+    // reported every subagent as it returned, so the user got a stream of walls
+    // while the work was still running. One reply, at the end.
+    expect(d).toMatch(/send one reply/i);
+    expect(d).toMatch(/not as you go/i);
+    // A tool description is a system-prompt-strength instruction, so the three
+    // levers that actually shorten a reply all have to be IN it — not only in
+    // the mode overlay, which competes with the harness's own prompt.
+    expect(d).toMatch(/screen already shows/i); // what the UI renders for free
+    expect(d).toMatch(/one to three lines/i); // the positive budget
+    expect(d).toMatch(/whole turn/i); // …bounded per TURN, not per message
+    expect(d).toMatch(/one claim, not a survey/i); // the shape rule that bit
+    expect(d).toMatch(/in full when it matters/i); // the named exemptions
+    // Exemplars must AGREE with the budget, or they are what gets copied.
+    const shown = d.split('Real replies look like:')[1] ?? '';
+    const examples = [...shown.matchAll(/"([^"]+)"/g)].map((m) => m[1] as string).slice(0, 3);
+    expect(examples).toHaveLength(3);
+    for (const ex of examples) expect(ex.length).toBeLessThanOrEqual(120);
   });
 
   it('hands back the fixed ack sentinel the normalizer recognises', async () => {
