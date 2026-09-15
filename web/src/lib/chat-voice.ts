@@ -134,7 +134,42 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
     out[lastProse] = { ...e, voice: 'fallback' };
   }
 
-  return out;
+  // Pass 3 — drop the sign-off. A model that has already replied very often
+  // adds one last line of prose restating what it just said: after a 188-char
+  // reply, an 89-char "4 markdown files at the top level of ~; largest is
+  // onboarding-goal-plan.md". It is written to an audience it knows cannot
+  // read it, and it is documented as NOT promptable — an explicit rule against
+  // it moved zero of seven live turns.
+  //
+  // Folding it was the containment, and the containment was the problem: a
+  // crisp note sitting under a longer reply reads as "the good answer is the
+  // hidden one", which is exactly how this was reported. Nothing is lost —
+  // the transcript and the FTS archive are untouched, this only declines to
+  // give it a row.
+  //
+  // Strictly bounded: only prose AFTER the turn's last reply, only with no
+  // action between them, and never when the turn produced no reply at all
+  // (that text is the fallback the guard just promoted, and dropping it would
+  // reinstate the silence this whole mechanism exists to prevent).
+  const drop = new Set<number>();
+  for (let s = 0; s < starts.length; s++) {
+    const from = starts[s] as number;
+    const to = s + 1 < starts.length ? (starts[s + 1] as number) : events.length;
+    if (to === events.length && opts.turnActive) continue;
+    let lastReply = -1;
+    for (let i = from + 1; i < to; i++) {
+      const e = out[i];
+      if (e?.kind === 'assistant' && e.voice === 'reply') lastReply = i;
+    }
+    if (lastReply < 0) continue;
+    for (let i = lastReply + 1; i < to; i++) {
+      const e = out[i] as ChatEvent;
+      if (!e) continue;
+      if (e.kind === 'assistant' && e.voice === 'private') drop.add(i);
+      else break; // an action after the reply means work continued — keep it all
+    }
+  }
+  return drop.size > 0 ? out.filter((_, i) => !drop.has(i)) : out;
 }
 
 /** Is this event one the chat shows as a MESSAGE, or private machinery that

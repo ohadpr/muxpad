@@ -137,11 +137,14 @@ describe('THE GUARD — the render half', () => {
   });
 
   it('does not fire when the turn replied, however much it also reasoned', () => {
+    // The guard's job is NOT to promote here, and it doesn't. The trailing
+    // prose is absent for a different reason: pass 3 drops a sign-off written
+    // after the reply. Working-out BEFORE the reply is kept, which is what
+    // this test is really pinning.
     expect(voices([user('do it'), prose('a'), reply('Done.'), prose('b')])).toEqual([
       'user',
       'private',
       'reply',
-      'private',
     ]);
   });
 
@@ -257,3 +260,44 @@ describe('a fold of only demoted prose is not an "action"', () => {
     expect(withTool.every((e) => e.kind === 'assistant')).toBe(false);
   });
 })
+
+describe('the post-reply sign-off is not shown', () => {
+  const user = { kind: 'user' as const, id: 'u1', ts: 1, text: 'hi' };
+  const reply = (t: string) => ({
+    kind: 'assistant' as const,
+    id: `r${t}`,
+    ts: 2,
+    text: t,
+    voice: 'reply' as const,
+  });
+  const prose = (t: string) => ({ kind: 'assistant' as const, id: `p${t}`, ts: 3, text: t });
+  const opts = {
+    mode: 'chat' as const,
+    backend: 'claude',
+    assistant: 'claude',
+    turnActive: false,
+  };
+
+  it('drops prose that only restates the reply just sent', () => {
+    // Measured live: a 188-char reply followed by an 89-char restatement
+    // written to an audience the model knows cannot read it. Folding it made
+    // the crisp note look like the real answer hiding under a longer one —
+    // which is exactly how the bug was reported.
+    const out = applyChatVoice([user, reply('4 files, biggest is X'), prose('4 files; largest X')], opts);
+    expect(out.filter((e) => e.kind === 'assistant')).toHaveLength(1);
+    expect(out.some((e) => e.kind === 'assistant' && e.voice === 'reply')).toBe(true);
+  });
+
+  it('keeps prose that came BEFORE the reply — that is real working-out', () => {
+    const out = applyChatVoice([user, prose("I'll read the file."), reply('done')], opts);
+    expect(out).toHaveLength(3);
+  });
+
+  it('keeps everything when the turn produced no reply at all', () => {
+    // That prose is the fallback the guard promotes. Dropping it would
+    // reinstate the silence the whole mechanism exists to prevent.
+    const out = applyChatVoice([user, prose('thought about it')], opts);
+    expect(out).toHaveLength(2);
+    expect(out.some((e) => e.kind === 'assistant' && e.voice === 'fallback')).toBe(true);
+  });
+});
