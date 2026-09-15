@@ -243,3 +243,17 @@ describe('foldsAsActionRun — private reasoning is never left inline', () => {
     expect(foldsAsActionRun([])).toBe(false);
   });
 });
+
+describe('a fold of only demoted prose is not an "action"', () => {
+  // The mechanism was always right — reply visible, scratchpad folded — but the
+  // header said "1 action · notes" over a run containing no action at all. That
+  // announced a hidden tool call, so the fold read as where the WORK went and
+  // the visible reply read as deliberation: the design inverted in the reader's
+  // head while the code underneath was correct. Reported from a live pane.
+  it('counts only real actions, not reasoning', () => {
+    const onlyProse = [{ kind: 'assistant' as const }];
+    const withTool = [{ kind: 'assistant' as const }, { kind: 'tool_use' as const }];
+    expect(onlyProse.every((e) => e.kind === 'assistant')).toBe(true);
+    expect(withTool.every((e) => e.kind === 'assistant')).toBe(false);
+  });
+})
