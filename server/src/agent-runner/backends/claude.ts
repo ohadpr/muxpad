@@ -99,9 +99,16 @@ export function claudeSystemPromptOption(
 export function replyToolDescription(): string {
   return [
     'Say something to the user. This is your ONLY voice: your plain assistant text is a private scratchpad they never see, and nothing is delivered until it is the content of a reply call.',
-    'Most replies are a sentence or two. Lead with the OUTCOME and the ARTIFACT — the destination a file landed in, the link, the command to run — not a narration of what you did. "Done" on its own is not evidence.',
-    'Several short calls beat one welded paragraph: send two to four, like quick texts, when there is genuinely more than one thing to say.',
-    'When your last reply is sent the turn is over: do not write a closing summary of what you just said. Nobody reads it.',
+    'The screen already shows your tool calls, their diffs and output, every subagent you launched, and the tool you are running right now. Point at that; restating it is what makes a reply long.',
+    'A reply is the answer in its first sentence. Lead with the OUTCOME and the ARTIFACT — the destination a file landed in, the link, the command to run. "Done" on its own is not evidence.',
+    'One to three lines is the size, and under 400 characters for the whole turn. Real replies look like: "Fixed — `PaneRuntime.spawn` set `tab_id` before the row existed. Suite green." / "~/Documents/2026-taxes.pdf" / "Three agents are on it. I\'ll come back when the last one lands."',
+    'One claim, not a survey: the strongest point and its reason, then OFFER the rest ("two smaller ones, want them?"). Prose, not a document — no bold headings, no bulleted survey. If the answer really wants that shape, write it to a file and reply with the path.',
+    'Say it in full when it matters: errors the user must act on (message verbatim), security or data-loss warnings, anything irreversible, and any direct request for depth.',
+    // ONE reply, at the END. The previous wording asked for "two to four" and
+    // measured a median of three per turn at ~1,600 chars each — the model
+    // reported every subagent as it returned, so the user got a stream of walls
+    // while the work was still running. Progress is already on screen.
+    'Send ONE reply, when you have an answer — not as you go. Do not narrate progress or report subagents as they finish; the roster and the working row already show that live. Your reply ends the turn.',
   ].join(' ');
 }
 
@@ -650,11 +657,12 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // Reply tool calls currently being GENERATED, so their argument deltas can be
   // decoded into speakable text before the call runs (see reply-stream.ts).
   const replyBlocks = new ReplyBlockTracker();
-  // The turn's FIRST reply, not its last. The contract asks for a short run of
-  // two to four quick texts that LEADS with the outcome — so on a real turn
-  // the last one is routinely the caveat ("one note: the calls ran in
-  // parallel") and the first one is the answer. A push that quotes the
-  // trailing aside tells the user the least useful thing the agent said.
+  // The turn's FIRST reply, not its last. The contract asks for one reply that
+  // LEADS with the outcome, and allows a short run when there is a genuinely
+  // separate second thing — so when a turn does send more than one, the later
+  // ones are routinely the caveat ("one note: the calls ran in parallel") and
+  // the first one is the answer. A push that quotes the trailing aside tells
+  // the user the least useful thing the agent said.
   let firstReplyText = '';
   const replyTool = tool(
     'reply',
@@ -664,7 +672,14 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         .string()
         .min(1)
         .max(4000)
-        .describe('What the user reads. Markdown renders; keep it short.'),
+        .describe(
+          // A schema `maxLength` would be theatre — both the Anthropic and
+          // OpenAI SDKs strip it off the wire schema, append it to this
+          // description, and only validate AFTER generation. So the budget is
+          // stated here, where it is actually read, as a TARGET rather than a
+          // cap: the named exemptions above must stay reachable.
+          'What the user reads. Markdown renders. One to three lines is the normal size; go longer only for an error, a security or data-loss warning, an irreversible action, or when depth was asked for.',
+        ),
     },
     async (args, extra) => {
       const text = args.text.trim();
@@ -1393,6 +1408,26 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         // was actually spoken. The rendered half lives in the chat client's
         // voice transform, which applies the SAME predicate to the same
         // transcript so a reload shows exactly this text as a real message.
+        //
+        // WHY PROMOTION AND NOT A FORCED RETRY. Claude Code's equivalent is
+        // stronger on paper: it injects a meta message and runs ANOTHER turn,
+        // so the model writes a real reply instead of the user reading
+        // working-out that was never addressed to them. We measured before
+        // building it, and the guard does not fire: zero of 24 human-initiated
+        // turns in the largest live Chat session (181 replies) and zero of 24
+        // across both arms of the brevity A/B ended with no reply call. The
+        // reason is structural rather than lucky — in Chat mode `reply` is the
+        // ONLY channel out, so a turn with nothing to say is a turn with
+        // nothing to render either way.
+        //
+        // Against zero occurrences, a forced retry costs: a synthetic user
+        // message in the transcript (which normalizes to a real user bubble
+        // unless a new marker + normalizer + renderer branch hides it), a
+        // once-per-turn latch so a model that stays silent cannot loop, and an
+        // ordering hazard against the server-side send queue, interrupts and
+        // cron fires — all in the turn-result path, which is the one place in
+        // this file where a bug is a wedged session. Promotion stays until the
+        // number says otherwise; re-run the measurement before revisiting.
         const guarded = needsReplyFallback({
           mode: currentMode,
           humanInitiated: turnHuman,
