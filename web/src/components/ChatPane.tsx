@@ -4380,6 +4380,17 @@ function ActionGroup({
   const actions = events.length;
   const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
   const summary = top.map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(' · ');
+  // A run of ONLY demoted prose is not "1 action" — nothing was done. Counting
+  // reasoning as an action is what made Chat mode read backwards: the header
+  // announced a hidden tool call, so the fold looked like the place the WORK
+  // went, while the visible reply looked like deliberation. It inverted the
+  // whole design in the reader's head while the mechanism underneath was
+  // correct. Name it for what it is; the count returns the moment a real
+  // action joins the run.
+  const notesOnly = events.every((e) => e.kind === 'assistant');
+  const countLabel = notesOnly
+    ? `${actions === 1 ? 'note' : `${actions} notes`}`
+    : `${actions} action${actions === 1 ? '' : 's'}`;
   return (
     <div className="chat-turn chat-turn-assistant" data-eid={anchorId}>
       <div className="chat-msg chat-action-group">
@@ -4395,10 +4406,8 @@ function ActionGroup({
           >
             ›
           </span>
-          <span className="chat-action-group-count">
-            {actions} action{actions === 1 ? '' : 's'}
-          </span>
-          <span className="chat-action-group-summary">{summary}</span>
+          <span className="chat-action-group-count">{countLabel}</span>
+          {notesOnly ? null : <span className="chat-action-group-summary">{summary}</span>}
           {failed > 0 ? <span className="chat-action-group-failed">{failed} failed</span> : null}
         </button>
         {expanded ? (
