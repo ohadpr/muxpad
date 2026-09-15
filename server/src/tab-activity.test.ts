@@ -259,3 +259,34 @@ describe('compareUnpinnedTabs — the auto-sorted block', () => {
     expect(sort([{ id: 'z', last_activity_at: null }, { id: 'a' }], positions)).toEqual(['a', 'z']);
   });
 });
+
+describe('our own restart is not activity', () => {
+  // Observed live: a routine restart left TWELVE tabs sharing one
+  // `last_activity_at` to the second, because every runner reconnects and every
+  // pty redraws at boot. The recency order didn't degrade — it collapsed into a
+  // tie, and a chat used minutes earlier sorted below ones untouched for weeks.
+  // The file's own comment called this "at most one extra write per tab", which
+  // is true of the count and wrong about the value.
+  const t0 = 1_800_000_000_000;
+
+  it('ignores pty signals during the boot grace window', () => {
+    const f = fixture();
+    const act = new TabActivity(f.db, { startedAt: t0, bootGraceMs: 90_000 });
+    expect(act.touchTab(f.tab.id, { at: t0 + 1_000 })).toBe(false);
+    expect(act.touchTab(f.tab.id, { at: t0 + 89_000 })).toBe(false);
+  });
+
+  it('lets them through once the window has passed', () => {
+    const f = fixture();
+    const act = new TabActivity(f.db, { startedAt: t0, bootGraceMs: 90_000 });
+    expect(act.touchTab(f.tab.id, { at: t0 + 91_000 })).toBe(true);
+  });
+
+  it('never suppresses a FORCED signal — a real send during boot still counts', () => {
+    // The exemption that keeps this from being a regression: a turn finishing
+    // or a message you submitted are the only two things this value is for.
+    const f = fixture();
+    const act = new TabActivity(f.db, { startedAt: t0, bootGraceMs: 90_000 });
+    expect(act.touchTab(f.tab.id, { at: t0 + 1_000, force: true })).toBe(true);
+  });
+});

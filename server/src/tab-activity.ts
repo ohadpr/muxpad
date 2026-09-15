@@ -13,9 +13,24 @@
 //       pointless writes per minute for a value whose only consumer is a
 //       coarse "which tab did something recently" sort.
 //
-// The throttle is in-memory and per-process. A restart forgets it, which
-// costs at most one extra write per tab — deliberately cheaper than
-// persisting throttle state. Timestamps are only ever moved FORWARD.
+// The throttle is in-memory and per-process. A restart forgets it — which this
+// file used to describe as costing "at most one extra write per tab". That is
+// true of the write COUNT and catastrophically wrong about the VALUE.
+//
+// On boot every pane's runner reconnects and every pty redraws, so every tab
+// takes a throttled write within the same second or two. The result is not a
+// few redundant rows: it is EVERY TAB SHARING ONE TIMESTAMP, which collapses
+// the sidebar's entire recency order into a tie. Observed live after a routine
+// restart — twelve tabs, one identical `last_activity_at`, and a chat used
+// minutes ago sorted below ones untouched for weeks.
+//
+// So throttled (pty) signals are ignored for a grace window after boot. A pty
+// redraw caused by our own restart is not the user doing something, and it must
+// never be allowed to speak for them. FORCED signals are exempt: a turn
+// finishing or a send being submitted during the window is real, and those are
+// the only two things this value is actually FOR.
+//
+// Timestamps are only ever moved FORWARD.
 import type { PaneStatus } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { PaneStore } from './store/PaneStore.js';
@@ -23,6 +38,16 @@ import { TabStore } from './store/TabStore.js';
 
 /** Minimum wall-clock gap between two THROTTLED writes for the same tab. */
 export const ACTIVITY_THROTTLE_MS = 60_000;
+
+/**
+ * How long after process start a THROTTLED (pty) signal is ignored.
+ *
+ * Sized to outlast the reconnect burst — runners re-hello, ptyd replays
+ * scrollback and shells redraw prompts — without swallowing a genuine
+ * interaction. A user who types into a pane inside this window still bumps its
+ * tab, because a submitted send is FORCED.
+ */
+export const ACTIVITY_BOOT_GRACE_MS = 90_000;
 
 export class TabActivity {
   private readonly tabs: TabStore;
@@ -41,6 +66,8 @@ export class TabActivity {
    */
   private readonly lastPaneSignalAt = new Map<string, number>();
   private readonly throttleMs: number;
+  private readonly bootGraceMs: number;
+  private readonly startedAt: number;
   /**
    * Called after every actual DB write, with the tab that moved.
    *
@@ -57,11 +84,20 @@ export class TabActivity {
 
   constructor(
     db: Database.Database,
-    opts: { throttleMs?: number; onWrite?: (tabId: string) => void } = {},
+    opts: {
+      throttleMs?: number;
+      /** Injected in tests; defaults to ACTIVITY_BOOT_GRACE_MS. */
+      bootGraceMs?: number;
+      /** Injected in tests so the grace window can be driven deterministically. */
+      startedAt?: number;
+      onWrite?: (tabId: string) => void;
+    } = {},
   ) {
     this.tabs = new TabStore(db);
     this.panes = new PaneStore(db);
     this.throttleMs = opts.throttleMs ?? ACTIVITY_THROTTLE_MS;
+    this.bootGraceMs = opts.bootGraceMs ?? ACTIVITY_BOOT_GRACE_MS;
+    this.startedAt = opts.startedAt ?? Date.now();
     this.onWrite = opts.onWrite;
   }
 
@@ -77,6 +113,14 @@ export class TabActivity {
   touchTab(tabId: string, opts: { force?: boolean; at?: number } = {}): boolean {
     const at = opts.at ?? Date.now();
     if (!opts.force) {
+      // Our own restart is not activity — see the boot-grace note at the head
+      // of this file. This is the whole fix for "the sidebar forgot its order".
+      // Bounded at BOTH ends on purpose. An `at` before startedAt is not "inside
+      // the boot window" — it is a caller supplying its own clock (every test
+      // here does), and swallowing those would make the window mean "suppress
+      // everything that isn't in the future".
+      const sinceBoot = at - this.startedAt;
+      if (sinceBoot >= 0 && sinceBoot < this.bootGraceMs) return false;
       const last = this.lastWriteAt.get(tabId);
       if (last !== undefined && at - last < this.throttleMs) return false;
     }
