@@ -109,6 +109,28 @@ export type RunnerFrame =
       t: 'question-done';
       qid: string;
     }
+  | {
+      /**
+       * The agent DELIBERATELY reaching the user's devices — the `notify` tool.
+       *
+       * Every other push muxpad sends is a heuristic firing on the agent's
+       * behalf: a BEL, or a turn that ended more than two minutes after the
+       * user last typed. Those cannot tell a five-second turn carrying
+       * something urgent from a ten-minute turn carrying nothing. This frame is
+       * the agent saying which one it is, mid-turn if need be.
+       *
+       * The runner is a separate process and cannot reach the PushService, so
+       * the tool's whole mechanism is this frame plus the `notify-result` that
+       * comes back: the server owns the rate limit, the presence check and
+       * whether any device is subscribed at all, and reports which of those
+       * happened so the tool can tell the MODEL rather than lie to it.
+       */
+      t: 'notify';
+      /** Correlates the `notify-result` that answers this frame. */
+      nid: string;
+      /** The push BODY — what the user reads on the lock screen. */
+      text: string;
+    }
   | { t: 'subagent'; progress: SubagentProgress }
   | {
       /**
@@ -135,9 +157,30 @@ export type RunnerFrame =
       error: string;
     };
 
+/**
+ * What became of a `notify` — the server's answer, and the text the tool turns
+ * into its tool RESULT. Every value is a thing the model should know:
+ *
+ *   sent          on its way to every subscribed device.
+ *   held-active   the user is at a device right now (Presence), so the in-app
+ *                 UI already shows this and a buzz would be noise.
+ *   no-devices    nothing has ever subscribed to push here — no VAPID pairing,
+ *                 no PWA installed. A no-op, not a failure.
+ *   rate-limited  this pane already notified within the minimum gap.
+ *   unavailable   this server has no push wired up at all (tests, a headless
+ *                 deployment), or the request was malformed.
+ */
+export type NotifyStatus = 'sent' | 'held-active' | 'no-devices' | 'rate-limited' | 'unavailable';
+
 /** server → runner */
 export type ServerFrame =
   | { t: 'send'; text: string }
+  | {
+      /** What became of the `notify` frame carrying `nid`. */
+      t: 'notify-result';
+      nid: string;
+      status: NotifyStatus;
+    }
   | { t: 'stop' }
   | { t: 'set-model'; model: string }
   | {

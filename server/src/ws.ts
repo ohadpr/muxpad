@@ -15,6 +15,7 @@ import { recordModelCatalog } from './agent-model-catalog.js';
 import {
   type AgentQuestion,
   CLOSE_RUNNER_DISPLACED,
+  type NotifyStatus,
   type RunnerFrame,
   type ServerFrame,
   type SubagentProgress,
@@ -65,6 +66,33 @@ const CHAT_HISTORY_TAIL_BYTES = 128 * 1024;
 // interactive conversation — its turn-done must not push-notify (the user
 // is right there). Longer turns and autonomous wakeup/cron turns do push.
 const INTERACTIVE_PUSH_SUPPRESS_MS = 2 * 60_000;
+
+/**
+ * Minimum gap between two EXPLICIT `notify` pushes from one pane.
+ *
+ * The heuristic push paths are self-limiting — a BEL needs a program to ring
+ * it, a turn-done needs a turn to end. A tool is not: a model in a loop, or one
+ * that has decided every step is worth a buzz, can call `notify` twenty times
+ * in a minute, and a phone that buzzes twenty times is a phone whose owner
+ * turns muxpad's notifications off for good. That is an unrecoverable failure
+ * mode, so it gets a hard cap rather than a plea in the tool description.
+ *
+ * A minute is the coarsest window that still lets a genuinely eventful session
+ * ring more than once (a build fails, then the fallback also fails), and the
+ * excess is DROPPED rather than queued: a notification held for 60s and then
+ * delivered is archaeology, and the model is told it was dropped so it can put
+ * the news in its reply instead.
+ *
+ * Only a push that actually WENT OUT starts the clock — see the handler.
+ */
+const EXPLICIT_NOTIFY_MIN_GAP_MS = 60_000;
+
+/**
+ * Cap on an explicit notification's body. A lock screen shows about two lines
+ * and truncates the rest mid-word; the tool's schema asks for one sentence, and
+ * this is what happens when the model ignores that.
+ */
+const NOTIFY_BODY_MAX = 180;
 
 // Upper bound on a pane's pending send queue. Generous for real batches (queue a
 // dozen follow-ups) but a hard stop against unbounded growth from a wedged turn
@@ -501,6 +529,18 @@ export function attachWsServer(deps: {
      * the cron `quiet_mins` policy (don't barge into a live conversation).
      */
     lastHumanSendAt: number;
+    /**
+     * When this pane's last EXPLICIT `notify` push actually went out (held and
+     * dropped calls don't count — they spent none of the user's attention).
+     *
+     * Two readers, and the second is the point: the rate limiter, and the
+     * turn-done push, which stands down when an explicit notification just
+     * fired. Without that, an agent that buzzes "staging deploy failed" and
+     * then ends its turn eight seconds later buzzes the phone twice, the second
+     * time with the strictly less useful "finished its turn" — which is exactly
+     * how a notification channel earns itself a mute.
+     */
+    lastExplicitNotifyAt: number;
     /**
      * The message we last relayed and whose turn has NOT started yet.
      *
@@ -1135,6 +1175,7 @@ export function attachWsServer(deps: {
           status: null,
           lastSendAt: 0,
           lastHumanSendAt: 0,
+          lastExplicitNotifyAt: 0,
           pendingSendText: null,
         };
         agentRunners.set(paneId, conn);
@@ -1379,12 +1420,19 @@ export function attachWsServer(deps: {
             // Long-running turns (the user walked away) and autonomous
             // wakeup/cron turns (no recent send) do push.
             if (Date.now() - conn.lastHumanSendAt > INTERACTIVE_PUSH_SUPPRESS_MS) {
-              // Prefer a snippet of what the agent actually said over the
-              // generic "finished its turn".
-              deps.notifyPane?.(
-                paneId,
-                frame.ok !== false ? frame.summary?.trim() || 'finished its turn' : 'turn failed',
-              );
+              // …unless the agent just notified DELIBERATELY. It already said
+              // the specific thing; "finished its turn" landing on top of it a
+              // few seconds later is a second buzz carrying less information
+              // than the first. The unread mark below still goes up — that is
+              // the quiet channel, and it costs nobody a vibration.
+              if (Date.now() - conn.lastExplicitNotifyAt >= EXPLICIT_NOTIFY_MIN_GAP_MS) {
+                // Prefer a snippet of what the agent actually said over the
+                // generic "finished its turn".
+                deps.notifyPane?.(
+                  paneId,
+                  frame.ok !== false ? frame.summary?.trim() || 'finished its turn' : 'turn failed',
+                );
+              }
               // Bold the pane "done, unreviewed" in the nav until it's viewed.
               // Same interactivity gate as the push: a turn you're actively
               // driving isn't "unread" (you're watching it). If you're looking
@@ -1419,6 +1467,49 @@ export function attachWsServer(deps: {
             if (conn.pendingQuestion?.qid === frame.qid) conn.pendingQuestion = null;
             if (!conn.pendingQuestion) deps.cache.setBlocked(paneId, false);
             bcast({ t: 'question-done', qid: frame.qid });
+          } else if (frame.t === 'notify') {
+            // The `notify` TOOL — the agent deciding this one is worth a phone.
+            //
+            // Deliberately NOT under the turn-done path's interactivity gate.
+            // That gate ("only push if the user hasn't typed for two minutes")
+            // is a guess about whether anyone is watching, and this frame is
+            // the agent OVERRIDING that guess with knowledge the gate does not
+            // have. A five-second turn that discovers the production database
+            // is down must be able to ring.
+            //
+            // Presence is a different question and is still respected, inside
+            // the notifier: "nobody is watching" is a guess, "this device
+            // reported a keystroke nine seconds ago" is an observation. A
+            // backgrounded tab does not heartbeat (web/src/lib/presence.ts
+            // requires visible + real interaction), so the at-my-desk case
+            // still reaches the desktop.
+            if (typeof frame.nid !== 'string' || !frame.nid) return;
+            const ack = (status: NotifyStatus) =>
+              sendToRunner(paneId, { t: 'notify-result', nid: frame.nid, status });
+            const body =
+              typeof frame.text === 'string' ? frame.text.replace(/\s+/g, ' ').trim() : '';
+            if (!body || !deps.notifyPane) {
+              ack('unavailable');
+              return;
+            }
+            const now = Date.now();
+            if (now - conn.lastExplicitNotifyAt < EXPLICIT_NOTIFY_MIN_GAP_MS) {
+              console.warn(
+                `[ws] pane ${paneId}: notify dropped — one per ${EXPLICIT_NOTIFY_MIN_GAP_MS / 1000}s (agent called it again after ${Math.round((now - conn.lastExplicitNotifyAt) / 1000)}s)`,
+              );
+              ack('rate-limited');
+              return;
+            }
+            const outcome = deps.notifyPane(
+              paneId,
+              body.length > NOTIFY_BODY_MAX ? `${body.slice(0, NOTIFY_BODY_MAX - 1)}…` : body,
+            );
+            // Only a push that WENT OUT starts the clock. One held because the
+            // user is looking at the screen, or dropped for want of a
+            // subscription, has cost them nothing — so it must not cost the
+            // next, genuinely urgent call its window.
+            if (outcome === 'sent') conn.lastExplicitNotifyAt = now;
+            ack(outcome);
           } else if (frame.t === 'subagent') {
             if (!frame.progress || typeof frame.progress.toolUseId !== 'string') return;
             if (frame.progress.done) {

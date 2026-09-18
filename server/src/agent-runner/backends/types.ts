@@ -4,7 +4,7 @@
 // server→runner control frames into method calls; the backend owns the session
 // and emits runner→server frames via the host. Nothing in the harness knows
 // which backend is running.
-import type { AgentMode, BackendId, RunnerFrame } from '../protocol.js';
+import type { AgentMode, BackendId, NotifyStatus, RunnerFrame } from '../protocol.js';
 
 /** Services the harness provides to a backend. */
 export interface RunnerHost {
@@ -69,6 +69,16 @@ export interface AgentBackend {
   setMode(mode: AgentMode): void;
   /** Answer an outstanding ask_user question (answers validated by the backend). */
   answer(qid: string, answers: unknown): void;
+  /**
+   * What became of a `notify` the backend emitted (sent / held / dropped), so
+   * its blocked tool call can tell the MODEL rather than claim a delivery it
+   * cannot observe.
+   *
+   * OPTIONAL, unlike the rest: it answers a frame only a backend that offers
+   * the `notify` tool can ever have sent, so a backend without that tool has
+   * nothing to implement. The harness calls it with `?.`.
+   */
+  notifyResult?(nid: string, status: NotifyStatus): void;
   /** ws (re)connected: re-deliver anything the server lost (pending questions,
    *  last status) so chat clients recover after a blip. */
   onConnected(): void;
