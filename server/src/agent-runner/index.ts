@@ -240,6 +240,10 @@ function connect(): void {
       if (next) b.setMode(next);
     } else if (frame.t === 'answer') {
       b.answer(frame.qid, frame.answers);
+    } else if (frame.t === 'notify-result') {
+      // Optional on the backend: only one that offers the `notify` tool can
+      // have sent the frame this answers.
+      if (typeof frame.nid === 'string' && frame.nid) b.notifyResult?.(frame.nid, frame.status);
     }
   });
   const retry = (code?: number) => {

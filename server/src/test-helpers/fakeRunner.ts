@@ -133,6 +133,7 @@ export async function startFakeRunner(opts: FakeRunnerOptions): Promise<FakeRunn
       else if (frame.t === 'slash' && (frame.cmd === 'compact' || frame.cmd === 'clear'))
         backend.slash(frame.cmd);
       else if (frame.t === 'answer') backend.answer(frame.qid, frame.answers);
+      else if (frame.t === 'notify-result') backend.notifyResult?.(frame.nid, frame.status);
     });
     s.on('close', (code) => {
       if (stopped || sock !== s) return;
