@@ -36,6 +36,20 @@ function makePane(id: string, tabId: string, attention: boolean): PaneSpec {
   };
 }
 
+/**
+ * A PushService that records instead of sending.
+ *
+ * `count` is not decoration: the notifier reports 'no-devices' when nothing is
+ * subscribed (so the `notify` tool can tell the model it was a no-op), so a
+ * stub without it is a server where push never fires.
+ */
+function fakePush(sent: PushPayload[], devices = 1): PushService {
+  return {
+    send: async (p: PushPayload) => void sent.push(p),
+    count: () => devices,
+  } as unknown as PushService;
+}
+
 describe('createPaneNotifier', () => {
   it('resolves pane → tab → workspace into title + deep link', () => {
     const db = openDb(':memory:');
@@ -43,7 +57,7 @@ describe('createPaneNotifier', () => {
     const tab = new TabStore(db).create({ name: 'muxpad', layout: '', workspace_id: ws.id });
     const pane = new PaneStore(db).create({ tab_id: tab.id, shell: '/bin/zsh', cwd: '/tmp' });
     const sent: PushPayload[] = [];
-    const push = { send: async (p: PushPayload) => void sent.push(p) } as unknown as PushService;
+    const push = fakePush(sent);
 
     createPaneNotifier(db, push)(pane.id, 'agent finished its turn');
     expect(sent[0]).toMatchObject({
@@ -62,7 +76,7 @@ describe('createPaneNotifier', () => {
     const tab = new TabStore(db).create({ name: 'muxpad', layout: '', workspace_id: ws.id });
     const pane = new PaneStore(db).create({ tab_id: tab.id, shell: '/bin/zsh', cwd: '/tmp' });
     const sent: PushPayload[] = [];
-    const push = { send: async (p: PushPayload) => void sent.push(p) } as unknown as PushService;
+    const push = fakePush(sent);
     const presence = new Presence();
     const notify = createPaneNotifier(db, push, presence);
 
@@ -77,10 +91,33 @@ describe('createPaneNotifier', () => {
     expect(sent).toHaveLength(1); // presence lapsed — push goes out
   });
 
+  // The OUTCOME is a return value because one caller has to report back: the
+  // agent's `notify` tool, whose whole contract is telling the model the truth
+  // about whether a human was actually reached.
+  it('reports what it did — sent, held, or nothing to send to', () => {
+    const db = openDb(':memory:');
+    const ws = new WorkspaceStore(db).create({ name: 'Dev' });
+    const tab = new TabStore(db).create({ name: 'muxpad', layout: '', workspace_id: ws.id });
+    const pane = new PaneStore(db).create({ tab_id: tab.id, shell: '/bin/zsh', cwd: '/tmp' });
+    const sent: PushPayload[] = [];
+
+    expect(createPaneNotifier(db, fakePush(sent))(pane.id, 'hi')).toBe('sent');
+
+    const presence = new Presence();
+    presence.mark();
+    expect(createPaneNotifier(db, fakePush(sent), presence)(pane.id, 'hi')).toBe('held-active');
+
+    // No subscription anywhere — an installed-nothing server. `send` was
+    // already a no-op here; what's new is that it can be SAID.
+    const none: PushPayload[] = [];
+    expect(createPaneNotifier(db, fakePush(none, 0))(pane.id, 'hi')).toBe('no-devices');
+    expect(none).toHaveLength(0);
+  });
+
   it('falls back to the root when the pane is unknown', () => {
     const db = openDb(':memory:');
     const sent: PushPayload[] = [];
-    const push = { send: async (p: PushPayload) => void sent.push(p) } as unknown as PushService;
+    const push = fakePush(sent);
     createPaneNotifier(db, push)('nope', 'hello');
     expect(sent[0]).toMatchObject({ title: 'muxpad', url: '/' });
   });
@@ -95,7 +132,7 @@ describe('createPaneNotifier', () => {
     const a = panes.create({ tab_id: tab.id, shell: '/bin/zsh', cwd: '/tmp' });
     const b = panes.create({ tab_id: tab.id, shell: '/bin/zsh', cwd: '/tmp' });
     const sent: PushPayload[] = [];
-    const push = { send: async (p: PushPayload) => void sent.push(p) } as unknown as PushService;
+    const push = fakePush(sent);
     const notify = createPaneNotifier(db, push, undefined, (id) =>
       id === a.id ? { title: 'claude' } : { fg: 'vite' },
     );
@@ -119,7 +156,7 @@ describe('createPaneNotifier', () => {
     panes.create({ tab_id: tab.id, shell: '/bin/zsh', cwd: '/tmp' });
     const b = panes.create({ tab_id: tab.id, shell: '/bin/zsh', cwd: '/tmp' });
     const sent: PushPayload[] = [];
-    const push = { send: async (p: PushPayload) => void sent.push(p) } as unknown as PushService;
+    const push = fakePush(sent);
     createPaneNotifier(db, push)(b.id, 'wants your attention');
     expect(sent[0]?.title).toBe('Pane 2 · muxpad');
   });
@@ -132,7 +169,7 @@ describe('createPaneNotifier', () => {
     tabs.update(tab.id, { slug: 'a b/c' });
     const pane = new PaneStore(db).create({ tab_id: tab.id, shell: '/bin/zsh', cwd: '/tmp' });
     const sent: PushPayload[] = [];
-    const push = { send: async (p: PushPayload) => void sent.push(p) } as unknown as PushService;
+    const push = fakePush(sent);
     createPaneNotifier(db, push)(pane.id, 'hi');
     // An unescaped '/' would make the URL point at a DIFFERENT route entirely.
     expect(sent[0]?.url).toContain('/t/a%20b%2Fc?');
@@ -158,7 +195,7 @@ describe('createPaneNotifier', () => {
     });
     new AppStore(db).setPane(app.id, pane.id);
     const sent: PushPayload[] = [];
-    const push = { send: async (p: PushPayload) => void sent.push(p) } as unknown as PushService;
+    const push = fakePush(sent);
 
     createPaneNotifier(db, push)(pane.id, 'could not be restarted');
     expect(sent[0]?.url).toBe('/hosted/a/notes?logs=true');
@@ -174,7 +211,7 @@ describe('createPaneNotifier', () => {
     const tab = new TabStore(db).create({ name: 'Orphan', layout: '', workspace_id: ws.id });
     const pane = new PaneStore(db).create({ tab_id: tab.id, shell: '/bin/zsh', cwd: '/tmp' });
     const sent: PushPayload[] = [];
-    const push = { send: async (p: PushPayload) => void sent.push(p) } as unknown as PushService;
+    const push = fakePush(sent);
     createPaneNotifier(db, push)(pane.id, 'wants your attention');
     expect(sent[0]?.url).toBe('/hosted');
     expect(sent[0]?.pane_id).toBeUndefined();
@@ -286,7 +323,7 @@ describe('attachAttentionPush', () => {
   beforeEach(() => {
     events = new EventBus();
     sent = [];
-    push = { send: vi.fn(async (p: PushPayload) => void sent.push(p)) } as unknown as PushService;
+    push = fakePush(sent);
     db = openDb(':memory:');
     const ws = new WorkspaceStore(db).create({ name: 'Dev' });
     const tab = new TabStore(db).create({ name: 'muxpad', layout: '', workspace_id: ws.id });

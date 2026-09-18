@@ -6,6 +6,7 @@ import type Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from './events.js';
 import { PtydCache } from './ptyd-cache.js';
+import type { PaneNotifier } from './push.js';
 import {
   RESPAWN_COOLDOWN_MS,
   RESPAWN_MAX_ATTEMPTS,
@@ -71,7 +72,7 @@ describe('serve supervisor', () => {
   /** Past the cooldown, so the next dead sweep is allowed to act. */
   const pastCooldown = () => advance(RESPAWN_COOLDOWN_MS + 1);
 
-  function setup(opts?: { notifyPane?: (id: string, body: string) => void }) {
+  function setup(opts?: { notifyPane?: PaneNotifier }) {
     const db = openDb(':memory:');
     const workspaces = new WorkspaceStore(db);
     const tabs = new TabStore(db);
@@ -194,7 +195,12 @@ describe('serve supervisor', () => {
 
   it('gives up after the attempt cap and says so exactly once', async () => {
     const notes: Array<[string, string]> = [];
-    const f = setup({ notifyPane: (id, body) => notes.push([id, body]) });
+    const f = setup({
+      notifyPane: (id, body) => {
+        notes.push([id, body]);
+        return 'sent';
+      },
+    });
     const pane = f.addServePane();
     f.ptydFake.ensureFails = true;
     for (let i = 0; i < RESPAWN_MAX_ATTEMPTS; i++) {

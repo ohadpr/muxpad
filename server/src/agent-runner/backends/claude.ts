@@ -29,7 +29,7 @@ import { readAgentInstructions } from '../../agent-instructions.js';
 import { readChatModeOverlay, wrapModeNote } from '../../agent-modes.js';
 import { findTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
-import type { AgentMode, AgentQuestion, RunnerFrame } from '../protocol.js';
+import type { AgentMode, AgentQuestion, NotifyStatus, RunnerFrame } from '../protocol.js';
 import { ReplyBlockTracker, replyToolUseId } from '../reply-stream.js';
 import {
   classifyAction,
@@ -109,6 +109,36 @@ export function replyToolDescription(): string {
     // reported every subagent as it returned, so the user got a stream of walls
     // while the work was still running. Progress is already on screen.
     'Send ONE reply, when you have an answer — not as you go. Do not narrate progress or report subagents as they finish; the roster and the working row already show that live. Your reply ends the turn.',
+  ].join(' ');
+}
+
+/**
+ * The `notify` tool's description — the whole UX of this feature.
+ *
+ * A tool description is a system-prompt-strength instruction, and for a tool
+ * whose effect is a vibration in someone's pocket it is also the only thing
+ * standing between "the agent can finally reach me" and "I muted muxpad".
+ * Two things it has to do that a naive description does not:
+ *
+ *  - Say when NOT to call it, concretely. muxpad ALREADY pushes when a turn
+ *    ends more than two minutes after the user last typed, so the single most
+ *    likely misuse is a notify sitting next to the final reply of a normal
+ *    turn — two buzzes, the second one worse. That case is named outright.
+ *  - Make every non-delivery a NON-EVENT. A model that reads "held" or "no
+ *    devices" as a failure will retry, and a retry loop is the exact thing the
+ *    rate limit exists to survive. The outcomes are stated as normal, with the
+ *    correct fallback (put it in the reply).
+ *
+ * Exported for tests: constructing the backend spawns a real SDK session, so
+ * the description is the testable seam.
+ */
+export function notifyToolDescription(): string {
+  return [
+    "Buzz the user on their phone and their desktop — a real push notification on the lock screen, wherever they are. Tapping it opens THIS pane. It is the only way you can reach someone who isn't looking at the screen.",
+    'Call it when something cannot wait for the end of the turn: a long run hit a blocker only they can clear, a deploy or a suite failed, a watch they asked you to keep just fired, or you are about to spend a long time on something they should know about now. Also call it once, with the result, at the end of a long autonomous run (a cron, a wakeup, an overnight batch) they are actually waiting on.',
+    'Do NOT call it to announce an ordinary finished turn. A turn that ends more than two minutes after the user last typed already notifies them on its own, so a notify next to your final reply just buzzes them twice, the second time with less news. Do not use it for progress updates, for anything that can wait until they next look at the screen, or twice in a minute — this pane sends at most one notification per minute and the rest are dropped.',
+    'The `text` IS the notification: one sentence, on a lock screen, all they get until they tap. Name what happened and what it needs — "staging deploy failed: migration 0042 timed out" or "the 40-file rename is done, 3 conflicts need you" — never "check muxpad" or "I have an update".',
+    'The result tells you what happened: sent, held because the user is already at a device, no subscribed device on this server, or dropped by the rate limit. None of those is an error and none is a reason to call again — if it was not sent, say the thing in your reply instead.',
   ].join(' ');
 }
 
@@ -616,6 +646,109 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   );
 
   // -------------------------------------------------------------------------
+  // notify: the agent deliberately reaching the user's DEVICES.
+  //
+  // Push used to be one heuristic: a turn that ends more than two minutes after
+  // the user's last message notifies, everything else doesn't. That is a decent
+  // default and it was the ONLY signal, so a five-second turn carrying
+  // something urgent could not reach a phone and a ten-minute turn carrying
+  // nothing always did. The agent is the one thing in the system that knows
+  // which is which; this is where it gets to say so.
+  //
+  // The runner is a separate process and cannot touch the PushService, so the
+  // mechanism is a frame out and a `notify-result` back (see protocol.ts). The
+  // round trip is not ceremony: the server owns the rate limit, the presence
+  // check and whether any device is even subscribed, and the tool's whole
+  // contract is that it tells the model the truth about which of those
+  // happened rather than claiming a delivery it cannot observe.
+  // -------------------------------------------------------------------------
+
+  /** How long to wait for the server's `notify-result` before giving up on it.
+   *  Reached only by a server too old to know the frame — runners are
+   *  version-skewed by design — so the answer is a neutral "no acknowledgement",
+   *  never a throw that would derail the turn. */
+  const NOTIFY_ACK_TIMEOUT_MS = 5_000;
+  const pendingNotifies = new Map<string, (status: NotifyStatus | 'no-ack') => void>();
+
+  /** The server's answer to a `notify` (harness → AgentBackend.notifyResult). */
+  function notifyResult(nid: string, status: NotifyStatus): void {
+    const resolve = pendingNotifies.get(nid);
+    if (!resolve) return; // already timed out, or never ours
+    pendingNotifies.delete(nid);
+    resolve(status);
+  }
+
+  /** What the MODEL reads back. Each one says plainly whether the user was
+   *  reached and what to do instead — a retry is never the answer. */
+  const NOTIFY_RESULT_TEXT: Record<NotifyStatus | 'no-ack', string> = {
+    sent: "Sent — it is on the user's devices now.",
+    'held-active':
+      'Not sent: the user is actively using a device right now, so they can already see this pane. Nothing more to do — this is normal, do not call again.',
+    'no-devices':
+      'Not sent: no device is subscribed to push on this server, so notifications are a no-op here. Say it in your reply instead; do not call again.',
+    'rate-limited':
+      'Dropped: this pane already sent a notification within the last minute. Put this in your reply instead; do not call again.',
+    unavailable:
+      'Not sent: this server has no push configured. Say it in your reply instead; do not call again.',
+    'no-ack':
+      'Sent, but the server did not acknowledge it, so delivery is unconfirmed. Do not call again — say it in your reply too.',
+  };
+
+  const notifyTool = tool(
+    'notify',
+    notifyToolDescription(),
+    {
+      text: z
+        .string()
+        .min(1)
+        .max(180)
+        .describe(
+          'The notification body — one sentence, naming what happened and what it needs. This is all the user sees until they tap it.',
+        ),
+    },
+    async (args) => {
+      // Newlines are invisible in a notification body and a lock screen collapses
+      // them anyway; do it here so what we log is what they will read.
+      const text = args.text.replace(/\s+/g, ' ').trim();
+      if (!text) {
+        return { content: [{ type: 'text' as const, text: 'Nothing sent — `text` was empty.' }] };
+      }
+      // A frame emitted while the socket is down is DROPPED, not queued (see
+      // RunnerHost.emit), so waiting five seconds for an ack that cannot come
+      // is pure latency in the middle of a turn.
+      if (!host.connected()) {
+        log(`${bold('✗ notify')} ${dim('not connected to muxpad — dropped')}`);
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: 'Not sent: this pane is not connected to muxpad right now. Say it in your reply instead.',
+            },
+          ],
+        };
+      }
+      const nid = randomUUID();
+      const status = await new Promise<NotifyStatus | 'no-ack'>((resolve) => {
+        const timer = setTimeout(() => {
+          pendingNotifies.delete(nid);
+          resolve('no-ack');
+        }, NOTIFY_ACK_TIMEOUT_MS);
+        // Don't hold the process open on an ack that may never come.
+        timer.unref?.();
+        pendingNotifies.set(nid, (s) => {
+          clearTimeout(timer);
+          resolve(s);
+        });
+        emit({ t: 'notify', nid, text });
+      });
+      log(
+        `${bold(status === 'sent' ? '🔔 notify' : '✗ notify')} ${status === 'sent' ? text : dim(`${status} — ${text}`)}`,
+      );
+      return { content: [{ type: 'text' as const, text: NOTIFY_RESULT_TEXT[status] }] };
+    },
+  );
+
+  // -------------------------------------------------------------------------
   // reply: the agent's VOICE in Chat mode.
   //
   // The mechanism, not the plea. `chat-mode.md` has asked for brevity since
@@ -1012,10 +1145,18 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         // instead of two to four — which is exactly the documented contract that
         // a mid-session switch is weaker than a fresh pane, and the switch note
         // now says so in those terms rather than naming a tool that isn't there.
+        //
+        // `notify` is registered in BOTH modes, and unlike `reply` that is not
+        // a compromise forced by construction order. It is about REACHING the
+        // user, not about how this session speaks, and nothing in its
+        // description asserts anything mode-dependent that a model could be
+        // misled by. Agent mode is also where it matters most: crons, wakeups
+        // and overnight batches all run there, and those are precisely the
+        // turns nobody is watching.
         tools:
           opts.mode === 'chat'
-            ? [askUserTool, showFilesTool, replyTool]
-            : [askUserTool, showFilesTool],
+            ? [askUserTool, showFilesTool, notifyTool, replyTool]
+            : [askUserTool, showFilesTool, notifyTool],
         alwaysLoad: true,
       }),
     },
@@ -1473,6 +1614,12 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     clearInterval(subagentKeepalive);
     if (interruptFailTimer !== null) clearTimeout(interruptFailTimer); // no spurious post-shutdown turn-done
     resolveAllQuestions('shutdown');
+    // Any notify still waiting on an ack it will never get: unblock the tool
+    // call rather than leave it to its 5s timeout during teardown.
+    for (const [nid, resolve] of pendingNotifies) {
+      pendingNotifies.delete(nid);
+      resolve('no-ack');
+    }
     try {
       session.close();
     } catch {
@@ -1489,6 +1636,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     setModel,
     setMode,
     answer,
+    notifyResult,
     onConnected,
     hello,
     shutdown,
