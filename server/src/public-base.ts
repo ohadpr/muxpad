@@ -36,6 +36,13 @@ import { probeUrlHealth } from './url-health.js';
  *             `muxpad publish --set-base`. For a tunnel whose URL is EPHEMERAL
  *             (a Cloudflare quick tunnel mints a new name on every restart):
  *             one command to re-point every surface, no deploy.
+ *   tunnel    the hostname of the cloudflare quick tunnel MUXPAD ITSELF owns
+ *             and supervises (tunnel/TunnelApp.ts). Below `pinned` because a
+ *             human who named a base outranks one muxpad minted for itself;
+ *             above `hint` because `hint` IS the funnel url, and letting it
+ *             outrank a live tunnel is the clobber this file was written to
+ *             stop. Gated on the tunnel process still owning it — a dead
+ *             tunnel's name is never offered as a candidate.
  *   hint      the `public_base_url` a publishing CLI discovered in its own
  *             shell. Below the pinned entry ON PURPOSE — this is the funnel
  *             url, and it is exactly what used to clobber a working base on
@@ -45,7 +52,8 @@ import { probeUrlHealth } from './url-health.js';
  *   local     the loopback url + a warning. Never shareable, and says so.
  *
  * NOTHING IS HARDCODED HERE. The current Cloudflare tunnel name is ephemeral
- * and appears nowhere in this file or any other — it is a value the user sets.
+ * and appears nowhere in this file or any other — it is a value muxpad's own
+ * tunnel supervisor writes at runtime, or that the user sets by hand.
  *
  * ON THE HEALTH CHECK, AND ITS HONEST LIMIT
  * -----------------------------------------
@@ -73,7 +81,14 @@ export const PUBLIC_BASE_PINNED_KEY = 'public_base_url_pinned';
  *  every 3s; probing a public tunnel that often would be rude and pointless. */
 export const BASE_PROBE_TTL_MS = 30_000;
 
-export type PublicBaseSource = 'env' | 'pinned' | 'hint' | 'funnel' | 'persisted' | 'local';
+export type PublicBaseSource =
+  | 'env'
+  | 'pinned'
+  | 'tunnel'
+  | 'hint'
+  | 'funnel'
+  | 'persisted'
+  | 'local';
 
 export interface PublicBase {
   /** Base to prefix slugs with, no trailing slash. */
@@ -126,6 +141,17 @@ export interface PublicBaseDeps {
   publicPort: number;
   /** MUXPAD_PUBLIC_BASE_URL, already normalized (or absent). */
   configuredBaseUrl?: string | undefined;
+  /**
+   * The base of the tunnel muxpad is currently supervising, or null.
+   *
+   * A FUNCTION, not a value, and deliberately not a globals read done here:
+   * "is this url still live" is a question about an app row and its pane, and
+   * this module must not learn what an app is. tunnel/TunnelApp.ts owns that
+   * rule; this file only knows where the answer goes in the order.
+   */
+  tunnelBaseUrl?: () => string | null;
+  /** A one-line explanation of a tunnel that keeps failing, or null. */
+  tunnelWarning?: () => string | null;
   now?: () => number;
   /** Injectable for tests; defaults to the real server-side probe. */
   probe?: (url: string) => Promise<UrlHealth>;
@@ -168,6 +194,7 @@ export function createPublicBaseResolver(deps: PublicBaseDeps): PublicBaseResolv
     };
     add(deps.configuredBaseUrl, 'env');
     add(globals.get(PUBLIC_BASE_PINNED_KEY), 'pinned');
+    add(deps.tunnelBaseUrl?.() ?? null, 'tunnel');
     add(typeof opts?.hint === 'string' ? opts.hint : null, 'hint');
     add(globals.get(PUBLIC_BASE_URL_KEY), 'persisted');
     return out;
@@ -233,9 +260,11 @@ export function createPublicBaseResolver(deps: PublicBaseDeps): PublicBaseResolv
       return {
         baseUrl: discoveredLocal ?? `http://127.0.0.1:${deps.publicPort}`,
         source: 'local',
-        // The funnel's own explanation wins when there is one — it says what
-        // actually went wrong, where ours only says what is missing.
+        // Most specific explanation first. A tunnel that keeps dying is the
+        // reason there is no base, and saying so (with the command that shows
+        // its logs) beats both the funnel's complaint and our generic one.
         warning:
+          deps.tunnelWarning?.() ??
           discoveryWarning ??
           'no public base url configured — this link only works on this machine. Set one with `muxpad publish --set-base <https://…>`.',
         health: null,
@@ -260,10 +289,16 @@ export function createPublicBaseResolver(deps: PublicBaseDeps): PublicBaseResolv
     // but say so, because a link nobody can open is the failure this whole
     // module exists to stop shipping silently.
     const first = list[0] as PublicBaseCandidate;
+    const tunnelTrouble = deps.tunnelWarning?.();
     return {
       baseUrl: first.url,
       source: first.source,
-      warning: `${first.url} is not answering — the tunnel may be down. The link may not work for anyone else.`,
+      // When muxpad's own tunnel is the reason nothing answers, SAY SO rather
+      // than leaving the user to guess at "the tunnel may be down" — there is
+      // now an owner, a log, and a command that shows it.
+      warning: tunnelTrouble
+        ? `${first.url} is not answering — ${tunnelTrouble}`
+        : `${first.url} is not answering — the tunnel may be down. The link may not work for anyone else.`,
       health: firstHealth,
     };
   };

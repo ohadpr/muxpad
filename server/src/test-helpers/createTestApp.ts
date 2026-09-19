@@ -43,6 +43,17 @@ export async function createTestApp(opts: {
     funnel: Funnel;
     publicBaseUrl?: string;
     baseProbe?: (url: string) => Promise<UrlHealth>;
+    /**
+     * muxpad's own tunnel. Omitted = a publish never starts one, which is what
+     * almost every test wants — a suite that could open a public tunnel by
+     * accident is not a suite.
+     */
+    tunnel?: {
+      ensure(opts?: { start?: boolean }): Promise<
+        import('../tunnel/TunnelApp.js').TunnelEnsureResult
+      >;
+      firstUrlWaitMs?: number;
+    };
   };
   /** Shared per-tab activity recorder (the living sidebar's recency signal). */
   tabActivity?: TabActivity;
@@ -88,6 +99,7 @@ export async function createTestApp(opts: {
             // No probe cache in tests: a test that flips reachability
             // mid-scenario must observe the flip, not a 30s-old reading.
             baseProbeTtlMs: 0,
+            ...(opts.publish.tunnel ? { tunnel: opts.publish.tunnel } : {}),
           },
         }
       : {}),

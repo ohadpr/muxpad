@@ -1394,6 +1394,28 @@ cmd_serve() {
   done
 }
 
+# `muxpad tunnel --port <public port>` — run and OWN the Cloudflare quick
+# tunnel that makes published artifacts reachable from the internet.
+#
+# Not meant to be typed. muxpad registers it as an app (slug `tunnel`) on the
+# first publish, so it runs inside a supervised hidden pane where ptyd owns it
+# and it survives a main-server restart — see server/src/tunnel/TunnelApp.ts.
+# `muxpad app logs tunnel` shows cloudflared's own output; `muxpad app stop
+# tunnel` closes the door.
+#
+# The work is node, not bash, for one reason: the load-bearing step is parsing
+# the hostname out of cloudflared's banner (a quick tunnel mints a NEW random
+# name on every start), and that parser has to be unit-tested against real
+# captured output. A grep in a shell loop cannot be.
+cmd_tunnel() {
+  local runner="$ROOT/server/dist/tunnel/index.js"
+  if [ ! -f "$runner" ]; then
+    echo "muxpad tunnel: not built ($runner missing) — run 'pnpm build' in $ROOT" >&2
+    exit 1
+  fi
+  exec node "$runner" "$@"
+}
+
 # `muxpad claude [claude args...]` — launch Claude Code in THIS pane as a
 # muxpad-tracked agent session, so it can later be viewed/driven from the web
 # chat and switched between terminal and chat. Passthrough that AUGMENTS: runs
@@ -2706,6 +2728,14 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      e.g. muxpad serve --url=http://host:4321 \
                                             --label=Notes -- ./start
 
+  tunnel --port <public port>        run the Cloudflare quick tunnel that puts
+                                     published artifacts on the internet, and
+                                     re-pin muxpad's public base every time it
+                                     mints a new hostname. Started for you as
+                                     the `tunnel` app on the first publish —
+                                     `muxpad app logs tunnel` to watch it,
+                                     `muxpad app stop tunnel` to close the door.
+
   app-url <url> [--label=<text>]     declare the web app THIS pane serves.
                                      The pane chrome then offers a "switch to
                                      web view" of it. Run from your dev script
@@ -2899,6 +2929,7 @@ case "$VERB" in
   app-url) cmd_app_url "${ARGS[@]:1}" ;;
   app) cmd_app "${ARGS[@]:1}" ;;
   serve) cmd_serve "${ARGS[@]:1}" ;;
+  tunnel) cmd_tunnel "${ARGS[@]:1}" ;;
   claude) cmd_claude "${ARGS[@]:1}" ;;
   agent) cmd_agent "${ARGS[@]:1}" ;;
   cron) cmd_cron "${ARGS[@]:1}" ;;

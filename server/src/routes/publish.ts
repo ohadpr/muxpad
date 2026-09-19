@@ -18,6 +18,17 @@ import {
   createPublicBaseResolver,
   normalizeBaseUrl,
 } from '../public-base.js';
+import {
+  type TunnelEnsureResult,
+  noteTunnelDown,
+  noteTunnelUp,
+  readTunnelRecord,
+  readTunnelStatus,
+  tunnelBaseUrl,
+  tunnelWarning,
+  waitForTunnelUrl,
+} from '../tunnel/TunnelApp.js';
+import { probeUrlHealth } from '../url-health.js';
 
 /**
  * Publish API (docs/plans/2026-08-28-muxpad-publish.md §2) — mounted on the
@@ -215,6 +226,18 @@ export function publishRoutes(deps: {
   baseResolver?: PublicBaseResolver;
   baseProbe?: ((url: string) => Promise<import('@muxpad/shared').UrlHealth>) | undefined;
   baseProbeTtlMs?: number | undefined;
+  /**
+   * muxpad's own Cloudflare tunnel. Absent = this instance cannot run one
+   * (no app registry wired — HTTP-only tests), which must degrade to exactly
+   * the behaviour that existed before the tunnel did.
+   */
+  tunnel?:
+    | {
+        ensure(opts?: { start?: boolean }): Promise<TunnelEnsureResult>;
+        /** Bound on how long a publish waits for a cold tunnel. */
+        firstUrlWaitMs?: number;
+      }
+    | undefined;
 }): Hono {
   const app = new Hono();
   // ONE resolver for every path in this file. The read path (GET /) and the
@@ -227,6 +250,12 @@ export function publishRoutes(deps: {
       funnel: deps.funnel,
       publicPort: deps.publicPort ?? 7778,
       ...(deps.publicBaseUrl ? { configuredBaseUrl: deps.publicBaseUrl } : {}),
+      // Wired unconditionally, even without `deps.tunnel`: the RECORD lives in
+      // the database and outlives this process (ptyd owns the tunnel), so a
+      // main server that has just restarted must be able to read back a tunnel
+      // it did not itself start.
+      tunnelBaseUrl: () => tunnelBaseUrl(deps.db),
+      tunnelWarning: () => tunnelWarning(deps.db),
       ...(deps.baseProbe ? { probe: deps.baseProbe } : {}),
       ...(deps.baseProbeTtlMs !== undefined ? { probeTtlMs: deps.baseProbeTtlMs } : {}),
     });
@@ -416,6 +445,32 @@ export function publishRoutes(deps: {
         500,
       );
     }
+    // THE LAZY HALF OF "WHEN DOES THE TUNNEL RUN". There is now something to
+    // serve, so open the door — and on a cold instance, wait for it, because a
+    // publish that answers 300ms sooner with a loopback link has answered the
+    // wrong question. Every later publish finds the url already there and this
+    // costs one database read.
+    //
+    // Best-effort in every direction: a tunnel that will not start must never
+    // fail a publish. The bytes are already on disk and the fallback chain
+    // still resolves; the worst case is the link this prints is the one it
+    // would have printed before.
+    if (deps.tunnel) {
+      try {
+        const ensured = await deps.tunnel.ensure();
+        if (ensured.state !== 'disabled' && !tunnelBaseUrl(deps.db)) {
+          await waitForTunnelUrl(deps.db, {
+            ...(deps.tunnel.firstUrlWaitMs !== undefined
+              ? { timeoutMs: deps.tunnel.firstUrlWaitMs }
+              : {}),
+            // Announced is not the same as reachable — see waitForTunnelUrl.
+            ready: async (url) => (await probeUrlHealth(`${url}/`, { timeoutMs: 2500 })).alive,
+          });
+        }
+      } catch (err) {
+        console.error('[tunnel] ensure failed during publish (link may be local-only)', err);
+      }
+    }
     const resolved = await resolveForPublish(hint);
     return c.json(
       {
@@ -551,6 +606,71 @@ export function publishRoutes(deps: {
     return c.json({
       url: resolved.source === 'local' ? null : resolved.baseUrl,
       source: resolved.source,
+    });
+  });
+
+  /**
+   * The tunnel muxpad owns (tunnel/TunnelApp.ts). These three are the ONLY new
+   * surface the feature adds, and all of the policy behind them lives on the
+   * server: the in-pane process reports a fact (a hostname appeared, a process
+   * exited) and is told nothing about precedence.
+   *
+   *   POST   /tunnel { url, pane_id? }        a tunnel is up at this hostname
+   *   DELETE /tunnel { error?, attempts? }    it is not any more
+   *   GET    /tunnel                          what muxpad thinks, for humans
+   *
+   * No new authorization question: the main port is unauthenticated by design
+   * and `PUT /base` already lets any caller on it pin any origin. What is
+   * checked is SHAPE — https, an origin with no path — because this value
+   * becomes the prefix of every published link.
+   */
+  app.post('/tunnel', async (c) => {
+    const body = (await c.req.json().catch(() => null)) as {
+      url?: unknown;
+      pane_id?: unknown;
+    } | null;
+    const url = typeof body?.url === 'string' ? body.url : '';
+    const paneId = typeof body?.pane_id === 'string' ? body.pane_id : null;
+    const stored = noteTunnelUp(deps.db, { url, paneId });
+    if (!stored)
+      return c.json(
+        { error: { code: 'bad_request', message: 'url must be a well-formed https origin' } },
+        400,
+      );
+    // Tell the reporter whether its url is actually being used. A tunnel
+    // running next to a configured MUXPAD_PUBLIC_BASE_URL is a door held open
+    // for nothing, and its own log should say so.
+    const resolved = await base.resolve();
+    return c.json({
+      url: stored,
+      active: resolved.source === 'tunnel',
+      base: resolved.baseUrl,
+      source: resolved.source,
+    });
+  });
+
+  app.delete('/tunnel', async (c) => {
+    const body = (await c.req.json().catch(() => null)) as {
+      error?: unknown;
+      attempts?: unknown;
+    } | null;
+    noteTunnelDown(deps.db, {
+      ...(typeof body?.error === 'string' ? { error: body.error } : {}),
+      ...(typeof body?.attempts === 'number' ? { attempts: body.attempts } : {}),
+    });
+    return c.body(null, 204);
+  });
+
+  app.get('/tunnel', (c) => {
+    const record = readTunnelRecord(deps.db);
+    return c.json({
+      // The live answer, with the ownership rules applied…
+      url: tunnelBaseUrl(deps.db),
+      // …and the raw row, so a url that is being IGNORED (its pane is gone, the
+      // app is stopped) is visible as such instead of just missing.
+      record,
+      status: readTunnelStatus(deps.db),
+      warning: tunnelWarning(deps.db),
     });
   });
 
