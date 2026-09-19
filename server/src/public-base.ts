@@ -280,6 +280,27 @@ export function createPublicBaseResolver(deps: PublicBaseDeps): PublicBaseResolv
     // SKIPPED, never reordered by latency — order is configuration.
     let firstHealth: UrlHealth | null = null;
     for (const c of list) {
+      // A TUNNEL candidate is not probed, because we own the process that IS
+      // it. The record only exists while our supervised cloudflared is alive
+      // and is retracted the moment it exits, so liveness is already known by
+      // construction — a probe can add nothing and can only be WRONG.
+      //
+      // And it was. Observed on this machine: the tunnel served 200 through
+      // Cloudflare's edge while the local resolver returned NXDOMAIN for its
+      // own hostname (Tailscale MagicDNS negative-caching *.trycloudflare.com),
+      // so muxpad demoted a perfectly good public URL and published the
+      // Tailscale funnel instead — the one thing already established as
+      // blocked on many networks. A false negative here does not degrade the
+      // link, it replaces a working one with a broken one.
+      //
+      // This does not weaken the rule stated above: the probe still only
+      // demotes candidates whose liveness is UNKNOWN. The tunnel's is not.
+      // ...UNLESS the supervisor is itself reporting trouble. Its distress
+      // signal is the one thing that can revoke this trust, because it is the
+      // same source the trust came from — not a probe second-guessing it.
+      if (c.source === 'tunnel' && !deps.tunnelWarning?.()) {
+        return { baseUrl: c.url, source: c.source, health: null };
+      }
       const health = await reach(c.url);
       firstHealth ??= health;
       if (health.alive) return { baseUrl: c.url, source: c.source, health };
