@@ -299,14 +299,36 @@ const BASH_MATCHERS: readonly BashMatcher[] = [
     why: 'publishes commits to the remote. Anyone with access can fetch them from that moment.',
     match: (b, s) => b === 'git' && s[0] === 'push',
   },
+  // `muxpad publish` is NOT gated, deliberately, and this comment is the rule
+  // rather than an omission.
+  //
+  // It failed the test this file is built on. The criterion is "escapes the
+  // machine, or destroys the only copy" — publishing escapes, so it was in.
+  // But the other half of the criterion is the one that matters here: gating
+  // something done dozens of times a day is how an approval card becomes a
+  // thing people tap through without reading, which costs more safety than it
+  // buys on the rare call that deserved a stop. Reported from a live session
+  // as "these stupid questions all the time".
+  //
+  // It is also the most reversible thing in this file: `muxpad publish --rm
+  // <slug>` takes it down, an `--update=<slug>` republish keeps the previous
+  // copy, and the target is a dedicated hardened static server that serves a
+  // sandbox CSP and nothing else. Compare `git push` (rewriting history off
+  // your machine) or `npm publish` (a version number that can never be reused)
+  // — those stay.
+  //
+  // What publishing risks is CONTENT, not reach: putting something private on
+  // a public URL. A prompt cannot evaluate that — it fires identically for a
+  // chart and for a credentials file — so the control belongs where it can
+  // work: the URL is printed on every publish, and `muxpad publish --rm`
+  // undoes it in one command.
   {
     verb: 'publish',
-    header: 'Publish link',
-    why: 'puts these files on a public URL — `muxpad publish` turns the Tailscale funnel on by itself.',
-    // `--list` and `--base` only read; everything else publishes or re-points
-    // the public origin.
-    match: (b, s, f) =>
-      b === 'muxpad' && s[0] === 'publish' && !f.has('--list') && !f.has('--base'),
+    header: 'Re-point public origin',
+    why: 'changes the base URL every published link is served from, including ones already shared.',
+    // `--set-base` is the one `muxpad publish` form that is not cheap to undo:
+    // it silently re-points links other people already hold.
+    match: (b, s, f) => b === 'muxpad' && s[0] === 'publish' && f.has('--set-base'),
   },
   {
     verb: 'publish',

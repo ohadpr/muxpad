@@ -54,11 +54,21 @@ describe('gated: publish — bytes that cannot be taken back', () => {
     expect(verb('pnpm test; git push')).toBe('publish');
   });
 
-  it('muxpad publish puts files on a public URL and turns the funnel on itself', () => {
-    expect(verb('muxpad publish ./report --name=teardown')).toBe('publish');
-    // …but its read-only modes are not publishing anything.
+  it('muxpad publish is NOT gated — it is done dozens of times a day and undone in one command', () => {
+    // Inverted deliberately. Publishing escapes the machine, so it passed the
+    // first half of this file's criterion — but gating a daily action is how
+    // an approval card becomes something you tap through without reading,
+    // which costs more safety than it buys. Reported live as "these stupid
+    // questions all the time". `--rm <slug>` takes it down; the target is the
+    // hardened static server.
+    expect(bash('muxpad publish ./report --name=teardown')).toBeNull();
+    expect(bash('muxpad publish --update=teardown ./report')).toBeNull();
     expect(bash('muxpad publish --list')).toBeNull();
     expect(bash('muxpad publish --base')).toBeNull();
+  });
+
+  it('…but re-pointing the public origin still stops — it moves links others hold', () => {
+    expect(verb('muxpad publish --set-base https://example.com')).toBe('publish');
   });
 
   it('gh pr create / merge, gh release, npm publish', () => {
