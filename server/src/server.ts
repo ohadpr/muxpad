@@ -101,6 +101,19 @@ export interface AppDeps {
     /** Test-only override for the base reachability probe. */
     baseProbe?: ((url: string) => Promise<import('@muxpad/shared').UrlHealth>) | undefined;
     baseProbeTtlMs?: number | undefined;
+    /**
+     * muxpad's own Cloudflare tunnel (tunnel/TunnelApp.ts). Omitted here means
+     * a publish never starts one — which is what every test wants: a suite
+     * that could open a public tunnel by accident is not a suite.
+     */
+    tunnel?:
+      | {
+          ensure(opts?: { start?: boolean }): Promise<
+            import('./tunnel/TunnelApp.js').TunnelEnsureResult
+          >;
+          firstUrlWaitMs?: number;
+        }
+      | undefined;
   };
   /**
    * The server-owned cron scheduler (cron/CronScheduler.ts). Optional so
@@ -224,6 +237,7 @@ export function createApp(deps: AppDeps): Hono {
       ...(resolved.publish?.baseProbeTtlMs !== undefined
         ? { baseProbeTtlMs: resolved.publish.baseProbeTtlMs }
         : {}),
+      ...(resolved.publish?.tunnel ? { tunnel: resolved.publish.tunnel } : {}),
     }),
   );
   if (resolved.push) app.route('/api/push', pushRoutes(resolved.push));
