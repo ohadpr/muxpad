@@ -35,6 +35,7 @@ import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { openDb } from './store/db.js';
 import { TabActivity } from './tab-activity.js';
+import { clearOrphanedTunnelBase, ensureTunnelApp } from './tunnel/TunnelApp.js';
 import { VoiceSessionManager, glossaryInstructions } from './voice/VoiceSessionManager.js';
 import { openAiVoiceTransport } from './voice/live.js';
 import { attachWsServer } from './ws.js';
@@ -311,6 +312,24 @@ const appStatus = createAppStatusProbe({
   gaveUp: (paneId) => serveSupervisorRef?.gaveUp(paneId) ?? false,
 });
 
+// muxpad's OWN public tunnel — an app like any other (`muxpad tunnel --port
+// <public port>` in a hidden pane), so ptyd owns it and it survives every
+// deploy. See tunnel/TunnelApp.ts for the whole argument; the only thing wired
+// here is the policy inputs it cannot discover for itself.
+//
+// MUXPAD_PUBLIC_BASE_URL is passed straight through because it does not merely
+// OUTRANK the tunnel, it cancels it: a real domain means there is nothing for a
+// quick tunnel to do, and running one anyway would hold a second public door
+// open forever for no reason.
+const ensureTunnel = (opts?: { start?: boolean }) =>
+  ensureTunnelApp({
+    db,
+    registry: appRegistry,
+    publicPort: config.publicPort,
+    ...(config.publicBaseUrl ? { configuredBaseUrl: config.publicBaseUrl } : {}),
+    ...(opts?.start !== undefined ? { start: opts.start } : {}),
+  });
+
 const app = createApp({
   db,
   ptyd,
@@ -327,6 +346,7 @@ const app = createApp({
     funnel,
     publicPort: config.publicPort,
     ...(config.publicBaseUrl ? { publicBaseUrl: config.publicBaseUrl } : {}),
+    tunnel: { ensure: ensureTunnel },
   },
   apps: { registry: appRegistry, status: appStatus },
   voice,
@@ -439,6 +459,28 @@ const appReconciler = startAppReconciler({
     };
   },
 });
+
+// The tunnel, at boot. Two jobs, and NEITHER of them is "start it" — that is
+// the reconciler's, via the app row's autostart, so `muxpad app stop tunnel`
+// still means stopped after a deploy.
+//
+//   · POLICY: if MUXPAD_PUBLIC_BASE_URL has since been set, or cloudflared has
+//     been uninstalled, or the public port moved, fix that now rather than at
+//     the next publish.
+//   · THE STALE NAME: the database may hold a hostname from a tunnel whose pane
+//     is gone. Reads already refuse it (tunnelBaseUrl checks ownership), but a
+//     row that lies is worth deleting.
+//
+// Best-effort and fire-and-forget: a tunnel that cannot be sorted out must not
+// hold up the boot of everything else.
+if (clearOrphanedTunnelBase(db)) {
+  console.log('[tunnel] dropped a tunnel url whose pane is gone');
+}
+void ensureTunnel({ start: false })
+  .then((r) => {
+    if (r.state === 'disabled' && r.reason) console.log(`[tunnel] not running: ${r.reason}`);
+  })
+  .catch((err) => console.error('[tunnel] boot check failed', err));
 
 // Durable schedules. The tick starts only now, with the ws layer attached and
 // the runner registry live behind the bridge; its own 15s startup grace then

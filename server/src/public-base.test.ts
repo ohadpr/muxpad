@@ -104,6 +104,76 @@ describe('precedence — configuration beats discovery', () => {
     expect((await r.resolve({ probe: true })).baseUrl).toBe(TUNNEL);
   });
 
+  it('MUXPAD_PUBLIC_BASE_URL beats a live tunnel — the domain is the answer', async () => {
+    // Precedence half of decision 1. (The other half is that the tunnel is not
+    // even RUN when env is set — tunnel/TunnelApp.test.ts.)
+    const r = make({
+      configuredBaseUrl: 'https://artifacts.example.com',
+      tunnelBaseUrl: () => TUNNEL,
+    });
+    reachable.add('https://artifacts.example.com');
+    const got = await r.resolve({ hint: FUNNEL, allowDiscovery: true, probe: true });
+    expect(got).toMatchObject({ baseUrl: 'https://artifacts.example.com', source: 'env' });
+  });
+
+  it('a human PIN outranks the tunnel muxpad minted for itself', async () => {
+    const pinned = 'https://mine.example.com';
+    reachable.add(pinned);
+    const r = make({ tunnelBaseUrl: () => TUNNEL });
+    r.setPinned(pinned);
+    expect(await r.resolve({ probe: true })).toMatchObject({ baseUrl: pinned, source: 'pinned' });
+  });
+
+  it("the TUNNEL outranks the publish hint — the funnel's :8443 must not clobber it", async () => {
+    // This is the original bug in its new form: every publish sends the funnel
+    // url as a hint. A live, muxpad-owned tunnel on :443 must win.
+    const r = make({ tunnelBaseUrl: () => TUNNEL });
+    const got = await r.resolve({ hint: FUNNEL, allowDiscovery: true, probe: true });
+    expect(got).toMatchObject({ baseUrl: TUNNEL, source: 'tunnel' });
+    expect(funnelCalls).toBe(0);
+  });
+
+  it('a tunnel that is down offers no candidate at all', async () => {
+    // tunnelBaseUrl() applies the ownership rules; a dead tunnel returns null,
+    // so the chain falls through instead of preserving a dead hostname.
+    const r = make({ tunnelBaseUrl: () => null });
+    globals.set(PUBLIC_BASE_URL_KEY, FUNNEL);
+    const got = await r.resolve({ probe: true });
+    expect(got.source).toBe('persisted');
+    expect(r.candidates().some((c) => c.source === 'tunnel')).toBe(false);
+  });
+
+  it('a dead tunnel url is demoted by the probe, not preserved', async () => {
+    const dead = 'https://gone-forever-name.trycloudflare.com';
+    const r = make({ tunnelBaseUrl: () => dead });
+    globals.set(PUBLIC_BASE_URL_KEY, FUNNEL);
+    // `dead` is not in `reachable`.
+    const got = await r.resolve({ probe: true });
+    expect(got.baseUrl).toBe(FUNNEL);
+    expect(got.source).toBe('persisted');
+  });
+
+  it('explains a tunnel that keeps failing, instead of a generic shrug', async () => {
+    const r = make({
+      tunnelBaseUrl: () => null,
+      tunnelWarning: () => 'the cloudflare tunnel has failed to start 5 times in a row',
+    });
+    const got = await r.resolve({ probe: true });
+    expect(got.source).toBe('local');
+    expect(got.warning).toContain('failed to start 5 times');
+  });
+
+  it('names the tunnel when it is why nothing answers', async () => {
+    const dead = 'https://gone-forever-name.trycloudflare.com';
+    const r = make({
+      tunnelBaseUrl: () => dead,
+      tunnelWarning: () => 'the cloudflare tunnel has failed to start 5 times in a row',
+    });
+    const got = await r.resolve({ probe: true });
+    expect(got.baseUrl).toBe(dead);
+    expect(got.warning).toContain('failed to start 5 times');
+  });
+
   it('a hint is used and persisted when nothing outranks it, without exec', async () => {
     const r = make();
     const got = await r.resolve({ hint: TUNNEL, allowDiscovery: true, probe: true });

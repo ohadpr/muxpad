@@ -161,7 +161,7 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
 export const PublicBaseInfoSchema = z.object({
   /** null = no shareable base; links would be loopback-only. */
   url: z.string().nullable(),
-  source: z.enum(['env', 'pinned', 'hint', 'funnel', 'persisted', 'local']),
+  source: z.enum(['env', 'pinned', 'tunnel', 'hint', 'funnel', 'persisted', 'local']),
   /** null = not checked. */
   reachable: z.boolean().nullable(),
   warning: z.string().optional(),
