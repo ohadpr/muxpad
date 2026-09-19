@@ -143,14 +143,28 @@ describe('precedence — configuration beats discovery', () => {
     expect(r.candidates().some((c) => c.source === 'tunnel')).toBe(false);
   });
 
-  it('a dead tunnel url is demoted by the probe, not preserved', async () => {
-    const dead = 'https://gone-forever-name.trycloudflare.com';
-    const r = make({ tunnelBaseUrl: () => dead });
+  it('trusts a tunnel url without probing it — we own the process that IS it', async () => {
+    // Deliberately inverted from the old contract, which demoted a tunnel the
+    // probe could not reach. Observed live: the tunnel served 200 through
+    // Cloudflare's edge while THIS machine's resolver returned NXDOMAIN for
+    // its own hostname, so muxpad demoted a working public URL and published
+    // the Tailscale funnel — already established as blocked on many networks.
+    // A false negative here does not degrade the link, it swaps a working one
+    // for a broken one.
+    //
+    // The liveness the probe was approximating is known exactly: the record
+    // exists only while our supervised cloudflared runs, is retracted the
+    // instant it exits, is ignored unless its announcing pane is still the
+    // app's, and is cleared at boot. The residual window is the ~20s after a
+    // ptyd restart, where a record can briefly outlive its process — a link
+    // that is briefly dead, against a link that was always wrong.
+    const live = 'https://any-name.trycloudflare.com';
+    const r = make({ tunnelBaseUrl: () => live });
     globals.set(PUBLIC_BASE_URL_KEY, FUNNEL);
-    // `dead` is not in `reachable`.
+    // `live` is NOT in `reachable` — the point is that it wins anyway.
     const got = await r.resolve({ probe: true });
-    expect(got.baseUrl).toBe(FUNNEL);
-    expect(got.source).toBe('persisted');
+    expect(got.baseUrl).toBe(live);
+    expect(got.source).toBe('tunnel');
   });
 
   it('explains a tunnel that keeps failing, instead of a generic shrug', async () => {
