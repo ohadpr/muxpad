@@ -36,7 +36,14 @@ import { type FakeSession, fakeSession } from './fakeAgentSdk.js';
 export interface FakeRunner {
   /** The live backend (send/stop/setModel/… exactly as the harness drives it). */
   readonly backend: AgentBackend;
-  /** The scripted SDK session feeding the backend's message loop. */
+  /**
+   * The scripted SDK session feeding the backend's message loop.
+   *
+   * Resolved on every access, never captured: the auth self-heal throws the
+   * `claude` child away and calls `query()` again, so after a re-exec the
+   * session a test must script is a DIFFERENT object. A captured handle would
+   * keep pushing messages into the dead one and the test would hang.
+   */
   readonly sdk: FakeSession;
   /** Push SDK messages and wait for the loop to consume them. */
   feed(messages: unknown[]): Promise<void>;
@@ -76,6 +83,9 @@ export interface FakeRunnerOptions {
    *  existing test keeps the behaviour it was written against. Chat-mode tests
    *  pass 'chat': the reply guard only applies there. */
   mode?: AgentMode;
+  /** Compress the auth self-heal back-off ladder so a test can walk it to the
+   *  give-up rung without waiting 85 seconds. See BackendOptions. */
+  authHealDelaysMs?: readonly number[];
 }
 
 /** Boot a fake runner and wait for its hello to land. */
@@ -106,8 +116,8 @@ export async function startFakeRunner(opts: FakeRunnerOptions): Promise<FakeRunn
     requestedSid: opts.sid ?? null,
     requestedModel: null,
     mode: opts.mode ?? 'agent',
+    ...(opts.authHealDelaysMs ? { authHealDelaysMs: opts.authHealDelaysMs } : {}),
   });
-  const sdk = fakeSession();
 
   // The backend's message loop. Never awaited by the caller — it resolves only
   // when the scripted stream ends.
@@ -159,13 +169,18 @@ export async function startFakeRunner(opts: FakeRunnerOptions): Promise<FakeRunn
 
   return {
     backend,
-    sdk,
+    get sdk() {
+      return fakeSession();
+    },
     sent,
     logs,
     connected: () => sock?.readyState === WebSocket.OPEN,
     async feed(messages) {
-      for (const m of messages) sdk.push(m);
-      await sdk.settle();
+      // Resolved per call, not captured — a self-heal re-exec replaces the
+      // session and messages pushed at the old one would never be consumed.
+      const live = fakeSession();
+      for (const m of messages) live.push(m);
+      await live.settle();
       // …and let the frames the loop emitted reach the server.
       await new Promise((r) => setTimeout(r, 30));
     },
@@ -196,7 +211,7 @@ export async function startFakeRunner(opts: FakeRunnerOptions): Promise<FakeRunn
           s.once('close', () => resolve());
           s.close();
         });
-      sdk.end();
+      fakeSession().end();
       await loop;
       await new Promise((r) => setTimeout(r, 60));
     },
