@@ -23,6 +23,18 @@ export interface FakeSession {
   settle(): Promise<void>;
   /** Options the backend passed to `query()`. */
   readonly options: Record<string, unknown>;
+  /**
+   * The user messages this session actually CONSUMED, in order.
+   *
+   * The input half used to be drained into a void loop and thrown away, which
+   * was fine while there was exactly one session per backend. The auth
+   * self-heal makes a second one, and "the message the user sent was handed to
+   * the NEW process, not the dead one" is the whole claim that path has to
+   * prove — so the prompts are now recorded per session.
+   */
+  readonly prompts: unknown[];
+  /** {@link prompts} reduced to their text, for readable assertions. */
+  readonly promptTexts: string[];
   /** How many times the backend called `interrupt()`. */
   readonly interrupts: number;
   /** Set by a test to make `interrupt()` reject (the stop-failed path). */
@@ -57,8 +69,16 @@ class FakeSessionImpl implements FakeSession {
   interrupts = 0;
   interruptRejects = false;
   closed = false;
+  readonly prompts: unknown[] = [];
 
   constructor(readonly options: Record<string, unknown>) {}
+
+  get promptTexts(): string[] {
+    return this.prompts.map((p) => {
+      const content = (p as { message?: { content?: unknown } })?.message?.content;
+      return typeof content === 'string' ? content : JSON.stringify(content);
+    });
+  }
 
   push(msg: unknown): void {
     this.buf.push(msg);
@@ -81,24 +101,36 @@ class FakeSessionImpl implements FakeSession {
   }
 
   async *[Symbol.asyncIterator](): AsyncGenerator<unknown> {
-    while (true) {
-      while (this.buf.length > 0) {
-        const msg = this.buf.shift();
-        const marker = msg as { subtype?: string; settleId?: number };
-        if (marker?.subtype === SETTLE_SUBTYPE) {
-          // Resolve on a macrotask so any promise chain the loop kicked off
-          // for the PRECEDING message (emit → ws.send) has flushed first.
-          const done = this.settlers.get(marker.settleId as number);
-          this.settlers.delete(marker.settleId as number);
-          if (done) setTimeout(done, 0);
-          continue;
+    try {
+      while (true) {
+        while (this.buf.length > 0) {
+          const msg = this.buf.shift();
+          const marker = msg as { subtype?: string; settleId?: number };
+          if (marker?.subtype === SETTLE_SUBTYPE) {
+            // Resolve on a macrotask so any promise chain the loop kicked off
+            // for the PRECEDING message (emit → ws.send) has flushed first.
+            const done = this.settlers.get(marker.settleId as number);
+            this.settlers.delete(marker.settleId as number);
+            if (done) setTimeout(done, 0);
+            continue;
+          }
+          yield msg;
         }
-        yield msg;
+        if (this.finished) return;
+        await new Promise<void>((r) => {
+          this.wake = r;
+        });
       }
-      if (this.finished) return;
-      await new Promise<void>((r) => {
-        this.wake = r;
-      });
+    } finally {
+      // A consumer that BREAKS out mid-stream — the auth self-heal abandons
+      // its session the moment a turn dies of a dead credential — leaves every
+      // settle marker behind it unconsumed. Without this the `feed()` that
+      // scripted the failure never resolves and the test hangs instead of
+      // failing.
+      for (const [id, done] of this.settlers) {
+        this.settlers.delete(id);
+        setTimeout(done, 0);
+      }
     }
   }
 
@@ -138,19 +170,23 @@ export function query(args: { prompt: unknown; options?: Record<string, unknown>
     })();
   }
   // Drain the backend's user-message generator in the background so `send()`
-  // resolves its queue exactly as the real SDK's consumption would.
+  // resolves its queue exactly as the real SDK's consumption would — recording
+  // what it handed over, which is how a test can tell WHICH session a retried
+  // message reached.
   const prompts = args.prompt as AsyncIterable<unknown>;
+  const session = new FakeSessionImpl(args.options ?? {});
+  current = session;
   void (async () => {
     try {
-      for await (const _ of prompts) {
+      for await (const m of prompts) {
         // The scripted stream, not this generator, drives the loop.
+        session.prompts.push(m);
       }
     } catch {
       // The generator is torn down with the session.
     }
   })();
-  current = new FakeSessionImpl(args.options ?? {});
-  return current;
+  return session;
 }
 
 /** One in-process MCP tool as the backend registered it. */
