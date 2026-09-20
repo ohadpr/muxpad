@@ -608,6 +608,12 @@ print_table() {
   } | awk -F '\t' -v bold="$C_BOLD" -v reset="$C_RESET" '
     {
       for (i = 1; i <= NF; i++) {
+        # Carriage returns and tabs cannot survive into a cell: this output is
+        # routinely parsed by a supervisor (and by an agent) with cut/awk, and
+        # a control character inside a pane id is a malformed URL and a curl
+        # that returns 000 with no explanation. jq @tsv escapes them in the
+        # DATA, but a value that arrives already containing one would not be.
+        gsub(/[\r\t]/, "", $i);
         if (length($i) > w[i]) w[i] = length($i);
         cell[NR, i] = $i;
       }
@@ -619,10 +625,16 @@ print_table() {
         line = "";
         for (i = 1; i <= ncols; i++) {
           v = cell[r, i];
-          pad = w[i] - length(v);
-          if (pad < 0) pad = 0;
-          line = line v sprintf("%*s", pad, "");
-          if (i < ncols) line = line "  ";
+          # Pad only BETWEEN columns. Padding the last one too put trailing
+          # whitespace on every row of every table muxpad prints — invisible
+          # on screen, and one more thing a caller has to strip off an id.
+          if (i < ncols) {
+            pad = w[i] - length(v);
+            if (pad < 0) pad = 0;
+            line = line v sprintf("%*s", pad, "") "  ";
+          } else {
+            line = line v;
+          }
         }
         if (r == 1) printf "%s%s%s\n", bold, line, reset;
         else printf "%s\n", line;
@@ -1672,6 +1684,96 @@ cmd_agent_list() {
     'SID:(.current_sid // "-")'
 }
 
+# `muxpad agent respawn <paneId>` | `--all [--backend=<id>]`
+#
+# Re-exec a pane's agent runner in place. The pane's startup_cmd carries
+# `--resume <sid>`, so the session comes back from its transcript and the
+# conversation continues; ptyd is never touched and no terminal dies.
+#
+# THE BULK FORM EXISTS BECAUSE A RECOVERY SHOULD BE ONE COMMAND. On 2026-09-20
+# every Claude pane went dead at once (a token expiry racing 25 long-lived
+# `claude` children) and the fix was a respawn of all 24. The obvious shell
+# loop against the HTTP API — `for p in $(muxpad agent list | awk …)` — ate two
+# attempts before anyone noticed the ids were dirty, and a hand-rolled loop
+# also swallows per-pane failures. Both are handled here, once.
+#
+# The runner now self-heals that particular condition on its own (see
+# server/src/agent-runner/auth-heal.ts). This stays as the escape hatch for
+# everything it cannot: a wedged session, a runner that outlived a `pnpm build`,
+# a pane whose SDK child is simply gone.
+cmd_agent_respawn() {
+  local a rest=() all=0
+  for a in "$@"; do
+    case "$a" in
+      --all) all=1 ;;
+      *) rest+=("$a") ;;
+    esac
+  done
+  set -- ${rest[@]+"${rest[@]}"}
+  reset_flags backend
+  parse_flags backend -- "$@"
+  require_api_url
+  local backend="${FLAG_backend:-}"
+  local ids=() id
+  if [ "$all" = 1 ]; then
+    require_jq
+    if [ "${#POSITIONAL[@]}" -gt 0 ]; then
+      echo 'muxpad: agent respawn takes a pane id OR --all, not both' >&2
+      exit 1
+    fi
+    local res filter='.[]'
+    res="$(http_request GET /api/agent-sessions)"
+    if [ -n "$backend" ]; then
+      filter=".[] | select(.assistant == $(json_string "$backend"))"
+    fi
+    while IFS= read -r id; do
+      [ -n "$id" ] && ids+=("$id")
+    done < <(printf '%s' "$res" | jq -r "$filter | .pane_id")
+  else
+    if [ -n "$backend" ]; then
+      echo 'muxpad: --backend only makes sense with --all' >&2
+      exit 1
+    fi
+    if [ "${#POSITIONAL[@]}" -ne 1 ]; then
+      echo 'usage: muxpad agent respawn <paneId> | --all [--backend=<id>]' >&2
+      exit 1
+    fi
+    ids=("${POSITIONAL[0]}")
+  fi
+  if [ "${#ids[@]}" -eq 0 ]; then
+    printf '%s(none)%s\n' "$C_DIM" "$C_RESET"
+    return 0
+  fi
+  local ok=0 bad=0 status
+  for id in "${ids[@]}"; do
+    # Scrub whitespace and control characters off the id before it becomes a
+    # URL. A pane id pasted from a terminal carries the tty's CR (ONLCR turns
+    # every \n into \r\n on the way out of a pty), and a CR inside a URL makes
+    # curl fail with 000 and no message at all — which is exactly how two
+    # recovery attempts were lost during the incident above.
+    id="$(printf '%s' "$id" | tr -d '[:space:]')"
+    [ -z "$id" ] && continue
+    status="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+      "${MUXPAD_API_URL%/}/api/panes/$id/respawn" || echo 000)"
+    case "$status" in
+      2*)
+        ok=$((ok + 1))
+        printf '%s✓%s %s\n' "$C_GREEN" "$C_RESET" "$id"
+        ;;
+      *)
+        bad=$((bad + 1))
+        printf '%s✗%s %s %s(HTTP %s)%s\n' \
+          "$C_RED" "$C_RESET" "$id" "$C_DIM" "$status" "$C_RESET" >&2
+        ;;
+    esac
+  done
+  if [ "$bad" -gt 0 ]; then
+    printf '%s%d respawned, %d failed%s\n' "$C_DIM" "$ok" "$bad" "$C_RESET"
+    exit 1
+  fi
+  printf '%s%d respawned%s\n' "$C_DIM" "$ok" "$C_RESET"
+}
+
 # `muxpad agent send <paneId> "message"` — deliver a message to the pane's
 # agent runner via the server-side queue. Exit codes: 0 sent, 0 queued
 # (behind an in-flight turn; noted on stderr), 1 rejected (reason printed).
@@ -1860,12 +1962,13 @@ cmd_agent_wait() {
 }
 
 cmd_agent() {
-  # `muxpad agent new|list|send|transcript|wait …` are HTTP verbs; anything else is
-  # the in-pane runner itself (including the server-written
+  # `muxpad agent new|list|respawn|send|transcript|wait …` are HTTP verbs;
+  # anything else is the in-pane runner itself (including the server-written
   # `muxpad agent --resume <sid>`).
   case "${1:-}" in
     new) shift; cmd_agent_new "$@"; return ;;
     list) shift; require_jq; cmd_agent_list "$@"; return ;;
+    respawn) shift; cmd_agent_respawn "$@"; return ;;
     send) shift; require_jq; cmd_agent_send "$@"; return ;;
     transcript) shift; require_jq; cmd_agent_transcript "$@"; return ;;
     wait) shift; require_jq; cmd_agent_wait "$@"; return ;;
@@ -2765,6 +2868,15 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      TURN is the session's running|idle turn
                                      state — NOT the five-state pane/tab
                                      `status` the list commands above print.
+  agent respawn <paneId> | --all [--backend=<id>]
+                                     re-exec a pane's agent runner in place.
+                                     startup_cmd carries --resume <sid>, so the
+                                     conversation comes back from its transcript
+                                     and ptyd is never touched (no terminal
+                                     dies). --all covers every tracked agent
+                                     session; --backend narrows it to one
+                                     harness. Per-pane result, exit 1 if any
+                                     failed.
   agent send <paneId> "message"      deliver a message to a pane's agent via
                                      the server queue. exit 0 = sent/queued
                                      (queued noted on stderr), 1 = rejected

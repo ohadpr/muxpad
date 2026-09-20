@@ -35,6 +35,15 @@ export interface BackendOptions {
    * behavior.
    */
   mode: AgentMode;
+  /**
+   * Override the auth self-heal back-off ladder (see auth-heal.ts). Absent in
+   * production — the harness never sets it, and the default ladder is the
+   * policy. It exists because the give-up path is reached by walking four
+   * rungs whose real delays total 85 seconds, and a test that waited them out
+   * would be a test nobody runs. The POLICY itself is unit-tested on its own
+   * injected clock; this is only for driving the backend through it.
+   */
+  authHealDelaysMs?: readonly number[];
 }
 
 /**

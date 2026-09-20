@@ -11,6 +11,9 @@ import { EventBus } from './events.js';
 import { localFunnel } from './funnel.js';
 import { PtydCache } from './ptyd-cache.js';
 import { createApp } from './server.js';
+import { AgentSessionStore } from './store/AgentSessionStore.js';
+import { PaneStore } from './store/PaneStore.js';
+import { TabStore } from './store/TabStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
 import { openDb } from './store/db.js';
 import { type SpawnedPtyd, spawnPtyd } from './test-helpers/spawnPtyd.js';
@@ -37,11 +40,17 @@ describe('scripts/muxpad HTTP wrapper', () => {
   let tmp: string;
   let ptyd: SpawnedPtyd;
   let workspaces: WorkspaceStore;
+  let tabs: TabStore;
+  let panes: PaneStore;
+  let agents: AgentSessionStore;
 
   beforeAll(async () => {
     tmp = mkdtempSync(join(tmpdir(), 'muxpad-cli-'));
     const db = openDb(':memory:');
     workspaces = new WorkspaceStore(db);
+    tabs = new TabStore(db);
+    panes = new PaneStore(db);
+    agents = new AgentSessionStore(db);
     ptyd = await spawnPtyd();
     const cache = new PtydCache();
     cache.attach(ptyd.client);
@@ -152,5 +161,120 @@ describe('scripts/muxpad HTTP wrapper', () => {
     });
     expect(second.stdout.trim()).toBe('https://stub-host.ts.net:8443/cli-fallback/');
     expect(second.stderr).toBe('');
+  });
+
+  // ── RECOVERING A ROOM FULL OF DEAD AGENT PANES ──────────────────────────
+  // On 2026-09-20 every Claude pane stopped answering at once and the fix was
+  // a respawn of all 24. There was no command for that, so it was attempted as
+  // a shell loop over `muxpad agent list` — and two attempts produced nothing
+  // at all, because the ids carried whitespace the loop did not strip and
+  // every URL built from them was malformed (curl returns 000 and says
+  // nothing). Both halves of that are pinned below.
+  describe('agent list / agent respawn', () => {
+    const env = () => ({ ...process.env, MUXPAD_API_URL: `http://127.0.0.1:${port}` });
+
+    /** An agent pane on a real ptyd, of a given backend. */
+    function makeAgentPane(assistant: string): string {
+      const ws = workspaces.create({ name: `ws-${assistant}-${Math.random()}` });
+      const tab = tabs.create({ name: 'T', layout: 'p1', workspace_id: ws.id });
+      const pane = panes.create({
+        tab_id: tab.id,
+        shell: '/bin/cat',
+        cwd: tmp,
+        startup_cmd: `muxpad agent --backend ${assistant}`,
+      });
+      agents.register({ pane_id: pane.id, assistant, session_id: `sid-${pane.id}` });
+      return pane.id;
+    }
+
+    it('list output carries no control characters and no trailing whitespace', async () => {
+      makeAgentPane('claude');
+      const { stdout } = await execFileAsync(MUXPAD_BIN, ['agent', 'list'], {
+        env: env(),
+        encoding: 'utf-8',
+      });
+      expect(stdout).not.toMatch(/\r/);
+      // Every column used to be padded — including the LAST one — so every row
+      // ended in invisible spaces that a caller had to know to strip.
+      for (const line of stdout.split('\n')) {
+        expect(line, `row has trailing whitespace: ${JSON.stringify(line)}`).toBe(
+          line.replace(/\s+$/, ''),
+        );
+      }
+    });
+
+    it('an id taken straight out of list output is usable as a URL component', async () => {
+      const id = makeAgentPane('claude');
+      const { stdout } = await execFileAsync(MUXPAD_BIN, ['agent', 'list'], {
+        env: env(),
+        encoding: 'utf-8',
+      });
+      const row = stdout.split('\n').find((l) => l.startsWith(id));
+      expect(row, `no row for ${id}`).toBeDefined();
+      const parsed = (row as string).split(/\s+/)[0] as string;
+      expect(parsed).toBe(id);
+      expect(encodeURIComponent(parsed)).toBe(parsed);
+    });
+
+    it('respawn --all covers every agent pane', async () => {
+      const a = makeAgentPane('claude');
+      const b = makeAgentPane('codex');
+      const { stdout } = await execFileAsync(MUXPAD_BIN, ['agent', 'respawn', '--all'], {
+        env: env(),
+        encoding: 'utf-8',
+      });
+      expect(stdout).toContain(a);
+      expect(stdout).toContain(b);
+      expect(stdout).toMatch(/respawned/);
+    });
+
+    it('--backend narrows it to one harness', async () => {
+      const claudePane = makeAgentPane('claude');
+      const codexPane = makeAgentPane('codex');
+      const { stdout } = await execFileAsync(
+        MUXPAD_BIN,
+        ['agent', 'respawn', '--all', '--backend=codex'],
+        { env: env(), encoding: 'utf-8' },
+      );
+      expect(stdout).toContain(codexPane);
+      expect(stdout).not.toContain(claudePane);
+    });
+
+    it('respawns a single named pane', async () => {
+      const id = makeAgentPane('claude');
+      const { stdout } = await execFileAsync(MUXPAD_BIN, ['agent', 'respawn', id], {
+        env: env(),
+        encoding: 'utf-8',
+      });
+      expect(stdout).toContain(id);
+      expect(stdout).toContain('1 respawned');
+    });
+
+    // A bulk recovery that stops at the first bad pane leaves the rest dead —
+    // which is the whole reason it is a command and not a shell loop.
+    it('keeps going past a pane that fails, and exits nonzero', async () => {
+      const good = makeAgentPane('claude');
+      await expect(
+        execFileAsync(MUXPAD_BIN, ['agent', 'respawn', 'NOSUCHPANEID'], {
+          env: env(),
+          encoding: 'utf-8',
+        }),
+      ).rejects.toMatchObject({ code: 1 });
+      // …and the good one still works on its own.
+      const { stdout } = await execFileAsync(MUXPAD_BIN, ['agent', 'respawn', good], {
+        env: env(),
+        encoding: 'utf-8',
+      });
+      expect(stdout).toContain('1 respawned');
+    });
+
+    it('refuses a pane id AND --all together rather than guessing', async () => {
+      await expect(
+        execFileAsync(MUXPAD_BIN, ['agent', 'respawn', '--all', 'SOMEPANE'], {
+          env: env(),
+          encoding: 'utf-8',
+        }),
+      ).rejects.toMatchObject({ code: 1 });
+    });
   });
 });

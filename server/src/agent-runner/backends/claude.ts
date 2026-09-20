@@ -29,6 +29,7 @@ import { readAgentInstructions } from '../../agent-instructions.js';
 import { readChatModeOverlay, wrapModeNote } from '../../agent-modes.js';
 import { findTranscript } from '../../chat/TranscriptReader.js';
 import { bold, dim } from '../ansi.js';
+import { AuthHealPolicy, authGiveUpNotice, isAuthFailureText } from '../auth-heal.js';
 import type { AgentMode, AgentQuestion, NotifyStatus, RunnerFrame } from '../protocol.js';
 import { ReplyBlockTracker, replyToolUseId } from '../reply-stream.js';
 import {
@@ -38,6 +39,7 @@ import {
   gateQuestion,
   isApproval,
 } from '../reversibility.js';
+import { markSessionTurned, sessionHadTurn } from '../session-marks.js';
 import { SubagentRoster } from '../subagent-roster.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
@@ -465,12 +467,50 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // conversation found"); start fresh UNDER that id instead, exactly like the
   // headless runner's fresh-mode fallback. Either way the pane keeps the id.
   const resumeSid = requestedSid && findTranscript(requestedSid) ? requestedSid : null;
+  // A resume we had to drop. Two very different situations wear the same face
+  // on disk — see session-marks.ts — and only the mark can tell them apart.
+  // When the session DID talk to someone and its transcript is gone anyway,
+  // history is being lost right here, and the old log line ("no transcript
+  // YET") said the opposite of the truth. Say it plainly, and reach the user:
+  // this is not something they can discover by reading a pane log later.
+  let lostHistoryNotice: string | null = null;
   if (requestedSid && !resumeSid) {
-    log(`no transcript yet for ${requestedSid} — starting the session fresh under that id`);
+    if (sessionHadTurn(requestedSid)) {
+      log(
+        `${bold('⚠ history lost')} — session ${requestedSid} had turns but its transcript is gone; starting a NEW conversation under that id`,
+      );
+      log(
+        dim(
+          '  (the transcript lives in <CLAUDE_CONFIG_DIR|~/.claude>/projects/<cwd>/<sid>.jsonl — a pruned dir, a moved config or a changed HOME all land here)',
+        ),
+      );
+      lostHistoryNotice = `${basename(process.cwd())}: an agent pane lost its conversation — session ${requestedSid.slice(0, 8)} had history but no transcript on disk, so it restarted empty.`;
+    } else {
+      log(`no transcript yet for ${requestedSid} — starting the session fresh under that id`);
+    }
   }
   const sid = requestedSid ?? randomUUID();
   // The id the live session actually runs under — updated if a resume drifts.
   let liveSid = sid;
+
+  /**
+   * Remember that this session has a transcript on disk, so a future respawn
+   * that cannot find one knows whether that is normal (never used) or a
+   * conversation going missing. See session-marks.ts.
+   *
+   * The mark is written only once `findTranscript` has actually SEEN the file,
+   * never merely because a turn happened: the mark's whole meaning is "a
+   * transcript existed here", and recording a turn that produced no file would
+   * make every later respawn cry wolf. Called at the end of a completed turn —
+   * by then the CLI has written it — and at most once per session id.
+   */
+  let markedSid: string | null = null;
+  function markTurn(): void {
+    if (markedSid === liveSid) return;
+    if (!findTranscript(liveSid)) return;
+    markedSid = liveSid;
+    markSessionTurned(liveSid);
+  }
 
   // -------------------------------------------------------------------------
   // Turn queue. Sends arriving from chat are serialized: one user turn in
@@ -495,6 +535,29 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     wakeQueue?.();
     wakeQueue = null;
   };
+
+  // ── Self-heal state (see auth-heal.ts for what this is for) ───────────────
+  // Bumped every time the SDK session is (re-)spawned. The user-message
+  // generator is bound to ONE epoch: a generator left behind by a re-exec must
+  // never hand the next user turn to the dead child, so it returns instead.
+  let sessionEpoch = 0;
+  /** The text of the turn in flight — what a re-exec has to put back. */
+  let currentTurnText: string | null = null;
+  /** The auth message seen during the current turn, if any. */
+  let authFailureThisTurn: string | null = null;
+  const authHeal = new AuthHealPolicy(
+    opts.authHealDelaysMs ? { delaysMs: opts.authHealDelaysMs } : {},
+  );
+  /**
+   * Set by the turn-result branch when a turn died of a dead credential; read
+   * by the session loop, which is the only place allowed to tear the session
+   * down and build another.
+   */
+  let healPlan: { delayMs: number; attempt: number; of: number; retry: string | null } | null =
+    null;
+  /** Set by shutdown(): a heal parked on its backoff must not resurrect the
+   *  session after the runner has been told to die. */
+  let shuttingDown = false;
 
   // -------------------------------------------------------------------------
   // ask_user: the chat-native question tool. Claude Code's own AskUserQuestion
@@ -801,18 +864,14 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     'reply',
     replyToolDescription(),
     {
-      text: z
-        .string()
-        .min(1)
-        .max(4000)
-        .describe(
-          // A schema `maxLength` would be theatre — both the Anthropic and
-          // OpenAI SDKs strip it off the wire schema, append it to this
-          // description, and only validate AFTER generation. So the budget is
-          // stated here, where it is actually read, as a TARGET rather than a
-          // cap: the named exemptions above must stay reachable.
-          'What the user reads. Markdown renders. One to three lines is the normal size; go longer only for an error, a security or data-loss warning, an irreversible action, or when depth was asked for.',
-        ),
+      text: z.string().min(1).max(4000).describe(
+        // A schema `maxLength` would be theatre — both the Anthropic and
+        // OpenAI SDKs strip it off the wire schema, append it to this
+        // description, and only validate AFTER generation. So the budget is
+        // stated here, where it is actually read, as a TARGET rather than a
+        // cap: the named exemptions above must stay reachable.
+        'What the user reads. Markdown renders. One to three lines is the normal size; go longer only for an error, a security or data-loss warning, an irreversible action, or when depth was asked for.',
+      ),
     },
     async (args, extra) => {
       const text = args.text.trim();
@@ -958,9 +1017,15 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     }
   }
 
-  async function* userMessages(): AsyncGenerator<SDKUserMessage> {
-    while (true) {
-      while (!inTurn && pendingTexts.length > 0) {
+  /**
+   * The session's user-turn stream, bound to the SDK session epoch that owns
+   * it. A re-exec bumps the epoch, so the generator feeding the DEAD child
+   * returns rather than racing the new one for the next queued message — the
+   * `wakeQueue` slot holds exactly one waiter and both generators want it.
+   */
+  async function* userMessages(epoch: number): AsyncGenerator<SDKUserMessage> {
+    while (epoch === sessionEpoch) {
+      while (epoch === sessionEpoch && !inTurn && pendingTexts.length > 0) {
         const text = pendingTexts.shift() as string;
         if (firstUserText === null) firstUserText = text;
         inTurn = true;
@@ -968,6 +1033,8 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         lastAssistantText = '';
         repliesThisTurn = 0;
         firstReplyText = '';
+        currentTurnText = text;
+        authFailureThisTurn = null;
         // A cron fire is a relay, not a person: the scheduler wrote it and
         // nobody is sitting there, so it may legitimately end silent. Read off
         // the message itself (the marker rides the text), exactly as ws.ts's
@@ -992,6 +1059,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           parent_tool_use_id: null,
         };
       }
+      if (epoch !== sessionEpoch) return;
       await new Promise<void>((r) => {
         wakeQueue = r;
       });
@@ -1113,7 +1181,10 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           },
         }
       : {}),
-    ...(resumeSid ? { resume: resumeSid } : { sessionId: sid }),
+    // NB: the session ANCHOR (`resume` / `sessionId`) is deliberately NOT here
+    // — it is the one option that differs between the boot session and a
+    // self-heal re-exec, so it is applied by spawnSession() below.
+    //
     // Yolo parity with `muxpad claude --dangerously-skip-permissions`. The SDK
     // auto-approves every tool call under bypass (canUseTool is never consulted
     // — spike-verified), so no permission prompt can wedge a headless turn.
@@ -1167,7 +1238,25 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     // CLAUDE.md, skills, MCP — same session the terminal TUI would run.
   };
 
-  const session = query({ prompt: userMessages(), options });
+  /**
+   * Spawn the SDK session — and therefore the `claude` CHILD PROCESS, which is
+   * the entire point of doing this more than once. The CLI reads its OAuth
+   * credential at process start and can never re-read it, so a credential that
+   * went bad under a live child is only fixable by getting a new child.
+   *
+   * The anchor is re-decided on every spawn rather than captured at boot: a
+   * session that has since drifted (a resume re-minted its id, `/clear` started
+   * a new one) must be re-anchored to what it is running NOW, and the same
+   * transcript check the boot path does applies — `resume` on a sid with no
+   * transcript kills the session, so a transcript-less id starts fresh UNDER
+   * itself and the pane keeps its identity either way.
+   */
+  function spawnSession(anchor: Pick<Options, 'resume' | 'sessionId'>): ReturnType<typeof query> {
+    return query({ prompt: userMessages(sessionEpoch), options: { ...options, ...anchor } });
+  }
+
+  sessionEpoch = 1;
+  let session = spawnSession(resumeSid ? { resume: resumeSid } : { sessionId: sid });
 
   // -------------------------------------------------------------------------
   // Session status for the chat header: model + context-window fill (+ the
@@ -1277,6 +1366,74 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     };
   }
 
+  /**
+   * Reach the user's devices for something the SESSION decided rather than the
+   * model — the `notify` tool's frame, with nobody's tool call waiting on the
+   * answer. The server still owns the rate limit and the presence check, so the
+   * unacknowledged `notify-result` that comes back is simply dropped.
+   */
+  function notifyUser(text: string): void {
+    if (!host.connected()) return;
+    emit({ t: 'notify', nid: randomUUID(), text: text.replace(/\s+/g, ' ').trim() });
+  }
+
+  /**
+   * Retire the `claude` child we have decided is broken — IMMEDIATELY, at the
+   * moment of the decision rather than after the back-off.
+   *
+   * The epoch bump is what makes the retirement real. Until it moves, the
+   * generator feeding this child is still the one a fresh `send()` would wake,
+   * and during a 60-second back-off rung that is a wide-open window in which
+   * the user types something and it is handed to a process that cannot
+   * authenticate — and then dies with it. Bumping first, and kicking so the
+   * old generator wakes up and returns, leaves new sends sitting in the queue
+   * for the replacement to pick up.
+   */
+  function retireSession(): void {
+    sessionEpoch += 1;
+    kick();
+    try {
+      session.close();
+    } catch {
+      // already gone
+    }
+  }
+
+  /**
+   * Spawn the replacement and put the user's turn back. The ONLY recovery for
+   * a dead credential — see auth-heal.ts.
+   */
+  async function performHeal(plan: NonNullable<typeof healPlan>): Promise<void> {
+    if (plan.delayMs > 0) {
+      log(
+        dim(
+          `auth: waiting ${Math.round(plan.delayMs / 1000)}s before re-exec ${plan.attempt}/${plan.of}`,
+        ),
+      );
+      await new Promise<void>((r) => {
+        const t = setTimeout(r, plan.delayMs);
+        t.unref?.();
+      });
+    }
+    if (shuttingDown) return;
+    log(
+      `${bold('↻ auth')} re-execing the session (attempt ${plan.attempt}/${plan.of}) — a fresh process re-reads the credential`,
+    );
+    // Half-generated reply blocks and the status cache belong to the process
+    // that is now dead; the new session re-inits and re-reports.
+    replyBlocks.clear();
+    lastStatus = null;
+    statusEpoch += 1;
+    if (plan.retry !== null) {
+      // Front of the queue: this message was never delivered to a model (the
+      // failed turn cost $0 and 0.05s), and it is what the user is waiting for.
+      pendingTexts.unshift(plan.retry);
+      log(dim('auth: the message that failed goes back at the front of the queue'));
+    }
+    session = spawnSession(findTranscript(liveSid) ? { resume: liveSid } : { sessionId: liveSid });
+    kick();
+  }
+
   // -------------------------------------------------------------------------
   // AgentBackend surface.
   // -------------------------------------------------------------------------
@@ -1371,6 +1528,15 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     // the next turn.
     for (const pq of pendingQuestions.values()) emit(pq.frame);
     if (lastStatus) emit(lastStatus);
+    // A conversation went missing at boot. The socket did not exist then, so
+    // this is the first moment the user can be told — and a lost conversation
+    // is precisely the kind of thing they must not find out about by noticing
+    // an agent has forgotten everything. Once only.
+    if (lostHistoryNotice) {
+      const notice = lostHistoryNotice;
+      lostHistoryNotice = null;
+      notifyUser(notice);
+    }
     // …and the live subagent roster. This is the piece that used to be missing:
     // the server rebuilt questions and status on reconnect but not the roster,
     // so a background subagent working through a server restart became
@@ -1418,6 +1584,10 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       lastAssistantText = '';
       repliesThisTurn = 0;
       firstReplyText = '';
+      // An autonomous turn has no text anyone is waiting on, so a re-exec has
+      // nothing to put back — see the turn-result branch.
+      currentTurnText = null;
+      authFailureThisTurn = null;
       // Nobody asked for this turn, so nobody is owed an answer for it — the
       // reply guard stays out of the way. (This is the distinction xAI's
       // harness never drew: they applied "you must always reply" everywhere,
@@ -1427,189 +1597,283 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       log(dim('▸ autonomous turn (wakeup/cron/background)'));
     };
 
-    for await (const msg of session) {
-      lastSessionActivityAt = Date.now();
-      // The roster's whole view of the stream, in one testable place. The
-      // branches below own the pane's LOG and the wire frames; this owns
-      // membership, and nothing else is allowed to touch it.
-      applySubagentMessage(subagents, msg as unknown as SubagentStreamMessage);
-      if (msg.type === 'system' && msg.subtype === 'init') {
-        log(dim(`ready · ${msg.model} · ${msg.tools.length} tools`));
-        // Init reports the concrete resolved model (e.g. 'claude-opus-4-8').
-        if (typeof msg.model === 'string' && msg.model) activeModel = msg.model;
-        void refreshStatus(true);
-        if (msg.session_id !== liveSid) {
-          // Session-id drift (resume minted a new id, /clear started fresh).
-          // Re-hello so the server re-points the tail and the self-heal
-          // startup_cmd at the real id — and drop the cached status: the old
-          // session's context fill must not be re-delivered over the new one.
-          log(dim(`session id drifted → ${msg.session_id}`));
-          liveSid = msg.session_id;
-          lastStatus = null;
-          statusEpoch++;
-          emit(hello());
-        }
-      } else if (msg.type === 'system' && isTaskLifecycle(msg.subtype)) {
-        // Roster handled above; nothing else to do with these.
-      } else if (msg.type === 'stream_event') {
-        const evt = msg.event as {
-          type?: string;
-          index?: number;
-          content_block?: unknown;
-          delta?: { type?: string; text?: string; partial_json?: string };
-        };
-        if (msg.parent_tool_use_id === null) {
-          // ANY main-thread stream event means a turn is under way — not just a
-          // text delta. A turn that opens with a tool call streams
-          // content_block_start for the tool_use long before its complete
-          // assistant message lands; waiting for text meant a Bash-first cron
-          // turn showed nothing at all (D7).
-          //
-          // Subagent stream events (parent_tool_use_id set) are deliberately
-          // NOT a turn signal: a background subagent legitimately emits them
-          // with no turn running (measured — see the roster note above), and
-          // treating those as a turn start would open a turn nothing ever
-          // closes. Their "working" comes from the durable roster instead.
-          noteAutonomousTurn();
-          if (
-            evt.type === 'content_block_delta' &&
-            evt.delta?.type === 'text_delta' &&
-            typeof evt.delta.text === 'string'
-          ) {
-            emit({ t: 'stream', delta: evt.delta.text });
+    // ── THE SESSION LOOP, once per `claude` CHILD PROCESS ────────────────────
+    // It used to be a bare `for await` because there was only ever one child.
+    // There can now be a second: a credential that dies under a running child
+    // is unfixable from inside it (the CLI reads its OAuth token once, at
+    // process start), so the turn-result branch can ask for a re-exec instead
+    // of surfacing `Not logged in` and leaving the pane dead until a human
+    // notices. `healPlan` is the only thing that brings us back around;
+    // anything else that ends the stream ends the runner, exactly as before.
+    while (true) {
+      healPlan = null;
+      await runSession();
+      const plan = healPlan;
+      healPlan = null;
+      if (!plan || shuttingDown) return;
+      await performHeal(plan);
+      if (shuttingDown) return;
+    }
+
+    async function runSession(): Promise<void> {
+      for await (const msg of session) {
+        lastSessionActivityAt = Date.now();
+        // The roster's whole view of the stream, in one testable place. The
+        // branches below own the pane's LOG and the wire frames; this owns
+        // membership, and nothing else is allowed to touch it.
+        applySubagentMessage(subagents, msg as unknown as SubagentStreamMessage);
+        if (msg.type === 'system' && msg.subtype === 'init') {
+          log(dim(`ready · ${msg.model} · ${msg.tools.length} tools`));
+          // Init reports the concrete resolved model (e.g. 'claude-opus-4-8').
+          if (typeof msg.model === 'string' && msg.model) activeModel = msg.model;
+          void refreshStatus(true);
+          if (msg.session_id !== liveSid) {
+            // Session-id drift (resume minted a new id, /clear started fresh).
+            // Re-hello so the server re-points the tail and the self-heal
+            // startup_cmd at the real id — and drop the cached status: the old
+            // session's context fill must not be re-delivered over the new one.
+            log(dim(`session id drifted → ${msg.session_id}`));
+            liveSid = msg.session_id;
+            lastStatus = null;
+            statusEpoch++;
+            emit(hello());
           }
-          // A `reply` being TYPED. Its text is a tool ARGUMENT, so it arrives
-          // as `input_json_delta` — which this branch used to drop on the
-          // floor, because the filter above only ever looked for `text_delta`.
-          // That discarded stream is the difference between a voice turn that
-          // starts speaking with the first phrase and one that waits for the
-          // agent to finish the paragraph. See reply-stream.ts for the decoder
-          // and the live-probed shapes.
-          else if (evt.type === 'content_block_start' && typeof evt.index === 'number') {
-            replyBlocks.start(evt.index, evt.content_block);
-          } else if (
-            evt.type === 'content_block_delta' &&
-            evt.delta?.type === 'input_json_delta' &&
-            typeof evt.delta.partial_json === 'string' &&
-            typeof evt.index === 'number'
-          ) {
-            const spoken = replyBlocks.delta(evt.index, evt.delta.partial_json);
-            if (spoken) emit({ t: 'speak-delta', id: spoken.id, delta: spoken.delta });
-          } else if (evt.type === 'content_block_stop' && typeof evt.index === 'number') {
-            replyBlocks.stop(evt.index);
-          }
-        }
-      } else if (msg.type === 'assistant' && msg.parent_tool_use_id === null) {
-        noteAutonomousTurn();
-        // Track the concrete model per assistant message so a mid-session switch
-        // (setModel) is reflected; refresh the status when it actually changes.
-        const m = msg.message.model;
-        if (typeof m === 'string' && m && m !== activeModel) {
-          activeModel = m;
-          void refreshStatus(false);
-        }
-        let msgText = '';
-        for (const block of msg.message.content ?? []) {
-          if (block.type === 'text' && block.text.trim()) {
-            msgText += (msgText ? '\n' : '') + block.text.trim();
-            if (!titleGenerated && firstAssistantText.length < 500) {
-              firstAssistantText += `${block.text.trim()}\n`;
+        } else if (msg.type === 'system' && isTaskLifecycle(msg.subtype)) {
+          // Roster handled above; nothing else to do with these.
+        } else if (msg.type === 'stream_event') {
+          const evt = msg.event as {
+            type?: string;
+            index?: number;
+            content_block?: unknown;
+            delta?: { type?: string; text?: string; partial_json?: string };
+          };
+          if (msg.parent_tool_use_id === null) {
+            // ANY main-thread stream event means a turn is under way — not just a
+            // text delta. A turn that opens with a tool call streams
+            // content_block_start for the tool_use long before its complete
+            // assistant message lands; waiting for text meant a Bash-first cron
+            // turn showed nothing at all (D7).
+            //
+            // Subagent stream events (parent_tool_use_id set) are deliberately
+            // NOT a turn signal: a background subagent legitimately emits them
+            // with no turn running (measured — see the roster note above), and
+            // treating those as a turn start would open a turn nothing ever
+            // closes. Their "working" comes from the durable roster instead.
+            noteAutonomousTurn();
+            if (
+              evt.type === 'content_block_delta' &&
+              evt.delta?.type === 'text_delta' &&
+              typeof evt.delta.text === 'string'
+            ) {
+              emit({ t: 'stream', delta: evt.delta.text });
             }
-            log(`${bold('claude')} ${block.text.trim()}`);
-          } else if (block.type === 'tool_use') {
-            const arg = summarizeToolInput(block.name, block.input);
-            log(`${dim('⚙')} ${block.name}${arg ? dim(` ${arg}`) : ''}`);
+            // A `reply` being TYPED. Its text is a tool ARGUMENT, so it arrives
+            // as `input_json_delta` — which this branch used to drop on the
+            // floor, because the filter above only ever looked for `text_delta`.
+            // That discarded stream is the difference between a voice turn that
+            // starts speaking with the first phrase and one that waits for the
+            // agent to finish the paragraph. See reply-stream.ts for the decoder
+            // and the live-probed shapes.
+            else if (evt.type === 'content_block_start' && typeof evt.index === 'number') {
+              replyBlocks.start(evt.index, evt.content_block);
+            } else if (
+              evt.type === 'content_block_delta' &&
+              evt.delta?.type === 'input_json_delta' &&
+              typeof evt.delta.partial_json === 'string' &&
+              typeof evt.index === 'number'
+            ) {
+              const spoken = replyBlocks.delta(evt.index, evt.delta.partial_json);
+              if (spoken) emit({ t: 'speak-delta', id: spoken.id, delta: spoken.delta });
+            } else if (evt.type === 'content_block_stop' && typeof evt.index === 'number') {
+              replyBlocks.stop(evt.index);
+            }
           }
+        } else if (msg.type === 'assistant' && msg.parent_tool_use_id === null) {
+          noteAutonomousTurn();
+          // Track the concrete model per assistant message so a mid-session switch
+          // (setModel) is reflected; refresh the status when it actually changes.
+          const m = msg.message.model;
+          if (typeof m === 'string' && m && m !== activeModel) {
+            activeModel = m;
+            void refreshStatus(false);
+          }
+          let msgText = '';
+          for (const block of msg.message.content ?? []) {
+            if (block.type === 'text' && block.text.trim()) {
+              msgText += (msgText ? '\n' : '') + block.text.trim();
+              if (!titleGenerated && firstAssistantText.length < 500) {
+                firstAssistantText += `${block.text.trim()}\n`;
+              }
+              // A DEAD CREDENTIAL ARRIVES HERE, as ordinary assistant prose —
+              // there is no error subtype and no throw, the turn that follows
+              // reports `success`, and this one line is the only signal on the
+              // wire. Recorded now, acted on at the turn's result (auth-heal.ts).
+              if (isAuthFailureText(block.text)) authFailureThisTurn = block.text.trim();
+              log(`${bold('claude')} ${block.text.trim()}`);
+            } else if (block.type === 'tool_use') {
+              const arg = summarizeToolInput(block.name, block.input);
+              log(`${dim('⚙')} ${block.name}${arg ? dim(` ${arg}`) : ''}`);
+            }
+          }
+          // Keep the LATEST prose-bearing assistant message as the turn's summary.
+          if (msgText) lastAssistantText = msgText;
+        } else if (msg.type === 'result') {
+          inTurn = false;
+          // A half-generated reply block cannot outlive the turn that was typing
+          // it — its index will be reused by the next turn's blocks.
+          replyBlocks.clear();
+          // Belt-and-braces: no question outlives its turn.
+          resolveAllQuestions('interrupted');
+          // Push any throttled-but-unsent progress. Deliberately does NOT drop
+          // entries: a run_in_background Task routinely outlives the turn that
+          // launched it, and clearing here is what made those subagents vanish.
+          applyTurnResult(subagents, msg.subtype, interruptRequested);
+          const ok = msg.subtype === 'success' || interruptRequested;
+          const secs = (msg.duration_ms / 1000).toFixed(1);
+          // ── RECOVERABLE-FATAL: the credential, not the turn ───────────────
+          // Every other way a turn can fail is about the WORK, and the session
+          // that produced it is still good. This one is about the PROCESS: the
+          // CLI cached an OAuth token at startup and cannot re-read the store,
+          // so this child will fail every turn forever, and a `/login` run
+          // anywhere — the thing that actually fixes it — will never reach it.
+          // Nothing below applies. No reply-guard promotion (the "reply" would
+          // be `Not logged in · Please run /login`, spoken in the agent's
+          // voice), no turn-done while we still intend to answer, no cost line.
+          if (authFailureThisTurn) {
+            const message = authFailureThisTurn;
+            authFailureThisTurn = null;
+            const decision = authHeal.decide();
+            if (decision.kind === 'heal') {
+              log(`${bold('✗ auth')} ${message}`);
+              // The user's turn is NOT swallowed and NOT reported as failed: it
+              // never reached a model (0.05s, $0), so it is re-sent to the new
+              // session and the turn stays open across the re-exec — the chat
+              // keeps its working indicator and the answer lands in the same
+              // turn the user started. An AUTONOMOUS turn has no such text, so
+              // its turn-done is emitted here and the re-exec is silent.
+              healPlan = {
+                delayMs: decision.delayMs,
+                attempt: decision.attempt,
+                of: decision.of,
+                retry: currentTurnText,
+              };
+              if (currentTurnText === null) emit({ t: 'turn-done', ok: false, error: message });
+              currentTurnText = null;
+              interruptRequested = false;
+              // Close the broken child HERE, not after the back-off — see
+              // retireSession. It also makes the `break` below trivially safe:
+              // the stream is already finishing when the loop asks it to stop.
+              retireSession();
+              break;
+            }
+            // Out of attempts, or already given up and inside the re-arm
+            // window. Either way this stops being something muxpad can fix, so
+            // it becomes something a HUMAN is told about — on their phone, not
+            // in a pane log nobody is reading.
+            const detail =
+              decision.kind === 'give-up'
+                ? `${decision.of} re-execs did not help`
+                : `re-arming in ${Math.round(decision.rearmInMs / 60_000)} min`;
+            log(`${bold('✗ auth')} ${message} ${dim(`(${detail})`)}`);
+            if (decision.kind === 'give-up') {
+              log(
+                `${bold('⚠')} giving up on self-heal — run ${bold('/login')} on this machine; this pane retries on its own afterwards`,
+              );
+              notifyUser(authGiveUpNotice(basename(process.cwd()), message));
+            }
+            currentTurnText = null;
+            interruptRequested = false;
+            emit({
+              t: 'turn-done',
+              ok: false,
+              error: `${message} — run /login on the muxpad host, then send again`,
+            });
+            kick();
+            void refreshStatus(false);
+            continue;
+          }
+          // A turn that got through on this credential forgives the ladder.
+          authHeal.ok();
+          currentTurnText = null;
+          // …and a turn the CLI actually ran has written the transcript a
+          // future respawn will look for. Record that it exists, once.
+          markTurn();
+          // ── THE GUARD ─────────────────────────────────────────────────────
+          // A user who sent a message must never get silence. If a turn a human
+          // was waiting on ends with zero reply calls, the harness speaks for the
+          // agent — falling back to the turn's final assistant text rather than
+          // inventing anything, because the fallback has to be something the
+          // agent actually said.
+          //
+          // This half owns the LIVE consequences: the pane log (so the miss is
+          // auditable rather than invisible) and the push/notification body,
+          // which used to read the last assistant text and must now prefer what
+          // was actually spoken. The rendered half lives in the chat client's
+          // voice transform, which applies the SAME predicate to the same
+          // transcript so a reload shows exactly this text as a real message.
+          //
+          // WHY PROMOTION AND NOT A FORCED RETRY. Claude Code's equivalent is
+          // stronger on paper: it injects a meta message and runs ANOTHER turn,
+          // so the model writes a real reply instead of the user reading
+          // working-out that was never addressed to them. We measured before
+          // building it, and the guard does not fire: zero of 24 human-initiated
+          // turns in the largest live Chat session (181 replies) and zero of 24
+          // across both arms of the brevity A/B ended with no reply call. The
+          // reason is structural rather than lucky — in Chat mode `reply` is the
+          // ONLY channel out, so a turn with nothing to say is a turn with
+          // nothing to render either way.
+          //
+          // Against zero occurrences, a forced retry costs: a synthetic user
+          // message in the transcript (which normalizes to a real user bubble
+          // unless a new marker + normalizer + renderer branch hides it), a
+          // once-per-turn latch so a model that stays silent cannot loop, and an
+          // ordering hazard against the server-side send queue, interrupts and
+          // cron fires — all in the turn-result path, which is the one place in
+          // this file where a bug is a wedged session. Promotion stays until the
+          // number says otherwise; re-run the measurement before revisiting.
+          const guarded = needsReplyFallback({
+            mode: currentMode,
+            humanInitiated: turnHuman,
+            replies: repliesThisTurn,
+            interrupted: interruptRequested,
+            failed: msg.subtype !== 'success',
+          });
+          if (guarded) {
+            log(
+              dim(
+                lastAssistantText.trim()
+                  ? '⚠ turn ended with no reply — speaking its final note for it'
+                  : '⚠ turn ended with no reply and nothing to fall back on',
+              ),
+            );
+          }
+          // Spoken text wins over scratchpad text for the push body; the guard's
+          // fallback is the scratchpad, promoted on purpose.
+          const summary = notifySnippet(firstReplyText || lastAssistantText);
+          if (interruptRequested) {
+            log(dim(`⏹ stopped after ${secs}s`));
+            emit({ t: 'turn-done', ok: true, ...(summary ? { summary } : {}) });
+          } else if (msg.subtype === 'success') {
+            log(dim(`✓ turn done · ${secs}s · $${msg.total_cost_usd.toFixed(2)}`));
+            emit({ t: 'turn-done', ok: true, ...(summary ? { summary } : {}) });
+            // First completed turn of a fresh session: self-title (resumed
+            // sessions keep whatever name their pane/tab already carries).
+            if (!resumeSid && !titleGenerated) void generateTitle();
+          } else {
+            const error = msg.errors?.join('; ') || msg.subtype;
+            log(`✗ turn failed: ${error}`);
+            emit({ t: 'turn-done', ok, error });
+          }
+          interruptRequested = false;
+          kick(); // release the next queued send, if any
+          void refreshStatus(false); // context fill changed with the turn
         }
-        // Keep the LATEST prose-bearing assistant message as the turn's summary.
-        if (msgText) lastAssistantText = msgText;
-      } else if (msg.type === 'result') {
-        inTurn = false;
-        // A half-generated reply block cannot outlive the turn that was typing
-        // it — its index will be reused by the next turn's blocks.
-        replyBlocks.clear();
-        // Belt-and-braces: no question outlives its turn.
-        resolveAllQuestions('interrupted');
-        // Push any throttled-but-unsent progress. Deliberately does NOT drop
-        // entries: a run_in_background Task routinely outlives the turn that
-        // launched it, and clearing here is what made those subagents vanish.
-        applyTurnResult(subagents, msg.subtype, interruptRequested);
-        const ok = msg.subtype === 'success' || interruptRequested;
-        const secs = (msg.duration_ms / 1000).toFixed(1);
-        // ── THE GUARD ─────────────────────────────────────────────────────
-        // A user who sent a message must never get silence. If a turn a human
-        // was waiting on ends with zero reply calls, the harness speaks for the
-        // agent — falling back to the turn's final assistant text rather than
-        // inventing anything, because the fallback has to be something the
-        // agent actually said.
-        //
-        // This half owns the LIVE consequences: the pane log (so the miss is
-        // auditable rather than invisible) and the push/notification body,
-        // which used to read the last assistant text and must now prefer what
-        // was actually spoken. The rendered half lives in the chat client's
-        // voice transform, which applies the SAME predicate to the same
-        // transcript so a reload shows exactly this text as a real message.
-        //
-        // WHY PROMOTION AND NOT A FORCED RETRY. Claude Code's equivalent is
-        // stronger on paper: it injects a meta message and runs ANOTHER turn,
-        // so the model writes a real reply instead of the user reading
-        // working-out that was never addressed to them. We measured before
-        // building it, and the guard does not fire: zero of 24 human-initiated
-        // turns in the largest live Chat session (181 replies) and zero of 24
-        // across both arms of the brevity A/B ended with no reply call. The
-        // reason is structural rather than lucky — in Chat mode `reply` is the
-        // ONLY channel out, so a turn with nothing to say is a turn with
-        // nothing to render either way.
-        //
-        // Against zero occurrences, a forced retry costs: a synthetic user
-        // message in the transcript (which normalizes to a real user bubble
-        // unless a new marker + normalizer + renderer branch hides it), a
-        // once-per-turn latch so a model that stays silent cannot loop, and an
-        // ordering hazard against the server-side send queue, interrupts and
-        // cron fires — all in the turn-result path, which is the one place in
-        // this file where a bug is a wedged session. Promotion stays until the
-        // number says otherwise; re-run the measurement before revisiting.
-        const guarded = needsReplyFallback({
-          mode: currentMode,
-          humanInitiated: turnHuman,
-          replies: repliesThisTurn,
-          interrupted: interruptRequested,
-          failed: msg.subtype !== 'success',
-        });
-        if (guarded) {
-          log(
-            dim(
-              lastAssistantText.trim()
-                ? '⚠ turn ended with no reply — speaking its final note for it'
-                : '⚠ turn ended with no reply and nothing to fall back on',
-            ),
-          );
-        }
-        // Spoken text wins over scratchpad text for the push body; the guard's
-        // fallback is the scratchpad, promoted on purpose.
-        const summary = notifySnippet(firstReplyText || lastAssistantText);
-        if (interruptRequested) {
-          log(dim(`⏹ stopped after ${secs}s`));
-          emit({ t: 'turn-done', ok: true, ...(summary ? { summary } : {}) });
-        } else if (msg.subtype === 'success') {
-          log(dim(`✓ turn done · ${secs}s · $${msg.total_cost_usd.toFixed(2)}`));
-          emit({ t: 'turn-done', ok: true, ...(summary ? { summary } : {}) });
-          // First completed turn of a fresh session: self-title (resumed
-          // sessions keep whatever name their pane/tab already carries).
-          if (!resumeSid && !titleGenerated) void generateTitle();
-        } else {
-          const error = msg.errors?.join('; ') || msg.subtype;
-          log(`✗ turn failed: ${error}`);
-          emit({ t: 'turn-done', ok, error });
-        }
-        interruptRequested = false;
-        kick(); // release the next queued send, if any
-        void refreshStatus(false); // context fill changed with the turn
       }
     }
   }
 
   function shutdown(): void {
+    shuttingDown = true;
     clearInterval(statusInterval);
     clearInterval(subagentKeepalive);
     if (interruptFailTimer !== null) clearTimeout(interruptFailTimer); // no spurious post-shutdown turn-done
