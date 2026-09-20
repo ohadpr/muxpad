@@ -93,6 +93,7 @@ import {
   scrollTopForSearchHit,
   shouldPersistChatScroll,
   shouldRememberPosition,
+  shouldRestorePosition,
 } from '../lib/chat-scroll';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
 import { useDictationCleanup } from '../lib/dictation-cleanup';
@@ -2525,6 +2526,14 @@ export function ChatPane({
       suppressPinUntil.current = 0;
       return;
     }
+    // A live search jump OWNS the scroll, and the memory below cannot describe
+    // it: `onScroll` records nothing while the hold is up (shouldRememberPosition),
+    // so what is stored is where the reader was BEFORE they searched. Re-asserting
+    // it here drags them out of the result and back into history — and this effect
+    // re-runs on every visibility flip, which is not a gesture and does not clear
+    // the jump. See shouldRestorePosition. The placement loop below re-asserts the
+    // hit on the same `showEpoch`, so the reader is never left unplaced.
+    if (!shouldRestorePosition({ searchJumpActive: searchJumpHold.current })) return;
     userScrolled.current = false;
     // Becoming visible starts the settling window (C) and invalidates the
     // last programmatic target: while hidden, the follow-bottom effect ran
@@ -2895,6 +2904,12 @@ export function ChatPane({
   // this file is to stamp `lastProgrammaticTop` BEFORE moving, and
   // `scrollIntoView` cannot say where it landed — so every frame of it would
   // read as the reader taking control.
+  //
+  // `showEpoch` is a re-run trigger for the same reason the restore effect has
+  // one, and it is the other half of that effect standing down for a live jump:
+  // a hide can cost the pane its scrollTop, and the reader who came back must
+  // find the hit where they left it rather than at the top of the document.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: showEpoch is a re-run trigger — a jump that owns the scroll must re-place itself when the pane becomes visible again.
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!active || !el || !jumpTargetId || !searchJumpHold.current) return;
@@ -2930,7 +2945,7 @@ export function ChatPane({
     return () => {
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [active, jumpTargetId]);
+  }, [active, jumpTargetId, showEpoch]);
 
   // ── Seek ──────────────────────────────────────────────────────────────────
   // The transcript opens on the server's 128 KB tail and archives run to tens

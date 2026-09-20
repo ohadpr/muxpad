@@ -17,6 +17,7 @@ import {
   scrollTopForSearchHit,
   shouldPersistChatScroll,
   shouldRememberPosition,
+  shouldRestorePosition,
 } from './chat-scroll';
 
 /** A remembered position, with the anchor fields defaulted. */
@@ -526,6 +527,68 @@ describe('a search jump does not poison the next ordinary open', () => {
       rememberChatScroll('pane-m', memo({ anchorId: 'evt#hit', ratio: 0.02, caughtUp: false }));
     }
     expect(opensAtNewest(recallChatScroll('pane-m'))).toBe(true);
+  });
+});
+
+// ── …and the READ half of the same hold ─────────────────────────────────────
+// `shouldRememberPosition` stops a jump WRITING the memory. That is only half
+// a rule: something still READS it. The settling restore re-runs on every
+// visibility transition (showEpoch) — an app backgrounding, a screen lock, a
+// browser-tab switch — none of which is a gesture and none of which clears the
+// jump (leaving the PANE does, which is why a tab switch was never the reported
+// case). So it would re-assert a memory the jump had deliberately frozen, and
+// the reader would be dragged out of the result they asked for and back into
+// history at a moment they did nothing at all.
+//
+// Measured on the real stack before this rule existed: parked at message 147
+// (scrollTop 8000), searched, landed on message 198 (scrollTop 22696),
+// backgrounded and returned — scrollTop 8000, and the highlight gone too. A
+// 14,696 px jump backwards, triggered by nothing the reader did. Verbatim the
+// report: "muxpad keeps jumping back to scroll history randomly."
+
+describe('shouldRestorePosition — a jump that owns the scroll is not overruled', () => {
+  it('stands the restore down while a jump is in flight', () => {
+    expect(shouldRestorePosition({ searchJumpActive: true })).toBe(false);
+  });
+
+  it('restores normally once the reader has taken the pane back', () => {
+    expect(shouldRestorePosition({ searchJumpActive: false })).toBe(true);
+  });
+
+  it('agrees with the WRITE half for every state of the hold', () => {
+    // The invariant, and the actual defect: these two are the read and write
+    // ends of ONE store. Whenever the memory declines to record where the
+    // reader is, the restore must decline to move them — otherwise the pane is
+    // re-asserting a position it knows is stale. Relaxing either side alone
+    // reopens the 14,696 px jump above.
+    for (const searchJumpActive of [true, false]) {
+      expect(shouldRestorePosition({ searchJumpActive })).toBe(
+        shouldRememberPosition({ searchJumpActive }),
+      );
+    }
+  });
+
+  it('never applies a memory that describes the pre-search position', () => {
+    // The scenario, end to end, in the units the store actually uses.
+    // 1. The reader parks in history. This IS recorded — no jump yet.
+    rememberChatScroll('pane-v', memo({ anchorId: 'evt#147', ratio: 0.2, caughtUp: false }));
+
+    // 2. They search and land on a much later message. Every frame of the
+    //    placement writes a scroll event; all of them are declined.
+    const jumpHolds = true;
+    if (shouldRememberPosition({ searchJumpActive: jumpHolds })) {
+      rememberChatScroll('pane-v', memo({ anchorId: 'evt#198', ratio: 0.57 }));
+    }
+
+    // 3. The app is backgrounded and comes back. The restore re-runs — and the
+    //    only memory it has is step 1's, which is 14,696 px from where the
+    //    reader is now looking. It must not apply it.
+    expect(shouldRestorePosition({ searchJumpActive: jumpHolds })).toBe(false);
+    expect(recallChatScroll('pane-v')?.anchorId).toBe('evt#147'); // stale, as designed
+
+    // 4. A wheel releases the hold: from here the reader is reading, the
+    //    memory tracks them again, and the restore is ordinary again.
+    expect(shouldRestorePosition({ searchJumpActive: false })).toBe(true);
   });
 });
 
