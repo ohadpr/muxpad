@@ -341,6 +341,41 @@ export function shouldRememberPosition(opts: { searchJumpActive: boolean }): boo
 }
 
 /**
+ * May the settling RESTORE place the reader?
+ *
+ * The exact counterpart of `shouldRememberPosition`, and it has to be, because
+ * the two are the read and write halves of one store. A jump deliberately
+ * records nothing — so for as long as it holds, the remembered position
+ * describes where the reader was BEFORE the search, which is by construction
+ * somewhere else. Anything that re-asserts that memory while the jump is up
+ * does not "restore" the reader; it drags them out of the result they asked
+ * for and back into history.
+ *
+ * And something does re-assert it, on a schedule nobody chose: the restore
+ * loop re-runs on every visibility transition (`showEpoch`) — a browser-tab
+ * switch, an app backgrounding, a screen lock, a bfcache restore. None of
+ * those is a gesture, none of them clears the jump (leaving the PANE does,
+ * which is why a tab switch was never the reported case), and the placement
+ * loop cannot push back because its own dependencies have not moved. Measured
+ * on the real stack: parked at message 147, searched, landed on message 198,
+ * backgrounded and returned — and was back at 147, a 14,696 px jump backwards,
+ * with the highlight gone too (the dismissal observer sees the hit leave the
+ * screen and concludes the reader scrolled away from it). Verbatim the report:
+ * "muxpad keeps jumping back to scroll history randomly."
+ *
+ * So while a jump owns the scroll, the restore stands down. It is not a race
+ * to be tuned — one of the two is answering a question the reader asked thirty
+ * seconds ago, and the other is answering one they asked before that.
+ *
+ * The hold is released by exactly the things that release it for the memory (a
+ * wheel, a finger, Escape, leaving the pane, the hit scrolling away), and the
+ * very next restore is ordinary again.
+ */
+export function shouldRestorePosition(opts: { searchJumpActive: boolean }): boolean {
+  return !opts.searchJumpActive;
+}
+
+/**
  * After an older-history batch prepends, where should `scrollTop` land?
  * Pinned readers stay at the bottom (follow new messages). Unpinned readers
  * keep the same messages under the viewport via the classic height-delta
