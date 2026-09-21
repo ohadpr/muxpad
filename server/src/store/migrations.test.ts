@@ -2,6 +2,26 @@ import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { LATEST_SCHEMA_VERSION, runMigrations } from './migrations.js';
 
+/**
+ * Everything that defines this database: the schema TEXT of every object, plus
+ * every row of every table. The unit of comparison for "a second migration
+ * pass is a no-op" — asserting that it didn't throw proves nothing about
+ * whether it kept the data.
+ *
+ * Rows are ordered by their first column so the comparison can't be fooled (or
+ * flaked) by SQLite's unordered scan.
+ */
+function fingerprint(db: Database.Database): unknown {
+  const master = db
+    .prepare('SELECT type, name, sql FROM sqlite_master ORDER BY type, name')
+    .all() as Array<{ type: string; name: string; sql: string | null }>;
+  const rows: Record<string, unknown[]> = {};
+  for (const t of master.filter((m) => m.type === 'table')) {
+    rows[t.name] = db.prepare(`SELECT * FROM "${t.name}" ORDER BY 1`).all();
+  }
+  return { master, rows };
+}
+
 describe('migrations', () => {
   it('creates the v1 baseline tables on a fresh db', () => {
     const db = new Database(':memory:');
@@ -19,6 +39,91 @@ describe('migrations', () => {
     const db = new Database(':memory:');
     runMigrations(db);
     expect(() => runMigrations(db)).not.toThrow();
+  });
+
+  // "Did not throw" is the weakest possible reading of idempotent, and it is
+  // the one the test above makes: a migration that dropped and recreated a
+  // table on its second pass — losing every row — would sail through it. Two
+  // of the migrations here DO rebuild tables (v6) and three rewrite existing
+  // rows in place (v8, v14, v26), which is exactly the population where a
+  // re-run can be silently destructive.
+  //
+  // So this one takes a full fingerprint — schema TEXT plus every row of every
+  // table — of a genuinely OLD database that has been upgraded to head, then
+  // migrates again and demands the fingerprint be unchanged.
+  it('a second pass over an upgraded old database changes nothing at all', () => {
+    const db = new Database(':memory:');
+    // A v6-era database: before icons (v8), before the chat-face reset (v14),
+    // before modes (v21) — so the upgrade walks every rewriting migration.
+    runMigrations(db, { upTo: 6 });
+    db.prepare(
+      'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+    ).run('w1', 'ws1', 'Work', 0, 1, 1);
+    const tab = db.prepare(
+      'INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)',
+    );
+    // A leading-emoji name (v8 lifts it into `icon`), a plain one (v8 invents
+    // a RANDOM icon — non-deterministic on the FIRST pass, which is precisely
+    // why the fingerprint is taken after it and not before).
+    tab.run('t1', 'sl1', '🌐 Home', '"p1"', 'w1', 0, 1, 1);
+    tab.run('t2', 'sl2', 'Notes', '"p2"', 'w1', 1, 1, 1);
+    const pane = db.prepare(
+      'INSERT INTO panes (id, tab_id, kind, shell, startup_cmd, cwd, created_at) VALUES (?,?,?,?,?,?,?)',
+    );
+    pane.run('p1', 't1', 'shell', '/bin/zsh', 'muxpad agent --mode do --resume abc', '/tmp', 1);
+    pane.run('p2', 't2', 'shell', '/bin/zsh', 'muxpad agent --mode deep', '/tmp', 1);
+    pane.run('p3', 't2', 'shell', '/bin/zsh', null, '/tmp', 1);
+
+    runMigrations(db);
+    expect(
+      (
+        db.prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1').get() as {
+          version: number;
+        }
+      ).version,
+    ).toBe(LATEST_SCHEMA_VERSION);
+    // The rebuild in v6 rewrites FK targets; a dangling one would survive
+    // silently and only surface as a cascade that never fires.
+    expect(db.pragma('foreign_key_check')).toEqual([]);
+    expect(db.pragma('integrity_check')).toEqual([{ integrity_check: 'ok' }]);
+    // The upgrade did its job before we pin it.
+    //
+    // Note which side wins, because it is not obvious and it is right: v21
+    // gives every pre-existing row `mode = 'deep'`, v26 renames that to
+    // 'agent', and v26 then rewrites startup_cmd to MATCH THE ROW — so the
+    // `--mode do` this command was carrying is stripped rather than adopted.
+    // For a database this old that is the only sound reading: modes did not
+    // exist when these rows were written, so a flag in the command is noise
+    // from a later hand-edit and the row is the authority.
+    expect(db.prepare('SELECT mode, startup_cmd FROM panes WHERE id = ?').get('p1')).toEqual({
+      mode: 'agent',
+      startup_cmd: 'muxpad agent --resume abc',
+    });
+    expect(db.prepare('SELECT startup_cmd FROM panes WHERE id = ?').get('p3')).toEqual({
+      startup_cmd: null, // a non-agent pane is never rewritten
+    });
+    expect(db.prepare('SELECT name, icon FROM tabs WHERE id = ?').get('t1')).toEqual({
+      name: 'Home', // v8 lifted the leading emoji out of the name…
+      icon: '🌐', // …and into the icon slot
+    });
+
+    const before = fingerprint(db);
+
+    // Prove the DETECTOR detects, or the assertion below is theatre: a
+    // fingerprint that quietly returned a constant would make every possible
+    // migration "idempotent". One row moved must show up, and moving it back
+    // must restore the fingerprint exactly.
+    db.prepare('UPDATE panes SET cwd = ? WHERE id = ?').run('/elsewhere', 'p3');
+    expect(fingerprint(db)).not.toEqual(before);
+    db.prepare('UPDATE panes SET cwd = ? WHERE id = ?').run('/tmp', 'p3');
+    expect(fingerprint(db)).toEqual(before);
+
+    runMigrations(db);
+    expect(fingerprint(db)).toEqual(before);
+    // …and a third, because "stable after two" and "stable forever" are not
+    // the same claim and this is free.
+    runMigrations(db);
+    expect(fingerprint(db)).toEqual(before);
   });
 
   it('records the current schema version', () => {
