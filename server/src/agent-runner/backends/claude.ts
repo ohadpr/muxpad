@@ -608,17 +608,50 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     });
   }
 
+  // ── LENGTH BUDGETS ARE TARGETS; ONLY STRUCTURE IS A HARD RULE ─────────────
+  /**
+   * Trim a display string to its budget, marking that it was trimmed. The
+   * counterpart to NOT capping these in the schema: something over budget is
+   * rendered short, never refused.
+   */
+  const clampDisplay = (s: string, max: number): string =>
+    s.length > max ? `${s.slice(0, max - 1)}…` : s;
+
+  // A zod `.max()` on a tool argument is NOT advice — it reaches the wire
+  // schema as `maxLength` and the MCP layer validates against it, so a string
+  // one word over budget comes back to the model as a tool ERROR in the middle
+  // of a turn. (Checkable from any agent pane: the tool listing a session
+  // actually receives shows `mcp__muxpad__notify` with `"maxLength": 180` and
+  // these questions with 16/80/300/500 — the exact zod numbers. An older
+  // comment in this file asserted the opposite, that both the Anthropic and
+  // OpenAI SDKs strip it; they do not, and `reply` was written around that
+  // false belief.)
+  //
+  // For a DISPLAY string the error is strictly worse than the overflow: a
+  // 20-character chip label renders a little wide, while a failed `ask_user`
+  // leaves an agent blocked on a decision it could not ask about. So the
+  // budgets live in the descriptions, where they steer generation, and the
+  // handler clamps what it renders.
+  //
+  // STRUCTURE stays hard — 1–3 questions, 2–5 options — because a one-option
+  // question is not a question and no amount of truncation makes it one. That
+  // is a thing the model must fix, which is what a tool error is FOR.
   const OptionSchema = z.object({
-    label: z.string().min(1).max(80).describe('Concise display text (1–5 words)'),
-    description: z.string().max(300).optional().describe('What choosing this means'),
+    label: z.string().min(1).describe('Concise display text (1–5 words; ~80 chars, then trimmed)'),
+    description: z
+      .string()
+      .optional()
+      .describe('What choosing this means (~300 chars, then trimmed)'),
   });
   const QuestionSchema = z.object({
     question: z
       .string()
       .min(1)
-      .max(500)
-      .describe('The complete question, ending with a question mark'),
-    header: z.string().min(1).max(16).describe('Very short chip label, e.g. "Approach"'),
+      .describe('The complete question, ending with a question mark (~500 chars, then trimmed)'),
+    header: z
+      .string()
+      .min(1)
+      .describe('Very short chip label, e.g. "Approach" (~16 chars, then trimmed)'),
     multiSelect: z.boolean().optional().describe('Allow selecting multiple options'),
     options: z.array(OptionSchema).min(2).max(5),
   });
@@ -628,13 +661,14 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     'Ask the user 1–3 multiple-choice questions when you are blocked on a decision only they can make. Each question renders as tappable options in the muxpad chat UI (the user may also type a custom answer). Use it sparingly: for reversible choices with a sensible default, proceed without asking.',
     { questions: z.array(QuestionSchema).min(1).max(3) },
     async (args) => {
+      // Clamped HERE rather than at the schema — see the budgets note above.
       const questions: AgentQuestion[] = args.questions.map((qq) => ({
-        question: qq.question,
-        header: qq.header,
+        question: clampDisplay(qq.question, 500),
+        header: clampDisplay(qq.header, 16),
         multiSelect: qq.multiSelect === true,
         options: qq.options.map((o) => ({
-          label: o.label,
-          ...(o.description ? { description: o.description } : {}),
+          label: clampDisplay(o.label, 80),
+          ...(o.description ? { description: clampDisplay(o.description, 300) } : {}),
         })),
       }));
       log(`${bold('? asking user')} ${questions.map((qq) => qq.header).join(', ')}`);
@@ -764,15 +798,24 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       text: z
         .string()
         .min(1)
-        .max(180)
         .describe(
-          'The notification body — one sentence, naming what happened and what it needs. This is all the user sees until they tap it.',
+          'The notification body — one sentence, naming what happened and what it needs, in about 180 characters (longer is trimmed). This is all the user sees until they tap it.',
         ),
     },
     async (args) => {
       // Newlines are invisible in a notification body and a lock screen collapses
       // them anyway; do it here so what we log is what they will read.
-      const text = args.text.replace(/\s+/g, ' ').trim();
+      //
+      // The length is TRIMMED, not refused. It used to be a zod `.max(180)`,
+      // which reaches the wire as `maxLength` and fails validation — turning
+      // the one call that is only ever made because something cannot wait into
+      // a mid-turn tool error, on a tool whose entire contract is "never give
+      // the model something to retry". ws.ts clamps the body to the same two
+      // lines before it reaches a device; this keeps the pane log honest about
+      // what was actually delivered. (Two constants, deliberately equal —
+      // NOTIFY_BODY_MAX in ws.ts is the server's own bound on a runner it does
+      // not trust to be the same version as itself.)
+      const text = clampDisplay(args.text.replace(/\s+/g, ' ').trim(), 180);
       if (!text) {
         return { content: [{ type: 'text' as const, text: 'Nothing sent — `text` was empty.' }] };
       }
@@ -864,12 +907,21 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     'reply',
     replyToolDescription(),
     {
-      text: z.string().min(1).max(4000).describe(
-        // A schema `maxLength` would be theatre — both the Anthropic and
-        // OpenAI SDKs strip it off the wire schema, append it to this
-        // description, and only validate AFTER generation. So the budget is
-        // stated here, where it is actually read, as a TARGET rather than a
-        // cap: the named exemptions above must stay reachable.
+      text: z.string().min(1).describe(
+        // The budget is stated HERE, in prose, as a TARGET rather than a cap —
+        // the named exemptions above must stay reachable.
+        //
+        // It used to be stated here AND enforced as `.max(4000)`, on the
+        // reasoning that "a schema maxLength would be theatre — both the
+        // Anthropic and OpenAI SDKs strip it off the wire schema". That
+        // reasoning was wrong (see the budgets note further up: the constraint
+        // is right there in the tool listing a live session receives), so the
+        // cap was real — and a reply is the ONE argument where a validation
+        // error is unrecoverable in kind. Chat mode has no other channel out:
+        // a refused `reply` is a turn that ends with zero replies, which the
+        // guard covers by promoting the model's private scratchpad into the
+        // user's answer. The 4,200-character security warning the exemption
+        // exists for was exactly the shape that hit it.
         'What the user reads. Markdown renders. One to three lines is the normal size; go longer only for an error, a security or data-loss warning, an irreversible action, or when depth was asked for.',
       ),
     },
