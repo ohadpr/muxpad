@@ -328,6 +328,48 @@ describe('VoiceSessionManager', () => {
     expect(closeRemote).not.toHaveBeenCalled();
   });
 
+  // ═══ A SESSION THAT CROSSES MIDNIGHT BELONGS TO BOTH DAYS ═══
+  //
+  // `settle` keyed the whole charge off the moment the call ENDED, and the
+  // ledger holds one day. So a call running at midnight had every second of
+  // itself charged against the new day — up to a full TTL of a budget it had
+  // not touched. On a 60-minute cap that is a sixth of the day gone before the
+  // user has said a word, on the one morning they would have no idea why.
+  //
+  // Conservative rather than a leak, but wrong in a way the user can feel: the
+  // refusal it produces ("today's voice budget is spent") names a number that
+  // is not true.
+  it('charges the new day only for the part of the call that happened in it', async () => {
+    vi.setSystemTime(new Date('2026-09-11T23:57:00'));
+    const m = make();
+    await start(m);
+    // Six minutes later it is tomorrow, and three of those minutes were.
+    vi.setSystemTime(new Date('2026-09-12T00:03:00'));
+    m.stop('live_123', 'client');
+    // Three minutes, not six.
+    expect(m.minutesToday()).toBeCloseTo(3, 1);
+  });
+
+  it('a call entirely inside one day is charged all of it', async () => {
+    vi.setSystemTime(new Date('2026-09-11T10:00:00'));
+    const m = make();
+    await start(m);
+    vi.setSystemTime(new Date('2026-09-11T10:06:00'));
+    m.stop('live_123', 'client');
+    expect(m.minutesToday()).toBeCloseTo(6, 1);
+  });
+
+  it('counts a still-running call that crossed midnight against today, from midnight', async () => {
+    vi.setSystemTime(new Date('2026-09-11T23:58:00'));
+    const m = make();
+    await start(m);
+    vi.setSystemTime(new Date('2026-09-12T00:04:00'));
+    // Live, unsettled: the ledger row still says yesterday. Four minutes of
+    // this call have happened today and they must be visible, or the budget
+    // check admits a session it should refuse.
+    expect(m.minutesToday()).toBeCloseTo(4, 1);
+  });
+
   it('survives a corrupt ledger row without bricking voice', async () => {
     globals.set(VOICE_USAGE_KEY, 'not json at all');
     const m = make();
