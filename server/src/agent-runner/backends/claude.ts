@@ -950,6 +950,10 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // The current turn's most recent assistant prose — rides along on turn-done so
   // the push notification can say WHAT the agent finished with, not just "done".
   let lastAssistantText = '';
+  /** The transcript id of {@link lastAssistantText}'s block, so the reply
+   *  guard's promoted speech can share an identity with the bubble that
+   *  renders for it. Null when the SDK message carried no uuid. */
+  let lastAssistantTextId: string | null = null;
   /**
    * Was the CURRENT turn started by somebody who is waiting for an answer?
    *
@@ -1698,9 +1702,18 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
             void refreshStatus(false);
           }
           let msgText = '';
-          for (const block of msg.message.content ?? []) {
+          // The transcript identity of the LAST prose block in this message —
+          // `<message uuid>:<block index>` is exactly what
+          // normalizeTranscriptLine builds the rendered event's id from. Kept
+          // so a promoted (guard) answer can be spoken under the same id as
+          // the bubble it promotes; see the guard at the turn's result.
+          let msgTextId: string | null = null;
+          const blocks = msg.message.content ?? [];
+          for (let bi = 0; bi < blocks.length; bi++) {
+            const block = blocks[bi] as (typeof blocks)[number];
             if (block.type === 'text' && block.text.trim()) {
               msgText += (msgText ? '\n' : '') + block.text.trim();
+              msgTextId = typeof msg.uuid === 'string' ? `${msg.uuid}:${bi}` : null;
               if (!titleGenerated && firstAssistantText.length < 500) {
                 firstAssistantText += `${block.text.trim()}\n`;
               }
@@ -1716,7 +1729,10 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
             }
           }
           // Keep the LATEST prose-bearing assistant message as the turn's summary.
-          if (msgText) lastAssistantText = msgText;
+          if (msgText) {
+            lastAssistantText = msgText;
+            lastAssistantTextId = msgTextId;
+          }
         } else if (msg.type === 'result') {
           inTurn = false;
           // A half-generated reply block cannot outlive the turn that was typing
@@ -1846,6 +1862,32 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
                   : '⚠ turn ended with no reply and nothing to fall back on',
               ),
             );
+            // …and SPEAKING it has to mean speaking it. The log line said
+            // "speaking its final note for it" while the only two outputs were
+            // the pane log and the push body, neither of which is audible:
+            // `speak`/`speak-delta` are the entire allow-list a voice session
+            // turns into speech (web/src/lib/voice/speak-bridge.ts — `stream`
+            // is deliberately NOT one, being the suppressed scratchpad), and
+            // they are emitted only inside the reply tool. So a guarded turn
+            // reached a live voice session as silence, under a `turn-done
+            // ok:true` that says nothing aloud: the user asked out loud, heard
+            // nothing, and kept paying for the session until its TTL.
+            //
+            // A pane switched Agent→Chat mid-session is the sharpest case —
+            // mcpServers is fixed at query() construction, so it has NO reply
+            // tool and EVERY one of its turns is a guarded turn — and the mic
+            // is offered regardless, because the UI reads the mode off the row.
+            //
+            // Safe to emit exactly here: `guarded` implies repliesThisTurn ===
+            // 0 (needsReplyFallback), so no speech has gone out under this
+            // turn and nothing can be said twice. It rides the SAME id as the
+            // bubble the promoted text renders as, which is what lets a
+            // client-side backstop for older runners (they emit no frame at
+            // all) dedupe against this instead of doubling it.
+            const promoted = lastAssistantText.trim();
+            if (promoted) {
+              emit({ t: 'speak', id: lastAssistantTextId ?? randomUUID(), text: promoted, n: 1 });
+            }
           }
           // Spoken text wins over scratchpad text for the push body; the guard's
           // fallback is the scratchpad, promoted on purpose.

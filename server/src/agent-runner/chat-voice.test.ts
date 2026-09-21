@@ -252,6 +252,100 @@ describe('THE GUARD — a human-initiated turn never ends in silence', () => {
     await fx.stop();
   });
 
+  // ── THE GUARD IS ALSO A VOICE PATH, AND IT USED NOT TO BE ─────────────────
+  // The guard's two outputs were the pane log and the push body. Neither is
+  // audible. `speak`/`speak-delta` are the ONLY frames a voice session turns
+  // into speech (speak-bridge.ts's allow-list; `stream` is deliberately
+  // nothing, being the suppressed scratchpad), and they exist only inside the
+  // reply tool — so a turn that ended with zero replies went out over a live
+  // voice session as SILENCE, with a `turn-done ok:true` that says nothing
+  // aloud. The user asked a question out loud, heard nothing back, and kept
+  // billing OpenAI minutes until the session's TTL.
+  //
+  // It is not a rare shape either: a pane switched Agent→Chat mid-session has
+  // NO reply tool at all (mcpServers is fixed at query() construction), so
+  // every one of its turns is a zero-reply turn — and the mic is offered
+  // anyway, because the UI reads the pane's mode off the row.
+  it('SPEAKS the promoted text — a voice session must not hear silence', async () => {
+    const fx = boot('chat');
+    await fx.send('where did the invoice go');
+    await fx.feed([
+      sdk.text('Checking the folder first.'),
+      sdk.text('Filed it under ~/Documents/Invoices/2026-09.pdf.'),
+      sdk.result('success'),
+    ]);
+    expect(guardFired(fx.logs)).toBe(true);
+    // Exactly one, carrying exactly what was promoted — the same text the push
+    // quotes and the same text the chat renders from the transcript.
+    expect(speaks(fx.sent).map((f) => f.text)).toEqual([
+      'Filed it under ~/Documents/Invoices/2026-09.pdf.',
+    ]);
+    await fx.stop();
+  });
+
+  it('speaks BEFORE the turn ends, so the turn-done is not the last word', async () => {
+    const fx = boot('chat');
+    await fx.send('status?');
+    await fx.feed([sdk.text('All three services are up.'), sdk.result('success')]);
+    const kinds = fx.sent.map((f) => f.t);
+    expect(kinds.indexOf('speak')).toBeGreaterThan(-1);
+    expect(kinds.indexOf('speak')).toBeLessThan(kinds.lastIndexOf('turn-done'));
+    await fx.stop();
+  });
+
+  it('the promoted speech carries the TRANSCRIPT identity of the text it promoted', async () => {
+    // Same id the rendered bubble gets (`<message uuid>:<block index>`), so a
+    // consumer can tie the two together — and so a client-side backstop for
+    // OLD runners (which emit no frame at all) dedupes against this one rather
+    // than saying the answer twice.
+    const fx = boot('chat');
+    const msg = sdk.text('Done — 3 files changed.');
+    await fx.send('ship it');
+    await fx.feed([msg, sdk.result('success')]);
+    expect(speaks(fx.sent)[0]?.id).toBe(`${(msg as { uuid: string }).uuid}:0`);
+    await fx.stop();
+  });
+
+  it('promotes NOTHING when there is nothing to fall back on', async () => {
+    // No prose, no reply: there is nothing honest to say, and an empty speak
+    // frame would be a voice session clearing its throat at silence.
+    const fx = boot('chat');
+    await fx.send('do the thing');
+    await fx.feed([sdk.result('success')]);
+    expect(speaks(fx.sent)).toHaveLength(0);
+    await fx.stop();
+  });
+
+  it('never promotes over a turn that spoke for itself', async () => {
+    // The promotion exists because `replies === 0`; a turn that replied must
+    // emit its replies and nothing else, or every answer is said twice.
+    const fx = boot('chat');
+    await fx.send('file the invoice');
+    await fx.feed([sdk.text('scratchpad, private')]);
+    await fx.reply('~/Documents/Invoices/2026-09.pdf');
+    await fx.feed([sdk.result('success')]);
+    expect(speaks(fx.sent).map((f) => f.text)).toEqual(['~/Documents/Invoices/2026-09.pdf']);
+    await fx.stop();
+  });
+
+  it('does not promote a STOPPED or FAILED turn into speech', async () => {
+    // Silence after Stop is what was asked for, and a failure already speaks
+    // as a failed turn-done (which the voice bridge does say aloud).
+    const stopped = boot('chat');
+    await stopped.send('long job');
+    await stopped.feed([sdk.text('half-finished thought')]);
+    stopped.backend.stop();
+    await stopped.feed([sdk.result('success')]);
+    expect(speaks(stopped.sent)).toHaveLength(0);
+    await stopped.stop();
+
+    const failed = boot('chat');
+    await failed.send('long job');
+    await failed.feed([sdk.text('half-finished thought'), sdk.result('error_during_execution')]);
+    expect(speaks(failed.sent)).toHaveLength(0);
+    await failed.stop();
+  });
+
   it('does NOT fire when the turn actually replied', async () => {
     const fx = boot('chat');
     await fx.send('file the invoice');
