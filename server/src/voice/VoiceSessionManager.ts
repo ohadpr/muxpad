@@ -93,6 +93,34 @@ export function dayKey(at: number): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+/** Local midnight at the start of `at`'s day. */
+function startOfDay(at: number): number {
+  const d = new Date(at);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+/**
+ * The seconds of a session that belong to the day `at` falls in.
+ *
+ * A CALL RUNNING AT MIDNIGHT BELONGS TO BOTH DAYS, and the ledger holds one.
+ * Charging the whole thing to whichever day it ENDED in pre-spends a budget
+ * that day never touched — up to a full TTL of it, which on the default 60
+ * minute cap is a sixth of the day, gone before the user has said a word, on
+ * the one morning they would have no idea why. It is conservative rather than a
+ * leak, but the refusal it produces names a number that is not true.
+ *
+ * So the charge is clipped at midnight. The {@link MIN_BILLED_SECONDS} floor
+ * still applies to a session that lived and died inside one day — it models
+ * OpenAI's 15-second upfront charge, and that charge happened when the session
+ * was created, on the START day. A session that crossed midnight already paid
+ * it yesterday, so today gets the elapsed seconds and no floor.
+ */
+function secondsOnDayOf(startedAt: number, endedAt: number): number {
+  const elapsed = Math.max(0, (endedAt - startedAt) / 1000);
+  if (dayKey(startedAt) === dayKey(endedAt)) return Math.max(MIN_BILLED_SECONDS, elapsed);
+  return Math.max(0, (endedAt - startOfDay(endedAt)) / 1000);
+}
+
 export interface VoiceStatus {
   configured: boolean;
   live: boolean;
@@ -272,12 +300,16 @@ export class VoiceSessionManager {
 
   /** Minutes spent today, including the one running right now. */
   minutesToday(): number {
-    const today = dayKey(this.now());
+    const now = this.now();
+    const today = dayKey(now);
     const l = this.readLedger();
     let seconds = this.settledToday(l, today);
-    if (l.open && l.day === today) {
-      seconds += Math.max(MIN_BILLED_SECONDS, (this.now() - l.open.startedAt) / 1000);
-    }
+    // The `l.day === today` test used to gate this, which meant a call that
+    // started yesterday and was still running contributed ZERO to today — the
+    // budget check would then admit a session against a ceiling it was already
+    // eating into. The open row is about a session, not about a day; what it
+    // owes today is the part of it that has happened today.
+    if (l.open) seconds += secondsOnDayOf(l.open.startedAt, now);
     return Math.round((seconds / 60) * 100) / 100;
   }
 
@@ -435,7 +467,7 @@ export class VoiceSessionManager {
     this.cancelDisconnect(s.paneId);
 
     const endedAt = Math.min(this.now(), s.deadline);
-    const charged = Math.max(MIN_BILLED_SECONDS, (endedAt - s.startedAt) / 1000);
+    const charged = secondsOnDayOf(s.startedAt, endedAt);
     const today = dayKey(endedAt);
     const l = this.readLedger();
     const spent = this.settledToday(l, today) + charged;
