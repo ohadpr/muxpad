@@ -12,6 +12,7 @@ import { MicGate } from './mic-gate';
 import { APPEND_TOKEN_CAP, type InboundEvent, type OutboundEvent } from './protocol';
 import {
   type AgentLink,
+  CANCEL_DEBOUNCE_MS,
   CANCEL_PROBE_QUIET_MS,
   DISPATCH_FILLER_MS,
   MUTE_RUNNER_DETAIL,
@@ -1889,5 +1890,78 @@ describe('a cancel is judged only once the sentence has stopped growing', () => 
     h.hear('stop', at + 10_000, at + 10_400);
     h.probe();
     expect(h.agent.stops).toBe(1);
+  });
+});
+
+// ═══ SAYING "STOP" AGAIN MADE "STOP" STOP WORKING ═══
+//
+// The debounce exists because a cancel reaches us twice BY DESIGN — once when
+// the model delegates it, once from the transcript backstop a beat later — and
+// the user should hear "Stopped." once, not twice.
+//
+// But the timestamp was stamped on every call, including the SUPPRESSED ones.
+// So each repeat pushed the window forward by its own arrival, and a user
+// saying "stop" every three seconds — which is exactly what someone does when
+// an agent is not dying fast enough — held the window open indefinitely.
+//
+// The consequence is not "the second stop is ignored", which would be fine. It
+// is that `cancel()` returns before `agent.stop()` and before the queue-cancel,
+// so NEW work dispatched during that period is uncancellable too. And the
+// suppressed branch says nothing aloud, so the user hears silence and assumes
+// it landed.
+describe('the cancel debounce measures from the cancel that actually fired', () => {
+  it('a repeated "stop" does not hold the window open forever', () => {
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('run the tests.');
+
+    /** Say it, and run past the probe so the backstop rules on it. */
+    const say = () => {
+      const at = h.clock.t;
+      h.hear('stop.', at + 100, at + 600);
+      h.probe();
+      // Cancelling clears `turnRunning`, and the backstop declines to judge
+      // anything when nothing is running. A cooperative stop takes a moment to
+      // land and the server starts the next turn regardless, so put one back.
+      h.turnStart();
+    };
+
+    say();
+    expect(h.agent.stops).toBe(1);
+    const firedAt = h.clock.t - 50; // the probe overshoots the timer by 50ms
+
+    // An impatient repeat, LATE in the window. Correctly suppressed — and,
+    // under the bug, it re-stamps, moving the window's origin to itself.
+    h.clock.advance(1900);
+    say();
+    expect(h.agent.stops).toBe(1);
+
+    // And now, comfortably past four seconds from the cancel that actually
+    // fired — but less than four seconds from the one that was suppressed.
+    h.clock.advance(600);
+    say();
+    expect(h.clock.t - firedAt).toBeGreaterThan(CANCEL_DEBOUNCE_MS);
+    expect(h.agent.stops).toBe(2);
+  });
+
+  it('still says "Stopped." exactly once for the two doors of one cancel', () => {
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('run the tests.');
+    const at = h.clock.t;
+    h.hear('stop.', at + 100, at + 600);
+    h.probe();
+    // The model's half, arriving a beat later through the same door the
+    // delegation uses.
+    h.delegate('d2', h.clock.t + 100);
+    h.settle();
+    expect(h.agent.stops).toBe(1);
+    expect(h.commentary().filter((t) => /stopped\./i.test(t))).toHaveLength(1);
   });
 });
