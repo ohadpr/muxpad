@@ -120,10 +120,23 @@ export async function createVoiceSession(
  * the component unmounted) and none of them can do anything useful with a
  * failure. The server expires sessions on its own, so a lost DELETE costs at
  * most the remainder of a TTL.
+ *
+ * `keepalive` IS LOAD-BEARING, not a flourish. One of those cleanup paths is
+ * `pagehide` (see lifecycle.ts's `onBackgrounded`), which on iOS is where a
+ * swipe-away lands with no visibility event before it — and a plain `fetch`
+ * started in a handler whose document is then discarded is simply cancelled.
+ * That is the exact moment nobody is left to hang up: the WebRTC call is
+ * browser↔OpenAI and survives the tab, and a frozen tab's WebSocket does not
+ * close promptly enough for the server's 15s disconnect grace to catch it, so
+ * the fallback is the full TTL. `keepalive` is the platform's one guarantee
+ * that a request outlives the page, and this is the request it is for.
  */
 export async function endVoiceSession(sessionId: string): Promise<void> {
   try {
-    await req<void>(`/api/voice/session/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+    await req<void>(`/api/voice/session/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+      keepalive: true,
+    });
   } catch {
     // best effort by design
   }
