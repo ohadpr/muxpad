@@ -557,6 +557,66 @@ export function scrollTopForAnchor(opts: {
 }
 
 /**
+ * Where `scrollTop` must land when a FOLD closes under the reader's feet.
+ *
+ * ── THE FOURTH WAY TO LOSE SOMEONE'S PLACE ───────────────────────────────────
+ * The three mechanisms this file already fights — a persisted nudge, a lost
+ * store, a restore overruling a jump — are all about which position we choose.
+ * This one is about the document changing height ABOVE the reader with nobody
+ * paying for it, which is the same shape as an older-history prepend and had no
+ * equivalent of `scrollTopAfterOlderPrepend`.
+ *
+ * A search can land inside a COLLAPSED action run, so ChatPane forces that run
+ * open around the highlight (a highlight nobody can see is no highlight). The
+ * force is deliberately not written into `expandedGroups`, so the run snaps
+ * shut again when the highlight is dismissed — and the signal for dismissal is
+ * an IntersectionObserver firing when the hit LEAVES THE SCREEN. Put those
+ * together and the common case is exact: the reader reads on past the hit, the
+ * hit scrolls off the top, and the run — now above them, off screen — collapses
+ * by its whole expanded height while they are mid-sentence.
+ *
+ * Measured on the real stack (Chromium, 300-turn transcript): a jump into a
+ * folded run opened it to 456 px; scrolling 1200 px onward moved a probe row
+ * from +682 to −948 instead of −518, and `scrollHeight` fell 26898 → 26468. A
+ * 430 px leap, unasked for, from an ordinary scroll. Real Chat-mode runs hold
+ * several scratchpad blocks, so the leap scales with them.
+ *
+ * So the run still snaps shut — the chat returns to its resting shape, which is
+ * what that decision is for — and the collapse is paid for here, in the one
+ * currency that keeps a reader still: the row under their eyes goes back where
+ * it was.
+ *
+ * `anchorRowTop` is that row's current top relative to the viewport, measured
+ * AFTER the collapse; null when it can't be measured (nothing anchorable, a
+ * hidden pane), and then the honest answer is to leave the scroll alone rather
+ * than guess. A PINNED reader is not re-anchored either: their anchor is the
+ * bottom, the re-pin observer already holds it, and two owners of one scroll
+ * position is how the last three of these started.
+ *
+ * Returns null for "don't touch it", never a fabricated target — and the target
+ * it does return is clamped for the reason every other one in this file is: the
+ * caller stamps it as `lastProgrammaticTop`, and a value the browser clamps
+ * would read as the reader taking control on the very next event.
+ */
+export function scrollTopAfterFoldChange(opts: {
+  pinned: boolean;
+  anchorRowTop: number | null;
+  anchorOffset: number;
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+}): number | null {
+  if (opts.pinned || opts.anchorRowTop === null) return null;
+  return scrollTopForAnchor({
+    scrollTop: opts.scrollTop,
+    rowTop: opts.anchorRowTop,
+    anchorOffset: opts.anchorOffset,
+    scrollHeight: opts.scrollHeight,
+    clientHeight: opts.clientHeight,
+  });
+}
+
+/**
  * Where a search hit should sit in the viewport, as a fraction from the top.
  *
  * Not the top (a message flush against the viewport edge looks like it was
