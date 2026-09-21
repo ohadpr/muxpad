@@ -77,6 +77,12 @@
   display: flex;
   flex-direction: column;
   gap: 22px;
+  /* Containing block for .chat-load-earlier-spinner, which must not take flow
+     space — see its note. Scoped here rather than on .chat-scroll so the
+     spinner rides WITH the content (it marks the top of the log, not the top
+     of the viewport) and so no modal/overlay elsewhere in the pane changes
+     which box it resolves against. */
+  position: relative;
   /* Bottom padding clears the floating composer (~90px tall + safe-area) so the
      last message settles just above it; earlier messages scroll frosted-through
      underneath. */
@@ -739,11 +745,29 @@
   font-size: 13px;
 }
 
-/* Top-of-list spinner while paging in older history on scroll-up. */
+/* Top-of-list spinner while paging in older history on scroll-up.
+
+   ABSOLUTE, for the same reason .chat-search-missed is (see its note): an
+   in-flow box here sits ABOVE the reader, so appearing and disappearing moves
+   every message under them by its own height. That is not a cosmetic flicker.
+   The older-prepend compensation in ChatPane measures scrollHeight WITH the
+   spinner and applies the delta after `older-done` has already removed it, so
+   the 46 px (24 px box + .chat-list's 22 px gap) is silently deducted from the
+   restore: measured on the real stack, a probe row sat 1044 px down the
+   viewport before a page and 1090 px after it — the reader dragged 46 px
+   further back into history on EVERY page, compounding across a scroll-up.
+
+   Out of flow, the document height simply never changes, so there is nothing
+   for anything to compensate. It is placed inside .chat-list's own 22 px top
+   padding, above the first message rather than over it. */
 .chat-load-earlier-spinner {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  right: 0;
   display: flex;
   justify-content: center;
-  padding: 4px 0 2px;
+  pointer-events: none;
 }
 .chat-load-earlier-spinner .chat-empty-spinner {
   width: 18px;
