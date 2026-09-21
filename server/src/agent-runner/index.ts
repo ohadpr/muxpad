@@ -32,6 +32,33 @@ import {
   parseFrame,
 } from './protocol.js';
 
+// `--help` STARTS A SESSION unless it is caught here, and that is not a
+// cosmetic complaint. Every other muxpad subcommand answers `--help` with
+// usage, so asking this one is a reflex — but the runner's argv parser only
+// looks for the flags it knows, so an unrecognised `--help` used to fall
+// through to "no --resume, no --backend": a brand-new Claude session, minted in
+// a pane that already had one. It says hello, the server's self-heal rewrite
+// dutifully re-points `current_sid` and `startup_cmd` at it (dropping the
+// pane's `--backend` along the way), and the real conversation is stranded
+// under an id nothing points at any more. That is exactly how pane
+// 01M2R8RT874AC74YR6899FH2ZG lost three days of history. The repair in
+// agent-resume-repair.ts gets it back; this stops it happening.
+//
+// Checked FIRST — before the pane-env guard — so `muxpad agent --help` answers
+// from an ordinary shell too.
+if (process.argv.slice(2).some((a) => a === '--help' || a === '-h')) {
+  console.log(`usage: muxpad agent [--backend claude|codex|cursor] [--mode chat|agent]
+                    [--model <id>] [--resume <session-id>] [--pick]
+
+  Runs the in-pane agent runner. Drive it from the pane's Chat face.
+  --resume is written into the pane's startup command by the server; you do
+  not normally type it.
+
+  Session-management subcommands (these do NOT start a runner):
+    muxpad agent new | list | respawn | send | transcript | wait`);
+  process.exit(0);
+}
+
 const paneId = process.env.MUXPAD_PANE_ID;
 const apiUrl = process.env.MUXPAD_API_URL;
 if (!paneId || !apiUrl) {
