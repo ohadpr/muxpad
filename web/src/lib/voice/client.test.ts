@@ -169,6 +169,28 @@ describe('endVoiceSession is best-effort by design', () => {
     await endVoiceSession('a b/c');
     expect((f.mock.calls[0] as unknown as [string])[0]).toBe('/api/voice/session/a%20b%2Fc');
   });
+
+  // THE CALL IS ISSUED FROM `pagehide`, AND THAT CHANGES WHAT IT MUST BE.
+  //
+  // `onBackgrounded` fires on `pagehide` as well as `visibilitychange`, which
+  // is the point: a swipe-away on iOS can freeze or discard the document with
+  // no visibility event first. But an ordinary `fetch()` started in a handler
+  // whose document is then discarded is CANCELLED — the browser is under no
+  // obligation to finish it, and on the one path where it matters it doesn't.
+  //
+  // `keepalive` is the whole contract for "this request must outlive the page".
+  // Without it the hang-up on a swipe-away is a coin toss, and losing it costs
+  // a live session until something else notices — the 15s disconnect grace if
+  // the WebSocket closes promptly, and the full 10-minute TTL if it doesn't,
+  // which is exactly what a frozen tab's socket does.
+  it('outlives the page it was fired from', async () => {
+    const f = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', f);
+    await endVoiceSession('s1');
+    const init = (f.mock.calls[0] as unknown as [string, RequestInit])[1];
+    expect(init.method).toBe('DELETE');
+    expect(init.keepalive).toBe(true);
+  });
 });
 
 describe('fetchVoiceStatus', () => {
