@@ -245,6 +245,29 @@ export class VoiceSessionManager {
     this.log(
       `muxpad voice: a session was still open when the server stopped; charged its full ${Math.round(l.open.ttlMs / 60_000)}-minute limit against today's budget (we cannot know when it really ended).`,
     );
+    // AND ASK UPSTREAM TO STOP IT. This is the one case the best-effort DELETE
+    // exists for — live.ts says so in as many words — and it was the one case
+    // that never made the call. A process that died mid-session cannot be the
+    // thing that hangs up: the peer connection is browser↔OpenAI and outlives
+    // us, the client holds a deadline WE will no longer enforce, and if that
+    // tab is frozen or gone there is nobody left to send `session.close`. We
+    // have the id; spend one request on it. Charging the ledger and saying
+    // nothing bounded our accounting and not the bill.
+    this.askRemoteToClose(l.open.id);
+  }
+
+  /** Fire-and-forget upstream close on a short leash. Nothing waits on it and
+   *  a failure is not an error — see the block comment in live.ts. */
+  private askRemoteToClose(sessionId: string): void {
+    if (!this.closeRemote || !sessionId) return;
+    const abort = new AbortController();
+    const t = setTimeout(() => abort.abort(), CLOSE_TIMEOUT_MS);
+    t.unref?.();
+    void this.closeRemote(sessionId, abort.signal)
+      .catch(() => {
+        // Best effort by construction.
+      })
+      .finally(() => clearTimeout(t));
   }
 
   /** Minutes spent today, including the one running right now. */
@@ -424,16 +447,7 @@ export class VoiceSessionManager {
       `muxpad voice: session closed (${reason}) after ${Math.round(charged)}s — ${(spent / 60).toFixed(1)} of ${this.capMinutes} minutes used today.`,
     );
 
-    if (this.closeRemote) {
-      const abort = new AbortController();
-      const t = setTimeout(() => abort.abort(), CLOSE_TIMEOUT_MS);
-      t.unref?.();
-      void this.closeRemote(s.id, abort.signal)
-        .catch(() => {
-          // Best effort by construction — see voice/live.ts.
-        })
-        .finally(() => clearTimeout(t));
-    }
+    this.askRemoteToClose(s.id);
   }
 
   // ── close on disconnect ───────────────────────────────────────────────
