@@ -7,9 +7,38 @@
 // nasty: the model hears its own tail, treats it as the user interrupting,
 // stops talking, and the user watches it talk over itself in a loop.
 //
-// TWO FILTERS, both on the TRANSCRIPT side rather than the audio side (there
-// is no audio to gate on WebRTC — the track goes straight to the peer, and
-// muting it would deafen the model rather than filter it):
+// ═══ WHAT ACTUALLY RUNS, AS OF TODAY — read this before the history below ═══
+//
+// This class has exactly ONE caller: session.ts's cancel backstop
+// (`judgeForCancel`), and it always passes `cancelShaped: true`. So the live
+// behaviour is two tests and only two:
+//
+//   1. A 120ms ABSOLUTE FLOOR ({@link MIN_CANCEL_UTTERANCE_MS}), against a
+//      transcriber hallucinating a word onto a burst of noise.
+//   2. While the post-playback window is armed, an ECHO TEST AGAINST THE
+//      MODEL'S OWN TRANSCRIPT — did it just say these words itself? Clearing
+//      it disarms the window entirely.
+//
+// The other two knobs below — {@link MIN_UTTERANCE_MS} and the time-only
+// echo-gated branch it pairs with — are UNREACHABLE in production. They are
+// the general-purpose half of the class, kept because they are the correct
+// answer for a non-cancel consumer and exercised by mic-gate.test.ts, but
+// nothing calls `judge` without `cancelShaped` today. This block exists
+// because the header used to describe them as the running behaviour, which was
+// false in a file whose entire history is people believing its comments.
+//
+// Both tests are on the TRANSCRIPT side rather than the audio side (there is no
+// audio to gate on WebRTC — the track goes straight to the peer, and muting it
+// would deafen the model rather than filter it).
+//
+// And note what this does NOT do: it does not gate what the MODEL hears. The
+// model is full-duplex and handles its own turn-taking, and fighting it there
+// would be both impossible and wrong. This gates only OUR reading of the
+// transcript — specifically, whether an utterance is substantial enough to
+// count as the user changing their mind, which is the thing that stops a
+// running agent turn and throws away minutes of work.
+//
+// ─── The two filters as originally designed, and why they were replaced ───
 //
 //   1. POST-PLAYBACK GATE. For a short window after the model stops producing
 //      output transcript, treat input as suspect. DISARMED BY REAL SPEECH: the
@@ -18,12 +47,7 @@
 //   2. MINIMUM DURATION. Sub-300ms utterances are lip smacks, "mm", breath,
 //      and echo fragments. Real interruptions are longer, every time.
 //
-// Note what this does NOT do: it does not gate what the MODEL hears. The model
-// is full-duplex and handles its own turn-taking, and fighting it there would
-// be both impossible and wrong. This gates only OUR reading of the transcript
-// — specifically, whether an utterance is substantial enough to count as the
-// user changing their mind, which is the thing that stops a running agent turn
-// and throws away minutes of work.
+// The second of those turned out to be measuring nothing at all — see below.
 //
 // ═══ AND THE CASE BOTH FILTERS WERE GETTING EXACTLY WRONG ═══
 //
@@ -85,9 +109,16 @@ export const POST_PLAYBACK_GATE_MS = 700;
 /**
  * Shorter than this is not an interruption.
  *
- * Read it as "at least two transcript deltas" — see the header. It is not
- * consulted on the cancel path any more, which is the only path that reaches
- * this class today.
+ * UNREACHABLE IN PRODUCTION, and named as such so nobody tunes it expecting an
+ * effect. Read it as "at least two transcript deltas" — the measurement in the
+ * header showed the API reports a fixed 200ms quantisation grid, so this floor
+ * rejects every single-delta utterance, which is what a one-word cancel always
+ * is. That is why the cancel path stopped consulting it, and the cancel path is
+ * the only path that reaches this class today.
+ *
+ * Kept rather than deleted because it is the right answer for a consumer that
+ * is NOT asking about a cancel — a judgement about substance where no closed
+ * set of words can answer the question directly. There is no such consumer yet.
  */
 export const MIN_UTTERANCE_MS = 300;
 
@@ -210,6 +241,8 @@ export class MicGate {
     if (this.isArmed(u.startMs)) {
       // Time says "this might be the model's voice". For a cancel we can ask
       // the model's transcript directly instead of guessing from the clock.
+      // The `!cancelShaped` branch is the general-purpose answer and has no
+      // caller today — see the header.
       if (!opts.cancelShaped) return 'echo-gated';
       if (looksLikeEcho(u.text, opts.recentOutput ?? '')) return 'echo-gated';
     }
