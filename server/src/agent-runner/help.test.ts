@@ -15,8 +15,8 @@
 // asserts we no longer hit.
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 
@@ -53,6 +53,53 @@ describe('the runner harness argv guard', () => {
   it.skipIf(!built)('takes -h too', async () => {
     const { stdout } = await execFileAsync(process.execPath, [RUNNER, '-h'], { timeout: 15_000 });
     expect(stdout).toContain('usage: muxpad agent');
+  });
+
+  it.skipIf(!built)('refuses a flag it does not know instead of running on', async () => {
+    // THE GENERAL CASE of the --help bug, at the binary. A misspelt `--resme`
+    // used to be indistinguishable from "no --resume at all": the scan looked
+    // for the four flags it knew and had no opinion about the rest, so the
+    // runner minted a brand-new session in a pane that already had one.
+    //
+    // Note what this proves and how. With no pane env, the OLD runner got all
+    // the way to the pane check and said "must run inside a muxpad pane" —
+    // which means it had already ACCEPTED this command line and would have
+    // started a session inside a real pane. It must not get there any more.
+    const env = { ...process.env };
+    // biome-ignore lint/performance/noDelete: the guard must fire before the pane check
+    delete env.MUXPAD_PANE_ID;
+    // biome-ignore lint/performance/noDelete: same
+    delete env.MUXPAD_API_URL;
+    const e = (await execFileAsync(process.execPath, [RUNNER, '--resme', 'abc-123'], {
+      env,
+      timeout: 15_000,
+    }).catch((err: unknown) => err)) as Error & { code?: number; stderr?: string };
+    expect(e).toBeInstanceOf(Error);
+    expect(e.code).toBe(2);
+    expect(e.stderr).not.toMatch(/must run inside a muxpad pane/);
+    expect(e.stderr).toMatch(/unrecognised option --resme/);
+    // …and it says what it would have accepted.
+    expect(e.stderr).toContain('usage: muxpad agent');
+  });
+
+  it.skipIf(!built)('accepts the --flag=value form the rest of the CLI teaches', async () => {
+    // `muxpad agent --resume=<sid>` used to mean, silently, "no --resume" —
+    // the same fresh-session-in-an-occupied-pane as --help, wearing the syntax
+    // `muxpad agent new --model=…` / `muxpad cron new --tz=…` taught the user.
+    // Getting as far as the pane check is the proof it parsed (what it parsed
+    // TO is nailed down exhaustively in args.test.ts).
+    const env = { ...process.env };
+    // biome-ignore lint/performance/noDelete: the pane check is the marker we want to reach
+    delete env.MUXPAD_PANE_ID;
+    // biome-ignore lint/performance/noDelete: same
+    delete env.MUXPAD_API_URL;
+    const e = (await execFileAsync(
+      process.execPath,
+      [RUNNER, '--backend=codex', '--mode=chat', '--resume=abc-123'],
+      { env, timeout: 15_000 },
+    ).catch((err: unknown) => err)) as Error & { code?: number; stderr?: string };
+    expect(e.code).toBe(1);
+    expect(e.stderr).toMatch(/must run inside a muxpad pane/);
   });
 
   it.skipIf(!built)('still refuses to run outside a pane', async () => {

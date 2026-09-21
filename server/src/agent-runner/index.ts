@@ -17,46 +17,36 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { BASELINE_AGENT_MODE } from '@muxpad/shared';
 import WebSocket from 'ws';
 import { dim } from './ansi.js';
+import { RUNNER_USAGE, parseRunnerArgs } from './args.js';
 import { createBackend } from './backends/index.js';
 import type { AgentBackend, RunnerHost } from './backends/types.js';
 import {
-  type AgentMode,
   CLOSE_RUNNER_DISPLACED,
   type RunnerFrame,
   type ServerFrame,
-  isBackendId,
   parseAgentMode,
   parseFrame,
 } from './protocol.js';
 
-// `--help` STARTS A SESSION unless it is caught here, and that is not a
-// cosmetic complaint. Every other muxpad subcommand answers `--help` with
-// usage, so asking this one is a reflex — but the runner's argv parser only
-// looks for the flags it knows, so an unrecognised `--help` used to fall
-// through to "no --resume, no --backend": a brand-new Claude session, minted in
-// a pane that already had one. It says hello, the server's self-heal rewrite
-// dutifully re-points `current_sid` and `startup_cmd` at it (dropping the
-// pane's `--backend` along the way), and the real conversation is stranded
-// under an id nothing points at any more. That is exactly how pane
-// 01M2R8RT874AC74YR6899FH2ZG lost three days of history. The repair in
-// agent-resume-repair.ts gets it back; this stops it happening.
+// ARGV IS PARSED BEFORE ANYTHING ELSE HAPPENS — before the pane-env guard, so
+// `muxpad agent --help` answers from an ordinary shell too, and before a single
+// session can be minted.
 //
-// Checked FIRST — before the pane-env guard — so `muxpad agent --help` answers
-// from an ordinary shell too.
-if (process.argv.slice(2).some((a) => a === '--help' || a === '-h')) {
-  console.log(`usage: muxpad agent [--backend claude|codex|cursor] [--mode chat|agent]
-                    [--model <id>] [--resume <session-id>] [--pick]
-
-  Runs the in-pane agent runner. Drive it from the pane's Chat face.
-  --resume is written into the pane's startup command by the server; you do
-  not normally type it.
-
-  Session-management subcommands (these do NOT start a runner):
-    muxpad agent new | list | respawn | send | transcript | wait`);
+// Argv that isn't fully understood does NOT start a session; see args.ts for
+// why that rule is written in blood (`--help`, `--resume=<sid>`, a misspelt
+// `--resme` and a missing value were all, silently, "mint a brand-new session
+// in a pane that already had one" — which strands its conversation the moment
+// the server's self-heal rewrite believes the hello).
+const parsed = parseRunnerArgs(process.argv.slice(2));
+if (parsed.kind === 'help') {
+  console.log(RUNNER_USAGE);
   process.exit(0);
+}
+if (parsed.kind === 'error') {
+  console.error(parsed.message);
+  process.exit(2);
 }
 
 const paneId = process.env.MUXPAD_PANE_ID;
@@ -68,20 +58,21 @@ if (!paneId || !apiUrl) {
   process.exit(1);
 }
 
-// --resume <ref> (written into the pane's startup_cmd by the server once the
-// session exists, so a respawned pane resumes instead of minting a session)
-// and --model <id> (written by the tabs route at creation, preserved across the
-// --resume rewrite). Both are opaque here — the backend interprets them.
-let requestedSid: string | null = null;
-let requestedModel: string | null = null;
-// --backend <id> selects the agent CLI/SDK (default claude). Baked into the
-// pane's startup_cmd by the tabs route + the server's self-heal rewrite.
-let requestedBackend: 'claude' | 'codex' | 'cursor' = 'claude';
-// --mode chat|agent selects the agent mode at LAUNCH. Written into the pane's
-// startup_cmd by the tabs route + the server's self-heal rewrite, so a
-// respawn boots in the pane's current mode.
+// The flags, already parsed and validated (args.ts):
+//   --resume <ref>  the session to continue — written into the pane's
+//                   startup_cmd by the server once the session exists, so a
+//                   respawned pane resumes instead of minting a new one.
+//   --model <id>    a launch-time model pin (tabs route; preserved across the
+//                   self-heal rewrite). Opaque here — the backend reads it.
+//   --backend <id>  which agent CLI/SDK drives the pane (default claude).
+//   --mode chat|agent  the LAUNCH mode.
+//   --pick          the pane was created "Agent" with no harness chosen yet:
+//                   start NO session, just idle so the chat face can show its
+//                   harness picker. Picking one hits POST
+//                   /panes/:id/agent-backend, which rewrites startup_cmd and
+//                   respawns us with a real --backend.
 //
-// ABSENT OR INVALID = BASELINE_AGENT_MODE ('agent') = exactly the pre-mode
+// ABSENT --mode = BASELINE_AGENT_MODE ('agent') = exactly the pre-mode
 // behavior, and that is deliberate even though the pane-level DEFAULT is now
 // Chat. A bare `muxpad agent` is what every pane created before modes existed
 // still carries, plus anything hand-typed in a terminal; making the flag's
@@ -89,27 +80,13 @@ let requestedBackend: 'claude' | 'codex' | 'cursor' = 'claude';
 // all of them on their next respawn. The default is applied where a pane is
 // CREATED (agent-tab.ts), which is the only place that knows it is a new
 // choice rather than an old row.
-let requestedMode: AgentMode = BASELINE_AGENT_MODE;
-{
-  const args = process.argv.slice(2);
-  const i = args.indexOf('--resume');
-  if (i !== -1 && args[i + 1]) requestedSid = args[i + 1] as string;
-  const m = args.indexOf('--model');
-  if (m !== -1 && args[m + 1]) requestedModel = args[m + 1] as string;
-  const b = args.indexOf('--backend');
-  if (b !== -1 && isBackendId(args[b + 1]))
-    requestedBackend = args[b + 1] as typeof requestedBackend;
-  const md = args.indexOf('--mode');
-  // Through the tolerant parser: a startup_cmd written by a pre-rename server
-  // says `--mode do`, and a runner that rejected it would boot the pane in the
-  // wrong mode rather than merely logging a complaint.
-  if (md !== -1) requestedMode = parseAgentMode(args[md + 1]) ?? requestedMode;
-}
-// --pick: the pane was created "Agent" without a harness chosen yet. Start NO
-// session — just idle so the chat face can show its harness picker; picking one
-// hits POST /panes/:id/agent-backend, which rewrites startup_cmd + respawns us
-// with a real --backend.
-const pickMode = process.argv.slice(2).includes('--pick');
+const {
+  requestedSid,
+  requestedModel,
+  requestedBackend,
+  requestedMode,
+  pick: pickMode,
+} = parsed.args;
 
 const ts = () => dim(new Date().toLocaleTimeString('en-GB'));
 
@@ -208,6 +185,11 @@ process.on('exit', (code) => {
 fileLog(
   `boot · pid=${process.pid} · cwd=${process.cwd()} · argv: ${process.argv.slice(2).join(' ') || '(none)'}`,
 );
+// Argv complaints that were not worth refusing to boot over (a `--mode`
+// spelling from a newer server). Logged here rather than swallowed: the pane's
+// mode is about to disagree with what someone typed, and the log is the only
+// place that can say so.
+for (const w of parsed.args.warnings) log(dim(w));
 
 // ---------------------------------------------------------------------------
 // Server link. The main server relays chat sends/stops here and fans the

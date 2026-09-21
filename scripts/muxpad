@@ -1973,11 +1973,24 @@ cmd_agent() {
     transcript) shift; require_jq; cmd_agent_transcript "$@"; return ;;
     wait) shift; require_jq; cmd_agent_wait "$@"; return ;;
   esac
+  local runner="$ROOT/server/dist/agent-runner/index.js" a
+  # `--help` is answered BEFORE the pane check, by the runner itself (one usage
+  # text, in server/src/agent-runner/args.ts). Asking a subcommand what it does
+  # is a reflex — and the reflex answer here used to be "must be run inside a
+  # muxpad pane", which teaches nothing and is what sent someone to type the
+  # bare command in a pane that already had a session (see args.ts).
+  for a in "$@"; do
+    case "$a" in
+      --help|-h)
+        if [ -f "$runner" ]; then exec node "$runner" --help; fi
+        echo "muxpad agent: runner not built ($runner missing) — run 'pnpm build' in $ROOT" >&2
+        exit 1 ;;
+    esac
+  done
   if [ -z "${MUXPAD_PANE_ID:-}" ]; then
     echo "muxpad agent: must be run inside a muxpad pane (no MUXPAD_PANE_ID)" >&2
     exit 1
   fi
-  local runner="$ROOT/server/dist/agent-runner/index.js"
   if [ ! -f "$runner" ]; then
     echo "muxpad agent: runner not built ($runner missing) — run 'pnpm build' in $ROOT" >&2
     exit 1
