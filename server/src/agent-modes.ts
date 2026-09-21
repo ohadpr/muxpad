@@ -60,7 +60,31 @@ import {
 /** Seed content — harness-neutral (claude/codex/cursor may all read it) and
  *  deliberately short: it competes for attention with the harness's own
  *  system prompt. Written to disk verbatim (under a generated-file banner) on
- *  every boot. */
+ *  every boot.
+ *
+ *  MEASURED, so the next person does not re-litigate it. A/B over real
+ *  `muxpad agent --mode chat` runners in an isolated instance, plus a census
+ *  of the live Chat transcripts either side of 1f92db6:
+ *
+ *    - The MULTIPLICITY fix took, completely. Live, 203 reply-bearing turns
+ *      before it ran a median of 2 replies/turn (64% multi-reply, max 6) at
+ *      1,874 chars/turn; the 34 turns after it are 1.00 replies/turn — zero
+ *      multi-reply turns — at 607. The A/B agrees: 12/12 Chat turns sent
+ *      exactly one message, against an Agent-mode control that sent up to 4.
+ *    - LENGTH is where it still sits above target: a median turn is ~515 chars
+ *      in the harness and ~607 live, against the 400 this file asks for.
+ *    - Three further rules aimed at that residue were written, run and
+ *      DISCARDED, because the number said no: "the offer replaces what it
+ *      offers", "reply with the path AND ONE SENTENCE, never the document
+ *      too", and a worked one-line exemplar of a three-item answer. On eight
+ *      matched open-ended turns the median went 515 → 544 and the max 820 →
+ *      1,027. Adding more words about brevity is not the lever; don't spend
+ *      the next attempt there.
+ *    - What DID move: the reply-guard bullet below. On trivial turns (a
+ *      lookup, a one-file chore) the model used to answer in plain text and
+ *      leave the harness to promote it — 6 of 10 matched turns. With that
+ *      bullet, 0 of 10 (Fisher p = 0.011), and reply length was unchanged
+ *      (~70–130 chars either way). It fixes the CHANNEL, not the size. */
 export const CHAT_MODE_SEED = `# Chat mode
 
 This session is in **Chat mode** — muxpad's own assistant. Optimize for
@@ -142,6 +166,10 @@ whole turn.** A full paragraph is already long.
   something finished, that is the moment to say nothing and keep working.
 - **One line is the target.** If a reply needs a blank line inside it, it has
   stopped being a message and become a report.
+- **Every turn ends with a \`reply\` — including the easy ones.** A turn whose
+  whole job was one lookup is where this is easiest to skip, because there was
+  nothing to do but answer. Answer through the tool: a one-line lookup is a
+  one-line \`reply\`.
 - **Your last \`reply\` ends the turn.** Anything worth saying belongs inside a
   \`reply\`; if it is not worth a \`reply\` it does not need writing at all.
 
