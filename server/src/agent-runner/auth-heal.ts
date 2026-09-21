@@ -44,12 +44,36 @@
  * ladder below. If the key really is invalid rather than stale, the re-execs
  * exhaust and give up loudly, which is the correct end state either way.
  */
-const AUTH_FAILURE_PATTERNS: readonly RegExp[] = [
+const AUTH_FAILURE_OPENINGS: readonly RegExp[] = [
   /^not logged in\b/,
   /^failed to authenticate\b/,
   /^invalid api key\b/,
-  /^oauth (session|token) (expired|revoked)\b/,
 ];
+
+/**
+ * An opening that is unambiguous on its own: it names the MECHANISM, which is
+ * not a thing a passing note says.
+ */
+const AUTH_FAILURE_COMPLETE: readonly RegExp[] = [/^oauth (session|token) (expired|revoked)\b/];
+
+/**
+ * …and what the rest of the message has to look like for an opening to count.
+ *
+ * The original rule was "one line, short, starts with a known phrase", on the
+ * reasoning that prose mentioning these "is multi-line, or long, or says
+ * something before it". That is true of prose and false of a SCRATCHPAD, which
+ * is what plain assistant text IS in Chat mode: short single-line notes, with
+ * nothing in front of them, written by agents who — in this repository — debug
+ * auth for a living. `Not logged in — that's the bug.` is 31 characters and
+ * satisfied all three conditions.
+ *
+ * So the message must also CONTINUE like an error rather than like a thought:
+ * after the opening it has to name the mechanism or the fix. Every verbatim
+ * variant from the incident does (`· Please run /login`, `: OAuth session
+ * expired and could not be refreshed`); a note about one does not.
+ */
+const AUTH_FAILURE_TAIL =
+  /\/login|\blog ?in\b|\boauth\b|\bcredentials?\b|\bapi key\b|\btokens?\b|\bexpired\b|\brefreshed?\b|\bauthenticat/;
 
 /**
  * The longest an auth message is allowed to be before we stop believing it is
@@ -62,16 +86,27 @@ const MAX_AUTH_MESSAGE_LEN = 200;
 /**
  * Is this assistant message the CLI saying its credentials are dead?
  *
- * Matched against the WHOLE message, not searched within it. Three conditions
- * together, and all three are load-bearing against the false positive: one
- * line, short, and STARTING with one of the known phrases. Prose that mentions
- * `Not logged in` is multi-line, or long, or says something before it.
+ * Matched against the WHOLE message, not searched within it. Four conditions,
+ * all load-bearing against the false positive: one line, short, STARTING with
+ * a known phrase, and CONTINUING like an error (see AUTH_FAILURE_TAIL) rather
+ * than like a note about one.
+ *
+ * The caller adds a fifth that text alone cannot supply — the turn made no
+ * tool calls — because the failing child never reaches a model at all. See the
+ * turn-result branch in backends/claude.ts.
  */
 export function isAuthFailureText(text: string): boolean {
   const s = text.trim();
   if (!s || s.length > MAX_AUTH_MESSAGE_LEN || s.includes('\n')) return false;
   const lower = s.toLowerCase();
-  return AUTH_FAILURE_PATTERNS.some((re) => re.test(lower));
+  if (AUTH_FAILURE_COMPLETE.some((re) => re.test(lower))) return true;
+  for (const re of AUTH_FAILURE_OPENINGS) {
+    const m = lower.match(re);
+    // The tail is searched AFTER the opening: `invalid api key` would
+    // otherwise satisfy its own tail requirement and prove nothing.
+    if (m && AUTH_FAILURE_TAIL.test(lower.slice(m[0].length))) return true;
+  }
+  return false;
 }
 
 /**
