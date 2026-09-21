@@ -35,11 +35,10 @@
 // NOT A SANDBOX. `eval "$(echo git push)"` walks straight through it, and no
 // amount of pattern work fixes that — the model can always construct a command
 // this file cannot read. The threat model is an ACCIDENT: an over-eager agent,
-// or, once voice exists, a MISHEARD instruction. `web/src/lib/dictation-cleanup.ts`
-// makes the argument for text — a misheard `pane send` is arbitrary shell
-// execution, so a human reads the composer before it runs — and voice deletes
-// the composer. This is what replaces that eyeball. Claiming more than that
-// would be worse than claiming nothing.
+// or, once voice exists, a MISHEARD instruction. In text the composer is the
+// eyeball — a misheard `pane send` is arbitrary shell execution, and a human
+// reads it before it runs. Voice deletes the composer. This is what replaces
+// that eyeball. Claiming more than that would be worse than claiming nothing.
 
 /**
  * SCOPE — narrow on purpose, and stated plainly.

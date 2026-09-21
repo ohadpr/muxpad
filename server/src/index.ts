@@ -286,10 +286,10 @@ const voice = new VoiceSessionManager({
   ...(voiceTransport
     ? { exchange: voiceTransport.exchange, closeRemote: voiceTransport.close }
     : {}),
-  // The same glossary the dictation-cleanup endpoint uses, behind the same
-  // cache. A live voice model mishears "muxpad" as "Max pad" for exactly the
-  // reason iOS dictation does, so it gets the same list rather than a second
-  // one that can drift out of sync with this install's names.
+  // The same glossary the headline writer uses, behind the same cache. A live
+  // voice model mishears "muxpad" as "Max pad" for exactly the reason iOS
+  // dictation does, so it gets the install's own list of names rather than a
+  // second one that can drift out of sync with it.
   instructions: glossaryInstructions(voiceGlossary),
   paneExists: (id) => paneStore.getById(id) !== undefined,
   voice: config.voice.voice,
