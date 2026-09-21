@@ -58,8 +58,28 @@
 // the sentence to finish before judging it, so "stop" does not fire before "the
 // dev server" has arrived — lives in session.ts, because it needs a clock.
 
-/** Filler that can precede a cancel without changing its meaning. Stripped
- *  repeatedly from the front, so "okay, no, wait — stop" reduces to "stop". */
+/**
+ * Filler that can precede a cancel without changing its meaning. Stripped
+ * repeatedly from the front, so "okay, no, wait — stop" reduces to "stop".
+ *
+ * ═══ THIS LIST IS WHAT MAKES THE CLOSED SET USABLE, AND IT WAS ENGLISH-ONLY ═══
+ *
+ * The whole-utterance rule is strict by design, so an utterance only ever
+ * matches if the filler around it has been removed first. With these two lists
+ * speaking English and the closed set speaking four languages, the non-English
+ * half matched the BARE imperative and nothing else — and attaching a
+ * politeness particle to an imperative is not an edge case in Spanish or
+ * Hebrew, it is the norm. "para, por favor" and "עצור בבקשה" are how people
+ * actually say it.
+ *
+ * So the outcome was not "a foreign cancel is ignored". It was the exact thing
+ * the header says the non-English set was added to prevent: the request to stop
+ * fell through to `enqueue` and was dispatched to Claude AS A NEW AGENT TURN.
+ *
+ * STRIPPING CANNOT CREATE A CANCEL. It only ever removes words from the ends,
+ * so the worst a wrong entry can do is expose a phrase that was already in the
+ * closed set. A task keeps its object, and an object is what disqualifies it.
+ */
 const LEAD_FILLER = new Set([
   'a',
   'ah',
@@ -89,6 +109,27 @@ const LEAD_FILLER = new Set([
   'well',
   'yeah',
   'yo',
+  // ── Spanish ────────────────────────────────────────────────────────────
+  'a ver',
+  'bueno',
+  'espera',
+  'oiga',
+  'oye',
+  'perdon',
+  'pero',
+  'vale',
+  'y',
+  // ── Hebrew ─────────────────────────────────────────────────────────────
+  'אה',
+  'אוקי',
+  'אוקיי',
+  'אז',
+  'בסדר',
+  'היי',
+  'טוב',
+  'לא',
+  'סליחה',
+  'רגע',
 ]);
 
 /** Politeness that can follow a cancel without changing its meaning. */
@@ -102,6 +143,18 @@ const TRAIL_FILLER = new Set([
   'thanks',
   'thank you',
   'yeah',
+  // ── Spanish. "ya" is the one that matters: "basta ya" and "para ya" are
+  //    the ordinary spoken forms, and neither reached the set without it.
+  'ahora',
+  'ahora mismo',
+  'gracias',
+  'por favor',
+  'porfavor',
+  'ya',
+  // ── Hebrew ─────────────────────────────────────────────────────────────
+  'בבקשה',
+  'עכשיו',
+  'תודה',
 ]);
 
 /**
@@ -157,6 +210,11 @@ const CANCEL_PHRASES = new Set([
   'עצור',
   'תעצור',
   'עצור את זה',
+  // The colloquial forms of the two above. `עצור את זה` was in the set and its
+  // far more common spoken variant `תעצור את זה` was not, which is the same
+  // "we listed the textbook form" gap the filler lists had.
+  'תעצור את זה',
+  'תפסיק את זה',
   'תפסיק',
   'די',
   'מספיק',
