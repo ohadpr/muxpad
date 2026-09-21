@@ -164,10 +164,14 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
   const [muted, setMuted] = useState(false);
   const soundCheckRef = useRef<number | undefined>(undefined);
 
-  const clearSoundCheck = () => {
+  // Stable: it touches a ref and nothing else, and both `enableSound` and
+  // `start` close over it — an identity that changed every render would either
+  // rebuild them both or (worse, and what the lint was pointing at) leave them
+  // holding a stale one.
+  const clearSoundCheck = useCallback(() => {
     if (soundCheckRef.current !== undefined) window.clearTimeout(soundCheckRef.current);
     soundCheckRef.current = undefined;
-  };
+  }, []);
 
   const enableSound = useCallback(async () => {
     const el = voiceAudioElement();
@@ -182,7 +186,7 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
     } catch {
       setMuted(true);
     }
-  }, []);
+  }, [clearSoundCheck]);
 
   const start = useCallback(() => {
     if (!enabled || !supported || sessionRef.current) return;
@@ -281,6 +285,27 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
         setStartedAt(Date.now());
         void fetchVoiceStatus().then(setStatus);
       } catch (e) {
+        // ═══ HANG UP FIRST. A FAILED START CAN STILL HAVE A PAID SESSION. ═══
+        //
+        // `exchangeSdp` sets `remoteId` the instant the POST answers — which is
+        // the instant a session exists at OpenAI and the meter starts. Every
+        // step after it can throw: the browser refusing the answer SDP, the
+        // session constructor, `session.start()`. All of them land here.
+        //
+        // This catch used to stop the mic tracks and render an error. It did
+        // not hang up. So a start that failed one line past the POST left the
+        // server session live for its ENTIRE TTL — ten minutes billed — and,
+        // because the manager allows one live session per install, 409'd every
+        // retry for those ten minutes against a call that never connected.
+        // Nothing logged it: no upstream error, no server line, just a mic
+        // button that refused and a bill.
+        clearSoundCheck();
+        closeTransport.current?.();
+        closeTransport.current = null;
+        deadline.current = null;
+        const orphan = remoteId.current;
+        remoteId.current = null;
+        if (orphan) void endVoiceSession(orphan);
         for (const t of stream.getTracks()) t.stop();
         setState('error');
         setDetail(
@@ -290,9 +315,10 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
               ? e.message
               : 'Voice couldn’t start.',
         );
+        void fetchVoiceStatus().then(setStatus);
       }
     })();
-  }, [enabled, supported, paneId, stop]);
+  }, [enabled, supported, paneId, stop, clearSoundCheck]);
 
   // The meter. Ticks locally rather than polling the server — this number is
   // shown next to a running cost, so it should never freeze because a fetch
