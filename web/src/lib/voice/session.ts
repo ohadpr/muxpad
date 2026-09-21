@@ -1340,15 +1340,26 @@ export class VoiceSession {
    */
   private cancel(speakUnder: VoiceTask | undefined, source: 'spoken' | 'delegated'): void {
     const now = this.sched.now();
-    const repeat = now - this.lastCancelAt < CANCEL_DEBOUNCE_MS;
-    this.lastCancelAt = now;
-    if (repeat) {
+    if (now - this.lastCancelAt < CANCEL_DEBOUNCE_MS) {
       // The same cancel arriving by the other door. Close the task that carried
       // it and say nothing more.
+      //
+      // AND DO NOT RE-STAMP. The timestamp used to be written on every call,
+      // suppressed ones included, so each repeat moved the window's origin to
+      // itself. A user saying "stop" every three seconds — which is exactly
+      // what someone does when an agent is not dying fast enough — held the
+      // window open indefinitely, and since this branch returns before
+      // `agent.stop()` and before the queue-cancel, NEW work dispatched in that
+      // period was uncancellable too. Silently: this branch says nothing aloud,
+      // so the user hears nothing and assumes it landed.
+      //
+      // The window is "for this long after the cancel that FIRED", which is
+      // what the constant's own comment says it is.
       if (speakUnder) this.registry.setStatus(speakUnder.id, 'cancelled');
       this.trace(`cancel (${source}) suppressed — already cancelled`);
       return;
     }
+    this.lastCancelAt = now;
 
     // Interrupt: a cancel confirmation is worthless late, and the user who just
     // said "stop" is by definition not mid-sentence.
