@@ -39,7 +39,7 @@ import {
   gateQuestion,
   isApproval,
 } from '../reversibility.js';
-import { markSessionTurned, sessionHadTurn } from '../session-marks.js';
+import { markSessionCleared, markSessionTurned, sessionHadTurn } from '../session-marks.js';
 import { SubagentRoster } from '../subagent-roster.js';
 import type { AgentBackend, BackendOptions, RunnerHost } from './types.js';
 
@@ -543,6 +543,9 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   let sessionEpoch = 0;
   /** The text of the turn in flight — what a re-exec has to put back. */
   let currentTurnText: string | null = null;
+  /** The message in flight is `/clear`, so the id rotation it causes is
+   *  DELIBERATE rather than drift. See the init branch. */
+  let clearRequested = false;
   /** The auth message seen during the current turn, if any. */
   let authFailureThisTurn: string | null = null;
   /**
@@ -1109,6 +1112,13 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         // and a server restart. A slash command is the user talking to the
         // SESSION (`/compact`, `/clear`), not asking the agent anything.
         turnHuman = parseCronMarker(text) === null && !text.startsWith('/');
+        // `/clear` is the one message whose SIDE EFFECT is a new session id.
+        // Remembered from here (not from slash(), which only queues it) so the
+        // id rotation it causes can be told apart from a drift nobody asked
+        // for — see the init branch. Set per dequeued message, so it is also
+        // reset by the next one: a rotation that arrives after the clear's own
+        // result still counts, a rotation after the next message does not.
+        clearRequested = text === '/clear';
         emit({ t: 'turn-start' });
         log(`${bold('▸ user')} ${text.length > 200 ? `${text.slice(0, 200)}…` : text}`);
         // A pending mode switch rides the next REAL message. Slash commands
@@ -1701,6 +1711,20 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
             // startup_cmd at the real id — and drop the cached status: the old
             // session's context fill must not be re-delivered over the new one.
             log(dim(`session id drifted → ${msg.session_id}`));
+            // WHICH KIND OF ROTATION WAS THIS. A resume that re-minted its id
+            // leaves the pane pointing at an empty session while the real
+            // conversation sits on disk under the old one — a drift, and the
+            // resume repair's whole job. A `/clear` leaves the pane pointing
+            // at an empty session because the user ASKED for an empty session.
+            // On disk they are the same thing, so the repair would walk the
+            // pane's history and hand back the conversation that was just
+            // cleared, context, cost and all, calling it a recovery. The
+            // difference is intent, it exists only here, and this is where it
+            // is written down (session-marks.ts).
+            if (clearRequested) {
+              markSessionCleared(msg.session_id);
+              log(dim('  (cleared on purpose — the resume repair will leave it alone)'));
+            }
             liveSid = msg.session_id;
             lastStatus = null;
             statusEpoch++;

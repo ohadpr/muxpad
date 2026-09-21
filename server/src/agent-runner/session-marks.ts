@@ -77,3 +77,44 @@ export function sessionHadTurn(sid: string): boolean {
     return false;
   }
 }
+
+// ---------------------------------------------------------------------------
+// THE SECOND MARK: "this session is empty ON PURPOSE."
+//
+// `/clear` rotates the session id, and the pane ends up pointing at a brand-new
+// session with no transcript — which is byte-for-byte the shape the resume
+// repair exists to undo (a pointer that DRIFTED onto an empty session while the
+// real conversation sits on disk under an older id). Left alone, a restart
+// before the next message walks the pane's history, finds the conversation the
+// user just cleared, and writes it back: the chat returns, with its context and
+// its cost, announced as a recovery.
+//
+// The two cases differ only by INTENT, and intent exists for one instant — the
+// moment the clear is asked for. So it is recorded then, on the sid the clear
+// produced, in the same directory and with the same best-effort rules as the
+// turn mark above. `<sid>.cleared` can never collide with a sid: markPath's
+// charset has no dot in it.
+// ---------------------------------------------------------------------------
+
+/** Record that `sid` is the empty session a deliberate `/clear` produced. */
+export function markSessionCleared(sid: string): void {
+  const p = markPath(sid);
+  if (!p) return;
+  try {
+    mkdirSync(sessionMarkDir(), { recursive: true });
+    writeFileSync(`${p}.cleared`, '');
+  } catch {
+    // Same contract as the turn mark: diagnostic, never load-bearing.
+  }
+}
+
+/** Was `sid` started by a deliberate `/clear` rather than by a drift? */
+export function sessionWasCleared(sid: string): boolean {
+  const p = markPath(sid);
+  if (!p) return false;
+  try {
+    return existsSync(`${p}.cleared`);
+  } catch {
+    return false;
+  }
+}
