@@ -159,26 +159,35 @@ export async function createRtcTransport(deps: RtcTransportDeps): Promise<RtcTra
     else if (pc.connectionState === 'closed') setState('closed');
   };
 
-  // (3) Offer → local description → wait for ICE.
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  await waitForIce(pc);
-
-  // (4) One-shot exchange through muxpad. No audio crosses muxpad's server.
-  const localSdp = pc.localDescription?.sdp ?? offer.sdp ?? '';
+  // (3)(4) Offer → local description → ICE → the one-shot exchange → answer.
+  //
+  // ALL OF IT UNDER ONE catch, because from the exchange onwards a failure here
+  // is a PAID session. The catch used to wrap only `exchangeSdp`, which is the
+  // one step whose failure means nothing was created; the step after it —
+  // `setRemoteDescription`, the browser refusing OpenAI's answer — left this
+  // peer connection open with a live session on the other end of it, and threw.
+  // Whoever caught that had no handle on the pc and no way to close it.
   let answer: { sdp: string; sessionId: string };
   try {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await waitForIce(pc);
+    const localSdp = pc.localDescription?.sdp ?? offer.sdp ?? '';
     answer = await deps.exchangeSdp(localSdp);
+    await pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
   } catch (e) {
     try {
       pc.close();
     } catch {
       // already gone
     }
+    // The mic too: the caller's gesture opened it, and a start that never
+    // returns a transport leaves nobody holding the handle that turns the
+    // phone's recording indicator off.
+    for (const t of deps.micStream.getTracks()) t.stop();
     setState('failed', e instanceof Error ? e.message : 'sdp exchange failed');
     throw e;
   }
-  await pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
 
   return {
     get state() {
