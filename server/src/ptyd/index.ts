@@ -278,6 +278,14 @@ function attachControl(
         ws.send(encodeResponse(msg.id, { entries: pm.snapshotCwds() }));
         return;
       }
+      if (msg.method === 'flushDecorations') {
+        // Same shape and same reason as flushCwds, for title/fg/attention:
+        // the PUSH side is diff-driven and its diff maps are in THIS process,
+        // so a reconnecting main server is told nothing about values that
+        // haven't moved. This is how it harvests them in one round trip.
+        ws.send(encodeResponse(msg.id, { entries: pm.snapshotDecorations() }));
+        return;
+      }
       ws.send(encodeErrorResponse(msg.id, `unknown method: ${msg.method}`));
     } catch (e) {
       ws.send(encodeErrorResponse(msg.id, String(e)));

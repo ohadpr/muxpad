@@ -228,6 +228,42 @@ export class PaneManager {
     return out;
   }
 
+  /**
+   * The same full-snapshot escape hatch {@link snapshotCwds} is for cwd, for
+   * the other three decorations — and it exists for the same reason, which cwd
+   * learned years earlier than title/fg/attention did.
+   *
+   * `emitDecorations` is DIFF-driven, and the diff maps (`lastTitle`,
+   * `lastFg`, `lastAttention`) are keyed by pane id in THIS process, not per
+   * subscriber. ptyd outlives the main server, so a fresh main server attaches
+   * to a ptyd that has already decided every current value is "unchanged" and
+   * is told nothing at all. Its cache reads null/false — not for a boot
+   * window, but until the value happens to MOVE. For a pane parked in one
+   * foreground process, or one whose bell is still ringing, that is the rest
+   * of the pane's life.
+   *
+   * Deliberately does NOT touch the diff maps: this is a read, and poisoning
+   * them here would suppress a genuine change that lands a moment later.
+   */
+  snapshotDecorations(): Array<{
+    id: string;
+    title: string | null;
+    fg: string | null;
+    attention: boolean;
+  }> {
+    const out: Array<{ id: string; title: string | null; fg: string | null; attention: boolean }> =
+      [];
+    for (const [id, runtime] of this.runtimes) {
+      out.push({
+        id,
+        title: runtime.getCurrentTitle(),
+        fg: this.foregroundCmd.get(id) ?? null,
+        attention: runtime.getNeedsAttention(),
+      });
+    }
+    return out;
+  }
+
   getOrCreate(spec: PaneRuntimeSpec): PaneRuntime {
     const existing = this.runtimes.get(spec.id);
     if (existing) return existing;

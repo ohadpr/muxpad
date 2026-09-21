@@ -7,9 +7,25 @@ import type { PtydClient } from './ptyd-client/PtydClient.js';
 // We don't need a real PtydClient for unit tests — only the EventEmitter
 // surface PtydCache uses. Cast a bare emitter as PtydClient + a stub
 // flushCwds so attach() compiles.
-function fakeClient(initialCwds: Array<{ id: string; cwd: string }> = []): PtydClient {
-  const e = new EventEmitter() as EventEmitter & { flushCwds: () => Promise<typeof initialCwds> };
+type Deco = { id: string; title: string | null; fg: string | null; attention: boolean };
+function fakeClient(
+  initialCwds: Array<{ id: string; cwd: string }> = [],
+  /** Omit entirely to model a ptyd predating the flushDecorations RPC. */
+  initialDecorations?: Deco[],
+  /** Held to keep the decoration snapshot in flight while a test races it. */
+  decorationsGate?: Promise<void>,
+): PtydClient {
+  const e = new EventEmitter() as EventEmitter & {
+    flushCwds: () => Promise<typeof initialCwds>;
+    flushDecorations?: () => Promise<Deco[]>;
+  };
   e.flushCwds = async () => initialCwds;
+  if (initialDecorations) {
+    e.flushDecorations = async () => {
+      if (decorationsGate) await decorationsGate;
+      return initialDecorations;
+    };
+  }
   return e as unknown as PtydClient;
 }
 
@@ -148,6 +164,65 @@ describe('PtydCache', () => {
     // flushCwds is async; let it resolve.
     await new Promise((r) => setImmediate(r));
     expect(cache.getCwd('p1')).toBe('/tmp/seed');
+  });
+
+  // …and this fake has NO flushDecorations, which is the point: a ptyd older
+  // than that RPC must still deliver its cwds. The first cut of the
+  // decoration snapshot put both calls in a `Promise.allSettled([...])` array
+  // literal, where the missing method threw SYNCHRONOUSLY — before
+  // allSettled — and took the cwd snapshot down with it. Version skew is the
+  // normal state here (a ptyd bounce kills every pane, so it waits), so the
+  // two snapshots have to fail independently.
+  it('still seeds cwd when the ptyd is too old for flushDecorations', async () => {
+    const cache = new PtydCache();
+    const c = fakeClient([{ id: 'p1', cwd: '/tmp/seed' }]);
+    expect((c as unknown as { flushDecorations?: unknown }).flushDecorations).toBeUndefined();
+    cache.attach(c);
+    (c as unknown as EventEmitter).emit('connected');
+    await new Promise((r) => setImmediate(r));
+    expect(cache.getCwd('p1')).toBe('/tmp/seed');
+  });
+
+  it('seeds title/fg/attention via flushDecorations on connected', async () => {
+    const cache = new PtydCache();
+    const c = fakeClient(
+      [{ id: 'p1', cwd: '/tmp/seed' }],
+      [{ id: 'p1', title: 'build', fg: 'vim', attention: true }],
+    );
+    cache.attach(c);
+    (c as unknown as EventEmitter).emit('connected');
+    await new Promise((r) => setImmediate(r));
+    expect(cache.getTitle('p1')).toBe('build');
+    expect(cache.getFg('p1')).toBe('vim');
+    expect(cache.getAttention('p1')).toBe(true);
+    // The value the nav actually renders: a ringing bell outranks everything.
+    expect(cache.getStatus('p1', false)).toBe('blocked');
+  });
+
+  // The snapshot is taken inside ptyd and travels; an event broadcast while it
+  // was in flight is FRESHER and must win. Per field, because the three move
+  // independently — a `paneFg` mid-flight says nothing about `title`.
+  it('lets a mid-flight decoration event beat the snapshot, field by field', async () => {
+    const cache = new PtydCache();
+    let releaseDecorations: (() => void) | undefined;
+    const gate = new Promise<void>((r) => {
+      releaseDecorations = r;
+    });
+    const c = fakeClient(
+      [],
+      [{ id: 'p1', title: 'stale', fg: 'stale-fg', attention: false }],
+      gate,
+    );
+    cache.attach(c);
+    (c as unknown as EventEmitter).emit('connected');
+    // Land a fresher fg while the snapshot is still in flight.
+    (c as unknown as EventEmitter).emit('paneFg', { id: 'p1', cmd: 'fresh-fg' });
+    releaseDecorations?.();
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    expect(cache.getFg('p1')).toBe('fresh-fg');
+    // …while the fields that did NOT race still take the snapshot's value.
+    expect(cache.getTitle('p1')).toBe('stale');
   });
 
   it('seedCwds primes lookup before any event arrives and a real event supersedes the seed', () => {
