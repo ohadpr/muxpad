@@ -1263,7 +1263,7 @@ export function sweepImplausibleHeadlines(db: Database.Database): { cleared: str
 
 /**
  * The production model: a one-shot Haiku completion through the Claude Agent
- * SDK — the same shape chat/clean-transcript.ts and chat/summarize.ts use.
+ * SDK — the same shape chat/summarize.ts uses.
  *
  * Why the Agent SDK and not `@anthropic-ai/sdk`: this machine has no
  * ANTHROPIC_API_KEY and no auth token. What it has is the Claude Code login
