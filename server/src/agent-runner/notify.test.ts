@@ -194,6 +194,87 @@ describe('the tool is offered, and its description is the UX', () => {
   });
 });
 
+// ── THE BODY'S BUDGET IS A TARGET, NOT A TRAP ───────────────────────────────
+// This file's own rule — "a notification that could not be delivered must
+// never come back as a tool ERROR: an error is a thing a model retries" — was
+// broken by the schema. `text` carried a zod `.max(180)`, and the comment that
+// justified it claimed a schema `maxLength` "would be theatre — both the
+// Anthropic and OpenAI SDKs strip it off the wire schema".
+//
+// That is false, and it is checkable from inside any agent pane: the tool
+// listing an agent actually receives shows `mcp__muxpad__notify` with
+// `"maxLength": 180`, and `ask_user` with 16/80/300/500 — the exact zod values.
+// The constraint survives to the wire, so a 200-character lock-screen line was
+// a validation failure mid-turn instead of a notification: exactly the retry
+// loop the tool's whole contract is built to avoid, on the one call that is
+// only ever made because something cannot wait.
+//
+// The budget stays — in the description, where it steers — and the handler
+// truncates to the lock screen's two lines, which is what ws.ts does to the
+// body anyway.
+describe('the body’s budget is a target, not a trap', () => {
+  const overLong = `Staging deploy failed: ${'migration 0042 timed out '.repeat(12)}`;
+
+  it('does not CAP the body on the wire — an over-long line is not an error', async () => {
+    await boot();
+    const schema = fakeMcpTool('notify').inputSchema as {
+      text: { safeParse: (v: unknown) => { success: boolean } };
+    };
+    expect(overLong.length).toBeGreaterThan(180);
+    expect(schema.text.safeParse(overLong).success).toBe(true);
+    // Still not a free-for-all: an empty body is meaningless and stays refused.
+    expect(schema.text.safeParse('').success).toBe(false);
+  });
+
+  it('delivers it anyway, trimmed to what a lock screen shows', async () => {
+    const fx = await boot();
+    const result = await fx.notify(overLong);
+    expect(result).toMatch(/Sent/);
+    const body = fx.pushes.at(-1)?.[1] ?? '';
+    expect(body.length).toBeLessThanOrEqual(180);
+    expect(body.endsWith('…')).toBe(true);
+    // The front of the sentence — the part that says what happened — survives.
+    expect(body.startsWith('Staging deploy failed: migration 0042 timed out')).toBe(true);
+  });
+
+  it('leaves a body inside the budget completely alone', async () => {
+    const fx = await boot();
+    await fx.notify('staging deploy failed: migration 0042 timed out');
+    expect(fx.pushes.at(-1)?.[1]).toBe('staging deploy failed: migration 0042 timed out');
+  });
+
+  it('the same is true of the other tools a model writes prose into', async () => {
+    // Same bug, same evidence (the live listing shows ask_user's 16/80/300/500
+    // and reply's cap on the wire). A chip label one word too long, or a
+    // security warning that needs 4,200 characters, must not be a tool error:
+    // it is the ANSWER, and a failed reply call ends the turn in silence —
+    // which the reply guard then covers by promoting scratchpad.
+    await boot({ mode: 'chat' });
+    const ask = fakeMcpTool('ask_user').inputSchema as {
+      questions: { safeParse: (v: unknown) => { success: boolean } };
+    };
+    const longHeader = [
+      {
+        question: 'Which approach?',
+        header: 'Implementation approach',
+        options: [{ label: 'A' }, { label: 'B' }],
+      },
+    ];
+    expect(ask.questions.safeParse(longHeader).success).toBe(true);
+    // The STRUCTURAL bounds stay hard — a one-option question is not a
+    // question, and no amount of truncation can make it one.
+    expect(
+      ask.questions.safeParse([
+        { question: 'Which?', header: 'Pick', options: [{ label: 'only one' }] },
+      ]).success,
+    ).toBe(false);
+    const reply = fakeMcpTool('reply').inputSchema as {
+      text: { safeParse: (v: unknown) => { success: boolean } };
+    };
+    expect(reply.text.safeParse('x'.repeat(4200)).success).toBe(true);
+  });
+});
+
 describe('the frame reaches the notifier', () => {
   it('a tool call becomes a push on the right pane, with the agent’s text', async () => {
     const fx = await boot();
