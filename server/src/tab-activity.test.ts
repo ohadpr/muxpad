@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { describe, expect, it } from 'vitest';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
@@ -288,5 +289,111 @@ describe('our own restart is not activity', () => {
     const f = fixture();
     const act = new TabActivity(f.db, { startedAt: t0, bootGraceMs: 90_000 });
     expect(act.touchTab(f.tab.id, { at: t0 + 1_000, force: true })).toBe(true);
+  });
+});
+
+describe('a ptyd reconnect is our own restart too', () => {
+  // The boot grace above was armed by PROCESS START, which is the wrong event.
+  // The thing it suppresses is a pty redraw BURST, and the main server's boot
+  // is only one of the doors that produces one.
+  //
+  // ptyd outlives the main server, and the reverse also happens: ptyd crashes
+  // (or is kickstarted alone) and launchd brings it back while the main server
+  // runs on, untouched, its grace long expired. Every pane in ptyd died with
+  // it, the dead-runner sweep respawns every agent pane within one 20s pass,
+  // each respawn types its startup_cmd, and each of those is a paneActivity
+  // tick. One throttled write per tab, all inside the same couple of seconds —
+  // which is not "a few redundant rows", it is every tab sharing one timestamp
+  // and the sidebar's recency order collapsing into a tie. Byte for byte the
+  // catastrophe the boot grace exists to prevent, through a door it never
+  // watched.
+  //
+  // So the window is armed by ptyd CONNECTING, which is the precise signal
+  // that a redraw burst is coming. At boot ptyd connects within milliseconds,
+  // so this strictly generalises the old behaviour rather than replacing it.
+  const t0 = 1_800_000_000_000;
+
+  /** The ptyd control channel, reduced to the events TabActivity attaches to. */
+  function fakeClient() {
+    return new EventEmitter() as unknown as Parameters<TabActivity['attach']>[0] & EventEmitter;
+  }
+
+  // THE REPRODUCTION, and it has to be on an injected clock: the burst must
+  // land well outside the 60s throttle, or the throttle suppresses it anyway
+  // and the test passes with the grace ripped out. (It did, on the first
+  // draft — a green test proving nothing, which is the whole failure mode this
+  // area keeps producing.)
+  it('re-arms the grace on reconnect — a respawn burst cannot flatten the order', () => {
+    const f = fixture();
+    const other = new TabStore(f.db).create({ name: 'T2', layout: '', workspace_id: f.ws.id });
+    const act = new TabActivity(f.db, { startedAt: t0, bootGraceMs: 90_000 });
+
+    // Two tabs used an hour apart. This is the recency order the user made.
+    expect(act.touchTab(f.tab.id, { at: t0 + 1_000_000 })).toBe(true);
+    expect(act.touchTab(other.id, { at: t0 + 4_600_000 })).toBe(true);
+    const settled = { a: f.read(f.tab.id), b: f.read(other.id) };
+    expect(settled.a).not.toBe(settled.b);
+
+    // ptyd dies and comes back hours later — far outside every throttle
+    // window. The sweep respawns every agent pane in one pass, so the redraw
+    // burst reaches every tab inside the same second or two.
+    const back = t0 + 10_000_000;
+    act.noteReconnect(back);
+    expect(act.touchTab(f.tab.id, { at: back + 500 })).toBe(false);
+    expect(act.touchTab(other.id, { at: back + 700 })).toBe(false);
+
+    // Untouched — so the order the user produced survives. Without the
+    // re-arm both rows are rewritten to within 200ms of each other and the
+    // sidebar's recency order collapses into a tie.
+    expect(f.read(f.tab.id)).toBe(settled.a);
+    expect(f.read(other.id)).toBe(settled.b);
+  });
+
+  // …and the listener that calls it. Separate, because the test above proves
+  // the POLICY and this proves the WIRING — the part that lived in an
+  // unimportable script and is where the second door was missed. Real clock
+  // (the listener's own), no prior write, so the grace is the only thing that
+  // can suppress this.
+  it('the ptyd `connected` event is what arms it', () => {
+    const f = fixture();
+    const act = new TabActivity(f.db, { startedAt: Date.now() - 3_600_000, bootGraceMs: 90_000 });
+    const c = fakeClient();
+    act.attach(c);
+    (c as EventEmitter).emit('connected');
+    expect(act.touchTab(f.tab.id)).toBe(false);
+    expect(f.read(f.tab.id)).toBe(f.tabs.getById(f.tab.id)?.created_at ?? null);
+  });
+
+  it('still lets a FORCED signal through during a reconnect burst', () => {
+    const f = fixture();
+    const act = new TabActivity(f.db, { startedAt: Date.now() - 3_600_000, bootGraceMs: 90_000 });
+    const c = fakeClient();
+    act.attach(c);
+    (c as EventEmitter).emit('connected');
+    // You typing into a pane while ptyd is coming back is still you.
+    expect(act.touchTab(f.tab.id, { force: true })).toBe(true);
+  });
+
+  it('admits pty signals again once the re-armed window expires', () => {
+    const f = fixture();
+    const act = new TabActivity(f.db, { startedAt: t0, bootGraceMs: 90_000 });
+    // Injected clock here, so the window's EDGES are exact rather than racing
+    // the wall clock.
+    act.noteReconnect(t0);
+    expect(act.touchTab(f.tab.id, { at: t0 + 89_000 })).toBe(false);
+    expect(act.touchTab(f.tab.id, { at: t0 + 91_000 })).toBe(true);
+  });
+
+  it('routes paneActivity through touchPane, so the wiring is the tested thing', () => {
+    // The listener used to live in index.ts, which is a SCRIPT and therefore
+    // untestable — so the one line connecting ptyd's ticks to this policy was
+    // the only part nothing covered. Owning both listeners here means a test
+    // can drive the real path end to end.
+    const f = fixture();
+    const act = new TabActivity(f.db, { startedAt: t0, bootGraceMs: 0 });
+    const c = fakeClient();
+    act.attach(c);
+    (c as EventEmitter).emit('paneActivity', { id: f.pane.id });
+    expect(f.read(f.tab.id)).not.toBeNull();
   });
 });

@@ -24,15 +24,29 @@
 // restart — twelve tabs, one identical `last_activity_at`, and a chat used
 // minutes ago sorted below ones untouched for weeks.
 //
-// So throttled (pty) signals are ignored for a grace window after boot. A pty
-// redraw caused by our own restart is not the user doing something, and it must
-// never be allowed to speak for them. FORCED signals are exempt: a turn
-// finishing or a send being submitted during the window is real, and those are
-// the only two things this value is actually FOR.
+// So throttled (pty) signals are ignored for a grace window. A pty redraw
+// caused by our own restart is not the user doing something, and it must never
+// be allowed to speak for them. FORCED signals are exempt: a turn finishing or
+// a send being submitted during the window is real, and those are the only two
+// things this value is actually FOR.
+//
+// THE WINDOW IS ARMED BY PTYD CONNECTING, not by process start. It was armed by
+// process start at first, and that is the wrong event: what it suppresses is a
+// pty redraw BURST, and the main server's own boot is only one of the doors
+// that produces one. ptyd outlives the main server — and the reverse happens
+// too. ptyd crashes (or is kickstarted alone), launchd brings it back, and the
+// main server runs on untouched with its grace long expired. Every pane died
+// with ptyd; the dead-runner sweep respawns every agent pane inside one 20s
+// pass; each respawn types its startup_cmd and each of those is an activity
+// tick. Same collapse, same second, through a door the original window never
+// watched. ptyd connecting is the precise signal that a burst is coming, and at
+// boot it connects within milliseconds — so this strictly generalises the
+// process-start version rather than replacing it.
 //
 // Timestamps are only ever moved FORWARD.
 import type { PaneStatus } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
+import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 
@@ -40,12 +54,14 @@ import { TabStore } from './store/TabStore.js';
 export const ACTIVITY_THROTTLE_MS = 60_000;
 
 /**
- * How long after process start a THROTTLED (pty) signal is ignored.
+ * How long after process start — or after ptyd (re)connects — a THROTTLED
+ * (pty) signal is ignored.
  *
  * Sized to outlast the reconnect burst — runners re-hello, ptyd replays
- * scrollback and shells redraw prompts — without swallowing a genuine
- * interaction. A user who types into a pane inside this window still bumps its
- * tab, because a submitted send is FORCED.
+ * scrollback, shells redraw prompts, and the dead-runner sweep respawns every
+ * agent pane within one 20s pass — without swallowing a genuine interaction. A
+ * user who types into a pane inside this window still bumps its tab, because a
+ * submitted send is FORCED.
  */
 export const ACTIVITY_BOOT_GRACE_MS = 90_000;
 
@@ -67,7 +83,14 @@ export class TabActivity {
   private readonly lastPaneSignalAt = new Map<string, number>();
   private readonly throttleMs: number;
   private readonly bootGraceMs: number;
-  private readonly startedAt: number;
+  /**
+   * When the current grace window opened. Process start to begin with, then
+   * re-stamped by every ptyd `connected` (see {@link attach}) — a reconnect
+   * means a redraw burst is on its way, and that burst is exactly as much "not
+   * the user" as a boot one is. Mutable for that reason, which is also why it
+   * is not `readonly`.
+   */
+  private graceFrom: number;
   /**
    * Called after every actual DB write, with the tab that moved.
    *
@@ -97,8 +120,36 @@ export class TabActivity {
     this.panes = new PaneStore(db);
     this.throttleMs = opts.throttleMs ?? ACTIVITY_THROTTLE_MS;
     this.bootGraceMs = opts.bootGraceMs ?? ACTIVITY_BOOT_GRACE_MS;
-    this.startedAt = opts.startedAt ?? Date.now();
+    this.graceFrom = opts.startedAt ?? Date.now();
     this.onWrite = opts.onWrite;
+  }
+
+  /**
+   * Bind to the ptyd control channel. Two listeners, and they belong together:
+   *
+   *   `paneActivity` → the raw pty tick this whole throttle exists for.
+   *   `connected`    → re-arm the grace window. A reconnect is our own
+   *                    restart wearing a different hat; see the head of this
+   *                    file.
+   *
+   * Owned HERE rather than wired in the main entry because the entry is a
+   * script and therefore untestable — which left the one line connecting
+   * ptyd's ticks to this policy as the only part of the path nothing covered,
+   * and it is the part where the second door was missed.
+   */
+  attach(client: PtydClient): void {
+    client.on('paneActivity', (e: { id: string }) => {
+      this.touchPane(e.id);
+    });
+    client.on('connected', () => {
+      this.noteReconnect();
+    });
+  }
+
+  /** Open a fresh grace window. Exposed (and clock-injectable) so a test can
+   *  drive the reconnect case deterministically. */
+  noteReconnect(at: number = Date.now()): void {
+    this.graceFrom = at;
   }
 
   /**
@@ -113,14 +164,16 @@ export class TabActivity {
   touchTab(tabId: string, opts: { force?: boolean; at?: number } = {}): boolean {
     const at = opts.at ?? Date.now();
     if (!opts.force) {
-      // Our own restart is not activity — see the boot-grace note at the head
-      // of this file. This is the whole fix for "the sidebar forgot its order".
-      // Bounded at BOTH ends on purpose. An `at` before startedAt is not "inside
-      // the boot window" — it is a caller supplying its own clock (every test
-      // here does), and swallowing those would make the window mean "suppress
-      // everything that isn't in the future".
-      const sinceBoot = at - this.startedAt;
-      if (sinceBoot >= 0 && sinceBoot < this.bootGraceMs) return false;
+      // Our own restart is not activity — see the grace note at the head of
+      // this file. This is the whole fix for "the sidebar forgot its order",
+      // and `graceFrom` moves on every ptyd reconnect because a reconnect is
+      // our own restart by another name.
+      // Bounded at BOTH ends on purpose. An `at` before `graceFrom` is not
+      // "inside the window" — it is a caller supplying its own clock (every
+      // test here does), and swallowing those would make the window mean
+      // "suppress everything that isn't in the future".
+      const sinceGrace = at - this.graceFrom;
+      if (sinceGrace >= 0 && sinceGrace < this.bootGraceMs) return false;
       const last = this.lastWriteAt.get(tabId);
       if (last !== undefined && at - last < this.throttleMs) return false;
     }
