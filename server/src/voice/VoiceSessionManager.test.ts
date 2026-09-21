@@ -298,6 +298,36 @@ describe('VoiceSessionManager', () => {
     expect(make().minutesToday()).toBeCloseTo(10, 1);
   });
 
+  // THE ONE CASE THE UPSTREAM DELETE EXISTS FOR.
+  //
+  // live.ts is explicit that the best-effort DELETE is worth making for exactly
+  // one scenario: a session whose client can no longer hang up. A process that
+  // died mid-call IS that scenario — the peer connection is browser↔OpenAI and
+  // outlives us, so nothing else in the system will ever ask for it to stop.
+  // Recovery charged the ledger and said nothing to OpenAI, which is the one
+  // place asking might actually have saved money.
+  it('asks OpenAI to close a session the crash left behind', async () => {
+    const closeRemote = vi.fn(async () => {});
+    const first = make({ closeRemote });
+    await start(first);
+    closeRemote.mockClear();
+
+    // The process is killed. A new one boots and finds `open` in the ledger.
+    const afterCrash = make({ closeRemote });
+    expect(afterCrash.minutesToday()).toBeCloseTo(10, 1);
+    expect(closeRemote).toHaveBeenCalledWith('live_123', expect.anything());
+  });
+
+  it('asks once — the next boot has nothing left to close', async () => {
+    const closeRemote = vi.fn(async () => {});
+    const first = make({ closeRemote });
+    await start(first);
+    make({ closeRemote });
+    closeRemote.mockClear();
+    make({ closeRemote });
+    expect(closeRemote).not.toHaveBeenCalled();
+  });
+
   it('survives a corrupt ledger row without bricking voice', async () => {
     globals.set(VOICE_USAGE_KEY, 'not json at all');
     const m = make();
