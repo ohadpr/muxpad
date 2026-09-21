@@ -148,7 +148,11 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
   const ending = useRef(false);
 
   const stop = useCallback(
-    (reason: EndReason = 'user') => {
+    // `detailOverride` exists because a session can end for a reason only IT
+    // knows — a pane that turns out to be unable to speak at all, say. Without
+    // it the generic `endReasonMessage` overwrote that sentence on the way out
+    // and the user was told the connection dropped, which was a lie.
+    (reason: EndReason = 'user', detailOverride?: string) => {
       if (ending.current) return;
       ending.current = true;
       // The sound check was armed by `start()` and has a 2.5s fuse. A session
@@ -174,7 +178,7 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
       setStartedAt(null);
       setElapsedMs(0);
       setState('off');
-      setDetail(reason === 'user' ? null : endReasonMessage(reason));
+      setDetail(detailOverride ?? (reason === 'user' ? null : endReasonMessage(reason)));
       void fetchVoiceStatus().then(setStatus);
       ending.current = false;
     },
@@ -266,7 +270,10 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
             if (s === 'ended' || s === 'error') {
               wakeLock.current?.release();
               wakeLock.current = null;
-              stop('transport-failed');
+              // The session's own reason wins. It ends itself for reasons the
+              // transport knows nothing about, and "the voice connection
+              // dropped" is the wrong story for every one of them.
+              stop('transport-failed', d);
             }
           },
         });

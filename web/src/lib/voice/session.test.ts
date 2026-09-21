@@ -14,6 +14,8 @@ import {
   type AgentLink,
   CANCEL_PROBE_QUIET_MS,
   DISPATCH_FILLER_MS,
+  MUTE_RUNNER_DETAIL,
+  MUTE_RUNNER_GRACE_MS,
   SETTLE_MAX_MS,
   SETTLE_QUIET_MS,
   type Scheduler,
@@ -156,11 +158,18 @@ function harness(
   const transport = fakeTransport();
   const agent = fakeAgent();
   const states: VoiceUiState[] = [];
+  /** The sentence the session hands the UI with a state change, when it has
+   *  one. A session that ends for a reason only IT knows has to be able to say
+   *  so, and that sentence is the only place the reason survives. */
+  const details: Array<string | undefined> = [];
   const session = new VoiceSession({
     transport,
     agent,
     scheduler: clock,
-    onState: (s) => states.push(s),
+    onState: (s, d) => {
+      states.push(s);
+      details.push(d);
+    },
     withContext: opts.withContext ?? false,
     ...(opts.heartbeatMs ? { heartbeatMs: opts.heartbeatMs } : {}),
     ...(opts.micGate ? { micGate: opts.micGate } : {}),
@@ -197,6 +206,7 @@ function harness(
     agent,
     session,
     states,
+    details,
     started,
     hear,
     speaks,
@@ -1689,5 +1699,130 @@ describe('a spoken answer reaches the gate', () => {
     // "Still working on it" over an unanswered question reads as a session that
     // is not listening.
     expect(h.commentary().slice(before).join(' ')).not.toMatch(/still working/i);
+  });
+});
+
+// ═══ A PANE THAT CANNOT ANSWER ALOUD MUST NOT KEEP BILLING ═══
+//
+// `speak`/`speak-delta` live inside the `reply` tool and nowhere else. Two
+// panes will never send one: a pane switched Agent→Chat mid-session (its
+// `mcpServers` were fixed when `query()` was constructed and the tool cannot be
+// added afterwards, while the mic appears the moment the pane row flips), and a
+// pane whose RUNNER PROCESS predates `reply` shipping — runners live for weeks,
+// so that is not a migration edge, it is the normal state of a long-lived pane.
+//
+// Both delegate, work and finish correctly, and say NOTHING. The user hears the
+// model's "on it" and then silence; the answer appears in the chat, so nothing
+// looks broken; and the session bills to its ten-minute ceiling. Total, silent,
+// and indistinguishable from a slow agent — the most expensive failure shape
+// this feature has.
+describe('a runner with no voice at all', () => {
+  /** Delegate one request and let the turn finish successfully. `reply` decides
+   *  whether anything is said. */
+  const oneTurn = (h: ReturnType<typeof harness>, request: string, reply?: string) => {
+    h.hear(request, h.clock.t + 1000, h.clock.t + 2000);
+    h.delegate(`d-${request.length}-${h.clock.t}`, h.clock.t + 2100);
+    h.settle();
+    h.turnStart(request);
+    if (reply !== undefined)
+      h.agent.frame({ t: 'speak', id: `r-${reply.length}`, text: reply, n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+  };
+
+  it('says what is wrong out loud when a successful turn produces no answer', () => {
+    const h = harness();
+    h.started();
+    oneTurn(h, 'run the tests.');
+    const said = h.commentary().join('\n');
+    // Not a console warning: the user is holding a phone, not watching a log.
+    expect(said).toMatch(/cannot send its answers to voice/i);
+    expect(said).toMatch(/written in the chat/i);
+  });
+
+  it('then hangs up, because every later request would end the same way', () => {
+    const h = harness();
+    h.started();
+    oneTurn(h, 'run the tests.');
+    // Not instantly — the explanation has to be spoken before the peer
+    // connection goes, or the warning is as silent as the bug.
+    expect(h.states.at(-1)).not.toBe('ended');
+    h.clock.advance(MUTE_RUNNER_GRACE_MS + 10);
+    expect(h.states.at(-1)).toBe('ended');
+    expect(h.details.at(-1)).toBe(MUTE_RUNNER_DETAIL);
+  });
+
+  it('says it once, however many turns follow', () => {
+    const h = harness();
+    h.started();
+    oneTurn(h, 'run the tests.');
+    const after = h.commentary().length;
+    oneTurn(h, 'now lint it.');
+    const again = h.commentary().slice(after).join('\n');
+    expect(again).not.toMatch(/cannot send its answers to voice/i);
+  });
+});
+
+describe('a runner that CAN speak is never hung up on', () => {
+  const oneTurn = (h: ReturnType<typeof harness>, request: string, reply?: string) => {
+    h.hear(request, h.clock.t + 1000, h.clock.t + 2000);
+    h.delegate(`d-${request.length}-${h.clock.t}`, h.clock.t + 2100);
+    h.settle();
+    h.turnStart(request);
+    if (reply !== undefined)
+      h.agent.frame({ t: 'speak', id: `r-${reply.length}`, text: reply, n: 1 });
+    h.agent.frame({ t: 'turn-done', ok: true });
+  };
+
+  it('a turn that answered is not evidence of anything', () => {
+    const h = harness();
+    h.started();
+    oneTurn(h, 'run the tests.', 'They all pass.');
+    h.clock.advance(MUTE_RUNNER_GRACE_MS + 10);
+    expect(h.commentary().join('\n')).not.toMatch(/cannot send its answers/i);
+    expect(h.states).not.toContain('ended');
+  });
+
+  // THE LATCH IS A LIFETIME LATCH, and this is why. An agent that has answered
+  // ten times and then finishes a turn without calling `reply` is an agent
+  // being quiet, not an agent that cannot speak. Hanging the call up there
+  // would be a far more annoying bug than the one being fixed.
+  it('a quiet turn AFTER a spoken one is just a quiet turn', () => {
+    const h = harness();
+    h.started();
+    oneTurn(h, 'run the tests.', 'They all pass.');
+    oneTurn(h, 'now lint it.');
+    h.clock.advance(MUTE_RUNNER_GRACE_MS + 10);
+    expect(h.commentary().join('\n')).not.toMatch(/cannot send its answers/i);
+    expect(h.states).not.toContain('ended');
+  });
+
+  it('a FAILED turn explains itself already — that silence is accounted for', () => {
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('run the tests.');
+    h.agent.frame({ t: 'turn-done', ok: false, error: 'the runner died' });
+    h.clock.advance(MUTE_RUNNER_GRACE_MS + 10);
+    expect(h.commentary().join('\n')).toMatch(/turn failed/i);
+    expect(h.commentary().join('\n')).not.toMatch(/cannot send its answers/i);
+    expect(h.states).not.toContain('ended');
+  });
+
+  it('a CANCELLED task was silent because the user silenced it', () => {
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('run the tests.');
+    h.hear('stop.', 5000, 5400);
+    h.delegate('d2', 5500);
+    h.settle();
+    h.probe();
+    h.agent.frame({ t: 'turn-done', ok: true });
+    h.clock.advance(MUTE_RUNNER_GRACE_MS + 10);
+    expect(h.commentary().join('\n')).not.toMatch(/cannot send its answers/i);
   });
 });
