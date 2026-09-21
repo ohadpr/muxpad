@@ -545,6 +545,16 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   let currentTurnText: string | null = null;
   /** The auth message seen during the current turn, if any. */
   let authFailureThisTurn: string | null = null;
+  /**
+   * Tool calls made in the current turn — the classifier's corroboration.
+   *
+   * A dead credential fails BEFORE the child reaches a model (0.05 s, $0, one
+   * message), so it can never have called anything. A turn that did call
+   * something was working, and whatever it wrote about auth is a note about
+   * auth. In Chat mode that covers the whole normal shape twice over, since
+   * the `reply` that ends a good turn is itself a tool call.
+   */
+  let toolUsesThisTurn = 0;
   const authHeal = new AuthHealPolicy(
     opts.authHealDelaysMs ? { delaysMs: opts.authHealDelaysMs } : {},
   );
@@ -1091,6 +1101,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         firstReplyText = '';
         currentTurnText = text;
         authFailureThisTurn = null;
+        toolUsesThisTurn = 0;
         // A cron fire is a relay, not a person: the scheduler wrote it and
         // nobody is sitting there, so it may legitimately end silent. Read off
         // the message itself (the marker rides the text), exactly as ws.ts's
@@ -1644,6 +1655,7 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
       // nothing to put back — see the turn-result branch.
       currentTurnText = null;
       authFailureThisTurn = null;
+      toolUsesThisTurn = 0;
       // Nobody asked for this turn, so nobody is owed an answer for it — the
       // reply guard stays out of the way. (This is the distinction xAI's
       // harness never drew: they applied "you must always reply" everywhere,
@@ -1776,6 +1788,10 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
               if (isAuthFailureText(block.text)) authFailureThisTurn = block.text.trim();
               log(`${bold('claude')} ${block.text.trim()}`);
             } else if (block.type === 'tool_use') {
+              // Counted for the auth classifier: a child that cannot
+              // authenticate never reaches a model, so a turn that CALLED
+              // something is a turn that was working. See the result branch.
+              toolUsesThisTurn++;
               const arg = summarizeToolInput(block.name, block.input);
               log(`${dim('⚙')} ${block.name}${arg ? dim(` ${arg}`) : ''}`);
             }
@@ -1807,6 +1823,26 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           // Nothing below applies. No reply-guard promotion (the "reply" would
           // be `Not logged in · Please run /login`, spoken in the agent's
           // voice), no turn-done while we still intend to answer, no cost line.
+          //
+          // CORROBORATED BY THE TURN, not by the text alone. The classifier
+          // matches a short single line that opens and continues like the
+          // CLI's error — and a Chat-mode turn's plain text is the model's
+          // SCRATCHPAD, whose normal shape is exactly short single-line notes
+          // (measured), written here by agents who debug auth for a living. So
+          // the turn must also have called NOTHING: the failing child never
+          // reaches a model, while any real turn — certainly any Chat turn,
+          // whose closing `reply` is itself a tool call — has called
+          // something. Without this, a note reading `Not logged in · Please
+          // run /login` costs its own session four re-execs and ends in a push
+          // telling the user their auth is broken when it is not.
+          if (authFailureThisTurn && toolUsesThisTurn > 0) {
+            log(
+              dim(
+                `(auth-looking line in a turn that ran ${toolUsesThisTurn} tool call(s) — treated as prose, not a dead credential)`,
+              ),
+            );
+            authFailureThisTurn = null;
+          }
           if (authFailureThisTurn) {
             const message = authFailureThisTurn;
             authFailureThisTurn = null;
@@ -1883,22 +1919,36 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
           // WHY PROMOTION AND NOT A FORCED RETRY. Claude Code's equivalent is
           // stronger on paper: it injects a meta message and runs ANOTHER turn,
           // so the model writes a real reply instead of the user reading
-          // working-out that was never addressed to them. We measured before
-          // building it, and the guard does not fire: zero of 24 human-initiated
-          // turns in the largest live Chat session (181 replies) and zero of 24
-          // across both arms of the brevity A/B ended with no reply call. The
-          // reason is structural rather than lucky — in Chat mode `reply` is the
-          // ONLY channel out, so a turn with nothing to say is a turn with
-          // nothing to render either way.
+          // working-out that was never addressed to them.
           //
-          // Against zero occurrences, a forced retry costs: a synthetic user
+          // The first measurement said the guard never fires — zero of 24
+          // human-initiated turns in the largest live Chat session, zero of 24
+          // across both arms of the brevity A/B — and the reason given was
+          // structural: `reply` is Chat mode's only channel out. THAT WAS
+          // WRONG, and re-measuring found it: 6 of 10 matched turns, and 4 of
+          // 12 in a mixed set, ended with the model answering in plain text
+          // and letting this promotion carry it. The misses cluster on
+          // ZERO-STAKES turns — a turn whose whole job is one lookup is
+          // exactly where reaching for a tool gets skipped.
+          //
+          // It was fixed by CONTRACT, not by mechanism: a bullet in
+          // CHAT_MODE_SEED ("every turn ends with a `reply` — including the
+          // easy ones") took it to 0 of 10, Fisher p = 0.011, with reply
+          // length unchanged. Note what could NOT have fixed it — the reply
+          // tool's own description, which the model had already read and was
+          // not consulting. So the promotion stays as the backstop it always
+          // was; what changed is that it is a backstop for a thing that does
+          // happen.
+          //
+          // A forced retry still costs more than it buys: a synthetic user
           // message in the transcript (which normalizes to a real user bubble
           // unless a new marker + normalizer + renderer branch hides it), a
           // once-per-turn latch so a model that stays silent cannot loop, and an
           // ordering hazard against the server-side send queue, interrupts and
           // cron fires — all in the turn-result path, which is the one place in
-          // this file where a bug is a wedged session. Promotion stays until the
-          // number says otherwise; re-run the measurement before revisiting.
+          // this file where a bug is a wedged session. A line of contract text
+          // closed the same gap for free. Re-measure before revisiting — and
+          // measure the CONTRACT, which is where the fix lives.
           const guarded = needsReplyFallback({
             mode: currentMode,
             humanInitiated: turnHuman,

@@ -317,6 +317,33 @@ describe('what must NOT trigger a re-exec', () => {
     expect(fakeSession()).toBe(first);
   });
 
+  it('an agent QUOTING it verbatim, in a turn that did work, does not either', async () => {
+    // The text rule cannot save us here: this is the incident's string, alone
+    // on its own line — which is exactly how an agent investigating the
+    // incident would write it after grepping for it, and exactly what Chat
+    // mode's scratchpad looks like (short, single-line, nothing in front).
+    //
+    // The turn is what tells them apart. A dead credential fails before the
+    // child reaches a model at all, so it can never have CALLED anything;
+    // this turn ran a tool. Without that corroboration, an agent reading pane
+    // logs re-execs its own session — four times, and then tells the user on
+    // their phone that auth is broken when it is not.
+    const fx = await boot();
+    const first = await send(fx, 'what did the panes print?');
+    await fx.runner.feed([
+      sdk.launchToolUse('toolu_grep1', 'grep the pane logs'),
+      sdk.text(NOT_LOGGED_IN),
+      sdk.result('success'),
+    ]);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(fakeSession()).toBe(first);
+    expect(first.closed).toBe(false);
+    // …and it completes as the ordinary turn it was.
+    expect(fx.runner.sent.filter((f) => f.t === 'turn-done')).toEqual([
+      { t: 'turn-done', ok: true, summary: NOT_LOGGED_IN },
+    ]);
+  });
+
   it('a successful turn is enough to forgive the ladder', async () => {
     // Two rungs, then give up — so if the reset did not happen, the second
     // failure below would be the LAST attempt rather than the first.
