@@ -222,6 +222,18 @@ export async function createRtcTransport(deps: RtcTransportDeps): Promise<RtcTra
       } catch {
         // ignore
       }
+      // GIVE THE ELEMENT BACK THE WAY WE FOUND IT. It is a page-lifetime
+      // singleton (lifecycle.ts) — iOS blesses an element, not a page — so
+      // whatever we leave attached is what the NEXT session starts with, and
+      // what we leave attached is a MediaStream whose peer connection we just
+      // closed. Two silent consequences: `isSilentlyBlocked` keys off
+      // `srcObject` and so reads true forever after the first session, raising
+      // "tap to hear" on healthy calls; and `unlockPlayback` branches on
+      // `srcObject`, so every session after the first takes `await el.play()`
+      // on a dead stream instead of the silent-WAV path that actually obtains
+      // the blessing — which is how this element ended up muted for the life of
+      // the page the first time.
+      if (deps.audioEl.srcObject) deps.audioEl.srcObject = null;
       // Releasing the mic is what actually turns off the phone's recording
       // indicator; leaving tracks live is how you get a "still listening" dot
       // over a session that ended.

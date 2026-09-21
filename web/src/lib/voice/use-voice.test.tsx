@@ -87,6 +87,10 @@ class FakePeerConnection {
     if (FakePeerConnection.rejectRemote) {
       throw new Error('Failed to set remote answer sdp: Called in wrong state');
     }
+    // The model's audio arrives the moment the answer is applied. `ev.streams`
+    // is deliberately EMPTY — that is what OpenAI actually sends, and what the
+    // transport is built to survive.
+    this.ontrack?.({ streams: [], track: { kind: 'audio' } });
   }
   close() {
     this.closed = true;
@@ -265,6 +269,64 @@ describe('useVoice: a start that fails AFTER the session was paid for', () => {
     const posts = calls.filter((c) => c.method === 'POST' && c.url === '/api/voice/session');
     expect(posts).toHaveLength(2);
     expect(latest?.state).not.toBe('error');
+  });
+});
+
+// ═══ THE ELEMENT THE NEXT SESSION HAS TO USE ═══
+//
+// `voiceAudioElement()` is a SINGLETON on purpose: iOS blesses an ELEMENT, not
+// a page, so a fresh element per session means the second session is silent.
+// The consequence nobody handled is that everything left on it also survives —
+// and what a session leaves on it is `srcObject`, a MediaStream whose peer
+// connection we just closed and whose tracks are all ended.
+//
+// Two things go wrong with a dead stream still attached, both silent:
+//
+//   · `isSilentlyBlocked(el)` keys off `srcObject`, so it stays true after the
+//     session is over. The 2.5s sound check fires into a stopped session and
+//     raises "tap to hear sound" on a call that no longer exists.
+//   · `unlockPlayback` branches on `srcObject`. With one attached it takes the
+//     `await el.play()` path on a stream with no live tracks instead of the
+//     silent-WAV path that actually obtains the blessing — which is the exact
+//     shape of the pending-forever play() that made voice silent in the first
+//     place (see lifecycle.ts).
+//
+// Teardown owns the element it borrowed.
+describe('useVoice: what a finished session leaves behind', () => {
+  it('detaches the dead stream from the shared audio element', async () => {
+    await mount();
+    await act(async () => {
+      latest?.start();
+    });
+    await settle();
+    const el = document.querySelector('audio') as HTMLAudioElement;
+    expect(el.srcObject).not.toBeNull(); // the track arrived
+
+    await act(async () => {
+      latest?.stop();
+    });
+    await settle();
+    expect(el.srcObject).toBeNull();
+  });
+
+  it('does not raise "tap to hear" 2.5s after the session was stopped', async () => {
+    await mount();
+    await act(async () => {
+      latest?.start();
+    });
+    await settle();
+    await act(async () => {
+      latest?.stop();
+    });
+    await settle();
+    expect(latest?.muted).toBe(false);
+
+    // The sound check was armed inside start() and nothing cancelled it.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 2600));
+    });
+    expect(latest?.state).toBe('off');
+    expect(latest?.muted).toBe(false);
   });
 });
 
