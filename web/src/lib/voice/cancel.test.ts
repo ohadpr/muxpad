@@ -170,3 +170,80 @@ describe('the arrival policy is per-arrival, not a global mode', () => {
     expect(arrivalPolicyFor('stop')).toBe(arrivalPolicyFor('stop'));
   });
 });
+
+// ═══ POLITENESS IS NOT A LANGUAGE FEATURE OF ENGLISH ═══
+//
+// The filler lists are what make the whole-utterance rule usable: "okay, no,
+// wait — stop" reduces to "stop", and "stop, please" reduces to "stop". Both
+// lists were English-only, so the non-English half of the closed set matched
+// ONLY the bare, unadorned imperative.
+//
+// That is not a rare shape. Attaching a politeness particle to an imperative
+// is the NORM in Spanish and Hebrew — "para, por favor", "עצור בבקשה" — and a
+// hesitation before one is universal. So the failure was not "a foreign cancel
+// is ignored". It was the exact outcome the non-English set was added to
+// prevent, restated in this file's own header: the request to stop fell
+// through to `enqueue` and was dispatched to Claude AS A NEW AGENT TURN.
+//
+// The previous suite tested only the bare forms — i.e. precisely the subset
+// that worked — so the header's claim that the non-English entries are "held
+// to exactly the same standard" was unpinned and untrue.
+describe('a foreign cancel survives the politeness that normally surrounds it', () => {
+  const spanish = [
+    'para, por favor',
+    'para por favor',
+    'basta ya',
+    'para ya',
+    'vale, para',
+    'oye, cancela',
+    'bueno, basta',
+    'cancela, gracias',
+    'espera, detente',
+    'no, para',
+  ];
+  for (const phrase of spanish) {
+    it(`Spanish: "${phrase}" cancels`, () => {
+      expect(isExplicitCancel(phrase)).toBe(true);
+      expect(arrivalPolicyFor(phrase)).toBe('interrupt');
+    });
+  }
+
+  const hebrew = [
+    'עצור בבקשה',
+    'תפסיק בבקשה',
+    'רגע, עצור',
+    'אוקיי תפסיק',
+    'בסדר, עצור',
+    'לא, תעצור',
+    'תעצור עכשיו',
+    'בטל, תודה',
+  ];
+  for (const phrase of hebrew) {
+    it(`Hebrew: "${phrase}" cancels`, () => {
+      expect(isExplicitCancel(phrase)).toBe(true);
+      expect(arrivalPolicyFor(phrase)).toBe('interrupt');
+    });
+  }
+
+  // The filler must not become a back door. Stripping it may only ever expose
+  // a phrase that was already in the closed set — never turn a TASK into a
+  // cancel, which is the one direction that costs the user work.
+  it('stripping filler still leaves an object as an object', () => {
+    for (const task of [
+      'por favor para el servidor',
+      'oye, cancela el cron',
+      'בבקשה עצור את השרת',
+      'רגע, תבטל את המשימה של אתמול',
+      'vale, basta de tests por favor',
+    ]) {
+      expect(isExplicitCancel(task)).toBe(false);
+      expect(arrivalPolicyFor(task)).toBe('enqueue');
+    }
+  });
+
+  it('and the "drop it" class stays out, however politely it is said', () => {
+    for (const risky of ['dejalo por favor', 'olvidalo ya', 'בבקשה עזוב את זה']) {
+      expect(isExplicitCancel(risky)).toBe(false);
+    }
+  });
+});
