@@ -105,26 +105,40 @@ interface Call {
 const calls: Call[] = [];
 const SESSION_ID = 'sess_leaky';
 
+/** Held session POSTs, so a test can decide what happens WHILE one is in
+ *  flight — which is the whole window every leak below lives in. */
+let releaseSession: Array<() => void> = [];
+/** Hold the next session POST open until the test says otherwise. */
+let holdSession = false;
+/** Distinct ids when a test manages to start more than one session. */
+let sessionSeq = 0;
+
 function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = typeof input === 'string' ? input : String(input);
   const method = (init?.method ?? 'GET').toUpperCase();
   calls.push({ method, url });
   const json = (body: unknown, status = 200) =>
-    Promise.resolve(
-      new Response(JSON.stringify(body), {
-        status,
-        headers: { 'content-type': 'application/json' },
-      }),
-    );
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    });
   if (url.startsWith('/api/voice/status')) {
-    return json({ configured: true, live: false, minutesToday: 0, capMinutes: 60 });
+    return Promise.resolve(
+      json({ configured: true, live: false, minutesToday: 0, capMinutes: 60 }),
+    );
   }
   if (url === '/api/voice/session' && method === 'POST') {
-    return json({
-      sessionId: SESSION_ID,
+    const id = sessionSeq === 0 ? SESSION_ID : `${SESSION_ID}_${sessionSeq}`;
+    sessionSeq += 1;
+    const body = json({
+      sessionId: id,
       sdp: 'v=0\r\no=- answer',
       expiresAt: Date.now() + 600_000,
       voice: 'marin',
+    });
+    if (!holdSession) return Promise.resolve(body);
+    return new Promise<Response>((resolve) => {
+      releaseSession.push(() => resolve(body));
     });
   }
   if (url.startsWith('/api/voice/session/') && method === 'DELETE') {
@@ -183,6 +197,9 @@ beforeEach(() => {
   calls.length = 0;
   FakePeerConnection.instances = [];
   FakePeerConnection.rejectRemote = false;
+  releaseSession = [];
+  holdSession = false;
+  sessionSeq = 0;
   mic = fakeMicStream();
 
   (globalThis as { RTCPeerConnection?: unknown }).RTCPeerConnection = FakePeerConnection;
@@ -351,5 +368,70 @@ describe('useVoice: a start that fails BEFORE anything was paid for', () => {
     expect(calls.some((c) => c.method === 'POST')).toBe(false);
     expect(deletes()).toHaveLength(0);
     expect(latest?.state).toBe('error');
+  });
+});
+
+// ═══ ONE BUTTON, ONE SESSION ═══
+//
+// `start()` guards on `sessionRef.current`, which is assigned at the very END
+// of the async body — after the mic permission sheet and a full SDP round trip.
+// That is hundreds of milliseconds at best and unbounded while iOS is showing
+// the permission prompt, and for all of it the guard reads null.
+//
+// So a second tap starts a second PAID session. Worse, the two attempts share
+// one set of refs: `remoteId`, `deadline` and `closeTransport` are single
+// slots, and the loser's values are simply overwritten — its peer connection is
+// never closed and its DELETE never fires. The server's one-live-session rule
+// turns the second POST into a 409, whose catch then renders 'error' over the
+// first attempt's perfectly healthy live session.
+//
+// The same window swallows an unmount. Both teardown effects gate on
+// `sessionRef.current` too, so a pane closed mid-start tears down nothing: the
+// async body runs to completion on a dead component, takes a wake lock,
+// registers `pagehide` listeners, and leaves a session billing that no UI can
+// ever stop.
+describe('useVoice: the window between the tap and the session', () => {
+  it('a second tap does not buy a second session', async () => {
+    holdSession = true;
+    await mount();
+    await act(async () => {
+      latest?.start();
+    });
+    await settle();
+    await act(async () => {
+      latest?.start();
+    });
+    await settle();
+
+    const posts = calls.filter((c) => c.method === 'POST' && c.url === '/api/voice/session');
+    expect(posts).toHaveLength(1);
+
+    for (const r of releaseSession) r();
+    await settle();
+    expect(latest?.state).not.toBe('error');
+  });
+
+  it('a session created after the pane unmounted is hung up on', async () => {
+    holdSession = true;
+    await mount();
+    await act(async () => {
+      latest?.start();
+    });
+    await settle();
+    // The POST is in flight. The pane goes away.
+    await act(() => {
+      root?.unmount();
+      root = null;
+    });
+    // ...and only now does OpenAI answer. A session exists, and there is no
+    // component left that will ever stop it.
+    for (const r of releaseSession) r();
+    await act(async () => {
+      for (let i = 0; i < 12; i++) await Promise.resolve();
+    });
+
+    expect(calls.some((c) => c.method === 'POST' && c.url === '/api/voice/session')).toBe(true);
+    expect(deletes()).toHaveLength(1);
+    expect(FakePeerConnection.instances[0]?.closed).toBe(true);
   });
 });
