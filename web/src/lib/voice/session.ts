@@ -110,7 +110,7 @@ import {
 } from './protocol';
 import { type PendingQuestion, answersFor, describeAnswer } from './question';
 import { SpeakBridge, type VoiceChatFrame, parseChatFrame } from './speak-bridge';
-import { TranscriptBuffer, type Utterance, reconstructRequest } from './transcript';
+import { GAP_MS, TranscriptBuffer, type Utterance, reconstructRequest } from './transcript';
 import type { TransportState, VoiceTransport } from './transport';
 
 /** The five live states the UI renders. `ended` is terminal. */
@@ -183,11 +183,37 @@ export const SETTLE_MAX_MS = 2500;
  * LONGER THAN THE SETTLE WINDOW, on purpose. The settle window decides what to
  * SEND, and being early there costs a truncated request. This window decides
  * whether to THROW WORK AWAY, and being early there cancels on the word "stop"
- * in "stop the dev server". It sits above a natural intra-phrase pause and
- * below the 1200ms gap at which transcript.ts calls it a new utterance, so by
- * the time it fires the sentence is as finished as this protocol can tell us.
+ * in "stop the dev server".
+ *
+ * ═══ AND IT USED TO BE 900ms, WHICH WAS THE WRONG SIDE OF THE ONLY LINE ═══
+ *
+ * The constant's reasoning was that sitting BELOW transcript.ts's 1200ms gap
+ * meant "we are still inside one utterance, so it must be finished". That is
+ * exactly backwards. {@link GAP_MS} is the window in which the utterance can
+ * still GROW — a delta arriving inside it is glued onto the same segment, and
+ * the segment object is live, so the probe re-read a sentence that was still
+ * being said. Judging at 900 against a 1200 gluing window left a 300ms band,
+ * by construction, in which "stop" was ruled a cancel and "the dev server"
+ * arrived immediately afterwards to no effect: `judged` had already marked the
+ * segment, the turn was already dead, and the interrupted notice was already
+ * written.
+ *
+ * THE TWO CLOCKS MAKE IT WIDER THAN 300ms. This timer runs on `sched.now()` —
+ * ARRIVAL time. The segmenter compares `start_ms`/`end_ms` — the API's own
+ * SPEECH clock. Realtime ASR batches on its VAD cadence and the network adds
+ * jitter, so a 400ms speech gap routinely shows up as a ~950ms arrival gap.
+ * There is no mapping between the two available here, so the only safe move is
+ * to wait out the whole gluing window and then some.
+ *
+ * Hence: derived from GAP_MS rather than chosen independently, so the two
+ * cannot drift back into the wrong order, plus a margin for the jitter. The
+ * cost is that a bare spoken "stop" takes ~1.5s to reach the BACKSTOP — and it
+ * is only ever the backstop. The main path is the model hearing the cancel and
+ * delegating it, which is immediate. The file's own asymmetry settles the
+ * trade: a late cancel costs one repetition, an early one costs minutes of
+ * work.
  */
-export const CANCEL_PROBE_QUIET_MS = 900;
+export const CANCEL_PROBE_QUIET_MS = GAP_MS + 300;
 /** Cadence of the "still working" update during a long turn. SPOKEN — see
  *  {@link VoiceSession.armHeartbeat}. */
 export const HEARTBEAT_MS = 25_000;

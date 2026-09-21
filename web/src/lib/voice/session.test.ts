@@ -22,6 +22,7 @@ import {
   VoiceSession,
   type VoiceUiState,
 } from './session';
+import { GAP_MS } from './transcript';
 import type { TransportState, VoiceTransport } from './transport';
 
 // ── Fakes ───────────────────────────────────────────────────────────────────
@@ -1824,5 +1825,69 @@ describe('a runner that CAN speak is never hung up on', () => {
     h.agent.frame({ t: 'turn-done', ok: true });
     h.clock.advance(MUTE_RUNNER_GRACE_MS + 10);
     expect(h.commentary().join('\n')).not.toMatch(/cannot send its answers/i);
+  });
+});
+
+// ═══ THE PROBE WAS JUDGING A SENTENCE THAT WAS STILL BEING SAID ═══
+//
+// Two windows decide whether "stop" is a cancel, and they were ordered the
+// wrong way round:
+//
+//   · transcript.ts glues a delta onto the OPEN utterance while the gap is
+//     ≤ GAP_MS (1200ms), measured on the SPEECH clock the API stamps.
+//   · session.ts judged that utterance after CANCEL_PROBE_QUIET_MS (900ms) of
+//     quiet, measured on the ARRIVAL clock — `sched.now()`.
+//
+// So there was a 300ms band, by construction, in which the probe ruled on a
+// segment the buffer was still filling. And the two clocks are not the same
+// one: realtime ASR batches on its own VAD cadence and the network adds
+// jitter, so a 400ms speech gap routinely arrives as a 950ms arrival gap.
+//
+// The comment on the constant claimed the opposite — that sitting BELOW the
+// gluing window meant "the sentence is as finished as this protocol can tell
+// us". It is exactly backwards: to judge a finished utterance you must wait
+// LONGER than the window in which it can still grow, not shorter.
+//
+// The cost of being wrong here is the one this whole module exists to avoid:
+// minutes of real agent work destroyed, plus a durable interrupted notice, on
+// a sentence that was never a cancel.
+describe('a cancel is judged only once the sentence has stopped growing', () => {
+  const runningTurn = () => {
+    const h = harness();
+    h.started();
+    h.hear('run the tests.', 1000, 2000);
+    h.delegate('d1', 2100);
+    h.settle();
+    h.turnStart('run the tests.');
+    return h;
+  };
+
+  it('"stop … the dev server" is a task, even across a one-second hesitation', () => {
+    const h = runningTurn();
+    const at = h.clock.t;
+    h.hear('stop', at + 10_000, at + 10_400);
+    // One second of ARRIVAL quiet: past the old 900ms probe, and well inside
+    // the 1200ms SPEECH gap the segmenter will still glue across.
+    h.clock.advance(1000);
+    expect(h.agent.stops).toBe(0);
+
+    h.hear(' the dev server', at + 10_800, at + 11_600);
+    h.probe();
+    expect(h.agent.stops).toBe(0);
+    expect(h.session.stats.cancels ?? 0).toBe(0);
+  });
+
+  it('the probe window is strictly longer than the window the text can grow in', () => {
+    // Stated as an assertion rather than a comment, because the bug was the two
+    // constants drifting into the wrong order with nothing to notice.
+    expect(CANCEL_PROBE_QUIET_MS).toBeGreaterThan(GAP_MS);
+  });
+
+  it('a bare "stop" still cancels once it has actually finished', () => {
+    const h = runningTurn();
+    const at = h.clock.t;
+    h.hear('stop', at + 10_000, at + 10_400);
+    h.probe();
+    expect(h.agent.stops).toBe(1);
   });
 });
