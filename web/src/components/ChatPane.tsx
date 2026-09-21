@@ -44,10 +44,13 @@ import {
   splitMessageAttachments,
 } from '../lib/attachments';
 import {
+  actionRunExpanded,
   applyChatVoice,
   chatVoiceActive,
   foldsAsActionRun,
   isPrivateReasoning,
+  lastTurnStartId,
+  toggleActionRun,
 } from '../lib/chat-voice';
 import { showFolderChip } from '../lib/nav-row-affordances';
 import {
@@ -3228,9 +3231,24 @@ export function ChatPane({
   // `sending` is the live-turn signal: it goes true synchronously on send and
   // on turn-start, false on turn-done, so the guard's promotion lands exactly
   // when the turn closes rather than flickering mid-turn.
+  //
+  // It is not enough on its own. `sending` says a turn is RUNNING; the voice
+  // needs to know whether the last segment IS that turn, and for a beat at the
+  // start of every turn it isn't — the flag is a socket frame (or an
+  // optimistic send), the user's message is a transcript line that has to be
+  // written, tailed and normalised first. The latch below closes that gap:
+  // while nothing is running, the last segment is by definition finished, so
+  // record which one it is; while a turn runs the value is FROZEN, and the
+  // voice compares against it to tell "the running turn hasn't written
+  // anything yet" from "the last segment is the running turn". See
+  // closedTurnStartId in chat-voice.ts for the measured symptom.
+  const lastTurnStart = useMemo(() => lastTurnStartId(events), [events]);
+  const closedTurnStart = useRef<string | null>(null);
+  if (!sending) closedTurnStart.current = lastTurnStart;
+  const closedTurnStartId = closedTurnStart.current;
   const voiceOpts = useMemo(
-    () => ({ mode, turnActive: sending, assistant: session?.assistant }),
-    [mode, sending, session?.assistant],
+    () => ({ mode, turnActive: sending, assistant: session?.assistant, closedTurnStartId }),
+    [mode, sending, session?.assistant, closedTurnStartId],
   );
   const voiceOn = chatVoiceActive(voiceOpts);
   const voiced = useMemo(() => applyChatVoice(events, voiceOpts), [events, voiceOpts]);
@@ -3733,21 +3751,17 @@ export function ChatPane({
         // as the second argument, which is now the anchor id.
         items.push(...run.map((ev) => renderEvent(ev, ev.id)));
       } else {
-        // Key stability differs by position: a CLOSED run never grows at
-        // its tail but older-history prepends can extend its head — key by
-        // LAST event. The TRAILING (possibly still growing) run gains
-        // events at its tail but its head is fixed — key by FIRST event,
-        // or every new action would reset the expansion.
-        const trailing = j === renderable.length;
-        const id = (run[trailing ? 0 : run.length - 1] as ChatEvent).id;
-        // The SCROLL ANCHOR deliberately does not follow that rule. The key
-        // flips from first-event to last-event the moment prose lands after a
-        // trailing run — routine, and it happens right where readers sit — and
-        // an anchor that flips is an anchor that can't be found, costing a full
-        // seek on the next restore. The run's FIRST event is stable across that
-        // transition and across the run growing at its tail; only a prepended
-        // batch whose own tail is contiguous actions can move it, which is rare
-        // and degrades to the ordinary "anchor not loaded" path.
+        // ONE id for the React key and the scroll anchor, and it is the run's
+        // FIRST event. These used to differ: the key flipped between the
+        // first and last event depending on whether the run was still
+        // trailing, which remounted the group (and, with the expansion keyed
+        // the same way, silently collapsed it) exactly when the turn's reply
+        // landed. The head is stable across a run growing at its tail and
+        // across that trailing→closed transition; only a prepended batch
+        // whose own tail is contiguous actions can move it, which is rare and
+        // degrades to the ordinary "anchor not loaded" path.
+        //
+        // The EXPANSION is not keyed off it at all — see actionRunExpanded.
         const anchorId = (run[0] as ChatEvent).id;
         // A `thinking` block is an ACTION, so it folds into a run — and the
         // archive indexes thinking, so a search can legitimately land inside a
@@ -3759,18 +3773,11 @@ export function ChatPane({
         const holdsHit = !!jumpTargetId && run.some((ev) => ev.id === jumpTargetId);
         items.push(
           <ActionGroup
-            key={`group-${id}`}
+            key={`group-${anchorId}`}
             events={run}
-            expanded={expandedGroups.has(id) || holdsHit}
+            expanded={actionRunExpanded(run, expandedGroups) || holdsHit}
             anchorId={anchorId}
-            onToggle={() =>
-              setExpandedGroups((prev) => {
-                const next = new Set(prev);
-                if (next.has(id)) next.delete(id);
-                else next.add(id);
-                return next;
-              })
-            }
+            onToggle={() => setExpandedGroups((prev) => toggleActionRun(run, prev))}
             renderEvent={renderEvent}
           />,
         );

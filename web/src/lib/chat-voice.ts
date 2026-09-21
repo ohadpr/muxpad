@@ -51,6 +51,43 @@ export interface ChatVoiceOpts {
    */
   turnActive: boolean;
   /**
+   * The `user` event that started the last turn we saw FINISH.
+   *
+   * ── WHY "IS A TURN RUNNING" IS NOT "IS THE LAST SEGMENT LIVE" ───────────────
+   * `turnActive` answers the first question, and this pass used to read it as
+   * the answer to the second — the last segment is exempt whenever a turn is
+   * running. Those two come apart at the start of EVERY turn, because the flag
+   * arrives before the transcript does: `turn-start` is a socket frame, the
+   * user's message is a line the harness appends to a file that is then tailed
+   * and normalised. (A composer send flips it even earlier, optimistically.)
+   * For that window the PREVIOUS, finished turn is "the last segment" and gets
+   * handed an exemption it outgrew when it ended.
+   *
+   * It is not a subtle window. Measured on the real stack, one send: 123 rows
+   * → 124 → 123, the last turn's already-dropped sign-off popping back as a
+   * folded action row and the document growing 91 px under the reader's cursor
+   * before collapsing again. On a turn that produced no reply it is the
+   * promoted `fallback` bubble that blinks out and returns — a message
+   * visibly un-saying itself every time you type.
+   *
+   * Comparing the last segment's own start event against the last one we saw
+   * CLOSE settles it with no clock and no timer:
+   *
+   *   equal     → the running turn has not written anything yet; the last
+   *               segment is the closed one, and it stays closed.
+   *   different → the last segment really is the turn that is running.
+   *
+   * It reads the right answer for the awkward cases too. A mid-turn runner
+   * reconnect re-broadcasts `turn-start` for a turn already in flight (see
+   * ws.ts): that turn's user message landed long ago, but no `turn-done` ever
+   * did, so it is NOT the last closed turn and stays protected. A client that
+   * mounts into a running turn has seen nothing close — null, which compares
+   * unequal to everything and therefore protects, which is the safe direction:
+   * the cost of being wrong here is a delayed promotion, where the cost of
+   * being wrong the other way is words appearing and disappearing.
+   */
+  closedTurnStartId: string | null;
+  /**
    * Which harness is running. Chat mode is Claude-only (modeForBackend) and
    * every door enforces it, but a codex/cursor row can still read 'chat' for
    * the instant before its runner hellos and the server corrects it. Hiding
@@ -82,6 +119,24 @@ function isHumanTurnStart(events: readonly ChatEvent[], i: number): boolean {
 }
 
 /**
+ * The `user` event that starts the transcript's LAST segment — the one a
+ * caller latches as `closedTurnStartId` whenever no turn is running.
+ *
+ * Exported because the segmentation rule has to be the same one `applyChatVoice`
+ * uses below (a `user` event, every `user` event, nothing else); a component
+ * re-deriving "the last turn" by any other reading would hand this file an
+ * answer to a slightly different question. Backwards scan — the answer is
+ * within a handful of events of the tail in every real transcript.
+ */
+export function lastTurnStartId(events: readonly ChatEvent[]): string | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e?.kind === 'user') return e.id;
+  }
+  return null;
+}
+
+/**
  * Apply Chat mode's voice to a transcript. Returns the input array unchanged
  * (same identity) when the voice is not in force, so Agent mode costs nothing
  * and its rendering is byte-for-byte what it was before this existed.
@@ -102,11 +157,21 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
   const starts: number[] = [];
   for (let i = 0; i < events.length; i++) if (events[i]?.kind === 'user') starts.push(i);
 
+  /**
+   * Is the segment starting at `from` the turn that is running RIGHT NOW —
+   * i.e. the one to leave alone? Only the last segment can be, and only when
+   * it isn't the turn we already watched close. See `closedTurnStartId`.
+   */
+  const isLiveSegment = (from: number, to: number): boolean =>
+    to === events.length &&
+    opts.turnActive &&
+    (events[from] as ChatEvent).id !== opts.closedTurnStartId;
+
   for (let s = 0; s < starts.length; s++) {
     const from = starts[s] as number;
     const to = s + 1 < starts.length ? (starts[s + 1] as number) : events.length;
-    // The LAST segment is the live one. Leave it alone until the turn closes.
-    if (to === events.length && opts.turnActive) continue;
+    // The live segment may still call `reply`. Leave it alone until it closes.
+    if (isLiveSegment(from, to)) continue;
     if (!isHumanTurnStart(events, from)) continue;
 
     let replies = 0;
@@ -155,7 +220,7 @@ export function applyChatVoice(events: readonly ChatEvent[], opts: ChatVoiceOpts
   for (let s = 0; s < starts.length; s++) {
     const from = starts[s] as number;
     const to = s + 1 < starts.length ? (starts[s + 1] as number) : events.length;
-    if (to === events.length && opts.turnActive) continue;
+    if (isLiveSegment(from, to)) continue;
     let lastReply = -1;
     for (let i = from + 1; i < to; i++) {
       const e = out[i];
@@ -198,4 +263,50 @@ const MIN_GROUP = 2;
  */
 export function foldsAsActionRun(run: readonly ChatEvent[]): boolean {
   return run.length >= MIN_GROUP || run.some(isPrivateReasoning);
+}
+
+/**
+ * Is this action run the one the reader opened?
+ *
+ * ── WHY MEMBERSHIP, NOT A CHOSEN END ─────────────────────────────────────────
+ * Expansion used to be remembered by ONE event id, and which end of the run
+ * supplied it depended on where the run sat: a still-growing TRAILING run was
+ * keyed by its first event (its tail moves), a closed one by its last (an
+ * older-history prepend can extend its head). Both halves of that are true,
+ * and together they are a bug, because a run does not stay trailing. The
+ * instant the turn's `reply` lands, the run the reader is looking at stops
+ * being last and its key flips from first-event to last-event — a key nobody
+ * ever wrote — so the chat quietly re-collapses a block the reader explicitly
+ * opened, right as the answer they were waiting for arrives. Measured on the
+ * real stack: a run expanded mid-turn went 292 px → 26 px the moment the reply
+ * appeared, with no input from the reader.
+ *
+ * A run has no stable single identity, so it is not asked for one. The
+ * expansion is remembered by the ids of the events that were IN the run when
+ * it was opened, and a run counts as expanded if it still contains any of
+ * them. Events are only ever appended to a run's tail or prepended to its
+ * head, never removed from the middle, so growth at either end preserves the
+ * answer — which is exactly the property neither end alone had.
+ */
+export function actionRunExpanded(
+  run: readonly ChatEvent[],
+  expanded: ReadonlySet<string>,
+): boolean {
+  return run.some((e) => expanded.has(e.id));
+}
+
+/** The expansion set after tapping this run's header. Collapsing forgets every
+ *  id the run currently carries, so a run that grew while open leaves nothing
+ *  behind to re-open it. */
+export function toggleActionRun(
+  run: readonly ChatEvent[],
+  expanded: ReadonlySet<string>,
+): Set<string> {
+  const next = new Set(expanded);
+  const open = actionRunExpanded(run, expanded);
+  for (const e of run) {
+    if (open) next.delete(e.id);
+    else next.add(e.id);
+  }
+  return next;
 }
