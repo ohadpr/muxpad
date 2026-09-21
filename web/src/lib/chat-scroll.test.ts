@@ -12,6 +12,7 @@ import {
   rememberChatScroll,
   scrollEventIsTrustworthy,
   scrollMemorySidMatches,
+  scrollTopAfterFoldChange,
   scrollTopAfterOlderPrepend,
   scrollTopForAnchor,
   scrollTopForSearchHit,
@@ -856,5 +857,87 @@ describe('storage that refuses to store', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('scrollTopAfterFoldChange — a run that closes above the reader', () => {
+  // The numbers are the live repro, Chromium against a 300-turn transcript: a
+  // search landed inside a collapsed action run, which ChatPane force-opened
+  // to 456px around the highlight. The reader scrolled 1200px onward, the hit
+  // left the top of the screen, the IntersectionObserver dismissed it — and
+  // the run snapped shut from ABOVE them. A probe row went from +682 to −948
+  // where −518 was the honest answer, with scrollHeight falling 26898 → 26468.
+  // The 430px gap IS the collapse, and nothing was paying for it.
+  const COLLAPSE = 430;
+
+  it('gives back exactly the height the collapse took', () => {
+    // After the collapse the anchored row sits COLLAPSE px higher than the
+    // reader left it; the target pulls scrollTop back by the same amount.
+    expect(
+      scrollTopAfterFoldChange({
+        pinned: false,
+        anchorRowTop: 200 - COLLAPSE,
+        anchorOffset: 200,
+        scrollTop: 23071,
+        scrollHeight: 26468,
+        clientHeight: 684,
+      }),
+    ).toBe(23071 - COLLAPSE);
+  });
+
+  it('leaves a PINNED reader alone — the bottom is their anchor', () => {
+    // Two owners of one scroll position is how the last three of these
+    // started; the re-pin observer already holds this case.
+    expect(
+      scrollTopAfterFoldChange({
+        pinned: true,
+        anchorRowTop: -230,
+        anchorOffset: 200,
+        scrollTop: 23071,
+        scrollHeight: 26468,
+        clientHeight: 684,
+      }),
+    ).toBe(null);
+  });
+
+  it('declines to guess when there is no row to measure', () => {
+    // A hidden pane, or a chat with nothing anchorable. Leaving the scroll
+    // alone is imprecise; inventing a target is wrong.
+    expect(
+      scrollTopAfterFoldChange({
+        pinned: false,
+        anchorRowTop: null,
+        anchorOffset: 200,
+        scrollTop: 23071,
+        scrollHeight: 26468,
+        clientHeight: 684,
+      }),
+    ).toBe(null);
+  });
+
+  it('clamps, like every other target in this file', () => {
+    // The caller stamps the result as lastProgrammaticTop, and a value the
+    // browser clamps would never equal the real scrollTop — so the very next
+    // scroll event would read as the reader taking control.
+    expect(
+      scrollTopAfterFoldChange({
+        pinned: false,
+        anchorRowTop: 900,
+        anchorOffset: 0,
+        scrollTop: 100,
+        scrollHeight: 1200,
+        clientHeight: 600,
+      }),
+    ).toBe(600);
+    expect(
+      scrollTopAfterFoldChange({
+        pinned: false,
+        anchorRowTop: -900,
+        anchorOffset: 0,
+        scrollTop: 100,
+        scrollHeight: 1200,
+        clientHeight: 600,
+      }),
+    ).toBe(0);
   });
 });

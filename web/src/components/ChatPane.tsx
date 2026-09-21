@@ -91,6 +91,7 @@ import {
   rememberChatScroll,
   scrollEventIsTrustworthy,
   scrollMemorySidMatches,
+  scrollTopAfterFoldChange,
   scrollTopAfterOlderPrepend,
   scrollTopForAnchor,
   scrollTopForSearchHit,
@@ -1546,6 +1547,12 @@ export function ChatPane({
   // letting it overwrite the memory would make the next ORDINARY open of this
   // chat land on the search hit. See shouldRememberPosition in chat-scroll.ts.
   const searchJumpHold = useRef(false);
+  /**
+   * The row under the reader's eyes at the instant a highlight was dismissed,
+   * held across the commit that closes the run the highlight forced open. See
+   * `clearJump` and scrollTopAfterFoldChange.
+   */
+  const foldAnchor = useRef<{ anchorId: string; anchorOffset: number } | null>(null);
   // Older pages spent hunting for this jump's message. Bounded like the
   // restore's anchor seek, and reset per jump (and by "keep looking").
   const jumpSeekPages = useRef(0);
@@ -2800,9 +2807,43 @@ export function ChatPane({
     // record it again.
     searchJumpHold.current = false;
     jumpSeekPages.current = 0;
+    // …and the other half is holding their place while the chat tidies up
+    // behind them. Dropping the highlight lets the run it forced open snap
+    // shut, and the dismissal signal IS the hit leaving the top of the screen
+    // — so the run is above the reader by construction, and its whole expanded
+    // height vanishes from above them mid-read. Capture the row under their
+    // eyes NOW, while the DOM still has the open run in it; the layout effect
+    // below puts that row back after the collapse. See
+    // scrollTopAfterFoldChange in chat-scroll.ts for the measured leap.
+    const el = scrollRef.current;
+    foldAnchor.current = el && el.clientHeight >= 40 ? captureAnchor(el) : null;
     setJump(null);
     setJumpMissed(false);
   }, []);
+
+  // The apply half. Keyed on `jumpTargetId` because that is what the fold reads
+  // (`holdsHit`), so this runs in the very commit the run closes — before
+  // paint, so the leap is never drawn. A no-op on the way IN (nothing was
+  // captured) and on any commit that isn't a dismissal.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: jumpTargetId is a re-run trigger, not a read — it is what the fold consults, so listing it is what puts this effect in the commit that closes the run.
+  useLayoutEffect(() => {
+    const keep = foldAnchor.current;
+    foldAnchor.current = null;
+    const el = scrollRef.current;
+    if (!el || !keep || el.clientHeight < 40) return;
+    const row = findAnchorRow(anchorRows(el), keep.anchorId);
+    const target = scrollTopAfterFoldChange({
+      pinned: pinnedToBottom.current,
+      anchorRowTop: row ? row.getBoundingClientRect().top - el.getBoundingClientRect().top : null,
+      anchorOffset: keep.anchorOffset,
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    });
+    if (target === null || Math.abs(el.scrollTop - target) <= 1) return;
+    lastProgrammaticTop.current = target;
+    el.scrollTop = target;
+  }, [jumpTargetId]);
 
   // Claim a pending jump. Both routes exist because the destination pane may or
   // may not be mounted when the result is clicked: the map covers "opened a
