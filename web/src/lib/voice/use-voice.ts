@@ -128,35 +128,6 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
     refreshStatus();
   }, [refreshStatus]);
 
-  /** Re-entry guard. `stop` disposes the session, and disposing it fires
-   *  `onState('ended')`, which now calls `stop` — once, not forever. */
-  const ending = useRef(false);
-
-  const stop = useCallback((reason: EndReason = 'user') => {
-    if (ending.current) return;
-    ending.current = true;
-    if (expiryTimer.current !== undefined) window.clearTimeout(expiryTimer.current);
-    expiryTimer.current = undefined;
-    deadline.current = null;
-    unBackground.current?.();
-    unBackground.current = null;
-    wakeLock.current?.release();
-    wakeLock.current = null;
-    sessionRef.current?.dispose(reason);
-    sessionRef.current = null;
-    closeTransport.current?.();
-    closeTransport.current = null;
-    const id = remoteId.current;
-    remoteId.current = null;
-    if (id) void endVoiceSession(id);
-    setStartedAt(null);
-    setElapsedMs(0);
-    setState('off');
-    setDetail(reason === 'user' ? null : endReasonMessage(reason));
-    void fetchVoiceStatus().then(setStatus);
-    ending.current = false;
-  }, []);
-
   // Playback can be refused even after a gesture (Safari ties permission to the
   // ELEMENT, and an element that has never played is not blessed). On a phone
   // that failure is invisible — you talk, it answers, you hear nothing — so it
@@ -164,14 +135,51 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
   const [muted, setMuted] = useState(false);
   const soundCheckRef = useRef<number | undefined>(undefined);
 
-  // Stable: it touches a ref and nothing else, and both `enableSound` and
-  // `start` close over it — an identity that changed every render would either
-  // rebuild them both or (worse, and what the lint was pointing at) leave them
-  // holding a stale one.
+  // Stable: it touches a ref and nothing else, and all three of `stop`,
+  // `enableSound` and `start` close over it — an identity that changed every
+  // render would either rebuild them all or leave them holding a stale one.
   const clearSoundCheck = useCallback(() => {
     if (soundCheckRef.current !== undefined) window.clearTimeout(soundCheckRef.current);
     soundCheckRef.current = undefined;
   }, []);
+
+  /** Re-entry guard. `stop` disposes the session, and disposing it fires
+   *  `onState('ended')`, which now calls `stop` — once, not forever. */
+  const ending = useRef(false);
+
+  const stop = useCallback(
+    (reason: EndReason = 'user') => {
+      if (ending.current) return;
+      ending.current = true;
+      // The sound check was armed by `start()` and has a 2.5s fuse. A session
+      // ended inside that window left it burning, and it fires into a dead
+      // session: `isSilentlyBlocked` is true of a stopped element, so the UI
+      // raises "tap to hear sound" on a call that is already over.
+      clearSoundCheck();
+      setMuted(false);
+      if (expiryTimer.current !== undefined) window.clearTimeout(expiryTimer.current);
+      expiryTimer.current = undefined;
+      deadline.current = null;
+      unBackground.current?.();
+      unBackground.current = null;
+      wakeLock.current?.release();
+      wakeLock.current = null;
+      sessionRef.current?.dispose(reason);
+      sessionRef.current = null;
+      closeTransport.current?.();
+      closeTransport.current = null;
+      const id = remoteId.current;
+      remoteId.current = null;
+      if (id) void endVoiceSession(id);
+      setStartedAt(null);
+      setElapsedMs(0);
+      setState('off');
+      setDetail(reason === 'user' ? null : endReasonMessage(reason));
+      void fetchVoiceStatus().then(setStatus);
+      ending.current = false;
+    },
+    [clearSoundCheck],
+  );
 
   const enableSound = useCallback(async () => {
     const el = voiceAudioElement();
