@@ -23,8 +23,8 @@ const verb = (command: string) => bash(command)?.verb ?? null;
 
 describe('gated: send — speaks as the user', () => {
   it('muxpad pane send is arbitrary shell in someone else’s terminal', () => {
-    // The exact hazard web/src/lib/dictation-cleanup.ts makes a human read the
-    // composer for. Voice has no composer; this is what replaces it.
+    // The exact hazard a human reads the composer for. Voice has no composer;
+    // this is what replaces it.
     expect(verb('muxpad pane send 3 "pnpm test"')).toBe('send');
     expect(verb('muxpad pane keys 3 --key=ctrl-c')).toBe('send');
   });

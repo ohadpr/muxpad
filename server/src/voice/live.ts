@@ -201,9 +201,9 @@ export function buildVoiceInstructions(glossary: readonly string[]): string {
     '',
     QUESTION_POLICY,
     '',
-    // Same reasoning as chat/clean-transcript.ts: the multi-word mishearings are
-    // the ones that need naming, because each word is ordinary English and only
-    // looks wrong once you know the vocabulary.
+    // The multi-word mishearings are the ones that need naming, because each
+    // word is ordinary English and only looks wrong once you know the
+    // vocabulary.
     'Names and terms from this user’s world. Speech recognition mangles them into ordinary',
     'words — "Max pad" for muxpad, "crown schedule" for "cron schedule", "heart effect" for',
     '"artifact". When something you heard plausibly SOUNDS like one of these, it is one:',
