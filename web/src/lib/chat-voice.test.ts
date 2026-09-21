@@ -2,10 +2,13 @@ import type { ChatEvent } from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
 import {
   type ChatVoiceOpts,
+  actionRunExpanded,
   applyChatVoice,
   chatVoiceActive,
   foldsAsActionRun,
   isPrivateReasoning,
+  lastTurnStartId,
+  toggleActionRun,
 } from './chat-voice';
 
 let seq = 0;
@@ -44,7 +47,12 @@ const toolUse = (name: string): ChatEvent => ({
   input: {},
 });
 
-const CHAT: ChatVoiceOpts = { mode: 'chat', turnActive: false, assistant: 'claude' };
+const CHAT: ChatVoiceOpts = {
+  mode: 'chat',
+  turnActive: false,
+  assistant: 'claude',
+  closedTurnStartId: null,
+};
 const voices = (events: ChatEvent[], opts = CHAT) =>
   applyChatVoice(events, opts).map((e) =>
     e.kind === 'assistant' ? (e.voice ?? 'spoken') : e.kind,
@@ -259,7 +267,7 @@ describe('a fold of only demoted prose is not an "action"', () => {
     expect(onlyProse.every((e) => e.kind === 'assistant')).toBe(true);
     expect(withTool.every((e) => e.kind === 'assistant')).toBe(false);
   });
-})
+});
 
 describe('the post-reply sign-off is not shown', () => {
   const user = { kind: 'user' as const, id: 'u1', ts: 1, text: 'hi' };
@@ -276,6 +284,7 @@ describe('the post-reply sign-off is not shown', () => {
     backend: 'claude',
     assistant: 'claude',
     turnActive: false,
+    closedTurnStartId: null,
   };
 
   it('drops prose that only restates the reply just sent', () => {
@@ -283,7 +292,10 @@ describe('the post-reply sign-off is not shown', () => {
     // written to an audience the model knows cannot read it. Folding it made
     // the crisp note look like the real answer hiding under a longer one —
     // which is exactly how the bug was reported.
-    const out = applyChatVoice([user, reply('4 files, biggest is X'), prose('4 files; largest X')], opts);
+    const out = applyChatVoice(
+      [user, reply('4 files, biggest is X'), prose('4 files; largest X')],
+      opts,
+    );
     expect(out.filter((e) => e.kind === 'assistant')).toHaveLength(1);
     expect(out.some((e) => e.kind === 'assistant' && e.voice === 'reply')).toBe(true);
   });
@@ -299,5 +311,101 @@ describe('the post-reply sign-off is not shown', () => {
     const out = applyChatVoice([user, prose('thought about it')], opts);
     expect(out).toHaveLength(2);
     expect(out.some((e) => e.kind === 'assistant' && e.voice === 'fallback')).toBe(true);
+  });
+});
+
+describe('a turn that has started but not yet spoken does not re-open the one before it', () => {
+  // `turn-start` is a socket frame; the user's message is a transcript line
+  // that has to be appended, tailed and normalised first. For that window the
+  // PREVIOUS turn is momentarily "the last segment" — and it used to collect
+  // the live-turn exemption, un-doing work already on screen. Measured on the
+  // real stack, once per send: 123 rows → 124 → 123, with the document growing
+  // 91 px under the reader.
+  const u1 = user('what is in ~?');
+  const closed = { ...CHAT, turnActive: true, closedTurnStartId: u1.id };
+
+  it('keeps the sign-off dropped', () => {
+    const events = [u1, reply('4 markdown files'), prose('4 files; largest is X')];
+    expect(applyChatVoice(events, closed)).toHaveLength(2);
+    // …and without the latch, the flag alone says "live" and it comes back.
+    expect(applyChatVoice(events, { ...closed, closedTurnStartId: null })).toHaveLength(3);
+  });
+
+  it('keeps a promoted fallback promoted', () => {
+    // The silent-turn shape: the bubble the guard put on screen must not blink
+    // out and return every time the reader presses Enter.
+    const events = [u1, prose('had a think, said nothing')];
+    expect(voices(events, closed)).toEqual(['user', 'fallback']);
+    expect(voices(events, { ...closed, closedTurnStartId: null })).toEqual(['user', 'private']);
+  });
+
+  it('hands the exemption over the moment the new turn DOES speak', () => {
+    const u2 = user('and now?');
+    const events = [
+      u1,
+      reply('4 markdown files'),
+      prose('4 files; largest is X'),
+      u2,
+      prose('working'),
+    ];
+    // The new segment is live (untouched); the old one stays finished.
+    expect(voices(events, closed)).toEqual(['user', 'reply', 'user', 'private']);
+  });
+
+  it('protects a turn whose start we never saw close — a mid-turn mount or a runner reconnect', () => {
+    // ws.ts re-broadcasts `turn-start` for a turn already in flight, and a
+    // client that mounts into one has watched nothing finish. Both read as
+    // "not the closed turn", which is the safe direction: a late promotion
+    // costs nothing, a premature one puts words on screen and takes them back.
+    const events = [u1, prose('still working on it')];
+    expect(voices(events, { ...CHAT, turnActive: true, closedTurnStartId: null })).toEqual([
+      'user',
+      'private',
+    ]);
+  });
+});
+
+describe('lastTurnStartId', () => {
+  it('names the user event that starts the last segment', () => {
+    const u = user('second');
+    expect(lastTurnStartId([user('first'), reply('ok'), u, prose('mid-turn')])).toBe(u.id);
+  });
+
+  it('is null for a transcript nobody has spoken into', () => {
+    expect(lastTurnStartId([prose('a wakeup ran')])).toBe(null);
+    expect(lastTurnStartId([])).toBe(null);
+  });
+});
+
+describe('an expanded action run survives the run changing shape', () => {
+  // The run the reader opens is almost always the TRAILING one — the work
+  // happening in front of them — and it stops being trailing the instant the
+  // turn's reply lands. Keying the expansion to whichever end was stable "for
+  // a run in that position" meant the key changed underneath the reader at
+  // exactly that moment. Measured: 292 px → 26 px, uninvited.
+  const a = prose('reading the file');
+  const b = toolUse('Read');
+  const c = toolUse('Grep');
+
+  it('stays open when the run grows at its TAIL (the turn keeps working)', () => {
+    const open = toggleActionRun([a, b], new Set<string>());
+    expect(actionRunExpanded([a, b, c], open)).toBe(true);
+  });
+
+  it('stays open when the run grows at its HEAD (an older-history prepend)', () => {
+    const open = toggleActionRun([b, c], new Set<string>());
+    expect(actionRunExpanded([a, b, c], open)).toBe(true);
+  });
+
+  it('collapses on a second tap, and leaves nothing behind to re-open it', () => {
+    const open = toggleActionRun([a, b], new Set<string>());
+    const shut = toggleActionRun([a, b, c], open);
+    expect(actionRunExpanded([a, b, c], shut)).toBe(false);
+    expect(shut.size).toBe(0);
+  });
+
+  it('does not open a DIFFERENT run', () => {
+    const open = toggleActionRun([a, b], new Set<string>());
+    expect(actionRunExpanded([c], open)).toBe(false);
   });
 });
