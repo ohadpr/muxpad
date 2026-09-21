@@ -13,6 +13,12 @@ import { WebSocket, WebSocketServer } from 'ws';
 import type { AgentBridge } from './agent-bridge.js';
 import { recordModelCatalog } from './agent-model-catalog.js';
 import {
+  type ResumeRepair,
+  describeRepair,
+  repairAllResumeTargets,
+  repairPaneResume,
+} from './agent-resume-repair.js';
+import {
   type AgentQuestion,
   CLOSE_RUNNER_DISPLACED,
   type NotifyStatus,
@@ -421,6 +427,39 @@ export function attachWsServer(deps: {
       });
     }
   };
+
+  // ── Stranded-conversation repair ──────────────────────────────────────────
+  // A pane's resume target can drift onto a session that never wrote a
+  // transcript, at which point every resume starts fresh and the pane reads as
+  // "my conversation got cleared" while the real one sits on disk one row away.
+  // See agent-resume-repair.ts for the mechanism and the decisions.
+  //
+  // Announcing is half the fix. A silent recovery is indistinguishable from the
+  // silent LOSS it repairs, which is how the original went unnoticed for three
+  // days — so every repair gets a server log line, a chat notice for anyone
+  // watching, and (once per sweep, not once per pane) a push.
+  const announceRepairs = (repairs: ResumeRepair[], source: string): void => {
+    if (repairs.length === 0) return;
+    for (const r of repairs) {
+      const line = describeRepair(r);
+      console.warn(`[agent-resume-repair · ${source}] pane ${r.pane_id}: ${line}`);
+      emitPaneUpdated(r.pane_id);
+      bcastToPane(r.pane_id, { t: 'notice', message: line });
+      deps.events.emit({ type: 'agent_session.updated', pane_id: r.pane_id });
+    }
+    // ONE push, even for a boot pass that repairs several panes: this reaches a
+    // phone, and a per-pane loop would burn the whole rate limit on one event.
+    const first = repairs[0] as ResumeRepair;
+    const more = repairs.length > 1 ? ` (+${repairs.length - 1} more pane(s))` : '';
+    deps.notifyPane?.(first.pane_id, `${describeRepair(first)}${more}`);
+  };
+  // Boot pass: fix every pane that has ALREADY drifted, before a chat client
+  // connects and reads current_sid. The resume-time pass in the dead-runner
+  // sweep below only ever reaches panes something is respawning; a pane that
+  // drifted days ago and is just sitting there empty is never respawned, so
+  // without this it would never be fixed and the user would never learn why.
+  announceRepairs(repairAllResumeTargets(deps.db), 'boot');
+
   // Auto-name agent panes/tabs from the session's AI title (the `ai-title`
   // records Claude appends to the transcript after the first turn and on topic
   // shifts).
@@ -778,6 +817,23 @@ export function attachWsServer(deps: {
         }
         if (fg?.includes('agent-runner')) continue;
         // ── The runner really is gone. Only NOW may we change anything. ──
+        //
+        // Resume-time repair, and it runs BEFORE the dead-session heal below on
+        // purpose. Both handle "the resume target is no good", but they are not
+        // equal outcomes: recovering the pane's most recent sid that still has a
+        // transcript brings the conversation BACK, while stripping `--resume`
+        // starts an empty one. Recovery wins whenever it is available — and when
+        // it fires, the old fatal diagnosis no longer describes the new target,
+        // so it is cleared rather than left to strip a resume we just fixed.
+        const repaired = repairPaneResume(deps.db, pane.id);
+        if (repaired) {
+          st.fatal = undefined;
+          st.attempts = 0;
+          respawns.set(pane.id, st);
+          announceRepairs([repaired], 'respawn');
+          // The repair rewrote startup_cmd; the ensurePane below already
+          // re-reads the row rather than typing this loop's stale copy.
+        }
         //
         // Dead-session self-heal: the runner told us (fatal) that its resume
         // target is gone from the harness's store — a bridged session, a
