@@ -323,9 +323,14 @@ function makeRefusalLogger(log: (line: string) => void): (origin: string, why: s
     // Unbounded growth would be a (very slow) leak, and a caller that varies
     // its Origin per request defeats the key anyway. The map only exists to
     // suppress repeats, so dropping the whole thing when it gets silly costs
-    // at most one extra log line. Cleared BEFORE the set, or the origin that
-    // tripped the limit would be evicted immediately and log again next time —
-    // which is exactly the flood this is here to stop.
+    // at most one extra line PER FORGOTTEN ORIGIN — up to 256 of them at once,
+    // not one. Still bounded and still worth it, but say the number: "at most
+    // one extra X" is precisely the sentence that hid the `last_activity_at`
+    // collapse for days (true of the write count, catastrophic about the
+    // value), and it should not be reintroduced by habit anywhere.
+    // Cleared BEFORE the set, or the origin that tripped the limit would be
+    // evicted immediately and log again next time — which is exactly the flood
+    // this is here to stop.
     if (lastLoggedAt.size > 256) lastLoggedAt.clear();
     lastLoggedAt.set(origin, now);
     log(
@@ -438,6 +443,18 @@ export function attachWsServer(deps: {
   // silent LOSS it repairs, which is how the original went unnoticed for three
   // days — so every repair gets a server log line, a chat notice for anyone
   // watching, and (once per sweep, not once per pane) a push.
+  //
+  // WHICH OF THOSE THREE ACTUALLY LAND DEPENDS ON WHEN IT RUNS, and the `boot`
+  // pass is the weak one. It fires during this function's own construction —
+  // before the HTTP server listens — so `chatClients` is empty and nothing has
+  // subscribed to the bus yet: the chat notice and the `pane.updated` /
+  // `agent_session.updated` emits reach ZERO clients, by construction. Only
+  // the console line and the push survive it. That is acceptable (a chat
+  // socket opening afterwards gets the repaired sid on its first `session`
+  // frame, and the push is the channel that reaches a person), but it must be
+  // stated rather than implied — a comment promising three channels where two
+  // are no-ops is the same shape of untrue claim this module exists to kill.
+  // The `respawn` pass below runs with clients connected and gets all three.
   const announceRepairs = (repairs: ResumeRepair[], source: string): void => {
     if (repairs.length === 0) return;
     for (const r of repairs) {
