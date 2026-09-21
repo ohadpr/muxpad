@@ -119,9 +119,11 @@ const tabActivity = new TabActivity(db, {
     if (t) events.emit({ type: 'tab.updated', tab: decorateTab(cache, db, t) });
   },
 });
-ptyd.on('paneActivity', (e: { id: string }) => {
-  tabActivity.touchPane(e.id);
-});
+// Both ptyd listeners at once — the raw activity tick AND the `connected`
+// signal that re-arms the "our own restart is not activity" grace. They live
+// inside TabActivity so the wiring is covered by its own tests; this file is a
+// script and nothing can import it.
+tabActivity.attach(ptyd);
 
 // An EXPLICIT app-url declaration (`muxpad app-url` / `muxpad serve` — the
 // OSC marker, not the output-scan heuristic) is the "this pane is a web app"
