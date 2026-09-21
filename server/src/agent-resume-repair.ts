@@ -29,6 +29,7 @@
 // about it with the mark in hand (see backends/claude.ts). This module only
 // speaks when it can actually fix something.
 import type Database from 'better-sqlite3';
+import { sessionWasCleared } from './agent-runner/session-marks.js';
 import { findTranscript, muxpadLocate } from './chat/TranscriptReader.js';
 
 /**
@@ -82,6 +83,8 @@ export interface ResumeRepair {
 export interface RepairDeps {
   /** Injectable for tests; production uses {@link locateAnyTranscript}. */
   locate?: (sid: string) => string | null;
+  /** Injectable for tests; production uses {@link sessionWasCleared}. */
+  wasCleared?: (sid: string) => boolean;
 }
 
 interface HistoryRow {
@@ -147,12 +150,22 @@ export function planResumeRepair(
   deps: RepairDeps = {},
 ): ResumeRepair | null {
   const locate = deps.locate ?? locateAnyTranscript;
-  const row = db
-    .prepare('SELECT current_sid FROM agent_sessions WHERE pane_id = ?')
-    .get(pane_id) as { current_sid: string | null } | undefined;
+  const wasCleared = deps.wasCleared ?? sessionWasCleared;
+  const row = db.prepare('SELECT current_sid FROM agent_sessions WHERE pane_id = ?').get(pane_id) as
+    | { current_sid: string | null }
+    | undefined;
   const current = row?.current_sid ?? null;
   if (!current) return null;
   if (locate(current)) return null; // the target is fine
+  // AN EMPTY SESSION THE USER ASKED FOR IS NOT A DRIFT. `/clear` rotates the
+  // session id and leaves the pane pointing at a brand-new, transcript-less
+  // session — the exact shape this module repairs. Without the mark the runner
+  // writes at the moment of the clear (session-marks.ts), a restart before the
+  // next message walks the history, finds the conversation that was just
+  // cleared, and hands it back with its context and its cost, announced as a
+  // recovery. "Nothing to recover" and "nothing you want recovered" are
+  // different answers and only one of them is ours to give.
+  if (wasCleared(current)) return null;
 
   let best: HistoryRow | null = null;
   let candidates = 0;
@@ -241,7 +254,8 @@ export function applyResumeRepair(db: Database.Database, repair: ResumeRepair): 
   const cmd = pane?.startup_cmd;
   if (!cmd?.startsWith('muxpad agent')) return; // not ours to rewrite
   const next = rewriteResumeCmd(cmd, repair.to, repair.assistant);
-  if (next !== cmd) db.prepare('UPDATE panes SET startup_cmd = ? WHERE id = ?').run(next, repair.pane_id);
+  if (next !== cmd)
+    db.prepare('UPDATE panes SET startup_cmd = ? WHERE id = ?').run(next, repair.pane_id);
 }
 
 /** Plan + apply for one pane. Returns what was done, or null if nothing was. */
@@ -266,7 +280,10 @@ export function repairPaneResume(
  * boot pass fixes every already-drifted pane in one go, before any chat client
  * connects and reads `current_sid`.
  */
-export function repairAllResumeTargets(db: Database.Database, deps: RepairDeps = {}): ResumeRepair[] {
+export function repairAllResumeTargets(
+  db: Database.Database,
+  deps: RepairDeps = {},
+): ResumeRepair[] {
   const panes = db
     .prepare("SELECT id FROM panes WHERE startup_cmd LIKE 'muxpad agent%'")
     .all() as Array<{ id: string }>;
