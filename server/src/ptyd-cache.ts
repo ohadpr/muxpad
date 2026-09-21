@@ -27,12 +27,22 @@ import { TabStore } from './store/TabStore.js';
  *
  * Cold start: `cwd` is seeded synchronously from `PaneStore.listCwds()`
  * (see `seedCwds` and the main entry's startup wiring). `title`,
- * `foreground_cmd`, and `attention` are NOT seeded — they live only in
- * ptyd's memory. During the window between HTTP start and the first
- * ptyd-event for a given pane those fields read as null. Acceptable
- * trade — the web side renders nulls gracefully. Future-me should not
- * "fix" this by seeding from SQLite, because those values aren't
- * persisted there.
+ * `foreground_cmd` and `attention` are NOT in SQLite — they live only in
+ * ptyd's memory — so they arrive on the ptyd `connected` handshake instead,
+ * via the `flushDecorations` snapshot, alongside `flushCwds`.
+ *
+ * That snapshot is load-bearing, not a nicety, and this comment used to say
+ * the opposite: it described the gap as "the window between HTTP start and
+ * the first ptyd-event" and called it an acceptable trade. It was not a
+ * window. ptyd's decoration bus fires only on CHANGE and its diff maps are
+ * keyed by pane id in ptyd's own memory — not per subscriber — so a value
+ * that does not move is never re-announced to a server that reconnected.
+ * A pane parked in one foreground command read `foreground_cmd: null` for
+ * the life of that command, and a pane whose bell was still ringing came
+ * back from every restart reading `idle` instead of `blocked`.
+ *
+ * Future-me should still not "fix" any of this by seeding from SQLite: those
+ * values aren't persisted there, and ptyd is the one thing that knows them.
  */
 export interface PaneState {
   cwd?: string;
@@ -72,6 +82,11 @@ export class PtydCache extends EventEmitter {
   // the paneCwd handler's `?.add` is a no-op — so the set never grows
   // beyond a single inflight flushCwds.
   private cwdEventRacers: Set<string> | null = null;
+  // The same idea as `cwdEventRacers`, for the decoration snapshot, but keyed
+  // per FIELD: title/fg/attention move independently, and a `paneFg` landing
+  // mid-flight says nothing about whether the snapshot's `title` is stale.
+  // Non-null only while a `connected`-driven `flushDecorations()` is inflight.
+  private decoEventRacers: Map<string, Set<'title' | 'fg' | 'attention'>> | null = null;
   // Server-side app-url detection. ptyd ships raw URL sightings
   // (`paneUrlsSeen`); the detector classifies hosts + probes for a listener
   // and writes the confirmed list back into the cache. It lives here so this
@@ -192,12 +207,15 @@ export class PtydCache extends EventEmitter {
       this.update(e.id, { cwd: e.cwd });
     });
     client.on('paneFg', (e: { id: string; cmd: string | null }) => {
+      this.noteDecoRacer(e.id, 'fg');
       this.update(e.id, { fg: e.cmd });
     });
     client.on('paneTitle', (e: { id: string; title: string | null }) => {
+      this.noteDecoRacer(e.id, 'title');
       this.update(e.id, { title: e.title });
     });
     client.on('paneAttention', (e: { id: string; attention: boolean }) => {
+      this.noteDecoRacer(e.id, 'attention');
       this.update(e.id, { attention: e.attention });
     });
     client.on('paneActivity', (e: { id: string }) => {
@@ -239,18 +257,85 @@ export class PtydCache extends EventEmitter {
       // so steady-state events don't accumulate ids forever.
       const racers = new Set<string>();
       this.cwdEventRacers = racers;
+      const decoRacers = new Map<string, Set<'title' | 'fg' | 'attention'>>();
+      this.decoEventRacers = decoRacers;
       try {
-        const entries = await client.flushCwds();
-        for (const { id, cwd } of entries) {
-          if (racers.has(id)) continue;
-          this.update(id, { cwd });
+        // Both snapshots on the one connect, and both for the same reason:
+        // ptyd's pushes fire only on CHANGE, so events alone cannot wash out a
+        // stale value — or, for a server that has just started against a ptyd
+        // that outlived it, supply one at all.
+        //
+        // `title` / `fg` / `attention` used to be left out of this, and the
+        // file's own comment called that a small "boot window". It is not a
+        // window: ptyd's diff maps are keyed by pane id in ptyd's memory, not
+        // per subscriber, so a value that does not MOVE is never re-announced.
+        // A pane parked in one foreground process kept `foreground_cmd: null`
+        // for the life of that process, and a pane whose bell was still
+        // ringing came back from a routine restart reading `idle` instead of
+        // `blocked` — losing the status rail's × AND the sidebar's
+        // "wants you now" promotion, silently, on every restart.
+        // Each call is isolated. They are INDEPENDENT snapshots, and one of
+        // them is newer than the other — a ptyd too old for
+        // `flushDecorations` must not cost us the cwds, and the eager
+        // evaluation inside a `Promise.allSettled([...])` array literal does
+        // exactly that when the method is simply absent (it throws
+        // synchronously, before allSettled ever runs). Caught by a unit test
+        // whose fake client predates the method — which is precisely the
+        // version skew this has to survive in the field.
+        const snapshot = async <T>(fn: () => Promise<T>): Promise<T | null> => {
+          try {
+            return await fn();
+          } catch {
+            return null;
+          }
+        };
+        const [cwds, decos] = await Promise.all([
+          snapshot(() => client.flushCwds()),
+          snapshot(() => client.flushDecorations()),
+        ]);
+        if (cwds) {
+          for (const { id, cwd } of cwds) {
+            if (racers.has(id)) continue;
+            this.update(id, { cwd });
+          }
         }
+        if (decos) {
+          for (const { id, title, fg, attention } of decos) {
+            // Per-field, because the three move independently: a `paneFg`
+            // that landed mid-flight makes the snapshot's `fg` stale and
+            // says nothing about its `title`.
+            const raced = decoRacers.get(id);
+            this.update(id, {
+              ...(raced?.has('title') ? {} : { title }),
+              ...(raced?.has('fg') ? {} : { fg }),
+              ...(raced?.has('attention') ? {} : { attention }),
+            });
+          }
+        }
+        // A ptyd too old for flushDecorations rejects with `unknown method`,
+        // which lands here as a settled rejection and is simply the behaviour
+        // that existed before this call — no snapshot, fields fill in from
+        // events. Version skew is normal (a ptyd bounce kills every pane, so
+        // it waits for the user's moment); it must never be an error.
       } catch {
-        // ignore — cache will fill in via paneCwd events
+        // ignore — cache will fill in via push events
       } finally {
         if (this.cwdEventRacers === racers) this.cwdEventRacers = null;
+        if (this.decoEventRacers === decoRacers) this.decoEventRacers = null;
       }
     });
+  }
+
+  /** Record that a decoration event for `id`.`field` landed while a
+   *  `flushDecorations()` snapshot was inflight — see {@link decoEventRacers}.
+   *  Outside that window the map is null and this is a no-op, so the racer
+   *  state can never outlive a single connect. */
+  private noteDecoRacer(id: string, field: 'title' | 'fg' | 'attention'): void {
+    const racers = this.decoEventRacers;
+    if (!racers) return;
+    const set = racers.get(id);
+    if (set) set.add(field);
+    else racers.set(id, new Set([field]));
   }
 
   /**
