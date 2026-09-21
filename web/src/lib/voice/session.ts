@@ -205,6 +205,44 @@ export const DISPATCH_FILLER_MS = 1500;
 /** Silence on the output transcript after which we stop calling it speaking. */
 export const SPEAKING_DECAY_MS = 900;
 /**
+ * ═══ A SESSION THAT CANNOT SPEAK MUST NOT QUIETLY BILL ═══
+ *
+ * `speak`/`speak-delta` are the only frames that become an answer, and they
+ * exist only inside the `reply` tool. Two panes will never send one:
+ *
+ *   · one switched Agent→Chat mid-session — `mcpServers` are fixed when
+ *     `query()` is constructed and the tool can never be added afterwards,
+ *     while the mic appears the instant the pane row flips; and
+ *   · one whose runner PROCESS predates `reply` shipping. Runners live for
+ *     weeks, so this is not a migration edge, it is the normal state of any
+ *     long-running pane.
+ *
+ * Both delegate correctly, work correctly, finish correctly — and say nothing.
+ * The user hears the model's "on it", then silence, while the meter runs to its
+ * ten-minute ceiling. The written answer lands in the chat, so nothing anywhere
+ * looks broken. This is the most expensive shape of failure this feature has:
+ * total, silent, and indistinguishable from a slow agent.
+ *
+ * A turn OF OURS that succeeded and produced no reply, on a session that has
+ * never seen one, is the proof. When it lands we say so out loud and hang up.
+ *
+ * HOW LONG TO WAIT BEFORE HANGING UP. Long enough for the model to actually
+ * deliver the sentence — tearing the peer connection down the same tick would
+ * make the explanation itself silent, which is the bug wearing a hat. Two
+ * sentences of speech, generously.
+ */
+export const MUTE_RUNNER_GRACE_MS = 10_000;
+
+/** What the user hears. It names the defect, points at where the answer IS,
+ *  and says why the call is ending — a hang-up with no reason reads as a
+ *  crash. */
+export const MUTE_RUNNER_LINE =
+  'Say this to the user, then stop: the agent finished, but this pane cannot send its answers to voice — its agent session is too old to have the reply tool. The answer is written in the chat. Ending the voice session so it does not keep costing money; restart the agent pane and voice will work.';
+
+/** The detail the UI shows once it has. */
+export const MUTE_RUNNER_DETAIL =
+  'Voice ended — this pane’s agent can’t send answers to voice (it started before the reply tool existed). Restart the agent pane, then try again.';
+/**
  * After an explicit cancel, ignore further cancels for this long.
  *
  * A cancel reaches us twice by design — once when the model delegates it, and
@@ -370,6 +408,10 @@ export class VoiceSession {
   private fillerTimer: number | null = null;
   private cancelProbeTimer: number | null = null;
   private floorTimer: number | null = null;
+  /** Set once we have PROVED this pane cannot answer aloud — see
+   *  {@link MUTE_RUNNER_GRACE_MS}. Latched, so we say it once and hang up once. */
+  private muteRunnerDeclared = false;
+  private muteRunnerTimer: number | null = null;
   /** One per task whose queue row has vanished, pending the grace window that
    *  tells "it started" from "it was cancelled". See {@link reconcileQueue}. */
   private orphanTimers = new Map<string, number>();
@@ -918,7 +960,13 @@ export class VoiceSession {
       //
       // ONLY `turn-done` RETIRES THE RUNNING TURN. An `error` does not, even
       // though it is a final frame: see `targetFor`.
-      if (frame.t === 'turn-done') this.retire(task, frame.ok ? 'completed' : 'failed');
+      if (frame.t === 'turn-done') {
+        // BEFORE the retire, so the explanation is delivered against a task
+        // that is still live — a stale task's appends are dropped, and this is
+        // the one append that must never be.
+        if (frame.ok) this.checkRunnerCanSpeak(task);
+        this.retire(task, frame.ok ? 'completed' : 'failed');
+      }
       if (frame.t === 'error' && task.status === 'queued') this.retire(task, 'failed');
     } else if (intents.length) {
       this.stats.staleDrops += intents.length;
@@ -1132,6 +1180,44 @@ export class VoiceSession {
     if (this.bound?.id === task.id) this.bound = null;
     this.lastTool = null;
     if (this.pipeline.length === 0) this.clearHeartbeat();
+  }
+
+  /**
+   * A turn of OURS just succeeded. Did it produce an answer anyone could hear?
+   *
+   * If it did not, AND nothing on this session ever has, this pane has no
+   * `reply` tool and never will — see {@link MUTE_RUNNER_GRACE_MS} for the two
+   * ways that happens. Every future request would end exactly the same way, so
+   * there is nothing to wait for and nothing to retry: say what is wrong, say
+   * where the answer actually is, and stop the meter.
+   *
+   * THE THREE GUARDS ARE THE WHOLE PRECISION OF THIS.
+   *
+   *   `frame.ok` (checked by the caller) — a failed turn is announced by the
+   *     bridge already, and its silence is explained.
+   *   `task` (the caller only reaches here with one) — a turn the user TYPED is
+   *     not one they are waiting to hear, and plenty of those are legitimately
+   *     quiet.
+   *   `bridge.canSpeak` — a lifetime latch. One reply proves the capability, and
+   *     after that a quiet turn is just a quiet turn. Without this, an agent
+   *     that answered ten times and then finished a turn without calling
+   *     `reply` would hang the user's call up for no reason.
+   *
+   * A cancelled task is excluded for the same reason as a failed turn: it was
+   * silent because the user silenced it.
+   */
+  private checkRunnerCanSpeak(task: VoiceTask): void {
+    if (this.muteRunnerDeclared || this.bridge.canSpeak) return;
+    if (task.status === 'cancelled') return;
+    this.muteRunnerDeclared = true;
+    this.trace('turn succeeded with no reply frame — this pane cannot answer aloud; ending');
+    // 'interrupt', because there is nothing worth waiting for the floor for:
+    // the session is about to end and this is the last thing it will ever say.
+    this.deliver(task, { kind: 'commentary', text: MUTE_RUNNER_LINE }, 'interrupt', true);
+    this.muteRunnerTimer = this.sched.setTimeout(() => {
+      this.muteRunnerTimer = null;
+      this.dispose(MUTE_RUNNER_DETAIL);
+    }, MUTE_RUNNER_GRACE_MS);
   }
 
   // ── Cancelling, which is the ONLY thing that stops the agent ───────────────
@@ -1457,6 +1543,8 @@ export class VoiceSession {
     this.floorTimer = null;
     if (this.speakingTimer != null) this.sched.clearTimeout(this.speakingTimer);
     this.speakingTimer = null;
+    if (this.muteRunnerTimer != null) this.sched.clearTimeout(this.muteRunnerTimer);
+    this.muteRunnerTimer = null;
     for (const u of this.unsubs) u();
     this.unsubs = [];
     this.pipeline = [];

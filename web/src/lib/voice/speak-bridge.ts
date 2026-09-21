@@ -204,6 +204,23 @@ export class SpeakBridge {
   /** Does the agent currently owe us an answer? Drives the "still working"
    *  heartbeat the session schedules. */
   private turnRunning = false;
+  /**
+   * Has this pane EVER put a reply on the wire?
+   *
+   * `speak`/`speak-delta` are the only frames that become a real answer, and
+   * they exist only inside the `reply` tool — a runner process older than
+   * da6d476 does not have it, and a pane switched Agent→Chat mid-session cannot
+   * gain it (its `mcpServers` were fixed when `query()` was constructed). Such a
+   * pane delegates perfectly, works, finishes, and says NOTHING, while a voice
+   * session bills to its ten-minute ceiling.
+   *
+   * This latch is the evidence. It is deliberately a LIFETIME latch rather than
+   * a per-turn flag: one reply proves the capability exists, and after that a
+   * quiet turn is just a quiet turn. Never reset — not even by `reset()`, which
+   * exists to drop per-reply dedupe state on a cancel and must not un-learn a
+   * fact about the runner.
+   */
+  private sawReply = false;
 
   constructor(opts: SpeakBridgeOpts = {}) {
     this.maxPending = opts.maxPendingChars ?? MAX_PENDING_CHARS;
@@ -217,6 +234,11 @@ export class SpeakBridge {
 
   isTurnRunning(): boolean {
     return this.turnRunning;
+  }
+
+  /** Has a reply ever reached us? See {@link sawReply}. */
+  get canSpeak(): boolean {
+    return this.sawReply;
   }
 
   /**
@@ -240,9 +262,11 @@ export class SpeakBridge {
         return [{ kind: 'thinking', text: 'The agent has started working on this.' }];
 
       case 'speak-delta':
+        this.sawReply = true;
         return this.onDelta(frame.id, frame.delta);
 
       case 'speak':
+        this.sawReply = true;
         return this.onFinal(frame.id, frame.text);
 
       case 'question':
