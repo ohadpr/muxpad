@@ -55,6 +55,26 @@ describe('isAuthFailureText — what counts as a dead credential', () => {
     const long = `Not logged in, apparently — ${'x'.repeat(250)}`;
     expect(isAuthFailureText(long)).toBe(false);
   });
+
+  // THE SHAPE THE ORIGINAL RULE MISSED. "one line, short, and STARTING with a
+  // known phrase" was justified on the claim that prose mentioning these "is
+  // multi-line, or long, or says something before it" — which is exactly what
+  // a Chat-mode SCRATCHPAD is not. Private working-out is short single-line
+  // notes, this repository's agents debug auth for a living, and every one of
+  // these is under 60 characters with nothing in front of it.
+  //
+  // So the message must also CONTINUE like an error: after the opening phrase
+  // it has to name the mechanism or the fix (`/login`, `oauth`, `credential`,
+  // `token`, `expired`, `api key`…). Every verbatim variant above does; none
+  // of the notes below do.
+  it.each([
+    ['a scratchpad note', "Not logged in — that's the bug."],
+    ['a hypothesis', 'Invalid API key, I think — let me check the env.'],
+    ['naming the string it greps for', 'Failed to authenticate is the string we match on.'],
+    ['a plan', 'Not logged in yet; checking the pane first.'],
+  ])('does NOT fire on %s', (_name, text) => {
+    expect(isAuthFailureText(text)).toBe(false);
+  });
 });
 
 describe('AuthHealPolicy — the ladder, the cap, and the way back', () => {
