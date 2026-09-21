@@ -80,6 +80,19 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
   const closeTransport = useRef<(() => void) | null>(null);
   const remoteId = useRef<string | null>(null);
   /**
+   * A start is under way but has not produced a session yet.
+   *
+   * `sessionRef` is not a usable "is voice on?" answer during that window, and
+   * the window is long: a mic permission sheet plus an SDP round trip. Both the
+   * re-entry guard and the teardown effects have to consult this as well, or a
+   * second tap buys a second paid session and a pane closed mid-start tears
+   * down nothing.
+   */
+  const starting = useRef(false);
+  /** Bumped by every start, and by every stop/unmount. An attempt whose
+   *  generation is stale abandons itself and cleans up after itself. */
+  const generation = useRef(0);
+  /**
    * The server's deadline for this call, and the timer that honours it.
    *
    * THE SERVER CANNOT HANG THE CALL UP. Audio is browser↔OpenAI, peer to peer;
@@ -155,6 +168,11 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
     (reason: EndReason = 'user', detailOverride?: string) => {
       if (ending.current) return;
       ending.current = true;
+      // Abandon any start still in flight. It will find its generation stale,
+      // close whatever it managed to create and hang up its own session — the
+      // refs below cannot do it, because nothing has been written to them yet.
+      generation.current += 1;
+      starting.current = false;
       // The sound check was armed by `start()` and has a 2.5s fuse. A session
       // ended inside that window left it burning, and it fires into a dead
       // session: `isSilentlyBlocked` is true of a stopped element, so the UI
@@ -201,7 +219,24 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
   }, [clearSoundCheck]);
 
   const start = useCallback(() => {
-    if (!enabled || !supported || sessionRef.current) return;
+    // ═══ THE GUARD HAS TO COVER THE WINDOW, NOT JUST THE RESULT ═══
+    //
+    // `sessionRef.current` is assigned at the very END of the body below —
+    // after the mic permission sheet and a full SDP round trip. That is
+    // hundreds of ms at best and unbounded while iOS holds the prompt up, and
+    // for all of it the old guard read null. A second tap therefore bought a
+    // second PAID session, and the two attempts shared one set of single-slot
+    // refs: the loser's `remoteId`, `deadline` and `closeTransport` were
+    // overwritten, so its peer connection was never closed and its DELETE
+    // never fired.
+    if (!enabled || !supported || sessionRef.current || starting.current) return;
+    // Everything this attempt does is checked against its generation. `stop()`
+    // and unmount bump it, which is what lets a start that is still negotiating
+    // be ABANDONED — cleanly, by the only code that has handles on what it
+    // created — instead of running to completion on a dead component.
+    const gen = ++generation.current;
+    starting.current = true;
+    const current = () => generation.current === gen;
     setDetail(null);
     setState('connecting');
 
@@ -220,14 +255,28 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
     const micPromise = requestMic();
 
     void (async () => {
+      // This attempt's OWN handles. They are published to the shared refs only
+      // once it has won — before that, two overlapping starts would clobber
+      // each other's ids and the loser's session would become unhangupable.
+      let myRemoteId: string | null = null;
+      let myDeadline: number | null = null;
       let stream: MediaStream;
       try {
         stream = await micPromise;
       } catch (e) {
+        starting.current = false;
+        if (!current()) return;
         setState('error');
         setDetail(
           isMicDenial(e) ? endReasonMessage('mic-denied') : 'Couldn’t open the microphone.',
         );
+        return;
+      }
+      if (!current()) {
+        // Abandoned while the permission sheet was up. Nothing was paid for
+        // yet; just give the microphone back.
+        starting.current = false;
+        for (const t of stream.getTracks()) t.stop();
         return;
       }
       try {
@@ -236,11 +285,23 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
           audioEl,
           exchangeSdp: async (offer) => {
             const answer = await createVoiceSession(paneId, offer);
-            remoteId.current = answer.sessionId;
-            deadline.current = answer.expiresAt;
+            myRemoteId = answer.sessionId;
+            myDeadline = answer.expiresAt;
             return { sdp: answer.sdp, sessionId: answer.sessionId };
           },
         });
+        if (!current()) {
+          // ABANDONED MID-NEGOTIATION, and by now a session EXISTS and is
+          // billing. The component that would have owned it is gone, so this
+          // closure is the last code that will ever hold its id: hang up here
+          // or nothing ever does.
+          starting.current = false;
+          transport.close();
+          if (myRemoteId) void endVoiceSession(myRemoteId);
+          return;
+        }
+        remoteId.current = myRemoteId;
+        deadline.current = myDeadline;
         closeTransport.current = () => transport.close();
 
         const session = new VoiceSession({
@@ -298,8 +359,10 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
         unBackground.current = onBackgrounded(() => stop('backgrounded'));
 
         setStartedAt(Date.now());
+        starting.current = false;
         void fetchVoiceStatus().then(setStatus);
       } catch (e) {
+        starting.current = false;
         // ═══ HANG UP FIRST. A FAILED START CAN STILL HAVE A PAID SESSION. ═══
         //
         // `exchangeSdp` sets `remoteId` the instant the POST answers — which is
@@ -314,14 +377,18 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
         // retry for those ten minutes against a call that never connected.
         // Nothing logged it: no upstream error, no server line, just a mic
         // button that refused and a bill.
+        // `myRemoteId` first: a failure INSIDE `createRtcTransport` never got
+        // as far as publishing to the shared ref, and that is precisely the
+        // failure with a live session behind it.
+        const orphan = myRemoteId ?? remoteId.current;
+        for (const t of stream.getTracks()) t.stop();
+        if (orphan) void endVoiceSession(orphan);
+        if (!current()) return;
         clearSoundCheck();
         closeTransport.current?.();
         closeTransport.current = null;
         deadline.current = null;
-        const orphan = remoteId.current;
         remoteId.current = null;
-        if (orphan) void endVoiceSession(orphan);
-        for (const t of stream.getTracks()) t.stop();
         setState('error');
         setDetail(
           e instanceof VoiceUnavailableError
@@ -347,13 +414,19 @@ export function useVoice(opts: UseVoiceOpts): UseVoiceResult {
   // Leaving Chat mode, or unmounting the pane, ends the session. Voice exists
   // in Chat mode only, and a session outliving its pane is a meter with no
   // off switch.
+  // `|| starting.current`: a start that is still negotiating has no session
+  // object yet but may already have a PAID one on the server. Gating teardown
+  // on `sessionRef` alone meant a pane closed inside that window tore down
+  // nothing at all, and the async body ran to completion on a dead component —
+  // taking a wake lock, registering `pagehide` listeners, and leaving a call
+  // billing that no UI could ever reach.
   useEffect(() => {
-    if (!enabled && sessionRef.current) stop('unmounted');
+    if (!enabled && (sessionRef.current || starting.current)) stop('unmounted');
   }, [enabled, stop]);
 
   useEffect(() => {
     return () => {
-      if (sessionRef.current) stop('unmounted');
+      if (sessionRef.current || starting.current) stop('unmounted');
     };
   }, [stop]);
 
