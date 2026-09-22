@@ -1511,6 +1511,31 @@ export function ChatPane({
   const renderedSid = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
+  /**
+   * Write the pin AND mirror it to the DOM, because the browser's own scroll
+   * anchoring is scoped to it (`.chat-scroll.-pinned { overflow-anchor: none }`).
+   *
+   * Anchoring is the engine holding an unpinned reader's place when content
+   * ABOVE them changes height — a pasted screenshot resolving from its 3:2
+   * placeholder to a tall phone aspect, a web font swapping in, a code block
+   * re-wrapping. It used to be off for the whole pane, which is why that class
+   * of jump had to be hand-compensated per trigger (older-prepend, search-fold)
+   * and why every trigger nobody had thought of yet dragged the reader
+   * backwards. Measured in headless Chromium: one screenshot resolving above
+   * the reader moved them 450px back with it off, 0px with it on — the engine
+   * bumped scrollTop by exactly the growth.
+   *
+   * The reason it was disabled is real but narrow: for a PINNED reader the
+   * engine pulls back toward its anchor in the same frame the follow-bottom
+   * effect pushes to the bottom, and which wins is unspecified. That argument
+   * only ever applied to the pinned case. So the rule is per-state, and the
+   * invariant is one owner at a time: pinned → muxpad owns the scroll,
+   * unpinned → the engine holds the reader's row.
+   */
+  const setPinned = useCallback((v: boolean) => {
+    pinnedToBottom.current = v;
+    scrollRef.current?.classList.toggle('-pinned', v);
+  }, []);
   // Programmatic scrollTop writes stamp this BEFORE assigning so onScroll
   // can tell reader-driven motion from restore / pin / older-prepend adjusts.
   const lastProgrammaticTop = useRef(-1);
@@ -2539,7 +2564,7 @@ export function ChatPane({
     // remembered message back in (see the seek below) lost its target before
     // the first page even arrived.
     const goal = usable(recallChatScroll(paneId));
-    pinnedToBottom.current = opensAtNewest(goal);
+    setPinned(opensAtNewest(goal));
     // While a goal ANCHOR is still outstanding, `onScroll` must not overwrite it
     // in the store. Every scrollTop this loop writes produces a trustworthy
     // scroll event once the 250ms show-settle window closes, and that event
@@ -2587,14 +2612,14 @@ export function ChatPane({
           // Caught up / no memory → hold the NEWEST message while content
           // streams in (follow-bottom effect also does this; settle covers the
           // gap before the first events commit).
-          pinnedToBottom.current = true;
+          setPinned(true);
           const target = maxScrollTop(el.scrollHeight, el.clientHeight);
           if (Math.abs(el.scrollTop - target) > 1) {
             lastProgrammaticTop.current = target;
             el.scrollTop = target;
           }
         } else {
-          pinnedToBottom.current = false;
+          setPinned(false);
           const rows = anchorRows(el);
           const row = mem.anchorId ? findAnchorRow(rows, mem.anchorId) : null;
           if (row) {
@@ -2831,7 +2856,7 @@ export function ChatPane({
       searchJumpHold.current = true;
       userScrolled.current = true;
       holdRememberedAnchor.current = false;
-      pinnedToBottom.current = false;
+      setPinned(false);
       setJumpMissed(false);
       setJump(j);
     };
@@ -2846,7 +2871,7 @@ export function ChatPane({
     };
     window.addEventListener(SEARCH_JUMP_EVENT, onJump);
     return () => window.removeEventListener(SEARCH_JUMP_EVENT, onJump);
-  }, [active, paneId]);
+  }, [active, paneId, setPinned]);
 
   // ── Dismissal ─────────────────────────────────────────────────────────────
   // A highlight answers a question ("where is it?"). It has to go when the
@@ -2932,7 +2957,7 @@ export function ChatPane({
     // The loop's own scroll events are not the reader's; a real gesture clears
     // this and takes over (see "the reader always wins").
     suppressPinUntil.current = until;
-    pinnedToBottom.current = false;
+    setPinned(false);
     const place = () => {
       raf = 0;
       if (!searchJumpHold.current) return;
@@ -3129,7 +3154,7 @@ export function ChatPane({
       // LIVE follow, and only that. Tight on purpose — nudge up one line and
       // the log stops scrolling itself under you. Deliberately NOT the value
       // that gets remembered: see `caughtUp` below and chat-scroll.ts.
-      pinnedToBottom.current = nearBottom;
+      setPinned(nearBottom);
       // RE-ENTRY policy: had they read to the end? A caught-up reader is
       // remembered as "open at the newest message", so a turn that lands while
       // they are away can't strand them thirty messages up.
@@ -3182,7 +3207,7 @@ export function ChatPane({
   const scrollToBottom = () => {
     const el = scrollRef.current;
     if (!el) return;
-    pinnedToBottom.current = true;
+    setPinned(true);
     setShowScrollDown(false);
     // This IS the reader taking control, and it must end the settling restore
     // exactly as a wheel spin does. The restore holds its goal as a snapshot,
@@ -4076,7 +4101,12 @@ export function ChatPane({
           </button>
         </output>
       ) : null}
-      <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
+      {/* `-pinned` matches pinnedToBottom's initial `true`: a chat opens at the
+          newest message, so muxpad owns the scroll until the reader moves. The
+          class is maintained imperatively from there (setPinned) because the pin
+          is a ref — it must be right in the same frame a layout change lands,
+          which a re-render cannot promise. */}
+      <div className="chat-scroll -pinned" ref={scrollRef} onScroll={onScroll}>
         <div
           className="chat-list"
           style={composerH ? { paddingBottom: `${composerH + 14}px` } : undefined}
