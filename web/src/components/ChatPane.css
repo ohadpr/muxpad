@@ -53,15 +53,21 @@
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
-  /* Explicitly OFF. The browser's own scroll anchoring tries to hold the
-     reader's position when content above them resizes — which sounds like
-     what we want, but it fights the pinned-to-bottom re-assert (the
-     ResizeObserver in ChatPane): the engine pulls back toward the anchored
-     node in the same frame we push to the bottom, and which wins is not
-     specified. One owner of scroll position, and it's ours. */
-  overflow-anchor: none;
   scrollbar-width: thin;
   scrollbar-color: var(--chat-border-strong) transparent;
+}
+/* Scroll anchoring — the engine holding the reader's place when content ABOVE
+   them changes height — is ON for an unpinned reader and OFF while pinned.
+   See setPinned() in ChatPane.tsx for the measurement and the full argument.
+
+   It was previously off for the whole pane, on a rationale that is true only of
+   the pinned case: the engine pulls back toward its anchor in the same frame
+   the follow-bottom effect pushes to the bottom, and which wins is unspecified.
+   Extending that to the unpinned reader is what left every "content grew above
+   me" jump to be hand-compensated one trigger at a time. One owner at a time:
+   pinned → ours, unpinned → the engine's. */
+.chat-scroll.-pinned {
+  overflow-anchor: none;
 }
 .chat-scroll::-webkit-scrollbar {
   width: 9px;
