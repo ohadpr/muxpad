@@ -1274,8 +1274,19 @@ type ServerMsg =
  * Assistant texts of the CURRENT turn (everything after the last user
  * message) that have already landed in the transcript. These render as real
  * events, so they must be stripped from the live streaming preview.
+ *
+ * `inFlightUser` is the correction for the case where the turn's OWN user
+ * message is not in `ordered` yet — an optimistic echo, or a queue drain whose
+ * transcript line is still up to a tail-poll away. Without it the "last user
+ * event" is the PREVIOUS turn's, so every assistant text of that finished turn
+ * counts as "landed this turn" and gets used as the tail anchor against the new
+ * turn's preview. Measured shapes: a previous `"a"` anchoring inside a fresh
+ * `"a plan for the next step"` left the preview as `"n for the next step"`, and
+ * a previous `"Done."` that appears nowhere in the new preview wiped it to ''.
+ * A turn with no transcript user line has, by definition, landed nothing.
  */
-function landedThisTurn(ordered: readonly ChatEvent[]): string[] {
+export function landedThisTurn(ordered: readonly ChatEvent[], inFlightUser = false): string[] {
+  if (inFlightUser) return [];
   let lastUser = -1;
   for (let i = ordered.length - 1; i >= 0; i--) {
     if (ordered[i]?.kind === 'user') {
@@ -1307,12 +1318,105 @@ function landedThisTurn(ordered: readonly ChatEvent[]): string[] {
  * trust the transcript over the buffer and hide the preview — the un-landed
  * tail re-lands within a tail-poll, so nothing is lost for long. Never
  * re-show landed text.
+ *
+ * ── PREFIX FIRST, tail-anchor second ────────────────────────────────────────
+ * `lastIndexOf` alone eats the head of the block that is still streaming
+ * whenever the landed text also occurs inside it: preview `"OKOK I will
+ * continue"` with `["OK"]` landed anchored on the SECOND "OK" and returned
+ * `" I will continue"`, so the in-progress block lost its own first two
+ * characters — permanently, because later deltas only append to the damaged
+ * remainder. When the preview genuinely begins with the concatenation of what
+ * has landed — the ordinary case, because the preview IS those deltas — the
+ * split point is known exactly and no search is needed. The tail-anchor stays
+ * as the fallback for the normalization drift it was written for.
  */
-function consumeStreamedText(preview: string, landed: string[]): string {
+export function consumeStreamedText(preview: string, landed: string[]): string {
   if (!landed.length) return preview;
+  const joined = landed.join('');
+  if (joined && preview.startsWith(joined)) return preview.slice(joined.length);
   const last = landed[landed.length - 1] as string;
   const idx = preview.lastIndexOf(last);
   return idx >= 0 ? preview.slice(idx + last.length) : '';
+}
+
+/**
+ * Has the optimistic user bubble's real transcript line landed?
+ *
+ * Only the NEWEST user event counts, and a SUFFIX match counts as the same
+ * message. Two independent mismatches came out of testing every user line for
+ * exact equality:
+ *
+ *  - Sending "yes" while an older "yes" is still in the loaded window retired
+ *    the echo instantly, leaving a gap at the bottom of the chat until the real
+ *    line arrived a tail-poll later.
+ *  - The first send after a Chat/Agent mode switch is written to the transcript
+ *    as `<muxpad-mode>…</muxpad-mode>\n\n` + what was typed, so exact equality
+ *    never matched and the reader saw their message twice — once clean, once
+ *    wearing the XML — until `turn-done`.
+ */
+export function optimisticEchoLanded(
+  events: readonly ChatEvent[],
+  optimistic: string,
+): boolean {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e?.kind !== 'user') continue;
+    return e.text === optimistic || e.text.endsWith(optimistic);
+  }
+  return false;
+}
+
+/**
+ * Apply a `phase:'history'` batch, which is a SNAPSHOT of [historyStart, EOF]
+ * — not a patch. Returns the new ordered list and whether everything the client
+ * already held had to be discarded, or null for "nothing to do".
+ *
+ * ── WHY A SNAPSHOT ──────────────────────────────────────────────────────────
+ * Every socket gets its own `TranscriptTail`, so a reconnect replays history,
+ * and a `/compact` rewrite re-emits history for the shrunken file. Appending
+ * those through the `byId` dedupe is only correct while the new tail OVERLAPS
+ * what is already rendered. Two ways it doesn't:
+ *
+ *  - A phone backgrounded for minutes comes back to a tail that starts AFTER
+ *    the last event it holds. Held `[e1..e10]` + history `[e21..e30]` appended
+ *    is a log with a permanent hole, and paging the gap back in PREPENDS it —
+ *    `[e11..e20, e1..e10, e21..e30]`, chronology destroyed. If the reader had
+ *    already paged to the start, `hasMoreOlder` is false and they cannot even
+ *    ask for it.
+ *  - `/compact` rewrites the file smaller with NEW uuids. Nothing dedupes, so
+ *    the whole pre-compact conversation stays on screen above the summary until
+ *    the next remount.
+ *
+ * ── WHY NOT A BLIND REPLACE ─────────────────────────────────────────────────
+ * `DocChat` replaces outright, which is right for a widget with no `load-older`
+ * and wrong here: an ordinary reconnect (the overlapping case, and much the
+ * commonest one — every mobile backgrounding) would throw away every older page
+ * the reader had scrolled back through, collapsing the document under them and
+ * dumping them at the tail. So the batch REPLACES FROM ITS OWN FIRST EVENT: the
+ * rows before that point are older history the server isn't claiming anything
+ * about, and the rows from it on are the server's word. Overlap → the reader
+ * sees nothing at all. No overlap → the held list cannot be joined to the
+ * snapshot without inventing an order, so it goes, and `load-older` brings the
+ * gap back CHRONOLOGICALLY.
+ *
+ * (An empty batch is a no-op rather than a wipe: the server drops empty emits
+ * entirely — `TranscriptTail.emit` only calls back `if (events.length)` — so an
+ * empty frame never arrives, and treating a hypothetical one as "the file is
+ * now empty" would be a guess.)
+ */
+export function mergeHistorySnapshot(
+  prev: readonly ChatEvent[],
+  batch: readonly ChatEvent[],
+): { events: ChatEvent[]; reset: boolean } | null {
+  const head = batch[0];
+  if (!head) return null;
+  const at = prev.findIndex((e) => e.id === head.id);
+  if (at === -1) {
+    // No overlap: a gap, or a rewrite that renumbered everything.
+    if (prev.length === 0) return { events: [...batch], reset: false };
+    return { events: [...batch], reset: true };
+  }
+  return { events: [...prev.slice(0, at), ...batch], reset: false };
 }
 
 /** A Task/Agent tool call — a subagent LAUNCH. It gets its own notice bubble
@@ -1693,6 +1797,12 @@ export function ChatPane({
   // The message you just sent, shown immediately as a user bubble until the
   // real one lands from the transcript tail (then deduped away).
   const [optimisticUser, setOptimisticUser] = useState<string | null>(null);
+  // Live mirror for the WS handler's closures, which capture state at
+  // subscription time. Its one reader is `landedThisTurn`: an echo on screen
+  // means the running turn's user line is NOT in `ordered` yet, so nothing has
+  // landed for this turn — see that function.
+  const optimisticUserRef = useRef<string | null>(null);
+  optimisticUserRef.current = optimisticUser;
   // An agent question awaiting the user (the runner's ask_user tool) —
   // rendered as tappable option chips at the end of the conversation.
   const [question, setQuestion] = useState<PendingQuestion | null>(null);
@@ -1827,7 +1937,12 @@ export function ChatPane({
             // twice. (On a fresh remount ordered is still empty → landed is
             // [] → the whole buffer shows, then the history replay below
             // strips block by block as it lands.)
-            setStreamingText(consumeStreamedText(msg.streamText, landedThisTurn(ordered.current)));
+            setStreamingText(
+              consumeStreamedText(
+                msg.streamText,
+                landedThisTurn(ordered.current, !!optimisticUserRef.current),
+              ),
+            );
           }
         }
         setQuestion(msg.question ?? null);
@@ -1878,6 +1993,27 @@ export function ChatPane({
             return next;
           });
         }
+        if (msg.phase === 'history') {
+          // A snapshot of [historyStart, EOF], not a patch — see
+          // mergeHistorySnapshot for the hole and the compaction ghosts that
+          // appending through `byId` leaves behind.
+          const merged = mergeHistorySnapshot(ordered.current, msg.events);
+          if (!merged) return;
+          ordered.current = merged.events;
+          byId.current = new Set(merged.events.map((e) => e.id));
+          if (merged.reset) {
+            // Everything the reader had paged in is gone with the old list, so
+            // the paging cursor has to go back to "there may be more" — and the
+            // prepend geometry describes a document that no longer exists.
+            setHasMoreOlder(true);
+            hasMoreOlderRef.current = true;
+            olderAnchor.current = null;
+          }
+          const landed = landedThisTurn(ordered.current, !!optimisticUserRef.current);
+          if (landed.length) setStreamingText((s) => (s ? consumeStreamedText(s, landed) : s));
+          setEvents(ordered.current);
+          return;
+        }
         if (fresh.length) {
           for (const e of fresh) byId.current.add(e.id);
           // Assistant text that just landed in the transcript leaves the
@@ -1892,7 +2028,10 @@ export function ChatPane({
           // live first block. Only 'older' pages are excluded — back-scrolled
           // ancient messages must never touch the live preview.
           if (msg.phase !== 'older') {
-            const landed = landedThisTurn([...ordered.current, ...fresh]);
+            const landed = landedThisTurn(
+              [...ordered.current, ...fresh],
+              !!optimisticUserRef.current,
+            );
             if (landed.length) setStreamingText((s) => (s ? consumeStreamedText(s, landed) : s));
           }
           if (msg.phase === 'older') {
@@ -1929,6 +2068,21 @@ export function ChatPane({
         setNotice(null);
         setStreamingText('');
         pendingText.current = '';
+        // ── The queue drain's missing baton ──────────────────────────────────
+        // A send that was PARKED (agent busy) is drawn from the server queue:
+        // `drainQueue` removes the row and re-broadcasts the queue the instant
+        // it relays the text, so the pending bubble disappears — and the user
+        // line only appears once the runner has written it to the JSONL and the
+        // ~250ms tail poll has picked it up. In between, the message the agent
+        // is working on is nowhere on screen: just a working row above an empty
+        // spot. The idle-send path is covered by its own optimistic echo; the
+        // queued path never set one, and `turn-start.text` (the server's
+        // correlation stamp for exactly this message) was being ignored.
+        //
+        // Setting it again for an idle send is a no-op — same string, same
+        // slot — and a turn nobody started (a cron fire, a wakeup) carries no
+        // text and sets nothing.
+        if (msg.text) setOptimisticUser(msg.text);
       } else if (msg.t === 'stream') {
         setStreamingText((s) => s + msg.delta);
       } else if (msg.t === 'turn-done') {
@@ -3304,9 +3458,17 @@ export function ChatPane({
     return () => clearTimeout(t);
   }, [connected, session, events.length]);
 
-  // Drop the optimistic user bubble once the real one lands from the transcript.
-  useEffect(() => {
-    if (optimisticUser && events.some((e) => e.kind === 'user' && e.text === optimisticUser)) {
+  // Drop the optimistic user bubble once the real one lands from the
+  // transcript. See optimisticEchoLanded for why only the NEWEST user line
+  // counts and why a suffix match does.
+  //
+  // A LAYOUT effect, not a plain one: a plain effect runs after paint, so the
+  // commit that first carries the real user event paints the echo alongside it
+  // — the reader's own message on screen twice, and a one-frame height bounce
+  // that a pinned reader gets re-pinned through in both directions, at the
+  // exact moment they are looking at the bottom of the chat.
+  useLayoutEffect(() => {
+    if (optimisticUser && optimisticEchoLanded(events, optimisticUser)) {
       setOptimisticUser(null);
     }
   }, [events, optimisticUser]);
