@@ -132,28 +132,71 @@ describe('a tab.updated repaints the row it names', () => {
     expect(listTabs).toHaveBeenCalledTimes(1);
   });
 
-  it('leaves the ARRAY ORDER exactly as the server gave it', async () => {
-    // The server owns the order (pinned block, then attention → recency) and
-    // this module only ever renders the sequence it was handed. `tab.updated`
-    // also fires on every `last_activity_at` write, so a handler that refetched
-    // would have re-sorted the unpinned block on every finished turn — rows
-    // sliding under the cursor at the debounce rate, which is the exact thing
-    // the active-tab freeze exists to prevent and which the freeze only covers
-    // for ONE row. Patching in place cannot reorder anything.
-    rows = [tab('t1'), tab('t2'), tab('t3')];
+  it('RE-SORTS on the pushed row, without a refetch', async () => {
+    // The order used to be left exactly as the server gave it, on the reasoning
+    // that the server owns it. The cost was that a tab which had just become the
+    // most recently active one did not move until the next 5s poll — and not at
+    // all while that poll is stopped, which it is for a collapsed workspace or a
+    // hidden document. The hazard that reasoning was protecting against (rows
+    // sliding under the cursor) is `freezeActiveTab`'s job, one row wide.
+    rows = [
+      tab('t1', { last_activity_at: 3_000 }),
+      tab('t2', { last_activity_at: 2_000 }),
+      tab('t3', { last_activity_at: 1_000 }),
+    ];
+    const mod = await import('./tabs');
+    await act(async () => {
+      await mod.refreshTabs(WS);
+    });
+    await mount(mod.useTabs);
+    expect(seen.map((t) => t.id)).toEqual(['t1', 't2', 't3']);
+
+    await emitTab(tab('t3', { headline: 'just did something', last_activity_at: 9_999 }));
+
+    // The row repainted AND climbed — and the climb cost no round trip, because
+    // both sides run the same comparator.
+    expect(seen.find((t) => t.id === 't3')?.headline).toBe('just did something');
+    expect(seen.map((t) => t.id)).toEqual(['t3', 't1', 't2']);
+    expect(listTabs).toHaveBeenCalledTimes(1);
+  });
+
+  it('promotes a tab that starts wanting you, above a more recent one', async () => {
+    rows = [
+      tab('t1', { last_activity_at: 3_000 }),
+      tab('t2', { last_activity_at: 2_000 }),
+      tab('t3', { last_activity_at: 1_000 }),
+    ];
     const mod = await import('./tabs');
     await act(async () => {
       await mod.refreshTabs(WS);
     });
     await mount(mod.useTabs);
 
-    await emitTab(tab('t3', { headline: 'just did something', last_activity_at: 9_999 }));
+    // `blocked` is the agent parked on a question — the highest-value case
+    // there is, and the one that must not wait for a poll.
+    await emitTab(tab('t3', { status: 'blocked', last_activity_at: 1_000 }));
 
-    // The update landed (without which the order assertion above is satisfied
-    // by doing nothing at all) and it landed WHERE THE ROW ALREADY WAS.
-    expect(seen.find((t) => t.id === 't3')?.headline).toBe('just did something');
-    expect(seen.map((t) => t.id)).toEqual(['t1', 't2', 't3']);
+    expect(seen.map((t) => t.id)).toEqual(['t3', 't1', 't2']);
     expect(listTabs).toHaveBeenCalledTimes(1);
+  });
+
+  it('never moves a row out of the pinned block', async () => {
+    // Pinned tabs carry a manual order and must stay above the divider whatever
+    // their recency says — NavTree draws the divider at the pinned count.
+    rows = [
+      tab('p1', { pinned: true, last_activity_at: 1 }),
+      tab('p2', { pinned: true, last_activity_at: 2 }),
+      tab('t1', { last_activity_at: 3_000 }),
+    ];
+    const mod = await import('./tabs');
+    await act(async () => {
+      await mod.refreshTabs(WS);
+    });
+    await mount(mod.useTabs);
+
+    await emitTab(tab('t1', { last_activity_at: 9_999 }));
+
+    expect(seen.map((t) => t.id)).toEqual(['p1', 'p2', 't1']);
   });
 
   it('ignores a tab this workspace does not hold', async () => {

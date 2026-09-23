@@ -7,3 +7,4 @@ export * from './tab-icons.js';
 export * from './attachments.js';
 export * from './cron.js';
 export * from './hosted.js';
+export * from './tab-order.js';

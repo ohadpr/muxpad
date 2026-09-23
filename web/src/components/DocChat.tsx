@@ -1,9 +1,14 @@
 import type { AgentQuestion, ChatEvent } from '@muxpad/shared';
 import { forwardRef, useCallback, useEffect, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { splitMessageAttachments } from '../lib/attachments';
+import { CopyablePre } from './CopyablePre';
 import './DocChat.css';
+
+const MD_COMPONENTS: Components = {
+  pre: ({ node: _node, ...props }) => <CopyablePre {...props} />,
+};
 
 /**
  * A DELIBERATELY light chat renderer for the document surface. Unlike ChatPane
@@ -306,7 +311,7 @@ function renderRich(text: string, asMarkdown: boolean): JSX.Element {
         if (p.kind === 'text') {
           return asMarkdown ? (
             // biome-ignore lint/suspicious/noArrayIndexKey: stable positional split of one immutable message
-            <ReactMarkdown key={`t${i}`} remarkPlugins={[remarkGfm]}>
+            <ReactMarkdown key={`t${i}`} remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
               {p.text}
             </ReactMarkdown>
           ) : (
