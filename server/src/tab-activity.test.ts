@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
@@ -22,26 +22,26 @@ function fixture() {
   return { db, ws, tabs, panes, tab, pane, read };
 }
 
-describe('TabActivity — the 60s throttle', () => {
+describe('TabActivity — the output throttle', () => {
   it('writes the first throttled signal immediately', () => {
     const f = fixture();
     const a = new TabActivity(f.db);
-    expect(a.touchTab(f.tab.id, { at: 1_000_000 })).toBe(true);
+    expect(a.touchTab(f.tab.id, { source: 'output', at: 1_000_000 })).toBe(true);
     expect(f.read(f.tab.id)).toBe(1_000_000);
   });
 
-  it('collapses a burst of throttled signals into ONE write per tab per 60s', () => {
+  it('collapses a burst of throttled signals into ONE write per tab per five seconds', () => {
     const f = fixture();
     const a = new TabActivity(f.db);
     const t0 = 1_000_000;
-    a.touchTab(f.tab.id, { at: t0 });
+    a.touchTab(f.tab.id, { source: 'output', at: t0 });
     let writes = 0;
     // A pane tailing a build: a tick every 200ms for two minutes.
     for (let ms = 200; ms <= 120_000; ms += 200) {
-      if (a.touchTab(f.tab.id, { at: t0 + ms })) writes++;
+      if (a.touchTab(f.tab.id, { source: 'output', at: t0 + ms })) writes++;
     }
-    // Exactly two more windows open in 120s.
-    expect(writes).toBe(2);
+    // Continuous output admits one write per five-second window.
+    expect(writes).toBe(120_000 / ACTIVITY_THROTTLE_MS);
     expect(f.read(f.tab.id)).toBe(t0 + 120_000);
   });
 
@@ -49,10 +49,12 @@ describe('TabActivity — the 60s throttle', () => {
     const f = fixture();
     const a = new TabActivity(f.db);
     const t0 = 1_000_000;
-    a.touchTab(f.tab.id, { at: t0 });
-    expect(a.touchTab(f.tab.id, { at: t0 + ACTIVITY_THROTTLE_MS - 1 })).toBe(false);
+    a.touchTab(f.tab.id, { source: 'output', at: t0 });
+    expect(a.touchTab(f.tab.id, { source: 'output', at: t0 + ACTIVITY_THROTTLE_MS - 1 })).toBe(
+      false,
+    );
     expect(f.read(f.tab.id)).toBe(t0); // unchanged — no write happened
-    expect(a.touchTab(f.tab.id, { at: t0 + ACTIVITY_THROTTLE_MS })).toBe(true);
+    expect(a.touchTab(f.tab.id, { source: 'output', at: t0 + ACTIVITY_THROTTLE_MS })).toBe(true);
     expect(f.read(f.tab.id)).toBe(t0 + ACTIVITY_THROTTLE_MS);
   });
 
@@ -60,10 +62,10 @@ describe('TabActivity — the 60s throttle', () => {
     const f = fixture();
     const a = new TabActivity(f.db);
     const t0 = 1_000_000;
-    a.touchTab(f.tab.id, { at: t0 });
-    expect(a.touchTab(f.tab.id, { at: t0 + 1, force: true })).toBe(true);
+    a.touchTab(f.tab.id, { source: 'output', at: t0 });
+    expect(a.touchTab(f.tab.id, { source: 'output', at: t0 + 1, force: true })).toBe(true);
     expect(f.read(f.tab.id)).toBe(t0 + 1);
-    expect(a.touchTab(f.tab.id, { at: t0 + 2, force: true })).toBe(true);
+    expect(a.touchTab(f.tab.id, { source: 'output', at: t0 + 2, force: true })).toBe(true);
     expect(f.read(f.tab.id)).toBe(t0 + 2);
   });
 
@@ -73,8 +75,8 @@ describe('TabActivity — the 60s throttle', () => {
     const f = fixture();
     const a = new TabActivity(f.db);
     const t0 = 1_000_000;
-    a.touchTab(f.tab.id, { at: t0, force: true });
-    expect(a.touchTab(f.tab.id, { at: t0 + 10 })).toBe(false);
+    a.touchTab(f.tab.id, { source: 'output', at: t0, force: true });
+    expect(a.touchTab(f.tab.id, { source: 'output', at: t0 + 10 })).toBe(false);
   });
 
   it('throttles per TAB, not globally', () => {
@@ -82,9 +84,9 @@ describe('TabActivity — the 60s throttle', () => {
     const other = f.tabs.create({ name: 'T2', layout: '', workspace_id: f.ws.id });
     const a = new TabActivity(f.db);
     const t0 = 1_000_000;
-    expect(a.touchTab(f.tab.id, { at: t0 })).toBe(true);
-    expect(a.touchTab(other.id, { at: t0 })).toBe(true);
-    expect(a.touchTab(f.tab.id, { at: t0 + 5 })).toBe(false);
+    expect(a.touchTab(f.tab.id, { source: 'output', at: t0 })).toBe(true);
+    expect(a.touchTab(other.id, { source: 'output', at: t0 })).toBe(true);
+    expect(a.touchTab(f.tab.id, { source: 'output', at: t0 + 5 })).toBe(false);
   });
 
   it('touchPane resolves the pane’s tab; an unknown pane is a silent no-op', () => {
@@ -110,8 +112,9 @@ describe('TabActivity — the 60s throttle', () => {
     };
     const t0 = 1_000_000;
     a.touchPane(f.pane.id, { at: t0 });
-    for (let ms = 200; ms <= 30_000; ms += 200) a.touchPane(f.pane.id, { at: t0 + ms });
-    expect(reads).toBe(1); // 150 signals, one read
+    for (let ms = 200; ms < ACTIVITY_THROTTLE_MS; ms += 200)
+      a.touchPane(f.pane.id, { at: t0 + ms });
+    expect(reads).toBe(1); // All ticks inside one output window share one read
   });
 
   it('a forced touchPane always reads through, bypassing the pre-filter', () => {
@@ -141,11 +144,11 @@ describe('TabActivity — the 60s throttle', () => {
     const f = fixture();
     const a = new TabActivity(f.db);
     const t0 = 1_000_000;
-    a.touchTab(f.tab.id, { at: t0 });
-    expect(a.touchTab(f.tab.id, { at: t0 + 5 })).toBe(false); // throttled
+    a.touchTab(f.tab.id, { source: 'output', at: t0 });
+    expect(a.touchTab(f.tab.id, { source: 'output', at: t0 + 5 })).toBe(false); // throttled
     a.forget(f.tab.id);
     // Memo gone → the window restarts (the row is still there in this test).
-    expect(a.touchTab(f.tab.id, { at: t0 + 6 })).toBe(true);
+    expect(a.touchTab(f.tab.id, { source: 'output', at: t0 + 6 })).toBe(true);
   });
 
   it('a deleted tab is a silent no-op, not a thrown error', () => {
@@ -154,7 +157,7 @@ describe('TabActivity — the 60s throttle', () => {
     f.tabs.delete(f.tab.id);
     // The row is gone; UPDATE matches nothing. Must not throw — this runs
     // inside a ws message handler.
-    expect(() => a.touchTab(f.tab.id, { force: true })).not.toThrow();
+    expect(() => a.touchTab(f.tab.id, { source: 'output', force: true })).not.toThrow();
   });
 });
 
@@ -176,7 +179,7 @@ describe('compareUnpinnedTabs — the auto-sorted block', () => {
         { id: 'recent', last_activity_at: 99 },
         { id: 'attn', attention: true, last_activity_at: 1 },
       ]),
-      // 'old' and 'working' tie on recency, so they fall through to position
+      // 'old' and 'working' tie on recency, so they fall through to ID
       // order — which is exactly the point: working no longer moves anything.
     ).toEqual(['attn', 'recent', 'old', 'working']);
   });
@@ -220,7 +223,7 @@ describe('compareUnpinnedTabs — the auto-sorted block', () => {
         { id: 'ancient', last_activity_at: 1 },
         { id: 'missing' },
       ]),
-    ).toEqual(['ancient', 'never', 'missing']); // nulls keep position order between themselves
+    ).toEqual(['ancient', 'missing', 'never']); // nulls use the canonical wire ID
   });
 
   it('a null timestamp sorts after a real one, even against an attention row’s partition', () => {
@@ -234,7 +237,7 @@ describe('compareUnpinnedTabs — the auto-sorted block', () => {
     ).toEqual(['nullattn', 'recent']);
   });
 
-  it('ties fall through to position, then id — the order is TOTAL', () => {
+  it('ties ignore caller positions and use wire id — the order is TOTAL', () => {
     // Identical on every signal: the comparator must still be deterministic,
     // or the sidebar would visibly reshuffle on every 5s poll.
     const rows = [
@@ -247,9 +250,9 @@ describe('compareUnpinnedTabs — the auto-sorted block', () => {
       ['b', 1],
       ['c', 0],
     ]);
-    expect(sort(rows, positions)).toEqual(['c', 'b', 'a']);
+    expect(sort(rows, positions)).toEqual(['a', 'b', 'c']);
     // Same data, different input order → same output.
-    expect(sort([...rows].reverse(), positions)).toEqual(['c', 'b', 'a']);
+    expect(sort([...rows].reverse(), positions)).toEqual(['a', 'b', 'c']);
   });
 
   it('two nulls with equal position fall through to id (never NaN-unstable)', () => {
@@ -273,14 +276,14 @@ describe('our own restart is not activity', () => {
   it('ignores pty signals during the boot grace window', () => {
     const f = fixture();
     const act = new TabActivity(f.db, { startedAt: t0, bootGraceMs: 90_000 });
-    expect(act.touchTab(f.tab.id, { at: t0 + 1_000 })).toBe(false);
-    expect(act.touchTab(f.tab.id, { at: t0 + 89_000 })).toBe(false);
+    expect(act.touchTab(f.tab.id, { source: 'output', at: t0 + 1_000 })).toBe(false);
+    expect(act.touchTab(f.tab.id, { source: 'output', at: t0 + 89_000 })).toBe(false);
   });
 
   it('lets them through once the window has passed', () => {
     const f = fixture();
     const act = new TabActivity(f.db, { startedAt: t0, bootGraceMs: 90_000 });
-    expect(act.touchTab(f.tab.id, { at: t0 + 91_000 })).toBe(true);
+    expect(act.touchTab(f.tab.id, { source: 'output', at: t0 + 91_000 })).toBe(true);
   });
 
   it('never suppresses a FORCED signal — a real send during boot still counts', () => {
@@ -288,7 +291,7 @@ describe('our own restart is not activity', () => {
     // or a message you submitted are the only two things this value is for.
     const f = fixture();
     const act = new TabActivity(f.db, { startedAt: t0, bootGraceMs: 90_000 });
-    expect(act.touchTab(f.tab.id, { at: t0 + 1_000, force: true })).toBe(true);
+    expect(act.touchTab(f.tab.id, { source: 'output', at: t0 + 1_000, force: true })).toBe(true);
   });
 });
 
@@ -329,8 +332,8 @@ describe('a ptyd reconnect is our own restart too', () => {
     const act = new TabActivity(f.db, { startedAt: t0, bootGraceMs: 90_000 });
 
     // Two tabs used an hour apart. This is the recency order the user made.
-    expect(act.touchTab(f.tab.id, { at: t0 + 1_000_000 })).toBe(true);
-    expect(act.touchTab(other.id, { at: t0 + 4_600_000 })).toBe(true);
+    expect(act.touchTab(f.tab.id, { source: 'output', at: t0 + 1_000_000 })).toBe(true);
+    expect(act.touchTab(other.id, { source: 'output', at: t0 + 4_600_000 })).toBe(true);
     const settled = { a: f.read(f.tab.id), b: f.read(other.id) };
     expect(settled.a).not.toBe(settled.b);
 
@@ -339,8 +342,8 @@ describe('a ptyd reconnect is our own restart too', () => {
     // burst reaches every tab inside the same second or two.
     const back = t0 + 10_000_000;
     act.noteReconnect(back);
-    expect(act.touchTab(f.tab.id, { at: back + 500 })).toBe(false);
-    expect(act.touchTab(other.id, { at: back + 700 })).toBe(false);
+    expect(act.touchTab(f.tab.id, { source: 'output', at: back + 500 })).toBe(false);
+    expect(act.touchTab(other.id, { source: 'output', at: back + 700 })).toBe(false);
 
     // Untouched — so the order the user produced survives. Without the
     // re-arm both rows are rewritten to within 200ms of each other and the
@@ -360,7 +363,7 @@ describe('a ptyd reconnect is our own restart too', () => {
     const c = fakeClient();
     act.attach(c);
     (c as EventEmitter).emit('connected');
-    expect(act.touchTab(f.tab.id)).toBe(false);
+    expect(act.touchTab(f.tab.id, { source: 'output' })).toBe(false);
     expect(f.read(f.tab.id)).toBe(f.tabs.getById(f.tab.id)?.created_at ?? null);
   });
 
@@ -371,7 +374,7 @@ describe('a ptyd reconnect is our own restart too', () => {
     act.attach(c);
     (c as EventEmitter).emit('connected');
     // You typing into a pane while ptyd is coming back is still you.
-    expect(act.touchTab(f.tab.id, { force: true })).toBe(true);
+    expect(act.touchTab(f.tab.id, { source: 'output', force: true })).toBe(true);
   });
 
   it('admits pty signals again once the re-armed window expires', () => {
@@ -380,8 +383,8 @@ describe('a ptyd reconnect is our own restart too', () => {
     // Injected clock here, so the window's EDGES are exact rather than racing
     // the wall clock.
     act.noteReconnect(t0);
-    expect(act.touchTab(f.tab.id, { at: t0 + 89_000 })).toBe(false);
-    expect(act.touchTab(f.tab.id, { at: t0 + 91_000 })).toBe(true);
+    expect(act.touchTab(f.tab.id, { source: 'output', at: t0 + 89_000 })).toBe(false);
+    expect(act.touchTab(f.tab.id, { source: 'output', at: t0 + 91_000 })).toBe(true);
   });
 
   it('routes paneActivity through touchPane, so the wiring is the tested thing', () => {
@@ -395,5 +398,105 @@ describe('a ptyd reconnect is our own restart too', () => {
     act.attach(c);
     (c as EventEmitter).emit('paneActivity', { id: f.pane.id });
     expect(f.read(f.tab.id)).not.toBeNull();
+  });
+});
+
+describe('terminal input survives sampling and reconnect', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it.each([0, 90_000])(
+    'ordinary terminal input immediately overtakes a newer tab (grace %s)',
+    (bootGraceMs) => {
+      vi.useFakeTimers();
+      const now = Date.now();
+      const f = fixture();
+      const other = f.tabs.create({ name: 'B', layout: '', workspace_id: f.ws.id });
+      const writes: string[] = [];
+      const a = new TabActivity(f.db, {
+        startedAt: now,
+        bootGraceMs,
+        onWrite: (id) => writes.push(id),
+      });
+      a.touchTab(f.tab.id, { force: true, at: now });
+      a.touchTab(other.id, { force: true, at: now + 30_000 });
+      expect(a.touchTab(f.tab.id, { at: now + 40_000 })).toBe(true);
+      expect(f.read(f.tab.id)).toBeGreaterThan(f.read(other.id)!);
+      expect(writes).toEqual([f.tab.id, other.id, f.tab.id]);
+    },
+  );
+
+  it('flushes the last key of a short burst within one second, without further input', () => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    const f = fixture();
+    const writes: number[] = [];
+    const a = new TabActivity(f.db, {
+      startedAt: now,
+      onWrite: () => writes.push(f.read(f.tab.id)!),
+    });
+    a.touchTab(f.tab.id);
+    for (let i = 0; i < 9; i++) {
+      vi.advanceTimersByTime(100);
+      a.touchTab(f.tab.id);
+    }
+    expect(writes).toEqual([now]);
+    vi.advanceTimersByTime(100);
+    expect(writes).toEqual([now, now + 900]);
+    vi.advanceTimersByTime(90_000);
+    expect(writes).toHaveLength(2);
+  });
+
+  it('forget cancels a deleted tab’s pending input flush', () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const onWrite = vi.fn();
+    const a = new TabActivity(f.db, { onWrite });
+    a.touchTab(f.tab.id);
+    vi.advanceTimersByTime(100);
+    a.touchTab(f.tab.id);
+    a.forget(f.tab.id);
+    vi.advanceTimersByTime(1000);
+    expect(onWrite).toHaveBeenCalledTimes(1);
+  });
+
+  it('a forced completion supersedes pending keys without a stale trailing emit', () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const onWrite = vi.fn();
+    const a = new TabActivity(f.db, { onWrite });
+    a.touchTab(f.tab.id);
+    vi.advanceTimersByTime(100);
+    a.touchTab(f.tab.id);
+    vi.advanceTimersByTime(100);
+    a.touchTab(f.tab.id, { force: true });
+    const completed = f.read(f.tab.id);
+    vi.advanceTimersByTime(1000);
+    expect(onWrite).toHaveBeenCalledTimes(2);
+    expect(f.read(f.tab.id)).toBe(completed);
+  });
+});
+
+describe('output has a five-second budget, without a second pane window', () => {
+  it('does not double the write gap after an offset forced event', () => {
+    const f = fixture();
+    const now = Date.now();
+    const writes: number[] = [];
+    const a = new TabActivity(f.db, {
+      bootGraceMs: 0,
+      onWrite: () => writes.push(f.read(f.tab.id)!),
+    });
+    a.touchPane(f.pane.id, { at: now });
+    a.touchTab(f.tab.id, { force: true, at: now + 1000 });
+    for (let ms = 2000; ms <= 6000; ms += 1000) a.touchPane(f.pane.id, { at: now + ms });
+    expect(writes.map((at) => at - now)).toEqual([0, 1000, 6000]);
+  });
+
+  it('a suppressed tick at grace end cannot extend startup suppression', () => {
+    const f = fixture();
+    const now = Date.now();
+    const a = new TabActivity(f.db, { startedAt: now });
+    expect(a.touchPane(f.pane.id, { at: now + 89_000 })).toBe(false);
+    expect(a.touchPane(f.pane.id, { at: now + 90_000 })).toBe(true);
+    expect(f.read(f.tab.id)).toBe(now + 90_000);
   });
 });

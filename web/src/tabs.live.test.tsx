@@ -305,3 +305,43 @@ describe('a PIN flip is the one change a patch cannot make', () => {
     }
   });
 });
+
+describe('pushed ties match authoritative ordering', () => {
+  it.each(['blocked clears', 'activity ties'] as const)(
+    '%s uses the same tie-break as GET',
+    async (transition) => {
+      const { compareUnpinnedTabs } = await import('@muxpad/shared');
+      // Server manual order is A,B, whereas the previously published order is
+      // B,A. Schema parsing ensures the comparison uses actual wire fields.
+      const a = tab('a', { last_activity_at: transition === 'activity ties' ? 100 : null });
+      const b = tab('b', {
+        last_activity_at: transition === 'activity ties' ? 200 : null,
+        status: transition === 'blocked clears' ? 'blocked' : 'idle',
+      });
+      const manual = new Map([
+        ['a', 0],
+        ['b', 1],
+      ]);
+      rows = [a, b].sort((x, y) => compareUnpinnedTabs(x, y, manual));
+      expect(rows.map((t) => t.id)).toEqual(['b', 'a']);
+      const mod = await import('./tabs');
+      await mod.refreshTabs(WS);
+      await mount(mod.useTabs);
+      const updated =
+        transition === 'activity ties'
+          ? { ...a, last_activity_at: 200 }
+          : { ...b, status: 'idle' as const };
+      await emitTab(updated);
+      rows = [a, b]
+        .map((t) => (t.id === updated.id ? updated : t))
+        .sort((x, y) => compareUnpinnedTabs(x, y, manual));
+      expect(seen.map((t) => t.id)).toEqual(['a', 'b']);
+      expect(seen).toEqual(rows);
+      expect(listTabs).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await mod.refreshTabs(WS);
+      });
+      expect(seen).toEqual(rows);
+    },
+  );
+});
