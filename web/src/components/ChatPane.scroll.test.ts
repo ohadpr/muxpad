@@ -107,3 +107,56 @@ describe('the settling restore retires a goal it could not reach', () => {
     expect(tsx).toContain('holdRememberedAnchor.current && !userScrolled.current');
   });
 });
+
+/**
+ * The composer's reserve, and why it is a SIBLING.
+ *
+ * The browser's scroll anchoring is what holds an unpinned reader's place when
+ * content above them changes height, and it has SUPPRESSION TRIGGERS: a
+ * computed `padding` (or margin/width/height/top/…) change on the anchor node
+ * or any of its ancestors UP TO AND INCLUDING the scrolling box cancels the
+ * adjustment for that layout pass. `.chat-list` was that ancestor for every row
+ * in the chat, and its `padding-bottom` was rewritten every time the composer's
+ * measured height moved — typing, an attachment chip row, the "Reconnecting…"
+ * banner, the mobile keyboard.
+ *
+ * Measured in headless Chromium (probe: /tmp/muxpad-hunt/fix-chat/
+ * padding-probe.html), unpinned reader at scrollTop 2000, 480px of growth above
+ * them:
+ *
+ *   no padding change        drift    0px   (engine paid the whole 480)
+ *   .chat-list padding moves drift  480px   (suppressed; nothing else pays)
+ *   .chat-scroll padding     drift  480px   (suppressed too — the scrolling box
+ *                                            is IN the chain, so moving the
+ *                                            reserve there fixes nothing)
+ *   sibling row grows        drift    0px
+ *
+ * jsdom has no layout, so this is the declaration-level invariant that keeps
+ * the reserve off the ancestor chain.
+ */
+describe("the composer's reserve does not switch scroll anchoring off", () => {
+  it('leaves .chat-list with a bottom padding nothing rewrites', () => {
+    const pad = rule('.chat-list').padding?.split(/\s+/) ?? [];
+    expect(px(pad[2])).toBe(0);
+    // …and the component must not put one back inline.
+    expect(tsx).not.toContain('paddingBottom: `${composerH');
+  });
+
+  it('keeps the scroller clear of a dynamic padding too', () => {
+    expect(rule('.chat-scroll').padding).toBeUndefined();
+    expect(rule('.chat-scroll')['padding-bottom']).toBeUndefined();
+  });
+
+  it('reserves the composer on a sibling row instead', () => {
+    expect(tsx).toContain('className="chat-composer-reserve"');
+    expect(tsx).toContain('height: `${composerH + 14}px`');
+    const r = rule('.chat-composer-reserve');
+    // Cancels .chat-list's row gap, so the resting clearance is exactly the
+    // height set inline — the same number the padding used to produce
+    // (measured: 100px either way).
+    expect(px(r['margin-top'])).toBe(-px(rule('.chat-list').gap));
+    // It must stay out of the anchor scan: `anchorRows` takes direct children
+    // of .chat-list that carry data-eid, so the reserve must carry none.
+    expect(tsx).not.toMatch(/chat-composer-reserve"[\s\S]{0,200}data-eid/);
+  });
+});
