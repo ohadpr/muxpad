@@ -104,16 +104,21 @@ ptyd.on('paneCwd', (e: { id: string; cwd: string }) => {
 });
 
 // Living sidebar: `tabs.last_activity_at`. One recorder shared with the ws
-// layer so the 60s throttle is per TAB, not per signal source. Raw pty output
+// layer so the throttle is per TAB, not per signal source. Raw pty output
 // ticks land here (ptyd throttles them already, but a busy pane still emits
-// several per second — hence the throttle); ws.ts adds the forced bumps for
-// turn-done / user sends and the throttled one for keystrokes.
+// several per second — hence the 5s output sample); ws.ts adds the forced
+// bumps for turn-done / user sends and the 1s-batched one for keystrokes.
 const tabActivity = new TabActivity(db, {
-  // Recency changed → tell every open client now, instead of leaving the
-  // reorder to their next 5s poll (which is stopped entirely for a collapsed
-  // workspace or a hidden document). Already rate-limited by the recorder's
-  // own throttle, so this is at most one event per tab per minute plus the
-  // discrete forced bumps.
+  // Recency changed AND the change can move a row → tell every open client
+  // now, instead of leaving the reorder to their next 5s poll (which is
+  // stopped entirely for a collapsed workspace or a hidden document).
+  //
+  // Rate, honestly: the recorder admits up to one write per tab per second
+  // while you type and one per five seconds while a pane spews, so this is
+  // NOT "one a minute" — and each event costs every connected client a full
+  // `GET /api/workspaces?all=1`. TabActivity therefore drops the writes that
+  // cannot reorder anything (the common case: bumping the tab that is already
+  // the most recent). See TabActivity.canReorder for why that is lossless.
   onWrite: (tabId) => {
     const t = tabStore.getById(tabId);
     if (t) events.emit({ type: 'tab.updated', tab: decorateTab(cache, db, t) });
