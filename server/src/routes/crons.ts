@@ -211,6 +211,12 @@ export function cronsRoutes(deps: {
         prompt: body.prompt ?? cron.prompt,
         from: Date.now(),
       });
+      // A reschedule MOVES `next_due_at`, which decorateTab folds into the nav
+      // row as `next_cron` — the `◷ 07:00` in the meta column. Create, enable/
+      // disable and delete all re-emit; this branch, the only one that actually
+      // changes the time being rendered, did not, so the clock stayed on the old
+      // schedule until the 5s poll (indefinitely for a collapsed workspace).
+      emitCronTabUpdate(deps, cron.target_pane);
     }
     if (body.enabled !== undefined) {
       // RESUMING re-anchors: a cron paused for a week must not wake up to a

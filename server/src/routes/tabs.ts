@@ -1,11 +1,11 @@
 import type { Tab } from '@muxpad/shared';
 import {
   AgentModeInputSchema,
+  BOOTSTRAP_TAB_NAME,
   LayoutNodeSchema,
   appendLeafToLayout,
   collectLayoutLeaves,
   rollupStatus,
-  BOOTSTRAP_TAB_NAME,
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
@@ -82,7 +82,8 @@ export function tabsRoutes(deps: {
     // random-name default. Rows, events and the eager ptyd spawn live in
     // bootstrapTab — shared verbatim with the cron scheduler's new-tab mode.
     const name =
-      body.name?.trim() || (body.bootstrap === 'agent' ? BOOTSTRAP_TAB_NAME : randomWorkspaceName());
+      body.name?.trim() ||
+      (body.bootstrap === 'agent' ? BOOTSTRAP_TAB_NAME : randomWorkspaceName());
     const created = await bootstrapTab(deps, {
       workspace_id: body.workspace_id,
       name,
@@ -193,6 +194,10 @@ export function tabsRoutes(deps: {
     // Viewing the tab clears the read-state flags — seeing it is the read
     // action: the manual tab "unread" mark AND every pane's "done, unreviewed"
     // bold. Synchronous DB writes, independent of ptyd.
+    // Read the tab's OWN mark before clearing it — it is the one piece of
+    // read-state the per-pane events below cannot describe (see the emit after
+    // the loop).
+    const hadManualMark = tabs.isUnread(id);
     tabs.setUnread(id, false);
     const tabPanes = panes.listByTab(id);
     for (const p of tabPanes) {
@@ -207,6 +212,16 @@ export function tabsRoutes(deps: {
           tab_id: fresh.tab_id,
           pane: decoratePane(deps.cache, fresh),
         });
+    }
+    // A tab marked unread by hand with no unread PANES emitted nothing at all
+    // above, while four rendered fields moved: the tab's bold name, its status
+    // rail (rollupStatus counts a manual mark as `ready`), and the workspace
+    // row's bold + rollup dot. Other clients only healed on their next 5s poll,
+    // which is stopped for a hidden document and a collapsed workspace.
+    if (hadManualMark) {
+      const fresh = tabs.getById(id);
+      if (fresh)
+        deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, fresh) });
     }
     // Issue markSeen (BEL/red-dot clear) against ptyd in parallel; swallow
     // per-pane failures (idempotent — markSeen on a missing id is a no-op on
@@ -225,24 +240,41 @@ export function tabsRoutes(deps: {
   // Manually flag a tab "unread" — restores the attention dot until the
   // tab is next viewed. Complements the BEL-driven runtime attention;
   // persisted in the DB so it survives ptyd/server restarts and needs no
-  // ptyd round-trip. The initiating client refreshes its tab list; other
-  // clients pick it up on the next poll.
+  // ptyd round-trip. The initiating client refreshes its tab list; every OTHER
+  // client learns from the emitted tab.updated (it used to wait for its next
+  // poll, which is stopped for a hidden document / a collapsed workspace — so
+  // a mark set on the phone could sit invisible on the desktop indefinitely).
   app.post('/:id/unread', (c) => {
     const id = c.req.param('id');
     if (!tabs.getById(id))
       return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
     tabs.setUnread(id, true);
+    const fresh = tabs.getById(id);
+    if (fresh)
+      deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, fresh) });
     return c.body(null, 204);
   });
 
   app.post('/reorder', async (c) => {
     const body = z.object({ ids: z.array(z.string()) }).parse(await c.req.json());
     tabs.reorder(body.ids);
-    // TODO(events): tab reorder changes `position` for N tabs in bulk.
-    // Emitting one tab.updated per touched row would work but the Tab
-    // schema doesn't actually expose position to clients, so a single
-    // event would carry no useful diff. The 5s poll covers this case
-    // until we either widen TabSchema or add a coarse workspace event.
+    // TODO(events): STILL SILENT, and the reason is worth being precise about
+    // because the old note ("the poll covers this") was wrong twice over.
+    //
+    // The poll does not cover it: it is stopped for a hidden document and a
+    // collapsed workspace, which is every second device. And this is not only a
+    // tiebreak — the PINNED block is ordered purely by `position`
+    // (orderedForWorkspace partitions a position-sorted read; sortSidebarTabs
+    // leaves that slice alone), so dragging within it is a pure position change
+    // with a fully visible result that no other client ever sees.
+    //
+    // A per-row `tab.updated` genuinely cannot carry it: Tab has no `position`,
+    // and the client's applyTabRow re-sorts with its CURRENT index as the
+    // tiebreak, so it would reproduce the order it already holds. This needs a
+    // coarse event — `{type:'tabs.reordered', workspace_id}` in
+    // shared/src/types.ts, routed in web/src/main.tsx next to tab.added as
+    // `void refreshTabs(e.workspace_id)`. Both files are outside this change's
+    // reach; the route has `tabs.getWorkspaceId(body.ids[0])` ready for it.
     return c.body(null, 204);
   });
 
@@ -253,8 +285,15 @@ export function tabsRoutes(deps: {
     const valid = new Set(livePanes.map((p) => p.id));
     const cleaned = pruneDeadPanes(t.layout, valid);
     if (JSON.stringify(cleaned) !== JSON.stringify(t.layout)) {
-      tabs.update(t.id, { layout: cleaned });
+      const repaired = tabs.update(t.id, { layout: cleaned });
       t.layout = cleaned;
+      // A GET that WRITES. Whoever triggered the prune reads the repaired
+      // layout back in this same response, but nobody else ever heard about it
+      // — and the tab LIST endpoint does no prune of its own, so every other
+      // client kept serving and rendering the ghost leaf. Announce the repair
+      // like any other layout change; it is idempotent, so a second GET finds
+      // the layouts equal and emits nothing.
+      deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, repaired) });
     }
     const decorated = livePanes.map((p) => decoratePane(deps.cache, p));
     return c.json({ ...t, panes: decorated });
