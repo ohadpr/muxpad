@@ -198,15 +198,10 @@ function applyTabRow(next: Tab): void {
     }
     const spliced = [...list];
     spliced[i] = next;
-    // Re-derive the published order from the rows we now hold. Same comparator
-    // the server runs, so this cannot disagree with the next poll.
-    //
-    // The tiebreak is the CURRENT INDEX rather than `position` (which the client
-    // row doesn't carry): the array we hold is the order the server last
-    // published, so for two tabs the comparator can't separate — identical
-    // attention AND identical activity — this reproduces the server's own answer
-    // instead of falling through to the id.
-    const merged = sortSidebarTabs(spliced, new Map(spliced.map((t, n) => [t.id, n])));
+    // Both sides break unpinned ties using wire IDs. The previous array order
+    // cannot stand in for the server's stored/manual order after a status or
+    // recency change. Pinned rows retain their authoritative manual order.
+    const merged = sortSidebarTabs(spliced);
     // Same version bump as applyTabOrder / applyTabUnread: a poll that started
     // before this event must not land after it and undo it.
     versions.set(wsId, (versions.get(wsId) ?? 0) + 1);

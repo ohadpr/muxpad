@@ -1,67 +1,24 @@
-// Per-tab "last activity" bookkeeping for the living sidebar.
-//
-// Three signals feed `tabs.last_activity_at`, and they are NOT equally noisy:
-//
-//   FORCED (write every time — these are discrete, user-meaningful moments):
-//     - an agent turn finishing in one of the tab's panes (ws.ts, next to the
-//       agent_turn emit)
-//     - a user send being submitted to a pane's agent (ws.ts submitSend)
-//
-//   THROTTLED (at most one DB write per tab per 60s):
-//     - raw pty output/input activity. A pane tailing a build emits activity
-//       ticks continuously; writing SQLite on each would be thousands of
-//       pointless writes per minute for a value whose only consumer is a
-//       coarse "which tab did something recently" sort.
-//
-// The throttle is in-memory and per-process. A restart forgets it — which this
-// file used to describe as costing "at most one extra write per tab". That is
-// true of the write COUNT and catastrophically wrong about the VALUE.
-//
-// On boot every pane's runner reconnects and every pty redraws, so every tab
-// takes a throttled write within the same second or two. The result is not a
-// few redundant rows: it is EVERY TAB SHARING ONE TIMESTAMP, which collapses
-// the sidebar's entire recency order into a tie. Observed live after a routine
-// restart — twelve tabs, one identical `last_activity_at`, and a chat used
-// minutes ago sorted below ones untouched for weeks.
-//
-// So throttled (pty) signals are ignored for a grace window. A pty redraw
-// caused by our own restart is not the user doing something, and it must never
-// be allowed to speak for them. FORCED signals are exempt: a turn finishing or
-// a send being submitted during the window is real, and those are the only two
-// things this value is actually FOR.
-//
-// THE WINDOW IS ARMED BY PTYD CONNECTING, not by process start. It was armed by
-// process start at first, and that is the wrong event: what it suppresses is a
-// pty redraw BURST, and the main server's own boot is only one of the doors
-// that produces one. ptyd outlives the main server — and the reverse happens
-// too. ptyd crashes (or is kickstarted alone), launchd brings it back, and the
-// main server runs on untouched with its grace long expired. Every pane died
-// with ptyd; the dead-runner sweep respawns every agent pane inside one 20s
-// pass; each respawn types its startup_cmd and each of those is an activity
-// tick. Same collapse, same second, through a door the original window never
-// watched. ptyd connecting is the precise signal that a burst is coming, and at
-// boot it connects within milliseconds — so this strictly generalises the
-// process-start version rather than replacing it.
-//
-// Timestamps are only ever moved FORWARD.
-import type { PaneStatus } from '@muxpad/shared';
+// Sidebar activity has three policies: discrete sends/completions are forced,
+// terminal input is leading + trailing batched at one second, and background
+// output is sampled every five seconds. Only output observes reconnect grace:
+// replayed scrollback must not erase the user's recency order.
 import type Database from 'better-sqlite3';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 
-/** Minimum wall-clock gap between two THROTTLED writes for the same tab. */
-export const ACTIVITY_THROTTLE_MS = 60_000;
+/** Output may reorder within one visible-poll interval, at most 12 writes/min
+ * per continuously active tab. Sixty seconds made ordinary work look stale. */
+export const ACTIVITY_THROTTLE_MS = 5_000;
+/** Bound input fan-out while retaining even the final key of a short burst. */
+export const INPUT_ACTIVITY_THROTTLE_MS = 1_000;
 
 /**
  * How long after process start — or after ptyd (re)connects — a THROTTLED
  * (pty) signal is ignored.
  *
- * Sized to outlast the reconnect burst — runners re-hello, ptyd replays
- * scrollback, shells redraw prompts, and the dead-runner sweep respawns every
- * agent pane within one 20s pass — without swallowing a genuine interaction. A
- * user who types into a pane inside this window still bumps its tab, because a
- * submitted send is FORCED.
+ * Sized to outlast runner reconnects, scrollback replay, and the 20s respawn
+ * sweep. Terminal input bypasses this window; redraw/output does not.
  */
 export const ACTIVITY_BOOT_GRACE_MS = 90_000;
 
@@ -70,17 +27,18 @@ export class TabActivity {
   private readonly panes: PaneStore;
   /** tabId → epoch ms of the last write we performed (forced or throttled). */
   private readonly lastWriteAt = new Map<string, number>();
-  /**
-   * paneId → epoch ms of the last THROTTLED signal we let through. Purely a
-   * pre-filter so a pty emitting several activity ticks per second doesn't
-   * pay a `panes.getById` (a fresh prepare + row read + JSON.parse of `env`)
-   * only to be thrown away by the tab-level throttle a moment later.
-   *
-   * Deliberately NOT a paneId→tabId cache: that would go stale on a pane
-   * move and keep bumping the wrong tab forever. This only ever skips work,
-   * so the worst case is one delayed bump.
-   */
+  /** Pane pre-filter uses the TAB's last admitted write, never rejected ticks.
+   * Ownership is read again at each eligible tick so pane moves cannot leave
+   * a persistent pane-to-tab cache pointing at the old tab. */
   private readonly lastPaneSignalAt = new Map<string, number>();
+  private readonly lastInputWriteAt = new Map<string, number>();
+  private readonly pendingInput = new Map<
+    string,
+    {
+      at: number;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
   private readonly throttleMs: number;
   private readonly bootGraceMs: number;
   /**
@@ -100,8 +58,8 @@ export class TabActivity {
    * stopped (collapsed workspace, hidden document). This hook lets the wiring
    * layer fan out a `tab.updated`. It is safe to emit on every write because
    * the writes are ALREADY rate-limited: forced ones are discrete user moments
-   * (turn-done, a send) and throttled ones are capped at one per tab per
-   * `throttleMs`.
+   * (turn-done, a send), input is batched at one second, and output is
+   * sampled at `throttleMs`.
    */
   private readonly onWrite: ((tabId: string) => void) | undefined;
 
@@ -152,37 +110,69 @@ export class TabActivity {
     this.graceFrom = at;
   }
 
-  /**
-   * Record activity in a tab. `force: true` bypasses the throttle (turn-done,
-   * user send); otherwise the write is skipped when one landed for this tab
-   * less than `throttleMs` ago. Returns whether a DB write happened — the
-   * tests assert on this, and callers can skip a needless event emit.
-   *
-   * Best-effort by design: this is sidebar decoration, so a failed write
-   * (deleted tab racing the signal) is swallowed rather than surfaced.
-   */
-  touchTab(tabId: string, opts: { force?: boolean; at?: number } = {}): boolean {
+  /** Direct tab calls are terminal INPUT (the ws keyboard path). Background
+   * ptyd activity arrives through touchPane and explicitly selects output.
+   * Returns whether this call wrote synchronously; a batched input also emits
+   * onWrite when its trailing flush lands, even if the terminal goes quiet. */
+  touchTab(
+    tabId: string,
+    opts: { force?: boolean; at?: number; source?: 'input' | 'output' } = {},
+  ): boolean {
     const at = opts.at ?? Date.now();
-    if (!opts.force) {
-      // Our own restart is not activity — see the grace note at the head of
-      // this file. This is the whole fix for "the sidebar forgot its order",
-      // and `graceFrom` moves on every ptyd reconnect because a reconnect is
-      // our own restart by another name.
-      // Bounded at BOTH ends on purpose. An `at` before `graceFrom` is not
-      // "inside the window" — it is a caller supplying its own clock (every
-      // test here does), and swallowing those would make the window mean
-      // "suppress everything that isn't in the future".
-      const sinceGrace = at - this.graceFrom;
-      if (sinceGrace >= 0 && sinceGrace < this.bootGraceMs) return false;
+    if (opts.force) return this.writeTab(tabId, at);
+    if (opts.source === 'output') {
+      if (this.inGrace(at)) return false;
       const last = this.lastWriteAt.get(tabId);
       if (last !== undefined && at - last < this.throttleMs) return false;
+      return this.writeTab(tabId, at);
+    }
+
+    // Input has its own budget: a background write must not hide a user's
+    // first keystroke. Keep the latest key's time, not the timer's firing time.
+    const last = this.lastInputWriteAt.get(tabId);
+    if (last === undefined || at - last >= INPUT_ACTIVITY_THROTTLE_MS) {
+      this.lastInputWriteAt.set(tabId, at);
+      return this.writeTab(tabId, at);
+    }
+    const pending = this.pendingInput.get(tabId);
+    if (pending) {
+      pending.at = Math.max(pending.at, at);
+    } else {
+      const due = last + INPUT_ACTIVITY_THROTTLE_MS;
+      const entry = {
+        at,
+        timer: setTimeout(
+          () => {
+            this.pendingInput.delete(tabId);
+            this.lastInputWriteAt.set(tabId, due);
+            this.writeTab(tabId, entry.at);
+          },
+          Math.max(0, due - at),
+        ),
+      };
+      entry.timer.unref();
+      this.pendingInput.set(tabId, entry);
+    }
+    return false;
+  }
+
+  private inGrace(at: number): boolean {
+    const sinceGrace = at - this.graceFrom;
+    return sinceGrace >= 0 && sinceGrace < this.bootGraceMs;
+  }
+
+  private writeTab(tabId: string, at: number): boolean {
+    const pending = this.pendingInput.get(tabId);
+    if (pending && pending.at <= at) {
+      clearTimeout(pending.timer);
+      this.pendingInput.delete(tabId);
     }
     try {
       this.tabs.touchActivity(tabId, at);
     } catch {
-      return false; // tab gone (cascade delete raced the signal)
+      return false;
     }
-    this.lastWriteAt.set(tabId, at);
+    this.lastWriteAt.set(tabId, Math.max(at, this.lastWriteAt.get(tabId) ?? at));
     try {
       this.onWrite?.(tabId);
     } catch {
@@ -191,31 +181,31 @@ export class TabActivity {
     return true;
   }
 
-  /**
-   * Same, resolving the tab from one of its panes. No-op for an unknown pane.
-   *
-   * The throttle is checked PER PANE before the row read, not just per tab
-   * afterwards: raw pty activity arrives several times a second and the row
-   * read is the expensive part, so filtering after it would defeat the point
-   * of throttling at all. `force` skips the pre-filter (a forced signal must
-   * always land).
-   */
+  /** Background output, resolving ownership only after the cheap pre-filter.
+   * Neither a rejected tab write nor grace advances the pane's clock. */
   touchPane(paneId: string, opts: { force?: boolean; at?: number } = {}): boolean {
     const at = opts.at ?? Date.now();
     if (!opts.force) {
+      if (this.inGrace(at)) return false;
       const last = this.lastPaneSignalAt.get(paneId);
       if (last !== undefined && at - last < this.throttleMs) return false;
-      this.lastPaneSignalAt.set(paneId, at);
     }
     const pane = this.panes.getById(paneId);
     if (!pane) return false;
-    return this.touchTab(pane.tab_id, { ...opts, at });
+    const wrote = this.touchTab(pane.tab_id, { ...opts, at, source: 'output' });
+    const last = this.lastWriteAt.get(pane.tab_id);
+    if (last !== undefined) this.lastPaneSignalAt.set(paneId, last);
+    return wrote;
   }
 
   /** Drop a tab's throttle memo (tab deleted) so the map can't grow forever.
    *  Wired into the tab DELETE handler (routes/tabs.ts). */
   forget(tabId: string): void {
     this.lastWriteAt.delete(tabId);
+    this.lastInputWriteAt.delete(tabId);
+    const pending = this.pendingInput.get(tabId);
+    if (pending) clearTimeout(pending.timer);
+    this.pendingInput.delete(tabId);
   }
 
   /** Drop a pane's pre-filter memo (pane deleted / moved). Same purpose as
@@ -243,9 +233,8 @@ export class TabActivity {
  *    partition the next key applies.
  *  - `last_activity_at` null (never observed — a row migrated in before the
  *    column existed) sorts AFTER every known timestamp, never before.
- *  - equal timestamps fall through to `position` (the stored manual order),
- *    then `id`, so the result is TOTAL: no two tabs can swap places between
- *    two renders of identical data, which would make the sidebar jitter.
+ *  - equal timestamps fall through to the shared wire `id`, so the result is
+ *    total: identical data cannot jitter between renders or between clients.
  */
 // The sidebar order moved to @muxpad/shared so the CLIENT can apply it to a
 // pushed row instead of waiting for its next poll — see shared/src/tab-order.ts

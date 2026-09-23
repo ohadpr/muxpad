@@ -4,7 +4,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Tab } from '@muxpad/shared';
+import { MuxpadEventSchema, sortSidebarTabs, type Tab } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb } from '../store/db.js';
@@ -61,6 +61,39 @@ describe('living sidebar — tab ordering + pinning', () => {
     expect(typeof row?.last_activity_at).toBe('number');
     expect(row?.id).toBe(t.id);
   });
+
+  it.each([null, 200])(
+    'a schema-parsed pushed tie matches GET, regardless of manual positions (%s)',
+    async (tie) => {
+      const a = await makeTab('A');
+      const b = await makeTab('B');
+      // Deliberately choose a stored order opposite to the canonical ID order.
+      // This catches server-side drift back to hidden positions independently
+      // of the client hook tests, which cover the actual push subscription.
+      const canonical = [a, b].sort((x, y) => (x.id < y.id ? -1 : 1));
+      await test.app.request('/api/tabs/reorder', {
+        method: 'POST',
+        ...json({ ids: canonical.map((t) => t.id).reverse() }),
+      });
+      const first = canonical[0]!;
+      const second = canonical[1]!;
+      setActivity(first.id, tie === null ? null : 100);
+      setActivity(second.id, 300);
+      const cached = await list();
+      expect(cached.map((t) => t.id)).toEqual([second.id, first.id]);
+      setActivity(first.id, tie);
+      setActivity(second.id, tie);
+      const authoritative = await list();
+      let client = cached;
+      for (const row of authoritative) {
+        const event = MuxpadEventSchema.parse({ type: 'tab.updated', tab: row });
+        if (event.type !== 'tab.updated') throw new Error('wrong event');
+        client = sortSidebarTabs(client.map((t) => (t.id === event.tab.id ? event.tab : t)));
+      }
+      expect(client).toEqual(authoritative);
+      expect(client.map((t) => t.id)).toEqual(canonical.map((t) => t.id));
+    },
+  );
 
   it('orders the unpinned block by recency, most recent first', async () => {
     const a = await makeTab('A');
