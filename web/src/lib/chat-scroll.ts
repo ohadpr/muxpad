@@ -744,12 +744,33 @@ export function scrollEventIsTrustworthy(opts: {
  * directly and set the flag without consulting this at all.
  */
 export function scrollMotionIsTheReader(opts: {
-  /** Did `scrollHeight` change since the previous scroll event? */
-  resized: boolean;
   scrollTop: number;
+  /** `scrollTop` as of the previous scroll event. */
+  lastScrollTop: number;
+  /** How much `scrollHeight` grew since the previous scroll event (may be <= 0). */
+  heightDelta: number;
   lastProgrammaticTop: number;
 }): boolean {
-  if (opts.resized) return false;
+  const moved = opts.scrollTop - opts.lastScrollTop;
+  // Nothing moved: not the reader, whatever the document did.
+  if (Math.abs(moved) <= 1) return false;
+  // ── How much of this motion can layout actually account for? ──────────────
+  // An anchoring adjustment pays for growth ABOVE the reader, so it moves
+  // scrollTop DOWN by at most the total growth — and by less when some of that
+  // growth was below them. Anything inside [0, heightDelta] is therefore
+  // explainable as compensation; anything beyond it, or any upward motion, is
+  // the reader.
+  //
+  // This replaces a blunt `if (resized) return false`, which excused EVERY
+  // motion in any frame where the content changed. That was correct for the
+  // adjustment and catastrophic for the neighbour: a reader paging with the
+  // keyboard, dragging the scrollbar, or drag-selecting during a live turn was
+  // invisible for as long as output kept arriving, and the settling restore —
+  // which nothing had told to stop — sprang them back. Measured: 7128px of real
+  // reader motion, 0 reader verdicts across 158 events.
+  if (opts.heightDelta > 0 && moved > 0 && moved <= opts.heightDelta + 1) return false;
+  // Otherwise fall back to the original question: is this position somewhere we
+  // did not put them? Programmatic writes stamp their target before assigning.
   return Math.abs(opts.scrollTop - opts.lastProgrammaticTop) > 1;
 }
 
