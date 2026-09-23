@@ -2977,6 +2977,25 @@ export function ChatPane({
           const heldRow = !anchor && held ? findAnchorRow(rows, held.anchorId) : null;
           const use =
             anchor ?? (heldRow && held ? { row: heldRow, offset: held.anchorOffset } : null);
+          // ── The ratio describes a document we have not loaded yet ──────────
+          // `ratio` was measured against the WHOLE conversation; a fresh mount
+          // opens on a ~128KB tail. Applying one to the other is not "merely
+          // imprecise", which is what the header calls it: measured, 0.0363 of
+          // a 185,753px document (turn 40) became 0.0363 of the 13,044px tail
+          // and landed on turn 296 — the opposite end. The loop then froze onto
+          // that row, correctly (freezing is what stops the R·(range+g) walk)
+          // and held the wrong message for the whole window.
+          //
+          // So while the seek can still page, hold position and let it page.
+          // The fallback is for when the anchor is genuinely unreachable — the
+          // budget is spent, or there is no more history — and by then the
+          // document is at least the one the ratio was measured against.
+          const seekCanStillRun =
+            !!mem.anchorId && hasMoreOlderRef.current && seekPages < ANCHOR_SEEK_PAGE_BUDGET;
+          if (!use && seekCanStillRun) {
+            raf = requestAnimationFrame(apply);
+            return;
+          }
           const range = maxScrollTop(el.scrollHeight, el.clientHeight);
           const target = use
             ? scrollTopForAnchor({
@@ -3037,7 +3056,17 @@ export function ChatPane({
       // expiry: a reader who took over writes their own memory through
       // `onScroll`, and overwriting it from here would be this loop having the
       // last word over a gesture.
-      const dead = holdRememberedAnchor.current && !userScrolled.current;
+      // …and ONLY when the document we settled in is the one the memory
+      // describes. If history is still unloaded, the row we settled on was
+      // chosen by the ratio fallback against a fraction of the conversation:
+      // measured, a stored ratio of 0.0363 meant 3.6% of a 185,753px document
+      // (turn 40) and was applied to the 13,044px tail, landing on turn 296 —
+      // a 14x arithmetic error at the opposite end of the chat. Retiring that
+      // row overwrote the one record of where the reader actually was, with no
+      // way back: reloading three times landed on turn 296, turn 296, turn 296.
+      // A settled row is REAL, which the comment above says; real is not right.
+      const dead =
+        holdRememberedAnchor.current && !userScrolled.current && !hasMoreOlderRef.current;
       holdRememberedAnchor.current = false;
       const settled = scrollRef.current;
       if (dead && settled && settled.clientHeight >= 40) {
@@ -4686,7 +4715,21 @@ export function ChatPane({
           class is maintained imperatively from there (setPinned) because the pin
           is a ref — it must be right in the same frame a layout change lands,
           which a re-render cannot promise. */}
-      <div className="chat-scroll -pinned" ref={scrollRef} onScroll={onScroll}>
+      {/* tabIndex=0 because a keydown listener on an element only fires when
+          focus is inside it, and this was a plain div: focus sat on <body>, the
+          listener never saw a key, and PageDown moved the log 0px. The chat had
+          no keyboard scrolling at all. A scrollable region is supposed to be
+          focusable for exactly this reason; `role=log` names what it is for a
+          screen reader now that it is in the tab order. */}
+      <div
+        className="chat-scroll -pinned"
+        ref={scrollRef}
+        onScroll={onScroll}
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: a SCROLLABLE region must be focusable or it cannot be scrolled by keyboard at all — the inverse of this rule's concern, and what axe's "scrollable-region-focusable" requires.
+        tabIndex={0}
+        role="log"
+        aria-label="Conversation"
+      >
         <div className="chat-list">
           {body}
           {optimisticUser ? (
