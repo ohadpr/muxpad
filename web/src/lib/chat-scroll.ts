@@ -111,6 +111,11 @@
  * quarter ago cannot resurrect a position from a conversation that has since
  * been cleared. A pruned entry degrades to "no memory" → the newest message,
  * never to a wrong position.
+ *
+ * Only PARKED positions occupy those 50 slots. A caught-up reader is restored
+ * to the newest message and so is a reader with no memory at all, so storing
+ * one buys nothing and costs a slot — see `rememberChatScroll` for what that
+ * cost measured out to on this machine.
  */
 export interface ChatScrollMem {
   /**
@@ -229,46 +234,170 @@ const mem: Map<string, StoredMem> = (() => {
 let flushTimer: number | undefined;
 
 /**
- * Write the map through to localStorage, preserving panes we know nothing
- * about.
+ * Panes this window has deliberately FORGOTTEN, and when.
+ *
+ * A caught-up reader needs no stored row — `opensAtNewest(null)` and
+ * `opensAtNewest({caughtUp: true})` are the same answer — so those writes are
+ * dropped rather than given an LRU slot (see `rememberChatScroll`). Dropping
+ * from `mem` is not enough on its own: `flush` merges what is already in
+ * localStorage, so a row this window deleted would be read straight back in.
+ * The timestamp is what keeps that honest across two windows: it out-ranks an
+ * OLDER stored row and yields to a NEWER one, exactly like an ordinary write.
+ */
+const dropped = new Map<string, number>();
+
+/**
+ * Take in whatever another window has written since we last looked.
+ *
+ * Bound to the `storage` event, which fires in every OTHER window of the origin
+ * on each write. Without it this window answers from a snapshot taken at
+ * import: `recallChatScroll` reads `mem` and nothing else, so a pane the other
+ * window has since moved restores to where it was at boot, and the next flush
+ * writes that stale position back over the newer one.
+ *
+ * Deliberately NOT called from `recallChatScroll`: that runs on every scroll
+ * event while a restore is holding its anchor, and a localStorage read plus a
+ * 50-entry JSON parse per frame is not a price a scroll can pay. The `storage`
+ * event covers the live case, and the import-time read covers everything
+ * written while this window did not exist — between them there is no gap.
+ */
+function adoptFromStorage(): void {
+  try {
+    const now = Date.now();
+    for (const [id, theirs] of parseEntries(localStorage.getItem(KEY), now)) {
+      const gone = dropped.get(id);
+      if (gone !== undefined && gone >= theirs.at) continue;
+      const ours = mem.get(id);
+      if (ours && ours.at >= theirs.at) continue;
+      dropped.delete(id);
+      mem.set(id, theirs);
+    }
+  } catch {
+    // private mode — nothing to adopt
+  }
+}
+
+/**
+ * Write the map through to localStorage, MERGING by write time.
  *
  * ── TWO WINDOWS ─────────────────────────────────────────────────────────────
  * sessionStorage was per-tab, so this never came up. localStorage is shared by
  * every muxpad window on the origin, and each one serialises its WHOLE map —
  * so a naive `setItem([...mem])` from window B would delete window A's memory
- * for panes B has never even opened. That is the real hazard, and it is not
- * "last writer wins" at all; it is one window silently forgetting on another's
- * behalf. Hence the read-merge-write: foreign keys are carried over untouched.
+ * for panes B has never even opened.
  *
- * For a pane BOTH windows have open, last-writer-wins is kept deliberately.
- * There is no better answer available — two windows genuinely are two places
- * the same reader was — and both candidates are a position that reader
- * actually occupied, so the loser costs them a scroll, never a wrong belief
- * about where they were. Guarding it would mean per-window keys, which would
- * hand the same reader two different answers for the same chat.
+ * This used to carry over only the keys it had never seen (`!mem.has(id)`), and
+ * `mem` is filled AT IMPORT with the entire store. So "foreign" meant "created
+ * after this window booted", and every key this window merely happened to load
+ * was treated as its own forever — even for a chat it never opened. Window B
+ * moving a position that window A had in its boot snapshot was silently undone
+ * the next time A flushed anything at all. The comment above this function
+ * claimed last-writer-wins for a pane BOTH windows have open; the code was
+ * last-FLUSHER-wins for every pane either window had ever loaded.
+ *
+ * Now the comparison is the one the comment always described: `at` decides, per
+ * key, and a window only overwrites a row it genuinely wrote more recently. For
+ * a pane both windows really do have open, last writer still wins — there is no
+ * better answer available, and both candidates are a position that reader
+ * actually occupied, so the loser costs them a scroll and never a wrong belief.
+ *
+ * The cap is applied to the MERGED set and by write time, not by this window's
+ * insertion order. The old form prepended foreign keys and then kept the tail,
+ * so at a full store another window's newly created pane was dropped on the
+ * floor and panes it had already evicted came back.
  */
 function flush(): void {
   try {
     const now = Date.now();
-    const foreign = parseEntries(localStorage.getItem(KEY), now).filter(([id]) => !mem.has(id));
-    // Ours last: `slice(-MAX_ENTRIES)` keeps the tail, so a crowded store
-    // evicts other windows' stale panes before this window's live ones.
-    localStorage.setItem(KEY, JSON.stringify([...foreign, ...mem].slice(-MAX_ENTRIES)));
+    const merged = new Map(parseEntries(localStorage.getItem(KEY), now));
+    for (const [id, when] of dropped) {
+      const theirs = merged.get(id);
+      if (!theirs || theirs.at <= when) merged.delete(id);
+    }
+    for (const [id, ours] of mem) {
+      const theirs = merged.get(id);
+      if (!theirs || ours.at >= theirs.at) merged.set(id, ours);
+    }
+    const entries = [...merged].sort((a, b) => a[1].at - b[1].at).slice(-MAX_ENTRIES);
+    localStorage.setItem(KEY, JSON.stringify(entries));
   } catch {
     // quota / private mode — the in-memory map still covers this session
   }
 }
 
+/**
+ * Write through NOW, cancelling the debounce.
+ *
+ * The 250ms debounce is right for a scroll storm — wheel and trackpad events
+ * fire per frame, and every one of them calls `rememberChatScroll` — but it has
+ * no answer for the browsing context ENDING inside the window. Worse, each
+ * remember RESTARTS the timer, so a reader who scrolls to a message and quits
+ * without pausing a quarter of a second never flushes ANY of that scroll
+ * session. Cold open then finds nothing and opens at the newest message, which
+ * is the same user-visible reset the move to localStorage existed to kill, just
+ * through a smaller door.
+ *
+ * iOS makes it routine rather than a race: it freezes timers the moment the
+ * page is backgrounded and may kill the WKWebView without ever running one.
+ * `pagehide` is the event that does fire — the voice stack in this app already
+ * knows that — and `visibilitychange` catches the app-switcher case that never
+ * reaches `pagehide` at all.
+ */
+export function flushChatScrollNow(): void {
+  if (typeof window !== 'undefined') window.clearTimeout(flushTimer);
+  flushTimer = undefined;
+  flush();
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key === KEY) adoptFromStorage();
+  });
+  window.addEventListener('pagehide', flushChatScrollNow);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushChatScrollNow();
+  });
+}
+
 export function rememberChatScroll(paneId: string, m: ChatScrollMem): void {
-  // Delete-then-set makes insertion order an LRU order.
-  mem.delete(paneId);
-  mem.set(paneId, { ...m, at: Date.now() });
-  while (mem.size > MAX_ENTRIES) {
-    const oldest = mem.keys().next().value;
-    if (oldest === undefined) break;
-    mem.delete(oldest);
+  if (m.caughtUp) {
+    // ── DON'T SPEND A SLOT ON THE DEFAULT ────────────────────────────────────
+    // A caught-up reader is restored to the newest message, and so is a reader
+    // with no memory at all (`opensAtNewest(null)`). Storing one therefore buys
+    // nothing — and costs an LRU slot, in a store capped at MAX_ENTRIES with a
+    // cockpit that already runs ~37 live panes plus every chat closed in the
+    // last fortnight.
+    //
+    // The eviction order made it worse than a headcount suggests. Caught-up
+    // chats are rewritten constantly (follow-bottom re-pins produce a trusted
+    // scroll event per height change), so they stay at the fresh end; a PARKED
+    // chat is not rewritten at all while the reader is elsewhere, so it ages to
+    // the front and is evicted first. The cap was throwing away exactly the
+    // positions it exists to keep, and the symptom — "I scrolled up in that
+    // chat and later it dumped me at the bottom" — is indistinguishable from
+    // the pin/caughtUp bug this store was built to fix.
+    mem.delete(paneId);
+    dropped.set(paneId, Date.now());
+  } else {
+    dropped.delete(paneId);
+    mem.set(paneId, { ...m, at: Date.now() });
+    while (mem.size > MAX_ENTRIES) {
+      // By WRITE TIME, not insertion order: `adoptFromStorage` can put another
+      // window's row in at any point, and an adopted row's age is its `at`.
+      let oldestId: string | undefined;
+      let oldestAt = Number.POSITIVE_INFINITY;
+      for (const [id, v] of mem) {
+        if (v.at < oldestAt) {
+          oldestAt = v.at;
+          oldestId = id;
+        }
+      }
+      if (oldestId === undefined) break;
+      mem.delete(oldestId);
+    }
   }
-  // Debounced write-through: scroll events fire per frame.
+  // Debounced write-through: scroll events fire per frame. See
+  // flushChatScrollNow for the half this cannot cover.
   window.clearTimeout(flushTimer);
   flushTimer = window.setTimeout(flush, 250);
 }
