@@ -13,6 +13,7 @@ import { stickyForegroundCmd } from '../lib/pane-scroll';
 import { createSafeClipboardAddon } from '../lib/safe-clipboard-provider';
 import { ChunkedWriter, SyncBlockExtractor } from '../lib/write-coalescer';
 import {
+  DEFAULT_XTERM_SCROLLBACK,
   MIN_FIT_COLS,
   MIN_FIT_ROWS,
   bufferJumpForKey,
@@ -209,6 +210,9 @@ export function XtermPane({
       cursorBlink: true,
       theme: themeFor(initialTheme),
       allowProposedApi: true,
+      // xterm's built-in 1000-line cap is the normal case after a dump;
+      // wrap reflow then evicts the line the reader is parked on.
+      scrollback: DEFAULT_XTERM_SCROLLBACK,
       linkHandler: { activate: (_event, uri) => openUri(uri) },
     });
     const fit = new FitAddon();

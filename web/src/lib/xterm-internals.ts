@@ -4,6 +4,40 @@ import type { IBuffer, Terminal } from '@xterm/xterm';
 export const MIN_FIT_COLS = 20;
 export const MIN_FIT_ROWS = 5;
 
+/** xterm.js built-in default. A real session fills this; wrap reflow then evicts. */
+export const XTERM_BUILTIN_SCROLLBACK = 1000;
+
+/**
+ * What muxpad constructs terminals with. 50k lines is a long Cursor/Claude
+ * dump without being an unbounded memory leak per pane.
+ */
+export const DEFAULT_XTERM_SCROLLBACK = 50_000;
+
+/**
+ * Grow the ring so a width-shrink reflow cannot evict the line the reader
+ * is parked on. xterm caps at `rows + scrollback`; wrapping 80→40 roughly
+ * doubles occupied rows, so a buffer already at the cap loses the top.
+ * Must run BEFORE resize/fit — afterwards the line is already gone.
+ */
+export function ensureScrollbackForReflow(term: Terminal, minCols = MIN_FIT_COLS): void {
+  try {
+    if (term.buffer.active.type !== 'normal') return;
+    const current =
+      typeof term.options?.scrollback === 'number'
+        ? term.options.scrollback
+        : XTERM_BUILTIN_SCROLLBACK;
+    const cols = Math.max(1, term.cols);
+    const floor = Math.max(1, minCols);
+    const factor = Math.max(1, Math.ceil(cols / floor));
+    const needed = Math.max(0, term.buffer.active.length * factor - term.rows);
+    if (needed > current && term.options) {
+      term.options.scrollback = needed;
+    }
+  } catch {
+    // disposed, or a test fake without options
+  }
+}
+
 /**
  * Why this file exists: xterm.js v5 exposes cell dimensions and the viewport
  * scrollbar width only through `_core` internals. Concentrating those reads
@@ -418,6 +452,8 @@ export function restoreViewportAnchor(term: Terminal, anchor: ViewportAnchor): v
 
 /** Capture the viewport, mutate (fit/resize), put the same content back. */
 export function withViewportAnchor(term: Terminal, mutate: () => void): void {
+  // Raise the cap first so wrap reflow cannot evict the snapshot target.
+  ensureScrollbackForReflow(term);
   const anchor = captureViewportAnchor(term);
   mutate();
   if (anchor) restoreViewportAnchor(term, anchor);

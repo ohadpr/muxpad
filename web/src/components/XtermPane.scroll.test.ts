@@ -27,6 +27,11 @@ describe('XtermPane wiring for the xterm hunt fixes', () => {
     ).toBe(false);
   });
 
+  it('constructs xterm with a scrollback cap above the 1000-line default', () => {
+    expect(has('DEFAULT_XTERM_SCROLLBACK')).toBe(true);
+    expect(has('scrollback: DEFAULT_XTERM_SCROLLBACK')).toBe(true);
+  });
+
   it('always consumes cursor buffer-path wheel events, including 0-line trackpad ticks', () => {
     expect(has('consumeCapturedWheel')).toBe(true);
     expect(has('customWheelAllowsXterm')).toBe(true);
