@@ -44,11 +44,12 @@ export function setPaneScrollRatio(paneId: string, ratio: number): void {
   write(s);
 }
 
-// Last-known foreground command. After a main-server restart, decoratePane
-// reports `foreground_cmd: null` for the life of a parked process (until a
-// ptyd bounce makes flushDecorations land). Wheel routing, Cursor replay
-// restore, and Ink-vs-shell decisions must not fall back to "this is a
-// shell" for that entire window. Null means unknown, not empty.
+// Last-known foreground command. decoratePane can still report null on
+// first paint, against a ptyd too old for flushDecorations, or for a pane
+// that has not been spawned. Wheel routing, Cursor replay, and Ink-vs-shell
+// decisions must not treat that unknown as "this is a shell". Null means
+// unknown, not empty. A main-server restart with a live ptyd no longer
+// leaves fg null for the life of the command — flushDecorations seeds it.
 const FG_KEY = 'muxpad.paneFg.v1';
 
 type FgState = Record<string, string>;
