@@ -1295,19 +1295,70 @@ describe('the LRU cap holds PARKED spots, not the default', () => {
     vi.resetModules();
   });
 
-  it('spends no slot on a caught-up reader', async () => {
+  it('spends no PARKED slot on a caught-up reader', async () => {
     vi.resetModules();
     const {
       rememberChatScroll: remember,
       opensAtNewest: newest,
       recallChatScroll: recall,
     } = await import('./chat-scroll');
-    remember('caught', memo({ anchorId: null, ratio: 1, caughtUp: true }));
+    // MAX_ENTRIES parked panes, then a storm of caught-up traffic on top. If
+    // the two shared a budget the caught-up rows would evict the parked ones —
+    // they are the newer writes — and the oldest parked pane is exactly the one
+    // the reader has been away from longest.
+    for (let i = 0; i < 200; i++) remember(`parked-${i}`, memo({ anchorId: `evt#${i}` }));
+    for (let i = 0; i < 200; i++) {
+      remember(`caught-${i}`, memo({ anchorId: null, ratio: 1, caughtUp: true }));
+    }
     await flushed();
-    // Not stored — and it does not need to be: no memory and "caught up" are
-    // the same answer to the only question re-entry asks.
-    expect(localStorage.getItem(STORE_KEY)).not.toContain('caught');
-    expect(newest(recall('caught'))).toBe(true);
+    expect(recall('parked-0')?.anchorId).toBe('evt#0');
+    expect(recall('parked-199')?.anchorId).toBe('evt#199');
+    // A caught-up row IS written — that is what retires the parked row another
+    // window is holding, see below — but it is budgeted separately, and it
+    // answers re-entry the same way no memory at all does.
+    expect(newest(recall('caught-199'))).toBe(true);
+    const rows = JSON.parse(localStorage.getItem(STORE_KEY) ?? '[]') as [string, ChatScrollMem][];
+    expect(rows.filter(([, m]) => !m.caughtUp)).toHaveLength(200);
+    expect(rows.filter(([, m]) => m.caughtUp).length).toBeLessThanOrEqual(50);
+  });
+
+  it('does not let a store full of INHERITED caught-up rows evict a parked one', async () => {
+    // The upgrade path. A build that stored caught-up readers as ordinary
+    // entries left them in the same v4 key — deliberately not re-versioned —
+    // and nothing on the read side filtered them, so they kept the slots they
+    // had taken. The wanted row here is the OLDEST, i.e. the first evicted.
+    const rows: [string, unknown][] = [
+      ['wanted', stored({ anchorId: 'evt#69', caughtUp: false, at: Date.now() - 60_000 })],
+    ];
+    for (let i = 0; i < 200; i++) {
+      rows.push([`legacy-caught-${i}`, stored({ ratio: 1, caughtUp: true, at: Date.now() - i })]);
+    }
+    localStorage.setItem(STORE_KEY, JSON.stringify(rows));
+    vi.resetModules();
+    const { rememberChatScroll: remember, recallChatScroll: recall } = await import(
+      './chat-scroll'
+    );
+    remember('fresh', memo({ anchorId: 'evt#new' }));
+    await flushed();
+    expect(recall('wanted')?.anchorId).toBe('evt#69');
+    expect(localStorage.getItem(STORE_KEY)).toContain('evt#69');
+  });
+
+  it('keeps every position a cockpit of 37 live panes plus a fortnight of closed ones parked', async () => {
+    // The measured shape of the loss at a cap of 50: this machine runs ~37 chat
+    // panes at once, and a chat closed today is still inside the 14-day cutoff,
+    // so ordinary churn pushes the count past the cap within a fortnight. The
+    // row evicted is the least-recently-WRITTEN — the pane left alone longest,
+    // which is the one most likely to be worth coming back to.
+    vi.resetModules();
+    const { rememberChatScroll: remember, recallChatScroll: recall } = await import(
+      './chat-scroll'
+    );
+    for (let i = 0; i < 37; i++) remember(`live-${i}`, memo({ anchorId: `live#${i}` }));
+    for (let i = 0; i < 40; i++) remember(`closed-${i}`, memo({ anchorId: `closed#${i}` }));
+    await flushed();
+    expect(recall('live-0')?.anchorId).toBe('live#0');
+    expect(recall('closed-0')?.anchorId).toBe('closed#0');
   });
 
   it('keeps a parked pane alive through a storm of caught-up traffic', async () => {
@@ -1330,15 +1381,23 @@ describe('the LRU cap holds PARKED spots, not the default', () => {
     // Dropping it from the map is not enough on its own — `flush` merges what
     // is already in localStorage, so a deleted row would be read straight back.
     vi.resetModules();
-    const { rememberChatScroll: remember, recallChatScroll: recall } = await import(
-      './chat-scroll'
-    );
+    const {
+      rememberChatScroll: remember,
+      recallChatScroll: recall,
+      opensAtNewest: newest,
+    } = await import('./chat-scroll');
     remember('p', memo({ anchorId: 'evt#7', caughtUp: false }));
     await flushed();
     expect(localStorage.getItem(STORE_KEY)).toContain('evt#7');
     remember('p', memo({ anchorId: null, ratio: 1, caughtUp: true }));
     await flushed();
-    expect(recall('p')).toBeNull();
+    // The reader opens at the newest message, as if nothing were remembered…
+    expect(newest(recall('p'))).toBe(true);
+    // …and the message id they were parked on is GONE, not merely shadowed by a
+    // flag: anything reading one field and not the other must not be able to
+    // put them back there. (A boundary, not a regression test — the design that
+    // removed the row outright satisfied it too.)
+    expect(recall('p')?.anchorId ?? null).toBeNull();
     expect(localStorage.getItem(STORE_KEY)).not.toContain('evt#7');
   });
 
@@ -1357,6 +1416,99 @@ describe('the LRU cap holds PARKED spots, not the default', () => {
     remember('other', memo());
     await flushed();
     expect(localStorage.getItem(STORE_KEY)).toContain('parked-in-B');
+  });
+});
+
+describe('a retirement in ANOTHER window', () => {
+  // The half of "two windows" that a merge by write time cannot express on its
+  // own. An UPDATE in window B is a row, and a row can out-rank window A's
+  // older one. A RETIREMENT in B used to be an ABSENCE — and absence carries no
+  // timestamp, so A could not tell "B deleted this a second ago" from "this was
+  // never here". A's next flush read its own stale row back over the deletion
+  // and the reader was returned to a message they had finished with.
+  //
+  // Both windows are real module instances over one localStorage: `vi.resetModules()`
+  // plus a fresh import is a second window, in the only sense this file has one.
+  beforeEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+    vi.resetModules();
+  });
+
+  /** A parks `p` in history; B boots from the same store and reads to the end. */
+  async function parkedInAretiredInB() {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([['p', stored({ anchorId: 'old-park', at: Date.now() - 60_000 })]]),
+    );
+    vi.resetModules();
+    const A = await import('./chat-scroll');
+    expect(A.recallChatScroll('p')?.anchorId).toBe('old-park');
+
+    vi.resetModules();
+    const B = await import('./chat-scroll');
+    B.rememberChatScroll('p', memo({ anchorId: null, ratio: 1, caughtUp: true }));
+    B.flushChatScrollNow();
+    return A;
+  }
+
+  /** What the next COLD open of the app would do with pane `p`. */
+  async function coldOpenOpensAtNewest() {
+    vi.resetModules();
+    const C = await import('./chat-scroll');
+    return C.opensAtNewest(C.recallChatScroll('p'));
+  }
+
+  it('reaches this window, instead of leaving it answering from boot', async () => {
+    const A = await parkedInAretiredInB();
+    window.dispatchEvent(new StorageEvent('storage', { key: STORE_KEY }));
+    expect(A.opensAtNewest(A.recallChatScroll('p'))).toBe(true);
+  });
+
+  it('is not undone by this window flushing something else entirely', async () => {
+    const A = await parkedInAretiredInB();
+    window.dispatchEvent(new StorageEvent('storage', { key: STORE_KEY }));
+    // A scrolls a DIFFERENT pane — which is all it takes to trigger a flush of
+    // A's whole map.
+    A.rememberChatScroll('unrelated', memo({ anchorId: 'somewhere-else' }));
+    A.flushChatScrollNow();
+    expect(await coldOpenOpensAtNewest()).toBe(true);
+  });
+
+  it('survives an IDLE window closing, which writes nothing of its own', async () => {
+    // The `pagehide` flush is unconditional — it has to be, since a window with
+    // a pending debounced write looks no different from one without. So closing
+    // a window that has done nothing at all still serialises its map, and that
+    // map is where the stale row lives.
+    const A = await parkedInAretiredInB();
+    window.dispatchEvent(new StorageEvent('storage', { key: STORE_KEY }));
+    A.flushChatScrollNow(); // what the `pagehide` listener calls
+    expect(await coldOpenOpensAtNewest()).toBe(true);
+  });
+
+  it('…even when the `storage` event never arrived at all', async () => {
+    // A tab discarded and restored, a listener that never fired, a window that
+    // was frozen through the write: the merge must be right on its own, not
+    // only when every event is delivered. A row can lose a timestamp
+    // comparison; an absence cannot enter one.
+    const A = await parkedInAretiredInB();
+    A.flushChatScrollNow();
+    expect(await coldOpenOpensAtNewest()).toBe(true);
+  });
+
+  it("still yields to another window's NEWER parked position for that pane", async () => {
+    // The counterpart, and the reason the retirement is timestamped rather than
+    // absolute: a reader who reads to the end here and then parks over there
+    // gets their parked spot back, not this window's retirement.
+    const A = await parkedInAretiredInB();
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([['p', stored({ anchorId: 'parked-in-C', at: Date.now() + 1000 })]]),
+    );
+    window.dispatchEvent(new StorageEvent('storage', { key: STORE_KEY }));
+    expect(A.recallChatScroll('p')?.anchorId).toBe('parked-in-C');
+    A.flushChatScrollNow();
+    expect(await coldOpenOpensAtNewest()).toBe(false);
   });
 });
 
