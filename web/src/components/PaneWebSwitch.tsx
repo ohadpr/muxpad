@@ -280,16 +280,22 @@ export function PaneWebSwitch({
   // nothing visible — but it HAS a chat face, and hiding the trigger there
   // strands the user in the terminal. Fetch on mount, on agent_session.updated,
   // and on events resync (reconnect + visibility). Honour a non-ok reply so a
-  // deleted session does not leave a dead toggle.
+  // deleted session does not leave a dead toggle — but only the latest
+  // in-flight check may write. A 404 from a check that started before the
+  // session existed is not sticky: it must not clobber a later 200, or the
+  // chat face stays unreachable until reload.
   const [hasSession, setHasSession] = useState(false);
   useEffect(() => {
     let aliveFlag = true;
-    const check = () =>
+    let generation = 0;
+    const check = () => {
+      const mine = ++generation;
       void fetch(`/api/agent-sessions/by-pane/${paneId}`)
         .then((r) => {
-          if (aliveFlag) setHasSession(r.ok);
+          if (aliveFlag && mine === generation) setHasSession(r.ok);
         })
         .catch(() => {});
+    };
     check();
     const unsub = subscribe((e) => {
       if (e.type === 'agent_session.updated' && e.pane_id === paneId) check();
@@ -297,6 +303,7 @@ export function PaneWebSwitch({
     const unsubR = subscribeResync(() => check());
     return () => {
       aliveFlag = false;
+      generation += 1;
       unsub();
       unsubR();
     };
