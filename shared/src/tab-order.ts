@@ -44,7 +44,7 @@ export function tabWantsYou(t: SortableTab): boolean {
 export function compareUnpinnedTabs(
   a: SortableTab,
   b: SortableTab,
-  positions: Map<string, number>,
+  _positions?: Map<string, number>,
 ): number {
   const attn = Number(tabWantsYou(b)) - Number(tabWantsYou(a));
   if (attn !== 0) return attn;
@@ -56,8 +56,10 @@ export function compareUnpinnedTabs(
   // NaN guard: (-Inf) - (-Inf) is NaN, which would make the comparator
   // inconsistent and the sort implementation-defined.
   if (at !== 0 && !Number.isNaN(at)) return at < 0 ? -1 : 1;
-  const pos = (positions.get(a.id) ?? 0) - (positions.get(b.id) ?? 0);
-  if (pos !== 0) return pos;
+  // Only wire fields may break ties. The server's manual positions are NOT
+  // the client's last published indices: status/recency can reorder them.
+  // IDs give both sides the same total order, even when a push creates a tie.
+  // The optional legacy argument is ignored; pinned manual order is separate.
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
@@ -65,9 +67,8 @@ export function compareUnpinnedTabs(
  * The published sidebar order for one workspace's tabs: the pinned block in its
  * manual order, untouched, then the unpinned block by `compareUnpinnedTabs`.
  *
- * `positions` is only a tiebreak (two tabs with identical attention AND
- * activity), so a caller with no position map can pass an empty one and get the
- * same answer for every row pair that differs at all.
+ * Unpinned ties use the wire ID, independent of any previous array order.
+ * The optional positions argument remains for source compatibility only.
  */
 export function sortSidebarTabs<T extends SortableTab & { pinned?: boolean | undefined }>(
   tabs: readonly T[],
