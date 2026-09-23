@@ -1004,4 +1004,165 @@ describe('flat pane enumeration (GET /api/panes)', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual([]);
   });
+
+  // ── event coverage: the layout and the read-state marks ──────────────────
+
+  it('DELETE /panes prunes the dead leaf out of the tab layout and announces it', async () => {
+    // C1: the handler emitted `pane.removed` and nothing else, so the tab's
+    // layout kept naming a pane that no longer existed. The desktop's own close
+    // path PATCHes the layout itself (which is why this never showed there),
+    // but the mobile sheet, the CLI and any API caller do not — and the only
+    // repair on the server is the lazy prune in GET /api/tabs/:id, which the tab
+    // LIST endpoint never runs. The result is a phantom mosaic tile / a header
+    // that opens blank, until a remount or a socket reconnect.
+    const events = new EventBus();
+    const local = await createTestApp({ db: openDb(':memory:'), dataDir: tmp, events });
+    try {
+      const ws = (await (
+        await local.app.request('/api/workspaces', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'W' }),
+        })
+      ).json()) as { id: string };
+      const t = (await (
+        await local.app.request('/api/tabs', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'T', workspace_id: ws.id }),
+        })
+      ).json()) as { id: string };
+      const mkPane = async () =>
+        (await (
+          await local.app.request(`/api/tabs/${t.id}/panes`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              kind: 'url',
+              url: 'https://x.example.com',
+              append_to_layout: true,
+            }),
+          })
+        ).json()) as { id: string };
+      const keep = await mkPane();
+      const doomed = await mkPane();
+
+      const received: MuxpadEvent[] = [];
+      events.subscribe((e) => received.push(e));
+
+      expect((await local.app.request(`/api/panes/${doomed.id}`, { method: 'DELETE' })).status).toBe(
+        204,
+      );
+
+      // The LIST endpoint — the one with no lazy repair — must not serve the
+      // ghost leaf any more.
+      const list = (await (
+        await local.app.request(`/api/tabs?workspaceId=${ws.id}`)
+      ).json()) as Array<{ id: string; layout: unknown }>;
+      const row = list.find((x) => x.id === t.id);
+      expect(JSON.stringify(row?.layout)).not.toContain(doomed.id);
+      expect(JSON.stringify(row?.layout)).toContain(keep.id);
+
+      // …and a client already holding the tab has to be TOLD, because
+      // `pane.removed` carries no layout and web/src/tabs.ts returns early on it.
+      const updated = received.find((e) => e.type === 'tab.updated');
+      expect(updated).toBeDefined();
+      if (updated?.type === 'tab.updated') {
+        expect(updated.tab.id).toBe(t.id);
+        expect(JSON.stringify(updated.tab.layout)).not.toContain(doomed.id);
+        // Decorated, like every other tab.updated emitter.
+        expect(updated.tab.status).toBeDefined();
+      }
+    } finally {
+      await local.cleanup();
+    }
+  });
+
+  it('DELETE of the LAST pane empties the layout rather than leaving a dead root', async () => {
+    const local = await createTestApp({ db: openDb(':memory:'), dataDir: tmp });
+    try {
+      const ws = (await (
+        await local.app.request('/api/workspaces', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'W' }),
+        })
+      ).json()) as { id: string };
+      const t = (await (
+        await local.app.request('/api/tabs', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'T', workspace_id: ws.id }),
+        })
+      ).json()) as { id: string };
+      const only = (await (
+        await local.app.request(`/api/tabs/${t.id}/panes`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ kind: 'url', url: 'https://x.example.com', append_to_layout: true }),
+        })
+      ).json()) as { id: string };
+      await local.app.request(`/api/panes/${only.id}`, { method: 'DELETE' });
+      const list = (await (
+        await local.app.request(`/api/tabs?workspaceId=${ws.id}`)
+      ).json()) as Array<{ id: string; layout: unknown }>;
+      expect(list.find((x) => x.id === t.id)?.layout).toBe('');
+    } finally {
+      await local.cleanup();
+    }
+  });
+
+  it('pane /seen announces clearing the TAB mark even when the pane was already read', async () => {
+    // C3: mobile takes this surgical per-pane route. With the pane itself
+    // already read the `if (pane.unread)` block above does not run, so the
+    // handler cleared the tab's manual bold while emitting NOTHING — a tab
+    // marked unread on the desktop and then opened on the phone stayed bold on
+    // the desktop until its next 5s poll, which is stopped for a hidden
+    // document / a collapsed workspace.
+    const events = new EventBus();
+    const local = await createTestApp({ db: openDb(':memory:'), dataDir: tmp, events });
+    try {
+      const ws = (await (
+        await local.app.request('/api/workspaces', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'W' }),
+        })
+      ).json()) as { id: string };
+      const t = (await (
+        await local.app.request('/api/tabs', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'T', workspace_id: ws.id }),
+        })
+      ).json()) as { id: string };
+      const p = (await (
+        await local.app.request(`/api/tabs/${t.id}/panes`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ kind: 'url', url: 'https://x.example.com' }),
+        })
+      ).json()) as { id: string };
+      // Mark the TAB unread by hand; the pane is left read.
+      await local.app.request(`/api/tabs/${t.id}/unread`, { method: 'POST' });
+
+      const received: MuxpadEvent[] = [];
+      events.subscribe((e) => received.push(e));
+
+      expect(
+        (await local.app.request(`/api/panes/${p.id}/seen`, { method: 'POST' })).status,
+      ).toBe(204);
+
+      const updated = received.find((e) => e.type === 'tab.updated');
+      expect(updated).toBeDefined();
+      if (updated?.type === 'tab.updated') {
+        expect(updated.tab.id).toBe(t.id);
+        expect(updated.tab.unread).toBe(false);
+        // The rail moves with the bold: a manual mark rolls up as `ready`.
+        expect(updated.tab.status).not.toBe('ready');
+      }
+    } finally {
+      await local.cleanup();
+    }
+  });
 });

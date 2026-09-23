@@ -651,6 +651,27 @@ export function panesScopedRoutes(deps: {
     deps.cache.forget(id);
     deps.tabActivity?.forgetPane(id);
     deps.events.emit({ type: 'pane.removed', tab_id: tabId, pane_id: id });
+    // The tab's LAYOUT still names the pane we just deleted, and `pane.removed`
+    // deliberately carries no layout — so every client holding this tab keeps a
+    // leaf pointing at nothing (a phantom mosaic tile in split mode, a header
+    // that opens blank in tabbed mode). The desktop's own close path PATCHes the
+    // layout itself, which is why this was invisible there; the mobile sheet's
+    // pane list, the CLI and any API caller do not, and the only repair on the
+    // server is the lazy prune inside GET /api/tabs/:id — which the tab LIST
+    // never runs. Prune here, where the pane actually goes away, and announce it.
+    //
+    // Emitted even when the layout was already clean (the desktop patched it
+    // first): the tab's rollup — status, agents, unread — moved regardless, and
+    // `pane.removed` is a dead end for it in web/src/tabs.ts.
+    const sourceTab = tabs.getById(tabId);
+    if (sourceTab) {
+      const pruned = removeLeafFromLayout(sourceTab.layout, id);
+      const tabRow =
+        JSON.stringify(pruned) === JSON.stringify(sourceTab.layout)
+          ? sourceTab
+          : tabs.update(tabId, { layout: pruned });
+      deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, tabRow) });
+    }
     return c.body(null, 204);
   });
 
@@ -1156,7 +1177,21 @@ export function panesScopedRoutes(deps: {
     // exactly the moment the tab-level bold stops meaning anything.
     if (tabs.isUnread(pane.tab_id)) {
       const stillUnread = panes.listByTab(pane.tab_id).some((p) => p.unread);
-      if (!stillUnread) tabs.setUnread(pane.tab_id, false);
+      if (!stillUnread) {
+        tabs.setUnread(pane.tab_id, false);
+        // …and SAY so. When the pane itself was already read the block above
+        // didn't run, so this route cleared the tab's bold while emitting
+        // nothing whatsoever: reading a tab on the phone left it bold on the
+        // desktop until that device's next 5s poll — which is stopped while the
+        // document is hidden or the workspace is collapsed, i.e. exactly when a
+        // second device is sitting there wrong.
+        const freshTab = tabs.getById(pane.tab_id);
+        if (freshTab)
+          deps.events.emit({
+            type: 'tab.updated',
+            tab: decorateTab(deps.cache, deps.db, freshTab),
+          });
+      }
     }
     try {
       await deps.ptyd.markSeen(id);
