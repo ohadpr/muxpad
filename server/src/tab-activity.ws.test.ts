@@ -20,10 +20,16 @@ it('real terminal frames survive reconnect grace and flush the final key after t
   const ws = new WorkspaceStore(db).create({ name: 'activity probe' });
   const tab = tabs.create({ name: 'terminal', layout: '', workspace_id: ws.id });
   const pane = new PaneStore(db).create({ tab_id: tab.id, shell: '/bin/cat', cwd: ptyd.dir });
+  // Watch the COLUMN, not the onWrite notification: notifications are filtered
+  // to writes that can reorder the sidebar, and this fixture has one tab, so
+  // only its first write qualifies. What this test is about is the write.
+  const stamped = tabs.getById(tab.id)!.last_activity_at!;
   const writes: number[] = [];
-  const activity = new TabActivity(db, {
-    onWrite: () => writes.push(tabs.getById(tab.id)!.last_activity_at!),
-  });
+  const poll = setInterval(() => {
+    const at = tabs.getById(tab.id)?.last_activity_at;
+    if (at != null && at !== stamped && at !== writes[writes.length - 1]) writes.push(at);
+  }, 10);
+  const activity = new TabActivity(db);
   activity.attach(ptyd.client);
   const http = createServer();
   const attached = attachWsServer({
@@ -68,6 +74,7 @@ it('real terminal frames survive reconnect grace and flush the final key after t
     // It records the key time, not when the one-second flush fired.
     expect(writes[1]! - first).toBeLessThan(1000);
   } finally {
+    clearInterval(poll);
     socket?.terminate();
     activity.forget(tab.id);
     await attached.close();
