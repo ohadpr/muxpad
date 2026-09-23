@@ -29,7 +29,7 @@ import { ShellPaneBody } from '../components/ShellPaneBody';
 import { StatusMark } from '../components/StatusMark';
 import { UrlPane } from '../components/UrlPane';
 import { SvgClose } from '../components/icons';
-import { subscribe, subscribeReconnect } from '../events';
+import { subscribe, subscribeResync } from '../events';
 import { HOUSE_CHAT_PANE_CREATE } from '../lib/agent-backend';
 import { consumeFollowTarget } from '../lib/follow-tab';
 import { getLastPaneId, setLastPaneId, setLastTabSlug } from '../lib/last-visited';
@@ -1118,15 +1118,15 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   }, [tab?.id, navigate, wsSlug]);
 
   // Re-fetch the active tab's detail whenever the events socket
-  // (re)connects. Any pane.added/removed/updated emitted during the
-  // disconnect window was lost, and the subscribe() effect above only
-  // delivers events from now on. Without this re-fetch, an active tab
-  // could keep stale panes/layout indefinitely after a server restart
-  // or network blip — refresh covers what events couldn't.
+  // (re)connects AND when the document becomes visible. Any
+  // pane.added/removed/updated emitted during a disconnect window was
+  // lost, and iOS can kill a backgrounded events socket without firing
+  // close — so subscribeReconnect never runs. Visibility is the HTTP
+  // backstop; the sidebar already refetches this way, the mosaic did not.
   useEffect(() => {
     if (!tab) return;
     const tabId = tab.id;
-    return subscribeReconnect(() => {
+    return subscribeResync(() => {
       void api
         .getTab(tabId)
         .then((detail) => {
