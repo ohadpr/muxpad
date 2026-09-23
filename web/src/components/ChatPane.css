@@ -89,12 +89,36 @@
      of the viewport) and so no modal/overlay elsewhere in the pane changes
      which box it resolves against. */
   position: relative;
-  /* Bottom padding clears the floating composer (~90px tall + safe-area) so the
-     last message settles just above it; earlier messages scroll frosted-through
-     underneath. */
-  padding: 22px 20px calc(96px + env(safe-area-inset-bottom, 0px));
+  /* NO bottom padding. The floating composer's clearance lives in
+     .chat-composer-reserve, a sibling row at the end of the list — see its
+     rule. A computed `padding` change on this element suppresses the browser's
+     scroll anchoring for every row in the chat, because this is their common
+     ancestor, and the composer's height moves on typing, attachments, the
+     notice banner and the mobile keyboard. */
+  padding: 22px 20px 0;
   max-width: 768px;
   margin: 0 auto;
+}
+/* The floating composer overlaps the scroller (~90px tall + safe-area), so the
+   log reserves its exact measured height here and the last message settles just
+   above it; earlier messages scroll frosted-through underneath.
+
+   A SIBLING ROW, not `.chat-list`'s padding and not the scroller's: a computed
+   padding change on either of those is a scroll-anchoring SUPPRESSION TRIGGER
+   for every row in the chat (the spec walks the anchor node's ancestors up to
+   AND INCLUDING the scrolling box). Measured in headless Chromium against an
+   unpinned reader with 480px of growth above them: 0px drift normally, the full
+   480px when `.chat-list`'s padding moved in the same layout pass, the full
+   480px again when `.chat-scroll`'s did — and 0px with this box. Its height is
+   nobody's ancestor.
+
+   `margin-top` cancels `.chat-list`'s row gap so the resting clearance is
+   exactly the height set inline, matching the padding this replaced. */
+.chat-composer-reserve {
+  flex: 0 0 auto;
+  height: calc(96px + env(safe-area-inset-bottom, 0px));
+  margin-top: -22px;
+  pointer-events: none;
 }
 
 /* ── Empty / connecting states ─────────────────────────────────────────── */
@@ -878,8 +902,9 @@
    conversation stays visible in every gap around the input (left/right of it on
    desktop, above and below it) instead of being hidden behind an opaque bar.
    The pill is opaque with a drop shadow so it reads as floating over the
-   content, and .chat-list reserves the wrap's measured height as bottom padding
-   so, at rest, the last message sits fully above the pill (never covered). */
+   content, and .chat-composer-reserve holds the wrap's measured height at the
+   end of the log so, at rest, the last message sits fully above the pill (never
+   covered). */
 .chat-composer-wrap {
   position: absolute;
   left: 0;

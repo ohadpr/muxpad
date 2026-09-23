@@ -1690,6 +1690,27 @@ export function ChatPane({
    * `clearJump` and scrollTopAfterFoldChange.
    */
   const foldAnchor = useRef<{ anchorId: string; anchorOffset: number } | null>(null);
+  /**
+   * The run header the reader just tapped, held across the commit that expands
+   * or collapses it.
+   *
+   * A fold toggle is a height change the READER caused, in the middle of the
+   * document, and the re-pin observer (D) cannot tell it from a thumbnail
+   * decoding — its comment is written entirely about content nobody asked for.
+   * So for a pinned reader it answers the expand by scrolling to the new
+   * bottom: the tapped header goes off the top of the screen and the reply
+   * under it does not move a pixel, i.e. tapping "12 actions" visibly does
+   * NOTHING. Measured in headless Chromium: a 1500px expansion moved the header
+   * from +272 to -1228 while the reply below it stayed at +322.
+   *
+   * That is the commonest shape in Chat mode — the reply is last, the fold sits
+   * directly above it, and the reader is pinned because they just read the
+   * reply — and it is self-reinforcing: they tap again to collapse, the
+   * observer re-pins again, and the whole thing reads as "scrolling is super
+   * buggy". The unpinned reader is already fine (the engine holds the header
+   * exactly, measured 0 scroll events), so this is strictly the pinned half.
+   */
+  const toggleAnchor = useRef<{ anchorId: string; top: number } | null>(null);
   // Older pages spent hunting for this jump's message. Bounded like the
   // restore's anchor seek, and reset per jump (and by "keep looking").
   const jumpSeekPages = useRef(0);
@@ -3058,6 +3079,40 @@ export function ChatPane({
     el.scrollTop = target;
   }, [jumpTargetId]);
 
+  // Put the tapped run header back where the reader tapped it, BEFORE paint —
+  // and stand down from the bottom while we are at it. See `toggleAnchor` for
+  // the measurement. The unpin is half the fix, not a side effect: after a
+  // mid-log expand the reader genuinely is not at the end any more, and saying
+  // so hands every LATER height change to the engine's scroll anchoring (or to
+  // the unpinned branch of the re-pin observer) instead of to a re-pin that
+  // would drag the header off the top again on the next thumbnail that decodes.
+  //
+  // A layout effect runs before the ResizeObserver callback for the same
+  // commit, and the `setPinned` it lands on makes the observer's own
+  // `if (pinnedToBottom.current)` the thing that keeps it out of the way.
+  useLayoutEffect(() => {
+    const keep = toggleAnchor.current;
+    toggleAnchor.current = null;
+    const el = scrollRef.current;
+    if (!el || !keep || el.clientHeight < 40) return;
+    const row = findAnchorRow(anchorRows(el), keep.anchorId);
+    if (!row) return;
+    const target = scrollTopForAnchor({
+      scrollTop: el.scrollTop,
+      rowTop: row.getBoundingClientRect().top - el.getBoundingClientRect().top,
+      // No `rowHeight` clamp: that guard exists for an offset replayed across a
+      // remount against a row that shrank in between. This one was measured
+      // against this row, in this document, one commit ago.
+      anchorOffset: keep.top,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    });
+    setPinned(el.scrollHeight - target - el.clientHeight < 40);
+    if (Math.abs(el.scrollTop - target) <= 1) return;
+    lastProgrammaticTop.current = target;
+    el.scrollTop = target;
+  }, [expandedGroups, setPinned]);
+
   // Claim a pending jump. Both routes exist because the destination pane may or
   // may not be mounted when the result is clicked: the map covers "opened a
   // chat in a workspace I hadn't visited", the event covers "jumped inside the
@@ -4079,7 +4134,21 @@ export function ChatPane({
             events={run}
             expanded={actionRunExpanded(run, expandedGroups) || holdsHit}
             anchorId={anchorId}
-            onToggle={() => setExpandedGroups((prev) => toggleActionRun(run, prev))}
+            onToggle={() => {
+              // Where the tapped header sits RIGHT NOW, before the commit that
+              // changes its height. See toggleAnchor.
+              const el = scrollRef.current;
+              const row =
+                el && el.clientHeight >= 40 ? findAnchorRow(anchorRows(el), anchorId) : null;
+              toggleAnchor.current =
+                el && row
+                  ? {
+                      anchorId,
+                      top: row.getBoundingClientRect().top - el.getBoundingClientRect().top,
+                    }
+                  : null;
+              setExpandedGroups((prev) => toggleActionRun(run, prev));
+            }}
             renderEvent={renderEvent}
           />,
         );
@@ -4373,10 +4442,7 @@ export function ChatPane({
           is a ref — it must be right in the same frame a layout change lands,
           which a re-render cannot promise. */}
       <div className="chat-scroll -pinned" ref={scrollRef} onScroll={onScroll}>
-        <div
-          className="chat-list"
-          style={composerH ? { paddingBottom: `${composerH + 14}px` } : undefined}
-        >
+        <div className="chat-list">
           {body}
           {optimisticUser ? (
             <div className="chat-turn chat-turn-user">
@@ -4452,6 +4518,33 @@ export function ChatPane({
               </div>
             </div>
           ))}
+          {/* ── The composer's reserve, as a SIBLING ──────────────────────────
+              The floating composer overlaps the scroller, so the log has to
+              reserve its exact measured height or the last message hides behind
+              it. That reserve used to be `.chat-list`'s padding-bottom, and
+              `.chat-list` is an ancestor of every anchor node in the chat — so
+              every time the composer's height moved, the computed `padding`
+              change SUPPRESSED the browser's scroll anchoring for that whole
+              layout pass. Measured in headless Chromium, unpinned reader,
+              480px of growth above them: 0px drift normally, the full 480px the
+              moment `.chat-list`'s padding moved in the same pass. And nothing
+              else compensates — the hand-rolled compensations were deliberately
+              narrowed to "older prepend" and "search fold" once the engine took
+              the general case.
+              Moving it to the SCROLLER does not help (measured: 480px drift
+              there too — the scrolling box is in the anchor node's chain, and
+              the spec's suppression triggers run up to and including it). A
+              sibling is: its height is nobody's ancestor. Measured 0px drift
+              with the reserve growing 96 -> 140 in the same pass as the growth.
+              `margin-top` cancels `.chat-list`'s row gap so the resting
+              clearance is identical to the padding it replaces (measured: 100px
+              either way). No `data-eid`, so it is invisible to the anchor scan
+              exactly like the rest of the live furniture below the last row. */}
+          <div
+            className="chat-composer-reserve"
+            aria-hidden="true"
+            style={composerH ? { height: `${composerH + 14}px` } : undefined}
+          />
         </div>
       </div>
       {showScrollDown ? (
