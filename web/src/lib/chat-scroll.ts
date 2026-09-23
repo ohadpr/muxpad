@@ -432,8 +432,20 @@ export function recallChatScroll(paneId: string): ChatScrollMem | null {
 export function shouldPersistChatScroll(opts: {
   active: boolean;
   clientHeight: number;
+  /**
+   * `document.visibilityState === 'visible'`. Omitted = treat as visible.
+   *
+   * `active` only tracks muxpad's own hiding. iOS is documented in this
+   * codebase as resetting overflow scroll on resume — that is the whole reason
+   * `showEpoch` exists — and the native `scroll` event from that reset can land
+   * before the restore effect has armed its suppression window. Persisting it
+   * writes `ratio ≈ 0` and the oldest on-screen row over the reader's parked
+   * message, and the restore then faithfully reproduces the corruption. A
+   * document that is not visible has no reading position to record.
+   */
+  visible?: boolean;
 }): boolean {
-  return opts.active && opts.clientHeight >= 40;
+  return opts.active && opts.clientHeight >= 40 && opts.visible !== false;
 }
 
 /**
