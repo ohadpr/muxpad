@@ -468,6 +468,59 @@ export function readerIsCaughtUp(opts: {
 }
 
 /**
+ * The memory that replaces a goal the settling restore could not reach.
+ *
+ * ── RETIRING A DEAD ANCHOR ───────────────────────────────────────────────────
+ * The restore holds the stored anchor untouched while it is still seeking the
+ * message it names — that hold is the only thing stopping the loop's own
+ * scrollTop writes from overwriting the reader's parked spot. But when the seek
+ * gives up, the store is still naming a message that is NOT COMING BACK, and
+ * nothing else corrects it: the loop has usually converged and stopped writing
+ * by then, so no further scroll event is coming.
+ *
+ * The cost is paid on every later visibility transition. The seek budget is a
+ * local of the restore effect, and that effect re-runs on each of them — a
+ * browser-tab switch, an iOS backgrounding, a screen unlock — so every flip
+ * spends another eight `load-older` round trips on the same ghost, and each
+ * re-run applies the remembered ratio against a document the previous re-runs
+ * grew. That is the R·(range + g) walk this file's header calls catastrophic,
+ * once per tab switch.
+ *
+ * So the loop hands over whatever it actually settled on. That row is a REAL
+ * one — `captureAnchor` read it off the document — so the next restore is an
+ * ordinary, instant one. `caughtUp` is MEASURED rather than assumed false: if
+ * the fallback left the reader at the end of the log, saying so is what stops
+ * the next open from pinning them to a message that is no longer the newest.
+ */
+export function retiredAnchorMemory(opts: {
+  /** Where the loop settled, from `captureAnchor`. null → nothing anchorable. */
+  live: { anchorId: string; anchorOffset: number } | null;
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+  /** The newest anchored row's bottom, viewport-relative. null → none. */
+  lastRowBottom: number | null;
+  sid: string | null;
+}): ChatScrollMem {
+  const range = Math.max(1, maxScrollTop(opts.scrollHeight, opts.clientHeight));
+  const nearBottom = opts.scrollHeight - opts.scrollTop - opts.clientHeight < 40;
+  return {
+    anchorId: opts.live?.anchorId ?? null,
+    anchorOffset: opts.live?.anchorOffset ?? 0,
+    // Clamped for the same reason every other stored ratio is: iOS rubber-band
+    // reports a scrollTop outside the range, and a ratio outside [0,1] restores
+    // to a target the browser then clamps, leaving the loop re-assigning it.
+    ratio: Math.min(Math.max(0, opts.scrollTop / range), 1),
+    caughtUp: readerIsCaughtUp({
+      lastRowBottom: opts.lastRowBottom,
+      clientHeight: opts.clientHeight,
+      nearBottom,
+    }),
+    sid: opts.sid,
+  };
+}
+
+/**
  * Whether a remembered sid may be applied against the currently rendered sid.
  * Soft match: either side unset is OK (hello hasn't bound yet / saved early).
  * Only a REAL mismatch (both set, different) blocks — /clear or resume.
