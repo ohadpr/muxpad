@@ -83,3 +83,27 @@ describe('the older-history spinner never moves the reader', () => {
     expect(tsx).toContain('className="chat-load-earlier-spinner"');
   });
 });
+
+/**
+ * A SHAPE test, not a measurement — the call sites below live inside a
+ * requestAnimationFrame loop that reads real geometry off a real scroller, and
+ * jsdom has neither. The arithmetic each one performs is unit-tested where it
+ * lives (`retiredAnchorMemory` in chat-scroll.test.ts); what cannot be reached
+ * from there is whether the loop still CALLS it, and under which condition.
+ * That is what these assert.
+ */
+describe('the settling restore retires a goal it could not reach', () => {
+  it('hands the store the row it actually settled on', () => {
+    // Without this the store keeps naming a message that is not coming back,
+    // and `seekPages` is a local of the effect — so every visibility flip
+    // spends another eight `load-older` round trips hunting the same ghost.
+    expect(tsx).toContain('retiredAnchorMemory({');
+  });
+
+  it('only on a deadline expiry, never over a reader who took over', () => {
+    // A gesture ends the loop too, and that reader writes their own memory
+    // through onScroll. Retiring on that path would be this loop having the
+    // last word over the reader, which is the bug the hold exists to prevent.
+    expect(tsx).toContain('holdRememberedAnchor.current && !userScrolled.current');
+  });
+});
