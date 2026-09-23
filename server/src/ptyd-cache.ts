@@ -70,8 +70,12 @@ export interface PaneState {
  *  - `paneExit` → drop the entry entirely (no event — consumer will get a
  *    matching `pane.removed` from the route layer or react to `paneExit`
  *    on the client directly).
- *  - `connected` → seed `cwd` for every live runtime via `flushCwds()`.
- *    Other fields will populate as their respective events arrive.
+ *  - `connected` → snapshot every live runtime via `flushCwds()` +
+ *    `flushDecorations()`, AND wash out every pane ptyd does not have. The
+ *    second half is not symmetry for its own sake: after a ptyd restart no
+ *    `paneExit` is ever delivered (ptyd was the thing that died), so a pane's
+ *    decorations would otherwise stand unchallenged forever — see the prune's
+ *    comment in the handler.
  */
 export class PtydCache extends EventEmitter {
   private state = new Map<string, PaneState>();
@@ -87,6 +91,16 @@ export class PtydCache extends EventEmitter {
   // mid-flight says nothing about whether the snapshot's `title` is stale.
   // Non-null only while a `connected`-driven `flushDecorations()` is inflight.
   private decoEventRacers: Map<string, Set<'title' | 'fg' | 'attention'>> | null = null;
+  // Ids whose pane EXITED while a `connected` snapshot was inflight. Both
+  // snapshots are a picture ptyd took BEFORE the exit, so re-applying either
+  // resurrects the entry — with the dead pane's decorations, and with the one
+  // `paneExit` that would have removed it already spent. The result is a
+  // permanent zombie: an entry no event will ever touch again, reading
+  // `blocked` forever if the bell happened to be ringing.
+  //
+  // Same lifetime rule as the two racer collections above: non-null only
+  // inside the inflight window, so nothing accumulates in steady state.
+  private exitRacers: Set<string> | null = null;
   // Server-side app-url detection. ptyd ships raw URL sightings
   // (`paneUrlsSeen`); the detector classifies hosts + probes for a listener
   // and writes the confirmed list back into the cache. It lives here so this
@@ -234,6 +248,9 @@ export class PtydCache extends EventEmitter {
       // repopulate the cache.
       this.clearBusyTimer(e.id);
       this.detector.forget(e.id);
+      // Veto both connect snapshots for this id if one is inflight — see
+      // {@link exitRacers}. No-op outside that window.
+      this.exitRacers?.add(e.id);
       if (this.state.delete(e.id)) {
         this.emit('paneRemoved', e.id);
       }
@@ -259,6 +276,8 @@ export class PtydCache extends EventEmitter {
       this.cwdEventRacers = racers;
       const decoRacers = new Map<string, Set<'title' | 'fg' | 'attention'>>();
       this.decoEventRacers = decoRacers;
+      const exited = new Set<string>();
+      this.exitRacers = exited;
       try {
         // Both snapshots on the one connect, and both for the same reason:
         // ptyd's pushes fire only on CHANGE, so events alone cannot wash out a
@@ -295,12 +314,14 @@ export class PtydCache extends EventEmitter {
         ]);
         if (cwds) {
           for (const { id, cwd } of cwds) {
-            if (racers.has(id)) continue;
+            if (racers.has(id) || exited.has(id)) continue;
             this.update(id, { cwd });
           }
         }
         if (decos) {
+          const live = new Set(decos.map((d) => d.id));
           for (const { id, title, fg, attention } of decos) {
+            if (exited.has(id)) continue;
             // Per-field, because the three move independently: a `paneFg`
             // that landed mid-flight makes the snapshot's `fg` stale and
             // says nothing about its `title`.
@@ -310,6 +331,51 @@ export class PtydCache extends EventEmitter {
               ...(raced?.has('fg') ? {} : { fg }),
               ...(raced?.has('attention') ? {} : { attention }),
             });
+          }
+          // …and now the panes ptyd does NOT have. The loop above only ever
+          // WRITES ids ptyd currently knows, which leaves the opposite set —
+          // ids this cache holds and ptyd has no opinion about — untouched
+          // forever. Those are precisely the panes whose `paneExit` was never
+          // delivered, because ptyd was the thing that died: after a ptyd
+          // restart every pane is gone, and nothing has ever contradicted
+          // their decorations. `busy` self-heals (its decay timer fires ~1.5s
+          // later) but `attention` does not, and `attention` outranks
+          // everything in getStatus and folds into decorateTab /
+          // decorateWorkspace — so a pane whose bell was ringing when ptyd
+          // died shows a red "wants you NOW" dot on its tab and its workspace
+          // for the rest of that pane's life. Agent and serve panes heal on
+          // respawn; a plain terminal pane is spawned LAZILY on browser
+          // attach, so a terminal in a tab you don't open never heals at all.
+          //
+          // Runs only when the snapshot ANSWERED. On a ptyd too old for
+          // flushDecorations `decos` is null, `live` would be empty, and this
+          // would blank every pane in the cockpit — so the whole prune is
+          // inside the `if (decos)`, which is the correct degradation.
+          //
+          // `cwd` deliberately survives: it is the one field seedCwds restores
+          // from SQLite for a not-yet-spawned pane, and the last-known cwd is
+          // still the right answer for a pane that is about to respawn.
+          // `appUrls` also survives — the detector re-probes every 10s and
+          // drops a dead listener on its own.
+          for (const id of [...this.state.keys()]) {
+            // A pane that exited mid-flight is legitimately absent from the
+            // snapshot, and its entry is already gone; `update` would recreate
+            // it for the same reason the deco loop would have.
+            if (live.has(id) || exited.has(id)) continue;
+            const s = this.state.get(id);
+            if (!s) continue;
+            const patch: PaneState = {};
+            if (s.title !== undefined) patch.title = null;
+            if (s.fg !== undefined) patch.fg = null;
+            if (s.attention) patch.attention = false;
+            if (s.busy) patch.busy = false;
+            // The emptiness guard is load-bearing: `update` compares with
+            // `!==`, so an unconditional `{busy: false}` on a pane whose busy
+            // is `undefined` counts as a change and would fan a `pane.updated`
+            // for every pane in the DB on every single reconnect.
+            if (Object.keys(patch).length === 0) continue;
+            this.clearBusyTimer(id);
+            this.update(id, patch);
           }
         }
         // A ptyd too old for flushDecorations rejects with `unknown method`,
@@ -322,6 +388,7 @@ export class PtydCache extends EventEmitter {
       } finally {
         if (this.cwdEventRacers === racers) this.cwdEventRacers = null;
         if (this.decoEventRacers === decoRacers) this.decoEventRacers = null;
+        if (this.exitRacers === exited) this.exitRacers = null;
       }
     });
   }
