@@ -1,6 +1,6 @@
 import type { AppUrl } from '@muxpad/shared';
 import { useEffect, useRef, useState } from 'react';
-import { subscribe } from '../events';
+import { subscribe, subscribeResync } from '../events';
 import { type UrlLiveness, isMixedContentUrl, probeUrlLive, requestFace } from '../lib/face-switch';
 import { announceOverlayOpen, onOtherOverlayOpen } from '../lib/overlays';
 import { normalizePaneUrl, usePaneFace } from '../lib/pane-face';
@@ -278,24 +278,27 @@ export function PaneWebSwitch({
 
   // A `muxpad claude` pane on its terminal face with no web URLs offers
   // nothing visible — but it HAS a chat face, and hiding the trigger there
-  // strands the user in the terminal. One fetch on mount (no poll) plus the
-  // agent_session.updated push keeps this sticky-true once a session exists.
+  // strands the user in the terminal. Fetch on mount, on agent_session.updated,
+  // and on events resync (reconnect + visibility). Honour a non-ok reply so a
+  // deleted session does not leave a dead toggle.
   const [hasSession, setHasSession] = useState(false);
   useEffect(() => {
     let aliveFlag = true;
     const check = () =>
       void fetch(`/api/agent-sessions/by-pane/${paneId}`)
         .then((r) => {
-          if (aliveFlag && r.ok) setHasSession(true);
+          if (aliveFlag) setHasSession(r.ok);
         })
         .catch(() => {});
     check();
     const unsub = subscribe((e) => {
       if (e.type === 'agent_session.updated' && e.pane_id === paneId) check();
     });
+    const unsubR = subscribeResync(() => check());
     return () => {
       aliveFlag = false;
       unsub();
+      unsubR();
     };
   }, [paneId]);
 
