@@ -79,53 +79,135 @@ export function DocChat({
   }, []);
 
   useEffect(() => {
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${proto}//${location.host}/ws/chat/${paneId}`);
-    wsRef.current = ws;
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => setConnected(false);
-    ws.onmessage = (ev) => {
-      let m: Record<string, unknown>;
+    // Same connect / onclose / visibility / heartbeat loop as ChatPane, keyed
+    // on paneId. History-replace in mergeEvents is the correct resync; this
+    // effect's job is to actually open a socket again after close. A one-shot
+    // socket left the composer on "connecting…" over a frozen transcript.
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
+    let lastPongAt = 0;
+
+    const connect = () => {
+      if (cancelled) return;
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${proto}//${location.host}/ws/chat/${paneId}`);
+      wsRef.current = ws;
+      ws.onopen = () => {
+        attempt = 0;
+        lastPongAt = Date.now();
+        setConnected(true);
+      };
+      ws.onerror = () => {
+        try {
+          ws.close();
+        } catch {
+          // onclose drives the retry
+        }
+      };
+      ws.onclose = () => {
+        setConnected(false);
+        if (wsRef.current === ws) wsRef.current = null;
+        if (cancelled) return;
+        retryTimer = setTimeout(connect, Math.min(1000 * 2 ** attempt, 10_000));
+        attempt += 1;
+      };
+      ws.onmessage = (ev) => {
+        let m: Record<string, unknown>;
+        try {
+          m = JSON.parse(ev.data);
+        } catch {
+          return;
+        }
+        switch (m.t) {
+          case 'session':
+            if (m.turnRunning) setRunning(true);
+            if (typeof m.streamText === 'string') setStream(m.streamText);
+            if (m.question) setQuestion(m.question as PendingQuestion);
+            break;
+          case 'events':
+            mergeEvents((m.events as ChatEvent[]) ?? [], m.phase as string);
+            break;
+          case 'turn-start':
+            setRunning(true);
+            setStream('');
+            break;
+          case 'stream':
+            setStream((s) => s + (m.delta as string));
+            break;
+          case 'turn-done':
+            setRunning(false);
+            setStream(''); // committed assistant event arrives via an `events` frame
+            break;
+          case 'question':
+            setQuestion({ qid: m.qid as string, questions: m.questions as AgentQuestion[] });
+            break;
+          case 'question-done':
+            setQuestion((q) => (q?.qid === m.qid ? null : q));
+            break;
+          case 'pong':
+            lastPongAt = Date.now();
+            break;
+        }
+      };
+    };
+
+    // Immediate reconnect if the socket is down — skip any pending backoff.
+    // A socket already up or coming up is left alone; CLOSING too: its onclose
+    // will schedule the retry, and connecting now would leave a duplicate.
+    const kick = () => {
+      if (cancelled) return;
+      const rs = wsRef.current?.readyState;
+      if (rs === WebSocket.OPEN || rs === WebSocket.CONNECTING || rs === WebSocket.CLOSING) return;
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = undefined;
+      attempt = 0;
+      connect();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') kick();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    connect();
+
+    // Heartbeat only while visible — a backgrounded tab's socket is expected
+    // to die, and onVisible reconnects on return. Missing pong → close the
+    // zombie so backoff (plus kick) brings up a fresh socket.
+    const heartbeat = window.setInterval(() => {
+      if (cancelled || document.visibilityState !== 'visible') return;
+      const sock = wsRef.current;
+      if (!sock || sock.readyState !== sock.OPEN) return;
+      const pingSentAt = Date.now();
       try {
-        m = JSON.parse(ev.data);
+        sock.send(JSON.stringify({ t: 'ping' }));
       } catch {
         return;
       }
-      switch (m.t) {
-        case 'session':
-          if (m.turnRunning) setRunning(true);
-          if (typeof m.streamText === 'string') setStream(m.streamText);
-          if (m.question) setQuestion(m.question as PendingQuestion);
-          break;
-        case 'events':
-          mergeEvents((m.events as ChatEvent[]) ?? [], m.phase as string);
-          break;
-        case 'turn-start':
-          setRunning(true);
-          setStream('');
-          break;
-        case 'stream':
-          setStream((s) => s + (m.delta as string));
-          break;
-        case 'turn-done':
-          setRunning(false);
-          setStream(''); // committed assistant event arrives via an `events` frame
-          break;
-        case 'question':
-          setQuestion({ qid: m.qid as string, questions: m.questions as AgentQuestion[] });
-          break;
-        case 'question-done':
-          setQuestion((q) => (q?.qid === m.qid ? null : q));
-          break;
-      }
-    };
-    const ping = setInterval(() => {
-      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'ping' }));
+      window.setTimeout(() => {
+        if (!cancelled && wsRef.current === sock && lastPongAt < pingSentAt) {
+          try {
+            sock.close();
+          } catch {
+            // already closing
+          }
+        }
+      }, 8000);
     }, 20_000);
+
     return () => {
-      clearInterval(ping);
-      ws.close();
+      cancelled = true;
+      window.clearInterval(heartbeat);
+      if (retryTimer) clearTimeout(retryTimer);
+      document.removeEventListener('visibilitychange', onVisible);
+      const ws = wsRef.current;
       wsRef.current = null;
+      if (ws) {
+        ws.onclose = null;
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onerror = null;
+        ws.close();
+      }
     };
   }, [paneId, mergeEvents]);
 
