@@ -4,10 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * The face-switch trigger for a `muxpad claude` / just-attached agent pane
- * is `hasSession`, fetched once on mount and then only on
- * `agent_session.updated`. A session created while /ws/events was down
- * (phone background, failed first connect) never flipped the flag, so the
- * user stayed stuck on the terminal with no chat toggle until remount.
+ * is `hasSession`, fetched on mount, on `agent_session.updated`, and on
+ * events resync. A session created while /ws/events was down (phone
+ * background, failed first connect) never flipped the flag, so the user
+ * stayed stuck on the terminal with no chat toggle until remount.
+ *
+ * Overlapping checks must not let an older reply clobber a newer one: a
+ * stale 404 after a 200 hides the chat face until reload, and a stale 200
+ * after a 404 leaves a dead toggle for a deleted session.
  */
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -40,7 +44,12 @@ let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 let fetchImpl: (url: string) => Promise<{ ok: boolean }> = async () => ({ ok: false });
 
-const settle = () => act(async () => { await Promise.resolve(); });
+const settle = () =>
+  act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
 
 async function mount() {
   const { PaneWebSwitch } = await import('./PaneWebSwitch');
@@ -98,5 +107,67 @@ describe('PaneWebSwitch hasSession reconnect', () => {
     });
     await settle();
     expect(host?.querySelector('button')).toBeNull();
+  });
+});
+
+describe('PaneWebSwitch hasSession out-of-order replies', () => {
+  async function mountWithInflight() {
+    const inflight: Array<(v: { ok: boolean }) => void> = [];
+    fetchImpl = () => new Promise((res) => inflight.push(res));
+    await mount();
+    return inflight;
+  }
+
+  it('a slow 404 from the mount check does not hide a later 200', async () => {
+    const inflight = await mountWithInflight();
+    expect(inflight).toHaveLength(1);
+    expect(host?.querySelector('button')).toBeNull();
+
+    await act(async () => {
+      for (const h of eventHandlers) h({ type: 'agent_session.updated', pane_id: 'pane_1' });
+    });
+    await settle();
+    expect(inflight).toHaveLength(2);
+
+    await act(async () => {
+      inflight[1]?.({ ok: true });
+    });
+    await settle();
+    expect(host?.querySelector('button'), 'trigger should be visible after 200').not.toBeNull();
+
+    await act(async () => {
+      inflight[0]?.({ ok: false });
+    });
+    await settle();
+    expect(
+      host?.querySelector('button'),
+      'stale 404 must not hide the chat-face trigger',
+    ).not.toBeNull();
+  });
+
+  it('a later 404 still hides, and a stale 200 cannot resurrect the trigger', async () => {
+    const inflight = await mountWithInflight();
+    expect(inflight).toHaveLength(1);
+
+    await act(async () => {
+      for (const h of resyncHandlers) h();
+    });
+    await settle();
+    expect(inflight).toHaveLength(2);
+
+    await act(async () => {
+      inflight[1]?.({ ok: false });
+    });
+    await settle();
+    expect(host?.querySelector('button')).toBeNull();
+
+    await act(async () => {
+      inflight[0]?.({ ok: true });
+    });
+    await settle();
+    expect(
+      host?.querySelector('button'),
+      'stale 200 must not resurrect a trigger the newer check hid',
+    ).toBeNull();
   });
 });
