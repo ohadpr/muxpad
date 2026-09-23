@@ -134,6 +134,21 @@ export function workspacesRoutes(deps: {
   app.post('/reorder', async (c) => {
     const body = z.object({ ids: z.array(z.string()) }).parse(await c.req.json());
     workspaces.reorder(body.ids);
+    // The sidebar's workspace order IS `position`, so a drag on one device was
+    // invisible on every other one until its 5s poll — which is stopped while
+    // the document is hidden, i.e. reliably stale on the second device the
+    // reorder was meant to reach.
+    //
+    // ONE event for ONE touched row is enough and deliberate: the global router
+    // (web/src/main.tsx) maps any workspace.* event to a wholesale
+    // refreshWorkspaces(), which refetches the list in the server's order. N
+    // events would trigger N identical refetches of the same list.
+    const touched = body.ids.map((id) => workspaces.getById(id)).find((w) => w);
+    if (touched)
+      deps.events.emit({
+        type: 'workspace.updated',
+        workspace: decorateWorkspace(deps.cache, deps.db, touched),
+      });
     return c.body(null, 204);
   });
 

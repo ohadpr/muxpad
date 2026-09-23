@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Cron } from '@muxpad/shared';
+import type { Cron, MuxpadEvent } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CronScheduler } from '../cron/CronScheduler.js';
@@ -26,6 +26,8 @@ describe('/api/crons', () => {
   let wsId: string;
   let paneId: string;
   let scheduler: CronScheduler;
+  /** The app's bus, hoisted so a test can subscribe to it. */
+  let events: EventBus;
 
   const json = async <T>(
     path: string,
@@ -56,7 +58,7 @@ describe('/api/crons', () => {
   beforeEach(async () => {
     tmp = mkdtempSync(join(tmpdir(), 'muxpad-crons-'));
     db = openDb(':memory:');
-    const events = new EventBus();
+    events = new EventBus();
     test = await createTestApp({ db, dataDir: tmp, events });
     wsId = new WorkspaceStore(db).create({ name: 'W' }).id;
     // An agent tab so we have a runner-owned pane to target.
@@ -327,5 +329,31 @@ describe('/api/crons', () => {
       spy.prepare = original as unknown as (sql: string) => unknown;
     }
     expect(cronQueries).toBe(1);
+  });
+
+  it('rescheduling a cron republishes the tab row its ◷ is rendered from', async () => {
+    // C5: emitCronTabUpdate ran on create, on enable/disable and on delete —
+    // but not in the reschedule branch, which is the ONE that moves
+    // `next_due_at`, the value decorateTab folds into the row as `next_cron`.
+    // So editing a schedule left every sidebar showing the old time until its
+    // 5s poll (indefinitely for a collapsed workspace).
+    const { body: cron } = await create();
+    const before = cron.next_due_at;
+
+    const received: MuxpadEvent[] = [];
+    events.subscribe((e) => received.push(e));
+
+    const { status, body: patched } = await json<Cron>(`/api/crons/${cron.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ schedule: 'daily at 03:00' }),
+    });
+    expect(status).toBe(200);
+    expect(patched.next_due_at).not.toBe(before); // the clock really moved
+
+    const updated = received.find((e) => e.type === 'tab.updated');
+    expect(updated).toBeDefined();
+    if (updated?.type === 'tab.updated') {
+      expect(updated.tab.next_cron?.next_due_at).toBe(patched.next_due_at);
+    }
   });
 });

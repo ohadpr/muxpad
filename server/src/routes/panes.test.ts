@@ -1050,9 +1050,9 @@ describe('flat pane enumeration (GET /api/panes)', () => {
       const received: MuxpadEvent[] = [];
       events.subscribe((e) => received.push(e));
 
-      expect((await local.app.request(`/api/panes/${doomed.id}`, { method: 'DELETE' })).status).toBe(
-        204,
-      );
+      expect(
+        (await local.app.request(`/api/panes/${doomed.id}`, { method: 'DELETE' })).status,
+      ).toBe(204);
 
       // The LIST endpoint — the one with no lazy repair — must not serve the
       // ghost leaf any more.
@@ -1099,7 +1099,11 @@ describe('flat pane enumeration (GET /api/panes)', () => {
         await local.app.request(`/api/tabs/${t.id}/panes`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ kind: 'url', url: 'https://x.example.com', append_to_layout: true }),
+          body: JSON.stringify({
+            kind: 'url',
+            url: 'https://x.example.com',
+            append_to_layout: true,
+          }),
         })
       ).json()) as { id: string };
       await local.app.request(`/api/panes/${only.id}`, { method: 'DELETE' });
@@ -1149,9 +1153,9 @@ describe('flat pane enumeration (GET /api/panes)', () => {
       const received: MuxpadEvent[] = [];
       events.subscribe((e) => received.push(e));
 
-      expect(
-        (await local.app.request(`/api/panes/${p.id}/seen`, { method: 'POST' })).status,
-      ).toBe(204);
+      expect((await local.app.request(`/api/panes/${p.id}/seen`, { method: 'POST' })).status).toBe(
+        204,
+      );
 
       const updated = received.find((e) => e.type === 'tab.updated');
       expect(updated).toBeDefined();
