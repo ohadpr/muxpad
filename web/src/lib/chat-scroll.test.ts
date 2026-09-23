@@ -1016,30 +1016,92 @@ describe('scrollTopAfterFoldChange — a run that closes above the reader', () =
 });
 
 describe('scrollMotionIsTheReader', () => {
-  // The regression that scoping `overflow-anchor` to the pinned state
-  // introduced: the engine pays an unpinned reader for growth above them by
-  // writing scrollTop during layout, and that write dispatches a scroll event
-  // nobody can stamp. Measured in headless Chromium — reader's row unmoved,
-  // scrollTop 4000 -> 4480, exactly one scroll event, flag flipped true.
+  // An anchoring adjustment: the engine pays for growth above the reader by
+  // moving scrollTop down by exactly that growth. Measured in headless
+  // Chromium — reader's row unmoved, 1400 -> 1850, one scroll event.
   it('does NOT blame the reader for an anchoring adjustment', () => {
     expect(
-      scrollMotionIsTheReader({ resized: true, scrollTop: 4480, lastProgrammaticTop: 4000 }),
+      scrollMotionIsTheReader({
+        scrollTop: 1850,
+        lastScrollTop: 1400,
+        heightDelta: 450,
+        lastProgrammaticTop: 1400,
+      }),
     ).toBe(false);
   });
 
-  it('still catches a reader who scrolled with no resize', () => {
+  it('does not blame them when only SOME of the growth was above them', () => {
+    // 450px arrived, 200 of it above the reader: the engine pays 200.
     expect(
-      scrollMotionIsTheReader({ resized: false, scrollTop: 4480, lastProgrammaticTop: 4000 }),
+      scrollMotionIsTheReader({
+        scrollTop: 1600,
+        lastScrollTop: 1400,
+        heightDelta: 450,
+        lastProgrammaticTop: 1400,
+      }),
+    ).toBe(false);
+  });
+
+  // The regression the validation fleet measured: the rule used to excuse EVERY
+  // motion in a frame where the content changed, so a reader paging with the
+  // keyboard or dragging a selection during a live turn was invisible for as
+  // long as output kept arriving. 7128px of real motion, 0 reader verdicts
+  // across 158 events.
+  it('DOES blame the reader for motion layout cannot account for', () => {
+    // 450px of growth cannot explain an 800px jump.
+    expect(
+      scrollMotionIsTheReader({
+        scrollTop: 2200,
+        lastScrollTop: 1400,
+        heightDelta: 450,
+        lastProgrammaticTop: 1400,
+      }),
+    ).toBe(true);
+  });
+
+  it('DOES blame the reader for scrolling UP while content grows', () => {
+    // Growth pushes scrollTop down; reading backwards is unmistakably theirs.
+    expect(
+      scrollMotionIsTheReader({
+        scrollTop: 1100,
+        lastScrollTop: 1400,
+        heightDelta: 450,
+        lastProgrammaticTop: 1400,
+      }),
+    ).toBe(true);
+  });
+
+  it('still catches a reader who scrolled with no growth at all', () => {
+    expect(
+      scrollMotionIsTheReader({
+        scrollTop: 4480,
+        lastScrollTop: 4000,
+        heightDelta: 0,
+        lastProgrammaticTop: 4000,
+      }),
     ).toBe(true);
   });
 
   it('does not blame the reader for our OWN programmatic write', () => {
     expect(
-      scrollMotionIsTheReader({ resized: false, scrollTop: 4000, lastProgrammaticTop: 4000 }),
+      scrollMotionIsTheReader({
+        scrollTop: 4000,
+        lastScrollTop: 4000,
+        heightDelta: 0,
+        lastProgrammaticTop: 4000,
+      }),
     ).toBe(false);
-    // Sub-pixel rounding is not a gesture either.
+  });
+
+  it('treats content shrinking as layout, not a gesture', () => {
+    // A fold closing above the reader: scrollTop is clamped down by the engine.
     expect(
-      scrollMotionIsTheReader({ resized: false, scrollTop: 4000.6, lastProgrammaticTop: 4000 }),
+      scrollMotionIsTheReader({
+        scrollTop: 900,
+        lastScrollTop: 900,
+        heightDelta: -450,
+        lastProgrammaticTop: 900,
+      }),
     ).toBe(false);
   });
 });

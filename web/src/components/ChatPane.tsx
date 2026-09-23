@@ -1685,6 +1685,9 @@ export function ChatPane({
    *  resized, which is the only thing that can produce a scroll-anchoring
    *  adjustment — see the discriminator in onScroll. */
   const lastScrollHeight = useRef(-1);
+  /** `scrollTop` as of the last scroll event, so a frame's motion can be
+   *  compared against the growth that might explain it. */
+  const lastScrollTop = useRef(-1);
   // Settling restore stops the moment the reader scrolls; reset on hide.
   const userScrolled = useRef(false);
   // Monotonic deadline (performance.now) until which scroll events are OUR
@@ -3496,11 +3499,47 @@ export function ChatPane({
       // scroll a line to read around it.
       searchJumpHold.current = false;
     };
+    // Wheel and touch are NOT the only ways a reader scrolls, and this listener
+    // being treated as if they were is what made `scrollMotionIsTheReader`
+    // dangerous: that rule declines to blame the reader whenever the content
+    // resized, on the stated grounds that a real gesture "is observed directly
+    // here". It was observed directly only for two input devices. Measured on
+    // the tree that shipped this morning: a drag-select autoscroll moved a
+    // reader 2000 → 9128px — 7128px of real motion — and produced ZERO reader
+    // verdicts across 158 scroll events, because growth was arriving the whole
+    // time. Keyboard paging was the same, 0 verdicts across 244 events.
+    //
+    // So the direct observation has to cover what it claims to:
+    //  · keydown — PageUp/PageDown/Home/End/arrows/space, once focus is in the
+    //    scroller. Filtered to the scrolling keys so typing in a focused child
+    //    (there is none today, but a future inline control would qualify)
+    //    cannot read as a scroll.
+    //  · pointerdown — a scrollbar thumb drag and a drag-select autoscroll both
+    //    begin with one, and neither emits wheel or touchmove at any point.
+    // Momentum after `touchend` is already covered: the flick's own touchmove
+    // fires first.
+    const SCROLL_KEYS = new Set([
+      'PageUp',
+      'PageDown',
+      'Home',
+      'End',
+      'ArrowUp',
+      'ArrowDown',
+      ' ',
+      'Spacebar',
+    ]);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (SCROLL_KEYS.has(e.key)) taken();
+    };
     el.addEventListener('wheel', taken, { passive: true });
     el.addEventListener('touchmove', taken, { passive: true });
+    el.addEventListener('keydown', onKeyDown, { passive: true });
+    el.addEventListener('pointerdown', taken, { passive: true });
     return () => {
       el.removeEventListener('wheel', taken);
       el.removeEventListener('touchmove', taken);
+      el.removeEventListener('keydown', onKeyDown);
+      el.removeEventListener('pointerdown', taken);
     };
   }, [active, pendingPick]);
 
@@ -3642,17 +3681,21 @@ export function ChatPane({
       // thumbnail that decoded, and settled for the fallback ratio.
       //
       // See scrollMotionIsTheReader for the discriminator and the measurement.
-      const resized = el.scrollHeight !== lastScrollHeight.current;
+      const heightDelta =
+        lastScrollHeight.current < 0 ? 0 : el.scrollHeight - lastScrollHeight.current;
+      const lastTop = lastScrollTop.current < 0 ? el.scrollTop : lastScrollTop.current;
       lastScrollHeight.current = el.scrollHeight;
+      lastScrollTop.current = el.scrollTop;
       if (
         scrollMotionIsTheReader({
-          resized,
           scrollTop: el.scrollTop,
+          lastScrollTop: lastTop,
+          heightDelta,
           lastProgrammaticTop: lastProgrammaticTop.current,
         })
       ) {
         userScrolled.current = true;
-      } else if (resized) {
+      } else if (heightDelta > 0) {
         // Layout's motion, not theirs — re-baseline so the NEXT event is judged
         // against where the engine left us, not where we last wrote.
         lastProgrammaticTop.current = el.scrollTop;
