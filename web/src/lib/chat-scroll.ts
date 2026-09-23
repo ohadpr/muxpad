@@ -54,7 +54,8 @@
  *
  * So the two questions are split, and only the second is remembered:
  *
- *   CAUGHT UP  ⇔  the newest message is at least partly ON SCREEN.
+ *   CAUGHT UP  ⇔  the END of the newest message is on screen (see
+ *                 readerIsCaughtUp for why its end and not its start).
  *
  * A caught-up reader opens at the newest message, however much arrived while
  * they were away — they had read to the end, so the end is where they belong. A
@@ -415,31 +416,55 @@ export function opensAtNewest(mem: ChatScrollMem | null): boolean {
 }
 
 /**
- * Was the reader at the END of the conversation — i.e. is the newest message
- * at least partly on screen?
+ * How far past the bottom of the viewport the newest message's END may sit
+ * while the reader still counts as caught up.
  *
- * `lastRowTop` is the newest anchored row's top relative to the scroll
+ * At rest this distance is NEGATIVE — the floating composer reserves ~130 px of
+ * list padding below the last message — so the budget is really "a couple of
+ * wheel notches up from the bottom" (Chromium: ~120 px each). Generous enough
+ * that nudging up to re-read the last line doesn't park you in history forever,
+ * which is the bug the message-shaped rule was introduced to fix; tight enough
+ * that scrolling away on purpose is respected.
+ */
+const CAUGHT_UP_SLACK_PX = 160;
+
+/**
+ * Was the reader at the END of the conversation?
+ *
+ * `lastRowBottom` is the newest anchored row's BOTTOM relative to the scroll
  * viewport's top; null when there are no rows to measure (an empty chat, or a
  * hidden pane whose boxes have collapsed), in which case the caller's pin state
  * is the best available answer.
  *
  * A message-shaped question, on purpose. The alternative — "within N pixels of
- * the bottom" — cannot distinguish a reader who has read to the end from one
- * who happens to be near it, and the distance to the bottom is not even
- * constant at rest: the floating composer reserves ~130 px of list padding, so
- * a reader AT the bottom already sits that far from the last message's end.
+ * the document bottom" — cannot distinguish a reader who has read to the end
+ * from one who happens to be near it, and the distance to the bottom is not even
+ * constant at rest: see CAUGHT_UP_SLACK_PX.
  *
- * A message taller than the viewport is the interesting edge: a reader at its
- * top is caught up by this rule, and returning lands them at its end. That is
- * the right answer — they had scrolled back past nothing.
+ * ── WHY THE BOTTOM AND NOT THE TOP ───────────────────────────────────────────
+ * This used to ask whether the newest message's TOP was on screen, on the
+ * reasoning that a reader who can see it "had scrolled back past nothing". That
+ * holds only while the newest message FITS. It routinely does not: a Chat-mode
+ * reply with its action run folded above it, or an Agent-mode tool result, runs
+ * to several screens. A reader on the first screen of one had their position
+ * recorded as caught up, and re-entry is defined as "open at the newest
+ * message" — so coming back dropped them at the END of the thing they were
+ * halfway through, composer-ready, with no way back to their place. Reported as
+ * "I come back to muxpad and it scrolls to the very bottom instead of my last
+ * position".
+ *
+ * Measuring the END answers the question that was always meant: has the reader
+ * actually reached the end of the newest message, not merely watched it begin.
+ * A tall message now keeps its anchor (the row under the viewport top, with the
+ * offset into it), which is exactly what the anchor was built to carry.
  */
 export function readerIsCaughtUp(opts: {
-  lastRowTop: number | null;
+  lastRowBottom: number | null;
   clientHeight: number;
   nearBottom: boolean;
 }): boolean {
-  if (opts.lastRowTop === null) return opts.nearBottom;
-  return opts.lastRowTop < opts.clientHeight;
+  if (opts.lastRowBottom === null) return opts.nearBottom;
+  return opts.lastRowBottom - opts.clientHeight <= CAUGHT_UP_SLACK_PX;
 }
 
 /**
