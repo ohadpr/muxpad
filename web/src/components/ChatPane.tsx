@@ -69,6 +69,7 @@ import {
 import type { AgentLink } from '../lib/voice/session';
 import { useVoice } from '../lib/voice/use-voice';
 import { AgentBackendLogo, backendFromAssistant } from './AgentLogos';
+import { CopyablePre } from './CopyablePre';
 import { SvgAgentGlyph, SvgGlobe, SvgTerminalGlyph } from './PaneWebSwitch';
 import { VoiceBar, VoiceControl } from './VoiceControl';
 
@@ -192,7 +193,7 @@ const MD_COMPONENTS: Components = {
       {children}
     </blockquote>
   ),
-  pre: ({ node: _node, ...props }) => <pre dir="ltr" {...props} />,
+  pre: ({ node: _node, ...props }) => <CopyablePre {...props} />,
 };
 
 /**
@@ -1422,7 +1423,11 @@ function lastAnchorRow(el: HTMLElement): HTMLElement | null {
 function measureCaughtUp(el: HTMLElement, nearBottom: boolean): boolean {
   const last = lastAnchorRow(el);
   return readerIsCaughtUp({
-    lastRowTop: last ? last.getBoundingClientRect().top - el.getBoundingClientRect().top : null,
+    // The row's END, not its start — a newest message taller than the viewport
+    // is read to the end only when its bottom arrives. See readerIsCaughtUp.
+    lastRowBottom: last
+      ? last.getBoundingClientRect().bottom - el.getBoundingClientRect().top
+      : null,
     clientHeight: el.clientHeight,
     nearBottom,
   });
@@ -5326,7 +5331,7 @@ function ToolModal({ detail, onClose }: { detail: ToolDetail; onClose: () => voi
           {use ? (
             <>
               <div className="chat-modal-label">Command</div>
-              <pre className="chat-modal-block">{commandText(use)}</pre>
+              <CopyablePre className="chat-modal-block">{commandText(use)}</CopyablePre>
             </>
           ) : null}
           {result?.diff ? (
@@ -5337,7 +5342,7 @@ function ToolModal({ detail, onClose }: { detail: ToolDetail; onClose: () => voi
           ) : result?.text ? (
             <>
               <div className="chat-modal-label">Output</div>
-              <pre className="chat-modal-block">{result.text.slice(0, 20000)}</pre>
+              <CopyablePre className="chat-modal-block">{result.text.slice(0, 20000)}</CopyablePre>
             </>
           ) : result ? (
             <div className="chat-modal-empty">

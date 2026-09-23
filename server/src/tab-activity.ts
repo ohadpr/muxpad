@@ -247,39 +247,8 @@ export class TabActivity {
  *    then `id`, so the result is TOTAL: no two tabs can swap places between
  *    two renders of identical data, which would make the sidebar jitter.
  */
-export interface SortableTab {
-  id: string;
-  status?: PaneStatus | undefined;
-  attention?: boolean | undefined;
-  last_activity_at?: number | null | undefined;
-}
-
-/** "This tab wants you NOW" — the one condition still worth reordering for.
- *  Reads `status` when the row carries it and falls back to the deprecated
- *  `attention` alias otherwise. The fallback is not decoration: `attention` is
- *  the raw BEL bit, and an AGENT chat never rings BEL — so a pane parked on
- *  `ask_user`, the highest-value case there is, would get no promotion at all
- *  if this partitioned on `attention` alone. */
-function wantsYou(t: SortableTab): boolean {
-  return t.status === 'blocked' || t.attention === true;
-}
-
-export function compareUnpinnedTabs(
-  a: SortableTab,
-  b: SortableTab,
-  positions: Map<string, number>,
-): number {
-  const attn = Number(wantsYou(b)) - Number(wantsYou(a));
-  if (attn !== 0) return attn;
-  // Nulls last: -Infinity is smaller than any real timestamp, and we sort
-  // descending, so a never-active tab lands at the bottom of its partition.
-  const at =
-    (b.last_activity_at ?? Number.NEGATIVE_INFINITY) -
-    (a.last_activity_at ?? Number.NEGATIVE_INFINITY);
-  // NaN guard: (-Inf) - (-Inf) is NaN, which would make the comparator
-  // inconsistent and the sort implementation-defined.
-  if (at !== 0 && !Number.isNaN(at)) return at < 0 ? -1 : 1;
-  const pos = (positions.get(a.id) ?? 0) - (positions.get(b.id) ?? 0);
-  if (pos !== 0) return pos;
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-}
+// The sidebar order moved to @muxpad/shared so the CLIENT can apply it to a
+// pushed row instead of waiting for its next poll — see shared/src/tab-order.ts
+// for why that wait was the bug. Re-exported here because this module is where
+// the rest of the server has always imported it from.
+export { type SortableTab, compareUnpinnedTabs, tabWantsYou } from '@muxpad/shared';

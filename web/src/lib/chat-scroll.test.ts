@@ -95,36 +95,61 @@ describe('readerIsCaughtUp', () => {
   // code filed the reader under "parked in history" and anchored them to that
   // message forever. Nothing about that is visible until the agent talks; then
   // the anchor is faithfully restored thirty messages above the newest one.
+  // A 170px message: resting at the bottom puts its top at 502 and its END at
+  // 672 — 128px clear of the fold, because the composer reserves that much list
+  // padding beneath it.
   it('a one-notch nudge off the bottom is still CAUGHT UP', () => {
-    expect(readerIsCaughtUp({ lastRowTop: 622, clientHeight: 800, nearBottom: false })).toBe(true);
+    // End moves 672 → 792: still on screen, still the message being read.
+    expect(readerIsCaughtUp({ lastRowBottom: 792, clientHeight: 800, nearBottom: false })).toBe(
+      true,
+    );
   });
 
   it('resting at the bottom is caught up', () => {
-    expect(readerIsCaughtUp({ lastRowTop: 502, clientHeight: 800, nearBottom: true })).toBe(true);
+    expect(readerIsCaughtUp({ lastRowBottom: 672, clientHeight: 800, nearBottom: true })).toBe(true);
   });
 
-  it('is caught up while reading a newest message taller than the viewport', () => {
-    // Its top is AT the viewport top and it runs off the bottom: the reader has
-    // scrolled back past nothing, so returning to its end is right.
-    expect(readerIsCaughtUp({ lastRowTop: 0, clientHeight: 800, nearBottom: false })).toBe(true);
+  // The regression this rule was rewritten for: "I come back to muxpad and it
+  // scrolls to the very bottom instead of my last position."
+  //
+  // A Chat-mode reply with its action run folded above it — or an Agent-mode
+  // tool result — runs to several screens. The rule used to ask whether the
+  // newest message had STARTED on screen, so a reader on its first screen was
+  // filed as caught up, and re-entry is defined as "open at the newest message":
+  // they came back to the END of the thing they were halfway through.
+  it('is NOT caught up on the first screen of a newest message taller than the viewport', () => {
+    // 2400px message, its top at the viewport top: the end is 1600px away.
+    expect(readerIsCaughtUp({ lastRowBottom: 2400, clientHeight: 800, nearBottom: false })).toBe(
+      false,
+    );
+  });
+
+  it('…and IS caught up once the reader reaches that message’s end', () => {
+    expect(readerIsCaughtUp({ lastRowBottom: 790, clientHeight: 800, nearBottom: true })).toBe(true);
   });
 
   it('is NOT caught up once the newest message is off the bottom of the screen', () => {
     // One 400px wheel notch already does this — the reader can no longer see
     // the newest message, so they are reading history and keep their place.
-    expect(readerIsCaughtUp({ lastRowTop: 902, clientHeight: 800, nearBottom: false })).toBe(false);
+    expect(readerIsCaughtUp({ lastRowBottom: 1072, clientHeight: 800, nearBottom: false })).toBe(
+      false,
+    );
   });
 
   it('is NOT caught up when parked deep in older history', () => {
-    expect(readerIsCaughtUp({ lastRowTop: 5200, clientHeight: 800, nearBottom: false })).toBe(
+    expect(readerIsCaughtUp({ lastRowBottom: 5370, clientHeight: 800, nearBottom: false })).toBe(
       false,
     );
   });
 
   it('falls back to the pin when there is nothing to measure', () => {
     // Empty chat, or a pane whose boxes collapsed under display:none.
-    expect(readerIsCaughtUp({ lastRowTop: null, clientHeight: 800, nearBottom: true })).toBe(true);
-    expect(readerIsCaughtUp({ lastRowTop: null, clientHeight: 0, nearBottom: false })).toBe(false);
+    expect(readerIsCaughtUp({ lastRowBottom: null, clientHeight: 800, nearBottom: true })).toBe(
+      true,
+    );
+    expect(readerIsCaughtUp({ lastRowBottom: null, clientHeight: 0, nearBottom: false })).toBe(
+      false,
+    );
   });
 });
 
@@ -139,7 +164,7 @@ describe('the stored re-entry policy is not the live-follow pin', () => {
   it('a reader 120px off the bottom is unpinned for LIVE follow but caught up for RE-ENTRY', () => {
     const nearBottom = 120 < 40; // the component's live-follow test — false
     expect(nearBottom).toBe(false);
-    const caughtUp = readerIsCaughtUp({ lastRowTop: 622, clientHeight: 800, nearBottom });
+    const caughtUp = readerIsCaughtUp({ lastRowBottom: 792, clientHeight: 800, nearBottom });
     expect(caughtUp).toBe(true);
     // …and "caught up" is what a re-open consults, so the newest message wins
     // over the message they happened to be nudged onto.
@@ -147,7 +172,7 @@ describe('the stored re-entry policy is not the live-follow pin', () => {
   });
 
   it('still keeps a genuinely scrolled-back reader exactly where they were', () => {
-    const caughtUp = readerIsCaughtUp({ lastRowTop: 5200, clientHeight: 800, nearBottom: false });
+    const caughtUp = readerIsCaughtUp({ lastRowBottom: 5370, clientHeight: 800, nearBottom: false });
     expect(caughtUp).toBe(false);
     expect(opensAtNewest(memo({ caughtUp, anchorId: 'e170', sid: 's1' }))).toBe(false);
   });

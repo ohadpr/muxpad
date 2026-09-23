@@ -1,4 +1,4 @@
-import type { Tab } from '@muxpad/shared';
+import { type Tab, sortSidebarTabs } from '@muxpad/shared';
 import { useEffect, useState } from 'react';
 import { api } from './api';
 import { subscribe, subscribeReconnect } from './events';
@@ -138,14 +138,31 @@ function scheduleLiveRefresh(): void {
  *
  * The event already carries the whole decorated row (every emitter goes
  * through `decorateTab` for exactly this reason), so there is nothing to fetch:
- * splicing it in is a round trip saved AND — the part that matters more —
- * it leaves the ARRAY ORDER alone. The server owns the order (pinned block,
- * then attention → recency) and the client only renders the sequence it was
- * given, so an in-place replacement cannot make a row jump under the cursor.
- * A refetch here would have: `tab.updated` also fires on every
- * `last_activity_at` write, so wiring this to a refetch would have turned the
- * unpinned block into a list that re-sorts on every finished turn, at the
- * debounce rate, everywhere except the one frozen active row.
+ * splicing it in is a round trip saved.
+ *
+ * ─── …and why it now RE-SORTS ────────────────────────────────────────────
+ * The splice used to leave the array ORDER alone, on the reasoning that the
+ * server owns the order and an in-place replacement therefore cannot make a row
+ * jump under the cursor. True, and it made the sidebar wrong: `tab.updated`
+ * fires on every `last_activity_at` write, so the row that had just become the
+ * most recently active one kept its old rank until the next 5s poll — and
+ * indefinitely while that poll is stopped, which it is for a collapsed
+ * workspace or a hidden document. On a second device, which is backgrounded
+ * most of the time, the order was reliably minutes stale. Reported as "the
+ * sidebar doesn't reorder properly and fast enough, on main device and on
+ * secondary devices".
+ *
+ * The hazard the old reasoning was protecting against is real but already
+ * owned: `freezeActiveTab` (lib/tab-freeze.ts) holds the row you are ON where
+ * you found it and lets everything else re-sort around it — which that file
+ * calls "the whole point of a living sidebar". So the two were contradicting
+ * each other, and the freeze is the one that is right.
+ *
+ * Sorting locally rather than refetching keeps the round trip saved and cannot
+ * go out of sync, because both sides now run the SAME comparator
+ * (`sortSidebarTabs`, shared/src/tab-order.ts). `position` is passed from the
+ * rows we hold; it is only a tiebreak between two tabs with identical attention
+ * AND activity, so a stale one cannot reorder anything that actually differs.
  *
  * ─── The one thing a patch cannot do ─────────────────────────────────────
  * `pinned` is the single field of the row that the ORDER has to agree with:
@@ -179,8 +196,17 @@ function applyTabRow(next: Tab): void {
       scheduleLiveRefresh();
       continue;
     }
-    const merged = [...list];
-    merged[i] = next;
+    const spliced = [...list];
+    spliced[i] = next;
+    // Re-derive the published order from the rows we now hold. Same comparator
+    // the server runs, so this cannot disagree with the next poll.
+    //
+    // The tiebreak is the CURRENT INDEX rather than `position` (which the client
+    // row doesn't carry): the array we hold is the order the server last
+    // published, so for two tabs the comparator can't separate — identical
+    // attention AND identical activity — this reproduces the server's own answer
+    // instead of falling through to the id.
+    const merged = sortSidebarTabs(spliced, new Map(spliced.map((t, n) => [t.id, n])));
     // Same version bump as applyTabOrder / applyTabUnread: a poll that started
     // before this event must not land after it and undo it.
     versions.set(wsId, (versions.get(wsId) ?? 0) + 1);
