@@ -43,3 +43,69 @@ export function setPaneScrollRatio(paneId: string, ratio: number): void {
   s[paneId] = n;
   write(s);
 }
+
+// Last-known foreground command. After a main-server restart, decoratePane
+// reports `foreground_cmd: null` for the life of a parked process (until a
+// ptyd bounce makes flushDecorations land). Wheel routing, Cursor replay
+// restore, and Ink-vs-shell decisions must not fall back to "this is a
+// shell" for that entire window. Null means unknown, not empty.
+const FG_KEY = 'muxpad.paneFg.v1';
+
+type FgState = Record<string, string>;
+
+function readFg(): FgState {
+  try {
+    const raw = localStorage.getItem(FG_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object') return {};
+    const out: FgState = {};
+    for (const [id, v] of Object.entries(parsed)) {
+      if (typeof v === 'string' && v.trim()) out[id] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writeFg(s: FgState): void {
+  try {
+    localStorage.setItem(FG_KEY, JSON.stringify(s));
+  } catch {
+    // quota exceeded etc. — best-effort
+  }
+}
+
+export function getPaneForegroundCmd(paneId: string): string | undefined {
+  return readFg()[paneId];
+}
+
+/** Persist a non-empty live decoration. Null/blank does not clear. */
+export function rememberPaneForegroundCmd(paneId: string, cmd: string | null | undefined): void {
+  const trimmed = cmd?.trim();
+  if (!trimmed) return;
+  const s = readFg();
+  if (s[paneId] === trimmed) return;
+  s[paneId] = trimmed;
+  writeFg(s);
+}
+
+/**
+ * Live decoration if present, else last-known, else infer cursor-agent from a
+ * saved scroll ratio (only Cursor panes write muxpad.paneScroll.v2).
+ */
+export function stickyForegroundCmd(
+  paneId: string,
+  live: string | null | undefined,
+): string | null {
+  const trimmed = live?.trim();
+  if (trimmed) {
+    rememberPaneForegroundCmd(paneId, trimmed);
+    return trimmed;
+  }
+  const remembered = getPaneForegroundCmd(paneId);
+  if (remembered) return remembered;
+  if (getPaneScrollRatio(paneId) !== undefined) return 'cursor-agent';
+  return live ?? null;
+}
