@@ -2,6 +2,12 @@
 // terminal input is leading + trailing batched at one second, and background
 // output is sampled every five seconds. Only output observes reconnect grace:
 // replayed scrollback must not erase the user's recency order.
+//
+// A fourth policy sits on the way OUT: a write only notifies (`onWrite`) when
+// it can actually move the row. Every notification costs each connected client
+// a full `GET /api/workspaces?all=1`, and the overwhelmingly common write —
+// bumping the tab that is already the most recent — cannot reorder anything.
+// See {@link TabActivity.canReorder}.
 import type Database from 'better-sqlite3';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { PaneStore } from './store/PaneStore.js';
@@ -23,6 +29,7 @@ export const INPUT_ACTIVITY_THROTTLE_MS = 1_000;
 export const ACTIVITY_BOOT_GRACE_MS = 90_000;
 
 export class TabActivity {
+  private readonly db: Database.Database;
   private readonly tabs: TabStore;
   private readonly panes: PaneStore;
   /** tabId → epoch ms of the last write we performed (forced or throttled). */
@@ -56,12 +63,17 @@ export class TabActivity {
    * to emit nothing at all — so a tab that just did something only climbed the
    * list on the next 5s poll, and never at all in a client whose poll is
    * stopped (collapsed workspace, hidden document). This hook lets the wiring
-   * layer fan out a `tab.updated`. It is safe to emit on every write because
-   * the writes are ALREADY rate-limited: forced ones are discrete user moments
-   * (turn-done, a send), input is batched at one second, and output is
-   * sampled at `throttleMs`.
+   * layer fan out a `tab.updated`.
+   *
+   * Called only for writes that can actually MOVE the row — see
+   * {@link canReorder}. The writes are rate-limited already (forced ones are
+   * discrete user moments, input is batched at one second, output is sampled
+   * at `throttleMs`), but "one per second" is not cheap when each one costs
+   * every connected client a full `GET /api/workspaces?all=1`.
    */
   private readonly onWrite: ((tabId: string) => void) | undefined;
+  /** Prepared lazily, and only when there is an `onWrite` to gate. */
+  private rivalStmt: Database.Statement | undefined;
 
   constructor(
     db: Database.Database,
@@ -74,6 +86,7 @@ export class TabActivity {
       onWrite?: (tabId: string) => void;
     } = {},
   ) {
+    this.db = db;
     this.tabs = new TabStore(db);
     this.panes = new PaneStore(db);
     this.throttleMs = opts.throttleMs ?? ACTIVITY_THROTTLE_MS;
@@ -161,12 +174,57 @@ export class TabActivity {
     return sinceGrace >= 0 && sinceGrace < this.bootGraceMs;
   }
 
+  /**
+   * Could moving this tab's `last_activity_at` from `before` to `at` change
+   * anything a client renders?
+   *
+   * The emit is not free. Every `tab.updated` costs EVERY connected client a
+   * full, uncoalesced `GET /api/workspaces?all=1` (web/src/main.tsx) — a walk
+   * of workspaces → tabs → panes through better-sqlite3 — for a rollup
+   * (attention / unread / status / agents) that `last_activity_at` cannot
+   * touch. At the 1s input batch that is one such walk per client per second
+   * of typing, and it multiplies by device count.
+   *
+   * What the write CAN change is the ORDER, and only sometimes. The sort is
+   * (attention, `last_activity_at` desc, id) in the sidebar and recency-first
+   * in the ⌘K list, so a tab that was ALREADY the most recent row anywhere
+   * stays exactly where it is when it becomes more recent still. Those writes
+   * emit nothing.
+   *
+   * Suppressing leaves the client holding a stale-but-still-maximal timestamp,
+   * which sorts identically. It cannot drift: writes move forward in time, so
+   * the next tab to write is by definition NOT the maximum, its own write
+   * emits, and it lands above the stale row — where it belongs. Only the
+   * single most-recent tab is ever stale, and only ever downward.
+   *
+   * The maximum is asked of the DB, never memoised: `tabs.last_activity_at` is
+   * also stamped outside this class (tab creation, resident-release's null
+   * backfill), and a memo would happily suppress a real reorder after one.
+   * The scope is GLOBAL rather than per-workspace because the nav search ranks
+   * tabs across workspaces by the same column.
+   */
+  private canReorder(tabId: string, before: number | null, at: number): boolean {
+    if (before === null) return true; // bottom of the list — any stamp moves it
+    if (at <= before) return true; // backwards/no-op write: don't reason, emit
+    // NULL fails `>=`, which is right: a never-observed tab sorts last and so
+    // is never a rival for the top.
+    this.rivalStmt ??= this.db.prepare(
+      'SELECT 1 FROM tabs WHERE id <> ? AND last_activity_at >= ? LIMIT 1',
+    );
+    // A rival AT the old timestamp counts: that tie used to be broken by id
+    // and now is not, which is a reorder.
+    return this.rivalStmt.get(tabId, before) !== undefined;
+  }
+
   private writeTab(tabId: string, at: number): boolean {
     const pending = this.pendingInput.get(tabId);
     if (pending && pending.at <= at) {
       clearTimeout(pending.timer);
       this.pendingInput.delete(tabId);
     }
+    // Read BEFORE the update: the gate below compares where the row was with
+    // where it is going.
+    const before = this.onWrite ? (this.tabs.getById(tabId)?.last_activity_at ?? null) : null;
     try {
       this.tabs.touchActivity(tabId, at);
     } catch {
@@ -174,7 +232,7 @@ export class TabActivity {
     }
     this.lastWriteAt.set(tabId, Math.max(at, this.lastWriteAt.get(tabId) ?? at));
     try {
-      this.onWrite?.(tabId);
+      if (this.onWrite && this.canReorder(tabId, before, at)) this.onWrite(tabId);
     } catch {
       // Decoration only — a failed emit must never fail the activity write.
     }
