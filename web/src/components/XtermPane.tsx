@@ -9,33 +9,40 @@ import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-det
 import { writeClipboard } from '../lib/clipboard-write';
 import { CursorScrollSession } from '../lib/cursor-scroll-session';
 import { isMobileLayout } from '../lib/mobile-layout';
+import { stickyForegroundCmd } from '../lib/pane-scroll';
 import { createSafeClipboardAddon } from '../lib/safe-clipboard-provider';
 import { ChunkedWriter, SyncBlockExtractor } from '../lib/write-coalescer';
 import {
-  bufferHasScrollback,
+  MIN_FIT_COLS,
+  MIN_FIT_ROWS,
+  bufferJumpForKey,
+  consumeCapturedWheel,
+  cursorShouldRefitOnVisibility,
+  customWheelAllowsXterm,
   getCellDimensions,
   isCursorAgentCmd,
   isInkForegroundCmd,
   linesAboveBottom,
-  linesAboveFromRatio,
+  mayFireQueuedResize,
+  proposedFitUsable,
   refreshVisibleRows,
-  restoreLinesAboveBottom,
   scrollBufferByLines,
-  scrollBufferWheel,
-  scrollRatioFromTerm,
   setScrollBarWidthZero,
   shouldForwardWheelToPty,
   shouldScrollXtermBuffer,
+  shouldSkipCursorUnchangedBox,
   shouldTouchScrollBuffer,
+  transcriptBandRow,
   triggerWheelMouseEvent,
   wheelInputForPty,
+  withViewportAnchor,
 } from '../lib/xterm-internals';
 import {
-  type Theme,
   TERMINAL_FONT,
+  type Theme,
+  getSettings,
   resolveTheme,
   systemPrefersDark,
-  getSettings,
   useResolvedTheme,
   useSettings,
 } from '../settings';
@@ -132,8 +139,13 @@ export function XtermPane({
   paneActive = true,
 }: XtermPaneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const foregroundCmdRef = useRef(foregroundCmd);
-  foregroundCmdRef.current = foregroundCmd;
+  // decoratePane reports null after a main-server restart for the life of
+  // the command. Last-known (and a saved cursor scroll ratio) keep wheel
+  // routing / replay restore from treating a parked Claude or Cursor as a
+  // shell.
+  const resolvedFg = stickyForegroundCmd(paneId, foregroundCmd);
+  const foregroundCmdRef = useRef(resolvedFg);
+  foregroundCmdRef.current = resolvedFg;
   const paneActiveRef = useRef(paneActive);
   paneActiveRef.current = paneActive;
   const onExitRef = useRef(onExit);
@@ -237,10 +249,14 @@ export function XtermPane({
     // gates on this too), leaving a blinking caret on an empty terminal.
     // 20x5 still rejects the degenerate ghost sizes this floor exists for
     // (8x4 storms from suspended layouts).
-    const MIN_COLS = 20;
-    const MIN_ROWS = 5;
+    const MIN_COLS = MIN_FIT_COLS;
+    const MIN_ROWS = MIN_FIT_ROWS;
     let lastSentCols = 0;
     let lastSentRows = 0;
+    // A hidden-tab ResizeObserver still sees the new box, then refit bails
+    // on mayDriveResize. Remember that so visibilitychange can actually fit
+    // instead of Cursor's refresh-only shortcut.
+    let skippedFitWhileHidden = false;
     const containerTooSmall = () => container.clientWidth < 60 || container.clientHeight < 40;
     const gridBelowFloor = () => term.cols < MIN_COLS || term.rows < MIN_ROWS;
 
@@ -368,16 +384,19 @@ export function XtermPane({
           // Don't fit a 0/near-zero container — fit() would mutate the
           // terminal to a few columns locally even if we never send it.
           if (!containerTooSmall()) {
-            fit.fit();
-            // fit() silently bails when xterm hasn't measured cell metrics
-            // yet (see fitWhenCellReady) — only a metrics-backed fit counts
-            // as "the grid is real" for the connect gate below.
-            if (getCellDimensions(term)) fittedOnce = true;
-            const ws = wsRef.current;
-            if (ws && ws.readyState === WebSocket.OPEN && mayDriveResize() && !gridBelowFloor()) {
-              lastSentCols = term.cols;
-              lastSentRows = term.rows;
-              ws.send(encodeResize(term.cols, term.rows));
+            const proposed = fit.proposeDimensions();
+            if (proposedFitUsable(proposed, MIN_COLS, MIN_ROWS)) {
+              fit.fit();
+              // fit() silently bails when xterm hasn't measured cell metrics
+              // yet (see fitWhenCellReady) — only a metrics-backed fit counts
+              // as "the grid is real" for the connect gate below.
+              if (getCellDimensions(term)) fittedOnce = true;
+              const ws = wsRef.current;
+              if (ws && ws.readyState === WebSocket.OPEN && mayDriveResize() && !gridBelowFloor()) {
+                lastSentCols = term.cols;
+                lastSentRows = term.rows;
+                ws.send(encodeResize(term.cols, term.rows));
+              }
             }
           }
         } catch {
@@ -557,6 +576,8 @@ export function XtermPane({
           // become-visible) re-announces once the layout settles.
           if (containerTooSmall()) return;
           try {
+            const proposed = fit.proposeDimensions();
+            if (!proposedFitUsable(proposed, MIN_COLS, MIN_ROWS)) return;
             fit.fit();
           } catch {
             // ignore
@@ -597,7 +618,9 @@ export function XtermPane({
           lastSentCols = cols;
           lastSentRows = rows - 1;
           window.setTimeout(() => {
-            if (intentionallyClosed) return;
+            if (!mayFireQueuedResize({ closed: intentionallyClosed, mayDrive: mayDriveResize() })) {
+              return;
+            }
             if (safeSend(encodeResize(cols, rows))) {
               lastSentCols = cols;
               lastSentRows = rows;
@@ -862,13 +885,18 @@ export function XtermPane({
         } else {
           const pos = cellAt(refX, refY);
           if (pos) {
-            // SGR mouse wheel: 64 = up (older), 65 = down (newer).
+            // SGR mouse wheel: 64 = up (older), 65 = down (newer). Aim at
+            // the transcript band, not the composer — same as desktop.
             const button = steps > 0 ? 65 : 64;
+            const row = transcriptBandRow(term.rows, pos.row);
             let seq = '';
             for (let i = 0; i < Math.abs(steps); i++) {
-              seq += `\x1b[<${button};${pos.col};${pos.row}M`;
+              seq += `\x1b[<${button};${pos.col};${row}M`;
             }
             if (seq) safeSend(encodeInput(seq));
+          } else if (!getCellDimensions(term)) {
+            // Metrics not ready: don't eat the gesture.
+            return;
           }
         }
       }
@@ -1025,7 +1053,7 @@ export function XtermPane({
       // Aim at the transcript band (upper third), not the input row.
       const col = hit?.col ?? Math.max(1, Math.floor(term.cols / 2));
       const row = hit?.row ?? Math.max(1, Math.floor(term.rows / 4));
-      const transcriptRow = Math.min(row, Math.max(1, Math.floor(term.rows / 3)));
+      const transcriptRow = transcriptBandRow(term.rows, row);
       // The encoders derive their step count from |delta|/stepPx; hand them
       // a synthetic delta that yields exactly `steps` (one per accumulated
       // notch) in the original direction, instead of the raw pixel delta.
@@ -1047,17 +1075,13 @@ export function XtermPane({
       const t = e.target;
       if (!(t instanceof Node) || !container.contains(t)) return;
       const fg = foregroundCmdRef.current;
-      if (shouldScrollXtermBuffer(term, fg)) {
-        if (scrollBufferWheel(term, e)) {
-          const active = term.buffer.active;
-          dbg('wheel→buffer', {
-            viewportY: active.viewportY,
-            baseY: active.baseY,
-            deltaY: e.deltaY,
-          });
-          e.preventDefault();
-          e.stopImmediatePropagation();
-        }
+      if (consumeCapturedWheel(term, e, fg) === 'buffer') {
+        dbg('wheel→buffer', {
+          viewportY: term.buffer.active.viewportY,
+          deltaY: e.deltaY,
+        });
+        e.preventDefault();
+        e.stopImmediatePropagation();
         return;
       }
       if (!sendWheelToPty(e)) return;
@@ -1071,6 +1095,7 @@ export function XtermPane({
     // mouse protocol lacks the wheel bit; return false to block ↑/↓ there.
     term.attachCustomWheelEventHandler((e) => {
       if (cursorScroll.replayActive) return false;
+      if (!customWheelAllowsXterm(term, foregroundCmdRef.current)) return false;
       return !sendWheelToPty(e);
     });
 
@@ -1081,6 +1106,7 @@ export function XtermPane({
         // measure a stale viewport. The visibilitychange→visible path
         // re-runs the full refit chain when the tab is looked at again.
         if (!mayDriveResize()) {
+          skippedFitWhileHidden = true;
           dbg('refit skipped: tab hidden');
           return;
         }
@@ -1091,10 +1117,17 @@ export function XtermPane({
         // ghost size before we send the real one a tick later — Claude
         // Code visibly relocates its input bar when this happens.
         if (containerTooSmall()) return;
-        const preserveScroll =
-          isCursorAgentCmd(foregroundCmdRef.current) && linesAboveBottom(term) > 0;
-        const scrollRatio = preserveScroll ? scrollRatioFromTerm(term) : 0;
-        fit.fit();
+        const proposed = fit.proposeDimensions();
+        if (!proposedFitUsable(proposed, MIN_COLS, MIN_ROWS)) {
+          dbg('refit skipped: below floor', proposed);
+          return;
+        }
+        // Content-anchor: keep the same logical line in view for shells
+        // and Claude as well as Cursor. Ratio restore (Cursor-only, and
+        // skipped on send-dedup) jumped the reader on wrap/height refits.
+        withViewportAnchor(term, () => {
+          fit.fit();
+        });
         fittedOnce = true; // only reachable with cell metrics ready (fitWhenCellReady)
         const cols = term.cols;
         const rows = term.rows;
@@ -1104,6 +1137,9 @@ export function XtermPane({
         }
         if (cols === lastSentCols && rows === lastSentRows) {
           dbg('refit skipped: dedup', { cols, rows });
+          // Local scroll already restored; last-sent is not evidence the
+          // local grid was unchanged (a prior rejected tiny fit).
+          tryInitialConnect();
           return;
         }
         // Cache only on a confirmed send. If the socket isn't open yet the
@@ -1112,9 +1148,6 @@ export function XtermPane({
         if (safeSend(encodeResize(cols, rows))) {
           lastSentCols = cols;
           lastSentRows = rows;
-        }
-        if (preserveScroll && scrollRatio > 0.001) {
-          restoreLinesAboveBottom(term, linesAboveFromRatio(term, scrollRatio));
         }
         if (isMobileLayout() && isCursorAgentCmd(foregroundCmdRef.current)) {
           refreshVisibleRows(term);
@@ -1166,14 +1199,25 @@ export function XtermPane({
     let hasSettledFirstResize = false;
     let lastRefitW = container.clientWidth;
     let lastRefitH = container.clientHeight;
-    const scheduleRefit = () => {
-      if (isCursorAgentCmd(foregroundCmdRef.current)) {
-        const w = container.clientWidth;
-        const h = container.clientHeight;
-        if (Math.abs(w - lastRefitW) < 2 && Math.abs(h - lastRefitH) < 2) return;
-        lastRefitW = w;
-        lastRefitH = h;
+    const scheduleRefit = (ev?: Event) => {
+      const force =
+        ev instanceof CustomEvent && Boolean((ev.detail as { force?: boolean } | undefined)?.force);
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      if (
+        shouldSkipCursorUnchangedBox({
+          isCursor: isCursorAgentCmd(foregroundCmdRef.current),
+          force,
+          prevW: lastRefitW,
+          prevH: lastRefitH,
+          nextW: w,
+          nextH: h,
+        })
+      ) {
+        return;
       }
+      lastRefitW = w;
+      lastRefitH = h;
       if (refitTimer !== null) window.clearTimeout(refitTimer);
       const cursor = isCursorAgentCmd(foregroundCmdRef.current);
       const delay = cursor ? (hasSettledFirstResize ? 150 : 300) : hasSettledFirstResize ? 50 : 250;
@@ -1183,7 +1227,7 @@ export function XtermPane({
         hasSettledFirstResize = true;
       }, delay);
     };
-    const resizeObs = new ResizeObserver(scheduleRefit);
+    const resizeObs = new ResizeObserver(() => scheduleRefit());
     resizeObs.observe(container);
     window.addEventListener('muxpad:layout-changed', scheduleRefit);
     // Backup for cases where ResizeObserver doesn't fire — e.g. browser
@@ -1267,6 +1311,11 @@ export function XtermPane({
       if (isCursorAgentCmd(foregroundCmdRef.current)) {
         if (cursorScroll.replayActive) return;
         if (source === 'window.focus') return;
+        if (cursorShouldRefitOnVisibility(skippedFitWhileHidden)) {
+          skippedFitWhileHidden = false;
+          reassertSize();
+          return;
+        }
         try {
           term.refresh(0, term.rows - 1);
         } catch {
@@ -1331,6 +1380,14 @@ export function XtermPane({
             // resize backstop (proxyAttach) can't eat half the wiggle.
             ws.send(encodeResize(cols + 1, rows));
             window.setTimeout(() => {
+              if (
+                !mayFireQueuedResize({
+                  closed: intentionallyClosed,
+                  mayDrive: mayDriveResize(),
+                })
+              ) {
+                return;
+              }
               if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
               try {
                 wsRef.current.send(encodeResize(cols, rows));
@@ -1484,6 +1541,19 @@ export function XtermPane({
     window.addEventListener('muxpad:scroll-buffer', onScrollBuffer);
 
     const onKeyDown = (e: KeyboardEvent) => {
+      const jump = bufferJumpForKey(term, e.key);
+      if (jump && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        try {
+          if (jump === 'bottom') term.scrollToBottom();
+          else term.scrollToLine(0);
+          refreshVisibleRows(term);
+        } catch {
+          // disposed
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       // Cmd/Ctrl+C: copy selection if any (else fall through so xterm sends
       // SIGINT to the PTY).
       if ((e.metaKey || e.ctrlKey) && (e.key === 'c' || e.key === 'C')) {
@@ -1661,21 +1731,6 @@ export function XtermPane({
       // bug) until the next unrelated resize. reassertSize also clears the
       // size dedup so the corrected dims actually reach the PTY.
       reassertSizeRef.current?.();
-      if (isMobileLayout()) {
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            const term = termRef.current;
-            if (term && isCursorAgentCmd(foregroundCmdRef.current)) {
-              try {
-                term.scrollToBottom();
-                refreshVisibleRows(term);
-              } catch {
-                // ignore
-              }
-            }
-          });
-        });
-      }
     }
 
     wasPaneActiveRef.current = paneActive;
@@ -1708,17 +1763,19 @@ export function XtermPane({
         // after a font swap — the metrics settle a beat after document.fonts
         // resolves, so one nudge isn't enough.
         const steps = [0, 100, 250];
-        steps.forEach((delay) => {
+        for (const delay of steps) {
           const id = window.setTimeout(() => {
             // Route through muxpad:layout-changed rather than calling fit()
             // directly: the main effect's refit() both fits AND sends the new
             // size to the server. A bare fit() resizes xterm's view but never
             // SIGWINCHes the PTY, so a TUI like Claude Code keeps rendering at
             // the old row count and doesn't fill the pane.
-            window.dispatchEvent(new Event('muxpad:layout-changed'));
+            window.dispatchEvent(
+              new CustomEvent('muxpad:layout-changed', { detail: { force: true } }),
+            );
           }, delay);
           timerIds.push(id);
-        });
+        }
       });
     return () => {
       disposed = true;
@@ -1729,7 +1786,7 @@ export function XtermPane({
   return (
     <div
       className={`xterm-pane-wrapper${
-        replayRestoring && isCursorAgentCmd(foregroundCmd) ? ' replay-restoring' : ''
+        replayRestoring && isCursorAgentCmd(resolvedFg) ? ' replay-restoring' : ''
       }`}
     >
       <div className="xterm-pane" ref={containerRef} tabIndex={0} />
