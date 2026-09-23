@@ -1,10 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
+import { stickyForegroundCmd } from './pane-scroll';
 import {
+  MIN_FIT_COLS,
+  MIN_FIT_ROWS,
   areMouseEventsActive,
+  bufferJumpForKey,
+  consumeCapturedWheel,
+  cursorShouldRefitOnVisibility,
+  customWheelAllowsXterm,
   getCellDimensions,
   isInkForegroundCmd,
   linesAboveBottom,
   linesAboveFromRatio,
+  mayFireQueuedResize,
+  proposedFitUsable,
   restoreLinesAboveBottom,
   scrollBufferByLines,
   scrollBufferWheel,
@@ -13,7 +22,9 @@ import {
   sgrWheelInput,
   shouldForwardWheelToPty,
   shouldScrollXtermBuffer,
+  shouldSkipCursorUnchangedBox,
   shouldTouchScrollBuffer,
+  transcriptBandRow,
   wheelInputForPty,
 } from './xterm-internals';
 
@@ -118,6 +129,22 @@ describe('xterm-internals', () => {
     const term = { buffer: { active, alternate: {} }, rows: 24 };
     expect(shouldScrollXtermBuffer(term as never, 'node claude-code')).toBe(false);
     expect(shouldForwardWheelToPty(term as never, 'node claude-code')).toBe(true);
+  });
+
+  it('sticky last-known fg keeps Claude forwarding after a null decoration', () => {
+    localStorage.clear();
+    const active = { type: 'normal', length: 100 };
+    const term = { buffer: { active, alternate: {} }, rows: 24 };
+    stickyForegroundCmd('p1', 'node claude-code');
+    const fg = stickyForegroundCmd('p1', null);
+    expect(shouldForwardWheelToPty(term as never, fg)).toBe(true);
+    expect(shouldTouchScrollBuffer(term as never, fg, true)).toBe(false);
+    expect(shouldForwardWheelToPty(term as never, null)).toBe(false);
+
+    stickyForegroundCmd('p2', 'cursor-agent');
+    const cursorFg = stickyForegroundCmd('p2', null);
+    expect(shouldScrollXtermBuffer(term as never, cursorFg)).toBe(true);
+    expect(shouldForwardWheelToPty(term as never, cursorFg)).toBe(false);
   });
 
   it('isInkForegroundCmd matches known Ink processes', () => {
@@ -244,5 +271,94 @@ describe('xterm-internals', () => {
     const fake = { _core: { viewport: { scrollBarWidth: 14 } } };
     setScrollBarWidthZero(fake as never);
     expect(fake._core.viewport.scrollBarWidth).toBe(0);
+  });
+});
+
+describe('proposedFitUsable — never mutate the buffer below the floor', () => {
+  it('rejects a 10-col fit that would evict scrollback (80px box at 8px/cell)', () => {
+    expect(proposedFitUsable({ cols: 10, rows: 24 })).toBe(false);
+    expect(proposedFitUsable({ cols: MIN_FIT_COLS, rows: MIN_FIT_ROWS })).toBe(true);
+    expect(proposedFitUsable({ cols: 80, rows: 24 })).toBe(true);
+    expect(proposedFitUsable(undefined)).toBe(false);
+  });
+});
+
+describe('consumeCapturedWheel — exclusive claim on the cursor buffer path', () => {
+  function term(opts: { getLinesScrolled?: number; type?: 'normal' | 'alternate' }) {
+    return {
+      rows: 24,
+      buffer: {
+        active: {
+          type: opts.type ?? 'normal',
+          length: 100,
+          viewportY: 10,
+          baseY: 80,
+        },
+      },
+      scrollToLine: vi.fn(),
+      scrollToBottom: vi.fn(),
+      _core: { viewport: { getLinesScrolled: () => opts.getLinesScrolled ?? 0 } },
+    };
+  }
+
+  it('consumes a sub-line trackpad delta (getLinesScrolled=0) so xterm handleWheel cannot pixel-scroll', () => {
+    const t = term({ getLinesScrolled: 0 });
+    const e = { deltaY: 12, shiftKey: false } as WheelEvent;
+    expect(scrollBufferWheel(t as never, e)).toBe(false);
+    expect(consumeCapturedWheel(t as never, e, 'cursor-agent')).toBe('buffer');
+    expect(customWheelAllowsXterm(t as never, 'cursor-agent')).toBe(false);
+  });
+
+  it('does not claim the buffer path for a shell / Claude', () => {
+    const t = term({ getLinesScrolled: 0 });
+    const e = { deltaY: 12, shiftKey: false } as WheelEvent;
+    expect(consumeCapturedWheel(t as never, e, 'zsh')).toBe('none');
+    expect(consumeCapturedWheel(t as never, e, 'node claude-code')).toBe('none');
+    expect(customWheelAllowsXterm(t as never, 'zsh')).toBe(true);
+  });
+});
+
+describe('queued wiggle return must re-check visibility', () => {
+  it('refuses a return send once the pane is hidden or unmounted', () => {
+    expect(mayFireQueuedResize({ closed: false, mayDrive: true })).toBe(true);
+    expect(mayFireQueuedResize({ closed: false, mayDrive: false })).toBe(false);
+    expect(mayFireQueuedResize({ closed: true, mayDrive: true })).toBe(false);
+  });
+});
+
+describe('cursor font-size / hidden-resize recovery', () => {
+  it('does not skip a forced metric invalidation when the box is unchanged', () => {
+    const box = { prevW: 800, prevH: 600, nextW: 800, nextH: 600 };
+    expect(shouldSkipCursorUnchangedBox({ isCursor: true, force: false, ...box })).toBe(true);
+    expect(shouldSkipCursorUnchangedBox({ isCursor: true, force: true, ...box })).toBe(false);
+    expect(shouldSkipCursorUnchangedBox({ isCursor: false, force: false, ...box })).toBe(false);
+  });
+
+  it('refits a cursor pane on visibility when a fit was skipped while hidden', () => {
+    expect(cursorShouldRefitOnVisibility(true)).toBe(true);
+    expect(cursorShouldRefitOnVisibility(false)).toBe(false);
+  });
+});
+
+describe('transcript-band wheel aim and End-key buffer jump', () => {
+  it('clamps a hit on the composer row into the upper third', () => {
+    expect(transcriptBandRow(24, 20)).toBe(8);
+    expect(transcriptBandRow(24, 2)).toBe(2);
+  });
+
+  it('End jumps the local buffer when scrolled up, and is inert at the live prompt', () => {
+    const scrolled = {
+      buffer: { active: { type: 'normal', viewportY: 10, baseY: 80 } },
+    };
+    const atBottom = {
+      buffer: { active: { type: 'normal', viewportY: 80, baseY: 80 } },
+    };
+    const alt = {
+      buffer: { active: { type: 'alternate', viewportY: 0, baseY: 0 } },
+    };
+    expect(bufferJumpForKey(scrolled as never, 'End')).toBe('bottom');
+    expect(bufferJumpForKey(scrolled as never, 'Home')).toBe('top');
+    expect(bufferJumpForKey(atBottom as never, 'End')).toBeNull();
+    expect(bufferJumpForKey(alt as never, 'End')).toBeNull();
   });
 });
