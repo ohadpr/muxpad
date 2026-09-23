@@ -92,8 +92,8 @@ import {
   rememberChatScroll,
   retiredAnchorMemory,
   scrollEventIsTrustworthy,
-  scrollMotionIsTheReader,
   scrollMemorySidMatches,
+  scrollMotionIsTheReader,
   scrollTopAfterFoldChange,
   scrollTopAfterOlderPrepend,
   scrollTopForAnchor,
@@ -1355,10 +1355,7 @@ export function consumeStreamedText(preview: string, landed: string[]): string {
  *    never matched and the reader saw their message twice — once clean, once
  *    wearing the XML — until `turn-done`.
  */
-export function optimisticEchoLanded(
-  events: readonly ChatEvent[],
-  optimistic: string,
-): boolean {
+export function optimisticEchoLanded(events: readonly ChatEvent[], optimistic: string): boolean {
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
     if (e?.kind !== 'user') continue;
@@ -2767,7 +2764,8 @@ export function ChatPane({
     let frame: number | null = null;
     const trackUntil = (deadline: number) => {
       apply();
-      frame = performance.now() < deadline ? requestAnimationFrame(() => trackUntil(deadline)) : null;
+      frame =
+        performance.now() < deadline ? requestAnimationFrame(() => trackUntil(deadline)) : null;
     };
     const onFocus = () => {
       if (frame !== null) cancelAnimationFrame(frame);
@@ -3227,6 +3225,7 @@ export function ChatPane({
   // A layout effect runs before the ResizeObserver callback for the same
   // commit, and the `setPinned` it lands on makes the observer's own
   // `if (pinnedToBottom.current)` the thing that keeps it out of the way.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: expandedGroups is a re-run trigger, not a read — listing it is what puts this effect in the commit that changes the fold's height.
   useLayoutEffect(() => {
     const keep = toggleAnchor.current;
     toggleAnchor.current = null;

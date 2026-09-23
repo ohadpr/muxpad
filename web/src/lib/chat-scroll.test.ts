@@ -12,8 +12,8 @@ import {
   rememberChatScroll,
   retiredAnchorMemory,
   scrollEventIsTrustworthy,
-  scrollMotionIsTheReader,
   scrollMemorySidMatches,
+  scrollMotionIsTheReader,
   scrollTopAfterFoldChange,
   scrollTopAfterOlderPrepend,
   scrollTopForAnchor,
@@ -108,7 +108,9 @@ describe('readerIsCaughtUp', () => {
   });
 
   it('resting at the bottom is caught up', () => {
-    expect(readerIsCaughtUp({ lastRowBottom: 672, clientHeight: 800, nearBottom: true })).toBe(true);
+    expect(readerIsCaughtUp({ lastRowBottom: 672, clientHeight: 800, nearBottom: true })).toBe(
+      true,
+    );
   });
 
   // The regression this rule was rewritten for: "I come back to muxpad and it
@@ -127,7 +129,9 @@ describe('readerIsCaughtUp', () => {
   });
 
   it('…and IS caught up once the reader reaches that message’s end', () => {
-    expect(readerIsCaughtUp({ lastRowBottom: 790, clientHeight: 800, nearBottom: true })).toBe(true);
+    expect(readerIsCaughtUp({ lastRowBottom: 790, clientHeight: 800, nearBottom: true })).toBe(
+      true,
+    );
   });
 
   it('is NOT caught up once the newest message is off the bottom of the screen', () => {
@@ -174,7 +178,11 @@ describe('the stored re-entry policy is not the live-follow pin', () => {
   });
 
   it('still keeps a genuinely scrolled-back reader exactly where they were', () => {
-    const caughtUp = readerIsCaughtUp({ lastRowBottom: 5370, clientHeight: 800, nearBottom: false });
+    const caughtUp = readerIsCaughtUp({
+      lastRowBottom: 5370,
+      clientHeight: 800,
+      nearBottom: false,
+    });
     expect(caughtUp).toBe(false);
     expect(opensAtNewest(memo({ caughtUp, anchorId: 'e170', sid: 's1' }))).toBe(false);
   });
@@ -1069,18 +1077,15 @@ describe('retiring an anchor the seek could not reach', () => {
       5,
     );
     // iOS rubber-band reports a scrollTop outside the range.
-    expect(
-      retiredAnchorMemory({ live: null, ...geometry, scrollTop: -40 }).ratio,
-    ).toBe(0);
-    expect(
-      retiredAnchorMemory({ live: null, ...geometry, scrollTop: 99999 }).ratio,
-    ).toBe(1);
+    expect(retiredAnchorMemory({ live: null, ...geometry, scrollTop: -40 }).ratio).toBe(0);
+    expect(retiredAnchorMemory({ live: null, ...geometry, scrollTop: 99999 }).ratio).toBe(1);
   });
 
   it('MEASURES caught-up rather than assuming the reader is parked', () => {
     // The fallback left them mid-history: the newest row ends far below.
-    expect(retiredAnchorMemory({ live: { anchorId: 'a', anchorOffset: 0 }, ...geometry }).caughtUp)
-      .toBe(false);
+    expect(
+      retiredAnchorMemory({ live: { anchorId: 'a', anchorOffset: 0 }, ...geometry }).caughtUp,
+    ).toBe(false);
     // …and left them at the end: saying so is what stops the NEXT open pinning
     // them to a message that is no longer the newest.
     expect(
@@ -1230,8 +1235,11 @@ describe('the LRU cap holds PARKED spots, not the default', () => {
 
   it('spends no slot on a caught-up reader', async () => {
     vi.resetModules();
-    const { rememberChatScroll: remember, opensAtNewest: newest, recallChatScroll: recall } =
-      await import('./chat-scroll');
+    const {
+      rememberChatScroll: remember,
+      opensAtNewest: newest,
+      recallChatScroll: recall,
+    } = await import('./chat-scroll');
     remember('caught', memo({ anchorId: null, ratio: 1, caughtUp: true }));
     await flushed();
     // Not stored — and it does not need to be: no memory and "caught up" are
