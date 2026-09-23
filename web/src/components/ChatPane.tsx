@@ -90,6 +90,7 @@ import {
   readerIsCaughtUp,
   recallChatScroll,
   rememberChatScroll,
+  retiredAnchorMemory,
   scrollEventIsTrustworthy,
   scrollMotionIsTheReader,
   scrollMemorySidMatches,
@@ -2844,8 +2845,58 @@ export function ChatPane({
           if (!use) held = anchorAt(el, rows);
         }
       }
-      if (performance.now() < deadline && !userScrolled.current) raf = requestAnimationFrame(apply);
-      else holdRememberedAnchor.current = false;
+      if (performance.now() < deadline && !userScrolled.current) {
+        raf = requestAnimationFrame(apply);
+        return;
+      }
+      // ── RETIRE A DEAD GOAL ───────────────────────────────────────────────
+      // The loop is over and the anchor was never found, so the store is still
+      // naming a message that is not coming back. `seekPages` is a local of
+      // this effect body, and the effect re-runs on every `showEpoch` — a
+      // browser-tab switch, an iOS backgrounding, a screen unlock — so the NEXT
+      // one spends another eight `load-older` round trips (~1 MB) hunting the
+      // same ghost, and the one after that does it again. Nothing else corrects
+      // the memory: while the loop runs `onScroll` preserves the stored anchor
+      // verbatim (that is what the hold is FOR), and by the time the hold is
+      // dropped the loop has usually converged and stopped writing, so no
+      // further scroll event is coming to record anything.
+      //
+      // Worse than the traffic: each re-run re-applies the ratio against a
+      // document that the PREVIOUS re-runs grew, which is the R·(range + g)
+      // walk chat-scroll.ts's header calls catastrophic. With the document
+      // roughly doubled between runs an honest re-anchor lands at
+      // range₁ + 0.1·range₁ and the ratio lands at 0.2·range₁ — the reader
+      // dragged ~0.9·range₁ further back into history, once per tab switch.
+      //
+      // Reachable ways an anchor stays unfindable: the message is more than
+      // eight pages back; the archive indexes it but the chat view does not
+      // render it (a subagent sidechain — the jump seek knows this case); a
+      // compaction renumbered the ids; a prepend moved a folded run's head.
+      //
+      // The row the fallback settled on is a REAL one, so make it the anchor
+      // and let the next restore be an ordinary one. Only on a deadline
+      // expiry: a reader who took over writes their own memory through
+      // `onScroll`, and overwriting it from here would be this loop having the
+      // last word over a gesture.
+      const dead = holdRememberedAnchor.current && !userScrolled.current;
+      holdRememberedAnchor.current = false;
+      const settled = scrollRef.current;
+      if (dead && settled && settled.clientHeight >= 40) {
+        const lastRow = lastAnchorRow(settled);
+        rememberChatScroll(
+          paneId,
+          retiredAnchorMemory({
+            live: captureAnchor(settled),
+            scrollTop: settled.scrollTop,
+            scrollHeight: settled.scrollHeight,
+            clientHeight: settled.clientHeight,
+            lastRowBottom: lastRow
+              ? lastRow.getBoundingClientRect().bottom - settled.getBoundingClientRect().top
+              : null,
+            sid: renderedSid.current,
+          }),
+        );
+      }
     };
     apply(); // first pass runs before paint — no flash
     return () => {

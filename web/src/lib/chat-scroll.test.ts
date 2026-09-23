@@ -10,6 +10,7 @@ import {
   readerIsCaughtUp,
   recallChatScroll,
   rememberChatScroll,
+  retiredAnchorMemory,
   scrollEventIsTrustworthy,
   scrollMotionIsTheReader,
   scrollMemorySidMatches,
@@ -1027,5 +1028,69 @@ describe('scrollMotionIsTheReader', () => {
     expect(
       scrollMotionIsTheReader({ resized: false, scrollTop: 4000.6, lastProgrammaticTop: 4000 }),
     ).toBe(false);
+  });
+});
+
+describe('retiring an anchor the seek could not reach', () => {
+  // The seek budget is a local of the restore effect and that effect re-runs on
+  // every visibility flip, so a stored anchor that is never going to be found
+  // costs eight `load-older` round trips PER FLIP — and each re-run re-applies
+  // the ratio against a document the previous ones grew. Handing over the row
+  // the fallback actually settled on makes the next restore an ordinary one.
+  const geometry = {
+    scrollTop: 4000,
+    scrollHeight: 20000,
+    clientHeight: 800,
+    lastRowBottom: 19000,
+    sid: 'sid-1',
+  };
+
+  it('names the row the loop settled on, not the ghost it was hunting', () => {
+    const m = retiredAnchorMemory({
+      live: { anchorId: 'evt-live', anchorOffset: -120 },
+      ...geometry,
+    });
+    expect(m.anchorId).toBe('evt-live');
+    expect(m.anchorOffset).toBe(-120);
+    expect(m.sid).toBe('sid-1');
+    // A findable anchor is exactly what stops `opensAtNewest` sending the next
+    // open to the bottom AND stops the loop seeking again.
+    expect(opensAtNewest(m)).toBe(false);
+  });
+
+  it('records the ratio the reader is actually at, clamped', () => {
+    expect(retiredAnchorMemory({ live: null, ...geometry }).ratio).toBeCloseTo(
+      4000 / (20000 - 800),
+      5,
+    );
+    // iOS rubber-band reports a scrollTop outside the range.
+    expect(
+      retiredAnchorMemory({ live: null, ...geometry, scrollTop: -40 }).ratio,
+    ).toBe(0);
+    expect(
+      retiredAnchorMemory({ live: null, ...geometry, scrollTop: 99999 }).ratio,
+    ).toBe(1);
+  });
+
+  it('MEASURES caught-up rather than assuming the reader is parked', () => {
+    // The fallback left them mid-history: the newest row ends far below.
+    expect(retiredAnchorMemory({ live: { anchorId: 'a', anchorOffset: 0 }, ...geometry }).caughtUp)
+      .toBe(false);
+    // …and left them at the end: saying so is what stops the NEXT open pinning
+    // them to a message that is no longer the newest.
+    expect(
+      retiredAnchorMemory({
+        live: { anchorId: 'a', anchorOffset: 0 },
+        ...geometry,
+        scrollTop: 19200,
+        lastRowBottom: 790,
+      }).caughtUp,
+    ).toBe(true);
+  });
+
+  it('falls back to no anchor when nothing is anchorable', () => {
+    const m = retiredAnchorMemory({ live: null, ...geometry });
+    expect(m.anchorId).toBeNull();
+    expect(m.anchorOffset).toBe(0);
   });
 });
