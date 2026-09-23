@@ -225,6 +225,182 @@ describe('PtydCache', () => {
     expect(cache.getTitle('p1')).toBe('stale');
   });
 
+  // A ptyd RESTART is the case the snapshot loops above cannot reach: they only
+  // ever write ids ptyd currently has, and after a restart ptyd has none of
+  // them. `paneExit` never arrived (ptyd was the thing that died), so before
+  // the prune nothing in the system had ever contradicted those decorations.
+  describe('a ptyd restart washes out the decorations of panes ptyd no longer has', () => {
+    /** A client whose two snapshots can be swapped out mid-test, to model the
+     *  same PtydClient reconnecting to a DIFFERENT (restarted) ptyd. */
+    function respawnableClient() {
+      const e = new EventEmitter() as EventEmitter & {
+        flushCwds: () => Promise<Array<{ id: string; cwd: string }>>;
+        flushDecorations: () => Promise<Deco[]>;
+      };
+      e.flushCwds = async () => [];
+      e.flushDecorations = async () => [];
+      return e;
+    }
+    const settle = () => new Promise((r) => setTimeout(r, 5));
+
+    it('clears title/fg/attention so a stuck red dot does not outlive the pane', async () => {
+      const cache = new PtydCache();
+      const c = respawnableClient();
+      c.flushCwds = async () => [{ id: 'p1', cwd: '/tmp' }];
+      c.flushDecorations = async () => [{ id: 'p1', title: 'build', fg: 'make', attention: true }];
+      cache.attach(c as unknown as PtydClient);
+      c.emit('connected');
+      await settle();
+      expect(cache.getStatus('p1', false)).toBe('blocked');
+
+      // ptyd restarts. Every pane died with it, so no paneExit is delivered,
+      // and the new ptyd has no runtimes — plain terminal panes are spawned
+      // lazily on browser attach, so one in an unopened tab never comes back
+      // on its own.
+      c.flushCwds = async () => [];
+      c.flushDecorations = async () => [];
+      c.emit('connected');
+      await settle();
+
+      expect(cache.getAttention('p1')).toBe(false);
+      expect(cache.getFg('p1')).toBeNull();
+      expect(cache.getTitle('p1')).toBeNull();
+      expect(cache.getStatus('p1', false)).toBe('idle');
+      // cwd survives on purpose: it is what seedCwds restores from SQLite and
+      // is still the right answer for a pane about to respawn there.
+      expect(cache.getCwd('p1')).toBe('/tmp');
+    });
+
+    it('drops a busy pane out of working, cancelling its decay timer', async () => {
+      const cache = new PtydCache({ busyQuietMs: 10_000, busyWarmupMs: 10 });
+      const c = respawnableClient();
+      c.flushDecorations = async () => [{ id: 'p1', title: null, fg: 'make', attention: false }];
+      cache.attach(c as unknown as PtydClient);
+      c.emit('connected');
+      await settle();
+      c.emit('paneActivity', { id: 'p1' });
+      await new Promise((r) => setTimeout(r, 20));
+      c.emit('paneActivity', { id: 'p1' });
+      expect(cache.getStatus('p1', false)).toBe('working');
+
+      c.flushDecorations = async () => [];
+      c.emit('connected');
+      await settle();
+      // Without the prune this would hold `working` for the full 10s decay.
+      expect(cache.getStatus('p1', false)).toBe('idle');
+    });
+
+    it('leaves panes ptyd still has alone, and emits nothing when there is nothing to prune', async () => {
+      const cache = new PtydCache();
+      const c = respawnableClient();
+      c.flushDecorations = async () => [
+        { id: 'p1', title: 'build', fg: 'make', attention: true },
+        { id: 'p2', title: null, fg: null, attention: false },
+      ];
+      cache.attach(c as unknown as PtydClient);
+      // p3 is seeded from SQLite and has never been spawned — cwd only.
+      cache.seedCwds([{ id: 'p3', cwd: '/seed' }]);
+      c.emit('connected');
+      await settle();
+
+      const changes: string[] = [];
+      cache.on('paneChange', (id) => changes.push(id));
+      // Reconnect to the SAME ptyd: every id is still live, so the prune must
+      // not fire a single event. An unconditional `{busy: false}` patch here
+      // would fan a pane.updated for every pane in the DB on every reconnect.
+      c.emit('connected');
+      await settle();
+      expect(changes).toEqual([]);
+      expect(cache.getAttention('p1')).toBe(true);
+      expect(cache.getCwd('p3')).toBe('/seed');
+    });
+
+    it('prunes nothing when the ptyd is too old for flushDecorations', async () => {
+      // `decos` is null on that ptyd, so an empty `live` set would blank the
+      // whole cockpit. The prune lives inside `if (decos)` for exactly this.
+      const cache = new PtydCache();
+      const c = fakeClient([], [{ id: 'p1', title: 'build', fg: 'make', attention: true }]);
+      cache.attach(c);
+      (c as unknown as EventEmitter).emit('connected');
+      await new Promise((r) => setTimeout(r, 5));
+      expect(cache.getAttention('p1')).toBe(true);
+
+      // Same cache, now talking to a ptyd that predates the RPC.
+      const old = fakeClient([]);
+      expect((old as unknown as { flushDecorations?: unknown }).flushDecorations).toBeUndefined();
+      cache.attach(old);
+      (old as unknown as EventEmitter).emit('connected');
+      await new Promise((r) => setTimeout(r, 5));
+      expect(cache.getAttention('p1')).toBe(true);
+      expect(cache.getFg('p1')).toBe('make');
+    });
+  });
+
+  // Both snapshots are a picture ptyd took BEFORE the exit. Re-applying either
+  // resurrects the entry, and the one paneExit that would have removed it has
+  // already been spent — so the zombie is permanent, and `blocked` if the bell
+  // happened to be ringing.
+  it('a paneExit racing the connect snapshot is not resurrected by it', async () => {
+    const cache = new PtydCache();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const c = fakeClient(
+      [{ id: 'p1', cwd: '/tmp' }],
+      [{ id: 'p1', title: 'build', fg: 'make', attention: true }],
+      gate,
+    );
+    cache.attach(c);
+    const removed: string[] = [];
+    cache.on('paneRemoved', (id) => removed.push(id));
+
+    (c as unknown as EventEmitter).emit('paneAttention', { id: 'p1', attention: true });
+    (c as unknown as EventEmitter).emit('connected');
+    await new Promise((r) => setImmediate(r));
+
+    // The pane exits while the snapshot is in flight.
+    (c as unknown as EventEmitter).emit('paneExit', { id: 'p1' });
+    expect(removed).toEqual(['p1']);
+    expect(cache.get('p1')).toBeUndefined();
+
+    release();
+    await new Promise((r) => setTimeout(r, 5));
+
+    // Still gone — and no second paneRemoved, because it was never re-added.
+    expect(cache.get('p1')).toBeUndefined();
+    expect(cache.getStatus('p1', false)).toBe('idle');
+    expect(removed).toEqual(['p1']);
+  });
+
+  it('a mid-flight paneExit also vetoes the CWD snapshot', async () => {
+    // flushCwds resolves on its own clock; the exit must veto both pictures,
+    // not just the decoration one, or the entry comes back cwd-only.
+    const cache = new PtydCache();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const e = new EventEmitter() as EventEmitter & {
+      flushCwds: () => Promise<Array<{ id: string; cwd: string }>>;
+      flushDecorations: () => Promise<Deco[]>;
+    };
+    e.flushCwds = async () => {
+      await gate;
+      return [{ id: 'p1', cwd: '/tmp' }];
+    };
+    e.flushDecorations = async () => [];
+    cache.attach(e as unknown as PtydClient);
+    e.emit('paneCwd', { id: 'p1', cwd: '/old' });
+    e.emit('connected');
+    await new Promise((r) => setImmediate(r));
+    e.emit('paneExit', { id: 'p1' });
+    expect(cache.get('p1')).toBeUndefined();
+    release();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(cache.get('p1')).toBeUndefined();
+  });
+
   it('seedCwds primes lookup before any event arrives and a real event supersedes the seed', () => {
     const cache = new PtydCache();
     const c = fakeClient();
