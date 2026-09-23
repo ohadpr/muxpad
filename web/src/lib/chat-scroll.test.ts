@@ -1512,61 +1512,99 @@ describe('a retirement in ANOTHER window', () => {
   });
 });
 
-describe('WebKit has no scroll anchoring — the JS equivalent must not double-pay', () => {
-  // Measured on BOTH engines (probe: /tmp/muxpad-hunt/fix-chat/ro-probe.mjs,
-  // headless Chromium + WebKit, 450px of growth above a parked reader):
+describe('scrollTopForAnchor lands where a scroll-anchoring engine lands', () => {
+  // ── WHAT THIS PROVES, AND WHAT IT DOES NOT ─────────────────────────────────
+  // Read this before trusting the block. It used to be titled for WebKit and
+  // iOS 26, which is more than it can show: these are calls to one exported
+  // function with numbers handed to it, in jsdom, which measures nothing and
+  // has no scroll anchoring of its own to have or lack. Specifically:
   //
-  //   overflow-anchor: auto   enginePaid 450  readerDrift 0    rowBased 0
-  //   overflow-anchor: none   enginePaid 0    readerDrift 450  rowBased 450
-  //   (a height DELTA would have moved 450 in BOTH rows — that is the double-pay)
+  //  · It CANNOT fail if ChatPane stops writing the compensation. That call
+  //    site is in another file, and removing `el.scrollTop = target` from it
+  //    leaves this whole suite green — recorded in val-val-test-honesty.md.
+  //    The gap is real and is not closed here.
+  //  · It says NOTHING about iOS 26 / WKWebView. No WebKit was run. The only
+  //    browser reachable from this repo's agent tooling is headless Chromium.
   //
-  // iOS 26 and earlier — Safari and the installed PWA, both WKWebView — live
-  // permanently in the second row; Safari 27 and Chromium in the first. The
-  // compensation is the same code either way, and the `<= 1` guard in the
-  // caller is what makes it a no-op where the engine already paid.
-  const GROWTH = 450;
-  const doc = { scrollHeight: 20000 + GROWTH, clientHeight: 600 };
+  // What it does prove is worth having, because the numbers are not invented.
+  // They are a measurement, taken through the Playwright MCP against headless
+  // Chromium on 2026-09-23 — full probe and raw output in
+  // /tmp/muxpad-hunt/f2-storage/anchoring-probe.md — of one 600px scroller
+  // parked at scrollTop 4000, then grown by 450px ABOVE the reader. The probe
+  // row is the one `firstVisibleRow` would pick (the first whose bottom is
+  // below the viewport top), so its geometry is the geometry this store
+  // actually stores: row19, top −181, height 201.
+  //
+  //   overflow-anchor: auto   scrollTop 4000 → 4450   row stays at −181
+  //   overflow-anchor: none   scrollTop 4000 → 4000   row drifts to +269
+  //
+  // So 4450 is an ORACLE, not an assumption: it is where a real engine put a
+  // real reader for that exact growth. The rule below is that the JS
+  // compensation must reach the same number from the un-anchored geometry, and
+  // must ask for nothing at all from the anchored one. A `scrollTop += Δheight`
+  // would move 450 in BOTH rows; that is the double-pay this replaced.
+  const MEASURED = {
+    growth: 450,
+    clientHeight: 600,
+    scrollHeightAfter: 20550,
+    scrollTopBefore: 4000,
+    rowTopBefore: -181,
+    rowHeight: 201,
+    // overflow-anchor: none — the engine paid nothing.
+    unanchored: { scrollTop: 4000, rowTop: 269 },
+    // overflow-anchor: auto — the engine paid, and this is the answer to match.
+    anchored: { scrollTop: 4450, rowTop: -181 },
+  };
+  // `anchorOffset` is the row's top relative to the viewport top as the reader
+  // left it — `getBoundingClientRect().top - viewportTop`, the same quantity
+  // and the same sign the probe reports.
+  const anchorOffset = MEASURED.rowTopBefore;
+  const rowHeight = MEASURED.rowHeight;
 
-  it('pays exactly once where the engine paid nothing (iOS 26)', () => {
-    // The engine did not move scrollTop, so the anchored row is GROWTH lower
-    // than the reader left it.
-    const target = scrollTopForAnchor({
-      scrollTop: 4000,
-      rowTop: -120 + GROWTH,
-      anchorOffset: -120,
-      rowHeight: 800,
-      ...doc,
-    });
-    expect(target - 4000).toBe(GROWTH);
+  it('reaches the anchoring engine’s own answer from the un-anchored geometry', () => {
+    expect(
+      scrollTopForAnchor({
+        scrollTop: MEASURED.unanchored.scrollTop,
+        rowTop: MEASURED.unanchored.rowTop,
+        anchorOffset,
+        rowHeight,
+        scrollHeight: MEASURED.scrollHeightAfter,
+        clientHeight: MEASURED.clientHeight,
+      }),
+    ).toBe(MEASURED.anchored.scrollTop);
   });
 
-  it('moves nothing where the engine already paid (Chromium / Safari 27)', () => {
-    // The engine bumped scrollTop by GROWTH, so the row is exactly where the
-    // reader left it — and the target equals the current scrollTop, which the
-    // caller's `<= 1` guard then declines to write.
-    const scrollTop = 4000 + GROWTH;
+  it('asks for nothing where the engine already paid, so the two cannot stack', () => {
+    // The measured anchored row, fed to the same function: the target equals
+    // the scrollTop the engine arrived at, and the caller's `<= 1` guard then
+    // declines to write it. Double-paying here is what would leap a reader
+    // 450px on a browser that was already handling it correctly.
     const target = scrollTopForAnchor({
-      scrollTop,
-      rowTop: -120,
-      anchorOffset: -120,
-      rowHeight: 800,
-      ...doc,
+      scrollTop: MEASURED.anchored.scrollTop,
+      rowTop: MEASURED.anchored.rowTop,
+      anchorOffset,
+      rowHeight,
+      scrollHeight: MEASURED.scrollHeightAfter,
+      clientHeight: MEASURED.clientHeight,
     });
-    expect(target).toBe(scrollTop);
-    expect(Math.abs(scrollTop - target) <= 1).toBe(true);
+    expect(target).toBe(MEASURED.anchored.scrollTop);
+    expect(Math.abs(MEASURED.anchored.scrollTop - target) <= 1).toBe(true);
   });
 
   it('ignores growth BELOW the reader, which a height delta would not', () => {
-    // Their row has not moved, so neither do they — a `scrollTop += Δheight`
-    // would have yanked them down by the agent talking.
-    const target = scrollTopForAnchor({
-      scrollTop: 4000,
-      rowTop: -120,
-      anchorOffset: -120,
-      rowHeight: 800,
-      ...doc,
-    });
-    expect(target).toBe(4000);
+    // The agent talking while someone reads history: scrollHeight grows, the
+    // reader's row does not move, and neither do they. A `scrollTop += Δheight`
+    // would have yanked them down by the whole turn.
+    expect(
+      scrollTopForAnchor({
+        scrollTop: MEASURED.scrollTopBefore,
+        rowTop: MEASURED.rowTopBefore,
+        anchorOffset,
+        rowHeight,
+        scrollHeight: MEASURED.scrollHeightAfter,
+        clientHeight: MEASURED.clientHeight,
+      }),
+    ).toBe(MEASURED.scrollTopBefore);
   });
 });
 
