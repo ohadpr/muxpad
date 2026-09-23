@@ -538,8 +538,31 @@ export function attachWsServer(deps: {
     /** Which harness drives this pane (claude|codex|cursor); set at hello. */
     backend: string;
     turnActive: boolean;
-    /** Question awaiting the user, so a (re)connecting chat client can render it. */
-    pendingQuestion: { qid: string; questions: AgentQuestion[] } | null;
+    /**
+     * Questions awaiting the user, oldest first (Map preserves insertion
+     * order), so a (re)connecting chat client can render one and the nav can
+     * say `blocked`.
+     *
+     * PLURAL, because the runner's side is plural and always was: the backend
+     * keeps its own `pendingQuestions` Map and `onConnected` re-emits EVERY
+     * entry. Two producers feed it — the `ask_user` tool and the reversibility
+     * gate's PreToolUse hook — and the hook is per tool call, so one assistant
+     * message containing two gated actions blocks on two questions at once
+     * with no `ask_user` involved at all.
+     *
+     * This used to be a single slot, and a second question silently evicted
+     * the first. The first was then unanswerable — its card had been replaced,
+     * its qid was gone from the server, and nothing re-announced it — while
+     * the gate hook it belonged to sat on a 7-day timeout. Answering the
+     * SECOND then cleared the slot and dropped the pane out of `blocked`, so a
+     * pane frozen mid-tool-call rendered as plain idle in the nav.
+     *
+     * Only the FRONT entry is broadcast to chat clients (see the `question`
+     * handler): the client holds one question card, so the queue is served one
+     * at a time rather than clobbering itself. That keeps the whole repair on
+     * this side of the wire — no new frame, no client change.
+     */
+    pendingQuestions: Map<string, AgentQuestion[]>;
     /** Latest per-task subagent progress for mid-turn (re)connects. */
     subagents: Map<string, SubagentProgress>;
     /**
@@ -632,6 +655,20 @@ export function attachWsServer(deps: {
      */
     pendingSendText: string | null;
   }
+  /**
+   * The question a chat client should be showing: the oldest unanswered one,
+   * which is the only one {@link AgentRunnerConn.pendingQuestions} ever
+   * broadcasts. One reader per surface (the live `question` bcast and the
+   * `session` snapshot) must agree, or a reload swaps the card out from under
+   * the user for a question they haven't got to yet.
+   */
+  const frontQuestion = (
+    conn: AgentRunnerConn | undefined,
+  ): { qid: string; questions: AgentQuestion[] } | null => {
+    const first = conn?.pendingQuestions.entries().next();
+    if (!first || first.done) return null;
+    return { qid: first.value[0], questions: first.value[1] };
+  };
   // A message that carries a cron fire marker was written by the scheduler,
   // not typed by anyone. One predicate, shared by both relay paths.
   const isHumanMessage = (text: string) => parseCronMarker(text) === null;
@@ -725,7 +762,8 @@ export function attachWsServer(deps: {
       return conn && conn.lastHumanSendAt > 0 ? conn.lastHumanSendAt : null;
     };
     deps.agentBridge.slash = (paneId, cmd) => sendToRunner(paneId, { t: 'slash', cmd });
-    deps.agentBridge.blocked = (paneId) => !!agentRunners.get(paneId)?.pendingQuestion;
+    deps.agentBridge.blocked = (paneId) =>
+      (agentRunners.get(paneId)?.pendingQuestions.size ?? 0) > 0;
   }
 
   // -------------------------------------------------------------------------
@@ -1240,7 +1278,7 @@ export function attachWsServer(deps: {
           sid: null,
           backend: 'claude',
           turnActive: false,
-          pendingQuestion: null,
+          pendingQuestions: new Map(),
           subagents: new Map(),
           subagentChangedAt: new Map(),
           subagentReaped: new Map(),
@@ -1264,6 +1302,24 @@ export function attachWsServer(deps: {
         syncSubagentCount(paneId);
         deps.cache.setBlocked(paneId, false);
         const bcast = (obj: unknown) => bcastToPane(paneId, obj);
+        /**
+         * Put a question in front of the user: render it and ring their phone.
+         *
+         * One function for both the moment a question ARRIVES at the front of
+         * an empty queue and the moment one is PROMOTED to the front, because
+         * those are the same event from the user's side — a card appearing.
+         * Splitting them is how the push went missing: it used to fire on
+         * arrival, so a question that had to wait its turn rang for a card
+         * nobody could see yet and then stayed silent when it finally showed.
+         */
+        const presentQuestion = (qid: string, questions: AgentQuestion[]) => {
+          bcast({ t: 'question', qid, questions });
+          const q = questions[0]?.question;
+          deps.notifyPane?.(
+            paneId,
+            q ? `asks: ${q.length > 80 ? `${q.slice(0, 80)}…` : q}` : 'has a question',
+          );
+        };
         const emitChange = () =>
           deps.events.emit({ type: 'agent_session.updated', pane_id: paneId });
         // Turn lifecycle on the GLOBAL bus (spec A4): a supervisor watching N
@@ -1453,7 +1509,7 @@ export function attachWsServer(deps: {
             }
           } else if (frame.t === 'turn-done') {
             conn.turnActive = false;
-            conn.pendingQuestion = null;
+            conn.pendingQuestions.clear();
             // Retire the correlation stamp with the turn. Normally turn-start
             // already consumed it, but a `turn-done` can arrive with NO
             // preceding `turn-start` — a Stop that cancels a send the runner
@@ -1519,7 +1575,8 @@ export function attachWsServer(deps: {
             drainQueue(paneId);
           } else if (frame.t === 'question') {
             if (typeof frame.qid !== 'string' || !Array.isArray(frame.questions)) return;
-            conn.pendingQuestion = { qid: frame.qid, questions: frame.questions };
+            const firstOpen = conn.pendingQuestions.size === 0;
+            conn.pendingQuestions.set(frame.qid, frame.questions);
             // D5: "needs input" had NO representation in the nav. The question
             // reached chat sockets and a push and touched nothing else, so a
             // chat parked on ask_user read as plain idle in the sidebar — the
@@ -1530,16 +1587,35 @@ export function attachWsServer(deps: {
             // blocked edge on the bus — invisible to the web client (which
             // dedups) but wrong for anything counting edges.
             deps.cache.setBlocked(paneId, true);
-            bcast({ t: 'question', qid: frame.qid, questions: frame.questions });
-            const q = frame.questions[0]?.question;
-            deps.notifyPane?.(
-              paneId,
-              q ? `asks: ${q.length > 80 ? `${q.slice(0, 80)}…` : q}` : 'has a question',
-            );
+            // Only the FRONT of the queue reaches the clients. A chat client
+            // holds ONE question card (`setQuestion` in ChatPane), so
+            // broadcasting a second question while the first is unanswered
+            // replaces the card — which is precisely how the first one used to
+            // become unanswerable. Held questions are released by the
+            // `question-done` branch below, in order.
+            //
+            // This also gives the runner's reconnect re-emit the right shape
+            // for free: `onConnected` replays every pending frame into a fresh
+            // (empty) conn, so the oldest lands first and is the one shown.
+            if (firstOpen) presentQuestion(frame.qid, frame.questions);
           } else if (frame.t === 'question-done') {
-            if (conn.pendingQuestion?.qid === frame.qid) conn.pendingQuestion = null;
-            if (!conn.pendingQuestion) deps.cache.setBlocked(paneId, false);
+            const wasFront = conn.pendingQuestions.keys().next().value === frame.qid;
+            conn.pendingQuestions.delete(frame.qid);
+            // Unblock only when NOTHING is left. The single-slot version
+            // unblocked on whichever question happened to be in the slot, so
+            // answering the second of two dropped the pane out of `blocked`
+            // while the first still held a tool call frozen.
+            if (conn.pendingQuestions.size === 0) deps.cache.setBlocked(paneId, false);
+            // Harmless for a held qid the clients never saw — their handler is
+            // qid-guarded (`q?.qid === msg.qid ? null : q`).
             bcast({ t: 'question-done', qid: frame.qid });
+            // The card just cleared and someone is next in line: promote them.
+            // Without this the user answers one question and the pane sits
+            // `blocked` with no card, which is the same wedge one level down.
+            if (wasFront) {
+              const next = conn.pendingQuestions.entries().next();
+              if (!next.done) presentQuestion(next.value[0], next.value[1]);
+            }
           } else if (frame.t === 'notify') {
             // The `notify` TOOL — the agent deciding this one is worth a phone.
             //
@@ -1837,6 +1913,7 @@ export function attachWsServer(deps: {
             const runner = agentRunners.get(chatPaneId);
             const turnRunning = runner?.turnActive === true;
             const streamText = streamBufs.get(chatPaneId);
+            const question = frontQuestion(runner);
             const cwd = deps.cache.getCwd(chatPaneId) ?? session?.cwd ?? null;
             send({
               t: 'session',
@@ -1852,7 +1929,11 @@ export function attachWsServer(deps: {
               ...(turnRunning && streamText ? { streamText } : {}),
               // Mid-turn (re)connect extras: a question awaiting the user and
               // live subagent progress would otherwise be lost to this socket.
-              ...(runner?.pendingQuestion ? { question: runner.pendingQuestion } : {}),
+              // The FRONT of the queue — the same one live clients were
+              // broadcast — so a reloading client and an already-open one show
+              // the same card. (The wire field is singular; the rest of the
+              // queue is served as each is answered.)
+              ...(question ? { question } : {}),
               ...(runner?.status ? { status: runner.status } : {}),
               ...(runner && runner.subagents.size > 0
                 ? { subagents: [...runner.subagents.values()] }

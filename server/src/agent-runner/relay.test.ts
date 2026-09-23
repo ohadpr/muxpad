@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { EventBus } from '../events.js';
 import { PtydCache, decoratePane } from '../ptyd-cache.js';
+import type { PaneNotifier } from '../push.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
@@ -19,7 +20,7 @@ afterEach(async () => {
   cleanup = null;
 });
 
-async function boot() {
+async function boot(extra: { notifyPane?: PaneNotifier } = {}) {
   const db = openDb(':memory:');
   const ptyd = await spawnPtyd();
   const workspaces = new WorkspaceStore(db);
@@ -40,7 +41,7 @@ async function boot() {
     const p = panes.getById(id);
     if (p) events.emit({ type: 'pane.updated', tab_id: p.tab_id, pane: decoratePane(cache, p) });
   });
-  attachWsServer({ http, db, ptyd: ptyd.client, cache, events });
+  attachWsServer({ http, db, ptyd: ptyd.client, cache, events, ...extra });
   await new Promise<void>((r) => http.listen(0, r));
   const port = (http.address() as AddressInfo).port;
   cleanup = async () => {
@@ -449,6 +450,76 @@ describe('agent-runner relay', () => {
     expect(cache.getStatus(paneId, false)).not.toBe('blocked');
 
     runner.close();
+  });
+
+  // TWO questions can be open at once, and this is not exotic. The backend
+  // keeps a `pendingQuestions` MAP and re-emits every entry on reconnect; two
+  // producers feed it (the `ask_user` tool and the reversibility gate), and the
+  // gate is a PreToolUse hook — per tool call — so one assistant message with
+  // two gated actions blocks on two questions with no `ask_user` at all. The
+  // server mirrored that with a single slot.
+  it('serves concurrent questions one at a time instead of losing all but the last', async () => {
+    const pushed: string[] = [];
+    const { port, paneId, cache } = await boot({
+      notifyPane: (_id, body) => {
+        pushed.push(body);
+        return 'no-devices';
+      },
+    });
+    const { sock: runner } = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${paneId}`);
+    runner.send(JSON.stringify({ t: 'hello', sid: SID, cwd: '/tmp', pid: 1, turnActive: false }));
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    await new Promise((r) => setTimeout(r, 80));
+    const { sock: chat, rx: fromChat } = await openSock(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
+    await new Promise((r) => setTimeout(r, 60));
+
+    const ask = (qid: string, q: string) =>
+      runner.send(
+        JSON.stringify({
+          t: 'question',
+          qid,
+          questions: [{ question: q, header: 'Pick', multiSelect: false, options: [] }],
+        }),
+      );
+    ask('q1', 'First?');
+    ask('q2', 'Second?');
+    await new Promise((r) => setTimeout(r, 80));
+    expect(cache.getStatus(paneId, false)).toBe('blocked');
+
+    // The client holds ONE question card, so only the oldest is broadcast.
+    // Sending both replaced q1's card with q2's and left q1 unanswerable —
+    // its qid was gone from the server and nothing would re-announce it.
+    const asked = () => fromChat.frames.filter((f) => f.t === 'question');
+    expect(asked().map((f) => f.qid)).toEqual(['q1']);
+    // …and the phone rings for the card they can SEE, not for the one waiting.
+    expect(pushed).toEqual(['asks: First?']);
+
+    // A client that reloads now must be shown the SAME card, not q2.
+    const { sock: chat2, rx: fromChat2 } = await openSock(
+      `ws://127.0.0.1:${port}/ws/chat/${paneId}`,
+    );
+    const session = await fromChat2.next((f) => f.t === 'session');
+    expect((session.question as { qid: string } | undefined)?.qid).toBe('q1');
+
+    // Answer q1 → q2 is promoted, and the pane stays blocked throughout.
+    runner.send(JSON.stringify({ t: 'question-done', qid: 'q1' }));
+    await fromChat.next((f) => f.t === 'question' && f.qid === 'q2');
+    expect(cache.getStatus(paneId, false)).toBe('blocked');
+    // Promotion rings too: answer one on your phone and walk away, and the
+    // next card still reaches you. (Holding the push without this would have
+    // traded one bug for a quieter one.)
+    expect(pushed).toEqual(['asks: First?', 'asks: Second?']);
+
+    // …and only NOW does answering the last one unblock it. The single-slot
+    // version unblocked on whichever question sat in the slot, so the pane read
+    // idle while a gate hook was still frozen on a 7-day timeout.
+    runner.send(JSON.stringify({ t: 'question-done', qid: 'q2' }));
+    await new Promise((r) => setTimeout(r, 80));
+    expect(cache.getStatus(paneId, false)).toBe('working');
+
+    runner.close();
+    chat.close();
+    chat2.close();
   });
 
   it('a runner-owned pane takes its status from the REGISTRY, not pty output (D4)', async () => {
