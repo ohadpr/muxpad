@@ -528,6 +528,38 @@ export function scrollEventIsTrustworthy(opts: {
 }
 
 /**
+ * Did the READER move, or did the document move under them?
+ *
+ * A scroll event whose position differs from the last programmatic target used
+ * to be, on its own, proof that the reader took control. It is not, because the
+ * browser's own scroll anchoring writes `scrollTop` during layout — paying an
+ * unpinned reader for content that grew above them — and that write dispatches
+ * an ordinary scroll event. Nothing can stamp the target for it: the engine
+ * does it, not us. Measured in headless Chromium: the reader's row did not move
+ * a pixel and the "reader took control" flag flipped true.
+ *
+ * That flag kills the settling restore, whose entire job is to hold a place
+ * WHILE the document settles — late-decoding images, the fill-viewport pager,
+ * the anchor seek's own prepended batches. All of those resize the content, so
+ * the restore was being killed by the very conditions it exists for.
+ *
+ * An anchoring adjustment can only occur when the scrollable content RESIZED,
+ * so that is the discriminator. On a resize the motion is attributed to layout
+ * and the caller re-baselines its target to the new position. A real gesture
+ * that happens to land mid-resize is not lost: wheel and touchmove are observed
+ * directly and set the flag without consulting this at all.
+ */
+export function scrollMotionIsTheReader(opts: {
+  /** Did `scrollHeight` change since the previous scroll event? */
+  resized: boolean;
+  scrollTop: number;
+  lastProgrammaticTop: number;
+}): boolean {
+  if (opts.resized) return false;
+  return Math.abs(opts.scrollTop - opts.lastProgrammaticTop) > 1;
+}
+
+/**
  * Index of the first row still (at least partly) on screen: the first whose
  * BOTTOM is below the viewport top. That row is the one the reader's eye is
  * anchored to, and the only one whose identity survives the document changing
@@ -576,8 +608,36 @@ export function scrollTopForAnchor(opts: {
   anchorOffset: number;
   scrollHeight: number;
   clientHeight: number;
+  /** The anchored row's CURRENT height. Omitted → no clamp (callers that have
+   *  not measured it; the old, unclamped behaviour). */
+  rowHeight?: number | undefined;
 }): number {
-  const raw = opts.scrollTop + (opts.rowTop - opts.anchorOffset);
+  // ── The offset has to still FIT THE ROW ──────────────────────────────────
+  // `anchorOffset` is how far the row's top sat above the viewport top, so its
+  // magnitude can never honestly exceed the row's own height — past that the
+  // row is entirely off screen and would not have been the anchor. It is
+  // replayed against the row as it is NOW, and the row routinely shrinks in
+  // between: `expandedGroups` is plain component state, so an action run the
+  // reader had expanded collapses to its ~44px summary on every remount (a
+  // sidebar tab switch unmounts the pane tree) and on every reload.
+  //
+  // Unclamped, a reader 1800px deep inside a 3000px run came back with
+  // `anchorOffset: -1800` replayed against 44px: target 4420 where the honest
+  // answer was 2620, which the range clamp below then pinned to the BOTTOM of
+  // the chat. Deterministic, not intermittent, and a verbatim match for "I come
+  // back to muxpad and it scrolls to the very bottom instead of my last
+  // position". Unlike a late-loading image — which grows back, letting the
+  // settling loop re-converge — a collapsed run never returns, so the loop
+  // re-asserted the same wrong target every frame for the whole window.
+  //
+  // An offset that cannot fit is DISCARDED rather than squeezed to the row's
+  // edge: squeezing lands the reader just past a row they never finished, while
+  // discarding puts its top under their eyes — the most honest answer available
+  // once the thing they were reading is gone. An offset that still fits is left
+  // exactly alone.
+  const stale = opts.rowHeight !== undefined && -opts.anchorOffset > opts.rowHeight;
+  const offset = stale ? 0 : opts.anchorOffset;
+  const raw = opts.scrollTop + (opts.rowTop - offset);
   return Math.min(Math.max(0, raw), maxScrollTop(opts.scrollHeight, opts.clientHeight));
 }
 

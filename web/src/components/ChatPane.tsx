@@ -91,6 +91,7 @@ import {
   recallChatScroll,
   rememberChatScroll,
   scrollEventIsTrustworthy,
+  scrollMotionIsTheReader,
   scrollMemorySidMatches,
   scrollTopAfterFoldChange,
   scrollTopAfterOlderPrepend,
@@ -1544,6 +1545,10 @@ export function ChatPane({
   // Programmatic scrollTop writes stamp this BEFORE assigning so onScroll
   // can tell reader-driven motion from restore / pin / older-prepend adjusts.
   const lastProgrammaticTop = useRef(-1);
+  /** `scrollHeight` as of the last scroll event. A change means the document
+   *  resized, which is the only thing that can produce a scroll-anchoring
+   *  adjustment — see the discriminator in onScroll. */
+  const lastScrollHeight = useRef(-1);
   // Settling restore stops the moment the reader scrolls; reset on hide.
   const userScrolled = useRef(false);
   // Monotonic deadline (performance.now) until which scroll events are OUR
@@ -2666,6 +2671,9 @@ export function ChatPane({
                 anchorOffset: use.offset,
                 scrollHeight: el.scrollHeight,
                 clientHeight: el.clientHeight,
+                // The row AS IT IS NOW — an action run the reader had expanded
+                // is collapsed again by this point. See scrollTopForAnchor.
+                rowHeight: use.row.getBoundingClientRect().height,
               })
             : // Nothing anchorable yet: place by the remembered ratio, ONCE.
               // Clamped — iOS rubber-band can persist a slightly negative
@@ -3034,11 +3042,24 @@ export function ChatPane({
     const onVisible = () => {
       if (document.visibilityState === 'visible') setShowEpoch((n) => n + 1);
     };
+    // `pageshow` ONLY when it is a bfcache restore. It also fires on an ordinary
+    // first load — after `load`, which waits for subresources, so a chat full of
+    // pasted screenshots delays it a long way past mount: measured 13ms to mount
+    // and 1661ms to pageshow behind one slow image. That bump re-ran the restore
+    // on every cold open, 1.6s in, resetting `userScrolled` to false and
+    // re-asserting the frozen goal — yanking back a reader who had scrolled away
+    // in the meantime, including one who had scrolled with the wheel, whose
+    // `taken()` flag this reset unconditionally. A `persisted` pageshow is the
+    // real case this listener was added for: the document comes back with its
+    // layout restored from cache and nothing else tells us.
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) onVisible();
+    };
     document.addEventListener('visibilitychange', onVisible);
-    window.addEventListener('pageshow', onVisible);
+    window.addEventListener('pageshow', onPageShow);
     return () => {
       document.removeEventListener('visibilitychange', onVisible);
-      window.removeEventListener('pageshow', onVisible);
+      window.removeEventListener('pageshow', onPageShow);
     };
   }, []);
 
@@ -3149,11 +3170,38 @@ export function ChatPane({
       now: performance.now(),
     });
     if (trustworthy) {
-      // The settling restore above fires this too; a scroll AWAY from its last
-      // programmatic target is the reader taking control — stop re-restoring.
-      // Programmatic paths stamp lastProgrammaticTop BEFORE assigning scrollTop
-      // so this check sees them as non-user.
-      if (Math.abs(el.scrollTop - lastProgrammaticTop.current) > 1) userScrolled.current = true;
+      // ── Did the DOCUMENT move, or did the reader? ──────────────────────────
+      // The browser's scroll anchoring writes scrollTop during layout to pay a
+      // reader for content growing above them, and that write dispatches an
+      // ordinary scroll event. Nothing can stamp `lastProgrammaticTop` for it —
+      // the engine does it, not us — so the delta test below read every one of
+      // those as a gesture. Measured: the reader's row did not move a pixel and
+      // `userScrolled` flipped true.
+      //
+      // That flag is the kill switch for the settling restore, whose entire job
+      // is to hold a place WHILE the document settles — late-decoding images,
+      // the fill-viewport pager, the anchor seek's own prepended batches. Those
+      // are precisely the things that trigger an adjustment, so the restore was
+      // being killed by the conditions it exists for: a cold open whose
+      // remembered message needs paging back in lost its seek to the first
+      // thumbnail that decoded, and settled for the fallback ratio.
+      //
+      // See scrollMotionIsTheReader for the discriminator and the measurement.
+      const resized = el.scrollHeight !== lastScrollHeight.current;
+      lastScrollHeight.current = el.scrollHeight;
+      if (
+        scrollMotionIsTheReader({
+          resized,
+          scrollTop: el.scrollTop,
+          lastProgrammaticTop: lastProgrammaticTop.current,
+        })
+      ) {
+        userScrolled.current = true;
+      } else if (resized) {
+        // Layout's motion, not theirs — re-baseline so the NEXT event is judged
+        // against where the engine left us, not where we last wrote.
+        lastProgrammaticTop.current = el.scrollTop;
+      }
       const range = Math.max(1, el.scrollHeight - el.clientHeight);
       const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
       // LIVE follow, and only that. Tight on purpose — nudge up one line and

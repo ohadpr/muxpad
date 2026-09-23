@@ -11,6 +11,7 @@ import {
   recallChatScroll,
   rememberChatScroll,
   scrollEventIsTrustworthy,
+  scrollMotionIsTheReader,
   scrollMemorySidMatches,
   scrollTopAfterFoldChange,
   scrollTopAfterOlderPrepend,
@@ -356,6 +357,39 @@ describe('firstVisibleRow — which message the reader is actually looking at', 
 });
 
 describe('scrollTopForAnchor — the reason this file no longer uses a ratio', () => {
+  // The measured "comes back to the very bottom" case. A reader 1800px deep
+  // inside a 3000px expanded action run parks there; `expandedGroups` is plain
+  // component state, so a remount collapses that run to its 44px summary, and
+  // the offset is replayed against a row 40x smaller.
+  it('clamps an offset that no longer fits the row it names', () => {
+    const collapsed = {
+      scrollTop: 2620,
+      rowTop: 0, // the collapsed run sits at the viewport top
+      anchorOffset: -1800, // measured while it was 3000px tall
+      scrollHeight: 5152,
+      clientHeight: 700,
+    };
+    // Unclamped the target is 4420 — past the honest 2620, and the range clamp
+    // then pins it to the bottom of the chat.
+    expect(scrollTopForAnchor(collapsed)).toBe(4420);
+    // Clamped to the row's real height, the reader lands on the run itself.
+    expect(scrollTopForAnchor({ ...collapsed, rowHeight: 44 })).toBe(2620);
+  });
+
+  it('leaves an offset that still fits alone', () => {
+    // The row did not change: the clamp must be inert, not merely harmless.
+    expect(
+      scrollTopForAnchor({
+        scrollTop: 1000,
+        rowTop: 380,
+        anchorOffset: -20,
+        scrollHeight: 9000,
+        clientHeight: 600,
+        rowHeight: 3000,
+      }),
+    ).toBe(1400);
+  });
+
   it('puts the anchored message back exactly where it was', () => {
     // The row has drifted 400px down (a prepended history batch); scrollTop has
     // to grow by exactly that to keep the message under the reader's eyes.
@@ -964,5 +998,34 @@ describe('scrollTopAfterFoldChange — a run that closes above the reader', () =
         clientHeight: 600,
       }),
     ).toBe(0);
+  });
+});
+
+describe('scrollMotionIsTheReader', () => {
+  // The regression that scoping `overflow-anchor` to the pinned state
+  // introduced: the engine pays an unpinned reader for growth above them by
+  // writing scrollTop during layout, and that write dispatches a scroll event
+  // nobody can stamp. Measured in headless Chromium — reader's row unmoved,
+  // scrollTop 4000 -> 4480, exactly one scroll event, flag flipped true.
+  it('does NOT blame the reader for an anchoring adjustment', () => {
+    expect(
+      scrollMotionIsTheReader({ resized: true, scrollTop: 4480, lastProgrammaticTop: 4000 }),
+    ).toBe(false);
+  });
+
+  it('still catches a reader who scrolled with no resize', () => {
+    expect(
+      scrollMotionIsTheReader({ resized: false, scrollTop: 4480, lastProgrammaticTop: 4000 }),
+    ).toBe(true);
+  });
+
+  it('does not blame the reader for our OWN programmatic write', () => {
+    expect(
+      scrollMotionIsTheReader({ resized: false, scrollTop: 4000, lastProgrammaticTop: 4000 }),
+    ).toBe(false);
+    // Sub-pixel rounding is not a gesture either.
+    expect(
+      scrollMotionIsTheReader({ resized: false, scrollTop: 4000.6, lastProgrammaticTop: 4000 }),
+    ).toBe(false);
   });
 });
