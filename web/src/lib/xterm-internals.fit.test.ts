@@ -1,7 +1,10 @@
 import { Terminal } from '@xterm/xterm';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  DEFAULT_XTERM_SCROLLBACK,
+  XTERM_BUILTIN_SCROLLBACK,
   captureViewportAnchor,
+  ensureScrollbackForReflow,
   proposedFitUsable,
   restoreViewportAnchor,
   withViewportAnchor,
@@ -113,6 +116,29 @@ describe('content-anchor restore across refit (finding 2)', () => {
     expect(topText(term).startsWith('row120')).toBe(true);
   });
 
+  // The 200-line case above never touches xterm's default 1000-line cap.
+  // A real shell dump fills that ring; 80→40 wrap then doubles occupied
+  // rows and evicts the parked line, so restore falls through to the
+  // numerical offset and the reader jumps (row0120 → row0310).
+  it('keeps row0120 at the viewport top after an 80→40 wrap of a full 1000-line scrollback', async () => {
+    term = new Terminal({ cols: 80, rows: 24, scrollback: 1000, allowProposedApi: true });
+    patchHeadlessScroll(term);
+    await write(
+      term,
+      Array.from({ length: 1000 }, (_, i) => {
+        const body = i < 500 ? 'x'.repeat(65) : 'short';
+        return `row${String(i).padStart(4, '0')} ${body}\r\n`;
+      }).join(''),
+    );
+    term.scrollToLine(120);
+    expect(topText(term).startsWith('row0120')).toBe(true);
+    expect(term.buffer.active.length).toBeGreaterThan(900);
+
+    withViewportAnchor(term, () => term!.resize(40, 24));
+
+    expect(topText(term).startsWith('row0120')).toBe(true);
+  });
+
   it('keeps row100 at the viewport top after an 80×24→80×40 height change', async () => {
     term = new Terminal({ cols: 80, rows: 24, scrollback: 1000, allowProposedApi: true });
     patchHeadlessScroll(term);
@@ -152,4 +178,35 @@ describe('content-anchor restore across refit (finding 2)', () => {
     expect(captureViewportAnchor(fake as never)).toBeNull();
     expect(() => restoreViewportAnchor(fake as never, { kind: 'bottom' })).not.toThrow();
   });
+
+  it("raises the ring above xterm's 1000-line default before a wrap can evict", async () => {
+    term = new Terminal({
+      cols: 80,
+      rows: 24,
+      scrollback: XTERM_BUILTIN_SCROLLBACK,
+      allowProposedApi: true,
+    });
+    patchHeadlessScroll(term);
+    await write(
+      term,
+      Array.from(
+        { length: 1000 },
+        (_, i) => `row${String(i).padStart(4, '0')} ${'x'.repeat(65)}\r\n`,
+      ).join(''),
+    );
+    expect(term.options.scrollback).toBe(XTERM_BUILTIN_SCROLLBACK);
+    ensureScrollbackForReflow(term);
+    expect(term.options.scrollback).toBeGreaterThan(XTERM_BUILTIN_SCROLLBACK);
+    expect(term.options.scrollback).toBeGreaterThanOrEqual(
+      term.buffer.active.length * 2 - term.rows,
+    );
+  });
 });
+
+describe('muxpad scrollback default', () => {
+  it("is well above xterm's built-in cap so a real session is not already truncated", () => {
+    expect(DEFAULT_XTERM_SCROLLBACK).toBeGreaterThan(XTERM_BUILTIN_SCROLLBACK);
+    expect(DEFAULT_XTERM_SCROLLBACK).toBeGreaterThanOrEqual(10_000);
+  });
+});
+
