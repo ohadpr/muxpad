@@ -32,6 +32,11 @@ import { describe, expect, it } from 'vitest';
 // is full of colons and semicolons the declaration parser below would read.
 const css = readFileSync(join(__dirname, 'ChatPane.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
 const tsx = readFileSync(join(__dirname, 'ChatPane.tsx'), 'utf8');
+/** …and the same file with its prose removed, for assertions that a given
+ *  SHAPE is absent: the notes in ChatPane.tsx name the shapes they replaced
+ *  (`scrollTop += ΔscrollHeight`, `CSS.supports('overflow-anchor')`), so a
+ *  naive search finds the comment explaining why the code is not there. */
+const code = tsx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
 /** The declarations of one rule, by exact selector. */
 function rule(selector: string): Record<string, string> {
@@ -139,7 +144,7 @@ describe("the composer's reserve does not switch scroll anchoring off", () => {
     const pad = rule('.chat-list').padding?.split(/\s+/) ?? [];
     expect(px(pad[2])).toBe(0);
     // …and the component must not put one back inline.
-    expect(tsx).not.toContain('paddingBottom: `${composerH');
+    expect(code).not.toContain('paddingBottom: `${composerH');
   });
 
   it('keeps the scroller clear of a dynamic padding too', () => {
@@ -149,7 +154,7 @@ describe("the composer's reserve does not switch scroll anchoring off", () => {
 
   it('reserves the composer on a sibling row instead', () => {
     expect(tsx).toContain('className="chat-composer-reserve"');
-    expect(tsx).toContain('height: `${composerH + 14}px`');
+    expect(tsx).toContain('`calc(${composerH + 14}px + var(--chat-keyboard-inset, 0px))`');
     const r = rule('.chat-composer-reserve');
     // Cancels .chat-list's row gap, so the resting clearance is exactly the
     // height set inline — the same number the padding used to produce
@@ -158,5 +163,56 @@ describe("the composer's reserve does not switch scroll anchoring off", () => {
     // It must stay out of the anchor scan: `anchorRows` takes direct children
     // of .chat-list that carry data-eid, so the reserve must carry none.
     expect(tsx).not.toMatch(/chat-composer-reserve"[\s\S]{0,200}data-eid/);
+  });
+});
+
+/**
+ * WebKit has no scroll anchoring before Safari 27, so on every iPhone running
+ * iOS 26 or earlier — Safari and the installed PWA alike, both WKWebView —
+ * `overflow-anchor` is inert and an unpinned reader has NO owner for content
+ * growing above them. The arithmetic of the JS equivalent is unit-tested in
+ * chat-scroll.test.ts and measured on both engines in
+ * /tmp/muxpad-hunt/fix-chat/ro-probe.mjs; these are the wiring invariants that
+ * cannot be reached from there.
+ */
+describe('the unpinned reader has an owner on WebKit too', () => {
+  it('the re-pin observer pays for growth above an unpinned reader', () => {
+    // It used to `return` for anyone not pinned, which left the phone with
+    // nobody at all.
+    expect(code).not.toContain('if (!pinnedToBottom.current) return;');
+    expect(tsx).toContain('const keep = liveAnchor.current;');
+  });
+
+  it('…row-based, so it cannot double-pay where the engine already paid', () => {
+    // `scrollTop += ΔscrollHeight` adds the growth a second time on Chromium
+    // and yanks the reader for growth BELOW them. A row-based target equals the
+    // current scrollTop there, and the `<= 1` guard declines to write.
+    expect(code).not.toMatch(/scrollTop \+= .*scrollHeight/);
+    expect(code).not.toContain("CSS.supports('overflow-anchor'");
+  });
+
+  it('stands down for the two other owners of the scroll', () => {
+    expect(tsx).toContain('if (searchJumpHold.current || holdRememberedAnchor.current) return;');
+  });
+
+  it('snapshots the reader in onScroll rather than re-capturing in the callback', () => {
+    // By the time the observer runs, the growth has happened: on WebKit a fresh
+    // capture reads the row at its JUMPED position and computes "leave it".
+    expect(tsx).toContain('liveAnchor.current = here;');
+  });
+});
+
+describe('the composer clears the software keyboard', () => {
+  it('reads an inset that is 0 everywhere it is not set', () => {
+    // Desktop, and every failure mode of the mobile effect, must resolve to the
+    // layout that shipped.
+    expect(rule('.chat-composer-wrap').bottom).toBe('var(--chat-keyboard-inset, 0px)');
+  });
+
+  it('reserves it in the log too, not just under the pill', () => {
+    // The scroller's clientHeight does not change when iOS raises a keyboard,
+    // so without this the last turns sit behind it.
+    expect(tsx).toContain('var(--chat-keyboard-inset, 0px)');
+    expect(tsx).toContain('isMobileLayout()');
   });
 });

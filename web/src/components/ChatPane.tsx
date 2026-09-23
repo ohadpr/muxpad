@@ -1405,6 +1405,37 @@ export function optimisticEchoLanded(
  * empty frame never arrives, and treating a hypothetical one as "the file is
  * now empty" would be a guess.)
  */
+/**
+ * How far the software keyboard reaches up into the chat pane, in CSS px.
+ *
+ * ── WHY THE COMPOSER NEEDS THIS AND THE PAGE DOES NOT ───────────────────────
+ * `.chat-composer-wrap` is `position: absolute; bottom: 0` of `.chat-pane`, and
+ * the pane is sized in LAYOUT viewport units (`100svh`, see main.tsx). On iOS
+ * the layout viewport does not shrink when the keyboard opens — only
+ * `visualViewport` does — so the composer stays on the layout bottom, under the
+ * keyboard, and the scroller's `clientHeight` never changes so the last turns
+ * are not reserved above it either. `MobileInputBar` and the nav sheet already
+ * special-case exactly this geometry (`sheet-viewport.ts`); chat never did.
+ *
+ * Returns 0 — i.e. today's behaviour, exactly — with no `visualViewport`, and
+ * whenever the visual viewport still reaches the pane's own bottom. A chat pane
+ * has no PTY, so unlike the terminal this cannot cascade into a SIGWINCH; that
+ * is why main.tsx's ban on a GLOBAL visualViewport height mirror does not apply
+ * here.
+ */
+export function chatKeyboardInset(opts: {
+  /** The pane's bottom edge, in layout-viewport coordinates. */
+  paneBottom: number;
+  /** `visualViewport.offsetTop` — iOS adds this when it scrolls a focused
+   *  field into view, and the pane is positioned against the LAYOUT viewport,
+   *  so it has to be added back. */
+  vvOffsetTop: number;
+  /** `visualViewport.height` — the band NOT covered by the keyboard. */
+  vvHeight: number;
+}): number {
+  return Math.max(0, Math.round(opts.paneBottom - (opts.vvOffsetTop + opts.vvHeight)));
+}
+
 export function mergeHistorySnapshot(
   prev: readonly ChatEvent[],
   batch: readonly ChatEvent[],
@@ -1621,6 +1652,9 @@ export function ChatPane({
   // (/clear, resume rotation) wipes the log (see the session handler).
   const renderedSid = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // The pane box, which is what the software keyboard's inset is measured
+  // against — see chatKeyboardInset.
+  const paneRef = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
   /**
    * Write the pin AND mirror it to the DOM, because the browser's own scroll
@@ -1711,6 +1745,41 @@ export function ChatPane({
    * exactly, measured 0 scroll events), so this is strictly the pinned half.
    */
   const toggleAnchor = useRef<{ anchorId: string; top: number } | null>(null);
+  /**
+   * Where the UNPINNED reader was at the end of the last trustworthy scroll
+   * event — the row under their eyes and how far its top sat above the
+   * viewport top. null while they are following the bottom.
+   *
+   * ── WEBKIT HAS NO SCROLL ANCHORING ──────────────────────────────────────────
+   * `.chat-scroll.-pinned { overflow-anchor: none }` leaves the unpinned
+   * scroller at the UA default, and on Chromium the engine then holds the
+   * reader's place when content above them grows. WebKit shipped that in Safari
+   * 27 (Sep 2026); every iPhone on iOS 26 or earlier — Safari and the installed
+   * PWA alike, both WKWebView — does not implement it at all. The re-pin
+   * observer below deliberately does nothing for an unpinned reader, so on the
+   * phone NOTHING pays: a screenshot above them finishing its decode slides the
+   * row they are reading down by the whole growth. Measured, headless WebKit
+   * and Chromium, 450px of growth above a parked reader: engine pays 450 and
+   * drift is 0 with anchoring on, engine pays 0 and drift is 450 with it off.
+   *
+   * ── AND IT MUST NOT DOUBLE-PAY ──────────────────────────────────────────────
+   * The obvious equivalent — `scrollTop += ΔscrollHeight` — adds the growth a
+   * SECOND time on an engine that already paid, throwing the reader forward by
+   * the same 450px, and yanks them for growth BELOW them too. So the
+   * compensation is ROW-BASED, like everything else in this file:
+   * `scrollTopForAnchor` computes an absolute target from the row's identity,
+   * which on an engine that has already restored that row equals the current
+   * scrollTop — and the `<= 1` guard then declines to write. That guard, not a
+   * `CSS.supports` feature test, is the double-pay defence: `CSS.supports(
+   * 'overflow-anchor', 'auto')` answers TRUE on an iOS 26 WKWebView that will
+   * not pay, and true on Playwright's WebKit that will.
+   *
+   * SNAPSHOT, not a fresh capture inside the observer callback: by the time the
+   * callback runs the growth has already happened, so on WebKit re-capturing
+   * would read the row at its NEW position and compute a target of "leave it
+   * exactly where it jumped to".
+   */
+  const liveAnchor = useRef<{ anchorId: string; anchorOffset: number } | null>(null);
   // Older pages spent hunting for this jump's message. Bounded like the
   // restore's anchor seek, and reset per jump (and by "keep looking").
   const jumpSeekPages = useRef(0);
@@ -2062,7 +2131,23 @@ export function ChatPane({
             // useLayoutEffect below. The batch is chronological and entirely
             // before the current head, so prepend it wholesale.
             const el = scrollRef.current;
-            const measured = el ? { height: el.scrollHeight, top: el.scrollTop } : null;
+            // CLAMPED, like the ratio on the persist path is. An older batch
+            // lands at the top of history, which on iOS is exactly where the
+            // rubber-band bounce reports a scrollTop outside [0, max] — and the
+            // reader paging older history IS at the top, mid-bounce, by
+            // construction. `scrollTopAfterOlderPrepend` treats `anchorTop` as
+            // the reader's position in the old document, so a captured -40
+            // lands them 40px INTO the new page instead of on the same
+            // messages.
+            const measured = el
+              ? {
+                  height: el.scrollHeight,
+                  top: Math.min(
+                    Math.max(0, el.scrollTop),
+                    maxScrollTop(el.scrollHeight, el.clientHeight),
+                  ),
+                }
+              : null;
             ordered.current = [...fresh, ...ordered.current];
             // Keyed to THIS array identity — the very commit setEvents is about
             // to publish. See olderAnchor's note.
@@ -2652,6 +2737,58 @@ export function ChatPane({
     return () => ro.disconnect();
   }, [session?.current_sid]);
 
+  // ── Lift the composer off the software keyboard ───────────────────────────
+  // MOBILE ONLY, and a no-op everywhere else: `--chat-keyboard-inset` defaults
+  // to 0px in the stylesheet, so a pane whose effect never runs is byte for
+  // byte the layout that shipped before it. See chatKeyboardInset for why the
+  // composer needs this at all (the layout viewport does not shrink on iOS, so
+  // `position: absolute; bottom: 0` lands it under the keyboard) and why the
+  // global ban on a visualViewport mirror in main.tsx does not reach here (no
+  // PTY in a chat pane, so nothing to SIGWINCH).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pendingPick/current_sid gate when the pane box and its composer exist.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!active || !vv || !isMobileLayout()) return;
+    const apply = () => {
+      const el = paneRef.current;
+      if (!el) return;
+      el.style.setProperty(
+        '--chat-keyboard-inset',
+        `${chatKeyboardInset({
+          paneBottom: el.getBoundingClientRect().bottom,
+          vvOffsetTop: vv.offsetTop,
+          vvHeight: vv.height,
+        })}px`,
+      );
+    };
+    // iOS Safari can fire `resize` only at the END of the keyboard animation,
+    // so track through the slide for a beat on focus — the same shape (and the
+    // same 600ms) MobileInputBar uses for the same reason.
+    let frame: number | null = null;
+    const trackUntil = (deadline: number) => {
+      apply();
+      frame = performance.now() < deadline ? requestAnimationFrame(() => trackUntil(deadline)) : null;
+    };
+    const onFocus = () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      trackUntil(performance.now() + 600);
+    };
+    vv.addEventListener('resize', apply);
+    vv.addEventListener('scroll', apply);
+    const pane = paneRef.current;
+    pane?.addEventListener('focusin', onFocus);
+    pane?.addEventListener('focusout', onFocus);
+    apply();
+    return () => {
+      vv.removeEventListener('resize', apply);
+      vv.removeEventListener('scroll', apply);
+      pane?.removeEventListener('focusin', onFocus);
+      pane?.removeEventListener('focusout', onFocus);
+      if (frame !== null) cancelAnimationFrame(frame);
+      pane?.style.removeProperty('--chat-keyboard-inset');
+    };
+  }, [active, pendingPick, session?.current_sid]);
+
   // Type-to-focus: when this chat is the visible face and you start typing a
   // printable character with nothing else focused, jump focus to the composer so
   // the keystroke lands there (same as Slack/Discord). Skips modifier combos
@@ -3108,6 +3245,11 @@ export function ChatPane({
       clientHeight: el.clientHeight,
     });
     setPinned(el.scrollHeight - target - el.clientHeight < 40);
+    // The pane has just gone unpinned, so the re-pin observer's unpinned branch
+    // owns the next height change — and `liveAnchor` is stale (null, if they
+    // were following the bottom). Hand it the header the reader is looking at,
+    // or the first thumbnail that decodes after an expand has nothing to hold.
+    liveAnchor.current = { anchorId: keep.anchorId, anchorOffset: keep.top };
     if (Math.abs(el.scrollTop - target) <= 1) return;
     lastProgrammaticTop.current = target;
     el.scrollTop = target;
@@ -3300,7 +3442,18 @@ export function ChatPane({
   // re-runs the restore + settling loop above.
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === 'visible') setShowEpoch((n) => n + 1);
+      if (document.visibilityState !== 'visible') return;
+      // Arm the settling window SYNCHRONOUSLY, before the state update. iOS is
+      // documented here as resetting overflow scroll on resume — that is what
+      // `showEpoch` exists for — and the native `scroll` event from that reset
+      // can run in this same turn, while the layout effect that reacts to the
+      // bump is still queued behind a render. `onScroll` would then read a
+      // scrollTop of 0 as trustworthy and write the oldest on-screen row over
+      // the reader's parked message, which the restore would then faithfully
+      // reproduce. The effect re-arms it on the same deadline; this is only the
+      // half-frame the state update cannot cover.
+      suppressPinUntil.current = performance.now() + SHOW_SETTLE_MS;
+      setShowEpoch((n) => n + 1);
     };
     // `pageshow` ONLY when it is a bfcache restore. It also fires on an ordinary
     // first load — after `load`, which waits for subresources, so a chat full of
@@ -3362,9 +3515,14 @@ export function ChatPane({
   // and the settling loop can't cover it because that loop has a 2500ms fuse.
   //
   // A ResizeObserver has no fuse. While the pane is VISIBLE and the reader is
-  // PINNED, any height change re-asserts the bottom. It deliberately does
-  // nothing for an unpinned reader: someone parked in history must never be
-  // yanked down by a thumbnail loading.
+  // PINNED, any height change re-asserts the bottom.
+  //
+  // It used to do nothing at all for an UNPINNED reader, on the reasoning that
+  // someone parked in history must never be yanked down by a thumbnail loading
+  // — which is right, and is exactly why the unpinned branch below is
+  // ROW-BASED rather than a height delta. The engine covers this case only
+  // where scroll anchoring exists: WebKit shipped it in Safari 27, so every
+  // iPhone on iOS 26 or earlier has no owner for it at all. See `liveAnchor`.
   // `pendingPick` is a dependency because the harness picker renders a
   // DIFFERENT tree with no .chat-scroll in it: an active pane that starts on
   // the picker has a null ref here, and without re-running when the real
@@ -3391,8 +3549,39 @@ export function ChatPane({
       // gating on it meant a reader who scrolled up and then came back to the
       // bottom silently lost late-content re-pinning — while the events
       // effect (which checks only the pin) kept following. One rule, one flag.
-      if (!pinnedToBottom.current) return;
-      const target = maxScrollTop(el.scrollHeight, el.clientHeight);
+      if (pinnedToBottom.current) {
+        const target = maxScrollTop(el.scrollHeight, el.clientHeight);
+        if (Math.abs(el.scrollTop - target) <= 1) return;
+        lastProgrammaticTop.current = target;
+        el.scrollTop = target;
+        return;
+      }
+      // ── Unpinned: pay for growth ABOVE the reader, where the engine won't ──
+      // Row-based on purpose (see `liveAnchor`): on Chromium and Safari 27 the
+      // engine has already put this row back, so `target === el.scrollTop` and
+      // the `<= 1` guard below declines to write — no double-pay. On iOS 26 the
+      // engine paid nothing and this assignment IS the compensation. Growth
+      // BELOW the reader moves the row not at all, so it is a no-op there too,
+      // which is the whole reason a height delta was the wrong instrument.
+      //
+      // Two owners it must stand down for: a search jump (the destination is
+      // not this snapshot) and a restore still seeking its anchor (its goal is
+      // not where the reader currently is, and it re-asserts every frame).
+      if (searchJumpHold.current || holdRememberedAnchor.current) return;
+      const keep = liveAnchor.current;
+      if (!keep) return;
+      const row = findAnchorRow(anchorRows(el), keep.anchorId);
+      if (!row) return;
+      const target = scrollTopForAnchor({
+        scrollTop: el.scrollTop,
+        rowTop: row.getBoundingClientRect().top - el.getBoundingClientRect().top,
+        anchorOffset: keep.anchorOffset,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+        // The row as it is NOW — a fold that collapsed under the reader must
+        // not replay an offset that no longer fits inside it.
+        rowHeight: row.getBoundingClientRect().height,
+      });
       if (Math.abs(el.scrollTop - target) <= 1) return;
       lastProgrammaticTop.current = target;
       el.scrollTop = target;
@@ -3417,7 +3606,14 @@ export function ChatPane({
     if (!el) return;
     // display:none (face/tab hide) zeroes clientHeight/scrollTop — persisting
     // that writes ratio 0 / unpinned and the next open lands in older history.
-    if (!shouldPersistChatScroll({ active, clientHeight: el.clientHeight })) return;
+    if (
+      !shouldPersistChatScroll({
+        active,
+        clientHeight: el.clientHeight,
+        visible: document.visibilityState === 'visible',
+      })
+    )
+      return;
     // Movement WE started — a just-un-hidden pane relaying out (clientHeight
     // is back but scrollTop and the composer height are not), or a smooth
     // jump-to-bottom mid-glide. Acting on those is what used to unpin a
@@ -3485,7 +3681,14 @@ export function ChatPane({
       // mid-seek frame can transiently sit at the tail, and letting that write
       // `caughtUp: true` would retire the very goal the hold exists to protect.
       const prev = holdRememberedAnchor.current ? recallChatScroll(paneId) : null;
-      const anchor = prev ?? (caughtUp ? null : captureAnchor(el));
+      // WHERE THE READER IS, which is not always what gets stored: during a
+      // hold the stored anchor is the goal, and for a caught-up reader nothing
+      // is stored at all. The re-pin observer's unpinned branch needs the live
+      // one — see `liveAnchor` — and it is the same O(log n) binary search the
+      // write below already pays for the common (parked) case.
+      const here = nearBottom ? null : captureAnchor(el);
+      liveAnchor.current = here;
+      const anchor = prev ?? (caughtUp ? null : here);
       // …and the THIRD case: a search jump is an explicit destination, not a
       // reading position, so it records nothing at all and whatever was
       // remembered before the search still stands. Deliberately below the pin
@@ -4401,7 +4604,7 @@ export function ChatPane({
   }
 
   return (
-    <div className="chat-pane">
+    <div className="chat-pane" ref={paneRef}>
       {/* We were asked to show WHERE the term is, and could not — so say so.
           Silently landing on an unchanged chat is the one outcome that reads as
           a broken search. Floats over the transcript rather than sitting in the
@@ -4543,7 +4746,14 @@ export function ChatPane({
           <div
             className="chat-composer-reserve"
             aria-hidden="true"
-            style={composerH ? { height: `${composerH + 14}px` } : undefined}
+            // …plus the keyboard, on mobile: the scroller's clientHeight does
+            // not change when iOS raises one, so without this the last turns
+            // sit behind it. `--chat-keyboard-inset` is 0px everywhere else.
+            style={
+              composerH
+                ? { height: `calc(${composerH + 14}px + var(--chat-keyboard-inset, 0px))` }
+                : undefined
+            }
           />
         </div>
       </div>
@@ -4551,7 +4761,12 @@ export function ChatPane({
         <button
           type="button"
           className="chat-scroll-down"
-          style={composerH ? { bottom: `${composerH + 12}px` } : undefined}
+          // Rides above the composer, so it rides above the keyboard too.
+          style={
+            composerH
+              ? { bottom: `calc(${composerH + 12}px + var(--chat-keyboard-inset, 0px))` }
+              : undefined
+          }
           onClick={scrollToBottom}
           aria-label="Jump to latest"
           title="Jump to latest"

@@ -1,6 +1,7 @@
 import type { ChatEvent } from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
 import {
+  chatKeyboardInset,
   consumeStreamedText,
   landedThisTurn,
   mergeHistorySnapshot,
@@ -143,5 +144,38 @@ describe('the optimistic user echo', () => {
 
   it('is not retired by an unrelated newest line', () => {
     expect(optimisticEchoLanded([ev('u1', 'user', 'something else')], 'hello')).toBe(false);
+  });
+});
+
+describe('the software keyboard inset', () => {
+  // `.chat-composer-wrap` is `position: absolute; bottom: 0` of a pane sized in
+  // LAYOUT viewport units, and iOS does not shrink the layout viewport when the
+  // keyboard opens — only `visualViewport` does. So the composer sits under the
+  // keyboard. Geometry from sheet-viewport.test.ts's measured iPhone 14 case:
+  // an 844px layout viewport with a 336px keyboard leaves vv.height 508.
+  it('is the band of the pane the keyboard covers', () => {
+    expect(chatKeyboardInset({ paneBottom: 844, vvOffsetTop: 0, vvHeight: 508 })).toBe(336);
+  });
+
+  it('adds back the offset iOS introduces scrolling a focused field into view', () => {
+    // The pane is positioned against the LAYOUT viewport; vv.offsetTop is how
+    // far the VISUAL one has moved inside it.
+    expect(chatKeyboardInset({ paneBottom: 844, vvOffsetTop: 60, vvHeight: 508 })).toBe(276);
+  });
+
+  it('is 0 with no keyboard — the layout that shipped, unchanged', () => {
+    expect(chatKeyboardInset({ paneBottom: 844, vvOffsetTop: 0, vvHeight: 844 })).toBe(0);
+  });
+
+  it('never goes negative, however the viewport is reported', () => {
+    // A URL bar collapsing can leave the visual viewport reaching BELOW the
+    // pane; lifting the composer for that would be a gap, not a fix.
+    expect(chatKeyboardInset({ paneBottom: 700, vvOffsetTop: 0, vvHeight: 844 })).toBe(0);
+  });
+
+  it('measures the PANE, not the window — a chat tile is not the screen', () => {
+    // Desktop mosaic / a split pane: the keyboard case does not arise, but the
+    // arithmetic must not invent an inset for a pane that ends above the fold.
+    expect(chatKeyboardInset({ paneBottom: 400, vvOffsetTop: 0, vvHeight: 508 })).toBe(0);
   });
 });
