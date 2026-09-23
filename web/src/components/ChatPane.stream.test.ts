@@ -6,6 +6,7 @@ import {
   landedThisTurn,
   mergeHistorySnapshot,
   optimisticEchoLanded,
+  streamingPreview,
 } from './ChatPane';
 
 /**
@@ -117,6 +118,57 @@ describe('the streaming preview', () => {
     expect(consumeStreamedText('Right, starting now', landedThisTurn(prevTurn, true))).toBe(
       'Right, starting now',
     );
+  });
+});
+
+describe('the preview is DERIVED from the stream buffer, not subtracted from itself', () => {
+  // The reader is watching block two type. Block one has already landed.
+  const buffer = 'BLOCKONE-partABLOCKTWO-stillgoing';
+  const mid = [ev('u1', 'user', 'PROMPT'), ev('a1', 'assistant', 'BLOCKONE-partA')];
+
+  it('answers the same however many frames account for the same landed block', () => {
+    // THE DEFECT, spelled out: consuming the PREVIEW twice with the same landed
+    // list — which is exactly what a reconnect did, the hello then the history
+    // replay — cannot find its anchor the second time and returns '', by
+    // design. The live paragraph vanished and never came back, because later
+    // deltas only append to the emptied string.
+    const once = consumeStreamedText(buffer, landedThisTurn(mid));
+    expect(once).toBe('BLOCKTWO-stillgoing');
+    expect(consumeStreamedText(once, landedThisTurn(mid))).toBe('');
+
+    // Derived from the untouched buffer, the answer does not depend on how many
+    // frames it took to get here.
+    expect(streamingPreview(buffer, mid, false)).toBe('BLOCKTWO-stillgoing');
+    expect(streamingPreview(buffer, mid, false)).toBe('BLOCKTWO-stillgoing');
+  });
+
+  it('survives a NON-assistant row landing mid-block — no socket death required', () => {
+    // A tool call lands while the next text block is still streaming. The
+    // turn's landed list is unchanged, so the old shape re-consumed an
+    // already-stripped preview and wiped it; the derivation is unmoved.
+    const withTool = [...mid, ev('t1', 'tool_use', 'ls')];
+    expect(streamingPreview(buffer, withTool, false)).toBe('BLOCKTWO-stillgoing');
+  });
+
+  it('still shows the whole buffer on a fresh mount, then trims as blocks land', () => {
+    // The case the consume exists for: a mid-turn RELOAD. The hello carries the
+    // WHOLE turn's buffer into an empty log, so all of it previews; the history
+    // replay lands block one, and only block two is left.
+    expect(streamingPreview(buffer, [], false)).toBe(buffer);
+    expect(streamingPreview(buffer, mid, false)).toBe('BLOCKTWO-stillgoing');
+  });
+
+  it('previews nothing when there is no buffer', () => {
+    // A turn with no text yet, and — the one that used to resurrect a finished
+    // turn's text — a socket that reconnects after the turn ended.
+    expect(streamingPreview('', mid, false)).toBe('');
+  });
+
+  it('counts nothing as landed while the turn’s user line is still in flight', () => {
+    // The optimistic echo says the transcript has not caught up, so the whole
+    // buffer is this turn's and none of the previous turn's text may anchor it.
+    const prevTurn = [ev('u0', 'user', 'earlier'), ev('a0', 'assistant', 'BLOCKONE-partA')];
+    expect(streamingPreview(buffer, prevTurn, true)).toBe(buffer);
   });
 });
 

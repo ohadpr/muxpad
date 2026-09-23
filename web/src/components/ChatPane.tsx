@@ -1341,6 +1341,45 @@ export function consumeStreamedText(preview: string, landed: string[]): string {
 }
 
 /**
+ * What the reader should see previewed, DERIVED from the turn's raw stream
+ * buffer and the transcript as it stands. Pure, and therefore idempotent — run
+ * it twice on the same inputs and you get the same answer.
+ *
+ * ── WHY DERIVE RATHER THAN SUBTRACT ─────────────────────────────────────────
+ * `consumeStreamedText` was applied TO THE PREVIEW STATE, destroying it each
+ * time. That is only correct if it runs exactly once per landed block, and
+ * three separate paths call it (the session hello, a history frame, a live
+ * events frame) with the same cumulative `landedThisTurn` list. Two of them
+ * firing for one block is not an edge case:
+ *
+ *  - A mid-turn socket reconnect: the hello consumes the landed block out of
+ *    the restored buffer, correctly — and then the history replay that follows
+ *    it consumes the SAME block again, out of the already-stripped remainder.
+ *    Neither the prefix nor the tail anchor matches any more, so the function
+ *    does what it is designed to do when it cannot find the anchor: returns ''.
+ *    The paragraph the reader was watching vanished and never came back,
+ *    because later deltas only append to the emptied string.
+ *  - No socket death required: a tool_use row landing while the next text block
+ *    is mid-stream is an ordinary events frame with the same cumulative list,
+ *    and wiped the live preview exactly the same way.
+ *
+ * Keeping the buffer UNCONSUMED and recomputing the preview from it removes the
+ * ordering question entirely: the answer depends only on what the server has
+ * sent and what the transcript holds, never on how many frames it took to get
+ * there. The buffer is the raw thing — deltas append to it, the hello replaces
+ * it with the server's whole-turn buffer, and turn-start / turn-done / a dead
+ * socket clear it.
+ */
+export function streamingPreview(
+  buffer: string,
+  ordered: readonly ChatEvent[],
+  inFlightUser: boolean,
+): string {
+  if (!buffer) return '';
+  return consumeStreamedText(buffer, landedThisTurn(ordered, inFlightUser));
+}
+
+/**
  * Has the optimistic user bubble's real transcript line landed?
  *
  * Only the NEWEST user event counts, and a SUFFIX match counts as the same
@@ -1474,6 +1513,11 @@ function agentLaunchDescription(e: ToolUseEvent): string {
  *  synchronously on keypress — every evicted agent popped back the instant you
  *  hit send. */
 const SUBAGENT_QUIET_MS = 15_000;
+
+/** How close to the top of the log counts as "asking for older history". Read
+ *  by both pager triggers — the reader's scroll, and the re-arm that covers a
+ *  reader parked AT the top, where the browser fires no scroll event at all. */
+const TOP_PAGE_ZONE_PX = 240;
 
 /** How long a conversion request may hang before the strip re-enables itself.
  *  Generous — the route kills a pty and spawns a runner before it answers —
@@ -1882,6 +1926,14 @@ export function ChatPane({
   // Live assistant text streamed from the headless turn (token-level), shown
   // as a preview until the final message lands in the transcript tail.
   const [streamingText, setStreamingText] = useState('');
+  /**
+   * The turn's raw stream buffer — every delta of the CURRENT turn, or the
+   * whole-turn buffer the session hello restores after a reconnect. Never
+   * stripped: `streamingText` is always `streamingPreview(this, ordered, …)`,
+   * recomputed whenever either side moves. See streamingPreview for why the
+   * old subtract-in-place shape lost the live paragraph on a reconnect.
+   */
+  const streamBuffer = useRef('');
   // A session whose transcript never shows up (ended, or its file is gone):
   // after a grace period, say so instead of spinning "waiting" forever.
   const [stale, setStale] = useState(false);
@@ -1955,6 +2007,8 @@ export function ChatPane({
     olderAnchor.current = null;
     acked.current = true;
     pendingText.current = '';
+    streamBuffer.current = '';
+    setStreamingText('');
     window.clearTimeout(sendWatchdog.current);
 
     let cancelled = false;
@@ -1993,6 +2047,7 @@ export function ChatPane({
           byId.current = new Set();
           ordered.current = [];
           setEvents([]);
+          streamBuffer.current = '';
           setStreamingText('');
           setHasMoreOlder(true);
           hasMoreOlderRef.current = true;
@@ -2024,17 +2079,21 @@ export function ChatPane({
             // including text that already landed in the transcript. On a
             // same-socket-lifecycle reconnect those landed messages are
             // already rendered (and dedupe away from the history replay), so
-            // consume them here or every text segment of the turn shows
-            // twice. (On a fresh remount ordered is still empty → landed is
-            // [] → the whole buffer shows, then the history replay below
-            // strips block by block as it lands.)
+            // the preview is the buffer MINUS what has landed, or every text
+            // segment of the turn shows twice. (On a fresh remount ordered is
+            // still empty → landed is [] → the whole buffer shows, and the
+            // history replay below re-derives block by block as it lands.)
+            streamBuffer.current = msg.streamText;
             setStreamingText(
-              consumeStreamedText(
-                msg.streamText,
-                landedThisTurn(ordered.current, !!optimisticUserRef.current),
-              ),
+              streamingPreview(streamBuffer.current, ordered.current, !!optimisticUserRef.current),
             );
           }
+        } else {
+          // No turn is running, so there is nothing to preview — and a buffer
+          // left over from a turn that finished while we were disconnected
+          // would be re-derived into view by the very next events frame.
+          streamBuffer.current = '';
+          setStreamingText('');
         }
         setQuestion(msg.question ?? null);
         // Mirror the hello exactly: no status means no live runner status —
@@ -2100,31 +2159,20 @@ export function ChatPane({
             hasMoreOlderRef.current = true;
             olderAnchor.current = null;
           }
-          const landed = landedThisTurn(ordered.current, !!optimisticUserRef.current);
-          if (landed.length) setStreamingText((s) => (s ? consumeStreamedText(s, landed) : s));
+          // The transcript moved, so re-derive the preview from the untouched
+          // buffer. A reconnect's history replay is the case that matters: the
+          // hello has already accounted for the turn's landed blocks, and this
+          // frame is very largely the same events again — deriving gives the
+          // same answer twice instead of consuming the same block twice and
+          // emptying the live paragraph. See streamingPreview.
+          setStreamingText(
+            streamingPreview(streamBuffer.current, ordered.current, !!optimisticUserRef.current),
+          );
           setEvents(ordered.current);
           return;
         }
         if (fresh.length) {
           for (const e of fresh) byId.current.add(e.id);
-          // Assistant text that just landed in the transcript leaves the
-          // streaming preview, or it would render twice until turn end.
-          // 'history' matters as much as 'live': a mid-turn (re)connect —
-          // tab switch remounting this pane, heartbeat reconnect — restores
-          // the FULL stream buffer from the hello, while the turn's already-
-          // landed messages replay as history. Without consuming those, every
-          // text segment of the turn shows again, concatenated, until
-          // turn-done. Scope to the CURRENT turn (landedThisTurn) so a prior
-          // turn's text can't become the tail anchor and wrongly clear the
-          // live first block. Only 'older' pages are excluded — back-scrolled
-          // ancient messages must never touch the live preview.
-          if (msg.phase !== 'older') {
-            const landed = landedThisTurn(
-              [...ordered.current, ...fresh],
-              !!optimisticUserRef.current,
-            );
-            if (landed.length) setStreamingText((s) => (s ? consumeStreamedText(s, landed) : s));
-          }
           if (msg.phase === 'older') {
             // Anchor the scroll to the current top so the prepend (which grows
             // content above the viewport) doesn't yank the view — see the
@@ -2155,6 +2203,18 @@ export function ChatPane({
           } else {
             ordered.current = [...ordered.current, ...fresh];
           }
+          // Assistant text that just landed in the transcript leaves the
+          // streaming preview, or it would render twice until turn end — so
+          // re-derive it against the list we just published. Only 'older' pages
+          // are excluded: back-scrolled ancient messages must never touch the
+          // live preview, and with no user line in the loaded window
+          // `landedThisTurn` would count every prepended assistant row as this
+          // turn's.
+          if (msg.phase !== 'older') {
+            setStreamingText(
+              streamingPreview(streamBuffer.current, ordered.current, !!optimisticUserRef.current),
+            );
+          }
           setEvents(ordered.current);
         }
       } else if (msg.t === 'older-done') {
@@ -2173,6 +2233,7 @@ export function ChatPane({
         window.clearTimeout(sendWatchdog.current);
         setSending(true);
         setNotice(null);
+        streamBuffer.current = '';
         setStreamingText('');
         pendingText.current = '';
         // ── The queue drain's missing baton ──────────────────────────────────
@@ -2191,9 +2252,19 @@ export function ChatPane({
         // text and sets nothing.
         if (msg.text) setOptimisticUser(msg.text);
       } else if (msg.t === 'stream') {
-        setStreamingText((s) => s + msg.delta);
+        // Append to the BUFFER and re-derive, rather than appending to the
+        // preview. The two only differ when the transcript and the buffer have
+        // drifted far enough that `consumeStreamedText` falls back to hiding
+        // the preview — and there, appending would show a tail that the next
+        // events frame re-derives away again, i.e. flicker. One rule, one
+        // answer: the preview is a function of the buffer and the transcript.
+        streamBuffer.current += msg.delta;
+        setStreamingText(
+          streamingPreview(streamBuffer.current, ordered.current, !!optimisticUserRef.current),
+        );
       } else if (msg.t === 'turn-done') {
         setSending(false);
+        streamBuffer.current = '';
         setStreamingText('');
         setOptimisticUser(null);
         setQuestion(null);
@@ -2320,6 +2391,11 @@ export function ChatPane({
         // reconnect's session hello (turnRunning) restores the working state,
         // and the turn's frames broadcast to the new socket.
         setSending(false);
+        // The buffer goes with the preview: if the turn finished while we were
+        // disconnected, the reconnect's hello carries no streamText, and a
+        // stale buffer left here would be re-derived into view by the next
+        // events frame. The hello restores it when the turn IS still running.
+        streamBuffer.current = '';
         setStreamingText('');
         // A send the server never acked died with this socket — put the text
         // back in the composer and drop the optimistic bubble, so the message
@@ -3140,13 +3216,66 @@ export function ChatPane({
   // batches until the content overflows (or history is exhausted): requests
   // are single-flight, and every server call moves the byte cursor back, so
   // this terminates even when a batch renders nothing new.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: events/loadingOlder are the re-check triggers; requestOlder is stable enough per render
+  //
+  // ── AND THE SAME DEAFNESS AT scrollTop 0 ────────────────────────────────────
+  // Overflow is not the only way to have no scroll events. `requestOlder` is
+  // otherwise driven ONLY by `onScroll`, and a browser fires no scroll event
+  // when scrollTop is already 0 and you wheel up. Two measured ways to be
+  // parked there with more history to fetch, both of them "I came back and
+  // scrolling up won't bring my conversation back":
+  //
+  //  - A no-overlap reconnect (a gap, a /compact) REPLACES the list under a
+  //    reader who had paged to the start. 30 rows, scrollTop 0, hasMoreOlder
+  //    back to true — and 84 wheel notches produced zero requests. Nudging
+  //    DOWN 900px and wheeling up again unwedged it instantly.
+  //  - An ordinary OVERLAPPING reconnect leaves the client's view ahead of the
+  //    server's paging cursor: the new tail's `historyStart` is well after the
+  //    oldest row still held, so the next page or two are pure duplicates that
+  //    prepend nothing and move scrollTop not at all. Frozen at the top, same
+  //    silence.
+  //
+  // So the top zone re-arms the pager too, off the same two triggers (a fresh
+  // events commit, and `older-done` clearing `loadingOlder`). It terminates on
+  // the same argument as the overflow case: a page that renders something
+  // moves the reader out of the zone via the prepend anchor, one that renders
+  // nothing still moved the server's cursor back, and `hasMoreOlder` ends it.
+  //
+  // The two guards are onScroll's, for its reasons. `pinnedToBottom` keeps a
+  // reader at the BOTTOM out of this entirely, and the suppression window keeps
+  // out a just-shown pane that reports scrollTop 0 while its layout settles —
+  // paging on that would prepend history on every tab visit. Unlike a scroll
+  // event, though, nothing re-delivers this check when the window expires, so a
+  // suppressed pass re-checks itself once the settle is over.
   useEffect(() => {
     if (!active || loadingOlder || !hasMoreOlder) return;
     if (!session?.current_sid) return; // history baseline not bound yet
     const el = scrollRef.current;
     if (!el || el.clientHeight < 40) return; // hidden/collapsed — don't page blind
-    if (el.scrollHeight <= el.clientHeight + 1) requestOlder();
+    if (el.scrollHeight <= el.clientHeight + 1) {
+      requestOlder();
+      return;
+    }
+    if (pinnedToBottom.current || events.length === 0) return;
+    const tryTopZone = () => {
+      const e = scrollRef.current;
+      if (!e || e.clientHeight < 40) return;
+      if (loadingOlderRef.current || !hasMoreOlderRef.current) return;
+      if (
+        !scrollEventIsTrustworthy({
+          suppressedUntil: suppressPinUntil.current,
+          now: performance.now(),
+        })
+      )
+        return;
+      if (e.scrollTop < TOP_PAGE_ZONE_PX) requestOlder();
+    };
+    const wait = suppressPinUntil.current - performance.now();
+    if (wait <= 0) {
+      tryTopZone();
+      return;
+    }
+    const t = window.setTimeout(tryTopZone, wait + 32);
+    return () => window.clearTimeout(t);
   }, [active, events, loadingOlder, hasMoreOlder, session?.current_sid]);
 
   /** @returns whether a request actually went out — the anchor seek spends its
@@ -3788,7 +3917,7 @@ export function ChatPane({
     // settles, and paging on that would prepend a batch of history on every
     // single tab visit to a chat the reader is pinned to the bottom of. The
     // genuine "not enough content to scroll" case has its own effect.
-    if (trustworthy && el.scrollTop < 240 && events.length > 0) requestOlder();
+    if (trustworthy && el.scrollTop < TOP_PAGE_ZONE_PX && events.length > 0) requestOlder();
   };
 
   const scrollToBottom = () => {
