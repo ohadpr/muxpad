@@ -106,16 +106,18 @@
  * position — and would make the migration below unable to see what it migrates.
  *
  * Bounded two ways, because localStorage does not clean up after itself the way
- * a dying session used to: an LRU cap of 50 entries (pane deletion has no
- * client-side hook to evict on) AND an age cutoff, so a pane read once a
- * quarter ago cannot resurrect a position from a conversation that has since
- * been cleared. A pruned entry degrades to "no memory" → the newest message,
- * never to a wrong position.
+ * a dying session used to: an LRU cap (pane deletion has no client-side hook to
+ * evict on) AND an age cutoff, so a pane read once a quarter ago cannot
+ * resurrect a position from a conversation that has since been cleared. A
+ * pruned entry degrades to "no memory" → the newest message, never to a wrong
+ * position.
  *
- * Only PARKED positions occupy those 50 slots. A caught-up reader is restored
- * to the newest message and so is a reader with no memory at all, so storing
- * one buys nothing and costs a slot — see `rememberChatScroll` for what that
- * cost measured out to on this machine.
+ * Only PARKED positions occupy those slots. A caught-up reader is restored to
+ * the newest message and so is a reader with no memory at all, so their row
+ * earns its place in storage for one reason only — to tell the OTHER windows
+ * that the parked row they are holding is finished with (see `retired`) — and
+ * it is capped separately, against MAX_RETIRED, so it can never crowd out a
+ * position someone is actually coming back to.
  */
 export interface ChatScrollMem {
   /**
@@ -140,7 +142,48 @@ export interface ChatScrollMem {
 }
 
 const KEY = 'muxpad:chat-scroll:v4';
-const MAX_ENTRIES = 50;
+
+/**
+ * How many PARKED positions the store keeps.
+ *
+ * Was 50, chosen when the cap was the only bound and every write — caught-up or
+ * parked — competed for the same slots. Both premises are gone: the age cutoff
+ * below is what actually stops the store growing without limit, and caught-up
+ * rows are now capped separately (MAX_RETIRED), so these slots hold nothing but
+ * positions a reader could still come back to.
+ *
+ * 50 was measurably too few for one cockpit. This machine runs ~37 chat panes
+ * at once; every one of them parked, plus fourteen chats closed inside the
+ * fortnight the age cutoff keeps, is 51 — and the row evicted is the
+ * least-recently-WRITTEN one, i.e. the pane the reader has left alone longest,
+ * which is exactly the position they are most likely to be coming back for.
+ * Silently dropping it reads as "muxpad reset my scroll position" and is
+ * indistinguishable from the bugs the rest of this file exists to fix.
+ *
+ * An entry serialises to roughly 120 bytes, so 200 of them is ~24 KB against a
+ * 5 MB origin quota — the cap is not paying for anything scarce, and the flush
+ * cost is a JSON parse of a list that is still small. The age cutoff remains
+ * the real bound; this is a backstop against a pathological number of panes.
+ */
+const MAX_ENTRIES = 200;
+
+/**
+ * How many RETIREMENTS the store keeps — see `retired` for what one is.
+ *
+ * A separate budget on purpose. Retirements exist to be read by other windows
+ * and by the next cold open; they are worth keeping around for a while and
+ * worth nothing compared to a real parked position, so they must never compete
+ * for the same slots. Caught-up chats are rewritten constantly (follow-bottom
+ * re-pins produce a trusted scroll event per height change), so on a shared cap
+ * they win every eviction and park nobody.
+ *
+ * 50 is generous for what it has to cover: a retirement only has to outlive the
+ * stale parked row it cancels, in every window that still holds one. The age
+ * cutoff expires it in the end, at which point the row it cancelled has expired
+ * too — both were written inside the same fortnight — so an expiring retirement
+ * cannot uncover a position it was hiding.
+ */
+const MAX_RETIRED = 50;
 
 /**
  * How long a remembered position stays worth restoring.
@@ -202,6 +245,40 @@ function parseEntries(raw: string | null, now: number): [string, StoredMem][] {
   }
 }
 
+/**
+ * Is this row a RETIREMENT — a record that the reader finished the
+ * conversation — rather than a place they are coming back to?
+ *
+ * The same predicate `opensAtNewest` asks, over the stored shape. A retirement
+ * and a missing row produce the identical answer for the reader; they differ
+ * only in what they tell the OTHER windows, which is the whole reason the row
+ * is written at all.
+ */
+function retired(m: ChatScrollMem): boolean {
+  return m.caughtUp;
+}
+
+/**
+ * Apply the two caps to a set of rows, newest-first within each.
+ *
+ * Parked positions and retirements are budgeted separately (see MAX_ENTRIES /
+ * MAX_RETIRED), so a storm of caught-up traffic — or fifty of them inherited
+ * from a build that stored them as ordinary entries — cannot evict a single
+ * position a reader parked on purpose.
+ *
+ * Returned in write order, because that is the order the store is serialised in
+ * and reading it back must be idempotent.
+ */
+function capped(rows: [string, StoredMem][]): [string, StoredMem][] {
+  const byAge = [...rows].sort((a, b) => a[1].at - b[1].at);
+  const parked = byAge.filter(([, m]) => !retired(m));
+  if (parked.length <= MAX_ENTRIES && byAge.length - parked.length <= MAX_RETIRED) return byAge;
+  return [
+    ...parked.slice(-MAX_ENTRIES),
+    ...byAge.filter(([, m]) => retired(m)).slice(-MAX_RETIRED),
+  ].sort((a, b) => a[1].at - b[1].at);
+}
+
 const mem: Map<string, StoredMem> = (() => {
   const now = Date.now();
   let entries: [string, StoredMem][] = [];
@@ -228,23 +305,10 @@ const mem: Map<string, StoredMem> = (() => {
   } catch {
     // no sessionStorage to migrate from
   }
-  return new Map(entries.slice(-MAX_ENTRIES));
+  return new Map(capped(entries));
 })();
 
 let flushTimer: number | undefined;
-
-/**
- * Panes this window has deliberately FORGOTTEN, and when.
- *
- * A caught-up reader needs no stored row — `opensAtNewest(null)` and
- * `opensAtNewest({caughtUp: true})` are the same answer — so those writes are
- * dropped rather than given an LRU slot (see `rememberChatScroll`). Dropping
- * from `mem` is not enough on its own: `flush` merges what is already in
- * localStorage, so a row this window deleted would be read straight back in.
- * The timestamp is what keeps that honest across two windows: it out-ranks an
- * OLDER stored row and yields to a NEWER one, exactly like an ordinary write.
- */
-const dropped = new Map<string, number>();
 
 /**
  * Take in whatever another window has written since we last looked.
@@ -265,11 +329,8 @@ function adoptFromStorage(): void {
   try {
     const now = Date.now();
     for (const [id, theirs] of parseEntries(localStorage.getItem(KEY), now)) {
-      const gone = dropped.get(id);
-      if (gone !== undefined && gone >= theirs.at) continue;
       const ours = mem.get(id);
       if (ours && ours.at >= theirs.at) continue;
-      dropped.delete(id);
       mem.set(id, theirs);
     }
   } catch {
@@ -301,7 +362,27 @@ function adoptFromStorage(): void {
  * better answer available, and both candidates are a position that reader
  * actually occupied, so the loser costs them a scroll and never a wrong belief.
  *
- * The cap is applied to the MERGED set and by write time, not by this window's
+ * ── AND THE OTHER HALF: A DELETION IS NOT AN ABSENCE ────────────────────────
+ * Merging by `at` answers "whose row is newer" — and for as long as retiring a
+ * caught-up reader meant REMOVING the row, one of the two candidates had no row
+ * to compare. Window B reading a conversation to the end deleted `p` from
+ * storage; window A, still holding the parked row it loaded at boot, had no way
+ * to tell that from "`p` was never stored". Its very next flush — of any pane at
+ * all, or of nothing at all, since `pagehide` flushes unconditionally — put the
+ * old position straight back, and the reader who had finished that conversation
+ * was dropped back into the middle of it. Delivering every `storage` event
+ * changed nothing: `adoptFromStorage` iterates the rows that ARE there, and the
+ * row in question was the one that had gone.
+ *
+ * So a retirement is a ROW now (see `retired`), carrying the timestamp that
+ * settles it exactly like an ordinary write: it out-ranks the older parked row
+ * in every window that still holds one, and yields to a NEWER parked position
+ * if the reader goes back and parks somewhere else. Absence means only what it
+ * can honestly mean — "nobody has written this" — and no longer has to stand in
+ * for a decision. Correct without the event, so it survives a window that was
+ * frozen or discarded through the write.
+ *
+ * The caps are applied to the MERGED set and by write time, not by this window's
  * insertion order. The old form prepended foreign keys and then kept the tail,
  * so at a full store another window's newly created pane was dropped on the
  * floor and panes it had already evicted came back.
@@ -310,16 +391,11 @@ function flush(): void {
   try {
     const now = Date.now();
     const merged = new Map(parseEntries(localStorage.getItem(KEY), now));
-    for (const [id, when] of dropped) {
-      const theirs = merged.get(id);
-      if (!theirs || theirs.at <= when) merged.delete(id);
-    }
     for (const [id, ours] of mem) {
       const theirs = merged.get(id);
       if (!theirs || ours.at >= theirs.at) merged.set(id, ours);
     }
-    const entries = [...merged].sort((a, b) => a[1].at - b[1].at).slice(-MAX_ENTRIES);
-    localStorage.setItem(KEY, JSON.stringify(entries));
+    localStorage.setItem(KEY, JSON.stringify(capped([...merged])));
   } catch {
     // quota / private mode — the in-memory map still covers this session
   }
@@ -360,41 +436,45 @@ if (typeof window !== 'undefined') {
 }
 
 export function rememberChatScroll(paneId: string, m: ChatScrollMem): void {
-  if (m.caughtUp) {
-    // ── DON'T SPEND A SLOT ON THE DEFAULT ────────────────────────────────────
-    // A caught-up reader is restored to the newest message, and so is a reader
-    // with no memory at all (`opensAtNewest(null)`). Storing one therefore buys
-    // nothing — and costs an LRU slot, in a store capped at MAX_ENTRIES with a
-    // cockpit that already runs ~37 live panes plus every chat closed in the
-    // last fortnight.
-    //
-    // The eviction order made it worse than a headcount suggests. Caught-up
-    // chats are rewritten constantly (follow-bottom re-pins produce a trusted
-    // scroll event per height change), so they stay at the fresh end; a PARKED
-    // chat is not rewritten at all while the reader is elsewhere, so it ages to
-    // the front and is evicted first. The cap was throwing away exactly the
-    // positions it exists to keep, and the symptom — "I scrolled up in that
-    // chat and later it dumped me at the bottom" — is indistinguishable from
-    // the pin/caughtUp bug this store was built to fix.
-    mem.delete(paneId);
-    dropped.set(paneId, Date.now());
-  } else {
-    dropped.delete(paneId);
-    mem.set(paneId, { ...m, at: Date.now() });
-    while (mem.size > MAX_ENTRIES) {
-      // By WRITE TIME, not insertion order: `adoptFromStorage` can put another
-      // window's row in at any point, and an adopted row's age is its `at`.
-      let oldestId: string | undefined;
-      let oldestAt = Number.POSITIVE_INFINITY;
-      for (const [id, v] of mem) {
-        if (v.at < oldestAt) {
-          oldestAt = v.at;
-          oldestId = id;
-        }
+  // ── DON'T SPEND A PARKED SLOT ON THE DEFAULT ──────────────────────────────
+  // A caught-up reader is restored to the newest message, and so is a reader
+  // with no memory at all (`opensAtNewest(null)`), so this row buys the READER
+  // nothing. It is written anyway, and only for the other windows: it is what
+  // retires the parked row they are still holding for this pane (see `flush`).
+  // It is budgeted against MAX_RETIRED rather than MAX_ENTRIES so it cannot
+  // cost a position anyone is coming back to.
+  //
+  // The eviction order is why that separation matters more than a headcount
+  // suggests. Caught-up chats are rewritten constantly (follow-bottom re-pins
+  // produce a trusted scroll event per height change), so they stay at the
+  // fresh end; a PARKED chat is not rewritten at all while the reader is
+  // elsewhere, so it ages to the front and is evicted first. On one shared cap
+  // the store threw away exactly the positions it exists to keep, and the
+  // symptom — "I scrolled up in that chat and later it dumped me at the
+  // bottom" — is indistinguishable from the pin/caughtUp bug it was built to
+  // fix.
+  //
+  // The anchor is DROPPED rather than carried along. A retirement says "the
+  // reader finished this conversation"; a message id sitting next to that says
+  // the opposite, and the only thing it could ever do is be restored by
+  // something that reads one field and not the other.
+  const row: StoredMem = m.caughtUp
+    ? {
+        anchorId: null,
+        anchorOffset: 0,
+        ratio: m.ratio,
+        caughtUp: true,
+        sid: m.sid,
+        at: Date.now(),
       }
-      if (oldestId === undefined) break;
-      mem.delete(oldestId);
-    }
+    : { ...m, at: Date.now() };
+  mem.set(paneId, row);
+  // By WRITE TIME, not insertion order: `adoptFromStorage` can put another
+  // window's row in at any point, and an adopted row's age is its `at`.
+  const kept = capped([...mem]);
+  if (kept.length !== mem.size) {
+    mem.clear();
+    for (const [id, v] of kept) mem.set(id, v);
   }
   // Debounced write-through: scroll events fire per frame. See
   // flushChatScrollNow for the half this cannot cover.
@@ -402,6 +482,15 @@ export function rememberChatScroll(paneId: string, m: ChatScrollMem): void {
   flushTimer = window.setTimeout(flush, 250);
 }
 
+/**
+ * What this window last knew about a pane's position.
+ *
+ * May return a RETIREMENT — `caughtUp: true`, no anchor — which `opensAtNewest`
+ * answers exactly as it answers null. Callers must go through that predicate
+ * rather than testing for null themselves; "there is no row" and "the reader
+ * finished this conversation" are the same fact about re-entry, and only one of
+ * them can be told to another window.
+ */
 export function recallChatScroll(paneId: string): ChatScrollMem | null {
   const m = mem.get(paneId);
   // Expiry is re-checked on READ, not just at load: a cockpit window stays open
