@@ -909,7 +909,12 @@
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
+  /* 0 until a mobile visualViewport listener lifts the pill above the software
+     keyboard — the layout viewport does not shrink on iOS, so `bottom: 0` alone
+     puts the composer UNDER it. Set on `.chat-pane` by ChatPane's
+     chatKeyboardInset effect and never set anywhere else, so desktop and every
+     failure mode resolve to the fallback and keep the layout that shipped. */
+  bottom: var(--chat-keyboard-inset, 0px);
   z-index: 5;
   padding: 6px 12px calc(16px + env(safe-area-inset-bottom, 0px));
   background: transparent;

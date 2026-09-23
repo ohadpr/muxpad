@@ -1289,3 +1289,102 @@ describe('the LRU cap holds PARKED spots, not the default', () => {
     expect(localStorage.getItem(STORE_KEY)).toContain('parked-in-B');
   });
 });
+
+describe('WebKit has no scroll anchoring — the JS equivalent must not double-pay', () => {
+  // Measured on BOTH engines (probe: /tmp/muxpad-hunt/fix-chat/ro-probe.mjs,
+  // headless Chromium + WebKit, 450px of growth above a parked reader):
+  //
+  //   overflow-anchor: auto   enginePaid 450  readerDrift 0    rowBased 0
+  //   overflow-anchor: none   enginePaid 0    readerDrift 450  rowBased 450
+  //   (a height DELTA would have moved 450 in BOTH rows — that is the double-pay)
+  //
+  // iOS 26 and earlier — Safari and the installed PWA, both WKWebView — live
+  // permanently in the second row; Safari 27 and Chromium in the first. The
+  // compensation is the same code either way, and the `<= 1` guard in the
+  // caller is what makes it a no-op where the engine already paid.
+  const GROWTH = 450;
+  const doc = { scrollHeight: 20000 + GROWTH, clientHeight: 600 };
+
+  it('pays exactly once where the engine paid nothing (iOS 26)', () => {
+    // The engine did not move scrollTop, so the anchored row is GROWTH lower
+    // than the reader left it.
+    const target = scrollTopForAnchor({
+      scrollTop: 4000,
+      rowTop: -120 + GROWTH,
+      anchorOffset: -120,
+      rowHeight: 800,
+      ...doc,
+    });
+    expect(target - 4000).toBe(GROWTH);
+  });
+
+  it('moves nothing where the engine already paid (Chromium / Safari 27)', () => {
+    // The engine bumped scrollTop by GROWTH, so the row is exactly where the
+    // reader left it — and the target equals the current scrollTop, which the
+    // caller's `<= 1` guard then declines to write.
+    const scrollTop = 4000 + GROWTH;
+    const target = scrollTopForAnchor({
+      scrollTop,
+      rowTop: -120,
+      anchorOffset: -120,
+      rowHeight: 800,
+      ...doc,
+    });
+    expect(target).toBe(scrollTop);
+    expect(Math.abs(scrollTop - target) <= 1).toBe(true);
+  });
+
+  it('ignores growth BELOW the reader, which a height delta would not', () => {
+    // Their row has not moved, so neither do they — a `scrollTop += Δheight`
+    // would have yanked them down by the agent talking.
+    const target = scrollTopForAnchor({
+      scrollTop: 4000,
+      rowTop: -120,
+      anchorOffset: -120,
+      rowHeight: 800,
+      ...doc,
+    });
+    expect(target).toBe(4000);
+  });
+});
+
+describe('shouldPersistChatScroll — a hidden document has no reading position', () => {
+  // iOS resets overflow scroll on resume (the whole reason `showEpoch` exists),
+  // and the native scroll event from that reset can land before the restore
+  // effect has armed its suppression window. Persisting it writes ratio ~0 over
+  // the reader's parked message, and the restore then faithfully reproduces it.
+  it('refuses while the document is hidden', () => {
+    expect(shouldPersistChatScroll({ active: true, clientHeight: 800, visible: false })).toBe(
+      false,
+    );
+  });
+
+  it('accepts when visible, and when the caller does not say (tests / older callers)', () => {
+    expect(shouldPersistChatScroll({ active: true, clientHeight: 800, visible: true })).toBe(true);
+    expect(shouldPersistChatScroll({ active: true, clientHeight: 800 })).toBe(true);
+  });
+});
+
+describe('an older prepend captured mid rubber-band', () => {
+  // iOS overscroll reports a scrollTop outside [0, max], and a reader paging
+  // older history IS at the top of the document, mid-bounce, by construction.
+  // The persist path already clamps its ratio; the prepend capture did not.
+  it('lands on the same messages, not 40px into the new page', () => {
+    const unclamped = scrollTopAfterOlderPrepend({
+      pinned: false,
+      anchorHeight: 8000,
+      anchorTop: -40,
+      newScrollHeight: 10000,
+      clientHeight: 800,
+    });
+    const clamped = scrollTopAfterOlderPrepend({
+      pinned: false,
+      anchorHeight: 8000,
+      anchorTop: Math.min(Math.max(0, -40), maxScrollTop(8000, 800)),
+      newScrollHeight: 10000,
+      clientHeight: 800,
+    });
+    expect(unclamped).toBe(1960);
+    expect(clamped).toBe(2000);
+  });
+});
