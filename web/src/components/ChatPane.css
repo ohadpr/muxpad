@@ -57,17 +57,26 @@
   scrollbar-color: var(--chat-border-strong) transparent;
 }
 /* Scroll anchoring — the engine holding the reader's place when content ABOVE
-   them changes height — is ON for an unpinned reader and OFF while pinned.
-   See setPinned() in ChatPane.tsx for the measurement and the full argument.
+   them changes height — is ON, unconditionally.
 
-   It was previously off for the whole pane, on a rationale that is true only of
-   the pinned case: the engine pulls back toward its anchor in the same frame
-   the follow-bottom effect pushes to the bottom, and which wins is unspecified.
-   Extending that to the unpinned reader is what left every "content grew above
-   me" jump to be hand-compensated one trigger at a time. One owner at a time:
-   pinned → ours, unpinned → the engine's. */
-.chat-scroll.-pinned {
-  overflow-anchor: none;
+   It was off for the whole pane, then off only while pinned. Both were wrong,
+   and the second was wrong in a way you could see: `setPinned` runs on EVERY
+   scroll event (a 40px threshold), so while output streamed the class flickered
+   and anchoring switched on and off frame to frame. In the frames it was off, a
+   pasted screenshot decoding higher up grew the document above the reader with
+   nobody paying for it — they jumped BACK by that growth and were snapped
+   forward again when the follow-bottom observer caught up. Reported as
+   "sometimes it just jumps back randomly a bit". The randomness was an image
+   finishing; the smallness was one image's worth.
+
+   There is no conflict to avoid. Appending below the reader does not trigger
+   anchoring at all, so live output still follows. When content grows ABOVE a
+   pinned reader the engine holds their row — which IS the bottom — and the
+   follow-bottom ResizeObserver re-asserts `maxScrollTop` after layout anyway,
+   so it has the last word. The two agree; the engine just removes the backward
+   flash in between. */
+.chat-scroll {
+  overflow-anchor: auto;
 }
 .chat-scroll::-webkit-scrollbar {
   width: 9px;

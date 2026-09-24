@@ -1698,29 +1698,19 @@ export function ChatPane({
   const paneRef = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
   /**
-   * Write the pin AND mirror it to the DOM, because the browser's own scroll
-   * anchoring is scoped to it (`.chat-scroll.-pinned { overflow-anchor: none }`).
+   * Whether live output should scroll itself into view. A ref, because it has to
+   * be right in the same frame a layout change lands, which a re-render cannot
+   * promise.
    *
-   * Anchoring is the engine holding an unpinned reader's place when content
-   * ABOVE them changes height — a pasted screenshot resolving from its 3:2
-   * placeholder to a tall phone aspect, a web font swapping in, a code block
-   * re-wrapping. It used to be off for the whole pane, which is why that class
-   * of jump had to be hand-compensated per trigger (older-prepend, search-fold)
-   * and why every trigger nobody had thought of yet dragged the reader
-   * backwards. Measured in headless Chromium: one screenshot resolving above
-   * the reader moved them 450px back with it off, 0px with it on — the engine
-   * bumped scrollTop by exactly the growth.
-   *
-   * The reason it was disabled is real but narrow: for a PINNED reader the
-   * engine pulls back toward its anchor in the same frame the follow-bottom
-   * effect pushes to the bottom, and which wins is unspecified. That argument
-   * only ever applied to the pinned case. So the rule is per-state, and the
-   * invariant is one owner at a time: pinned → muxpad owns the scroll,
-   * unpinned → the engine holds the reader's row.
+   * This used to ALSO mirror itself onto the DOM, because scroll anchoring was
+   * scoped to it (`.chat-scroll.-pinned { overflow-anchor: none }`). That is
+   * gone: this setter runs on every scroll event, so the class flickered while
+   * output streamed and anchoring switched on and off frame to frame, which is
+   * the small random backward jump described in ChatPane.css. Anchoring is now
+   * unconditional and this is just a ref again.
    */
   const setPinned = useCallback((v: boolean) => {
     pinnedToBottom.current = v;
-    scrollRef.current?.classList.toggle('-pinned', v);
   }, []);
   // Programmatic scrollTop writes stamp this BEFORE assigning so onScroll
   // can tell reader-driven motion from restore / pin / older-prepend adjusts.
@@ -1795,9 +1785,10 @@ export function ChatPane({
    * viewport top. null while they are following the bottom.
    *
    * ── WEBKIT HAS NO SCROLL ANCHORING ──────────────────────────────────────────
-   * `.chat-scroll.-pinned { overflow-anchor: none }` leaves the unpinned
-   * scroller at the UA default, and on Chromium the engine then holds the
-   * reader's place when content above them grows. WebKit shipped that in Safari
+   * `.chat-scroll` now asks for `overflow-anchor: auto` unconditionally (the
+   * `-pinned` exception is gone — see ChatPane.css), and on Chromium the engine
+   * then holds the reader's place when content above them grows. WebKit shipped
+   * that in Safari
    * 27 (Sep 2026); every iPhone on iOS 26 or earlier — Safari and the installed
    * PWA alike, both WKWebView — does not implement it at all. The re-pin
    * observer below deliberately does nothing for an unpinned reader, so on the
@@ -4839,11 +4830,6 @@ export function ChatPane({
           </button>
         </output>
       ) : null}
-      {/* `-pinned` matches pinnedToBottom's initial `true`: a chat opens at the
-          newest message, so muxpad owns the scroll until the reader moves. The
-          class is maintained imperatively from there (setPinned) because the pin
-          is a ref — it must be right in the same frame a layout change lands,
-          which a re-render cannot promise. */}
       {/* tabIndex=0 because a keydown listener on an element only fires when
           focus is inside it, and this was a plain div: focus sat on <body>, the
           listener never saw a key, and PageDown moved the log 0px. The chat had
@@ -4851,7 +4837,7 @@ export function ChatPane({
           focusable for exactly this reason; `role=log` names what it is for a
           screen reader now that it is in the tab order. */}
       <div
-        className="chat-scroll -pinned"
+        className="chat-scroll"
         ref={scrollRef}
         onScroll={onScroll}
         // biome-ignore lint/a11y/noNoninteractiveTabindex: a SCROLLABLE region must be focusable or it cannot be scrolled by keyboard at all — the inverse of this rule's concern, and what axe's "scrollable-region-focusable" requires.
