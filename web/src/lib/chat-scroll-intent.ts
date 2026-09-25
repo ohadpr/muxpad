@@ -274,7 +274,7 @@ export function intentFor(mem: ChatScrollMem | null): ScrollIntent {
  * other four. `rowLoaded` is the only thing the caller has to look up, and it is
  * the one fact that distinguishes "holding a message" from "hunting one".
  */
-export type ScrollPhase = 'FOLLOWING' | 'ANCHORED' | 'SEEKING' | 'IDLE';
+type ScrollPhase = 'FOLLOWING' | 'ANCHORED' | 'SEEKING' | 'IDLE';
 
 export function phase(
   state: ScrollState,
@@ -390,7 +390,7 @@ export function targetFor(
  * mechanism re-assigning, and forcing a reflow, on every notification for as
  * long as the condition lasted.
  */
-export const TARGET_EPSILON = 1;
+const TARGET_EPSILON = 1;
 
 /** Is this target already satisfied? Then do not write — see `targetFor`. */
 export function alreadyThere(target: number, scrollTop: number): boolean {

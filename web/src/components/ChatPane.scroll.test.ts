@@ -139,36 +139,44 @@ describe("the composer's reserve does not switch scroll anchoring off", () => {
 /**
  * WebKit has no scroll anchoring before Safari 27, so on every iPhone running
  * iOS 26 or earlier — Safari and the installed PWA alike, both WKWebView —
- * `overflow-anchor` is inert and an unpinned reader has NO owner for content
- * growing above them. The arithmetic of the JS equivalent is unit-tested in
- * chat-scroll.test.ts and measured on both engines in
- * /tmp/muxpad-hunt/fix-chat/ro-probe.mjs; these are the wiring invariants that
- * cannot be reached from there.
+ * `overflow-anchor` is inert and a parked reader has NO owner for content
+ * growing above them.
+ *
+ * Three tests here used to assert that ChatPane.tsx CONTAINED
+ * `const keep = liveAnchor.current;`, a specific two-flag stand-down expression,
+ * and `liveAnchor.current = here;`. All three named code that no longer exists,
+ * and none of them could have failed for the right reason: a substring is not a
+ * behaviour, so they would have kept passing with the call made at the wrong
+ * time, with the wrong arguments, or in a branch that never ran.
+ *
+ * What replaces them is chat-scroll-controller.test.ts, where the whole ANCHORED
+ * block runs twice under `describe.each` — once with the engine paying and once
+ * with it paying nothing — plus a third case where it pays a FRACTION, which is
+ * what was actually measured (1440 of 1920px in one frame) and which neither a
+ * feature test nor a substring could have caught.
+ *
+ * What survives here is the part that genuinely is a property of this file: the
+ * shapes that must never come back.
  */
-describe('the unpinned reader has an owner on WebKit too', () => {
-  it('the re-pin observer pays for growth above an unpinned reader', () => {
-    // It used to `return` for anyone not pinned, which left the phone with
-    // nobody at all.
-    expect(code).not.toContain('if (!pinnedToBottom.current) return;');
-    expect(tsx).toContain('const keep = liveAnchor.current;');
+describe('the compensation cannot take a form that double-pays', () => {
+  it('never adds a height delta to scrollTop', () => {
+    // `scrollTop += ΔscrollHeight` adds the growth a second time on an engine
+    // that already paid — measured, the reader thrown forward by the same 450px
+    // — and yanks a parked reader for growth BELOW them, which should move them
+    // not at all.
+    expect(code).not.toMatch(/scrollTop \+= /);
+    const intent = readFileSync(join(__dirname, '../lib/chat-scroll-intent.ts'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+    expect(intent).not.toMatch(/scrollTop \+= /);
   });
 
-  it('…row-based, so it cannot double-pay where the engine already paid', () => {
-    // `scrollTop += ΔscrollHeight` adds the growth a second time on Chromium
-    // and yanks the reader for growth BELOW them. A row-based target equals the
-    // current scrollTop there, and the `<= 1` guard declines to write.
-    expect(code).not.toMatch(/scrollTop \+= .*scrollHeight/);
+  it('never feature-tests for scroll anchoring', () => {
+    // `CSS.supports('overflow-anchor', 'auto')` answers TRUE on an iOS 26
+    // WKWebView that will not pay, and true on Playwright's WebKit that will, so
+    // it cannot distinguish the two cases it would be asked to distinguish. The
+    // double-pay defence is the arithmetic being absolute.
     expect(code).not.toContain("CSS.supports('overflow-anchor'");
-  });
-
-  it('stands down for the two other owners of the scroll', () => {
-    expect(tsx).toContain('if (searchJumpHold.current || holdRememberedAnchor.current) return;');
-  });
-
-  it('snapshots the reader in onScroll rather than re-capturing in the callback', () => {
-    // By the time the observer runs, the growth has happened: on WebKit a fresh
-    // capture reads the row at its JUMPED position and computes "leave it".
-    expect(tsx).toContain('liveAnchor.current = here;');
   });
 });
 
