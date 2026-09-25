@@ -3851,10 +3851,49 @@ export function ChatPane({
       }
       const range = Math.max(1, el.scrollHeight - el.clientHeight);
       const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-      // LIVE follow, and only that. Tight on purpose — nudge up one line and
-      // the log stops scrolling itself under you. Deliberately NOT the value
-      // that gets remembered: see `caughtUp` below and chat-scroll.ts.
-      setPinned(nearBottom);
+      // ── ONLY A GESTURE MAY UN-PIN ─────────────────────────────────────────
+      // `nearBottom` is raw geometry, and raw geometry lies about a reader who
+      // has not moved. The follow-bottom ResizeObserver computes `maxScrollTop`
+      // INSIDE its callback and assigns it; the scroll event that assignment
+      // produces is dispatched a frame later. When a burst of lazy thumbnails
+      // all finish in one layout pass — a pane mounting, or coming back to the
+      // foreground — more content lands in between, so the event arrives at a
+      // position that WAS the bottom against a document that has since grown.
+      // Measured: reassert targeted 24910 against scrollHeight 25774, two more
+      // screenshots decoded in the same frame (27934), event dispatched with
+      // 2160px of distance. `nearBottom` false about a reader sitting still.
+      //
+      // Un-pinning on that is PERMANENT. `pinnedToBottom` is the sole gate on
+      // both the follow-bottom effect and the observer's pinned branch, so the
+      // chat silently stops following live output for the rest of the visit and
+      // the unpinned branch faithfully holds the reader where the accident left
+      // them — 5280px up, then 6284px up as more turns land. Reported as
+      // "it keeps jumping back randomly": the randomness is a thumbnail burst.
+      //
+      // So the pin follows the READER, not the geometry. `userScrolled` is the
+      // honest signal: the direct listeners (wheel/touchmove/keydown/
+      // pointerdown) all fire BEFORE the scroll event they cause, and
+      // `scrollMotionIsTheReader` has just run above. If the reader has not
+      // taken control, a pinned chat that finds itself off the bottom is our own
+      // accounting arriving late — finish the job against the document as it is
+      // NOW rather than concluding they left.
+      //
+      // This is deliberately stronger than testing `scrollTop === the last
+      // target`, which was measured at 5/6: with anchoring unconditional the
+      // engine can move `scrollTop` itself without stamping anything, and that
+      // slips through an equality test. It cannot slip through this one.
+      if (pinnedToBottom.current && !nearBottom && !userScrolled.current) {
+        const settled = maxScrollTop(el.scrollHeight, el.clientHeight);
+        if (Math.abs(el.scrollTop - settled) > 1) {
+          lastProgrammaticTop.current = settled;
+          el.scrollTop = settled;
+        }
+      } else {
+        // LIVE follow, and only that. Tight on purpose — nudge up one line and
+        // the log stops scrolling itself under you. Deliberately NOT the value
+        // that gets remembered: see `caughtUp` below and chat-scroll.ts.
+        setPinned(nearBottom);
+      }
       // RE-ENTRY policy: had they read to the end? A caught-up reader is
       // remembered as "open at the newest message", so a turn that lands while
       // they are away can't strand them thirty messages up.
