@@ -68,6 +68,16 @@ export interface ScrollSurface {
   rowBox(id: string): RowBox | null;
   /** The row under the viewport top right now, or null if nothing is anchorable. */
   anchorHere(): Anchor | null;
+  /**
+   * The current search hit's MARK, or null if none is rendered.
+   *
+   * Found by the DOM's `[data-search-hit]` marker rather than by an id, because
+   * a jump starts before the message it names is loaded — and because the mark
+   * can be nested deep inside a message, or inside an action run the highlight
+   * forced open, where a top-level row scan cannot reach it.
+   */
+  hitBox(): RowBox | null;
+
   /** Assign `scrollTop`. The ONLY place this happens. */
   setScrollTop(value: number): void;
 }
@@ -119,9 +129,15 @@ export class ChatScrollController {
   }
 
   private rowLoaded(): boolean {
+    return this.boxFor() !== null;
+  }
+
+  /** The box the current intent needs, or null if it names nothing loaded. */
+  private boxFor(): RowBox | null {
     const { intent } = this.state;
-    if (intent.at !== 'row' && intent.at !== 'hit') return false;
-    return this.surface.rowBox(intent.id) !== null;
+    if (intent.at === 'row') return this.surface.rowBox(intent.id);
+    if (intent.at === 'hit') return this.surface.hitBox();
+    return null;
   }
 
   /**
@@ -159,8 +175,7 @@ export class ChatScrollController {
     this.state = next(this.state, { t: 'measured' });
     const geo = this.surface.geometry();
     const { intent } = this.state;
-    const row = intent.at === 'row' || intent.at === 'hit' ? this.surface.rowBox(intent.id) : null;
-    const target = targetFor(intent, geo, row);
+    const target = targetFor(intent, geo, this.boxFor());
     if (target === null) {
       // We do not know where the reader belongs — the transcript has not
       // arrived, or the message is older than the loaded window. Leave the

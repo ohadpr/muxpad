@@ -151,7 +151,7 @@ describe('the seek budget', () => {
   it('a new search jump gets a fresh budget', () => {
     let s = drive({ t: 'shown', mem: parked() });
     for (let i = 0; i < SEEK_PAGE_BUDGET; i++) s = next(s, { t: 'sought' });
-    s = next(s, { t: 'search-jump', id: 'evt#hit' });
+    s = next(s, { t: 'search-jump' });
     expect(canSeek(s, missing)).toBe(true);
   });
 });
@@ -169,7 +169,7 @@ describe('targetFor — the one target computation', () => {
   // cannot place anyone, and the alternative is a guess.
   it('a row we have not loaded moves nobody', () => {
     expect(targetFor({ at: 'row', id: 'evt#40', offset: -120 }, VIEWPORT, null)).toBeNull();
-    expect(targetFor({ at: 'hit', id: 'evt#40' }, VIEWPORT, null)).toBeNull();
+    expect(targetFor({ at: 'hit' }, VIEWPORT, null)).toBeNull();
   });
 
   it('puts the anchored row back where it was', () => {
@@ -227,7 +227,7 @@ describe('targetFor — the one target computation', () => {
 
   it('places a search hit a third of the way down, not at the top', () => {
     const t = targetFor(
-      { at: 'hit', id: 'evt#h' },
+      { at: 'hit' },
       { ...VIEWPORT, scrollTop: 1000 },
       {
         top: 600,
@@ -403,12 +403,12 @@ describe('recordFor — only a position the reader chose is ever stored', () => 
   // of that chat — a click on the tab tomorrow, no search involved — would
   // restore a reader who had read to the end to a message from three weeks ago.
   it('stores NOTHING for a search hit, however deep it landed', () => {
-    expect(recordFor(drive({ t: 'search-jump', id: 'evt#ancient' }), sid)).toBeNull();
+    expect(recordFor(drive({ t: 'search-jump' }), sid)).toBeNull();
   });
 
   it('…and starts recording again the moment the reader takes the pane back', () => {
     const s = drive(
-      { t: 'search-jump', id: 'evt#ancient' },
+      { t: 'search-jump' },
       { t: 'search-cleared', here: { id: 'evt#70', offset: -12 }, atEnd: false },
     );
     expect(recordFor(s, sid)?.anchorId).toBe('evt#70');
@@ -432,11 +432,11 @@ describe('the transitions', () => {
     // backwards, with the highlight gone too. A flip is not a gesture and does
     // not dismiss a highlight, so it must not re-assert the pre-search memory.
     const s = drive(
-      { t: 'search-jump', id: 'evt#198' },
+      { t: 'search-jump' },
       { t: 'hidden' },
       { t: 'shown', mem: parked({ anchorId: 'evt#147' }) },
     );
-    expect(s.intent).toEqual({ at: 'hit', id: 'evt#198' });
+    expect(s.intent).toEqual({ at: 'hit' });
   });
 
   it('a visibility flip DOES re-read the memory for an ordinary reader', () => {
