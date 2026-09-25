@@ -89,56 +89,26 @@ describe('the older-history spinner never moves the reader', () => {
   });
 });
 
-/**
- * A SHAPE test, not a measurement — the call sites below live inside a
- * requestAnimationFrame loop that reads real geometry off a real scroller, and
- * jsdom has neither. The arithmetic each one performs is unit-tested where it
- * lives (`retiredAnchorMemory` in chat-scroll.test.ts); what cannot be reached
- * from there is whether the loop still CALLS it, and under which condition.
- * That is what these assert.
+/*
+ * `the settling restore retires a goal it could not reach` lived here: two tests
+ * that asserted `ChatPane.tsx` CONTAINS the strings `retiredAnchorMemory({` and
+ * `holdRememberedAnchor.current && !userScrolled.current`.
+ *
+ * Deleted with the code they named, and they are worth a note because they are
+ * the clearest example in this tree of a test that cannot fail for the right
+ * reason. Both passed throughout the week the retirement logic was shipping the
+ * landing-point walk, because a substring is not a behaviour: the first would
+ * have kept passing if the call had been made with the wrong arguments, at the
+ * wrong time, or in a branch that never ran, and the second pinned the exact
+ * boolean expression whose two-correct-rules composition WAS the bug.
+ *
+ * Nothing replaces them one-for-one. What replaces them in kind is
+ * chat-scroll-intent.test.ts, which drives the state machine through the same
+ * situations and asserts the outcome instead of the source text — and the
+ * simulated-layout tests, which can express "the document changed under the
+ * reader mid-seek", the case no string search and no jsdom assertion can reach.
  */
-describe('the settling restore retires a goal it could not reach', () => {
-  it('hands the store the row it actually settled on', () => {
-    // Without this the store keeps naming a message that is not coming back,
-    // and `seekPages` is a local of the effect — so every visibility flip
-    // spends another eight `load-older` round trips hunting the same ghost.
-    expect(tsx).toContain('retiredAnchorMemory({');
-  });
 
-  it('only on a deadline expiry, never over a reader who took over', () => {
-    // A gesture ends the loop too, and that reader writes their own memory
-    // through onScroll. Retiring on that path would be this loop having the
-    // last word over the reader, which is the bug the hold exists to prevent.
-    expect(tsx).toContain('holdRememberedAnchor.current && !userScrolled.current');
-  });
-});
-
-/**
- * The composer's reserve, and why it is a SIBLING.
- *
- * The browser's scroll anchoring is what holds an unpinned reader's place when
- * content above them changes height, and it has SUPPRESSION TRIGGERS: a
- * computed `padding` (or margin/width/height/top/…) change on the anchor node
- * or any of its ancestors UP TO AND INCLUDING the scrolling box cancels the
- * adjustment for that layout pass. `.chat-list` was that ancestor for every row
- * in the chat, and its `padding-bottom` was rewritten every time the composer's
- * measured height moved — typing, an attachment chip row, the "Reconnecting…"
- * banner, the mobile keyboard.
- *
- * Measured in headless Chromium (probe: /tmp/muxpad-hunt/fix-chat/
- * padding-probe.html), unpinned reader at scrollTop 2000, 480px of growth above
- * them:
- *
- *   no padding change        drift    0px   (engine paid the whole 480)
- *   .chat-list padding moves drift  480px   (suppressed; nothing else pays)
- *   .chat-scroll padding     drift  480px   (suppressed too — the scrolling box
- *                                            is IN the chain, so moving the
- *                                            reserve there fixes nothing)
- *   sibling row grows        drift    0px
- *
- * jsdom has no layout, so this is the declaration-level invariant that keeps
- * the reserve off the ancestor chain.
- */
 describe("the composer's reserve does not switch scroll anchoring off", () => {
   it('leaves .chat-list with a bottom padding nothing rewrites', () => {
     const pad = rule('.chat-list').padding?.split(/\s+/) ?? [];
@@ -169,36 +139,44 @@ describe("the composer's reserve does not switch scroll anchoring off", () => {
 /**
  * WebKit has no scroll anchoring before Safari 27, so on every iPhone running
  * iOS 26 or earlier — Safari and the installed PWA alike, both WKWebView —
- * `overflow-anchor` is inert and an unpinned reader has NO owner for content
- * growing above them. The arithmetic of the JS equivalent is unit-tested in
- * chat-scroll.test.ts and measured on both engines in
- * /tmp/muxpad-hunt/fix-chat/ro-probe.mjs; these are the wiring invariants that
- * cannot be reached from there.
+ * `overflow-anchor` is inert and a parked reader has NO owner for content
+ * growing above them.
+ *
+ * Three tests here used to assert that ChatPane.tsx CONTAINED
+ * `const keep = liveAnchor.current;`, a specific two-flag stand-down expression,
+ * and `liveAnchor.current = here;`. All three named code that no longer exists,
+ * and none of them could have failed for the right reason: a substring is not a
+ * behaviour, so they would have kept passing with the call made at the wrong
+ * time, with the wrong arguments, or in a branch that never ran.
+ *
+ * What replaces them is chat-scroll-controller.test.ts, where the whole ANCHORED
+ * block runs twice under `describe.each` — once with the engine paying and once
+ * with it paying nothing — plus a third case where it pays a FRACTION, which is
+ * what was actually measured (1440 of 1920px in one frame) and which neither a
+ * feature test nor a substring could have caught.
+ *
+ * What survives here is the part that genuinely is a property of this file: the
+ * shapes that must never come back.
  */
-describe('the unpinned reader has an owner on WebKit too', () => {
-  it('the re-pin observer pays for growth above an unpinned reader', () => {
-    // It used to `return` for anyone not pinned, which left the phone with
-    // nobody at all.
-    expect(code).not.toContain('if (!pinnedToBottom.current) return;');
-    expect(tsx).toContain('const keep = liveAnchor.current;');
+describe('the compensation cannot take a form that double-pays', () => {
+  it('never adds a height delta to scrollTop', () => {
+    // `scrollTop += ΔscrollHeight` adds the growth a second time on an engine
+    // that already paid — measured, the reader thrown forward by the same 450px
+    // — and yanks a parked reader for growth BELOW them, which should move them
+    // not at all.
+    expect(code).not.toMatch(/scrollTop \+= /);
+    const intent = readFileSync(join(__dirname, '../lib/chat-scroll-intent.ts'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+    expect(intent).not.toMatch(/scrollTop \+= /);
   });
 
-  it('…row-based, so it cannot double-pay where the engine already paid', () => {
-    // `scrollTop += ΔscrollHeight` adds the growth a second time on Chromium
-    // and yanks the reader for growth BELOW them. A row-based target equals the
-    // current scrollTop there, and the `<= 1` guard declines to write.
-    expect(code).not.toMatch(/scrollTop \+= .*scrollHeight/);
+  it('never feature-tests for scroll anchoring', () => {
+    // `CSS.supports('overflow-anchor', 'auto')` answers TRUE on an iOS 26
+    // WKWebView that will not pay, and true on Playwright's WebKit that will, so
+    // it cannot distinguish the two cases it would be asked to distinguish. The
+    // double-pay defence is the arithmetic being absolute.
     expect(code).not.toContain("CSS.supports('overflow-anchor'");
-  });
-
-  it('stands down for the two other owners of the scroll', () => {
-    expect(tsx).toContain('if (searchJumpHold.current || holdRememberedAnchor.current) return;');
-  });
-
-  it('snapshots the reader in onScroll rather than re-capturing in the callback', () => {
-    // By the time the observer runs, the growth has happened: on WebKit a fresh
-    // capture reads the row at its JUMPED position and computes "leave it".
-    expect(tsx).toContain('liveAnchor.current = here;');
   });
 });
 
