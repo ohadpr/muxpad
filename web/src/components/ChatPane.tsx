@@ -106,6 +106,7 @@ import {
   shouldRestorePosition,
 } from '../lib/chat-scroll';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
+import { trackKeyboardInset } from '../lib/keyboard-inset';
 import { liveStatusLabel } from '../lib/live-status';
 import { isMobileLayout } from '../lib/mobile-layout';
 import { useDismissable } from '../lib/use-dismissable';
@@ -1449,34 +1450,11 @@ export function optimisticEchoLanded(events: readonly ChatEvent[], optimistic: s
  */
 /**
  * How far the software keyboard reaches up into the chat pane, in CSS px.
- *
- * ── WHY THE COMPOSER NEEDS THIS AND THE PAGE DOES NOT ───────────────────────
- * `.chat-composer-wrap` is `position: absolute; bottom: 0` of `.chat-pane`, and
- * the pane is sized in LAYOUT viewport units (`100svh`, see main.tsx). On iOS
- * the layout viewport does not shrink when the keyboard opens — only
- * `visualViewport` does — so the composer stays on the layout bottom, under the
- * keyboard, and the scroller's `clientHeight` never changes so the last turns
- * are not reserved above it either. `MobileInputBar` and the nav sheet already
- * special-case exactly this geometry (`sheet-viewport.ts`); chat never did.
- *
- * Returns 0 — i.e. today's behaviour, exactly — with no `visualViewport`, and
- * whenever the visual viewport still reaches the pane's own bottom. A chat pane
- * has no PTY, so unlike the terminal this cannot cascade into a SIGWINCH; that
- * is why main.tsx's ban on a GLOBAL visualViewport height mirror does not apply
- * here.
+ * Lives in `lib/keyboard-inset.ts` with the tracker that keeps it true — see
+ * that file for why the composer needs it, why `MobileInputBar`'s "skip the JS
+ * in a PWA" shortcut does not transfer, and how a stale read used to latch.
  */
-export function chatKeyboardInset(opts: {
-  /** The pane's bottom edge, in layout-viewport coordinates. */
-  paneBottom: number;
-  /** `visualViewport.offsetTop` — iOS adds this when it scrolls a focused
-   *  field into view, and the pane is positioned against the LAYOUT viewport,
-   *  so it has to be added back. */
-  vvOffsetTop: number;
-  /** `visualViewport.height` — the band NOT covered by the keyboard. */
-  vvHeight: number;
-}): number {
-  return Math.max(0, Math.round(opts.paneBottom - (opts.vvOffsetTop + opts.vvHeight)));
-}
+export { keyboardInset as chatKeyboardInset } from '../lib/keyboard-inset';
 
 export function mergeHistorySnapshot(
   prev: readonly ChatEvent[],
@@ -2823,54 +2801,15 @@ export function ChatPane({
   // ── Lift the composer off the software keyboard ───────────────────────────
   // MOBILE ONLY, and a no-op everywhere else: `--chat-keyboard-inset` defaults
   // to 0px in the stylesheet, so a pane whose effect never runs is byte for
-  // byte the layout that shipped before it. See chatKeyboardInset for why the
-  // composer needs this at all (the layout viewport does not shrink on iOS, so
-  // `position: absolute; bottom: 0` lands it under the keyboard) and why the
-  // global ban on a visualViewport mirror in main.tsx does not reach here (no
-  // PTY in a chat pane, so nothing to SIGWINCH).
+  // byte the layout that shipped before it. All of the reasoning — why the
+  // composer needs this at all, why the installed PWA is the case that matters,
+  // and why a value that was right once has to be re-asserted rather than
+  // latched — is in lib/keyboard-inset.ts.
   // biome-ignore lint/correctness/useExhaustiveDependencies: pendingPick/current_sid gate when the pane box and its composer exist.
   useEffect(() => {
-    const vv = window.visualViewport;
-    if (!active || !vv || !isMobileLayout()) return;
-    const apply = () => {
-      const el = paneRef.current;
-      if (!el) return;
-      el.style.setProperty(
-        '--chat-keyboard-inset',
-        `${chatKeyboardInset({
-          paneBottom: el.getBoundingClientRect().bottom,
-          vvOffsetTop: vv.offsetTop,
-          vvHeight: vv.height,
-        })}px`,
-      );
-    };
-    // iOS Safari can fire `resize` only at the END of the keyboard animation,
-    // so track through the slide for a beat on focus — the same shape (and the
-    // same 600ms) MobileInputBar uses for the same reason.
-    let frame: number | null = null;
-    const trackUntil = (deadline: number) => {
-      apply();
-      frame =
-        performance.now() < deadline ? requestAnimationFrame(() => trackUntil(deadline)) : null;
-    };
-    const onFocus = () => {
-      if (frame !== null) cancelAnimationFrame(frame);
-      trackUntil(performance.now() + 600);
-    };
-    vv.addEventListener('resize', apply);
-    vv.addEventListener('scroll', apply);
     const pane = paneRef.current;
-    pane?.addEventListener('focusin', onFocus);
-    pane?.addEventListener('focusout', onFocus);
-    apply();
-    return () => {
-      vv.removeEventListener('resize', apply);
-      vv.removeEventListener('scroll', apply);
-      pane?.removeEventListener('focusin', onFocus);
-      pane?.removeEventListener('focusout', onFocus);
-      if (frame !== null) cancelAnimationFrame(frame);
-      pane?.style.removeProperty('--chat-keyboard-inset');
-    };
+    if (!active || !pane || !isMobileLayout()) return;
+    return trackKeyboardInset(pane, { viewport: window.visualViewport ?? null });
   }, [active, pendingPick, session?.current_sid]);
 
   // Type-to-focus: when this chat is the visible face and you start typing a
