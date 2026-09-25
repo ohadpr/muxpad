@@ -483,9 +483,37 @@ describe('the transitions', () => {
     expect(s).toEqual(IDLE_STATE);
   });
 
-  it('applying is what makes a scroll event believable', () => {
+  // READING THE LAYOUT is what makes a scroll event believable — not moving
+  // anybody. A pane whose intent is "we do not know where the reader belongs"
+  // has still been looked at, and if the gate waits for a target the reader can
+  // never be heard at all. That mistake cost three headline failures in a real
+  // browser behind a green unit suite.
+  it('measuring is what makes a scroll event believable', () => {
     const s = drive({ t: 'shown', mem: parked() });
     expect(s.placed).toBe(false);
-    expect(next(s, { t: 'applied' }).placed).toBe(true);
+    expect(next(s, { t: 'measured' }).placed).toBe(true);
+  });
+
+  it('…including when there is nothing to assert at all', () => {
+    expect(next(IDLE_STATE, { t: 'measured' }).placed).toBe(true);
+  });
+});
+
+// ── THE ORDER OF `mounted` AND `shown` IS LOAD-BEARING ──────────────────────
+// This is the shape of a bug that cost three headline failures in a real
+// browser. ChatPane had two layout effects — one dispatching `shown`, one
+// dispatching `mounted` — and React runs them in DECLARATION order, so every
+// fresh mount read the memory, set the intent from it, and then reset that
+// intent to "we do not know". They are one effect now, with the reset first,
+// because two effects is a place to get an order wrong silently.
+describe('a reset after a restore throws the restore away', () => {
+  it('mounted-then-shown restores the reader', () => {
+    const s = drive({ t: 'mounted' }, { t: 'shown', mem: parked() });
+    expect(s.intent).toEqual({ at: 'row', id: 'evt#40', offset: -120 });
+  });
+
+  it('shown-then-mounted does not — which is why they share an effect', () => {
+    const s = drive({ t: 'shown', mem: parked() }, { t: 'mounted' });
+    expect(s.intent).toEqual({ at: 'nothing' });
   });
 });
