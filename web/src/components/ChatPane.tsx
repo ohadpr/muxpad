@@ -1605,20 +1605,7 @@ export function ChatPane({
   const enteredPane = useRef<string | null>(null);
   const scroll = useRef<ChatScrollController | null>(null);
   if (!scroll.current) {
-    scroll.current = new ChatScrollController(
-      domScrollSurface(
-        () => scrollRef.current,
-        // A search jump's target is the MARK, not the message: a hit two thousand
-        // pixels down a long answer is not "brought into view" by showing the top
-        // of that answer. Falls back to the ROW when the mark is not there — an
-        // attachment-only message, or a match a re-render momentarily dropped —
-        // because landing on the right message beats not moving at all.
-        (el, id) => {
-          const row = el.querySelector(`[${ANCHOR_ATTR}="${CSS.escape(id)}"][data-search-hit]`);
-          return row ? (row.querySelector('.chat-hit') ?? row) : null;
-        },
-      ),
-    );
+    scroll.current = new ChatScrollController(domScrollSurface(() => scrollRef.current));
   }
   /**
    * Write the reader's position through to the store.
@@ -2568,17 +2555,28 @@ export function ChatPane({
   };
 
   // ── THE DOCUMENT CHANGED: SATISFY THE INTENT ──────────────────────────────
-  // This used to be "keep pinned to the bottom as new events arrive", one of
-  // eleven places that assigned scrollTop. It is now one of two subscriptions
-  // that ask the controller to re-satisfy whatever the reader's intent is —
-  // which for a reader at the end IS the bottom, and for a parked reader is
-  // holding their row against the commit that just landed.
+  // One of two subscriptions. This one is "React committed, so the document may
+  // have changed"; the ResizeObserver below is "something changed outside a
+  // commit" (an image decoding, a font settling, the viewport resizing).
   //
-  // The subagent trigger is the COUNT, not the map: progress ticks replace the
-  // map object every ~500ms without changing content height, and each firing
-  // costs a forced reflow (a scrollHeight read). Rows appear and disappear only
-  // when the count moves.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: events/streamingText/optimisticUser/question/subagent-count/queued-count are the triggers — the body reads the DOM, not them
+  // NO DEPENDENCY ARRAY, deliberately. It used to list the state it thought
+  // could move the log — `events`, `streamingText`, `optimisticUser`,
+  // `question`, the subagent count, the queue length — and that list was an
+  // enumeration, which is the same mistake the per-device gesture listeners
+  // were. It was missing `notice` (the "Reconnecting…" banner), `loadingOlder`
+  // (the older-history spinner), `stale`, `hasMessages`, `agentStatus`,
+  // `folder` and `mode`, every one of which renders or unrenders a box.
+  //
+  // A ResizeObserver does not cover the gap, because it reports an element whose
+  // own box changed and fires nothing when one is REMOVED. Measured: a restore
+  // landed correctly and then ~6px above the reader disappeared, leaving them at
+  // offset -6 for the whole visit. The old design survived it by polling for
+  // 2500ms and re-converging; that is the forgiveness a poll buys, and the way
+  // to keep it without the poll is to subscribe to the commit itself rather than
+  // to a guess about which state matters.
+  //
+  // The cost is one `place()` per commit: two rect reads, and a write only when
+  // the intent is not already satisfied.
   useLayoutEffect(() => {
     if (!active) return;
     // New rows are new things that can change height under the reader.
@@ -2590,15 +2588,7 @@ export function ChatPane({
     // already was, which is the common case for a tab switch — showed no way
     // back to the tail at all.
     syncScrollDownArrow();
-  }, [
-    events,
-    streamingText,
-    optimisticUser,
-    question,
-    Object.keys(subagents).length,
-    queue.length,
-    active,
-  ]);
+  });
 
   // Auto-grow the composer like ChatGPT: reset to content height, capped by CSS
   // max-height (the textarea keeps scrolling past that). `input` is the trigger
@@ -2983,6 +2973,10 @@ export function ChatPane({
       // the scroll from fighting it.
       setJumpMissed(false);
       setJump(j);
+      // Dispatched on the CLAIM, not when the target binds. The message is
+      // usually not loaded yet — that is what the seek is for — so waiting for
+      // an id meant the jump never entered the state that pages for it.
+      scroll.current?.dispatch({ t: 'search-jump' });
     };
     const claimed = takeSearchJump(paneId);
     if (claimed) claim(claimed);
@@ -3067,7 +3061,10 @@ export function ChatPane({
   // biome-ignore lint/correctness/useExhaustiveDependencies: showEpoch is a re-run trigger — a jump that owns the scroll must re-place itself when the pane becomes visible again.
   useLayoutEffect(() => {
     if (!active || !jumpTargetId) return;
-    scroll.current?.dispatch({ t: 'search-jump', id: jumpTargetId });
+    // The target has bound (or re-rendered, or the pane became visible again):
+    // re-place against the mark as it is now. The intent is already `hit` — set
+    // when the jump was claimed — so this is a placement, not a state change.
+    scroll.current?.place();
   }, [active, jumpTargetId, showEpoch]);
 
   /*
@@ -4118,8 +4115,7 @@ export function ChatPane({
               onClick={() => {
                 // "Keep looking" is a fresh request, so it gets a fresh budget —
                 // re-claiming the same jump resets the controller's page count.
-                if (jumpTargetId) scroll.current?.dispatch({ t: 'search-jump', id: jumpTargetId });
-                else if (jump) scroll.current?.dispatch({ t: 'search-jump', id: jump.query });
+                scroll.current?.dispatch({ t: 'search-jump' });
                 setJumpMissed(false);
               }}
             >

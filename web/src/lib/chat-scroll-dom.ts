@@ -82,10 +82,7 @@ function anchorRows(el: HTMLElement): HTMLElement[] {
  * matched row when there is one, because a hit two thousand pixels down a long
  * answer is not "brought into view" by putting the top of that answer on screen.
  */
-export function domScrollSurface(
-  getEl: () => HTMLElement | null,
-  findHit?: (el: HTMLElement, id: string) => Element | null,
-): ScrollSurface {
+export function domScrollSurface(getEl: () => HTMLElement | null): ScrollSurface {
   const viewportTop = (el: HTMLElement) => el.getBoundingClientRect().top;
   return {
     geometry(): ScrollGeometry {
@@ -121,12 +118,6 @@ export function domScrollSurface(
       // subtree — and walks ALL of it on the miss, which is the case a seek hits
       // on every frame while it pages the anchor back in. It also needed the id
       // escaped as a CSS string, which this does not.
-      const target = findHit ? findHit(el, id) : null;
-      if (target) {
-        const top = viewportTop(el);
-        const r = target.getBoundingClientRect();
-        return { top: r.top - top, height: r.height };
-      }
       for (const row of anchorRows(el)) {
         if (row.getAttribute(ANCHOR_ATTR) !== id) continue;
         const r = row.getBoundingClientRect();
@@ -155,6 +146,27 @@ export function domScrollSurface(
       const id = row?.getAttribute(ANCHOR_ATTR);
       if (!row || !id) return null;
       return { id, offset: Math.round(row.getBoundingClientRect().top - top) };
+    },
+
+    hitBox(): RowBox | null {
+      const el = getEl();
+      if (!el) return null;
+      // The MARK, not the message: a hit two thousand pixels down a long answer
+      // is not "brought into view" by putting the top of that answer on screen.
+      // Falls back to the row when the mark is not there — an attachment-only
+      // message, or a match a re-render momentarily dropped — because landing on
+      // the right message beats not moving at all.
+      //
+      // Deliberately a subtree query rather than a scan of top-level rows: a hit
+      // can be nested inside an action run the highlight forced open, which is
+      // exactly where a row scan cannot reach it. There is at most one hit, so
+      // this is one `querySelector` rather than the per-frame cost the row scan
+      // is avoiding.
+      const row = el.querySelector('[data-search-hit]');
+      if (!row) return null;
+      const mark = row.querySelector('.chat-hit') ?? row;
+      const r = mark.getBoundingClientRect();
+      return { top: r.top - viewportTop(el), height: r.height };
     },
 
     setScrollTop(value: number): void {

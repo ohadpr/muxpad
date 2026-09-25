@@ -86,6 +86,14 @@ export class SimScroller implements ScrollSurface {
   anchoringFraction: number;
   /** display:none — clientHeight collapses and every measurement is worthless. */
   hidden = false;
+  /**
+   * The row carrying the current search hit, or null if none is rendered.
+   *
+   * Separate from the row list on purpose: a hit is found by the DOM's
+   * `[data-search-hit]` marker, not by an id the mechanism holds — because when
+   * the seek starts, the message is not loaded and has no id anybody knows.
+   */
+  hitId: string | null = null;
   /** Every `scrollTop` this surface was ASSIGNED, in order. */
   writes: number[] = [];
   /** Scroll events the model has produced but the caller has not consumed. */
@@ -137,6 +145,10 @@ export class SimScroller implements ScrollSurface {
     // last row is the best available description of where the reader is.
     const last = this.rows[this.rows.length - 1] as SimRow;
     return { id: last.id, offset: this.contentHeight - last.height - viewportTop };
+  }
+
+  hitBox(): RowBox | null {
+    return this.hitId === null ? null : this.rowBox(this.hitId);
   }
 
   setScrollTop(value: number): void {
