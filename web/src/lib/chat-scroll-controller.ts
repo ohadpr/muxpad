@@ -98,6 +98,11 @@ export class ChatScrollController {
     return this.state.intent;
   }
 
+  /** Has anything read this pane's layout since it became visible? */
+  hasPlaced(): boolean {
+    return this.state.placed;
+  }
+
   /** The live box of a row, for callers that need to measure before an input. */
   rowBox(id: string): RowBox | null {
     return this.surface.rowBox(id);

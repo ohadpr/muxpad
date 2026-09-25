@@ -12,6 +12,7 @@ import {
   phase,
   recordFor,
   scrollEventIsTheReader,
+  shouldPageOlder,
   targetFor,
 } from './chat-scroll-intent';
 
@@ -515,5 +516,113 @@ describe('a reset after a restore throws the restore away', () => {
   it('shown-then-mounted does not — which is why they share an effect', () => {
     const s = drive({ t: 'shown', mem: parked() }, { t: 'mounted' });
     expect(s.intent).toEqual({ at: 'nothing' });
+  });
+});
+
+// ── THE RUNAWAY PAGER ───────────────────────────────────────────────────────
+// Acceptance failure 2, reproduced. A fresh mount rendered the WHOLE
+// conversation — 990 rows, 211,298px, where the server serves a 128KB tail of
+// 126 rows — so a reader who had touched nothing was 210,000px from the newest
+// message. The loop: intent wrong -> phase IDLE -> the FOLLOWING guard does not
+// fire -> nobody placed anyone so scrollTop is 0 -> page -> `events` changes ->
+// the effect re-runs -> around again until the server runs out of history.
+describe('shouldPageOlder', () => {
+  const TAIL = { scrollTop: 0, scrollHeight: 28_098, clientHeight: 864 };
+  const base = {
+    placed: true,
+    geo: TAIL,
+    measurable: true,
+    hasMoreOlder: true,
+    loadingOlder: false,
+    haveEvents: true,
+    sessionBound: true,
+  } as const;
+
+  it('does not page for a reader who is following the tail', () => {
+    expect(
+      shouldPageOlder({
+        ...base,
+        phase: 'FOLLOWING',
+        geo: { ...TAIL, scrollTop: 27_234 },
+      }),
+    ).toBe('no');
+  });
+
+  // …and the case that actually needs the FOLLOWING guard, which the assertion
+  // above does not: a SHORT conversation, where the whole scrollable range is
+  // narrower than the top zone. The reader is at the bottom watching live output
+  // AND within 240px of the top, both at once — so without the guard the chat
+  // pages history in behind them for as long as the server has any. A mutation
+  // sweep found the first test passing with the guard deleted, because it put
+  // the reader 27,234px from the top and the zone check carried it.
+  it('…even when the tail is so short that the reader is inside the top zone', () => {
+    const shortRange = { scrollTop: 136, scrollHeight: 1_000, clientHeight: 864 };
+    expect(shouldPageOlder({ ...base, phase: 'FOLLOWING', geo: shortRange })).toBe('no');
+    // The same geometry for a reader who is NOT following still pages.
+    expect(shouldPageOlder({ ...base, phase: 'ANCHORED', geo: shortRange })).toBe('top-zone');
+  });
+
+  // The runaway, in one assertion. Before the fix this returned 'top-zone' on a
+  // freshly mounted pane and did so again on every page it caused.
+  it('does not page a pane whose layout nothing has read yet', () => {
+    expect(shouldPageOlder({ ...base, phase: 'IDLE', placed: false })).toBe('no');
+  });
+
+  it('…and that holds however wrong the intent is', () => {
+    for (const phase of ['FOLLOWING', 'ANCHORED', 'SEEKING', 'IDLE'] as const) {
+      expect(shouldPageOlder({ ...base, phase, placed: false })).toBe('no');
+    }
+  });
+
+  it('DOES page for a reader who has reached the top zone', () => {
+    expect(shouldPageOlder({ ...base, phase: 'ANCHORED', geo: { ...TAIL, scrollTop: 120 } })).toBe(
+      'top-zone',
+    );
+  });
+
+  it('…and at exactly scrollTop 0, where no scroll event ever fires', () => {
+    // A browser fires no scroll event when you wheel up at 0. Measured on the
+    // old tree: 30 rows, scrollTop 0, hasMoreOlder true, 84 wheel notches, 0
+    // requests. The effect re-runs on the events commit, which is what covers it.
+    expect(shouldPageOlder({ ...base, phase: 'ANCHORED' })).toBe('top-zone');
+  });
+
+  it('does not page past the top zone', () => {
+    expect(
+      shouldPageOlder({ ...base, phase: 'ANCHORED', geo: { ...TAIL, scrollTop: 9_000 } }),
+    ).toBe('no');
+  });
+
+  // The one case that pages without a reader asking, and the reason it must run
+  // BEFORE the placed guard: with no overflow there are no scroll events at all,
+  // so nothing will ever place anyone and the rest of the conversation is
+  // unreachable forever.
+  it('pages to fill a viewport the tail could not, even before anything is placed', () => {
+    const short = { scrollTop: 0, scrollHeight: 400, clientHeight: 864 };
+    expect(shouldPageOlder({ ...base, phase: 'IDLE', placed: false, geo: short })).toBe(
+      'fill-viewport',
+    );
+  });
+
+  it('stops when the server says there is no more', () => {
+    expect(shouldPageOlder({ ...base, phase: 'ANCHORED', hasMoreOlder: false })).toBe('no');
+    expect(
+      shouldPageOlder({
+        ...base,
+        phase: 'IDLE',
+        placed: false,
+        hasMoreOlder: false,
+        geo: { scrollTop: 0, scrollHeight: 400, clientHeight: 864 },
+      }),
+    ).toBe('no');
+  });
+
+  it('is single-flight — never asks while a request is in flight', () => {
+    expect(shouldPageOlder({ ...base, phase: 'ANCHORED', loadingOlder: true })).toBe('no');
+  });
+
+  it('never pages a pane it cannot measure, or one with no session yet', () => {
+    expect(shouldPageOlder({ ...base, phase: 'ANCHORED', measurable: false })).toBe('no');
+    expect(shouldPageOlder({ ...base, phase: 'ANCHORED', sessionBound: false })).toBe('no');
   });
 });
