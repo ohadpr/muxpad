@@ -3833,6 +3833,9 @@ export function ChatPane({
       const heightDelta =
         lastScrollHeight.current < 0 ? 0 : el.scrollHeight - lastScrollHeight.current;
       const lastTop = lastScrollTop.current < 0 ? el.scrollTop : lastScrollTop.current;
+      // Captured BEFORE the re-baseline below overwrites it — the pin guard
+      // needs to ask "is this event our own write arriving?".
+      const lastTarget = lastProgrammaticTop.current;
       lastScrollHeight.current = el.scrollHeight;
       lastScrollTop.current = el.scrollTop;
       if (
@@ -3878,11 +3881,28 @@ export function ChatPane({
       // accounting arriving late — finish the job against the document as it is
       // NOW rather than concluding they left.
       //
-      // This is deliberately stronger than testing `scrollTop === the last
-      // target`, which was measured at 5/6: with anchoring unconditional the
-      // engine can move `scrollTop` itself without stamping anything, and that
-      // slips through an equality test. It cannot slip through this one.
-      if (pinnedToBottom.current && !nearBottom && !userScrolled.current) {
+      // TWO conditions, either of which is enough, because each covers the
+      // other's hole — measured, 6/6 on the burst and 3/3 on every neighbour:
+      //
+      //  · no gesture this visit. Catches the case an equality test cannot:
+      //    with anchoring unconditional the engine moves `scrollTop` itself and
+      //    stamps nothing, so the arriving event matches no target we hold.
+      //
+      //  · this event IS our own write arriving. Needed because `userScrolled`
+      //    is NOT "the reader is scrolling" — it is the settling restore's kill
+      //    switch, and it is deliberately sticky: set once by `taken()`, cleared
+      //    only on hide. So one wheel notch at any point in the visit would
+      //    disarm the first condition for the rest of it, and the burst bug
+      //    returns verbatim (measured 0/3 after a single nudge up and back).
+      //    Worse, `scrollToBottom` sets it EXPLICITLY — so tapping "jump to
+      //    latest", the exact gesture that means "I want to follow the tail
+      //    again", would permanently disable the thing keeping you there.
+      const ourOwnWriteArriving = Math.abs(el.scrollTop - lastTarget) <= 1;
+      if (
+        pinnedToBottom.current &&
+        !nearBottom &&
+        (!userScrolled.current || ourOwnWriteArriving)
+      ) {
         const settled = maxScrollTop(el.scrollHeight, el.clientHeight);
         if (Math.abs(el.scrollTop - settled) > 1) {
           lastProgrammaticTop.current = settled;
