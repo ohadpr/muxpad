@@ -68,6 +68,34 @@ export type AttachmentExt = keyof typeof ATTACHMENT_MIME_BY_EXT;
 export const ATTACHMENT_EXTENSIONS = Object.keys(ATTACHMENT_MIME_BY_EXT) as AttachmentExt[];
 export const ATTACHMENT_EXT_ALTERNATION = ATTACHMENT_EXTENSIONS.map((e) => e.slice(1)).join('|');
 
+/**
+ * '.ext' for an accepted attachment mime, or null when nothing here renders it.
+ *
+ * The attachment-wide sibling of `imageExtForMime`. The composer needs it
+ * because a picker hands over a MIME and the upload route keys off the
+ * EXTENSION: a provider that reports `application/pdf` for a file named
+ * `notes.pdf` and a provider that reports `''` for the same file must both be
+ * accepted, and only this pair of lookups covers both.
+ */
+export function attachmentExtForMime(mime: string): AttachmentExt | null {
+  const normalized = mime === 'image/jpg' ? 'image/jpeg' : mime.toLowerCase();
+  for (const [ext, m] of Object.entries(ATTACHMENT_MIME_BY_EXT)) {
+    if (m === normalized) return ext as AttachmentExt;
+  }
+  return null;
+}
+
+/**
+ * The `accept` attribute for a file input, as an explicit extension list.
+ *
+ * Extensions rather than `*​/*` on purpose. It is the same list the upload route
+ * enforces, so the OS greys out what the server would reject instead of letting
+ * someone pick a `.pages` and meet an error afterwards — and on iOS an `accept`
+ * that is not image-only is what makes the sheet offer Files and iCloud
+ * alongside Photo Library and Take Photo. `image/*` was suppressing that.
+ */
+export const ATTACHMENT_ACCEPT = ATTACHMENT_EXTENSIONS.join(',');
+
 export type AttachmentKind = 'image' | 'video' | 'file';
 /** Classify a filename/ext into how the chat should render it. */
 export function attachmentKind(name: string): AttachmentKind {

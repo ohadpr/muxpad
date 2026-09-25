@@ -1,3 +1,4 @@
+import { ATTACHMENT_ACCEPT, attachmentExtForMime } from '@muxpad/shared';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
@@ -260,19 +261,20 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
     await uploadAndInsert(items, tail);
   };
 
-  // Photo/camera button → native file picker. `accept="image/*"` with NO
-  // `capture` attribute makes iOS show the full sheet (Photo Library / Take
-  // Photo / Choose File) and Android offer camera + gallery, so the one button
-  // covers both grabbing an existing photo and shooting a new one. Uploads the
-  // chosen image(s) through the same path as paste.
+  // Attach button → native file picker. NO `capture` attribute, so iOS shows
+  // the full sheet (Photo Library / Take Photo / Choose File) and Android
+  // offers camera + gallery. `accept` names the extensions the upload route
+  // accepts rather than `image/*`: the server has always taken pdf, csv, json,
+  // zip and the rest, and on iOS an image-only accept SUPPRESSES the Files and
+  // iCloud entries in that sheet. Uploads through the same path as paste.
   const onPickFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const input = e.target;
     const items = Array.from(input.files ?? [])
-      // The OS already constrained the picker to images via accept="image/*";
-      // accept empty-type too — some Android providers and HEIC captures report
-      // type "" and would otherwise be silently dropped (photo taken, nothing
-      // happens). Reject only files that explicitly declare a non-image type.
-      .filter((f) => f.type === '' || f.type.startsWith('image/'))
+      // Accept empty-type too: HEIC captures, some Android providers and iOS
+      // Files hand over type "" and would otherwise be dropped in silence
+      // (file picked, nothing happens). The server checks the extension, so a
+      // type it cannot take is refused there with a reason.
+      .filter((f) => f.type === '' || attachmentExtForMime(f.type) !== null)
       .map((f) => ({ blob: f, name: f.name || `image.${f.type.split('/')[1] ?? 'png'}` }));
     // Reset first so picking the SAME file again still fires onChange.
     input.value = '';
@@ -359,13 +361,13 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
         </button>
       </div>
       <div className="mobile-input-row">
-        {/* Photo/camera attach. The hidden input does the work; the button is
-            the visible affordance. accept="image/*" + no `capture` → native
-            sheet offers both library and camera (see onPickFiles). */}
+        {/* Attach any file muxpad can render. The hidden input does the work;
+            the button is the visible affordance. See onPickFiles for why the
+            accept list is extensions rather than image/*. */}
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
+          accept={ATTACHMENT_ACCEPT}
           multiple
           hidden
           onChange={onPickFiles}
@@ -374,8 +376,8 @@ export function MobileInputBar({ paneId, paneKind, foregroundCmd = null }: Mobil
           type="button"
           className="mobile-input-attach"
           onClick={() => fileInputRef.current?.click()}
-          title="Add photo"
-          aria-label="Add photo or take a picture"
+          title="Attach a file"
+          aria-label="Attach a file, photo or take a picture"
         >
           <SvgCamera />
         </button>
