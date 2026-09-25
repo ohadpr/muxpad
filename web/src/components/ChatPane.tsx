@@ -1127,19 +1127,32 @@ function SessionBar({
 
       {liveLabel ? (
         <div className="chat-status-seg-wrap">
-          <button
-            type="button"
-            className={`chat-status-seg -live${panel === 'live' ? ' is-open' : ''}`}
-            onClick={() => toggle('live')}
-            aria-expanded={panel === 'live'}
-            aria-label={liveLabel}
-            title={liveLabel}
-          >
-            <span className="chat-roster-spin -head" aria-hidden="true">
-              <RosterSpinner />
-            </span>
-            <span className="chat-status-seg-label">{liveLabel}</span>
-          </button>
+          {/* A BUTTON only when there is a roster to open. With no subagents the
+              label is "Working…", and the panel below renders nothing for an
+              empty roster — so a button there would be a control that visibly
+              does nothing. Same static chip the mode indicator uses. */}
+          {agents.length > 0 ? (
+            <button
+              type="button"
+              className={`chat-status-seg -live${panel === 'live' ? ' is-open' : ''}`}
+              onClick={() => toggle('live')}
+              aria-expanded={panel === 'live'}
+              aria-label={liveLabel}
+              title={liveLabel}
+            >
+              <span className="chat-roster-spin -head" aria-hidden="true">
+                <RosterSpinner />
+              </span>
+              <span className="chat-status-seg-label">{liveLabel}</span>
+            </button>
+          ) : (
+            <div className="chat-status-seg -live -static" aria-label={liveLabel} title={liveLabel}>
+              <span className="chat-roster-spin -head" aria-hidden="true">
+                <RosterSpinner />
+              </span>
+              <span className="chat-status-seg-label">{liveLabel}</span>
+            </div>
+          )}
           {panel === 'live' && agents.length > 0 ? (
             <div className="chat-status-menu chat-live-menu" role="dialog">
               <div className="chat-session-head">Subagent{agents.length === 1 ? '' : 's'}</div>
@@ -3977,7 +3990,7 @@ export function ChatPane({
     return () => window.clearTimeout(t);
   });
 
-  const liveLabel = liveStatusLabel({ agentCount: rosterAgents.length });
+  const liveLabel = liveStatusLabel({ agentCount: rosterAgents.length, turnActive: sending });
 
   // Harness pick: a `--pick` pane shows the picker here (not the tab bar).
   // Agents start a runner; Terminal / Web view convert the pane (URL chrome
