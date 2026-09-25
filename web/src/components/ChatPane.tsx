@@ -90,7 +90,6 @@ import {
   readerIsCaughtUp,
   recallChatScroll,
   rememberChatScroll,
-  retiredAnchorMemory,
   scrollEventIsTrustworthy,
   scrollMemorySidMatches,
   scrollMotionIsTheReader,
@@ -1577,39 +1576,19 @@ function anchorRows(el: HTMLElement): HTMLElement[] {
   return out;
 }
 
-/**
- * The NEWEST anchored row, or null if the chat has none.
+/*
+ * `lastAnchorRow` and `measureCaughtUp` used to live here — a backwards walk to
+ * the newest `[data-eid]` row, whose bottom answered "has the reader reached the
+ * end of the conversation?".
  *
- * A backwards walk from the list's last child rather than `anchorRows(el)`,
- * because this runs on every trusted scroll event and only the last row is
- * wanted. The rows below it are the un-anchored live furniture — the streaming
- * preview, the working indicator, the queued strip — of which there are at most
- * a handful, so the walk is O(1) in practice where collecting every row is O(n).
+ * Both are gone. The newest MESSAGE is not the end of the DOCUMENT: the
+ * streaming preview, the optimistic bubble, the question card, the queued strip
+ * and the composer's reserve all render below the last anchored row and carry no
+ * `data-eid`, so a rule that walks anchored rows cannot see them — and a reader
+ * who scrolled up past three screens of streaming output measured "caught up"
+ * and was taken to the newest message on re-entry. `readerIsCaughtUp` now asks
+ * about the scroll range, which includes every one of them by construction.
  */
-function lastAnchorRow(el: HTMLElement): HTMLElement | null {
-  const list = el.querySelector('.chat-list');
-  for (let n = list?.lastElementChild ?? null; n; n = n.previousElementSibling) {
-    if (n instanceof HTMLElement && n.hasAttribute(ANCHOR_ATTR)) return n;
-  }
-  return null;
-}
-
-/**
- * Is the reader at the end of the conversation — is the newest message on
- * screen? This, not the pin, is what a re-open consults. See chat-scroll.ts.
- */
-function measureCaughtUp(el: HTMLElement, nearBottom: boolean): boolean {
-  const last = lastAnchorRow(el);
-  return readerIsCaughtUp({
-    // The row's END, not its start — a newest message taller than the viewport
-    // is read to the end only when its bottom arrives. See readerIsCaughtUp.
-    lastRowBottom: last
-      ? last.getBoundingClientRect().bottom - el.getBoundingClientRect().top
-      : null,
-    clientHeight: el.clientHeight,
-    nearBottom,
-  });
-}
 
 /**
  * Which message the reader is looking at, and how far its top sits above the
@@ -2973,13 +2952,6 @@ export function ChatPane({
     // in flight; neither may keep an animation frame loop alive indefinitely.
     const hardStop = startedAt + RESTORE_HARD_STOP_MS;
     let seekPages = 0;
-    // Once the ratio fallback has placed the reader, we anchor to whatever row
-    // that landed on and hold THAT for the rest of the window. Re-deriving the
-    // position from the ratio every frame is the original bug in miniature: the
-    // seek's own prepends grow the document above the reader, and R·(range + g)
-    // walks them backward with every page — which would have made a
-    // budget-exhausted restore land DEEPER in history than doing nothing at all.
-    let held: { anchorId: string; anchorOffset: number } | null = null;
     const apply = () => {
       raf = 0;
       const el = scrollRef.current;
@@ -3014,7 +2986,6 @@ export function ChatPane({
           const rows = anchorRows(el);
           const row = mem.anchorId ? findAnchorRow(rows, mem.anchorId) : null;
           if (row) {
-            held = null; // the real thing beats whatever the fallback settled on
             holdRememberedAnchor.current = false;
           } else if (
             mem.anchorId &&
@@ -3040,118 +3011,59 @@ export function ChatPane({
               );
             }
           }
-          const anchor = row ? { row, offset: mem.anchorOffset } : null;
-          const heldRow = !anchor && held ? findAnchorRow(rows, held.anchorId) : null;
-          const use =
-            anchor ?? (heldRow && held ? { row: heldRow, offset: held.anchorOffset } : null);
-          // ── The ratio describes a document we have not loaded yet ──────────
-          // `ratio` was measured against the WHOLE conversation; a fresh mount
-          // opens on a ~128KB tail. Applying one to the other is not "merely
-          // imprecise", which is what the header calls it: measured, 0.0363 of
-          // a 185,753px document (turn 40) became 0.0363 of the 13,044px tail
-          // and landed on turn 296 — the opposite end. The loop then froze onto
-          // that row, correctly (freezing is what stops the R·(range+g) walk)
-          // and held the wrong message for the whole window.
+          const use = row ? { row, offset: mem.anchorOffset } : null;
+          // ── THE ANCHOR IS NOT LOADED: DO NOT GUESS ─────────────────────────
+          // There used to be a fallback here — place the reader at the
+          // remembered RATIO of the scrollable range. It is gone, and nothing
+          // replaces it.
           //
-          // So while the seek can still page, hold position and let it page.
-          // The fallback is for when the anchor is genuinely unreachable — the
-          // budget is spent, or there is no more history — and by then the
-          // document is at least the one the ratio was measured against.
-          const seekCanStillRun =
-            !!mem.anchorId && hasMoreOlderRef.current && seekPages < ANCHOR_SEEK_PAGE_BUDGET;
-          if (!use && seekCanStillRun) {
-            raf = requestAnimationFrame(apply);
-            return;
-          }
-          const range = maxScrollTop(el.scrollHeight, el.clientHeight);
-          const target = use
-            ? scrollTopForAnchor({
-                scrollTop: el.scrollTop,
-                rowTop: use.row.getBoundingClientRect().top - el.getBoundingClientRect().top,
-                anchorOffset: use.offset,
-                scrollHeight: el.scrollHeight,
-                clientHeight: el.clientHeight,
-                // The row AS IT IS NOW — an action run the reader had expanded
-                // is collapsed again by this point. See scrollTopForAnchor.
-                rowHeight: use.row.getBoundingClientRect().height,
-              })
-            : // Nothing anchorable yet: place by the remembered ratio, ONCE.
-              // Clamped — iOS rubber-band can persist a slightly negative
-              // ratio, and an out-of-range target never equals the scrollTop
-              // the browser clamps it to, so the loop would re-assign (and
-              // force a reflow) every frame for the full window.
-              Math.min(Math.max(0, Math.round(mem.ratio * range)), range);
+          // A ratio is a fraction of the document it was measured in, and a
+          // fresh mount opens on a ~128 KB tail of a conversation that runs to
+          // tens of MB: measured, 0.0363 of 185,753 px (turn 40) became 0.0363
+          // of the 13,044 px tail and landed on turn 296, the opposite end of
+          // the chat. Recording that result then walked the landing point
+          // further down on every reopen — 4 % to 72 % over eight reloads, with
+          // no fixed point short of the bottom.
+          //
+          // So while the message is missing we leave `scrollTop` exactly where
+          // the document opened, and let the seek below page history in. If the
+          // seek runs out, the reader stays in the tail — which is a floor, and
+          // a floor is what an honest "we do not know" looks like.
+          if (!use) return;
+          const target = scrollTopForAnchor({
+            scrollTop: el.scrollTop,
+            rowTop: use.row.getBoundingClientRect().top - el.getBoundingClientRect().top,
+            anchorOffset: use.offset,
+            scrollHeight: el.scrollHeight,
+            clientHeight: el.clientHeight,
+            // The row AS IT IS NOW — an action run the reader had expanded is
+            // collapsed again by this point. See scrollTopForAnchor.
+            rowHeight: use.row.getBoundingClientRect().height,
+          });
           if (Math.abs(el.scrollTop - target) > 1) {
             lastProgrammaticTop.current = target;
             el.scrollTop = target;
           }
-          // Freeze the fallback into a row identity so the next frame holds a
-          // MESSAGE rather than re-deriving from the ratio.
-          if (!use) held = anchorAt(el, rows);
         }
       }
       if (performance.now() < deadline && !userScrolled.current) {
         raf = requestAnimationFrame(apply);
         return;
       }
-      // ── RETIRE A DEAD GOAL ───────────────────────────────────────────────
-      // The loop is over and the anchor was never found, so the store is still
-      // naming a message that is not coming back. `seekPages` is a local of
-      // this effect body, and the effect re-runs on every `showEpoch` — a
-      // browser-tab switch, an iOS backgrounding, a screen unlock — so the NEXT
-      // one spends another eight `load-older` round trips (~1 MB) hunting the
-      // same ghost, and the one after that does it again. Nothing else corrects
-      // the memory: while the loop runs `onScroll` preserves the stored anchor
-      // verbatim (that is what the hold is FOR), and by the time the hold is
-      // dropped the loop has usually converged and stopped writing, so no
-      // further scroll event is coming to record anything.
+      // ── NOTHING TO RETIRE ────────────────────────────────────────────────
+      // A block here used to write back whatever row the ratio fallback had
+      // settled on, so the next open would not spend another eight pages on the
+      // same unreachable message. It is gone with the fallback: there is no
+      // guessed row to correct any more, so a seek that runs out simply leaves
+      // the record alone and the reader where the document opened.
       //
-      // Worse than the traffic: each re-run re-applies the ratio against a
-      // document that the PREVIOUS re-runs grew, which is the R·(range + g)
-      // walk chat-scroll.ts's header calls catastrophic. With the document
-      // roughly doubled between runs an honest re-anchor lands at
-      // range₁ + 0.1·range₁ and the ratio lands at 0.2·range₁ — the reader
-      // dragged ~0.9·range₁ further back into history, once per tab switch.
-      //
-      // Reachable ways an anchor stays unfindable: the message is more than
-      // eight pages back; the archive indexes it but the chat view does not
-      // render it (a subagent sidechain — the jump seek knows this case); a
-      // compaction renumbered the ids; a prepend moved a folded run's head.
-      //
-      // The row the fallback settled on is a REAL one, so make it the anchor
-      // and let the next restore be an ordinary one. Only on a deadline
-      // expiry: a reader who took over writes their own memory through
-      // `onScroll`, and overwriting it from here would be this loop having the
-      // last word over a gesture.
-      // …and ONLY when the document we settled in is the one the memory
-      // describes. If history is still unloaded, the row we settled on was
-      // chosen by the ratio fallback against a fraction of the conversation:
-      // measured, a stored ratio of 0.0363 meant 3.6% of a 185,753px document
-      // (turn 40) and was applied to the 13,044px tail, landing on turn 296 —
-      // a 14x arithmetic error at the opposite end of the chat. Retiring that
-      // row overwrote the one record of where the reader actually was, with no
-      // way back: reloading three times landed on turn 296, turn 296, turn 296.
-      // A settled row is REAL, which the comment above says; real is not right.
-      const dead =
-        holdRememberedAnchor.current && !userScrolled.current && !hasMoreOlderRef.current;
+      // The two rules it needed — "retire a dead anchor" and "never retire
+      // against a partially loaded document" — were each right, and composing
+      // them was the live bug: a budget-exhausted seek in a conversation that
+      // still had history never retired at all, so every visibility flip
+      // re-spent the whole budget AND re-applied the ratio against a document
+      // the previous runs had grown.
       holdRememberedAnchor.current = false;
-      const settled = scrollRef.current;
-      if (dead && settled && settled.clientHeight >= 40) {
-        const lastRow = lastAnchorRow(settled);
-        rememberChatScroll(
-          paneId,
-          retiredAnchorMemory({
-            live: captureAnchor(settled),
-            scrollTop: settled.scrollTop,
-            scrollHeight: settled.scrollHeight,
-            clientHeight: settled.clientHeight,
-            lastRowBottom: lastRow
-              ? lastRow.getBoundingClientRect().bottom - settled.getBoundingClientRect().top
-              : null,
-            sid: renderedSid.current,
-          }),
-        );
-      }
     };
     apply(); // first pass runs before paint — no flash
     return () => {
@@ -3898,11 +3810,7 @@ export function ChatPane({
       //    latest", the exact gesture that means "I want to follow the tail
       //    again", would permanently disable the thing keeping you there.
       const ourOwnWriteArriving = Math.abs(el.scrollTop - lastTarget) <= 1;
-      if (
-        pinnedToBottom.current &&
-        !nearBottom &&
-        (!userScrolled.current || ourOwnWriteArriving)
-      ) {
+      if (pinnedToBottom.current && !nearBottom && (!userScrolled.current || ourOwnWriteArriving)) {
         const settled = maxScrollTop(el.scrollHeight, el.clientHeight);
         if (Math.abs(el.scrollTop - settled) > 1) {
           lastProgrammaticTop.current = settled;
@@ -3917,7 +3825,11 @@ export function ChatPane({
       // RE-ENTRY policy: had they read to the end? A caught-up reader is
       // remembered as "open at the newest message", so a turn that lands while
       // they are away can't strand them thirty messages up.
-      const caughtUp = measureCaughtUp(el, nearBottom);
+      const caughtUp = readerIsCaughtUp({
+        scrollTop: el.scrollTop,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+      });
       // The ANCHOR is the position that matters (see chat-scroll.ts); the ratio
       // rides along as the fallback for a mount whose window doesn't hold the
       // anchored message yet. Measured only for a reader who is NOT caught up:
@@ -3948,11 +3860,6 @@ export function ChatPane({
         rememberChatScroll(paneId, {
           anchorId: anchor?.anchorId ?? null,
           anchorOffset: anchor?.anchorOffset ?? 0,
-          // Clamped: overscroll (iOS rubber-band) reports a scrollTop outside
-          // the range, and a stored ratio outside [0,1] restores to a position
-          // the browser then clamps — leaving the restore loop re-assigning a
-          // target it can never reach.
-          ratio: Math.min(Math.max(0, el.scrollTop / range), 1),
           caughtUp: prev ? prev.caughtUp : caughtUp,
           sid: renderedSid.current,
         });
@@ -3989,7 +3896,6 @@ export function ChatPane({
     rememberChatScroll(paneId, {
       anchorId: null,
       anchorOffset: 0,
-      ratio: 1,
       caughtUp: true,
       sid: renderedSid.current,
     });

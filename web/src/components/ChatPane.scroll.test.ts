@@ -89,56 +89,26 @@ describe('the older-history spinner never moves the reader', () => {
   });
 });
 
-/**
- * A SHAPE test, not a measurement — the call sites below live inside a
- * requestAnimationFrame loop that reads real geometry off a real scroller, and
- * jsdom has neither. The arithmetic each one performs is unit-tested where it
- * lives (`retiredAnchorMemory` in chat-scroll.test.ts); what cannot be reached
- * from there is whether the loop still CALLS it, and under which condition.
- * That is what these assert.
+/*
+ * `the settling restore retires a goal it could not reach` lived here: two tests
+ * that asserted `ChatPane.tsx` CONTAINS the strings `retiredAnchorMemory({` and
+ * `holdRememberedAnchor.current && !userScrolled.current`.
+ *
+ * Deleted with the code they named, and they are worth a note because they are
+ * the clearest example in this tree of a test that cannot fail for the right
+ * reason. Both passed throughout the week the retirement logic was shipping the
+ * landing-point walk, because a substring is not a behaviour: the first would
+ * have kept passing if the call had been made with the wrong arguments, at the
+ * wrong time, or in a branch that never ran, and the second pinned the exact
+ * boolean expression whose two-correct-rules composition WAS the bug.
+ *
+ * Nothing replaces them one-for-one. What replaces them in kind is
+ * chat-scroll-intent.test.ts, which drives the state machine through the same
+ * situations and asserts the outcome instead of the source text — and the
+ * simulated-layout tests, which can express "the document changed under the
+ * reader mid-seek", the case no string search and no jsdom assertion can reach.
  */
-describe('the settling restore retires a goal it could not reach', () => {
-  it('hands the store the row it actually settled on', () => {
-    // Without this the store keeps naming a message that is not coming back,
-    // and `seekPages` is a local of the effect — so every visibility flip
-    // spends another eight `load-older` round trips hunting the same ghost.
-    expect(tsx).toContain('retiredAnchorMemory({');
-  });
 
-  it('only on a deadline expiry, never over a reader who took over', () => {
-    // A gesture ends the loop too, and that reader writes their own memory
-    // through onScroll. Retiring on that path would be this loop having the
-    // last word over the reader, which is the bug the hold exists to prevent.
-    expect(tsx).toContain('holdRememberedAnchor.current && !userScrolled.current');
-  });
-});
-
-/**
- * The composer's reserve, and why it is a SIBLING.
- *
- * The browser's scroll anchoring is what holds an unpinned reader's place when
- * content above them changes height, and it has SUPPRESSION TRIGGERS: a
- * computed `padding` (or margin/width/height/top/…) change on the anchor node
- * or any of its ancestors UP TO AND INCLUDING the scrolling box cancels the
- * adjustment for that layout pass. `.chat-list` was that ancestor for every row
- * in the chat, and its `padding-bottom` was rewritten every time the composer's
- * measured height moved — typing, an attachment chip row, the "Reconnecting…"
- * banner, the mobile keyboard.
- *
- * Measured in headless Chromium (probe: /tmp/muxpad-hunt/fix-chat/
- * padding-probe.html), unpinned reader at scrollTop 2000, 480px of growth above
- * them:
- *
- *   no padding change        drift    0px   (engine paid the whole 480)
- *   .chat-list padding moves drift  480px   (suppressed; nothing else pays)
- *   .chat-scroll padding     drift  480px   (suppressed too — the scrolling box
- *                                            is IN the chain, so moving the
- *                                            reserve there fixes nothing)
- *   sibling row grows        drift    0px
- *
- * jsdom has no layout, so this is the declaration-level invariant that keeps
- * the reserve off the ancestor chain.
- */
 describe("the composer's reserve does not switch scroll anchoring off", () => {
   it('leaves .chat-list with a bottom padding nothing rewrites', () => {
     const pad = rule('.chat-list').padding?.split(/\s+/) ?? [];
