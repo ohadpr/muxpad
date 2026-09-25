@@ -674,3 +674,74 @@ describe('the live-follow threshold is not the re-entry threshold', () => {
     expect(c.record('s1')).toEqual(RETIRED);
   });
 });
+
+// ── IDLE MUST NOT BE AN ABSORBING STATE ─────────────────────────────────────
+// Found by an acceptance run in a real browser, behind a green unit suite.
+//
+// `placed` is the causal gate: the discriminator believes no scroll event until
+// something has been placed since the pane became visible, because an iOS resume
+// fires a scroll event reporting 0 that geometry cannot tell from a gesture.
+// `place()` used to set it only on the two branches that computed a target — so
+// while the intent was `{ at: 'nothing' }` (the transcript has not arrived, or
+// the remembered message is not loaded) the gate never opened, every scroll
+// event read as layout, and the reader could not be heard AT ALL.
+//
+// Measured consequence in the browser: parking wrote no store key, the pane
+// paged its entire history because nothing ever said "this reader is following",
+// and a thumbnail burst left the reader 2,640px short with `writes: 0`.
+//
+// The gate's honest meaning is "have we read the layout yet", not "did we move
+// anybody" — a pane with nothing to assert has still been measured.
+describe('a pane with nothing to assert still hears the reader', () => {
+  function idlePane() {
+    const sim = new SimScroller(simRows(40), { furnitureBelow: 100 });
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.place(); // the commit subscription, with no memory read yet
+    return { sim, c };
+  }
+
+  it('hears a gesture while the intent is still “we do not know”', () => {
+    const { sim, c } = idlePane();
+    expect(c.intent()).toEqual({ at: 'nothing' });
+    sim.readerScrollsTo(3000);
+    expect(drainScroll(sim, c)).toBe(1);
+    expect(c.intent()).toMatchObject({ at: 'row' });
+  });
+
+  it('…and stores where they chose to be', () => {
+    const { sim, c } = idlePane();
+    sim.readerScrollsTo(3000);
+    drainScroll(sim, c);
+    expect(c.record('s1')).toMatchObject({ caughtUp: false, sid: 's1' });
+    expect(c.record('s1')?.anchorId).toBe(sim.anchorHere()?.id);
+  });
+
+  it('…and follows the tail once they reach it', () => {
+    const { sim, c } = idlePane();
+    sim.readerScrollsToEnd();
+    drainScroll(sim, c);
+    expect(c.phase(true)).toBe('FOLLOWING');
+    // …which is what the pager consults, so a chat nobody has scrolled does not
+    // page its whole history in.
+    sim.append(simRows(1, 300, 'img-'));
+    c.place();
+    sim.resizeRow('img-0', 2400);
+    drainScroll(sim, c);
+    c.place();
+    expect(sim.scrollTop).toBe(sim.maxScrollTop);
+  });
+
+  // The seek is the other way to sit on `{ at: 'nothing' }` for a long time.
+  it('hears a gesture in the middle of a seek it cannot finish', () => {
+    const sim = new SimScroller(simRows(20, 200, 'tail'), { furnitureBelow: 100 });
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: PARKED('ancient', -120) });
+    while (c.wantsOlder(true)) c.dispatch({ t: 'sought' });
+    sim.readerScrollsTo(500);
+    expect(drainScroll(sim, c)).toBe(1);
+    // …and their choice replaces the goal they told us to stop hunting.
+    expect(c.record('s1')?.anchorId).not.toBe('ancient');
+  });
+});

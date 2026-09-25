@@ -161,8 +161,24 @@ export type ScrollInput =
   | { t: 'search-cleared'; here: Anchor | null; atEnd: boolean }
   /** A `load-older` request actually went out (see `pages`). */
   | { t: 'sought' }
-  /** `place()` wrote, or confirmed, the current intent. */
-  | { t: 'applied' };
+  /**
+   * `place()` has READ THE LAYOUT — whether or not it had anything to assert.
+   *
+   * Deliberately not "applied". The gate this opens (`placed`) exists for one
+   * case: an iOS resume fires a scroll event reporting 0 that no geometry test
+   * can tell from a reader flicking to the top, so the discriminator has to know
+   * whether we have had a look yet. That is a question about US, not about the
+   * reader — and a pane whose intent is `{ at: 'nothing' }` has still been
+   * looked at.
+   *
+   * Setting it only when a target was computed made IDLE an ABSORBING state:
+   * while we did not know where the reader belonged, every scroll event read as
+   * layout, so the reader could not tell us. Found in a browser, behind a green
+   * unit suite — parking stored nothing, the pager saw no FOLLOWING reader and
+   * paged the entire history, and a burst left the reader 2,640px short with
+   * zero writes. One missing transition, three headline failures.
+   */
+  | { t: 'measured' };
 
 /**
  * How many older-history pages one visit may spend hunting a remembered
@@ -240,7 +256,7 @@ export function next(state: ScrollState, input: ScrollInput): ScrollState {
     case 'sought':
       return { ...state, pages: state.pages + 1 };
 
-    case 'applied':
+    case 'measured':
       return state.placed ? state : { ...state, placed: true };
   }
 }
