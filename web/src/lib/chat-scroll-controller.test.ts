@@ -616,3 +616,61 @@ describe('the reader always wins', () => {
     expect(rec?.anchorId).not.toBe('m40');
   });
 });
+
+// ── THE TWO THRESHOLDS ARE NOT ONE THRESHOLD ────────────────────────────────
+// "Should live output scroll itself into view while I watch?" is a 40px question
+// answered continuously. "Had I finished the conversation?" is a 160px question
+// answered once, when I leave. Collapsing them is the bug that stranded a reader
+// 5701px up: one wheel notch (~120px, a single trackpad nudge to re-read the
+// last line) is past the first and inside the second, and persisting the first
+// as the second stored "parked on the newest message" — harmless until a
+// ten-minute turn landed thirty messages.
+//
+// A mutation sweep found this had no test: widening FOLLOW_THRESHOLD_PX from 40
+// to 160 left the whole suite green.
+describe('the live-follow threshold is not the re-entry threshold', () => {
+  function nudgedUp(px: number) {
+    const sim = new SimScroller(simRows(40), { furnitureBelow: 100 });
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: RETIRED });
+    sim.readerScrollsBy(-px);
+    drainScroll(sim, c);
+    return { sim, c };
+  }
+
+  it('a one-notch nudge stops the log following, and is still caught up', () => {
+    const { c } = nudgedUp(120);
+    // Live output must NOT drag them back down…
+    expect(c.phase(true)).not.toBe('FOLLOWING');
+    // …and tomorrow they still open at the newest message, because they had read
+    // to the end.
+    expect(c.record('s1')).toEqual(RETIRED);
+  });
+
+  it('…and live output really does leave them alone', () => {
+    const { sim, c } = nudgedUp(120);
+    const before = sim.anchorHere();
+    for (let i = 0; i < 5; i++) {
+      sim.append(simRows(1, 300, `live${i}-`));
+      c.place();
+      drainScroll(sim, c);
+    }
+    expect(sim.anchorHere()).toEqual(before);
+  });
+
+  it('a reader who scrolled properly away is neither', () => {
+    const { c } = nudgedUp(4000);
+    expect(c.phase(true)).toBe('ANCHORED');
+    expect(c.record('s1')?.caughtUp).toBe(false);
+  });
+
+  it('resting at the end is both', () => {
+    const sim = new SimScroller(simRows(40), { furnitureBelow: 100 });
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: RETIRED });
+    expect(c.phase(true)).toBe('FOLLOWING');
+    expect(c.record('s1')).toEqual(RETIRED);
+  });
+});
