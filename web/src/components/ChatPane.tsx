@@ -1631,6 +1631,29 @@ export function ChatPane({
    * flag unnecessary: a position we placed is not a position the reader chose, so
    * there is nothing to protect.
    */
+  /**
+   * The observer, and the rows it is watching.
+   *
+   * A ref rather than a local so the commit subscription can re-offer newly
+   * rendered rows without tearing the observer down — see the effect below for
+   * why the rows and not just the container.
+   */
+  const rowWatcher = useRef<ResizeObserver | null>(null);
+  const watchRows = useCallback(() => {
+    const ro = rowWatcher.current;
+    const el = scrollRef.current;
+    if (!ro || !el) return;
+    ro.observe(el);
+    const list = el.querySelector('.chat-list');
+    if (!list) return;
+    // BORDER-BOX on the list: the composer's clearance is a sibling row at the
+    // end of it, and a content-box observer would not see that resize.
+    ro.observe(list, { box: 'border-box' });
+    for (const row of list.children) {
+      if (row instanceof HTMLElement && row.hasAttribute(ANCHOR_ATTR)) ro.observe(row);
+    }
+  }, []);
+
   /** Reveal "jump to latest" only once meaningfully scrolled up, so it does not
    *  flicker on tiny nudges near the bottom. */
   const syncScrollDownArrow = useCallback(() => {
@@ -2558,6 +2581,8 @@ export function ChatPane({
   // biome-ignore lint/correctness/useExhaustiveDependencies: events/streamingText/optimisticUser/question/subagent-count/queued-count are the triggers — the body reads the DOM, not them
   useLayoutEffect(() => {
     if (!active) return;
+    // New rows are new things that can change height under the reader.
+    watchRows();
     scroll.current?.place();
     // …and the arrow follows the placement. It used to be derived ONLY inside
     // `onScroll`, so a pane that opened somewhere other than the bottom without
@@ -3149,11 +3174,19 @@ export function ChatPane({
   // is the notification for all of them — and it is the notification the old
   // settling loop was polling for with a 2500ms fuse.
   //
-  // It used to carry two branches and three stand-downs: re-assert the bottom if
-  // pinned, else re-anchor a row from a snapshot ref, unless a search jump or a
-  // seeking restore owned the scroll. All of that is now one `place()`, because
-  // "what should be true" is the intent and this only has to say "it may have
-  // stopped being true".
+  // ── IT WATCHES THE ROWS, NOT JUST THE BOXES ───────────────────────────────
+  // Observing the scroller and the list is not enough, and the gap is silent.
+  // A ResizeObserver reports an element whose own box changed — so two rows
+  // ABOVE the reader that change by equal and opposite amounts, which is an
+  // ordinary markdown reflow or an image replacing a placeholder of nearly the
+  // same height, move the reader and fire NOTHING, because `.chat-list`'s total
+  // height never moved. Measured in a browser: the callback did not run once.
+  //
+  // A poll is forgiving of that and a subscription is not, which is the price of
+  // deleting the poll — so the subscription has to cover what the poll covered.
+  // Watching each row closes it precisely: a ResizeObserver costs per CHANGED
+  // element, not per observed one, and `observe` is idempotent, so re-offering
+  // the same rows on each commit is cheap.
   //
   // `pendingPick` is a dependency because the harness picker renders a DIFFERENT
   // tree with no `.chat-scroll` in it: an active pane that starts on the picker
@@ -3163,26 +3196,13 @@ export function ChatPane({
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !active) return;
-    let last = '';
-    const ro = new ResizeObserver(() => {
-      // Both dimensions matter: content growing (scrollHeight) and the viewport
-      // shrinking (clientHeight — composer regrowth, window resize) each move
-      // where the intent's target lies.
-      const key = `${el.scrollHeight}x${el.clientHeight}`;
-      if (key === last) return;
-      last = key;
-      scroll.current?.place();
-    });
-    ro.observe(el);
-    // The scroll container's own box often does not change when its CONTENT
-    // grows, so watch the list too — that is the element images live in.
-    //
-    // BORDER-BOX, not the default content-box: the composer's clearance is a
-    // sibling row at the end of the list, and a content-box observer would not
-    // see it resize.
-    const list = el.querySelector('.chat-list');
-    if (list) ro.observe(list, { box: 'border-box' });
-    return () => ro.disconnect();
+    const ro = new ResizeObserver(() => scroll.current?.place());
+    rowWatcher.current = ro;
+    watchRows();
+    return () => {
+      ro.disconnect();
+      rowWatcher.current = null;
+    };
   }, [active, pendingPick]);
 
   /**
