@@ -1605,6 +1605,8 @@ export function ChatPane({
   // We looked, we paged, and the message is not in reach — say so instead of
   // navigating to a chat that looks like nothing happened.
   const [jumpMissed, setJumpMissed] = useState(false);
+  /** Which conversation the controller was last reset for. See the effect below. */
+  const enteredPane = useRef<string | null>(null);
   const scroll = useRef<ChatScrollController | null>(null);
   if (!scroll.current) {
     scroll.current = new ChatScrollController(
@@ -1633,6 +1635,14 @@ export function ChatPane({
    * flag unnecessary: a position we placed is not a position the reader chose, so
    * there is nothing to protect.
    */
+  /** Reveal "jump to latest" only once meaningfully scrolled up, so it does not
+   *  flicker on tiny nudges near the bottom. */
+  const syncScrollDownArrow = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || el.clientHeight < 40) return;
+    setShowScrollDown(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
+  }, []);
+
   const saveScroll = useCallback(() => {
     const c = scroll.current;
     if (!c) return;
@@ -2551,7 +2561,14 @@ export function ChatPane({
   // when the count moves.
   // biome-ignore lint/correctness/useExhaustiveDependencies: events/streamingText/optimisticUser/question/subagent-count/queued-count are the triggers — the body reads the DOM, not them
   useLayoutEffect(() => {
-    if (active) scroll.current?.place();
+    if (!active) return;
+    scroll.current?.place();
+    // …and the arrow follows the placement. It used to be derived ONLY inside
+    // `onScroll`, so a pane that opened somewhere other than the bottom without
+    // producing a scroll event — a restore that lands exactly where the document
+    // already was, which is the common case for a tab switch — showed no way
+    // back to the tail at all.
+    syncScrollDownArrow();
   }, [
     events,
     streamingText,
@@ -2692,10 +2709,29 @@ export function ChatPane({
   // different — is a different conversation, and that is treated as no memory at
   // all rather than as a position to distrust, because "restore nothing but also
   // do not follow" was the worst of both.
+  // ONE effect, because the ORDER of these two dispatches is load-bearing and a
+  // second effect is a place to get it wrong. It was wrong: `mounted` was
+  // declared after `shown`, React runs layout effects in declaration order, and
+  // so every fresh mount read the memory, set the intent from it, and then
+  // immediately reset that intent to "we do not know". The pane then opened at
+  // the top of the conversation, paged its entire history because nothing said a
+  // reader was following, and stored nothing — three headline failures from one
+  // reordering, none of which a module test could see.
+  //
+  // Keyed on `paneId` for the reset, not on mount: the seek budget has to
+  // survive every visibility flip of one visit (it used to be a local of the
+  // restore effect, so three tab switches spent 24 `load-older` round trips
+  // hunting the same unreachable message) and must not survive a different
+  // conversation.
+  //
   // biome-ignore lint/correctness/useExhaustiveDependencies: showEpoch is a re-run trigger — becoming visible again must re-place.
   useLayoutEffect(() => {
     const c = scroll.current;
     if (!c) return;
+    if (enteredPane.current !== paneId) {
+      enteredPane.current = paneId;
+      c.dispatch({ t: 'mounted' });
+    }
     if (!active) {
       c.dispatch({ t: 'hidden' });
       return;
@@ -2706,15 +2742,6 @@ export function ChatPane({
       mem: mem && scrollMemorySidMatches(mem.sid, renderedSid.current) ? mem : null,
     });
   }, [active, paneId, showEpoch]);
-
-  // A fresh pane forgets the seek budget. Deliberately keyed on `paneId` alone:
-  // the budget has to survive every visibility flip of one visit (it used to be
-  // a local of the restore effect, so three tab switches spent 24 `load-older`
-  // round trips hunting the same unreachable message) and must not survive a
-  // different conversation.
-  useLayoutEffect(() => {
-    scroll.current?.dispatch({ t: 'mounted' });
-  }, [paneId]);
 
   /*
    * ── NO PREPEND COMPENSATION ───────────────────────────────────────────────
@@ -3176,7 +3203,7 @@ export function ChatPane({
     // doesn't flicker on tiny nudges near the bottom. Derived from current
     // geometry and self-correcting, so it is deliberately outside the
     // reader-or-layout question.
-    setShowScrollDown(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
+    syncScrollDownArrow();
     // Near the top → page in earlier messages. A reader at the bottom is not
     // paging history, and a pane that has not been placed yet has not had its
     // layout read (the old version needed a 250ms window here, because a

@@ -145,7 +145,13 @@ export class ChatScrollController {
    * position from live geometry, so calling this twice in a row writes once.
    */
   place(): void {
+    // Nothing to read — a hidden or mid-relayout pane. We have NOT looked, so
+    // the gate stays shut.
     if (!this.surface.measurable()) return;
+    // We have looked. Everything below is about what we found; this is true
+    // either way, including when the answer is "we do not know where the reader
+    // belongs yet". See the `measured` input.
+    this.state = next(this.state, { t: 'measured' });
     const geo = this.surface.geometry();
     const { intent } = this.state;
     const row = intent.at === 'row' || intent.at === 'hit' ? this.surface.rowBox(intent.id) : null;
@@ -166,13 +172,11 @@ export class ChatScrollController {
       // compute equals the current position and we stay out of the way. Where it
       // paid nothing (every iPhone on iOS 26 or earlier), the branch below pays
       // in full. Same arithmetic, no feature test, no double payment.
-      this.state = next(this.state, { t: 'applied' });
       this.settled();
       return;
     }
     this.wrote = target;
     this.surface.setScrollTop(target);
-    this.state = next(this.state, { t: 'applied' });
     this.settled();
   }
 
