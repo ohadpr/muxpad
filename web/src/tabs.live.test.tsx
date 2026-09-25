@@ -311,16 +311,17 @@ describe('pushed ties match authoritative ordering', () => {
     '%s uses the same tie-break as GET',
     async (transition) => {
       const { compareUnpinnedTabs } = await import('@muxpad/shared');
-      // Server manual order is A,B, whereas the previously published order is
-      // B,A. Schema parsing ensures the comparison uses actual wire fields.
+      // Manual and previously published order are B,A, opposite to wire IDs.
+      // After the push, attention and activity are equal: ONLY the tie-break
+      // can put A first. Schema parsing ensures these are actual wire fields.
       const a = tab('a', { last_activity_at: transition === 'activity ties' ? 100 : null });
       const b = tab('b', {
         last_activity_at: transition === 'activity ties' ? 200 : null,
         status: transition === 'blocked clears' ? 'blocked' : 'idle',
       });
       const manual = new Map([
-        ['a', 0],
-        ['b', 1],
+        ['b', 0],
+        ['a', 1],
       ]);
       rows = [a, b].sort((x, y) => compareUnpinnedTabs(x, y, manual));
       expect(rows.map((t) => t.id)).toEqual(['b', 'a']);
@@ -335,6 +336,9 @@ describe('pushed ties match authoritative ordering', () => {
       rows = [a, b]
         .map((t) => (t.id === updated.id ? updated : t))
         .sort((x, y) => compareUnpinnedTabs(x, y, manual));
+      // Pin GET's contract explicitly too: client == server alone could let
+      // both sides agree on the same incorrect manual/index-based order.
+      expect(rows.map((t) => t.id)).toEqual(['a', 'b']);
       expect(seen.map((t) => t.id)).toEqual(['a', 'b']);
       expect(seen).toEqual(rows);
       expect(listTabs).toHaveBeenCalledTimes(1);
