@@ -41,25 +41,39 @@
 // that eyeball. Claiming more than that would be worse than claiming nothing.
 
 /**
- * SCOPE — narrow on purpose, and stated plainly.
+ * SCOPE — OFF by default, and this is a correction.
  *
- * The gate runs in CHAT MODE ONLY. Agent mode is muxpad's raw face: it is
- * documented as `--dangerously-skip-permissions` parity, it is what you pick
- * when you want the agent to get on with it, and putting a confirmation in
- * front of that would be answering a question nobody asked. Chat mode is the
- * conversational face — the one a voice layer will drive, and the one where
- * there is no composer for a human to read before something runs.
+ * It used to run in all of Chat mode, on the reasoning quoted above: voice
+ * deletes the composer, so something has to replace the eyeball. Read that
+ * sentence again and the error is plain — the eyeball only goes missing when
+ * VOICE is driving. Typed Chat mode has a composer, the human reads what they
+ * send, and gating it asks them to approve a thing they just typed on purpose.
  *
- * `MUXPAD_GATE=off` turns it off outright. There is deliberately no way to turn
- * it ON for Agent mode from the environment: a gate with two scopes is two
- * behaviours to reason about, and the narrow one is the defensible one.
+ * `mode === 'chat'` was a proxy for "the surface voice will drive", chosen
+ * because a live voice session is not a fact the runner is told. The proxy was
+ * far too broad, and the user has now reported the consequence twice: being
+ * asked for permission to delete a file or push a commit they had just asked
+ * for, in a mode whose entire contract is "decisive, get on with it". A
+ * confirmation nobody needs is not a safety feature; it trains you to tap
+ * through, which is worse than not asking.
+ *
+ * So the default is OFF. `MUXPAD_GATE=on` re-enables it for Chat mode, and the
+ * whole mechanism is kept — verbs, tokenizer, PreToolUse wiring, the no-expiry
+ * contract — because the voice case it was built for is real and unsolved.
+ * When a live voice session becomes something the runner knows about, the
+ * honest rule is that: gate while the composer is gone, never otherwise.
+ *
+ * NOT A REGRESSION IN SAFETY TERMS, stated plainly: this was never a sandbox
+ * (see above — `eval` walks through it), Agent mode has always run ungated, and
+ * muxpad's panes have always been full-privilege shells. What is lost is the
+ * accident case for TYPED chat, where the composer already covers it.
  */
 export function gateEnabled(
   mode: string,
   env: Record<string, string | undefined> = process.env,
 ): boolean {
-  if (env.MUXPAD_GATE === 'off') return false;
-  return mode === 'chat';
+  if (env.MUXPAD_GATE === 'on') return mode === 'chat';
+  return false;
 }
 
 /** The named verbs. This list IS the policy. */

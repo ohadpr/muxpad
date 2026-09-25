@@ -53,7 +53,7 @@ beforeAll(() => {
 
 afterEach(() => {
   resetFakeAgentSdk();
-  process.env.MUXPAD_GATE = undefined;
+  delete process.env.MUXPAD_GATE;
 });
 
 type Decision = {
@@ -61,7 +61,22 @@ type Decision = {
   hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
 };
 
-function boot(mode: AgentMode = 'chat') {
+/**
+ * Boot a runner with the gate SWITCHED ON.
+ *
+ * The gate is off by default now (see gateEnabled: `mode === 'chat'` gated
+ * typed chat too, where the composer is already the eyeball). These tests are
+ * about the MECHANISM — where the hook sits, that it holds, that dismissal
+ * fails closed — so they opt in explicitly. The default itself is pinned in
+ * reversibility.test.ts, and `MUXPAD_GATE=off` still has its own case below.
+ */
+function boot(mode: AgentMode = 'chat', gate: 'on' | 'off' | 'unset' = 'on') {
+  // 'unset' rather than `undefined`: passing undefined explicitly triggers the
+  // PARAMETER DEFAULT, so the case meant to exercise the shipped default was
+  // booting with the gate on and asserting the opposite. And `process.env.X =
+  // undefined` assigns the STRING "undefined" — the key has to be deleted.
+  if (gate === 'unset') delete process.env.MUXPAD_GATE;
+  else process.env.MUXPAD_GATE = gate;
   const sent: RunnerFrame[] = [];
   const logs: string[] = [];
   const host: RunnerHost = {
@@ -141,8 +156,15 @@ describe('where the gate sits', () => {
   });
 
   it('is not registered at all when MUXPAD_GATE=off', async () => {
-    process.env.MUXPAD_GATE = 'off';
-    const fx = boot('chat');
+    const fx = boot('chat', 'off');
+    expect(hasFakeHook('PreToolUse')).toBe(false);
+    await fx.stop();
+  });
+
+  it('…nor by DEFAULT, which is the whole point of the correction', async () => {
+    // Being asked to approve a delete or a push you just typed is not safety;
+    // it trains you to tap through. See gateEnabled.
+    const fx = boot('chat', 'unset');
     expect(hasFakeHook('PreToolUse')).toBe(false);
     await fx.stop();
   });
