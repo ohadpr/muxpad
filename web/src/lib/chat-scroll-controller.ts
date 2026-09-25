@@ -72,14 +72,6 @@ export interface ScrollSurface {
   setScrollTop(value: number): void;
 }
 
-/** What `place()` did, for callers that need to know (tests, the pager). */
-export interface Placement {
-  /** The value written, or null if nothing was written. */
-  wrote: number | null;
-  /** The target that was computed, or null if the intent could not be satisfied. */
-  target: number | null;
-}
-
 /**
  * The live scroll mechanism for one chat pane.
  *
@@ -106,6 +98,16 @@ export class ChatScrollController {
     return this.state.intent;
   }
 
+  /** The live box of a row, for callers that need to measure before an input. */
+  rowBox(id: string): RowBox | null {
+    return this.surface.rowBox(id);
+  }
+
+  /** The row under the viewport top right now. */
+  anchorHere(): Anchor | null {
+    return this.surface.anchorHere();
+  }
+
   /** May we ask for another page of history to reach the current intent? */
   wantsOlder(hasMoreOlder: boolean): boolean {
     return canSeek(this.state, { rowLoaded: this.rowLoaded(), hasMoreOlder });
@@ -125,13 +127,13 @@ export class ChatScrollController {
    * height, and a re-entry places before paint, so the reader never sees the
    * pre-restore position.
    */
-  dispatch(input: ScrollInput): Placement {
+  dispatch(input: ScrollInput): void {
     this.state = next(this.state, input);
     // A reader input is the one thing that can change where they belong, so it
     // is the one thing that can change what we store. Note what does NOT reach
     // here: a height change, a scroll event we attributed to layout, a tick of
     // any clock. See `recordFor`.
-    return this.place();
+    this.place();
   }
 
   /**
@@ -142,8 +144,8 @@ export class ChatScrollController {
    * new events. Idempotent by construction: `targetFor` computes an absolute
    * position from live geometry, so calling this twice in a row writes once.
    */
-  place(): Placement {
-    if (!this.surface.measurable()) return { wrote: null, target: null };
+  place(): void {
+    if (!this.surface.measurable()) return;
     const geo = this.surface.geometry();
     const { intent } = this.state;
     const row = intent.at === 'row' || intent.at === 'hit' ? this.surface.rowBox(intent.id) : null;
@@ -154,7 +156,8 @@ export class ChatScrollController {
       // scroll exactly where it is and let the seek page history in. This is
       // where a ratio fallback used to place a guess.
       //
-      return this.settled({ wrote: null, target: null });
+      this.settled();
+      return;
     }
     if (alreadyThere(target, geo.scrollTop)) {
       // Already true. Do NOT write — this is the whole double-pay defence, and
@@ -164,12 +167,13 @@ export class ChatScrollController {
       // paid nothing (every iPhone on iOS 26 or earlier), the branch below pays
       // in full. Same arithmetic, no feature test, no double payment.
       this.state = next(this.state, { t: 'applied' });
-      return this.settled({ wrote: null, target });
+      this.settled();
+      return;
     }
     this.wrote = target;
     this.surface.setScrollTop(target);
     this.state = next(this.state, { t: 'applied' });
-    return this.settled({ wrote: target, target });
+    this.settled();
   }
 
   /**
@@ -184,9 +188,8 @@ export class ChatScrollController {
    * see it: otherwise the scroll event our own assignment is about to produce
    * would compare against a position that no longer exists and read as a gesture.
    */
-  private settled(p: Placement): Placement {
+  private settled(): void {
     this.was = this.surface.anchorHere();
-    return p;
   }
 
   /**
