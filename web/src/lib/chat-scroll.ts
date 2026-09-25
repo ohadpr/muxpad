@@ -4,7 +4,7 @@
  * display:none (which zeroes scrollTop) — so returning to a chat always
  * snapped to the bottom.
  *
- * ── WHY A MESSAGE ID, NOT A RATIO ────────────────────────────────────────────
+ * ── A MESSAGE, AND NOTHING ELSE. THERE IS NO RATIO. ──────────────────────────
  * This used to store position as a RATIO of the scrollable range, on the theory
  * that a ratio "degrades proportionally" when the document height changes. It
  * does — and proportional degradation is precisely the bug, because a chat log
@@ -17,21 +17,36 @@
  * fixed. Prepend `g` pixels of older history and the honest target is
  * `R·range + g` (the same messages, pushed down); the ratio computes
  * `R·(range + g)`, which is smaller for every R < 1 — so the reader is dragged
- * BACK into older history, further with every batch. Worse, the ratio is a
- * FIXED POINT: the settling-restore loop re-applies it each frame, so it
- * silently overrides the prepend compensation `scrollTopAfterOlderPrepend`
- * just computed. Measured on the real stack: parked at message 70, reopened at
- * message 165, with the final scroll ratio equal to the stored one to three
- * decimals.
+ * BACK into older history, further with every batch.
  *
  * So the unit of memory is a MESSAGE: `anchorId` (an event id, which is stable
  * across prepends, appends, dedupe and reconnects) plus `anchorOffset`, how far
  * that message's top sat above the viewport top. Restoring means "put message
  * X back under the reader's eyes", which is invariant to everything the
- * document does around it. `ratio` is still written, purely as the fallback for
- * when the anchored message isn't rendered (a fresh mount opens on a 128 KB
- * tail; anything older has to be paged back in first — see the seek in
- * ChatPane's restore effect).
+ * document does around it.
+ *
+ * The ratio survived that change as "the fallback for when the anchored message
+ * isn't rendered", and every remaining catastrophe came through that door. A
+ * fresh mount opens on the server's ~128 KB tail of a conversation that can run
+ * to tens of MB, so the fallback applied a fraction of the WHOLE document to a
+ * sliver of it: measured, 0.0363 of 185,753 px (turn 40) became 0.0363 of the
+ * 13,044 px tail and landed the reader on turn 296 — the opposite end. And
+ * because the result was then recorded, each reopen consumed a slightly larger
+ * fraction and walked further down. Eight reloads of one chat parked at 4 %:
+ *
+ *     4 % → 13 → 21 → 28 → 42 → 53 → 62 → 66 → 72 %
+ *
+ * with no fixed point short of the bottom. Five cold opens took the same reader
+ * from 4 % to 67 %. Blocking the fallback for a partial document fixed the first
+ * open and left the walk; blocking the re-record fixed the walk and left the
+ * first open. Both halves are the same mistake, which is guessing.
+ *
+ * The honest rule, and the reason this field is GONE rather than guarded: if the
+ * anchor is not loaded, SEEK it (page older history until it arrives — see
+ * SEEK_PAGE_BUDGET in chat-scroll-intent.ts); if you cannot find it, STAY WHERE
+ * YOU ARE. "We do not know yet" is a first-class value in the intent model
+ * (`{ at: 'nothing' }`) precisely so that no arithmetic has to stand in for it.
+ * A floor is a floor; a guess is a walk.
  *
  * ── WHY "CAUGHT UP", NOT "PINNED" ────────────────────────────────────────────
  * Anchoring to a message fixed the MECHANISM: whatever position we remember, we
@@ -122,14 +137,16 @@
 export interface ChatScrollMem {
   /**
    * Event id of the message under the viewport top, and how far its top sat
-   * ABOVE that line (so normally <= 0). null when nothing was measurable —
-   * then `ratio` is all we have. Always null for a caught-up reader: "the
-   * newest message" is not a fixed message, and pinning it to one is the bug.
+   * ABOVE that line (so normally <= 0). null when nothing was measurable, and
+   * always null for a caught-up reader: "the newest message" is not a fixed
+   * message, and pinning it to one is the bug.
+   *
+   * There is deliberately no second field describing position. See the header:
+   * a null anchor means "open at the newest message", not "fall back to
+   * arithmetic".
    */
   anchorId: string | null;
   anchorOffset: number;
-  /** 0..1 fraction of (scrollHeight - clientHeight). Fallback only. */
-  ratio: number;
   /**
    * Had the reader read to the END of the conversation when they left?
    *
@@ -459,14 +476,7 @@ export function rememberChatScroll(paneId: string, m: ChatScrollMem): void {
   // the opposite, and the only thing it could ever do is be restored by
   // something that reads one field and not the other.
   const row: StoredMem = m.caughtUp
-    ? {
-        anchorId: null,
-        anchorOffset: 0,
-        ratio: m.ratio,
-        caughtUp: true,
-        sid: m.sid,
-        at: Date.now(),
-      }
+    ? { anchorId: null, anchorOffset: 0, caughtUp: true, sid: m.sid, at: Date.now() }
     : { ...m, at: Date.now() };
   mem.set(paneId, row);
   // By WRITE TIME, not insertion order: `adoptFromStorage` can put another
@@ -500,13 +510,18 @@ export function recallChatScroll(paneId: string): ChatScrollMem | null {
     mem.delete(paneId);
     return null;
   }
-  // A non-finite ratio (an older format, or a divide-by-zero that escaped)
-  // coerces to scrollTop 0 and dumps the reader at the TOP of the chat. Treat
-  // it as no memory. The anchor fields are normalised rather than rejected —
-  // an entry with a usable anchor and a junk offset is still worth honouring.
-  if (!m || !Number.isFinite(m.ratio)) return null;
+  // Normalised rather than rejected: an entry with a usable anchor and a junk
+  // offset is still worth honouring, and an entry with NEITHER is the ordinary
+  // "open at the newest message" row, not a corrupt one.
+  //
+  // This used to reject any entry whose `ratio` was not finite. That guard went
+  // with the field — and it had to, because after the field was removed every
+  // row this module writes would have failed it, i.e. the store would have
+  // looked permanently empty and every pane would have opened at the bottom.
+  if (!m) return null;
   return {
-    ...m,
+    caughtUp: !!m.caughtUp,
+    sid: m.sid ?? null,
     anchorId: typeof m.anchorId === 'string' ? m.anchorId : null,
     anchorOffset: Number.isFinite(m.anchorOffset) ? m.anchorOffset : 0,
   };
@@ -642,113 +657,106 @@ export function scrollTopAfterOlderPrepend(opts: {
  * policy, and it is deliberately the only thing that decides it.
  */
 export function opensAtNewest(mem: ChatScrollMem | null): boolean {
-  return !mem || mem.caughtUp;
+  // THREE ways to mean "the newest message", and they have to agree, because
+  // they are indistinguishable to the reader:
+  //   · no row at all (a fresh device, an expired entry, a rotated sid);
+  //   · a retirement — the reader finished the conversation;
+  //   · a row that names no message, which is what a retirement looks like once
+  //     you stop reading `caughtUp`.
+  //
+  // That third case used to answer differently here (`caughtUp` false, so
+  // "parked") and in the restore (no `anchorId`, so nothing to anchor to) — two
+  // owners of one question, which is how the reader ends up somewhere neither
+  // owner intended. It is reachable from a legacy row and from any future writer
+  // that clears the anchor without clearing the flag.
+  return !mem || mem.caughtUp || !mem.anchorId;
 }
 
 /**
- * How far past the bottom of the viewport the newest message's END may sit
- * while the reader still counts as caught up.
+ * How far above the end of the rendered log the reader may sit and still count
+ * as having finished it.
  *
- * At rest this distance is NEGATIVE — the floating composer reserves ~130 px of
- * list padding below the last message — so the budget is really "a couple of
- * wheel notches up from the bottom" (Chromium: ~120 px each). Generous enough
- * that nudging up to re-read the last line doesn't park you in history forever,
- * which is the bug the message-shaped rule was introduced to fix; tight enough
- * that scrolling away on purpose is respected.
+ * Generous enough that nudging up a couple of wheel notches to re-read the last
+ * line (Chromium: ~120 px each) doesn't park you in history forever — which is
+ * the bug this rule was introduced to fix — and tight enough that scrolling away
+ * on purpose is respected. Deliberately four times the live-follow threshold:
+ * the two answer different questions on different timescales. See the note on
+ * `readerIsCaughtUp`.
  */
 const CAUGHT_UP_SLACK_PX = 160;
 
 /**
- * Was the reader at the END of the conversation?
+ * Has the reader reached the END of the conversation?
  *
- * `lastRowBottom` is the newest anchored row's BOTTOM relative to the scroll
- * viewport's top; null when there are no rows to measure (an empty chat, or a
- * hidden pane whose boxes have collapsed), in which case the caller's pin state
- * is the best available answer.
+ * The one question re-entry consults. A caught-up reader opens at the newest
+ * message, however much arrived while they were away; a reader who is not
+ * caught up scrolled back on purpose and keeps their exact spot.
  *
- * A message-shaped question, on purpose. The alternative — "within N pixels of
- * the document bottom" — cannot distinguish a reader who has read to the end
- * from one who happens to be near it, and the distance to the bottom is not even
- * constant at rest: see CAUGHT_UP_SLACK_PX.
+ * ── IT ASKS ABOUT THE DOCUMENT, NOT ABOUT THE LAST MESSAGE ───────────────────
+ * Two earlier versions of this asked a message-shaped question, and each was
+ * introduced to fix the previous one's failure.
  *
- * ── WHY THE BOTTOM AND NOT THE TOP ───────────────────────────────────────────
- * This used to ask whether the newest message's TOP was on screen, on the
- * reasoning that a reader who can see it "had scrolled back past nothing". That
- * holds only while the newest message FITS. It routinely does not: a Chat-mode
- * reply with its action run folded above it, or an Agent-mode tool result, runs
- * to several screens. A reader on the first screen of one had their position
- * recorded as caught up, and re-entry is defined as "open at the newest
- * message" — so coming back dropped them at the END of the thing they were
- * halfway through, composer-ready, with no way back to their place. Reported as
- * "I come back to muxpad and it scrolls to the very bottom instead of my last
- * position".
+ *   v1: "is the newest message's TOP on screen?" — which holds only while the
+ *   newest message FITS. A Chat-mode reply with its action run above it, or an
+ *   Agent-mode tool result, runs to several screens; a reader on the first
+ *   screen of one was recorded caught up, so coming back dropped them at the END
+ *   of the thing they were halfway through. Reported as "I come back to muxpad
+ *   and it scrolls to the very bottom instead of my last position".
  *
- * Measuring the END answers the question that was always meant: has the reader
- * actually reached the end of the newest message, not merely watched it begin.
- * A tall message now keeps its anchor (the row under the viewport top, with the
- * offset into it), which is exactly what the anchor was built to carry.
+ *   v2: "is the newest message's END on screen?" — right for that case, and
+ *   wrong for its neighbour, because the newest MESSAGE is not the end of the
+ *   DOCUMENT. Everything the live turn puts below it — the streaming preview,
+ *   the optimistic user bubble, the question card, the queued strip — carries no
+ *   `data-eid` and so is invisible to a rule that walks anchored rows. A reader
+ *   who scrolled up to the end of the last committed message while three screens
+ *   of streaming output sat below them measured `lastRowBottom ≈ 0` and was
+ *   recorded CAUGHT UP: on re-entry they were taken to the newest message, which
+ *   is content they had deliberately scrolled away from and never read.
+ *
+ * So the question is asked about the scroll range, which by construction
+ * includes every one of those and the composer's reserve row: is there anything
+ * below you that you have not seen? That answers v1's case for the same reason
+ * v2 did — a reader on the first screen of a three-screen message has two
+ * screens below them — and it answers v2's case, which no row-walk can.
+ *
+ * Note this is NOT the live-follow threshold wearing different clothes. That one
+ * is 40 px and governs whether output scrolls itself into view while you watch;
+ * this one is 160 px and governs where you land tomorrow. Same measurement,
+ * different slack, different question — and persisting the first as the second is
+ * the bug that stored "parked on the newest message" for one wheel notch and then
+ * stranded the reader 5701 px up when a ten-minute turn landed.
  */
 export function readerIsCaughtUp(opts: {
-  lastRowBottom: number | null;
-  clientHeight: number;
-  nearBottom: boolean;
-}): boolean {
-  if (opts.lastRowBottom === null) return opts.nearBottom;
-  return opts.lastRowBottom - opts.clientHeight <= CAUGHT_UP_SLACK_PX;
-}
-
-/**
- * The memory that replaces a goal the settling restore could not reach.
- *
- * ── RETIRING A DEAD ANCHOR ───────────────────────────────────────────────────
- * The restore holds the stored anchor untouched while it is still seeking the
- * message it names — that hold is the only thing stopping the loop's own
- * scrollTop writes from overwriting the reader's parked spot. But when the seek
- * gives up, the store is still naming a message that is NOT COMING BACK, and
- * nothing else corrects it: the loop has usually converged and stopped writing
- * by then, so no further scroll event is coming.
- *
- * The cost is paid on every later visibility transition. The seek budget is a
- * local of the restore effect, and that effect re-runs on each of them — a
- * browser-tab switch, an iOS backgrounding, a screen unlock — so every flip
- * spends another eight `load-older` round trips on the same ghost, and each
- * re-run applies the remembered ratio against a document the previous re-runs
- * grew. That is the R·(range + g) walk this file's header calls catastrophic,
- * once per tab switch.
- *
- * So the loop hands over whatever it actually settled on. That row is a REAL
- * one — `captureAnchor` read it off the document — so the next restore is an
- * ordinary, instant one. `caughtUp` is MEASURED rather than assumed false: if
- * the fallback left the reader at the end of the log, saying so is what stops
- * the next open from pinning them to a message that is no longer the newest.
- */
-export function retiredAnchorMemory(opts: {
-  /** Where the loop settled, from `captureAnchor`. null → nothing anchorable. */
-  live: { anchorId: string; anchorOffset: number } | null;
   scrollTop: number;
   scrollHeight: number;
   clientHeight: number;
-  /** The newest anchored row's bottom, viewport-relative. null → none. */
-  lastRowBottom: number | null;
-  sid: string | null;
-}): ChatScrollMem {
-  const range = Math.max(1, maxScrollTop(opts.scrollHeight, opts.clientHeight));
-  const nearBottom = opts.scrollHeight - opts.scrollTop - opts.clientHeight < 40;
-  return {
-    anchorId: opts.live?.anchorId ?? null,
-    anchorOffset: opts.live?.anchorOffset ?? 0,
-    // Clamped for the same reason every other stored ratio is: iOS rubber-band
-    // reports a scrollTop outside the range, and a ratio outside [0,1] restores
-    // to a target the browser then clamps, leaving the loop re-assigning it.
-    ratio: Math.min(Math.max(0, opts.scrollTop / range), 1),
-    caughtUp: readerIsCaughtUp({
-      lastRowBottom: opts.lastRowBottom,
-      clientHeight: opts.clientHeight,
-      nearBottom,
-    }),
-    sid: opts.sid,
-  };
+}): boolean {
+  // A document too short to scroll has no end to be short of.
+  if (opts.scrollHeight <= opts.clientHeight) return true;
+  return opts.scrollHeight - opts.scrollTop - opts.clientHeight <= CAUGHT_UP_SLACK_PX;
 }
+
+/*
+ * `retiredAnchorMemory` used to live here: when the settling restore gave up on
+ * an anchor it could not reach, it wrote back whatever row the RATIO FALLBACK
+ * had landed on, so the next open would be an ordinary one instead of spending
+ * another eight pages on the same ghost.
+ *
+ * It is gone with the fallback, and nothing replaces it. Retirement existed only
+ * to clean up after a guess; with nothing guessing, a seek that runs out of
+ * budget simply leaves the record alone and the reader where the document
+ * opened. The budget itself is what stops the pages being re-spent (see
+ * `ScrollState.pages`, which survives a visibility flip and is reset only by a
+ * fresh mount) — a counter, rather than a write-back that had to be gated on
+ * `!hasMoreOlder` to avoid overwriting the reader's real parked spot with a row
+ * chosen by arithmetic against a fraction of the conversation.
+ *
+ * Those two rules — "retire a dead anchor" and "never retire against a partial
+ * document" — were each correct, and composing them is what produced the live
+ * bug: a budget-exhausted seek in a conversation that still had history never
+ * retired at all, so every tab switch re-spent the whole budget AND re-applied
+ * the ratio against a document the previous runs had grown.
+ */
 
 /**
  * Whether a remembered sid may be applied against the currently rendered sid.
