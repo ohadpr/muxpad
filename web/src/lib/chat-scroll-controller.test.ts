@@ -745,3 +745,79 @@ describe('a pane with nothing to assert still hears the reader', () => {
     expect(c.record('s1')?.anchorId).not.toBe('ancient');
   });
 });
+
+// ── A SEARCH HIT THAT IS NOT LOADED YET ─────────────────────────────────────
+// Acceptance regression: every search case that needed older history failed.
+// The jump could only enter the `hit` state once the target message was already
+// rendered — which is precisely what the seek exists to achieve — so it never
+// paged, the banner appeared immediately, and "Keep looking" reached nothing.
+// Measured: `rows: 126` before and after, `hit: null`.
+//
+// A hit is therefore named by the DOM (`[data-search-hit]`), not by an id the
+// mechanism holds, because when the seek starts nobody knows the id.
+describe('a search jump seeks history for a hit it cannot see yet', () => {
+  function jumped() {
+    // A fresh mount on the tail; the hit is 4 pages back.
+    const sim = new SimScroller(simRows(20, 200, 'tail'), { furnitureBelow: 100 });
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: null });
+    c.dispatch({ t: 'search-jump' });
+    return { sim, c };
+  }
+
+  it('asks for older history while the hit is not rendered', () => {
+    const { c } = jumped();
+    expect(c.phase(true)).toBe('SEEKING');
+    expect(c.wantsOlder(true)).toBe(true);
+  });
+
+  it('does not move the reader while it is hunting', () => {
+    const { sim, c } = jumped();
+    const onScreen = sim.anchorHere();
+    sim.writes.length = 0;
+    c.dispatch({ t: 'sought' });
+    sim.prepend(simRows(4, 200, 'older'));
+    c.place();
+    // The mechanism asserts nothing — measured as writes, not as scrollTop,
+    // because the ENGINE moves scrollTop for a prepend and that is not us.
+    expect(sim.writes).toEqual([]);
+    // …and the reader is left on the row they were reading.
+    expect(sim.anchorHere()).toEqual(onScreen);
+  });
+
+  it('places the hit a third down the moment it arrives', () => {
+    const { sim, c } = jumped();
+    c.dispatch({ t: 'sought' });
+    // Rows BEFORE the hit as well as after it: a hit at the very top of the
+    // document cannot be put a third of the way down, and clamping there is
+    // correct rather than a failure.
+    sim.prepend([...simRows(3, 200, 'before'), { id: 'hit', height: 300 }, ...simRows(3, 200, 'after')]);
+    sim.hitId = 'hit';
+    c.place();
+    expect(sim.rowOffset('hit')).toBe(Math.round(sim.clientHeight / 3));
+    expect(c.phase(true)).toBe('ANCHORED');
+    expect(c.wantsOlder(true)).toBe(false);
+  });
+
+  it('gives up inside the budget rather than paging forever', () => {
+    const { c } = jumped();
+    let asked = 0;
+    while (c.wantsOlder(true)) {
+      asked++;
+      c.dispatch({ t: 'sought' });
+      if (asked > 100) throw new Error('unbounded');
+    }
+    expect(asked).toBe(SEEK_PAGE_BUDGET);
+    // …and having given up, it still records nothing over the reader's memory.
+    expect(c.record('s1')).toBeNull();
+  });
+
+  it('"keep looking" gets a fresh budget', () => {
+    const { c } = jumped();
+    while (c.wantsOlder(true)) c.dispatch({ t: 'sought' });
+    expect(c.wantsOlder(true)).toBe(false);
+    c.dispatch({ t: 'search-jump' });
+    expect(c.wantsOlder(true)).toBe(true);
+  });
+});

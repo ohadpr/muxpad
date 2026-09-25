@@ -64,7 +64,7 @@ export interface Anchor {
 export type ScrollIntent =
   | { at: 'end' }
   | { at: 'row'; id: string; offset: number }
-  | { at: 'hit'; id: string }
+  | { at: 'hit' }
   | { at: 'nothing' };
 
 /**
@@ -155,8 +155,20 @@ export type ScrollInput =
    * i.e. tapping "12 actions" visibly did nothing.
    */
   | { t: 'fold-toggled'; id: string; offset: number }
-  /** A search result opened this pane, or superseded the last one. */
-  | { t: 'search-jump'; id: string }
+  /**
+   * A search result opened this pane, or superseded the last one.
+   *
+   * Carries NO id, and that is the point. When a jump starts, the message it
+   * names is usually not rendered — that is what the seek is for — so there is
+   * no id for anybody to pass. The DOM marks the hit with `data-search-hit`
+   * once it arrives, and `ScrollSurface.hitBox` is what finds it.
+   *
+   * The id used to be required here, so the jump could only enter this state
+   * once the target was ALREADY loaded. Every search that needed older history
+   * therefore never sought at all: the banner appeared immediately and "Keep
+   * looking" reached nothing.
+   */
+  | { t: 'search-jump' }
   /** The highlight was dismissed; the reader owns the scroll again. */
   | { t: 'search-cleared'; here: Anchor | null; atEnd: boolean }
   /** A `load-older` request actually went out (see `pages`). */
@@ -251,7 +263,7 @@ export function next(state: ScrollState, input: ScrollInput): ScrollState {
       // A new jump gets a fresh budget: it is a destination the reader asked for
       // just now, and refusing to page for it because an earlier restore spent
       // the pages would make the search silently do nothing.
-      return { intent: { at: 'hit', id: input.id }, pages: 0, placed: false };
+      return { intent: { at: 'hit' }, pages: 0, placed: false };
 
     case 'sought':
       return { ...state, pages: state.pages + 1 };
@@ -387,6 +399,9 @@ export function targetFor(
         rowHeight: row.height,
       });
     case 'hit':
+      // `row` here is the HIT's box — the mark inside the matched message, not
+      // the message's own top: a hit two thousand pixels down a long answer is
+      // not "brought into view" by showing where that answer begins.
       if (!row) return null;
       return scrollTopForSearchHit({
         scrollTop: geo.scrollTop,
