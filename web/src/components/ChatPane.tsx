@@ -2847,11 +2847,24 @@ export function ChatPane({
   //
   // ONE budget for both callers. The restore's seek and the search jump's seek
   // used to be separate counters with separate loops and the same constant.
+  //
+  // NO DEPENDENCY ARRAY, for the third time in this file and for the third time
+  // for the same reason. It listed `[active, events, loadingOlder,
+  // hasMoreOlder]` — and claiming a search jump changes none of them. It changes
+  // `jump`, and it dispatches the intent. So the effect never re-ran, the seek
+  // never started, and the reader was told the message was "further back than
+  // the history loaded here" on the strength of zero requests. Measured: `rows`
+  // and `first` identical before and after the jump.
+  //
+  // What wants a page is the INTENT, and an intent changes on a dispatch that no
+  // dependency array can see. Running on every commit costs one `wantsOlder` —
+  // a single row lookup — and `requestOlder` is single-flight on a ref, so a
+  // burst of commits cannot produce a burst of requests.
   useEffect(() => {
     if (!active || loadingOlder) return;
     if (!scroll.current?.wantsOlder(hasMoreOlder)) return;
     if (requestOlder()) scroll.current.dispatch({ t: 'sought' });
-  }, [active, events, loadingOlder, hasMoreOlder]);
+  });
 
   /** @returns whether a request actually went out — the anchor seek spends its
    *  budget in REQUESTS, not attempts. */
@@ -3082,12 +3095,23 @@ export function ChatPane({
    * view does not render), and the deadline is the backstop for a socket that
    * never opens.
    */
+  //
+  // Every branch here is a REASON, and none of them is "the seek is not running
+  // for some other cause". `wantsOlder` used to stand in for the last one, and
+  // it answers false for reasons that have nothing to do with having looked —
+  // so a jump that never got as far as asking reported itself as exhausted.
   useEffect(() => {
-    if (!jump || !active || jumpTargetId || jumpMissed || loadingOlder) return;
+    const c = scroll.current;
+    if (!jump || !active || !c || jumpTargetId || jumpMissed || loadingOlder) return;
     if (
+      // The server has no more to give.
       !hasMoreOlder ||
+      // The hit's timestamp is already INSIDE the loaded range and it still is
+      // not rendered — a subagent sidechain, which the archive indexes and the
+      // chat view does not draw. No amount of paging will produce it.
       !jumpMayBeOlder(events, jump.ts) ||
-      !scroll.current?.wantsOlder(hasMoreOlder)
+      // …or we looked, eight pages of it.
+      c.spentSeekBudget()
     ) {
       setJumpMissed(true);
     }
