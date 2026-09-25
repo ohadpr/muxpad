@@ -4,12 +4,15 @@ import {
   type AgentQuestion,
   type AgentSessionStatus,
   type ChatEvent,
-  IMAGE_MIME_BY_EXT,
+  ATTACHMENT_ACCEPT,
+  ATTACHMENT_EXTENSIONS,
+  ATTACHMENT_MIME_BY_EXT,
   LAUNCH_ACK_RE,
   type NoticeEvent,
   type SubagentProgress,
   type ToolResultEvent,
   type ToolUseEvent,
+  attachmentExtForMime,
   imageExtForMime,
   isAgentLaunchTool,
   subagentLabel,
@@ -268,16 +271,19 @@ function HighlightedText({ text, hl }: { text: string; hl?: readonly string[] | 
 }
 
 /** Camera glyph for the photo/attach button (matches the TUI composer). */
-function SvgCamera() {
+function SvgAttach() {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" fill="none">
+      {/* A paperclip, not a camera. The button takes any file muxpad can
+          render — pdf, csv, json, zip, the lot — and a camera glyph promised
+          photos only, which is also what the input's accept was enforcing. */}
       <path
-        d="M4 8a2 2 0 0 1 2-2h1.2a2 2 0 0 0 1.66-.89l.62-.92A1 1 0 0 1 10.3 4h3.4a1 1 0 0 1 .82.43l.62.92A2 2 0 0 0 16.8 6H18a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8Z"
+        d="M17.5 9.5 10.9 16.1a3 3 0 0 1-4.24-4.24l7.07-7.07a2 2 0 0 1 2.83 2.83l-7.08 7.07a1 1 0 0 1-1.41-1.41l6.36-6.37"
         stroke="currentColor"
         strokeWidth="1.6"
+        strokeLinecap="round"
         strokeLinejoin="round"
       />
-      <circle cx="12" cy="13" r="3.2" stroke="currentColor" strokeWidth="1.6" />
     </svg>
   );
 }
@@ -1530,13 +1536,14 @@ const CONVERT_STALL_MS = 60_000;
  *  it is gone by the time you have typed your first message. */
 const CONVERT_CONFIRM_MS = 8_000;
 
-/** '.ext' when the filename carries a renderable image extension — the
- *  picker's fallback for providers that report an empty MIME type (mirrors
- *  the server upload route's accept rule). */
-function imageExtFromName(name: string): string | null {
+/** '.ext' when the filename carries an extension the upload route accepts —
+ *  the picker's fallback for providers that report an empty MIME type (HEIC
+ *  pickers, some Android providers, and iOS's Files for several document
+ *  types). Mirrors the server's rule, which keys off the extension. */
+function attachmentExtFromName(name: string): string | null {
   const m = /\.[a-z0-9]+$/i.exec(name);
   const ext = m ? m[0].toLowerCase() : '';
-  return ext && ext in IMAGE_MIME_BY_EXT ? ext : null;
+  return ext && ext in ATTACHMENT_MIME_BY_EXT ? ext : null;
 }
 
 /**
@@ -2619,26 +2626,35 @@ export function ChatPane({
     setQuestion((q) => (q?.qid === qid ? null : q));
   };
 
-  // Photo picker → upload via the same attachments endpoint the TUI composer
+  // File picker → upload via the same attachments endpoint the TUI composer
   // uses; each upload becomes a composer chip whose path is appended at send
   // (exactly like paste — the path is NEVER spliced into the draft, or it would
-  // ride out twice and render the image twice). accept="image/*" with no
-  // `capture` → the OS sheet offers library + camera. Empty-type files
-  // (HEIC / some Android providers) are kept.
-  const onPickImages = async (e: ChangeEvent<HTMLInputElement>) => {
+  // ride out twice and render the image twice).
+  //
+  // ── WHY NOT image/* ─────────────────────────────────────────────────────────
+  // This was an image picker, and the server never was: the upload route has
+  // always taken pdf, txt, md, csv, json, zip and the rest, and the chat has a
+  // file-chip renderer for exactly those. The `accept` attribute was the only
+  // thing standing in the way — and on iOS an image-only `accept` also
+  // SUPPRESSES the Files and iCloud options in the share sheet, which is why
+  // the phone offered only Photo Library and Take Photo. Naming the extensions
+  // the server accepts restores the full native sheet and keeps the OS greying
+  // out anything the upload would have rejected afterwards.
+  const onPickFiles = async (e: ChangeEvent<HTMLInputElement>) => {
     const el = e.target;
-    // Accept exactly what the server upload route accepts: a renderable
-    // MIME, or a renderable filename extension when the provider reports no
-    // type (HEIC pickers / some Android providers hand over type='').
-    // Dropping anything is LOUD — a silently-swallowed pick reads as "the
-    // app is broken".
+    // Accept exactly what the server upload route accepts: a known MIME, or a
+    // known filename extension when the provider reports no type (HEIC
+    // pickers, some Android providers, and iOS Files for several document
+    // types all hand over type=''). Dropping anything is LOUD — a silently
+    // swallowed pick reads as "the app is broken".
     const all = Array.from(el.files ?? []);
     const files = all.filter(
-      (f) => imageExtForMime(f.type) !== null || imageExtFromName(f.name) !== null,
+      (f) => attachmentExtForMime(f.type) !== null || attachmentExtFromName(f.name) !== null,
     );
     if (files.length < all.length) {
+      const skipped = all.filter((f) => !files.includes(f)).map((f) => f.name);
       setNotice({
-        text: `some files were skipped — unsupported image type`,
+        text: `skipped ${skipped.join(', ')} — muxpad accepts ${ATTACHMENT_EXTENSIONS.join(' ')}`,
         tone: 'danger',
       });
     }
@@ -5082,13 +5098,18 @@ export function ChatPane({
             }}
           />
           <div className="chat-composer">
+            {/* No `capture` attribute, deliberately: with one, iOS goes straight
+                to the camera. Without it — and with an `accept` that is not
+                image-only — the share sheet offers Photo Library, Take Photo,
+                AND Choose File / iCloud, which is the native picker rather than
+                anything we have to build. */}
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
+              accept={ATTACHMENT_ACCEPT}
               multiple
               hidden
-              onChange={onPickImages}
+              onChange={onPickFiles}
             />
             <div className="chat-composer-main">
               <button
@@ -5096,13 +5117,13 @@ export function ChatPane({
                 className="chat-attach"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={uploading}
-                aria-label="Add photo"
-                title="Add photo"
+                aria-label="Attach a file"
+                title="Attach a file"
               >
                 {uploading ? (
                   <span className="chat-attach-spin" aria-hidden="true" />
                 ) : (
-                  <SvgCamera />
+                  <SvgAttach />
                 )}
               </button>
               {/* Chat mode only — Agent mode is raw, and `voiceOn` is the same
