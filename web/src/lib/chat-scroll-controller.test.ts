@@ -821,3 +821,59 @@ describe('a search jump seeks history for a hit it cannot see yet', () => {
     expect(c.wantsOlder(true)).toBe(true);
   });
 });
+
+// ── "I LOOKED AND COULD NOT FIND IT" IS NOT "I NEVER LOOKED" ────────────────
+// The banner cannot tell those apart and the reader cannot either, so the
+// give-up path has to be able to. Measured in a browser: `rows` and `first`
+// identical before and after a jump, the banner up immediately, and not one
+// page requested — reported to the reader as "further back than the history
+// loaded here", which is a claim about the conversation made by code that never
+// asked the server anything.
+describe('giving up on a hit is a fact about the search, not a default', () => {
+  function hunting() {
+    const sim = new SimScroller(simRows(20, 200, 'tail'), { furnitureBelow: 100 });
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: null });
+    c.dispatch({ t: 'search-jump' });
+    return { sim, c };
+  }
+
+  it('has not given up before it has asked', () => {
+    const { c } = hunting();
+    expect(c.spentSeekBudget()).toBe(false);
+    expect(c.wantsOlder(true)).toBe(true);
+  });
+
+  it('…nor part way through', () => {
+    const { c } = hunting();
+    c.dispatch({ t: 'sought' });
+    c.dispatch({ t: 'sought' });
+    expect(c.spentSeekBudget()).toBe(false);
+  });
+
+  it('has given up once the budget is spent', () => {
+    const { c } = hunting();
+    for (let i = 0; i < SEEK_PAGE_BUDGET; i++) c.dispatch({ t: 'sought' });
+    expect(c.spentSeekBudget()).toBe(true);
+  });
+
+  // The distinction that matters: a pane that never entered the hit state, or
+  // one whose seek never ran, must not report a spent budget — otherwise "we
+  // looked eight pages back" is said on behalf of zero requests.
+  it('a pane that never sought has not spent anything', () => {
+    const sim = new SimScroller(simRows(20, 200, 'tail'), { furnitureBelow: 100 });
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: null });
+    expect(c.spentSeekBudget()).toBe(false);
+  });
+
+  it('a fresh jump has not given up, however much the last one spent', () => {
+    const { c } = hunting();
+    for (let i = 0; i < SEEK_PAGE_BUDGET; i++) c.dispatch({ t: 'sought' });
+    expect(c.spentSeekBudget()).toBe(true);
+    c.dispatch({ t: 'search-jump' });
+    expect(c.spentSeekBudget()).toBe(false);
+  });
+});

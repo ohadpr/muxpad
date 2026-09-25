@@ -37,6 +37,7 @@ import type {
 } from './chat-scroll-intent';
 import {
   IDLE_STATE,
+  SEEK_PAGE_BUDGET,
   alreadyThere,
   canSeek,
   next,
@@ -106,6 +107,19 @@ export class ChatScrollController {
 
   intent(): ScrollState['intent'] {
     return this.state.intent;
+  }
+
+  /**
+   * Has the seek spent its whole budget?
+   *
+   * The ONLY honest basis for telling a reader "it is further back than the
+   * history loaded here". A pane that never entered the hit state, or whose
+   * seek never ran, returns false — because "I looked and could not find it"
+   * and "I never looked" are different facts, and the banner cannot distinguish
+   * them on the reader's behalf.
+   */
+  spentSeekBudget(): boolean {
+    return this.state.pages >= SEEK_PAGE_BUDGET;
   }
 
   /** Has anything read this pane's layout since it became visible? */
