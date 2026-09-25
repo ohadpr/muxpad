@@ -585,7 +585,7 @@ export function maxScrollTop(scrollHeight: number, clientHeight: number): number
  * exactly how far the document has drifted under the reader, whatever caused
  * it — a prepended history batch, a thumbnail decoding above, a font settling.
  *
- * CLAMPED for the same reason `scrollTopAfterOlderPrepend` is: the caller
+ * CLAMPED into the scrollable range: the caller
  * stamps the returned value as `lastProgrammaticTop`, and an out-of-range value
  * never equals the scrollTop the browser clamps to — so the next scroll event
  * would read as the reader taking control, and the restore loop would re-assign
