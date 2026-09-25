@@ -262,21 +262,32 @@ describe('answers — fail closed, always', () => {
   });
 });
 
-describe('scope — narrow on purpose', () => {
-  it('is on in Chat mode', () => {
-    expect(gateEnabled('chat', {})).toBe(true);
+describe('scope — OFF by default', () => {
+  // The correction: `mode === 'chat'` was a proxy for "the surface voice will
+  // drive", and it gated TYPED chat too — where the composer is already the
+  // eyeball the gate exists to replace. Reported twice as being asked to
+  // approve a delete or a push the user had just requested.
+  it('is OFF in Chat mode by default', () => {
+    expect(gateEnabled('chat', {})).toBe(false);
   });
 
   it('is OFF in Agent mode, which is documented as the raw face', () => {
     expect(gateEnabled('agent', {})).toBe(false);
   });
 
-  it('MUXPAD_GATE=off turns it off outright', () => {
-    expect(gateEnabled('chat', { MUXPAD_GATE: 'off' })).toBe(false);
+  it('MUXPAD_GATE=on re-enables it for Chat mode', () => {
+    // The mechanism is kept, not deleted: the voice case it was built for is
+    // real and unsolved.
+    expect(gateEnabled('chat', { MUXPAD_GATE: 'on' })).toBe(true);
   });
 
-  it('there is no environment switch that turns it ON for Agent mode', () => {
+  it('there is still no environment switch that turns it ON for Agent mode', () => {
     expect(gateEnabled('agent', { MUXPAD_GATE: 'on' })).toBe(false);
     expect(gateEnabled('agent', { MUXPAD_GATE: 'all' })).toBe(false);
+  });
+
+  it('an unrecognised value is not an accidental ON', () => {
+    expect(gateEnabled('chat', { MUXPAD_GATE: 'yes' })).toBe(false);
+    expect(gateEnabled('chat', { MUXPAD_GATE: 'off' })).toBe(false);
   });
 });
