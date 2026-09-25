@@ -528,3 +528,67 @@ export function recordFor(
     ? { anchorId: null, anchorOffset: 0, caughtUp: true, sid: opts.sid }
     : { anchorId: intent.id, anchorOffset: intent.offset, caughtUp: false, sid: opts.sid };
 }
+
+/**
+ * How near the top the reader must be before we page older history in.
+ *
+ * Not zero, because a reader arriving at the top wants the next batch already
+ * on its way rather than a stall when they hit the edge.
+ */
+export const TOP_PAGE_ZONE_PX = 240;
+
+/** Why we are asking for older history, or `no`. */
+export type PageOlderReason = 'no' | 'fill-viewport' | 'top-zone';
+
+/**
+ * SHOULD WE ASK FOR OLDER HISTORY?
+ *
+ * Pulled out of `ChatPane` and made pure because the inline version ran away in
+ * a real browser and no test could see it. The mechanism: an effect-ordering bug
+ * left the intent as `{ at: 'nothing' }` on every fresh mount, so `phase` was
+ * IDLE rather than FOLLOWING, the FOLLOWING guard did not fire, nobody had
+ * placed the reader so `scrollTop` was 0, the top zone asked for a page, the
+ * page changed `events`, the effect re-ran, and around again until the server
+ * ran out of history. Measured: 990 rows and 211,298px at mount, where the
+ * server serves a 128KB tail — a reader who had touched nothing was 210,000px
+ * from the newest message.
+ *
+ * The ordering bug is fixed, so the intent is right and FOLLOWING alone would
+ * now hold. `placed` is here anyway, because the comment at the old call site
+ * asserted this guarantee ("a pane that has not been placed since it became
+ * visible has not had its layout read at all") and the code did not implement
+ * it. A guard that depends on the intent being correct is a guard that fails
+ * exactly when something upstream is wrong, which is when you need it.
+ */
+export function shouldPageOlder(opts: {
+  phase: ScrollPhase;
+  /** `ScrollState.placed` — has anything read this pane's layout yet? */
+  placed: boolean;
+  geo: ScrollGeometry;
+  measurable: boolean;
+  hasMoreOlder: boolean;
+  loadingOlder: boolean;
+  /** Has anything rendered? An empty log has no reader to page for. */
+  haveEvents: boolean;
+  /** The server's history baseline is bound (we know which transcript). */
+  sessionBound: boolean;
+}): PageOlderReason {
+  if (!opts.hasMoreOlder || opts.loadingOlder || !opts.sessionBound) return 'no';
+  // A box we cannot measure tells us nothing about where the reader is, and
+  // paging on it prepends a batch of history for nobody.
+  if (!opts.measurable) return 'no';
+  // ── Not enough content to scroll ──────────────────────────────────────────
+  // The initial window is a BYTE tail, and a few huge records (a base64 image
+  // paste runs to hundreds of KB on one line) can eat all of it and render less
+  // than a screenful. With no overflow there are no scroll events, so the
+  // scroll-up pager could never fire and the rest of the conversation would be
+  // unreachable. This is the one case that pages without a reader asking.
+  if (opts.geo.scrollHeight <= opts.geo.clientHeight + 1) return 'fill-viewport';
+  if (!opts.haveEvents) return 'no';
+  // Nobody has read the layout yet, so `scrollTop` 0 is not evidence the reader
+  // is at the top — it is evidence that nothing has happened.
+  if (!opts.placed) return 'no';
+  // A reader at the end is not paging history.
+  if (opts.phase === 'FOLLOWING') return 'no';
+  return opts.geo.scrollTop < TOP_PAGE_ZONE_PX ? 'top-zone' : 'no';
+}

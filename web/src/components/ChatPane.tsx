@@ -87,6 +87,7 @@ import {
 } from '../lib/chat-scroll';
 import { ChatScrollController, FOLLOW_THRESHOLD_PX } from '../lib/chat-scroll-controller';
 import { ANCHOR_ATTR, domScrollSurface } from '../lib/chat-scroll-dom';
+import { TOP_PAGE_ZONE_PX, shouldPageOlder } from '../lib/chat-scroll-intent';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
 import { liveStatusLabel } from '../lib/live-status';
 import { isMobileLayout } from '../lib/mobile-layout';
@@ -1499,11 +1500,6 @@ function agentLaunchDescription(e: ToolUseEvent): string {
  *  hit send. */
 const SUBAGENT_QUIET_MS = 15_000;
 
-/** How close to the top of the log counts as "asking for older history". Read
- *  by both pager triggers — the reader's scroll, and the re-arm that covers a
- *  reader parked AT the top, where the browser fires no scroll event at all. */
-const TOP_PAGE_ZONE_PX = 240;
-
 /** How long a conversion request may hang before the strip re-enables itself.
  *  Generous — the route kills a pty and spawns a runner before it answers —
  *  and deliberately NOT an error claim: it only gives the user their button
@@ -2805,23 +2801,27 @@ export function ChatPane({
   // event, though, nothing re-delivers this check when the window expires, so a
   // suppressed pass re-checks itself once the settle is over.
   useEffect(() => {
-    if (!active || loadingOlder || !hasMoreOlder) return;
-    if (!session?.current_sid) return; // history baseline not bound yet
+    const c = scroll.current;
     const el = scrollRef.current;
-    if (!el || el.clientHeight < 40) return; // hidden/collapsed — don't page blind
-    if (el.scrollHeight <= el.clientHeight + 1) {
-      requestOlder();
-      return;
-    }
-    // A reader at the BOTTOM is not paging history; everyone else in the top
-    // zone is. The old version of this also had to wait out a 250ms suppression
-    // window, because a just-shown pane reported scrollTop 0 while its layout
-    // settled and paging on that prepended a batch of history on every tab
-    // visit. There is no window any more: a pane that has not been placed since
-    // it became visible has not had its layout read at all, which is the same
-    // guarantee without a clock.
-    if (scroll.current?.phase(hasMoreOlder) === 'FOLLOWING' || events.length === 0) return;
-    if (el.scrollTop < TOP_PAGE_ZONE_PX) requestOlder();
+    if (!active || !c || !el) return;
+    // The whole decision is in `shouldPageOlder`, pure and tested — including
+    // the loop it used to be able to enter, which rendered a 990-row
+    // conversation at mount where the server serves a 126-row tail.
+    const why = shouldPageOlder({
+      phase: c.phase(hasMoreOlder),
+      placed: c.hasPlaced(),
+      geo: {
+        scrollTop: el.scrollTop,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+      },
+      measurable: el.clientHeight >= 40,
+      hasMoreOlder,
+      loadingOlder,
+      haveEvents: events.length > 0,
+      sessionBound: !!session?.current_sid,
+    });
+    if (why !== 'no') requestOlder();
   }, [active, events, loadingOlder, hasMoreOlder, session?.current_sid]);
 
   // ── THE SEEK ──────────────────────────────────────────────────────────────
