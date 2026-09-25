@@ -79,32 +79,18 @@ import { VoiceBar, VoiceControl } from './VoiceControl';
 /** Open a media item in the lightbox (image or video). */
 type OpenMedia = (m: { url: string; name: string; video: boolean }) => void;
 import {
-  ANCHOR_SEEK_PAGE_BUDGET,
-  ANCHOR_SEEK_PAGE_MS,
-  RESTORE_HARD_STOP_MS,
-  RESTORE_SETTLE_MS,
   SEARCH_JUMP_DEADLINE_MS,
-  SEARCH_JUMP_SETTLE_MS,
-  SHOW_SETTLE_MS,
-  SMOOTH_SCROLL_SETTLE_MS,
-  firstVisibleRow,
-  maxScrollTop,
-  opensAtNewest,
-  readerIsCaughtUp,
+  flushChatScrollNow,
   recallChatScroll,
+  recallExpandedRuns,
   rememberChatScroll,
-  retiredAnchorMemory,
-  scrollEventIsTrustworthy,
+  rememberExpandedRuns,
   scrollMemorySidMatches,
-  scrollMotionIsTheReader,
-  scrollTopAfterFoldChange,
-  scrollTopAfterOlderPrepend,
-  scrollTopForAnchor,
-  scrollTopForSearchHit,
   shouldPersistChatScroll,
-  shouldRememberPosition,
-  shouldRestorePosition,
 } from '../lib/chat-scroll';
+import { ChatScrollController, FOLLOW_THRESHOLD_PX } from '../lib/chat-scroll-controller';
+import { ANCHOR_ATTR, domScrollSurface } from '../lib/chat-scroll-dom';
+import { TOP_PAGE_ZONE_PX, shouldPageOlder } from '../lib/chat-scroll-intent';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
 import { trackKeyboardInset } from '../lib/keyboard-inset';
 import { liveStatusLabel } from '../lib/live-status';
@@ -1498,11 +1484,6 @@ function agentLaunchDescription(e: ToolUseEvent): string {
  *  hit send. */
 const SUBAGENT_QUIET_MS = 15_000;
 
-/** How close to the top of the log counts as "asking for older history". Read
- *  by both pager triggers — the reader's scroll, and the re-arm that covers a
- *  reader parked AT the top, where the browser fires no scroll event at all. */
-const TOP_PAGE_ZONE_PX = 240;
-
 /** How long a conversion request may hang before the strip re-enables itself.
  *  Generous — the route kills a pty and spawns a runner before it answers —
  *  and deliberately NOT an error claim: it only gives the user their button
@@ -1524,123 +1505,23 @@ function attachmentExtFromName(name: string): string | null {
   return ext && ext in ATTACHMENT_MIME_BY_EXT ? ext : null;
 }
 
-/**
- * The attribute top-level chat rows carry so the scroll memory can name one.
- *
- * The value is the same id the React key uses (an event id, or an action run's
- * stable end event) — see `renderEvent`. Only TOP-LEVEL rows carry it: the
- * lookups below assume `[data-eid]` boxes are siblings in document order, so
- * their bottoms increase monotonically and can be binary-searched.
- */
-const ANCHOR_ATTR = 'data-eid';
-
 /** The "no search jump" terms list. A module-level constant so `jumpTerms` has
  *  a STABLE identity when there is no jump — `ChatRow` is memoised on it, and a
  *  fresh `[]` every render would defeat that for the whole transcript. */
 const NO_TERMS: readonly string[] = [];
 
-/**
- * The anchored rows of a chat, in document order.
+/*
+ * The row-measuring helpers — `ANCHOR_ATTR`, `anchorRows`, `captureAnchor`,
+ * `anchorAt`, `findAnchorRow`, `firstVisibleRow` — used to live here, and are now
+ * in lib/chat-scroll-dom.ts behind the `ScrollSurface` port.
  *
- * DIRECT children of `.chat-list` only — a live HTMLCollection, no layout and no
- * subtree walk. Everything here runs off scroll events or an animation-frame
- * loop, and a long chat's rendered markdown is tens of thousands of nodes; a
- * `querySelectorAll` over the whole tree would be a per-frame tax on a chat that
- * is doing nothing wrong. Scanning the children also means an attribute that
- * somehow ends up on a NESTED row can never be mistaken for a top-level one, so
- * the monotonic-bottoms invariant holds structurally rather than by convention.
+ * Not a tidy-up: they were called from five places in this file, each of which
+ * re-derived "is this box real?", "which row is the reader on?" and "what is the
+ * viewport top?" for itself, and they did not all agree — one clamped an iOS
+ * rubber-band scrollTop and the others did not, one treated a row whose bottom
+ * sat exactly on the viewport top as past it and another as present. Measuring
+ * in one place is what lets the deciding be tested without a browser.
  */
-function anchorRows(el: HTMLElement): HTMLElement[] {
-  const list = el.querySelector('.chat-list');
-  if (!list) return [];
-  const kids = list.children;
-  const out: HTMLElement[] = [];
-  for (let i = 0; i < kids.length; i++) {
-    const child = kids[i];
-    if (child instanceof HTMLElement && child.hasAttribute(ANCHOR_ATTR)) out.push(child);
-  }
-  return out;
-}
-
-/**
- * The NEWEST anchored row, or null if the chat has none.
- *
- * A backwards walk from the list's last child rather than `anchorRows(el)`,
- * because this runs on every trusted scroll event and only the last row is
- * wanted. The rows below it are the un-anchored live furniture — the streaming
- * preview, the working indicator, the queued strip — of which there are at most
- * a handful, so the walk is O(1) in practice where collecting every row is O(n).
- */
-function lastAnchorRow(el: HTMLElement): HTMLElement | null {
-  const list = el.querySelector('.chat-list');
-  for (let n = list?.lastElementChild ?? null; n; n = n.previousElementSibling) {
-    if (n instanceof HTMLElement && n.hasAttribute(ANCHOR_ATTR)) return n;
-  }
-  return null;
-}
-
-/**
- * Is the reader at the end of the conversation — is the newest message on
- * screen? This, not the pin, is what a re-open consults. See chat-scroll.ts.
- */
-function measureCaughtUp(el: HTMLElement, nearBottom: boolean): boolean {
-  const last = lastAnchorRow(el);
-  return readerIsCaughtUp({
-    // The row's END, not its start — a newest message taller than the viewport
-    // is read to the end only when its bottom arrives. See readerIsCaughtUp.
-    lastRowBottom: last
-      ? last.getBoundingClientRect().bottom - el.getBoundingClientRect().top
-      : null,
-    clientHeight: el.clientHeight,
-    nearBottom,
-  });
-}
-
-/**
- * Which message the reader is looking at, and how far its top sits above the
- * viewport top. `null` when there is nothing anchorable (empty chat, or a
- * hidden pane whose boxes have all collapsed).
- */
-function captureAnchor(el: HTMLElement): { anchorId: string; anchorOffset: number } | null {
-  return anchorAt(el, anchorRows(el));
-}
-
-/** `captureAnchor` against an already-collected row list (saves a re-scan). */
-function anchorAt(
-  el: HTMLElement,
-  rows: HTMLElement[],
-): { anchorId: string; anchorOffset: number } | null {
-  if (rows.length === 0) return null;
-  const viewportTop = el.getBoundingClientRect().top;
-  const i = firstVisibleRow(
-    rows.length,
-    (k) => (rows[k] as HTMLElement).getBoundingClientRect().bottom,
-    viewportTop + 1,
-  );
-  // `firstVisibleRow` returns `count` when every row is above the line, which
-  // only happens transiently mid-relayout — the last row is still the best
-  // available description of where the reader is.
-  const row = rows[Math.min(i, rows.length - 1)];
-  const anchorId = row?.getAttribute(ANCHOR_ATTR);
-  if (!row || !anchorId) return null;
-  return { anchorId, anchorOffset: Math.round(row.getBoundingClientRect().top - viewportTop) };
-}
-
-/**
- * The rendered row for a remembered anchor id, or null if it isn't loaded.
- *
- * A linear scan of the already-collected top-level rows, NOT
- * `querySelector('[data-eid="…"]')`. The selector form walks the entire subtree
- * — and walks ALL of it on the miss, which is exactly the case the restore loop
- * hits every frame while it is paging the anchor back in. It also needed the id
- * escaped as a CSS string, which this doesn't.
- */
-function findAnchorRow(rows: HTMLElement[], anchorId: string): HTMLElement | null {
-  for (const row of rows) {
-    if (row.getAttribute(ANCHOR_ATTR) === anchorId) return row;
-  }
-  return null;
-}
 
 /**
  * Chat view of the Claude session tracked in a pane. Connects to
@@ -1681,48 +1562,22 @@ export function ChatPane({
   // The pane box, which is what the software keyboard's inset is measured
   // against — see chatKeyboardInset.
   const paneRef = useRef<HTMLDivElement>(null);
-  const pinnedToBottom = useRef(true);
   /**
-   * Whether live output should scroll itself into view. A ref, because it has to
-   * be right in the same frame a layout change lands, which a re-render cannot
-   * promise.
+   * THE SCROLL MECHANISM. One object, one writer.
    *
-   * This used to ALSO mirror itself onto the DOM, because scroll anchoring was
-   * scoped to it (`.chat-scroll.-pinned { overflow-anchor: none }`). That is
-   * gone: this setter runs on every scroll event, so the class flickered while
-   * output streamed and anchoring switched on and off frame to frame, which is
-   * the small random backward jump described in ChatPane.css. Anchoring is now
-   * unconditional and this is just a ref again.
+   * Everything this replaced is worth naming, because the shape is the finding:
+   * thirteen refs coordinated scroll here (`pinnedToBottom`,
+   * `lastProgrammaticTop`, `lastScrollHeight`, `lastScrollTop`, `userScrolled`,
+   * `suppressPinUntil`, `holdRememberedAnchor`, `searchJumpHold`, `foldAnchor`,
+   * `toggleAnchor`, `liveAnchor`, `jumpSeekPages`, `olderAnchor`) and eleven
+   * places assigned `scrollTop`. Twelve of those refs existed to answer one
+   * question — "was that scroll event us or the reader?" — which only existed
+   * because there were eleven writers. With one writer the question is answered
+   * by bookkeeping at the write site, and the refs have nothing to do.
+   *
+   * What survives is here: `hasMoreOlder` / `loadingOlder` (the pager, a real
+   * requirement) and this controller. Nothing else.
    */
-  const setPinned = useCallback((v: boolean) => {
-    pinnedToBottom.current = v;
-  }, []);
-  // Programmatic scrollTop writes stamp this BEFORE assigning so onScroll
-  // can tell reader-driven motion from restore / pin / older-prepend adjusts.
-  const lastProgrammaticTop = useRef(-1);
-  /** `scrollHeight` as of the last scroll event. A change means the document
-   *  resized, which is the only thing that can produce a scroll-anchoring
-   *  adjustment — see the discriminator in onScroll. */
-  const lastScrollHeight = useRef(-1);
-  /** `scrollTop` as of the last scroll event, so a frame's motion can be
-   *  compared against the growth that might explain it. */
-  const lastScrollTop = useRef(-1);
-  // Settling restore stops the moment the reader scrolls; reset on hide.
-  const userScrolled = useRef(false);
-  // Monotonic deadline (performance.now) until which scroll events are OUR
-  // doing — a show transition relaying out, or a smooth jump-to-bottom — and
-  // so must not touch pin state or scroll memory. 0 = nothing in flight. A
-  // real gesture clears it (see the wheel/touch listener): distrusting events
-  // for a moment is right; distrusting the reader never is.
-  const suppressPinUntil = useRef(0);
-  // True while the settling restore is still trying to reach a remembered
-  // MESSAGE it hasn't found yet. `onScroll` keeps recording pin + ratio (both
-  // describe the pane as it actually is) but must leave the stored anchor
-  // alone: the restore's own scrollTop writes would otherwise overwrite the
-  // reader's parked message with wherever the restore had got to, losing it for
-  // good. Cleared by the restore itself; a real gesture ends the restore, which
-  // clears it too.
-  const holdRememberedAnchor = useRef(false);
   // ── Search jump ───────────────────────────────────────────────────────────
   // The message-tier search hit this pane was opened for, or null. Component
   // state, never storage: a highlight is a property of one visit and must not
@@ -1731,78 +1586,78 @@ export function ChatPane({
   // We looked, we paged, and the message is not in reach — say so instead of
   // navigating to a chat that looks like nothing happened.
   const [jumpMissed, setJumpMissed] = useState(false);
-  // True from the moment a jump starts until the reader takes the pane back.
-  // While it is set `onScroll` records NOTHING: a jump is a destination the
-  // user asked for from the search box, not the place they were reading, and
-  // letting it overwrite the memory would make the next ORDINARY open of this
-  // chat land on the search hit. See shouldRememberPosition in chat-scroll.ts.
-  const searchJumpHold = useRef(false);
+  /** Which conversation the controller was last reset for. See the effect below. */
+  const enteredPane = useRef<string | null>(null);
+  const scroll = useRef<ChatScrollController | null>(null);
+  if (!scroll.current) {
+    scroll.current = new ChatScrollController(domScrollSurface(() => scrollRef.current));
+  }
   /**
-   * The row under the reader's eyes at the instant a highlight was dismissed,
-   * held across the commit that closes the run the highlight forced open. See
-   * `clearJump` and scrollTopAfterFoldChange.
+   * Write the reader's position through to the store.
+   *
+   * Called ONLY where the controller says the reader chose a position. The
+   * previous design called `rememberChatScroll` from `onScroll`, which fires for
+   * every writer's scrollTop as well as the reader's — so a restore's own
+   * intermediate frames recorded themselves as reading positions, and it needed a
+   * hold flag to protect the goal from the loop chasing it. `recordFor` makes the
+   * flag unnecessary: a position we placed is not a position the reader chose, so
+   * there is nothing to protect.
    */
-  const foldAnchor = useRef<{ anchorId: string; anchorOffset: number } | null>(null);
   /**
-   * The run header the reader just tapped, held across the commit that expands
-   * or collapses it.
+   * The observer, and the rows it is watching.
    *
-   * A fold toggle is a height change the READER caused, in the middle of the
-   * document, and the re-pin observer (D) cannot tell it from a thumbnail
-   * decoding — its comment is written entirely about content nobody asked for.
-   * So for a pinned reader it answers the expand by scrolling to the new
-   * bottom: the tapped header goes off the top of the screen and the reply
-   * under it does not move a pixel, i.e. tapping "12 actions" visibly does
-   * NOTHING. Measured in headless Chromium: a 1500px expansion moved the header
-   * from +272 to -1228 while the reply below it stayed at +322.
-   *
-   * That is the commonest shape in Chat mode — the reply is last, the fold sits
-   * directly above it, and the reader is pinned because they just read the
-   * reply — and it is self-reinforcing: they tap again to collapse, the
-   * observer re-pins again, and the whole thing reads as "scrolling is super
-   * buggy". The unpinned reader is already fine (the engine holds the header
-   * exactly, measured 0 scroll events), so this is strictly the pinned half.
+   * A ref rather than a local so the commit subscription can re-offer newly
+   * rendered rows without tearing the observer down — see the effect below for
+   * why the rows and not just the container.
    */
-  const toggleAnchor = useRef<{ anchorId: string; top: number } | null>(null);
+  const rowWatcher = useRef<ResizeObserver | null>(null);
+  const watchRows = useCallback(() => {
+    const ro = rowWatcher.current;
+    const el = scrollRef.current;
+    if (!ro || !el) return;
+    ro.observe(el);
+    const list = el.querySelector('.chat-list');
+    if (!list) return;
+    // BORDER-BOX on the list: the composer's clearance is a sibling row at the
+    // end of it, and a content-box observer would not see that resize.
+    ro.observe(list, { box: 'border-box' });
+    for (const row of list.children) {
+      if (row instanceof HTMLElement && row.hasAttribute(ANCHOR_ATTR)) ro.observe(row);
+    }
+  }, []);
+
+  /** Reveal "jump to latest" only once meaningfully scrolled up, so it does not
+   *  flicker on tiny nudges near the bottom. */
+  const syncScrollDownArrow = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || el.clientHeight < 40) return;
+    setShowScrollDown(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
+  }, []);
+
+  const saveScroll = useCallback(() => {
+    const c = scroll.current;
+    if (!c) return;
+    if (
+      !shouldPersistChatScroll({
+        active: activeRef.current,
+        clientHeight: scrollRef.current?.clientHeight ?? 0,
+        visible: document.visibilityState === 'visible',
+      })
+    )
+      return;
+    const rec = c.record(renderedSid.current);
+    if (rec) rememberChatScroll(paneId, rec);
+  }, [paneId]);
+
   /**
-   * Where the UNPINNED reader was at the end of the last trustworthy scroll
-   * event — the row under their eyes and how far its top sat above the
-   * viewport top. null while they are following the bottom.
-   *
-   * ── WEBKIT HAS NO SCROLL ANCHORING ──────────────────────────────────────────
-   * `.chat-scroll` now asks for `overflow-anchor: auto` unconditionally (the
-   * `-pinned` exception is gone — see ChatPane.css), and on Chromium the engine
-   * then holds the reader's place when content above them grows. WebKit shipped
-   * that in Safari
-   * 27 (Sep 2026); every iPhone on iOS 26 or earlier — Safari and the installed
-   * PWA alike, both WKWebView — does not implement it at all. The re-pin
-   * observer below deliberately does nothing for an unpinned reader, so on the
-   * phone NOTHING pays: a screenshot above them finishing its decode slides the
-   * row they are reading down by the whole growth. Measured, headless WebKit
-   * and Chromium, 450px of growth above a parked reader: engine pays 450 and
-   * drift is 0 with anchoring on, engine pays 0 and drift is 450 with it off.
-   *
-   * ── AND IT MUST NOT DOUBLE-PAY ──────────────────────────────────────────────
-   * The obvious equivalent — `scrollTop += ΔscrollHeight` — adds the growth a
-   * SECOND time on an engine that already paid, throwing the reader forward by
-   * the same 450px, and yanks them for growth BELOW them too. So the
-   * compensation is ROW-BASED, like everything else in this file:
-   * `scrollTopForAnchor` computes an absolute target from the row's identity,
-   * which on an engine that has already restored that row equals the current
-   * scrollTop — and the `<= 1` guard then declines to write. That guard, not a
-   * `CSS.supports` feature test, is the double-pay defence: `CSS.supports(
-   * 'overflow-anchor', 'auto')` answers TRUE on an iOS 26 WKWebView that will
-   * not pay, and true on Playwright's WebKit that will.
-   *
-   * SNAPSHOT, not a fresh capture inside the observer callback: by the time the
-   * callback runs the growth has already happened, so on WebKit re-capturing
-   * would read the row at its NEW position and compute a target of "leave it
-   * exactly where it jumped to".
+   * The reader tapped a run header. Capture where it sits BEFORE the commit that
+   * changes its height, and make that the intent.
    */
-  const liveAnchor = useRef<{ anchorId: string; anchorOffset: number } | null>(null);
-  // Older pages spent hunting for this jump's message. Bounded like the
-  // restore's anchor seek, and reset per jump (and by "keep looking").
-  const jumpSeekPages = useRef(0);
+  const onFoldToggled = useCallback((id: string) => {
+    const c = scroll.current;
+    const box = c?.rowBox(id);
+    if (c && box) c.dispatch({ t: 'fold-toggled', id, offset: box.top });
+  }, []);
   // Live mirror of `active` for the WS message handler's closures (which
   // capture it at subscription time) — see the turn-done seen-clear.
   const activeRef = useRef(active);
@@ -1848,8 +1703,7 @@ export function ChatPane({
   const [notice, setNotice] = useState<{ text: string; tone: 'info' | 'danger' } | null>(null);
   // Older-history pagination: the server opens with just the recent tail; we
   // page earlier messages in on scroll-up. `hasMoreOlder` starts true and is
-  // corrected by the server's `older-done`; `olderAnchor` preserves the scroll
-  // position across a prepend so the view doesn't jump.
+  // corrected by the server's `older-done`.
   const [hasMoreOlder, setHasMoreOlder] = useState(true);
   // Mirror for the closures that outlive a render: the restore effect re-runs
   // only on activation, so it would otherwise seek against whatever
@@ -1863,20 +1717,6 @@ export function ChatPane({
   // (or on unmount/pane switch) so a stale timer can't fire into a LATER
   // request and clear its loading flag mid-flight.
   const olderTimeout = useRef<number | undefined>(undefined);
-  /**
-   * Scroll geometry captured just before an older-history prepend, so the
-   * layout effect below can restore the reader's position after the content
-   * grows above the viewport.
-   *
-   * `forEvents` KEYS IT TO ONE EVENTS COMMIT. The apply used to sit inside a
-   * `clientHeight >= 40` guard, and so did the null-reset — so a batch that
-   * prepended while the pane was hidden left a live anchor behind, and the next
-   * unrelated commit (a plain incoming message) applied that stale geometry and
-   * teleported the reader. An anchor is only ever valid for the exact commit it
-   * was measured against; anything else drops it and lets the ratio-restore
-   * loop do its job.
-   */
-  const olderAnchor = useRef<{ height: number; top: number; forEvents: ChatEvent[] } | null>(null);
   // Tool calls collapse to a one-line summary; tapping opens this modal with the
   // full command + output. null = closed.
   const [openTool, setOpenTool] = useState<ToolDetail | null>(null);
@@ -1932,7 +1772,15 @@ export function ChatPane({
   // it reads as done, not running; its tool_result may never stream here).
   const subagentSeenAt = useRef(new Map<string, number>());
   // Expanded action-run blocks, keyed by the run's first event id.
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  // Expanded action-run blocks, keyed by the run's first event id — PERSISTED,
+  // because a run the reader had opened collapsing on remount is what made the
+  // offset into it meaningless. See recallExpandedRuns.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() =>
+    recallExpandedRuns(paneId),
+  );
+  useEffect(() => {
+    rememberExpandedRuns(paneId, expandedGroups);
+  }, [paneId, expandedGroups]);
   // Runner-pushed session status: model, context fill, available models.
   // null = no runner status yet (TUI-view chats never get one).
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
@@ -1980,7 +1828,6 @@ export function ChatPane({
     loadingOlderRef.current = false;
     window.clearTimeout(olderTimeout.current);
     olderTimeout.current = undefined;
-    olderAnchor.current = null;
     acked.current = true;
     pendingText.current = '';
     streamBuffer.current = '';
@@ -2027,11 +1874,6 @@ export function ChatPane({
           setStreamingText('');
           setHasMoreOlder(true);
           hasMoreOlderRef.current = true;
-          // Geometry measured against the log we just wiped describes a
-          // document that no longer exists. The commit-identity guard in the
-          // prepend effect would drop it anyway, but leaving it live means the
-          // NEXT older batch of the NEW session could match it first.
-          olderAnchor.current = null;
         }
         if (newSid) renderedSid.current = newSid;
         setSession(
@@ -2129,11 +1971,9 @@ export function ChatPane({
           byId.current = new Set(merged.events.map((e) => e.id));
           if (merged.reset) {
             // Everything the reader had paged in is gone with the old list, so
-            // the paging cursor has to go back to "there may be more" — and the
-            // prepend geometry describes a document that no longer exists.
+            // the paging cursor has to go back to "there may be more".
             setHasMoreOlder(true);
             hasMoreOlderRef.current = true;
-            olderAnchor.current = null;
           }
           // The transcript moved, so re-derive the preview from the untouched
           // buffer. A reconnect's history replay is the case that matters: the
@@ -2150,32 +1990,13 @@ export function ChatPane({
         if (fresh.length) {
           for (const e of fresh) byId.current.add(e.id);
           if (msg.phase === 'older') {
-            // Anchor the scroll to the current top so the prepend (which grows
-            // content above the viewport) doesn't yank the view — see the
-            // useLayoutEffect below. The batch is chronological and entirely
-            // before the current head, so prepend it wholesale.
-            const el = scrollRef.current;
-            // CLAMPED, like the ratio on the persist path is. An older batch
-            // lands at the top of history, which on iOS is exactly where the
-            // rubber-band bounce reports a scrollTop outside [0, max] — and the
-            // reader paging older history IS at the top, mid-bounce, by
-            // construction. `scrollTopAfterOlderPrepend` treats `anchorTop` as
-            // the reader's position in the old document, so a captured -40
-            // lands them 40px INTO the new page instead of on the same
-            // messages.
-            const measured = el
-              ? {
-                  height: el.scrollHeight,
-                  top: Math.min(
-                    Math.max(0, el.scrollTop),
-                    maxScrollTop(el.scrollHeight, el.clientHeight),
-                  ),
-                }
-              : null;
+            // The batch is chronological and entirely before the current head,
+            // so prepend it wholesale. No geometry is captured: the reader's
+            // place is held by their intent (a message id), which the commit
+            // subscription re-satisfies against the document as it is AFTER the
+            // prepend. Capturing heights across a commit is what made the old
+            // compensation wrong whenever a live append landed in the same one.
             ordered.current = [...fresh, ...ordered.current];
-            // Keyed to THIS array identity — the very commit setEvents is about
-            // to publish. See olderAnchor's note.
-            olderAnchor.current = measured ? { ...measured, forEvents: ordered.current } : null;
           } else {
             ordered.current = [...ordered.current, ...fresh];
           }
@@ -2727,36 +2548,41 @@ export function ChatPane({
     })();
   };
 
-  // Keep pinned to the bottom as new events arrive, unless the user scrolled up.
-  // `events` is a deliberate trigger dependency (we re-scroll on new events)
-  // even though the body reads it only via the DOM.
-  // The subagent trigger is the COUNT, not the map: progress ticks replace
-  // the map object every ~500ms without changing content height, and each
-  // firing costs a forced reflow (scrollHeight read). Rows appear/disappear
-  // only when the count moves.
-  // Set lastProgrammaticTop BEFORE scrollTop so the synchronous onScroll
-  // doesn't treat this as the reader taking control.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: events/streamingText/optimisticUser/question/subagent-count/queued-count are the scroll triggers
-  useEffect(() => {
-    const el = scrollRef.current;
-    // clientHeight < 40 means no real box (mid-relayout, or a pane hidden by
-    // an ancestor we haven't been told about): measuring it yields target 0,
-    // which stamps a bogus lastProgrammaticTop and parks the reader at the
-    // top. Same threshold the persistence and re-pin guards use.
-    if (el && active && el.clientHeight >= 40 && pinnedToBottom.current) {
-      const target = maxScrollTop(el.scrollHeight, el.clientHeight);
-      lastProgrammaticTop.current = target;
-      el.scrollTop = target;
-    }
-  }, [
-    events,
-    streamingText,
-    optimisticUser,
-    question,
-    Object.keys(subagents).length,
-    queue.length,
-    active,
-  ]);
+  // ── THE DOCUMENT CHANGED: SATISFY THE INTENT ──────────────────────────────
+  // One of two subscriptions. This one is "React committed, so the document may
+  // have changed"; the ResizeObserver below is "something changed outside a
+  // commit" (an image decoding, a font settling, the viewport resizing).
+  //
+  // NO DEPENDENCY ARRAY, deliberately. It used to list the state it thought
+  // could move the log — `events`, `streamingText`, `optimisticUser`,
+  // `question`, the subagent count, the queue length — and that list was an
+  // enumeration, which is the same mistake the per-device gesture listeners
+  // were. It was missing `notice` (the "Reconnecting…" banner), `loadingOlder`
+  // (the older-history spinner), `stale`, `hasMessages`, `agentStatus`,
+  // `folder` and `mode`, every one of which renders or unrenders a box.
+  //
+  // A ResizeObserver does not cover the gap, because it reports an element whose
+  // own box changed and fires nothing when one is REMOVED. Measured: a restore
+  // landed correctly and then ~6px above the reader disappeared, leaving them at
+  // offset -6 for the whole visit. The old design survived it by polling for
+  // 2500ms and re-converging; that is the forgiveness a poll buys, and the way
+  // to keep it without the poll is to subscribe to the commit itself rather than
+  // to a guess about which state matters.
+  //
+  // The cost is one `place()` per commit: two rect reads, and a write only when
+  // the intent is not already satisfied.
+  useLayoutEffect(() => {
+    if (!active) return;
+    // New rows are new things that can change height under the reader.
+    watchRows();
+    scroll.current?.place();
+    // …and the arrow follows the placement. It used to be derived ONLY inside
+    // `onScroll`, so a pane that opened somewhere other than the bottom without
+    // producing a scroll event — a restore that lands exactly where the document
+    // already was, which is the common case for a tab switch — showed no way
+    // back to the tail at all.
+    syncScrollDownArrow();
+  });
 
   // Auto-grow the composer like ChatGPT: reset to content height, capped by CSS
   // max-height (the textarea keeps scrolling past that). `input` is the trigger
@@ -2832,327 +2658,79 @@ export function ChatPane({
     return () => window.removeEventListener('keydown', onKey);
   }, [active, openTool, openImage]);
 
-  // Restore & HOLD the remembered scroll on (re)activation. A ChatPane's
-  // scroll height is NOT final when the first events render: the fill-viewport
-  // pager keeps prepending older batches, image thumbnails load, and the sid
-  // (staleness guard) may not be bound yet. A one-shot restore lands against a
-  // partial height and drifts (the "doesn't always remember" bug). Instead,
-  // re-assert the remembered position each frame for a short settling window —
-  // it converges as content arrives, and stops the instant the reader scrolls.
+  // ── RE-ENTRY ──────────────────────────────────────────────────────────────
+  // Becoming visible is an INPUT, and the placement is one call. What was here
+  // before was a 120-line animation-frame loop with a 2500ms fuse, extended
+  // 1500ms per history page, capped at 15s, killed early by a sticky flag — all
+  // of it polling for "has the document finished settling?" while the
+  // ResizeObserver twenty lines down was already being told.
   //
-  // The position it re-asserts is a MESSAGE, not a ratio. That distinction is
-  // the whole fix: the loop's re-assertion is authoritative, so whatever unit
-  // it uses wins over everything else that moves the scroll — including the
-  // older-prepend compensation below. With a ratio, every prepended batch was
-  // silently undone and the reader was dragged back into older history. With a
-  // message id, the loop and the prepend compensation agree by construction,
-  // because they are computing the same thing. See chat-scroll.ts.
-  //
-  // When the anchored message isn't rendered at all — a fresh mount opens on
-  // the server's 128 KB tail, and anything older has to be paged back in — the
-  // loop SEEKS it: up to ANCHOR_SEEK_PAGE_BUDGET older pages, extending its own
-  // deadline per request.
-  //
-  // The remembered ratio places the reader while that runs, but ONLY ONCE: the
-  // frame it is applied, the loop freezes the row it landed on and holds THAT
-  // for the rest of the window. Re-deriving from the ratio every frame would be
-  // the original bug in miniature — the seek's own prepends grow the document
-  // above the reader, and R·(range + g) walks them backward with every page, so
-  // a budget-exhausted restore would end up DEEPER in history than doing
-  // nothing at all. Frozen to a row, the fallback is merely imprecise.
+  // `showEpoch` is a re-run trigger for the visibility transitions that never
+  // touch `active`: a browser-tab switch, an iOS app backgrounding, a bfcache
+  // restore. Those hide the pane as thoroughly as display:none does.
   //
   // Sid matching is soft: memory may be saved before the hello binds
-  // renderedSid (or remount starts with sid=null). Requiring equality then
-  // skipped every restore for the whole window and left unpinned readers at
-  // scrollTop 0 — "scroll is totally not remembered". Only skip on a REAL
-  // mismatch (both set, different) for /clear / resume rotation.
+  // `renderedSid` (or a remount starts with sid null). Requiring equality skipped
+  // every restore for the whole window. Only a REAL mismatch — both set,
+  // different — is a different conversation, and that is treated as no memory at
+  // all rather than as a position to distrust, because "restore nothing but also
+  // do not follow" was the worst of both.
+  // ONE effect, because the ORDER of these two dispatches is load-bearing and a
+  // second effect is a place to get it wrong. It was wrong: `mounted` was
+  // declared after `shown`, React runs layout effects in declaration order, and
+  // so every fresh mount read the memory, set the intent from it, and then
+  // immediately reset that intent to "we do not know". The pane then opened at
+  // the top of the conversation, paged its entire history because nothing said a
+  // reader was following, and stored nothing — three headline failures from one
+  // reordering, none of which a module test could see.
   //
-  // `showEpoch` re-runs it for the visibility transitions that never touch
-  // `active`: a browser-tab switch, an iOS app backgrounding, a bfcache
-  // restore. Those hide the pane just as thoroughly as display:none does.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: showEpoch is a re-run trigger — becoming visible again must re-anchor.
+  // Keyed on `paneId` for the reset, not on mount: the seek budget has to
+  // survive every visibility flip of one visit (it used to be a local of the
+  // restore effect, so three tab switches spent 24 `load-older` round trips
+  // hunting the same unreachable message) and must not survive a different
+  // conversation.
+  //
+  // biome-ignore lint/correctness/useExhaustiveDependencies: showEpoch is a re-run trigger — becoming visible again must re-place.
   useLayoutEffect(() => {
+    const c = scroll.current;
+    if (!c) return;
+    if (enteredPane.current !== paneId) {
+      enteredPane.current = paneId;
+      c.dispatch({ t: 'mounted' });
+    }
     if (!active) {
-      userScrolled.current = false; // hidden panes lose scrollTop — re-restore on return
-      suppressPinUntil.current = 0;
+      c.dispatch({ t: 'hidden' });
       return;
     }
-    // A live search jump OWNS the scroll, and the memory below cannot describe
-    // it: `onScroll` records nothing while the hold is up (shouldRememberPosition),
-    // so what is stored is where the reader was BEFORE they searched. Re-asserting
-    // it here drags them out of the result and back into history — and this effect
-    // re-runs on every visibility flip, which is not a gesture and does not clear
-    // the jump. See shouldRestorePosition. The placement loop below re-asserts the
-    // hit on the same `showEpoch`, so the reader is never left unplaced.
-    if (!shouldRestorePosition({ searchJumpActive: searchJumpHold.current })) return;
-    userScrolled.current = false;
-    // Becoming visible starts the settling window (C) and invalidates the
-    // last programmatic target: while hidden, the follow-bottom effect ran
-    // against a zero-height element and stamped 0. Leaving that in place
-    // makes the first real scroll event look like a 0→N reader jump.
-    suppressPinUntil.current = performance.now() + SHOW_SETTLE_MS;
-    lastProgrammaticTop.current = -1;
-    const sidOk = (mem: NonNullable<ReturnType<typeof recallChatScroll>>) =>
-      scrollMemorySidMatches(mem.sid, renderedSid.current);
-    // Memory whose sid REALLY disagrees with what's rendered (/clear, a resume
-    // rotation) describes a conversation that no longer exists: treat it as no
-    // memory at all, i.e. follow the bottom. Reading `pinned` off it while
-    // refusing to apply its ratio was the worst of both — an unpinned pane
-    // that anchored to nothing and then didn't follow new messages either.
-    const usable = (mem: ReturnType<typeof recallChatScroll>) => (mem && sidOk(mem) ? mem : null);
-    // SNAPSHOT, read once. The loop used to re-read the store every frame,
-    // which was harmless while position was a ratio (writing R then reading R
-    // is a no-op) and is fatal now that it is a message: this loop's own
-    // scrollTop writes fire `onScroll`, which records the message NOW under the
-    // viewport top — so the target the loop is converging on was being
-    // overwritten with wherever the loop had got to. It could never move on
-    // from its first frame's guess, and a restore that has to PAGE the
-    // remembered message back in (see the seek below) lost its target before
-    // the first page even arrived.
-    const goal = usable(recallChatScroll(paneId));
-    setPinned(opensAtNewest(goal));
-    // While a goal ANCHOR is still outstanding, `onScroll` must not overwrite it
-    // in the store. Every scrollTop this loop writes produces a trustworthy
-    // scroll event once the 250ms show-settle window closes, and that event
-    // records the row the loop is currently sitting on — so a restore that has
-    // to PAGE its message back in would destroy the reader's real parked spot
-    // (permanently, and for every future open of the pane) before the first page
-    // landed. Cleared the moment the anchor is applied, the goal is retired, or
-    // the reader takes over.
-    holdRememberedAnchor.current = !!goal && !goal.caughtUp && !!goal.anchorId;
-    let raf = 0;
-    const startedAt = performance.now();
-    let deadline = startedAt + RESTORE_SETTLE_MS;
-    // Absolute ceiling. The seek extends `deadline` per page, and the
-    // not-scrollable-yet branch below extends it while the transcript is still
-    // in flight; neither may keep an animation frame loop alive indefinitely.
-    const hardStop = startedAt + RESTORE_HARD_STOP_MS;
-    let seekPages = 0;
-    // Once the ratio fallback has placed the reader, we anchor to whatever row
-    // that landed on and hold THAT for the rest of the window. Re-deriving the
-    // position from the ratio every frame is the original bug in miniature: the
-    // seek's own prepends grow the document above the reader, and R·(range + g)
-    // walks them backward with every page — which would have made a
-    // budget-exhausted restore land DEEPER in history than doing nothing at all.
-    let held: { anchorId: string; anchorOffset: number } | null = null;
-    const apply = () => {
-      raf = 0;
-      const el = scrollRef.current;
-      // clientHeight < 40: no real box yet (the un-hide hasn't laid out, or
-      // the pane is collapsed). Every measurement taken from it is wrong;
-      // skip this frame and try the next one.
-      if (el && !userScrolled.current && el.clientHeight >= 40) {
-        // Re-check the sid each frame against the SNAPSHOT: on a fresh mount
-        // `renderedSid` is null until the hello lands, and a rotation that
-        // arrives mid-window must retire the goal (its conversation is gone).
-        const mem = usable(goal);
-        if (!mem || mem.caughtUp) holdRememberedAnchor.current = false;
-        if (el.scrollHeight <= el.clientHeight) {
-          // Nothing to scroll yet — the transcript hasn't arrived, or the
-          // "Loading conversation…" state is all there is. Don't spend the
-          // window waiting on an empty document: a first render slower than
-          // RESTORE_SETTLE_MS used to leave an unpinned reader at scrollTop 0,
-          // i.e. as deep in history as the document goes.
-          deadline = Math.min(hardStop, performance.now() + RESTORE_SETTLE_MS);
-        } else if (!mem || mem.caughtUp) {
-          // Caught up / no memory → hold the NEWEST message while content
-          // streams in (follow-bottom effect also does this; settle covers the
-          // gap before the first events commit).
-          setPinned(true);
-          const target = maxScrollTop(el.scrollHeight, el.clientHeight);
-          if (Math.abs(el.scrollTop - target) > 1) {
-            lastProgrammaticTop.current = target;
-            el.scrollTop = target;
-          }
-        } else {
-          setPinned(false);
-          const rows = anchorRows(el);
-          const row = mem.anchorId ? findAnchorRow(rows, mem.anchorId) : null;
-          if (row) {
-            held = null; // the real thing beats whatever the fallback settled on
-            holdRememberedAnchor.current = false;
-          } else if (
-            mem.anchorId &&
-            hasMoreOlderRef.current &&
-            seekPages < ANCHOR_SEEK_PAGE_BUDGET
-          ) {
-            // The remembered message is older than the loaded window. Ask for
-            // the next page and give the loop time for the round trip. Bounded,
-            // so an anchor that no longer exists can't drag a transcript over.
-            // Count a page only when one is actually REQUESTED: `requestOlder`
-            // no-ops on a socket that isn't open (a chat opened while the
-            // reconnect backoff is still running — precisely the case this seek
-            // exists for), and counting those burned the whole budget in eight
-            // animation frames without sending anything.
-            if (requestOlder()) {
-              seekPages++;
-              // max(): the base window is already 2500ms, so assigning
-              // now + 1500 would SHORTEN a seeking restore — the opposite of
-              // the intent — and could kill it before the first page arrived.
-              deadline = Math.min(
-                hardStop,
-                Math.max(deadline, performance.now() + ANCHOR_SEEK_PAGE_MS),
-              );
-            }
-          }
-          const anchor = row ? { row, offset: mem.anchorOffset } : null;
-          const heldRow = !anchor && held ? findAnchorRow(rows, held.anchorId) : null;
-          const use =
-            anchor ?? (heldRow && held ? { row: heldRow, offset: held.anchorOffset } : null);
-          // ── The ratio describes a document we have not loaded yet ──────────
-          // `ratio` was measured against the WHOLE conversation; a fresh mount
-          // opens on a ~128KB tail. Applying one to the other is not "merely
-          // imprecise", which is what the header calls it: measured, 0.0363 of
-          // a 185,753px document (turn 40) became 0.0363 of the 13,044px tail
-          // and landed on turn 296 — the opposite end. The loop then froze onto
-          // that row, correctly (freezing is what stops the R·(range+g) walk)
-          // and held the wrong message for the whole window.
-          //
-          // So while the seek can still page, hold position and let it page.
-          // The fallback is for when the anchor is genuinely unreachable — the
-          // budget is spent, or there is no more history — and by then the
-          // document is at least the one the ratio was measured against.
-          const seekCanStillRun =
-            !!mem.anchorId && hasMoreOlderRef.current && seekPages < ANCHOR_SEEK_PAGE_BUDGET;
-          if (!use && seekCanStillRun) {
-            raf = requestAnimationFrame(apply);
-            return;
-          }
-          const range = maxScrollTop(el.scrollHeight, el.clientHeight);
-          const target = use
-            ? scrollTopForAnchor({
-                scrollTop: el.scrollTop,
-                rowTop: use.row.getBoundingClientRect().top - el.getBoundingClientRect().top,
-                anchorOffset: use.offset,
-                scrollHeight: el.scrollHeight,
-                clientHeight: el.clientHeight,
-                // The row AS IT IS NOW — an action run the reader had expanded
-                // is collapsed again by this point. See scrollTopForAnchor.
-                rowHeight: use.row.getBoundingClientRect().height,
-              })
-            : // Nothing anchorable yet: place by the remembered ratio, ONCE.
-              // Clamped — iOS rubber-band can persist a slightly negative
-              // ratio, and an out-of-range target never equals the scrollTop
-              // the browser clamps it to, so the loop would re-assign (and
-              // force a reflow) every frame for the full window.
-              Math.min(Math.max(0, Math.round(mem.ratio * range)), range);
-          if (Math.abs(el.scrollTop - target) > 1) {
-            lastProgrammaticTop.current = target;
-            el.scrollTop = target;
-          }
-          // Freeze the fallback into a row identity so the next frame holds a
-          // MESSAGE rather than re-deriving from the ratio.
-          if (!use) held = anchorAt(el, rows);
-        }
-      }
-      if (performance.now() < deadline && !userScrolled.current) {
-        raf = requestAnimationFrame(apply);
-        return;
-      }
-      // ── RETIRE A DEAD GOAL ───────────────────────────────────────────────
-      // The loop is over and the anchor was never found, so the store is still
-      // naming a message that is not coming back. `seekPages` is a local of
-      // this effect body, and the effect re-runs on every `showEpoch` — a
-      // browser-tab switch, an iOS backgrounding, a screen unlock — so the NEXT
-      // one spends another eight `load-older` round trips (~1 MB) hunting the
-      // same ghost, and the one after that does it again. Nothing else corrects
-      // the memory: while the loop runs `onScroll` preserves the stored anchor
-      // verbatim (that is what the hold is FOR), and by the time the hold is
-      // dropped the loop has usually converged and stopped writing, so no
-      // further scroll event is coming to record anything.
-      //
-      // Worse than the traffic: each re-run re-applies the ratio against a
-      // document that the PREVIOUS re-runs grew, which is the R·(range + g)
-      // walk chat-scroll.ts's header calls catastrophic. With the document
-      // roughly doubled between runs an honest re-anchor lands at
-      // range₁ + 0.1·range₁ and the ratio lands at 0.2·range₁ — the reader
-      // dragged ~0.9·range₁ further back into history, once per tab switch.
-      //
-      // Reachable ways an anchor stays unfindable: the message is more than
-      // eight pages back; the archive indexes it but the chat view does not
-      // render it (a subagent sidechain — the jump seek knows this case); a
-      // compaction renumbered the ids; a prepend moved a folded run's head.
-      //
-      // The row the fallback settled on is a REAL one, so make it the anchor
-      // and let the next restore be an ordinary one. Only on a deadline
-      // expiry: a reader who took over writes their own memory through
-      // `onScroll`, and overwriting it from here would be this loop having the
-      // last word over a gesture.
-      // …and ONLY when the document we settled in is the one the memory
-      // describes. If history is still unloaded, the row we settled on was
-      // chosen by the ratio fallback against a fraction of the conversation:
-      // measured, a stored ratio of 0.0363 meant 3.6% of a 185,753px document
-      // (turn 40) and was applied to the 13,044px tail, landing on turn 296 —
-      // a 14x arithmetic error at the opposite end of the chat. Retiring that
-      // row overwrote the one record of where the reader actually was, with no
-      // way back: reloading three times landed on turn 296, turn 296, turn 296.
-      // A settled row is REAL, which the comment above says; real is not right.
-      const dead =
-        holdRememberedAnchor.current && !userScrolled.current && !hasMoreOlderRef.current;
-      holdRememberedAnchor.current = false;
-      const settled = scrollRef.current;
-      if (dead && settled && settled.clientHeight >= 40) {
-        const lastRow = lastAnchorRow(settled);
-        rememberChatScroll(
-          paneId,
-          retiredAnchorMemory({
-            live: captureAnchor(settled),
-            scrollTop: settled.scrollTop,
-            scrollHeight: settled.scrollHeight,
-            clientHeight: settled.clientHeight,
-            lastRowBottom: lastRow
-              ? lastRow.getBoundingClientRect().bottom - settled.getBoundingClientRect().top
-              : null,
-            sid: renderedSid.current,
-          }),
-        );
-      }
-    };
-    apply(); // first pass runs before paint — no flash
-    return () => {
-      holdRememberedAnchor.current = false;
-      if (raf) cancelAnimationFrame(raf);
-    };
+    const mem = recallChatScroll(paneId);
+    c.dispatch({
+      t: 'shown',
+      mem: mem && scrollMemorySidMatches(mem.sid, renderedSid.current) ? mem : null,
+    });
   }, [active, paneId, showEpoch]);
 
-  // After an older-history batch prepends, content grew above the viewport.
-  // Pinned readers stay at the bottom (fill-viewport paging must not yank
-  // them into older history). Unpinned readers keep the messages they were
-  // looking at. Always stamp lastProgrammaticTop first so onScroll doesn't
-  // treat the adjust as a user scroll and corrupt pin/memory.
-  // `events` is both the trigger AND a real read (the anchor is keyed to one
-  // commit) — no suppression needed here any more.
-  useLayoutEffect(() => {
-    const el = scrollRef.current;
-    const a = olderAnchor.current;
-    // An anchor belongs to ONE commit. If `events` has moved on since it was
-    // measured (the prepend landed while hidden, and this render is some later,
-    // unrelated message), the geometry describes a document that no longer
-    // exists — applying it would yank the reader to a position computed from a
-    // stale height. Drop it; the ratio-restore loop covers the hidden case.
-    if (a && a.forEvents !== events) {
-      olderAnchor.current = null;
-      return;
-    }
-    // A prepend that lands while the pane is HIDDEN has no geometry to
-    // anchor against: every measurement is 0, so the adjust would stamp
-    // lastProgrammaticTop = 0 and throw the anchor away. Leave both alone —
-    // the restore loop re-applies the remembered ratio on return, and a ratio
-    // degrades proportionally when the document grows (which is exactly why
-    // the memory is a ratio and not an offset).
-    if (el && a && el.clientHeight >= 40) {
-      const target = scrollTopAfterOlderPrepend({
-        pinned: pinnedToBottom.current,
-        newScrollHeight: el.scrollHeight,
-        clientHeight: el.clientHeight,
-        anchorHeight: a.height,
-        anchorTop: a.top,
-      });
-      lastProgrammaticTop.current = target;
-      el.scrollTop = target;
-      olderAnchor.current = null;
-    }
-  }, [events]);
+  /*
+   * ── NO PREPEND COMPENSATION ───────────────────────────────────────────────
+   * A layout effect used to live here, applying `scrollTopAfterOlderPrepend`:
+   * capture `scrollHeight`/`scrollTop` before a prepend, and after it assign
+   * `newHeight - oldHeight + oldTop`. It is gone, along with the `olderAnchor`
+   * ref that carried the geometry across the commit and the `forEvents` identity
+   * check that kept it from being applied to the wrong one.
+   *
+   * Two reasons, and the second is the one that makes this a deletion rather
+   * than a move. First, the commit subscription above already re-satisfies the
+   * intent on the very commit the prepend lands in, and an ANCHORED reader's
+   * intent IS "hold this row" — so the work is done by the general mechanism.
+   *
+   * Second, the arithmetic was wrong in a way row-based compensation cannot be.
+   * It measured the document's TOTAL height, so a live append batched into the
+   * same React commit as an older prepend was counted as growth above the
+   * reader: measured, it assigned 400 where 300 was right, with the
+   * commit-identity check passing. `targetFor` never looks at the document's
+   * height, so it cannot make that mistake — and it is asserted under a
+   * prepend-and-append-in-one-commit case in chat-scroll-controller.test.ts,
+   * on both engine settings.
+   */
 
   // Fill the viewport: the initial history window is a byte tail, and a few
   // huge records (base64 image pastes run to hundreds of KB per line) can
@@ -3193,36 +2771,55 @@ export function ChatPane({
   // event, though, nothing re-delivers this check when the window expires, so a
   // suppressed pass re-checks itself once the settle is over.
   useEffect(() => {
-    if (!active || loadingOlder || !hasMoreOlder) return;
-    if (!session?.current_sid) return; // history baseline not bound yet
+    const c = scroll.current;
     const el = scrollRef.current;
-    if (!el || el.clientHeight < 40) return; // hidden/collapsed — don't page blind
-    if (el.scrollHeight <= el.clientHeight + 1) {
-      requestOlder();
-      return;
-    }
-    if (pinnedToBottom.current || events.length === 0) return;
-    const tryTopZone = () => {
-      const e = scrollRef.current;
-      if (!e || e.clientHeight < 40) return;
-      if (loadingOlderRef.current || !hasMoreOlderRef.current) return;
-      if (
-        !scrollEventIsTrustworthy({
-          suppressedUntil: suppressPinUntil.current,
-          now: performance.now(),
-        })
-      )
-        return;
-      if (e.scrollTop < TOP_PAGE_ZONE_PX) requestOlder();
-    };
-    const wait = suppressPinUntil.current - performance.now();
-    if (wait <= 0) {
-      tryTopZone();
-      return;
-    }
-    const t = window.setTimeout(tryTopZone, wait + 32);
-    return () => window.clearTimeout(t);
+    if (!active || !c || !el) return;
+    // The whole decision is in `shouldPageOlder`, pure and tested — including
+    // the loop it used to be able to enter, which rendered a 990-row
+    // conversation at mount where the server serves a 126-row tail.
+    const why = shouldPageOlder({
+      phase: c.phase(hasMoreOlder),
+      placed: c.hasPlaced(),
+      geo: {
+        scrollTop: el.scrollTop,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+      },
+      measurable: el.clientHeight >= 40,
+      hasMoreOlder,
+      loadingOlder,
+      haveEvents: events.length > 0,
+      sessionBound: !!session?.current_sid,
+    });
+    if (why !== 'no') requestOlder();
   }, [active, events, loadingOlder, hasMoreOlder, session?.current_sid]);
+
+  // ── THE SEEK ──────────────────────────────────────────────────────────────
+  // The controller owns the budget and says when a page is worth asking for; the
+  // socket owns whether one can be sent. Re-runs on every events commit, which is
+  // what makes it self-driving: each answered page changes `events`, the row may
+  // now be loaded, and `wantsOlder` says so.
+  //
+  // ONE budget for both callers. The restore's seek and the search jump's seek
+  // used to be separate counters with separate loops and the same constant.
+  //
+  // NO DEPENDENCY ARRAY, for the third time in this file and for the third time
+  // for the same reason. It listed `[active, events, loadingOlder,
+  // hasMoreOlder]` — and claiming a search jump changes none of them. It changes
+  // `jump`, and it dispatches the intent. So the effect never re-ran, the seek
+  // never started, and the reader was told the message was "further back than
+  // the history loaded here" on the strength of zero requests. Measured: `rows`
+  // and `first` identical before and after the jump.
+  //
+  // What wants a page is the INTENT, and an intent changes on a dispatch that no
+  // dependency array can see. Running on every commit costs one `wantsOlder` —
+  // a single row lookup — and `requestOlder` is single-flight on a ref, so a
+  // burst of commits cannot produce a burst of requests.
+  useEffect(() => {
+    if (!active || loadingOlder) return;
+    if (!scroll.current?.wantsOlder(hasMoreOlder)) return;
+    if (requestOlder()) scroll.current.dispatch({ t: 'sought' });
+  });
 
   /** @returns whether a request actually went out — the anchor seek spends its
    *  budget in REQUESTS, not attempts. */
@@ -3278,88 +2875,51 @@ export function ChatPane({
   }, [jump, jumpTerms, events]);
 
   const clearJump = useCallback(() => {
-    // Releasing the hold is the important half: from here on this is an
-    // ordinary reader at an ordinary scroll position, and `onScroll` may
-    // record it again.
-    searchJumpHold.current = false;
-    jumpSeekPages.current = 0;
-    // …and the other half is holding their place while the chat tidies up
-    // behind them. Dropping the highlight lets the run it forced open snap
-    // shut, and the dismissal signal IS the hit leaving the top of the screen
-    // — so the run is above the reader by construction, and its whole expanded
-    // height vanishes from above them mid-read. Capture the row under their
-    // eyes NOW, while the DOM still has the open run in it; the layout effect
-    // below puts that row back after the collapse. See
-    // scrollTopAfterFoldChange in chat-scroll.ts for the measured leap.
+    // The reader owns the scroll again, and where they are now is what the
+    // memory is for. `search-cleared` carries their position so the intent stops
+    // being a destination and becomes a reading position in the same call.
+    //
+    // The other half used to be a `foldAnchor` ref: dismissing a highlight lets
+    // the run it forced open snap shut, and the dismissal signal IS the hit
+    // leaving the top of the screen — so the run is above the reader by
+    // construction and its whole expanded height vanishes from above them
+    // mid-read (measured: a 430px leap). That ref is gone. The reader's intent
+    // is a row id, and the commit that closes the run re-satisfies it against
+    // the collapsed document, which is the same work without the hand-off.
+    const c = scroll.current;
     const el = scrollRef.current;
-    foldAnchor.current = el && el.clientHeight >= 40 ? captureAnchor(el) : null;
+    if (c && el && el.clientHeight >= 40) {
+      const geo = {
+        scrollTop: el.scrollTop,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+      };
+      c.dispatch({
+        t: 'search-cleared',
+        here: c.anchorHere(),
+        atEnd: geo.scrollHeight - geo.scrollTop - geo.clientHeight < FOLLOW_THRESHOLD_PX,
+      });
+    }
     setJump(null);
     setJumpMissed(false);
   }, []);
 
-  // The apply half. Keyed on `jumpTargetId` because that is what the fold reads
-  // (`holdsHit`), so this runs in the very commit the run closes — before
-  // paint, so the leap is never drawn. A no-op on the way IN (nothing was
-  // captured) and on any commit that isn't a dismissal.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: jumpTargetId is a re-run trigger, not a read — it is what the fold consults, so listing it is what puts this effect in the commit that closes the run.
-  useLayoutEffect(() => {
-    const keep = foldAnchor.current;
-    foldAnchor.current = null;
-    const el = scrollRef.current;
-    if (!el || !keep || el.clientHeight < 40) return;
-    const row = findAnchorRow(anchorRows(el), keep.anchorId);
-    const target = scrollTopAfterFoldChange({
-      pinned: pinnedToBottom.current,
-      anchorRowTop: row ? row.getBoundingClientRect().top - el.getBoundingClientRect().top : null,
-      anchorOffset: keep.anchorOffset,
-      scrollTop: el.scrollTop,
-      scrollHeight: el.scrollHeight,
-      clientHeight: el.clientHeight,
-    });
-    if (target === null || Math.abs(el.scrollTop - target) <= 1) return;
-    lastProgrammaticTop.current = target;
-    el.scrollTop = target;
-  }, [jumpTargetId]);
-
-  // Put the tapped run header back where the reader tapped it, BEFORE paint —
-  // and stand down from the bottom while we are at it. See `toggleAnchor` for
-  // the measurement. The unpin is half the fix, not a side effect: after a
-  // mid-log expand the reader genuinely is not at the end any more, and saying
-  // so hands every LATER height change to the engine's scroll anchoring (or to
-  // the unpinned branch of the re-pin observer) instead of to a re-pin that
-  // would drag the header off the top again on the next thumbnail that decodes.
-  //
-  // A layout effect runs before the ResizeObserver callback for the same
-  // commit, and the `setPinned` it lands on makes the observer's own
-  // `if (pinnedToBottom.current)` the thing that keeps it out of the way.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: expandedGroups is a re-run trigger, not a read — listing it is what puts this effect in the commit that changes the fold's height.
-  useLayoutEffect(() => {
-    const keep = toggleAnchor.current;
-    toggleAnchor.current = null;
-    const el = scrollRef.current;
-    if (!el || !keep || el.clientHeight < 40) return;
-    const row = findAnchorRow(anchorRows(el), keep.anchorId);
-    if (!row) return;
-    const target = scrollTopForAnchor({
-      scrollTop: el.scrollTop,
-      rowTop: row.getBoundingClientRect().top - el.getBoundingClientRect().top,
-      // No `rowHeight` clamp: that guard exists for an offset replayed across a
-      // remount against a row that shrank in between. This one was measured
-      // against this row, in this document, one commit ago.
-      anchorOffset: keep.top,
-      scrollHeight: el.scrollHeight,
-      clientHeight: el.clientHeight,
-    });
-    setPinned(el.scrollHeight - target - el.clientHeight < 40);
-    // The pane has just gone unpinned, so the re-pin observer's unpinned branch
-    // owns the next height change — and `liveAnchor` is stale (null, if they
-    // were following the bottom). Hand it the header the reader is looking at,
-    // or the first thumbnail that decodes after an expand has nothing to hold.
-    liveAnchor.current = { anchorId: keep.anchorId, anchorOffset: keep.top };
-    if (Math.abs(el.scrollTop - target) <= 1) return;
-    lastProgrammaticTop.current = target;
-    el.scrollTop = target;
-  }, [expandedGroups, setPinned]);
+  /*
+   * ── NO FOLD COMPENSATION EFFECT ───────────────────────────────────────────
+   * Two layout effects used to live here: one applying `scrollTopAfterFoldChange`
+   * after a highlight dismissal closed a run, and one applying
+   * `scrollTopForAnchor` after the reader toggled a run open or shut, each with
+   * a ref carrying geometry across the commit (`foldAnchor`, `toggleAnchor`).
+   *
+   * Both are gone, and the second is the more interesting deletion. It existed
+   * because the re-pin observer could not tell a height change the READER caused
+   * from a thumbnail decoding, so for a reader at the bottom it answered an
+   * expand by scrolling to the new bottom — measured, a 1500px expansion moved
+   * the tapped header from +272 to -1228 while the reply below it did not move a
+   * pixel, i.e. tapping "12 actions" visibly did nothing. With a fold toggle as a
+   * named INPUT, the intent becomes "hold this header where it was" and the
+   * commit subscription does the rest.
+   */
 
   // Claim a pending jump. Both routes exist because the destination pane may or
   // may not be mounted when the result is clicked: the map covers "opened a
@@ -3373,13 +2933,18 @@ export function ChatPane({
   useEffect(() => {
     if (!active) return;
     const claim = (j: SearchJump) => {
-      jumpSeekPages.current = 0;
-      searchJumpHold.current = true;
-      userScrolled.current = true;
-      holdRememberedAnchor.current = false;
-      setPinned(false);
+      // A jump is a destination the reader asked for from somewhere else, so it
+      // takes the scroll: the intent becomes the hit, which `recordFor` refuses
+      // to store and `shown` refuses to overwrite. Three coordinating booleans
+      // used to say that (`searchJumpHold`, `shouldRememberPosition`,
+      // `shouldRestorePosition`) and they existed only to stop OTHER owners of
+      // the scroll from fighting it.
       setJumpMissed(false);
       setJump(j);
+      // Dispatched on the CLAIM, not when the target binds. The message is
+      // usually not loaded yet — that is what the seek is for — so waiting for
+      // an id meant the jump never entered the state that pages for it.
+      scroll.current?.dispatch({ t: 'search-jump' });
     };
     const claimed = takeSearchJump(paneId);
     if (claimed) claim(claimed);
@@ -3392,7 +2957,7 @@ export function ChatPane({
     };
     window.addEventListener(SEARCH_JUMP_EVENT, onJump);
     return () => window.removeEventListener(SEARCH_JUMP_EVENT, onJump);
-  }, [active, paneId, setPinned]);
+  }, [active, paneId]);
 
   // ── Dismissal ─────────────────────────────────────────────────────────────
   // A highlight answers a question ("where is it?"). It has to go when the
@@ -3451,86 +3016,60 @@ export function ChatPane({
   }, [jump, jumpTargetId, active, clearJump]);
 
   // ── Placement ─────────────────────────────────────────────────────────────
-  // Put the MARK on screen, and keep it there while the document settles.
+  // A jump's destination is an intent like any other, so "put the mark on screen
+  // and keep it there" is: set the intent when the target binds, and let the
+  // commit subscription satisfy it as the document settles. What was here was a
+  // second animation-frame loop with its own 1200ms fuse, re-asserting a target
+  // every frame — the restore loop's twin, for the same reason and with the same
+  // answer.
   //
-  // The target is the highlighted run, not the message: a hit two thousand
-  // pixels into a long answer is not "brought into view" by showing the top of
-  // that answer. Re-asserted for a short window for the same reason the restore
-  // loop is — markdown commits, images decode, and the seek's own pages can
-  // still be landing — and it stops the instant a wheel or a finger arrives,
-  // because that listener clears `searchJumpHold`.
-  //
-  // `scrollTop` is assigned directly, never `scrollIntoView`: the convention in
-  // this file is to stamp `lastProgrammaticTop` BEFORE moving, and
-  // `scrollIntoView` cannot say where it landed — so every frame of it would
-  // read as the reader taking control.
-  //
-  // `showEpoch` is a re-run trigger for the same reason the restore effect has
-  // one, and it is the other half of that effect standing down for a live jump:
-  // a hide can cost the pane its scrollTop, and the reader who came back must
-  // find the hit where they left it rather than at the top of the document.
+  // `showEpoch` is a trigger for the same reason the re-entry effect has one: a
+  // hide can cost the pane its scrollTop, and the reader who comes back must find
+  // the hit where they left it rather than at the top of the document.
   // biome-ignore lint/correctness/useExhaustiveDependencies: showEpoch is a re-run trigger — a jump that owns the scroll must re-place itself when the pane becomes visible again.
   useLayoutEffect(() => {
-    const el = scrollRef.current;
-    if (!active || !el || !jumpTargetId || !searchJumpHold.current) return;
-    let raf = 0;
-    const until = performance.now() + SEARCH_JUMP_SETTLE_MS;
-    // The loop's own scroll events are not the reader's; a real gesture clears
-    // this and takes over (see "the reader always wins").
-    suppressPinUntil.current = until;
-    setPinned(false);
-    const place = () => {
-      raf = 0;
-      if (!searchJumpHold.current) return;
-      const row = el.querySelector('[data-search-hit]');
-      // Fall back to the ROW when the mark isn't there: an attachment-only
-      // message, or a match that a re-render has momentarily dropped. Landing
-      // on the right message beats not moving at all.
-      const hit = row?.querySelector('.chat-hit') ?? row;
-      if (hit && el.clientHeight >= 40) {
-        const target = scrollTopForSearchHit({
-          scrollTop: el.scrollTop,
-          hitTop: hit.getBoundingClientRect().top - el.getBoundingClientRect().top,
-          scrollHeight: el.scrollHeight,
-          clientHeight: el.clientHeight,
-        });
-        if (Math.abs(el.scrollTop - target) > 1) {
-          lastProgrammaticTop.current = target;
-          el.scrollTop = target;
-        }
-      }
-      if (performance.now() < until) raf = requestAnimationFrame(place);
-    };
-    place(); // before paint — the reader never sees the pre-jump position
-    return () => {
-      if (raf) cancelAnimationFrame(raf);
-    };
+    if (!active || !jumpTargetId) return;
+    // The target has bound (or re-rendered, or the pane became visible again):
+    // re-place against the mark as it is now. The intent is already `hit` — set
+    // when the jump was claimed — so this is a placement, not a state change.
+    scroll.current?.place();
   }, [active, jumpTargetId, showEpoch]);
 
-  // ── Seek ──────────────────────────────────────────────────────────────────
-  // The transcript opens on the server's 128 KB tail and archives run to tens
-  // of megabytes, so a hit from last week is simply not in the document. Page
-  // backwards until it is — bounded by the same budget the anchor restore uses
-  // (8 pages ≈ 1 MB), because paging is a byte cursor walking backward and
-  // there is no "give me the page containing this message" on the wire.
+  /*
+   * ── NO SEPARATE JUMP SEEK ─────────────────────────────────────────────────
+   * An effect here used to page older history hunting the jump's message, with
+   * its own counter (`jumpSeekPages`) against the same constant the restore's
+   * seek used. There is one seek now, driven by `wantsOlder` — the controller
+   * does not care whether the row it cannot find is a remembered position or a
+   * search hit, because in both cases the honest move is the same: ask for a
+   * page, count it, and stop at the budget.
+   *
+   * What remains jump-specific is knowing when to give up and SAY so, which is
+   * below: `jumpMayBeOlder` is the "it is inside the loaded range and still not
+   * there" case (a subagent sidechain, which the archive indexes and the chat
+   * view does not render), and the deadline is the backstop for a socket that
+   * never opens.
+   */
   //
-  // Self-driving: each answered page changes `events`, which re-runs this. When
-  // it runs out — budget spent, history exhausted, or the hit's timestamp is
-  // already INSIDE the loaded range and it still isn't there (a subagent
-  // sidechain, which the archive indexes and the chat view doesn't render) —
-  // it says so rather than leaving the reader on a chat where nothing happened.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: same rule the restore effect's seek follows — `requestOlder` is re-created every render and listing it would re-run this on every frame of a live turn, re-requesting pages the last render already asked for.
+  // Every branch here is a REASON, and none of them is "the seek is not running
+  // for some other cause". `wantsOlder` used to stand in for the last one, and
+  // it answers false for reasons that have nothing to do with having looked —
+  // so a jump that never got as far as asking reported itself as exhausted.
   useEffect(() => {
-    if (!jump || !active || jumpTargetId || jumpMissed || loadingOlder) return;
+    const c = scroll.current;
+    if (!jump || !active || !c || jumpTargetId || jumpMissed || loadingOlder) return;
     if (
+      // The server has no more to give.
       !hasMoreOlder ||
+      // The hit's timestamp is already INSIDE the loaded range and it still is
+      // not rendered — a subagent sidechain, which the archive indexes and the
+      // chat view does not draw. No amount of paging will produce it.
       !jumpMayBeOlder(events, jump.ts) ||
-      jumpSeekPages.current >= ANCHOR_SEEK_PAGE_BUDGET
+      // …or we looked, eight pages of it.
+      c.spentSeekBudget()
     ) {
       setJumpMissed(true);
-      return;
     }
-    if (requestOlder()) jumpSeekPages.current++;
   }, [jump, active, jumpTargetId, jumpMissed, loadingOlder, hasMoreOlder, events]);
 
   // Backstop for the seek stalling silently — a socket that never opened, or a
@@ -3549,16 +3088,16 @@ export function ChatPane({
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return;
-      // Arm the settling window SYNCHRONOUSLY, before the state update. iOS is
-      // documented here as resetting overflow scroll on resume — that is what
-      // `showEpoch` exists for — and the native `scroll` event from that reset
-      // can run in this same turn, while the layout effect that reacts to the
-      // bump is still queued behind a render. `onScroll` would then read a
-      // scrollTop of 0 as trustworthy and write the oldest on-screen row over
-      // the reader's parked message, which the restore would then faithfully
-      // reproduce. The effect re-arms it on the same deadline; this is only the
-      // half-frame the state update cannot cover.
-      suppressPinUntil.current = performance.now() + SHOW_SETTLE_MS;
+      // iOS resets overflow scroll on resume — that is what `showEpoch` exists
+      // for — and the native `scroll` event from that reset can run in this same
+      // turn, while the layout effect reacting to the bump is still queued behind
+      // a render. Nothing has to be armed for it: the controller believes no
+      // scroll event until it has placed something since becoming visible, which
+      // is a causal gate rather than a 250ms window, and `hidden` is what opened
+      // it. This used to be a wall-clock deadline stamped here AND re-stamped in
+      // the effect, because a state update cannot cover the half-frame in
+      // between.
+      scroll.current?.dispatch({ t: 'hidden' });
       setShowEpoch((n) => n + 1);
     };
     // `pageshow` ONLY when it is a bfcache restore. It also fires on an ordinary
@@ -3582,382 +3121,114 @@ export function ChatPane({
     };
   }, []);
 
-  // ── The reader always wins ────────────────────────────────────────────────
-  // The suppression window exists to ignore layout-driven scroll EVENTS, but
-  // a wheel spin or a finger drag is not layout: it is the reader taking
-  // control, and it must land even one frame after a show. Without this, a
-  // flick inside the window was silently undone by the settling loop (which
-  // only stops on `userScrolled`) and, worse, the re-pin observer could still
-  // see a stale `pinnedToBottom` and throw them back to the bottom.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: pendingPick gates when the scroll container exists (the picker renders a different tree).
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || !active) return;
-    const taken = () => {
-      suppressPinUntil.current = 0; // the next scroll event is theirs, and counts
-      userScrolled.current = true; // stop the settling restore
-      // …and end a search jump's hold on the scroll memory. Up to this moment
-      // the pane was showing a result; from here the reader is reading, and
-      // where they choose to be is exactly what the memory is for. The
-      // HIGHLIGHT stays — it goes when the hit leaves the screen, not when they
-      // scroll a line to read around it.
-      searchJumpHold.current = false;
-    };
-    // Wheel and touch are NOT the only ways a reader scrolls, and this listener
-    // being treated as if they were is what made `scrollMotionIsTheReader`
-    // dangerous: that rule declines to blame the reader whenever the content
-    // resized, on the stated grounds that a real gesture "is observed directly
-    // here". It was observed directly only for two input devices. Measured on
-    // the tree that shipped this morning: a drag-select autoscroll moved a
-    // reader 2000 → 9128px — 7128px of real motion — and produced ZERO reader
-    // verdicts across 158 scroll events, because growth was arriving the whole
-    // time. Keyboard paging was the same, 0 verdicts across 244 events.
-    //
-    // So the direct observation has to cover what it claims to:
-    //  · keydown — PageUp/PageDown/Home/End/arrows/space, once focus is in the
-    //    scroller. Filtered to the scrolling keys so typing in a focused child
-    //    (there is none today, but a future inline control would qualify)
-    //    cannot read as a scroll.
-    //  · pointerdown — a scrollbar thumb drag and a drag-select autoscroll both
-    //    begin with one, and neither emits wheel or touchmove at any point.
-    // Momentum after `touchend` is already covered: the flick's own touchmove
-    // fires first.
-    const SCROLL_KEYS = new Set([
-      'PageUp',
-      'PageDown',
-      'Home',
-      'End',
-      'ArrowUp',
-      'ArrowDown',
-      ' ',
-      'Spacebar',
-    ]);
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (SCROLL_KEYS.has(e.key)) taken();
-    };
-    el.addEventListener('wheel', taken, { passive: true });
-    el.addEventListener('touchmove', taken, { passive: true });
-    el.addEventListener('keydown', onKeyDown, { passive: true });
-    el.addEventListener('pointerdown', taken, { passive: true });
-    return () => {
-      el.removeEventListener('wheel', taken);
-      el.removeEventListener('touchmove', taken);
-      el.removeEventListener('keydown', onKeyDown);
-      el.removeEventListener('pointerdown', taken);
-    };
-  }, [active, pendingPick]);
+  /*
+   * ── NO GESTURE LISTENERS ──────────────────────────────────────────────────
+   * An effect here attached `wheel`, `touchmove`, `keydown` and `pointerdown` to
+   * the scroller, to set a flag saying the reader had taken control. It is gone,
+   * and its absence is a correctness improvement rather than a saving.
+   *
+   * The set was never exhaustive and could not be. It started as wheel and touch;
+   * keyboard paging, scrollbar-thumb drags and drag-select autoscroll reached
+   * none of them (measured: 7128px of real drag-select motion producing ZERO
+   * reader verdicts across 158 scroll events, and 0 across 244 for PageDown),
+   * so `keydown` and `pointerdown` were added — and two movers still had no
+   * listener at all, because they are not gestures on the scroller: sequential
+   * focus navigation onto an off-screen button inside the log (the log has
+   * several) and find-in-page.
+   *
+   * The controller answers the question geometrically instead: a scroll event
+   * that leaves the reader's ROW where it was is the document moving under a
+   * stationary reader, and anything else is the reader — whatever device they
+   * used, and including the two nobody had counted. One rule, no per-device
+   * enumeration, and nothing sticky to disarm.
+   */
 
-  // ── D. Hold the bottom through ANY height change, not just React commits ──
-  // The follow-bottom effect only fires on state the component knows about
-  // (events, streaming text, …). Plenty of height arrives outside that:
-  // image and gallery thumbnails decoding late (they're lazy and have no
-  // intrinsic size), the composer regrowing after a show, fonts settling,
-  // the viewport changing. Each grows content BELOW the reader's anchor with
-  // no re-pin, which is the "comes back a little bit off" half of the bug —
-  // and the settling loop can't cover it because that loop has a 2500ms fuse.
+  // ── THE OTHER SUBSCRIPTION: the document changed outside a React commit ───
+  // Plenty of height arrives with no state change behind it: image and gallery
+  // thumbnails decoding late (they are lazy and have no intrinsic size), the
+  // composer regrowing after a show, fonts settling, the viewport changing. This
+  // is the notification for all of them — and it is the notification the old
+  // settling loop was polling for with a 2500ms fuse.
   //
-  // A ResizeObserver has no fuse. While the pane is VISIBLE and the reader is
-  // PINNED, any height change re-asserts the bottom.
+  // ── IT WATCHES THE ROWS, NOT JUST THE BOXES ───────────────────────────────
+  // Observing the scroller and the list is not enough, and the gap is silent.
+  // A ResizeObserver reports an element whose own box changed — so two rows
+  // ABOVE the reader that change by equal and opposite amounts, which is an
+  // ordinary markdown reflow or an image replacing a placeholder of nearly the
+  // same height, move the reader and fire NOTHING, because `.chat-list`'s total
+  // height never moved. Measured in a browser: the callback did not run once.
   //
-  // It used to do nothing at all for an UNPINNED reader, on the reasoning that
-  // someone parked in history must never be yanked down by a thumbnail loading
-  // — which is right, and is exactly why the unpinned branch below is
-  // ROW-BASED rather than a height delta. The engine covers this case only
-  // where scroll anchoring exists: WebKit shipped it in Safari 27, so every
-  // iPhone on iOS 26 or earlier has no owner for it at all. See `liveAnchor`.
-  // `pendingPick` is a dependency because the harness picker renders a
-  // DIFFERENT tree with no .chat-scroll in it: an active pane that starts on
-  // the picker has a null ref here, and without re-running when the real
-  // chat mounts, the observer would never attach for that pane's whole life.
+  // A poll is forgiving of that and a subscription is not, which is the price of
+  // deleting the poll — so the subscription has to cover what the poll covered.
+  // Watching each row closes it precisely: a ResizeObserver costs per CHANGED
+  // element, not per observed one, and `observe` is idempotent, so re-offering
+  // the same rows on each commit is cheap.
+  //
+  // `pendingPick` is a dependency because the harness picker renders a DIFFERENT
+  // tree with no `.chat-scroll` in it: an active pane that starts on the picker
+  // has a null ref here, and without re-running when the real chat mounts the
+  // observer would never attach for that pane's whole life.
   // biome-ignore lint/correctness/useExhaustiveDependencies: pendingPick gates when the scroll container exists.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !active) return;
-    let last = '';
-    const reassert = () => {
-      // A zero/absurdly-short box is a hidden or mid-relayout pane; measuring
-      // it produces a target of 0 and would park the reader at the top.
-      if (el.clientHeight < 40) return;
-      // Both dimensions matter: content growing (scrollHeight) and the
-      // viewport shrinking (clientHeight — composer regrowth, window resize)
-      // each move the bottom. Keying on scrollHeight alone made a pinned
-      // reader miss every pure-viewport change.
-      const key = `${el.scrollHeight}x${el.clientHeight}`;
-      if (key === last) return;
-      last = key;
-      // `pinnedToBottom` is the ONE authority on whether we may move the
-      // reader; deliberately NOT also gated on `userScrolled`. That flag stays
-      // true for the rest of the visit once the reader touches the wheel, so
-      // gating on it meant a reader who scrolled up and then came back to the
-      // bottom silently lost late-content re-pinning — while the events
-      // effect (which checks only the pin) kept following. One rule, one flag.
-      if (pinnedToBottom.current) {
-        const target = maxScrollTop(el.scrollHeight, el.clientHeight);
-        if (Math.abs(el.scrollTop - target) <= 1) return;
-        lastProgrammaticTop.current = target;
-        el.scrollTop = target;
-        return;
-      }
-      // ── Unpinned: pay for growth ABOVE the reader, where the engine won't ──
-      // Row-based on purpose (see `liveAnchor`): on Chromium and Safari 27 the
-      // engine has already put this row back, so `target === el.scrollTop` and
-      // the `<= 1` guard below declines to write — no double-pay. On iOS 26 the
-      // engine paid nothing and this assignment IS the compensation. Growth
-      // BELOW the reader moves the row not at all, so it is a no-op there too,
-      // which is the whole reason a height delta was the wrong instrument.
-      //
-      // Two owners it must stand down for: a search jump (the destination is
-      // not this snapshot) and a restore still seeking its anchor (its goal is
-      // not where the reader currently is, and it re-asserts every frame).
-      if (searchJumpHold.current || holdRememberedAnchor.current) return;
-      const keep = liveAnchor.current;
-      if (!keep) return;
-      const row = findAnchorRow(anchorRows(el), keep.anchorId);
-      if (!row) return;
-      const target = scrollTopForAnchor({
-        scrollTop: el.scrollTop,
-        rowTop: row.getBoundingClientRect().top - el.getBoundingClientRect().top,
-        anchorOffset: keep.anchorOffset,
-        scrollHeight: el.scrollHeight,
-        clientHeight: el.clientHeight,
-        // The row as it is NOW — a fold that collapsed under the reader must
-        // not replay an offset that no longer fits inside it.
-        rowHeight: row.getBoundingClientRect().height,
-      });
-      if (Math.abs(el.scrollTop - target) <= 1) return;
-      lastProgrammaticTop.current = target;
-      el.scrollTop = target;
+    const ro = new ResizeObserver(() => scroll.current?.place());
+    rowWatcher.current = ro;
+    watchRows();
+    return () => {
+      ro.disconnect();
+      rowWatcher.current = null;
     };
-    const ro = new ResizeObserver(reassert);
-    ro.observe(el);
-    // The scroll container's own box often doesn't change when its CONTENT
-    // grows, so watch the list too — that's the element images live in.
-    //
-    // BORDER-BOX, not the default content-box: the floating composer is
-    // absolutely positioned, so its height reaches the log only as the list's
-    // bottom PADDING. A content-box observer never sees that change, which
-    // means the composer regrowing after a show — one of the exact cases this
-    // observer exists for — would leave the last message hidden behind it.
-    const list = el.querySelector('.chat-list');
-    if (list) ro.observe(list, { box: 'border-box' });
-    return () => ro.disconnect();
   }, [active, pendingPick]);
 
+  /**
+   * A scroll event arrived. Ask the controller whose it was; if it was the
+   * reader's, their position is now the intent and is worth storing.
+   *
+   * This was 180 lines. It computed `nearBottom` from raw geometry and set the
+   * pin from it, ran two discriminators over four refs, decided what to preserve
+   * from the store versus what to overwrite, and wrote the memory on every
+   * event. Every one of those decisions is now either a state transition or a
+   * consequence of one.
+   */
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    // display:none (face/tab hide) zeroes clientHeight/scrollTop — persisting
-    // that writes ratio 0 / unpinned and the next open lands in older history.
-    if (
-      !shouldPersistChatScroll({
-        active,
-        clientHeight: el.clientHeight,
-        visible: document.visibilityState === 'visible',
-      })
-    )
-      return;
-    // Movement WE started — a just-un-hidden pane relaying out (clientHeight
-    // is back but scrollTop and the composer height are not), or a smooth
-    // jump-to-bottom mid-glide. Acting on those is what used to unpin a
-    // visible chat and persist it, which is what made the bug stick. Still
-    // update the scroll-down arrow (it derives from current geometry and is
-    // self-correcting); just don't touch pin or memory. A real gesture has
-    // already cleared the window by the time its scroll event arrives.
-    const trustworthy = scrollEventIsTrustworthy({
-      suppressedUntil: suppressPinUntil.current,
-      now: performance.now(),
-    });
-    if (trustworthy) {
-      // ── Did the DOCUMENT move, or did the reader? ──────────────────────────
-      // The browser's scroll anchoring writes scrollTop during layout to pay a
-      // reader for content growing above them, and that write dispatches an
-      // ordinary scroll event. Nothing can stamp `lastProgrammaticTop` for it —
-      // the engine does it, not us — so the delta test below read every one of
-      // those as a gesture. Measured: the reader's row did not move a pixel and
-      // `userScrolled` flipped true.
-      //
-      // That flag is the kill switch for the settling restore, whose entire job
-      // is to hold a place WHILE the document settles — late-decoding images,
-      // the fill-viewport pager, the anchor seek's own prepended batches. Those
-      // are precisely the things that trigger an adjustment, so the restore was
-      // being killed by the conditions it exists for: a cold open whose
-      // remembered message needs paging back in lost its seek to the first
-      // thumbnail that decoded, and settled for the fallback ratio.
-      //
-      // See scrollMotionIsTheReader for the discriminator and the measurement.
-      const heightDelta =
-        lastScrollHeight.current < 0 ? 0 : el.scrollHeight - lastScrollHeight.current;
-      const lastTop = lastScrollTop.current < 0 ? el.scrollTop : lastScrollTop.current;
-      // Captured BEFORE the re-baseline below overwrites it — the pin guard
-      // needs to ask "is this event our own write arriving?".
-      const lastTarget = lastProgrammaticTop.current;
-      lastScrollHeight.current = el.scrollHeight;
-      lastScrollTop.current = el.scrollTop;
-      if (
-        scrollMotionIsTheReader({
-          scrollTop: el.scrollTop,
-          lastScrollTop: lastTop,
-          heightDelta,
-          lastProgrammaticTop: lastProgrammaticTop.current,
-        })
-      ) {
-        userScrolled.current = true;
-      } else if (heightDelta > 0) {
-        // Layout's motion, not theirs — re-baseline so the NEXT event is judged
-        // against where the engine left us, not where we last wrote.
-        lastProgrammaticTop.current = el.scrollTop;
-      }
-      const range = Math.max(1, el.scrollHeight - el.clientHeight);
-      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-      // ── ONLY A GESTURE MAY UN-PIN ─────────────────────────────────────────
-      // `nearBottom` is raw geometry, and raw geometry lies about a reader who
-      // has not moved. The follow-bottom ResizeObserver computes `maxScrollTop`
-      // INSIDE its callback and assigns it; the scroll event that assignment
-      // produces is dispatched a frame later. When a burst of lazy thumbnails
-      // all finish in one layout pass — a pane mounting, or coming back to the
-      // foreground — more content lands in between, so the event arrives at a
-      // position that WAS the bottom against a document that has since grown.
-      // Measured: reassert targeted 24910 against scrollHeight 25774, two more
-      // screenshots decoded in the same frame (27934), event dispatched with
-      // 2160px of distance. `nearBottom` false about a reader sitting still.
-      //
-      // Un-pinning on that is PERMANENT. `pinnedToBottom` is the sole gate on
-      // both the follow-bottom effect and the observer's pinned branch, so the
-      // chat silently stops following live output for the rest of the visit and
-      // the unpinned branch faithfully holds the reader where the accident left
-      // them — 5280px up, then 6284px up as more turns land. Reported as
-      // "it keeps jumping back randomly": the randomness is a thumbnail burst.
-      //
-      // So the pin follows the READER, not the geometry. `userScrolled` is the
-      // honest signal: the direct listeners (wheel/touchmove/keydown/
-      // pointerdown) all fire BEFORE the scroll event they cause, and
-      // `scrollMotionIsTheReader` has just run above. If the reader has not
-      // taken control, a pinned chat that finds itself off the bottom is our own
-      // accounting arriving late — finish the job against the document as it is
-      // NOW rather than concluding they left.
-      //
-      // TWO conditions, either of which is enough, because each covers the
-      // other's hole — measured, 6/6 on the burst and 3/3 on every neighbour:
-      //
-      //  · no gesture this visit. Catches the case an equality test cannot:
-      //    with anchoring unconditional the engine moves `scrollTop` itself and
-      //    stamps nothing, so the arriving event matches no target we hold.
-      //
-      //  · this event IS our own write arriving. Needed because `userScrolled`
-      //    is NOT "the reader is scrolling" — it is the settling restore's kill
-      //    switch, and it is deliberately sticky: set once by `taken()`, cleared
-      //    only on hide. So one wheel notch at any point in the visit would
-      //    disarm the first condition for the rest of it, and the burst bug
-      //    returns verbatim (measured 0/3 after a single nudge up and back).
-      //    Worse, `scrollToBottom` sets it EXPLICITLY — so tapping "jump to
-      //    latest", the exact gesture that means "I want to follow the tail
-      //    again", would permanently disable the thing keeping you there.
-      const ourOwnWriteArriving = Math.abs(el.scrollTop - lastTarget) <= 1;
-      if (
-        pinnedToBottom.current &&
-        !nearBottom &&
-        (!userScrolled.current || ourOwnWriteArriving)
-      ) {
-        const settled = maxScrollTop(el.scrollHeight, el.clientHeight);
-        if (Math.abs(el.scrollTop - settled) > 1) {
-          lastProgrammaticTop.current = settled;
-          el.scrollTop = settled;
-        }
-      } else {
-        // LIVE follow, and only that. Tight on purpose — nudge up one line and
-        // the log stops scrolling itself under you. Deliberately NOT the value
-        // that gets remembered: see `caughtUp` below and chat-scroll.ts.
-        setPinned(nearBottom);
-      }
-      // RE-ENTRY policy: had they read to the end? A caught-up reader is
-      // remembered as "open at the newest message", so a turn that lands while
-      // they are away can't strand them thirty messages up.
-      const caughtUp = measureCaughtUp(el, nearBottom);
-      // The ANCHOR is the position that matters (see chat-scroll.ts); the ratio
-      // rides along as the fallback for a mount whose window doesn't hold the
-      // anchored message yet. Measured only for a reader who is NOT caught up:
-      // a caught-up reader is restored to the newest message, so the walk would
-      // be pure cost — and caught up is what chats are almost all of the time.
-      // …unless a restore is still hunting for the anchor already stored: this
-      // event is almost certainly that restore's own scrollTop write, and
-      // recording where it has got to would erase the message the reader
-      // actually parked on — permanently, and for every future open of the pane.
-      // Keep the stored anchor AND the caught-up verdict it belongs to: a
-      // mid-seek frame can transiently sit at the tail, and letting that write
-      // `caughtUp: true` would retire the very goal the hold exists to protect.
-      const prev = holdRememberedAnchor.current ? recallChatScroll(paneId) : null;
-      // WHERE THE READER IS, which is not always what gets stored: during a
-      // hold the stored anchor is the goal, and for a caught-up reader nothing
-      // is stored at all. The re-pin observer's unpinned branch needs the live
-      // one — see `liveAnchor` — and it is the same O(log n) binary search the
-      // write below already pays for the common (parked) case.
-      const here = nearBottom ? null : captureAnchor(el);
-      liveAnchor.current = here;
-      const anchor = prev ?? (caughtUp ? null : here);
-      // …and the THIRD case: a search jump is an explicit destination, not a
-      // reading position, so it records nothing at all and whatever was
-      // remembered before the search still stands. Deliberately below the pin
-      // update (live-follow describes the pane as it actually is) and above the
-      // write. See shouldRememberPosition in chat-scroll.ts.
-      if (shouldRememberPosition({ searchJumpActive: searchJumpHold.current })) {
-        rememberChatScroll(paneId, {
-          anchorId: anchor?.anchorId ?? null,
-          anchorOffset: anchor?.anchorOffset ?? 0,
-          // Clamped: overscroll (iOS rubber-band) reports a scrollTop outside
-          // the range, and a stored ratio outside [0,1] restores to a position
-          // the browser then clamps — leaving the restore loop re-assigning a
-          // target it can never reach.
-          ratio: Math.min(Math.max(0, el.scrollTop / range), 1),
-          caughtUp: prev ? prev.caughtUp : caughtUp,
-          sid: renderedSid.current,
-        });
-      }
-    }
+    if (scroll.current?.onScroll()) saveScroll();
     // Hysteresis: only reveal the arrow once meaningfully scrolled up, so it
-    // doesn't flicker on tiny nudges near the bottom.
-    setShowScrollDown(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
-    // Near the top → page in earlier messages (once events exist, so we don't
-    // fire during the initial empty/loading state). Untrusted events are
-    // excluded: a just-shown pane can report scrollTop 0 while its layout
-    // settles, and paging on that would prepend a batch of history on every
-    // single tab visit to a chat the reader is pinned to the bottom of. The
-    // genuine "not enough content to scroll" case has its own effect.
-    if (trustworthy && el.scrollTop < TOP_PAGE_ZONE_PX && events.length > 0) requestOlder();
+    // doesn't flicker on tiny nudges near the bottom. Derived from current
+    // geometry and self-correcting, so it is deliberately outside the
+    // reader-or-layout question.
+    syncScrollDownArrow();
+    // Near the top → page in earlier messages. A reader at the bottom is not
+    // paging history, and a pane that has not been placed yet has not had its
+    // layout read (the old version needed a 250ms window here, because a
+    // just-shown pane reports scrollTop 0 while it settles and paging on that
+    // prepended a batch of history on every tab visit).
+    if (
+      el.scrollTop < TOP_PAGE_ZONE_PX &&
+      events.length > 0 &&
+      scroll.current?.phase(hasMoreOlderRef.current) !== 'FOLLOWING'
+    ) {
+      requestOlder();
+    }
   };
 
   const scrollToBottom = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    setPinned(true);
     setShowScrollDown(false);
-    // This IS the reader taking control, and it must end the settling restore
-    // exactly as a wheel spin does. The restore holds its goal as a snapshot,
-    // so without this it would spend the rest of its window re-asserting the
-    // old parked message against the glide this button just started — and no
-    // wheel/touch event is coming to stop it, because a tap is neither.
-    userScrolled.current = true;
-    holdRememberedAnchor.current = false;
-    // Record the re-pin immediately — the smooth scroll's own onScroll
-    // events lag, and switching away mid-glide must not save a stale spot.
-    // No anchor: "the bottom" is not a message, and leaving a stale one here
-    // would out-rank the caught-up verdict on the next restore.
-    rememberChatScroll(paneId, {
-      anchorId: null,
-      anchorOffset: 0,
-      ratio: 1,
-      caughtUp: true,
-      sid: renderedSid.current,
-    });
-    // …and suppress the glide itself. A smooth scroll emits an event per
-    // frame, none of them the reader: each one used to read as "scrolled away
-    // from the programmatic target", unpinning the chat this button just
-    // pinned and persisting a mid-glide ratio if the pane was hidden before
-    // the animation finished. Grabbing the wheel mid-glide still wins — the
-    // gesture listener clears this.
-    suppressPinUntil.current = performance.now() + SMOOTH_SCROLL_SETTLE_MS;
-    const target = maxScrollTop(el.scrollHeight, el.clientHeight);
-    lastProgrammaticTop.current = target;
-    el.scrollTo({ top: target, behavior: 'smooth' });
+    // The one gesture that unambiguously means "follow the tail again". It is an
+    // INPUT, so it needs no flag — and it used to need one, because the smooth
+    // glide below emitted a scroll event per frame at positions nothing had
+    // written, so each was read as the reader scrolling away from the target the
+    // button had just set.
+    //
+    // There is no glide any more. `behavior: 'smooth'` is an unattributable
+    // writer we opted into voluntarily: the browser interpolates, so neither half
+    // of the discriminator can recognise the intermediate frames, and that is the
+    // entire reason `SMOOTH_SCROLL_SETTLE_MS` (600ms) existed. A cosmetic easing
+    // bought a hole in the one invariant this mechanism rests on.
+    scroll.current?.dispatch({ t: 'jump-to-latest' });
+    saveScroll();
   };
 
   // Grace timer: connected but still nothing to show after a while — either a
@@ -4543,18 +3814,12 @@ export function ChatPane({
             expanded={actionRunExpanded(run, expandedGroups) || holdsHit}
             anchorId={anchorId}
             onToggle={() => {
-              // Where the tapped header sits RIGHT NOW, before the commit that
-              // changes its height. See toggleAnchor.
-              const el = scrollRef.current;
-              const row =
-                el && el.clientHeight >= 40 ? findAnchorRow(anchorRows(el), anchorId) : null;
-              toggleAnchor.current =
-                el && row
-                  ? {
-                      anchorId,
-                      top: row.getBoundingClientRect().top - el.getBoundingClientRect().top,
-                    }
-                  : null;
+              // A fold toggle is a height change the READER caused, in the
+              // middle of the document — so it is an INPUT, not something to be
+              // detected afterwards. The intent becomes "hold this header where
+              // it is right now", measured before the commit that changes its
+              // height, and the commit subscription satisfies it.
+              onFoldToggled(anchorId);
               setExpandedGroups((prev) => toggleActionRun(run, prev));
             }}
             renderEvent={renderEvent}
@@ -4827,7 +4092,9 @@ export function ChatPane({
               type="button"
               className="chat-search-missed-more"
               onClick={() => {
-                jumpSeekPages.current = 0;
+                // "Keep looking" is a fresh request, so it gets a fresh budget —
+                // re-claiming the same jump resets the controller's page count.
+                scroll.current?.dispatch({ t: 'search-jump' });
                 setJumpMissed(false);
               }}
             >

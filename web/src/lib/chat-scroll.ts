@@ -1,135 +1,77 @@
 /**
- * Remembered scroll positions for chat panes. A ChatPane loses its scroll
- * constantly — a reload unmounts it, and tab/pane/face switches hide it with
- * display:none (which zeroes scrollTop) — so returning to a chat always
- * snapped to the bottom.
+ * REMEMBERED SCROLL POSITIONS for chat panes — the durable half of the scroll
+ * mechanism. The live half is in chat-scroll-intent.ts (what to assert) and
+ * chat-scroll-controller.ts (the one writer).
  *
- * ── WHY A MESSAGE ID, NOT A RATIO ────────────────────────────────────────────
- * This used to store position as a RATIO of the scrollable range, on the theory
- * that a ratio "degrades proportionally" when the document height changes. It
- * does — and proportional degradation is precisely the bug, because a chat log
- * grows at BOTH ends:
+ * A ChatPane loses its scroll constantly — a reload unmounts it, tab/pane/face
+ * switches hide it with `display:none` (which zeroes `scrollTop`) — so returning
+ * to a chat always snapped to the bottom.
  *
- *   · below, when the agent keeps talking while you're away;
- *   · ABOVE, every time the older-history pager prepends a 128 KB batch.
+ * ── THE UNIT IS A MESSAGE. THERE IS NO RATIO. ────────────────────────────────
+ * Position was once stored as a fraction of the scrollable range. A chat log
+ * grows at BOTH ends — below when the agent keeps talking, ABOVE every time the
+ * pager prepends a 128 KB batch — and a fraction only survives the second if the
+ * content above the reader is fixed. Prepend `g` pixels and the honest target is
+ * `R·range + g`; the ratio computes `R·(range + g)`, which is smaller for every
+ * R < 1, so the reader is dragged back into older history, further each batch.
  *
- * A ratio only preserves the reader's place when the content above them is
- * fixed. Prepend `g` pixels of older history and the honest target is
- * `R·range + g` (the same messages, pushed down); the ratio computes
- * `R·(range + g)`, which is smaller for every R < 1 — so the reader is dragged
- * BACK into older history, further with every batch. Worse, the ratio is a
- * FIXED POINT: the settling-restore loop re-applies it each frame, so it
- * silently overrides the prepend compensation `scrollTopAfterOlderPrepend`
- * just computed. Measured on the real stack: parked at message 70, reopened at
- * message 165, with the final scroll ratio equal to the stored one to three
- * decimals.
+ * It survived as "the fallback for when the anchored message isn't rendered",
+ * and that is where the last catastrophes came from: a fresh mount opens on a
+ * ~128 KB tail of a conversation that can run to tens of MB, so the fallback
+ * applied a fraction of the WHOLE document to a sliver of it. Measured, 0.0363
+ * of 185,753px (turn 40) became 0.0363 of the 13,044px tail and landed on turn
+ * 296 — and because the result was recorded, each reopen consumed a larger
+ * fraction: 4% → 13 → 21 → 28 → 42 → 53 → 62 → 66 → 72% over eight reloads, with
+ * no fixed point short of the bottom.
  *
- * So the unit of memory is a MESSAGE: `anchorId` (an event id, which is stable
- * across prepends, appends, dedupe and reconnects) plus `anchorOffset`, how far
- * that message's top sat above the viewport top. Restoring means "put message
- * X back under the reader's eyes", which is invariant to everything the
- * document does around it. `ratio` is still written, purely as the fallback for
- * when the anchored message isn't rendered (a fresh mount opens on a 128 KB
- * tail; anything older has to be paged back in first — see the seek in
- * ChatPane's restore effect).
+ * So the unit is `anchorId` (an event id, stable across prepends, appends,
+ * dedupe and reconnects) plus `anchorOffset`, how far that message's top sat
+ * above the viewport top. If the anchor is not loaded, SEEK it; if you cannot
+ * find it, stay where you are. A floor is a floor; a guess is a walk.
  *
- * ── WHY "CAUGHT UP", NOT "PINNED" ────────────────────────────────────────────
- * Anchoring to a message fixed the MECHANISM: whatever position we remember, we
- * restore it exactly. The report kept coming back anyway, because the position
- * being remembered was wrong — and it was wrong for a reader who had not
- * knowingly scrolled anywhere.
+ * ── "CAUGHT UP", NOT "PINNED" ────────────────────────────────────────────────
+ * Two questions on two timescales, and only the second is remembered. Whether
+ * live output should scroll itself into view is a 40px question answered
+ * continuously; whether the reader had finished the conversation is a 160px
+ * question answered once, when they leave. Persisting the first as the second
+ * meant one wheel notch (~120px, a single trackpad nudge to re-read the last
+ * line) stored "parked on the newest message" — harmless until a ten-minute turn
+ * landed thirty messages and the same anchor, faithfully restored, was 5701px
+ * above the newest one. See `readerIsCaughtUp`.
  *
- * `pinnedToBottom` in the component answers "should live output scroll itself
- * into view while I am watching?", and its threshold is deliberately tight
- * (40 px): auto-scrolling someone who nudged up a line is obnoxious. That flag
- * used to be persisted AS THE RE-ENTRY POLICY too — and re-entry is a different
- * question, answered on a different timescale. One wheel notch off the bottom
- * (Chromium: ~120 px, i.e. a single trackpad nudge to re-read the last line)
- * stored `pinned: false` plus an anchor on the newest message. That is harmless
- * while nothing arrives. Then the agent runs a ten-minute turn, and the SAME
- * anchor — faithfully, exactly restored — is now thirty messages above the
- * newest one. Measured: 120 px off the bottom, 30 messages arrive, reopen lands
- * 5701 px up. Verbatim the report: "scrolled up a bunch and I need to scroll
- * down to the most recent message."
+ * ── localStorage, NOT sessionStorage ─────────────────────────────────────────
+ * "Whenever i open muxpad it resets my scroll position." Note the trigger:
+ * OPENING THE APP. Three earlier rounds chased the position across doors that
+ * keep the browsing context alive — a tab switch, a background, a reload — and
+ * all tested clean. A cold open is the one door that does not: quit the PWA,
+ * launch it again, and the new context's sessionStorage is empty BY
+ * SPECIFICATION. Measured: parked at message 69, cold-opened at message 194.
  *
- * So the two questions are split, and only the second is remembered:
+ * The key is NOT re-versioned across that move or across the removal of the
+ * ratio. `:v4` names the SHAPE, and a v4 row is readable either way — bumping it
+ * would throw away every reader's position once, to fix a bug about throwing
+ * away every reader's position.
  *
- *   CAUGHT UP  ⇔  the END of the newest message is on screen (see
- *                 readerIsCaughtUp for why its end and not its start).
- *
- * A caught-up reader opens at the newest message, however much arrived while
- * they were away — they had read to the end, so the end is where they belong. A
- * reader who is NOT caught up scrolled back past the newest message on purpose;
- * they keep their exact spot, anchored to the message they were reading, no
- * matter what arrives. Stated in messages rather than pixels, because "am I at
- * the end of the conversation" is a fact about the conversation, and pixels stop
- * meaning anything the moment the document grows.
- *
- * `caughtUp` readers keep the follow-new-messages behavior; the sid guards
- * staleness — a cleared/rotated session forgets the spot.
- *
- * Persistence is gated by `shouldPersistChatScroll`: a display:none hide
- * zeroes clientHeight and must NOT write ratio 0 / unpinned, or the next
- * open restores into older history. Older-history prepends use
- * `scrollTopAfterOlderPrepend` so pinned readers stay at the bottom instead
- * of being height-delta'd mid-log (which used to unpin via onScroll).
- *
- * ── WHY localStorage, NOT sessionStorage ─────────────────────────────────────
- * "Whenever i open muxpad it resets my scroll position."
- *
- * Note the trigger: OPENING THE APP. The three rounds above all chased the
- * position across doors that keep the browsing context alive — a tab switch, a
- * background/foreground, a reload (F5 replaces the document, but the TAB, and
- * therefore its sessionStorage, is the same one). This store used to be
- * sessionStorage, and its own comment claimed "reloads keep it", which was
- * true. That is exactly why every previous round tested clean.
- *
- * A cold open is the one door that does not keep the context: quit the PWA,
- * close the window, launch muxpad again, and the new context's sessionStorage
- * is empty BY SPECIFICATION. Not degraded, not stale — absent. Every pane fell
- * back to its default, which for a reader parked in history reads exactly like
- * "it reset my scroll position". Measured on the real stack: parked at message
- * 69, cold-opened at message 194 (the bottom).
- *
- * So the memory outlives the browsing context, like every other per-device
- * preference here (settings, nav expansion, last-visited, and the terminal
- * pane's own scroll ratio in `pane-scroll.ts`, which has always been
- * localStorage).
- *
- * The key is NOT re-versioned for this. `:v4` names the SHAPE of an entry, and
- * the shape is unchanged — v2 entries carry no anchor and v3 entries carry
- * `pinned` (the 40 px live-follow threshold masquerading as "had read to the
- * end"), so inheriting either would carry a bug across the fix that removed it.
- * A v4 entry is the post-fix shape and inheriting one is exactly what we want:
- * the storage TIER changed, not the meaning. Bumping would instead throw away
- * every reader's position once, to fix a bug about throwing away every reader's
- * position — and would make the migration below unable to see what it migrates.
- *
- * Bounded two ways, because localStorage does not clean up after itself the way
- * a dying session used to: an LRU cap (pane deletion has no client-side hook to
- * evict on) AND an age cutoff, so a pane read once a quarter ago cannot
- * resurrect a position from a conversation that has since been cleared. A
+ * Bounded two ways, because localStorage does not clean up after itself: an LRU
+ * cap (pane deletion has no client-side hook to evict on) AND an age cutoff. A
  * pruned entry degrades to "no memory" → the newest message, never to a wrong
- * position.
- *
- * Only PARKED positions occupy those slots. A caught-up reader is restored to
- * the newest message and so is a reader with no memory at all, so their row
- * earns its place in storage for one reason only — to tell the OTHER windows
- * that the parked row they are holding is finished with (see `retired`) — and
- * it is capped separately, against MAX_RETIRED, so it can never crowd out a
- * position someone is actually coming back to.
+ * position. Only PARKED positions occupy those slots; a caught-up row is written
+ * solely to tell the OTHER windows that the parked row they hold is finished
+ * with (see `retired`), and is capped separately.
  */
 export interface ChatScrollMem {
   /**
    * Event id of the message under the viewport top, and how far its top sat
-   * ABOVE that line (so normally <= 0). null when nothing was measurable —
-   * then `ratio` is all we have. Always null for a caught-up reader: "the
-   * newest message" is not a fixed message, and pinning it to one is the bug.
+   * ABOVE that line (so normally <= 0). null when nothing was measurable, and
+   * always null for a caught-up reader: "the newest message" is not a fixed
+   * message, and pinning it to one is the bug.
+   *
+   * There is deliberately no second field describing position. See the header:
+   * a null anchor means "open at the newest message", not "fall back to
+   * arithmetic".
    */
   anchorId: string | null;
   anchorOffset: number;
-  /** 0..1 fraction of (scrollHeight - clientHeight). Fallback only. */
-  ratio: number;
   /**
    * Had the reader read to the END of the conversation when they left?
    *
@@ -459,14 +401,7 @@ export function rememberChatScroll(paneId: string, m: ChatScrollMem): void {
   // the opposite, and the only thing it could ever do is be restored by
   // something that reads one field and not the other.
   const row: StoredMem = m.caughtUp
-    ? {
-        anchorId: null,
-        anchorOffset: 0,
-        ratio: m.ratio,
-        caughtUp: true,
-        sid: m.sid,
-        at: Date.now(),
-      }
+    ? { anchorId: null, anchorOffset: 0, caughtUp: true, sid: m.sid, at: Date.now() }
     : { ...m, at: Date.now() };
   mem.set(paneId, row);
   // By WRITE TIME, not insertion order: `adoptFromStorage` can put another
@@ -500,13 +435,18 @@ export function recallChatScroll(paneId: string): ChatScrollMem | null {
     mem.delete(paneId);
     return null;
   }
-  // A non-finite ratio (an older format, or a divide-by-zero that escaped)
-  // coerces to scrollTop 0 and dumps the reader at the TOP of the chat. Treat
-  // it as no memory. The anchor fields are normalised rather than rejected —
-  // an entry with a usable anchor and a junk offset is still worth honouring.
-  if (!m || !Number.isFinite(m.ratio)) return null;
+  // Normalised rather than rejected: an entry with a usable anchor and a junk
+  // offset is still worth honouring, and an entry with NEITHER is the ordinary
+  // "open at the newest message" row, not a corrupt one.
+  //
+  // This used to reject any entry whose `ratio` was not finite. That guard went
+  // with the field — and it had to, because after the field was removed every
+  // row this module writes would have failed it, i.e. the store would have
+  // looked permanently empty and every pane would have opened at the bottom.
+  if (!m) return null;
   return {
-    ...m,
+    caughtUp: !!m.caughtUp,
+    sid: m.sid ?? null,
     anchorId: typeof m.anchorId === 'string' ? m.anchorId : null,
     anchorOffset: Number.isFinite(m.anchorOffset) ? m.anchorOffset : 0,
   };
@@ -538,217 +478,90 @@ export function shouldPersistChatScroll(opts: {
 }
 
 /**
- * May a trusted scroll event WRITE the remembered position?
+ * How far above the end of the rendered log the reader may sit and still count
+ * as having finished it.
  *
- * ── THE THIRD CASE ───────────────────────────────────────────────────────────
- * The header above describes two kinds of reader, and the whole re-entry policy
- * is deciding between them: a CAUGHT-UP reader opens at the newest message, a
- * SCROLLED-BACK reader keeps their exact spot. Both are descriptions of where
- * someone was READING.
- *
- * A search jump is neither. It is an explicit, one-shot destination the user
- * asked for from somewhere else entirely — "take me to the message that says
- * X" — and it lands wherever that message happens to be, usually deep in
- * history. Left ungated, the jump's own scrollTop writes produce scroll events
- * like any other, and each one would record "parked at message X, not caught
- * up". The next ORDINARY open of that chat — a click on the tab tomorrow, with
- * no search involved — would then faithfully restore a reader who had read to
- * the end to a message from three weeks ago. That is the exact bug the
- * caught-up rule was introduced to kill, re-entering through a different door.
- *
- * So a jump records NOTHING, and whatever was remembered before the search
- * stands. A reader who was caught up is still caught up; one who was parked
- * mid-history is still parked there.
- *
- * The hold is released the moment the reader does something with the pane —
- * a wheel spin, a drag, dismissing the highlight — because at that point they
- * are no longer being shown a search result, they are reading, and where they
- * choose to be is exactly what the memory is for. Time does not release it:
- * a reader who studies the hit for two minutes and leaves has still not told us
- * anything about where they want to resume.
- */
-export function shouldRememberPosition(opts: { searchJumpActive: boolean }): boolean {
-  return !opts.searchJumpActive;
-}
-
-/**
- * May the settling RESTORE place the reader?
- *
- * The exact counterpart of `shouldRememberPosition`, and it has to be, because
- * the two are the read and write halves of one store. A jump deliberately
- * records nothing — so for as long as it holds, the remembered position
- * describes where the reader was BEFORE the search, which is by construction
- * somewhere else. Anything that re-asserts that memory while the jump is up
- * does not "restore" the reader; it drags them out of the result they asked
- * for and back into history.
- *
- * And something does re-assert it, on a schedule nobody chose: the restore
- * loop re-runs on every visibility transition (`showEpoch`) — a browser-tab
- * switch, an app backgrounding, a screen lock, a bfcache restore. None of
- * those is a gesture, none of them clears the jump (leaving the PANE does,
- * which is why a tab switch was never the reported case), and the placement
- * loop cannot push back because its own dependencies have not moved. Measured
- * on the real stack: parked at message 147, searched, landed on message 198,
- * backgrounded and returned — and was back at 147, a 14,696 px jump backwards,
- * with the highlight gone too (the dismissal observer sees the hit leave the
- * screen and concludes the reader scrolled away from it). Verbatim the report:
- * "muxpad keeps jumping back to scroll history randomly."
- *
- * So while a jump owns the scroll, the restore stands down. It is not a race
- * to be tuned — one of the two is answering a question the reader asked thirty
- * seconds ago, and the other is answering one they asked before that.
- *
- * The hold is released by exactly the things that release it for the memory (a
- * wheel, a finger, Escape, leaving the pane, the hit scrolling away), and the
- * very next restore is ordinary again.
- */
-export function shouldRestorePosition(opts: { searchJumpActive: boolean }): boolean {
-  return !opts.searchJumpActive;
-}
-
-/**
- * After an older-history batch prepends, where should `scrollTop` land?
- * Pinned readers stay at the bottom (follow new messages). Unpinned readers
- * keep the same messages under the viewport via the classic height-delta
- * restore. Without the pinned branch, the height-delta lands mid-log and the
- * ensuing onScroll unpins — the "opens into older chat" bug on fill-viewport
- * pagination / cross-device first open.
- */
-export function scrollTopAfterOlderPrepend(opts: {
-  pinned: boolean;
-  newScrollHeight: number;
-  clientHeight: number;
-  anchorHeight: number;
-  anchorTop: number;
-}): number {
-  if (opts.pinned) {
-    return maxScrollTop(opts.newScrollHeight, opts.clientHeight);
-  }
-  // CLAMPED. If clientHeight changed between capturing the anchor and
-  // applying it (a composer resize, a viewport change), the raw arithmetic
-  // can land outside the scrollable range. The browser would clamp the real
-  // scrollTop but the caller still stamps the UNCLAMPED value as
-  // `lastProgrammaticTop`, so the very next scroll event reads as "the
-  // reader took control" — unpinning them mid-history for no reason.
-  const raw = opts.newScrollHeight - opts.anchorHeight + opts.anchorTop;
-  return Math.min(Math.max(0, raw), maxScrollTop(opts.newScrollHeight, opts.clientHeight));
-}
-
-/**
- * Where re-opening a chat lands: at the newest message, or back at the
- * remembered one? No memory → newest (fresh mount / another device).
- *
- * Reads `caughtUp`, NOT a pin: see the header. This is the whole re-entry
- * policy, and it is deliberately the only thing that decides it.
- */
-export function opensAtNewest(mem: ChatScrollMem | null): boolean {
-  return !mem || mem.caughtUp;
-}
-
-/**
- * How far past the bottom of the viewport the newest message's END may sit
- * while the reader still counts as caught up.
- *
- * At rest this distance is NEGATIVE — the floating composer reserves ~130 px of
- * list padding below the last message — so the budget is really "a couple of
- * wheel notches up from the bottom" (Chromium: ~120 px each). Generous enough
- * that nudging up to re-read the last line doesn't park you in history forever,
- * which is the bug the message-shaped rule was introduced to fix; tight enough
- * that scrolling away on purpose is respected.
+ * Generous enough that nudging up a couple of wheel notches to re-read the last
+ * line (Chromium: ~120 px each) doesn't park you in history forever — which is
+ * the bug this rule was introduced to fix — and tight enough that scrolling away
+ * on purpose is respected. Deliberately four times the live-follow threshold:
+ * the two answer different questions on different timescales. See the note on
+ * `readerIsCaughtUp`.
  */
 const CAUGHT_UP_SLACK_PX = 160;
 
 /**
- * Was the reader at the END of the conversation?
+ * Has the reader reached the END of the conversation?
  *
- * `lastRowBottom` is the newest anchored row's BOTTOM relative to the scroll
- * viewport's top; null when there are no rows to measure (an empty chat, or a
- * hidden pane whose boxes have collapsed), in which case the caller's pin state
- * is the best available answer.
+ * The one question re-entry consults. A caught-up reader opens at the newest
+ * message, however much arrived while they were away; a reader who is not
+ * caught up scrolled back on purpose and keeps their exact spot.
  *
- * A message-shaped question, on purpose. The alternative — "within N pixels of
- * the document bottom" — cannot distinguish a reader who has read to the end
- * from one who happens to be near it, and the distance to the bottom is not even
- * constant at rest: see CAUGHT_UP_SLACK_PX.
+ * ── IT ASKS ABOUT THE DOCUMENT, NOT ABOUT THE LAST MESSAGE ───────────────────
+ * Two earlier versions of this asked a message-shaped question, and each was
+ * introduced to fix the previous one's failure.
  *
- * ── WHY THE BOTTOM AND NOT THE TOP ───────────────────────────────────────────
- * This used to ask whether the newest message's TOP was on screen, on the
- * reasoning that a reader who can see it "had scrolled back past nothing". That
- * holds only while the newest message FITS. It routinely does not: a Chat-mode
- * reply with its action run folded above it, or an Agent-mode tool result, runs
- * to several screens. A reader on the first screen of one had their position
- * recorded as caught up, and re-entry is defined as "open at the newest
- * message" — so coming back dropped them at the END of the thing they were
- * halfway through, composer-ready, with no way back to their place. Reported as
- * "I come back to muxpad and it scrolls to the very bottom instead of my last
- * position".
+ *   v1: "is the newest message's TOP on screen?" — which holds only while the
+ *   newest message FITS. A Chat-mode reply with its action run above it, or an
+ *   Agent-mode tool result, runs to several screens; a reader on the first
+ *   screen of one was recorded caught up, so coming back dropped them at the END
+ *   of the thing they were halfway through. Reported as "I come back to muxpad
+ *   and it scrolls to the very bottom instead of my last position".
  *
- * Measuring the END answers the question that was always meant: has the reader
- * actually reached the end of the newest message, not merely watched it begin.
- * A tall message now keeps its anchor (the row under the viewport top, with the
- * offset into it), which is exactly what the anchor was built to carry.
+ *   v2: "is the newest message's END on screen?" — right for that case, and
+ *   wrong for its neighbour, because the newest MESSAGE is not the end of the
+ *   DOCUMENT. Everything the live turn puts below it — the streaming preview,
+ *   the optimistic user bubble, the question card, the queued strip — carries no
+ *   `data-eid` and so is invisible to a rule that walks anchored rows. A reader
+ *   who scrolled up to the end of the last committed message while three screens
+ *   of streaming output sat below them measured `lastRowBottom ≈ 0` and was
+ *   recorded CAUGHT UP: on re-entry they were taken to the newest message, which
+ *   is content they had deliberately scrolled away from and never read.
+ *
+ * So the question is asked about the scroll range, which by construction
+ * includes every one of those and the composer's reserve row: is there anything
+ * below you that you have not seen? That answers v1's case for the same reason
+ * v2 did — a reader on the first screen of a three-screen message has two
+ * screens below them — and it answers v2's case, which no row-walk can.
+ *
+ * Note this is NOT the live-follow threshold wearing different clothes. That one
+ * is 40 px and governs whether output scrolls itself into view while you watch;
+ * this one is 160 px and governs where you land tomorrow. Same measurement,
+ * different slack, different question — and persisting the first as the second is
+ * the bug that stored "parked on the newest message" for one wheel notch and then
+ * stranded the reader 5701 px up when a ten-minute turn landed.
  */
 export function readerIsCaughtUp(opts: {
-  lastRowBottom: number | null;
-  clientHeight: number;
-  nearBottom: boolean;
-}): boolean {
-  if (opts.lastRowBottom === null) return opts.nearBottom;
-  return opts.lastRowBottom - opts.clientHeight <= CAUGHT_UP_SLACK_PX;
-}
-
-/**
- * The memory that replaces a goal the settling restore could not reach.
- *
- * ── RETIRING A DEAD ANCHOR ───────────────────────────────────────────────────
- * The restore holds the stored anchor untouched while it is still seeking the
- * message it names — that hold is the only thing stopping the loop's own
- * scrollTop writes from overwriting the reader's parked spot. But when the seek
- * gives up, the store is still naming a message that is NOT COMING BACK, and
- * nothing else corrects it: the loop has usually converged and stopped writing
- * by then, so no further scroll event is coming.
- *
- * The cost is paid on every later visibility transition. The seek budget is a
- * local of the restore effect, and that effect re-runs on each of them — a
- * browser-tab switch, an iOS backgrounding, a screen unlock — so every flip
- * spends another eight `load-older` round trips on the same ghost, and each
- * re-run applies the remembered ratio against a document the previous re-runs
- * grew. That is the R·(range + g) walk this file's header calls catastrophic,
- * once per tab switch.
- *
- * So the loop hands over whatever it actually settled on. That row is a REAL
- * one — `captureAnchor` read it off the document — so the next restore is an
- * ordinary, instant one. `caughtUp` is MEASURED rather than assumed false: if
- * the fallback left the reader at the end of the log, saying so is what stops
- * the next open from pinning them to a message that is no longer the newest.
- */
-export function retiredAnchorMemory(opts: {
-  /** Where the loop settled, from `captureAnchor`. null → nothing anchorable. */
-  live: { anchorId: string; anchorOffset: number } | null;
   scrollTop: number;
   scrollHeight: number;
   clientHeight: number;
-  /** The newest anchored row's bottom, viewport-relative. null → none. */
-  lastRowBottom: number | null;
-  sid: string | null;
-}): ChatScrollMem {
-  const range = Math.max(1, maxScrollTop(opts.scrollHeight, opts.clientHeight));
-  const nearBottom = opts.scrollHeight - opts.scrollTop - opts.clientHeight < 40;
-  return {
-    anchorId: opts.live?.anchorId ?? null,
-    anchorOffset: opts.live?.anchorOffset ?? 0,
-    // Clamped for the same reason every other stored ratio is: iOS rubber-band
-    // reports a scrollTop outside the range, and a ratio outside [0,1] restores
-    // to a target the browser then clamps, leaving the loop re-assigning it.
-    ratio: Math.min(Math.max(0, opts.scrollTop / range), 1),
-    caughtUp: readerIsCaughtUp({
-      lastRowBottom: opts.lastRowBottom,
-      clientHeight: opts.clientHeight,
-      nearBottom,
-    }),
-    sid: opts.sid,
-  };
+}): boolean {
+  // A document too short to scroll has no end to be short of.
+  if (opts.scrollHeight <= opts.clientHeight) return true;
+  return opts.scrollHeight - opts.scrollTop - opts.clientHeight <= CAUGHT_UP_SLACK_PX;
 }
+
+/*
+ * `retiredAnchorMemory` used to live here: when the settling restore gave up on
+ * an anchor it could not reach, it wrote back whatever row the RATIO FALLBACK
+ * had landed on, so the next open would be an ordinary one instead of spending
+ * another eight pages on the same ghost.
+ *
+ * It is gone with the fallback, and nothing replaces it. Retirement existed only
+ * to clean up after a guess; with nothing guessing, a seek that runs out of
+ * budget simply leaves the record alone and the reader where the document
+ * opened. The budget itself is what stops the pages being re-spent (see
+ * `ScrollState.pages`, which survives a visibility flip and is reset only by a
+ * fresh mount) — a counter, rather than a write-back that had to be gated on
+ * `!hasMoreOlder` to avoid overwriting the reader's real parked spot with a row
+ * chosen by arithmetic against a fraction of the conversation.
+ *
+ * Those two rules — "retire a dead anchor" and "never retire against a partial
+ * document" — were each correct, and composing them is what produced the live
+ * bug: a budget-exhausted seek in a conversation that still had history never
+ * retired at all, so every tab switch re-spent the whole budget AND re-applied
+ * the ratio against a document the previous runs had grown.
+ */
 
 /**
  * Whether a remembered sid may be applied against the currently rendered sid.
@@ -765,134 +578,6 @@ export function maxScrollTop(scrollHeight: number, clientHeight: number): number
 }
 
 /**
- * How long after a pane becomes visible its scroll events are ignored for
- * PIN/MEMORY purposes.
- *
- * A pane un-hidden from display:none delivers scroll events while its layout
- * is still settling: `clientHeight` is back but `scrollTop` may still be the
- * stale (or engine-zeroed) value, and the composer's height hasn't regrown.
- * The first such event used to be read as "the reader scrolled": it set
- * `userScrolled`, killed the settling restore, flipped `pinnedToBottom` to
- * false and wrote that to memory — so a chat stopped following new messages
- * while plainly visible, and stayed that way. That is what made the bug
- * STICKY rather than a one-off jump.
- *
- * Two animation frames is the shortest window that reliably spans the
- * relayout; we use a small wall-clock budget instead of counting frames so a
- * throttled background tab can't leave the window open forever.
- */
-export const SHOW_SETTLE_MS = 250;
-
-/**
- * How long a smooth `scrollTo` glide is suppressed for. The animation emits a
- * scroll event per frame, none of which is the reader: read as gestures they
- * would unpin the chat the "jump to latest" button just pinned, and persist a
- * mid-glide ratio if the pane is hidden before the glide finishes.
- */
-export const SMOOTH_SCROLL_SETTLE_MS = 600;
-
-/**
- * Should this scroll event be allowed to change pin state / scroll memory?
- *
- * `suppressedUntil` is a timestamp the component stamps when it starts moving
- * the scroll itself (a show transition, a smooth jump-to-bottom); 0 means
- * nothing is in flight. A REAL gesture clears it — distrusting scroll events
- * for a moment is right, distrusting the reader never is, so the component
- * zeroes this the instant a wheel/touch arrives.
- *
- * Pure so the rule is testable without a DOM: the component supplies clock
- * readings (monotonic ones — see performance.now at the call site).
- */
-export function scrollEventIsTrustworthy(opts: {
-  suppressedUntil: number;
-  now: number;
-}): boolean {
-  return opts.now >= opts.suppressedUntil;
-}
-
-/**
- * Did the READER move, or did the document move under them?
- *
- * A scroll event whose position differs from the last programmatic target used
- * to be, on its own, proof that the reader took control. It is not, because the
- * browser's own scroll anchoring writes `scrollTop` during layout — paying an
- * unpinned reader for content that grew above them — and that write dispatches
- * an ordinary scroll event. Nothing can stamp the target for it: the engine
- * does it, not us. Measured in headless Chromium: the reader's row did not move
- * a pixel and the "reader took control" flag flipped true.
- *
- * That flag kills the settling restore, whose entire job is to hold a place
- * WHILE the document settles — late-decoding images, the fill-viewport pager,
- * the anchor seek's own prepended batches. All of those resize the content, so
- * the restore was being killed by the very conditions it exists for.
- *
- * An anchoring adjustment can only occur when the scrollable content RESIZED,
- * so that is the discriminator. On a resize the motion is attributed to layout
- * and the caller re-baselines its target to the new position. A real gesture
- * that happens to land mid-resize is not lost: wheel and touchmove are observed
- * directly and set the flag without consulting this at all.
- */
-export function scrollMotionIsTheReader(opts: {
-  scrollTop: number;
-  /** `scrollTop` as of the previous scroll event. */
-  lastScrollTop: number;
-  /** How much `scrollHeight` grew since the previous scroll event (may be <= 0). */
-  heightDelta: number;
-  lastProgrammaticTop: number;
-}): boolean {
-  const moved = opts.scrollTop - opts.lastScrollTop;
-  // Nothing moved: not the reader, whatever the document did.
-  if (Math.abs(moved) <= 1) return false;
-  // ── How much of this motion can layout actually account for? ──────────────
-  // An anchoring adjustment pays for growth ABOVE the reader, so it moves
-  // scrollTop DOWN by at most the total growth — and by less when some of that
-  // growth was below them. Anything inside [0, heightDelta] is therefore
-  // explainable as compensation; anything beyond it, or any upward motion, is
-  // the reader.
-  //
-  // This replaces a blunt `if (resized) return false`, which excused EVERY
-  // motion in any frame where the content changed. That was correct for the
-  // adjustment and catastrophic for the neighbour: a reader paging with the
-  // keyboard, dragging the scrollbar, or drag-selecting during a live turn was
-  // invisible for as long as output kept arriving, and the settling restore —
-  // which nothing had told to stop — sprang them back. Measured: 7128px of real
-  // reader motion, 0 reader verdicts across 158 events.
-  if (opts.heightDelta > 0 && moved > 0 && moved <= opts.heightDelta + 1) return false;
-  // Otherwise fall back to the original question: is this position somewhere we
-  // did not put them? Programmatic writes stamp their target before assigning.
-  return Math.abs(opts.scrollTop - opts.lastProgrammaticTop) > 1;
-}
-
-/**
- * Index of the first row still (at least partly) on screen: the first whose
- * BOTTOM is below the viewport top. That row is the one the reader's eye is
- * anchored to, and the only one whose identity survives the document changing
- * around it.
- *
- * Binary search, because this runs off scroll events and `bottomOf` costs a
- * `getBoundingClientRect` each — a linear scan over a few hundred rows would
- * be a per-frame layout tax on a chat that is doing nothing wrong. Rows are
- * in-flow siblings in document order, so their bottoms are monotonic.
- *
- * Returns `count` when every row is above the line (the reader is past the end
- * — only reachable transiently mid-relayout).
- */
-export function firstVisibleRow(
-  count: number,
-  bottomOf: (i: number) => number,
-  viewportTop: number,
-): number {
-  let lo = 0;
-  let hi = count; // invariant: answer is in [lo, hi]
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (bottomOf(mid) > viewportTop) hi = mid;
-    else lo = mid + 1;
-  }
-  return lo;
-}
-
-/**
  * Where `scrollTop` must land to put the anchored message back where it was.
  *
  * `rowTop` is the anchor row's current top relative to the viewport top;
@@ -900,7 +585,7 @@ export function firstVisibleRow(
  * exactly how far the document has drifted under the reader, whatever caused
  * it — a prepended history batch, a thumbnail decoding above, a font settling.
  *
- * CLAMPED for the same reason `scrollTopAfterOlderPrepend` is: the caller
+ * CLAMPED into the scrollable range: the caller
  * stamps the returned value as `lastProgrammaticTop`, and an out-of-range value
  * never equals the scrollTop the browser clamps to — so the next scroll event
  * would read as the reader taking control, and the restore loop would re-assign
@@ -946,66 +631,6 @@ export function scrollTopForAnchor(opts: {
 }
 
 /**
- * Where `scrollTop` must land when a FOLD closes under the reader's feet.
- *
- * ── THE FOURTH WAY TO LOSE SOMEONE'S PLACE ───────────────────────────────────
- * The three mechanisms this file already fights — a persisted nudge, a lost
- * store, a restore overruling a jump — are all about which position we choose.
- * This one is about the document changing height ABOVE the reader with nobody
- * paying for it, which is the same shape as an older-history prepend and had no
- * equivalent of `scrollTopAfterOlderPrepend`.
- *
- * A search can land inside a COLLAPSED action run, so ChatPane forces that run
- * open around the highlight (a highlight nobody can see is no highlight). The
- * force is deliberately not written into `expandedGroups`, so the run snaps
- * shut again when the highlight is dismissed — and the signal for dismissal is
- * an IntersectionObserver firing when the hit LEAVES THE SCREEN. Put those
- * together and the common case is exact: the reader reads on past the hit, the
- * hit scrolls off the top, and the run — now above them, off screen — collapses
- * by its whole expanded height while they are mid-sentence.
- *
- * Measured on the real stack (Chromium, 300-turn transcript): a jump into a
- * folded run opened it to 456 px; scrolling 1200 px onward moved a probe row
- * from +682 to −948 instead of −518, and `scrollHeight` fell 26898 → 26468. A
- * 430 px leap, unasked for, from an ordinary scroll. Real Chat-mode runs hold
- * several scratchpad blocks, so the leap scales with them.
- *
- * So the run still snaps shut — the chat returns to its resting shape, which is
- * what that decision is for — and the collapse is paid for here, in the one
- * currency that keeps a reader still: the row under their eyes goes back where
- * it was.
- *
- * `anchorRowTop` is that row's current top relative to the viewport, measured
- * AFTER the collapse; null when it can't be measured (nothing anchorable, a
- * hidden pane), and then the honest answer is to leave the scroll alone rather
- * than guess. A PINNED reader is not re-anchored either: their anchor is the
- * bottom, the re-pin observer already holds it, and two owners of one scroll
- * position is how the last three of these started.
- *
- * Returns null for "don't touch it", never a fabricated target — and the target
- * it does return is clamped for the reason every other one in this file is: the
- * caller stamps it as `lastProgrammaticTop`, and a value the browser clamps
- * would read as the reader taking control on the very next event.
- */
-export function scrollTopAfterFoldChange(opts: {
-  pinned: boolean;
-  anchorRowTop: number | null;
-  anchorOffset: number;
-  scrollTop: number;
-  scrollHeight: number;
-  clientHeight: number;
-}): number | null {
-  if (opts.pinned || opts.anchorRowTop === null) return null;
-  return scrollTopForAnchor({
-    scrollTop: opts.scrollTop,
-    rowTop: opts.anchorRowTop,
-    anchorOffset: opts.anchorOffset,
-    scrollHeight: opts.scrollHeight,
-    clientHeight: opts.clientHeight,
-  });
-}
-
-/**
  * Where a search hit should sit in the viewport, as a fraction from the top.
  *
  * Not the top (a message flush against the viewport edge looks like it was
@@ -1041,18 +666,6 @@ export function scrollTopForSearchHit(opts: {
 }
 
 /**
- * How long the jump-to-hit placement keeps re-asserting itself.
- *
- * Same problem the restore loop has, for the same reason: the document is
- * still settling when the target first renders (markdown commits, images
- * decode, older pages the seek asked for are still landing), so a one-shot
- * scroll drifts. Shorter than RESTORE_SETTLE_MS because by the time a jump
- * places anything the transcript is already loaded — this window only has to
- * cover the last of the layout. It ends early the instant the reader scrolls.
- */
-export const SEARCH_JUMP_SETTLE_MS = 1200;
-
-/**
  * How long a jump may go unresolved before we admit we cannot find it.
  *
  * The seek below is driven by arriving history, so a socket that never opens
@@ -1063,40 +676,56 @@ export const SEARCH_JUMP_SETTLE_MS = 1200;
 export const SEARCH_JUMP_DEADLINE_MS = 15_000;
 
 /**
- * How many older-history pages a restore may request while hunting for the
- * remembered message.
+ * Which action runs the reader had expanded, per pane.
  *
- * A fresh mount opens on the server's ~128 KB tail, so a reader who had paged
- * back through half a long conversation left an anchor that simply is not in
- * the document yet — and no arithmetic can conjure it. Paging back to find it
- * is the only honest answer, but it has to be bounded: each page is a socket
- * round trip and up to 128 KB, and a reader whose anchor was lost to a `/clear`
- * must not drag the whole transcript over the wire looking for it.
+ * ── WHY THIS IS IN THE SCROLL FILE ───────────────────────────────────────────
+ * Because it is a scroll bug. `expandedGroups` was plain component state, and a
+ * sidebar tab switch unmounts the whole pane tree — so a run the reader had
+ * opened came back COLLAPSED, and the offset into it (`anchorOffset`, measured
+ * against the tall box) was replayed against a ~26px summary. Measured: a reader
+ * 799px inside a 25-action run, reloaded, with the stored offset pushing them
+ * 799px past a row that no longer had the height to hold it, which the range
+ * clamp then pinned to the BOTTOM of the chat. Deterministic, not intermittent,
+ * and a verbatim match for "I come back to muxpad and it scrolls to the very
+ * bottom instead of my last position".
  *
- * Eight pages ≈ 1 MB, which covers "I scrolled back a few screens yesterday"
- * without ever approaching the tens of MB a long session's transcript reaches.
- * Past that the fallback ratio applies and the reader lands in the tail — the
- * old behaviour, which is a floor, not a regression.
+ * `scrollTopForAnchor`'s row-height clamp turns that catastrophe into a lost
+ * place: the offset is discarded and the reader lands on the run's top. This
+ * removes the bug class instead — if the run is still open, the offset into it
+ * still means what it meant.
+ *
+ * Same storage tier and same expiry as the position, because it is the same
+ * fact: what the document looked like when the reader left it.
  */
-export const ANCHOR_SEEK_PAGE_BUDGET = 8;
+const FOLDS_KEY = 'muxpad:chat-folds:v1';
 
-/**
- * How long the settling restore keeps trying.
- *
- * The base window covers layout settling (composer regrowth, thumbnails). Two
- * things extend it rather than raising the base for every restore: a SEEK (each
- * page is a server round trip) and a document that isn't scrollable yet (a cold
- * mount whose transcript is still in flight — letting the window expire there
- * left an unpinned reader at scrollTop 0, i.e. as deep in history as the
- * document goes). Extensions are `max`, never assignment: assigning
- * `now + ANCHOR_SEEK_PAGE_MS` to a window that still had 2500ms on it would
- * SHORTEN a seeking restore, which is the opposite of the intent.
- *
- * `RESTORE_HARD_STOP_MS` is the ceiling on all of it: extensions must never
- * keep an animation-frame loop alive indefinitely. It sits just above the worst
- * case a full seek can legitimately need
- * (ANCHOR_SEEK_PAGE_BUDGET × ANCHOR_SEEK_PAGE_MS).
- */
-export const RESTORE_SETTLE_MS = 2500;
-export const ANCHOR_SEEK_PAGE_MS = 1500;
-export const RESTORE_HARD_STOP_MS = 15_000;
+function foldStore(): Record<string, string[]> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(FOLDS_KEY) ?? '{}') as unknown;
+    return raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? (raw as Record<string, string[]>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+export function recallExpandedRuns(paneId: string): Set<string> {
+  const v = foldStore()[paneId];
+  return new Set(Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []);
+}
+
+export function rememberExpandedRuns(paneId: string, ids: Set<string>): void {
+  try {
+    const all = foldStore();
+    if (ids.size === 0) delete all[paneId];
+    else all[paneId] = [...ids];
+    // Bounded by the same argument the position store uses, and more cheaply:
+    // a pane with no open runs has no row, so the common case costs nothing.
+    const keys = Object.keys(all);
+    if (keys.length > 200) for (const k of keys.slice(0, keys.length - 200)) delete all[k];
+    localStorage.setItem(FOLDS_KEY, JSON.stringify(all));
+  } catch {
+    // quota / private mode — folds just do not persist
+  }
+}

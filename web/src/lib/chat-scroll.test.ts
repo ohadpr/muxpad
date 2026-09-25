@@ -1,31 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  ANCHOR_SEEK_PAGE_BUDGET,
   type ChatScrollMem,
-  SHOW_SETTLE_MS,
-  SMOOTH_SCROLL_SETTLE_MS,
-  firstVisibleRow,
   maxScrollTop,
-  opensAtNewest,
   readerIsCaughtUp,
   recallChatScroll,
+  recallExpandedRuns,
   rememberChatScroll,
-  retiredAnchorMemory,
-  scrollEventIsTrustworthy,
+  rememberExpandedRuns,
   scrollMemorySidMatches,
-  scrollMotionIsTheReader,
-  scrollTopAfterFoldChange,
-  scrollTopAfterOlderPrepend,
   scrollTopForAnchor,
   scrollTopForSearchHit,
   shouldPersistChatScroll,
-  shouldRememberPosition,
-  shouldRestorePosition,
 } from './chat-scroll';
+import { intentFor } from './chat-scroll-intent';
 
-/** A remembered position, with the anchor fields defaulted. */
+/**
+ * A remembered position: a PARKED reader by default, because that is the case
+ * worth defaulting to — it is the one with something to lose.
+ *
+ * `anchorId` is part of that default deliberately. It used to be null here, so
+ * every fixture that meant "a reader who had scrolled back" was actually a row
+ * naming no message at all — a shape that cannot arise from a real parked
+ * reader, and which `opensAtNewest` now correctly reads as "open at the newest".
+ * Pass `anchorId: null` explicitly to build a retirement.
+ */
 function memo(over: Partial<ChatScrollMem> = {}): ChatScrollMem {
-  return { anchorId: null, anchorOffset: 0, ratio: 0.5, caughtUp: false, sid: null, ...over };
+  return { anchorId: 'evt#parked', anchorOffset: 0, caughtUp: false, sid: null, ...over };
 }
 
 describe('shouldPersistChatScroll', () => {
@@ -42,149 +42,114 @@ describe('shouldPersistChatScroll', () => {
   });
 });
 
-describe('scrollTopAfterOlderPrepend', () => {
-  it('stays pinned to the bottom when the reader was following new messages', () => {
-    // newH=2000, clientH=500 → bottom is 1500
-    expect(
-      scrollTopAfterOlderPrepend({
-        pinned: true,
-        newScrollHeight: 2000,
-        clientHeight: 500,
-        anchorHeight: 800,
-        anchorTop: 0,
-      }),
-    ).toBe(1500);
-  });
-
-  it('preserves the pre-prepend viewport when the reader had scrolled up', () => {
-    // Old view: height 800, top 200. After prepend of 1200 bytes-worth → newH=2000.
-    // Keep looking at the same messages: 2000 - 800 + 200 = 1400.
-    expect(
-      scrollTopAfterOlderPrepend({
-        pinned: false,
-        newScrollHeight: 2000,
-        clientHeight: 500,
-        anchorHeight: 800,
-        anchorTop: 200,
-      }),
-    ).toBe(1400);
-  });
-});
-
-describe('opensAtNewest', () => {
-  it('defaults to the newest message when nothing was remembered (fresh / other device)', () => {
-    expect(opensAtNewest(null)).toBe(true);
-  });
-
-  it('honours a reader who had scrolled back past the newest message', () => {
-    expect(opensAtNewest(memo({ ratio: 0.3, caughtUp: false, sid: 's1' }))).toBe(false);
-  });
-
-  it('opens at the newest message when the reader had read to the end', () => {
-    expect(opensAtNewest(memo({ ratio: 1, caughtUp: true, sid: 's1' }))).toBe(true);
-  });
-});
-
-describe('readerIsCaughtUp', () => {
-  // The reported bug, in its smallest honest form.
-  //
-  // Geometry from the real component (1100×800 viewport, an ordinary chat):
-  // sitting AT the bottom puts the newest message's top at 502 — it does not
-  // reach the fold, because the floating composer reserves ~130px of list
-  // padding beneath it. Nudge the wheel one notch (Chromium: ~120px) to re-read
-  // the last line and the top moves to 622: still plainly on screen, still the
-  // message being read — but 120 > the 40px live-follow threshold, so the old
-  // code filed the reader under "parked in history" and anchored them to that
-  // message forever. Nothing about that is visible until the agent talks; then
-  // the anchor is faithfully restored thirty messages above the newest one.
-  // A 170px message: resting at the bottom puts its top at 502 and its END at
-  // 672 — 128px clear of the fold, because the composer reserves that much list
-  // padding beneath it.
-  it('a one-notch nudge off the bottom is still CAUGHT UP', () => {
-    // End moves 672 → 792: still on screen, still the message being read.
-    expect(readerIsCaughtUp({ lastRowBottom: 792, clientHeight: 800, nearBottom: false })).toBe(
-      true,
-    );
-  });
+describe('readerIsCaughtUp — has the reader reached the end?', () => {
+  // Geometry from the real component: a 1100x800 pane. `distance` below is
+  // always scrollHeight - scrollTop - clientHeight, i.e. how much of the
+  // document is still below the fold.
+  const at = (distance: number, docHeight = 20_000) =>
+    readerIsCaughtUp({
+      scrollTop: docHeight - 800 - distance,
+      scrollHeight: docHeight,
+      clientHeight: 800,
+    });
 
   it('resting at the bottom is caught up', () => {
-    expect(readerIsCaughtUp({ lastRowBottom: 672, clientHeight: 800, nearBottom: true })).toBe(
-      true,
-    );
+    expect(at(0)).toBe(true);
   });
 
-  // The regression this rule was rewritten for: "I come back to muxpad and it
-  // scrolls to the very bottom instead of my last position."
-  //
-  // A Chat-mode reply with its action run folded above it — or an Agent-mode
-  // tool result — runs to several screens. The rule used to ask whether the
-  // newest message had STARTED on screen, so a reader on its first screen was
-  // filed as caught up, and re-entry is defined as "open at the newest message":
-  // they came back to the END of the thing they were halfway through.
-  it('is NOT caught up on the first screen of a newest message taller than the viewport', () => {
-    // 2400px message, its top at the viewport top: the end is 1600px away.
-    expect(readerIsCaughtUp({ lastRowBottom: 2400, clientHeight: 800, nearBottom: false })).toBe(
-      false,
-    );
+  // The first report, in its smallest honest form. One wheel notch (Chromium:
+  // ~120px) to re-read the last line is 3x the 40px live-follow threshold, so
+  // persisting the PIN as the re-entry policy filed this reader under "parked in
+  // history" and anchored them to that message forever. Nothing about it is
+  // visible until the agent talks; then the anchor is faithfully restored thirty
+  // messages above the newest one — measured, 5701px up.
+  it('a one-notch nudge off the bottom is still CAUGHT UP', () => {
+    expect(at(120)).toBe(true);
   });
 
-  it('…and IS caught up once the reader reaches that message’s end', () => {
-    expect(readerIsCaughtUp({ lastRowBottom: 790, clientHeight: 800, nearBottom: true })).toBe(
-      true,
-    );
-  });
-
-  it('is NOT caught up once the newest message is off the bottom of the screen', () => {
-    // One 400px wheel notch already does this — the reader can no longer see
-    // the newest message, so they are reading history and keep their place.
-    expect(readerIsCaughtUp({ lastRowBottom: 1072, clientHeight: 800, nearBottom: false })).toBe(
-      false,
-    );
+  it('is NOT caught up once the reader has scrolled meaningfully away', () => {
+    expect(at(400)).toBe(false);
   });
 
   it('is NOT caught up when parked deep in older history', () => {
-    expect(readerIsCaughtUp({ lastRowBottom: 5370, clientHeight: 800, nearBottom: false })).toBe(
-      false,
-    );
+    expect(at(4698)).toBe(false);
   });
 
-  it('falls back to the pin when there is nothing to measure', () => {
-    // Empty chat, or a pane whose boxes collapsed under display:none.
-    expect(readerIsCaughtUp({ lastRowBottom: null, clientHeight: 800, nearBottom: true })).toBe(
-      true,
-    );
-    expect(readerIsCaughtUp({ lastRowBottom: null, clientHeight: 0, nearBottom: false })).toBe(
-      false,
-    );
+  // "I come back to muxpad and it scrolls to the very bottom instead of my last
+  // position." A Chat-mode reply with its action run folded above it, or an
+  // Agent-mode tool result, runs to several screens. The rule used to ask whether
+  // the newest message had STARTED on screen, so a reader on its first screen was
+  // filed as caught up — and re-entry means "open at the newest message", so they
+  // came back to the END of the thing they were halfway through.
+  it('is NOT caught up on the first screen of a newest message taller than the viewport', () => {
+    // A 2400px newest message, its top at the viewport top: 1600px of it is
+    // still below the fold, plus the composer's ~128px reserve.
+    expect(at(1728)).toBe(false);
+  });
+
+  it('…and IS caught up once the reader reaches that message’s end', () => {
+    expect(at(10)).toBe(true);
+  });
+
+  // ── The neighbour the message-shaped rule got wrong ───────────────────────
+  // Everything a live turn renders below the newest committed message — the
+  // streaming preview, the optimistic user bubble, the question card, the queued
+  // strip — carries no `data-eid`, so a rule that walks anchored rows cannot see
+  // it. A reader who scrolled up to the end of the last committed message while
+  // three screens of streaming output sat below them measured `lastRowBottom` of
+  // about 790 against a 800px viewport, i.e. CAUGHT UP — and on re-entry was
+  // taken to the newest message, which is content they had deliberately scrolled
+  // away from and never read.
+  //
+  // Asking about the scroll range instead answers this for free: the preview is
+  // in `scrollHeight` whether or not it is anchorable.
+  it('is NOT caught up with unanchored live output below the newest message', () => {
+    // The last committed row's bottom is 790 (on screen, so the old rule said
+    // caught up) and three screens of streaming preview follow it.
+    expect(at(2400)).toBe(false);
+  });
+
+  it('a document too short to scroll has no end to be short of', () => {
+    expect(readerIsCaughtUp({ scrollTop: 0, scrollHeight: 400, clientHeight: 800 })).toBe(true);
+  });
+
+  // iOS rubber-band reports a scrollTop past the end, so the distance goes
+  // NEGATIVE. That reader is at the bottom and then some.
+  it('survives overscroll past the bottom', () => {
+    expect(at(-40)).toBe(true);
   });
 });
 
 describe('the stored re-entry policy is not the live-follow pin', () => {
-  // Two rounds of fixes went into the restore MECHANISM (visibility threading,
-  // then anchoring to a message id instead of a scroll ratio) and the report
-  // survived both, because the mechanism was never what was wrong: it restored
-  // exactly what it was told to. What was wrong is that the thing it was told
-  // came from `pinnedToBottom`, a 40px live-auto-scroll threshold, being reused
-  // as the answer to a different question — where should re-opening this tab
-  // land? This is the guard that the two are no longer the same value.
+  // Two rounds of fixes went into the restore MECHANISM and the report survived
+  // both, because the mechanism was never what was wrong: it restored exactly
+  // what it was told. What was wrong is that the thing it was told came from
+  // `pinnedToBottom`, a 40px live-auto-scroll threshold, being reused as the
+  // answer to a different question — where should re-opening this tab land?
+  const geo = (distance: number) => ({
+    scrollTop: 20_000 - 800 - distance,
+    scrollHeight: 20_000,
+    clientHeight: 800,
+  });
+
   it('a reader 120px off the bottom is unpinned for LIVE follow but caught up for RE-ENTRY', () => {
-    const nearBottom = 120 < 40; // the component's live-follow test — false
-    expect(nearBottom).toBe(false);
-    const caughtUp = readerIsCaughtUp({ lastRowBottom: 792, clientHeight: 800, nearBottom });
+    const following = 120 < 40; // the component's live-follow test — false
+    expect(following).toBe(false);
+    const caughtUp = readerIsCaughtUp(geo(120));
     expect(caughtUp).toBe(true);
     // …and "caught up" is what a re-open consults, so the newest message wins
     // over the message they happened to be nudged onto.
-    expect(opensAtNewest(memo({ caughtUp, anchorId: 'e196', sid: 's1' }))).toBe(true);
+    expect(intentFor(memo({ caughtUp, anchorId: 'e196', sid: 's1' }))).toEqual({ at: 'end' });
   });
 
   it('still keeps a genuinely scrolled-back reader exactly where they were', () => {
-    const caughtUp = readerIsCaughtUp({
-      lastRowBottom: 5370,
-      clientHeight: 800,
-      nearBottom: false,
-    });
+    const caughtUp = readerIsCaughtUp(geo(4698));
     expect(caughtUp).toBe(false);
-    expect(opensAtNewest(memo({ caughtUp, anchorId: 'e170', sid: 's1' }))).toBe(false);
+    expect(intentFor(memo({ caughtUp, anchorId: 'e170', sid: 's1' }))).toEqual({
+      at: 'row',
+      id: 'e170',
+      offset: 0,
+    });
   });
 });
 
@@ -225,143 +190,9 @@ describe('rememberChatScroll hide corruption', () => {
         clientHeight: 0,
       })
     ) {
-      rememberChatScroll('pane-x', memo({ ratio: 0, caughtUp: false, sid: 's1' }));
+      rememberChatScroll('pane-x', memo({ caughtUp: false, sid: 's1' }));
     }
     expect(recallChatScroll('pane-x')).toBeNull();
-  });
-});
-
-describe('scrollEventIsTrustworthy — the pin-suppression window', () => {
-  it('distrusts scroll events in the first moments after a pane is shown', () => {
-    // Un-hiding from display:none delivers scroll events while layout is
-    // still settling: clientHeight is back but scrollTop (and the composer's
-    // height) are not. Acting on those used to unpin a visible chat and
-    // PERSIST that — which is what made the bug sticky rather than a jump.
-    const shownAt = 1_000;
-    const until = shownAt + SHOW_SETTLE_MS;
-    expect(scrollEventIsTrustworthy({ suppressedUntil: until, now: shownAt })).toBe(false);
-    expect(scrollEventIsTrustworthy({ suppressedUntil: until, now: shownAt + 100 })).toBe(false);
-  });
-
-  it('trusts them again once the window has passed', () => {
-    expect(scrollEventIsTrustworthy({ suppressedUntil: 1_250, now: 1_250 })).toBe(true);
-    expect(scrollEventIsTrustworthy({ suppressedUntil: 1_250, now: 9_000 })).toBe(true);
-  });
-
-  it('trusts everything when nothing is in flight (0)', () => {
-    // Also the shape a real gesture produces: the component zeroes the
-    // deadline on wheel/touch so the reader is never second-guessed.
-    expect(scrollEventIsTrustworthy({ suppressedUntil: 0, now: 0 })).toBe(true);
-    expect(scrollEventIsTrustworthy({ suppressedUntil: 0, now: 5 })).toBe(true);
-  });
-
-  it('is wall-clock, not frame-counted — a throttled tab still converges', () => {
-    // A background tab may deliver no frames at all; the window must still
-    // close on time rather than staying open forever.
-    expect(scrollEventIsTrustworthy({ suppressedUntil: 1_250, now: 60_000 })).toBe(true);
-  });
-
-  it('covers a smooth jump-to-bottom for longer than a show', () => {
-    // A smooth glide emits an event per frame for a few hundred ms; each one
-    // used to read as "the reader scrolled away from the target" and unpin
-    // the chat the button had just pinned.
-    expect(SMOOTH_SCROLL_SETTLE_MS).toBeGreaterThan(SHOW_SETTLE_MS);
-    const until = 1_000 + SMOOTH_SCROLL_SETTLE_MS;
-    expect(scrollEventIsTrustworthy({ suppressedUntil: until, now: 1_000 + SHOW_SETTLE_MS })).toBe(
-      false,
-    );
-    expect(scrollEventIsTrustworthy({ suppressedUntil: until, now: until })).toBe(true);
-  });
-});
-
-describe('scrollTopAfterOlderPrepend — clamping', () => {
-  it('never returns a target outside the scrollable range', () => {
-    // If clientHeight changed between capturing the anchor and applying it
-    // (composer resize, viewport change), the raw arithmetic can overshoot.
-    // The browser would clamp the real scrollTop while the caller stamped the
-    // UNCLAMPED value as lastProgrammaticTop — so the next scroll event read
-    // as "the reader took control" and unpinned them for no reason.
-    const target = scrollTopAfterOlderPrepend({
-      pinned: false,
-      newScrollHeight: 1000,
-      clientHeight: 900, // grew a lot since the anchor was taken
-      anchorHeight: 200,
-      anchorTop: 190,
-    });
-    expect(target).toBeLessThanOrEqual(maxScrollTop(1000, 900));
-    expect(target).toBeGreaterThanOrEqual(0);
-  });
-
-  it('never returns a negative target', () => {
-    const target = scrollTopAfterOlderPrepend({
-      pinned: false,
-      newScrollHeight: 500,
-      clientHeight: 100,
-      anchorHeight: 900,
-      anchorTop: 0,
-    });
-    expect(target).toBe(0);
-  });
-
-  it('still preserves the reader’s anchor in the normal case', () => {
-    // 400px of older content prepended: the message they were looking at
-    // must stay under their eyes, i.e. scrollTop moves down by exactly that.
-    expect(
-      scrollTopAfterOlderPrepend({
-        pinned: false,
-        newScrollHeight: 1400,
-        clientHeight: 500,
-        anchorHeight: 1000,
-        anchorTop: 120,
-      }),
-    ).toBe(520);
-  });
-
-  it('a pinned reader still lands exactly at the bottom', () => {
-    expect(
-      scrollTopAfterOlderPrepend({
-        pinned: true,
-        newScrollHeight: 1400,
-        clientHeight: 500,
-        anchorHeight: 1000,
-        anchorTop: 120,
-      }),
-    ).toBe(900);
-  });
-});
-
-describe('firstVisibleRow — which message the reader is actually looking at', () => {
-  // 10 rows, 100px each, stacked from y=0 in the container's own coordinates.
-  const bottoms = (i: number) => (i + 1) * 100;
-
-  it('picks the row straddling the viewport top', () => {
-    expect(firstVisibleRow(10, bottoms, 250)).toBe(2); // row 2 spans 200..300
-  });
-
-  it('picks row 0 when nothing is scrolled past', () => {
-    expect(firstVisibleRow(10, bottoms, 0)).toBe(0);
-  });
-
-  it('treats a row whose bottom is exactly on the line as already past', () => {
-    // Row 2 ends at 300. At viewportTop 300 the reader sees row 3 first.
-    expect(firstVisibleRow(10, bottoms, 300)).toBe(3);
-  });
-
-  it('returns `count` when every row is above the line (transient relayout)', () => {
-    expect(firstVisibleRow(10, bottoms, 5000)).toBe(10);
-  });
-
-  it('is a binary search — it must not read every row', () => {
-    // The capture runs off scroll events; a linear walk of getBoundingClientRect
-    // over a few hundred rows would be a per-frame layout tax on a chat doing
-    // nothing wrong.
-    let reads = 0;
-    const counted = (i: number) => {
-      reads++;
-      return bottoms(i);
-    };
-    firstVisibleRow(1024, counted, 51_200);
-    expect(reads).toBeLessThanOrEqual(11); // log2(1024) + 1
   });
 });
 
@@ -478,14 +309,36 @@ describe('scrollTopForAnchor — the reason this file no longer uses a ratio', (
   });
 });
 
-describe('the seek budget', () => {
-  it('is bounded — a lost anchor must not drag a whole transcript over the wire', () => {
-    // Each page is a socket round trip of up to 128 KB. A reader whose anchor
-    // was lost (a /clear we didn't observe) must give up, not page forever.
-    expect(ANCHOR_SEEK_PAGE_BUDGET).toBeGreaterThan(0);
-    expect(ANCHOR_SEEK_PAGE_BUDGET).toBeLessThanOrEqual(16);
-  });
-});
+/*
+ * ── WHAT WAS DELETED FROM THIS FILE, AND WHAT REPLACED IT ────────────────────
+ * Ten describe blocks went with the functions they covered. None of them was a
+ * bad test of the thing it tested; they were tests of the wrong things to have.
+ *
+ *  · `scrollTopAfterOlderPrepend` (×2 blocks, 9 tests) — total-height prepend
+ *    compensation. Replaced by `ANCHORED > holds the reader's row through an
+ *    older-history prepend` in chat-scroll-controller.test.ts, which runs under
+ *    both engine settings AND covers the case the arithmetic got wrong: a live
+ *    append batched into the same commit, where it wrote 400 for a reader who
+ *    belonged at 300.
+ *  · `scrollTopAfterFoldChange` (4) — dead in both branches before it was
+ *    deleted. Replaced by `holds it through a fold collapsing above them`.
+ *  · `scrollMotionIsTheReader` (7) and `scrollEventIsTrustworthy` (5) — the two
+ *    discriminators and the wall-clock window. Replaced by
+ *    `scrollEventIsTheReader` in chat-scroll-intent.test.ts and by `the reader
+ *    always wins` in the controller suite, which can express the case the old
+ *    signature could not admit: the reader moved AND the document resized.
+ *  · `shouldRememberPosition` / `shouldRestorePosition` (7) — the two halves of
+ *    the search-jump hold. Replaced by `recordFor` refusing to store a hit and
+ *    by the `shown` transition refusing to overwrite one, which are the same two
+ *    facts without a flag to keep in step.
+ *  · `opensAtNewest` (3) — replaced by `intentFor`, which answers the same
+ *    question and also covers the row-with-no-anchor case the two predicates
+ *    used to disagree about.
+ *  · `firstVisibleRow` (5) — moved with the function to chat-scroll-dom.ts.
+ *  · `the seek budget` (1) — replaced by the block of the same name in
+ *    chat-scroll-intent.test.ts, which adds the case that mattered: the budget
+ *    is not re-spent on every visibility flip.
+ */
 
 describe('the remembered shape', () => {
   beforeEach(() => {
@@ -493,7 +346,7 @@ describe('the remembered shape', () => {
   });
 
   it('round-trips an anchor', () => {
-    rememberChatScroll('p1', memo({ anchorId: 'evt#3', anchorOffset: -42, ratio: 0.2 }));
+    rememberChatScroll('p1', memo({ anchorId: 'evt#3', anchorOffset: -42 }));
     const got = recallChatScroll('p1');
     expect(got?.anchorId).toBe('evt#3');
     expect(got?.anchorOffset).toBe(-42);
@@ -509,162 +362,52 @@ describe('the remembered shape', () => {
     expect(got?.anchorOffset).toBe(0);
   });
 
-  it('still refuses an entry with no usable ratio at all', () => {
-    rememberChatScroll('p3', { ...memo(), ratio: Number.NaN });
-    expect(recallChatScroll('p3')).toBeNull();
+  // ── THE RATIO IS GONE, AND OLD ROWS STILL READ ────────────────────────────
+  // This replaces `still refuses an entry with no usable ratio at all`, which
+  // asserted that a row whose `ratio` was not finite was treated as no memory.
+  // That guard could not survive the field: after the removal EVERY row this
+  // module writes would have failed it, so the store would have looked
+  // permanently empty and every pane would have opened at the bottom — the exact
+  // reset the store exists to prevent, shipped as the fix for it.
+  //
+  // The key is deliberately not re-versioned (see the header), so rows written by
+  // a build that still stored a ratio are in the store right now. They must be
+  // read for the field that means something and the dead one ignored.
+  it('reads a v4 row written with a ratio, and ignores the ratio', () => {
+    const legacy = { anchorId: 'evt#40', anchorOffset: -3, ratio: 0.0363, caughtUp: false };
+    localStorage.setItem(STORE_KEY, JSON.stringify([['p3', { ...legacy, at: Date.now() }]]));
+    vi.resetModules();
+    return import('./chat-scroll').then(({ recallChatScroll: recall }) => {
+      const got = recall('p3');
+      expect(got?.anchorId).toBe('evt#40');
+      expect(got?.anchorOffset).toBe(-3);
+      expect(got?.caughtUp).toBe(false);
+      // Nothing carries the ratio forward. 0.0363 of the whole conversation is
+      // what landed a reader parked on turn 40 at turn 296 when it was applied to
+      // a 128KB tail; it must not be reachable from a recalled entry at all.
+      expect('ratio' in (got as object)).toBe(false);
+    });
+  });
+
+  it('a row with no anchor at all is the ordinary "open at the newest" row', () => {
+    rememberChatScroll('p4', memo({ anchorId: null, caughtUp: false }));
+    const got = recallChatScroll('p4');
+    // Not null — it is a real row — and `intentFor` is what interprets it.
+    expect(got).not.toBeNull();
+    expect(intentFor(got)).toEqual({ at: 'end' });
   });
 });
 
-// ── The third case: an explicit destination ─────────────────────────────────
-// A caught-up reader opens at the newest message; a scrolled-back reader keeps
-// their exact spot. A SEARCH JUMP is neither — it is a place the user asked to
-// be taken from somewhere else entirely, and it lands wherever the matched
-// message happens to be. The rules below are what stop it from being mistaken
-// for a reading position.
-
-describe('shouldRememberPosition — a search jump is not a reading position', () => {
-  it('records nothing while a jump is in flight', () => {
-    expect(shouldRememberPosition({ searchJumpActive: true })).toBe(false);
-  });
-
-  it('records normally once the reader has taken the pane back', () => {
-    expect(shouldRememberPosition({ searchJumpActive: false })).toBe(true);
-  });
-});
-
-describe('a search jump does not poison the next ordinary open', () => {
-  it('leaves a CAUGHT-UP reader caught up, however deep the jump landed', () => {
-    // The reader had read to the end of pane-j and left.
-    rememberChatScroll('pane-j', memo({ anchorId: null, ratio: 1, caughtUp: true, sid: 's1' }));
-
-    // They search, follow a message hit, and land three weeks up the log. The
-    // jump's own scrollTop writes fire onScroll like any other motion — each
-    // one would record "parked at an ancient message, not caught up".
-    for (const scrollTop of [0.05, 0.06, 0.07]) {
-      if (shouldRememberPosition({ searchJumpActive: true })) {
-        rememberChatScroll(
-          'pane-j',
-          memo({ anchorId: 'evt#ancient', ratio: scrollTop, caughtUp: false, sid: 's1' }),
-        );
-      }
-    }
-
-    // Tomorrow they click the tab, with no search involved. They must land at
-    // the newest message, exactly as they would have without the search.
-    const next = recallChatScroll('pane-j');
-    expect(opensAtNewest(next)).toBe(true);
-    // Nothing parked was left behind by the jump's own writes. Asserted as
-    // "not `evt#ancient`" rather than "stored as ratio 1 with a null anchor":
-    // a caught-up reader no longer occupies an LRU slot at all (see
-    // rememberChatScroll), so the caught-up STATE is now carried by the
-    // absence of a row as legitimately as by a row saying so. Both answer
-    // `opensAtNewest` the same way, which is the only thing re-entry reads.
-    expect(next?.anchorId ?? null).toBeNull();
-  });
-
-  it('leaves a SCROLLED-BACK reader on the message they had parked on', () => {
-    // The other half: a jump must not overwrite a real parked spot either.
-    rememberChatScroll(
-      'pane-k',
-      memo({ anchorId: 'evt#parked', anchorOffset: -120, ratio: 0.4, caughtUp: false, sid: 's1' }),
-    );
-    if (shouldRememberPosition({ searchJumpActive: true })) {
-      rememberChatScroll('pane-k', memo({ anchorId: 'evt#hit', ratio: 0.01, sid: 's1' }));
-    }
-    const next = recallChatScroll('pane-k');
-    expect(opensAtNewest(next)).toBe(false);
-    expect(next?.anchorId).toBe('evt#parked');
-    expect(next?.anchorOffset).toBe(-120);
-  });
-
-  it('starts recording again the moment the reader scrolls for themselves', () => {
-    // The hold is released by a real gesture (see the wheel/touch listener in
-    // ChatPane): from there this is an ordinary reader at an ordinary
-    // position, and where they choose to be is exactly what the memory is for.
-    rememberChatScroll('pane-l', memo({ ratio: 1, caughtUp: true, sid: 's1' }));
-    const readerTookOver = false; // …then a wheel event cleared the hold
-    if (shouldRememberPosition({ searchJumpActive: readerTookOver })) {
-      rememberChatScroll(
-        'pane-l',
-        memo({ anchorId: 'evt#reading-here', ratio: 0.3, caughtUp: false, sid: 's1' }),
-      );
-    }
-    const next = recallChatScroll('pane-l');
-    expect(opensAtNewest(next)).toBe(false);
-    expect(next?.anchorId).toBe('evt#reading-here');
-  });
-
-  it('writes nothing at all when there was no memory to protect', () => {
-    // A jump into a chat this browser has never opened must not invent one:
-    // the next ordinary open should still get the default (newest message).
-    if (shouldRememberPosition({ searchJumpActive: true })) {
-      rememberChatScroll('pane-m', memo({ anchorId: 'evt#hit', ratio: 0.02, caughtUp: false }));
-    }
-    expect(opensAtNewest(recallChatScroll('pane-m'))).toBe(true);
-  });
-});
-
-// ── …and the READ half of the same hold ─────────────────────────────────────
-// `shouldRememberPosition` stops a jump WRITING the memory. That is only half
-// a rule: something still READS it. The settling restore re-runs on every
-// visibility transition (showEpoch) — an app backgrounding, a screen lock, a
-// browser-tab switch — none of which is a gesture and none of which clears the
-// jump (leaving the PANE does, which is why a tab switch was never the reported
-// case). So it would re-assert a memory the jump had deliberately frozen, and
-// the reader would be dragged out of the result they asked for and back into
-// history at a moment they did nothing at all.
-//
-// Measured on the real stack before this rule existed: parked at message 147
-// (scrollTop 8000), searched, landed on message 198 (scrollTop 22696),
-// backgrounded and returned — scrollTop 8000, and the highlight gone too. A
-// 14,696 px jump backwards, triggered by nothing the reader did. Verbatim the
-// report: "muxpad keeps jumping back to scroll history randomly."
-
-describe('shouldRestorePosition — a jump that owns the scroll is not overruled', () => {
-  it('stands the restore down while a jump is in flight', () => {
-    expect(shouldRestorePosition({ searchJumpActive: true })).toBe(false);
-  });
-
-  it('restores normally once the reader has taken the pane back', () => {
-    expect(shouldRestorePosition({ searchJumpActive: false })).toBe(true);
-  });
-
-  it('agrees with the WRITE half for every state of the hold', () => {
-    // The invariant, and the actual defect: these two are the read and write
-    // ends of ONE store. Whenever the memory declines to record where the
-    // reader is, the restore must decline to move them — otherwise the pane is
-    // re-asserting a position it knows is stale. Relaxing either side alone
-    // reopens the 14,696 px jump above.
-    for (const searchJumpActive of [true, false]) {
-      expect(shouldRestorePosition({ searchJumpActive })).toBe(
-        shouldRememberPosition({ searchJumpActive }),
-      );
-    }
-  });
-
-  it('never applies a memory that describes the pre-search position', () => {
-    // The scenario, end to end, in the units the store actually uses.
-    // 1. The reader parks in history. This IS recorded — no jump yet.
-    rememberChatScroll('pane-v', memo({ anchorId: 'evt#147', ratio: 0.2, caughtUp: false }));
-
-    // 2. They search and land on a much later message. Every frame of the
-    //    placement writes a scroll event; all of them are declined.
-    const jumpHolds = true;
-    if (shouldRememberPosition({ searchJumpActive: jumpHolds })) {
-      rememberChatScroll('pane-v', memo({ anchorId: 'evt#198', ratio: 0.57 }));
-    }
-
-    // 3. The app is backgrounded and comes back. The restore re-runs — and the
-    //    only memory it has is step 1's, which is 14,696 px from where the
-    //    reader is now looking. It must not apply it.
-    expect(shouldRestorePosition({ searchJumpActive: jumpHolds })).toBe(false);
-    expect(recallChatScroll('pane-v')?.anchorId).toBe('evt#147'); // stale, as designed
-
-    // 4. A wheel releases the hold: from here the reader is reading, the
-    //    memory tracks them again, and the restore is ordinary again.
-    expect(shouldRestorePosition({ searchJumpActive: false })).toBe(true);
-  });
-});
+/*
+ * The search-jump block moved to chat-scroll-intent.test.ts, with the two
+ * predicates it exercised. `shouldRememberPosition` and `shouldRestorePosition`
+ * were the write and read halves of one hold flag, and they had to agree for
+ * every state of it — a requirement the tests stated explicitly ("agrees with
+ * the WRITE half for every state of the hold"), which is the tell that the two
+ * should never have been separate. `recordFor` refusing to store a hit and the
+ * `shown` transition refusing to overwrite one are the same two facts derived
+ * from one value, so there is nothing left to keep in step.
+ */
 
 describe('scrollTopForSearchHit — putting the matched run on screen', () => {
   const page = { scrollHeight: 10_000, clientHeight: 900 };
@@ -727,7 +470,7 @@ describe('remembered position across a cold open', () => {
   it('survives a COLD OPEN — a new tab starts with NO sessionStorage', async () => {
     rememberChatScroll(
       'pane-cold',
-      memo({ anchorId: 'evt#7', anchorOffset: -120, ratio: 0.31, caughtUp: false, sid: 's1' }),
+      memo({ anchorId: 'evt#7', anchorOffset: -120, caughtUp: false, sid: 's1' }),
     );
     await flushed();
 
@@ -749,10 +492,7 @@ describe('remembered position across a cold open', () => {
     sessionStorage.setItem(
       STORE_KEY,
       JSON.stringify([
-        [
-          'pane-legacy',
-          { anchorId: 'evt#3', anchorOffset: -10, ratio: 0.4, caughtUp: false, sid: 's1' },
-        ],
+        ['pane-legacy', { anchorId: 'evt#3', anchorOffset: -10, caughtUp: false, sid: 's1' }],
       ]),
     );
     vi.resetModules();
@@ -783,9 +523,9 @@ describe('remembered position across a cold open', () => {
   it('a fresh browser profile has nothing, and opens at the newest message', async () => {
     // The boundary: no memory is not a reset, it is the correct default.
     vi.resetModules();
-    const { recallChatScroll: recall, opensAtNewest: newest } = await import('./chat-scroll');
+    const { recallChatScroll: recall } = await import('./chat-scroll');
     expect(recall('never-seen')).toBeNull();
-    expect(newest(recall('never-seen'))).toBe(true);
+    expect(intentFor(recall('never-seen'))).toEqual({ at: 'end' });
   });
 });
 
@@ -822,8 +562,8 @@ describe('staleness — localStorage does not clean up after itself', () => {
       ]),
     );
     vi.resetModules();
-    const { recallChatScroll: recall, opensAtNewest: newest } = await import('./chat-scroll');
-    expect(newest(recall('pane-ancient'))).toBe(true);
+    const { recallChatScroll: recall } = await import('./chat-scroll');
+    expect(intentFor(recall('pane-ancient'))).toEqual({ at: 'end' });
   });
 
   it('keeps a position from within the cutoff', async () => {
@@ -933,239 +673,27 @@ describe('storage that refuses to store', () => {
   });
 });
 
-describe('scrollTopAfterFoldChange — a run that closes above the reader', () => {
-  // The numbers are the live repro, Chromium against a 300-turn transcript: a
-  // search landed inside a collapsed action run, which ChatPane force-opened
-  // to 456px around the highlight. The reader scrolled 1200px onward, the hit
-  // left the top of the screen, the IntersectionObserver dismissed it — and
-  // the run snapped shut from ABOVE them. A probe row went from +682 to −948
-  // where −518 was the honest answer, with scrollHeight falling 26898 → 26468.
-  // The 430px gap IS the collapse, and nothing was paying for it.
-  const COLLAPSE = 430;
-
-  it('gives back exactly the height the collapse took', () => {
-    // After the collapse the anchored row sits COLLAPSE px higher than the
-    // reader left it; the target pulls scrollTop back by the same amount.
-    expect(
-      scrollTopAfterFoldChange({
-        pinned: false,
-        anchorRowTop: 200 - COLLAPSE,
-        anchorOffset: 200,
-        scrollTop: 23071,
-        scrollHeight: 26468,
-        clientHeight: 684,
-      }),
-    ).toBe(23071 - COLLAPSE);
-  });
-
-  it('leaves a PINNED reader alone — the bottom is their anchor', () => {
-    // Two owners of one scroll position is how the last three of these
-    // started; the re-pin observer already holds this case.
-    expect(
-      scrollTopAfterFoldChange({
-        pinned: true,
-        anchorRowTop: -230,
-        anchorOffset: 200,
-        scrollTop: 23071,
-        scrollHeight: 26468,
-        clientHeight: 684,
-      }),
-    ).toBe(null);
-  });
-
-  it('declines to guess when there is no row to measure', () => {
-    // A hidden pane, or a chat with nothing anchorable. Leaving the scroll
-    // alone is imprecise; inventing a target is wrong.
-    expect(
-      scrollTopAfterFoldChange({
-        pinned: false,
-        anchorRowTop: null,
-        anchorOffset: 200,
-        scrollTop: 23071,
-        scrollHeight: 26468,
-        clientHeight: 684,
-      }),
-    ).toBe(null);
-  });
-
-  it('clamps, like every other target in this file', () => {
-    // The caller stamps the result as lastProgrammaticTop, and a value the
-    // browser clamps would never equal the real scrollTop — so the very next
-    // scroll event would read as the reader taking control.
-    expect(
-      scrollTopAfterFoldChange({
-        pinned: false,
-        anchorRowTop: 900,
-        anchorOffset: 0,
-        scrollTop: 100,
-        scrollHeight: 1200,
-        clientHeight: 600,
-      }),
-    ).toBe(600);
-    expect(
-      scrollTopAfterFoldChange({
-        pinned: false,
-        anchorRowTop: -900,
-        anchorOffset: 0,
-        scrollTop: 100,
-        scrollHeight: 1200,
-        clientHeight: 600,
-      }),
-    ).toBe(0);
-  });
-});
-
-describe('scrollMotionIsTheReader', () => {
-  // An anchoring adjustment: the engine pays for growth above the reader by
-  // moving scrollTop down by exactly that growth. Measured in headless
-  // Chromium — reader's row unmoved, 1400 -> 1850, one scroll event.
-  it('does NOT blame the reader for an anchoring adjustment', () => {
-    expect(
-      scrollMotionIsTheReader({
-        scrollTop: 1850,
-        lastScrollTop: 1400,
-        heightDelta: 450,
-        lastProgrammaticTop: 1400,
-      }),
-    ).toBe(false);
-  });
-
-  it('does not blame them when only SOME of the growth was above them', () => {
-    // 450px arrived, 200 of it above the reader: the engine pays 200.
-    expect(
-      scrollMotionIsTheReader({
-        scrollTop: 1600,
-        lastScrollTop: 1400,
-        heightDelta: 450,
-        lastProgrammaticTop: 1400,
-      }),
-    ).toBe(false);
-  });
-
-  // The regression the validation fleet measured: the rule used to excuse EVERY
-  // motion in a frame where the content changed, so a reader paging with the
-  // keyboard or dragging a selection during a live turn was invisible for as
-  // long as output kept arriving. 7128px of real motion, 0 reader verdicts
-  // across 158 events.
-  it('DOES blame the reader for motion layout cannot account for', () => {
-    // 450px of growth cannot explain an 800px jump.
-    expect(
-      scrollMotionIsTheReader({
-        scrollTop: 2200,
-        lastScrollTop: 1400,
-        heightDelta: 450,
-        lastProgrammaticTop: 1400,
-      }),
-    ).toBe(true);
-  });
-
-  it('DOES blame the reader for scrolling UP while content grows', () => {
-    // Growth pushes scrollTop down; reading backwards is unmistakably theirs.
-    expect(
-      scrollMotionIsTheReader({
-        scrollTop: 1100,
-        lastScrollTop: 1400,
-        heightDelta: 450,
-        lastProgrammaticTop: 1400,
-      }),
-    ).toBe(true);
-  });
-
-  it('still catches a reader who scrolled with no growth at all', () => {
-    expect(
-      scrollMotionIsTheReader({
-        scrollTop: 4480,
-        lastScrollTop: 4000,
-        heightDelta: 0,
-        lastProgrammaticTop: 4000,
-      }),
-    ).toBe(true);
-  });
-
-  it('does not blame the reader for our OWN programmatic write', () => {
-    expect(
-      scrollMotionIsTheReader({
-        scrollTop: 4000,
-        lastScrollTop: 4000,
-        heightDelta: 0,
-        lastProgrammaticTop: 4000,
-      }),
-    ).toBe(false);
-  });
-
-  it('treats content shrinking as layout, not a gesture', () => {
-    // A fold closing above the reader: scrollTop is clamped down by the engine.
-    expect(
-      scrollMotionIsTheReader({
-        scrollTop: 900,
-        lastScrollTop: 900,
-        heightDelta: -450,
-        lastProgrammaticTop: 900,
-      }),
-    ).toBe(false);
-  });
-});
-
-describe('retiring an anchor the seek could not reach', () => {
-  // The seek budget is a local of the restore effect and that effect re-runs on
-  // every visibility flip, so a stored anchor that is never going to be found
-  // costs eight `load-older` round trips PER FLIP — and each re-run re-applies
-  // the ratio against a document the previous ones grew. Handing over the row
-  // the fallback actually settled on makes the next restore an ordinary one.
-  const geometry = {
-    scrollTop: 4000,
-    scrollHeight: 20000,
-    clientHeight: 800,
-    lastRowBottom: 19000,
-    sid: 'sid-1',
-  };
-
-  it('names the row the loop settled on, not the ghost it was hunting', () => {
-    const m = retiredAnchorMemory({
-      live: { anchorId: 'evt-live', anchorOffset: -120 },
-      ...geometry,
-    });
-    expect(m.anchorId).toBe('evt-live');
-    expect(m.anchorOffset).toBe(-120);
-    expect(m.sid).toBe('sid-1');
-    // A findable anchor is exactly what stops `opensAtNewest` sending the next
-    // open to the bottom AND stops the loop seeking again.
-    expect(opensAtNewest(m)).toBe(false);
-  });
-
-  it('records the ratio the reader is actually at, clamped', () => {
-    expect(retiredAnchorMemory({ live: null, ...geometry }).ratio).toBeCloseTo(
-      4000 / (20000 - 800),
-      5,
-    );
-    // iOS rubber-band reports a scrollTop outside the range.
-    expect(retiredAnchorMemory({ live: null, ...geometry, scrollTop: -40 }).ratio).toBe(0);
-    expect(retiredAnchorMemory({ live: null, ...geometry, scrollTop: 99999 }).ratio).toBe(1);
-  });
-
-  it('MEASURES caught-up rather than assuming the reader is parked', () => {
-    // The fallback left them mid-history: the newest row ends far below.
-    expect(
-      retiredAnchorMemory({ live: { anchorId: 'a', anchorOffset: 0 }, ...geometry }).caughtUp,
-    ).toBe(false);
-    // …and left them at the end: saying so is what stops the NEXT open pinning
-    // them to a message that is no longer the newest.
-    expect(
-      retiredAnchorMemory({
-        live: { anchorId: 'a', anchorOffset: 0 },
-        ...geometry,
-        scrollTop: 19200,
-        lastRowBottom: 790,
-      }).caughtUp,
-    ).toBe(true);
-  });
-
-  it('falls back to no anchor when nothing is anchorable', () => {
-    const m = retiredAnchorMemory({ live: null, ...geometry });
-    expect(m.anchorId).toBeNull();
-    expect(m.anchorOffset).toBe(0);
-  });
-});
+/*
+ * The `retiring an anchor the seek could not reach` block lived here — four
+ * tests over `retiredAnchorMemory`, which wrote back whatever row the ratio
+ * fallback had settled on when a seek gave up.
+ *
+ * Deleted with the function, and with the fallback that made it necessary.
+ * Nothing guesses a position any more, so there is no guessed row to correct:
+ * a seek that runs out of budget leaves the record untouched and the reader
+ * where the document opened. What stops the budget being re-spent on every
+ * visibility flip is now a counter that outlives the flip
+ * (`ScrollState.pages`), tested in chat-scroll-intent.test.ts.
+ *
+ * Worth recording why the tests passed while the behaviour was wrong: they
+ * asserted that retirement named "the row the loop settled on, not the ghost it
+ * was hunting", which the function did. The defect was upstream of anything they
+ * could see — the row it named had been chosen by arithmetic against a fraction
+ * of the conversation — and the guard added for THAT (never retire while history
+ * is unloaded) silently disabled retirement in the commonest case, so every tab
+ * switch re-spent eight `load-older` round trips. Two correct rules, composed
+ * into the live bug, with green tests over both.
+ */
 
 describe('two windows, merged by WRITE TIME', () => {
   beforeEach(() => {
@@ -1262,7 +790,7 @@ describe('a close inside the debounce window', () => {
 
   it('flushes on `pagehide` — the event a killed PWA does fire', async () => {
     vi.resetModules();
-    const { rememberChatScroll: remember, opensAtNewest: newest } = await import('./chat-scroll');
+    const { rememberChatScroll: remember } = await import('./chat-scroll');
     remember('pane-park', memo({ anchorId: 'evt#69' }));
     window.dispatchEvent(new Event('pagehide'));
 
@@ -1271,7 +799,7 @@ describe('a close inside the debounce window', () => {
     vi.resetModules();
     const { recallChatScroll: recall } = await import('./chat-scroll');
     expect(recall('pane-park')?.anchorId).toBe('evt#69');
-    expect(newest(recall('pane-park'))).toBe(false);
+    expect(intentFor(recall('pane-park'))).toMatchObject({ at: 'row', id: 'evt#69' });
   });
 
   it('flushes when the document goes hidden — iOS freezes timers there', async () => {
@@ -1297,18 +825,16 @@ describe('the LRU cap holds PARKED spots, not the default', () => {
 
   it('spends no PARKED slot on a caught-up reader', async () => {
     vi.resetModules();
-    const {
-      rememberChatScroll: remember,
-      opensAtNewest: newest,
-      recallChatScroll: recall,
-    } = await import('./chat-scroll');
+    const { rememberChatScroll: remember, recallChatScroll: recall } = await import(
+      './chat-scroll'
+    );
     // MAX_ENTRIES parked panes, then a storm of caught-up traffic on top. If
     // the two shared a budget the caught-up rows would evict the parked ones —
     // they are the newer writes — and the oldest parked pane is exactly the one
     // the reader has been away from longest.
     for (let i = 0; i < 200; i++) remember(`parked-${i}`, memo({ anchorId: `evt#${i}` }));
     for (let i = 0; i < 200; i++) {
-      remember(`caught-${i}`, memo({ anchorId: null, ratio: 1, caughtUp: true }));
+      remember(`caught-${i}`, memo({ anchorId: null, caughtUp: true }));
     }
     await flushed();
     expect(recall('parked-0')?.anchorId).toBe('evt#0');
@@ -1316,7 +842,7 @@ describe('the LRU cap holds PARKED spots, not the default', () => {
     // A caught-up row IS written — that is what retires the parked row another
     // window is holding, see below — but it is budgeted separately, and it
     // answers re-entry the same way no memory at all does.
-    expect(newest(recall('caught-199'))).toBe(true);
+    expect(intentFor(recall('caught-199'))).toEqual({ at: 'end' });
     const rows = JSON.parse(localStorage.getItem(STORE_KEY) ?? '[]') as [string, ChatScrollMem][];
     expect(rows.filter(([, m]) => !m.caughtUp)).toHaveLength(200);
     expect(rows.filter(([, m]) => m.caughtUp).length).toBeLessThanOrEqual(50);
@@ -1331,7 +857,7 @@ describe('the LRU cap holds PARKED spots, not the default', () => {
       ['wanted', stored({ anchorId: 'evt#69', caughtUp: false, at: Date.now() - 60_000 })],
     ];
     for (let i = 0; i < 200; i++) {
-      rows.push([`legacy-caught-${i}`, stored({ ratio: 1, caughtUp: true, at: Date.now() - i })]);
+      rows.push([`legacy-caught-${i}`, stored({ caughtUp: true, at: Date.now() - i })]);
     }
     localStorage.setItem(STORE_KEY, JSON.stringify(rows));
     vi.resetModules();
@@ -1372,7 +898,7 @@ describe('the LRU cap holds PARKED spots, not the default', () => {
     );
     remember('parked-00', memo({ anchorId: 'evt#69', caughtUp: false }));
     for (let i = 0; i < 120; i++) {
-      remember(`follow-${i}`, memo({ anchorId: null, ratio: 1, caughtUp: true }));
+      remember(`follow-${i}`, memo({ anchorId: null, caughtUp: true }));
     }
     expect(recall('parked-00')?.anchorId).toBe('evt#69');
   });
@@ -1381,18 +907,16 @@ describe('the LRU cap holds PARKED spots, not the default', () => {
     // Dropping it from the map is not enough on its own — `flush` merges what
     // is already in localStorage, so a deleted row would be read straight back.
     vi.resetModules();
-    const {
-      rememberChatScroll: remember,
-      recallChatScroll: recall,
-      opensAtNewest: newest,
-    } = await import('./chat-scroll');
+    const { rememberChatScroll: remember, recallChatScroll: recall } = await import(
+      './chat-scroll'
+    );
     remember('p', memo({ anchorId: 'evt#7', caughtUp: false }));
     await flushed();
     expect(localStorage.getItem(STORE_KEY)).toContain('evt#7');
-    remember('p', memo({ anchorId: null, ratio: 1, caughtUp: true }));
+    remember('p', memo({ anchorId: null, caughtUp: true }));
     await flushed();
     // The reader opens at the newest message, as if nothing were remembered…
-    expect(newest(recall('p'))).toBe(true);
+    expect(intentFor(recall('p'))).toEqual({ at: 'end' });
     // …and the message id they were parked on is GONE, not merely shadowed by a
     // flag: anything reading one field and not the other must not be able to
     // put them back there. (A boundary, not a regression test — the design that
@@ -1406,7 +930,7 @@ describe('the LRU cap holds PARKED spots, not the default', () => {
     const { rememberChatScroll: remember, recallChatScroll: recall } = await import(
       './chat-scroll'
     );
-    remember('p', memo({ anchorId: null, ratio: 1, caughtUp: true }));
+    remember('p', memo({ anchorId: null, caughtUp: true }));
     localStorage.setItem(
       STORE_KEY,
       JSON.stringify([['p', stored({ anchorId: 'parked-in-B', at: Date.now() + 1000 })]]),
@@ -1447,7 +971,7 @@ describe('a retirement in ANOTHER window', () => {
 
     vi.resetModules();
     const B = await import('./chat-scroll');
-    B.rememberChatScroll('p', memo({ anchorId: null, ratio: 1, caughtUp: true }));
+    B.rememberChatScroll('p', memo({ anchorId: null, caughtUp: true }));
     B.flushChatScrollNow();
     return A;
   }
@@ -1456,13 +980,13 @@ describe('a retirement in ANOTHER window', () => {
   async function coldOpenOpensAtNewest() {
     vi.resetModules();
     const C = await import('./chat-scroll');
-    return C.opensAtNewest(C.recallChatScroll('p'));
+    return intentFor(C.recallChatScroll('p')).at === 'end';
   }
 
   it('reaches this window, instead of leaving it answering from boot', async () => {
     const A = await parkedInAretiredInB();
     window.dispatchEvent(new StorageEvent('storage', { key: STORE_KEY }));
-    expect(A.opensAtNewest(A.recallChatScroll('p'))).toBe(true);
+    expect(intentFor(A.recallChatScroll('p')).at === 'end').toBe(true);
   });
 
   it('is not undone by this window flushing something else entirely', async () => {
@@ -1625,26 +1149,50 @@ describe('shouldPersistChatScroll — a hidden document has no reading position'
   });
 });
 
-describe('an older prepend captured mid rubber-band', () => {
-  // iOS overscroll reports a scrollTop outside [0, max], and a reader paging
-  // older history IS at the top of the document, mid-bounce, by construction.
-  // The persist path already clamps its ratio; the prepend capture did not.
-  it('lands on the same messages, not 40px into the new page', () => {
-    const unclamped = scrollTopAfterOlderPrepend({
-      pinned: false,
-      anchorHeight: 8000,
-      anchorTop: -40,
-      newScrollHeight: 10000,
-      clientHeight: 800,
-    });
-    const clamped = scrollTopAfterOlderPrepend({
-      pinned: false,
-      anchorHeight: 8000,
-      anchorTop: Math.min(Math.max(0, -40), maxScrollTop(8000, 800)),
-      newScrollHeight: 10000,
-      clientHeight: 800,
-    });
-    expect(unclamped).toBe(1960);
-    expect(clamped).toBe(2000);
+/*
+ * `an older prepend captured mid rubber-band` lived here. iOS overscroll reports
+ * a `scrollTop` outside [0, max], and a reader paging older history IS at the
+ * top mid-bounce by construction, so an unclamped capture landed them 40px into
+ * the newly prepended page instead of on the same messages.
+ *
+ * Both the prepend capture and the function it fed are gone. The clamp now lives
+ * where the number is READ — `domScrollSurface.geometry()` — so it applies to
+ * every consumer at once. The previous design clamped at three of the five
+ * places that used the value, which is how the other two came to disagree.
+ */
+
+describe('the fold state survives a remount', () => {
+  // `expandedGroups` was component state, and a sidebar tab switch unmounts the
+  // pane tree — so a run the reader had opened came back collapsed and the
+  // offset into it (measured against the tall box) was replayed against a ~26px
+  // summary. The row-height clamp turns that into a lost place rather than a
+  // dump at the bottom of the chat; this removes the cause.
+  beforeEach(() => localStorage.clear());
+
+  it('round-trips the open runs of a pane', () => {
+    rememberExpandedRuns('p', new Set(['run#1', 'run#9']));
+    expect([...recallExpandedRuns('p')].sort()).toEqual(['run#1', 'run#9']);
+  });
+
+  it('a pane that was never opened has nothing open', () => {
+    expect(recallExpandedRuns('never-seen').size).toBe(0);
+  });
+
+  it('does not keep a row for a pane with everything collapsed', () => {
+    rememberExpandedRuns('p', new Set(['run#1']));
+    rememberExpandedRuns('p', new Set());
+    expect(localStorage.getItem('muxpad:chat-folds:v1')).toBe('{}');
+  });
+
+  it('keeps panes apart', () => {
+    rememberExpandedRuns('a', new Set(['run#1']));
+    rememberExpandedRuns('b', new Set(['run#2']));
+    expect([...recallExpandedRuns('a')]).toEqual(['run#1']);
+    expect([...recallExpandedRuns('b')]).toEqual(['run#2']);
+  });
+
+  it('degrades to nothing open on a corrupt blob, rather than throwing', () => {
+    localStorage.setItem('muxpad:chat-folds:v1', '{not json');
+    expect(recallExpandedRuns('p').size).toBe(0);
   });
 });
