@@ -1,5 +1,6 @@
+import { CHAT_STAGGER_MS } from '@muxpad/shared';
 import Database from 'better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { LATEST_SCHEMA_VERSION, runMigrations } from './migrations.js';
 
 /**
@@ -807,6 +808,26 @@ describe('migrations v27 — the chat clock and the spawn link', () => {
     ).clock_started_at;
   }
 
+  /**
+   * `n` ULID-shaped ids sharing ONE timestamp prefix — worse than a real
+   * install, where tabs were created over months and the prefixes differ. Ids
+   * minted in one burst differ only in the trailing 16 random characters, and
+   * those are the ids a spread that only looked at the front would bucket
+   * together.
+   */
+  function realisticTabIds(n: number): string[] {
+    const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+    return Array.from({ length: n }, (_, i) => {
+      let s = Math.imul(i + 1, 2654435761) >>> 0;
+      let suffix = '';
+      for (let c = 0; c < 16; c++) {
+        s = (Math.imul(s, 1103515245) + 12345) >>> 0;
+        suffix += alphabet[s >>> 27]; // the TOP bits — an LCG's low bits cycle
+      }
+      return `01JQK7XY0A${suffix}`;
+    });
+  }
+
   it('starts EVERY existing tab fresh at boot, not from its last activity', () => {
     // The decision this test exists to pin down. Backfilling from
     // `last_activity_at` was explicitly rejected: `stale` below has not been
@@ -820,15 +841,68 @@ describe('migrations v27 — the chat clock and the spawn link', () => {
     addTab(db, 'never', null); // never observed at all — no timestamp to inherit
     const before = Date.now();
     runMigrations(db);
-    const after = Date.now();
 
     for (const id of ['stale', 'fresh', 'never']) {
       const clock = clockOf(db, id);
       expect(clock, `${id} got a clock`).not.toBeNull();
+      // At or after boot — never before it. The stagger moves clocks LATER, so
+      // this bound is the day-one guarantee itself and not an approximation of
+      // it: no tab can reach four days sooner than a tab stamped at boot.
       expect(clock).toBeGreaterThanOrEqual(before);
-      expect(clock).toBeLessThanOrEqual(after);
+      expect(clock).toBeLessThan(before + CHAT_STAGGER_MS);
     }
     expect(clockOf(db, 'stale')).not.toBe(monthAgo);
+    // `stale` and `fresh` are a month apart in activity and must land in the
+    // same window regardless — the spread reads the id, nothing else.
+    expect(clockOf(db, 'stale')).not.toBe(clockOf(db, 'fresh'));
+  });
+
+  it('spreads the backfilled clocks over days instead of expiring them together', () => {
+    // F1, the day-four cliff. One `Date.now()` for every row means every row
+    // expires in the same minute: the sidebar does not thin on the fourth
+    // morning, it empties, and the sweeper emits one `tab.updated` per row in
+    // a single tick — each costing every connected client a full workspace
+    // walk. Revert `apply` to one shared stamp and this fails on both counts.
+    const db = v26();
+    const ids = realisticTabIds(90);
+    for (const id of ids) addTab(db, id, null);
+    const before = Date.now();
+    runMigrations(db);
+
+    const starts = ids.map((id) => clockOf(db, id) as number);
+    const perDay = [0, 1, 2].map(
+      (d) =>
+        starts.filter((s) => s - before >= d * 86_400_000 && s - before < (d + 1) * 86_400_000)
+          .length,
+    );
+    for (const n of perDay) expect(n, `day ${perDay.indexOf(n)} share`).toBeGreaterThan(90 / 6);
+
+    const perTick = new Map<number, number>();
+    for (const s of starts) {
+      const tick = Math.floor((s - before) / 60_000); // the sweeper's interval
+      perTick.set(tick, (perTick.get(tick) ?? 0) + 1);
+    }
+    expect(Math.max(...perTick.values())).toBeLessThanOrEqual(2);
+  });
+
+  it('gives a tab the same OFFSET whenever the backfill runs, so a restore does not re-deal', () => {
+    // The offset is derived from the id, not randomised. Restore a pre-v27
+    // backup a week later and the migration runs again: it has to hand every
+    // surviving chat back the same position in the queue, not a fresh draw
+    // that moves a death date the user has been watching count down.
+    const id = '01JQK7XY0AVVVVVVVVVVVVVVVV';
+    const offsetAt = (boot: number): number => {
+      const db = v26();
+      addTab(db, id, null);
+      vi.spyOn(Date, 'now').mockReturnValue(boot);
+      try {
+        runMigrations(db);
+        return (clockOf(db, id) as number) - boot;
+      } finally {
+        vi.restoreAllMocks();
+      }
+    };
+    expect(offsetAt(1_800_000_000_000)).toBe(offsetAt(1_800_000_000_000 + 7 * 86_400_000));
   });
 
   it('adds spawned_by as a nullable column with no parent by default', () => {

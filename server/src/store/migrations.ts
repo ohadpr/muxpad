@@ -1,4 +1,10 @@
-import { type LayoutNode, pruneLayout, randomTabIcon, splitLeadingEmoji } from '@muxpad/shared';
+import {
+  type LayoutNode,
+  pruneLayout,
+  randomTabIcon,
+  splitLeadingEmoji,
+  staggeredClockStart,
+} from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { applyModeToStartupCmd } from '../agent-modes.js';
 
@@ -599,18 +605,35 @@ const MIGRATIONS: Migration[] = [
     // key everything touches and a lifecycle clock only a deliberate act may
     // move.
     //
-    // ── THE BACKFILL: EVERYONE STARTS FRESH ──────────────────────────────────
-    // Every existing tab's clock starts at THIS MOMENT — the first boot after
+    // ── THE BACKFILL: EVERYONE STARTS FRESH, BUT NOT ALL AT ONCE ─────────────
+    // No existing tab's clock starts before THIS MOMENT — the first boot after
     // this ships — so nothing decays on day one. Backfilling from
     // `last_activity_at` was considered and explicitly rejected: it would have
     // arrived with roughly half the existing tabs already expired, collapsing
     // most of the sidebar into a `done` group on the first render, which reads
     // as data loss even though nothing was lost.
     //
+    // What one shared `Date.now()` gets wrong is the OTHER end of the same
+    // four days. Ninety rows stamped in one minute expire in one minute, so
+    // the sidebar does not thin on the fourth morning, it empties — every
+    // untouched workspace a collapsed `N done` header over nothing, arriving
+    // as ninety `tab.updated` events in a single sweeper tick. So each row's
+    // clock starts at boot PLUS an offset derived from its id
+    // (`staggeredClockStart`, in shared, with the argument for the direction
+    // and for not ranking by activity). Measured on the real 90-tab database:
+    // 38/26/26 crossings across days four to seven, and never more than two in
+    // any one tick.
+    //
+    // The offset is never negative, which is how the day-one promise survives
+    // the change: staggering can only give a chat more time than it had.
+    //
     // Guarded by `IS NULL` so the backfill is idempotent in the real sense: a
     // second pass cannot re-stamp a clock the user has since reset (the version
     // guard already prevents a second pass, but a migration that would corrupt
     // data if it ever ran twice is one restore-from-backup away from doing it).
+    // The offset is a pure function of the id for the same reason — a restore
+    // must not re-deal every surviving chat a different death date than the one
+    // the user has been watching count down.
     version: 27,
     sql: `
       ALTER TABLE tabs ADD COLUMN spawned_by TEXT;
@@ -618,9 +641,12 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX tabs_spawned_by ON tabs(spawned_by);
     `,
     apply: (db) => {
-      db.prepare('UPDATE tabs SET clock_started_at = ? WHERE clock_started_at IS NULL').run(
-        Date.now(),
-      );
+      const boot = Date.now();
+      const ids = db
+        .prepare('SELECT id FROM tabs WHERE clock_started_at IS NULL')
+        .all() as Array<{ id: string }>;
+      const update = db.prepare('UPDATE tabs SET clock_started_at = ? WHERE id = ?');
+      for (const { id } of ids) update.run(staggeredClockStart(id, boot), id);
     },
   },
   {

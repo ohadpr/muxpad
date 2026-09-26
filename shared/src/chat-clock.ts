@@ -94,3 +94,70 @@ export function chatClockDone(clock: ChatClock, now: number): boolean {
   if (clock.stopped || clock.expires_at === null) return false;
   return now >= clock.expires_at;
 }
+
+/**
+ * How far apart the one-time backfill spreads the clocks it starts.
+ *
+ * Three days, so an existing sidebar empties over days four to seven instead
+ * of in a single minute. Not a policy anyone's chats live under afterwards —
+ * the first message a chat receives puts it back on the plain
+ * {@link CHAT_DECAY_DAYS} clock like everything else.
+ */
+export const CHAT_STAGGER_DAYS = 3;
+
+export const CHAT_STAGGER_MS = CHAT_STAGGER_DAYS * DAY_MS;
+
+/**
+ * Where one chat's clock starts when the backfill hands every existing chat a
+ * clock at once.
+ *
+ * ── THE PROBLEM THIS SOLVES ──────────────────────────────────────────────────
+ * One `Date.now()` for ninety rows means ninety rows expire in the same
+ * minute. On the fourth morning the user's sidebar does not thin, it EMPTIES:
+ * every untouched workspace becomes a collapsed `N done` header over nothing,
+ * in one tick, with one `tab.updated` per row behind it (and `tab.updated`
+ * costs every connected client a full uncoalesced workspace walk — see
+ * server/src/tab-activity.ts). A list that clears itself in one sweep is the
+ * failure that killed Google Inbox's bundles and Outlook's Clutter: the
+ * mechanism may be correct and the user still reads it as data loss, and the
+ * first thing they do is go looking for the off switch.
+ *
+ * ── WHY THE OFFSET IS FORWARD, NEVER BACKWARD ────────────────────────────────
+ * The offset is always ≥ 0, so a backfilled clock expires no EARLIER than the
+ * four days it would have anyway. That is the day-one guarantee, kept by
+ * construction rather than by arithmetic anyone has to check: staggering can
+ * only ever give a chat more time, never less. Spreading backwards would have
+ * been the same size of change and would have put some chats a day from death
+ * on the morning this ships — which is the outcome "everyone starts fresh" was
+ * chosen to avoid.
+ *
+ * The visible cost is that a chat at the far end of the spread sits at 0% fill
+ * for up to three days before its tile starts filling. That is not a lie: it
+ * genuinely has more than four days left.
+ *
+ * ── WHY NOT RANK BY last_activity_at ─────────────────────────────────────────
+ * Because that is the reading the user rejected, in the smaller. The backfill
+ * deliberately does not look at activity (see migrations.ts v27: it measures
+ * the terminal, not you), and ordering the spread by it would smuggle the same
+ * signal back in — the chat you left tailing a log would outlive the chat you
+ * actually finished with. This reads nothing but the id, so it stays strictly
+ * inside the decision already made: everyone starts fresh, just not all in the
+ * same minute.
+ *
+ * Derived from the id rather than randomised, for the reason
+ * `fallbackTabIcon` is: a stored random number is indistinguishable from one
+ * somebody meant, and a pure function is the same answer in a test, in a
+ * re-run, and in a restore. FNV-1a, same as that sibling — it needs to be
+ * well-spread, not cryptographic. ULIDs from one install share a long
+ * timestamp prefix, so the hash must mix the whole string; FNV-1a does.
+ */
+export function staggeredClockStart(id: string, boot: number): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) {
+    hash ^= id.charCodeAt(i);
+    // >>> 0 keeps it an unsigned 32-bit value; Math.imul does the mod-2^32
+    // multiply that plain `*` would lose precision on.
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return boot + Math.floor((hash / 0x1_0000_0000) * CHAT_STAGGER_MS);
+}
