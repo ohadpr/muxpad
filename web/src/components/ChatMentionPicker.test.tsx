@@ -84,6 +84,26 @@ describe('the picker', () => {
     expect(picker([{ chat: FENCE, via: 'name' }])).toContain('data-done="true"');
   });
 
+  it('says a retired sub-chat DELIVERED, and whose work it was', () => {
+    // After the amendment a sub-chat leaves the live list the moment it reports,
+    // so this list is one of the two ways back to it. Its name is the task
+    // ("Work review"); "delivered · under muxpad sidebar" is what makes it
+    // recognisable — and tells two same-named sub-chats apart.
+    const sub = chat({
+      tabName: 'Work review',
+      done: true,
+      doneReason: 'delivered',
+      parentName: 'muxpad sidebar',
+    });
+    const out = picker([{ chat: sub, via: 'name' }]);
+    expect(out).toContain('delivered · under muxpad sidebar');
+  });
+
+  it('adds nothing to an ordinary live row', () => {
+    // The common row must not grow a tag for the uncommon case.
+    expect(picker([{ chat: INV, via: 'name' }])).not.toContain('chat-mention-under');
+  });
+
   it('never lets the archive tier replace the rows already on screen', () => {
     const out = picker([{ chat: INV, via: 'name' }], { query: 'cash', searching: true });
     expect(out).toContain('Investing');

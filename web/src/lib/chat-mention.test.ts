@@ -249,9 +249,26 @@ describe('rankMentions', () => {
       'Investing',
       'Main',
       'Main repo',
-      // done sinks below every live chat even though it is the most recent
+      // a chat you walked away from sinks below every live one, even though it
+      // is the most recently active of them
       'quarterly budget notes',
     ]);
+  });
+
+  it('does NOT sink a sub-chat that just delivered — it is a result, not neglect', () => {
+    // The amendment's own case: a sub-chat leaves the live list the instant it
+    // reports, so if `done` buried it under thirty live rows, the thing that
+    // just came back would be the hardest row in the list to reach.
+    const delivered = chat({
+      tabName: 'Work review',
+      done: true,
+      doneReason: 'delivered',
+      lastActivityAt: 500,
+    });
+    const rows = rankMentions([...CORPUS, delivered], '', {});
+    expect(rows[0]?.chat.tabName).toBe('Work review');
+    // …while decayed and archived still sort under the live chats.
+    expect(rows.at(-1)?.chat.tabName).toBe('quarterly budget notes');
   });
 
   it('excludes the chat you are typing in', () => {
@@ -269,6 +286,21 @@ describe('rankMentions', () => {
     expect(rankMentions(CORPUS, 'fence', {}).map((r) => r.chat.tabName)).toEqual([
       'quarterly budget notes',
     ]);
+  });
+
+  it('finds a retired sub-chat that has no panes left', () => {
+    // A delivered sub-chat may end up with no panes at all (nothing is deleted,
+    // but nothing keeps a process either). Name and headline matching must not
+    // depend on a pane existing — this list is one of the two ways back to it.
+    const gone = chat({
+      tabName: 'Credit failover',
+      headline: 'why the billing retry gave up',
+      done: true,
+      doneReason: 'delivered',
+      paneIds: [],
+    });
+    expect(rankMentions([gone], 'failover', {})[0]?.chat.tabName).toBe('Credit failover');
+    expect(rankMentions([gone], 'billing retry', {})[0]?.chat.tabName).toBe('Credit failover');
   });
 });
 
@@ -328,10 +360,22 @@ describe('toMentionChats — the corpus', () => {
           layout: 'p1',
           icon: '📈',
           headline: 'what it is about',
-          clock: { started_at: 1000 },
+          clock: { started_at: 1000, expires_at: 5000, fill: 0.5, last_day: false, stopped: false },
           last_activity_at: 50,
         },
         { id: 't2', slug: 'b', name: 'Cold one', layout: 'p2', done: true, spawned_by: 't1' },
+        {
+          id: 't3',
+          slug: 'c',
+          name: 'Work review',
+          // Retired on delivery: no panes, no clock, and a parent.
+          layout: '',
+          done: true,
+          done_reason: 'delivered',
+          spawned_by: 't1',
+          clock: null,
+          last_activity_at: 9_000,
+        },
       ] as never,
     },
   ];
@@ -340,19 +384,40 @@ describe('toMentionChats — the corpus', () => {
     expect(toMentionChats(groups).map((c) => [c.tabName, c.done ?? false])).toEqual([
       ['Live one', false],
       ['Cold one', true],
+      ['Work review', true],
     ]);
   });
 
-  it('builds the chip material once, off the SERVER clock — not last activity', () => {
-    // The whole point of the migration decision: a clock that started at boot
-    // must not be re-derived from a months-old last_activity_at.
+  it('builds the chip material once, and passes the SERVER clock through whole', () => {
+    // Not a start timestamp the client re-derives a phase from: the server
+    // computed `fill` and `last_day`, and the chip only quantises the fill.
     const [live, cold] = toMentionChats(groups);
     expect(live?.chip).toMatchObject({
       name: 'Live one',
       icon: '📈',
       headline: 'what it is about',
-      clock_started_at: 1000,
+      clock: { started_at: 1000, fill: 0.5, last_day: false, stopped: false },
     });
+    // A row with a published clock must not also carry the pre-column fallback,
+    // or a rolling upgrade has two answers for the same tile.
+    expect(live?.chip.last_activity_at).toBeUndefined();
     expect(cold?.chip).toMatchObject({ done: true, spawned_by: 't1' });
+  });
+
+  it('does not invent a clock for a sub-chat the server says has none', () => {
+    // `clock: null` is "there is no clock", not "the clock is at 0". Falling
+    // through to last_activity_at here would draw a half-buried tile on a row
+    // that retired the moment it delivered.
+    const sub = toMentionChats(groups)[2];
+    expect(sub?.chip.clock).toBeUndefined();
+    expect(sub?.chip.last_activity_at).toBeUndefined();
+  });
+
+  it('resolves the parent to a NAME, and keeps the reason it is done', () => {
+    const sub = toMentionChats(groups)[2];
+    expect(sub?.parentName).toBe('Live one');
+    expect(sub?.doneReason).toBe('delivered');
+    // A child whose parent row carries no reason gets none invented for it.
+    expect(toMentionChats(groups)[1]?.doneReason).toBeUndefined();
   });
 });

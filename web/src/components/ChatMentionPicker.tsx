@@ -121,6 +121,13 @@ function Row({
       <span className="chat-mention-name" dir="auto">
         <Highlight text={chat.tabName} range={row.nameRange} />
       </span>
+      {/* A sub-chat leaves the live list the moment it delivers, so this list is
+          one of the two ways back to it — and its name is usually the task
+          ("Work review"), not whose task it was. The tag says WHOSE, and for a
+          delivered one it says that too: "this row is a result", not something
+          you walked away from. Ahead of the headline because it is the part that
+          must not be the thing that gets ellipsised. */}
+      {provenance(chat) ? <span className="chat-mention-under">{provenance(chat)}</span> : null}
       <span className="chat-mention-why" dir="auto">
         {row.via === 'content' && row.snippet ? (
           snippetParts(row.snippet).map((part, i) =>
@@ -140,6 +147,23 @@ function Row({
       </span>
     </div>
   );
+}
+
+/**
+ * The tag between a row's name and its headline: where this chat came from, and
+ * — when it is over — which of the three ways it got there.
+ *
+ * `delivered` is the one that earns its space. `decayed` and `archived` both say
+ * "you are done with this", which the chip's own dashed outline already says; a
+ * delivered sub-chat is a RESULT that has left the live list, and the word is the
+ * difference between recognising it and scrolling past it. Empty for an ordinary
+ * live chat, which is most of them — nothing is added to the common row.
+ */
+function provenance(chat: MentionRow['chat']): string {
+  const parts: string[] = [];
+  if (chat.doneReason === 'delivered') parts.push('delivered');
+  if (chat.parentName) parts.push(`under ${chat.parentName}`);
+  return parts.join(' · ');
 }
 
 /**

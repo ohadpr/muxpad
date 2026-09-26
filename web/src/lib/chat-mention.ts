@@ -1,3 +1,4 @@
+import type { ChatClock } from '@muxpad/shared';
 import { type ArchiveSearchHit, req } from '../api';
 import type { ChatChipChat } from '../components/ChatChip';
 import {
@@ -54,6 +55,24 @@ export interface MentionChat extends SearchableTab {
    */
   done?: boolean | undefined;
   /**
+   * WHY it is done, when it is. The picker says this out loud for a reason:
+   * after the amendment a sub-chat leaves the live list the moment it delivers,
+   * so `@` is one of the two ways back to it (the other is its card), and
+   * "delivered" is the word that tells you this row is a RESULT rather than
+   * something you abandoned.
+   */
+  doneReason?: 'decayed' | 'delivered' | 'archived' | undefined;
+  /**
+   * The chat this one was spawned under, resolved to a NAME within the corpus.
+   *
+   * A delivered sub-chat is usually named after its task ("Work review"), and
+   * there may be several of them; whose work it was is the thing that tells them
+   * apart. Absent when the parent is not in the corpus — a dangling `spawned_by`
+   * is an expected state (nothing is ever deleted, but nothing is cascaded
+   * either), and the honest reading of it is "a root in its own right".
+   */
+  parentName?: string | undefined;
+  /**
    * What `ChatChip` (and `chatTooltip`) need off this chat, built ONCE here.
    *
    * The chip is territory B's component and its prop shape is deliberately
@@ -67,8 +86,10 @@ export interface MentionChat extends SearchableTab {
 /** The lifecycle fields territory A publishes on the tab row. */
 type TabWithLifecycle = {
   done?: boolean | null;
+  done_reason?: 'decayed' | 'delivered' | 'archived' | null;
   spawned_by?: string | null;
-  clock?: { started_at?: number | null } | null;
+  /** Present-but-NULL means there is no clock at all — see toMentionChats. */
+  clock?: ChatClock | null;
 };
 
 /**
@@ -84,24 +105,42 @@ export function toMentionChats(groups: readonly WorkspaceTabs[]): MentionChat[] 
   for (const g of groups) {
     for (const t of g.tabs) rows.set(t.id, t as TabWithLifecycle);
   }
+  const names = new Map<string, string>();
+  for (const g of groups) {
+    for (const t of g.tabs) names.set(t.id, t.name);
+  }
   return toSearchableTabs(groups).map((t) => {
     const row = rows.get(t.tabId);
     const done = row?.done === true;
+    const reason = row?.done_reason ?? undefined;
+    const parentName = row?.spawned_by ? names.get(row.spawned_by) : undefined;
+    // PRESENT-BUT-NULL `clock` means the server is saying there is no clock —
+    // a sub-chat does not decay, it retires when it delivers. That is a
+    // different statement from "the clock is at 0", and the difference has to
+    // survive this adapter: passing `last_activity_at` through here would let
+    // the chip derive a countdown for a chat whose whole point is not having
+    // one, and draw a half-buried tile on a row that appeared a minute ago.
+    const noClock = row !== undefined && row.clock === null;
     return {
       ...t,
       ...(done ? { done: true } : {}),
+      ...(reason ? { doneReason: reason } : {}),
+      ...(parentName ? { parentName } : {}),
       chip: {
         name: t.tabName,
         icon: t.icon ?? null,
         ...(t.pinned ? { pinned: true } : {}),
         ...(done ? { done: true } : {}),
         ...(row?.spawned_by ? { spawned_by: row.spawned_by } : {}),
-        // The server publishes the clock as an object; the chip reads a start
-        // timestamp and derives the phase itself. `last_activity_at` is only the
-        // fallback for a row from a server that predates the column — the
-        // migration deliberately does NOT start every clock from last activity.
-        clock_started_at: row?.clock?.started_at ?? t.lastActivityAt ?? null,
-        ...(t.lastActivityAt != null ? { last_activity_at: t.lastActivityAt } : {}),
+        // The clock is passed through EXACTLY as published. The chip quantises
+        // the fill for the tile and nothing else — lifecycle is the server's.
+        ...(row?.clock ? { clock: row.clock } : {}),
+        // …and the pre-column fallback, which a no-clock row must not get:
+        // "derive a clock from last activity" is precisely what the migration
+        // decision rejected.
+        ...(!noClock && !row?.clock && t.lastActivityAt != null
+          ? { last_activity_at: t.lastActivityAt }
+          : {}),
         ...(t.headline ? { headline: t.headline } : {}),
       },
     };
@@ -559,6 +598,23 @@ export interface MentionRow {
 export const MAX_MENTION_ROWS = 8;
 
 /**
+ * Where a chat sits in the bare-`@` list: 0 = offer it, 1 = push it under.
+ *
+ * DONE IS NOT ONE THING any more. A decayed chat and an archived one both mean
+ * "you are finished with this", and they belong under the live rows. A
+ * DELIVERED sub-chat means the opposite: it just produced something, and it left
+ * the live list for that reason rather than from neglect. Sinking it would make
+ * the amendment's own case unreachable — a sub-chat retires the instant it
+ * reports, and "the thing that just came back" is the likeliest row you want.
+ * So it sorts by recency alongside the live chats, which is where it actually
+ * ranks.
+ */
+function restingRank(c: MentionChat): number {
+  if (!c.done) return 0;
+  return c.doneReason === 'delivered' ? 0 : 1;
+}
+
+/**
  * Rank chats by name/headline/workspace — the instant tier, no network.
  *
  * An EMPTY query is a real query here, unlike the sidebar box: `@` on its own
@@ -576,8 +632,8 @@ export function rankMentions(
   const q = query.trim();
   if (!q) {
     const resting = [...pool].sort((a, b) => {
-      const da = a.done ? 1 : 0;
-      const db = b.done ? 1 : 0;
+      const da = restingRank(a);
+      const db = restingRank(b);
       if (da !== db) return da - db;
       const la = a.lastActivityAt ?? Number.NEGATIVE_INFINITY;
       const lb = b.lastActivityAt ?? Number.NEGATIVE_INFINITY;
