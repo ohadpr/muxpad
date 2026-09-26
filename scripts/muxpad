@@ -1568,24 +1568,23 @@ cmd_claude() {
 printable_base() {
   local base="${MUXPAD_API_URL%/}"
   base="${base/0.0.0.0/127.0.0.1}"
-  # Only substitute a host we can actually name; never invent a scheme or port.
-  local ts_host=""
   if [ -n "${MUXPAD_PUBLIC_BASE_URL:-}" ]; then
     printf '%s' "${MUXPAD_PUBLIC_BASE_URL%/}"; return
   fi
-  local ts_bin=/Applications/Tailscale.app/Contents/MacOS/Tailscale
-  [ -x "$ts_bin" ] || ts_bin="$(command -v tailscale 2>/dev/null || true)"
-  if [ -n "$ts_bin" ] && [ -x "$ts_bin" ]; then
-    ts_host="$("$ts_bin" status --json 2>/dev/null | jq -r '.Self.DNSName // ""' | sed 's/\.$//')"
-  fi
-  if [ -n "$ts_host" ]; then
-    # serve on 443 means the bare hostname works; otherwise keep our port.
-    # `serve status` prints the origin with NO trailing slash, and the bare
-    # hostname only works when something is served on 443.
-    if "$ts_bin" serve status 2>/dev/null | grep -qE "^https://$ts_host( |\$)"; then
-      printf 'https://%s' "$ts_host"; return
-    fi
-  fi
+  # Ask the SERVER for a hostname it already knows, rather than executing the
+  # Tailscale binary inside /Applications/Tailscale.app. Reaching into another
+  # app's bundle is what makes macOS put up "node would like to access data
+  # from other apps" — once per invocation, on the machine running muxpad.
+  #
+  # The candidate list is published for the PUBLISH base (artifacts, on :8443),
+  # so its port is wrong for the cockpit; only the HOST is borrowed. The bare
+  # hostname reaches the cockpit because muxpad's tailnet serve puts :443 there
+  # (tailnet-only — an unauthenticated cockpit is never on a public funnel).
+  local host
+  host="$(curl -sS --max-time 2 "${MUXPAD_API_URL%/}/api/publish/base" 2>/dev/null \
+    | jq -r '[.candidates[]?.url] | map(select(test("\\.ts\\.net"))) | .[0] // ""' \
+    | sed -E 's#^https?://##; s#[:/].*$##')"
+  if [ -n "$host" ]; then printf 'https://%s' "$host"; return; fi
   printf '%s' "$base"
 }
 
