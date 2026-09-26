@@ -642,9 +642,9 @@ const MIGRATIONS: Migration[] = [
     `,
     apply: (db) => {
       const boot = Date.now();
-      const ids = db
-        .prepare('SELECT id FROM tabs WHERE clock_started_at IS NULL')
-        .all() as Array<{ id: string }>;
+      const ids = db.prepare('SELECT id FROM tabs WHERE clock_started_at IS NULL').all() as Array<{
+        id: string;
+      }>;
       const update = db.prepare('UPDATE tabs SET clock_started_at = ? WHERE id = ?');
       for (const { id } of ids) update.run(staggeredClockStart(id, boot), id);
     },

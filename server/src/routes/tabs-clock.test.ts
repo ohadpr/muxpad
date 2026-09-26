@@ -34,8 +34,28 @@ describe('the chat clock on the wire', () => {
     return (await (await test.app.request(`/api/tabs?workspaceId=${wsId}`)).json()) as Tab[];
   }
 
+  /**
+   * A CHAT: the row, plus the agent pane that makes it one.
+   *
+   * The pane is not decoration. A clock's only exit is a message, so a tab
+   * with nothing to send a message to publishes no clock at all (F2,
+   * `hasDecayClock`) — creating the row alone would be creating a terminal and
+   * then asserting it behaves like a conversation. Inserted directly rather
+   * than through `bootstrap: 'agent'` so the test does not need a ptyd.
+   */
   async function newTab(name: string, extra: Record<string, unknown> = {}): Promise<Tab> {
-    return (await (await post('/api/tabs', { name, workspace_id: wsId, ...extra })).json()) as Tab;
+    const tab = (await (
+      await post('/api/tabs', { name, workspace_id: wsId, ...extra })
+    ).json()) as Tab;
+    new PaneStore(db).create({ tab_id: tab.id, startup_cmd: 'muxpad agent', face: 'chat' });
+    return tab;
+  }
+
+  /** A tab with no agent in it — a plain shell, and nothing to message. */
+  async function newTerminalTab(name: string): Promise<Tab> {
+    const tab = (await (await post('/api/tabs', { name, workspace_id: wsId })).json()) as Tab;
+    new PaneStore(db).create({ tab_id: tab.id, shell: '/bin/zsh', cwd: '/tmp' });
+    return tab;
   }
 
   beforeEach(async () => {
@@ -95,6 +115,18 @@ describe('the chat clock on the wire', () => {
     // It is still THERE. Nothing is ever deleted — `done` is where it renders,
     // not whether it exists.
     expect(row.name).toBe('gone');
+  });
+
+  it('a terminal tab publishes no clock and never goes done', async () => {
+    // F2, on the wire, where it bites: the clock's only exit is a message and
+    // a terminal has no inbox, so decaying one does not rest it, it loses it.
+    // The client has no unarchive button, `noteUserMessage` has one production
+    // caller and it is the agent send path, and pinning is the only way back.
+    const t = await newTerminalTab('Trayobot');
+    tabs.resetClock(t.id, Date.now() - 40 * DAY_MS);
+    const row = (await listTabs()).find((r) => r.id === t.id) as Tab;
+    expect(row.done).toBe(false);
+    expect(row.clock).toBeNull();
   });
 
   it('a pinned chat publishes a stopped clock and is never done', async () => {
