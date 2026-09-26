@@ -255,7 +255,10 @@ describe('the chat clock on the wire', () => {
       expect(((await res.json()) as { error: { code: string } }).error.code).toBe('pinned');
 
       // And nothing was stored, so there is no delayed detonation on unpin.
-      expect(tabs.getById(t.id)?.retired_at ?? null).toBeNull();
+      // Read the raw column: `retired_at` is deliberately not on the wire
+      // (`done`/`done_reason` are what the client is told), so the only place
+      // a stored-but-invisible retirement would show up is the table itself.
+      expect(tabs.clockRow(t.id)?.retired_at).toBeNull();
       await test.app.request(`/api/tabs/${t.id}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },

@@ -22,7 +22,7 @@ import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { pruneDeadPanes } from '../store/migrations.js';
 import { type TabActivity, compareUnpinnedTabs } from '../tab-activity.js';
-import { type ClockIndex, clockIndex, reviveChat, tabLifecycle } from '../tab-clock.js';
+import { type ClockSnapshot, clockSnapshot, reviveChat, tabLifecycle } from '../tab-clock.js';
 import { retireChat } from '../tab-retire.js';
 
 /**
@@ -147,7 +147,7 @@ export function tabsRoutes(deps: {
    * per-workspace list and the cross-workspace `?all=1` read so the search
    * results and the tree can never disagree about which tab comes first.
    */
-  function orderedForWorkspace(workspaceId: string, sharedClocks?: ClockIndex): Tab[] {
+  function orderedForWorkspace(workspaceId: string, shared?: ClockSnapshot): Tab[] {
     const raw = tabs.listByWorkspace(workspaceId);
     // Fold in the two independent per-tab signals:
     //   attention (red dot, "wants you NOW") = any pane rang BEL since you
@@ -169,7 +169,7 @@ export function tabsRoutes(deps: {
     // rows the workspace-scoped read above may not contain.
     // (`/all` builds it once and passes it down — the index is global, so
     //  rebuilding it per workspace there would be the same scan N times.)
-    const clocks = sharedClocks ?? clockIndex(deps.db);
+    const clocks = shared ?? clockSnapshot(deps.db);
     const decorated = raw.map((t) =>
       decorateTab(deps.cache, deps.db, t, manualUnreadIds, cronIds, clocks),
     );
@@ -197,7 +197,7 @@ export function tabsRoutes(deps: {
    * navigates to), and `Tab` carries neither.
    */
   app.get('/all', (c) => {
-    const clocks = clockIndex(deps.db);
+    const clocks = clockSnapshot(deps.db);
     const list = workspaces.list().map((w) => ({
       id: w.id,
       slug: w.slug,

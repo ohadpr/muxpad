@@ -15,6 +15,7 @@ import {
   resetChatClock,
   resolveTabClock,
   reviveChat,
+  tabLifecycle,
 } from './tab-clock.js';
 
 describe('tab-clock', () => {
@@ -423,6 +424,93 @@ describe('tab-clock', () => {
       sweeper.tick(t0);
       expect(() => sweeper.tick(t0 + CHAT_DECAY_MS)).not.toThrow();
       expect(seen).toHaveLength(1);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // THE SEAM. `resolveTabClock` answers from a whole-table index; `tabLifecycle`
+  // answers from at most two row reads, because building the index for a single
+  // decoration more than doubled the cost of the hottest path in the app
+  // (`tab.updated` on every rename, turn and activity bump, plus
+  // GET /api/tabs/:id). That optimisation created a second way to compute one
+  // value — muxpad's failure mode #1 — and nothing was watching it. Mutation
+  // M11 (`const parent = null`, so the single-row path stops asking whether the
+  // parent exists) left the entire suite green while publishing a sub-chat as a
+  // root with a clock through one path and as `clock: null` through the other.
+  // ────────────────────────────────────────────────────────────────────────
+  describe('the single-row read and the list read cannot disagree', () => {
+    /** Every shape a row can be, in one database. */
+    function everyShape(): string[] {
+      const root = chat('root', 1);
+      const old = chat('old', 9);
+      const parent = chat('parent', 2);
+      const child = chat('child', 3, parent);
+      const grandchild = chat('grandchild', 4, child);
+      const delivered = chat('delivered', 0, parent);
+      tabs.retire(delivered, 'delivered');
+      const archived = chat('archived', 0);
+      tabs.retire(archived, 'archived');
+      const pinnedRoot = chat('pinnedRoot', 9);
+      tabs.setPinned(pinnedRoot, true);
+      const pinnedChild = chat('pinnedChild', 0, parent);
+      tabs.setPinned(pinnedChild, true);
+      const term = terminal('terminal', 9);
+      const empty = tabs.create({ name: 'empty', layout: '', workspace_id: workspaceId }).id;
+      // A worker whose parent lives in ANOTHER workspace — the orchestrator
+      // pattern, and the reason the index is global rather than per-workspace.
+      const far = new WorkspaceStore(db).create({ name: 'Far' }).id;
+      const farChild = tabs.create({
+        name: 'farChild',
+        layout: '',
+        workspace_id: far,
+        spawned_by: parent,
+      }).id;
+      panes.create({ tab_id: farChild, startup_cmd: 'muxpad agent', face: 'chat' });
+      // An orphan: spawned_by pointing at a row that is gone.
+      const orphan = chat('orphan', 0, root);
+      tabs.delete(root);
+      return [
+        old,
+        parent,
+        child,
+        grandchild,
+        delivered,
+        archived,
+        pinnedRoot,
+        pinnedChild,
+        term,
+        empty,
+        farChild,
+        orphan,
+      ];
+    }
+
+    it('agrees on every shape of row', () => {
+      const ids = everyShape();
+      // ONE `now` for both, or the comparison measures the clock instead of
+      // the code: `fill` is continuous in `now`.
+      const now = Date.now();
+      const index = clockIndex(db);
+      for (const id of ids) {
+        expect(tabLifecycle(db, id, now), id).toEqual(resolveTabClock(index, id, now));
+      }
+    });
+
+    it('agrees that a row which is not there is not there', () => {
+      const now = Date.now();
+      expect(tabLifecycle(db, 'ghost', now)).toEqual(resolveTabClock(clockIndex(db), 'ghost', now));
+    });
+
+    it('covers a sub-chat, a root and a clock-less tab — the answers are not all alike', () => {
+      // Anti-vacuity. The agreement above is only worth something if the three
+      // published shapes are actually distinct in this fixture.
+      const ids = everyShape();
+      const now = Date.now();
+      const shapes = ids.map((id) => {
+        const r = tabLifecycle(db, id, now);
+        return `${r.done}/${r.clock === null ? 'null' : 'clock'}/${r.done_reason ?? '-'}`;
+      });
+      expect(new Set(shapes).size).toBeGreaterThan(2);
     });
   });
 

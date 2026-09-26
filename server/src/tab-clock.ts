@@ -54,6 +54,28 @@ export function clockIndex(db: Database.Database): ClockIndex {
   return new Map(rows.map((r) => [r.id, r]));
 }
 
+/**
+ * ONE coherent read of the lifecycle: every row's inputs, and the instant they
+ * are all resolved AT.
+ *
+ * The two travel together because separating them is a bug with no symptom
+ * until it has one. `fill` is continuous in `now` and `done` is a threshold on
+ * it, so a list that re-read the clock per row could publish two rows that
+ * straddle the same instant — one live, the next done, in a single payload
+ * that is supposed to be one picture of the sidebar. Reading the index once
+ * per list was always the plan (it is the expensive half); reading the CLOCK
+ * once per list is the same idea applied to the cheap half, and it is what
+ * makes a response a snapshot rather than a sequence of samples.
+ */
+export interface ClockSnapshot {
+  index: ClockIndex;
+  now: number;
+}
+
+export function clockSnapshot(db: Database.Database, now: number = Date.now()): ClockSnapshot {
+  return { index: clockIndex(db), now };
+}
+
 /** What the row publishes: whether this chat is out of the live list, and why. */
 export interface TabLifecycle {
   done: boolean;
