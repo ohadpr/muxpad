@@ -226,22 +226,49 @@ describe('tab-clock', () => {
   });
 
   describe('ChatClockSweeper', () => {
-    it('says nothing on the first pass, then announces each crossing once', () => {
+    it('announces nothing on the first pass, then each crossing exactly once', () => {
       const id = chat('a', 0);
       // Already done before the sweeper ever runs — a server restart four days
-      // into a quiet chat. The priming pass must swallow it.
+      // into a quiet chat. It must not be ANNOUNCED: it was already done in
+      // every client's first fetch.
       chat('long-gone', 9);
-      const seen: string[] = [];
-      const sweeper = new ChatClockSweeper(db, (t) => seen.push(t));
+      const announced: string[] = [];
+      const sweeper = new ChatClockSweeper(db, (t, o) => {
+        if (o.announce) announced.push(t);
+      });
       const t0 = Date.now();
 
       expect(sweeper.tick(t0)).toEqual([]);
       expect(sweeper.tick(t0 + DAY_MS)).toEqual([]);
-      expect(seen).toEqual([]);
+      expect(announced).toEqual([]);
 
       expect(sweeper.tick(t0 + CHAT_DECAY_MS)).toEqual([id]);
       expect(sweeper.tick(t0 + CHAT_DECAY_MS + 60_000)).toEqual([]);
-      expect(seen).toEqual([id]);
+      expect(announced).toEqual([id]);
+    });
+
+    it('still RECONCILES on the priming pass, it just does not announce', () => {
+      // A chat that decayed while the server was down crossed just as truly as
+      // one that crossed a minute ago — and its READY mark is just as stale,
+      // with nobody ever going to open the tab that would clear it. The
+      // handler runs; the event does not.
+      const gone = chat('long-gone', 9);
+      const seen: Array<{ id: string; announce: boolean }> = [];
+      const sweeper = new ChatClockSweeper(db, (id, o) => seen.push({ id, announce: o.announce }));
+      expect(sweeper.tick(Date.now())).toEqual([]); // nothing CROSSED, from a client's view
+      expect(seen).toEqual([{ id: gone, announce: false }]);
+    });
+
+    it('announces with announce=true once it is running', () => {
+      const id = chat('a', 0);
+      const seen: Array<{ id: string; announce: boolean }> = [];
+      const sweeper = new ChatClockSweeper(db, (t, o) =>
+        seen.push({ id: t, announce: o.announce }),
+      );
+      const t0 = Date.now();
+      sweeper.tick(t0);
+      sweeper.tick(t0 + CHAT_DECAY_MS);
+      expect(seen).toEqual([{ id, announce: true }]);
     });
 
     it('re-arms after a revival', () => {
