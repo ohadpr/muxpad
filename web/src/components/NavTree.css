@@ -1983,6 +1983,72 @@ body.sidenav-resizing iframe {
   content: none;
 }
 
+/* ─── The done group on the sheet ─────────────────────────────────────────
+   It was switched off here, and that was the costly half of the flattening:
+   decay and retirement both file a chat into this drawer, so with no drawer on
+   the phone nothing ever left the list. Every finished agent and every expired
+   chat stayed live on the one device this list is read on.
+
+   The header component is shared and already unscoped; these two rules only
+   move it onto the sheet's leading edge, so its caret lines up with the emoji
+   column instead of the desktop rail's narrower one. */
+.navtree[data-variant="sheet"] .navtree-done-head,
+.navtree[data-variant="sheet"] .navtree-done-parent {
+  padding-inline-start: var(--nt-rail-lead);
+}
+/* A done chat is quieter, same as desktop. The shared rule cannot reach these
+   rows: it is a SIBLING selector, and on this surface every row is wrapped in
+   its own swipe shell — so the rows are not siblings of the header, the shells
+   are. Matching the shell is the whole fix. */
+.navtree[data-variant="sheet"] .navtree-done-head ~ .swiperow .navtree-name-text,
+.navtree[data-variant="sheet"]
+  .navtree-done-head
+  ~ .swiperow
+  .navtree-tab-row:not([data-active="true"])
+  .navtree-name-text {
+  color: var(--fg-dim);
+}
+
+/* ─── A CHILD row on the sheet ────────────────────────────────────────────
+   The same nesting the desktop rail has, at this surface's scale.
+
+   It had none: the sheet dropped the grouping before it reached the DOM, so a
+   sub-chat arrived as a top-level line sorted by recency and sat ABOVE the
+   chat that spawned it. Both halves are now here — the grouping in NavTree.tsx
+   and this.
+
+   One step, and it is --nt-rail-lead's own step rather than --nt-indent: the
+   sheet's leading edge is 14px, so a child's emoji box starts one gap-plus-dot
+   in from it and its NAME lands on one x with every other child's. The mark
+   itself is the dot in that box (ChatChip, shape="dot"), which is what makes
+   this read as nesting rather than as a line pushed right. */
+.navtree[data-variant="sheet"] .navtree-tab-row[data-child="true"] {
+  padding-inline-start: calc(var(--nt-rail-lead) + var(--nt-rail-emoji));
+}
+/* The dot stands in the emoji's box, so it has to BE that box — otherwise the
+   flex line closes up around a 6px mark and the name jumps left by 14px on
+   every child row, which is the column this whole rule exists to hold. */
+.navtree[data-variant="sheet"] .navtree-rail-dot {
+  flex: 0 0 var(--nt-rail-emoji);
+  inline-size: var(--nt-rail-emoji);
+  block-size: var(--nt-rail-emoji);
+}
+/* One step quieter in the type, same as the desktop child — a child is
+   subordinate, and saying it in the type means not spending a second mark on
+   it. The active rule carries the variant prefix for the same specificity
+   reason the desktop one does: without it a selected child keeps --fg-dim on
+   the accent fill, which is grey ink on violet. */
+.navtree[data-variant="sheet"] .navtree-tab-row[data-child="true"] .navtree-name-text {
+  font-weight: 400;
+  font-size: 14px;
+  color: var(--fg-dim);
+}
+.navtree[data-variant="sheet"]
+  .navtree-tab-row[data-child="true"][data-active="true"]
+  .navtree-name-text {
+  color: var(--accent-fg);
+}
+
 /* ─── The name, and THE BIDI FIX ──────────────────────────────────────────
    `dir="auto"` is KEPT on the name (NavTree.tsx). It is the only thing that
    gets two separate things right: the glyph ORDER inside a Hebrew name, and

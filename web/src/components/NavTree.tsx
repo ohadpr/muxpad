@@ -1218,14 +1218,24 @@ export function TabList({
   // what is a child, what has decayed out of the live list, and where the pin
   // seam falls once the decayed rows are gone.
   //
-  // SHEET: not grouped. The mobile rail is one flat line per chat by design,
-  // and neither the nesting nor the done group has been designed for it; it
-  // keeps the whole list exactly as before.
+  // BOTH VARIANTS GROUP. The sheet used to map every chat to `{children: []}`
+  // and drop `done` entirely, on the reasoning that "the mobile rail is one
+  // flat line per chat by design". The consequence, reported from the phone:
+  // a spawned sub-chat came out as a TOP-LEVEL row sorted by recency, which
+  // put it ABOVE its own parent with a full tile and no mark — and every
+  // retired agent and every decayed chat stayed in the live list forever,
+  // because the one surface that files them away was switched off on the one
+  // device this user actually reads the list on.
+  //
+  // The hierarchy is not a desktop ornament; it is what keeps the list short.
+  // A flat line per chat is a statement about the ROW's density — no headline,
+  // no pane count, no tint — and it survives intact: a child is still one
+  // line, it just knows whose line it is under.
   const grouped = groupChats(tabs);
-  const liveGroups = sheet ? tabs.map((chat) => ({ chat, children: [] as Tab[] })) : grouped.live;
-  const doneGroups = sheet ? [] : grouped.done;
+  const liveGroups = grouped.live;
+  const doneGroups = grouped.done;
   const doneCount = doneChatCount(doneGroups);
-  const pinnedCount = sheet ? tabs.filter((t) => t.pinned).length : grouped.livePinned;
+  const pinnedCount = grouped.livePinned;
   // COLLAPSED by default. A chat crossing into done should be something you
   // notice leaving the live list, not something that re-opens a drawer of
   // fourteen finished chats under it.
@@ -2230,7 +2240,13 @@ function TabRow({
       : { label: 'Mark as unread', onSelect: () => onSetUnread(true) },
     { label: 'Change icon…', onSelect: () => setPicker({ x: at.x, y: at.y }) },
     { label: 'Rename', onSelect: () => setEditing({ kind: 'tab', id: tab.id }) },
-    { label: 'New pane', onSelect: () => onAddPane() },
+    // "New pane" only for a tab that takes panes (terminals, web views, an
+    // empty tab). A chat's second pane was never a second chat — no parent, no
+    // clock, no card — and on touch this menu is the only route to it, so
+    // leaving it here would leave the whole affordance alive on mobile.
+    // `takes_panes` is the SERVER's answer (decorateTab), because this row does
+    // not know its own panes; absent — an older server — reads as "show it".
+    ...(tab.takes_panes === false ? [] : [{ label: 'New pane', onSelect: () => onAddPane() }]),
     // "Move to workspace ▸" with the workspaces in a hover flyout, so the main
     // menu stays short. Omitted entirely when there's nowhere to move to.
     // (Dragging the tab onto a workspace row also works, on desktop.)
@@ -2332,6 +2348,26 @@ function TabRow({
       }}
     />
   );
+  /**
+   * The SHEET's leading cell.
+   *
+   * A top-level chat keeps its bare emoji — the plate is deleted on this
+   * surface deliberately (NavTree.css), and none of that changes. A CHILD gets
+   * the same 6px dot the desktop child row gets, from the same component, so
+   * the two surfaces cannot drift on what "still working" and "delivered" look
+   * like.
+   *
+   * The dot sits in the emoji's own fixed box, and that is the load-bearing
+   * part: it is why every child name on the sheet lands on the same x as every
+   * other child name instead of at an indent chosen per row. The dot is the
+   * "soft signifier" a nested row needs — without it a child is a word floating
+   * under its parent, which is exactly how it read when the sheet was flat.
+   */
+  const sheetLeadCell = parent ? (
+    <ChatChip density="row" chat={tab} shape="dot" className="navtree-rail-dot" title={tab.name} />
+  ) : (
+    iconCell
+  );
   /** Name · headline · where the clock stands. The one-line row's whole
    *  second line, moved to where it costs nothing until you ask for it.
    *  Read off the tab's OWN row: the server already publishes a child's
@@ -2422,6 +2458,11 @@ function TabRow({
     <div
       className="navtree-tab-row"
       data-active={isActiveTab ? 'true' : undefined}
+      // The sheet's half of the nesting. It was missing here while the desktop
+      // row had it, so even once the grouping reached this surface a child
+      // would have rendered as an ordinary line — indistinguishable from the
+      // chat that spawned it, sitting directly beneath it.
+      data-child={parent ? 'true' : undefined}
       // No `data-state` here, and that is the design rather than an omission:
       // the left bar and the row tint in StateChip.css are keyed off it, and
       // the mobile rail has neither. Its state is one bit, drawn by the
@@ -2429,7 +2470,7 @@ function TabRow({
       data-unread={tab.unread ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
     >
-      {iconCell}
+      {sheetLeadCell}
       {isEditing ? (
         renameInput
       ) : (
