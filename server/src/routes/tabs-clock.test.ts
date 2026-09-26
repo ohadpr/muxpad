@@ -236,6 +236,34 @@ describe('the chat clock on the wire', () => {
       );
     });
 
+    it('REFUSES a pinned chat instead of accepting a click that does nothing', async () => {
+      // F6. Pinning is the universal override, so a pinned chat is never
+      // `done` however it got there — that rule is untouched. What was wrong
+      // was this route answering 204 to a press of × that moved nothing on
+      // screen and explained nothing, which reads as a broken button. Worse,
+      // it WROTE the retirement: unpin a month later and the chat dropped
+      // into `done` on the strength of a click nobody remembers.
+      const t = await newTab('kept');
+      await test.app.request(`/api/tabs/${t.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ pinned: true }),
+      });
+
+      const res = await test.app.request(`/api/tabs/${t.id}/archive`, { method: 'POST' });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('pinned');
+
+      // And nothing was stored, so there is no delayed detonation on unpin.
+      expect(tabs.getById(t.id)?.retired_at ?? null).toBeNull();
+      await test.app.request(`/api/tabs/${t.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ pinned: false }),
+      });
+      expect(((await listTabs()).find((r) => r.id === t.id) as Tab).done).toBe(false);
+    });
+
     it('archives a sub-chat by hand without calling it delivered', async () => {
       const parent = await newTab('parent');
       const child = await newTab('child', { spawned_by: parent.id });

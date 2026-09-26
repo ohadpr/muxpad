@@ -304,11 +304,37 @@ export function tabsRoutes(deps: {
    * Idempotent: archiving an archived chat keeps the original stamp (204
    * either way). Destructive delete is still DELETE /api/tabs/:id, where it
    * belongs — behind a menu, not a one-click ×.
+   *
+   * ── A PINNED CHAT IS REFUSED, NOT QUIETLY ACCEPTED ─────────────────────────
+   * Pinning is the universal override: a pinned chat is never `done`, however
+   * it got there (tab-clock.ts, and `tab-clock.test.ts` "a pinned chat is
+   * never done, even archived"). That rule is right and is NOT what changes
+   * here. What changed is this route, which used to write the retirement and
+   * answer 204 anyway — so the × on a pinned row moved nothing on screen and
+   * said nothing about why, which reads as a broken button rather than a
+   * refused one. Worse, the write persisted: unpin a month later and the chat
+   * vanished into `done` on the strength of a click nobody remembers.
+   *
+   * 409 instead, with no write. The state is unreachable rather than stored
+   * and deferred, and the client has something specific to render — see F6.
+   * Auto-unpinning was the other option and is worse: it would let an
+   * implicit gesture overturn an explicit one, which is the single thing
+   * pinning is for.
    */
   app.post('/:id/archive', (c) => {
     const id = c.req.param('id');
-    if (!tabs.getById(id))
-      return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
+    const tab = tabs.getById(id);
+    if (!tab) return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
+    if (tab.pinned)
+      return c.json(
+        {
+          error: {
+            code: 'pinned',
+            message: 'a pinned chat cannot be archived — unpin it first',
+          },
+        },
+        409,
+      );
     retireChat({ db: deps.db, cache: deps.cache, events: deps.events }, id, 'archived');
     return c.body(null, 204);
   });
