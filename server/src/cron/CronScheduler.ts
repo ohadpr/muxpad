@@ -580,6 +580,27 @@ export class CronScheduler {
       this.noteTabKept(pending.cronId, pending.tabId, 'the run produced an artifact');
       return;
     }
+    // A turn that ends with live background subagents has NOT delivered — the
+    // work it spawned is still out there and its results arrive after this
+    // moment. `tab-retire.ts` holds a sub-chat open for exactly this and says
+    // the two keep-lists must not drift; it grew this condition and cron did
+    // not, which is the drift that header warns about.
+    //
+    // It matters MORE here than there. Retirement loses a row from the live
+    // list and the work keeps running. This path calls `deleteTabCascade`,
+    // which kills the pane, which kills the runner, which kills the subagents
+    // with it — so the drift did not cost a row, it cost the work. Reachable
+    // today: `muxpad cron new --new-tab` defaults `close_when_done` to true,
+    // so any scheduled job that launches a background Task and then ends its
+    // turn was deleting itself mid-flight.
+    //
+    // The DURABLE server-owned roster, same source the retirer reads — a
+    // background subagent parked in one long tool call emits nothing for
+    // minutes, so a pty heuristic would call it finished.
+    if (this.deps.cache.getSubagentCount(paneId) > 0) {
+      this.noteTabKept(pending.cronId, pending.tabId, 'background agents are still running');
+      return;
+    }
     // The pane may have more of OUR queued messages (catchup=all) — closing
     // now would drop them. Let the last one close it.
     if (this.queue.count(paneId) > 0) {

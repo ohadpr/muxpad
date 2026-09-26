@@ -549,6 +549,32 @@ describe('CronScheduler', () => {
     s.stop();
   });
 
+  // The keep-lists must not drift. `tab-retire.ts` grew this condition and
+  // cron did not, and cron is the one that DELETES: deleteTabCascade kills the
+  // pane, the runner and the background agents with it. A scheduled job that
+  // launches a background Task and ends its turn was deleting itself mid-run.
+  it('close_when_done KEEPS the tab while background agents are still running', async () => {
+    const s = scheduler({});
+    s.start();
+    const cron = makeCron(s, {
+      target_kind: 'new-tab',
+      target_pane: null,
+      workspace_id: wsId,
+      close_when_done: true,
+    });
+    runAt(cron);
+    await s.tick();
+    const tabId = s.store.runs(cron.id)[0]?.target_tab as string;
+    const pid = sent[0]?.paneId as string;
+    // The DURABLE roster, the same source tab-retire.ts reads.
+    cache.setSubagentCount(pid, 1);
+    events.emit({ type: 'agent_turn', pane_id: pid, phase: 'done', sid: null, backend: 'x' });
+    await new Promise((r) => setImmediate(r));
+    expect(new TabStore(db).getById(tabId)).not.toBeNull();
+    expect(s.store.runs(cron.id).some((r) => r.outcome === 'kept')).toBe(true);
+    s.stop();
+  });
+
   it('close_when_done KEEPS the tab when the turn ended fatally', async () => {
     const s = scheduler();
     s.start();
