@@ -126,7 +126,26 @@
    exactly this), and it must not break across lines mid-name. */
 .chat-mention-pill {
   display: inline-flex;
-  align-items: center;
+  /* ─── THE PILL HANGS OFF ITS OWN TEXT, NOT OFF THE TILE ──────────────────
+     `baseline`, and this is the one declaration that decides whether a mention
+     sits on a line of prose or floats near it.
+
+     It was `center`. With `center` no flex item takes part in baseline
+     alignment, so the engine synthesises the pill's baseline from its FIRST
+     item — the tile — whose own baseline is that of the 10px emoji inside it.
+     The pill was therefore hung on a text line by a glyph in a box, which is why
+     it was wrong by an amount that did not move with the text: measured in
+     Chromium, the tile's bottom edge sat 4.00px below the prose baseline at
+     15.5px text AND at 17.8px, while the cap band it wants to be centred on grew
+     from 10.91px to 12.53px. One size looked tuned; every other size drifted.
+
+     With `baseline` the tile opts out (align-self below) and the NAME — real
+     text, same family as the prose around it, one shared baseline — is what the
+     pill aligns by. Measured after: the tile's centre lands 0.23px off the cap
+     band's centre at 15.5px and 0.66px at 17.8px, with no length anywhere in the
+     chain, and the same under RTL. (ChatChip.css used to carry a `-3px` nudge for
+     this; it never had any effect at all — see the note there.) */
+  align-items: baseline;
   gap: 4px;
   vertical-align: baseline;
   background: color-mix(in srgb, var(--chat-fg) 9%, transparent);
@@ -140,6 +159,15 @@
   cursor: pointer;
   color: inherit;
   font-family: inherit;
+}
+/* The tile is centred ACROSS the pill's line rather than sat on its baseline.
+   Both halves matter: without this the tile would be baseline-aligned too — its
+   bottom edge on the text baseline, hanging the whole 16px above the line — and
+   the pill would go back to taking its baseline from the tile, which is the bug
+   above. Centring across a line box whose height is the TEXT's is what makes the
+   whole arrangement scale with the font size. */
+.chat-mention-pill > .chatchip {
+  align-self: center;
 }
 .chat-mention-pill:hover {
   border-color: var(--chat-accent);

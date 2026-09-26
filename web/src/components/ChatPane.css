@@ -1060,15 +1060,13 @@
   border: 2px solid transparent;
   background-clip: content-box;
 }
-.chat-input::placeholder {
-  /* Muted toward the bar background so it reads as a quiet hint, not a
-     saturated accent-colored label. */
-  color: color-mix(in srgb, var(--chat-faint) 70%, var(--chat-elev));
-  opacity: 1;
-}
-.chat-input:disabled {
-  opacity: 0.7;
-}
+/* `::placeholder` and `:disabled` used to be here. Both belong to a form
+   control, and the composer is a contenteditable now (see ChatDraft.tsx) — so
+   neither selector can match anything, and a rule that cannot match is a rule
+   that defends nothing while looking like it does. The placeholder moved to
+   `.chat-draft.is-empty::before` in ChatDraft.css, muted to the same colour;
+   `:disabled` was already dead, because nothing has ever passed `disabled` to
+   this field. */
 
 .chat-send {
   flex: 0 0 auto;

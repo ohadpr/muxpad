@@ -108,6 +108,7 @@ import {
 import type { AgentLink } from '../lib/voice/session';
 import { useVoice } from '../lib/voice/use-voice';
 import { AgentBackendLogo, backendFromAssistant } from './AgentLogos';
+import { ChatDraft, type ChatDraftHandle } from './ChatDraft';
 import { ChatMentionCard, ChatMentionPicker, ChatMentionPill } from './ChatMentionPicker';
 import { CopyablePre } from './CopyablePre';
 import { SvgAgentGlyph, SvgGlobe, SvgTerminalGlyph } from './PaneWebSwitch';
@@ -1722,7 +1723,12 @@ export function ChatPane({
   // and the voice layer reads a copy. Note this is emphatically NOT a place to
   // render from — see the ServerMsg comment on `speak`.
   const frameTaps = useRef(new Set<(raw: unknown) => void>());
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  // The composer is a `ChatDraft` — a contenteditable that draws picked mentions
+  // as chips while you type (see ChatDraft.tsx and lib/chat-draft.ts). It is not
+  // a form control, so `value`/`selectionStart`/`setSelectionRange` come through
+  // this handle instead. The draft ITSELF is unchanged: still the `input` string
+  // below, still what every offset in the `@` grammar counts into.
+  const inputRef = useRef<ChatDraftHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Composer draft, persisted per pane: switching sidebar tabs unmounts the
   // whole pane tree, so plain state would wipe half-typed messages. Restored
@@ -2026,15 +2032,17 @@ export function ChatPane({
     // mentions actually in the composer rather than growing per pick.
     setPicks((cur) => [...repinPicks(next.text, cur), next.pick]);
     closeMentions();
-    // After React has committed the new value: setting `value` without touching
-    // the selection parks the caret at the END, which after picking a mention
-    // mid-sentence is wrong by however much was already written.
+    // After React has committed the new value: a draft replaced from outside
+    // parks the caret at the END, which after picking a mention mid-sentence is
+    // wrong by however much was already written.
+    //
+    // The offset is an offset into the STRING, and the composer maps it onto a
+    // DOM position — which now has to skip a chip rather than count ten
+    // characters of `@Investing`. That is `caretRange`'s job, and the reason the
+    // caret restore did not have to change shape when the field did.
     requestAnimationFrame(() => {
       mentionJustPicked.current = false;
-      const el = inputRef.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(next.caret, next.caret);
+      inputRef.current?.setCaret(next.caret);
     });
   };
 
@@ -2973,7 +2981,7 @@ export function ChatPane({
     [],
   );
 
-  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+  const onPaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
     const data = e.clipboardData;
     if (!data) return;
     const { imageOnly, imageItems } = splitClipboard(data);
@@ -3052,11 +3060,17 @@ export function ChatPane({
   });
 
   // Auto-grow the composer like ChatGPT: reset to content height, capped by CSS
-  // max-height (the textarea keeps scrolling past that). `input` is the trigger
+  // max-height (the box keeps scrolling past that). `input` is the trigger
   // (we measure the DOM, not read it), so keep it in the dep list.
+  //
+  // Measuring works the same on the contenteditable the composer now is — one
+  // box, one scrollHeight — with one difference that matters: a chip is TALLER
+  // than the text beside it, so a draft can outgrow one line without any newline
+  // in it. Which is the same reason this reads the DOM rather than counting the
+  // string, and was already true of a wrapped line.
   // biome-ignore lint/correctness/useExhaustiveDependencies: input is the resize trigger
   useEffect(() => {
-    const el = inputRef.current;
+    const el = inputRef.current?.el();
     if (!el) return;
     el.style.height = 'auto';
     const max = Number.parseFloat(getComputedStyle(el).maxHeight) || Number.POSITIVE_INFINITY;
@@ -3114,12 +3128,15 @@ export function ChatPane({
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
       if (openTool || openImage) return;
-      const input = inputRef.current;
+      const input = inputRef.current?.el();
       if (!input || document.activeElement === input) return;
       const ae = document.activeElement as HTMLElement | null;
+      // `isContentEditable` covers the composer itself now as well as any other
+      // editable on the page — which is why the identity check above comes
+      // first: without it this would decline to focus the very field it is for.
       if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable))
         return;
-      input.focus(); // the character then lands in the now-focused textarea
+      input.focus(); // the character then lands in the now-focused composer
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -4862,30 +4879,33 @@ export function ChatPane({
                     onStop={() => voice.stop('user')}
                   />
                 ) : null}
-                <textarea
+                <ChatDraft
                   ref={inputRef}
                   className="chat-input"
                   value={input}
+                  // The SAME corpus the log resolves a sent message against, so
+                  // the draft and the message cannot disagree about which `@Name`
+                  // is a chip — see draftNodes.
+                  corpus={corpus}
                   // The combobox arrangement the sidebar's search box uses: the
                   // FIELD keeps focus and points at the active row, so composing
                   // is never interrupted by a list taking the caret. Stated only
                   // while the picker is up — an `aria-activedescendant` pointing
                   // at an id that is not in the document announces nothing.
-                  {...(mentionOpen
-                    ? {
-                        role: 'combobox',
-                        'aria-expanded': true,
-                        'aria-autocomplete': 'list' as const,
-                        'aria-controls': mentionListId,
-                        'aria-activedescendant': `${mentionListId}-${mentionSafeCursor}`,
-                      }
-                    : {})}
-                  onChange={(e) => {
-                    setInput(e.target.value);
-                    syncMentionRun(
-                      e.target.value,
-                      e.target.selectionStart ?? e.target.value.length,
-                    );
+                  aria={
+                    mentionOpen
+                      ? {
+                          role: 'combobox',
+                          'aria-expanded': true,
+                          'aria-autocomplete': 'list',
+                          'aria-controls': mentionListId,
+                          'aria-activedescendant': `${mentionListId}-${mentionSafeCursor}`,
+                        }
+                      : undefined
+                  }
+                  onChange={(text, caret) => {
+                    setInput(text);
+                    syncMentionRun(text, caret);
                     // Editing retires a search highlight. Typing into the
                     // composer means you have stopped reading the result you were
                     // brought here for and started using the chat.
@@ -4896,14 +4916,7 @@ export function ChatPane({
                   // run is defined by where the caret is, not by the end of the
                   // draft. `keyup` rather than `keydown`: the caret has not moved
                   // yet on the way down.
-                  onKeyUp={(e) => {
-                    const el = e.currentTarget;
-                    syncMentionRun(el.value, el.selectionStart ?? el.value.length);
-                  }}
-                  onClick={(e) => {
-                    const el = e.currentTarget;
-                    syncMentionRun(el.value, el.selectionStart ?? el.value.length);
-                  }}
+                  onCaret={(text, caret) => syncMentionRun(text, caret)}
                   onPaste={onPaste}
                   onKeyDown={(e) => {
                     // The picker owns the arrows, Enter, Tab and Escape while it
@@ -4951,7 +4964,6 @@ export function ChatPane({
                         // harness is not a thing the user chose.
                         `Message ${mode === 'chat' ? 'Chat' : assistantLabel(session?.assistant)}…`
                   }
-                  rows={1}
                 />
                 {sending && !question ? (
                   <>
