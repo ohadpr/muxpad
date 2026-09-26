@@ -836,9 +836,11 @@ describe('migrations v27 — the chat clock and the spawn link', () => {
     addTab(db, 't1', null);
     runMigrations(db);
     expect(
-      (db.prepare('SELECT spawned_by FROM tabs WHERE id = ?').get('t1') as {
-        spawned_by: string | null;
-      }).spawned_by,
+      (
+        db.prepare('SELECT spawned_by FROM tabs WHERE id = ?').get('t1') as {
+          spawned_by: string | null;
+        }
+      ).spawned_by,
     ).toBeNull();
   });
 
