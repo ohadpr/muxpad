@@ -80,12 +80,12 @@ import {
   applyMention,
   detectMentionRun,
   directTo,
+  nextMentionRun,
   parseDirectMarker,
   parseDirective,
   parseMentions,
   parseReportMarker,
   rankMentions,
-  runIsSettled,
   toMentionChats,
   withContentRows,
 } from '../lib/chat-mention';
@@ -1856,16 +1856,14 @@ export function ChatPane({
    * end of the string.
    */
   const syncMentionRun = (text: string, caret: number) => {
-    const run = detectMentionRun(text, caret);
-    // A run whose name is chosen and spaced past is not an invitation any more —
-    // everything after it is the request being typed.
-    const live = run && !runIsSettled(run.query, corpus) ? run : null;
+    const live = nextMentionRun(text, caret, corpus, mentionDismissed);
     if (!live) {
       if (mentionRun) setMentionRun(null);
-      setMentionDismissed(null);
+      // The `@` this dismissal belonged to is gone (deleted, or the caret left
+      // it), so the latch has nothing left to hold shut.
+      if (mentionDismissed !== null && !detectMentionRun(text, caret)) setMentionDismissed(null);
       return;
     }
-    if (mentionDismissed !== null && live.start === mentionDismissed) return;
     if (mentionDismissed !== null) setMentionDismissed(null);
     // Only the first `@` of a session pays for the corpus.
     if (!mentionRun) ensureCorpus();

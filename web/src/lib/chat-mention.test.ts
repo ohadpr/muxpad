@@ -8,6 +8,7 @@ import {
   type MentionChat,
   applyMention,
   detectMentionRun,
+  nextMentionRun,
   parseDirectMarker,
   parseDirective,
   parseMentions,
@@ -86,6 +87,28 @@ describe('runIsSettled — the picker gets out of the way', () => {
   it('is not settled while the name is still being typed', () => {
     expect(runIsSettled('Invest', CORPUS)).toBe(false);
     expect(runIsSettled('Investing', CORPUS)).toBe(false);
+  });
+});
+
+describe('nextMentionRun — every reason the picker closes, in one place', () => {
+  it('is open while a name is being typed', () => {
+    expect(nextMentionRun('@inv', 4, CORPUS, null)?.query).toBe('inv');
+  });
+
+  it('closes once the name is chosen and the request has started', () => {
+    // The single most important one: the picker must not hover over the sentence
+    // you type after choosing, and Enter must go back to meaning "send".
+    expect(nextMentionRun("@Investing what's the cash", 26, CORPUS, null)).toBeNull();
+  });
+
+  it('stays closed for the run Escape was pressed on', () => {
+    expect(nextMentionRun('@inv', 4, CORPUS, 0)).toBeNull();
+    // …and typing more into that same run does not bring it back.
+    expect(nextMentionRun('@invest', 7, CORPUS, 0)).toBeNull();
+  });
+
+  it('opens again for a NEW @ — a dismissal is not a mode', () => {
+    expect(nextMentionRun('@inv and @ma', 12, CORPUS, 0)?.query).toBe('ma');
   });
 });
 

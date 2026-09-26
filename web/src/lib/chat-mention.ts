@@ -180,6 +180,31 @@ export function runIsSettled(query: string, corpus: readonly MentionChat[]): boo
 }
 
 /**
+ * The run the picker should be showing, given everything that can close it.
+ *
+ * All three closing conditions in one place, because "why is the picker still
+ * up" is the question this feature gets wrong first:
+ *   — no `@…` under the caret at all (detectMentionRun),
+ *   — the name is chosen and spaced past, so the rest is the request
+ *     (runIsSettled),
+ *   — Escape was pressed on THIS run: `dismissedAt` is the offset of the `@` it
+ *     was pressed on, so continuing to type does not bring it back, while a NEW
+ *     `@` is a new invitation.
+ */
+export function nextMentionRun(
+  text: string,
+  caret: number,
+  corpus: readonly MentionChat[],
+  dismissedAt: number | null,
+): MentionRun | null {
+  const run = detectMentionRun(text, caret);
+  if (!run) return null;
+  if (runIsSettled(run.query, corpus)) return null;
+  if (dismissedAt !== null && run.start === dismissedAt) return null;
+  return run;
+}
+
+/**
  * Replace a run with the canonical token for `chat`, plus one trailing space.
  *
  * Returns the new draft AND where the caret goes, because the caller has to set
