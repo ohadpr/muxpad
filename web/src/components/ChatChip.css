@@ -68,13 +68,23 @@
 }
 /* Inline in running text. Sized to sit ON a text line rather than drive its
    leading — a 24px tile in a 20px line box pushes the line apart and the whole
-   paragraph ripples around one mention. */
+   paragraph ripples around one mention.
+
+   SIZE ONLY, like the other two, and there is a deleted declaration behind that.
+   This rule used to also carry `vertical-align: -3px` — a pixel offset tuned
+   against one font size, which is wrong at every other one. It was also INERT:
+   the only thing that renders a `chip` density is `.chat-mention-pill`, which is
+   a flex container, and `vertical-align` does not apply to a flex item. Measured
+   in Chromium: `-20px` moved it zero pixels. So a chip sitting wrong on a line is
+   not this file's to fix — where the chip sits is a fact about the CONTAINER that
+   puts it on the line, and the pill now hangs itself off its own text's baseline
+   (see ChatMentionPicker.css). Do not put a length back here; it will look like a
+   fix and do nothing. */
 .chatchip[data-density="chip"] {
   --chatchip-size: 16px;
   --chatchip-radius: 5px;
   --chatchip-glyph: 10px;
   --chatchip-dot: 5px;
-  vertical-align: -3px;
 }
 
 /* ─── The tile ───────────────────────────────────────────────────────────── */
