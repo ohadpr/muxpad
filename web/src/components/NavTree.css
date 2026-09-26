@@ -798,7 +798,14 @@
 .navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"]:hover .navtree-name-text {
   color: var(--fg);
 }
-.navtree-tab-row[data-child="true"][data-active="true"] .navtree-name-text {
+/* The variant prefix is LOAD-BEARING, not decoration. The dim rule above
+   carries it and this one did not, so this selector scored one step lower and
+   lost — a selected child kept `--fg-dim` on the accent fill, which is grey
+   ink on violet. Specificity, not a missing rule: the rule was right and
+   unreachable. Hover has the prefix for the same reason. */
+.navtree[data-variant="sidebar"]
+  .navtree-tab-row[data-child="true"][data-active="true"]
+  .navtree-name-text {
   color: var(--accent-fg);
 }
 
