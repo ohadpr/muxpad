@@ -7,6 +7,7 @@ import { AppUrlDetector } from './runtime/app-url-detector.js';
 import type { AppUrlMarker } from './runtime/pty-scanner.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
+import { type ClockIndex, clockIndex, resolveTabClock } from './tab-clock.js';
 
 /**
  * Per-pane decoration state cached on the main server from ptyd push events.
@@ -744,6 +745,10 @@ export function decorateTab(
   manualUnreadIds?: ReadonlySet<string>,
   /** Pre-read cron summary per tab, for the same reason (see cronsByTab). */
   cronsByTabId?: ReadonlyMap<string, TabCronSummary>,
+  /** Pre-read clock inputs for EVERY tab, for the same reason again — and
+   *  because a child chat's clock is its parent's, so a row cannot be resolved
+   *  from itself alone (see tab-clock.ts / TabStore.clockRows). */
+  clocks?: ClockIndex,
 ): Tab {
   const panes = new PaneStore(db);
   const tabs = new TabStore(db);
@@ -764,6 +769,14 @@ export function decorateTab(
   // not one per tab. Absent when the tab has none, so the payload — and the
   // client's change-dedup signature — is unchanged for every tab without a cron.
   const cron = cronsByTabId ? cronsByTabId.get(tab.id) : cronsForTab(db, tab.id);
+  // LIFECYCLE, resolved here and nowhere else. `done` and `clock` are computed
+  // server-side and published on the row precisely so no client re-derives
+  // them: a decay clock evaluated independently by the sidebar, the picker and
+  // the chat header is three surfaces that will eventually disagree about one
+  // chat. Both fields are UNCONDITIONAL, even when false/fresh — clients
+  // coalesce `tab.updated` onto their cached row, so a field omitted when
+  // false would leave a stale `done: true` after a revival.
+  const lifecycle = resolveTabClock(clocks ?? clockIndex(db), tab.id, Date.now());
   // Deprecated alias, exact by construction (see PaneStatusSchema).
   return {
     ...tab,
@@ -773,6 +786,8 @@ export function decorateTab(
     status,
     agents,
     ...(cron ? { crons: cron.count, next_cron: cron.next } : {}),
+    done: lifecycle.done,
+    clock: lifecycle.clock,
   };
 }
 

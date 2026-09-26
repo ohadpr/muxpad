@@ -12,6 +12,7 @@ import type Database from 'better-sqlite3';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
+import { resetChatClock } from './tab-clock.js';
 
 /** Output may reorder within one visible-poll interval, at most 12 writes/min
  * per continuously active tab. Sixty seconds made ordinary work look stale. */
@@ -169,6 +170,44 @@ export class TabActivity {
     return false;
   }
 
+  /**
+   * A MESSAGE THE USER SENT THIS CHAT. Two things at once, and they belong
+   * together because they are the same event seen from two angles:
+   *
+   *   recency — the sidebar's order. A forced bump, like turn-done.
+   *   the CLOCK — the chat's 4-day life, restarted to full. This is the ONLY
+   *     thing that restarts it. Not a turn finishing, not pty output, not a
+   *     keystroke in a terminal: a chat that is producing output is not a chat
+   *     you still want, and the whole point of the clock is that it measures
+   *     your attention rather than the machine's.
+   *
+   * The write lands on the tree's ROOT (a child shares its parent's clock) and
+   * every member of that tree gets an event, because every member publishes
+   * the clock that just moved. Revival rides the same path with nothing extra:
+   * a done chat you message is a done chat whose clock is now full.
+   *
+   * The dedup is deliberate. `writeTab` may already have emitted for this tab,
+   * and every `tab.updated` costs each connected client a full
+   * `GET /api/workspaces?all=1` — so the row that moved is announced once, not
+   * twice. And unlike the recency write, the clock reset ALWAYS announces:
+   * `canReorder` correctly suppresses a recency bump that cannot move the
+   * most-recent row, but the chip it just un-aged is a visible change that the
+   * order says nothing about.
+   */
+  noteUserMessage(tabId: string, at: number = Date.now()): void {
+    const affected = resetChatClock(this.db, tabId, at);
+    const { emitted } = this.writeTabInner(tabId, at);
+    if (!this.onWrite) return;
+    for (const id of affected) {
+      if (id === tabId && emitted) continue;
+      try {
+        this.onWrite(id);
+      } catch {
+        // Decoration only — a failed emit must never fail the write above.
+      }
+    }
+  }
+
   private inGrace(at: number): boolean {
     const sinceGrace = at - this.graceFrom;
     return sinceGrace >= 0 && sinceGrace < this.bootGraceMs;
@@ -217,6 +256,14 @@ export class TabActivity {
   }
 
   private writeTab(tabId: string, at: number): boolean {
+    return this.writeTabInner(tabId, at).wrote;
+  }
+
+  /** {@link writeTab}, also reporting whether it EMITTED — which
+   *  {@link noteUserMessage} needs in order not to announce the same row
+   *  twice. Split rather than widened because every other caller wants the
+   *  plain boolean and reads better for it. */
+  private writeTabInner(tabId: string, at: number): { wrote: boolean; emitted: boolean } {
     const pending = this.pendingInput.get(tabId);
     if (pending && pending.at <= at) {
       clearTimeout(pending.timer);
@@ -228,15 +275,19 @@ export class TabActivity {
     try {
       this.tabs.touchActivity(tabId, at);
     } catch {
-      return false;
+      return { wrote: false, emitted: false };
     }
     this.lastWriteAt.set(tabId, Math.max(at, this.lastWriteAt.get(tabId) ?? at));
+    let emitted = false;
     try {
-      if (this.onWrite && this.canReorder(tabId, before, at)) this.onWrite(tabId);
+      if (this.onWrite && this.canReorder(tabId, before, at)) {
+        emitted = true;
+        this.onWrite(tabId);
+      }
     } catch {
       // Decoration only — a failed emit must never fail the activity write.
     }
-    return true;
+    return { wrote: true, emitted };
   }
 
   /** Background output, resolving ownership only after the cheap pre-filter.

@@ -1059,7 +1059,14 @@ export function attachWsServer(deps: {
     // act — forced, like turn-done. Recorded before the accept/queue/reject
     // branch on purpose: a message the user MEANT to send is activity even if
     // the agent turns out to be dead.
-    activity.touchTab(pane.tab_id, { force: true });
+    //
+    // It is also the one act that restarts the chat's decay clock (and revives
+    // it if the clock had already run out) — see TabActivity.noteUserMessage.
+    // THIS DOOR, rather than a broader one, because everything that reaches it
+    // is a message somebody chose to send: the chat composer, `muxpad agent
+    // send`, a cron firing into a pane. Turn-done and pty output take the
+    // recency path only, deliberately.
+    activity.noteUserMessage(pane.tab_id);
     const conn = agentRunners.get(paneId);
     // Fast path: agent free and nothing queued ahead of it → run immediately.
     if (conn && !conn.turnActive && queue.count(paneId) === 0) {

@@ -1630,6 +1630,13 @@ cmd_agent_new() {
   # Backend rides the pane's startup command too (`muxpad agent --backend <b>`),
   # so a respawn keeps the harness it was launched with.
   [ -n "${FLAG_backend:-}" ] && body+=",\"backend\":$(json_string "$FLAG_backend")"
+  # HIERARCHY. Spawned from inside a pane — which is nearly every scripted
+  # spawn, since the caller is an agent delegating work — the new chat records
+  # which chat asked for it. That is what makes it nest in the sidebar and
+  # share its parent's decay clock, so a worker cannot outlive the chat it was
+  # spawned to serve. The server resolves pane→tab and silently drops the link
+  # if that tab is gone, so a spawn never fails over provenance.
+  [ -n "${MUXPAD_PANE_ID:-}" ] && body+=",\"spawned_by_pane\":$(json_string "$MUXPAD_PANE_ID")"
   body+='}'
   local tab_json tab_id tab_slug
   tab_json="$(http_request POST /api/tabs "$body")"

@@ -568,6 +568,61 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // THE CHAT CLOCK, and the hierarchy it is shared down.
+    //
+    //   tabs.spawned_by — the tab this chat was spawned FROM (an agent working
+    //     in that chat asked for this one). Nullable; null is the normal case.
+    //
+    //     Deliberately NO foreign key, and the reason is the whole model:
+    //     nothing here is ever deleted by a clock, so a child must survive its
+    //     parent's manual deletion rather than cascade away with it. A dangling
+    //     id is therefore an EXPECTED state, and the resolver (tab-clock.ts)
+    //     reads a child whose parent is gone as a root in its own right. An
+    //     ON DELETE SET NULL would also have worked, but only while
+    //     `foreign_keys = ON` — which is a pragma, i.e. a property of the
+    //     CONNECTION, not of the data. Tolerating the dangle is the invariant
+    //     that holds however the db is opened.
+    //
+    //   tabs.clock_started_at — epoch ms the chat's 4-day clock last started.
+    //     Reset by a message the user sends it; when it runs out the chat is
+    //     `done` (computed at read time, never stored — a stored flag would be
+    //     a second source of truth that goes stale the instant the clock ticks
+    //     past it with no writer awake).
+    //
+    // ── WHY NOT REUSE last_activity_at ───────────────────────────────────────
+    // It answers a different question. `last_activity_at` is bumped by pty
+    // OUTPUT (sampled every 5s) and by keystrokes, so a chat left tailing a log
+    // would be immortal while a chat you genuinely finished with three days ago
+    // decays on schedule — the clock would measure the terminal, not you. It is
+    // also the sidebar's recency ORDER, and one column cannot be both a sort
+    // key everything touches and a lifecycle clock only a deliberate act may
+    // move.
+    //
+    // ── THE BACKFILL: EVERYONE STARTS FRESH ──────────────────────────────────
+    // Every existing tab's clock starts at THIS MOMENT — the first boot after
+    // this ships — so nothing decays on day one. Backfilling from
+    // `last_activity_at` was considered and explicitly rejected: it would have
+    // arrived with roughly half the existing tabs already expired, collapsing
+    // most of the sidebar into a `done` group on the first render, which reads
+    // as data loss even though nothing was lost.
+    //
+    // Guarded by `IS NULL` so the backfill is idempotent in the real sense: a
+    // second pass cannot re-stamp a clock the user has since reset (the version
+    // guard already prevents a second pass, but a migration that would corrupt
+    // data if it ever ran twice is one restore-from-backup away from doing it).
+    version: 27,
+    sql: `
+      ALTER TABLE tabs ADD COLUMN spawned_by TEXT;
+      ALTER TABLE tabs ADD COLUMN clock_started_at INTEGER;
+      CREATE INDEX tabs_spawned_by ON tabs(spawned_by);
+    `,
+    apply: (db) => {
+      db.prepare('UPDATE tabs SET clock_started_at = ? WHERE clock_started_at IS NULL').run(
+        Date.now(),
+      );
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the
