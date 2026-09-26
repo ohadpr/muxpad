@@ -59,7 +59,12 @@ describe('retiring a sub-chat when it delivers', () => {
   it('retires the sub-chat and clears its READY the moment its turn ends', () => {
     const parent = chat('parent');
     const child = chat('child', parent.tab);
-    panes.setUnread(child.pane, true); // turn-done bolds it "done, unreviewed"
+    // A mark left over from an EARLIER turn. Deliberately not "the one
+    // turn-done is about to write": in production `setUnread` runs AFTER the
+    // synchronous `emitTurn('done')` that lands here, so pre-setting it would
+    // state the ordering backwards and hide the write that matters. That
+    // sequence is driven for real in tab-retire.ws.test.ts.
+    panes.setUnread(child.pane, true);
 
     expect(new ChatRetirer(deps).onTurnEnded({ pane_id: child.pane, phase: 'done' })).toBe(true);
 
@@ -153,6 +158,38 @@ describe('retiring a sub-chat when it delivers', () => {
       ).run('a1', child.pane, 'image/png', '/tmp/x.png', Date.now());
       expect(new ChatRetirer(deps).onTurnEnded({ pane_id: child.pane, phase: 'done' })).toBe(false);
       expect(isDone(child.tab)).toBe(false);
+    });
+
+    it('LIVE BACKGROUND SUBAGENTS — the work it spawned outlives the turn', () => {
+      // R2-3. A turn ends; the subagents it launched are still running. The
+      // sub-chat retired anyway, and the row it left behind published
+      // `done: true` alongside `status: 'working'` — the same roster that
+      // holds this open is the one `getStatus` reads. The sidebar was saying
+      // both things about one row at once.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      cache.setSubagentCount(child.pane, 2);
+      expect(new ChatRetirer(deps).onTurnEnded({ pane_id: child.pane, phase: 'done' })).toBe(false);
+      expect(isDone(child.tab)).toBe(false);
+      expect(cache.getStatus(child.pane, false)).toBe('working');
+
+      // The last one finishes: now it has delivered, and the next turn end
+      // retires it. (A runner reports the empty roster before turn-done on
+      // the ordinary path; this is the same edge either way.)
+      cache.setSubagentCount(child.pane, 0);
+      expect(new ChatRetirer(deps).onTurnEnded({ pane_id: child.pane, phase: 'done' })).toBe(true);
+      expect(isDone(child.tab)).toBe(true);
+    });
+
+    it('never publishes done and working together', () => {
+      // The invariant behind the one above, stated on its own so it survives
+      // a rewrite of the keep-list: whatever the reasons are, a row the
+      // sidebar calls finished must not also be one it draws a spinner on.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      cache.setSubagentCount(child.pane, 1);
+      new ChatRetirer(deps).onTurnEnded({ pane_id: child.pane, phase: 'done' });
+      expect(isDone(child.tab) && cache.getStatus(child.pane, false) === 'working').toBe(false);
     });
 
     it('QUEUED work — let the LAST turn retire it', () => {
