@@ -1,4 +1,4 @@
-import { CHAT_DECAY_DAYS, type ChatClock, chatClockDone } from '@muxpad/shared';
+import { CHAT_DECAY_DAYS, type ChatClock } from '@muxpad/shared';
 import type React from 'react';
 import './ChatChip.css';
 
@@ -41,10 +41,11 @@ import './ChatChip.css';
  * de-emphasised. Never re-encode this as opacity, however much simpler the
  * CSS gets.
  *
- * --clock is ONE colour at every size: `color-mix(in srgb, <accent> 34%,
- * #d9d3ea)`. The 24px tile's fill and the 6px child dot are the same ink, so
- * the tile and the dot read as the same substance at two scales rather than as
- * two indicators that happen to sit near each other.
+ * --clock is ONE colour at every size — the 24px tile's fill and the 6px
+ * sub-chat dot are the same ink, so they read as one substance at two scales
+ * rather than as two indicators that happen to sit near each other. It is a
+ * THEME token (styles.css): the accent cut to 34%, with the colour it is cut
+ * with re-stepping per theme the way --status-* do.
  *
  * ─── Densities ───────────────────────────────────────────────────────────
  * Three, and they differ in SIZE ONLY — same phases, same ink, same drawing:
@@ -81,7 +82,6 @@ export function ChatChip({
   density,
   chat,
   shape,
-  parent,
   className,
   onClick,
   onDoubleClick,
@@ -110,7 +110,7 @@ export function ChatChip({
     );
   }
 
-  const clock = chipClock(chat.clock ? chat : (parent ?? chat));
+  const clock = chipClock(chat);
   const common = {
     className: `chatchip${className ? ` ${className}` : ''}`,
     'data-density': density,
@@ -145,12 +145,11 @@ export interface ChatChipProps {
    * and a dot with no parent row above it to belong to is just a lost mark.
    */
   shape?: 'tile' | 'dot' | undefined;
-  /**
-   * The parent chat. A FALLBACK only — the server publishes a child's
-   * effective clock on the child's own row, so this is needed just for rows
-   * that predate `clock`.
-   */
-  parent?: ChatChipChat | undefined;
+  /* There is deliberately NO `parent` prop. It existed to lend a child its
+     parent's clock, and both halves of that are now wrong: the server resolves
+     the effective clock onto the row it belongs to, and a sub-chat has no clock
+     to lend in the first place. A second chat as an input is a second place for
+     this component to get time from. */
   className?: string | undefined;
   onClick?: ((e: React.MouseEvent) => void) | undefined;
   onDoubleClick?: ((e: React.MouseEvent) => void) | undefined;
@@ -183,23 +182,20 @@ export interface ChatChipChat {
    */
   done?: boolean | undefined;
   /**
-   * The clock as the server publishes it, or NULL for a chat that has none.
+   * The clock as the server publishes it — the ONLY input to how this chip
+   * draws time. Pass `tab.clock` straight through; do not unpack it, do not
+   * rebuild it from a timestamp, and do not substitute one when it is absent.
    *
-   * Null is the SUB-CHAT's answer and it is a real answer, not a gap: a
-   * sub-chat retires on delivery rather than on a timer, so there is no clock
-   * to publish. `undefined` means something different — a row from a server
-   * that predates the column — and `chipClock` treats the two apart.
+   * `null` is a real answer (a sub-chat has no clock — it retires on delivery
+   * rather than decaying), and `undefined` is "not told". Both draw a clean
+   * tile, so callers need not tell them apart.
    */
   clock?: ChatClock | null | undefined;
-  /** Last-resort clock origin for rows with no published `clock`. */
-  last_activity_at?: number | null | undefined;
 }
 
 /** Re-exported so the three surfaces agree on the number without each
  *  reaching into `@muxpad/shared` for it. */
 export const DECAY_DAYS = CHAT_DECAY_DAYS;
-
-const DAY_MS = 86_400_000;
 
 export type ChipPhase = 'pinned' | 'fresh' | 'ageing' | 'last-day' | 'done';
 
@@ -212,14 +208,25 @@ export interface ChipClock {
 }
 
 /**
- * What the chip DRAWS, from what the server PUBLISHES.
+ * What the chip DRAWS, from what the server PUBLISHES. Nothing else.
  *
- * The server's `clock.fill` is continuous (0 → 1, see shared/chat-clock.ts);
- * this quantises it to the four steps the tile actually has — clean, a
- * quarter, a half, and then the dashed outline of the final day.
+ * ONE OWNER. `stopped`, `last_day` and `done` are READ off the row — the
+ * client does not decide, re-check or second-guess any of them, and there is
+ * no timestamp anywhere in this function. The only number it computes is the
+ * fill's RESOLUTION.
  *
- * That quantisation is a rendering decision, not a disagreement with the
- * server, and it is deliberate on both counts:
+ * This is stricter than it looks, and it is stricter on purpose. It used to
+ * carry a fallback that derived the whole lifecycle from `last_activity_at`
+ * for "rows that predate the column" — which sounded prudent and was in fact a
+ * second, unowned implementation of the decay rules living in the client. It
+ * cost territory C a defensive guard in its adapter (a null `clock` had to be
+ * carefully distinguished from a missing one, or a sub-chat that cannot decay
+ * would have been handed a countdown), and it is the exact shape of the bug
+ * muxpad has shipped three times: two surfaces deriving one value, agreeing
+ * today, drifting the moment either moves. The fallback is gone. A row with no
+ * clock draws a clean tile and says nothing.
+ *
+ * The quantisation that remains is a RENDERING decision, not a disagreement:
  *
  *   · it is the settled visual language — "25% / 50% / 75% as days pass" is
  *     what the prototype does and what eight rounds with the user converged on;
@@ -227,51 +234,49 @@ export interface ChipClock {
  *     and 62% buried is not information, and animating it would have every
  *     chip in the rail re-rendering on a timer to say nothing.
  *
- * Lifecycle is NEVER re-derived here. `stopped`, `last_day` and `done` are all
- * read off the row; only the fill's resolution is the client's business.
+ * It takes no `now`, and that absence is load-bearing: a function with a clock
+ * in it is a function that can disagree with the server about what time it is.
  */
-export function chipClock(chat: ChatChipChat, now: number = Date.now()): ChipClock {
+export function chipClock(chat: ChatChipChat): ChipClock {
   const published = chat.clock;
-  if (published) {
-    if (published.stopped) return { phase: 'pinned', daysLeft: DECAY_DAYS, fill: 0 };
-    // The row's `done` is the answer. `chatClockDone` is the SERVER's own
-    // predicate, reached for only when the row does not carry the flag — so
-    // even the fallback is the server's rule rather than a second one.
-    if (chat.done ?? chatClockDone(published, now)) return { phase: 'done', daysLeft: 0, fill: 0 };
-    // Buried QUARTERS, floored: a tile shows the step it has fully reached.
-    const steps = Math.floor(Math.max(0, Math.min(1, published.fill)) * DECAY_DAYS);
-    const daysLeft = Math.max(0, DECAY_DAYS - steps);
-    if (published.last_day) return { phase: 'last-day', daysLeft: 1, fill: 0 };
-    const fill = (steps / DECAY_DAYS) * 100;
-    return { phase: fill === 0 ? 'fresh' : 'ageing', daysLeft, fill };
-  }
 
-  // ── No published clock ──────────────────────────────────────────────────
-  // A row from a server that predates the column. Derive the same four steps
-  // from whatever timestamp there is, so the rail does not go blank during a
-  // rolling upgrade, and treat a row with no timestamp at all as FRESH rather
-  // than as instantly done.
-  if (chat.pinned) return { phase: 'pinned', daysLeft: DECAY_DAYS, fill: 0 };
-  const startedAt = chat.last_activity_at ?? now;
-  const elapsed = Math.max(0, Math.floor((now - startedAt) / DAY_MS));
-  const daysLeft = Math.max(0, Math.min(DECAY_DAYS, DECAY_DAYS - elapsed));
-  if (chat.done ?? daysLeft <= 0) return { phase: 'done', daysLeft, fill: 0 };
-  if (daysLeft <= 1) return { phase: 'last-day', daysLeft, fill: 0 };
-  const fill = (1 - daysLeft / DECAY_DAYS) * 100;
-  return { phase: fill === 0 ? 'fresh' : 'ageing', daysLeft, fill };
+  // NO CLOCK — and there is nothing to work out. A sub-chat (`clock: null`)
+  // does not decay, and a row the server has said nothing about is not the
+  // client's to guess at. Both draw a clean tile: no fill, no countdown, no
+  // claim. "I have not been told" renders as "nothing to report", which is the
+  // only honest option and the only one that cannot be wrong.
+  if (!published) return { phase: 'fresh', daysLeft: DECAY_DAYS, fill: 0 };
+
+  // Everything below is READ, not derived. Three fields off the row, in the
+  // server's own precedence.
+  if (published.stopped) return { phase: 'pinned', daysLeft: DECAY_DAYS, fill: 0 };
+  if (chat.done) return { phase: 'done', daysLeft: 0, fill: 0 };
+  if (published.last_day) return { phase: 'last-day', daysLeft: 1, fill: 0 };
+
+  // The ONE thing this function computes, and it is a rendering decision
+  // rather than a second opinion: the server's continuous `fill` (0 → 1)
+  // quantised to the four steps a 24px tile actually has. The value is A's;
+  // only its resolution is ours.
+  const steps = Math.floor(clamp01(published.fill) * DECAY_DAYS);
+  return {
+    phase: steps === 0 ? 'fresh' : 'ageing',
+    daysLeft: Math.max(0, DECAY_DAYS - steps),
+    fill: (steps / DECAY_DAYS) * 100,
+  };
 }
+
+const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 
 /**
  * True iff this chat has left the live list — the sidebar's grouping rule.
  *
- * The server's `done` is the answer. The derivation behind it exists only for
- * rows that predate the column; this is not a second opinion, and a chat is
- * never swept out of the live list by the client's own arithmetic while the
- * server is saying otherwise.
+ * The server's `done`, and nothing else. There is no arithmetic behind this any
+ * more: what leaves the sidebar is a lifecycle decision, the server owns
+ * lifecycle, and a client that can reach a different answer will eventually
+ * reach a different answer.
  */
-export function isChatDone(chat: ChatChipChat, now: number = Date.now()): boolean {
-  if (chat.done !== undefined) return chat.done;
-  return chipClock(chat, now).phase === 'done';
+export function isChatDone(chat: ChatChipChat): boolean {
+  return chat.done === true;
 }
 
 /**
@@ -301,10 +306,7 @@ export function isChatRetired(chat: ChatChipChat): boolean {
  * picker, and it is still on the row: one hover away instead of permanently
  * occupying a second line on every row whether or not you were asking.
  */
-export function chatTooltip(
-  chat: ChatChipChat & { headline?: string | null | undefined },
-  now: number = Date.now(),
-): string {
+export function chatTooltip(chat: ChatChipChat & { headline?: string | null | undefined }): string {
   const parts = [chat.name];
   if (chat.headline) parts.push(chat.headline);
   // A SUB-CHAT HAS NO CLOCK, so it says nothing about time. It reports the one
@@ -313,7 +315,7 @@ export function chatTooltip(
   if (chat.spawned_by != null) {
     if (isChatRetired(chat)) parts.push('done');
   } else {
-    const clock = chipClock(chat, now);
+    const clock = chipClock(chat);
     parts.push(CLOCK_WORDS[clock.phase](clock.daysLeft));
   }
   return parts.join(' · ');

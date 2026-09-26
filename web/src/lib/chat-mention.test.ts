@@ -398,19 +398,16 @@ describe('toMentionChats — the corpus', () => {
       headline: 'what it is about',
       clock: { started_at: 1000, fill: 0.5, last_day: false, stopped: false },
     });
-    // A row with a published clock must not also carry the pre-column fallback,
-    // or a rolling upgrade has two answers for the same tile.
-    expect(live?.chip.last_activity_at).toBeUndefined();
     expect(cold?.chip).toMatchObject({ done: true, spawned_by: 't1' });
   });
 
   it('does not invent a clock for a sub-chat the server says has none', () => {
-    // `clock: null` is "there is no clock", not "the clock is at 0". Falling
-    // through to last_activity_at here would draw a half-buried tile on a row
-    // that retired the moment it delivered.
+    // `clock: null` is "there is no clock", not "the clock is at 0", and the
+    // chip draws a clean tile for it. (B's chip no longer accepts a timestamp
+    // at all, so there is no longer a fallback for this to fall through TO —
+    // the assertion that it did not is gone with the field.)
     const sub = toMentionChats(groups)[2];
     expect(sub?.chip.clock).toBeUndefined();
-    expect(sub?.chip.last_activity_at).toBeUndefined();
   });
 
   it('resolves the parent to a NAME, and keeps the reason it is done', () => {
