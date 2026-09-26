@@ -271,7 +271,17 @@ export class TabActivity {
     }
     // Read BEFORE the update: the gate below compares where the row was with
     // where it is going.
-    const before = this.onWrite ? (this.tabs.getById(tabId)?.last_activity_at ?? null) : null;
+    const row = this.onWrite ? this.tabs.getById(tabId) : null;
+    const before = row?.last_activity_at ?? null;
+    // A DELETED tab writes nothing (the UPDATE matches no rows, silently) and
+    // must therefore announce nothing. It used to announce anyway — `before`
+    // read as null, which `canReorder` reads as "bottom of the list, any stamp
+    // moves it" — so every forced signal arriving just after a delete cost
+    // each connected client a full tree walk for a row that no longer exists.
+    // Harmless downstream (index.ts finds no row and emits nothing), but the
+    // walk is the expensive part and it happened regardless. Free to check
+    // here: the row was already read.
+    const exists = row !== null;
     try {
       this.tabs.touchActivity(tabId, at);
     } catch {
@@ -280,7 +290,7 @@ export class TabActivity {
     this.lastWriteAt.set(tabId, Math.max(at, this.lastWriteAt.get(tabId) ?? at));
     let emitted = false;
     try {
-      if (this.onWrite && this.canReorder(tabId, before, at)) {
+      if (this.onWrite && exists && this.canReorder(tabId, before, at)) {
         emitted = true;
         this.onWrite(tabId);
       }

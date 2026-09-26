@@ -102,4 +102,59 @@ describe('TabStore', () => {
     const w = store.create({ name: 'X', layout, workspace_id: workspaceId });
     expect(store.getById(w.id)?.layout).toEqual(layout);
   });
+
+  it('is born with a full clock and no parent', () => {
+    const before = Date.now();
+    const w = store.create({ name: 'Dev', layout: 'p', workspace_id: workspaceId });
+    const row = store.clockRows().find((r) => r.id === w.id);
+    expect(row?.clock_started_at).toBeGreaterThanOrEqual(before);
+    expect(row?.spawned_by).toBeNull();
+    // Absent, not null, on the wire — a chat with no parent should not widen
+    // every payload (nor the client's change-dedup signature).
+    expect('spawned_by' in (store.getById(w.id) as object)).toBe(false);
+  });
+
+  it('records and surfaces the chat it was spawned from', () => {
+    const parent = store.create({ name: 'P', layout: 'p', workspace_id: workspaceId });
+    const child = store.create({
+      name: 'C',
+      layout: 'c',
+      workspace_id: workspaceId,
+      spawned_by: parent.id,
+    });
+    expect(child.spawned_by).toBe(parent.id);
+    expect(store.getById(child.id)?.spawned_by).toBe(parent.id);
+    expect(store.clockRows().find((r) => r.id === child.id)?.spawned_by).toBe(parent.id);
+  });
+
+  it('a child is stamped with its own clock too, as an orphan fallback', () => {
+    // It is ignored while the parent exists (the resolver reads the root's),
+    // but a parent deleted later must leave a real timestamp behind rather
+    // than a null nothing can interpret.
+    const parent = store.create({ name: 'P', layout: 'p', workspace_id: workspaceId });
+    const child = store.create({
+      name: 'C',
+      layout: 'c',
+      workspace_id: workspaceId,
+      spawned_by: parent.id,
+    });
+    expect(store.clockRows().find((r) => r.id === child.id)?.clock_started_at).toBeGreaterThan(0);
+  });
+
+  it('resetClock moves the clock without bumping updated_at', () => {
+    // `updated_at` tracks structural edits and clients key cache invalidation
+    // off it — same contract as touchActivity.
+    const w = store.create({ name: 'Dev', layout: 'p', workspace_id: workspaceId });
+    const at = Date.now() + 10_000;
+    store.resetClock(w.id, at);
+    expect(store.clockRows().find((r) => r.id === w.id)?.clock_started_at).toBe(at);
+    expect(store.getById(w.id)?.updated_at).toBe(w.updated_at);
+  });
+
+  it('clockRows reports pinning as a boolean', () => {
+    const w = store.create({ name: 'Dev', layout: 'p', workspace_id: workspaceId });
+    expect(store.clockRows().find((r) => r.id === w.id)?.pinned).toBe(false);
+    store.setPinned(w.id, true);
+    expect(store.clockRows().find((r) => r.id === w.id)?.pinned).toBe(true);
+  });
 });
