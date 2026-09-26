@@ -29,6 +29,7 @@ function chat(over: Partial<MentionChat> & { tabName: string }): MentionChat {
     workspaceSlug: 'personal',
     workspaceName: 'Personal',
     paneIds: [],
+    chip: { name: over.tabName },
     ...over,
   };
 }
@@ -271,22 +272,44 @@ describe('withContentRows — the archive tier', () => {
 });
 
 describe('toMentionChats — the corpus', () => {
+  const groups: WorkspaceTabs[] = [
+    {
+      id: 'w1',
+      slug: 'personal',
+      name: 'Personal',
+      tabs: [
+        {
+          id: 't1',
+          slug: 'a',
+          name: 'Live one',
+          layout: 'p1',
+          icon: '📈',
+          headline: 'what it is about',
+          clock: { started_at: 1000 },
+          last_activity_at: 50,
+        },
+        { id: 't2', slug: 'b', name: 'Cold one', layout: 'p2', done: true, spawned_by: 't1' },
+      ] as never,
+    },
+  ];
+
   it('carries the server-computed done flag onto the row', () => {
-    const groups: WorkspaceTabs[] = [
-      {
-        id: 'w1',
-        slug: 'personal',
-        name: 'Personal',
-        tabs: [
-          { id: 't1', slug: 'a', name: 'Live one', layout: 'p1' },
-          { id: 't2', slug: 'b', name: 'Cold one', layout: 'p2', done: true },
-        ] as never,
-      },
-    ];
-    const out = toMentionChats(groups);
-    expect(out.map((c) => [c.tabName, c.done ?? false])).toEqual([
+    expect(toMentionChats(groups).map((c) => [c.tabName, c.done ?? false])).toEqual([
       ['Live one', false],
       ['Cold one', true],
     ]);
+  });
+
+  it('builds the chip material once, off the SERVER clock — not last activity', () => {
+    // The whole point of the migration decision: a clock that started at boot
+    // must not be re-derived from a months-old last_activity_at.
+    const [live, cold] = toMentionChats(groups);
+    expect(live?.chip).toMatchObject({
+      name: 'Live one',
+      icon: '📈',
+      headline: 'what it is about',
+      clock_started_at: 1000,
+    });
+    expect(cold?.chip).toMatchObject({ done: true, spawned_by: 't1' });
   });
 });

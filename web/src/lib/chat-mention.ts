@@ -1,4 +1,5 @@
 import { type ArchiveSearchHit, req } from '../api';
+import type { ChatChipChat } from '../components/ChatChip';
 import {
   type SearchableTab,
   type WorkspaceTabs,
@@ -52,10 +53,23 @@ export interface MentionChat extends SearchableTab {
    * because a chat with no clock (pinned) is never done.
    */
   done?: boolean | undefined;
+  /**
+   * What `ChatChip` (and `chatTooltip`) need off this chat, built ONCE here.
+   *
+   * The chip is territory B's component and its prop shape is deliberately
+   * structural, not `Tab` — so the translation from a wire row to chip material
+   * happens at corpus time, in one place, rather than inline at each of the
+   * three surfaces that draw a chip (picker row, inline mention, report card).
+   */
+  chip: ChatChipChat & { headline?: string | null };
 }
 
-/** A tab row with the lifecycle fields territory A adds to the wire type. */
-type TabWithLifecycle = { done?: boolean | null };
+/** The lifecycle fields territory A publishes on the tab row. */
+type TabWithLifecycle = {
+  done?: boolean | null;
+  spawned_by?: string | null;
+  clock?: { started_at?: number | null } | null;
+};
 
 /**
  * The picker's corpus: every chat in every visible workspace, live and done.
@@ -66,14 +80,32 @@ type TabWithLifecycle = { done?: boolean | null };
  * answers to "which chats are there".
  */
 export function toMentionChats(groups: readonly WorkspaceTabs[]): MentionChat[] {
-  const done = new Set<string>();
+  const rows = new Map<string, TabWithLifecycle>();
   for (const g of groups) {
-    for (const t of g.tabs) if ((t as TabWithLifecycle).done) done.add(t.id);
+    for (const t of g.tabs) rows.set(t.id, t as TabWithLifecycle);
   }
-  return toSearchableTabs(groups).map((t) => ({
-    ...t,
-    ...(done.has(t.tabId) ? { done: true } : {}),
-  }));
+  return toSearchableTabs(groups).map((t) => {
+    const row = rows.get(t.tabId);
+    const done = row?.done === true;
+    return {
+      ...t,
+      ...(done ? { done: true } : {}),
+      chip: {
+        name: t.tabName,
+        icon: t.icon ?? null,
+        ...(t.pinned ? { pinned: true } : {}),
+        ...(done ? { done: true } : {}),
+        ...(row?.spawned_by ? { spawned_by: row.spawned_by } : {}),
+        // The server publishes the clock as an object; the chip reads a start
+        // timestamp and derives the phase itself. `last_activity_at` is only the
+        // fallback for a row from a server that predates the column — the
+        // migration deliberately does NOT start every clock from last activity.
+        clock_started_at: row?.clock?.started_at ?? t.lastActivityAt ?? null,
+        ...(t.lastActivityAt != null ? { last_activity_at: t.lastActivityAt } : {}),
+        ...(t.headline ? { headline: t.headline } : {}),
+      },
+    };
+  });
 }
 
 // ── The run under the caret ──────────────────────────────────────────────────
