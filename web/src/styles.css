@@ -64,6 +64,38 @@
      to clear 4.5:1 against the chip's own fill on every theme and surface. */
   --status-ink-mix: 55%;
 
+  /* ─── The chat CLOCK's ink ─────────────────────────────────────────────
+     What the sidebar chip's descending fill is made of, and — at 6px — the
+     sub-chat dot. ONE colour at every size, so the tile and the dot read as
+     the same substance at two scales (components/ChatChip.css).
+
+     Stated as a MIX so the relationship is the constant: the clock is always
+     the accent cut to 34%, on every theme, and only what it is cut WITH
+     re-steps. That base is the token below, and it re-steps for exactly the
+     reason --status-* do — the clock has to sit at a fixed distance from the
+     TILE it fills (--bg-elev), and a single literal cannot do that on a white
+     surface and a near-black one at once. It was `#d9d3ea` for every theme:
+     drawn against the white cockpit, correct there, and a bright lilac wash
+     shouting off a dark tile everywhere else.
+
+     DARK-surface step here; the light themes re-step it below. Dark wants a
+     MID tone (lighter than the tile, so the fill reads as filled) and light
+     wants a PALE one (darker than the tile, same reason) — the base moves to
+     the opposite side of the surface, which is why it cannot be derived from
+     --border or --bg-hover and is written out per theme.
+
+     Only the BASE lives here. `--clock` itself — the 34% mix — is declared on
+     `.chatchip` (components/ChatChip.css), and that is deliberate: a custom
+     property is substituted on the element that DECLARES it, so a `--clock`
+     written here would resolve against THIS element's base and inherit down as
+     a finished colour, with every theme override below arriving too late to
+     matter. It happens to work today only because the theme attribute is set
+     on documentElement (settings.ts) — the same element as `:root` — which is
+     a coincidence of placement, not a design. Declared on the chip, the mix
+     resolves against whatever base is in scope there, and the token is correct
+     wherever a chip is rendered. */
+  --clock-base: #3d4663;
+
   /* ─── Search-hit highlight ─────────────────────────────────────────────
      What a term looks like once you have been taken to the message that says
      it (components/ChatPane.css `.chat-hit`). Its own token trio, not
@@ -113,6 +145,8 @@
   --danger: #f7768e;
   --accent: #7aa2f7;
   --accent-fg: #1a1b26;
+  /* Dark surface (--bg-elev #1f2335): a MID slate the accent lightens. */
+  --clock-base: #3d4663;
   --hit-bg: #f2c55c;
   --hit-ink: #141520;
   --hit-rule: #8a5e00;
@@ -136,6 +170,8 @@
   --danger: #ff5555;
   --accent: #bd93f9;
   --accent-fg: #282a36;
+  /* Dark surface (--bg-elev #21222c): a MID purple-grey. */
+  --clock-base: #454758;
   --hit-bg: #f1fa8c;
   --hit-ink: #1e1f29;
   --hit-rule: #7a7f2a;
@@ -170,6 +206,10 @@
   --danger: #c62828;
   --accent: #6641d6;
   --accent-fg: #ffffff;
+  /* Light re-step, and the ORIGINAL: this pale lilac on the white cockpit is
+     the colour the prototype was drawn against and signed off on. Every other
+     theme is a re-step of it, never the other way round. */
+  --clock-base: #d9d3ea;
   /* Light re-step (see :root), on a COOL surface — so --status-quiet is the
      lavender-grey counterpart of github-light's neutral, not Acme's warm one. */
   --status-blocked: #c62828;
@@ -204,6 +244,11 @@
   --xterm-fg: #1f2328;
   --danger: #cf222e;
   --accent: #0969da;
+  /* Light re-step, neutral-cool to match the surface. Stepped DOWN from the
+     obvious pale value until the fill reads at least as clearly against white
+     as alucard's does (2.36 vs 2.30) — alucard is the reference because it is
+     the one a human actually approved. */
+  --clock-base: #c3cfdd;
   --accent-fg: #ffffff;
   /* Light re-step (see :root). Neutral --status-quiet here rather than the
      warm one Acme uses — this surface is a cool pure white.
@@ -250,6 +295,10 @@
   --xterm-fg: #0d0d12;
   --danger: #d83a5b;
   --accent: #6f55ff;
+  /* Light re-step on a WARM cream surface, so the base carries a little warmth
+     rather than going grey against it — and stepped down to alucard's
+     readability for the same reason as github-light above. */
+  --clock-base: #cdc6e2;
   --accent-fg: #ffffff;
   /* Light re-step for the WARM CREAM surface — the values the design was
      iterated against (see the reference prototype's `.theme.light` block),
@@ -287,6 +336,10 @@
   --xterm-fg: #ebe5d2;
   --danger: #ff7a99;
   --accent: #9d85f5;
+  /* Dark surface, and a deep VIOLET one (--bg-elev #2c1d5b) rather than a
+     neutral — the base is lifted out of that violet, not out of grey, or the
+     fill reads as a muddy patch instead of a step up from the tile. */
+  --clock-base: #4a3a7d;
   --accent-fg: #221547;
   --hit-bg: #f5c85a;
   --hit-ink: #1a1035;
