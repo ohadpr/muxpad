@@ -239,25 +239,109 @@ export function nextMentionRun(
 }
 
 /**
+ * A chat the user EXPLICITLY CHOSE, and where its token sits in the draft.
+ *
+ * ─── Why the token alone is not enough ───────────────────────────────────────
+ * The token is the chat's NAME (see the note at the top of this file, and it is
+ * still the right token — a slug would be unreadable in the draft the user is
+ * looking at). But a name is DISPLAY TEXT: it is not unique, it is not stable,
+ * and resolving it again at send time is a guess. Two ways that guess was wrong,
+ * both reproduced:
+ *
+ *   · pick `Main`, type `repo status`, and the draft reads `@Main repo status` —
+ *     which re-resolves, correctly by its own longest-name rule, to the chat
+ *     called `Main repo`. No duplicate names needed.
+ *   · two chats both called `Work review`; pick the second and the first gets
+ *     the work, because it comes first in the corpus. The picker even shows the
+ *     parent that tells them apart, and then throws it away.
+ *
+ * So a pick is REMEMBERED, by id, anchored to the `@` it was inserted at. The
+ * text stays exactly what the user reads; the identity rides alongside it. A
+ * pick that no longer matches the draft is dropped, not guessed at — see
+ * `repinPicks` — so this can only ever make resolution MORE specific than the
+ * name-matching fallback, never differently wrong.
+ */
+export interface MentionPick {
+  /** The chat that was chosen. The whole point: an id, not a display name. */
+  tabId: string;
+  /** The name as INSERTED. What the anchor is re-found by, and how many
+   *  characters the body starts after — the chat may have been renamed since. */
+  name: string;
+  /** Offset of the `@` this pick belongs to. */
+  start: number;
+}
+
+/**
  * Replace a run with the canonical token for `chat`, plus one trailing space.
  *
- * Returns the new draft AND where the caret goes, because the caller has to set
- * both in the same commit — a textarea whose value changed without its
- * selection puts the caret at the end, which after picking a mention in the
- * middle of a sentence is the wrong place by however much you had written.
+ * Returns the new draft, where the caret goes, AND the pick — because the caller
+ * has to set all of them in the same commit. The caret: a textarea whose value
+ * changed without its selection puts the caret at the end, which after picking a
+ * mention in the middle of a sentence is the wrong place by however much you had
+ * written. The pick: see `MentionPick`.
  */
 export function applyMention(
   text: string,
   run: MentionRun,
   chat: MentionChat,
-): { text: string; caret: number } {
+): { text: string; caret: number; pick: MentionPick } {
   // One space after the token, and never two: picking a mention in the middle of
   // a sentence must not leave a gap the user has to go back and delete.
   const followedBySpace = /^[ \t]/.test(text.slice(run.end));
   const token = followedBySpace ? `@${chat.tabName}` : `@${chat.tabName} `;
   const next = text.slice(0, run.start) + token + text.slice(run.end);
   // Caret past the space either way, so typing continues the request.
-  return { text: next, caret: run.start + token.length + (followedBySpace ? 1 : 0) };
+  return {
+    text: next,
+    caret: run.start + token.length + (followedBySpace ? 1 : 0),
+    pick: { tabId: chat.tabId, name: chat.tabName, start: run.start },
+  };
+}
+
+/**
+ * Re-anchor picks against the draft as it is NOW, dropping the ones that are gone.
+ *
+ * A draft is edited freely after a mention is picked: text is typed in front of
+ * the token (every offset shifts), the token is deleted (the pick is void), the
+ * same chat is picked twice (two anchors, one name). So an offset recorded at
+ * pick time is a hint, not a fact, and this is the one place that reconciles it.
+ *
+ * TWO PASSES, and the order matters: every pick that still sits exactly where it
+ * was claims its position first, and only then do the displaced ones look for a
+ * free occurrence of their token. One pass would let a displaced pick steal the
+ * anchor of a pick that never moved, which for two same-named chats is the very
+ * confusion this whole mechanism exists to remove.
+ *
+ * Pure, and total: what it returns always describes the text it was handed.
+ */
+export function repinPicks(text: string, picks: readonly MentionPick[]): MentionPick[] {
+  const lower = text.toLowerCase();
+  const claimed = new Set<number>();
+  const held: MentionPick[] = [];
+  const adrift: MentionPick[] = [];
+  for (const p of picks) {
+    const name = p.name.toLowerCase();
+    if (!name) continue;
+    if (!claimed.has(p.start) && tokenAt(lower, p.start, name)) {
+      claimed.add(p.start);
+      held.push(p);
+    } else adrift.push(p);
+  }
+  for (const p of adrift) {
+    const name = p.name.toLowerCase();
+    let at = -1;
+    for (let i = lower.indexOf(`@${name}`); i >= 0; i = lower.indexOf(`@${name}`, i + 1)) {
+      if (claimed.has(i) || !tokenAt(lower, i, name)) continue;
+      at = i;
+      break;
+    }
+    // The token is gone from the draft, so the choice it recorded is gone too.
+    // Dropping it falls back to name resolution, which is the honest answer.
+    if (at < 0) continue;
+    claimed.add(at);
+    held.push({ ...p, start: at });
+  }
+  return held.sort((a, b) => a.start - b.start);
 }
 
 // ── Resolution: a token back to a chat ───────────────────────────────────────
@@ -268,9 +352,19 @@ export function applyMention(
  * Longest-first is the disambiguation rule and it is load-bearing: "Main" is a
  * prefix of "Main repo", and matching the short one would send work to the
  * wrong chat while LOOKING right in the draft.
+ *
+ * The tie-break on `tabId` is not cosmetic. Two chats may share a name, and the
+ * sort was otherwise stable on the CORPUS ORDER — which is the sidebar's order,
+ * which moves with activity. So the same `@Work review` in a message already
+ * sent resolved to one chat this morning and the other one this afternoon.
+ * Identity for a NEW mention is carried properly by `MentionPick`; this is what
+ * makes the fallback — text that was written before any of that, or by hand —
+ * at least answer the same way every time.
  */
 function byNameLength(corpus: readonly MentionChat[]): MentionChat[] {
-  return [...corpus].sort((a, b) => b.tabName.length - a.tabName.length);
+  return [...corpus].sort(
+    (a, b) => b.tabName.length - a.tabName.length || a.tabId.localeCompare(b.tabId),
+  );
 }
 
 /** Does `@name` sit at `i` in `text`, as a whole token? */
@@ -337,16 +431,43 @@ export interface Directive {
  * routing it away from the chat the user was typing in would be the single
  * worst thing this feature could do. The rule is one the user can state, which
  * is the property that matters.
+ *
+ * ─── An explicit choice outranks re-reading the text ─────────────────────────
+ * `picks` is what the user actually SELECTED in the picker (see `MentionPick`).
+ * When one is anchored to this leading `@` and its token still matches, that
+ * chat receives the work — full stop. Re-resolving by name is the FALLBACK, for
+ * a mention typed by hand or restored from a draft written before the pick was
+ * recorded; it is not a second opinion about a choice already made.
+ *
+ * `text` should be passed UNTRIMMED: a pick's anchor is an offset into the
+ * draft, and trimming it first shifts every offset by the leading whitespace.
+ * The body is trimmed here either way, so nothing else changes.
  */
-export function parseDirective(text: string, corpus: readonly MentionChat[]): Directive | null {
-  const trimmed = text.trimStart();
+export function parseDirective(
+  text: string,
+  corpus: readonly MentionChat[],
+  picks: readonly MentionPick[] = [],
+): Directive | null {
+  const lead = text.length - text.trimStart().length;
+  const trimmed = text.slice(lead);
   if (!trimmed.startsWith('@')) return null;
   const lower = trimmed.toLowerCase();
-  const target = byNameLength(corpus).find(
-    (c) => c.tabName && tokenAt(lower, 0, c.tabName.toLowerCase()),
+  // The chat the user pointed at, if they pointed at this `@` and the token they
+  // were given is still the one in the draft.
+  const picked = picks.find(
+    (p) => p.start === lead && p.name && tokenAt(lower, 0, p.name.toLowerCase()),
   );
+  const chosen = picked ? corpus.find((c) => c.tabId === picked.tabId) : undefined;
+  const target =
+    chosen ??
+    byNameLength(corpus).find((c) => c.tabName && tokenAt(lower, 0, c.tabName.toLowerCase()));
   if (!target) return null;
-  const body = trimmed.slice(1 + target.tabName.length).trim();
+  // How far the body starts after the `@` is a fact about the TEXT, so it is the
+  // token's length — which is the name as inserted, not the chat's name today.
+  // A chat renamed after it was picked still gets the work, and the body is
+  // still the body.
+  const token = chosen && picked ? picked.name : target.tabName;
+  const body = trimmed.slice(1 + token.length).trim();
   return body ? { target, body } : null;
 }
 
