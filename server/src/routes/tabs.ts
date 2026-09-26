@@ -22,7 +22,7 @@ import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { pruneDeadPanes } from '../store/migrations.js';
 import { type TabActivity, compareUnpinnedTabs } from '../tab-activity.js';
-import { type ClockIndex, clockIndex } from '../tab-clock.js';
+import { type ClockIndex, clockIndex, resolveTabClock } from '../tab-clock.js';
 
 /**
  * CRUD for tabs (the things in the tab bar). Each tab belongs to a
@@ -327,7 +327,14 @@ export function tabsRoutes(deps: {
       deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, repaired) });
     }
     const decorated = livePanes.map((p) => decoratePane(deps.cache, p));
-    return c.json({ ...t, panes: decorated });
+    // LIFECYCLE rides even the detail read. This endpoint deliberately does
+    // NOT run the full decorateTab (its job is the tab plus its panes, and the
+    // runtime rollups are the list's business) — but `done`/`clock` are not
+    // rollups, they are what this row IS, and a client that merges this
+    // response over a decorated one would otherwise blank them. Same
+    // resolution, same instant, one answer.
+    const lifecycle = resolveTabClock(clockIndex(deps.db), t.id, Date.now());
+    return c.json({ ...t, done: lifecycle.done, clock: lifecycle.clock, panes: decorated });
   });
 
   app.patch('/:id', async (c) => {

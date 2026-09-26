@@ -126,6 +126,19 @@ describe('the chat clock on the wire', () => {
     expect(seen[0]?.clock?.fill).toBe(1);
   });
 
+  it('the single-tab read carries the same lifecycle as the list', async () => {
+    // A client that merges this response over a decorated row would otherwise
+    // blank both fields — the shape of bug this whole "compute it server-side"
+    // rule exists to prevent.
+    const t = await newTab('x');
+    tabs.resetClock(t.id, Date.now() - CHAT_DECAY_MS - 1_000);
+    const one = (await (await test.app.request(`/api/tabs/${t.id}`)).json()) as Tab;
+    const listed = (await listTabs()).find((r) => r.id === t.id) as Tab;
+    expect(one.done).toBe(true);
+    expect(one.done).toBe(listed.done);
+    expect(one.clock?.started_at).toBe(listed.clock?.started_at);
+  });
+
   describe('spawned_by', () => {
     it('records the parent tab and shares its clock', async () => {
       const parent = await newTab('parent');
