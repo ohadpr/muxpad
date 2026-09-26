@@ -623,6 +623,36 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    // RETIREMENT — the other way into `done`, and the one that answers the
+    // 41-agent sidebar.
+    //
+    //   tabs.retired_at     — epoch ms this chat left the live list by an act
+    //     rather than by the clock. Null means "still live" (or decayed, which
+    //     is computed from the clock and never written).
+    //   tabs.retired_reason — WHICH act. 'delivered' (a sub-chat finished its
+    //     work and its result went back to the parent), 'archived' (the user
+    //     did it by hand). Stored rather than inferred because the two read
+    //     very differently in a tooltip, and because `spawned_by` alone cannot
+    //     tell them apart — a sub-chat can also be archived by hand.
+    //
+    // WHY A COLUMN AND NOT A COMPUTED STATE, when `done`-by-decay is computed:
+    // decay is a function of TIME, which the server can always re-derive; a
+    // retirement is an EVENT, and an event nobody wrote down did not happen.
+    // A sub-chat's delivery is observable exactly once, at turn-done, and the
+    // runtime that observed it is gone after a restart.
+    //
+    // Nullable with no backfill, and that is the whole upgrade: every existing
+    // tab is live, which is exactly the state they were in before this column
+    // existed. Nothing retires retroactively — including the 41 agents that
+    // motivated this. They decay on the v27 clock like everything else, and
+    // any sub-chat among them retires the next time it finishes a turn.
+    version: 28,
+    sql: `
+      ALTER TABLE tabs ADD COLUMN retired_at INTEGER;
+      ALTER TABLE tabs ADD COLUMN retired_reason TEXT;
+    `,
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

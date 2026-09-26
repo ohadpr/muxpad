@@ -2,11 +2,16 @@
  * The chat CLOCK: how a chat ages, and when it becomes `done`.
  *
  * ── THE MODEL ────────────────────────────────────────────────────────────────
- * Every chat carries a 4-day clock. Any message the user sends it resets the
- * clock to full. When the clock runs out the chat is DONE: it leaves the live
- * list, collapses into a `done` group, and comes back the moment you send it
- * another message. Nothing is ever deleted — `done` is a rendering state, not
- * a tombstone. Pinning stops the clock entirely.
+ * A TOP-LEVEL chat carries a 4-day clock. Any message the user sends it resets
+ * the clock to full. When the clock runs out the chat is DONE: it leaves the
+ * live list, collapses into a `done` group, and comes back the moment you send
+ * it another message. Nothing is ever deleted — `done` is a rendering state,
+ * not a tombstone. Pinning stops the clock entirely.
+ *
+ * A SUB-CHAT has no clock and never reaches this file. It is a piece of work,
+ * not a conversation: it retires the moment it delivers its result to its
+ * parent. See server/src/tab-clock.ts for why, and for the sidebar full of
+ * finished agents that settled the question.
  *
  * ── WHY THE MATH LIVES IN shared ─────────────────────────────────────────────
  * It does NOT live here so the client can re-derive lifecycle — the server
@@ -18,9 +23,9 @@
  * that wants to animate between polls must animate the same curve the server
  * publishes, not a second one it invented.
  *
- * The one input that is NOT here is which clock a chat reads: a child chat
- * shares its parent's, so resolving that means walking the spawn tree. That
- * needs the DB and lives in server/src/tab-clock.ts.
+ * The one question that is NOT answered here is WHETHER a chat has a clock at
+ * all, and whether it has already retired. Both need the database and live in
+ * server/src/tab-clock.ts.
  */
 import { z } from 'zod';
 

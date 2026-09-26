@@ -518,7 +518,7 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
       .get() as { version: number };
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
-    expect(LATEST_SCHEMA_VERSION).toBe(27);
+    expect(LATEST_SCHEMA_VERSION).toBe(28);
   });
 });
 
@@ -871,5 +871,44 @@ describe('migrations v27 — the chat clock and the spawn link', () => {
     db.prepare('UPDATE tabs SET clock_started_at = ? WHERE id = ?').run(reset, 't1');
     runMigrations(db);
     expect(clockOf(db, 't1')).toBe(reset);
+  });
+});
+
+describe('migrations v28 — retirement', () => {
+  function v27(): Database.Database {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 27 });
+    db.prepare(
+      'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+    ).run('w1', 'wslug1aa', 'W', 0, 1, 1);
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at)
+       VALUES ('t1', 's1', 'T', '""', 'w1', 0, 1, 1)`,
+    ).run();
+    return db;
+  }
+
+  it('leaves every existing tab LIVE — nothing retires retroactively', () => {
+    // Including the 41 agents that motivated the column. They decay on the
+    // v27 clock like everything else; any sub-chat among them retires the
+    // next time it finishes a turn.
+    const db = v27();
+    runMigrations(db);
+    expect(
+      db.prepare('SELECT retired_at, retired_reason FROM tabs WHERE id = ?').get('t1'),
+    ).toEqual({ retired_at: null, retired_reason: null });
+  });
+
+  it('stores the reason alongside the stamp', () => {
+    const db = v27();
+    runMigrations(db);
+    db.prepare('UPDATE tabs SET retired_at = ?, retired_reason = ? WHERE id = ?').run(
+      5_000,
+      'delivered',
+      't1',
+    );
+    expect(
+      db.prepare('SELECT retired_at, retired_reason FROM tabs WHERE id = ?').get('t1'),
+    ).toEqual({ retired_at: 5_000, retired_reason: 'delivered' });
   });
 });

@@ -36,6 +36,7 @@ import { TabStore } from './store/TabStore.js';
 import { openDb } from './store/db.js';
 import { TabActivity } from './tab-activity.js';
 import { ChatClockSweeper } from './tab-clock.js';
+import { ChatRetirer, clearReadyMarks } from './tab-retire.js';
 import { clearOrphanedTunnelBase, ensureTunnelApp } from './tunnel/TunnelApp.js';
 import { VoiceSessionManager, glossaryInstructions } from './voice/VoiceSessionManager.js';
 import { openAiVoiceTransport } from './voice/live.js';
@@ -137,11 +138,31 @@ tabActivity.attach(ptyd);
 // this tick the sidebar would not move until the client's next poll, which is
 // stopped entirely for a hidden document or a collapsed workspace. Rising edge
 // only, and silent on the first pass (see ChatClockSweeper).
+// `blocked` reads the AGENT BRIDGE, not the cache, and so is deliberately the
+// same signal cron's keep-list reads: a question actually awaiting an answer.
+// The cache's `blocked` status is a superset (question ∪ BEL), and a bell is
+// not a reason to keep a delivered sub-chat in the live list. Declared lazily
+// because the bridge is constructed further down; it is only ever CALLED from
+// a turn event, which cannot arrive before the bridge exists.
+const retireDeps = { db, cache, events, blocked: (paneId: string) => agentBridge.blocked(paneId) };
 const clockSweeper = new ChatClockSweeper(db, (tabId) => {
+  // A chat that has decayed is not "finished, waiting for you" — it is four
+  // days past anyone caring. Clearing the marks as it crosses is the third
+  // door into the `ready` expiry (delivery and archive are the other two), and
+  // the one that catches the 41 agents in the screenshot: nobody will ever
+  // open those tabs, so nothing else would ever turn them off.
+  clearReadyMarks(retireDeps, tabId);
   const t = tabStore.getById(tabId);
   if (t) events.emit({ type: 'tab.updated', tab: decorateTab(cache, db, t) });
 });
 clockSweeper.start();
+
+// A SUB-CHAT retires the moment its work lands back in its parent. Subscribed
+// to the same `agent_turn` the cron scheduler watches, with cron's own
+// keep-list (fatal / a pending question / an artifact / more queued work), and
+// one difference: cron closes the tab, this one retires it.
+const chatRetirer = new ChatRetirer(retireDeps);
+chatRetirer.start();
 
 // An EXPLICIT app-url declaration (`muxpad app-url` / `muxpad serve` — the
 // OSC marker, not the output-scan heuristic) is the "this pane is a web app"

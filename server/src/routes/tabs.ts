@@ -22,7 +22,8 @@ import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { pruneDeadPanes } from '../store/migrations.js';
 import { type TabActivity, compareUnpinnedTabs } from '../tab-activity.js';
-import { type ClockIndex, clockIndex, resolveTabClock } from '../tab-clock.js';
+import { type ClockIndex, clockIndex, resolveTabClock, reviveChat } from '../tab-clock.js';
+import { retireChat } from '../tab-retire.js';
 
 /**
  * CRUD for tabs (the things in the tab bar). Each tab belongs to a
@@ -286,6 +287,56 @@ export function tabsRoutes(deps: {
     return c.body(null, 204);
   });
 
+  /**
+   * ARCHIVE — the manual path into `done`, and the row's × from now on.
+   *
+   * It lands in exactly the same place decay does, which is the point: one
+   * destination, reached by a clock or by a decision. Nothing is removed, the
+   * transcript and the spawn tree are untouched, and the next message revives
+   * it — so this is an action a person can take without thinking about it,
+   * which `DELETE` never was. (That is why the × was never used: it meant
+   * destroy, so using it required being sure.)
+   *
+   * It also clears the chat's `ready` marks. Archiving something is telling
+   * the system you are done with it; leaving it lit green in the done group
+   * would be the same "READY forever" noise this whole change exists to end.
+   *
+   * Idempotent: archiving an archived chat keeps the original stamp (204
+   * either way). Destructive delete is still DELETE /api/tabs/:id, where it
+   * belongs — behind a menu, not a one-click ×.
+   */
+  app.post('/:id/archive', (c) => {
+    const id = c.req.param('id');
+    if (!tabs.getById(id))
+      return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
+    retireChat({ db: deps.db, cache: deps.cache, events: deps.events }, id, 'archived');
+    return c.body(null, 204);
+  });
+
+  /**
+   * Bring an archived chat back to the live list WITHOUT sending it anything —
+   * the undo for a mis-click, and the only way back that does not put words in
+   * an agent's mouth.
+   *
+   * It restarts the clock as well as clearing the retirement, because the two
+   * cannot be separated: a chat un-archived onto the expired clock it left
+   * with would be `done` again on the very next read, and the undo would look
+   * like it had silently failed.
+   *
+   * A sub-chat un-retired this way is live until it delivers again (it has no
+   * clock to restart — the reset is a harmless no-op on a column nothing
+   * reads while it has a parent).
+   */
+  app.post('/:id/unarchive', (c) => {
+    const id = c.req.param('id');
+    if (!reviveChat(deps.db, id))
+      return c.json({ error: { code: 'not_found', message: 'tab not found' } }, 404);
+    const fresh = tabs.getById(id);
+    if (fresh)
+      deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, fresh) });
+    return c.body(null, 204);
+  });
+
   app.post('/reorder', async (c) => {
     const body = z.object({ ids: z.array(z.string()) }).parse(await c.req.json());
     tabs.reorder(body.ids);
@@ -334,7 +385,13 @@ export function tabsRoutes(deps: {
     // response over a decorated one would otherwise blank them. Same
     // resolution, same instant, one answer.
     const lifecycle = resolveTabClock(clockIndex(deps.db), t.id, Date.now());
-    return c.json({ ...t, done: lifecycle.done, clock: lifecycle.clock, panes: decorated });
+    return c.json({
+      ...t,
+      done: lifecycle.done,
+      ...(lifecycle.done_reason ? { done_reason: lifecycle.done_reason } : {}),
+      clock: lifecycle.clock,
+      panes: decorated,
+    });
   });
 
   app.patch('/:id', async (c) => {

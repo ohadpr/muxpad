@@ -6,12 +6,13 @@ import { WorkspaceStore } from './store/WorkspaceStore.js';
 import { runMigrations } from './store/migrations.js';
 import {
   ChatClockSweeper,
+  childrenOf,
   clockIndex,
-  clockRoot,
-  descendantsOf,
   doneTabIds,
+  isSubChat,
   resetChatClock,
   resolveTabClock,
+  reviveChat,
 } from './tab-clock.js';
 
 describe('tab-clock', () => {
@@ -19,7 +20,7 @@ describe('tab-clock', () => {
   let tabs: TabStore;
   let workspaceId: string;
 
-  /** A tab with its clock stamped `daysAgo` days back. */
+  /** A top-level chat whose clock started `daysAgo` days back. */
   function chat(name: string, daysAgo: number, parent?: string): string {
     const t = tabs.create({
       name,
@@ -31,6 +32,8 @@ describe('tab-clock', () => {
     return t.id;
   }
 
+  const resolve = (id: string) => resolveTabClock(clockIndex(db), id, Date.now());
+
   beforeEach(() => {
     db = new Database(':memory:');
     runMigrations(db);
@@ -38,151 +41,204 @@ describe('tab-clock', () => {
     workspaceId = new WorkspaceStore(db).create({ name: 'W' }).id;
   });
 
-  it('gives a brand-new chat a full clock', () => {
-    const id = chat('a', 0);
-    const { done, clock } = resolveTabClock(clockIndex(db), id, Date.now());
-    expect(done).toBe(false);
-    expect(clock.fill).toBeLessThan(0.001);
-    expect(clock.stopped).toBe(false);
-  });
-
-  it('marks a chat done once four days pass with no message', () => {
-    const id = chat('a', 5);
-    expect(resolveTabClock(clockIndex(db), id, Date.now()).done).toBe(true);
-  });
-
-  it('a message revives a done chat and refills its clock', () => {
-    const id = chat('a', 5);
-    expect(resolveTabClock(clockIndex(db), id, Date.now()).done).toBe(true);
-    resetChatClock(db, id);
-    const after = resolveTabClock(clockIndex(db), id, Date.now());
-    expect(after.done).toBe(false);
-    expect(after.clock.fill).toBeLessThan(0.001);
-  });
-
-  it('pinning stops the clock, however old the chat is', () => {
-    const id = chat('a', 40);
-    tabs.setPinned(id, true);
-    const { done, clock } = resolveTabClock(clockIndex(db), id, Date.now());
-    expect(done).toBe(false);
-    expect(clock.stopped).toBe(true);
-    expect(clock.expires_at).toBeNull();
-  });
-
-  describe('a child shares its parent’s clock', () => {
-    it('reads the parent’s age, not its own', () => {
-      const parent = chat('parent', 3);
-      const child = chat('child', 0, parent);
-      const index = clockIndex(db);
-      const p = resolveTabClock(index, parent, Date.now());
-      const c = resolveTabClock(index, child, Date.now());
-      expect(c.clock.started_at).toBe(p.clock.started_at);
-      expect(c.clock.fill).toBeCloseTo(0.75, 3);
-      expect(c.clock.last_day).toBe(true);
-    });
-
-    it('expires WITH the parent even when it is the newer chat', () => {
-      // The rule this encodes: work spawned under a chat must not outlive it.
-      // The child here was created moments ago and would be nowhere near
-      // expiry on a clock of its own.
-      const parent = chat('parent', 5);
-      const child = chat('child', 0, parent);
-      const index = clockIndex(db);
-      expect(resolveTabClock(index, parent, Date.now()).done).toBe(true);
-      expect(resolveTabClock(index, child, Date.now()).done).toBe(true);
-    });
-
-    it('resolves through a grandparent', () => {
-      const root = chat('root', 5);
-      const mid = chat('mid', 0, root);
-      const leaf = chat('leaf', 0, mid);
-      expect(clockRoot(clockIndex(db), leaf)?.id).toBe(root);
-      expect(resolveTabClock(clockIndex(db), leaf, Date.now()).done).toBe(true);
-    });
-
-    it('a message to the CHILD revives the whole family', () => {
-      // A shared clock has to be shared in both directions, or answering a
-      // worker leaves the chat it belongs to expiring underneath you.
-      const parent = chat('parent', 5);
-      const child = chat('child', 5, parent);
-      const touched = resetChatClock(db, child);
-      expect(new Set(touched)).toEqual(new Set([parent, child]));
-      const index = clockIndex(db);
-      expect(resolveTabClock(index, parent, Date.now()).done).toBe(false);
-      expect(resolveTabClock(index, child, Date.now()).done).toBe(false);
-    });
-
-    it('a pinned parent stops its children too', () => {
-      const parent = chat('parent', 40);
-      const child = chat('child', 40, parent);
-      tabs.setPinned(parent, true);
-      const c = resolveTabClock(clockIndex(db), child, Date.now());
-      expect(c.done).toBe(false);
-      expect(c.clock.stopped).toBe(true);
-    });
-
-    it('a pinned child opts itself out without pinning the parent', () => {
-      const parent = chat('parent', 5);
-      const child = chat('child', 5, parent);
-      tabs.setPinned(child, true);
-      const index = clockIndex(db);
-      expect(resolveTabClock(index, child, Date.now()).done).toBe(false);
-      expect(resolveTabClock(index, parent, Date.now()).done).toBe(true);
-    });
-
-    it('an orphan falls back to its own clock instead of vanishing', () => {
-      // There is no FK: deleting a parent leaves the child holding a dangling
-      // id. It becomes a root in its own right — reading the dangle as
-      // "expired" would delete work by implication, which this model never
-      // does.
-      const parent = chat('parent', 5);
-      const child = chat('child', 0, parent);
-      tabs.delete(parent);
-      const { done, clock } = resolveTabClock(clockIndex(db), child, Date.now());
+  describe('a top-level chat decays', () => {
+    it('is live with a full clock when new', () => {
+      const { done, clock } = resolve(chat('a', 0));
       expect(done).toBe(false);
-      expect(clock.fill).toBeLessThan(0.001);
+      expect(clock?.fill).toBeLessThan(0.001);
+      expect(clock?.stopped).toBe(false);
     });
 
-    it('survives a cycle instead of hanging', () => {
-      // Unreachable through any route that exists (spawned_by is written once,
-      // at creation) — but this runs on the sidebar's hot path, and a corrupt
-      // row must not take the server with it.
-      const a = chat('a', 0);
-      const b = chat('b', 0, a);
-      db.prepare('UPDATE tabs SET spawned_by = ? WHERE id = ?').run(b, a);
-      expect(() => resolveTabClock(clockIndex(db), a, Date.now())).not.toThrow();
-      expect(() => descendantsOf(clockIndex(db), a)).not.toThrow();
+    it('is done once four days pass with no message', () => {
+      const r = resolve(chat('a', 5));
+      expect(r.done).toBe(true);
+      expect(r.done_reason).toBe('decayed');
+    });
+
+    it('a message revives it and refills the clock', () => {
+      const id = chat('a', 5);
+      expect(resolve(id).done).toBe(true);
+      resetChatClock(db, id);
+      const after = resolve(id);
+      expect(after.done).toBe(false);
+      expect(after.clock?.fill).toBeLessThan(0.001);
+    });
+
+    it('pinning stops the clock, however old the chat is', () => {
+      const id = chat('a', 40);
+      tabs.setPinned(id, true);
+      const { done, clock } = resolve(id);
+      expect(done).toBe(false);
+      expect(clock?.stopped).toBe(true);
+      expect(clock?.expires_at).toBeNull();
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // THE AMENDMENT. A sub-chat used to share its parent's clock. A real
+  // 41-agent sidebar — every row READY, every one finished hours before,
+  // none retired — killed that: a shared clock would have kept all 41 live
+  // for four more days. A sub-chat is a piece of WORK, and it leaves when the
+  // work lands.
+  // ────────────────────────────────────────────────────────────────────────
+  describe('a sub-chat has no clock — it retires on delivery', () => {
+    it('publishes no clock at all, not a fresh one', () => {
+      // `null` and "0% full" are different claims. Nothing about elapsed time
+      // describes a sub-chat, and a chip that renders 0% is saying it does.
+      const parent = chat('parent', 0);
+      const child = chat('child', 0, parent);
+      expect(resolve(child).clock).toBeNull();
+      expect(resolve(parent).clock).not.toBeNull();
+      expect(isSubChat(clockIndex(db), child)).toBe(true);
+      expect(isSubChat(clockIndex(db), parent)).toBe(false);
+    });
+
+    it('never decays, however long the work takes', () => {
+      // A sub-chat still running after a week is not stale, it is busy — and
+      // a clock would retire it mid-sentence.
+      const parent = chat('parent', 0);
+      const child = chat('child', 30, parent);
+      expect(resolve(child).done).toBe(false);
+    });
+
+    it('does NOT expire with its parent', () => {
+      // The old rule, now wrong in the other direction too: the parent's clock
+      // says nothing about whether this work is finished.
+      const parent = chat('parent', 9);
+      const child = chat('child', 9, parent);
+      expect(resolve(parent).done).toBe(true);
+      expect(resolve(child).done).toBe(false);
+    });
+
+    it('is done the moment it is marked delivered', () => {
+      const parent = chat('parent', 0);
+      const child = chat('child', 0, parent);
+      tabs.retire(child, 'delivered');
+      const r = resolve(child);
+      expect(r.done).toBe(true);
+      expect(r.done_reason).toBe('delivered');
+      // Still there. Nothing is ever deleted — `done` is where it renders.
+      expect(tabs.getById(child)?.spawned_by).toBe(parent);
+    });
+
+    it('a message revives it, and it is live again until it re-delivers', () => {
+      const parent = chat('parent', 0);
+      const child = chat('child', 0, parent);
+      tabs.retire(child, 'delivered');
+      resetChatClock(db, child);
+      expect(resolve(child).done).toBe(false);
+      expect(resolve(child).clock).toBeNull(); // still a sub-chat, still no clock
+    });
+
+    it('an orphan becomes a root and gets an ordinary clock', () => {
+      // The parent is gone (no FK, by design), so there is nobody left to
+      // deliver to — it decays like anything else rather than hanging live
+      // forever waiting.
+      const parent = chat('parent', 0);
+      const child = chat('child', 9, parent);
+      expect(resolve(child).clock).toBeNull();
+      tabs.delete(parent);
+      const after = resolve(child);
+      expect(after.clock).not.toBeNull();
+      expect(after.done).toBe(true);
+      expect(after.done_reason).toBe('decayed');
+    });
+
+    it('a pinned sub-chat is never done, delivered or not', () => {
+      const parent = chat('parent', 0);
+      const child = chat('child', 0, parent);
+      tabs.setPinned(child, true);
+      tabs.retire(child, 'delivered');
+      expect(resolve(child).done).toBe(false);
+      expect(resolve(child).clock).toBeNull();
+    });
+
+    it('nests: a grandchild is a sub-chat too', () => {
+      const root = chat('root', 0);
+      const mid = chat('mid', 0, root);
+      const leaf = chat('leaf', 30, mid);
+      expect(resolve(leaf).clock).toBeNull();
+      expect(resolve(leaf).done).toBe(false);
+      expect(childrenOf(clockIndex(db), root)).toEqual([mid]);
+    });
+  });
+
+  describe('archiving', () => {
+    it('makes a live chat done with its reason recorded', () => {
+      const id = chat('a', 0);
+      tabs.retire(id, 'archived');
+      const r = resolve(id);
+      expect(r.done).toBe(true);
+      expect(r.done_reason).toBe('archived');
+    });
+
+    it('outranks the clock: an archived chat says archived, not decayed', () => {
+      const id = chat('a', 9);
+      tabs.retire(id, 'archived');
+      expect(resolve(id).done_reason).toBe('archived');
+    });
+
+    it('keeps the original stamp when applied twice', () => {
+      // A second turn-done on an already-delivered sub-chat must not re-date
+      // it; the timestamp is what a done group sorts and labels by.
+      const id = chat('a', 0);
+      tabs.retire(id, 'archived', 1_000);
+      expect(tabs.retire(id, 'delivered', 2_000)).toBe(false);
+      expect(clockIndex(db).get(id)?.retired_at).toBe(1_000);
+      expect(resolve(id).done_reason).toBe('archived');
+    });
+
+    it('reviveChat un-retires AND restarts the clock, in one act', () => {
+      // Un-retiring alone would hand an archived chat back onto its expired
+      // clock — done again on the very next read, so the undo would look like
+      // it had silently failed.
+      const id = chat('a', 9);
+      tabs.retire(id, 'archived');
+      expect(reviveChat(db, id)).toBe(true);
+      const r = resolve(id);
+      expect(r.done).toBe(false);
+      expect(r.clock?.fill).toBeLessThan(0.001);
+    });
+
+    it('reviveChat reports an unknown tab rather than pretending', () => {
+      expect(reviveChat(db, 'ghost')).toBe(false);
+      expect(resetChatClock(db, 'ghost')).toEqual([]);
+    });
+
+    it('a pinned chat is never done, even archived', () => {
+      const id = chat('a', 0);
+      tabs.setPinned(id, true);
+      tabs.retire(id, 'archived');
+      expect(resolve(id).done).toBe(false);
     });
   });
 
   it('never reports an unknown tab as done', () => {
     // A tab deleted between a read and its decoration. Nothing should render
-    // it; "alive" is the harmless direction to be wrong in.
-    expect(resolveTabClock(clockIndex(db), 'ghost', Date.now()).done).toBe(false);
+    // it; "still here" is the harmless direction to be wrong in.
+    const r = resolve('ghost');
+    expect(r.done).toBe(false);
+    expect(r.clock).toBeNull();
   });
 
-  it('resetChatClock reports nothing for an unknown tab', () => {
-    expect(resetChatClock(db, 'ghost')).toEqual([]);
+  it('a live chat publishes no done_reason', () => {
+    expect(resolve(chat('a', 1)).done_reason).toBeUndefined();
   });
 
   describe('ChatClockSweeper', () => {
     it('says nothing on the first pass, then announces each crossing once', () => {
       const id = chat('a', 0);
       // Already done before the sweeper ever runs — a server restart four days
-      // into a quiet chat. The priming pass must swallow it: it was done in
-      // the payload of every client's first fetch, so announcing it is a boot
-      // burst that tells nobody anything.
+      // into a quiet chat. The priming pass must swallow it.
       chat('long-gone', 9);
       const seen: string[] = [];
       const sweeper = new ChatClockSweeper(db, (t) => seen.push(t));
       const t0 = Date.now();
 
-      // Priming pass, and a tick while the chat is still alive.
       expect(sweeper.tick(t0)).toEqual([]);
       expect(sweeper.tick(t0 + DAY_MS)).toEqual([]);
       expect(seen).toEqual([]);
 
-      // It crosses — announced exactly once, however many ticks follow.
       expect(sweeper.tick(t0 + CHAT_DECAY_MS)).toEqual([id]);
       expect(sweeper.tick(t0 + CHAT_DECAY_MS + 60_000)).toEqual([]);
       expect(seen).toEqual([id]);
@@ -199,13 +255,13 @@ describe('tab-clock', () => {
       expect(sweeper.tick(t0 + 2 * CHAT_DECAY_MS + 1_000)).toEqual([id]);
     });
 
-    it('announces a child crossing alongside its parent', () => {
+    it('never announces a sub-chat — it has no clock to run out', () => {
       const parent = chat('parent', 0);
-      const child = chat('child', 0, parent);
+      chat('child', 0, parent);
       const sweeper = new ChatClockSweeper(db, () => {});
       const t0 = Date.now();
       sweeper.tick(t0);
-      expect(new Set(sweeper.tick(t0 + CHAT_DECAY_MS))).toEqual(new Set([parent, child]));
+      expect(sweeper.tick(t0 + CHAT_DECAY_MS)).toEqual([parent]);
     });
 
     it('keeps sweeping when one announcement throws', () => {
@@ -227,12 +283,20 @@ describe('tab-clock', () => {
     });
   });
 
-  it('doneTabIds returns every expired chat in one pass', () => {
+  it('doneTabIds returns every done chat in one pass', () => {
     const live = chat('live', 1);
-    const dead = chat('dead', 9);
+    const decayed = chat('decayed', 9);
+    const archived = chat('archived', 0);
+    tabs.retire(archived, 'archived');
     const pinned = chat('pinned', 9);
     tabs.setPinned(pinned, true);
-    expect(doneTabIds(clockIndex(db), Date.now())).toEqual(new Set([dead]));
+    const parent = chat('parent', 9);
+    const delivered = chat('delivered', 0, parent);
+    tabs.retire(delivered, 'delivered');
+    chat('working', 0, parent); // a sub-chat still working stays live
+    expect(doneTabIds(clockIndex(db), Date.now())).toEqual(
+      new Set([decayed, archived, parent, delivered]),
+    );
     expect(live).toBeTruthy();
   });
 });

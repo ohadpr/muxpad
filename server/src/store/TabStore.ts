@@ -36,17 +36,25 @@ interface TabRow {
   icon_at: number | null;
   spawned_by: string | null;
   clock_started_at: number | null;
+  retired_at: number | null;
+  retired_reason: string | null;
   created_at: number;
   updated_at: number;
 }
 
-/** The four columns the chat clock is resolved from, for every tab at once.
+/** Why a chat left the live list by an ACT rather than by the clock.
+ *  `decayed` is never stored — it is what the clock says. */
+export type RetireReason = 'delivered' | 'archived';
+
+/** Everything a chat's lifecycle is resolved from, for every tab at once.
  *  See {@link TabStore.clockRows} and server/src/tab-clock.ts. */
 export interface TabClockRow {
   id: string;
   spawned_by: string | null;
   pinned: boolean;
   clock_started_at: number | null;
+  retired_at: number | null;
+  retired_reason: RetireReason | null;
 }
 
 export class TabStore {
@@ -109,11 +117,13 @@ export class TabStore {
         maxPos + 1,
         now,
         spawned_by,
-        // Every chat is born with a full clock, INCLUDING a child — whose own
-        // column is then ignored for as long as its parent exists (the
-        // resolver reads the root's). Stamping it anyway costs nothing and
-        // means a child orphaned by its parent's deletion falls back to a real
-        // timestamp instead of a null nobody can interpret.
+        // Every chat is born with a full clock, INCLUDING a sub-chat — whose
+        // column is then ignored for as long as its parent exists, because a
+        // sub-chat does not decay at all (it retires when it delivers).
+        // Stamping it anyway costs nothing and means a sub-chat ORPHANED by
+        // its parent's deletion — which does become an ordinary decaying chat
+        // — falls back to a real timestamp instead of a null nobody can
+        // interpret.
         now,
       );
     return {
@@ -323,9 +333,14 @@ export class TabStore {
   }
 
   /**
-   * Restart this tab's decay clock. The raw write — WHICH tab to restart (a
-   * child shares its parent's clock, so the reset lands on the root) is
-   * resolved by the caller in tab-clock.ts.
+   * Restart this tab's decay clock. The raw write; the revival it is half of
+   * lives in tab-clock.ts (`reviveChat`, which also clears any retirement —
+   * a chat handed back onto an expired clock would be done again on the next
+   * read).
+   *
+   * Harmless on a sub-chat, which has no clock: the column is written and
+   * simply not read while the parent exists. It becomes meaningful again if
+   * that parent is ever deleted.
    *
    * Deliberately not touching `updated_at`, for the same reason
    * `touchActivity` doesn't: that column tracks structural edits and clients
@@ -336,34 +351,80 @@ export class TabStore {
   }
 
   /**
-   * Every tab's clock inputs, in ONE query.
+   * Every tab's lifecycle inputs, in ONE query.
    *
-   * A chat's clock is its ROOT ancestor's, so resolving a single row can mean
-   * walking several — and `decorateTab` runs per row on a 5s sidebar poll, so
-   * a per-row walk of per-row queries would be the hottest thing in the app.
-   * The table is tens of rows on a real install, which makes reading all of it
-   * once cheaper than the index lookups a smarter query would do.
+   * Resolving a single row needs another row — whether its `spawned_by`
+   * parent still EXISTS is what decides between "a sub-chat, which retires on
+   * delivery" and "a root, which decays" — and `decorateTab` runs per row on a
+   * 5s sidebar poll, so a per-row lookup would be the hottest thing in the
+   * app. The table is tens of rows on a real install, which makes reading all
+   * of it once cheaper than the index lookups a smarter query would do.
    *
-   * GLOBAL rather than per-workspace on purpose: a chat spawned from a chat in
-   * another workspace (a worker dropped into a project workspace, say) still
-   * reads its parent's clock, and a workspace-scoped index would silently read
-   * that parent as missing and hand the child a root clock of its own.
+   * GLOBAL rather than per-workspace on purpose: a chat can be spawned from a
+   * chat in ANOTHER workspace (a worker dropped into a project workspace, say),
+   * and a workspace-scoped read would not find that parent — silently
+   * promoting a live sub-chat to a decaying root.
    */
   clockRows(): TabClockRow[] {
     const rows = this.db
-      .prepare('SELECT id, spawned_by, pinned, clock_started_at FROM tabs')
+      .prepare(
+        'SELECT id, spawned_by, pinned, clock_started_at, retired_at, retired_reason FROM tabs',
+      )
       .all() as Array<{
       id: string;
       spawned_by: string | null;
       pinned: number;
       clock_started_at: number | null;
+      retired_at: number | null;
+      retired_reason: string | null;
     }>;
     return rows.map((r) => ({
       id: r.id,
       spawned_by: r.spawned_by,
       pinned: !!r.pinned,
       clock_started_at: r.clock_started_at,
+      retired_at: r.retired_at,
+      // Anything unrecognised reads as a hand archive: it is the conservative
+      // one (it claims only that a person did this), and the alternative would
+      // be a row that is retired for no stated reason at all.
+      retired_reason:
+        r.retired_at === null ? null : r.retired_reason === 'delivered' ? 'delivered' : 'archived',
     }));
+  }
+
+  /**
+   * Retire a chat: it leaves the live list and joins the `done` group.
+   *
+   * NOT a delete, and the distinction is the whole model — the row, its panes,
+   * its transcript and its place in the spawn tree all stay exactly where they
+   * were, and the next message revives it ({@link unretire}). This is where
+   * BOTH manual archive and a sub-chat's delivery land, because they are the
+   * same state arrived at two ways.
+   *
+   * Idempotent on purpose: retiring a retired chat keeps the ORIGINAL stamp
+   * and reason. A second turn-done on an already-delivered sub-chat must not
+   * silently re-date it (the timestamp is what a `done` group sorts and labels
+   * by), and an archive must not be overwritten by a later delivery.
+   */
+  retire(id: string, reason: RetireReason, at: number = Date.now()): boolean {
+    const r = this.db
+      .prepare(
+        'UPDATE tabs SET retired_at = ?, retired_reason = ? WHERE id = ? AND retired_at IS NULL',
+      )
+      .run(at, reason, id);
+    return r.changes > 0;
+  }
+
+  /** Bring a retired chat back. Its clock is restarted by the caller — see
+   *  tab-clock.ts `reviveChat`, which does both in one act, because a chat
+   *  un-retired onto an expired clock would be done again on the next read. */
+  unretire(id: string): boolean {
+    const r = this.db
+      .prepare(
+        'UPDATE tabs SET retired_at = NULL, retired_reason = NULL WHERE id = ? AND retired_at IS NOT NULL',
+      )
+      .run(id);
+    return r.changes > 0;
   }
 
   /**

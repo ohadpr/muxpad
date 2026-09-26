@@ -139,8 +139,85 @@ describe('the chat clock on the wire', () => {
     expect(one.clock?.started_at).toBe(listed.clock?.started_at);
   });
 
+  describe('archive — the manual path into done', () => {
+    it('lands in the same place decay does, and says which it was', async () => {
+      const t = await newTab('x');
+      const res = await test.app.request(`/api/tabs/${t.id}/archive`, { method: 'POST' });
+      expect(res.status).toBe(204);
+      const row = (await listTabs()).find((r) => r.id === t.id) as Tab;
+      expect(row.done).toBe(true);
+      expect(row.done_reason).toBe('archived');
+    });
+
+    it('does NOT delete — the row, its panes and its name are all still there', async () => {
+      // This is the whole reason × becomes archive: the gesture stops being
+      // one you have to be sure about.
+      const t = await newTab('keepme');
+      const pane = new PaneStore(db).create({ tab_id: t.id, shell: '/bin/zsh', cwd: '/tmp' });
+      await test.app.request(`/api/tabs/${t.id}/archive`, { method: 'POST' });
+      expect(tabs.getById(t.id)?.name).toBe('keepme');
+      expect(new PaneStore(db).getById(pane.id)).not.toBeNull();
+    });
+
+    it('clears READY on the way out', async () => {
+      const t = await newTab('x');
+      const pane = new PaneStore(db).create({ tab_id: t.id, shell: '/bin/zsh', cwd: '/tmp' });
+      new PaneStore(db).setUnread(pane.id, true);
+      await test.app.request(`/api/tabs/${t.id}/archive`, { method: 'POST' });
+      expect(new PaneStore(db).getById(pane.id)?.unread).toBe(false);
+    });
+
+    it('announces it, so the row leaves every sidebar at once', async () => {
+      const t = await newTab('x');
+      const seen: Tab[] = [];
+      events.subscribe((e: MuxpadEvent) => {
+        if (e.type === 'tab.updated') seen.push(e.tab);
+      });
+      await test.app.request(`/api/tabs/${t.id}/archive`, { method: 'POST' });
+      expect(seen.at(-1)?.done).toBe(true);
+    });
+
+    it('unarchive brings it back live, on a full clock', async () => {
+      const t = await newTab('x');
+      tabs.resetClock(t.id, Date.now() - CHAT_DECAY_MS - 1_000); // expired when archived
+      await test.app.request(`/api/tabs/${t.id}/archive`, { method: 'POST' });
+      const res = await test.app.request(`/api/tabs/${t.id}/unarchive`, { method: 'POST' });
+      expect(res.status).toBe(204);
+      const row = (await listTabs()).find((r) => r.id === t.id) as Tab;
+      // Not merely un-retired: un-retired onto the expired clock it left with,
+      // it would be done again on this very read.
+      expect(row.done).toBe(false);
+      expect(row.clock?.fill).toBeLessThan(0.01);
+    });
+
+    it('is idempotent, and 404s on a tab that is not there', async () => {
+      const t = await newTab('x');
+      await test.app.request(`/api/tabs/${t.id}/archive`, { method: 'POST' });
+      expect((await test.app.request(`/api/tabs/${t.id}/archive`, { method: 'POST' })).status).toBe(
+        204,
+      );
+      expect((await test.app.request('/api/tabs/ghost/archive', { method: 'POST' })).status).toBe(
+        404,
+      );
+      expect((await test.app.request('/api/tabs/ghost/unarchive', { method: 'POST' })).status).toBe(
+        404,
+      );
+    });
+
+    it('archives a sub-chat by hand without calling it delivered', async () => {
+      const parent = await newTab('parent');
+      const child = await newTab('child', { spawned_by: parent.id });
+      await test.app.request(`/api/tabs/${child.id}/archive`, { method: 'POST' });
+      const row = (await listTabs()).find((r) => r.id === child.id) as Tab;
+      expect(row.done_reason).toBe('archived');
+    });
+  });
+
   describe('spawned_by', () => {
-    it('records the parent tab and shares its clock', async () => {
+    it('records the parent, and publishes NO clock for the child', async () => {
+      // A sub-chat does not share its parent's clock and does not have one of
+      // its own: it is work, and it leaves when the work lands. `null` says
+      // that; a 0%-full clock would claim elapsed time means something here.
       const parent = await newTab('parent');
       tabs.resetClock(parent.id, Date.now() - 3 * DAY_MS);
       const child = await newTab('child', { spawned_by: parent.id });
@@ -149,8 +226,18 @@ describe('the chat clock on the wire', () => {
       const rows = await listTabs();
       const p = rows.find((r) => r.id === parent.id) as Tab;
       const c = rows.find((r) => r.id === child.id) as Tab;
-      expect(c.clock?.started_at).toBe(p.clock?.started_at);
-      expect(c.clock?.last_day).toBe(true);
+      expect(c.clock).toBeNull();
+      expect(c.done).toBe(false);
+      expect(p.clock?.last_day).toBe(true);
+    });
+
+    it('the child outlives a parent that decays', async () => {
+      const parent = await newTab('parent');
+      tabs.resetClock(parent.id, Date.now() - CHAT_DECAY_MS - 1_000);
+      const child = await newTab('child', { spawned_by: parent.id });
+      const rows = await listTabs();
+      expect((rows.find((r) => r.id === parent.id) as Tab).done).toBe(true);
+      expect((rows.find((r) => r.id === child.id) as Tab).done).toBe(false);
     });
 
     it('accepts a PANE id, for anything spawning from inside one', async () => {
