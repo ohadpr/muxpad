@@ -902,6 +902,25 @@
 .navtree-done-head:hover {
   color: var(--fg-dim);
 }
+/* Whose retired sub-chats these are. The parent is still LIVE and has its own
+   row up in the list above — this is a label, not a second copy of it, and it
+   is styled so nobody can mistake it for one: no chip, no state mark, no hover,
+   no hit target. Set one step in from the done header so it reads as nested
+   inside the group rather than as a second heading for it. */
+.navtree-done-parent {
+  padding: 8px var(--nt-air) 2px calc(var(--nt-pad) + var(--nt-indent));
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* It is `aria-hidden` in the markup — each retired row's own title already
+     names its parent, and a screen reader stopping on a decorative label
+     between rows is one more thing between the user and the list. */
+  pointer-events: none;
+}
+
 /* A done chat's row is quieter still — it has left the live list, and the only
    reason it is on screen at all is that you opened the drawer to look. The
    chip already says it (a dashed outline round a ghosted emoji); this stops
@@ -1127,6 +1146,27 @@
 .navtree-pane-row-wrap[data-active="true"] .navtree-close:hover {
   background-color: var(--accent-fg);
   color: var(--danger);
+}
+
+/* ─── ARCHIVE is not destructive, and must not hover red ──────────────────
+   It borrows `.navtree-close` for its geometry (the hit box, the hover square,
+   the reveal-on-hover timing — all of which it wants) and then has to take the
+   MEANING back out: `.navtree-close:hover` paints --danger, and the two rules
+   above paint it on the accent block too. A red hover on the one action in this
+   rail that cannot lose anything would teach exactly the lesson that stopped
+   the old × from ever being used.
+   Each override MIRRORS its danger rule's selector exactly — including the
+   `:not(.navtree-pin)` on the active-row one, which is not decoration. That
+   pseudo-class is worth a specificity point: without it this selector is (0,4,1)
+   against the danger rule's (0,5,1) and LOSES despite coming later, so the
+   archive button hovered red on the selected row and only there. Measured in a
+   real engine, then pinned by a test — do not "simplify" it away. */
+.navtree-archive:hover {
+  color: var(--accent);
+}
+.navtree-tab-row[data-active="true"] button.navtree-archive:not(.navtree-pin):hover {
+  background-color: var(--accent-fg);
+  color: var(--accent);
 }
 
 /* Two more things that sit ON the solid block and derive their colour from

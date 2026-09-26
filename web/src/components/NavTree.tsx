@@ -34,7 +34,7 @@ import {
   useWorkspaces,
   visibleWorkspaces,
 } from '../workspaces';
-import { ChatChip, chatTooltip, isChatDone } from './ChatChip';
+import { ChatChip, chatTooltip, isChatDone, isChatRetired } from './ChatChip';
 import { NavSearch } from './NavSearch';
 import { NewTabButton } from './NewTabButton';
 import { StateChip } from './StateChip';
@@ -1217,6 +1217,7 @@ function TabList({
   const grouped = groupChats(tabs);
   const liveGroups = sheet ? tabs.map((chat) => ({ chat, children: [] as Tab[] })) : grouped.live;
   const doneGroups = sheet ? [] : grouped.done;
+  const doneCount = doneChatCount(doneGroups);
   const pinnedCount = sheet ? tabs.filter((t) => t.pinned).length : grouped.livePinned;
   // COLLAPSED by default. A chat crossing into done should be something you
   // notice leaving the live list, not something that re-opens a drawer of
@@ -1428,18 +1429,47 @@ function TabList({
     return i >= 0 && i < MAX_QUICK_SWITCH_TABS ? i + 1 : undefined;
   };
 
-  const closeTab = async (e: React.MouseEvent, tab: Tab) => {
+  /**
+   * ARCHIVE — the row's one-click action, and the manual path to exactly where
+   * decay leads. Nothing is deleted: the chat drops into the done group with
+   * its transcript intact, stays findable by `@`, and a message revives it.
+   *
+   * No confirm, and that is the point of the change rather than an oversight.
+   * The × used to DELETE, which is precisely why it was never used — a
+   * one-click irreversible action on a row you are only tidying is one you
+   * learn not to touch, so the rail filled up instead. An action you can undo
+   * by talking to the chat does not need a gate in front of it.
+   */
+  const archiveTab = async (e: React.MouseEvent, tab: Tab) => {
     e.stopPropagation();
     e.preventDefault();
-    // No window.confirm — flaky in iOS PWA standalone mode, and tabs are
-    // lighter than workspaces. Tap = delete (same as the old mobile menu).
     try {
-      await api.deleteTab(tab.id);
+      await api.archiveTab(tab.id);
       await refreshTabs(workspace.id);
       await refreshWorkspaces(); // tab_count chips on collapsed rows
     } catch (err) {
+      console.error('archiveTab failed', err);
+      window.alert(`Failed to archive chat: ${String(err)}`);
+    }
+  };
+
+  /**
+   * DELETE — permanent, and reachable only from the context menu.
+   *
+   * It keeps its confirm BECAUSE it is now the rare path: the common action
+   * (archive) is one click and reversible, so the destructive one can afford to
+   * ask. window.confirm is flaky in the iOS PWA, so the guard is the menu's own
+   * depth plus this prompt on desktop.
+   */
+  const deleteTab = async (tab: Tab) => {
+    if (!window.confirm(`Delete “${tab.name}” permanently? This cannot be undone.`)) return;
+    try {
+      await api.deleteTab(tab.id);
+      await refreshTabs(workspace.id);
+      await refreshWorkspaces();
+    } catch (err) {
       console.error('deleteTab failed', err);
-      window.alert(`Failed to close tab: ${String(err)}`);
+      window.alert(`Failed to delete chat: ${String(err)}`);
     }
   };
 
@@ -1513,7 +1543,8 @@ function TabList({
       isEditing={editing?.kind === 'tab' && editing.id === t.id}
       setEditing={setEditing}
       onNavigate={onNavigate}
-      onClose={(e) => void closeTab(e, t)}
+      onArchive={(e) => void archiveTab(e, t)}
+      onDelete={() => void deleteTab(t)}
       onSetUnread={(want) => void setTabUnread(t, want)}
       onSetIcon={(icon) => void setTabIcon(t, icon)}
       onSetPinned={(want) => void setTabPinned(t, want)}
@@ -1528,8 +1559,18 @@ function TabList({
     />
   );
   const renderGroup = (g: ChatGroup) => (
-    <Fragment key={g.chat.id}>
-      {renderRow(g.chat)}
+    <Fragment key={`${g.chat.id}${g.contextOnly ? ':retired' : ''}`}>
+      {g.contextOnly ? (
+        /* The parent is LIVE and has a row of its own above. This is a label
+           saying whose sub-chats these were — not a link, not a chip, no state
+           mark. Rendering a real row here would put two clickable copies of one
+           chat in the list, one of which would go on lighting up as it worked. */
+        <div className="navtree-done-parent" aria-hidden="true">
+          {g.chat.name}
+        </div>
+      ) : (
+        renderRow(g.chat)
+      )}
       {g.children.map((k) => renderRow(k, g.chat))}
     </Fragment>
   );
@@ -1572,7 +1613,7 @@ function TabList({
             aria-expanded={doneOpen}
           >
             <SvgCaret open={doneOpen} />
-            {doneGroups.length} done
+            {doneCount} done
           </button>
           {doneOpen ? doneGroups.map(renderGroup) : null}
         </>
@@ -1785,7 +1826,10 @@ interface TabRowProps {
   isEditing: boolean;
   setEditing: (e: Editing) => void;
   onNavigate?: (() => void) | undefined;
-  onClose: (e: React.MouseEvent) => void;
+  /** Retire to the done group. The row's ×, and reversible. */
+  onArchive: (e: React.MouseEvent) => void;
+  /** Permanent. Context menu only — never a one-click affordance on the row. */
+  onDelete: () => void;
   /** Toggle the manual unread mark — true flags the dot, false clears it. */
   onSetUnread: (want: boolean) => void;
   /** Set this tab's leading icon (emoji). */
@@ -1807,6 +1851,13 @@ interface TabRowProps {
 export interface ChatGroup {
   chat: Tab;
   children: Tab[];
+  /**
+   * This group is in the DONE list only to say whose retired sub-chats these
+   * are. `chat` itself is live and has its own row up in the list above, so it
+   * is drawn here as a quiet label rather than as a second, clickable copy of
+   * a row that already exists.
+   */
+  contextOnly?: boolean;
 }
 
 /**
@@ -1823,9 +1874,17 @@ export interface ChatGroup {
  *      workspace, or was closed — makes the chat a TOP-level row rather than
  *      an orphan that vanishes. A chat is never invisible because of a dangling
  *      pointer.
- *   3. A child follows its parent into `done`, because it SHARES the parent's
- *      clock: work spawned under a chat should not outlive it. A child's own
- *      lifecycle is never consulted.
+ *   3. A SUB-CHAT RETIRES ON ITS OWN, on delivery — it has no clock and it does
+ *      not read its parent's. The moment its work finishes it leaves the live
+ *      list, because its result has already come back to the parent as a card.
+ *      This is what keeps a workspace that spawned forty agents from showing
+ *      forty rows: they are gone as they report, and their cards remain.
+ *
+ *      So a live parent contributes to BOTH lists — its still-working children
+ *      nested under it up top, its delivered ones down in the done group under
+ *      a `contextOnly` label. A done parent takes its whole family with it;
+ *      children of a chat that has itself left the live list have no business
+ *      staying in it.
  *
  * Order is the server's throughout — pinned block first, then the auto-sorted
  * one. `livePinned` is the seam between them, recomputed over the live tops
@@ -1851,10 +1910,36 @@ export function groupChats(
   const live: ChatGroup[] = [];
   const done: ChatGroup[] = [];
   for (const chat of tops) {
-    const group: ChatGroup = { chat, children: childrenOf.get(chat.id) ?? [] };
-    (isChatDone(chat, now) ? done : live).push(group);
+    const children = childrenOf.get(chat.id) ?? [];
+    if (isChatDone(chat, now)) {
+      // The parent has left the live list; the whole family goes with it.
+      done.push({ chat, children });
+      continue;
+    }
+    const working = children.filter((k) => !isChatRetired(k));
+    const delivered = children.filter((k) => isChatRetired(k));
+    live.push({ chat, children: working });
+    // Delivered sub-chats keep their parent's name over them so you can see
+    // whose work they were — but the parent is drawn as a label, not as a
+    // second copy of a row that is still live above.
+    if (delivered.length > 0) done.push({ chat, children: delivered, contextOnly: true });
   }
   return { live, done, livePinned: live.filter((g) => g.chat.pinned).length };
+}
+
+/**
+ * How many CHATS the done group holds — the number in its header.
+ *
+ * Groups would be the wrong unit in both directions at once: a `contextOnly`
+ * group's parent is a label for a chat that is still live above (so counting it
+ * over-counts), while its retired sub-chats are real done chats (so counting
+ * the group as one under-counts). With forty delivered agents under one parent
+ * the two errors compound into "1 done" over a drawer of forty.
+ *
+ * The header's number has to be what you will find when you open it.
+ */
+export function doneChatCount(groups: readonly ChatGroup[]): number {
+  return groups.reduce((n, g) => n + g.children.length + (g.contextOnly ? 0 : 1), 0);
 }
 
 /**
@@ -1970,7 +2055,8 @@ function TabRow({
   setEditing,
   onNavigate,
   rowDnd,
-  onClose,
+  onArchive,
+  onDelete,
   onSetUnread,
   onSetIcon,
   onSetPinned,
@@ -2145,13 +2231,19 @@ function TabRow({
           },
         ]
       : []),
+    // Archive is here TOO, not only on the ×: the menu is the one surface that
+    // touch can reach (long press), and it is where a user goes looking for
+    // "what can I do to this row". Not danger-styled — it undoes with a message.
+    // onArchive expects a MouseEvent for stopPropagation; the menu has already
+    // dismissed, so a lightweight stub is enough.
     {
-      label: 'Close tab',
-      danger: true,
-      // onClose expects a MouseEvent for stopPropagation; the menu already
-      // dismissed, so a lightweight stub is enough.
-      onSelect: () => onClose({ stopPropagation() {}, preventDefault() {} } as React.MouseEvent),
+      label: 'Archive',
+      onSelect: () => onArchive({ stopPropagation() {}, preventDefault() {} } as React.MouseEvent),
     },
+    // PERMANENT, and this menu is the only way to reach it. It used to be the
+    // row's ×, one click from every row in the rail — which is exactly why the
+    // rail never got tidied. Its own confirm lives in the handler.
+    { label: 'Delete permanently…', danger: true, onSelect: () => onDelete() },
   ];
 
   /** The icon, the rename input and the overlays — the parts both row shapes
@@ -2379,7 +2471,17 @@ function TabRow({
         {/* The swipe shell wraps every row: pin, mark-unread and close live
             UNDER it, and they are the sheet's only per-row actions. Not while
             EDITING — a rename input you can swipe out from under is a way to
-            lose what you typed. */}
+            lose what you typed.
+
+            STILL WIRED TO DELETE, and that is the honest reading rather than a
+            miss. The desktop × became archive because its GLYPH and its tooltip
+            changed with it; this tray's button is labelled "Close" and arms a
+            "Sure?" confirm, both of which live in SwipeRow.tsx. Repointing it at
+            archive without touching those would give the sheet a button that
+            says Close, asks you to confirm, and then does something reversible
+            and different — worse than leaving it truthful. SwipeRow.tsx is not
+            this territory's; the swap is written up in the report. Archive is
+            reachable on touch today via the long-press menu. */}
         {isEditing ? (
           sheetRow
         ) : (
@@ -2390,9 +2492,7 @@ function TabRow({
             unread={tab.unread === true}
             onPin={() => onSetPinned(!tab.pinned)}
             onSetUnread={onSetUnread}
-            onClose={() =>
-              onClose({ stopPropagation() {}, preventDefault() {} } as React.MouseEvent)
-            }
+            onClose={onDelete}
           >
             {sheetRow}
           </SwipeRow>
@@ -2535,15 +2635,22 @@ function TabRow({
               <SvgPin size={12} filled={tab.pinned === true} />
             </button>
           ) : null}
+          {/* ARCHIVE, not close. The glyph changed with the meaning and had to:
+                a × means "destroy this" in every rail anyone has ever used, so
+                leaving the × and quietly making it safe would have taught the
+                user nothing — they had already learned not to touch it. An
+                arrow going down into a tray says "put this away", which is
+                exactly what it now does, and the down-stroke reads at 13px
+                where a box-with-a-lid does not. */}
           {affords.closeButton ? (
             <button
               type="button"
-              className="navtree-close"
-              onClick={onClose}
-              title="Close tab"
-              aria-label={`Close tab ${tab.name}`}
+              className="navtree-close navtree-archive"
+              onClick={onArchive}
+              title="Archive — moves to done, a message brings it back"
+              aria-label={`Archive chat ${tab.name}`}
             >
-              <SvgClose size={13} />
+              <SvgArchive size={13} />
             </button>
           ) : null}
         </span>
@@ -2813,6 +2920,36 @@ function SvgPin({ size = 12, filled = false }: { size?: number; filled?: boolean
 /** Horizontal ellipsis — the universal "more actions here" mark. Used on the
  *  mobile sheet, where the row's actions can't hide behind a hover or a
  *  gesture and need a control you can simply see and tap. */
+
+/**
+ * ARCHIVE — an arrow going down into a tray. The row's one-click action.
+ *
+ * Deliberately NOT a × and deliberately not the filing-box glyph (a lid over a
+ * body): at 13px the box's lid and body collapse into two stacked bars and it
+ * reads as a hamburger. The arrow carries the verb — something moves, and it
+ * moves DOWN and out of the way, which is what the done group is.
+ */
+function SvgArchive({ size = 13 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {/* The stroke down, and the head. */}
+      <path d="M8 2.5v6.5" />
+      <path d="M5.25 6.5 8 9.25 10.75 6.5" />
+      {/* The tray it lands in — open at the top, so the arrow goes INTO it. */}
+      <path d="M3 11.25v1.25a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1.25" />
+    </svg>
+  );
+}
 
 function SvgChevronRight() {
   return (

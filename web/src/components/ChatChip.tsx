@@ -60,13 +60,22 @@ import './ChatChip.css';
  *                 a text line without driving its leading; a 24px tile in a
  *                 20px line box pushes the line apart and the paragraph ripples.
  *
- * ─── The child dot fades as the tile fills ───────────────────────────────
- * Note the two marks move in OPPOSITE directions: the parent's tile gains ink
- * as the clock runs down, and the child's dot loses it. That is not an
- * inconsistency. The tile is a vessel (filling), the dot is a presence
- * (fading), and a 6px dot has no room to be a vessel — a 25%-filled 6px disc
- * is a rendering artefact, not a signal. Both reach their loudest change on
- * the last day, which is the only day the distinction has to survive.
+ * ─── A SUB-CHAT HAS NO CLOCK, so its dot has two states and no fill ──────
+ * A sub-chat is not a small chat that ages more quietly — it is a piece of
+ * work with a result, and the result comes back to the parent as a card. The
+ * moment it delivers, it retires. There is no clock to draw, because nothing
+ * is counting down: it is either still working or it is done.
+ *
+ *   live      a solid 6px dot at full presence
+ *   retired   a hollow ring
+ *
+ * So the dot does NOT fade with anything, and it never shows a fill. That is
+ * the whole vocabulary a 6px mark can carry anyway, and it is now carrying
+ * exactly the distinction that matters.
+ *
+ * This replaced a dot whose opacity tracked the parent's clock — a mark that
+ * quietly said "your parent is three days old", which is not a fact about the
+ * sub-chat and not a fact anyone can read off six pixels of alpha.
  */
 export function ChatChip({
   density,
@@ -78,14 +87,30 @@ export function ChatChip({
   onDoubleClick,
   title,
 }: ChatChipProps) {
-  // A child chat shares its PARENT's clock, and the SERVER has already resolved
-  // that — `tab.clock` on a child is its parent's clock, walked through
-  // `spawned_by` (server/src/tab-clock.ts). So there is nothing to merge here;
-  // `parent` survives only as a fallback for a caller holding a row that
-  // predates the published clock.
   const isDot = shape ? shape === 'dot' : chat.spawned_by != null;
-  const clock = chipClock(chat.clock ? chat : (parent ?? chat));
 
+  // A SUB-CHAT HAS NO CLOCK. It does not read its parent's and it does not run
+  // one of its own — it retires when it delivers. So the dot asks one question
+  // and never touches `chipClock`: has this finished?
+  if (isDot) {
+    const retired = isChatRetired(chat);
+    return (
+      /* biome-ignore lint/a11y/useKeyWithClickEvents: mouse-only by design, exactly as the tile is — the keyboard path to this chat's actions is the row's context menu, and adding a key handler here would put a second tab stop on every row of the rail. */
+      <span
+        className={`chatchip${className ? ` ${className}` : ''}`}
+        data-density={density}
+        data-phase={retired ? 'done' : 'live'}
+        data-shape="dot"
+        onClick={onClick}
+        onDoubleClick={onDoubleClick}
+        title={title}
+      >
+        <i className="chatchip-dot" data-hollow={retired ? 'true' : undefined} />
+      </span>
+    );
+  }
+
+  const clock = chipClock(chat.clock ? chat : (parent ?? chat));
   const common = {
     className: `chatchip${className ? ` ${className}` : ''}`,
     'data-density': density,
@@ -94,19 +119,6 @@ export function ChatChip({
     onDoubleClick,
     title,
   };
-
-  if (isDot) {
-    const dot = childDot(clock);
-    return (
-      <span {...common} data-shape="dot">
-        <i
-          className="chatchip-dot"
-          data-hollow={dot.hollow ? 'true' : undefined}
-          style={{ opacity: dot.opacity }}
-        />
-      </span>
-    );
-  }
 
   return (
     <span {...common} data-shape="tile">
@@ -171,11 +183,14 @@ export interface ChatChipChat {
    */
   done?: boolean | undefined;
   /**
-   * The clock as the server publishes it — already resolved, so a CHILD's row
-   * carries its parent's clock and a pinned chat carries a `stopped` one.
-   * Absent only on rows that predate the column.
+   * The clock as the server publishes it, or NULL for a chat that has none.
+   *
+   * Null is the SUB-CHAT's answer and it is a real answer, not a gap: a
+   * sub-chat retires on delivery rather than on a timer, so there is no clock
+   * to publish. `undefined` means something different — a row from a server
+   * that predates the column — and `chipClock` treats the two apart.
    */
-  clock?: ChatClock | undefined;
+  clock?: ChatClock | null | undefined;
   /** Last-resort clock origin for rows with no published `clock`. */
   last_activity_at?: number | null | undefined;
 }
@@ -260,14 +275,21 @@ export function isChatDone(chat: ChatChipChat, now: number = Date.now()): boolea
 }
 
 /**
- * The child dot, which FADES where the tile fills (see the note above), and
- * gives way to a hollow ring on the parent's last day — the dot's equivalent of
- * the tile's dashed outline, and the same "provisional" reading at 6px.
+ * Has this SUB-CHAT delivered?
+ *
+ * The one question a sub-chat's mark asks, and the one the sidebar asks to
+ * decide whether it still occupies a live row. It is `done` and nothing else:
+ * a sub-chat has no clock, so there is no arithmetic to fall back to and none
+ * is wanted — the server retires it when its work finishes (the
+ * `close_when_done` semantics the cron scheduler already has, except that this
+ * retires to the done group instead of closing, because nothing is deleted).
+ *
+ * Absent `done` means a row that predates the column, and it reads as still
+ * live. That is the safe direction: a sub-chat wrongly shown as live is a row
+ * you can see and act on, where one wrongly retired has silently left the list.
  */
-export function childDot(clock: ChipClock): { hollow: boolean; opacity: number } {
-  if (clock.phase === 'last-day' || clock.phase === 'done') return { hollow: true, opacity: 0.85 };
-  const v = clock.phase === 'pinned' ? 1 : clock.daysLeft / DECAY_DAYS;
-  return { hollow: false, opacity: Number((0.3 + v * 0.55).toFixed(2)) };
+export function isChatRetired(chat: ChatChipChat): boolean {
+  return chat.done === true;
 }
 
 /**
@@ -283,10 +305,17 @@ export function chatTooltip(
   chat: ChatChipChat & { headline?: string | null | undefined },
   now: number = Date.now(),
 ): string {
-  const clock = chipClock(chat, now);
   const parts = [chat.name];
   if (chat.headline) parts.push(chat.headline);
-  parts.push(CLOCK_WORDS[clock.phase](clock.daysLeft));
+  // A SUB-CHAT HAS NO CLOCK, so it says nothing about time. It reports the one
+  // thing it has to report — whether it has delivered — and a live one says
+  // nothing at all rather than inventing a countdown it is not running.
+  if (chat.spawned_by != null) {
+    if (isChatRetired(chat)) parts.push('done');
+  } else {
+    const clock = chipClock(chat, now);
+    parts.push(CLOCK_WORDS[clock.phase](clock.daysLeft));
+  }
   return parts.join(' · ');
 }
 

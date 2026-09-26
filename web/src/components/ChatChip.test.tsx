@@ -1,6 +1,6 @@
 import { CHAT_DECAY_DAYS, chatClock } from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
-import { type ChatChipChat, chatTooltip, childDot, chipClock, isChatDone } from './ChatChip';
+import { type ChatChipChat, chatTooltip, chipClock, isChatDone, isChatRetired } from './ChatChip';
 
 const DAY = 86_400_000;
 const NOW = 1_700_000_000_000;
@@ -83,22 +83,36 @@ describe('chipClock', () => {
   });
 });
 
-describe('childDot', () => {
-  it('fades as the parent ages, then hollows out on the last day', () => {
-    expect(childDot(chipClock(aged(0), NOW))).toEqual({ hollow: false, opacity: 0.85 });
-    expect(childDot(chipClock(aged(1), NOW))).toEqual({ hollow: false, opacity: 0.71 });
-    // 0.575 → 0.57, not 0.58: toFixed rounds the float's actual value, and the
-    // prototype does exactly the same thing. Kept identical on purpose.
-    expect(childDot(chipClock(aged(2), NOW))).toEqual({ hollow: false, opacity: 0.57 });
-    expect(childDot(chipClock(aged(3), NOW))).toEqual({ hollow: true, opacity: 0.85 });
-    expect(childDot(chipClock(aged(9), NOW))).toEqual({ hollow: true, opacity: 0.85 });
+/**
+ * A SUB-CHAT HAS NO CLOCK.
+ *
+ * It retires when it delivers, and its dot has exactly two states. These tests
+ * replaced a set that asserted the dot's opacity tracked the PARENT's remaining
+ * days — a mark that said "your parent is three days old", which is not a fact
+ * about this chat and is not readable off six pixels of alpha anyway.
+ */
+describe('isChatRetired — the sub-chat’s one question', () => {
+  /** A sub-chat as the server publishes it: `spawned_by` set, and NO clock. */
+  const sub = (done: boolean): ChatChipChat => ({ name: 'kid', spawned_by: 'p', done });
+
+  it('is retired once it has delivered, and not before', () => {
+    expect(isChatRetired(sub(true))).toBe(true);
+    expect(isChatRetired(sub(false))).toBe(false);
   });
 
-  it('holds a pinned parent at full presence', () => {
-    expect(childDot(chipClock(aged(99, { pinned: true }), NOW))).toEqual({
-      hollow: false,
-      opacity: 0.85,
-    });
+  it('reads a row with no verdict yet as still working', () => {
+    // The safe direction: a sub-chat wrongly shown as live is a row you can see
+    // and act on; one wrongly retired has silently left the list.
+    expect(isChatRetired({ name: 'kid', spawned_by: 'p' })).toBe(false);
+  });
+
+  it('never consults a clock — age cannot retire a sub-chat', () => {
+    // Even handed a long-expired clock (which the server would not send), only
+    // delivery decides.
+    const ancient = chatClock({ started_at: NOW - 99 * DAY, now: NOW, pinned: false });
+    expect(isChatRetired({ name: 'kid', spawned_by: 'p', clock: ancient, done: false })).toBe(
+      false,
+    );
   });
 });
 
@@ -113,6 +127,24 @@ describe('chatTooltip', () => {
     expect(t).toContain('muxpad');
     expect(t).toContain('wiring the decay indicator');
     expect(t).toContain('3d left');
+  });
+
+  // A sub-chat has no clock, so it must not invent a countdown. It reports the
+  // one thing it has — whether it delivered — and says nothing while working.
+  it('never puts a countdown on a SUB-CHAT, which has no clock', () => {
+    const working = { name: 'Work review', spawned_by: 'p', done: false };
+    expect(chatTooltip(working, NOW)).toBe('Work review');
+    expect(chatTooltip({ ...working, done: true }, NOW)).toBe('Work review · done');
+    expect(chatTooltip({ ...working, headline: 'reviewing the scroll rewrite' }, NOW)).toBe(
+      'Work review · reviewing the scroll rewrite',
+    );
+    // …and not even when a clock is somehow present on the row.
+    expect(
+      chatTooltip(
+        { ...working, clock: chatClock({ started_at: NOW - 2 * DAY, now: NOW, pinned: false }) },
+        NOW,
+      ),
+    ).not.toContain('left');
   });
 
   it('says where the clock stands when there is no headline', () => {

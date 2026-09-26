@@ -751,3 +751,61 @@ describe('the MOBILE RAIL — the bidi fix, which is why it is a flex line', () 
     }
   });
 });
+
+/**
+ * ARCHIVE is not destructive, and the cascade has to agree.
+ *
+ * The archive button borrows `.navtree-close` for its geometry and then has to
+ * take the MEANING back out — `.navtree-close:hover` paints `--danger`. Whether
+ * the override actually lands is a specificity question, and specificity is
+ * exactly the kind of thing that is invisible to inspection and survives review:
+ * the first version of this lost on the selected row ONLY, because the danger
+ * rule carries a `:not(.navtree-pin)` worth one extra point.
+ */
+describe('the row’s × archives, and never reads as delete', () => {
+  /** Specificity as (ids, classes+attrs+pseudo-classes, types), CSS's own rules. */
+  function specificity(selector: string): [number, number, number] {
+    const s = selector.replace(/:not\(([^)]*)\)/g, ' $1 '); // :not() contributes its ARG
+    const ids = (s.match(/#[\w-]+/g) ?? []).length;
+    const classes = (s.match(/\.[\w-]+|\[[^\]]+\]|:[\w-]+(?!\()/g) ?? []).length;
+    const types = (s.match(/(?:^|[\s>+~])([a-z][\w-]*)/g) ?? []).length;
+    return [ids, classes, types];
+  }
+  const beats = (a: string, b: string) => {
+    const [x, y] = [specificity(a), specificity(b)];
+    for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return (x[i] as number) > (y[i] as number);
+    return null; // a tie — source order decides, and ours is declared later
+  };
+
+  it('overrides the danger hover on an ORDINARY row', () => {
+    const danger = '.navtree-close:hover';
+    const ours = '.navtree-archive:hover';
+    expect(NAV_CSS).toContain(ours);
+    // A tie (null) is fine: ours is declared after. Losing is not.
+    expect(beats(danger, ours)).not.toBe(true);
+    expect(NAV_CSS.indexOf(ours)).toBeGreaterThan(NAV_CSS.indexOf(danger));
+    expect(decl(ruleBody(NAV_CSS, ours), 'color')).toBe('var(--accent)');
+  });
+
+  it('overrides it on the ACTIVE row too — the case that was wrong', () => {
+    const danger =
+      '.navtree-tab-row[data-active="true"] button.navtree-close:not(.navtree-pin):hover';
+    const ours =
+      '.navtree-tab-row[data-active="true"] button.navtree-archive:not(.navtree-pin):hover';
+    expect(NAV_CSS).toContain(ours);
+    expect(beats(danger, ours)).not.toBe(true);
+    expect(NAV_CSS.indexOf(ours)).toBeGreaterThan(NAV_CSS.indexOf(danger));
+    expect(decl(ruleBody(NAV_CSS, ours), 'color')).toBe('var(--accent)');
+  });
+
+  it('and the specificity helper itself can tell the two apart', () => {
+    // Guards the guard: if this ever reports the losing selector as a tie, the
+    // two tests above stop meaning anything.
+    expect(
+      beats(
+        '.navtree-tab-row[data-active="true"] button.navtree-close:not(.navtree-pin):hover',
+        '.navtree-tab-row[data-active="true"] button.navtree-archive:hover',
+      ),
+    ).toBe(true);
+  });
+});
