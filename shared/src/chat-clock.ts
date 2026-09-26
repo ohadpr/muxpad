@@ -8,10 +8,12 @@
  * it another message. Nothing is ever deleted — `done` is a rendering state,
  * not a tombstone. Pinning stops the clock entirely.
  *
- * A SUB-CHAT has no clock and never reaches this file. It is a piece of work,
- * not a conversation: it retires the moment it delivers its result to its
- * parent. See server/src/tab-clock.ts for why, and for the sidebar full of
- * finished agents that settled the question.
+ * Two kinds of tab have no clock and never reach this file. A SUB-CHAT is a
+ * piece of work rather than a conversation: it retires the moment it delivers
+ * its result to its parent. A TAB WITH NO AGENT IN IT — a terminal, a web view
+ * — has no inbox, so "send it a message" is not a way back and decay would be
+ * a one-way door. See server/src/tab-clock.ts (`hasDecayClock`) for both, and
+ * for the sidebar full of finished agents that settled the first question.
  *
  * ── WHY THE MATH LIVES IN shared ─────────────────────────────────────────────
  * It does NOT live here so the client can re-derive lifecycle — the server

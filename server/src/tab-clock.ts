@@ -39,6 +39,13 @@
  *
  * Consequently a sub-chat publishes `clock: null` — "there is no clock", which
  * is a different and truer statement than "the clock is at 0%".
+ *
+ * ── AND WHY A TERMINAL HAS NO CLOCK EITHER ───────────────────────────────────
+ * The clock's only exit is a message, and a terminal or a web view has no
+ * inbox to put one in. Decaying one does not rest it, it loses it. So the
+ * question "does this tab decay at all" has two independent reasons to answer
+ * no, and both land on the same published `clock: null` — see
+ * {@link hasDecayClock}, which is where that question now lives.
  */
 import type { ChatClock } from '@muxpad/shared';
 import { chatClock, chatClockDone } from '@muxpad/shared';
