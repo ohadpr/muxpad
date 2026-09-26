@@ -197,6 +197,18 @@ export function ChatMentionPill({
  * as its second line and the state slot spinning), and the report that comes
  * back (with the other agent's answer as the body). Same chip, same header, so
  * the pair reads as one exchange rather than as two unrelated rows.
+ *
+ * ─── THE HEAD is the link, and the card is not ────────────────────────────────
+ * The whole card used to be one `<button>`. That is the obvious shape for the
+ * directed card, which has no body — and it is wrong for the report, whose body
+ * is the other agent's answer rendered in full, mentions included. A
+ * `ChatMentionPill` is itself a button, so "see @Investing" inside a report put a
+ * button inside a button: clicking the pill navigated to Investing and then the
+ * click bubbled to the card and navigated straight back, defeating the thing that
+ * was clicked. (It is also invalid DOM nesting, which React says out loud.)
+ *
+ * So the container is inert and the HEAD carries the navigation. Independently
+ * clickable content in the body now sits beside that link rather than inside it.
  */
 export function ChatMentionCard({
   chat,
@@ -215,37 +227,48 @@ export function ChatMentionCard({
   state?: string | undefined;
   /** The report itself, rendered in full by the caller (markdown, links…). */
   body?: ReactNode | undefined;
-  onOpen: () => void;
+  /**
+   * Where to go. OMITTED when the chat at the other end cannot be resolved —
+   * which is a real state (a report from a chat that has since been deleted),
+   * and the card still draws, because a name and an answer you can read is a far
+   * better degradation than XML. What it must NOT do then is offer a button that
+   * does nothing when you press it.
+   */
+  onOpen?: (() => void) | undefined;
 }) {
-  return (
-    <button
-      type="button"
-      className={`chat-mention-card${body ? ' -report' : ''}`}
-      title={chatTooltip(chat)}
-      onClick={onOpen}
-    >
-      <span className="chat-mention-card-head">
-        <ChatChip density="card" chat={chat} />
-        <span className="chat-mention-card-text">
-          <span className="chat-mention-card-name">{chat.name}</span>
-          {sub ? (
-            <span className="chat-mention-card-sub" dir="auto">
-              {sub}
-            </span>
-          ) : null}
-        </span>
-        {working ? (
-          <span className="chat-mention-card-mark" aria-hidden="true" />
-        ) : state ? (
-          <span className="chat-mention-card-state">{state}</span>
+  const head = (
+    <>
+      <ChatChip density="card" chat={chat} />
+      <span className="chat-mention-card-text">
+        <span className="chat-mention-card-name">{chat.name}</span>
+        {sub ? (
+          <span className="chat-mention-card-sub" dir="auto">
+            {sub}
+          </span>
         ) : null}
       </span>
-      {body ? (
-        <span className="chat-mention-card-body" dir="auto">
-          {body}
-        </span>
+      {working ? (
+        <span className="chat-mention-card-mark" aria-hidden="true" />
+      ) : state ? (
+        <span className="chat-mention-card-state">{state}</span>
       ) : null}
-    </button>
+    </>
+  );
+  return (
+    <div className={`chat-mention-card${body ? ' -report' : ''}`} title={chatTooltip(chat)}>
+      {onOpen ? (
+        <button type="button" className="chat-mention-card-head" onClick={onOpen}>
+          {head}
+        </button>
+      ) : (
+        <div className="chat-mention-card-head">{head}</div>
+      )}
+      {body ? (
+        <div className="chat-mention-card-body" dir="auto">
+          {body}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

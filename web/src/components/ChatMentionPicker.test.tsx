@@ -1,5 +1,7 @@
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup as html } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MentionChat, MentionRow } from '../lib/chat-mention';
 import { ChatMentionCard, ChatMentionPicker, ChatMentionPill } from './ChatMentionPicker';
 
@@ -152,5 +154,93 @@ describe('the card', () => {
     );
     expect(out).toContain('-report');
     expect(out).toContain('Cash is 12%.');
+  });
+
+  it('draws no control at all when there is nowhere to go', () => {
+    // A report from a chat that cannot be resolved still draws — a name and an
+    // answer beats a bubble of XML. What it must not do is offer a button whose
+    // click does nothing, which is exactly what a fresh load into a conversation
+    // with an empty composer used to render.
+    const out = html(<ChatMentionCard chat={{ name: 'another chat' }} state="reported" />);
+    expect(out).toContain('another chat');
+    expect(out).not.toContain('<button');
+  });
+});
+
+/**
+ * A REPORT'S BODY IS NOT INSIDE THE LINK.
+ *
+ * The card was one big `<button>`, and a report's body is the other agent's
+ * answer rendered in full — mentions included, and a mention is a
+ * `ChatMentionPill`, which is also a button. So "see @Investing" in a report was
+ * a button inside a button: the pill's click ran, then bubbled to the card, and
+ * the card navigated back to the reporting chat — defeating the reference that
+ * was clicked. Mounted and clicked, because the bubbling IS the defect and no
+ * assertion about markup alone would name it.
+ */
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+describe('clicking a mention inside a report goes to the mention, once', () => {
+  let host: HTMLDivElement | null = null;
+  let root: ReturnType<typeof createRoot> | null = null;
+
+  afterEach(() => {
+    act(() => root?.unmount());
+    host?.remove();
+    host = null;
+    root = null;
+  });
+
+  /** The production composition: a report card whose body holds a resolved pill. */
+  function mountReport(openReport: () => void, openMention: () => void) {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => {
+      root?.render(
+        <ChatMentionCard
+          chat={{ name: 'Work review' }}
+          state="reported"
+          onOpen={openReport}
+          body={
+            <>
+              {'see '}
+              <ChatMentionPill chat={{ name: 'Investing' }} onOpen={openMention} />
+            </>
+          }
+        />,
+      );
+    });
+    return host;
+  }
+
+  it('fires the pill’s handler and NOT the card’s', () => {
+    const openReport = vi.fn();
+    const openMention = vi.fn();
+    const box = mountReport(openReport, openMention);
+    const pill = box.querySelector<HTMLButtonElement>('.chat-mention-pill');
+    expect(pill).not.toBeNull();
+    act(() => pill?.click());
+    expect(openMention).toHaveBeenCalledTimes(1);
+    // The whole finding: this used to be 1, so the navigation the user asked for
+    // was undone by the container in the same click.
+    expect(openReport).not.toHaveBeenCalled();
+  });
+
+  it('still navigates to the reporting chat from the card’s head', () => {
+    // The affordance the card exists for has to survive the fix.
+    const openReport = vi.fn();
+    const openMention = vi.fn();
+    const box = mountReport(openReport, openMention);
+    act(() => box.querySelector<HTMLButtonElement>('.chat-mention-card-head')?.click());
+    expect(openReport).toHaveBeenCalledTimes(1);
+    expect(openMention).not.toHaveBeenCalled();
+  });
+
+  it('nests no button inside another, anywhere in the card', () => {
+    // The structural statement of the same thing — and it is also invalid DOM
+    // nesting, which React warns about on every render.
+    const box = mountReport(vi.fn(), vi.fn());
+    expect(box.querySelector('button button')).toBeNull();
   });
 });
