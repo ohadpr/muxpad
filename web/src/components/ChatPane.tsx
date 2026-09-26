@@ -38,7 +38,7 @@ import {
 } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { type AgentLaunchOptions, type ArchiveSearchHit, type RecentFolder, api } from '../api';
+import { type AgentLaunchOptions, type RecentFolder, api } from '../api';
 import {
   AGENT_BACKENDS,
   type AgentBackendId,
@@ -64,10 +64,14 @@ import {
   type MentionPick,
   type MentionRow,
   type MentionRun,
+  type MentionSearchState,
+  NO_MENTION_SEARCH,
   applyMention,
   detectMentionRun,
   directTo,
+  hitsFor,
   nextMentionRun,
+  nextSearchLimit,
   parseDirectMarker,
   parseDirective,
   parseMentions,
@@ -1808,12 +1812,18 @@ export function ChatPane({
   // by the run's `@` offset: a NEW `@` is a new invitation, but continuing to
   // type into a run you dismissed must not bring it back.
   const [mentionDismissed, setMentionDismissed] = useState<number | null>(null);
-  const [mentionHits, setMentionHits] = useState<ArchiveSearchHit[]>([]);
+  // The archive tier's hits, CARRYING THE QUERY THEY ANSWER. Kept together
+  // deliberately: hits held on their own stayed selectable under a query they
+  // had nothing to do with (see hitsFor), and the ticket scheme cannot help —
+  // it guards a late response, not stale state.
+  const [mentionSearch, setMentionSearch] = useState<MentionSearchState>(NO_MENTION_SEARCH);
   const [mentionSearching, setMentionSearching] = useState(false);
   // Latches false on the first 404: /api/search exists only when the archive
   // does, so its absence must cost one request to learn, not one per keystroke.
   const [archiveAvailable, setArchiveAvailable] = useState(true);
   const mentionTicket = useRef(0);
+  /** `<query>\0<limit>` of the request already sent, so an escalation fires once. */
+  const mentionAsked = useRef<string | null>(null);
 
   const ensureCorpus = useCallback(() => {
     void loadAllTabs().then((groups) => {
@@ -1835,12 +1845,20 @@ export function ChatPane({
   /** Which chat this pane belongs to — excluded from its own picker. */
   const myChat = useMemo(() => paneIndex(corpus).get(paneId), [corpus, paneId]);
 
+  /** The query under the caret, trimmed — what everything below keys off. */
+  const mentionQuery = mentionRun?.query.trim() ?? '';
   const mentionNameRows = useMemo(
     () =>
       mentionRun
         ? rankMentions(corpus, mentionRun.query, { excludeTabId: myChat?.tabId })
         : ([] as MentionRow[]),
     [corpus, mentionRun, myChat],
+  );
+  // Only ever the hits for the query being shown. A previous query's results are
+  // not "slightly stale", they are a row that sends work to an unrelated chat.
+  const mentionHits = useMemo(
+    () => hitsFor(mentionSearch, mentionQuery),
+    [mentionSearch, mentionQuery],
   );
   const mentionRows = useMemo(
     () =>
@@ -1858,42 +1876,58 @@ export function ChatPane({
   const mentionSafeCursor =
     mentionRows.length === 0 ? 0 : Math.min(mentionCursor, mentionRows.length - 1);
 
-  // The content tier — what was SAID, from the archive's FTS index. Debounced,
-  // superseded-response-proof (same ticket scheme as the sidebar box), and never
-  // allowed to delay or reorder the instant rows above it.
+  /**
+   * The content tier — what was SAID, from the archive's FTS index.
+   *
+   * WHAT to ask for is `nextSearchLimit`'s decision, not this effect's: the
+   * thresholds, the first page, and the ONE escalation for a page that came back
+   * full without filling the picker are all policy, they are all testable
+   * without a composer, and they live beside `withContentRows` which throws most
+   * of the answer away. This is the transport: debounce, ticket, 404 latch.
+   *
+   * It settles rather than loops — the escalated page is the server's own cap, so
+   * `nextSearchLimit` returns null once it lands whatever the rows do.
+   */
+  const mentionWantLimit = nextSearchLimit({
+    query: mentionQuery,
+    state: mentionSearch,
+    rows: mentionRows.length,
+    want: MAX_MENTION_ROWS,
+    archiveAvailable,
+  });
   useEffect(() => {
-    const q = mentionRun?.query.trim() ?? '';
     mentionTicket.current += 1;
-    // 3 chars before asking FTS5 to match half the alphabet; 256 because the
-    // server rejects a longer `q` outright (its MATCH is synchronous).
-    if (!archiveAvailable || q.length < 3 || q.length > 256) {
-      setMentionHits([]);
+    if (mentionWantLimit === null) {
       setMentionSearching(false);
       return;
     }
+    // One request per (query, limit). Without this the escalation would re-fire
+    // on every render that still shows a short list.
+    const asked = `${mentionQuery} ${mentionWantLimit}`;
+    if (mentionAsked.current === asked) return;
     const mine = mentionTicket.current;
     setMentionSearching(true);
     const timer = window.setTimeout(() => {
+      mentionAsked.current = asked;
       api
-        // Well above what is shown: hits from sessions whose pane is gone can't
-        // be resolved to a chat and are dropped client-side, so asking for
-        // exactly eight can legitimately render none.
-        .searchMessages(q, 50)
+        .searchMessages(mentionQuery, mentionWantLimit)
         .then((res) => {
           if (mine !== mentionTicket.current) return;
-          setMentionHits(res.hits);
+          setMentionSearch({ query: mentionQuery, limit: mentionWantLimit, hits: res.hits });
         })
         .catch((err: unknown) => {
           if (mine !== mentionTicket.current) return;
           if ((err as { status?: number } | null)?.status === 404) setArchiveAvailable(false);
-          setMentionHits([]);
+          // An empty answer FOR THIS QUERY, so the tier reports "nothing said
+          // this" rather than leaving the previous query's rows up.
+          setMentionSearch({ query: mentionQuery, limit: mentionWantLimit, hits: [] });
         })
         .finally(() => {
           if (mine === mentionTicket.current) setMentionSearching(false);
         });
     }, 150);
     return () => window.clearTimeout(timer);
-  }, [mentionRun, archiveAvailable]);
+  }, [mentionQuery, mentionWantLimit]);
 
   /**
    * Recompute the run from the draft and the caret.
@@ -1935,7 +1969,10 @@ export function ChatPane({
   const closeMentions = (dismiss = false) => {
     if (dismiss && mentionRun) setMentionDismissed(mentionRun.start);
     setMentionRun(null);
-    setMentionHits([]);
+    // Nothing to clear: the hits are read through `hitsFor`, which answers the
+    // query being shown and no other, so closing the run retires them. The
+    // state is left as a one-query cache — reopening the same `@…` shows its
+    // rows immediately and still refetches.
     setMentionSearching(false);
   };
 

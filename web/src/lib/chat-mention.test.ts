@@ -5,11 +5,16 @@
 import { describe, expect, it } from 'vitest';
 import {
   MENTION_QUERY_MAX,
+  MENTION_SEARCH_MAX,
+  MENTION_SEARCH_PAGE,
   type MentionChat,
   type MentionPick,
+  NO_MENTION_SEARCH,
   applyMention,
   detectMentionRun,
+  hitsFor,
   nextMentionRun,
+  nextSearchLimit,
   parseDirectMarker,
   parseDirective,
   parseMentions,
@@ -486,6 +491,84 @@ describe('withContentRows — the archive tier', () => {
       excludeTabId: 'investing',
     });
     expect(rows).toEqual([]);
+  });
+});
+
+describe('hitsFor — a result never outlives the query it answers', () => {
+  const state = { query: 'cash', limit: 50, hits: [{ sid: 's1' }] as never };
+
+  it('hands back the hits for their own query', () => {
+    expect(hitsFor(state, 'cash')).toHaveLength(1);
+    expect(hitsFor(state, ' cash ')).toHaveLength(1);
+  });
+
+  it('hands back NOTHING under a different query', () => {
+    // The defect: search `@cash`, take a hit, retype the query as `@zebra`, and
+    // the cash row stayed in the open picker — header saying zebra, row selected,
+    // Enter picking an unrelated chat — for the debounce plus a round trip. The
+    // ticket scheme cannot help: it guards a late RESPONSE, not stale state.
+    expect(hitsFor(state, 'zebra')).toEqual([]);
+    expect(hitsFor(state, '')).toEqual([]);
+    expect(hitsFor(NO_MENTION_SEARCH, 'cash')).toEqual([]);
+  });
+});
+
+describe('nextSearchLimit — how far the content tier goes, and when it stops', () => {
+  const ask = (over: Partial<Parameters<typeof nextSearchLimit>[0]> = {}) =>
+    nextSearchLimit({
+      query: 'trayo',
+      state: NO_MENTION_SEARCH,
+      rows: 0,
+      want: 8,
+      archiveAvailable: true,
+      ...over,
+    });
+
+  it('asks for the first page for a new query', () => {
+    expect(ask()).toBe(MENTION_SEARCH_PAGE);
+  });
+
+  it('asks nothing of an archive that is not there, or of a query too short', () => {
+    expect(ask({ archiveAvailable: false })).toBeNull();
+    expect(ask({ query: 'ab' })).toBeNull();
+    expect(ask({ query: '' })).toBeNull();
+    expect(ask({ query: 'x'.repeat(257) })).toBeNull();
+  });
+
+  it('goes back for the big page when a FULL page did not fill the picker', () => {
+    // The real shape of the defect: the archive returns 50 hits, 47 of them in
+    // sessions whose panes are no longer chats, so the picker renders one row
+    // with seven slots free and no way to ask for more.
+    const state = { query: 'trayo', limit: 50, hits: Array.from({ length: 50 }) as never };
+    expect(ask({ state, rows: 1 })).toBe(MENTION_SEARCH_MAX);
+  });
+
+  it('stops once the picker is full — a full list is not worth another request', () => {
+    const state = { query: 'trayo', limit: 50, hits: Array.from({ length: 50 }) as never };
+    expect(ask({ state, rows: 8 })).toBeNull();
+  });
+
+  it('stops when the page came back SHORT — the archive has no more to give', () => {
+    // Asking for more of nothing is a round trip that cannot change the answer.
+    const state = { query: 'trayo', limit: 50, hits: Array.from({ length: 12 }) as never };
+    expect(ask({ state, rows: 1 })).toBeNull();
+  });
+
+  it('stops at the server’s own cap, and does not loop', () => {
+    // MENTION_SEARCH_MAX is routes/search.ts's clamp, so there is nothing past
+    // it to ask for. Without this the escalation would re-fire forever on a
+    // query whose hits never resolve.
+    const state = {
+      query: 'trayo',
+      limit: MENTION_SEARCH_MAX,
+      hits: Array.from({ length: MENTION_SEARCH_MAX }) as never,
+    };
+    expect(ask({ state, rows: 0 })).toBeNull();
+  });
+
+  it('starts over for a new query even mid-escalation', () => {
+    const state = { query: 'trayo', limit: 50, hits: Array.from({ length: 50 }) as never };
+    expect(ask({ state, query: 'codex', rows: 0 })).toBe(MENTION_SEARCH_PAGE);
   });
 });
 
