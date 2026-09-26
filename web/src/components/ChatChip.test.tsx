@@ -1,6 +1,14 @@
 import { CHAT_DECAY_DAYS, chatClock } from '@muxpad/shared';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { type ChatChipChat, chatTooltip, chipClock, isChatDone, isChatRetired } from './ChatChip';
+import {
+  ChatChip,
+  type ChatChipChat,
+  chatTooltip,
+  chipClock,
+  isChatDone,
+  isChatRetired,
+} from './ChatChip';
 
 const DAY = 86_400_000;
 const NOW = 1_700_000_000_000;
@@ -153,6 +161,111 @@ describe('isChatRetired — the sub-chat’s one question', () => {
     expect(isChatRetired({ name: 'kid', spawned_by: 'p', clock: ancient, done: false })).toBe(
       false,
     );
+  });
+});
+
+/**
+ * WHAT THE CHIP DRAWS — and it was not tested at all.
+ *
+ * Everything above this line tests four pure functions, which a mutation sweep
+ * showed to be genuinely well pinned. The COMPONENT was not rendered by any test
+ * in the branch, so three mutations to the one visual primitive of the whole
+ * feature passed the entire suite:
+ *
+ *   · delete the fill's `height` style — the descending fill, the thing eight
+ *     rounds with the user converged on — and every test still passed;
+ *   · delete `data-hollow` — the entire two-state vocabulary of a child dot —
+ *     and every test still passed;
+ *   · make a sub-chat's mark stop being a dot, and every test still passed.
+ *
+ * The logic was beautifully tested and the RENDERING is the deliverable. These
+ * assert the markup the browser is handed, because that is the only place the
+ * fill, the ring and the shape exist. The pixels themselves belong to
+ * ChatChip.css (and its own test); this is the seam between them.
+ */
+describe('what the chip actually renders', () => {
+  const html = (chat: ChatChipChat, shape?: 'tile' | 'dot') =>
+    renderToStaticMarkup(<ChatChip density="row" chat={chat} {...(shape ? { shape } : {})} />);
+  /** The fill's height as the browser gets it, or null when the element is gone. */
+  const fillHeight = (markup: string) =>
+    markup.match(/class="chatchip-fill"[^>]*style="height:([^"]*)"/)?.[1] ?? null;
+
+  it('puts the DESCENDING FILL on the element, as a height', () => {
+    // The fill is `background: var(--clock)` on a block whose HEIGHT moves —
+    // emphatically not the tile at a fraction of its opacity (see the component).
+    // So the height is the whole encoding, and it is an inline style: nothing in
+    // the stylesheet can assert it and nothing else in the app carries it.
+    expect(fillHeight(html(aged(1)))).toBe('25%');
+    expect(fillHeight(html(aged(2)))).toBe('50%');
+  });
+
+  it('keeps the fill in the DOM at zero, so the tile animates rather than snaps', () => {
+    // Always present, at height 0 when there is nothing to bury: that is what
+    // gives the transition something to run between when a chat is talked to and
+    // its fill animates back UP.
+    expect(fillHeight(html(aged(0)))).toBe('0%');
+    expect(html(aged(0))).toContain('chatchip-fill');
+  });
+
+  it('draws the last day and done as a tile with nothing left to fill', () => {
+    // Both hand over to the dashed outline, which is the stylesheet's business —
+    // what this owns is that the phase reaches the element and the fill is empty.
+    for (const days of [3, CHAT_DECAY_DAYS]) {
+      const out = html(aged(days));
+      expect(out).toContain('data-shape="tile"');
+      expect(fillHeight(out)).toBe('0%');
+    }
+    expect(html(aged(3))).toContain('data-phase="last-day"');
+    expect(html(aged(CHAT_DECAY_DAYS))).toContain('data-phase="done"');
+  });
+
+  it('draws the glyph, and a stand-in when the chat has no icon', () => {
+    expect(html({ ...aged(0), icon: '📈' })).toContain('📈');
+    expect(html({ name: 'x' })).toContain('•');
+  });
+
+  // ─── The child dot ───────────────────────────────────────────────────────
+  // A SUB-CHAT HAS NO CLOCK. Two states, no fill, at 6px.
+  describe('a sub-chat’s mark', () => {
+    const sub = (done: boolean): ChatChipChat => ({ name: 'kid', spawned_by: 'p', done });
+
+    it('is a DOT, inferred from spawned_by with nothing else to go on', () => {
+      const out = html(sub(false));
+      expect(out).toContain('data-shape="dot"');
+      expect(out).toContain('class="chatchip-dot"');
+      // No fill element at all: there is no clock to draw, so there is nothing
+      // for a fill to mean.
+      expect(out).not.toContain('chatchip-fill');
+    });
+
+    it('goes HOLLOW once it has delivered, and not before', () => {
+      // The dot's equivalent of the tile's dashed outline — "finished, not gone".
+      // `data-hollow` is the only thing the stylesheet has to hang the ring on.
+      expect(html(sub(true))).toContain('data-hollow="true"');
+      expect(html(sub(false))).not.toContain('data-hollow');
+      // …and the phase says the same thing to anything reading the container.
+      expect(html(sub(true))).toContain('data-phase="done"');
+      expect(html(sub(false))).toContain('data-phase="live"');
+    });
+
+    it('obeys a shape the CALLER forces, in both directions', () => {
+      // The sidebar's promoted orphan: `spawned_by` dangles, so the row is
+      // top-level and must draw a tile — a dot with no parent row above it
+      // belongs to nothing. And the row that IS a child is told 'dot' even
+      // though its own `spawned_by` would have said so anyway.
+      expect(html(sub(false), 'tile')).toContain('data-shape="tile"');
+      expect(html(sub(false), 'tile')).toContain('chatchip-fill');
+      expect(html({ ...aged(1) }, 'dot')).toContain('data-shape="dot"');
+      expect(html({ ...aged(1) }, 'dot')).not.toContain('chatchip-fill');
+    });
+  });
+
+  it('carries the density through to the element, since density IS the size', () => {
+    for (const density of ['row', 'card', 'chip'] as const) {
+      expect(renderToStaticMarkup(<ChatChip density={density} chat={aged(1)} />)).toContain(
+        `data-density="${density}"`,
+      );
+    }
   });
 });
 

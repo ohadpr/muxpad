@@ -558,6 +558,13 @@ describe('what the pass was NOT allowed to move', () => {
     // (ChatChip.css), so the only thing separating a child row from a parent
     // row is this one step — which is what puts every child name on one shared
     // x while keeping the dot in the mark column.
+    //
+    // THIS TEST WAS INERT AND PASSING for three reviews: the rule is correct,
+    // and `data-child="true"` was emitted on no element in the product, because
+    // `renderRow` never forwarded `parent` to `TabRow`. A stylesheet test cannot
+    // see that. Its other half is NavTree.rows.test.tsx, which renders the list
+    // and asserts the attribute and the dot actually reach the DOM — do not
+    // change this selector without it, or the pair goes dead again.
     const child = ruleBody(
       NAV_CSS,
       '.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"]',

@@ -1166,8 +1166,15 @@ interface TabListProps {
 /**
  * Mounted only while its workspace is expanded, so useTabs polls (and
  * keeps attention dots live) for exactly the workspaces you can see.
+ *
+ * EXPORTED for one reason, and it is the same reason `groupChats` is: what this
+ * renders decides what you can SEE. `groupChats` is the grouping rule and is
+ * unit-tested; this is the HANDOFF from that rule to the rows, and the handoff
+ * is where the child's dot and indent went missing for three reviews — a bug
+ * invisible to both a grouping test and a stylesheet test, because each was
+ * right about its own half. See NavTree.rows.test.tsx.
  */
-function TabList({
+export function TabList({
   workspace,
   isActiveWorkspace,
   activeTabSlug,
@@ -1529,12 +1536,22 @@ function TabList({
     }
   };
 
-  /** One chat's row. `parent` is set for the chats spawned under it — they
-   *  share its clock, and their mark is a dot in its chip's column. */
+  /** One chat's row. `parent` is set for the chats spawned under it: it is what
+   *  switches the row's mark from a tile to a dot in its parent's chip column,
+   *  and what puts the one indent step on the row. Nothing about a clock — a
+   *  sub-chat has none, and the row reads its own. */
   const renderRow = (t: Tab, parent?: Tab) => (
     <TabRow
       key={t.id}
       tab={t}
+      // The whole reason `renderGroup` knows the parent. Forwarding it was
+      // missed, and because every OTHER prop here is spelled out explicitly
+      // there was nothing to notice: `TabRow.parent` was simply `undefined` on
+      // every row ever rendered, so `data-child` was never emitted, every child
+      // drew a tile, and the child dot, the indent and the shared name x were
+      // all dead in the product while their CSS and their grouping rule were
+      // both correct. Pinned by NavTree.rows.test.tsx.
+      {...(parent ? { parent } : {})}
       workspace={workspace}
       isActiveTab={isActiveWorkspace && t.slug === activeTabSlug}
       quickNumber={showQuickNumbers && quickEnabled ? quickNumberFor(t.id) : undefined}
