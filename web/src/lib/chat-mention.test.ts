@@ -163,14 +163,30 @@ describe('the markers — one grammar, both directions', () => {
     expect(text).toContain('muxpad agent send pane-1');
   });
 
+  it('pre-fills the whole report line, so the other agent only writes prose', () => {
+    const text = renderDirectMarker(
+      { id: 'd1', from: 'muxpad', pane: 'pane-1', to: 'Investing', toPane: 'pane-2' },
+      'check the cash',
+    );
+    // The report template inside the instruction must itself parse — it is the
+    // string the answer will be made of.
+    const template = text.slice(text.indexOf('<muxpad-report'));
+    expect(parseReportMarker(template)?.marker).toEqual({
+      id: 'd1',
+      from: 'Investing',
+      pane: 'pane-2',
+    });
+  });
+
   it('escapes a chat name that would otherwise break the attribute', () => {
     const text = renderDirectMarker({ id: 'd1', from: 'say "hi" <b>', pane: 'p' }, 'x');
     expect(parseDirectMarker(text)?.marker.from).toBe('say "hi" <b>');
   });
 
   it('round-trips a report', () => {
-    const text = renderReportMarker({ id: 'd1' }, 'Cash is 12%.');
-    expect(parseReportMarker(text)).toEqual({ marker: { id: 'd1' }, body: 'Cash is 12%.' });
+    const marker = { id: 'd1', from: 'Investing', pane: 'pane-2' };
+    const text = renderReportMarker(marker, 'Cash is 12%.');
+    expect(parseReportMarker(text)).toEqual({ marker, body: 'Cash is 12%.' });
   });
 
   it('accepts a report the other agent typed loosely', () => {
@@ -178,17 +194,17 @@ describe('the markers — one grammar, both directions', () => {
     // has to land as a card rather than as raw XML in a bubble.
     // No closing tag, no id:
     expect(parseReportMarker('  <muxpad-report>  \n\nDone: 12%.')).toEqual({
-      marker: { id: '' },
+      marker: { id: '', from: '', pane: '' },
       body: 'Done: 12%.',
     });
-    // An attribute we never asked for:
-    expect(parseReportMarker('<muxpad-report id="d1" from="X"></muxpad-report>\nDone.')).toEqual({
-      marker: { id: 'd1' },
+    // Attributes dropped or reordered:
+    expect(parseReportMarker('<muxpad-report from="X" id="d1"></muxpad-report>\nDone.')).toEqual({
+      marker: { id: 'd1', from: 'X', pane: '' },
       body: 'Done.',
     });
     // The answer written INSIDE the element instead of after it:
     expect(parseReportMarker('<muxpad-report id="d1">Cash is 12%.</muxpad-report>')).toEqual({
-      marker: { id: 'd1' },
+      marker: { id: 'd1', from: '', pane: '' },
       body: 'Cash is 12%.',
     });
   });

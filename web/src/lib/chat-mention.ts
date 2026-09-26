@@ -332,6 +332,13 @@ export interface DirectMarker {
   from: string;
   /** Pane of the chat that asked — where the report has to be sent back to. */
   pane: string;
+  /** The chat RECEIVING this. Pre-filled into the report template it copies, so
+   *  the answer identifies itself without the agent having to know its own
+   *  chat's name (it doesn't, reliably). */
+  to?: string | undefined;
+  /** …and its pane, so a device with no local record of the request can still
+   *  resolve which chat the report came from. */
+  toPane?: string | undefined;
 }
 
 /**
@@ -346,10 +353,16 @@ export interface DirectMarker {
  * other side is matching a string this file also wrote.
  */
 export function renderDirectMarker(marker: DirectMarker, body: string): string {
+  // Fully pre-filled: the receiving agent copies a line, it does not compose
+  // one. Every attribute in it is something this side already knows, and an
+  // agent asked to invent `from` would invent something wrong.
+  const report = `<muxpad-report id="${esc(marker.id)}" from="${esc(
+    marker.to ?? '',
+  )}" pane="${esc(marker.toPane ?? '')}"></muxpad-report>`;
   const note =
     `Directed here from the muxpad chat "${marker.from}" — another chat's user, not this chat's. ` +
     'Do the work in THIS chat, then report back once, in one message:\n' +
-    `  muxpad agent send ${marker.pane} '<muxpad-report id="${esc(marker.id)}"></muxpad-report>\n` +
+    `  muxpad agent send ${marker.pane} '${report}\n` +
     "  <two or three sentences: what you did and what the answer is>'\n" +
     'Nothing else is needed — the chat that asked renders that message as a card.';
   return `<muxpad-direct id="${esc(marker.id)}" from="${esc(marker.from)}" pane="${esc(
@@ -375,11 +388,17 @@ export function parseDirectMarker(text: string): { marker: DirectMarker; body: s
 export interface ReportMarker {
   /** The directive this answers. Empty when the agent omitted it. */
   id: string;
+  /** The chat that is answering. Empty when the agent dropped the attribute. */
+  from: string;
+  /** Its pane — the fallback way to resolve which chat that was. */
+  pane: string;
 }
 
 /** The answer's marker — written by the OTHER agent, parsed here. */
 export function renderReportMarker(marker: ReportMarker, body: string): string {
-  return `<muxpad-report id="${esc(marker.id)}"></muxpad-report>\n${body}`;
+  return `<muxpad-report id="${esc(marker.id)}" from="${esc(marker.from)}" pane="${esc(
+    marker.pane,
+  )}"></muxpad-report>\n${body}`;
 }
 
 /**
@@ -400,8 +419,13 @@ export function parseReportMarker(text: string): { marker: ReportMarker; body: s
   const close = rest.indexOf(REPORT_CLOSE);
   const inner = close >= 0 ? rest.slice(0, close) : '';
   const after = close >= 0 ? rest.slice(close + REPORT_CLOSE.length) : rest;
+  const attrs = m[1] ?? '';
   return {
-    marker: { id: unesc(attr(m[1] ?? '', 'id') ?? '') },
+    marker: {
+      id: unesc(attr(attrs, 'id') ?? ''),
+      from: unesc(attr(attrs, 'from') ?? ''),
+      pane: unesc(attr(attrs, 'pane') ?? ''),
+    },
     // After the tag is the form we asked for; inside it is the form a model
     // writes anyway. Prefer the first, fall back to the second, lose neither.
     body: after.trim() || inner.trim(),
@@ -443,7 +467,7 @@ export async function directTo(
       message: `${target.tabName} has no live agent — open it and send it a message first.`,
     };
   }
-  const text = renderDirectMarker(marker, body);
+  const text = renderDirectMarker({ ...marker, to: target.tabName, toPane: paneId }, body);
   try {
     const res = await req<{ ok: boolean; reason?: string }>(
       `/api/agent-sessions/${encodeURIComponent(paneId)}/send`,

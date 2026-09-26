@@ -150,6 +150,13 @@
 .chat-mention-card:hover {
   border-color: var(--chat-accent);
 }
+/* A direction and its report arrive as USER messages (they are real delivered
+   messages), and `.chat-turn-user` pushes its child to the right edge. A card is
+   not the user speaking — it is the other chat — so it keeps the left, where
+   every other piece of furniture in the log sits. */
+.chat-turn-user > .chat-mention-card {
+  margin-right: auto;
+}
 /* A report carries an answer, so it gets a message's width rather than a
    row's — the same reading measure as the assistant text around it. */
 .chat-mention-card.-report {

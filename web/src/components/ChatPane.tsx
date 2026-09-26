@@ -23,18 +23,27 @@ import {
   type ComponentProps,
   Fragment,
   type ReactNode,
+  createContext,
   isValidElement,
   memo,
   useCallback,
+  useContext,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { type AgentLaunchOptions, type RecentFolder, api } from '../api';
+import {
+  type AgentLaunchOptions,
+  type ArchiveSearchHit,
+  type RecentFolder,
+  api,
+} from '../api';
 import {
   AGENT_BACKENDS,
   type AgentBackendId,
@@ -55,7 +64,33 @@ import {
   lastTurnStartId,
   toggleActionRun,
 } from '../lib/chat-voice';
+import { cachedAllTabs, loadAllTabs } from '../lib/all-tabs';
+import {
+  type DirectedWork,
+  addDirected,
+  loadDirected,
+  removeDirected,
+  syncReported,
+} from '../lib/chat-directed';
+import {
+  MAX_MENTION_ROWS,
+  type MentionChat,
+  type MentionRow,
+  type MentionRun,
+  applyMention,
+  detectMentionRun,
+  directTo,
+  parseDirectMarker,
+  parseDirective,
+  parseMentions,
+  parseReportMarker,
+  rankMentions,
+  runIsSettled,
+  toMentionChats,
+  withContentRows,
+} from '../lib/chat-mention';
 import { showFolderChip } from '../lib/nav-row-affordances';
+import { paneIndex } from '../lib/nav-search';
 import {
   type HighlightRun,
   highlightRuns,
@@ -72,6 +107,7 @@ import {
 import type { AgentLink } from '../lib/voice/session';
 import { useVoice } from '../lib/voice/use-voice';
 import { AgentBackendLogo, backendFromAssistant } from './AgentLogos';
+import { ChatMentionCard, ChatMentionPicker, ChatMentionPill } from './ChatMentionPicker';
 import { CopyablePre } from './CopyablePre';
 import { SvgAgentGlyph, SvgGlobe, SvgTerminalGlyph } from './PaneWebSwitch';
 import { VoiceBar, VoiceControl } from './VoiceControl';
@@ -1707,6 +1743,203 @@ export function ChatPane({
       // storage unavailable (private mode / quota) — drafts just don't persist
     }
   }, [input, draftKey]);
+
+  // ── The @ picker ──────────────────────────────────────────────────────────
+  // Typing `@` opens a picker over EVERY chat, live and done. Three things in
+  // one gesture: a reference (a chip in the message), a direction (`@Name text`
+  // sends the work to that chat and it reports back as a card), and — because
+  // the query matches names AND what was said in them — a search. See
+  // lib/chat-mention for the grammar; this is only the surface.
+  const navigate = useNavigate();
+  const mentionListId = useId();
+  // Seeded from whatever `/api/tabs/all` has already answered this session, so
+  // the first `@` has something to show before its own fetch lands.
+  const [corpus, setCorpus] = useState<MentionChat[]>(() => toMentionChats(cachedAllTabs() ?? []));
+  const [mentionRun, setMentionRun] = useState<MentionRun | null>(null);
+  const [mentionCursor, setMentionCursor] = useState(0);
+  // Escape dismisses the picker for THIS run without clearing the draft. Keyed
+  // by the run's `@` offset: a NEW `@` is a new invitation, but continuing to
+  // type into a run you dismissed must not bring it back.
+  const [mentionDismissed, setMentionDismissed] = useState<number | null>(null);
+  const [mentionHits, setMentionHits] = useState<ArchiveSearchHit[]>([]);
+  const [mentionSearching, setMentionSearching] = useState(false);
+  // Latches false on the first 404: /api/search exists only when the archive
+  // does, so its absence must cost one request to learn, not one per keystroke.
+  const [archiveAvailable, setArchiveAvailable] = useState(true);
+  const mentionTicket = useRef(0);
+
+  const ensureCorpus = useCallback(() => {
+    void loadAllTabs().then((groups) => {
+      // An empty answer is a real answer (no workspaces) but must not replace a
+      // usable fallback that came from a failed request — see loadAllTabs.
+      if (groups.length > 0 || cachedAllTabs()) setCorpus(toMentionChats(groups));
+    });
+  }, []);
+
+  // A restored draft can already contain `@Name …` — and if the corpus never
+  // loads, that text resolves to nothing and a direction would be sent to this
+  // chat as prose instead. One fetch on mount, only when there is a `@` to
+  // resolve, closes that without putting a request in front of the first paint.
+  const draftHasAt = input.includes('@');
+  useEffect(() => {
+    if (draftHasAt) ensureCorpus();
+  }, [draftHasAt, ensureCorpus]);
+
+  /** Which chat this pane belongs to — excluded from its own picker. */
+  const myChat = useMemo(() => paneIndex(corpus).get(paneId), [corpus, paneId]);
+
+  const mentionNameRows = useMemo(
+    () =>
+      mentionRun
+        ? rankMentions(corpus, mentionRun.query, { excludeTabId: myChat?.tabId })
+        : ([] as MentionRow[]),
+    [corpus, mentionRun, myChat],
+  );
+  const mentionRows = useMemo(
+    () =>
+      mentionRun
+        ? withContentRows(mentionNameRows, mentionHits, corpus, {
+            excludeTabId: myChat?.tabId,
+            limit: MAX_MENTION_ROWS,
+          })
+        : ([] as MentionRow[]),
+    [mentionNameRows, mentionHits, corpus, mentionRun, myChat],
+  );
+  // Open only while there is something to choose. A query that matches nothing
+  // must give Enter back to the composer rather than swallow it.
+  const mentionOpen = mentionRun !== null && mentionRows.length > 0;
+  const mentionSafeCursor =
+    mentionRows.length === 0 ? 0 : Math.min(mentionCursor, mentionRows.length - 1);
+
+  // The content tier — what was SAID, from the archive's FTS index. Debounced,
+  // superseded-response-proof (same ticket scheme as the sidebar box), and never
+  // allowed to delay or reorder the instant rows above it.
+  useEffect(() => {
+    const q = mentionRun?.query.trim() ?? '';
+    mentionTicket.current += 1;
+    // 3 chars before asking FTS5 to match half the alphabet; 256 because the
+    // server rejects a longer `q` outright (its MATCH is synchronous).
+    if (!archiveAvailable || q.length < 3 || q.length > 256) {
+      setMentionHits([]);
+      setMentionSearching(false);
+      return;
+    }
+    const mine = mentionTicket.current;
+    setMentionSearching(true);
+    const timer = window.setTimeout(() => {
+      api
+        // Well above what is shown: hits from sessions whose pane is gone can't
+        // be resolved to a chat and are dropped client-side, so asking for
+        // exactly eight can legitimately render none.
+        .searchMessages(q, 50)
+        .then((res) => {
+          if (mine !== mentionTicket.current) return;
+          setMentionHits(res.hits);
+        })
+        .catch((err: unknown) => {
+          if (mine !== mentionTicket.current) return;
+          if ((err as { status?: number } | null)?.status === 404) setArchiveAvailable(false);
+          setMentionHits([]);
+        })
+        .finally(() => {
+          if (mine === mentionTicket.current) setMentionSearching(false);
+        });
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [mentionRun, archiveAvailable]);
+
+  /**
+   * Recompute the run from the draft and the caret.
+   *
+   * Called on every change AND on caret movement: a mention is defined by where
+   * the caret is (editing one mid-sentence must reopen its picker), not by the
+   * end of the string.
+   */
+  const syncMentionRun = (text: string, caret: number) => {
+    const run = detectMentionRun(text, caret);
+    // A run whose name is chosen and spaced past is not an invitation any more —
+    // everything after it is the request being typed.
+    const live = run && !runIsSettled(run.query, corpus) ? run : null;
+    if (!live) {
+      if (mentionRun) setMentionRun(null);
+      setMentionDismissed(null);
+      return;
+    }
+    if (mentionDismissed !== null && live.start === mentionDismissed) return;
+    if (mentionDismissed !== null) setMentionDismissed(null);
+    // Only the first `@` of a session pays for the corpus.
+    if (!mentionRun) ensureCorpus();
+    if (mentionRun?.start !== live.start || mentionRun?.query !== live.query) {
+      setMentionRun(live);
+      setMentionCursor(0);
+    }
+  };
+
+  const closeMentions = (dismiss = false) => {
+    if (dismiss && mentionRun) setMentionDismissed(mentionRun.start);
+    setMentionRun(null);
+    setMentionHits([]);
+    setMentionSearching(false);
+  };
+
+  /** Insert the picked chat's token and put the caret back where it belongs. */
+  const pickMention = (row: MentionRow) => {
+    if (!mentionRun) return;
+    const next = applyMention(input, mentionRun, row.chat);
+    setInput(next.text);
+    closeMentions();
+    // After React has committed the new value: setting `value` without touching
+    // the selection parks the caret at the END, which after picking a mention
+    // mid-sentence is wrong by however much was already written.
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(next.caret, next.caret);
+    });
+  };
+
+  /** Go to a chat — from a picker row's chip, a pill in text, or a card. */
+  const openChat = useCallback(
+    (chat: { workspaceSlug: string; tabSlug: string }) => {
+      void navigate({
+        to: '/w/$wsSlug/t/$tabSlug',
+        params: { wsSlug: chat.workspaceSlug, tabSlug: chat.tabSlug },
+      });
+    },
+    [navigate],
+  );
+  // What every rendered mention in the log resolves through. Memoized so the
+  // transcript re-renders when the corpus lands, not on every frame around it.
+  const mentionContext = useMemo(() => ({ corpus, open: openChat }), [corpus, openChat]);
+
+  // ── Directed work ─────────────────────────────────────────────────────────
+  // Cards for requests this chat has sent to another one. Local echo — see
+  // lib/chat-directed for why it cannot be a transcript row.
+  const [directed, setDirected] = useState<DirectedWork[]>(() => loadDirected(paneId));
+  useEffect(() => {
+    setDirected(loadDirected(paneId));
+  }, [paneId]);
+
+  // Which requests have been answered is READ OFF THE TRANSCRIPT, not observed
+  // as an event: a report can land while this pane is closed (or on another
+  // device), and a card left spinning for a request that came back yesterday is
+  // a lie the user has no way to clear.
+  const reportedIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const ev of events) {
+      if (ev.kind !== 'user') continue;
+      const id = parseReportMarker(ev.text)?.marker.id;
+      if (id) ids.add(id);
+    }
+    return ids;
+  }, [events]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed to the reported SET changing; `syncReported` is a pure write-through and listing `directed` would re-enter on its own result.
+  useEffect(() => {
+    if (reportedIds.size === 0) return;
+    setDirected(syncReported(paneId, reportedIds));
+  }, [paneId, reportedIds]);
+
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
   // tone 'info' = transient connection chatter (reconnecting, not connected
@@ -2379,12 +2612,47 @@ export function ChatPane({
     inputRef.current?.focus();
   };
 
+  /**
+   * Hand a request to ANOTHER chat's agent, and leave a card here saying so.
+   *
+   * Does not touch this pane's socket: the point of `@Name do this` is that the
+   * work happens over there and this chat stays free. The card goes up
+   * optimistically (the user's sentence must not vanish while a request is in
+   * flight) and is taken back if the request could not be delivered.
+   */
+  const directWork = (target: MentionChat, body: string) => {
+    const id =
+      globalThis.crypto?.randomUUID?.().slice(0, 8) ?? Math.random().toString(36).slice(2, 10);
+    const entry: DirectedWork = {
+      id,
+      at: Date.now(),
+      tabId: target.tabId,
+      tabSlug: target.tabSlug,
+      workspaceSlug: target.workspaceSlug,
+      body,
+      chip: target.chip,
+    };
+    setDirected(addDirected(paneId, entry));
+    void directTo(target, { id, from: myChat?.tabName ?? 'another chat', pane: paneId }, body).then(
+      (res) => {
+        if (res.ok) return;
+        setDirected(removeDirected(paneId, id));
+        setNotice({ text: res.message, tone: 'info' });
+        // Give the sentence back rather than losing it — same contract as a send
+        // into a dead socket. Only if the composer is still empty: the user may
+        // have started typing something else while this was in flight.
+        setInput((cur) => (cur.trim() ? cur : `@${target.tabName} ${body}`));
+      },
+    );
+  };
+
   const sendMessage = () => {
     const text = input.trim();
     // Sending retires a search highlight: it is the clearest possible statement
     // that you are done reading the result you were brought here for. Covers
     // the paths `onChange` doesn't — dictation, and the mobile send button.
     clearJump();
+    closeMentions();
     // Attachment paths ride along at the END of the message — the agent reads
     // the path, not the pixels. The draft box stays clean prose.
     const attachmentPaths = chips.map((c) => c.path);
@@ -2399,6 +2667,17 @@ export function ChatPane({
         question.questions.map((q) => ({ question: q.question, answers: [text] })),
       );
       setInput('');
+      return;
+    }
+    // `@Name <text>` at the head of the draft goes to THAT chat instead of this
+    // one. Checked before the socket, because this path does not use it — and
+    // deliberately after the question card above, which owns the composer while
+    // it is up.
+    const directive = parseDirective(text, corpus);
+    if (directive) {
+      directWork(directive.target, composeOutgoingMessage(directive.body, attachmentPaths));
+      setInput('');
+      clearChips();
       return;
     }
     const outgoing = composeOutgoingMessage(text, attachmentPaths);
@@ -4087,6 +4366,12 @@ export function ChatPane({
   }
 
   return (
+    // Every mention in the log resolves through this: rows are rendered by a
+    // memoized component reached from several call sites, and a resolver
+    // threaded as a prop through all of them would be a prop on every event
+    // shape in the file. The value is memoized, so the transcript re-renders
+    // when the CORPUS lands and not on the frames in between.
+    <ChatMentionContext.Provider value={mentionContext}>
     <div className="chat-pane" ref={paneRef}>
       {/* We were asked to show WHERE the term is, and could not — so say so.
           Silently landing on an unchanged chat is the one outcome that reads as
@@ -4183,6 +4468,21 @@ export function ChatPane({
               onAnswer={(answers) => answerQuestion(question.qid, answers)}
             />
           ) : null}
+          {/* Work this chat DIRECTED at another one. Live furniture at the foot
+              of the log, beside the pending queue, because that is what it is:
+              a request in flight somewhere else. The spinner is the same 10px
+              mark as everywhere else, and it stops when the report lands (which
+              is read off the transcript, not watched for). */}
+          {directed.map((d) => (
+            <ChatMentionCard
+              key={d.id}
+              chat={d.chip}
+              sub={d.body}
+              working={!d.reportedAt}
+              state={d.reportedAt ? 'reported' : undefined}
+              onOpen={() => openChat(d)}
+            />
+          ))}
           {/* Server-owned pending queue rides at the BOTTOM of the chat —
               pending user bubbles under the latest message + working indicator,
               scrolling with the log. Dashed + muted = "waiting its turn"; edit
@@ -4316,6 +4616,21 @@ export function ChatPane({
               sock.send(JSON.stringify(obj));
             }}
           />
+          {/* Absolutely positioned (see ChatMentionPicker.css): the composer
+              wrap's measured height is what reserves room at the foot of the
+              transcript, so a picker in its flow would scroll the conversation
+              every time you typed `@`. */}
+          {mentionOpen ? (
+            <ChatMentionPicker
+              rows={mentionRows}
+              cursor={mentionSafeCursor}
+              query={mentionRun?.query ?? ''}
+              listId={mentionListId}
+              searching={mentionSearching}
+              onPick={pickMention}
+              onHover={setMentionCursor}
+            />
+          ) : null}
           <div className="chat-composer">
             {/* No `capture` attribute, deliberately: with one, iOS goes straight
                 to the camera. Without it — and with an `accept` that is not
@@ -4363,15 +4678,71 @@ export function ChatPane({
                 ref={inputRef}
                 className="chat-input"
                 value={input}
+                // The combobox arrangement the sidebar's search box uses: the
+                // FIELD keeps focus and points at the active row, so composing
+                // is never interrupted by a list taking the caret. Stated only
+                // while the picker is up — an `aria-activedescendant` pointing
+                // at an id that is not in the document announces nothing.
+                {...(mentionOpen
+                  ? {
+                      role: 'combobox',
+                      'aria-expanded': true,
+                      'aria-autocomplete': 'list' as const,
+                      'aria-controls': mentionListId,
+                      'aria-activedescendant': `${mentionListId}-${mentionSafeCursor}`,
+                    }
+                  : {})}
                 onChange={(e) => {
                   setInput(e.target.value);
+                  syncMentionRun(e.target.value, e.target.selectionStart ?? e.target.value.length);
                   // Editing retires a search highlight. Typing into the
                   // composer means you have stopped reading the result you were
                   // brought here for and started using the chat.
                   clearJump();
                 }}
+                // A caret MOVED by an arrow or a click can land inside an
+                // existing `@…`, which has to reopen that run's picker — the
+                // run is defined by where the caret is, not by the end of the
+                // draft. `keyup` rather than `keydown`: the caret has not moved
+                // yet on the way down.
+                onKeyUp={(e) => {
+                  const el = e.currentTarget;
+                  syncMentionRun(el.value, el.selectionStart ?? el.value.length);
+                }}
+                onClick={(e) => {
+                  const el = e.currentTarget;
+                  syncMentionRun(el.value, el.selectionStart ?? el.value.length);
+                }}
                 onPaste={onPaste}
                 onKeyDown={(e) => {
+                  // The picker owns the arrows, Enter, Tab and Escape while it
+                  // is up — except mid-composition, where an IME owns Enter and
+                  // the arrows to choose a candidate and stealing them there
+                  // makes the composer unusable in Japanese/Chinese input.
+                  if (mentionOpen && !e.nativeEvent.isComposing) {
+                    const n = mentionRows.length;
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      setMentionCursor((c) => (Math.min(c, n - 1) + 1) % n);
+                      return;
+                    }
+                    if (e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      setMentionCursor((c) => (Math.min(c, n - 1) + n - 1) % n);
+                      return;
+                    }
+                    if (e.key === 'Enter' || e.key === 'Tab') {
+                      e.preventDefault();
+                      const row = mentionRows[mentionSafeCursor];
+                      if (row) pickMention(row);
+                      return;
+                    }
+                    if (e.key === 'Escape') {
+                      e.preventDefault();
+                      closeMentions(true);
+                      return;
+                    }
+                  }
                   // Desktop: Enter sends, Shift+Enter = newline. Mobile: the
                   // on-screen Return key inserts a newline (send is the button) —
                   // otherwise every line break fires off a message.
@@ -4456,6 +4827,107 @@ export function ChatPane({
         </div>
       ) : null}
     </div>
+    </ChatMentionContext.Provider>
+  );
+}
+
+/**
+ * How a rendered message resolves an `@` back to a chat.
+ *
+ * Default is deliberately inert (no chats, navigation a no-op): a message
+ * rendered outside a pane — a test, a future surface — shows the text the user
+ * typed rather than throwing, which is the correct degradation for a chip.
+ */
+interface ChatMentionResolver {
+  corpus: readonly MentionChat[];
+  open: (chat: { workspaceSlug: string; tabSlug: string }) => void;
+}
+const ChatMentionContext = createContext<ChatMentionResolver>({ corpus: [], open: () => {} });
+
+/**
+ * A user message, which may be a chat talking to a chat.
+ *
+ * Three shapes, decided by a leading marker (see lib/chat-mention):
+ *
+ *   a REPORT — an answer coming back from a chat this one directed work to.
+ *   a DIRECTION — a request that arrived here FROM another chat, with the block
+ *     that told this chat's agent where to send its answer.
+ *   anything else — an ordinary bubble, with `@` mentions as chips.
+ *
+ * Both cards are clickable and go to the chat at the other end of the exchange,
+ * which is the whole affordance: a card is the handle on the conversation that
+ * is happening somewhere else.
+ */
+function MentionMessage({
+  text,
+  onOpenImage,
+  hl,
+}: {
+  text: string;
+  onOpenImage?: OpenMedia | undefined;
+  hl?: readonly string[] | undefined;
+}) {
+  const { corpus, open } = useContext(ChatMentionContext);
+  const report = parseReportMarker(text);
+  const direct = report ? null : parseDirectMarker(text);
+  const marker = report?.marker ?? direct?.marker;
+  if (!marker) {
+    return (
+      <div className="chat-bubble" dir="auto">
+        <UserText text={text} onOpenImage={onOpenImage} hl={hl} />
+      </div>
+    );
+  }
+  // Which chat is at the other end. By pane first (durable), by name second
+  // (the attribute the other agent copied), and if neither resolves, the name
+  // alone still draws a card — a fresh tile and a chat you cannot click is a
+  // better answer than XML.
+  const other =
+    corpus.find((c) => marker.pane && c.paneIds.includes(marker.pane)) ??
+    corpus.find((c) => c.tabName === marker.from);
+  const chip = other?.chip ?? { name: marker.from || 'another chat' };
+  const body = report ? report.body : (direct?.body.trim() ?? '');
+  return (
+    <ChatMentionCard
+      chat={chip}
+      state={report ? 'reported' : 'directed here'}
+      body={<MentionedText text={body} hl={hl} />}
+      onOpen={() => {
+        if (other) open(other);
+      }}
+    />
+  );
+}
+
+/**
+ * Prose with `@Name` runs replaced by chips.
+ *
+ * The chip is rendered from the CORPUS, not from the text: it carries the chat's
+ * emoji and its clock, which is the whole reason a mention is worth being a chip
+ * rather than bold text. An `@word` that resolves to nothing stays exactly as
+ * typed — see parseMentions.
+ */
+function MentionedText({ text, hl }: { text: string; hl?: readonly string[] | undefined }) {
+  const { corpus, open } = useContext(ChatMentionContext);
+  const parts = useMemo(() => parseMentions(text, corpus), [text, corpus]);
+  if (parts.length === 1 && parts[0]?.kind === 'text')
+    return <HighlightedText text={text} hl={hl} />;
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.kind === 'text' ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: segments have no identity of their own and the whole run is rebuilt when the text or corpus changes.
+          <HighlightedText key={i} text={part.text} hl={hl} />
+        ) : (
+          <ChatMentionPill
+            // biome-ignore lint/suspicious/noArrayIndexKey: see above — the same chat can be mentioned twice in one message.
+            key={i}
+            chat={part.chat.chip}
+            onOpen={() => open(part.chat)}
+          />
+        ),
+      )}
+    </>
   );
 }
 
@@ -4579,11 +5051,14 @@ const ChatRow = memo(function ChatRow({
   const found = hl && hl.length > 0 ? 'true' : undefined;
   switch (event.kind) {
     case 'user':
+      // A directed request and the report that answers it are REAL delivered
+      // messages (muxpad never writes a transcript), so both arrive here as
+      // user bubbles carrying a marker block. Rendering them as cards is not
+      // decoration: without it the chat shows a wall of XML, which is what the
+      // cron marker's own expander exists to prevent.
       return (
         <div className="chat-turn chat-turn-user" data-eid={anchorId} data-search-hit={found}>
-          <div className="chat-bubble" dir="auto">
-            <UserText text={event.text} onOpenImage={onOpenImage} hl={hl} />
-          </div>
+          <MentionMessage text={event.text} onOpenImage={onOpenImage} hl={hl} />
         </div>
       );
     case 'assistant':
@@ -4648,15 +5123,14 @@ function UserText({
   hl?: readonly string[] | undefined;
 }) {
   const parts = splitMessageAttachments(text);
-  if (parts.length === 1 && parts[0]?.kind === 'text')
-    return <HighlightedText text={text} hl={hl} />;
+  if (parts.length === 1 && parts[0]?.kind === 'text') return <MentionedText text={text} hl={hl} />;
   return (
     <>
       {renderMessageParts(
         parts,
         (t, key) => (
           <span key={key}>
-            <HighlightedText text={t} hl={hl} />
+            <MentionedText text={t} hl={hl} />
           </span>
         ),
         (m) => onOpenImage?.(m),
