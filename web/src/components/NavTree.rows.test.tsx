@@ -211,3 +211,80 @@ describe('opening the done drawer shows a delivered child as a hollow dot', () =
     expect(box.querySelector('.navtree-done-head')).toBeNull();
   });
 });
+
+/**
+ * THE SHEET, which had no nesting at all.
+ *
+ * The desktop rail's half of this was fixed three times (see the header above);
+ * the sheet's half had never been built. `TabList` mapped every chat to
+ * `{children: []}` and dropped `done` entirely when `variant === 'sheet'`, on
+ * the stated reasoning that the mobile rail is one flat line per chat by design.
+ *
+ * What that cost, reported from the phone with a screenshot: two agents spawned
+ * under `muxpad` rendered as top-level rows sorted by recency, which put them
+ * ABOVE their own parent with full-size emoji and no mark on them — and because
+ * the done drawer is where both decay and retirement file a chat, nothing ever
+ * left the live list on the one device this list actually gets read on.
+ *
+ * Every assertion here failed before the fix. They are written against the
+ * SHEET's own vocabulary — no tile (the plate is deleted on this surface), a dot
+ * for a child, and the shared done header — not against the desktop's.
+ */
+describe('the sheet nests a child under its parent and files done chats away', () => {
+  const sheetHtml = (tabs: Tab[]): string => {
+    TABS = tabs;
+    return renderToStaticMarkup(
+      <TabList
+        workspace={WS}
+        isActiveWorkspace={true}
+        activeTabSlug={null}
+        variant="sheet"
+        editing={null}
+        setEditing={() => {}}
+      />,
+    );
+  };
+
+  it('marks the child row as a child, so the indent rule can reach it', () => {
+    // `data-child` was emitted by the desktop row and not by the sheet's, so
+    // even once the grouping arrived a child would have been an ordinary line.
+    const out = sheetHtml([tab('root'), tab('kid', { spawned_by: 'root', clock: null })]);
+    expect(count(out, 'data-child="true"')).toBe(1);
+  });
+
+  it('gives the child a dot in the emoji column and the parent its bare emoji', () => {
+    // The dot is what makes this read as nesting: it stands in the emoji's own
+    // fixed box, which lands every child name on one x. The parent keeps the
+    // plateless emoji this surface is built on — no tile is introduced here.
+    const out = sheetHtml([tab('root'), tab('kid', { spawned_by: 'root', clock: null })]);
+    expect(count(out, 'data-shape="dot"')).toBe(1);
+    expect(out).not.toContain('data-shape="tile"');
+  });
+
+  it('puts the child AFTER its parent, whatever the flat order says', () => {
+    // The reported symptom exactly: recency sorted the fresh sub-chats above the
+    // chat that spawned them. Grouping is what makes position mean parentage
+    // instead of last-touched, so the child must follow its parent even when the
+    // incoming list has it first.
+    const out = sheetHtml([tab('kid', { spawned_by: 'root', clock: null }), tab('root')]);
+    expect(out.indexOf('>root<')).toBeLessThan(out.indexOf('>kid<'));
+  });
+
+  it('moves a decayed chat into the done drawer instead of leaving it live', () => {
+    // The drawer was `[]` on this variant, so a chat the server had already
+    // marked done stayed in the live list forever. The header is the shared one.
+    const out = sheetHtml([tab('root'), tab('old', { done: true })]);
+    expect(out).toContain('1 done');
+    // Collapsed by default here too, so the decayed row is not in the markup.
+    expect(out).not.toContain('>old<');
+  });
+
+  it('leaves a flat list flat — no marks, no drawer', () => {
+    // Guards the four above: they must be reporting the hierarchy, not a
+    // grouping pass that decorates every row it touches.
+    const out = sheetHtml([tab('root'), tab('other')]);
+    expect(out).not.toContain('data-child="true"');
+    expect(out).not.toContain('data-shape="dot"');
+    expect(out).not.toContain('done');
+  });
+});
