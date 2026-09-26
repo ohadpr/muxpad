@@ -7,7 +7,7 @@ import { AppUrlDetector } from './runtime/app-url-detector.js';
 import type { AppUrlMarker } from './runtime/pty-scanner.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
-import { type ClockIndex, resolveTabClock, tabLifecycle } from './tab-clock.js';
+import { type ClockSnapshot, resolveTabClock, tabLifecycle } from './tab-clock.js';
 
 /**
  * Per-pane decoration state cached on the main server from ptyd push events.
@@ -745,10 +745,12 @@ export function decorateTab(
   manualUnreadIds?: ReadonlySet<string>,
   /** Pre-read cron summary per tab, for the same reason (see cronsByTab). */
   cronsByTabId?: ReadonlyMap<string, TabCronSummary>,
-  /** Pre-read clock inputs for EVERY tab, for the same reason again — and
-   *  because a child chat's clock is its parent's, so a row cannot be resolved
-   *  from itself alone (see tab-clock.ts / TabStore.clockRows). */
-  clocks?: ClockIndex,
+  /** Pre-read clock inputs for EVERY tab AND the instant to resolve them at,
+   *  for the same reason again — and because a row cannot be resolved from
+   *  itself alone: whether its `spawned_by` parent still exists is what decides
+   *  between a sub-chat and a root (see tab-clock.ts / TabStore.clockRows).
+   *  The `now` rides along so one list is one snapshot (see ClockSnapshot). */
+  clocks?: ClockSnapshot,
 ): Tab {
   const panes = new PaneStore(db);
   const tabs = new TabStore(db);
@@ -777,7 +779,7 @@ export function decorateTab(
   // coalesce `tab.updated` onto their cached row, so a field omitted when
   // false would leave a stale `done: true` after a revival.
   const lifecycle = clocks
-    ? resolveTabClock(clocks, tab.id, Date.now())
+    ? resolveTabClock(clocks.index, tab.id, clocks.now)
     : // No pre-read (a single-row emit): resolve from at most two targeted row
       // reads rather than scanning the table. See tabLifecycle.
       tabLifecycle(db, tab.id, Date.now());
