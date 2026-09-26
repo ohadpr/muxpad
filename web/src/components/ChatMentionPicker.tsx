@@ -148,18 +148,18 @@ function Row({
  */
 export function ChatMentionPill({
   chat,
-  label,
   onOpen,
 }: {
   chat: ChatChipChat & { headline?: string | null };
-  /** What the user actually typed, so the renderer never rewrites their text. */
-  label: string;
   onOpen: () => void;
 }) {
   return (
     <button type="button" className="chat-mention-pill" title={chatTooltip(chat)} onClick={onOpen}>
       <ChatChip density="chip" chat={chat} />
-      {label}
+      {/* The chat's OWN name, not the casing the user happened to type: this is
+          a chip standing for a thing, and the thing has a name. The typed text
+          is preserved in the message; it is just not what the chip reads. */}
+      {chat.name}
     </button>
   );
 }
