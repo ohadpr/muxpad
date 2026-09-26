@@ -60,7 +60,7 @@
   /* The name must not be pushed out by a long headline or snippet. */
   min-width: 0;
 }
-.chat-mention-row[data-cursor='true'] {
+.chat-mention-row[data-cursor="true"] {
   background: color-mix(in srgb, var(--chat-fg) 9%, transparent);
 }
 
@@ -81,7 +81,7 @@
 /* A done chat is still pickable — nothing is deleted and a message revives it —
    but it should not read as loud as a live one. The CHIP already says it (the
    dashed outline round a ghost); the name just steps back. */
-.chat-mention-row[data-done='true'] .chat-mention-name {
+.chat-mention-row[data-done="true"] .chat-mention-name {
   color: var(--chat-dim);
   font-weight: 500;
 }

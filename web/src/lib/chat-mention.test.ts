@@ -4,12 +4,12 @@
 // whole sentence" — neither of which a rendered assertion would name.
 import { describe, expect, it } from 'vitest';
 import {
-  type MentionChat,
   MENTION_QUERY_MAX,
+  type MentionChat,
   applyMention,
   detectMentionRun,
-  parseDirective,
   parseDirectMarker,
+  parseDirective,
   parseMentions,
   parseReportMarker,
   rankMentions,
@@ -72,7 +72,9 @@ describe('detectMentionRun — when the picker is open', () => {
   it('closes on a newline, a second @, and past the length cap', () => {
     expect(detectMentionRun('@inv\nnext', 9)).toBeNull();
     expect(detectMentionRun('@a @b', 2)).not.toBeNull(); // the LAST @ wins
-    expect(detectMentionRun(`@${'x'.repeat(MENTION_QUERY_MAX + 1)}`, MENTION_QUERY_MAX + 2)).toBeNull();
+    expect(
+      detectMentionRun(`@${'x'.repeat(MENTION_QUERY_MAX + 1)}`, MENTION_QUERY_MAX + 2),
+    ).toBeNull();
   });
 });
 
@@ -210,7 +212,9 @@ describe('the markers — one grammar, both directions', () => {
   });
 
   it('ignores text that merely mentions the tag mid-message', () => {
-    expect(parseReportMarker('I will write <muxpad-report id="x"></muxpad-report> later')).toBeNull();
+    expect(
+      parseReportMarker('I will write <muxpad-report id="x"></muxpad-report> later'),
+    ).toBeNull();
     expect(parseDirectMarker('about <muxpad-direct id="x"></muxpad-direct>')).toBeNull();
   });
 });

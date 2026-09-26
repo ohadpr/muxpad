@@ -2,7 +2,7 @@ import { fallbackTabIcon } from '@muxpad/shared';
 import { Fragment, type ReactNode } from 'react';
 import type { MentionRow } from '../lib/chat-mention';
 import { snippetParts, splitHighlight } from '../lib/nav-search';
-import { type ChatChipChat, ChatChip, chatTooltip } from './ChatChip';
+import { ChatChip, type ChatChipChat, chatTooltip } from './ChatChip';
 import './ChatMentionPicker.css';
 
 /**
@@ -93,7 +93,9 @@ function Row({
   const { chat } = row;
   const chip = { ...chat.chip, icon: chat.chip.icon ?? fallbackTabIcon(chat.tabId) };
   return (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: the keyboard path is the composer's own combobox handling (aria-activedescendant); these rows are never tab stops.
+    // No keyboard handler here, deliberately: the keyboard path is the
+    // composer's own combobox handling (aria-activedescendant), and these rows
+    // are never tab stops.
     <div
       className="chat-mention-row"
       id={id}
