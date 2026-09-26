@@ -9,3 +9,4 @@ export * from './cron.js';
 export * from './hosted.js';
 export * from './tab-order.js';
 export * from './chat-clock.js';
+export * from './build-id.js';

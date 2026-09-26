@@ -164,3 +164,68 @@ describe('serving', () => {
     }
   });
 });
+
+/**
+ * `GET /api/build` — the one thing a resumed iOS PWA can ask to find out that it
+ * is running last week's bundle. Its own web root, because the interesting case
+ * is a DEPLOY: index.html is rewritten under a live server and the next answer
+ * has to be the new build, not a memoized old one.
+ */
+describe('build identifier', () => {
+  let buildRoot: string;
+  let buildApp: Hono;
+  const shell = (entry: string) =>
+    `<!doctype html><html><body><div id="root"></div><script type="module" crossorigin src="${entry}"></script></body></html>`;
+  const writeShell = (entry: string) => writeFileSync(join(buildRoot, 'index.html'), shell(entry));
+
+  beforeAll(() => {
+    buildRoot = mkdtempSync(join(tmpdir(), 'muxpad-build-'));
+    writeShell('/assets/index-Cgp7p3nE.js');
+    buildApp = new Hono();
+    mountStaticWeb(buildApp, buildRoot);
+  });
+  afterAll(() => rmSync(buildRoot, { recursive: true, force: true }));
+
+  const build = async () => {
+    const res = await buildApp.request('/api/build');
+    return { res, body: (await res.json()) as { build: string | null } };
+  };
+
+  it('names the entry chunk the shell on disk points at', async () => {
+    const { res, body } = await build();
+    expect(res.status).toBe(200);
+    expect(body.build).toBe('index-Cgp7p3nE.js');
+  });
+
+  it('is never cached — a stale answer is a client that never updates', async () => {
+    const { res } = await build();
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    // And no validator either: a 304 here is the same failure wearing a
+    // different status code.
+    expect(res.headers.get('etag')).toBeNull();
+  });
+
+  it('reports the NEW build immediately after a deploy rewrites the shell', async () => {
+    expect((await build()).body.build).toBe('index-Cgp7p3nE.js');
+    writeShell('/assets/index-ZZZZ9999.js');
+    expect((await build()).body.build).toBe('index-ZZZZ9999.js');
+  });
+
+  it('answers null rather than 404 when the shell names no bundle', async () => {
+    // The dev shell, and any shell we cannot parse. A client that gets null
+    // learns nothing and must stay quiet — which is the safe direction.
+    writeShell('/src/main.tsx');
+    const { res, body } = await build();
+    expect(res.status).toBe(200);
+    expect(body.build).toBeNull();
+    writeShell('/assets/index-Cgp7p3nE.js');
+  });
+
+  it('answers null when there is no built shell at all', async () => {
+    const empty = new Hono();
+    mountStaticWeb(empty, join(tmpdir(), 'muxpad-no-such-dist'));
+    const res = await empty.request('/api/build');
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { build: string | null }).toEqual({ build: null });
+  });
+});

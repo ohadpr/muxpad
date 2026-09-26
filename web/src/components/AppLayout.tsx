@@ -10,6 +10,7 @@ import { MobileNavSwitcher } from './MobileNavSwitcher';
 import { MoveUndoToast } from './MoveUndoToast';
 import { NavTree } from './NavTree';
 import { SettingsMenu } from './SettingsMenu';
+import { UpdateBanner } from './UpdateBanner';
 import { WorkspaceShell } from './WorkspaceLayout';
 
 const REPO_URL = 'https://github.com/ohadpr/muxpad';
@@ -144,6 +145,10 @@ export function AppLayout() {
       {/* Global, route-independent — a move-undo toast must outlive the
           navigation the move triggers (follow-the-pane / follow-the-tab). */}
       <MoveUndoToast />
+      {/* Same reason, plus one of its own: an installed iOS PWA is the case
+          this exists for, and the chrome's build label is display:none on
+          mobile. See UpdateBanner / lib/update-check. */}
+      <UpdateBanner />
     </div>
   );
 }
