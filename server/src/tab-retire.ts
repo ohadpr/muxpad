@@ -28,6 +28,8 @@
  *   · a FATAL turn — a crashed run is exactly what you want to look at
  *   · a pending QUESTION — it is blocked on you, which is the opposite of done
  *   · an ARTIFACT on the pane — it made you something
+ *   · LIVE BACKGROUND SUBAGENTS — the work it spawned outlives the turn that
+ *     spawned it, and their results land after this moment
  *   · QUEUED messages — more work is already waiting; let the last one retire it
  *
  * Cron adds one more at the end: it deletes the tab. This does not. Retiring
@@ -162,6 +164,17 @@ export class ChatRetirer {
     if (e.phase === 'fatal') return true;
     if (this.deps.blocked?.(e.pane_id) === true) return true;
     if (this.hasArtifact(e.pane_id)) return true;
+    // Its own BACKGROUND SUBAGENTS are still running. A turn that ends while
+    // the roster is non-empty has not delivered — the work it spawned is
+    // still out there, and its results arrive after this moment. The same
+    // roster is what makes `getStatus` say `working`, so retiring here
+    // published a row that read `done: true, status: 'working'`: the sidebar
+    // simultaneously claiming this is finished and that it is not.
+    //
+    // The DURABLE server-owned roster, not a pty heuristic — ptyd-cache
+    // mirrors it from the ws layer precisely because a background subagent
+    // parked in one long tool call emits nothing for minutes.
+    if (this.deps.cache.getSubagentCount(e.pane_id) > 0) return true;
     // More of its work is already queued — let the LAST turn retire it.
     if (new AgentQueueStore(this.deps.db).count(e.pane_id) > 0) return true;
     // A multi-pane tab is not a single unit of work: one agent finishing says
