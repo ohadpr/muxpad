@@ -1535,7 +1535,6 @@ function TabList({
     <TabRow
       key={t.id}
       tab={t}
-      parent={parent}
       workspace={workspace}
       isActiveTab={isActiveWorkspace && t.slug === activeTabSlug}
       quickNumber={showQuickNumbers && quickEnabled ? quickNumberFor(t.id) : undefined}
@@ -1889,11 +1888,16 @@ export interface ChatGroup {
  * Order is the server's throughout — pinned block first, then the auto-sorted
  * one. `livePinned` is the seam between them, recomputed over the live tops
  * only, so the pin divider cannot be stranded below a row that decayed away.
+ *
+ * It takes no `now`, and that is the point: nothing in here is time-dependent
+ * any more. `done` is read off the row and `spawned_by` is a pointer, so this
+ * function cannot disagree with the server about what has expired.
  */
-export function groupChats(
-  tabs: Tab[],
-  now: number = Date.now(),
-): { live: ChatGroup[]; done: ChatGroup[]; livePinned: number } {
+export function groupChats(tabs: Tab[]): {
+  live: ChatGroup[];
+  done: ChatGroup[];
+  livePinned: number;
+} {
   const present = new Set(tabs.map((t) => t.id));
   const childrenOf = new Map<string, Tab[]>();
   const tops: Tab[] = [];
@@ -1911,7 +1915,7 @@ export function groupChats(
   const done: ChatGroup[] = [];
   for (const chat of tops) {
     const children = childrenOf.get(chat.id) ?? [];
-    if (isChatDone(chat, now)) {
+    if (isChatDone(chat)) {
       // The parent has left the live list; the whole family goes with it.
       done.push({ chat, children });
       continue;
@@ -2295,7 +2299,6 @@ function TabRow({
       // a TOP-level row in this list (see groupChats), and it must draw a tile
       // like one — a dot with no parent row above it belongs to nothing.
       shape={parent ? 'dot' : 'tile'}
-      parent={parent}
       className="navtree-tab-chip"
       title="Change icon"
       onClick={(e) => {

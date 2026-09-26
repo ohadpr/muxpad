@@ -114,13 +114,6 @@ export function toMentionChats(groups: readonly WorkspaceTabs[]): MentionChat[] 
     const done = row?.done === true;
     const reason = row?.done_reason ?? undefined;
     const parentName = row?.spawned_by ? names.get(row.spawned_by) : undefined;
-    // PRESENT-BUT-NULL `clock` means the server is saying there is no clock —
-    // a sub-chat does not decay, it retires when it delivers. That is a
-    // different statement from "the clock is at 0", and the difference has to
-    // survive this adapter: passing `last_activity_at` through here would let
-    // the chip derive a countdown for a chat whose whole point is not having
-    // one, and draw a half-buried tile on a row that appeared a minute ago.
-    const noClock = row !== undefined && row.clock === null;
     return {
       ...t,
       ...(done ? { done: true } : {}),
@@ -132,15 +125,17 @@ export function toMentionChats(groups: readonly WorkspaceTabs[]): MentionChat[] 
         ...(t.pinned ? { pinned: true } : {}),
         ...(done ? { done: true } : {}),
         ...(row?.spawned_by ? { spawned_by: row.spawned_by } : {}),
-        // The clock is passed through EXACTLY as published. The chip quantises
-        // the fill for the tile and nothing else — lifecycle is the server's.
+        // The clock is passed through EXACTLY as published, and it is the only
+        // time input the chip has. The chip quantises the fill for the tile and
+        // reads `stopped`/`last_day`/`done` off the row; lifecycle is the
+        // server's, start to finish.
+        //
+        // There is nothing to guard against here any more. This used to also
+        // pass `last_activity_at` for "rows that predate the column", carefully
+        // withheld when `clock` was explicitly null — a guard that existed only
+        // because the chip carried a fallback that re-derived the decay rules
+        // client-side. B deleted the fallback; the guard went with it.
         ...(row?.clock ? { clock: row.clock } : {}),
-        // …and the pre-column fallback, which a no-clock row must not get:
-        // "derive a clock from last activity" is precisely what the migration
-        // decision rejected.
-        ...(!noClock && !row?.clock && t.lastActivityAt != null
-          ? { last_activity_at: t.lastActivityAt }
-          : {}),
         ...(t.headline ? { headline: t.headline } : {}),
       },
     };
