@@ -37,6 +37,7 @@ import { openDb } from './store/db.js';
 import { TabActivity } from './tab-activity.js';
 import { ChatClockSweeper } from './tab-clock.js';
 import { ChatRetirer, clearReadyMarks } from './tab-retire.js';
+import { tailnetHostname } from './tailnet-hostname.js';
 import { clearOrphanedTunnelBase, ensureTunnelApp } from './tunnel/TunnelApp.js';
 import { VoiceSessionManager, glossaryInstructions } from './voice/VoiceSessionManager.js';
 import { openAiVoiceTransport } from './voice/live.js';
@@ -397,6 +398,17 @@ const app = createApp({
     funnel,
     publicPort: config.publicPort,
     ...(config.publicBaseUrl ? { publicBaseUrl: config.publicBaseUrl } : {}),
+    // THE ONE PLACE the no-exec tailnet lookup is wired. It answers the same
+    // question as `tailscale status --json` — this machine's ts.net name — by
+    // reverse-resolving its own 100.64/10 address through MagicDNS, so it costs
+    // no exec and therefore no macOS "access data from other apps" prompt. That
+    // matters here because Tailscale is a Mac App Store install: the only binary
+    // lives in the sandboxed app bundle, and touching it always prompts.
+    //
+    // Behind `funnelEnabled` (MUXPAD_NO_FUNNEL=1 turns it off) for the same
+    // reason `funnel` is: the url this produces is a FUNNEL url, meaningless on
+    // an instance that has no funnel.
+    ...(config.funnelEnabled ? { tailnetHostname } : {}),
     tunnel: { ensure: ensureTunnel },
   },
   apps: { registry: appRegistry, status: appStatus },

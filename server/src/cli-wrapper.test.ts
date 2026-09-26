@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { join } from 'node:path';
@@ -134,10 +134,21 @@ describe('scripts/muxpad HTTP wrapper', () => {
     const srcFile = join(tmp, 'artifact.html');
     writeFileSync(srcFile, '<html>cli</html>');
 
-    // Phase 1: stubbed tailscale present — the CLI ensures the funnel,
-    // reads Self.DNSName, and the server uses + persists the hint.
+    // The CLI now prefers a no-exec PTR lookup (tailnet_hostname) over execing
+    // anything, so on a machine that IS on a tailnet the stub below would never
+    // run and this test would silently stop covering the exec tier. A `dig`
+    // shim earlier on PATH removes the cheap answer so the fallback is the thing
+    // under test. Shimming `dig` rather than `ifconfig` keeps the change to the
+    // one command whose answer we want to suppress.
+    const shimDir = join(tmp, 'shim');
+    mkdirSync(shimDir, { recursive: true });
+    writeFileSync(join(shimDir, 'dig'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+
+    // Phase 1: no PTR answer and a stubbed tailscale — the CLI ensures the
+    // funnel, reads Self.DNSName, and the server uses + persists the hint.
     const env = {
       ...process.env,
+      PATH: `${shimDir}:${process.env.PATH ?? ''}`,
       MUXPAD_API_URL: `http://127.0.0.1:${port}`,
       MUXPAD_TAILSCALE_BIN: stub,
       MUXPAD_PUBLIC_PORT: '7799',
@@ -161,6 +172,92 @@ describe('scripts/muxpad HTTP wrapper', () => {
     });
     expect(second.stdout.trim()).toBe('https://stub-host.ts.net:8443/cli-fallback/');
     expect(second.stderr).toBe('');
+
+    // Phase 3: THE BUG. tailscale is available again, and the CLI must still
+    // not run it — the server already has a base, so the hint could only
+    // re-confirm what it knows. Every one of those pointless execs read the
+    // Tailscale app's container and made macOS ask "node would like to access
+    // data from other apps", about five times a day on the machine that runs
+    // muxpad.
+    const quietLog = join(tmp, 'tailscale-quiet.log');
+    const quietStub = join(tmp, 'tailscale-quiet.sh');
+    writeFileSync(
+      quietStub,
+      `#!/bin/sh\necho "$@" >> "${quietLog}"\nif [ "$1" = "status" ]; then printf '%s' '{"Self":{"DNSName":"stub-host.ts.net."}}'; fi\nexit 0\n`,
+      { mode: 0o755 },
+    );
+    const third = await execFileAsync(MUXPAD_BIN, ['publish', srcFile, '--name=cli-cached'], {
+      env: { ...env, MUXPAD_TAILSCALE_BIN: quietStub },
+      encoding: 'utf-8',
+    });
+    expect(third.stdout.trim()).toBe('https://stub-host.ts.net:8443/cli-cached/');
+    expect(existsSync(quietLog), 'publish execed tailscale despite a known base').toBe(false);
+  });
+
+  it('a COLD publish prefers the no-exec PTR name over execing tailscale', async () => {
+    // The other half of the fix, and the half the App Store constraint forces:
+    // even with nothing persisted, the CLI must not open the app bundle. It
+    // derives the tailnet name from this machine's own 100.64/10 address via
+    // MagicDNS instead. Requires the box to be on a tailnet, so it reports
+    // rather than silently passing when it is not.
+    const { stdout: ptr } = await execFileAsync(MUXPAD_BIN, ['_tailnet-hostname'], {
+      env: { ...process.env },
+      encoding: 'utf-8',
+    });
+    const host = ptr.trim();
+    if (!host) {
+      console.log('skipped: this machine is not on a tailnet, so there is no PTR to prefer');
+      return;
+    }
+
+    // A SEPARATE server with its own empty db — a cold cache, so
+    // `discovery_needed` is true and the CLI really does try to discover.
+    const coldDb = openDb(':memory:');
+    const coldDir = mkdtempSync(join(tmpdir(), 'muxpad-cold-'));
+    const coldApp = createApp({
+      db: coldDb,
+      ptyd: ptyd.client,
+      cache: new PtydCache(),
+      dataDir: coldDir,
+      events: new EventBus(),
+      publish: {
+        funnel: localFunnel(7799, 'funnel disabled in tests'),
+        baseProbe: async () => ({
+          alive: true,
+          status: 404,
+          reason: 'client_error' as const,
+          elapsedMs: 1,
+        }),
+      },
+    });
+    const coldServer = serve({ fetch: coldApp.fetch, port: 0, hostname: '127.0.0.1' });
+    await new Promise<void>((r) => coldServer.once('listening', () => r()));
+    const coldPort = (coldServer.address() as { port: number }).port;
+
+    const log = join(tmp, 'cold-must-not-run.log');
+    const stub = join(tmp, 'cold-must-not-run.sh');
+    writeFileSync(stub, `#!/bin/sh\necho "$@" >> "${log}"\nexit 0\n`, { mode: 0o755 });
+    const srcFile = join(tmp, 'cold.html');
+    writeFileSync(srcFile, '<html>cold</html>');
+
+    try {
+      const { stdout } = await execFileAsync(MUXPAD_BIN, ['publish', srcFile, '--name=cold'], {
+        env: {
+          ...process.env,
+          MUXPAD_API_URL: `http://127.0.0.1:${coldPort}`,
+          MUXPAD_TAILSCALE_BIN: stub,
+        },
+        encoding: 'utf-8',
+      });
+      expect(stdout.trim()).toBe(`https://${host}:8443/cold/`);
+      expect(existsSync(log), 'a cold publish execed tailscale instead of using the PTR').toBe(
+        false,
+      );
+    } finally {
+      await new Promise<void>((r) => coldServer.close(() => r()));
+      coldDb.close();
+      rmSync(coldDir, { recursive: true, force: true });
+    }
   });
 
   // ── RECOVERING A ROOM FULL OF DEAD AGENT PANES ──────────────────────────
