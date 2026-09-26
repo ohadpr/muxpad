@@ -63,6 +63,15 @@ export interface MentionChat extends SearchableTab {
    */
   doneReason?: 'decayed' | 'delivered' | 'archived' | undefined;
   /**
+   * The chat this one was spawned under, by ID — `spawned_by`, passed through.
+   *
+   * The name (below) is for SAYING whose work this is; the id is for ASKING the
+   * other direction — "what did this chat start" — which is what the spawn cards
+   * in a conversation and the running count above its composer are. Absent for a
+   * root, which is most chats.
+   */
+  parentId?: string | undefined;
+  /**
    * The chat this one was spawned under, resolved to a NAME within the corpus.
    *
    * A delivered sub-chat is usually named after its task ("Work review"), and
@@ -118,6 +127,7 @@ export function toMentionChats(groups: readonly WorkspaceTabs[]): MentionChat[] 
       ...t,
       ...(done ? { done: true } : {}),
       ...(reason ? { doneReason: reason } : {}),
+      ...(row?.spawned_by ? { parentId: row.spawned_by } : {}),
       ...(parentName ? { parentName } : {}),
       chip: {
         name: t.tabName,
@@ -140,6 +150,65 @@ export function toMentionChats(groups: readonly WorkspaceTabs[]): MentionChat[] 
       },
     };
   });
+}
+
+// ── What this chat SPAWNED ───────────────────────────────────────────────────
+
+/**
+ * How many spawn cards one conversation shows at its foot.
+ *
+ * The same shape of cap as the directed cards next door, and for the same
+ * reason: a chat used as a dispatcher accumulates children forever, and forty
+ * cards is not a record of anything you can read. LIVE children are never
+ * dropped — they are the work still running, which is the whole point of the
+ * card — so the cap only ever sheds delivered ones, oldest first. What it sheds
+ * is not lost: the sidebar's `done` group and `@` both still hold it.
+ */
+export const MAX_SPAWN_CARDS = 12;
+
+/**
+ * The chats spawned under `tabId`, as the conversation renders them.
+ *
+ * This is the whole of fix 4's data layer, and it needed no new storage: a child
+ * chat IS the record that a spawn happened. The card could have been a
+ * device-local echo like the directed ones (see lib/chat-directed), and then a
+ * spawn made by the CLI — an agent delegating work, which is nearly all of them
+ * — would have appeared nowhere, on any device. Derived from the corpus it
+ * appears everywhere, for whoever made it, and it cannot disagree with the
+ * sidebar about what is running because it is the same rows.
+ *
+ * Order is OLDEST FIRST by last activity, so a new spawn appends at the bottom
+ * of the log like the message that caused it. `tabId` breaks ties, keeping the
+ * order total — two spawns in the same millisecond must not swap places between
+ * two renders.
+ */
+export function spawnedChildren(
+  corpus: readonly MentionChat[],
+  tabId: string | undefined | null,
+  max: number = MAX_SPAWN_CARDS,
+): MentionChat[] {
+  if (!tabId) return [];
+  const kids = corpus.filter((c) => c.parentId === tabId && c.tabId !== tabId);
+  kids.sort(
+    (a, b) => (a.lastActivityAt ?? 0) - (b.lastActivityAt ?? 0) || a.tabId.localeCompare(b.tabId),
+  );
+  if (kids.length <= max) return kids;
+  // Shed DELIVERED ones from the front; keep every live child and fill the rest
+  // of the budget with the most recent results.
+  const live = kids.filter((k) => !k.done);
+  const finished = kids.filter((k) => k.done);
+  const keepFinished = finished.slice(
+    Math.max(0, finished.length - Math.max(0, max - live.length)),
+  );
+  return kids.filter((k) => (k.done ? keepFinished.includes(k) : true));
+}
+
+/** The children still working — the number above the composer. */
+export function liveSpawnedChildren(
+  corpus: readonly MentionChat[],
+  tabId: string | undefined | null,
+): MentionChat[] {
+  return spawnedChildren(corpus, tabId, Number.POSITIVE_INFINITY).filter((c) => !c.done);
 }
 
 // ── The run under the caret ──────────────────────────────────────────────────

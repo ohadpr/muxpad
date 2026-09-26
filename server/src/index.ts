@@ -187,7 +187,11 @@ ptyd.on(
     paneStore.setFace(e.id, 'web', marker.url);
     const fresh = paneStore.getById(e.id);
     if (fresh) {
-      events.emit({ type: 'pane.updated', tab_id: fresh.tab_id, pane: decoratePane(cache, fresh) });
+      events.emit({
+        type: 'pane.updated',
+        tab_id: fresh.tab_id,
+        pane: decoratePane(cache, fresh, db),
+      });
     }
   },
 );
@@ -202,7 +206,7 @@ cache.on('paneChange', (paneId: string) => {
   events.emit({
     type: 'pane.updated',
     tab_id: pane.tab_id,
-    pane: decoratePane(cache, pane),
+    pane: decoratePane(cache, pane, db),
   });
 });
 
@@ -219,7 +223,7 @@ cache.on('paneRemoved', (paneId: string) => {
   events.emit({
     type: 'pane.updated',
     tab_id: pane.tab_id,
-    pane: decoratePane(cache, pane),
+    pane: decoratePane(cache, pane, db),
   });
 });
 

@@ -10,7 +10,12 @@ import {
 } from 'react-mosaic-component';
 import 'react-mosaic-component/react-mosaic-component.css';
 import type { AppUrl, LayoutNode, PaneSpec, Tab } from '@muxpad/shared';
-import { collectLayoutLeaves, spliceLayoutAtTarget } from '@muxpad/shared';
+import {
+  collectLayoutLeaves,
+  isAgentPane,
+  spliceLayoutAtTarget,
+  tabTakesPanes,
+} from '@muxpad/shared';
 import { type TabWithPanes, api } from '../api';
 import { ExternalOpenToasts } from '../components/ExternalOpenToasts';
 import { MobileInputBar } from '../components/MobileInputBar';
@@ -1345,31 +1350,42 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         {/* Pane-level controls now live in the TOP bar (line 1), not a second
             strip: mobile spends no whole row on chrome. The nav sheet owns pane
             SWITCH + CLOSE (the old picker & ×), leaving just the face switch
-            (what am I looking at) and an always-visible + (new pane). Portalled
-            up because the top bar (AppLayout) has no pane context; gated on
-            isActive so kept-mounted hidden tabs don't paint duplicates. */}
+            (what am I looking at) and — for a tab that takes panes at all — the
+            + . It is no longer "always visible": a chat tab has no pane + on any
+            device (see tabTakesPanes), and with neither control left there is no
+            bar to paint. Portalled up because the top bar (AppLayout) has no
+            pane context; gated on isActive so kept-mounted hidden tabs don't
+            paint duplicates. */}
         {isActive
           ? (() => {
               const ap = activeId ? tab.panes.find((p) => p.id === activeId) : undefined;
+              // The shared rule, not a second hand-rolled copy of half of it:
+              // a pane CONVERTED to chat (face only, original startup command
+              // intact) is just as much an agent as one launched as a chat.
               const webSwitch =
-                ap &&
-                ap.kind === 'shell' &&
-                !(ap.startup_cmd?.startsWith('muxpad agent') ?? false) ? (
+                ap && ap.kind === 'shell' && !isAgentPane(ap) ? (
                   <PaneWebSwitch
                     paneId={ap.id}
                     appUrls={ap.app_urls ?? []}
                     startupCmd={ap.startup_cmd}
                   />
                 ) : null;
+              // Same rule as the desktop strip, and stated once: a chat tab
+              // shows no pane `+` on any device.
+              const plus = tabTakesPanes(tab.panes) ? (
+                <NewTabButton
+                  idleLabel="+"
+                  idleTitle="New pane"
+                  idleClassName="mobile-strip-add"
+                  onCreate={() => void addPane()}
+                />
+              ) : null;
+              // Nothing left to put in the bar — don't paint an empty one.
+              if (!webSwitch && !plus) return null;
               return (
                 <MobilePaneChrome>
                   {webSwitch ? <div className="mobile-strip-webswitch">{webSwitch}</div> : null}
-                  <NewTabButton
-                    idleLabel="+"
-                    idleTitle="New pane"
-                    idleClassName="mobile-strip-add"
-                    onCreate={() => void addPane()}
-                  />
+                  {plus}
                 </MobilePaneChrome>
               );
             })()
@@ -1547,13 +1563,19 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
               );
             })}
             {/* Browser-standard lone "+"; always opens the harness picker
-                (Claude / Codex / Cursor + Terminal below). */}
-            <NewTabButton
-              idleLabel="+"
-              idleTitle="New pane"
-              idleClassName="desktop-tab-add desktop-tab-add-plus"
-              onCreate={() => void addPane()}
-            />
+                (Claude / Codex / Cursor + Terminal below).
+                GONE for a tab that is nothing but agents — see tabTakesPanes.
+                This `+` was how the user got more chats without a sidebar row,
+                and children-under-a-parent replaced it: a second agent in this
+                tab is a chat with no parent, no clock and no card. */}
+            {tabTakesPanes(tab.panes) ? (
+              <NewTabButton
+                idleLabel="+"
+                idleTitle="New pane"
+                idleClassName="desktop-tab-add desktop-tab-add-plus"
+                onCreate={() => void addPane()}
+              />
+            ) : null}
           </div>
           <div className="desktop-tab-strip-actions">
             <button
@@ -1679,22 +1701,34 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
                         </button>
                       )}
                       <span className="pane-chrome-spacer" />
-                      <button
-                        className="pane-chrome-btn"
-                        title="Split right"
-                        aria-label="Split right"
-                        onClick={() => void splitFromPane(paneId, 'row')}
-                      >
-                        <SvgSplitRight />
-                      </button>
-                      <button
-                        className="pane-chrome-btn"
-                        title="Split down"
-                        aria-label="Split down"
-                        onClick={() => void splitFromPane(paneId, 'column')}
-                      >
-                        <SvgSplitDown />
-                      </button>
+                      {/* SPLIT IS THE SAME PRIMITIVE AS THE STRIP'S `+` — it
+                          adds a pane — so it goes for an agent pane too. Two
+                          shells side by side is a layout; two agents side by
+                          side is two chats with no relationship, which is the
+                          thing children replaced. Kept per-pane (not gated on
+                          the whole tab like the strip's `+`): here the button
+                          belongs to ONE pane, and a terminal sharing a tab with
+                          a chat is still splittable. */}
+                      {isAgentPane(tilePane) ? null : (
+                        <>
+                          <button
+                            className="pane-chrome-btn"
+                            title="Split right"
+                            aria-label="Split right"
+                            onClick={() => void splitFromPane(paneId, 'row')}
+                          >
+                            <SvgSplitRight />
+                          </button>
+                          <button
+                            className="pane-chrome-btn"
+                            title="Split down"
+                            aria-label="Split down"
+                            onClick={() => void splitFromPane(paneId, 'column')}
+                          >
+                            <SvgSplitDown />
+                          </button>
+                        </>
+                      )}
                       {/* The split⇄tabbed toggle lives once, in the top strip's
                           right slot (mirroring tabbed mode's "expand to split"),
                           not per-pane — so it's not repeated here. */}
@@ -1977,7 +2011,10 @@ function SvgChevron() {
 function paneSurfaceKind(p: PaneSpec | undefined): 'agent' | 'web' | 'terminal' {
   if (!p) return 'terminal';
   if (p.kind === 'url') return 'web';
-  if (p.startup_cmd?.startsWith('muxpad agent') || p.face === 'chat') return 'agent';
+  // The SHARED rule (shared/src/agent-pane.ts) — the same one the server
+  // publishes `takes_panes` from, so the icon here and the presence of a `+`
+  // cannot come to different conclusions about the same pane.
+  if (isAgentPane(p)) return 'agent';
   if (p.face === 'web' && p.face_url) return 'web';
   return 'terminal';
 }

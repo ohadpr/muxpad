@@ -429,7 +429,7 @@ export function attachWsServer(deps: {
       deps.events.emit({
         type: 'pane.updated',
         tab_id: pane.tab_id,
-        pane: decoratePane(deps.cache, pane),
+        pane: decoratePane(deps.cache, pane, deps.db),
       });
     }
   };

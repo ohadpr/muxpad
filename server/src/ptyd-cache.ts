@@ -1,13 +1,20 @@
 import { EventEmitter } from 'node:events';
 import type { AppUrl, PaneSpec, PaneStatus, Tab, Workspace } from '@muxpad/shared';
-import { rollupStatus } from '@muxpad/shared';
+import { rollupStatus, tabTakesPanes } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { AppUrlDetector } from './runtime/app-url-detector.js';
 import type { AppUrlMarker } from './runtime/pty-scanner.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
-import { type ClockSnapshot, resolveTabClock, tabLifecycle } from './tab-clock.js';
+import {
+  type ClockSnapshot,
+  clockSnapshot,
+  liveChildCount,
+  resolveTabClock,
+  tabLifecycle,
+  tabLiveChildCount,
+} from './tab-clock.js';
 
 /**
  * Per-pane decoration state cached on the main server from ptyd push events.
@@ -704,7 +711,18 @@ export class PtydCache extends EventEmitter {
  * through this — a hand-built partial payload silently blanks `busy` on the
  * client and poisons the sidebar's change-dedup signature.
  */
-export function decoratePane(cache: PtydCache, pane: PaneSpec): PaneSpec {
+export function decoratePane(
+  cache: PtydCache,
+  pane: PaneSpec,
+  /**
+   * For the CHILD-CHAT half of `agents` (see below). Optional only so a caller
+   * with no database — there are none in production — degrades to the harness
+   * count instead of failing; every emitter passes it, because a payload that
+   * left it out would publish a LOWER number than the one before it and the
+   * client coalesces payloads onto the row it holds.
+   */
+  db?: Database.Database,
+): PaneSpec {
   const status = cache.getStatus(pane.id, pane.unread === true);
   return {
     ...pane,
@@ -719,7 +737,16 @@ export function decoratePane(cache: PtydCache, pane: PaneSpec): PaneSpec {
     // Deprecated alias, exact by construction.
     busy: status === 'working',
     status,
-    agents: cache.getSubagentCount(pane.id),
+    // Both kinds of parallel work, exactly as the tab row counts them (see
+    // decorateTab): the harness roster in THIS pane, plus the chats spawned
+    // under the tab it lives in. A chat's children are its work even though the
+    // pointer that records them (`spawned_by`) names the tab and not the pane —
+    // there is no pane-level spawn link to read, and no consumer sums this
+    // field across a tab's panes (the tab and workspace rollups both go to the
+    // cache and the clock index directly), so attributing them here cannot
+    // double-count.
+    agents:
+      cache.getSubagentCount(pane.id) + (db ? tabLiveChildCount(db, pane.tab_id, Date.now()) : 0),
     app_urls: cache.getAppUrls(pane.id),
   };
 }
@@ -765,7 +792,15 @@ export function decorateTab(
     ...tabPanes.map((p) => cache.getStatus(p.id, p.unread === true)),
     ...(manualUnread ? (['ready'] as const) : []),
   ]);
-  const agents = tabPanes.reduce((n, p) => n + cache.getSubagentCount(p.id), 0);
+  // PARALLEL WORK, both kinds. The harness roster (subagents, which die with
+  // their turn) PLUS the chats this one spawned (which do not) — see
+  // liveChildCount. Counting only the first is why a chat with a dozen working
+  // children published `agents: 0`.
+  const agents =
+    tabPanes.reduce((n, p) => n + cache.getSubagentCount(p.id), 0) +
+    (clocks
+      ? liveChildCount(clocks.index, tab.id, clocks.now)
+      : tabLiveChildCount(db, tab.id, Date.now()));
   // A SCHEDULE, not a status: folded in here (rather than queried per row in
   // the client or the renderer) so the sidebar costs ONE cron query per list,
   // not one per tab. Absent when the tab has none, so the payload — and the
@@ -795,6 +830,10 @@ export function decorateTab(
     busy: status === 'working',
     status,
     agents,
+    // Whether this tab's chrome offers a `+` at all — resolved from the panes
+    // this function already read, so it costs nothing, and resolved HERE so the
+    // rail, the pane strip and the mobile bar cannot each decide differently.
+    takes_panes: tabTakesPanes(tabPanes),
     ...(cron ? { crons: cron.count, next_cron: cron.next } : {}),
     done: lifecycle.done,
     ...(lifecycle.done_reason ? { done_reason: lifecycle.done_reason } : {}),
@@ -894,6 +933,9 @@ export function decorateWorkspace(
   cache: PtydCache,
   db: Database.Database,
   workspace: Workspace,
+  /** Pre-read clock inputs, when the caller is decorating a LIST of workspaces —
+   *  same pre-read discipline (and same reason) as decorateTab's. */
+  clocks: ClockSnapshot = clockSnapshot(db),
 ): Workspace {
   const panes = new PaneStore(db);
   const tabs = new TabStore(db);
@@ -907,6 +949,9 @@ export function decorateWorkspace(
       unread = true;
       statuses.push('ready');
     }
+    // A collapsed workspace has nothing mounted to observe its tabs, so the
+    // children spawned under them are exactly the work it cannot otherwise see.
+    agents += liveChildCount(clocks.index, t.id, clocks.now);
     for (const p of panes.listByTab(t.id)) {
       if (cache.getAttention(p.id)) attention = true;
       if (p.unread) unread = true;

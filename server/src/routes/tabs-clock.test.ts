@@ -352,4 +352,98 @@ describe('the chat clock on the wire', () => {
       expect('spawned_by' in t).toBe(false);
     });
   });
+
+  /**
+   * WHERE A SPAWN LANDS — from its parent, never from whoever asked.
+   *
+   * The caller's `workspace_id` was an ambient guess (for the CLI, an env value
+   * frozen into the spawning pane at its birth), and it produced two symptoms
+   * the user reported separately: a workspace they had abandoned re-seeding
+   * itself through generations of agents, and children that never nested
+   * because the sidebar groups by workspace before it groups by parent.
+   */
+  describe('where a spawn lands', () => {
+    /** A second, unrelated workspace — the wrong answer, available. */
+    async function otherWorkspace(): Promise<string> {
+      return (
+        (await (await post('/api/workspaces', { name: 'Elsewhere' })).json()) as { id: string }
+      ).id;
+    }
+
+    async function tabsIn(workspaceId: string): Promise<Tab[]> {
+      return (await (
+        await test.app.request(`/api/tabs?workspaceId=${workspaceId}`)
+      ).json()) as Tab[];
+    }
+
+    it('takes the PARENT’s workspace and ignores the one the caller named', async () => {
+      const parent = await newTab('parent');
+      const elsewhere = await otherWorkspace();
+      const child = (await (
+        await post('/api/tabs', { name: 'child', workspace_id: elsewhere, spawned_by: parent.id })
+      ).json()) as Tab & { workspace_id?: string };
+
+      expect(child.workspace_id).toBe(wsId);
+      expect((await tabsIn(wsId)).map((t) => t.id)).toContain(child.id);
+      // Not merely "also in the parent's workspace" — NOT in the other one. A
+      // child in a different workspace from its parent is what does not draw.
+      expect((await tabsIn(elsewhere)).map((t) => t.id)).not.toContain(child.id);
+    });
+
+    it('needs no workspace at all when it has a parent', async () => {
+      const parent = await newTab('parent');
+      const res = await post('/api/tabs', { name: 'child', spawned_by: parent.id });
+      expect(res.status).toBe(201);
+      expect(((await res.json()) as { workspace_id?: string }).workspace_id).toBe(wsId);
+    });
+
+    it('does the same through a PANE id — the CLI’s only door', async () => {
+      // `muxpad agent new` from inside a pane knows $MUXPAD_PANE_ID and nothing
+      // trustworthy about workspaces, which is the whole point of the fix.
+      const parent = await newTab('parent');
+      const pane = new PaneStore(db).create({ tab_id: parent.id, shell: '/bin/zsh', cwd: '/tmp' });
+      const elsewhere = await otherWorkspace();
+      const child = (await (
+        await post('/api/tabs', {
+          name: 'child',
+          workspace_id: elsewhere,
+          spawned_by_pane: pane.id,
+        })
+      ).json()) as Tab & { workspace_id?: string };
+      expect(child.workspace_id).toBe(wsId);
+      expect(child.spawned_by).toBe(parent.id);
+    });
+
+    it('follows the parent after it MOVES — the stale-env case, live', async () => {
+      // The reported symptom: a chat moved out of an old workspace kept
+      // spawning agents back into it, because the id in its pane's environment
+      // was stamped at birth and never revisited. Parentage is read from the
+      // row, so a move is simply the new answer.
+      const parent = await newTab('parent');
+      const elsewhere = await otherWorkspace();
+      expect((await post(`/api/tabs/${parent.id}/move`, { workspace_id: elsewhere })).status).toBe(
+        200,
+      );
+      const child = (await (
+        await post('/api/tabs', { name: 'child', workspace_id: wsId, spawned_by: parent.id })
+      ).json()) as Tab & { workspace_id?: string };
+      expect(child.workspace_id).toBe(elsewhere);
+    });
+
+    it('still requires one for a ROOT tab, which has nothing to inherit', async () => {
+      const res = await post('/api/tabs', { name: 'orphan' });
+      expect(res.status).toBe(400);
+    });
+
+    it('falls back to the caller’s workspace when the parent is GONE', async () => {
+      // The link is dropped rather than refused (a worker must not fail to
+      // exist because the chat that asked for it was deleted), so there is no
+      // parentage left to read and the caller's answer is the only one there is.
+      const child = (await (
+        await post('/api/tabs', { name: 'child', workspace_id: wsId, spawned_by: 'no-such-tab' })
+      ).json()) as Tab & { workspace_id?: string };
+      expect(child.workspace_id).toBe(wsId);
+      expect(child.spawned_by).toBeUndefined();
+    });
+  });
 });

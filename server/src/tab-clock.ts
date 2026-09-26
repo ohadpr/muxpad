@@ -246,6 +246,58 @@ export function childrenOf(index: ClockIndex, tabId: string): string[] {
 }
 
 /**
+ * How many chats spawned under `tabId` are still WORKING — the number the rail
+ * publishes as `agents`.
+ *
+ * WHY THIS IS THE `agents` NUMBER. That field counted harness subagents alone,
+ * and muxpad's own pattern is to spawn PANES: a child chat survives a runner
+ * restart, keeps its own transcript, and reports back with a card, where a
+ * harness subagent dies with the turn that launched it. So the one indicator
+ * built to say "this chat has parallel work running" sat at 0 through a dozen
+ * working children — the user asked about it twice.
+ *
+ * DIRECT children only. The rail's number answers "what did this chat start",
+ * and a transitive count would make one deep chain read as a fleet.
+ *
+ * "Still working" is `!done`, resolved through {@link resolveTabClock} rather
+ * than by reading `retired_at` here — a sub-chat's only exit is retirement
+ * today, but the rule for what `done` means belongs in one place, and a pinned
+ * child (never done) has to keep counting.
+ */
+export function liveChildCount(index: ClockIndex, tabId: string, now: number): number {
+  let n = 0;
+  for (const row of index.values()) {
+    if (row.spawned_by !== tabId) continue;
+    if (!resolveTabClock(index, row.id, now).done) n += 1;
+  }
+  return n;
+}
+
+/**
+ * The same count for a caller decorating ONE row, without building the
+ * whole-table index — the sibling of {@link tabLifecycle}, and for the same
+ * measured reason.
+ *
+ * Two indexed reads: this tab, and its children (`tabs_spawned_by`). The
+ * children are enough to resolve themselves: every one of them names THIS tab
+ * as its parent, and a row whose parent exists is a sub-chat, which is the only
+ * input `done` needs beyond its own retirement.
+ */
+export function tabLiveChildCount(
+  db: Database.Database,
+  tabId: string,
+  now: number = Date.now(),
+): number {
+  const tabs = new TabStore(db);
+  const self = tabs.clockRow(tabId);
+  if (!self) return 0;
+  const kids = tabs.childClockRows(tabId);
+  if (kids.length === 0) return 0;
+  const index: ClockIndex = new Map([[self.id, self], ...kids.map((k) => [k.id, k] as const)]);
+  return liveChildCount(index, tabId, now);
+}
+
+/**
  * Bring a chat back: un-retire it AND restart its clock, as one act.
  *
  * The two halves cannot be separated. Un-retiring alone would hand the chat

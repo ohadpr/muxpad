@@ -70,6 +70,7 @@ import {
   detectMentionRun,
   directTo,
   hitsFor,
+  liveSpawnedChildren,
   nextMentionRun,
   nextSearchLimit,
   parseDirectMarker,
@@ -78,6 +79,7 @@ import {
   parseReportMarker,
   rankMentions,
   repinPicks,
+  spawnedChildren,
   toMentionChats,
   withContentRows,
 } from '../lib/chat-mention';
@@ -409,6 +411,16 @@ interface RosterAgent {
   label: string;
   steps: number;
   busy: boolean;
+  /**
+   * A CHILD CHAT rather than a harness subagent.
+   *
+   * Both are parallel work this chat started, which is why they share the count
+   * and the panel — but they are not the same thing and the panel says so: a
+   * subagent dies with the turn that launched it, a child chat outlives a runner
+   * restart, has its own transcript, and is reachable (its card is below, in the
+   * log). Absent = a subagent, which keeps every existing entry as it was.
+   */
+  chat?: { workspaceSlug: string; tabSlug: string };
 }
 
 /** Trim a trailing slash so `/a/b` and `/a/b/` compare equal. */
@@ -838,7 +850,10 @@ const MODE_CHOICES: ReadonlyArray<{ id: AgentMode; label: string; desc: string }
  * rail, which runs on a strict one-bit (status) budget; adding a second
  * channel there is how a rail becomes a dashboard.
  */
-function SessionBar({
+// Exported for its test (like ChatReadyGreeting / HarnessLaunchCard below): what
+// this strip claims is running is a load-bearing statement, and the defect it
+// carried — "0 agents" through a dozen working children — is not visible by eye.
+export function SessionBar({
   paneId,
   folder,
   status,
@@ -846,6 +861,7 @@ function SessionBar({
   send,
   liveLabel,
   agents,
+  onOpenChat,
   mode,
 }: {
   paneId: string;
@@ -855,6 +871,8 @@ function SessionBar({
   send: (obj: unknown) => void;
   liveLabel: string | null;
   agents: RosterAgent[];
+  /** Go to a chat — only ever called for a CHILD row (see RosterAgent.chat). */
+  onOpenChat?: ((chat: { workspaceSlug: string; tabSlug: string }) => void) | undefined;
   /** The pane's mode, or null when the server hasn't told us — no chip. */
   mode: AgentMode | null;
   /** Optimistic local echo + the "here is what actually just happened" notice.
@@ -1193,21 +1211,44 @@ function SessionBar({
           )}
           {panel === 'live' && agents.length > 0 ? (
             <div className="chat-status-menu chat-live-menu" role="dialog">
-              <div className="chat-session-head">Subagent{agents.length === 1 ? '' : 's'}</div>
+              {/* "Subagents" only while that is all there is. A child chat in
+                  this list is not a subagent, and calling it one would teach the
+                  wrong thing about the only one of the two you can open. */}
+              <div className="chat-session-head">
+                {agents.every((a) => !a.chat)
+                  ? `Subagent${agents.length === 1 ? '' : 's'}`
+                  : 'Running'}
+              </div>
               <ul className="chat-roster-list">
-                {agents.map((a) => (
-                  <li key={a.id} className="chat-roster-item" data-busy={a.busy || undefined}>
-                    <span className="chat-roster-spin" aria-hidden="true">
-                      <RosterSpinner />
-                    </span>
-                    <span className="chat-roster-name">{a.label}</span>
-                    {a.steps > 0 ? (
-                      <span className="chat-roster-meta">
-                        {a.steps} step{a.steps === 1 ? '' : 's'}
+                {agents.map((a) => {
+                  // Captured so the handler closes over a value TypeScript has
+                  // already narrowed — `a.chat` inside the closure has not been.
+                  const target = a.chat;
+                  return (
+                    <li key={a.id} className="chat-roster-item" data-busy={a.busy || undefined}>
+                      <span className="chat-roster-spin" aria-hidden="true">
+                        <RosterSpinner />
                       </span>
-                    ) : null}
-                  </li>
-                ))}
+                      {/* A child chat is somewhere you can GO; a subagent is not. */}
+                      {target ? (
+                        <button
+                          type="button"
+                          className="chat-roster-name chat-roster-link"
+                          onClick={() => onOpenChat?.(target)}
+                        >
+                          {a.label}
+                        </button>
+                      ) : (
+                        <span className="chat-roster-name">{a.label}</span>
+                      )}
+                      {a.steps > 0 ? (
+                        <span className="chat-roster-meta">
+                          {a.steps} step{a.steps === 1 ? '' : 's'}
+                        </span>
+                      ) : null}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           ) : null}
@@ -2068,10 +2109,30 @@ export function ChatPane({
     setDirected(loadDirected(paneId));
   }, [paneId]);
 
+  // ── Work this chat SPAWNED ────────────────────────────────────────────────
+  // The children of this chat, from the corpus — no storage of its own, because
+  // a child chat IS the record that a spawn happened (see spawnedChildren). The
+  // cards are the conversation's copy of what the sidebar already knows: before
+  // this, a spawn made by `muxpad agent new` from inside a pane set `spawned_by`
+  // and wrote nothing here, so the parent had no record that it had started
+  // anything at all.
+  const spawned = useMemo(() => spawnedChildren(corpus, myChat?.tabId), [corpus, myChat]);
+  const spawnedLive = useMemo(() => liveSpawnedChildren(corpus, myChat?.tabId), [corpus, myChat]);
+
   // Everything this pane resolves through a chat, in one condition. Declared
   // here rather than up with the corpus because a card is one of the three
   // reasons — see the note on `transcriptNeedsCorpus`.
-  const needsCorpus = draftHasAt || transcriptNeedsCorpus || directed.length > 0;
+  //
+  // …and now a FOURTH, which subsumes the rest: ANY chat may have children, and
+  // the only way to find out is to look, so this one is unconditional. That is
+  // not the regression it appears to be — the corpus is one shared,
+  // single-flight, event-refreshed cache (lib/all-tabs), so it costs one request
+  // per app rather than one per pane. The others are kept in the expression
+  // because each is a real reason in its own right, and the next person to
+  // narrow this needs to see all four.
+  const mayHaveSpawnedWork = true;
+  const needsCorpus =
+    mayHaveSpawnedWork || draftHasAt || transcriptNeedsCorpus || directed.length > 0;
   useEffect(() => {
     if (needsCorpus) ensureCorpus();
   }, [needsCorpus, ensureCorpus]);
@@ -4451,6 +4512,21 @@ export function ChatPane({
       busy: now - (p.seenAt ?? subagentSeenAt.current.get(id) ?? 0) < SUBAGENT_QUIET_MS,
     });
   }
+  // …and the CHILD CHATS, which are the parallel work muxpad itself spawns.
+  // This cell is the persistent "something is running" indicator, and it read 0
+  // through a dozen working children because it counted the harness roster only
+  // — the user asked about that twice. A child is busy until it delivers (a
+  // sub-chat has no clock; it leaves the live list when its work lands), so
+  // `!done` IS the running state and no timer is involved.
+  for (const kid of spawnedLive) {
+    rosterAgents.push({
+      id: `chat:${kid.tabId}`,
+      label: kid.tabName,
+      steps: 0,
+      busy: true,
+      chat: { workspaceSlug: kid.workspaceSlug, tabSlug: kid.tabSlug },
+    });
+  }
   // Each agent's busy/quiet dot is evaluated at render time — with a silent
   // background task nothing else triggers a re-render, so tick a few seconds
   // apart while any rows show to keep the dots honest.
@@ -4688,6 +4764,27 @@ export function ChatPane({
                 />
               );
             })}
+            {/* Work this chat SPAWNED — a child chat, however it was started.
+              The same card, the same densities: a spawn through the in-chat path
+              and a spawn through `muxpad agent new` from inside this pane are
+              the same act, and only the first one used to leave a trace here.
+              No storage behind these (see spawnedChildren): the child row IS the
+              record, which is why they appear on every device and why a card
+              cannot disagree with the sidebar about what is running.
+              Deduped against the directed cards above — @-directing your own
+              child would otherwise draw it twice. */}
+            {spawned
+              .filter((k) => !directed.some((d) => d.tabId === k.tabId))
+              .map((kid) => (
+                <ChatMentionCard
+                  key={kid.tabId}
+                  chat={kid.chip}
+                  sub={kid.headline ?? undefined}
+                  working={!kid.done}
+                  state={kid.done ? (kid.doneReason ?? 'done') : undefined}
+                  onOpen={() => openChat(kid)}
+                />
+              ))}
             {/* Server-owned pending queue rides at the BOTTOM of the chat —
               pending user bubbles under the latest message + working indicator,
               scrolling with the log. Dashed + muted = "waiting its turn"; edit
@@ -4811,6 +4908,7 @@ export function ChatPane({
               {...(session?.assistant ? { assistant: session.assistant } : {})}
               liveLabel={liveLabel}
               agents={rosterAgents}
+              onOpenChat={openChat}
               mode={mode}
               send={(obj) => {
                 const sock = wsRef.current;

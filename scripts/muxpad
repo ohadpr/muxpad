@@ -1626,11 +1626,32 @@ cmd_agent_new() {
       *) echo "muxpad: --backend must be claude, codex, cursor or pick (got '$FLAG_backend')" >&2; exit 1 ;;
     esac
   fi
-  local workspace_id="${FLAG_workspace:-}"
-  if [ -z "$workspace_id" ]; then
+  # WHERE THE WORKER LANDS. Two cases, and the first one is nearly every spawn.
+  #
+  # SPAWNED FROM INSIDE A PANE ($MUXPAD_PANE_ID) — the worker has a PARENT, and
+  # the parent's workspace is the answer. The server resolves it from the live
+  # row (see routes/tabs.ts), so this sends no workspace at all: not the flag,
+  # and above all not $MUXPAD_WORKSPACE_ID, which is stamped into the pane's
+  # environment at birth and is therefore a guess that goes stale the moment the
+  # chat is moved. That stale guess is what kept re-seeding a workspace the user
+  # had abandoned — every generation of agents carrying the same dead id.
+  #
+  # A ROOT spawn (no pane, e.g. a cron or a plain shell) keeps the old
+  # behaviour: the flag, then the env, then a hard error.
+  local workspace_id=''
+  if [ -n "${MUXPAD_PANE_ID:-}" ]; then
+    if [ -n "${FLAG_workspace:-}" ]; then
+      # Ignored, not refused, and SAID OUT LOUD — a launcher that passed it was
+      # working around exactly the bug this now fixes, and it must not silently
+      # keep putting children somewhere other than their parent.
+      echo "muxpad: --workspace is ignored for a spawn from inside a pane — the worker goes where its parent chat lives" >&2
+    fi
+  elif [ -n "${FLAG_workspace:-}" ]; then
+    workspace_id="$FLAG_workspace"
+  else
     workspace_id="${MUXPAD_WORKSPACE_ID:-}"
     if [ -z "$workspace_id" ]; then
-      echo "muxpad: --workspace=<id> required (no MUXPAD_WORKSPACE_ID in env)" >&2
+      echo "muxpad: --workspace=<id> required (no parent pane and no MUXPAD_WORKSPACE_ID in env)" >&2
       exit 1
     fi
     # A pane living in a hidden system workspace inherits a hidden
@@ -1654,7 +1675,10 @@ cmd_agent_new() {
   fi
   local cwd="${FLAG_cwd:-$PWD}"
   local body
-  body="{\"workspace_id\":$(json_string "$workspace_id"),\"bootstrap\":\"agent\",\"cwd\":$(json_string "$cwd")"
+  body="{\"bootstrap\":\"agent\",\"cwd\":$(json_string "$cwd")"
+  # Absent for a spawn with a parent — see "WHERE THE WORKER LANDS" above. The
+  # server requires one only when there is no parent to inherit from.
+  [ -n "$workspace_id" ] && body+=",\"workspace_id\":$(json_string "$workspace_id")"
   # A custom tab name survives the session's AI auto-rename (only the
   # bootstrap default 'agent' gets renamed) — so launchers can label the tab.
   [ -n "${FLAG_name:-}" ] && body+=",\"name\":$(json_string "$FLAG_name")"
@@ -1678,6 +1702,12 @@ cmd_agent_new() {
   tab_json="$(http_request POST /api/tabs "$body")"
   tab_id="$(printf '%s' "$tab_json" | jq -r '.id')"
   tab_slug="$(printf '%s' "$tab_json" | jq -r '.slug')"
+  # WHERE IT ACTUALLY LANDED, from the server — not from what we asked for. For a
+  # spawn we asked for nothing (the parent decides), so this is the only way to
+  # know, and it is also the honest value for the URL when a flag was ignored.
+  local landed
+  landed="$(printf '%s' "$tab_json" | jq -r '.workspace_id // empty')"
+  [ -n "$landed" ] && workspace_id="$landed"
   local pane_id
   pane_id="$(http_request GET "/api/tabs/$tab_id" | jq -r '.panes[0].id')"
   # Poll the send until the runner registers (409 + reason until then).
