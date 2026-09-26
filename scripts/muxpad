@@ -1552,6 +1552,43 @@ cmd_claude() {
 # face; the terminal shows a compact activity log. The pane's startup command
 # is rewritten to `muxpad agent --resume <sid>` by the server, so a ptyd
 # restart or reboot springs the pane back into the same session from disk.
+# The base URL to PRINT in a link a human will click.
+#
+# `MUXPAD_API_URL` is what this CLI talks to, which is loopback — correct for
+# an API call from this machine and useless in a link, because the person
+# reading it is usually on a phone. A wildcard bind is worse: `0.0.0.0` is not
+# connectable at all.
+#
+# So prefer a reachable hostname when the machine has one. Tailscale's MagicDNS
+# name is the right default here: muxpad's cockpit is deliberately tailnet-only
+# (an unauthenticated cockpit must never sit on a public funnel — see
+# funnel.ts), so the ts.net name is exactly as private as loopback and works
+# from every device the user owns. Falls back to loopback when there is no
+# tailnet, which is the honest answer on a standalone machine.
+printable_base() {
+  local base="${MUXPAD_API_URL%/}"
+  base="${base/0.0.0.0/127.0.0.1}"
+  # Only substitute a host we can actually name; never invent a scheme or port.
+  local ts_host=""
+  if [ -n "${MUXPAD_PUBLIC_BASE_URL:-}" ]; then
+    printf '%s' "${MUXPAD_PUBLIC_BASE_URL%/}"; return
+  fi
+  local ts_bin=/Applications/Tailscale.app/Contents/MacOS/Tailscale
+  [ -x "$ts_bin" ] || ts_bin="$(command -v tailscale 2>/dev/null || true)"
+  if [ -n "$ts_bin" ] && [ -x "$ts_bin" ]; then
+    ts_host="$("$ts_bin" status --json 2>/dev/null | jq -r '.Self.DNSName // ""' | sed 's/\.$//')"
+  fi
+  if [ -n "$ts_host" ]; then
+    # serve on 443 means the bare hostname works; otherwise keep our port.
+    # `serve status` prints the origin with NO trailing slash, and the bare
+    # hostname only works when something is served on 443.
+    if "$ts_bin" serve status 2>/dev/null | grep -qE "^https://$ts_host( |\$)"; then
+      printf 'https://%s' "$ts_host"; return
+    fi
+  fi
+  printf '%s' "$base"
+}
+
 # muxpad agent new [--workspace=<id>] [--cwd=<dir>] [--name=<tab name>] [--model=<model>] [--backend=<b>] "first message"
 # One-shot launcher: creates an agent tab (chat-native Claude session), waits
 # for its runner to register, sends the first message so the session starts
@@ -1673,8 +1710,7 @@ cmd_agent_new() {
   # default list, and a silent empty slug would break the printed URL.
   local ws_slug base url
   ws_slug="$(http_request GET '/api/workspaces?all=1' | jq -r --arg id "$workspace_id" '.[] | select(.id == $id) | .slug')"
-  base="${MUXPAD_API_URL%/}"
-  base="${base/0.0.0.0/127.0.0.1}"
+  base="$(printable_base)"
   url="$base/w/${ws_slug:-$workspace_id}/t/$tab_slug"
   if [ "$JSON_OUTPUT" = "1" ]; then
     printf '{"tab_id":%s,"pane_id":%s,"url":%s}\n' \
