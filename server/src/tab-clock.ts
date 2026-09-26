@@ -126,6 +126,39 @@ export function resolveTabClock(index: ClockIndex, tabId: string, now: number): 
     : { done: false, clock };
 }
 
+/**
+ * ONE chat's lifecycle, read directly — for every caller that is decorating a
+ * single row rather than a list.
+ *
+ * It needs at most TWO row reads: this chat, and (only if it names a parent)
+ * whether that parent still exists — which is the entire question separating
+ * "a sub-chat, retires on delivery" from "a root, decays".
+ *
+ * This exists because the obvious thing was measurably wrong. Building the
+ * whole-table index for a single decoration more than doubled `decorateTab`
+ * (296µs → 706µs on a 30-tab database), and `tab.updated` fires on every
+ * rename, turn and activity bump — so the cost landed on the hottest path
+ * there is. Lists still pre-read the index once and pass it down, which is
+ * cheaper again.
+ */
+export function tabLifecycle(db: Database.Database, tabId: string, now: number): TabLifecycle {
+  const tabs = new TabStore(db);
+  const self = tabs.clockRow(tabId);
+  if (!self) return { done: false, clock: null };
+  // Only the PARENT's existence matters, never its contents — a sub-chat has
+  // no clock, so there is nothing of the parent's to read.
+  const parent = self.spawned_by ? tabs.clockRow(self.spawned_by) : null;
+  const index: ClockIndex = new Map(
+    parent
+      ? [
+          [self.id, self],
+          [parent.id, parent],
+        ]
+      : [[self.id, self]],
+  );
+  return resolveTabClock(index, tabId, now);
+}
+
 /** Every tab currently out of the live list, by id. One pass, no per-row
  *  queries. */
 export function doneTabIds(index: ClockIndex, now: number): Set<string> {

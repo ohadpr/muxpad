@@ -7,7 +7,7 @@ import { AppUrlDetector } from './runtime/app-url-detector.js';
 import type { AppUrlMarker } from './runtime/pty-scanner.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
-import { type ClockIndex, clockIndex, resolveTabClock } from './tab-clock.js';
+import { type ClockIndex, resolveTabClock, tabLifecycle } from './tab-clock.js';
 
 /**
  * Per-pane decoration state cached on the main server from ptyd push events.
@@ -776,7 +776,11 @@ export function decorateTab(
   // chat. Both fields are UNCONDITIONAL, even when false/fresh — clients
   // coalesce `tab.updated` onto their cached row, so a field omitted when
   // false would leave a stale `done: true` after a revival.
-  const lifecycle = resolveTabClock(clocks ?? clockIndex(db), tab.id, Date.now());
+  const lifecycle = clocks
+    ? resolveTabClock(clocks, tab.id, Date.now())
+    : // No pre-read (a single-row emit): resolve from at most two targeted row
+      // reads rather than scanning the table. See tabLifecycle.
+      tabLifecycle(db, tab.id, Date.now());
   // `done_reason` is the one lifecycle field that IS conditional, and it can
   // be: it only ever appears alongside `done: true`, which is unconditional —
   // so a client coalescing a live row over a done one clears `done` in the

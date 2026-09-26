@@ -46,6 +46,32 @@ interface TabRow {
  *  `decayed` is never stored — it is what the clock says. */
 export type RetireReason = 'delivered' | 'archived';
 
+const CLOCK_COLUMNS = 'id, spawned_by, pinned, clock_started_at, retired_at, retired_reason';
+
+interface RawClockRow {
+  id: string;
+  spawned_by: string | null;
+  pinned: number;
+  clock_started_at: number | null;
+  retired_at: number | null;
+  retired_reason: string | null;
+}
+
+function toClockRow(r: RawClockRow): TabClockRow {
+  return {
+    id: r.id,
+    spawned_by: r.spawned_by,
+    pinned: !!r.pinned,
+    clock_started_at: r.clock_started_at,
+    retired_at: r.retired_at,
+    // Anything unrecognised reads as a hand archive: it is the conservative
+    // one (it claims only that a person did this), and the alternative would
+    // be a row that is retired for no stated reason at all.
+    retired_reason:
+      r.retired_at === null ? null : r.retired_reason === 'delivered' ? 'delivered' : 'archived',
+  };
+}
+
 /** Everything a chat's lifecycle is resolved from, for every tab at once.
  *  See {@link TabStore.clockRows} and server/src/tab-clock.ts. */
 export interface TabClockRow {
@@ -366,30 +392,29 @@ export class TabStore {
    * promoting a live sub-chat to a decaying root.
    */
   clockRows(): TabClockRow[] {
-    const rows = this.db
-      .prepare(
-        'SELECT id, spawned_by, pinned, clock_started_at, retired_at, retired_reason FROM tabs',
-      )
-      .all() as Array<{
-      id: string;
-      spawned_by: string | null;
-      pinned: number;
-      clock_started_at: number | null;
-      retired_at: number | null;
-      retired_reason: string | null;
-    }>;
-    return rows.map((r) => ({
-      id: r.id,
-      spawned_by: r.spawned_by,
-      pinned: !!r.pinned,
-      clock_started_at: r.clock_started_at,
-      retired_at: r.retired_at,
-      // Anything unrecognised reads as a hand archive: it is the conservative
-      // one (it claims only that a person did this), and the alternative would
-      // be a row that is retired for no stated reason at all.
-      retired_reason:
-        r.retired_at === null ? null : r.retired_reason === 'delivered' ? 'delivered' : 'archived',
-    }));
+    const rows = this.db.prepare(`SELECT ${CLOCK_COLUMNS} FROM tabs`).all() as RawClockRow[];
+    return rows.map(toClockRow);
+  }
+
+  /**
+   * ONE tab's lifecycle inputs.
+   *
+   * The counterpart to {@link clockRows}, and the reason both exist: a LIST
+   * resolves every row and wants the whole table once, but a single
+   * `tab.updated` — which fires on every rename, every turn, every activity
+   * bump — wants one row, not thirty.
+   *
+   * Reading the whole table for a single decoration measurably cost: it more
+   * than doubled `decorateTab` (296µs → 706µs on a 30-tab database) and pushed
+   * the slower integration tests past their timeout. The list path is
+   * unaffected because it pre-reads the index once and passes it down; this is
+   * for everything else.
+   */
+  clockRow(id: string): TabClockRow | null {
+    const r = this.db.prepare(`SELECT ${CLOCK_COLUMNS} FROM tabs WHERE id = ?`).get(id) as
+      | RawClockRow
+      | undefined;
+    return r ? toClockRow(r) : null;
   }
 
   /**
