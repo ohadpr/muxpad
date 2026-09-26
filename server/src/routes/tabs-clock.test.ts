@@ -272,6 +272,27 @@ describe('the chat clock on the wire', () => {
       expect((rows.find((r) => r.id === child.id) as Tab).done).toBe(false);
     });
 
+    it('a worker whose parent is DELETED is promoted live, not straight into done', async () => {
+      // F5, through the real door. `cron --new-tab` with close_when_done runs
+      // this exact delete on every clean fire, so any agent that spawned a
+      // worker from inside a cron tab is orphaning one minutes later. The
+      // worker inherits a clock stamped at its birth and never once read —
+      // so before the fix a ten-day-old worker was `decayed` the instant its
+      // parent went away, mid-job, with no announcement.
+      const parent = await newTab('parent');
+      const child = await newTab('child', { spawned_by: parent.id });
+      tabs.resetClock(child.id, Date.now() - 10 * DAY_MS);
+
+      expect(
+        (await test.app.request(`/api/tabs/${parent.id}`, { method: 'DELETE' })).status,
+      ).toBeLessThan(300);
+
+      const row = (await listTabs()).find((r) => r.id === child.id) as Tab;
+      expect(row.done).toBe(false);
+      expect(row.clock).not.toBeNull(); // it IS a root now
+      expect(row.clock?.fill).toBeLessThan(0.01); // …on a clock that starts here
+    });
+
     it('accepts a PANE id, for anything spawning from inside one', async () => {
       // The CLI knows $MUXPAD_PANE_ID and nothing else; making every such
       // caller do its own pane→tab lookup is how one of them ends up not
