@@ -518,7 +518,7 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
       .get() as { version: number };
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
-    expect(LATEST_SCHEMA_VERSION).toBe(26);
+    expect(LATEST_SCHEMA_VERSION).toBe(27);
   });
 });
 
@@ -777,5 +777,97 @@ describe('migrations v26 — ⚡ do / 🧠 deep become Chat / Agent', () => {
     expect(
       (db.prepare("SELECT mode FROM crons WHERE id = 'c1'").get() as { mode: string }).mode,
     ).toBe('do');
+  });
+});
+
+describe('migrations v27 — the chat clock and the spawn link', () => {
+  /** A v26-era database (before clocks) with one workspace and one tab. */
+  function v26(): Database.Database {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 26 });
+    db.prepare(
+      'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+    ).run('w1', 'wslug1aa', 'W', 0, 1, 1);
+    return db;
+  }
+
+  function addTab(db: Database.Database, id: string, lastActivityAt: number | null): void {
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at,
+                         last_activity_at)
+       VALUES (?, ?, ?, '""', 'w1', 0, 1, 1, ?)`,
+    ).run(id, `s-${id}`, id, lastActivityAt);
+  }
+
+  function clockOf(db: Database.Database, id: string): number | null {
+    return (
+      db.prepare('SELECT clock_started_at FROM tabs WHERE id = ?').get(id) as {
+        clock_started_at: number | null;
+      }
+    ).clock_started_at;
+  }
+
+  it('starts EVERY existing tab fresh at boot, not from its last activity', () => {
+    // The decision this test exists to pin down. Backfilling from
+    // `last_activity_at` was explicitly rejected: `stale` below has not been
+    // touched in a month, so that reading would have shipped it already
+    // expired — and roughly half a real sidebar with it, collapsed into a
+    // `done` group on the very first render.
+    const db = v26();
+    const monthAgo = Date.now() - 30 * 86_400_000;
+    addTab(db, 'stale', monthAgo);
+    addTab(db, 'fresh', Date.now());
+    addTab(db, 'never', null); // never observed at all — no timestamp to inherit
+    const before = Date.now();
+    runMigrations(db);
+    const after = Date.now();
+
+    for (const id of ['stale', 'fresh', 'never']) {
+      const clock = clockOf(db, id);
+      expect(clock, `${id} got a clock`).not.toBeNull();
+      expect(clock).toBeGreaterThanOrEqual(before);
+      expect(clock).toBeLessThanOrEqual(after);
+    }
+    expect(clockOf(db, 'stale')).not.toBe(monthAgo);
+  });
+
+  it('adds spawned_by as a nullable column with no parent by default', () => {
+    const db = v26();
+    addTab(db, 't1', null);
+    runMigrations(db);
+    expect(
+      (db.prepare('SELECT spawned_by FROM tabs WHERE id = ?').get('t1') as {
+        spawned_by: string | null;
+      }).spawned_by,
+    ).toBeNull();
+  });
+
+  it('does NOT cascade-delete a child when its parent tab is deleted', () => {
+    // No foreign key, deliberately: nothing in this model is deleted by a
+    // clock, so a child has to outlive its parent's manual deletion rather
+    // than vanish with it. The child becomes a root with its own clock.
+    const db = v26();
+    addTab(db, 'parent', null);
+    addTab(db, 'child', null);
+    runMigrations(db);
+    db.pragma('foreign_keys = ON');
+    db.prepare('UPDATE tabs SET spawned_by = ? WHERE id = ?').run('parent', 'child');
+    db.prepare('DELETE FROM tabs WHERE id = ?').run('parent');
+    const child = db.prepare('SELECT id, spawned_by FROM tabs WHERE id = ?').get('child');
+    expect(child).toEqual({ id: 'child', spawned_by: 'parent' });
+    expect(db.pragma('foreign_key_check')).toEqual([]);
+  });
+
+  it('never re-stamps a clock the user has since reset', () => {
+    // The version guard already stops a second pass; this pins the backfill
+    // itself as safe to re-run, which is one restore-from-backup away from
+    // mattering.
+    const db = v26();
+    addTab(db, 't1', null);
+    runMigrations(db);
+    const reset = Date.now() + 5_000;
+    db.prepare('UPDATE tabs SET clock_started_at = ? WHERE id = ?').run(reset, 't1');
+    runMigrations(db);
+    expect(clockOf(db, 't1')).toBe(reset);
   });
 });

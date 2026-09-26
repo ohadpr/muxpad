@@ -705,3 +705,87 @@ describe('a write only notifies when it can reorder something', () => {
     expect(notifications).toBeLessThan(writes);
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// The CLOCK. A message the user sends is the only thing that restarts a
+// chat's four-day life — and the only signal here that is not about ordering.
+// ──────────────────────────────────────────────────────────────────────────
+describe('noteUserMessage — recency AND the decay clock', () => {
+  const clockOf = (db: ReturnType<typeof openDb>, id: string) =>
+    new TabStore(db).clockRows().find((r) => r.id === id)?.clock_started_at ?? null;
+
+  it('restarts the clock and records recency in one act', () => {
+    const f = fixture();
+    const a = new TabActivity(f.db);
+    f.tabs.resetClock(f.tab.id, 1_000);
+    a.noteUserMessage(f.tab.id, 9_000_000);
+    expect(clockOf(f.db, f.tab.id)).toBe(9_000_000);
+    expect(f.read(f.tab.id)).toBe(9_000_000);
+  });
+
+  it('leaves the clock alone for output, input and turn-done', () => {
+    // The whole point of the clock is that it measures YOUR attention. A chat
+    // tailing a log would otherwise be immortal.
+    const f = fixture();
+    const a = new TabActivity(f.db, { bootGraceMs: 0 });
+    f.tabs.resetClock(f.tab.id, 1_000);
+    a.touchTab(f.tab.id, { source: 'output', at: 2_000_000 });
+    a.touchTab(f.tab.id, { at: 3_000_000 }); // keystrokes
+    a.touchPane(f.pane.id, { force: true, at: 4_000_000 }); // turn-done
+    expect(clockOf(f.db, f.tab.id)).toBe(1_000);
+    expect(f.read(f.tab.id)).toBe(4_000_000);
+  });
+
+  it('notifies even when the recency bump cannot reorder anything', () => {
+    // `canReorder` correctly suppresses a bump of the already-most-recent row.
+    // The chip it just un-aged is a visible change the ORDER says nothing
+    // about, so the clock reset has to announce on its own.
+    const f = fixture();
+    const notified: string[] = [];
+    const a = new TabActivity(f.db, { onWrite: (id) => notified.push(id) });
+    a.noteUserMessage(f.tab.id, 5_000_000); // the only tab — always the newest
+    expect(notified).toEqual([f.tab.id]);
+  });
+
+  it('announces the row exactly once, not twice', () => {
+    // Every `tab.updated` costs each connected client a full
+    // `GET /api/workspaces?all=1`; the reset and the recency bump are one
+    // event, not two.
+    const f = fixture();
+    const other = f.tabs.create({ name: 'other', layout: '', workspace_id: f.ws.id });
+    f.tabs.touchActivity(other.id, 9_000_000); // makes f.tab NOT the newest…
+    const notified: string[] = [];
+    const a = new TabActivity(f.db, { onWrite: (id) => notified.push(id) });
+    a.noteUserMessage(f.tab.id, 9_500_000); // …so the recency bump DOES emit
+    expect(notified).toEqual([f.tab.id]);
+  });
+
+  it('resets the parent’s clock and announces the whole family', () => {
+    const f = fixture();
+    const child = f.tabs.create({
+      name: 'child',
+      layout: '',
+      workspace_id: f.ws.id,
+      spawned_by: f.tab.id,
+    });
+    f.tabs.resetClock(f.tab.id, 1_000);
+    f.tabs.resetClock(child.id, 1_000);
+    const notified: string[] = [];
+    const a = new TabActivity(f.db, { onWrite: (id) => notified.push(id) });
+    a.noteUserMessage(child.id, 7_000_000);
+    // The write lands on the ROOT — one clock per spawn tree.
+    expect(clockOf(f.db, f.tab.id)).toBe(7_000_000);
+    // …and every row that publishes that clock hears about it.
+    expect(new Set(notified)).toEqual(new Set([f.tab.id, child.id]));
+    // Recency, though, belongs to the chat you actually messaged.
+    expect(f.read(child.id)).toBe(7_000_000);
+  });
+
+  it('is a silent no-op for a deleted tab', () => {
+    const f = fixture();
+    const notified: string[] = [];
+    const a = new TabActivity(f.db, { onWrite: (id) => notified.push(id) });
+    expect(() => a.noteUserMessage('gone', 1_000)).not.toThrow();
+    expect(notified).toEqual([]);
+  });
+});
