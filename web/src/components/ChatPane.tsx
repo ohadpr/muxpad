@@ -1868,12 +1868,12 @@ export function ChatPane({
   const [transcriptNeedsCorpus, setTranscriptNeedsCorpus] = useState(false);
   useEffect(() => {
     if (transcriptNeedsCorpus) return;
-    // A mention chip, a report coming back, or a request that arrived here from
-    // another chat — the three things in a message that resolve through a chat.
+    // USER events only, which is where all three live: a mention chip, a report
+    // coming back, and a request that arrived here from another chat are all
+    // delivered messages (see MentionMessage). Same population `reportedIds`
+    // walks, for the same reason.
     const wants = events.some(
-      (ev) =>
-        typeof (ev as { text?: unknown }).text === 'string' &&
-        /@|<muxpad-report|<muxpad-direct/.test((ev as { text: string }).text),
+      (ev) => ev.kind === 'user' && /@|<muxpad-report|<muxpad-direct/.test(ev.text),
     );
     if (wants) setTranscriptNeedsCorpus(true);
   }, [events, transcriptNeedsCorpus]);
