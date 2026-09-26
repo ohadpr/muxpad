@@ -234,6 +234,20 @@ export const api = {
       body: JSON.stringify(patch),
     }),
 
+  /**
+   * Retire a chat to the `done` group by hand — the manual path to the same
+   * place decay leads. NOT a delete: nothing is removed, the chat keeps its
+   * transcript, it stays findable by `@`, and sending it a message revives it.
+   * This is what the row's × does now.
+   *
+   * A verb endpoint, like `seen` above, because that is the house style for
+   * "do this to the tab" as opposed to "set this field" — and because `done`
+   * is DERIVED from the clock server-side (see server/src/tab-clock.ts), so
+   * archiving is "expire the clock now", not a column the client may write.
+   */
+  archiveTab: (id: string) => req<void>(`/api/tabs/${id}/archive`, { method: 'POST' }),
+
+  /** PERMANENT. Behind the row's context menu, never a one-click affordance. */
   deleteTab: (id: string) => req<void>(`/api/tabs/${id}`, { method: 'DELETE' }),
 
   markTabSeen: (id: string) => req<void>(`/api/tabs/${id}/seen`, { method: 'POST' }),
