@@ -1,8 +1,8 @@
 import type { Tab, Workspace } from '@muxpad/shared';
-import type { ReactNode } from 'react';
+import { type ReactNode, act } from 'react';
+import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
-import { vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * THE RENDERED LIST — the assertion that was missing.
@@ -127,5 +127,87 @@ describe('the rail hands a child row the things that make it look like a child',
     const out = railHtml([tab('root'), tab('orphan', { spawned_by: 'gone' })]);
     expect(count(out, 'data-shape="tile"')).toBe(2);
     expect(out).not.toContain('data-shape="dot"');
+  });
+});
+
+/**
+ * THE DELIVERED CHILD, which only exists behind a click.
+ *
+ * A sub-chat retires the moment it reports, so the one row whose mark is the
+ * HOLLOW RING is always inside the done drawer — and the drawer is collapsed by
+ * default, deliberately. Static markup therefore cannot reach the case where the
+ * sidebar and the `@` picker used to disagree about the same chat: the picker
+ * inferred a dot from `spawned_by` and drew the ring, while the sidebar forced a
+ * tile and — a retired sub-chat having `clock: null` — took the chip's
+ * no-clock/fresh branch, so one surface said "delivered" and the other said
+ * "brand new".
+ */
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+describe('opening the done drawer shows a delivered child as a hollow dot', () => {
+  let host: HTMLDivElement | null = null;
+  let root: ReturnType<typeof createRoot> | null = null;
+
+  afterEach(() => {
+    act(() => root?.unmount());
+    host?.remove();
+    host = null;
+    root = null;
+  });
+
+  function mountRail(tabs: Tab[]): HTMLDivElement {
+    TABS = tabs;
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => {
+      root?.render(
+        <TabList
+          workspace={WS}
+          isActiveWorkspace={true}
+          activeTabSlug={null}
+          variant="sidebar"
+          editing={null}
+          setEditing={() => {}}
+        />,
+      );
+    });
+    return host;
+  }
+
+  it('keeps the drawer shut until asked, then draws the ring in the mark column', () => {
+    // A live parent with one delivered sub-chat: it contributes a live row up top
+    // and a `contextOnly` label with the child under it, down in the drawer.
+    const box = mountRail([
+      tab('root'),
+      // No clock at all — a sub-chat does not decay, it delivers (groupChats).
+      tab('kid', { spawned_by: 'root', done: true, done_reason: 'delivered', clock: null }),
+    ]);
+    expect(box.querySelector('.navtree-done-head')?.textContent).toContain('1 done');
+    // COLLAPSED by default: a chat leaving the live list must not re-open a
+    // drawer of finished ones under it.
+    expect(box.querySelectorAll('[data-shape="dot"]')).toHaveLength(0);
+
+    act(() => box.querySelector<HTMLButtonElement>('.navtree-done-head')?.click());
+
+    const dots = box.querySelectorAll('[data-shape="dot"]');
+    expect(dots).toHaveLength(1);
+    // Hollow, not solid — "finished, not gone", the dot's whole second state.
+    expect(box.querySelectorAll('.chatchip-dot[data-hollow="true"]')).toHaveLength(1);
+    // …and it is a CHILD row, so its dot lands in the column its parent's tile
+    // occupies and its name shares the tree's one child x.
+    expect(box.querySelectorAll('.navtree-tab-row[data-child="true"]')).toHaveLength(1);
+    // The parent above is a label here, not a second clickable copy of the row
+    // that is still live at the top of the list.
+    expect(box.querySelector('.navtree-done-parent')?.textContent).toBe('root');
+  });
+
+  it('draws a working child as a SOLID dot in the live list', () => {
+    // The other half of the two-state vocabulary, and the reason the drawer is
+    // not the only place a dot appears.
+    const box = mountRail([tab('root'), tab('kid', { spawned_by: 'root', clock: null })]);
+    expect(box.querySelectorAll('[data-shape="dot"]')).toHaveLength(1);
+    expect(box.querySelectorAll('.chatchip-dot[data-hollow="true"]')).toHaveLength(0);
+    expect(box.querySelector('.navtree-done-head')).toBeNull();
   });
 });
