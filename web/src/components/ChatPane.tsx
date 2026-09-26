@@ -1855,7 +1855,19 @@ export function ChatPane({
    * the caret is (editing one mid-sentence must reopen its picker), not by the
    * end of the string.
    */
+  /**
+   * Held over a pick, because `keyup` reads the DOM.
+   *
+   * Picking with Enter happens on keydown: the draft is replaced and the picker
+   * closes. The matching KEYUP then fires against a textarea that React may not
+   * have re-rendered yet, so the run it computes is the OLD one — and the picker
+   * you just closed comes straight back. One frame of suppression is enough,
+   * because the caret restore runs in the same frame.
+   */
+  const mentionJustPicked = useRef(false);
+
   const syncMentionRun = (text: string, caret: number) => {
+    if (mentionJustPicked.current) return;
     const live = nextMentionRun(text, caret, corpus, mentionDismissed);
     if (!live) {
       if (mentionRun) setMentionRun(null);
@@ -1884,12 +1896,14 @@ export function ChatPane({
   const pickMention = (row: MentionRow) => {
     if (!mentionRun) return;
     const next = applyMention(input, mentionRun, row.chat);
+    mentionJustPicked.current = true;
     setInput(next.text);
     closeMentions();
     // After React has committed the new value: setting `value` without touching
     // the selection parks the caret at the END, which after picking a mention
     // mid-sentence is wrong by however much was already written.
     requestAnimationFrame(() => {
+      mentionJustPicked.current = false;
       const el = inputRef.current;
       if (!el) return;
       el.focus();
@@ -2618,7 +2632,13 @@ export function ChatPane({
    * optimistically (the user's sentence must not vanish while a request is in
    * flight) and is taken back if the request could not be delivered.
    */
-  const directWork = (target: MentionChat, body: string) => {
+  const directWork = (
+    target: MentionChat,
+    /** What the other agent is sent — prose plus any attachment paths. */
+    outgoing: string,
+    /** The composer's state, to hand back untouched if this never leaves. */
+    restore: { text: string; chips: readonly { path: string; name: string; previewUrl: string }[] },
+  ) => {
     const id =
       globalThis.crypto?.randomUUID?.().slice(0, 8) ?? Math.random().toString(36).slice(2, 10);
     const entry: DirectedWork = {
@@ -2627,21 +2647,26 @@ export function ChatPane({
       tabId: target.tabId,
       tabSlug: target.tabSlug,
       workspaceSlug: target.workspaceSlug,
-      body,
+      // The card shows the REQUEST as the user wrote it: attachment paths are
+      // for the agent to read, not for the log to quote back.
+      body: restore.text.replace(`@${target.tabName}`, '').trim(),
       chip: target.chip,
     };
     setDirected(addDirected(paneId, entry));
-    void directTo(target, { id, from: myChat?.tabName ?? 'another chat', pane: paneId }, body).then(
-      (res) => {
-        if (res.ok) return;
-        setDirected(removeDirected(paneId, id));
-        setNotice({ text: res.message, tone: 'info' });
-        // Give the sentence back rather than losing it — same contract as a send
-        // into a dead socket. Only if the composer is still empty: the user may
-        // have started typing something else while this was in flight.
-        setInput((cur) => (cur.trim() ? cur : `@${target.tabName} ${body}`));
-      },
-    );
+    void directTo(
+      target,
+      { id, from: myChat?.tabName ?? 'another chat', pane: paneId },
+      outgoing,
+    ).then((res) => {
+      if (res.ok) return;
+      setDirected(removeDirected(paneId, id));
+      setNotice({ text: res.message, tone: 'info' });
+      // Give the composer back rather than lose it — the same contract as a send
+      // into a dead socket. Only if it is still empty: the user may have started
+      // typing something else while this was in flight.
+      setInput((cur) => (cur.trim() ? cur : restore.text));
+      if (restore.chips.length) setChips((prev) => (prev.length ? prev : [...restore.chips]));
+    });
   };
 
   const sendMessage = () => {
@@ -2673,7 +2698,10 @@ export function ChatPane({
     // it is up.
     const directive = parseDirective(text, corpus);
     if (directive) {
-      directWork(directive.target, composeOutgoingMessage(directive.body, attachmentPaths));
+      directWork(directive.target, composeOutgoingMessage(directive.body, attachmentPaths), {
+        text,
+        chips,
+      });
       setInput('');
       clearChips();
       return;
