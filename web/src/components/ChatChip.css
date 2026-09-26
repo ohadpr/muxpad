@@ -1,0 +1,158 @@
+/* ─── THE CHIP ─────────────────────────────────────────────────────────────
+   The clock, drawn. See ChatChip.tsx for what the phases mean and why the fill
+   is a colour rather than an opacity; this file is the exact values.
+
+   Everything here is scoped to `.chatchip`, --clock included, so the three
+   surfaces that render one (the sidebar row, a conversation card, an inline
+   mention) need nothing from their own stylesheets to make it correct. */
+
+.chatchip {
+  /* ─── --clock: ONE colour, every size ───────────────────────────────────
+     The 24px tile's descending fill and the 6px child dot are the same ink, so
+     they read as one substance at two scales instead of two indicators that
+     happen to be near each other.
+
+     The `#d9d3ea` is the prototype's literal — a pale lilac the accent is cut
+     WITH, not a theme token, and that is deliberate: the mix has to land in the
+     same place relative to the accent on every theme, and every candidate token
+     (--border, --bg-chrome) moves with the theme's own background and would
+     make the clock nearly invisible on one theme and nearly solid on another.
+     On the light cockpit themes this resolves to exactly the prototype's
+     colour; on the dark ones it lands as a pale fill descending into a dark
+     tile, which still reads as filling up. */
+  --clock: color-mix(in srgb, var(--accent) 34%, #d9d3ea);
+
+  /* Density is SIZE ONLY. Three tokens, set once per density below, and
+     nothing else in this file varies with it. */
+  --chatchip-size: 24px;
+  --chatchip-radius: 8px;
+  --chatchip-glyph: 14px;
+  --chatchip-dot: 6px;
+
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  position: relative;
+  width: var(--chatchip-size);
+  height: var(--chatchip-size);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* `card` is identical to `row` by construction — a card is a row in a
+   different container. Declared anyway so a future divergence is one line
+   here rather than a fork of the component. */
+.chatchip[data-density="card"] {
+  --chatchip-size: 24px;
+  --chatchip-radius: 8px;
+  --chatchip-glyph: 14px;
+  --chatchip-dot: 6px;
+}
+/* Inline in running text. Sized to sit ON a text line rather than drive its
+   leading — a 24px tile in a 20px line box pushes the line apart and the whole
+   paragraph ripples around one mention. */
+.chatchip[data-density="chip"] {
+  --chatchip-size: 16px;
+  --chatchip-radius: 5px;
+  --chatchip-glyph: 10px;
+  --chatchip-dot: 5px;
+  vertical-align: -3px;
+}
+
+/* ─── The tile ───────────────────────────────────────────────────────────── */
+
+.chatchip[data-shape="tile"] {
+  border-radius: var(--chatchip-radius);
+  /* CLEAN and WHITE at rest — the surface the theme nominates as its topmost,
+     which on the light cockpit themes is #fff exactly. The tile has to read as
+     an empty vessel, so it is the lightest thing on the row and not a tint of
+     it. */
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  /* Clips the descending fill to the tile's rounded corners. Load-bearing. */
+  overflow: hidden;
+  transition: background 0.3s, border-color 0.3s, border-style 0.3s;
+}
+
+/* ─── The descending fill ────────────────────────────────────────────────── */
+
+/* A DEFINITE COLOUR whose HEIGHT animates, pinned to the tile's top edge. Not
+   the tile at a fraction of its opacity — see the long note in ChatChip.tsx.
+   z-index 2: it sits ABOVE the glyph and buries it, which is the point. */
+.chatchip-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 2;
+  display: block;
+  background: var(--clock);
+  transition: height 0.45s ease;
+}
+
+.chatchip-glyph {
+  position: relative;
+  z-index: 1;
+  font-weight: 400;
+  font-size: var(--chatchip-glyph);
+  line-height: 1;
+  transition: filter 0.35s;
+}
+
+/* ─── Last day, and done ─────────────────────────────────────────────────── */
+
+/* The tile GIVES WAY: a dashed outline round a ghost. Provisional, which is
+   exactly what a chat about to leave the live list is. `done` draws the same —
+   the tile has nothing left to say about time, and the row's place in the done
+   group is what says it is over. */
+.chatchip[data-phase="last-day"][data-shape="tile"],
+.chatchip[data-phase="done"][data-shape="tile"] {
+  background: transparent;
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border-strong));
+}
+.chatchip[data-phase="last-day"] .chatchip-glyph,
+.chatchip[data-phase="done"] .chatchip-glyph {
+  filter: grayscale(100%);
+  opacity: 0.34;
+}
+
+/* ─── The child dot ──────────────────────────────────────────────────────── */
+
+/* The same material at dot size. It occupies a box the width of the TILE, so a
+   child's dot lands in the same mark column its parent's chip does and every
+   child name in the tree starts on one shared x. */
+.chatchip[data-shape="dot"] {
+  /* width stays --chatchip-size (the tile's), height too — the box is the
+     column, the dot is what is drawn in the middle of it. */
+  background: none;
+  border: 0;
+}
+.chatchip-dot {
+  display: block;
+  width: var(--chatchip-dot);
+  height: var(--chatchip-dot);
+  border-radius: 50%;
+  background: var(--clock);
+  transition: opacity 0.3s, box-shadow 0.3s, background 0.3s;
+}
+/* The dot's equivalent of the tile's dashed outline: on the last day it
+   hollows out to a ring. Same "provisional" reading, at 6px. */
+.chatchip-dot[data-hollow="true"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--clock);
+}
+
+/* ─── Reduced motion ─────────────────────────────────────────────────────── */
+
+/* The fill's 0.45s slide is a state CHANGE, not a loop, so it does not break
+   the rail's "only `working` moves" invariant — but it is still motion, and a
+   user who has asked for none gets the new height immediately instead. */
+@media (prefers-reduced-motion: reduce) {
+  .chatchip[data-shape="tile"],
+  .chatchip-fill,
+  .chatchip-glyph,
+  .chatchip-dot {
+    transition: none;
+  }
+}
