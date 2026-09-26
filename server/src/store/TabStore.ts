@@ -46,7 +46,21 @@ interface TabRow {
  *  `decayed` is never stored — it is what the clock says. */
 export type RetireReason = 'delivered' | 'archived';
 
-const CLOCK_COLUMNS = 'id, spawned_by, pinned, clock_started_at, retired_at, retired_reason';
+/**
+ * ONE projection, used by both the list read and the single-row read, so the
+ * two paths cannot come to different conclusions about the same tab.
+ *
+ * `has_agent` is the question "is there anything in here you could send a
+ * message TO" — see {@link TabClockRow.has_agent}. `startup_cmd LIKE 'muxpad
+ * agent%'` is the same durable ownership marker {@link
+ * TabStore.prototype.listAgentPanes}'s sibling in PaneStore uses; it survives
+ * a ptyd restart, a reboot, and a dead runner, which a live-registry answer
+ * would not.
+ */
+const CLOCK_COLUMNS = `tabs.id, tabs.spawned_by, tabs.pinned, tabs.clock_started_at,
+    tabs.retired_at, tabs.retired_reason,
+    EXISTS (SELECT 1 FROM panes p
+             WHERE p.tab_id = tabs.id AND p.startup_cmd LIKE 'muxpad agent%') AS has_agent`;
 
 interface RawClockRow {
   id: string;
@@ -55,6 +69,7 @@ interface RawClockRow {
   clock_started_at: number | null;
   retired_at: number | null;
   retired_reason: string | null;
+  has_agent: number;
 }
 
 function toClockRow(r: RawClockRow): TabClockRow {
@@ -69,6 +84,7 @@ function toClockRow(r: RawClockRow): TabClockRow {
     // be a row that is retired for no stated reason at all.
     retired_reason:
       r.retired_at === null ? null : r.retired_reason === 'delivered' ? 'delivered' : 'archived',
+    has_agent: !!r.has_agent,
   };
 }
 
@@ -81,6 +97,16 @@ export interface TabClockRow {
   clock_started_at: number | null;
   retired_at: number | null;
   retired_reason: RetireReason | null;
+  /**
+   * Is there an AGENT in this tab — something a message could be sent to?
+   *
+   * The decay clock's only exit is "send it a message", and a terminal or a
+   * web view has no inbox: `noteUserMessage` has exactly one production caller
+   * (ws.ts `submitSend`), which runs for runner-owned agent panes and nothing
+   * else. A tab without one that decays is not resting, it is gone — see
+   * tab-clock.ts.
+   */
+  has_agent: boolean;
 }
 
 export class TabStore {
@@ -411,7 +437,7 @@ export class TabStore {
    * for everything else.
    */
   clockRow(id: string): TabClockRow | null {
-    const r = this.db.prepare(`SELECT ${CLOCK_COLUMNS} FROM tabs WHERE id = ?`).get(id) as
+    const r = this.db.prepare(`SELECT ${CLOCK_COLUMNS} FROM tabs WHERE tabs.id = ?`).get(id) as
       | RawClockRow
       | undefined;
     return r ? toClockRow(r) : null;

@@ -78,6 +78,42 @@ export function isSubChat(index: ClockIndex, tabId: string): boolean {
 }
 
 /**
+ * Does this tab decay at all?
+ *
+ * TWO tabs in the sidebar carry no clock, for two different reasons that reach
+ * the same published shape (`clock: null` — "there is no clock", which is a
+ * different and truer claim than "the clock is at 0%"):
+ *
+ *   A SUB-CHAT is work, not a conversation. It leaves when the work lands.
+ *     See the file comment.
+ *
+ *   A TAB WITH NO AGENT IN IT — a terminal, a web view, an empty tab — has no
+ *     inbox. The decay clock has exactly one exit, "send it a message", and
+ *     `noteUserMessage` has exactly one production caller (ws.ts `submitSend`)
+ *     which runs for runner-owned agent panes and nothing else. So a terminal
+ *     that decays does not go quiet for a while, it goes for good: there is no
+ *     message you could send it, the client never calls the unarchive route,
+ *     and pinning is the only way back. Three of the user's own long-lived
+ *     terminals were on the casualty list, and a lifecycle that eats the tab
+ *     you keep a server running in has misread what the tab is.
+ *
+ * Both are still RETIRABLE. Retirement is an act somebody performed — pressing
+ * × on a terminal should still file it away. What a terminal must not do is
+ * expire because nobody typed in it for four days, which is a fact about the
+ * clock and not about the tab.
+ *
+ * Note this is a property of the tab's CONTENTS, so it moves: a tab whose
+ * agent pane is closed stops decaying, and the direction that error falls in
+ * is "stays visible", which is the harmless one.
+ */
+export function hasDecayClock(index: ClockIndex, tabId: string): boolean {
+  const row = index.get(tabId);
+  if (!row) return false;
+  if (!row.has_agent) return false;
+  return !isSubChat(index, tabId);
+}
+
+/**
  * The lifecycle fields for one chat, exactly as they are published.
  *
  * PINNING is the universal override and the only one: a pinned chat is never
@@ -94,18 +130,20 @@ export function resolveTabClock(index: ClockIndex, tabId: string, now: number): 
   if (self.pinned) {
     return {
       done: false,
-      // A pinned root still shows its (stopped) clock; a pinned sub-chat still
-      // has none. Pinning answers "does this expire", not "is this work".
-      clock: isSubChat(index, tabId)
-        ? null
-        : chatClock({ started_at: self.clock_started_at ?? now, now, pinned: true }),
+      // A pinned chat still shows its (stopped) clock; anything that had no
+      // clock still has none. Pinning answers "does this expire", not "is
+      // there a clock here to stop".
+      clock: hasDecayClock(index, tabId)
+        ? chatClock({ started_at: self.clock_started_at ?? now, now, pinned: true })
+        : null,
     };
   }
-  if (isSubChat(index, tabId)) {
+  if (!hasDecayClock(index, tabId)) {
     // No clock, and therefore exactly one way out: it delivered, or somebody
-    // archived it. Until then it is live for however long the work takes —
-    // which is the point. A sub-chat still running after a week is not stale,
-    // it is busy, and a clock would retire it mid-sentence.
+    // archived it. Until then it is live for however long it takes — which is
+    // the point. A sub-chat still running after a week is not stale, it is
+    // busy, and a clock would retire it mid-sentence; a terminal you have kept
+    // open for a month is not stale either, it is a terminal.
     return self.retired_at === null
       ? { done: false, clock: null }
       : { done: true, done_reason: self.retired_reason ?? 'archived', clock: null };

@@ -1,6 +1,7 @@
 import { CHAT_DECAY_MS, DAY_MS } from '@muxpad/shared';
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
 import { runMigrations } from './store/migrations.js';
@@ -9,6 +10,7 @@ import {
   childrenOf,
   clockIndex,
   doneTabIds,
+  hasDecayClock,
   isSubChat,
   resetChatClock,
   resolveTabClock,
@@ -18,9 +20,12 @@ import {
 describe('tab-clock', () => {
   let db: Database.Database;
   let tabs: TabStore;
+  let panes: PaneStore;
   let workspaceId: string;
 
-  /** A top-level chat whose clock started `daysAgo` days back. */
+  /** A top-level chat whose clock started `daysAgo` days back. It gets an
+   *  AGENT pane, because that is what makes a tab a chat — a tab you cannot
+   *  send a message to has no clock at all (see `hasDecayClock`). */
   function chat(name: string, daysAgo: number, parent?: string): string {
     const t = tabs.create({
       name,
@@ -28,6 +33,16 @@ describe('tab-clock', () => {
       workspace_id: workspaceId,
       ...(parent ? { spawned_by: parent } : {}),
     });
+    panes.create({ tab_id: t.id, startup_cmd: 'muxpad agent', face: 'chat' });
+    tabs.resetClock(t.id, Date.now() - daysAgo * DAY_MS);
+    return t.id;
+  }
+
+  /** A tab with no agent in it: a plain shell. Same row, same columns, nothing
+   *  to send a message to. */
+  function terminal(name: string, daysAgo: number): string {
+    const t = tabs.create({ name, layout: '', workspace_id: workspaceId });
+    panes.create({ tab_id: t.id, shell: '/bin/zsh' });
     tabs.resetClock(t.id, Date.now() - daysAgo * DAY_MS);
     return t.id;
   }
@@ -38,6 +53,7 @@ describe('tab-clock', () => {
     db = new Database(':memory:');
     runMigrations(db);
     tabs = new TabStore(db);
+    panes = new PaneStore(db);
     workspaceId = new WorkspaceStore(db).create({ name: 'W' }).id;
   });
 
@@ -160,6 +176,66 @@ describe('tab-clock', () => {
       expect(resolve(leaf).clock).toBeNull();
       expect(resolve(leaf).done).toBe(false);
       expect(childrenOf(clockIndex(db), root)).toEqual([mid]);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // F2. The clock's only exit is "send it a message". A terminal has no
+  // inbox, so a terminal that decays is not resting, it is gone: nothing to
+  // send, no unarchive button in the client, and pinning the only way back.
+  // Three of the user's own long-lived terminals were on the casualty list.
+  // ────────────────────────────────────────────────────────────────────────
+  describe('a tab with no agent in it has no clock', () => {
+    it('publishes no clock for a terminal, however old', () => {
+      const id = terminal('shell', 40);
+      expect(hasDecayClock(clockIndex(db), id)).toBe(false);
+      expect(resolve(id).clock).toBeNull();
+    });
+
+    it('never decays — there is no message that would bring it back', () => {
+      const id = terminal('Trayobot', 40);
+      expect(resolve(id).done).toBe(false);
+      expect(doneTabIds(clockIndex(db), Date.now()).has(id)).toBe(false);
+    });
+
+    it('a tab with no panes at all is not something you can message either', () => {
+      const t = tabs.create({ name: 'empty', layout: '', workspace_id: workspaceId });
+      tabs.resetClock(t.id, Date.now() - 40 * DAY_MS);
+      expect(resolve(t.id).clock).toBeNull();
+      expect(resolve(t.id).done).toBe(false);
+    });
+
+    it('is still ARCHIVABLE — an act is not a clock', () => {
+      // The distinction the whole fix rests on. Pressing × on a terminal
+      // should still file it away; what must not happen is it expiring
+      // because nobody typed in it for four days.
+      const id = terminal('shell', 0);
+      tabs.retire(id, 'archived');
+      const r = resolve(id);
+      expect(r.done).toBe(true);
+      expect(r.done_reason).toBe('archived');
+      expect(r.clock).toBeNull();
+    });
+
+    it('gains a clock when an agent moves in, and loses it when one leaves', () => {
+      // It is a property of the CONTENTS, so it moves. Closing the agent pane
+      // stops the decay rather than freezing a stale answer — and the
+      // direction that error falls in is "stays visible".
+      const id = terminal('shell', 5);
+      expect(resolve(id).done).toBe(false);
+      const agent = panes.create({ tab_id: id, startup_cmd: 'muxpad agent', face: 'chat' });
+      expect(resolve(id).done).toBe(true);
+      panes.delete(agent.id);
+      expect(resolve(id).done).toBe(false);
+    });
+
+    it('counts a pending `--pick` pane as an agent', () => {
+      // The harness has not been chosen yet, but a message sent to it will be
+      // delivered to whatever gets picked. It is a chat.
+      const t = tabs.create({ name: 'pending', layout: '', workspace_id: workspaceId });
+      panes.create({ tab_id: t.id, startup_cmd: 'muxpad agent --pick' });
+      tabs.resetClock(t.id, Date.now() - 5 * DAY_MS);
+      expect(resolve(t.id).done).toBe(true);
     });
   });
 
