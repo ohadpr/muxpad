@@ -22,7 +22,7 @@ import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { pruneDeadPanes } from '../store/migrations.js';
 import { type TabActivity, compareUnpinnedTabs } from '../tab-activity.js';
-import { type ClockIndex, clockIndex, resolveTabClock, reviveChat } from '../tab-clock.js';
+import { type ClockIndex, clockIndex, reviveChat, tabLifecycle } from '../tab-clock.js';
 import { retireChat } from '../tab-retire.js';
 
 /**
@@ -384,7 +384,7 @@ export function tabsRoutes(deps: {
     // rollups, they are what this row IS, and a client that merges this
     // response over a decorated one would otherwise blank them. Same
     // resolution, same instant, one answer.
-    const lifecycle = resolveTabClock(clockIndex(deps.db), t.id, Date.now());
+    const lifecycle = tabLifecycle(deps.db, t.id, Date.now());
     return c.json({
       ...t,
       done: lifecycle.done,
