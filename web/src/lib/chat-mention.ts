@@ -359,12 +359,15 @@ export function renderDirectMarker(marker: DirectMarker, body: string): string {
   const report = `<muxpad-report id="${esc(marker.id)}" from="${esc(
     marker.to ?? '',
   )}" pane="${esc(marker.toPane ?? '')}"></muxpad-report>`;
-  const note =
-    `Directed here from the muxpad chat "${marker.from}" — another chat's user, not this chat's. ` +
-    'Do the work in THIS chat, then report back once, in one message:\n' +
-    `  muxpad agent send ${marker.pane} '${report}\n` +
-    "  <two or three sentences: what you did and what the answer is>'\n" +
-    'Nothing else is needed — the chat that asked renders that message as a card.';
+  // Line by line, joined: the exact shape of these lines is the contract with
+  // the agent reading them, so they are worth being able to see.
+  const note = [
+    `Directed here from the muxpad chat "${marker.from}" — another chat's user, not this chat's.`,
+    'Do the work in THIS chat, then report back once, in one message:',
+    `  muxpad agent send ${marker.pane} '${report}`,
+    "  <two or three sentences: what you did and what the answer is>'",
+    'Nothing else is needed — the chat that asked renders that message as a card.',
+  ].join('\n');
   return `<muxpad-direct id="${esc(marker.id)}" from="${esc(marker.from)}" pane="${esc(
     marker.pane,
   )}">\n${note}\n</muxpad-direct>\n\n${body}`;
