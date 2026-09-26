@@ -523,16 +523,52 @@ describe('what the pass was NOT allowed to move', () => {
     expect(paneLabelLeft - chatNameLeft()).toBe(18);
   });
 
-  it('the RAIL’s vertical metrics are untouched by any of this', () => {
-    // Row heights on the rail are 34/50 and come from the vertical padding plus
-    // the text lines. Air must never appear in one, or a one-line row stops
-    // matching --nt-row-tab and the leading of one- and two-line rows diverges.
+  it('the RAIL’s row height is the CHIP’s, and every row is the same height', () => {
+    // The rail's row is ONE LINE now — name only, the headline having moved to
+    // the row's tooltip — so the tallest thing in it is no longer a stack of
+    // text: it is the 24px chip, which is a real element (it clips the clock's
+    // fill) and therefore does enter the row's height.
+    //
+    // What this test defends did not change with the number: --nt-row-tab must
+    // be EXACTLY the padding plus the tallest item, or the row is floor-clamped
+    // by its min-height and the vertical rhythm comes from two places at once.
+    // Air must never appear in the vertical padding for the same reason.
     const railPad = decl(ruleBody(NAV_CSS, '.navtree-tab-row'), 'padding');
-    expect(resolve(side(railPad, 'top'), BASE)).toBe(8);
-    expect(resolve(side(railPad, 'bottom'), BASE)).toBe(8);
-    // 8 + 18 + 8 = 34, exactly --nt-row-tab.
-    expect(8 + resolve(BASE['--nt-icon-h'] as string, BASE) + 8).toBe(
+    expect(resolve(side(railPad, 'top'), BASE)).toBe(6);
+    expect(resolve(side(railPad, 'bottom'), BASE)).toBe(6);
+    // 6 + 24 + 6 = 36, exactly --nt-row-tab.
+    expect(6 + resolve(BASE['--nt-chip'] as string, BASE) + 6).toBe(
       resolve(BASE['--nt-row-tab'] as string, BASE),
+    );
+  });
+
+  it('the rail’s chip sits at its track’s HEAD, like the plate it replaced', () => {
+    // Same load-bearing assumption as the icon plate above, restated for the
+    // element that is actually rendered on the rail: the gap to the name is
+    // `track − chip` only while the chip is at the track's START. The chip's
+    // own width comes from --chatchip-size in ChatChip.css, which is the same
+    // 24 as --nt-chip; the alignment is this file's business.
+    expect(
+      decl(ruleBody(NAV_CSS, '.navtree[data-variant="sidebar"] .navtree-tab-chip'), 'justify-self'),
+    ).toBe('start');
+  });
+
+  it('a CHILD row steps one indent, and nothing else moves', () => {
+    // The child's mark is drawn in a box the width of the parent's chip
+    // (ChatChip.css), so the only thing separating a child row from a parent
+    // row is this one step — which is what puts every child name on one shared
+    // x while keeping the dot in the mark column.
+    const child = ruleBody(
+      NAV_CSS,
+      '.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"]',
+    );
+    expect(decl(child, 'padding-left')).toBe('calc(var(--nt-pad) + var(--nt-indent) * 2)');
+    const parentLeft = resolve(
+      side(decl(ruleBody(NAV_CSS, '.navtree-tab-row'), 'padding'), 'left'),
+      BASE,
+    );
+    expect(resolve(decl(child, 'padding-left'), BASE) - parentLeft).toBe(
+      resolve(BASE['--nt-indent'] as string, BASE),
     );
   });
 });

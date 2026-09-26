@@ -1000,10 +1000,11 @@ function WorkspaceNode({
       <div
         className="navtree-ws-row"
         data-active={isActive ? 'true' : undefined}
-        // The row's own left bar + tint. Same value the chip below is given,
-        // and given to the ROW because that is what the bar and the wash are
-        // painted on — see StateChip.css for the three-way encoding.
-        data-state={expanded ? 'idle' : (workspace.status ?? 'idle')}
+        // No `data-state`, for the same reason the chat rows below dropped it
+        // (see RowMark): it is what painted the left bar and the row tint, and
+        // both are gone from the desktop rail. A workspace header that washed
+        // amber while its chats did not would be the loudest thing in a rail
+        // whose chats now whisper.
         data-unread={workspace.unread ? 'true' : undefined}
         data-pressing={pressing ? 'true' : undefined}
         data-tab-drop={tabDropOver ? 'true' : undefined}
@@ -1132,7 +1133,10 @@ function WorkspaceNode({
             state and a rollup on top of them would double-signal. It still
             renders an `idle` chip rather than nothing, so the cell exists in
             the grid either way. */}
-        {!isEditing && <StateChip status={expanded ? 'idle' : workspace.status} />}
+        {/* Same 10px mark, same slot, one track back from the chat rows' —
+            a collapsed workspace speaks for the chats it is hiding, and an
+            expanded one has nothing to add over the rows now visible below. */}
+        {!isEditing && <RowMark status={expanded ? 'idle' : workspace.status} />}
       </div>
       {expanded && (
         <TabList
@@ -1201,7 +1205,23 @@ function TabList({
     (isActiveWorkspace && serverTabs.find((t) => t.slug === activeTabSlug)?.id) || null;
   const railOrder = useFrozenTabOrder(serverTabs, sheet ? null : activeTabId);
   const tabs = useFrozenSheetOrder(railOrder, sheet);
-  const pinnedCount = tabs.filter((t) => t.pinned).length;
+
+  // ── The live list, the done group, and the nesting ──────────────────────
+  // groupChats is pure and unit-tested (NavTree.chats.test.tsx) — it decides
+  // what is a child, what has decayed out of the live list, and where the pin
+  // seam falls once the decayed rows are gone.
+  //
+  // SHEET: not grouped. The mobile rail is one flat line per chat by design,
+  // and neither the nesting nor the done group has been designed for it; it
+  // keeps the whole list exactly as before.
+  const grouped = groupChats(tabs);
+  const liveGroups = sheet ? tabs.map((chat) => ({ chat, children: [] as Tab[] })) : grouped.live;
+  const doneGroups = sheet ? [] : grouped.done;
+  const pinnedCount = sheet ? tabs.filter((t) => t.pinned).length : grouped.livePinned;
+  // COLLAPSED by default. A chat crossing into done should be something you
+  // notice leaving the live list, not something that re-opens a drawer of
+  // fourteen finished chats under it.
+  const [doneOpen, setDoneOpen] = useState(false);
 
   // Pin / unpin. Optimistic only in the sense that we refetch immediately —
   // the server may also move the tab (a newly-pinned tab goes to the end of
@@ -1368,7 +1388,12 @@ function TabList({
   // (Across separate holds the unpinned numbers still move — that's the
   // feature working. PINNING is what buys a number that means the same
   // thing tomorrow, since pinned tabs never re-sort.)
+  // Numbered in the order they are DRAWN, and only the rows that are actually
+  // drawn: the top-level live chats. A number that addressed a row folded away
+  // inside the done group would be a badge you cannot see attached to a chat
+  // you did not ask for.
   const quickEnabled = variant === 'sidebar' && isActiveWorkspace;
+  const quickTargets = liveGroups.map((g) => g.chat);
   const [quickIds, setQuickIds] = useState<string[]>([]);
   // "Were the badges up as of the last render?" — read before it's written
   // below, which is exactly the question the tabCount arg needs answered.
@@ -1379,7 +1404,7 @@ function TabList({
     // make a badge you can still see stop responding, and a tab created
     // mid-hold would widen it past the snapshot — swallowing the chord from
     // the focused terminal to switch to nothing.
-    tabCount: quickEnabled ? (quickHeld.current ? quickIds.length : tabs.length) : 0,
+    tabCount: quickEnabled ? (quickHeld.current ? quickIds.length : quickTargets.length) : 0,
     onSwitch: (i) => {
       // Resolve against the FROZEN snapshot, then look the tab up by id —
       // never by live index. A tab deleted mid-hold simply no-ops.
@@ -1393,9 +1418,9 @@ function TabList({
     },
   });
   quickHeld.current = showQuickNumbers;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `tabs` is deliberately NOT a dependency — re-snapshotting while the badges are up is the exact bug this prevents.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `quickTargets` is deliberately NOT a dependency — re-snapshotting while the badges are up is the exact bug this prevents.
   useEffect(() => {
-    setQuickIds(showQuickNumbers ? tabs.map((t) => t.id) : []);
+    setQuickIds(showQuickNumbers ? quickTargets.map((t) => t.id) : []);
   }, [showQuickNumbers]);
   /** The frozen badge number for a tab (1–9), or undefined if it has none. */
   const quickNumberFor = (id: string): number | undefined => {
@@ -1474,10 +1499,45 @@ function TabList({
     }
   };
 
+  /** One chat's row. `parent` is set for the chats spawned under it — they
+   *  share its clock, and their mark is a dot in its chip's column. */
+  const renderRow = (t: Tab, parent?: Tab) => (
+    <TabRow
+      key={t.id}
+      tab={t}
+      parent={parent}
+      workspace={workspace}
+      isActiveTab={isActiveWorkspace && t.slug === activeTabSlug}
+      quickNumber={showQuickNumbers && quickEnabled ? quickNumberFor(t.id) : undefined}
+      variant={variant}
+      isEditing={editing?.kind === 'tab' && editing.id === t.id}
+      setEditing={setEditing}
+      onNavigate={onNavigate}
+      onClose={(e) => void closeTab(e, t)}
+      onSetUnread={(want) => void setTabUnread(t, want)}
+      onSetIcon={(icon) => void setTabIcon(t, icon)}
+      onSetPinned={(want) => void setTabPinned(t, want)}
+      onMergeInto={(payload) => void mergeTabInto(payload, t)}
+      onAddPane={() => void addPaneToTab(t)}
+      onMovePaneHere={(paneId, sourceTabId) => void movePaneHere(paneId, sourceTabId, t)}
+      // A CHILD is not draggable: its place in the list is its parent, not an
+      // order you arranged, so there is nothing for a drop to mean.
+      rowDnd={
+        variant === 'sidebar' && !parent ? (t.pinned ? tabDnd(t.id) : moveOnlyDnd(t.id)) : undefined
+      }
+    />
+  );
+  const renderGroup = (g: ChatGroup) => (
+    <Fragment key={g.chat.id}>
+      {renderRow(g.chat)}
+      {g.children.map((k) => renderRow(k, g.chat))}
+    </Fragment>
+  );
+
   return (
     <div className="navtree-tab-list">
-      {tabs.map((t, i) => (
-        <Fragment key={t.id}>
+      {liveGroups.map((g, i) => (
+        <Fragment key={g.chat.id}>
           {/* The seam between "you arranged these" and "these arrange
               themselves". Only drawn when BOTH blocks exist — a hairline
               above nothing (or below nothing) is noise, and a workspace
@@ -1493,28 +1553,30 @@ function TabList({
           {!sheet && i === pinnedCount && pinnedCount > 0 ? (
             <div className="navtree-pin-divider" aria-hidden="true" />
           ) : null}
-          <TabRow
-            tab={t}
-            workspace={workspace}
-            isActiveTab={isActiveWorkspace && t.slug === activeTabSlug}
-            quickNumber={showQuickNumbers && quickEnabled ? quickNumberFor(t.id) : undefined}
-            variant={variant}
-            isEditing={editing?.kind === 'tab' && editing.id === t.id}
-            setEditing={setEditing}
-            onNavigate={onNavigate}
-            onClose={(e) => void closeTab(e, t)}
-            onSetUnread={(want) => void setTabUnread(t, want)}
-            onSetIcon={(icon) => void setTabIcon(t, icon)}
-            onSetPinned={(want) => void setTabPinned(t, want)}
-            onMergeInto={(payload) => void mergeTabInto(payload, t)}
-            onAddPane={() => void addPaneToTab(t)}
-            onMovePaneHere={(paneId, sourceTabId) => void movePaneHere(paneId, sourceTabId, t)}
-            rowDnd={
-              variant === 'sidebar' ? (t.pinned ? tabDnd(t.id) : moveOnlyDnd(t.id)) : undefined
-            }
-          />
+          {renderGroup(g)}
         </Fragment>
       ))}
+      {/* ─── The done group ────────────────────────────────────────────────
+          Chats whose clock ran out. They LEFT the live list; they were not
+          deleted, and nothing here deletes them — sending one a message
+          restarts its clock and it walks straight back up into the list above.
+          Shaped like the workspace header one step quieter: a section head,
+          not a third kind of label, and no count badge (the number is the
+          label). */}
+      {doneGroups.length > 0 ? (
+        <>
+          <button
+            type="button"
+            className="navtree-done-head"
+            onClick={() => setDoneOpen((o) => !o)}
+            aria-expanded={doneOpen}
+          >
+            <SvgCaret open={doneOpen} />
+            {doneGroups.length} done
+          </button>
+          {doneOpen ? doneGroups.map(renderGroup) : null}
+        </>
+      ) : null}
       {/* SHEET: no "+ New tab" row. Nothing lives in that scroller which is
           not a chat — creation is the bar's "+" (SheetRail), one thumb-reach
           above the list and reachable without scrolling to the bottom of it. */}
@@ -1712,6 +1774,9 @@ function SheetPaneList({
 
 interface TabRowProps {
   tab: Tab;
+  /** The chat that spawned this one, when it is a child. Supplies the clock
+   *  they share, and switches the row's leading mark from tile to dot. */
+  parent?: Tab | undefined;
   workspace: Workspace;
   isActiveTab: boolean;
   /** 1–9 chip shown while Ctrl is held (sidebar quick-switch); else undefined. */
@@ -1737,6 +1802,120 @@ interface TabRowProps {
   onMovePaneHere: (paneId: string, sourceTabId: string | null) => void;
   rowDnd?: DragItemProps | undefined;
 }
+
+/** A top-level chat and the chats spawned under it, in the server's order. */
+export interface ChatGroup {
+  chat: Tab;
+  children: Tab[];
+}
+
+/**
+ * The sidebar's two lists, and the parent→child nesting inside them.
+ *
+ * Pure, and exported for its test: this is the rule that decides what you can
+ * SEE, so it is the one piece of this file that must not be checked by eye.
+ *
+ * Three things it settles:
+ *
+ *   1. A chat with a `spawned_by` that resolves IN THIS LIST is a child. It
+ *      renders under its parent and never also as a top-level row.
+ *   2. A `spawned_by` that does NOT resolve — the parent lives in another
+ *      workspace, or was closed — makes the chat a TOP-level row rather than
+ *      an orphan that vanishes. A chat is never invisible because of a dangling
+ *      pointer.
+ *   3. A child follows its parent into `done`, because it SHARES the parent's
+ *      clock: work spawned under a chat should not outlive it. A child's own
+ *      lifecycle is never consulted.
+ *
+ * Order is the server's throughout — pinned block first, then the auto-sorted
+ * one. `livePinned` is the seam between them, recomputed over the live tops
+ * only, so the pin divider cannot be stranded below a row that decayed away.
+ */
+export function groupChats(
+  tabs: Tab[],
+  now: number = Date.now(),
+): { live: ChatGroup[]; done: ChatGroup[]; livePinned: number } {
+  const present = new Set(tabs.map((t) => t.id));
+  const childrenOf = new Map<string, Tab[]>();
+  const tops: Tab[] = [];
+  for (const t of tabs) {
+    const parentId = t.spawned_by ?? null;
+    if (parentId !== null && parentId !== t.id && present.has(parentId)) {
+      const siblings = childrenOf.get(parentId);
+      if (siblings) siblings.push(t);
+      else childrenOf.set(parentId, [t]);
+    } else {
+      tops.push(t);
+    }
+  }
+  const live: ChatGroup[] = [];
+  const done: ChatGroup[] = [];
+  for (const chat of tops) {
+    const group: ChatGroup = { chat, children: childrenOf.get(chat.id) ?? [] };
+    (isChatDone(chat, now) ? done : live).push(group);
+  }
+  return { live, done, livePinned: live.filter((g) => g.chat.pinned).length };
+}
+
+/**
+ * THE state slot — one 10px mark, one place, every state.
+ *
+ * This replaces the rail's three-way encoding (a 3px bar on the row's left
+ * edge, a faint tint across the whole row, and a worded chip on the right).
+ * All three are gone from the chat rows, and they were removed deliberately
+ * rather than lost: next to a chip that says how much life a chat has left by
+ * quietly filling with colour, a tinted row and a mono `READY` badge were
+ * shouting. Two channels competing for "look here" is one channel.
+ *
+ * What is left is the smallest thing that can still say it, in the slot at the
+ * row's right edge that every row shares:
+ *
+ *   working  a 10px turning ring — still the rail's ONE moving thing, and
+ *            still the whole basis of "a still rail means nothing is running"
+ *   blocked  a 10px filled dot, red. It wants you NOW.
+ *   ready    a 10px filled dot, green. Finished, waiting for you.
+ *   dead     a 10px filled dot, grey — findable, but not shouting: a dead
+ *            runner needs nothing until you decide it does
+ *   idle     NOTHING, and no element at all, so the cell takes no width and
+ *            declines its gutter. Most rows are this one.
+ *
+ * Only `working` and `idle` come from the prototype, whose toy data had no
+ * `blocked` and no `dead`. Rendering those two as nothing would have deleted
+ * the rail's most consequential signal, so they take the same mark in the same
+ * slot, separated by hue — which is what the rule ("every state is the SAME
+ * mark in the same place") actually asks for.
+ *
+ * Rendered OUTSIDE the row's link, like every other state mark in this tree:
+ * a label inside a control joins that control's accessible name, and the name
+ * would then change under the user every time an agent started or stopped.
+ */
+function RowMark({ status }: { status: PaneStatus | undefined }) {
+  const s = status ?? 'idle';
+  // A genuinely absent element, not an empty one: the grid's last track is
+  // `auto`, so nothing here means no width and no gutter for the majority of
+  // rows, and the name gets it instead.
+  if (s === 'idle') return null;
+  // `working` is aria-hidden for the same reason it is everywhere else: it
+  // toggles at whatever rate the agent does, and announcing it churns.
+  const announced = s !== 'working';
+  return (
+    <span
+      className="navtree-mark"
+      data-state={s}
+      title={MARK_TITLES[s]}
+      {...(announced
+        ? { role: 'img' as const, 'aria-label': MARK_TITLES[s] }
+        : { 'aria-hidden': 'true' as const })}
+    />
+  );
+}
+
+const MARK_TITLES: Record<Exclude<PaneStatus, 'idle'>, string> = {
+  blocked: 'Waiting on you',
+  working: 'Working…',
+  ready: 'Ready for you',
+  dead: 'Agent exited',
+};
 
 /**
  * "This chat runs on a schedule, and next at —." The nav row's META column.
@@ -1782,6 +1961,7 @@ function CronMark({ tab }: { tab: Tab }) {
 
 function TabRow({
   tab,
+  parent,
   workspace,
   isActiveTab,
   quickNumber,
@@ -2000,6 +2180,51 @@ function TabRow({
       {tab.icon ?? fallbackTabIcon(tab.id)}
     </span>
   );
+  /**
+   * The DESKTOP rail's leading cell — the chip, which is the clock.
+   *
+   * It replaces the plain emoji-on-a-plate that `iconCell` above still draws
+   * for the sheet, and it keeps that cell's one job: clicking it opens the icon
+   * picker. A span rather than a button so the row can still be dragged by it,
+   * and mouse-only by design — the keyboard path is the context menu's
+   * "Change icon…", exactly as before.
+   *
+   * For a CHILD row this same component draws a 6px dot instead of a tile, in a
+   * box the width of the tile. That is what puts a child's mark in the very
+   * same column its parent's chip occupies, and every child name in the tree on
+   * one shared x — before this they were words floating at an arbitrary indent,
+   * which is the thing the indent was hiding.
+   */
+  const chipCell = (
+    <ChatChip
+      density="row"
+      chat={{ ...tab, icon: tab.icon ?? fallbackTabIcon(tab.id) }}
+      // The shape is told, not inferred. A chat whose `spawned_by` dangles is
+      // a TOP-level row in this list (see groupChats), and it must draw a tile
+      // like one — a dot with no parent row above it belongs to nothing.
+      shape={parent ? 'dot' : 'tile'}
+      parent={parent}
+      className="navtree-tab-chip"
+      title="Change icon"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        setPicker({ x: r.left, y: r.bottom + 4 });
+      }}
+      onDoubleClick={(e) => {
+        // Don't let a fast double-click on the chip trip the row's
+        // rename-on-doubleclick.
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+    />
+  );
+  /** Name · headline · where the clock stands. The one-line row's whole
+   *  second line, moved to where it costs nothing until you ask for it.
+   *  Read off the tab's OWN row: the server already publishes a child's
+   *  effective (parent's) clock there, so there is no parent to consult. */
+  const rowTitle = chatTooltip(tab);
   const renameInput = (
     <RenameInput
       initial={tab.name}
@@ -2189,10 +2414,12 @@ function TabRow({
     <div
       className="navtree-tab-row"
       data-active={isActiveTab ? 'true' : undefined}
-      // Drives the row's left state bar and its tint (StateChip.css). The chip
-      // at the far end of the row reads the same value; one attribute, so the
-      // three tellings of a row's state cannot disagree.
-      data-state={tab.status ?? 'idle'}
+      // NO `data-state`, and its absence is the mechanism rather than an
+      // oversight: the 3px left bar and the row tint in StateChip.css are both
+      // keyed off that attribute, so not writing it is what removes them. Both
+      // went deliberately — see RowMark. The row's state is now told exactly
+      // once, by the 10px mark at its right edge.
+      data-child={parent ? 'true' : undefined}
       data-unread={tab.unread ? 'true' : undefined}
       data-pressing={pressing ? 'true' : undefined}
       data-drop-into={dropInto ? 'true' : undefined}
@@ -2206,14 +2433,13 @@ function TabRow({
         : {})}
       {...dropDnd}
     >
-      {/* Leading icon — its OWN grid cell now, not the first inline-flex
-            child of the link. The row is a strict four-track grid
-            (icon | name+headline | meta | status), and the only way every
-            status mark lands on one vertical line is if nothing in front of
-            it is free to size itself. Click opens the picker; a span, not a
-            button, so it can also be dragged with the row. Mouse-only by
-            design — the keyboard path is the context menu's "Change icon…". */}
-      {iconCell}
+      {/* Leading mark — its OWN grid cell, not the first inline-flex child of
+            the link. The row is a strict four-track grid
+            (mark | name | meta | status), and the only way every status mark
+            lands on one vertical line is if nothing in front of it is free to
+            size itself. This cell is also the column a CHILD row's dot sits
+            in, which is what gives the children one shared x. */}
+      {chipCell}
       {isEditing ? (
         renameInput
       ) : (
@@ -2223,7 +2449,7 @@ function TabRow({
           className="navtree-tab-link"
           // The row owns drag-to-reorder; don't let the anchor drag its URL.
           draggable={false}
-          title={isActiveTab ? 'Double-click to rename' : tab.name}
+          title={isActiveTab ? 'Double-click to rename' : rowTitle}
           onDoubleClick={
             isActiveTab
               ? (e) => {
@@ -2250,27 +2476,24 @@ function TabRow({
             )}
             {/* dir="auto" on the TEXT, never on the row — see
                 .navtree-name-text in NavTree.css for why alignment stays
-                pinned left while direction follows the string. */}
-            <span className="navtree-name-text" dir="auto" title={tab.name}>
+                pinned left while direction follows the string.
+                No `title` of its own any more: it would shadow the row's
+                composed tooltip on exactly the part of the row you hover, and
+                that tooltip already opens with the full name. */}
+            <span className="navtree-name-text" dir="auto">
               {tab.name}
             </span>
           </span>
-          {/* Line two: WHAT THIS CHAT IS ABOUT — one machine-written line,
-                dim, ellipsised, never wrapped. A name alone ("muxpad",
-                "Main") tells you which chat; it never tells you where you
-                left it, so re-entering a chat always cost a read of the last
-                turn. Written rarely and kept sticky on purpose (see the
-                server's headline generator): a summary that churned every
-                turn would be a second moving thing in a rail whose whole
-                point is that only one thing moves. Absent is FINE — the row
-                is simply one line tall. Never a placeholder, never an error:
-                a rail that says "couldn't summarise" on ten rows is worse
-                than a rail that says nothing. */}
-          {tab.headline ? (
-            <span className="navtree-tab-headline" dir="auto" title={tab.headline}>
-              {tab.headline}
-            </span>
-          ) : null}
+          {/* THE ROW IS ONE LINE — name only.
+                The machine-written headline that used to sit here as line two
+                is NOT deleted: it moved into the row's `title` (see `rowTitle`
+                above) and it is shown in the `@` picker, which is where you are
+                actually choosing between chats. On the rail it was a second
+                line of dim text on every row that had one, and it made the list
+                a paragraph to read rather than a column to scan — the rows
+                changed height between one-line and two-line neighbours, so
+                there was no rhythm to run an eye down. One line, one height,
+                one glance; the sentence is a hover away. */}
         </Link>
       )}
       {/* Hover-revealed controls — DESKTOP ONLY, and deliberately placed
@@ -2333,12 +2556,12 @@ function TabRow({
       {!isEditing ? (
         <span className="navtree-tab-meta">{tab.crons ? <CronMark tab={tab} /> : null}</span>
       ) : null}
-      {/* The state chip — the LAST track, so nothing in front of it can push
+      {/* The state mark — the LAST track, so nothing in front of it can push
             it off the row's right edge. Rendered on the ACTIVE row too, and
             deliberately: agent panes work quietly for minutes on their chat
             face, and the one chat whose progress you are actually waiting on
             must not be the single row that goes dark. */}
-      {!isEditing && <StateChip status={tab.status} />}
+      {!isEditing && <RowMark status={tab.status} />}
       {overlays}
     </div>
   );

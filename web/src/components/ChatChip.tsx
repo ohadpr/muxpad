@@ -1,3 +1,4 @@
+import { CHAT_DECAY_DAYS, type ChatClock, chatClockDone } from '@muxpad/shared';
 import type React from 'react';
 import './ChatChip.css';
 
@@ -70,18 +71,20 @@ import './ChatChip.css';
 export function ChatChip({
   density,
   chat,
+  shape,
   parent,
   className,
   onClick,
   onDoubleClick,
   title,
 }: ChatChipProps) {
-  // A child chat shares its PARENT's clock — work spawned under a chat should
-  // not outlive it. `parent` is how the caller supplies it; falling back to the
-  // child's own row keeps the mark drawable when the parent is not to hand
-  // (another workspace, or a list that was not built as a tree).
-  const isChild = parent != null || chat.spawned_by != null;
-  const clock = chatClock(parent ?? chat);
+  // A child chat shares its PARENT's clock, and the SERVER has already resolved
+  // that — `tab.clock` on a child is its parent's clock, walked through
+  // `spawned_by` (server/src/tab-clock.ts). So there is nothing to merge here;
+  // `parent` survives only as a fallback for a caller holding a row that
+  // predates the published clock.
+  const isDot = shape ? shape === 'dot' : chat.spawned_by != null;
+  const clock = chipClock(chat.clock ? chat : (parent ?? chat));
 
   const common = {
     className: `chatchip${className ? ` ${className}` : ''}`,
@@ -92,7 +95,7 @@ export function ChatChip({
     title,
   };
 
-  if (isChild) {
+  if (isDot) {
     const dot = childDot(clock);
     return (
       <span {...common} data-shape="dot">
@@ -110,7 +113,9 @@ export function ChatChip({
       {/* The descending fill. Always in the DOM, at height 0 when there is
           nothing to bury, so the transition has something to run between and a
           chat that is talked to animates back UP rather than snapping. */}
-      <i className="chatchip-fill" style={{ height: `${clock.fill}%` }} aria-hidden="true" />
+      {/* Empty and unlabelled, so it contributes nothing to the a11y tree on
+          its own — no aria-hidden needed, and biome rightly objects to one. */}
+      <i className="chatchip-fill" style={{ height: `${clock.fill}%` }} />
       <b className="chatchip-glyph">{chat.icon ?? '•'}</b>
     </span>
   );
@@ -120,7 +125,19 @@ export interface ChatChipProps {
   /** Size only — see the densities note above. */
   density: ChatChipDensity;
   chat: ChatChipChat;
-  /** The parent chat, when `chat` is a child. Supplies the clock they share. */
+  /**
+   * Force the mark's form. Omit and it follows `spawned_by`, which is right
+   * nearly everywhere; pass it when the CALLER already knows better. The
+   * sidebar does: a chat whose `spawned_by` points at a tab that is not in the
+   * list (deleted, or in another workspace) is drawn as a top-level row there,
+   * and a dot with no parent row above it to belong to is just a lost mark.
+   */
+  shape?: 'tile' | 'dot' | undefined;
+  /**
+   * The parent chat. A FALLBACK only — the server publishes a child's
+   * effective clock on the child's own row, so this is needed just for rows
+   * that predate `clock`.
+   */
   parent?: ChatChipChat | undefined;
   className?: string | undefined;
   onClick?: ((e: React.MouseEvent) => void) | undefined;
@@ -149,27 +166,30 @@ export interface ChatChipChat {
   /** Set on a chat spawned under another; the id of that parent. */
   spawned_by?: string | null | undefined;
   /**
-   * The SERVER's lifecycle verdict. Authoritative when present: the client
-   * never decides whether a chat is over, it only draws the decision (the
-   * fallback below exists for rows that predate the column, not as a second
-   * opinion).
+   * The SERVER's lifecycle verdict. Authoritative: the client never decides
+   * whether a chat is over, it only draws the decision.
    */
   done?: boolean | undefined;
-  /** Epoch ms the current clock started from. */
-  clock_started_at?: number | null | undefined;
-  /** Fallback clock origin for rows that have no `clock_started_at` yet. */
+  /**
+   * The clock as the server publishes it — already resolved, so a CHILD's row
+   * carries its parent's clock and a pinned chat carries a `stopped` one.
+   * Absent only on rows that predate the column.
+   */
+  clock?: ChatClock | undefined;
+  /** Last-resort clock origin for rows with no published `clock`. */
   last_activity_at?: number | null | undefined;
 }
 
-/** One constant, no per-chat weighting. Pinning is the only override. */
-export const DECAY_DAYS = 4;
+/** Re-exported so the three surfaces agree on the number without each
+ *  reaching into `@muxpad/shared` for it. */
+export const DECAY_DAYS = CHAT_DECAY_DAYS;
 
 const DAY_MS = 86_400_000;
 
-export type ChatClockPhase = 'pinned' | 'fresh' | 'ageing' | 'last-day' | 'done';
+export type ChipPhase = 'pinned' | 'fresh' | 'ageing' | 'last-day' | 'done';
 
-export interface ChatClock {
-  phase: ChatClockPhase;
+export interface ChipClock {
+  phase: ChipPhase;
   /** Whole days remaining, DECAY_DAYS…0. */
   daysLeft: number;
   /** Percent of the tile buried from the top. 0 for pinned, last-day and done. */
@@ -177,34 +197,66 @@ export interface ChatClock {
 }
 
 /**
- * The clock, in whole days.
+ * What the chip DRAWS, from what the server PUBLISHES.
  *
- * QUANTISED to days deliberately, and not only to match the prototype's steps.
- * A continuous fill would re-render every chip on every animation frame to say
- * something no one can read off a 24px tile — the difference between 61% and
- * 62% buried is not information. Whole days give four distinct, nameable
- * states (clean / a quarter / half / three-quarters) and then the dashed
- * outline, which is the resolution the mark can actually carry.
+ * The server's `clock.fill` is continuous (0 → 1, see shared/chat-clock.ts);
+ * this quantises it to the four steps the tile actually has — clean, a
+ * quarter, a half, and then the dashed outline of the final day.
+ *
+ * That quantisation is a rendering decision, not a disagreement with the
+ * server, and it is deliberate on both counts:
+ *
+ *   · it is the settled visual language — "25% / 50% / 75% as days pass" is
+ *     what the prototype does and what eight rounds with the user converged on;
+ *   · 24px of tile cannot carry a continuous value. The difference between 61%
+ *     and 62% buried is not information, and animating it would have every
+ *     chip in the rail re-rendering on a timer to say nothing.
+ *
+ * Lifecycle is NEVER re-derived here. `stopped`, `last_day` and `done` are all
+ * read off the row; only the fill's resolution is the client's business.
  */
-export function chatClock(chat: ChatChipChat, now: number = Date.now()): ChatClock {
-  if (chat.pinned) return { phase: 'pinned', daysLeft: DECAY_DAYS, fill: 0 };
+export function chipClock(chat: ChatChipChat, now: number = Date.now()): ChipClock {
+  const published = chat.clock;
+  if (published) {
+    if (published.stopped) return { phase: 'pinned', daysLeft: DECAY_DAYS, fill: 0 };
+    // The row's `done` is the answer. `chatClockDone` is the SERVER's own
+    // predicate, reached for only when the row does not carry the flag — so
+    // even the fallback is the server's rule rather than a second one.
+    if (chat.done ?? chatClockDone(published, now)) return { phase: 'done', daysLeft: 0, fill: 0 };
+    // Buried QUARTERS, floored: a tile shows the step it has fully reached.
+    const steps = Math.floor(Math.max(0, Math.min(1, published.fill)) * DECAY_DAYS);
+    const daysLeft = Math.max(0, DECAY_DAYS - steps);
+    if (published.last_day) return { phase: 'last-day', daysLeft: 1, fill: 0 };
+    const fill = (steps / DECAY_DAYS) * 100;
+    return { phase: fill === 0 ? 'fresh' : 'ageing', daysLeft, fill };
+  }
 
-  const startedAt = chat.clock_started_at ?? chat.last_activity_at ?? now;
+  // ── No published clock ──────────────────────────────────────────────────
+  // A row from a server that predates the column. Derive the same four steps
+  // from whatever timestamp there is, so the rail does not go blank during a
+  // rolling upgrade, and treat a row with no timestamp at all as FRESH rather
+  // than as instantly done.
+  if (chat.pinned) return { phase: 'pinned', daysLeft: DECAY_DAYS, fill: 0 };
+  const startedAt = chat.last_activity_at ?? now;
   const elapsed = Math.max(0, Math.floor((now - startedAt) / DAY_MS));
   const daysLeft = Math.max(0, Math.min(DECAY_DAYS, DECAY_DAYS - elapsed));
-
-  // The server's word first; the derivation is only for rows that predate it.
   if (chat.done ?? daysLeft <= 0) return { phase: 'done', daysLeft, fill: 0 };
-  // The tile is spent — a dashed outline round a ghost. No fill to report.
   if (daysLeft <= 1) return { phase: 'last-day', daysLeft, fill: 0 };
-
-  const fill = Math.round((1 - daysLeft / DECAY_DAYS) * 100);
+  const fill = (1 - daysLeft / DECAY_DAYS) * 100;
   return { phase: fill === 0 ? 'fresh' : 'ageing', daysLeft, fill };
 }
 
-/** True iff this chat has left the live list. The sidebar's grouping rule. */
+/**
+ * True iff this chat has left the live list — the sidebar's grouping rule.
+ *
+ * The server's `done` is the answer. The derivation behind it exists only for
+ * rows that predate the column; this is not a second opinion, and a chat is
+ * never swept out of the live list by the client's own arithmetic while the
+ * server is saying otherwise.
+ */
 export function isChatDone(chat: ChatChipChat, now: number = Date.now()): boolean {
-  return chatClock(chat, now).phase === 'done';
+  if (chat.done !== undefined) return chat.done;
+  return chipClock(chat, now).phase === 'done';
 }
 
 /**
@@ -212,7 +264,7 @@ export function isChatDone(chat: ChatChipChat, now: number = Date.now()): boolea
  * gives way to a hollow ring on the parent's last day — the dot's equivalent of
  * the tile's dashed outline, and the same "provisional" reading at 6px.
  */
-export function childDot(clock: ChatClock): { hollow: boolean; opacity: number } {
+export function childDot(clock: ChipClock): { hollow: boolean; opacity: number } {
   if (clock.phase === 'last-day' || clock.phase === 'done') return { hollow: true, opacity: 0.85 };
   const v = clock.phase === 'pinned' ? 1 : clock.daysLeft / DECAY_DAYS;
   return { hollow: false, opacity: Number((0.3 + v * 0.55).toFixed(2)) };
@@ -228,17 +280,17 @@ export function childDot(clock: ChatClock): { hollow: boolean; opacity: number }
  * occupying a second line on every row whether or not you were asking.
  */
 export function chatTooltip(
-  chat: ChatChipChat & { headline?: string | null },
+  chat: ChatChipChat & { headline?: string | null | undefined },
   now: number = Date.now(),
 ): string {
-  const clock = chatClock(chat, now);
+  const clock = chipClock(chat, now);
   const parts = [chat.name];
   if (chat.headline) parts.push(chat.headline);
   parts.push(CLOCK_WORDS[clock.phase](clock.daysLeft));
   return parts.join(' · ');
 }
 
-const CLOCK_WORDS: Record<ChatClockPhase, (daysLeft: number) => string> = {
+const CLOCK_WORDS: Record<ChipPhase, (daysLeft: number) => string> = {
   pinned: () => 'pinned',
   done: () => 'done',
   'last-day': () => 'last day',

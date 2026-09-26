@@ -65,7 +65,12 @@
 .navtree {
   /* Row metrics + surfaces are the only things the variants disagree on. */
   --nt-row-ws: 32px;
-  --nt-row-tab: 34px;
+  /* ONE LINE, and the chip decides the height: 6 + 24 + 6. It was 34px for a
+     row that could be one line or two depending on whether a headline had been
+     written for that chat — so neighbouring rows had different heights and the
+     list had no rhythm to run an eye down. The headline moved to the row's
+     tooltip (see TabRow) and every row is now exactly this tall. */
+  --nt-row-tab: 36px;
   --nt-hit: 24px; /* square hit target for the close button */
   --nt-disc: 18px; /* disclosure chevron column — narrow; the glyph is tiny */
   /* Tab leading-icon column. Tuned so a tab's icon lands directly under the
@@ -145,14 +150,17 @@
      space above it than a two-line row's first line gets — which is the
      ragged rhythm, measured as 14px of leading against 11px. */
   --nt-icon-h: 18px;
-  /* The chip: a uniform rounded container behind every icon, and the column's
-     real anchor (see .navtree-tab-icon). Bigger than the glyph on purpose —
-     an inset is the whole point, or a full-bleed tile merges with the chip and
-     the density cue is back. Bigger than --nt-icon-h too, which it can afford
-     to be because it is painted by a pseudo-element and so does not enter the
-     row's height calculation. */
-  --nt-chip: 20px;
-  --nt-chip-radius: 5px;
+  /* THE CHIP — 24px, and now a REAL element rather than a pseudo-element plate
+     behind an emoji: it is the clock (ChatChip.css), so it has to clip a fill
+     and it therefore has to be in the layout. That is what makes it, not the
+     text, the thing that sets --nt-row-tab above.
+     24 and radius 8 are the prototype's numbers, and the column derives from
+     them (--nt-col-icon below), so the chip's left edge and the name's first
+     glyph are both consequences of one value. It was 20/5 for a plate that only
+     had to sit behind a glyph; a tile that has to read as a VESSEL filling up
+     needs the extra 4px to show a quarter of itself. */
+  --nt-chip: 24px;
+  --nt-chip-radius: 8px;
   /* Floor for the meta cell, wide enough that `◷ 07:00` and `◷ Sun 09:00`
      right-align on the same digits instead of jittering row to row. A FLOOR,
      not a reservation: rows with no schedule collapse it to zero (and swallow
@@ -585,14 +593,15 @@
   /* The indent that steps a tab under its workspace name used to be the
      link's padding-left. In the grid it has to be the ROW's, or the icon
      column starts at the pill edge and the hierarchy step disappears. */
-  /* 8px: a one-line row is then 8 + 18 + 8 = 34px, exactly --nt-row-tab, so
-     it is NOT floor-clamped and its leading matches a two-line row's.
+  /* 6px: the row is then 6 + 24 + 6 = 36px, exactly --nt-row-tab, so it is NOT
+     floor-clamped and every row in the list is the same height. There is no
+     two-line row left to match — that is the point.
      LEFT is the row's 4px pad plus the hierarchy indent, and it is frozen:
-     the icon chip's left edge is the one x in this tree that every row agrees
+     the chip's left edge is the one x in this tree that every row agrees
      on to 0.00px, and it is this number. RIGHT is one step of air, so the
-     state chip clears the row's edge — and, on the selected row, the accent
+     state mark clears the row's edge — and, on the selected row, the accent
      block's rounded corner. */
-  padding: 8px var(--nt-air) 8px calc(var(--nt-pad) + var(--nt-indent));
+  padding: 6px var(--nt-air) 6px calc(var(--nt-pad) + var(--nt-indent));
   border-radius: var(--nt-pill);
   color: var(--fg-dim);
   font-weight: 500;
@@ -642,6 +651,30 @@
    FROM changes.) */
 .navtree-tab-row[data-active="true"] .navtree-tab-icon::before {
   background: color-mix(in srgb, var(--accent-fg) 18%, transparent);
+}
+/* The CHIP on the accent block. Its resting colours are a white tile with a
+   --border hairline and a --clock fill, all three of which are tuned against
+   the rail's background and none of which survives a saturated fill: a white
+   tile on the accent reads as a hole punched in the row, and --clock (34%
+   accent) against the accent itself is very nearly invisible — which would
+   silently delete the clock on exactly the row you are looking at.
+   So the whole chip is re-derived from the block's own ink: a translucent
+   plate, no hairline, and a fill that is a stronger step of the same ink. The
+   dashed last-day outline and the ghosted glyph are left alone — they are
+   already drawn in greys and read fine on the block. */
+.navtree-tab-row[data-active="true"] .chatchip[data-shape="tile"] {
+  background: color-mix(in srgb, var(--accent-fg) 20%, transparent);
+  border-color: transparent;
+}
+.navtree-tab-row[data-active="true"] .chatchip-fill {
+  background: color-mix(in srgb, var(--accent-fg) 38%, transparent);
+}
+.navtree-tab-row[data-active="true"] .chatchip-dot {
+  background: var(--accent-fg);
+}
+.navtree-tab-row[data-active="true"] .chatchip-dot[data-hollow="true"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--accent-fg);
 }
 .navtree-tab-row[data-active="true"] .navtree-quicknum {
   background: color-mix(in srgb, var(--accent-fg) 22%, transparent);
@@ -717,6 +750,165 @@
    the one step that costs no contrast. */
 .navtree-tab-row[data-active="true"] .navtree-tab-headline {
   color: var(--accent-fg);
+}
+
+/* ─── The chip cell, child rows, and the state mark ───────────────────────
+   Desktop rail only. The sheet keeps its plain emoji plate — it is one flat
+   line per chat with no columns to align and no nesting, so none of this has
+   anything to do there. */
+
+/* The chip sits at its track's left edge, exactly where the old icon plate
+   did. The track (--nt-col-icon) is chip + air and is WIDER than the chip, and
+   that difference is the gap to the name — a property of the scale rather than
+   a margin that a fixed track could swallow. */
+.navtree[data-variant="sidebar"] .navtree-tab-chip {
+  justify-self: start;
+  cursor: pointer;
+}
+
+/* ─── Child rows ──────────────────────────────────────────────────────────
+   A chat spawned under another. Two things make this read as nesting rather
+   than as a list with some words pushed right:
+
+   1. THE DOT IS IN THE MARK COLUMN. It is drawn by the same component, in a
+      box the same width as the parent's tile (ChatChip.css), so it lands in
+      the column the chips occupy instead of floating in the text.
+   2. EVERY CHILD NAME LANDS ON ONE x. It follows from (1): the mark box is a
+      fixed width, so the name after it starts at the same place on every child
+      row in the tree, however deep in the list it sits and whoever its parent
+      is. Before this the children were words at an arbitrary indent, and an
+      indent alone cannot do either job — it moves the name without giving the
+      eye a column to find it on.
+
+   The step is ONE --nt-indent, the same step a tab takes under its workspace
+   name. A child of a chat is exactly one level of the same hierarchy, so it
+   costs the same. */
+.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"] {
+  padding-left: calc(var(--nt-pad) + var(--nt-indent) * 2);
+}
+/* One step quieter than a parent's name, in weight and colour — a child is
+   subordinate, and saying so in the type means not having to say it with a
+   second mark. Hover brings it back up to full ink, because at that point you
+   are reading it. */
+.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"] .navtree-name-text {
+  font-weight: 500;
+  font-size: 13.5px;
+  color: var(--fg-dim);
+}
+.navtree[data-variant="sidebar"] .navtree-tab-row[data-child="true"]:hover .navtree-name-text {
+  color: var(--fg);
+}
+.navtree-tab-row[data-child="true"][data-active="true"] .navtree-name-text {
+  color: var(--accent-fg);
+}
+
+/* ─── THE state mark ──────────────────────────────────────────────────────
+   One 10px mark, in the row's last track, for every state there is. See
+   RowMark in NavTree.tsx for why the 3px left bar, the row tint and the worded
+   READY chip are all gone.
+
+   Rendered ONLY when there is something to say — an idle row has no element
+   here at all, so it pays neither the 10px nor the gutter, and the name gets
+   both. */
+.navtree-mark {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  margin-left: var(--nt-gutter);
+}
+/* The rail's ONE moving thing, and still the whole basis of "a still rail
+   means nothing is running". A ring with one quadrant cut out, turning.
+   It reuses `navtree-state-spin` (declared in StateChip.css, which the sheet
+   still needs) rather than declaring a second keyframe of its own: ONE
+   animation exists in this rail, and that is enforced by a test — two spin
+   keyframes that happen to agree today are two that can disagree tomorrow. */
+.navtree-mark[data-state="working"] {
+  border: 1.5px solid var(--status-working);
+  border-top-color: transparent;
+  animation: navtree-state-spin 0.8s linear infinite;
+}
+.navtree-mark[data-state="ready"] {
+  background: var(--status-ready);
+  opacity: 0.9;
+}
+/* It wants you NOW — the one state that is about you rather than the machine,
+   and the only reason this mark is not simply "spinner or nothing". */
+.navtree-mark[data-state="blocked"] {
+  background: var(--status-blocked);
+}
+/* Findable, not shouting: a dead runner needs nothing until you decide it
+   does, so it gets the mark in the palette's quiet grey rather than in red. */
+.navtree-mark[data-state="dead"] {
+  background: var(--status-dead);
+}
+/* On the accent block, the mark is drawn in the block's own ink — the status
+   hues are tuned against the rail's background and none of them is guaranteed
+   legible on a saturated fill. */
+.navtree-tab-row[data-active="true"] .navtree-mark[data-state="ready"],
+.navtree-tab-row[data-active="true"] .navtree-mark[data-state="blocked"],
+.navtree-tab-row[data-active="true"] .navtree-mark[data-state="dead"] {
+  background: var(--accent-fg);
+  opacity: 1;
+}
+.navtree-tab-row[data-active="true"] .navtree-mark[data-state="working"] {
+  border-color: var(--accent-fg);
+  border-top-color: transparent;
+}
+/* ─── Reduced motion ──────────────────────────────────────────────────────
+   `working` becomes a SOLID mark in its own hue: the same 10px in the same
+   slot as the other three states, told apart by colour rather than by turning.
+   Not a static ring (indistinguishable from a decoration) and not a fainter
+   mark (it would make the busiest row the quietest thing on screen) — the same
+   two rules the chip's own reduced-motion fallback follows.
+
+   Note what this does NOT do: cancel the animation. Closing the ring's gap and
+   filling its centre makes the mark rotationally symmetric, so there is no
+   visible motion left to cancel — and a cancelling declaration here would be a
+   second animation property in this rail, which is the thing the
+   one-animation test exists to prevent. Same pixels, invariant intact. */
+@media (prefers-reduced-motion: reduce) {
+  .navtree-mark[data-state="working"] {
+    border-color: var(--status-working);
+    background: var(--status-working);
+  }
+  .navtree-tab-row[data-active="true"] .navtree-mark[data-state="working"] {
+    border-color: var(--accent-fg);
+    background: var(--accent-fg);
+  }
+}
+
+/* ─── The done group ──────────────────────────────────────────────────────
+   Chats whose clock ran out. Shaped like the workspace header one step
+   quieter — a section head, not a third kind of label — so the rail still has
+   exactly two kinds of heading in it. The count IS the label; no badge. */
+.navtree-done-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  /* Space ABOVE, not below: the gap is what separates this group from the live
+     list, and the header belongs to the rows under it. */
+  padding: 14px var(--nt-air) 4px calc(var(--nt-pad) + var(--nt-indent));
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-faint);
+  text-align: left;
+  cursor: pointer;
+}
+.navtree-done-head:hover {
+  color: var(--fg-dim);
+}
+/* A done chat's row is quieter still — it has left the live list, and the only
+   reason it is on screen at all is that you opened the drawer to look. The
+   chip already says it (a dashed outline round a ghosted emoji); this stops
+   the NAME from being the loudest thing in a group of finished work. */
+.navtree-done-head + .navtree-tab-row .navtree-name-text,
+.navtree-done-head ~ .navtree-tab-row:not([data-active="true"]) .navtree-name-text {
+  color: var(--fg-dim);
 }
 
 /* ─── Meta column ─────────────────────────────────────────────────────────

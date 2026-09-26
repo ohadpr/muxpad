@@ -361,11 +361,20 @@ describe('the CSS mapping — selection is not a state', () => {
 });
 
 describe('only WORKING moves', () => {
-  it('the rail declares exactly ONE animation, and it is the spinner', () => {
-    const animations = [...`${STATE_CSS} ${NAV_CSS}`.matchAll(/animation: ([^;]+);/g)].map(
-      (m) => m[1],
-    );
-    expect(animations).toEqual(['navtree-state-spin 0.8s linear infinite']);
+  it('the rail runs exactly ONE animation, and it is the spinner', () => {
+    // Comments stripped FIRST: prose about animations is not an animation, and
+    // a sentence containing the word was enough to fail this outright.
+    const css = `${STATE_CSS} ${NAV_CSS}`.replace(/\/\*[\s\S]*?\*\//g, '');
+    const animations = [...css.matchAll(/animation: ([^;]+);/g)].map((m) => m[1]);
+    // DISTINCT animations, not declarations. Two rails draw the working
+    // spinner now — StateChip's chip (the sheet, the pane rows) and the chat
+    // rows' 10px mark — and they must use the SAME one: two keyframes that
+    // happen to agree today are two that can disagree tomorrow. So the set is
+    // what is pinned, and it is still a set of one.
+    expect([...new Set(animations)]).toEqual(['navtree-state-spin 0.8s linear infinite']);
+    // …and every site really is that one, so a second animation cannot hide
+    // behind a duplicate of the first.
+    expect(animations.every((a) => a === 'navtree-state-spin 0.8s linear infinite')).toBe(true);
   });
 
   it('the spinner is a 13px ring on a 2px stroke, turning once every 0.8s', () => {
