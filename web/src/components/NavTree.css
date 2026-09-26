@@ -2017,13 +2017,19 @@ body.sidenav-resizing iframe {
    chat that spawned it. Both halves are now here — the grouping in NavTree.tsx
    and this.
 
-   One step, and it is --nt-rail-lead's own step rather than --nt-indent: the
-   sheet's leading edge is 14px, so a child's emoji box starts one gap-plus-dot
-   in from it and its NAME lands on one x with every other child's. The mark
-   itself is the dot in that box (ChatChip, shape="dot"), which is what makes
-   this read as nesting rather than as a line pushed right. */
+   ONE --nt-indent, and the step is deliberately small — the same 12px a tab
+   takes under its workspace name, and the same one step the desktop child row
+   takes. A child of a chat is one level of the same hierarchy, so it costs the
+   same on both surfaces. (Indenting by a whole emoji box instead, which is the
+   obvious reading of "put the dot where the tile was", pushes the child name
+   34px off its parent's — measurably the "indentation is too much" the rail was
+   already once redrawn to fix.)
+
+   The mark is a dot in the emoji's own box (ChatChip, shape="dot"). That is what
+   makes this read as nesting rather than as a line pushed right, and it is what
+   lands every child name in the list on one shared x. */
 .navtree[data-variant="sheet"] .navtree-tab-row[data-child="true"] {
-  padding-inline-start: calc(var(--nt-rail-lead) + var(--nt-rail-emoji));
+  padding-inline-start: calc(var(--nt-rail-lead) + var(--nt-indent));
 }
 /* The dot stands in the emoji's box, so it has to BE that box — otherwise the
    flex line closes up around a 6px mark and the name jumps left by 14px on

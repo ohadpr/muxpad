@@ -652,6 +652,40 @@ describe('the MOBILE RAIL — a flex line, and its four numbers', () => {
     expect(chatNameLeft()).toBe(42);
   });
 
+  it('a CHILD row steps ONE indent — 54px, not 76 — and its dot holds the column', () => {
+    // The sheet had no child row at all: TabList emptied `children` before the
+    // DOM, so a sub-chat came out as a top-level line above its own parent. Both
+    // halves are pinned — the attribute and the dot in NavTree.rows.test.tsx,
+    // the arithmetic here.
+    //
+    // ONE --nt-indent, the same step the desktop child takes and the same step a
+    // tab takes under its workspace name. The obvious alternative — indent by a
+    // whole emoji box, "put the dot where the tile was" — computes to a name at
+    // 76px, 34px off its parent's, which is the "indentation is too much" this
+    // rail was already once redrawn to fix. The number is the guard.
+    const child = ruleBody(
+      NAV_CSS,
+      '.navtree[data-variant="sheet"] .navtree-tab-row[data-child="true"]',
+    );
+    const childLead = resolve(decl(child, 'padding-inline-start'), SHEET);
+    expect(childLead).toBe(26);
+    const childNameLeft =
+      childLead +
+      resolve(SHEET['--nt-rail-emoji'] as string, SHEET) +
+      resolve(SHEET['--nt-rail-gap'] as string, SHEET);
+    expect(childNameLeft).toBe(54);
+    expect(childNameLeft - chatNameLeft()).toBe(resolve(SHEET['--nt-indent'] as string, SHEET));
+    // The dot must BE the emoji's box, not a 6px mark in a flex line that closes
+    // up around it — otherwise the name jumps 14px left on every child row and
+    // the shared x this whole rule exists to hold is gone.
+    const dot = ruleBody(NAV_CSS, '.navtree[data-variant="sheet"] .navtree-rail-dot');
+    expect(decl(dot, 'flex')).toBe('0 0 var(--nt-rail-emoji)');
+    expect(resolve(decl(dot, 'inline-size'), SHEET)).toBe(20);
+    // Logical, like every other inset on this surface: the list is read in
+    // Hebrew as often as in English and a physical inset indents the wrong side.
+    expect(child).not.toMatch(/(?:^|;)\s*padding(?:-left|-right):/);
+  });
+
   it('there is no leading disclosure track left to push that 42 anywhere', () => {
     // It used to be charged to every row — chevron-less rows carried an
     // identical-width spacer to keep the column — and it put the emoji, the
