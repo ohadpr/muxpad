@@ -497,6 +497,30 @@ function esc(v: string): string {
   );
 }
 
+/**
+ * A value as LITERAL TEXT inside a `'…'` shell word.
+ *
+ * XML escaping is not shell quoting, and `esc` above is XML escaping. It leaves
+ * the apostrophe alone — correctly, for an attribute in a `"`-quoted slot — and
+ * the report-back command interpolates those same attributes into a
+ * single-quoted shell argument. So a chat called `Ohad's project` produced a
+ * ready-to-copy command whose quote ended in the middle of its own name:
+ *
+ *   muxpad agent send p1 '<muxpad-report … from="Ohad's project" …>
+ *
+ * `/bin/sh -n` rejects it with an unterminated quote, and the round trip then
+ * depended on the receiving agent noticing and repairing our command. Review 3
+ * named the real hole here: "shell quoting" was a boundary nobody's territory
+ * claimed, in a file otherwise concerned with XML.
+ *
+ * `'\''` is the POSIX idiom — close the quote, an escaped literal apostrophe,
+ * reopen — and it is the whole trick, because inside `'…'` nothing else has any
+ * meaning at all.
+ */
+function shq(v: string): string {
+  return v.replace(/'/g, `'\\''`);
+}
+
 function unesc(v: string): string {
   return v
     .replace(/&lt;/g, '<')
@@ -541,11 +565,23 @@ export function renderDirectMarker(marker: DirectMarker, body: string): string {
   )}" pane="${esc(marker.toPane ?? '')}"></muxpad-report>`;
   // Line by line, joined: the exact shape of these lines is the contract with
   // the agent reading them, so they are worth being able to see.
+  //
+  // Both interpolations into the COMMAND go through `shq` — see it for the
+  // apostrophe that broke the template. The last line is the other half of the
+  // same problem and cannot be escaped from here: the agent writes its own
+  // prose, and "it's done" would end the quote just as a name did. So the marker
+  // is stated as the contract and the delivery is explicitly not — an agent that
+  // would rather POST, or quote differently, is doing the right thing as long as
+  // the first line is the marker. (The durable fix is a stdin form of
+  // `muxpad agent send`, which is the CLI's to add, not this file's.)
   const note = [
     `Directed here from the muxpad chat "${marker.from}" — another chat's user, not this chat's.`,
     'Do the work in THIS chat, then report back once, in one message:',
-    `  muxpad agent send ${marker.pane} '${report}`,
+    `  muxpad agent send '${shq(marker.pane)}' '${shq(report)}`,
     "  <two or three sentences: what you did and what the answer is>'",
+    "The single quotes are the shell's, so an apostrophe inside your sentences has",
+    "to be written '\\'' — or send the message any other way you like. What matters",
+    'is only that its FIRST LINE is exactly the marker above.',
     'Nothing else is needed — the chat that asked renders that message as a card.',
   ].join('\n');
   return `<muxpad-direct id="${esc(marker.id)}" from="${esc(marker.from)}" pane="${esc(

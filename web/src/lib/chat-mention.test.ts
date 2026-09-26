@@ -2,6 +2,7 @@
 // of a mention (reference / direction / search) are one parse, and the bugs that
 // matter are "it sent work to the wrong chat" and "the picker hovered over my
 // whole sentence" — neither of which a rendered assertion would name.
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import {
   MENTION_QUERY_MAX,
@@ -333,7 +334,7 @@ describe('the markers — one grammar, both directions', () => {
     expect(parsed?.body.trim()).toBe('run the tests');
     // The block is a real instruction, not just a render hook: the receiving
     // agent has to be told where to send the answer.
-    expect(text).toContain('muxpad agent send pane-1');
+    expect(text).toContain("muxpad agent send 'pane-1'");
   });
 
   it('pre-fills the whole report line, so the other agent only writes prose', () => {
@@ -354,6 +355,74 @@ describe('the markers — one grammar, both directions', () => {
   it('escapes a chat name that would otherwise break the attribute', () => {
     const text = renderDirectMarker({ id: 'd1', from: 'say "hi" <b>', pane: 'p' }, 'x');
     expect(parseDirectMarker(text)?.marker.from).toBe('say "hi" <b>');
+  });
+
+  /**
+   * THE COMMAND IN THE INSTRUCTION IS A SHELL COMMAND, and this file is
+   * otherwise about XML. `esc` escapes XML attribute characters and leaves the
+   * apostrophe — right for a `"…"` attribute, wrong at the boundary where those
+   * same attributes get interpolated into a `'…'` shell word. An ordinary
+   * possessive in a chat name therefore ended the quote in the middle of the
+   * ready-to-copy command, and whether the round trip happened at all came down
+   * to the receiving agent noticing and repairing our own template.
+   *
+   * Checked against a REAL SHELL, because "is this valid sh" is not a claim a
+   * regex should be making. `sh -n` for syntax; then `sh` with `muxpad` stubbed
+   * out, so what the command would actually have DELIVERED is what gets parsed
+   * back — the round trip, not a lookalike.
+   */
+  describe('the report-back command survives the names people give chats', () => {
+    /** The two indented command lines, as an agent would copy them. */
+    const commandOf = (instruction: string): string => {
+      const lines = instruction.split('\n');
+      const first = lines.findIndex((l) => l.trim().startsWith('muxpad agent send'));
+      expect(first).toBeGreaterThanOrEqual(0);
+      // The argument spans the marker line and the sentences line under it.
+      return lines
+        .slice(first, first + 2)
+        .map((l) => l.trim())
+        .join('\n');
+    };
+
+    const instruction = (to: string) =>
+      renderDirectMarker({ id: 'd1', from: 'muxpad', pane: 'pane-1', to, toPane: 'pane-2' }, 'go');
+
+    it.each(["Ohad's project", "it's a 'quoted' name", 'say "hi" <b> & co', "don't; rm -rf /"])(
+      'is valid sh for a chat called %s',
+      (name) => {
+        const script = commandOf(instruction(name));
+        const check = spawnSync('/bin/sh', ['-n'], { input: script, encoding: 'utf8' });
+        expect({ name, status: check.status, err: check.stderr.trim() }).toEqual({
+          name,
+          status: 0,
+          err: '',
+        });
+      },
+    );
+
+    it('delivers the marker VERBATIM through the shell, name and all', () => {
+      // Runs the real command with the real quoting and a stub in muxpad's
+      // place, then parses what arrived. Nothing in the chain is simulated
+      // except the CLI itself.
+      const name = "Ohad's project";
+      const script = `muxpad() { printf '%s' "$4"; }\n${commandOf(instruction(name))}`;
+      const run = spawnSync('/bin/sh', [], { input: script, encoding: 'utf8' });
+      expect(run.status).toBe(0);
+      const parsed = parseReportMarker(run.stdout);
+      expect(parsed?.marker).toEqual({ id: 'd1', from: name, pane: 'pane-2' });
+      // …and the agent's own line is the body, which is what draws the card.
+      expect(parsed?.body).toContain('two or three sentences');
+    });
+
+    it('does not pretend the agent’s OWN prose is quoted for it', () => {
+      // The half that cannot be fixed from here: the sentences are written by
+      // the other agent, and "it's done" ends the quote exactly as a name did.
+      // The instruction says so, and says the marker — not the command — is the
+      // contract. Silence here would be the same bug wearing a fix.
+      const text = instruction('Investing');
+      expect(text).toContain("'\\''");
+      expect(text).toContain('FIRST LINE is exactly the marker');
+    });
   });
 
   it('round-trips a report', () => {
