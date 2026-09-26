@@ -151,13 +151,53 @@ describe('tab-clock', () => {
       // deliver to — it decays like anything else rather than hanging live
       // forever waiting.
       const parent = chat('parent', 0);
-      const child = chat('child', 9, parent);
+      const child = chat('child', 0, parent);
       expect(resolve(child).clock).toBeNull();
       tabs.delete(parent);
+      expect(resolve(child).clock).not.toBeNull();
+      tabs.resetClock(child, Date.now() - 9 * DAY_MS);
       const after = resolve(child);
-      expect(after.clock).not.toBeNull();
       expect(after.done).toBe(true);
       expect(after.done_reason).toBe('decayed');
+    });
+
+    it('an orphan starts its clock at the promotion, not at its birth', () => {
+      // F5. The clock it inherits is `clock_started_at`, stamped when it was
+      // created and never read since — a sub-chat's clock is not consulted.
+      // So a worker born ten days ago was `decayed` the instant its parent
+      // went away, mid-job, with a full tile and no announcement.
+      //
+      // Not a rare shape: `cron --new-tab` with close_when_done cascades the
+      // tab away on every clean fire, and every pane carries MUXPAD_PANE_ID,
+      // so an agent that runs `muxpad agent new` inside a cron tab leaves one
+      // of these behind minutes later. It is the recurring-job pattern the
+      // house notes recommend.
+      const parent = chat('parent', 0);
+      const child = chat('child', 10, parent);
+      tabs.delete(parent);
+      const after = resolve(child);
+      expect(after.done).toBe(false);
+      expect(after.clock?.fill).toBeLessThan(0.001);
+    });
+
+    it('promotes every orphan, not just the first', () => {
+      const parent = chat('parent', 0);
+      const kids = [chat('a', 10, parent), chat('b', 30, parent), chat('c', 5, parent)];
+      tabs.delete(parent);
+      for (const id of kids) expect(resolve(id).done, id).toBe(false);
+    });
+
+    it('does not un-retire an orphan that had already delivered', () => {
+      // Its parent going away is not news about whether the work landed. The
+      // clock is restarted (it is a root now and has to have one), but the
+      // retirement outranks it, exactly as it does for any other chat.
+      const parent = chat('parent', 0);
+      const child = chat('child', 10, parent);
+      tabs.retire(child, 'delivered');
+      tabs.delete(parent);
+      const after = resolve(child);
+      expect(after.done).toBe(true);
+      expect(after.done_reason).toBe('delivered');
     });
 
     it('a pinned sub-chat is never done, delivered or not', () => {

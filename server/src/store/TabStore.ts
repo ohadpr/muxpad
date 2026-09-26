@@ -300,8 +300,39 @@ export class TabStore {
     return { ...existing, ...next, updated_at: now };
   }
 
-  delete(id: string): void {
-    this.db.prepare('DELETE FROM tabs WHERE id = ?').run(id);
+  /**
+   * Delete a tab — and START THE CLOCK on every child it orphans.
+   *
+   * There is no foreign key, deliberately (see migrations v27), so a child
+   * survives its parent's deletion. What it survives AS changes, though: while
+   * the parent existed it was a sub-chat, which has no clock and cannot decay;
+   * the moment the parent is gone it is a root, and the clock it inherits is
+   * `clock_started_at` — stamped at its BIRTH, and never once read since,
+   * because a sub-chat's clock is not consulted.
+   *
+   * So a worker born ten days ago is `done: 'decayed'` the instant its parent
+   * is deleted, still mid-job, with a full tile. That is not a rare shape.
+   * `cron --new-tab` with `close_when_done` cascades the tab away on every
+   * clean fire, and every pane carries MUXPAD_PANE_ID, so any agent that runs
+   * `muxpad agent new` inside a cron-created tab leaves an orphan behind
+   * minutes later. Even a young orphan inherits a PARTIAL clock it never had a
+   * chance to reset.
+   *
+   * Promotion is an event, so it gets a clock the way every other promotion
+   * into the live list does: fresh, from now. The chat has never had a clock
+   * before this moment; starting it anywhere but now is claiming to know
+   * something about a timer that was not running.
+   *
+   * Here rather than in `deleteTabCascade` because this is not the only door:
+   * the workspace delete loops over tabs, and AppRegistry drops a tab whose
+   * last pane went away. Three hand-written copies of the same rule is how two
+   * of them end up disagreeing.
+   */
+  delete(id: string, at: number = Date.now()): void {
+    this.db.transaction(() => {
+      this.db.prepare('UPDATE tabs SET clock_started_at = ? WHERE spawned_by = ?').run(at, id);
+      this.db.prepare('DELETE FROM tabs WHERE id = ?').run(id);
+    })();
   }
 
   /**
