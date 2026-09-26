@@ -125,8 +125,8 @@ function Row({
           one of the two ways back to it — and its name is usually the task
           ("Work review"), not whose task it was. The tag says WHOSE, and for a
           delivered one it says that too: "this row is a result", not something
-          you walked away from. Ahead of the headline because it is the part that
-          must not be the thing that gets ellipsised. */}
+          you walked away from. Ahead of the headline, and the last thing on the
+          row to give up space — the snippet beside it shrinks first. */}
       {provenance(chat) ? <span className="chat-mention-under">{provenance(chat)}</span> : null}
       <span className="chat-mention-why" dir="auto">
         {row.via === 'content' && row.snippet ? (
