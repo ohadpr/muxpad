@@ -8,19 +8,37 @@
 
 .chatchip {
   /* ─── --clock: ONE colour, every size ───────────────────────────────────
-     The 24px tile's descending fill and the 6px child dot are the same ink, so
-     they read as one substance at two scales instead of two indicators that
-     happen to be near each other.
+     The 24px tile's descending fill and the 6px sub-chat dot are the same ink,
+     so they read as one substance at two scales rather than as two indicators
+     that happen to sit near each other.
 
-     The `#d9d3ea` is the prototype's literal — a pale lilac the accent is cut
-     WITH, not a theme token, and that is deliberate: the mix has to land in the
-     same place relative to the accent on every theme, and every candidate token
-     (--border, --bg-chrome) moves with the theme's own background and would
-     make the clock nearly invisible on one theme and nearly solid on another.
-     On the light cockpit themes this resolves to exactly the prototype's
-     colour; on the dark ones it lands as a pale fill descending into a dark
-     tile, which still reads as filling up. */
-  --clock: color-mix(in srgb, var(--accent) 34%, #d9d3ea);
+     TWO PLACES, ONE EACH, and the split is the point:
+       · the RELATIONSHIP — the accent, cut to 34% — is here, next to the thing
+         it describes, and is one number for every theme;
+       · the BASE it is cut WITH re-steps per theme in styles.css, exactly as
+         the --status-* tokens do.
+
+     It used to be `color-mix(in srgb, var(--accent) 34%, #d9d3ea)` right here,
+     literal and all. The mix was right and the literal was not: that pale lilac
+     was picked against the WHITE cockpit, so on the dark themes the fill
+     descended as a bright wash on a near-black tile — one declaration
+     whispering on one theme and shouting on another.
+
+     DECLARED ON THE CHIP, not at :root, and that is load-bearing rather than
+     tidy. A custom property is substituted on the element that declares it, so
+     a `--clock` at :root resolves against :root's base and inherits down as a
+     FINISHED colour — every per-theme override arriving too late to change it.
+     Measured: with the mix at :root, all seven themes rendered the same
+     #526595. It would have shipped looking correct, because the theme
+     attribute happens to sit on documentElement (settings.ts) and the app
+     therefore hits the one case where :root and the theme rule are the same
+     element. On the chip, the mix resolves against whatever base is in scope
+     and the token is right wherever a chip is drawn.
+
+     (And NOT `--clock: var(--clock, …)`: a custom property that substitutes
+     itself is a cycle, invalid at computed-value time, and that spelling
+     silently produces no colour at all.) */
+  --clock: color-mix(in srgb, var(--accent) 34%, var(--clock-base));
 
   /* Density is SIZE ONLY. Three tokens, set once per density below, and
      nothing else in this file varies with it. */
