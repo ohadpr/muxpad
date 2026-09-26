@@ -259,7 +259,11 @@ export function panesTabScopedRoutes(deps: {
         );
       }
       const pane = panes.create({ tab_id: tabId, kind: 'url', url: body.url });
-      deps.events.emit({ type: 'pane.added', tab_id: tabId, pane: decoratePane(deps.cache, pane) });
+      deps.events.emit({
+        type: 'pane.added',
+        tab_id: tabId,
+        pane: decoratePane(deps.cache, pane, deps.db),
+      });
       if (body.append_to_layout) {
         const nextLayout = appendPaneToLayout(
           t.layout,
@@ -336,7 +340,11 @@ export function panesTabScopedRoutes(deps: {
       ...(body.face ? { face: body.face } : {}),
       ...(agentMode ? { mode: agentMode } : {}),
     });
-    deps.events.emit({ type: 'pane.added', tab_id: tabId, pane: decoratePane(deps.cache, pane) });
+    deps.events.emit({
+      type: 'pane.added',
+      tab_id: tabId,
+      pane: decoratePane(deps.cache, pane, deps.db),
+    });
     if (body.append_to_layout) {
       const nextLayout = appendPaneToLayout(
         t.layout,
@@ -437,7 +445,7 @@ export function panesScopedRoutes(deps: {
       const p = panes.getById(r.pane_id);
       if (!p) continue; // raced a delete between the join and the fetch
       out.push({
-        ...decoratePane(deps.cache, p),
+        ...decoratePane(deps.cache, p, deps.db),
         // Live shell cwd when ptyd has reported one; else the spawn cwd row.
         cwd: deps.cache.getCwd(p.id) ?? p.cwd,
         isRunning: live.has(p.id),
@@ -464,7 +472,7 @@ export function panesScopedRoutes(deps: {
     }
     // Decorated (title/fg/attention/busy/app_urls) like the flat list — the
     // web's pinned rows seed their badges from this single-pane GET.
-    return c.json({ ...decoratePane(deps.cache, p), isRunning });
+    return c.json({ ...decoratePane(deps.cache, p, deps.db), isRunning });
   });
 
   app.patch('/:id', async (c) => {
@@ -618,7 +626,7 @@ export function panesScopedRoutes(deps: {
       // undefined), so a face switch / rename mid-turn killed the spinner until
       // the next busy EDGE. It also poisoned the sidebar's (busy,attention)
       // dedup signature, swallowing the real busy→false edge afterwards.
-      const decorated = decoratePane(deps.cache, refreshed);
+      const decorated = decoratePane(deps.cache, refreshed, deps.db);
       deps.events.emit({ type: 'pane.updated', tab_id: refreshed.tab_id, pane: decorated });
       return c.json(decorated);
     }
@@ -958,7 +966,7 @@ export function panesScopedRoutes(deps: {
       deps.events.emit({
         type: 'pane.updated',
         tab_id: refreshed.tab_id,
-        pane: decoratePane(deps.cache, refreshed),
+        pane: decoratePane(deps.cache, refreshed, deps.db),
       });
     // Return what was ACTUALLY used, not what was asked for. `agentCwd` snaps
     // the request to the project root, so a client echoing its own input can
@@ -1024,7 +1032,7 @@ export function panesScopedRoutes(deps: {
       deps.events.emit({
         type: 'pane.updated',
         tab_id: refreshed.tab_id,
-        pane: decoratePane(deps.cache, refreshed),
+        pane: decoratePane(deps.cache, refreshed, deps.db),
       });
     return c.body(null, 204);
   });
@@ -1055,7 +1063,7 @@ export function panesScopedRoutes(deps: {
       deps.events.emit({
         type: 'pane.updated',
         tab_id: refreshed.tab_id,
-        pane: decoratePane(deps.cache, refreshed),
+        pane: decoratePane(deps.cache, refreshed, deps.db),
       });
     return c.body(null, 204);
   });
@@ -1141,7 +1149,7 @@ export function panesScopedRoutes(deps: {
       deps.events.emit({
         type: 'pane.updated',
         tab_id: refreshed.tab_id,
-        pane: decoratePane(deps.cache, refreshed),
+        pane: decoratePane(deps.cache, refreshed, deps.db),
       });
     return c.body(null, 204);
   });
@@ -1166,7 +1174,7 @@ export function panesScopedRoutes(deps: {
         deps.events.emit({
           type: 'pane.updated',
           tab_id: refreshed.tab_id,
-          pane: decoratePane(deps.cache, refreshed),
+          pane: decoratePane(deps.cache, refreshed, deps.db),
         });
     }
     // D12: `unread` was UNCLEARABLE FROM MOBILE. Mobile takes this surgical
@@ -1254,7 +1262,7 @@ export function panesScopedRoutes(deps: {
 
     const decorate = (paneId: string) => {
       const p = panes.getById(paneId);
-      return p ? decoratePane(deps.cache, p) : null;
+      return p ? decoratePane(deps.cache, p, deps.db) : null;
     };
 
     // Extracting the SOLE pane of a tab into a new tab is pure churn — it

@@ -143,7 +143,7 @@ export function createServeSupervisor(deps: ServeSupervisorDeps): ServeSuperviso
         deps.events.emit({
           type: 'pane.updated',
           tab_id: fresh.tab_id,
-          pane: deps.cache ? decoratePane(deps.cache, fresh) : fresh,
+          pane: deps.cache ? decoratePane(deps.cache, fresh, deps.db) : fresh,
         });
       }
     } catch {

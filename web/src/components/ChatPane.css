@@ -1836,6 +1836,23 @@
   white-space: nowrap;
   color: color-mix(in srgb, var(--chat-fg) 80%, transparent);
 }
+/* A CHILD CHAT's row is a link — the one entry in this list you can open. Same
+   metrics as the span next to it (it shares .chat-roster-name), so the two read
+   as one list; the pointer and the hover brightening are the whole difference. */
+.chat-roster-link {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-roster-link:hover,
+.chat-roster-link:focus-visible {
+  color: var(--chat-fg);
+}
 .chat-roster-meta {
   flex: 0 0 auto;
   white-space: nowrap;

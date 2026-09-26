@@ -135,7 +135,7 @@ export async function bootstrapTab(
     deps.events.emit({
       type: 'pane.added',
       tab_id: created.tab.id,
-      pane: decoratePane(deps.cache, created.pane),
+      pane: decoratePane(deps.cache, created.pane, deps.db),
     });
     // Eager spawn: an agent tab created from a phone (or by the cron tick,
     // with no browser anywhere) starts its runner immediately.

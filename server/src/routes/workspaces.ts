@@ -8,6 +8,7 @@ import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
+import { clockSnapshot } from '../tab-clock.js';
 
 /**
  * CRUD for the top-level workspace concept. Workspaces own tabs; tabs
@@ -50,7 +51,11 @@ export function workspacesRoutes(deps: {
     // excluded from the
     // default list — and thus the sidebar tree — unless ?all=1.
     const list = workspaces.list({ all: c.req.query('all') === '1' });
-    const decorated = list.map((w) => decorateWorkspace(deps.cache, deps.db, w));
+    // ONE clock read for the whole list, not one per workspace: the spawn tree
+    // is global (a child's parent may live in another workspace), so every row
+    // needs the same whole-table index — and this endpoint is on a 5s poll.
+    const clocks = clockSnapshot(deps.db);
+    const decorated = list.map((w) => decorateWorkspace(deps.cache, deps.db, w, clocks));
     return c.json(decorated);
   });
 

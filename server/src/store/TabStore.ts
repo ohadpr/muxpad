@@ -475,6 +475,22 @@ export class TabStore {
   }
 
   /**
+   * The lifecycle inputs of every chat spawned DIRECTLY under `id`.
+   *
+   * The third member of the {@link clockRows} / {@link clockRow} family, for the
+   * one question a single row cannot answer about itself: how much work it
+   * started that is still running (see tab-clock.ts `tabLiveChildCount`). Goes
+   * through the `tabs_spawned_by` index, so it stays a lookup rather than a
+   * scan on the hot single-row decoration path.
+   */
+  childClockRows(id: string): TabClockRow[] {
+    const rows = this.db
+      .prepare(`SELECT ${CLOCK_COLUMNS} FROM tabs WHERE tabs.spawned_by = ?`)
+      .all(id) as RawClockRow[];
+    return rows.map(toClockRow);
+  }
+
+  /**
    * Retire a chat: it leaves the live list and joins the `done` group.
    *
    * NOT a delete, and the distinction is the whole model — the row, its panes,

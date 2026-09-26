@@ -47,7 +47,12 @@ export function tabsRoutes(deps: {
   app.post('/', async (c) => {
     const body = z
       .object({
-        workspace_id: z.string(),
+        // OPTIONAL, because a spawn does not need one: a chat with a parent
+        // takes its parent's workspace (see below), and requiring the caller to
+        // name one anyway is what made every scripted spawn carry an ambient
+        // guess. Still required — enforced below, not by the schema — for a
+        // ROOT tab, which has nothing to inherit from.
+        workspace_id: z.string().optional(),
         name: z.string().optional(),
         layout: LayoutNodeSchema.optional(),
         // Atomic tab-with-pane creation — the tabs-first default. 'shell'
@@ -99,6 +104,48 @@ export function tabsRoutes(deps: {
       : undefined;
     const parentId = body.spawned_by ?? spawnedByPaneTab;
     const spawned_by = parentId && tabs.getById(parentId) ? parentId : null;
+    /**
+     * WHERE A SPAWN LANDS IS ITS PARENT'S BUSINESS, and nobody else's.
+     *
+     * A child used to land wherever the CALLER said — which, for the CLI, meant
+     * `MUXPAD_WORKSPACE_ID` out of the spawning pane's environment. That is an
+     * ambient guess stamped at the pane's birth, and it goes wrong in the two
+     * ways the user actually hit:
+     *
+     *   · The env value is FROZEN. Move a chat to another workspace and its
+     *     agents keep spawning into the old one — and those children inherit
+     *     the same stale value, so a workspace nobody uses any more
+     *     perpetuates itself with no flag involved.
+     *   · A child in a DIFFERENT workspace from its parent does not nest. The
+     *     sidebar groups by workspace first, so the parent→child relationship
+     *     it was created with is not drawn anywhere the user was looking; the
+     *     child surfaces as an unrelated root in a workspace they had stopped
+     *     opening.
+     *
+     * Parentage is read LIVE from the row, so it cannot go stale, and a child
+     * in a different workspace from its parent stops being expressible. An
+     * explicit `workspace_id` is therefore IGNORED when a parent resolved —
+     * deliberately not a 400: a spawn is delegation, and failing one over a
+     * flag the caller had no reason to think was wrong helps nobody.
+     */
+    const parentWorkspace = spawned_by ? tabs.getWorkspaceId(spawned_by) : undefined;
+    const workspace_id = parentWorkspace ?? body.workspace_id;
+    if (!workspace_id) {
+      // Only reachable for a ROOT tab (no parent, or a parent that has since
+      // been deleted), which genuinely has nowhere to go.
+      // The `{ error: { code, message } }` shape this file uses everywhere —
+      // it is also the one the CLI unwraps to print (`http_request`), so the
+      // sentence reaches whoever ran the command.
+      return c.json(
+        {
+          error: {
+            code: 'workspace_required',
+            message: 'workspace_id required — there is no parent chat to inherit one from',
+          },
+        },
+        400,
+      );
+    }
     // Agent tabs get a deliberate name + mark (auto-renamed to the session's
     // AI title once the conversation has one); everything else keeps the
     // random-name default. Rows, events and the eager ptyd spawn live in
@@ -107,7 +154,7 @@ export function tabsRoutes(deps: {
       body.name?.trim() ||
       (body.bootstrap === 'agent' ? BOOTSTRAP_TAB_NAME : randomWorkspaceName());
     const created = await bootstrapTab(deps, {
-      workspace_id: body.workspace_id,
+      workspace_id,
       name,
       ...(body.layout !== undefined ? { layout: body.layout as string } : {}),
       ...(body.bootstrap ? { bootstrap: body.bootstrap } : {}),
@@ -129,7 +176,11 @@ export function tabsRoutes(deps: {
       // row, bare or not. A bare row's advantage is that it has no headline
       // either, so its first accepted label is by definition a change.)
     });
-    return c.json(created.tab, 201);
+    // `workspace_id` rides the CREATE response (and only this one) because the
+    // caller no longer decides it: a spawn is told where it landed. The CLI
+    // needs it to print a URL, and a launcher that wants to look at its worker
+    // should not have to guess the answer it just delegated.
+    return c.json({ ...created.tab, workspace_id }, 201);
   });
 
   /**
@@ -242,7 +293,7 @@ export function tabsRoutes(deps: {
         deps.events.emit({
           type: 'pane.updated',
           tab_id: fresh.tab_id,
-          pane: decoratePane(deps.cache, fresh),
+          pane: decoratePane(deps.cache, fresh, deps.db),
         });
     }
     // A tab marked unread by hand with no unread PANES emitted nothing at all
@@ -403,7 +454,7 @@ export function tabsRoutes(deps: {
       // the layouts equal and emits nothing.
       deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, repaired) });
     }
-    const decorated = livePanes.map((p) => decoratePane(deps.cache, p));
+    const decorated = livePanes.map((p) => decoratePane(deps.cache, p, deps.db));
     // LIFECYCLE rides even the detail read. This endpoint deliberately does
     // NOT run the full decorateTab (its job is the tab plus its panes, and the
     // runtime rollups are the list's business) — but `done`/`clock` are not
@@ -659,7 +710,7 @@ export function tabsRoutes(deps: {
         deps.events.emit({
           type: 'pane.added',
           tab_id: dest.id,
-          pane: decoratePane(deps.cache, p),
+          pane: decoratePane(deps.cache, p, deps.db),
         });
     }
     deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, finalDest) });

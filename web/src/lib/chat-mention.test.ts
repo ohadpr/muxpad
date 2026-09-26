@@ -14,6 +14,7 @@ import {
   applyMention,
   detectMentionRun,
   hitsFor,
+  liveSpawnedChildren,
   nextMentionRun,
   nextSearchLimit,
   parseDirectMarker,
@@ -25,6 +26,7 @@ import {
   renderReportMarker,
   repinPicks,
   runIsSettled,
+  spawnedChildren,
   toMentionChats,
   withContentRows,
 } from './chat-mention';
@@ -711,5 +713,91 @@ describe('toMentionChats — the corpus', () => {
     expect(sub?.doneReason).toBe('delivered');
     // A child whose parent row carries no reason gets none invented for it.
     expect(toMentionChats(groups)[1]?.doneReason).toBeUndefined();
+  });
+
+  it('keeps the parent ID too — the card in the parent is asked the other way round', () => {
+    expect(toMentionChats(groups).map((c) => c.parentId)).toEqual([undefined, 't1', 't1']);
+  });
+});
+
+/**
+ * WHAT THIS CHAT SPAWNED — the cards at the foot of its log, and the count above
+ * its composer.
+ *
+ * Derived from the corpus rather than stored: a child chat IS the record that a
+ * spawn happened, so a spawn made by the CLI (an agent delegating work) shows up
+ * in the parent conversation on every device, which a device-local echo could
+ * never do.
+ */
+describe('spawnedChildren', () => {
+  const kid = (name: string, over: Partial<MentionChat> = {}) =>
+    chat({ tabName: name, parentId: 'p', ...over });
+
+  it('is empty for a chat that has spawned nothing, and for no chat at all', () => {
+    expect(spawnedChildren(CORPUS, 'p')).toEqual([]);
+    expect(spawnedChildren([kid('a')], undefined)).toEqual([]);
+  });
+
+  it('takes only DIRECT children', () => {
+    const rows = [kid('a'), chat({ tabName: 'grandkid', parentId: 'a' })];
+    expect(spawnedChildren(rows, 'p').map((c) => c.tabName)).toEqual(['a']);
+  });
+
+  it('ignores a row that names itself as its own parent', () => {
+    expect(spawnedChildren([chat({ tabName: 'loop', tabId: 'p', parentId: 'p' })], 'p')).toEqual(
+      [],
+    );
+  });
+
+  it('is OLDEST FIRST, so a new spawn appends at the bottom of the log', () => {
+    const rows = [
+      kid('third', { lastActivityAt: 300 }),
+      kid('first', { lastActivityAt: 100 }),
+      kid('second', { lastActivityAt: 200 }),
+    ];
+    expect(spawnedChildren(rows, 'p').map((c) => c.tabName)).toEqual(['first', 'second', 'third']);
+  });
+
+  it('orders TOTALLY, so two rows cannot swap places between renders', () => {
+    const rows = [
+      chat({ tabName: 'b', tabId: 'b', parentId: 'p' }),
+      chat({ tabName: 'a', tabId: 'a', parentId: 'p' }),
+    ];
+    expect(spawnedChildren(rows, 'p').map((c) => c.tabId)).toEqual(['a', 'b']);
+  });
+
+  it('sheds DELIVERED children at the cap and never a live one', () => {
+    const rows = [
+      ...Array.from({ length: 5 }, (_, i) =>
+        chat({
+          tabName: `done-${i}`,
+          tabId: `d${i}`,
+          parentId: 'p',
+          done: true,
+          lastActivityAt: i,
+        }),
+      ),
+      ...Array.from({ length: 3 }, (_, i) =>
+        chat({ tabName: `live-${i}`, tabId: `l${i}`, parentId: 'p', lastActivityAt: 100 + i }),
+      ),
+    ];
+    const kept = spawnedChildren(rows, 'p', 4).map((c) => c.tabId);
+    // Every live child, plus the most recent result — the oldest results go.
+    expect(kept).toEqual(['d4', 'l0', 'l1', 'l2']);
+  });
+
+  it('keeps every live child even when they alone exceed the cap', () => {
+    const rows = Array.from({ length: 5 }, (_, i) =>
+      chat({ tabName: `live-${i}`, tabId: `l${i}`, parentId: 'p', lastActivityAt: i }),
+    );
+    expect(spawnedChildren(rows, 'p', 2)).toHaveLength(5);
+  });
+
+  it('liveSpawnedChildren is the running ones, uncapped — it is a COUNT', () => {
+    const rows = [
+      kid('working', { tabId: 'w' }),
+      kid('delivered', { tabId: 'd', done: true, doneReason: 'delivered' }),
+    ];
+    expect(liveSpawnedChildren(rows, 'p').map((c) => c.tabId)).toEqual(['w']);
   });
 });

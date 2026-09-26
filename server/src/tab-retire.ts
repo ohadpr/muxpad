@@ -84,7 +84,7 @@ export function clearReadyMarks(deps: RetireDeps, tabId: string): boolean {
       deps.events.emit({
         type: 'pane.updated',
         tab_id: fresh.tab_id,
-        pane: decoratePane(deps.cache, fresh),
+        pane: decoratePane(deps.cache, fresh, deps.db),
       });
   }
   return changed;
