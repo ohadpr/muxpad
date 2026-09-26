@@ -34,8 +34,19 @@ interface TabRow {
   name_sticky: number;
   icon_sticky: number;
   icon_at: number | null;
+  spawned_by: string | null;
+  clock_started_at: number | null;
   created_at: number;
   updated_at: number;
+}
+
+/** The four columns the chat clock is resolved from, for every tab at once.
+ *  See {@link TabStore.clockRows} and server/src/tab-clock.ts. */
+export interface TabClockRow {
+  id: string;
+  spawned_by: string | null;
+  pinned: boolean;
+  clock_started_at: number | null;
 }
 
 export class TabStore {
@@ -46,6 +57,10 @@ export class TabStore {
     layout: LayoutNode;
     workspace_id: string;
     icon?: string;
+    /** The tab this chat was spawned FROM, when something running in another
+     *  chat asked for it. Not validated here — the caller resolves it (see
+     *  routes/tabs.ts), and a dangling id is a tolerated state by design. */
+    spawned_by?: string | null;
   }): Tab {
     const id = ulid();
     const slug = this.uniqueSlug();
@@ -76,9 +91,10 @@ export class TabStore {
     // column's 'split' default) — this changes the default going forward
     // only.
     const view_mode = 'tabbed' as const;
+    const spawned_by = input.spawned_by ?? null;
     this.db
       .prepare(
-        'INSERT INTO tabs (id, slug, name, icon, layout, workspace_id, view_mode, created_at, updated_at, position, last_activity_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO tabs (id, slug, name, icon, layout, workspace_id, view_mode, created_at, updated_at, position, last_activity_at, spawned_by, clock_started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         id,
@@ -91,6 +107,13 @@ export class TabStore {
         now,
         now,
         maxPos + 1,
+        now,
+        spawned_by,
+        // Every chat is born with a full clock, INCLUDING a child — whose own
+        // column is then ignored for as long as its parent exists (the
+        // resolver reads the root's). Stamping it anyway costs nothing and
+        // means a child orphaned by its parent's deletion falls back to a real
+        // timestamp instead of a null nobody can interpret.
         now,
       );
     return {
@@ -108,6 +131,10 @@ export class TabStore {
       // recent thing the user did, and sorting it last (null = never) would
       // bury a just-created tab at the bottom of its workspace. Stamp it.
       last_activity_at: now,
+      // Same rule as `icon`/`headline`: absent, not null, when there is no
+      // parent — so the overwhelmingly common case adds nothing to the payload
+      // or to the client's change-dedup signature.
+      ...(spawned_by ? { spawned_by } : {}),
       created_at: now,
       updated_at: now,
     };
@@ -296,6 +323,50 @@ export class TabStore {
   }
 
   /**
+   * Restart this tab's decay clock. The raw write — WHICH tab to restart (a
+   * child shares its parent's clock, so the reset lands on the root) is
+   * resolved by the caller in tab-clock.ts.
+   *
+   * Deliberately not touching `updated_at`, for the same reason
+   * `touchActivity` doesn't: that column tracks structural edits and clients
+   * key cache invalidation off it.
+   */
+  resetClock(id: string, at: number = Date.now()): void {
+    this.db.prepare('UPDATE tabs SET clock_started_at = ? WHERE id = ?').run(at, id);
+  }
+
+  /**
+   * Every tab's clock inputs, in ONE query.
+   *
+   * A chat's clock is its ROOT ancestor's, so resolving a single row can mean
+   * walking several — and `decorateTab` runs per row on a 5s sidebar poll, so
+   * a per-row walk of per-row queries would be the hottest thing in the app.
+   * The table is tens of rows on a real install, which makes reading all of it
+   * once cheaper than the index lookups a smarter query would do.
+   *
+   * GLOBAL rather than per-workspace on purpose: a chat spawned from a chat in
+   * another workspace (a worker dropped into a project workspace, say) still
+   * reads its parent's clock, and a workspace-scoped index would silently read
+   * that parent as missing and hand the child a root clock of its own.
+   */
+  clockRows(): TabClockRow[] {
+    const rows = this.db
+      .prepare('SELECT id, spawned_by, pinned, clock_started_at FROM tabs')
+      .all() as Array<{
+      id: string;
+      spawned_by: string | null;
+      pinned: number;
+      clock_started_at: number | null;
+    }>;
+    return rows.map((r) => ({
+      id: r.id,
+      spawned_by: r.spawned_by,
+      pinned: !!r.pinned,
+      clock_started_at: r.clock_started_at,
+    }));
+  }
+
+  /**
    * Write the nav row's second line, stamping the rate limiter's clock in the
    * same statement so the two can never disagree.
    *
@@ -450,6 +521,13 @@ export class TabStore {
       // client's change-dedup signature.
       ...(x.headline ? { headline: x.headline } : {}),
       ...(x.name_sticky ? { name_sticky: true } : {}),
+      // Absent, not null, when this chat has no parent — the common case, and
+      // one that should not widen every payload. `clock_started_at` is
+      // deliberately NOT surfaced next to it: what a client renders is the
+      // EFFECTIVE clock (a child's is its parent's), which decorateTab
+      // publishes as `clock`. Shipping the raw column too would put two
+      // timestamps on one row that disagree for every child chat.
+      ...(x.spawned_by ? { spawned_by: x.spawned_by } : {}),
       // `icon_sticky` is deliberately NOT surfaced. Nothing on the client
       // branches on it — the picker sets it as a side effect of PATCHing an
       // icon, and the rail renders whatever glyph it is handed — so adding it

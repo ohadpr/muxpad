@@ -44,6 +44,10 @@ export interface BootstrapTabInput {
   backend?: 'claude' | 'codex' | 'cursor' | 'pick' | undefined;
   mode?: AgentMode | undefined;
   icon?: string | undefined;
+  /** The chat this one is being spawned FROM. Shares that chat's decay clock
+   *  and nests under it in the sidebar. Resolved (and dropped if the parent is
+   *  gone) by the caller — see routes/tabs.ts. */
+  spawned_by?: string | undefined;
 }
 
 /**
@@ -101,6 +105,7 @@ export async function bootstrapTab(
       layout: input.layout ?? '',
       workspace_id: input.workspace_id,
       ...(input.icon ? { icon: input.icon } : {}),
+      ...(input.spawned_by ? { spawned_by: input.spawned_by } : {}),
     });
     if (!input.bootstrap) return { tab, pane: null as PaneSpec | null };
     const pane = panes.create({

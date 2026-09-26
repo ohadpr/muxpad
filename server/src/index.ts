@@ -35,6 +35,7 @@ import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { openDb } from './store/db.js';
 import { TabActivity } from './tab-activity.js';
+import { ChatClockSweeper } from './tab-clock.js';
 import { clearOrphanedTunnelBase, ensureTunnelApp } from './tunnel/TunnelApp.js';
 import { VoiceSessionManager, glossaryInstructions } from './voice/VoiceSessionManager.js';
 import { openAiVoiceTransport } from './voice/live.js';
@@ -129,6 +130,18 @@ const tabActivity = new TabActivity(db, {
 // inside TabActivity so the wiring is covered by its own tests; this file is a
 // script and nothing can import it.
 tabActivity.attach(ptyd);
+
+// The chat CLOCK's one un-triggered transition: a chat crossing into `done`
+// because four days passed with no message. Nothing else on the server will
+// ever notice it — there is no request, no keystroke, no turn — so without
+// this tick the sidebar would not move until the client's next poll, which is
+// stopped entirely for a hidden document or a collapsed workspace. Rising edge
+// only, and silent on the first pass (see ChatClockSweeper).
+const clockSweeper = new ChatClockSweeper(db, (tabId) => {
+  const t = tabStore.getById(tabId);
+  if (t) events.emit({ type: 'tab.updated', tab: decorateTab(cache, db, t) });
+});
+clockSweeper.start();
 
 // An EXPLICIT app-url declaration (`muxpad app-url` / `muxpad serve` — the
 // OSC marker, not the output-scan heuristic) is the "this pane is a web app"

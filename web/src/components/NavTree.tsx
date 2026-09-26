@@ -1,5 +1,6 @@
 import {
   type PaneSpec,
+  type PaneStatus,
   type Tab,
   type Workspace,
   collectLayoutLeaves,
@@ -33,6 +34,7 @@ import {
   useWorkspaces,
   visibleWorkspaces,
 } from '../workspaces';
+import { ChatChip, chatTooltip, isChatDone } from './ChatChip';
 import { NavSearch } from './NavSearch';
 import { NewTabButton } from './NewTabButton';
 import { StateChip } from './StateChip';

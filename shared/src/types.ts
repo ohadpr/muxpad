@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ChatClockSchema } from './chat-clock.js';
 
 export type LayoutNode =
   | string
@@ -440,6 +441,31 @@ export const TabSchema = z.object({
   // manual name matched neither the bootstrap sentinel nor the last
   // auto-title.
   name_sticky: z.boolean().optional(),
+  // The tab this chat was SPAWNED FROM — an agent working in that chat asked
+  // for this one to exist. Null/absent for a chat a human made, which is most
+  // of them. Deliberately NOT a foreign key in the DB: deleting a parent must
+  // not cascade its children away (nothing in this model is ever deleted by a
+  // clock), so a dangling id is an expected state and the resolver treats a
+  // child whose parent is gone as a root in its own right.
+  spawned_by: z.string().nullable().optional(),
+  // ── LIFECYCLE, COMPUTED SERVER-SIDE ────────────────────────────────────────
+  // The chat's clock has run out: it leaves the live list and collapses into
+  // the `done` group. Nothing is deleted and a message revives it.
+  //
+  // ALWAYS SENT by any server that has this field, even when false, and that
+  // is load-bearing: clients coalesce `tab.updated` onto their cached row, so
+  // a field omitted when false would leave a stale `done: true` sitting there
+  // forever after a revival. Same reason `attention`/`unread`/`busy` are
+  // unconditional. `.optional()` here is wire-compat with a server that
+  // predates the column, where absent correctly reads as "not done".
+  done: z.boolean().optional(),
+  // How far through that clock the chat is — the one input the sidebar chip
+  // renders (white → filling → dashed on the last day). Derived by the server
+  // from the EFFECTIVE clock: a child chat reads its parent's, so work spawned
+  // under a chat cannot outlive it. Unconditional for the same coalescing
+  // reason as `done`; `stopped` (not absence) is how a pinned chat says its
+  // clock does not run.
+  clock: ChatClockSchema.optional(),
 });
 export type Tab = z.infer<typeof TabSchema>;
 

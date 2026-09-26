@@ -22,6 +22,7 @@ import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { pruneDeadPanes } from '../store/migrations.js';
 import { type TabActivity, compareUnpinnedTabs } from '../tab-activity.js';
+import { type ClockIndex, clockIndex } from '../tab-clock.js';
 
 /**
  * CRUD for tabs (the things in the tab bar). Each tab belongs to a
@@ -75,8 +76,28 @@ export function tabsRoutes(deps: {
         // bake into the shell string; accepts the pre-rename 'do'/'deep' so a
         // version-skewed `muxpad agent new --mode=do` still lands.
         mode: AgentModeInputSchema.optional(),
+        // HIERARCHY. The chat this one is being spawned FROM — it shares that
+        // chat's decay clock, and the sidebar nests it underneath.
+        //
+        // Two spellings because callers know two different things. The web app
+        // knows the tab it is in; anything running INSIDE a pane (the CLI,
+        // wearing $MUXPAD_PANE_ID) knows only its pane, and making every such
+        // caller do its own pane→tab lookup is how one of them ends up not
+        // doing it.
+        spawned_by: z.string().optional(),
+        spawned_by_pane: z.string().optional(),
       })
       .parse(await c.req.json().catch(() => ({})));
+    // Resolve the parent, and DROP it if it doesn't exist rather than
+    // rejecting: a worker being spawned must not fail to exist because the
+    // chat that asked for it has since been deleted. An unresolvable parent
+    // leaves the new chat a root with a clock of its own, which is exactly
+    // what it now is.
+    const spawnedByPaneTab = body.spawned_by_pane
+      ? panes.getById(body.spawned_by_pane)?.tab_id
+      : undefined;
+    const parentId = body.spawned_by ?? spawnedByPaneTab;
+    const spawned_by = parentId && tabs.getById(parentId) ? parentId : null;
     // Agent tabs get a deliberate name + mark (auto-renamed to the session's
     // AI title once the conversation has one); everything else keeps the
     // random-name default. Rows, events and the eager ptyd spawn live in
@@ -93,6 +114,7 @@ export function tabsRoutes(deps: {
       ...(body.model !== undefined ? { model: body.model } : {}),
       ...(body.backend !== undefined ? { backend: body.backend } : {}),
       ...(body.mode !== undefined ? { mode: body.mode } : {}),
+      ...(spawned_by ? { spawned_by } : {}),
       // Deliberately NO icon. Agent tabs used to be created wearing `✳`, which
       // was the worst of both worlds: every one of them drew the same glyph,
       // so the rail was already the uniform column a per-tab icon exists to
@@ -124,7 +146,7 @@ export function tabsRoutes(deps: {
    * per-workspace list and the cross-workspace `?all=1` read so the search
    * results and the tree can never disagree about which tab comes first.
    */
-  function orderedForWorkspace(workspaceId: string): Tab[] {
+  function orderedForWorkspace(workspaceId: string, sharedClocks?: ClockIndex): Tab[] {
     const raw = tabs.listByWorkspace(workspaceId);
     // Fold in the two independent per-tab signals:
     //   attention (red dot, "wants you NOW") = any pane rang BEL since you
@@ -141,7 +163,15 @@ export function tabsRoutes(deps: {
     // One cron query per workspace (see cronsByTab) — the sidebar polls this
     // route every 5s, so a per-row lookup would be the hottest query in the app.
     const cronIds = cronsByTab(deps.db, workspaceId);
-    const decorated = raw.map((t) => decorateTab(deps.cache, deps.db, t, manualUnreadIds, cronIds));
+    // And one clock read for the whole list, for the same reason — plus one of
+    // its own: a child chat's clock is its PARENT's, so resolving a row needs
+    // rows the workspace-scoped read above may not contain.
+    // (`/all` builds it once and passes it down — the index is global, so
+    //  rebuilding it per workspace there would be the same scan N times.)
+    const clocks = sharedClocks ?? clockIndex(deps.db);
+    const decorated = raw.map((t) =>
+      decorateTab(deps.cache, deps.db, t, manualUnreadIds, cronIds, clocks),
+    );
     const positions = new Map(raw.map((t, i) => [t.id, i]));
     const pinned = decorated.filter((t) => t.pinned);
     const rest = decorated
@@ -166,11 +196,12 @@ export function tabsRoutes(deps: {
    * navigates to), and `Tab` carries neither.
    */
   app.get('/all', (c) => {
+    const clocks = clockIndex(deps.db);
     const list = workspaces.list().map((w) => ({
       id: w.id,
       slug: w.slug,
       name: w.name,
-      tabs: orderedForWorkspace(w.id),
+      tabs: orderedForWorkspace(w.id, clocks),
     }));
     return c.json({ workspaces: list });
   });
