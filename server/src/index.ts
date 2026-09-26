@@ -145,13 +145,19 @@ tabActivity.attach(ptyd);
 // because the bridge is constructed further down; it is only ever CALLED from
 // a turn event, which cannot arrive before the bridge exists.
 const retireDeps = { db, cache, events, blocked: (paneId: string) => agentBridge.blocked(paneId) };
-const clockSweeper = new ChatClockSweeper(db, (tabId) => {
+const clockSweeper = new ChatClockSweeper(db, (tabId, { announce }) => {
   // A chat that has decayed is not "finished, waiting for you" — it is four
   // days past anyone caring. Clearing the marks as it crosses is the third
   // door into the `ready` expiry (delivery and archive are the other two), and
   // the one that catches the 41 agents in the screenshot: nobody will ever
   // open those tabs, so nothing else would ever turn them off.
+  //
+  // Runs on the priming pass too — a chat that decayed while the server was
+  // down crossed just as truly as one that crossed a minute ago — but the
+  // EVENT does not, because those rows were already done in every client's
+  // first fetch.
   clearReadyMarks(retireDeps, tabId);
+  if (!announce) return;
   const t = tabStore.getById(tabId);
   if (t) events.emit({ type: 'tab.updated', tab: decorateTab(cache, db, t) });
 });

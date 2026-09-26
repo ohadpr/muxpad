@@ -208,8 +208,19 @@ export class ChatClockSweeper {
 
   constructor(
     private readonly db: Database.Database,
-    /** Called once per tab that JUST became done. */
-    private readonly onDone: (tabId: string) => void,
+    /**
+     * Called once per tab that JUST became done.
+     *
+     * `announce` is false on the PRIMING pass, and the distinction is the
+     * reason this is one callback and not two. A chat that decayed while the
+     * server was down has still crossed — its `ready` mark is just as stale as
+     * any other done chat's, and nothing else will ever clear it, since nobody
+     * is going to open a tab that finished last week. So the handler still
+     * runs. What it must NOT do is EMIT: those rows were already done in the
+     * payload of every client's first fetch, and a boot burst of events
+     * proportional to the accumulated backlog tells nobody anything.
+     */
+    private readonly onDone: (tabId: string, opts: { announce: boolean }) => void,
   ) {}
 
   /** One pass. Exposed (and clock-injectable) so a test can drive the
@@ -218,16 +229,20 @@ export class ChatClockSweeper {
     const done = doneTabIds(clockIndex(this.db), now);
     const previous = this.known;
     this.known = done;
-    if (previous === null) return []; // priming pass — see the class comment
-    const crossed = [...done].filter((id) => !previous.has(id));
+    const priming = previous === null;
+    const crossed = priming
+      ? [...done]
+      : [...done].filter((id) => !(previous as Set<string>).has(id));
     for (const id of crossed) {
       try {
-        this.onDone(id);
+        this.onDone(id, { announce: !priming });
       } catch {
-        // Announcement only — one bad emit must not stop the rest of the sweep.
+        // Reconciliation only — one bad handler must not stop the sweep.
       }
     }
-    return crossed;
+    // The priming pass reports nothing CROSSED, because nothing did from any
+    // client's point of view — see the constructor comment.
+    return priming ? [] : crossed;
   }
 
   /**
