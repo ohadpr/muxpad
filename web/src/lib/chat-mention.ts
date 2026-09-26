@@ -802,3 +802,93 @@ export function withContentRows(
   }
   return rows;
 }
+
+// ── The content tier's REQUEST ───────────────────────────────────────────────
+//
+// `withContentRows` above is what SURVIVES the archive's answer, and on a real
+// archive most of it does not: the endpoint ranks messages across every session
+// ever recorded on this machine, and this client then discards every hit whose
+// pane is not a chat that still exists, every repeat from one chat, and the chat
+// being typed in. Measured on the user's own archive: for `trayo`, 47 of the
+// first 50 hits were unresolvable and one chat made the list, out of eight that
+// have the word in them. A chat whose matching message ranks 51st was
+// unreachable by that query while the picker sat with seven empty slots.
+//
+// The endpoint takes a limit and nothing else — no offset, and no way to say
+// "only these panes" — so the client cannot page properly and cannot push the
+// filter down. What it CAN do is ask for a bigger page when, and only when, the
+// answer it got did not fill the list. That is the policy below, and it is
+// deliberately a pure function so the paging can be tested without mounting a
+// composer.
+
+/** The first page. Small enough that the common query costs one cheap MATCH. */
+export const MENTION_SEARCH_PAGE = 50;
+/**
+ * The last page, and it is the SERVER'S CAP (routes/search.ts clamps to 200) —
+ * not a number chosen here. So this is the end of the line: a chat whose only
+ * matching message ranks 201st cannot be reached through the content tier at
+ * all, and no amount of client paging changes that. Closing that properly means
+ * the endpoint filtering to a set of panes, or paging, and the endpoint is
+ * another territory's. Recorded rather than hidden.
+ */
+export const MENTION_SEARCH_MAX = 200;
+/** Below this the query is too broad to be worth an FTS5 MATCH. */
+const MENTION_SEARCH_MIN_CHARS = 3;
+/** The server rejects a longer `q` outright — its MATCH is synchronous. */
+const MENTION_SEARCH_MAX_CHARS = 256;
+
+/** Hits, and the query they are the answer to. */
+export interface MentionSearchState {
+  /** `''` when nothing has been searched yet. */
+  query: string;
+  /** The limit they were asked for — how we know whether there may be more. */
+  limit: number;
+  hits: readonly ArchiveSearchHit[];
+}
+
+export const NO_MENTION_SEARCH: MentionSearchState = { query: '', limit: 0, hits: [] };
+
+/**
+ * The hits that answer THIS query — and nothing else, ever.
+ *
+ * The ticket scheme in the composer stops a LATE response overwriting a newer
+ * one. It does not, and cannot, stop the hits already in state from being shown
+ * under a query they have nothing to do with: search `@cash`, take a content
+ * result, replace the query with `@zebra`, and for the debounce plus a round
+ * trip the picker said "matching zebra" over the cash row — selectable, and the
+ * first thing Enter would take. Binding the hits to their query makes that
+ * unrepresentable rather than something to remember to clear.
+ */
+export function hitsFor(state: MentionSearchState, query: string): readonly ArchiveSearchHit[] {
+  const q = query.trim();
+  return q !== '' && state.query === q ? state.hits : [];
+}
+
+/**
+ * The limit to fetch for `query` next, or null for "ask the archive nothing".
+ *
+ * Three answers in one place: don't search, search the first page, or go back
+ * for the big page because what came back did not fill the list.
+ */
+export function nextSearchLimit(opts: {
+  query: string;
+  state: MentionSearchState;
+  /** Rows the picker can already show, AFTER resolution and dedup. */
+  rows: number;
+  /** Rows it has room for. */
+  want: number;
+  /** False once /api/search has 404ed — an older server with no archive. */
+  archiveAvailable: boolean;
+}): number | null {
+  const q = opts.query.trim();
+  if (!opts.archiveAvailable) return null;
+  if (q.length < MENTION_SEARCH_MIN_CHARS || q.length > MENTION_SEARCH_MAX_CHARS) return null;
+  if (opts.state.query !== q) return MENTION_SEARCH_PAGE;
+  // The page came back FULL, so the archive may be holding more of it, and the
+  // picker still has room. A short page means the archive is exhausted: asking
+  // for more of nothing is a round trip that cannot change the answer.
+  const mayHaveMore =
+    opts.state.hits.length >= opts.state.limit && opts.state.limit < MENTION_SEARCH_MAX;
+  if (mayHaveMore && opts.rows < opts.want) return MENTION_SEARCH_MAX;
+  return null;
+}
