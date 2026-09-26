@@ -149,6 +149,10 @@
    Same material as a sidebar row in a different container (that is what
    the `card` density means), sized like an assistant message rather than
    full width so it reads as one item in the log and not as a banner. */
+/* The container is INERT — see ChatMentionCard. It was a <button>, and a report
+   body containing a mention put a button inside it. The properties that were
+   here only to undo a button's own styling (color, font-family) are kept: the
+   head is a button now, and inherits through them. */
 .chat-mention-card {
   display: flex;
   flex-direction: column;
@@ -162,9 +166,11 @@
   border-radius: 12px;
   color: inherit;
   font-family: inherit;
-  cursor: pointer;
 }
-.chat-mention-card:hover {
+/* Hover is driven by the LINK rather than the box: on a report the box also
+   contains the answer and its own mentions, and a border that lit up while the
+   pointer was over a paragraph promised a click that paragraph does not make. */
+.chat-mention-card:has(.chat-mention-card-head:hover) {
   border-color: var(--chat-accent);
 }
 /* A direction and its report arrive as USER messages (they are real delivered
@@ -180,11 +186,24 @@
   width: min(560px, 96%);
 }
 
+/* The card's one link. A button, so it is reachable by keyboard and announced as
+   the control it is — stripped back to the head's own layout, because the box
+   around it already paints the card. */
 .chat-mention-card-head {
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
+  width: 100%;
+  padding: 0;
+  text-align: left;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+}
+button.chat-mention-card-head {
+  cursor: pointer;
 }
 
 /* The answer from the other chat, in full: it is a message, and a message that

@@ -45,7 +45,7 @@ import {
   backendLabel,
   conversionFailure,
 } from '../lib/agent-backend';
-import { cachedAllTabs, loadAllTabs } from '../lib/all-tabs';
+import { cachedAllTabs, loadAllTabs, subscribeAllTabs } from '../lib/all-tabs';
 import {
   type MessagePart,
   composeOutgoingMessage,
@@ -91,7 +91,7 @@ import {
   toggleActionRun,
 } from '../lib/chat-voice';
 import { showFolderChip } from '../lib/nav-row-affordances';
-import { paneIndex } from '../lib/nav-search';
+import { type WorkspaceTabs, paneIndex } from '../lib/nav-search';
 import {
   type HighlightRun,
   highlightRuns,
@@ -1803,9 +1803,21 @@ export function ChatPane({
   // lib/chat-mention for the grammar; this is only the surface.
   const navigate = useNavigate();
   const mentionListId = useId();
-  // Seeded from whatever `/api/tabs/all` has already answered this session, so
-  // the first `@` has something to show before its own fetch lands.
-  const [corpus, setCorpus] = useState<MentionChat[]>(() => toMentionChats(cachedAllTabs() ?? []));
+  /**
+   * Every chat, as the picker, the inline chips and the cards all need them.
+   *
+   * Seeded from whatever `/api/tabs/all` has already answered this session, so
+   * the first `@` has something to show before its own fetch lands — and then
+   * SUBSCRIBED, which is the part that was missing. A pane used to take one
+   * snapshot and hold it for as long as it was mounted, so a referenced chat
+   * that was renamed, archived, retired or revived went on being drawn in its
+   * old state, in a conversation sitting right beside the sidebar row that had
+   * already updated. The store follows the server's own tab pushes (lib/all-tabs)
+   * so there is one answer to "which chats are there" and it is current.
+   */
+  const [corpusGroups, setCorpusGroups] = useState<WorkspaceTabs[]>(() => cachedAllTabs() ?? []);
+  useEffect(() => subscribeAllTabs(setCorpusGroups), []);
+  const corpus = useMemo(() => toMentionChats(corpusGroups), [corpusGroups]);
   const [mentionRun, setMentionRun] = useState<MentionRun | null>(null);
   const [mentionCursor, setMentionCursor] = useState(0);
   // Escape dismisses the picker for THIS run without clearing the draft. Keyed
@@ -1828,22 +1840,49 @@ export function ChatPane({
   const ensureCorpus = useCallback(() => {
     void loadAllTabs().then((groups) => {
       // An empty answer is a real answer (no workspaces) but must not replace a
-      // usable fallback that came from a failed request — see loadAllTabs.
-      if (groups.length > 0 || cachedAllTabs()) setCorpus(toMentionChats(groups));
+      // usable fallback that came from a failed request — see loadAllTabs. A
+      // successful load publishes to every subscriber, so there is nothing to
+      // set here; this only covers the fresh-cache case, where loadAllTabs
+      // answers from the cache without notifying anyone.
+      if (groups.length > 0 || cachedAllTabs()) setCorpusGroups(groups);
     });
   }, []);
 
-  // A restored draft can already contain `@Name …` — and if the corpus never
-  // loads, that text resolves to nothing and a direction would be sent to this
-  // chat as prose instead. One fetch on mount, only when there is a `@` to
-  // resolve, closes that without putting a request in front of the first paint.
-  const draftHasAt = input.includes('@');
+  /**
+   * WHEN THIS PANE NEEDS THE CORPUS, which is not only when composing.
+   *
+   * It used to be loaded on exactly two triggers: a draft containing `@`, and
+   * opening the picker. Neither fires on the case that matters most — reload
+   * straight into a conversation that already HAS a report in it, with an empty
+   * composer. The corpus was then empty, so the report card rendered a fallback
+   * name and a button whose click did nothing at all, inline references stayed
+   * plain text, and no poll or tab push ever fixed it. The one route back to a
+   * worker that has retired out of the sidebar was a dead button, and the
+   * remedy — type `@` in the composer and delete it — is not discoverable.
+   *
+   * So the TRANSCRIPT asks for it too, and so do the directed cards, which now
+   * resolve against it rather than only against their own frozen snapshot. The
+   * `.some` short-circuits, and the latch means a long transcript is scanned
+   * until the first hit and then never again.
+   */
+  const [transcriptNeedsCorpus, setTranscriptNeedsCorpus] = useState(false);
   useEffect(() => {
-    if (draftHasAt) ensureCorpus();
-  }, [draftHasAt, ensureCorpus]);
+    if (transcriptNeedsCorpus) return;
+    // A mention chip, a report coming back, or a request that arrived here from
+    // another chat — the three things in a message that resolve through a chat.
+    const wants = events.some(
+      (ev) =>
+        typeof (ev as { text?: unknown }).text === 'string' &&
+        /@|<muxpad-report|<muxpad-direct/.test((ev as { text: string }).text),
+    );
+    if (wants) setTranscriptNeedsCorpus(true);
+  }, [events, transcriptNeedsCorpus]);
+  const draftHasAt = input.includes('@');
 
   /** Which chat this pane belongs to — excluded from its own picker. */
   const myChat = useMemo(() => paneIndex(corpus).get(paneId), [corpus, paneId]);
+  /** By tab id — how a stored card finds the chat it was sent to, now. */
+  const corpusById = useMemo(() => new Map(corpus.map((c) => [c.tabId, c])), [corpus]);
 
   /** The query under the caret, trimmed — what everything below keys off. */
   const mentionQuery = mentionRun?.query.trim() ?? '';
@@ -2020,6 +2059,14 @@ export function ChatPane({
   useEffect(() => {
     setDirected(loadDirected(paneId));
   }, [paneId]);
+
+  // Everything this pane resolves through a chat, in one condition. Declared
+  // here rather than up with the corpus because a card is one of the three
+  // reasons — see the note on `transcriptNeedsCorpus`.
+  const needsCorpus = draftHasAt || transcriptNeedsCorpus || directed.length > 0;
+  useEffect(() => {
+    if (needsCorpus) ensureCorpus();
+  }, [needsCorpus, ensureCorpus]);
 
   // Which requests have been answered is READ OFF THE TRANSCRIPT, not observed
   // as an event: a report can land while this pane is closed (or on another
@@ -4601,16 +4648,29 @@ export function ChatPane({
               a request in flight somewhere else. The spinner is the same 10px
               mark as everywhere else, and it stops when the report lands (which
               is read off the transcript, not watched for). */}
-            {directed.map((d) => (
-              <ChatMentionCard
-                key={d.id}
-                chat={d.chip}
-                sub={d.body}
-                working={!d.reportedAt}
-                state={d.reportedAt ? 'reported' : undefined}
-                onOpen={() => openChat(d)}
-              />
-            ))}
+            {directed.map((d) => {
+              // LIVE FIRST, snapshot second. `d.chip` is frozen at send time so
+              // the card can draw on the first paint after a reload, before
+              // `/api/tabs/all` has answered — that is still why it is stored.
+              // But it was also the ONLY thing ever rendered, and the comment
+              // claiming "the corpus refreshes it when it arrives" had no
+              // implementing code: directing work to a done chat left a
+              // done-looking card for as long as the card lived, even though the
+              // message had just revived its recipient, and a rename or a
+              // retirement never reached it either. The tab id is the durable
+              // handle; the snapshot is the fallback while there is no corpus.
+              const live = corpusById.get(d.tabId);
+              return (
+                <ChatMentionCard
+                  key={d.id}
+                  chat={live?.chip ?? d.chip}
+                  sub={d.body}
+                  working={!d.reportedAt}
+                  state={d.reportedAt ? 'reported' : undefined}
+                  onOpen={() => openChat(live ?? d)}
+                />
+              );
+            })}
             {/* Server-owned pending queue rides at the BOTTOM of the chat —
               pending user bubbles under the latest message + working indicator,
               scrolling with the log. Dashed + muted = "waiting its turn"; edit
@@ -5023,9 +5083,12 @@ function MentionMessage({
       chat={chip}
       state={report ? 'reported' : 'directed here'}
       body={<MentionedText text={body} hl={hl} />}
-      onOpen={() => {
-        if (other) open(other);
-      }}
+      // No `onOpen` at all when the chat did not resolve, instead of one that
+      // silently does nothing: the card is then a name and an answer, which is
+      // honest. The corpus is now loaded whenever the transcript holds a card
+      // (see needsCorpus), so the common unresolved case — a reload into a
+      // conversation with an empty composer — no longer happens at all.
+      {...(other ? { onOpen: () => open(other) } : {})}
     />
   );
 }
