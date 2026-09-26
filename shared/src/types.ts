@@ -449,8 +449,10 @@ export const TabSchema = z.object({
   // child whose parent is gone as a root in its own right.
   spawned_by: z.string().nullable().optional(),
   // ── LIFECYCLE, COMPUTED SERVER-SIDE ────────────────────────────────────────
-  // The chat's clock has run out: it leaves the live list and collapses into
-  // the `done` group. Nothing is deleted and a message revives it.
+  // This chat has left the live list and collapsed into the `done` group,
+  // either because its clock ran out, because it was a sub-chat that finished
+  // its work, or because the user archived it. Nothing is deleted and a
+  // message revives it.
   //
   // ALWAYS SENT by any server that has this field, even when false, and that
   // is load-bearing: clients coalesce `tab.updated` onto their cached row, so
@@ -459,13 +461,24 @@ export const TabSchema = z.object({
   // unconditional. `.optional()` here is wire-compat with a server that
   // predates the column, where absent correctly reads as "not done".
   done: z.boolean().optional(),
-  // How far through that clock the chat is — the one input the sidebar chip
-  // renders (white → filling → dashed on the last day). Derived by the server
-  // from the EFFECTIVE clock: a child chat reads its parent's, so work spawned
-  // under a chat cannot outlive it. Unconditional for the same coalescing
-  // reason as `done`; `stopped` (not absence) is how a pinned chat says its
-  // clock does not run.
-  clock: ChatClockSchema.optional(),
+  // WHY it is done — the three are visually distinct in the done group and in
+  // a tooltip, and only the server can tell them apart. Absent while live.
+  //   'decayed'   — four days with no message
+  //   'delivered' — a sub-chat finished its work; its result went to the
+  //                 parent as a card
+  //   'archived'  — the user did it by hand (the row's ×)
+  done_reason: z.enum(['decayed', 'delivered', 'archived']).optional(),
+  // How far through its clock the chat is — the one input the sidebar chip
+  // renders (white → filling → dashed on the last day).
+  //
+  // NULL means THERE IS NO CLOCK, which is a different and truer statement
+  // than "the clock is at 0%": a sub-chat does not decay, it retires when it
+  // delivers, so nothing about elapsed time describes it. Render those as a
+  // plain mark, not an empty tile.
+  //
+  // Unconditional (null rather than absent) for the same coalescing reason as
+  // `done`; `stopped` is how a pinned chat says its clock does not run.
+  clock: ChatClockSchema.nullable().optional(),
 });
 export type Tab = z.infer<typeof TabSchema>;
 

@@ -181,10 +181,14 @@ export class TabActivity {
    *     you still want, and the whole point of the clock is that it measures
    *     your attention rather than the machine's.
    *
-   * The write lands on the tree's ROOT (a child shares its parent's clock) and
-   * every member of that tree gets an event, because every member publishes
-   * the clock that just moved. Revival rides the same path with nothing extra:
-   * a done chat you message is a done chat whose clock is now full.
+   * It touches THIS CHAT ONLY. An earlier draft wrote through to the spawn
+   * tree's root, because a sub-chat shared its parent's clock; it doesn't any
+   * more (it has no clock at all), so answering a worker must not silently
+   * hand its parent four more days.
+   *
+   * REVIVAL rides the same path with nothing extra, and covers both ways out:
+   * a chat you message is un-retired — archived or delivered — and restarted
+   * on a full clock. That is why the × can safely mean archive.
    *
    * The dedup is deliberate. `writeTab` may already have emitted for this tab,
    * and every `tab.updated` costs each connected client a full

@@ -777,6 +777,10 @@ export function decorateTab(
   // coalesce `tab.updated` onto their cached row, so a field omitted when
   // false would leave a stale `done: true` after a revival.
   const lifecycle = resolveTabClock(clocks ?? clockIndex(db), tab.id, Date.now());
+  // `done_reason` is the one lifecycle field that IS conditional, and it can
+  // be: it only ever appears alongside `done: true`, which is unconditional —
+  // so a client coalescing a live row over a done one clears `done` in the
+  // same merge, and a stale reason has nothing left to attach to.
   // Deprecated alias, exact by construction (see PaneStatusSchema).
   return {
     ...tab,
@@ -787,6 +791,7 @@ export function decorateTab(
     agents,
     ...(cron ? { crons: cron.count, next_cron: cron.next } : {}),
     done: lifecycle.done,
+    ...(lifecycle.done_reason ? { done_reason: lifecycle.done_reason } : {}),
     clock: lifecycle.clock,
   };
 }

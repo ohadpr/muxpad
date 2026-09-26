@@ -760,7 +760,10 @@ describe('noteUserMessage — recency AND the decay clock', () => {
     expect(notified).toEqual([f.tab.id]);
   });
 
-  it('resets the parent’s clock and announces the whole family', () => {
+  it('touches ONLY the chat you messaged, never its parent', () => {
+    // An earlier draft reset the whole spawn tree, because a sub-chat shared
+    // its parent's clock. It doesn't any more — it has no clock at all — so
+    // messaging a worker must not silently hand its parent four more days.
     const f = fixture();
     const child = f.tabs.create({
       name: 'child',
@@ -773,12 +776,22 @@ describe('noteUserMessage — recency AND the decay clock', () => {
     const notified: string[] = [];
     const a = new TabActivity(f.db, { onWrite: (id) => notified.push(id) });
     a.noteUserMessage(child.id, 7_000_000);
-    // The write lands on the ROOT — one clock per spawn tree.
-    expect(clockOf(f.db, f.tab.id)).toBe(7_000_000);
-    // …and every row that publishes that clock hears about it.
-    expect(new Set(notified)).toEqual(new Set([f.tab.id, child.id]));
-    // Recency, though, belongs to the chat you actually messaged.
+    expect(clockOf(f.db, f.tab.id)).toBe(1_000); // the parent is untouched
+    expect(notified).toEqual([child.id]);
     expect(f.read(child.id)).toBe(7_000_000);
+  });
+
+  it('revives a chat that had already left the live list', () => {
+    // The revival contract, at the door every message comes through: archived
+    // or delivered, a message brings it back — and back onto a FULL clock, or
+    // it would be done again on the very next read.
+    const f = fixture();
+    f.tabs.resetClock(f.tab.id, 1_000);
+    f.tabs.retire(f.tab.id, 'archived', 2_000);
+    const a = new TabActivity(f.db);
+    a.noteUserMessage(f.tab.id, 8_000_000);
+    expect(f.tabs.clockRows().find((r) => r.id === f.tab.id)?.retired_at).toBeNull();
+    expect(clockOf(f.db, f.tab.id)).toBe(8_000_000);
   });
 
   it('is a silent no-op for a deleted tab', () => {
