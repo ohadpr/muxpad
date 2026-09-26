@@ -1580,10 +1580,19 @@ printable_base() {
   # so its port is wrong for the cockpit; only the HOST is borrowed. The bare
   # hostname reaches the cockpit because muxpad's tailnet serve puts :443 there
   # (tailnet-only — an unauthenticated cockpit is never on a public funnel).
+  #
+  # `probe=0` and `|| true` for the same two reasons publish_base_url has them:
+  # only the candidate LIST is wanted, so paying for a reachability walk is
+  # pointless; and under this script's `set -euo pipefail` a curl that fails or
+  # outruns the 2s budget makes the assignment non-zero and `set -e` kills the
+  # script. That last one bites hardest right here — `muxpad agent new` calls
+  # this at the very END, after the tab is created and the first message
+  # delivered, so an abort would lose the URL for work already done.
   local host
-  host="$(curl -sS --max-time 2 "${MUXPAD_API_URL%/}/api/publish/base" 2>/dev/null \
-    | jq -r '[.candidates[]?.url] | map(select(test("\\.ts\\.net"))) | .[0] // ""' \
-    | sed -E 's#^https?://##; s#[:/].*$##')"
+  host="$(curl -sS --max-time 2 "${MUXPAD_API_URL%/}/api/publish/base?probe=0" 2>/dev/null \
+    | jq -r '[.candidates[]?.url] | map(select(test("\\.ts\\.net"))) | .[0] // ""' 2>/dev/null \
+    | sed -E 's#^https?://##; s#[:/].*$##' \
+    || true)"
   if [ -n "$host" ]; then printf 'https://%s' "$host"; return; fi
   printf '%s' "$base"
 }
@@ -2427,9 +2436,14 @@ cmd_search() {
 # dedicated public static port). The URL is the one thing printed on stdout,
 # so `url=$(muxpad publish report.html)` just works; warnings go to stderr.
 
-# Locate the tailscale binary: MUXPAD_TAILSCALE_BIN (tests stub it — the
-# real one must never run there) > PATH > the macOS app bundle. Prints the
-# path, or nothing when unavailable. Always exits 0.
+# Locate the tailscale binary. THE POLICY LIVES IN server/src/tailscale-bin.ts
+# — this is its shell twin, and tailscale-bin.test.ts asserts the two still
+# agree (via the `_tailscale-bin` verb below). Read that file before changing
+# either. In short: MUXPAD_TAILSCALE_BIN (exclusive — a missing override
+# resolves to NOTHING, never to the app bundle, so tests can never exec the
+# real binary) > PATH > /Applications/Tailscale.app.
+#
+# Prints the path, or nothing when unavailable. Always exits 0.
 find_tailscale() {
   if [ -n "${MUXPAD_TAILSCALE_BIN:-}" ]; then
     [ -x "$MUXPAD_TAILSCALE_BIN" ] && echo "$MUXPAD_TAILSCALE_BIN"
@@ -2445,14 +2459,104 @@ find_tailscale() {
   return 0
 }
 
-# Best-effort public-base-url discovery from THIS shell. The daemon runs
-# under launchd, where the macOS Tailscale app CLI refuses to run (CLIError
-# 3) — but it works fine from user/pane shells. So the CLI ensures the
-# funnel and reads Self.DNSName here, and hands the server a
-# `public_base_url` hint to persist. EVERY failure is silent (empty output):
-# the server's fallback chain (persisted globals → local URL + warning)
-# copes without us.
+# Best-effort public-base-url discovery from THIS shell. The daemon runs under
+# launchd, where the macOS Tailscale app CLI refuses to run (CLIError 3) — but
+# it works fine from user/pane shells. So the CLI ensures the funnel and reads
+# Self.DNSName here, and hands the server a `public_base_url` hint to persist.
+# EVERY failure is silent (empty output): the server's fallback chain (persisted
+# globals → local URL + warning) copes without us.
+#
+# ASK FIRST. This function used to run unconditionally on every `muxpad
+# publish`, and on a Mac with no `tailscale` on PATH that means executing the
+# binary inside /Applications/Tailscale.app — which reads that app's container,
+# so macOS puts up "node would like to access data from other apps". Every
+# publish, several times a day.
+#
+# The hint is only worth anything when the server does not already know a base,
+# and the server is the only one who can say (public-base.ts: env > pinned >
+# tunnel > hint > funnel > persisted). On this machine it holds a live tunnel
+# AND the persisted ts.net name, so the discovered hint was ranked below both
+# and thrown away — a modal dialog per publish for a value nobody used.
+#
+# `discovery_needed` also stays false after a FAILED attempt for
+# DISCOVERY_RETRY_TTL_MS, so a machine with no tailnet asks at most once a
+# working day rather than once a command. A server too old to send the field, or
+# unreachable, yields empty → we discover, i.e. the old behaviour.
+# This machine's tailnet FQDN, WITHOUT touching Tailscale. Prints the name or
+# nothing; never fails.
+#
+# Tailscale here is a Mac App Store install: the only CLI is inside the sandboxed
+# /Applications/Tailscale.app, there will be no `brew install`, and every exec of
+# that binary reads the app's own container — which is what makes macOS ask "node
+# would like to access data from other apps". So the name has to come from
+# somewhere else, and it does, twice over:
+#
+#   1. tailscaled puts this host's address in 100.64.0.0/10 (CGNAT) on a utun
+#      interface. `ifconfig` reads interface config — not privileged, no prompt.
+#   2. MagicDNS answers that address's PTR with the full name (macOS's
+#      /etc/resolv.conf lists `nameserver 100.100.100.100`), so a plain reverse
+#      lookup resolves it — again no prompt.
+#
+# Verified: 100.111.22.33 → dt-mac-mini.example-tailnet.ts.net, which is exactly the
+# base already persisted in globals.
+#
+# NOT `scutil --get LocalHostName`, though it is equally prompt-free: on this
+# machine it answers `home` while the tailnet name is `dt-mac-mini`. They are
+# unrelated settings, so gluing LocalHostName to the tailnet suffix would produce
+# `home.example-tailnet.ts.net` — a wrong host and a link that cannot work. The PTR is
+# the machine's real tailnet identity, not a guess assembled from parts.
+#
+# The TS twin is server/src/tailnet-hostname.ts; keep the two in step.
+tailnet_hostname() {
+  local ip name
+  # 100.64–100.127 only. 100.5.x and 100.200.x are ORDINARY public addresses, and
+  # treating all of 100/8 as tailnet would reverse-resolve a stranger's host and
+  # then trust the name that came back.
+  ip="$(ifconfig 2>/dev/null \
+    | grep -oE 'inet 100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+' \
+    | awk '{print $2}' | head -1 || true)"
+  [ -z "$ip" ] && return 0
+  name="$(dig +short +time=2 +tries=1 -x "$ip" 2>/dev/null | head -1 | sed 's/\.*$//' || true)"
+  # Only a *.ts.net answer is believed. Anything else means MagicDNS is off or
+  # something else on the network answered the PTR for CGNAT space, and a name
+  # from there would build a dead link. `*.ts.net` (not a substring match), so
+  # `ts.net.attacker.example` and a bare `ts.net` are both refused.
+  case "$name" in
+    *.ts.net) printf '%s' "$name" ;;
+  esac
+  return 0
+}
+
 publish_base_url() {
+  # probe=0: this is a pure DB question, and the probing variant walks every
+  # candidate at up to 2.5s each — a dead tunnel would blow the 2s budget below,
+  # leaving us to exec tailscale exactly when things are already wrong.
+  #
+  # The trailing `|| true` is NOT decoration. This script runs `set -euo
+  # pipefail`, so a curl that fails or times out makes the whole assignment
+  # non-zero and `set -e` tears the script down — a slow server would abort the
+  # publish instead of merely leaving this question unanswered. An unanswered
+  # question means "assume yes", i.e. the pre-existing behaviour.
+  local needed
+  needed="$(curl -sS --max-time 2 "${MUXPAD_API_URL%/}/api/publish/base?probe=0" 2>/dev/null \
+    | jq -r 'if .discovery_needed == null then "" else (.discovery_needed | tostring) end' 2>/dev/null \
+    || true)"
+  [ "$needed" = "false" ] && return 0
+
+  # COLD CACHE, AND STILL NO EXEC. The tailnet name is derivable from this
+  # machine's own address (see tailnet_hostname above) — the same answer
+  # `tailscale status --json` would give, for no prompt. So a first publish on a
+  # fresh machine works without ever opening the app bundle.
+  local host
+  host="$(tailnet_hostname)"
+  if [ -n "$host" ]; then printf 'https://%s:8443' "$host"; return 0; fi
+
+  # LAST RESORT, and the only tier that costs a prompt. Reached only when the
+  # server knows no base AND this machine has no tailnet address to reverse —
+  # i.e. Tailscale is not up, in which case the exec will most likely fail too.
+  # It is kept because it is also the only way to CREATE the funnel mapping
+  # rather than merely name it; the server rations it to once per
+  # DISCOVERY_RETRY_TTL_MS via `discovery_needed` above.
   local ts dns
   ts="$(find_tailscale)"
   [ -z "$ts" ] && return 0
@@ -3147,6 +3251,25 @@ case "$VERB" in
   search) cmd_search "${ARGS[@]:1}" ;;
   publish) cmd_publish "${ARGS[@]:1}" ;;
   _agent-hook) cmd_agent_hook ;;
+  # Internal: print which tailscale binary this script would use, or nothing.
+  # The only seam onto find_tailscale, so tailscale-bin.test.ts can check the
+  # shell and TypeScript resolvers still agree — and it answers "why is muxpad
+  # touching the Tailscale app?" without a stack trace.
+  _tailscale-bin) find_tailscale ;;
+  # Internal: print the public-base hint this shell would send with a publish,
+  # or nothing. The only seam onto publish_base_url — otherwise it is reachable
+  # only by doing a real publish, and the property that matters most about it is
+  # what it does when things FAIL (see tailscale-bin.test.ts).
+  _publish-base-url) publish_base_url ;;
+  # Internal: print the base URL this shell would put in a human-clickable link.
+  # Same reason as the two above — it asks the server over curl under `set -e`,
+  # and `muxpad agent new` calls it only after the tab exists, so its behaviour
+  # on a dead or slow server is the thing worth pinning.
+  _printable-base) printable_base ;;
+  # Internal: print this machine's tailnet FQDN, worked out with no exec at all.
+  # Also the honest answer to "does muxpad still need the Tailscale binary?" —
+  # if this prints a name, it does not.
+  _tailnet-hostname) tailnet_hostname ;;
   ''|help|-h|--help) usage; [ "$VERB" = '' ] && exit 1 || exit 0 ;;
   *)
     echo "muxpad: unknown command '$VERB'" >&2

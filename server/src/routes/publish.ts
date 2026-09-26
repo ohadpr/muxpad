@@ -227,6 +227,11 @@ export function publishRoutes(deps: {
   baseProbe?: ((url: string) => Promise<import('@muxpad/shared').UrlHealth>) | undefined;
   baseProbeTtlMs?: number | undefined;
   /**
+   * The no-exec tailnet-name lookup (tailnet-hostname.ts). Absent = off, which
+   * is what every test gets; index.ts wires the real one. See PublicBaseDeps.
+   */
+  tailnetHostname?: (() => Promise<string | null>) | undefined;
+  /**
    * muxpad's own Cloudflare tunnel. Absent = this instance cannot run one
    * (no app registry wired — HTTP-only tests), which must degrade to exactly
    * the behaviour that existed before the tunnel did.
@@ -258,6 +263,7 @@ export function publishRoutes(deps: {
       tunnelWarning: () => tunnelWarning(deps.db),
       ...(deps.baseProbe ? { probe: deps.baseProbe } : {}),
       ...(deps.baseProbeTtlMs !== undefined ? { probeTtlMs: deps.baseProbeTtlMs } : {}),
+      ...(deps.tailnetHostname ? { tailnetHostname: deps.tailnetHostname } : {}),
     });
 
   /**
@@ -567,13 +573,26 @@ export function publishRoutes(deps: {
    * DELETE clears the pin and falls back down the chain.
    */
   app.get('/base', async (c) => {
-    const resolved = await base.resolve({ probe: true });
+    // `?probe=0` skips the reachability walk. For `muxpad publish`, which reads
+    // only `discovery_needed` — a pure DB question — inside a 2s curl budget it
+    // cannot afford to spend on probing candidates at 2.5s each. A dead tunnel
+    // blowing that budget would make the CLI fall back to execing tailscale,
+    // which is the macOS prompt this whole change removes. Default stays ON:
+    // `muxpad publish --base` and the Hosted view both want the check.
+    const probe = c.req.query('probe') !== '0';
+    const resolved = await base.resolve({ probe });
     return c.json({
       url: resolved.source === 'local' ? null : resolved.baseUrl,
       source: resolved.source,
       reachable: resolved.health ? resolved.health.alive : null,
       ...(resolved.warning ? { warning: resolved.warning } : {}),
       candidates: base.candidates(),
+      // For `muxpad publish`, which must decide whether to exec `tailscale` in
+      // its own shell BEFORE it posts. False means "I already know a base" —
+      // and a hint that only re-confirms a known base is not worth the macOS
+      // "access data from other apps" prompt that reading the Tailscale app
+      // bundle costs. A pure read: polling this cannot consume the attempt.
+      discovery_needed: base.discoveryNeeded(),
     });
   });
 

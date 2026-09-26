@@ -100,6 +100,11 @@ export interface AppDeps {
     baseProbe?: ((url: string) => Promise<import('@muxpad/shared').UrlHealth>) | undefined;
     baseProbeTtlMs?: number | undefined;
     /**
+     * The no-exec tailnet-name lookup. Absent = off, like `funnel` absent means
+     * localFunnel: a test-built app never touches the network by accident.
+     */
+    tailnetHostname?: (() => Promise<string | null>) | undefined;
+    /**
      * muxpad's own Cloudflare tunnel (tunnel/TunnelApp.ts). Omitted here means
      * a publish never starts one — which is what every test wants: a suite
      * that could open a public tunnel by accident is not a suite.
@@ -216,6 +221,9 @@ export function createApp(deps: AppDeps): Hono {
       publicPort: resolved.publish?.publicPort ?? 7778,
       ...(resolved.publish?.publicBaseUrl ? { publicBaseUrl: resolved.publish.publicBaseUrl } : {}),
       ...(resolved.publish?.baseProbe ? { baseProbe: resolved.publish.baseProbe } : {}),
+      ...(resolved.publish?.tailnetHostname
+        ? { tailnetHostname: resolved.publish.tailnetHostname }
+        : {}),
       ...(resolved.publish?.baseProbeTtlMs !== undefined
         ? { baseProbeTtlMs: resolved.publish.baseProbeTtlMs }
         : {}),

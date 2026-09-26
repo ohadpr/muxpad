@@ -1,6 +1,6 @@
 import type { UrlHealth } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
-import type { Funnel } from './funnel.js';
+import { FUNNEL_PORT, type Funnel } from './funnel.js';
 import { GlobalsStore } from './store/GlobalsStore.js';
 import { probeUrlHealth } from './url-health.js';
 
@@ -47,8 +47,17 @@ import { probeUrlHealth } from './url-health.js';
  *             shell. Below the pinned entry ON PURPOSE — this is the funnel
  *             url, and it is exactly what used to clobber a working base on
  *             the next publish.
- *   funnel    server-side `tailscale` discovery (dev / non-launchd only).
- *   persisted the `public_base_url` global, seeded by hint/funnel.
+ *   tailnet   this machine's own tailnet name, worked out with NO exec at all —
+ *             its 100.64/10 address reverse-resolved through MagicDNS
+ *             (tailnet-hostname.ts). Above `funnel` because it costs nothing:
+ *             Tailscale here is a Mac App Store install whose only binary is
+ *             inside the sandboxed app bundle, so every `funnel`/`status` exec
+ *             raises a macOS "access data from other apps" prompt. Same answer,
+ *             no dialog.
+ *   funnel    server-side `tailscale` discovery. Now genuinely last-resort: it
+ *             is the only tier that can CREATE a Funnel mapping, and the only
+ *             one that costs a prompt.
+ *   persisted the `public_base_url` global, seeded by hint/tailnet/funnel.
  *   local     the loopback url + a warning. Never shareable, and says so.
  *
  * NOTHING IS HARDCODED HERE. The current Cloudflare tunnel name is ephemeral
@@ -77,6 +86,41 @@ export const PUBLIC_BASE_URL_KEY = 'public_base_url';
 /** globals-KV key holding a base the USER pinned. Outranks discovery. */
 export const PUBLIC_BASE_PINNED_KEY = 'public_base_url_pinned';
 
+/**
+ * globals-KV key holding WHEN discovery was last attempted (ms epoch), whether
+ * or not it worked.
+ *
+ * THE ATTEMPT, NOT THE RESULT — and that is the whole point. A successful
+ * discovery persists its base under PUBLIC_BASE_URL_KEY, so the
+ * `list.length === 0` gate below already stops it repeating. A FAILED one
+ * persists nothing, so the gate never closed and the exec ran again on the very
+ * next publish. On a Mac with no `tailscale` on PATH every one of those execs
+ * reaches into /Applications/Tailscale.app (see tailscale-bin.ts) and macOS puts
+ * up "node would like to access data from other apps" — the reported symptom,
+ * about five times a day.
+ *
+ * Remembering the attempt closes that. It is deliberately NOT in-process
+ * memory: the CLI asking `discovery_needed` is a different process every time,
+ * and the whole point is that it stops asking.
+ */
+export const TAILSCALE_DISCOVERY_KEY = 'tailscale_discovery_attempted_at';
+
+/**
+ * How long a failed discovery is taken at its word before anything tries again.
+ *
+ * Long, because the thing being discovered does not change: a machine's tailnet
+ * name is stable for its whole life, so a repeat attempt has nothing new to
+ * learn — it only costs another modal. Not INFINITE, because "I just logged into
+ * Tailscale" has to become true eventually without reading source code to find
+ * out how. Six hours is one working day's worth of at most one prompt, and a
+ * daemon restart clears the wait too (funnel.ts's own cache is per-process).
+ *
+ * The immediate escape hatch, which the local-fallback warning already names,
+ * is `muxpad publish --set-base <url>` — configuration outranks discovery, so
+ * pinning makes the question moot rather than answering it faster.
+ */
+export const DISCOVERY_RETRY_TTL_MS = 6 * 60 * 60 * 1000;
+
 /** How long a candidate's reachability probe is reused. The Hosted view polls
  *  every 3s; probing a public tunnel that often would be rude and pointless. */
 export const BASE_PROBE_TTL_MS = 30_000;
@@ -86,6 +130,7 @@ export type PublicBaseSource =
   | 'pinned'
   | 'tunnel'
   | 'hint'
+  | 'tailnet'
   | 'funnel'
   | 'persisted'
   | 'local';
@@ -152,6 +197,21 @@ export interface PublicBaseDeps {
   tunnelBaseUrl?: () => string | null;
   /** A one-line explanation of a tunnel that keeps failing, or null. */
   tunnelWarning?: () => string | null;
+  /**
+   * This machine's tailnet FQDN worked out WITHOUT execing tailscale, or null.
+   * Tried before `funnel.ensure()` because it is the same answer for no prompt.
+   *
+   * DEFAULTS TO OFF (`async () => null`), exactly like `funnel` defaults to
+   * localFunnel in server.ts: nothing a test constructs may touch the network
+   * unless it said so. The real lookup (tailnet-hostname.ts) is wired in ONE
+   * place — index.ts — and only when the funnel is enabled, since the url this
+   * tier produces is a funnel url and means nothing without one.
+   *
+   * Learned the hard way: defaulting this to the live lookup broke six route
+   * tests on a machine that happens to be on a tailnet, and would have passed
+   * on any machine that is not.
+   */
+  tailnetHostname?: () => Promise<string | null>;
   now?: () => number;
   /** Injectable for tests; defaults to the real server-side probe. */
   probe?: (url: string) => Promise<UrlHealth>;
@@ -171,6 +231,21 @@ export interface PublicBaseResolver {
     allowDiscovery?: boolean;
     probe?: boolean;
   }): Promise<PublicBase>;
+  /**
+   * Would a `resolve({ allowDiscovery: true })` actually shell out right now?
+   *
+   * A PURE READ — asking must never exec and must never claim the
+   * once-per-TTL slot, because the Hosted view polls the route that exposes
+   * this every 3s and would otherwise eat the CLI's only attempt.
+   *
+   * This exists for the CLI. Server-side discovery cannot work under launchd,
+   * so the real attempt happens in a pane shell — and the CLI has no way to
+   * know whether its hint is wanted without asking. Before this it just always
+   * execed, paying a macOS prompt to re-discover a base the server already had
+   * (and, on this machine, one the resolver then ranks BELOW the live tunnel
+   * and discards).
+   */
+  discoveryNeeded(): boolean;
   /** Pin a base (or clear the pin with null). */
   setPinned(url: string | null): void;
   /** The ordered candidate list, unprobed. Exposed for `--base` / diagnostics. */
@@ -198,6 +273,32 @@ export function createPublicBaseResolver(deps: PublicBaseDeps): PublicBaseResolv
     add(typeof opts?.hint === 'string' ? opts.hint : null, 'hint');
     add(globals.get(PUBLIC_BASE_URL_KEY), 'persisted');
     return out;
+  };
+
+  /** True while a failed attempt is still inside DISCOVERY_RETRY_TTL_MS. */
+  const attemptIsFresh = (): boolean => {
+    const at = Number(globals.get(TAILSCALE_DISCOVERY_KEY));
+    if (!Number.isFinite(at) || at <= 0) return false;
+    // A clock that has gone BACKWARDS (restore, NTP step) would otherwise make
+    // a stamp from "the future" fresh forever, permanently disabling discovery.
+    const age = now() - at;
+    return age >= 0 && age < DISCOVERY_RETRY_TTL_MS;
+  };
+
+  const discoveryNeeded = (): boolean => candidates().length === 0 && !attemptIsFresh();
+
+  /**
+   * The no-exec tailnet base, or null. Never throws — a failure here must fall
+   * through to the funnel tier, not fail the publish.
+   */
+  const tailnetBase = async (): Promise<string | null> => {
+    const resolve = deps.tailnetHostname ?? (async () => null);
+    try {
+      const host = await resolve();
+      return host ? `https://${host}:${FUNNEL_PORT}` : null;
+    } catch {
+      return null;
+    }
   };
 
   const reach = async (url: string): Promise<UrlHealth> => {
@@ -243,15 +344,44 @@ export function createPublicBaseResolver(deps: PublicBaseDeps): PublicBaseResolv
     // that had moved.
     let discoveredLocal: string | undefined;
     if (opts?.allowDiscovery && list.length === 0) {
-      const discovered = await deps.funnel.ensure();
-      if (discovered.warning) {
-        discoveryWarning = discovered.warning;
-        discoveredLocal = discovered.baseUrl;
-      } else {
-        const url = normalizeBaseUrl(discovered.baseUrl);
-        if (url) {
-          globals.set(PUBLIC_BASE_URL_KEY, url);
-          list.push({ url, source: 'funnel' });
+      // FREE TIER FIRST, and free in the sense that matters: this machine's
+      // tailnet name comes from its own 100.64/10 address reverse-resolved
+      // through MagicDNS (tailnet-hostname.ts). Same answer as `tailscale status
+      // --json`, no exec, no macOS prompt — and it works under launchd, where
+      // the app-bundle CLI refuses to run at all.
+      //
+      // UNRATIONED, deliberately. The retry TTL below exists to stop a costly
+      // attempt repeating; this one costs nothing, so gating it would only mean
+      // a machine that has just joined a tailnet fails to notice for six hours.
+      const viaTailnet = normalizeBaseUrl(await tailnetBase());
+      if (viaTailnet) {
+        globals.set(PUBLIC_BASE_URL_KEY, viaTailnet);
+        list.push({ url: viaTailnet, source: 'tailnet' });
+      } else if (!attemptIsFresh()) {
+        // Only now is an exec worth its cost — and it is the ONLY tier that can
+        // CREATE a Funnel mapping rather than merely name one.
+        //
+        // `!attemptIsFresh()` is the second half of the gate that was missing.
+        // `list.length === 0` alone only suppressed a repeat after discovery
+        // SUCCEEDED (success is what puts a candidate in the list); a failing
+        // tailscale left the list empty and got re-execed by every subsequent
+        // publish, forever, each one a macOS prompt.
+        //
+        // Stamped BEFORE the exec, not after: an attempt that hangs, throws
+        // outside ensure()'s own catch, or takes the process down with it still
+        // counts as having been made. Recording it only on the way out would
+        // reopen exactly the loop this is here to close.
+        globals.set(TAILSCALE_DISCOVERY_KEY, String(now()));
+        const discovered = await deps.funnel.ensure();
+        if (discovered.warning) {
+          discoveryWarning = discovered.warning;
+          discoveredLocal = discovered.baseUrl;
+        } else {
+          const url = normalizeBaseUrl(discovered.baseUrl);
+          if (url) {
+            globals.set(PUBLIC_BASE_URL_KEY, url);
+            list.push({ url, source: 'funnel' });
+          }
         }
       }
     }
@@ -327,6 +457,7 @@ export function createPublicBaseResolver(deps: PublicBaseDeps): PublicBaseResolv
   return {
     resolve,
     candidates,
+    discoveryNeeded,
     setPinned: (url) => {
       if (url === null) {
         deps.db.prepare('DELETE FROM globals WHERE key = ?').run(PUBLIC_BASE_PINNED_KEY);
