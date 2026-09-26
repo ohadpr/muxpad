@@ -1,12 +1,12 @@
 import {
   AGENT_MODE_LABELS,
+  ATTACHMENT_ACCEPT,
+  ATTACHMENT_EXTENSIONS,
+  ATTACHMENT_MIME_BY_EXT,
   type AgentMode,
   type AgentQuestion,
   type AgentSessionStatus,
   type ChatEvent,
-  ATTACHMENT_ACCEPT,
-  ATTACHMENT_EXTENSIONS,
-  ATTACHMENT_MIME_BY_EXT,
   LAUNCH_ACK_RE,
   type NoticeEvent,
   type SubagentProgress,
@@ -18,6 +18,7 @@ import {
   subagentLabel,
   summarizeToolInput,
 } from '@muxpad/shared';
+import { useNavigate } from '@tanstack/react-router';
 import {
   type ChangeEvent,
   type ComponentProps,
@@ -35,36 +36,21 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useNavigate } from '@tanstack/react-router';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import {
-  type AgentLaunchOptions,
-  type ArchiveSearchHit,
-  type RecentFolder,
-  api,
-} from '../api';
+import { type AgentLaunchOptions, type ArchiveSearchHit, type RecentFolder, api } from '../api';
 import {
   AGENT_BACKENDS,
   type AgentBackendId,
   backendLabel,
   conversionFailure,
 } from '../lib/agent-backend';
+import { cachedAllTabs, loadAllTabs } from '../lib/all-tabs';
 import {
   type MessagePart,
   composeOutgoingMessage,
   splitMessageAttachments,
 } from '../lib/attachments';
-import {
-  actionRunExpanded,
-  applyChatVoice,
-  chatVoiceActive,
-  foldsAsActionRun,
-  isPrivateReasoning,
-  lastTurnStartId,
-  toggleActionRun,
-} from '../lib/chat-voice';
-import { cachedAllTabs, loadAllTabs } from '../lib/all-tabs';
 import {
   type DirectedWork,
   addDirected,
@@ -75,6 +61,7 @@ import {
 import {
   MAX_MENTION_ROWS,
   type MentionChat,
+  type MentionPick,
   type MentionRow,
   type MentionRun,
   applyMention,
@@ -86,9 +73,19 @@ import {
   parseMentions,
   parseReportMarker,
   rankMentions,
+  repinPicks,
   toMentionChats,
   withContentRows,
 } from '../lib/chat-mention';
+import {
+  actionRunExpanded,
+  applyChatVoice,
+  chatVoiceActive,
+  foldsAsActionRun,
+  isPrivateReasoning,
+  lastTurnStartId,
+  toggleActionRun,
+} from '../lib/chat-voice';
 import { showFolderChip } from '../lib/nav-row-affordances';
 import { paneIndex } from '../lib/nav-search';
 import {
@@ -1744,6 +1741,56 @@ export function ChatPane({
     }
   }, [input, draftKey]);
 
+  /**
+   * WHICH CHATS THE USER ACTUALLY PICKED, alongside the draft that shows them.
+   *
+   * A mention's token is the chat's NAME, which is the right thing for the user
+   * to read and the wrong thing to resolve a recipient from: names are neither
+   * unique nor stable, so re-reading one at send time is a guess, and it guessed
+   * wrong in two reproducible ways (see MentionPick in lib/chat-mention). The
+   * identity is therefore kept beside the text, by id, anchored to its `@`.
+   *
+   * Persisted next to the draft rather than inside it: a reload must not turn an
+   * explicit choice back into a name to be re-guessed, and a separate key means a
+   * draft written before this existed still restores as a draft.
+   */
+  const picksKey = `muxpad.chatPicks.${paneId}`;
+  const [picks, setPicks] = useState<MentionPick[]>(() => {
+    try {
+      const raw = localStorage.getItem(picksKey);
+      const parsed: unknown = raw ? JSON.parse(raw) : null;
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(
+        (p): p is MentionPick =>
+          !!p &&
+          typeof p === 'object' &&
+          typeof (p as MentionPick).tabId === 'string' &&
+          typeof (p as MentionPick).name === 'string' &&
+          typeof (p as MentionPick).start === 'number',
+      );
+    } catch {
+      return [];
+    }
+  });
+  /**
+   * The picks as they describe the draft RIGHT NOW.
+   *
+   * Derived rather than stored, because the draft is edited freely after a pick:
+   * every offset shifts when text is typed in front of a mention, and a pick
+   * whose token was deleted is void. Deriving it means the two can never
+   * disagree — there is no effect to miss an edit, and clearing the composer
+   * clears the picks by construction.
+   */
+  const livePicks = useMemo(() => repinPicks(input, picks), [input, picks]);
+  useEffect(() => {
+    try {
+      if (livePicks.length) localStorage.setItem(picksKey, JSON.stringify(livePicks));
+      else localStorage.removeItem(picksKey);
+    } catch {
+      // same contract as the draft next door: persistence is a nicety
+    }
+  }, [livePicks, picksKey]);
+
   // ── The @ picker ──────────────────────────────────────────────────────────
   // Typing `@` opens a picker over EVERY chat, live and done. Three things in
   // one gesture: a reference (a chip in the message), a direction (`@Name text`
@@ -1898,6 +1945,10 @@ export function ChatPane({
     const next = applyMention(input, mentionRun, row.chat);
     mentionJustPicked.current = true;
     setInput(next.text);
+    // Remember WHICH chat this was, not just what it is called. Re-anchored
+    // against the new draft first, so the stored list stays the size of the
+    // mentions actually in the composer rather than growing per pick.
+    setPicks((cur) => [...repinPicks(next.text, cur), next.pick]);
     closeMentions();
     // After React has committed the new value: setting `value` without touching
     // the selection parks the caret at the END, which after picking a mention
@@ -2634,6 +2685,11 @@ export function ChatPane({
    */
   const directWork = (
     target: MentionChat,
+    /** The request as the user wrote it, for the card's second line. Taken from
+     *  the parsed directive rather than re-derived by stripping the name out of
+     *  the draft: the token in the draft is whatever the chat was CALLED when it
+     *  was picked, which after a rename is not its name any more. */
+    request: string,
     /** What the other agent is sent — prose plus any attachment paths. */
     outgoing: string,
     /** The composer's state, to hand back untouched if this never leaves. */
@@ -2649,7 +2705,7 @@ export function ChatPane({
       workspaceSlug: target.workspaceSlug,
       // The card shows the REQUEST as the user wrote it: attachment paths are
       // for the agent to read, not for the log to quote back.
-      body: restore.text.replace(`@${target.tabName}`, '').trim(),
+      body: request,
       chip: target.chip,
     };
     setDirected(addDirected(paneId, entry));
@@ -2696,12 +2752,21 @@ export function ChatPane({
     // one. Checked before the socket, because this path does not use it — and
     // deliberately after the question card above, which owns the composer while
     // it is up.
-    const directive = parseDirective(text, corpus);
+    //
+    // `input`, not `text`: a pick is anchored at an offset into the draft, and
+    // the trim would shift every one of them by the leading whitespace.
+    // `parseDirective` trims for itself.
+    const directive = parseDirective(input, corpus, livePicks);
     if (directive) {
-      directWork(directive.target, composeOutgoingMessage(directive.body, attachmentPaths), {
-        text,
-        chips,
-      });
+      directWork(
+        directive.target,
+        directive.body,
+        composeOutgoingMessage(directive.body, attachmentPaths),
+        {
+          text,
+          chips,
+        },
+      );
       setInput('');
       clearChips();
       return;
@@ -4398,150 +4463,150 @@ export function ChatPane({
     // shape in the file. The value is memoized, so the transcript re-renders
     // when the CORPUS lands and not on the frames in between.
     <ChatMentionContext.Provider value={mentionContext}>
-    <div className="chat-pane" ref={paneRef}>
-      {/* We were asked to show WHERE the term is, and could not — so say so.
+      <div className="chat-pane" ref={paneRef}>
+        {/* We were asked to show WHERE the term is, and could not — so say so.
           Silently landing on an unchanged chat is the one outcome that reads as
           a broken search. Floats over the transcript rather than sitting in the
           flow: inserting a strip would reflow the log and move the very scroll
           position the jump is trying to hold. */}
-      {jump && jumpMissed && !jumpTargetId ? (
-        <output className="chat-search-missed">
-          <span className="chat-search-missed-text" dir="auto">
-            {hasMoreOlder
-              ? `“${jump.query}” is further back than the history loaded here.`
-              : `“${jump.query}” isn’t in this conversation’s messages.`}
-          </span>
-          {hasMoreOlder ? (
+        {jump && jumpMissed && !jumpTargetId ? (
+          <output className="chat-search-missed">
+            <span className="chat-search-missed-text" dir="auto">
+              {hasMoreOlder
+                ? `“${jump.query}” is further back than the history loaded here.`
+                : `“${jump.query}” isn’t in this conversation’s messages.`}
+            </span>
+            {hasMoreOlder ? (
+              <button
+                type="button"
+                className="chat-search-missed-more"
+                onClick={() => {
+                  // "Keep looking" is a fresh request, so it gets a fresh budget —
+                  // re-claiming the same jump resets the controller's page count.
+                  scroll.current?.dispatch({ t: 'search-jump' });
+                  setJumpMissed(false);
+                }}
+              >
+                Keep looking
+              </button>
+            ) : null}
             <button
               type="button"
-              className="chat-search-missed-more"
-              onClick={() => {
-                // "Keep looking" is a fresh request, so it gets a fresh budget —
-                // re-claiming the same jump resets the controller's page count.
-                scroll.current?.dispatch({ t: 'search-jump' });
-                setJumpMissed(false);
-              }}
+              className="chat-search-missed-close"
+              aria-label="Dismiss"
+              onClick={clearJump}
             >
-              Keep looking
+              ×
             </button>
-          ) : null}
-          <button
-            type="button"
-            className="chat-search-missed-close"
-            aria-label="Dismiss"
-            onClick={clearJump}
-          >
-            ×
-          </button>
-        </output>
-      ) : null}
-      {/* tabIndex=0 because a keydown listener on an element only fires when
+          </output>
+        ) : null}
+        {/* tabIndex=0 because a keydown listener on an element only fires when
           focus is inside it, and this was a plain div: focus sat on <body>, the
           listener never saw a key, and PageDown moved the log 0px. The chat had
           no keyboard scrolling at all. A scrollable region is supposed to be
           focusable for exactly this reason; `role=log` names what it is for a
           screen reader now that it is in the tab order. */}
-      <div
-        className="chat-scroll"
-        ref={scrollRef}
-        onScroll={onScroll}
-        // biome-ignore lint/a11y/noNoninteractiveTabindex: a SCROLLABLE region must be focusable or it cannot be scrolled by keyboard at all — the inverse of this rule's concern, and what axe's "scrollable-region-focusable" requires.
-        tabIndex={0}
-        role="log"
-        aria-label="Conversation"
-      >
-        <div className="chat-list">
-          {body}
-          {optimisticUser ? (
-            <div className="chat-turn chat-turn-user">
-              <div className="chat-bubble" dir="auto">
-                <UserText text={optimisticUser} onOpenImage={setOpenImage} />
+        <div
+          className="chat-scroll"
+          ref={scrollRef}
+          onScroll={onScroll}
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: a SCROLLABLE region must be focusable or it cannot be scrolled by keyboard at all — the inverse of this rule's concern, and what axe's "scrollable-region-focusable" requires.
+          tabIndex={0}
+          role="log"
+          aria-label="Conversation"
+        >
+          <div className="chat-list">
+            {body}
+            {optimisticUser ? (
+              <div className="chat-turn chat-turn-user">
+                <div className="chat-bubble" dir="auto">
+                  <UserText text={optimisticUser} onOpenImage={setOpenImage} />
+                </div>
               </div>
-            </div>
-          ) : null}
-          {agentWorking && !question ? (
-            <div className="chat-turn chat-turn-assistant">
-              {/* In Chat mode the token stream IS the private scratchpad — the
+            ) : null}
+            {agentWorking && !question ? (
+              <div className="chat-turn chat-turn-assistant">
+                {/* In Chat mode the token stream IS the private scratchpad — the
                   `reply` tool's argument streams as input_json, which the
                   runner does not forward — so showing it would put reasoning on
                   screen live and then take it back at turn end. The working
                   indicator is what a Chat-mode turn shows instead, and it names
                   the running tool so a silent pane never reads as stuck. */}
-              {streamingText && !voiceOn ? (
-                <div className="chat-msg">
-                  <Markdown text={streamingText} />
-                  <span className="chat-cursor" aria-hidden="true" />
-                </div>
-              ) : (
-                <div
-                  className="chat-msg chat-working"
-                  aria-label={`${assistantLabel(session?.assistant)} is working`}
-                >
-                  <span className="chat-typing" aria-hidden="true">
-                    <i />
-                    <i />
-                    <i />
-                  </span>
-                  <span className="chat-working-label">{workingLabel}</span>
-                </div>
-              )}
-            </div>
-          ) : null}
-          {question ? (
-            <QuestionCard
-              key={question.qid}
-              pending={question}
-              onAnswer={(answers) => answerQuestion(question.qid, answers)}
-            />
-          ) : null}
-          {/* Work this chat DIRECTED at another one. Live furniture at the foot
+                {streamingText && !voiceOn ? (
+                  <div className="chat-msg">
+                    <Markdown text={streamingText} />
+                    <span className="chat-cursor" aria-hidden="true" />
+                  </div>
+                ) : (
+                  <div
+                    className="chat-msg chat-working"
+                    aria-label={`${assistantLabel(session?.assistant)} is working`}
+                  >
+                    <span className="chat-typing" aria-hidden="true">
+                      <i />
+                      <i />
+                      <i />
+                    </span>
+                    <span className="chat-working-label">{workingLabel}</span>
+                  </div>
+                )}
+              </div>
+            ) : null}
+            {question ? (
+              <QuestionCard
+                key={question.qid}
+                pending={question}
+                onAnswer={(answers) => answerQuestion(question.qid, answers)}
+              />
+            ) : null}
+            {/* Work this chat DIRECTED at another one. Live furniture at the foot
               of the log, beside the pending queue, because that is what it is:
               a request in flight somewhere else. The spinner is the same 10px
               mark as everywhere else, and it stops when the report lands (which
               is read off the transcript, not watched for). */}
-          {directed.map((d) => (
-            <ChatMentionCard
-              key={d.id}
-              chat={d.chip}
-              sub={d.body}
-              working={!d.reportedAt}
-              state={d.reportedAt ? 'reported' : undefined}
-              onOpen={() => openChat(d)}
-            />
-          ))}
-          {/* Server-owned pending queue rides at the BOTTOM of the chat —
+            {directed.map((d) => (
+              <ChatMentionCard
+                key={d.id}
+                chat={d.chip}
+                sub={d.body}
+                working={!d.reportedAt}
+                state={d.reportedAt ? 'reported' : undefined}
+                onOpen={() => openChat(d)}
+              />
+            ))}
+            {/* Server-owned pending queue rides at the BOTTOM of the chat —
               pending user bubbles under the latest message + working indicator,
               scrolling with the log. Dashed + muted = "waiting its turn"; edit
               pulls it back to the composer, cancel drops it before it runs. Both
               act on the server, so the change follows you across devices. */}
-          {queue.map((q) => (
-            <div key={q.id} className="chat-turn chat-turn-user chat-turn-queued">
-              <div className="chat-queued-actions">
-                <button
-                  type="button"
-                  className="chat-queued-edit"
-                  onClick={() => editQueued(q)}
-                  aria-label="Edit — restore to the composer"
-                  title="Queued — tap to edit before it sends"
-                >
-                  <SvgRestore />
-                </button>
-                <button
-                  type="button"
-                  className="chat-queued-cancel"
-                  onClick={() => cancelQueued(q.id)}
-                  aria-label="Cancel this queued message"
-                  title="Cancel — remove before it sends"
-                >
-                  ✕
-                </button>
+            {queue.map((q) => (
+              <div key={q.id} className="chat-turn chat-turn-user chat-turn-queued">
+                <div className="chat-queued-actions">
+                  <button
+                    type="button"
+                    className="chat-queued-edit"
+                    onClick={() => editQueued(q)}
+                    aria-label="Edit — restore to the composer"
+                    title="Queued — tap to edit before it sends"
+                  >
+                    <SvgRestore />
+                  </button>
+                  <button
+                    type="button"
+                    className="chat-queued-cancel"
+                    onClick={() => cancelQueued(q.id)}
+                    aria-label="Cancel this queued message"
+                    title="Cancel — remove before it sends"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="chat-bubble chat-bubble-queued" dir="auto">
+                  <UserText text={q.text} onOpenImage={setOpenImage} />
+                </div>
               </div>
-              <div className="chat-bubble chat-bubble-queued" dir="auto">
-                <UserText text={q.text} onOpenImage={setOpenImage} />
-              </div>
-            </div>
-          ))}
-          {/* ── The composer's reserve, as a SIBLING ──────────────────────────
+            ))}
+            {/* ── The composer's reserve, as a SIBLING ──────────────────────────
               The floating composer overlaps the scroller, so the log has to
               reserve its exact measured height or the last message hides behind
               it. That reserve used to be `.chat-list`'s padding-bottom, and
@@ -4563,296 +4628,299 @@ export function ChatPane({
               clearance is identical to the padding it replaces (measured: 100px
               either way). No `data-eid`, so it is invisible to the anchor scan
               exactly like the rest of the live furniture below the last row. */}
-          <div
-            className="chat-composer-reserve"
-            aria-hidden="true"
-            // …plus the keyboard, on mobile: the scroller's clientHeight does
-            // not change when iOS raises one, so without this the last turns
-            // sit behind it. `--chat-keyboard-inset` is 0px everywhere else.
+            <div
+              className="chat-composer-reserve"
+              aria-hidden="true"
+              // …plus the keyboard, on mobile: the scroller's clientHeight does
+              // not change when iOS raises one, so without this the last turns
+              // sit behind it. `--chat-keyboard-inset` is 0px everywhere else.
+              style={
+                composerH
+                  ? { height: `calc(${composerH + 14}px + var(--chat-keyboard-inset, 0px))` }
+                  : undefined
+              }
+            />
+          </div>
+        </div>
+        {showScrollDown ? (
+          <button
+            type="button"
+            className="chat-scroll-down"
+            // Rides above the composer, so it rides above the keyboard too.
             style={
               composerH
-                ? { height: `calc(${composerH + 14}px + var(--chat-keyboard-inset, 0px))` }
+                ? { bottom: `calc(${composerH + 12}px + var(--chat-keyboard-inset, 0px))` }
                 : undefined
             }
+            onClick={scrollToBottom}
+            aria-label="Jump to latest"
+            title="Jump to latest"
+          >
+            ↓
+          </button>
+        ) : null}
+        {openTool ? <ToolModal detail={openTool} onClose={() => setOpenTool(null)} /> : null}
+        {openImage ? (
+          <ImageModal
+            url={openImage.url}
+            name={openImage.name}
+            video={openImage.video}
+            onClose={() => setOpenImage(null)}
           />
-        </div>
-      </div>
-      {showScrollDown ? (
-        <button
-          type="button"
-          className="chat-scroll-down"
-          // Rides above the composer, so it rides above the keyboard too.
-          style={
-            composerH
-              ? { bottom: `calc(${composerH + 12}px + var(--chat-keyboard-inset, 0px))` }
-              : undefined
-          }
-          onClick={scrollToBottom}
-          aria-label="Jump to latest"
-          title="Jump to latest"
-        >
-          ↓
-        </button>
-      ) : null}
-      {openTool ? <ToolModal detail={openTool} onClose={() => setOpenTool(null)} /> : null}
-      {openImage ? (
-        <ImageModal
-          url={openImage.url}
-          name={openImage.name}
-          video={openImage.video}
-          onClose={() => setOpenImage(null)}
-        />
-      ) : null}
-      {session?.current_sid ? (
-        <div className="chat-composer-wrap" ref={composerRef}>
-          {notice ? (
-            <div className={`chat-notice${notice.tone === 'danger' ? ' -danger' : ''}`}>
-              {notice.text}
-            </div>
-          ) : null}
-          {voiceOn ? (
-            <VoiceBar
-              state={voice.state}
-              detail={voice.detail}
-              status={voice.status}
-              supported={voice.supported}
-              minutesLeft={voice.minutesLeft}
-              elapsedMs={voice.elapsedMs}
-              onStart={voice.start}
-              onStop={() => voice.stop('user')}
-              muted={voice.muted}
-              onEnableSound={() => void voice.enableSound()}
-              onDismiss={() => voice.stop('user')}
+        ) : null}
+        {session?.current_sid ? (
+          <div className="chat-composer-wrap" ref={composerRef}>
+            {notice ? (
+              <div className={`chat-notice${notice.tone === 'danger' ? ' -danger' : ''}`}>
+                {notice.text}
+              </div>
+            ) : null}
+            {voiceOn ? (
+              <VoiceBar
+                state={voice.state}
+                detail={voice.detail}
+                status={voice.status}
+                supported={voice.supported}
+                minutesLeft={voice.minutesLeft}
+                elapsedMs={voice.elapsedMs}
+                onStart={voice.start}
+                onStop={() => voice.stop('user')}
+                muted={voice.muted}
+                onEnableSound={() => void voice.enableSound()}
+                onDismiss={() => voice.stop('user')}
+              />
+            ) : null}
+            <SessionBar
+              paneId={paneId}
+              folder={folder}
+              status={agentStatus}
+              {...(session?.assistant ? { assistant: session.assistant } : {})}
+              liveLabel={liveLabel}
+              agents={rosterAgents}
+              mode={mode}
+              send={(obj) => {
+                const sock = wsRef.current;
+                if (!sock || sock.readyState !== WebSocket.OPEN) {
+                  setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
+                  return;
+                }
+                sock.send(JSON.stringify(obj));
+              }}
             />
-          ) : null}
-          <SessionBar
-            paneId={paneId}
-            folder={folder}
-            status={agentStatus}
-            {...(session?.assistant ? { assistant: session.assistant } : {})}
-            liveLabel={liveLabel}
-            agents={rosterAgents}
-            mode={mode}
-            send={(obj) => {
-              const sock = wsRef.current;
-              if (!sock || sock.readyState !== WebSocket.OPEN) {
-                setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
-                return;
-              }
-              sock.send(JSON.stringify(obj));
-            }}
-          />
-          {/* Absolutely positioned (see ChatMentionPicker.css): the composer
+            {/* Absolutely positioned (see ChatMentionPicker.css): the composer
               wrap's measured height is what reserves room at the foot of the
               transcript, so a picker in its flow would scroll the conversation
               every time you typed `@`. */}
-          {mentionOpen ? (
-            <ChatMentionPicker
-              rows={mentionRows}
-              cursor={mentionSafeCursor}
-              query={mentionRun?.query ?? ''}
-              listId={mentionListId}
-              searching={mentionSearching}
-              onPick={pickMention}
-              onHover={setMentionCursor}
-            />
-          ) : null}
-          <div className="chat-composer">
-            {/* No `capture` attribute, deliberately: with one, iOS goes straight
+            {mentionOpen ? (
+              <ChatMentionPicker
+                rows={mentionRows}
+                cursor={mentionSafeCursor}
+                query={mentionRun?.query ?? ''}
+                listId={mentionListId}
+                searching={mentionSearching}
+                onPick={pickMention}
+                onHover={setMentionCursor}
+              />
+            ) : null}
+            <div className="chat-composer">
+              {/* No `capture` attribute, deliberately: with one, iOS goes straight
                 to the camera. Without it — and with an `accept` that is not
                 image-only — the share sheet offers Photo Library, Take Photo,
                 AND Choose File / iCloud, which is the native picker rather than
                 anything we have to build. */}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept={ATTACHMENT_ACCEPT}
-              multiple
-              hidden
-              onChange={onPickFiles}
-            />
-            <div className="chat-composer-main">
-              <button
-                type="button"
-                className="chat-attach"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading}
-                aria-label="Attach a file"
-                title="Attach a file"
-              >
-                {uploading ? (
-                  <span className="chat-attach-spin" aria-hidden="true" />
-                ) : (
-                  <SvgAttach />
-                )}
-              </button>
-              {/* Chat mode only — Agent mode is raw, and `voiceOn` is the same
-                  predicate that governs Chat mode's written voice. */}
-              {voiceOn ? (
-                <VoiceControl
-                  state={voice.state}
-                  detail={voice.detail}
-                  status={voice.status}
-                  supported={voice.supported}
-                  minutesLeft={voice.minutesLeft}
-                  elapsedMs={voice.elapsedMs}
-                  onStart={voice.start}
-                  onStop={() => voice.stop('user')}
-                />
-              ) : null}
-              <textarea
-                ref={inputRef}
-                className="chat-input"
-                value={input}
-                // The combobox arrangement the sidebar's search box uses: the
-                // FIELD keeps focus and points at the active row, so composing
-                // is never interrupted by a list taking the caret. Stated only
-                // while the picker is up — an `aria-activedescendant` pointing
-                // at an id that is not in the document announces nothing.
-                {...(mentionOpen
-                  ? {
-                      role: 'combobox',
-                      'aria-expanded': true,
-                      'aria-autocomplete': 'list' as const,
-                      'aria-controls': mentionListId,
-                      'aria-activedescendant': `${mentionListId}-${mentionSafeCursor}`,
-                    }
-                  : {})}
-                onChange={(e) => {
-                  setInput(e.target.value);
-                  syncMentionRun(e.target.value, e.target.selectionStart ?? e.target.value.length);
-                  // Editing retires a search highlight. Typing into the
-                  // composer means you have stopped reading the result you were
-                  // brought here for and started using the chat.
-                  clearJump();
-                }}
-                // A caret MOVED by an arrow or a click can land inside an
-                // existing `@…`, which has to reopen that run's picker — the
-                // run is defined by where the caret is, not by the end of the
-                // draft. `keyup` rather than `keydown`: the caret has not moved
-                // yet on the way down.
-                onKeyUp={(e) => {
-                  const el = e.currentTarget;
-                  syncMentionRun(el.value, el.selectionStart ?? el.value.length);
-                }}
-                onClick={(e) => {
-                  const el = e.currentTarget;
-                  syncMentionRun(el.value, el.selectionStart ?? el.value.length);
-                }}
-                onPaste={onPaste}
-                onKeyDown={(e) => {
-                  // The picker owns the arrows, Enter, Tab and Escape while it
-                  // is up — except mid-composition, where an IME owns Enter and
-                  // the arrows to choose a candidate and stealing them there
-                  // makes the composer unusable in Japanese/Chinese input.
-                  if (mentionOpen && !e.nativeEvent.isComposing) {
-                    const n = mentionRows.length;
-                    if (e.key === 'ArrowDown') {
-                      e.preventDefault();
-                      setMentionCursor((c) => (Math.min(c, n - 1) + 1) % n);
-                      return;
-                    }
-                    if (e.key === 'ArrowUp') {
-                      e.preventDefault();
-                      setMentionCursor((c) => (Math.min(c, n - 1) + n - 1) % n);
-                      return;
-                    }
-                    if (e.key === 'Enter' || e.key === 'Tab') {
-                      e.preventDefault();
-                      const row = mentionRows[mentionSafeCursor];
-                      if (row) pickMention(row);
-                      return;
-                    }
-                    if (e.key === 'Escape') {
-                      e.preventDefault();
-                      closeMentions(true);
-                      return;
-                    }
-                  }
-                  // Desktop: Enter sends, Shift+Enter = newline. Mobile: the
-                  // on-screen Return key inserts a newline (send is the button) —
-                  // otherwise every line break fires off a message.
-                  if (e.key === 'Enter' && !e.shiftKey && !isMobileLayout()) {
-                    e.preventDefault();
-                    sendMessage();
-                  }
-                }}
-                placeholder={
-                  question
-                    ? 'Type an answer, or tap an option…'
-                    : // Chat is addressed as Chat. Naming the harness here was
-                      // the same slip as the greeting: "Message Claude…" under a
-                      // pane that calls itself Chat, in the one mode where the
-                      // harness is not a thing the user chose.
-                      `Message ${mode === 'chat' ? 'Chat' : assistantLabel(session?.assistant)}…`
-                }
-                rows={1}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept={ATTACHMENT_ACCEPT}
+                multiple
+                hidden
+                onChange={onPickFiles}
               />
-              {sending && !question ? (
-                <>
-                  {/* Busy + composed text → Queue it (the server holds it and
-                      feeds it when the agent frees up) alongside Stop, instead
-                      of the old dead-end where a typed message wouldn't send. */}
-                  {input.trim() || chips.length > 0 ? (
-                    <button
-                      type="button"
-                      className="chat-send is-queue"
-                      onClick={sendMessage}
-                      aria-label="Queue message — sends when the agent is free"
-                      title="Queue — sends when the agent is free"
-                    >
-                      <SvgQueue />
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="chat-send is-stop"
-                    onClick={stop}
-                    aria-label="Stop"
-                    title="Stop"
-                  >
-                    <span className="chat-send-glyph" aria-hidden="true" />
-                  </button>
-                </>
-              ) : (
+              <div className="chat-composer-main">
                 <button
                   type="button"
-                  className="chat-send"
-                  onClick={sendMessage}
-                  disabled={!input.trim() && chips.length === 0}
-                  aria-label="Send"
-                  title="Send"
+                  className="chat-attach"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  aria-label="Attach a file"
+                  title="Attach a file"
                 >
-                  <span className="chat-send-glyph" aria-hidden="true">
-                    ↑
-                  </span>
+                  {uploading ? (
+                    <span className="chat-attach-spin" aria-hidden="true" />
+                  ) : (
+                    <SvgAttach />
+                  )}
                 </button>
-              )}
-            </div>
-            {/* Attachment previews live INSIDE the composer pill, as a row
-                under the input — not a floating strip above it. */}
-            {chips.length > 0 ? (
-              <div className="chat-chips">
-                {chips.map((ch) => (
-                  <div key={ch.path} className="chat-chip" title={ch.name}>
-                    <img className="chat-chip-thumb" src={ch.previewUrl} alt={ch.name} />
+                {/* Chat mode only — Agent mode is raw, and `voiceOn` is the same
+                  predicate that governs Chat mode's written voice. */}
+                {voiceOn ? (
+                  <VoiceControl
+                    state={voice.state}
+                    detail={voice.detail}
+                    status={voice.status}
+                    supported={voice.supported}
+                    minutesLeft={voice.minutesLeft}
+                    elapsedMs={voice.elapsedMs}
+                    onStart={voice.start}
+                    onStop={() => voice.stop('user')}
+                  />
+                ) : null}
+                <textarea
+                  ref={inputRef}
+                  className="chat-input"
+                  value={input}
+                  // The combobox arrangement the sidebar's search box uses: the
+                  // FIELD keeps focus and points at the active row, so composing
+                  // is never interrupted by a list taking the caret. Stated only
+                  // while the picker is up — an `aria-activedescendant` pointing
+                  // at an id that is not in the document announces nothing.
+                  {...(mentionOpen
+                    ? {
+                        role: 'combobox',
+                        'aria-expanded': true,
+                        'aria-autocomplete': 'list' as const,
+                        'aria-controls': mentionListId,
+                        'aria-activedescendant': `${mentionListId}-${mentionSafeCursor}`,
+                      }
+                    : {})}
+                  onChange={(e) => {
+                    setInput(e.target.value);
+                    syncMentionRun(
+                      e.target.value,
+                      e.target.selectionStart ?? e.target.value.length,
+                    );
+                    // Editing retires a search highlight. Typing into the
+                    // composer means you have stopped reading the result you were
+                    // brought here for and started using the chat.
+                    clearJump();
+                  }}
+                  // A caret MOVED by an arrow or a click can land inside an
+                  // existing `@…`, which has to reopen that run's picker — the
+                  // run is defined by where the caret is, not by the end of the
+                  // draft. `keyup` rather than `keydown`: the caret has not moved
+                  // yet on the way down.
+                  onKeyUp={(e) => {
+                    const el = e.currentTarget;
+                    syncMentionRun(el.value, el.selectionStart ?? el.value.length);
+                  }}
+                  onClick={(e) => {
+                    const el = e.currentTarget;
+                    syncMentionRun(el.value, el.selectionStart ?? el.value.length);
+                  }}
+                  onPaste={onPaste}
+                  onKeyDown={(e) => {
+                    // The picker owns the arrows, Enter, Tab and Escape while it
+                    // is up — except mid-composition, where an IME owns Enter and
+                    // the arrows to choose a candidate and stealing them there
+                    // makes the composer unusable in Japanese/Chinese input.
+                    if (mentionOpen && !e.nativeEvent.isComposing) {
+                      const n = mentionRows.length;
+                      if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        setMentionCursor((c) => (Math.min(c, n - 1) + 1) % n);
+                        return;
+                      }
+                      if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        setMentionCursor((c) => (Math.min(c, n - 1) + n - 1) % n);
+                        return;
+                      }
+                      if (e.key === 'Enter' || e.key === 'Tab') {
+                        e.preventDefault();
+                        const row = mentionRows[mentionSafeCursor];
+                        if (row) pickMention(row);
+                        return;
+                      }
+                      if (e.key === 'Escape') {
+                        e.preventDefault();
+                        closeMentions(true);
+                        return;
+                      }
+                    }
+                    // Desktop: Enter sends, Shift+Enter = newline. Mobile: the
+                    // on-screen Return key inserts a newline (send is the button) —
+                    // otherwise every line break fires off a message.
+                    if (e.key === 'Enter' && !e.shiftKey && !isMobileLayout()) {
+                      e.preventDefault();
+                      sendMessage();
+                    }
+                  }}
+                  placeholder={
+                    question
+                      ? 'Type an answer, or tap an option…'
+                      : // Chat is addressed as Chat. Naming the harness here was
+                        // the same slip as the greeting: "Message Claude…" under a
+                        // pane that calls itself Chat, in the one mode where the
+                        // harness is not a thing the user chose.
+                        `Message ${mode === 'chat' ? 'Chat' : assistantLabel(session?.assistant)}…`
+                  }
+                  rows={1}
+                />
+                {sending && !question ? (
+                  <>
+                    {/* Busy + composed text → Queue it (the server holds it and
+                      feeds it when the agent frees up) alongside Stop, instead
+                      of the old dead-end where a typed message wouldn't send. */}
+                    {input.trim() || chips.length > 0 ? (
+                      <button
+                        type="button"
+                        className="chat-send is-queue"
+                        onClick={sendMessage}
+                        aria-label="Queue message — sends when the agent is free"
+                        title="Queue — sends when the agent is free"
+                      >
+                        <SvgQueue />
+                      </button>
+                    ) : null}
                     <button
                       type="button"
-                      className="chat-chip-remove"
-                      onClick={() => removeChip(ch.path)}
-                      aria-label={`Remove ${ch.name}`}
-                      title="Remove"
+                      className="chat-send is-stop"
+                      onClick={stop}
+                      aria-label="Stop"
+                      title="Stop"
                     >
-                      ×
+                      <span className="chat-send-glyph" aria-hidden="true" />
                     </button>
-                  </div>
-                ))}
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="chat-send"
+                    onClick={sendMessage}
+                    disabled={!input.trim() && chips.length === 0}
+                    aria-label="Send"
+                    title="Send"
+                  >
+                    <span className="chat-send-glyph" aria-hidden="true">
+                      ↑
+                    </span>
+                  </button>
+                )}
               </div>
-            ) : null}
+              {/* Attachment previews live INSIDE the composer pill, as a row
+                under the input — not a floating strip above it. */}
+              {chips.length > 0 ? (
+                <div className="chat-chips">
+                  {chips.map((ch) => (
+                    <div key={ch.path} className="chat-chip" title={ch.name}>
+                      <img className="chat-chip-thumb" src={ch.previewUrl} alt={ch.name} />
+                      <button
+                        type="button"
+                        className="chat-chip-remove"
+                        onClick={() => removeChip(ch.path)}
+                        aria-label={`Remove ${ch.name}`}
+                        title="Remove"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
           </div>
-        </div>
-      ) : null}
-    </div>
+        ) : null}
+      </div>
     </ChatMentionContext.Provider>
   );
 }

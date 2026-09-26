@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MENTION_QUERY_MAX,
   type MentionChat,
+  type MentionPick,
   applyMention,
   detectMentionRun,
   nextMentionRun,
@@ -16,6 +17,7 @@ import {
   rankMentions,
   renderDirectMarker,
   renderReportMarker,
+  repinPicks,
   runIsSettled,
   toMentionChats,
   withContentRows,
@@ -121,6 +123,147 @@ describe('applyMention — what picking inserts', () => {
     // Caret lands after the inserted space, NOT at the end of the draft — the
     // rest of the sentence was already written.
     expect(next.caret).toBe('ask @Investing '.length);
+  });
+
+  it('records WHICH chat was picked, by id, anchored at its @', () => {
+    // The identity half. The draft still reads as the user's own words; the id
+    // rides alongside so send time does not have to guess the name back.
+    const run = detectMentionRun('@ma', 3);
+    if (!run) throw new Error('expected a run');
+    const next = applyMention('@ma', run, CORPUS[1] as MentionChat);
+    expect(next.text).toBe('@Main ');
+    expect(next.pick).toEqual({ tabId: 'main', name: 'Main', start: 0 });
+  });
+});
+
+/**
+ * PICKING A CHAT DECIDES WHICH CHAT GETS THE WORK.
+ *
+ * Both cases below were reproduced against the real functions before this
+ * existed: the picker serialised the NAME and threw the selection away, and
+ * `parseDirective` then re-resolved the name over the whole corpus. The user
+ * chose a chat, watched the picker display the parent that distinguishes it, and
+ * the work went somewhere else.
+ */
+describe('an explicit pick decides the recipient', () => {
+  /** What the composer does: pick from the picker, then type the request. */
+  const pickThenType = (draft: string, caret: number, chat: MentionChat, rest: string) => {
+    const run = detectMentionRun(draft, caret);
+    if (!run) throw new Error('expected a run');
+    const applied = applyMention(draft, run, chat);
+    const text = applied.text + rest;
+    return { text, picks: repinPicks(text, [applied.pick]) };
+  };
+
+  it('sends to Main, not Main repo, when Main is what was picked', () => {
+    // THE live case, and it needs no duplicate names at all: pick `Main`, type
+    // `repo status`, and the draft reads `@Main repo status`.
+    const { text, picks } = pickThenType('@ma', 3, CORPUS[1] as MentionChat, 'repo status');
+    expect(text).toBe('@Main repo status');
+    // The defect, still the answer without the pick — the longest name wins and
+    // it is a different chat with a truncated request.
+    expect(parseDirective(text, CORPUS)).toMatchObject({
+      target: { tabName: 'Main repo' },
+      body: 'status',
+    });
+    // With it, the chat the user chose, and the whole request.
+    expect(parseDirective(text, CORPUS, picks)).toMatchObject({
+      target: { tabName: 'Main' },
+      body: 'repo status',
+    });
+  });
+
+  it('sends to the same-named chat that was actually selected', () => {
+    // Names are not unique and nothing enforces it. The picker shows the parent
+    // to tell two `Work review` rows apart, so the distinction is visible at the
+    // moment of choosing and must not be lost by choosing.
+    const first = chat({ tabName: 'Work review', tabId: 'wr-1', parentName: 'Main' });
+    const second = chat({ tabName: 'Work review', tabId: 'wr-2', parentName: 'Investing' });
+    const corpus = [first, second];
+    const { text, picks } = pickThenType('@work', 5, second, 'check it');
+    expect(text).toBe('@Work review check it');
+    expect(parseDirective(text, corpus, picks)?.target.tabId).toBe('wr-2');
+    // …and picking the other one sends to the other one. Without the picks both
+    // go to whichever the sort happens to put first.
+    const other = pickThenType('@work', 5, first, 'check it');
+    expect(parseDirective(other.text, corpus, other.picks)?.target.tabId).toBe('wr-1');
+  });
+
+  it('still gets the work to a chat RENAMED after it was picked', () => {
+    // The token in the draft is the old name; the pick is an id. Identity wins,
+    // and the body still starts after the token the user can see.
+    const { text, picks } = pickThenType('@ma', 3, CORPUS[1] as MentionChat, 'run it');
+    const renamed = [chat({ tabName: 'Mainline', tabId: 'main' })];
+    expect(parseDirective(text, renamed, picks)).toMatchObject({
+      target: { tabId: 'main' },
+      body: 'run it',
+    });
+  });
+
+  it('falls back to the name when the pick does not describe this draft', () => {
+    // A pick anchored somewhere else, or at a token that has been edited away,
+    // must not hijack the leading mention. The fallback is the old behaviour,
+    // which is right for text typed by hand.
+    const stray: MentionPick[] = [{ tabId: 'investing', name: 'Investing', start: 40 }];
+    expect(parseDirective('@Main repo run it', CORPUS, stray)?.target.tabName).toBe('Main repo');
+  });
+
+  it('ignores a pick for a chat that is no longer in the corpus', () => {
+    const gone: MentionPick[] = [{ tabId: 'deleted', name: 'Main', start: 0 }];
+    // Resolution continues rather than failing: the name still reads as a chat.
+    expect(parseDirective('@Main repo run it', CORPUS, gone)?.target.tabName).toBe('Main repo');
+  });
+
+  it('resolves the same way whatever order the corpus is in', () => {
+    // The sidebar's order moves with activity, and it used to be the tie-break
+    // between two same-named chats — so an already-written mention changed
+    // destination through the day.
+    const a = chat({ tabName: 'Work review', tabId: 'wr-1' });
+    const b = chat({ tabName: 'Work review', tabId: 'wr-2' });
+    expect(parseDirective('@Work review go', [a, b])?.target.tabId).toBe(
+      parseDirective('@Work review go', [b, a])?.target.tabId,
+    );
+  });
+});
+
+describe('repinPicks — a pick survives editing, or it is dropped', () => {
+  const pick = (over: Partial<MentionPick> = {}): MentionPick => ({
+    tabId: 'main',
+    name: 'Main',
+    start: 0,
+    ...over,
+  });
+
+  it('follows the token when text is typed in front of it', () => {
+    expect(repinPicks('hey @Main go', [pick()])).toEqual([pick({ start: 4 })]);
+  });
+
+  it('drops a pick whose token the user deleted', () => {
+    expect(repinPicks('go and do it', [pick()])).toEqual([]);
+    // Half-deleted counts as deleted: `@Mai` is not the token that was inserted.
+    expect(repinPicks('@Mai go', [pick()])).toEqual([]);
+  });
+
+  it('keeps a pick that has not moved, and never lets another steal its anchor', () => {
+    // Two same-named chats, both mentioned. The one that is still where it was
+    // claims that position first, so the second cannot slide onto it and change
+    // who the first mention means.
+    const held = pick({ tabId: 'wr-1', name: 'Work review', start: 0 });
+    const later = pick({ tabId: 'wr-2', name: 'Work review', start: 14 });
+    const text = '@Work review @Work review';
+    expect(repinPicks(text, [later, held])).toEqual([
+      held,
+      pick({ tabId: 'wr-2', name: 'Work review', start: 13 }),
+    ]);
+  });
+
+  it('does not match a token that is only a prefix of a longer word', () => {
+    expect(repinPicks('@Mainframe go', [pick()])).toEqual([]);
+  });
+
+  it('is empty-safe both ways', () => {
+    expect(repinPicks('', [pick()])).toEqual([]);
+    expect(repinPicks('@Main go', [])).toEqual([]);
   });
 });
 
