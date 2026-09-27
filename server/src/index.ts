@@ -577,16 +577,21 @@ void ensureTunnel({ start: false })
 void (async () => {
   const chrome = findChrome();
   if (!chrome) {
+    // Deliberately does not go looking in /Applications: a syscall into another
+    // app's bundle raises a macOS permission dialog on the user's real screen.
     console.log(
-      '[browser] no Chrome found — `npx playwright install chromium`, or set MUXPAD_CHROME_BIN',
+      '[browser] no browser to own — run `npx playwright install chromium`, or set MUXPAD_CHROME_BIN',
     );
     return;
   }
+  // Say WHICH browser and WHY, because "it picked something" is the state that
+  // took an hour to debug the last time discovery guessed.
+  console.log(`[browser] using ${chrome.path} (${chrome.source})`);
   for (const profile of DEFAULT_BROWSER_PROFILES) {
     await ensureBrowserApp(profile, {
       db,
       dataDir: config.dataDir,
-      chromePath: chrome,
+      chromePath: chrome.path,
       hostEntry: browserHostEntry(),
       registry: appRegistry,
       cwd: config.dataDir,

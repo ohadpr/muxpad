@@ -120,10 +120,11 @@ describe('the command', () => {
       profile: 'shopping',
       port: 9410,
       dataDir: '/Users/me/Library/Application Support/muxpad',
-      chromePath: '/Applications/Google Chrome for Testing.app/x',
+      chromePath: '/opt/browsers/Chrome for Testing/chrome',
     });
     expect(cmd).toContain('"/opt/my apps/cli.js"');
     expect(cmd).toContain('"/Users/me/Library/Application Support/muxpad"');
+    expect(cmd).toContain('"/opt/browsers/Chrome for Testing/chrome"');
     expect(cmd).toContain('--profile=shopping');
     expect(cmd).toContain('--port=9410');
   });

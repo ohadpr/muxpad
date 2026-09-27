@@ -94,7 +94,7 @@ export function browsersRoutes(deps: {
   hostEntry: string;
   cwd: string;
   registry: { start(appId: string): Promise<unknown>; stop(appId: string): Promise<unknown> };
-  chromePath?: () => string | null;
+  chromePath?: () => { path: string; source: string } | null;
 }) {
   const app = new Hono();
   const wheel = new BrowserWheel(deps.db);
@@ -128,14 +128,21 @@ export function browsersRoutes(deps: {
     const profile = profileParam(parsed.data.profile);
     if (!profile) return c.json({ error: 'invalid profile name' }, 400);
 
-    // No Chrome is a configuration fact, not a crash — and the message names
+    // No browser is a configuration fact, not a crash — and the message names
     // the fix, because "failed to start browser" sends somebody reading logs
     // for twenty minutes.
+    //
+    // The message names the two SAFE answers and nothing else. It deliberately
+    // does not mention the user's real Chrome, even to rule it out: an error
+    // body is read as a to-do list, and "point it at /Applications" is exactly
+    // the habit that put a TCC dialog on somebody's screen. The reason lives in
+    // findChrome.ts, where the next person to edit discovery will read it.
     const chrome = chromeFor();
     if (!chrome) {
       return c.json(
         {
-          error: `no Chrome found — install Playwright's browsers (npx playwright install chromium) or set MUXPAD_CHROME_BIN`,
+          error:
+            'no browser muxpad can own — run `npx playwright install chromium`, or set MUXPAD_CHROME_BIN to a browser binary',
         },
         503,
       );
@@ -144,7 +151,7 @@ export function browsersRoutes(deps: {
     const state = await ensureBrowserApp(profile, {
       db: deps.db,
       dataDir: deps.dataDir,
-      chromePath: chrome,
+      chromePath: chrome.path,
       hostEntry: deps.hostEntry,
       registry: deps.registry,
       cwd: deps.cwd,

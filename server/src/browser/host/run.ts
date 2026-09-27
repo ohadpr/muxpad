@@ -69,7 +69,18 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
   chrome.stderr?.on('data', (b) => log(`[chrome] ${String(b).trimEnd()}`));
   chrome.on('exit', (code) => log(`[chrome] exited ${code}`));
 
-  await waitForCdp(spec.url, chrome);
+  // findChrome deliberately does NOT verify a path inside an app bundle —
+  // stat-ing there is what raises a macOS permission dialog on the real screen.
+  // So a wrong path arrives HERE instead, and this is where it has to become a
+  // sentence rather than an unhandled 'error' event that takes the process down
+  // with a stack trace nobody can act on.
+  let spawnFailure: Error | null = null;
+  chrome.on('error', (err) => {
+    spawnFailure = new Error(`cannot launch ${spec.command}: ${err.message}`);
+    log(`[chrome] ${spawnFailure.message}`);
+  });
+
+  await waitForCdp(spec.url, chrome, () => spawnFailure);
 
   const cdp = new CdpConnection({
     endpoint: spec.url,
@@ -220,9 +231,15 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
  * exits — otherwise a browser that died on a bad flag is indistinguishable from
  * one that is merely slow, for twenty seconds, on every single start.
  */
-async function waitForCdp(endpoint: string, chrome: ChildProcess) {
+async function waitForCdp(
+  endpoint: string,
+  chrome: ChildProcess,
+  spawnFailure: () => Error | null,
+) {
   const deadline = Date.now() + CDP_READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
+    const failed = spawnFailure();
+    if (failed) throw failed;
     if (chrome.exitCode !== null) {
       throw new Error(`chrome exited (${chrome.exitCode}) before CDP came up`);
     }
