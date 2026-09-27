@@ -54,6 +54,25 @@ export const BROWSER_PROFILES_DIRNAME = 'browser-profiles';
  */
 export const BROWSER_PORT_RANGE: readonly [number, number] = [9400, 9499];
 
+/**
+ * Distance from a profile's CDP port to its VIEWER port.
+ *
+ * Two ports, both derived from the one number, for the same reason the number
+ * is derived at all: a card in a chat log outlives the browser process, and a
+ * viewer URL that moved on restart would strand every link muxpad ever wrote.
+ *
+ * They are kept apart because different things dial them — CDP is dialled by
+ * the agent's Playwright MCP, the viewer is opened by a person — and because
+ * the offset must clear the whole CDP range, or one profile's viewer lands on
+ * another profile's debugging port and the two fight silently.
+ */
+export const BROWSER_VIEWER_PORT_OFFSET = 100;
+
+/** The viewer port paired with a profile's CDP port. */
+export function browserViewerPort(cdpPort: number): number {
+  return cdpPort + BROWSER_VIEWER_PORT_OFFSET;
+}
+
 /** Longest profile name. It becomes a slug, a pane title and a path segment. */
 const MAX_PROFILE_NAME = 64;
 

@@ -487,6 +487,36 @@ export const TabSchema = z.object({
   // Unconditional (null rather than absent) for the same coalescing reason as
   // `done`; `stopped` is how a pinned chat says its clock does not run.
   clock: ChatClockSchema.nullable().optional(),
+  // ── THE SPAWN REPORT ───────────────────────────────────────────────────────
+  // What this SUB-CHAT did, read off its own transcript by a cheap model when
+  // its work ended, and shown as an entry in its PARENT's conversation. A
+  // worker retires the moment it delivers, so without this the log says "you
+  // started this" and never says what came back.
+  //
+  // A few sentences at most: what it was asked, what it concluded, whether it
+  // worked, and where the work IS (a report file, a published URL, an
+  // attachment) — that last part being the actual complaint this answers, since
+  // a push notification arrives and the work is then unfindable. NULL text with
+  // a non-null state is a real answer ("finished with nothing to report"); the
+  // FULL work is not here at all, it is fetched on demand from the transcript
+  // endpoint when the card is expanded (a 25 KB report on a row that rides
+  // every sidebar poll is 25 KB per poll per tab).
+  //
+  // All three are ABSENT together, not null, whenever there is no report —
+  // which is every chat nobody spawned. Unlike `done`/`clock` there is nothing
+  // to un-say: a report is only ever written, never withdrawn, so a client
+  // coalescing rows cannot be left holding a stale one.
+  spawn_report: z.string().nullable().optional(),
+  // Epoch ms the report was written. Its place in the parent's log — the moment
+  // the result LANDED, not the spawn that may be hours further up.
+  spawn_report_at: z.number().nullable().optional(),
+  // Which kind of answer this is. 'ok' — a report. 'none' — the child produced
+  // nothing usable and says so plainly (never an invented summary). 'crashed' —
+  // its last turn was fatal; a crashed sub-chat deliberately KEEPS its row, so
+  // this is the only thing that stops its card spinning forever. A report we
+  // could not produce at all is the absence of these fields, and renders
+  // nothing.
+  spawn_report_state: z.enum(['ok', 'none', 'crashed']).optional(),
 });
 export type Tab = z.infer<typeof TabSchema>;
 

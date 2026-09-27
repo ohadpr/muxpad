@@ -204,10 +204,10 @@ export function ChatMentionPill({
 /**
  * The card — a chat, inline in a conversation.
  *
- * Two uses, one container: work you DIRECTED to another chat (with the request
- * as its second line and the state slot spinning), and the report that comes
- * back (with the other agent's answer as the body). Same chip, same header, so
- * the pair reads as one exchange rather than as two unrelated rows.
+ * Four uses, one container: work you DIRECTED to another chat, the report that
+ * comes back, a chat this one SPAWNED, and that worker's report. Same chip, same
+ * header, same state slot, so a pair reads as one exchange rather than as two
+ * unrelated rows.
  *
  * ─── THE HEAD is the link, and the card is not ────────────────────────────────
  * The whole card used to be one `<button>`. That is the obvious shape for the
@@ -219,14 +219,33 @@ export function ChatMentionPill({
  * was clicked. (It is also invalid DOM nesting, which React says out loud.)
  *
  * So the container is inert and the HEAD carries the navigation. Independently
- * clickable content in the body now sits beside that link rather than inside it.
+ * clickable content in the body now sits beside that link rather than inside it —
+ * and that is also why the state chip and the disclosure are the head's SIBLINGS
+ * rather than its children.
+ *
+ * ─── THE RIGHT-EDGE CLUSTER: state, then disclosure ───────────────────────────
+ * `state` is a word for what happened and it sits OUTSIDE the link, which is
+ * StateChip's own rule and not a detail: visually-hidden or not, text inside a
+ * control joins that control's accessible NAME, so a state in the head would
+ * rename the link every time an agent started or stopped ("Work review" → "Work
+ * review, delivered").
+ *
+ * `onToggleExpanded` adds a SECOND control beside it. Expand to read the work
+ * here; the head to go there and continue. Both, deliberately: the summary is an
+ * index, and an index that can only be followed by leaving the conversation is
+ * the thing being complained about.
  */
 export function ChatMentionCard({
   chat,
   sub,
   working,
   state,
+  tone,
   body,
+  work,
+  expanded,
+  anchorId,
+  onToggleExpanded,
   onOpen,
 }: {
   chat: ChatChipChat & { headline?: string | null };
@@ -236,8 +255,39 @@ export function ChatMentionCard({
   working?: boolean | undefined;
   /** A word for what happened, when nothing is spinning. */
   state?: string | undefined;
+  /**
+   * Which HUE that word carries — the app's status channel, re-stepped per theme
+   * in styles.css, so nothing here names a colour.
+   *
+   * Absent means `note`: a neutral chip for a word that is an annotation rather
+   * than a lifecycle state ("reported", "directed here"). Those must not borrow
+   * the green that means a worker finished.
+   */
+  tone?: 'delivered' | 'done' | 'failed' | 'note' | undefined;
   /** The report itself, rendered in full by the caller (markdown, links…). */
   body?: ReactNode | undefined;
+  /**
+   * THE WORK the body is a summary of — shown only while `expanded`.
+   *
+   * Passed in rather than fetched here because it is fetched on demand and cached
+   * per child by the conversation (see ChatPane): this component stays
+   * presentational, and a card that re-mounted would not re-request anything.
+   */
+  work?: ReactNode | undefined;
+  expanded?: boolean | undefined;
+  /**
+   * The scroll memory's handle on this row (`data-eid`, see ANCHOR_ATTR) — the
+   * same arrangement `ActionGroup` uses.
+   *
+   * Needed because expanding is a reader-caused height change in the MIDDLE of
+   * the document, and the scroll hold measures the row by this id before the
+   * commit. Without it the hold silently does nothing and expanding a card above
+   * the viewport pulls the text out from under whoever pressed the button.
+   */
+  anchorId?: string | undefined;
+  /** Omitted when there is nothing to expand TO — no control is drawn at all,
+   *  rather than one that does nothing when pressed. */
+  onToggleExpanded?: (() => void) | undefined;
   /**
    * Where to go. OMITTED when the chat at the other end cannot be resolved —
    * which is a real state (a report from a chat that has since been deleted),
@@ -258,25 +308,58 @@ export function ChatMentionCard({
           </span>
         ) : null}
       </span>
-      {working ? (
-        <span className="chat-mention-card-mark" aria-hidden="true" />
-      ) : state ? (
-        <span className="chat-mention-card-state">{state}</span>
-      ) : null}
     </>
   );
   return (
-    <div className={`chat-mention-card${body ? ' -report' : ''}`} title={chatTooltip(chat)}>
-      {onOpen ? (
-        <button type="button" className="chat-mention-card-head" onClick={onOpen}>
-          {head}
-        </button>
-      ) : (
-        <div className="chat-mention-card-head">{head}</div>
-      )}
+    <div
+      className={`chat-mention-card${body ? ' -report' : ''}`}
+      data-expanded={expanded ? 'true' : undefined}
+      data-eid={anchorId}
+      title={chatTooltip(chat)}
+    >
+      <div className="chat-mention-card-row">
+        {onOpen ? (
+          <button type="button" className="chat-mention-card-head" onClick={onOpen}>
+            {head}
+          </button>
+        ) : (
+          <div className="chat-mention-card-head">{head}</div>
+        )}
+        {working ? (
+          <span className="chat-mention-card-mark" aria-hidden="true" />
+        ) : state ? (
+          <span className="chat-mention-card-state" data-state={tone ?? 'note'}>
+            {state}
+          </span>
+        ) : null}
+        {onToggleExpanded ? (
+          <button
+            type="button"
+            className="chat-mention-card-more"
+            aria-expanded={expanded === true}
+            title={expanded ? 'Hide the work' : 'Show the work'}
+            onClick={onToggleExpanded}
+          >
+            {/* The glyph is CSS (a rotating chevron), so the button's accessible
+                name is this text and nothing else. */}
+            <span className="chat-mention-card-chevron" aria-hidden="true" />
+            <span className="chat-mention-card-sr">
+              {expanded ? 'Hide the work' : 'Show the work'}
+            </span>
+          </button>
+        ) : null}
+      </div>
       {body ? (
         <div className="chat-mention-card-body" dir="auto">
           {body}
+        </div>
+      ) : null}
+      {/* THE SUMMARY STAYS. Expanding adds the work under it rather than
+          replacing it — the summary is the line that says where the work is, and
+          swapping it out would take that away exactly when it is being used. */}
+      {expanded && work ? (
+        <div className="chat-mention-card-work" dir="auto">
+          {work}
         </div>
       ) : null}
     </div>

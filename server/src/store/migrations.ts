@@ -679,6 +679,68 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE tabs ADD COLUMN retired_reason TEXT;
     `,
   },
+  {
+    // THE SPAWN REPORT — what a sub-chat actually did, in the parent's log.
+    //
+    // A worker retires the moment it delivers, which answered the 41-agent
+    // sidebar and created a new complaint in its place: "I don't see the
+    // summary of the work of this card anywhere". The chat leaves, the push
+    // notification arrives, and the report it wrote is behind a click nobody
+    // knows to make. These three columns are what the parent's log shows
+    // instead.
+    //
+    //   spawn_report       — a few sentences: what it was asked, what it
+    //     concluded, whether it worked, and where the work IS (a file path, a
+    //     published URL, an attachment). NULL when there was nothing to say.
+    //   spawn_report_at    — epoch ms of the ATTEMPT. Two jobs, deliberately:
+    //     the rate limiter's clock (headline_at's precedent — a restart is
+    //     exactly when a limiter must not forget itself, and a FAILURE has to
+    //     advance it or a broken install spawns a subprocess per retirement
+    //     forever), and the report entry's PLACE in the parent's transcript,
+    //     which is the moment the result landed rather than the spawn three
+    //     hours further up.
+    //   spawn_report_state — what KIND of answer this is, and it is what keeps
+    //     three different outcomes from reading as one shrug:
+    //       'ok'      — a report was written
+    //       'none'    — the child finished having produced nothing usable, and
+    //                   says so. NEVER an invented summary.
+    //       'crashed' — its last turn was FATAL. Written with or without text
+    //                   (whatever it got done before dying is worth saying),
+    //                   and it is the ONLY signal the client has that a child
+    //                   which never retires has stopped — a crashed sub-chat
+    //                   keeps its row by design, so its card span otherwise.
+    //       NULL      — we could not summarise (no SDK, a timeout, a reply that
+    //                   was not a report). The clock still advanced; nothing
+    //                   renders. Every failure path leaves the surface exactly
+    //                   as it was, which is chat/headline.ts's contract.
+    //
+    // WHY THE TAB ROW and not a side table: one report per child is a 1:1
+    // relation, and the child's row already IS the record that the spawn
+    // happened (the cards derive from the corpus and store nothing of their
+    // own). The row also reaches the parent's conversation with no new
+    // protocol — TabStore.row() → decorateTab → `tab.updated` → the client's
+    // tab cache → the spawn cards — which is durable, cross-device, and the
+    // same liveness path the headline already rides. A `spawn_notes` table
+    // earns its keep when a parent needs MANY notes of SEVERAL kinds (the
+    // directed-work echo in web/src/lib/chat-directed.ts being the other
+    // candidate); it is the upgrade, not this.
+    //
+    // ONLY THE SUMMARY LIVES HERE. The report the child actually wrote can be
+    // 25 KB, and the tab row is published on every sidebar list and every 5s
+    // poll — so the expansion is fetched on demand from the transcript
+    // endpoint instead. See web/src/lib/spawn-work.ts.
+    //
+    // No backfill, and there cannot be one: a report is read off a transcript
+    // at the moment a child finishes, and no existing child is finishing now.
+    // Absent is the right state for every row that predates the column, and
+    // the client draws nothing for it.
+    version: 29,
+    sql: `
+      ALTER TABLE tabs ADD COLUMN spawn_report TEXT;
+      ALTER TABLE tabs ADD COLUMN spawn_report_at INTEGER;
+      ALTER TABLE tabs ADD COLUMN spawn_report_state TEXT;
+    `,
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

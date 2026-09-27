@@ -6,6 +6,7 @@ import {
   browserAppSlug,
   browserAppUrl,
   browserProfileDir,
+  browserViewerPort,
   isBrowserAppSlug,
   normalizeProfileName,
   parseBrowserPort,
@@ -96,6 +97,20 @@ describe('addressing', () => {
     for (const bad of ['', 'not a url', 'http://127.0.0.1', 'https://example.com/x']) {
       expect(parseBrowserPort(bad), bad).toBeNull();
     }
+  });
+});
+
+describe('the viewer port', () => {
+  it('is derived from the CDP port, so it is stable across restarts too', () => {
+    expect(browserViewerPort(9410)).toBe(9510);
+    expect(browserViewerPort(9410)).toBe(browserViewerPort(9410));
+  });
+
+  it('never collides with another profile CDP port', () => {
+    // The offset must clear the whole CDP range, or profile A's viewer lands on
+    // profile B's debugging port and the two fight silently.
+    const [lo, hi] = BROWSER_PORT_RANGE;
+    expect(browserViewerPort(lo)).toBeGreaterThan(hi);
   });
 });
 

@@ -28,6 +28,8 @@ import {
   repinPicks,
   runIsSettled,
   spawnCards,
+  spawnReportSummary,
+  spawnState,
   spawnedChildren,
   toMentionChats,
   withContentRows,
@@ -675,6 +677,9 @@ describe('toMentionChats — the corpus', () => {
           clock: null,
           last_activity_at: 9_000,
           created_at: 7_000,
+          spawn_report: 'Reviewed the branch and found two failing tests.',
+          spawn_report_at: 9_500,
+          spawn_report_state: 'ok',
         },
       ] as never,
     },
@@ -720,6 +725,26 @@ describe('toMentionChats — the corpus', () => {
 
   it('keeps the parent ID too — the card in the parent is asked the other way round', () => {
     expect(toMentionChats(groups).map((c) => c.parentId)).toEqual([undefined, 't1', 't1']);
+  });
+
+  it('carries the SPAWN REPORT off the row, as one object or not at all', () => {
+    // The three columns arrive as a set and are read as a set: a state with no
+    // timestamp has no place in the log to sit, and publishing the timestamp
+    // alone would put an empty entry in the conversation.
+    expect(toMentionChats(groups)[2]?.report).toEqual({
+      text: 'Reviewed the branch and found two failing tests.',
+      state: 'ok',
+      at: 9_500,
+    });
+    expect(toMentionChats(groups)[0]?.report).toBeUndefined();
+  });
+
+  it('reads a report field without its pair as NO report', () => {
+    const reported = (groups[0] as { tabs: Record<string, unknown>[] }).tabs[2];
+    const half = [
+      { ...groups[0], tabs: [{ ...reported, spawn_report_at: null }] },
+    ] as never as WorkspaceTabs[];
+    expect(toMentionChats(half)[0]?.report).toBeUndefined();
   });
 
   it('carries created_at — for a child, that IS the moment of the spawn', () => {
@@ -859,9 +884,9 @@ describe('spawnCards', () => {
 
   it('carries the spawn MOMENT with each card — that is what places it', () => {
     expect(spawnCards(rows, 'p')).toEqual([
-      { chat: rows[0], at: 100 },
-      { chat: rows[1], at: 200 },
-      { chat: rows[2], at: 300 },
+      { chat: rows[0], kind: 'spawn', at: 100 },
+      { chat: rows[1], kind: 'spawn', at: 200 },
+      { chat: rows[2], kind: 'spawn', at: 300 },
     ]);
   });
 
@@ -899,6 +924,140 @@ describe('spawnCards', () => {
 });
 
 /**
+ * THE REPORT — the entry that did not exist.
+ *
+ * "i don't see the summary of the work of this card anywhere — not in the main
+ * muxpad chat, not when hovering over the card, not in some other expandable
+ * toggle thing in the card". The summary is written server-side off the child's
+ * own transcript; this is the half that decides WHERE it appears and WHAT the
+ * card says about it.
+ */
+describe('spawnCards — the report is its own entry', () => {
+  const reported = (over: Partial<MentionChat> = {}) =>
+    chat({
+      tabName: 'browser-use',
+      tabId: 'bu',
+      parentId: 'p',
+      createdAt: 100,
+      done: true,
+      doneReason: 'delivered',
+      report: { text: 'Read 14 pages and wrote /tmp/browser-use.md.', state: 'ok', at: 9_000 },
+      ...over,
+    });
+
+  it('draws the report WHERE IT LANDED, not at the spawn', () => {
+    // The card for a worker that ran for hours would otherwise put its result
+    // three hours up the log — and the push notification that says "it is done"
+    // arrives at the bottom, which is where the reader then looks.
+    expect(spawnCards([reported()], 'p')).toEqual([
+      { chat: reported(), kind: 'spawn', at: 100 },
+      { chat: reported(), kind: 'report', at: 9_000 },
+    ]);
+  });
+
+  it('draws no report entry for a worker that has not written one', () => {
+    const working = chat({ tabName: 'kid', tabId: 'k', parentId: 'p', createdAt: 100 });
+    expect(spawnCards([working], 'p').map((c) => c.kind)).toEqual(['spawn']);
+  });
+
+  it('keeps the whole list in TIME order across both kinds', () => {
+    // A slow worker's report lands after a later sibling's spawn. The interleave
+    // walks this list once against the transcript, so a list that is not sorted
+    // silently drops entries into the wrong slots.
+    const slow = reported({ tabId: 'slow', createdAt: 100 });
+    const later = chat({ tabName: 'later', tabId: 'later', parentId: 'p', createdAt: 5_000 });
+    expect(spawnCards([slow, later], 'p').map((c) => [c.chat.tabId, c.kind, c.at])).toEqual([
+      ['slow', 'spawn', 100],
+      ['later', 'spawn', 5_000],
+      ['slow', 'report', 9_000],
+    ]);
+  });
+
+  it("sheds a child's TWO entries together when the cap bites", () => {
+    // Half a pair is worse than neither: a spawn whose result is missing reads
+    // as work that vanished, and a report with no spawn as one that came from
+    // nowhere.
+    const rows = [
+      ...Array.from({ length: 4 }, (_, i) =>
+        reported({ tabId: `r${i}`, createdAt: i, report: { text: 'x', state: 'ok', at: 500 + i } }),
+      ),
+      chat({ tabName: 'live', tabId: 'live', parentId: 'p', createdAt: 900 }),
+    ];
+    const ids = spawnCards(rows, 'p', 2).map((c) => c.chat.tabId);
+    expect(ids.filter((id) => id === 'r3')).toHaveLength(2);
+    expect(ids).not.toContain('r0');
+  });
+
+  it('a report does not make a finished child count as running', () => {
+    // The roster agreement, restated against the new entry: two cards for one
+    // child must not become two agents.
+    const rows = [reported()];
+    expect(liveSpawnedChildren(rows, 'p')).toEqual([]);
+  });
+});
+
+describe('spawnReportSummary — what the card says when there are no sentences', () => {
+  it('says it plainly, and invents nothing', () => {
+    // "A child that produced nothing useful says so plainly. Do not invent a
+    // summary for it."
+    expect(spawnReportSummary({ text: null, state: 'none', at: 1 })).toBe(
+      'Finished with nothing to report.',
+    );
+    expect(spawnReportSummary({ text: null, state: 'crashed', at: 1 })).toBe(
+      'Crashed before it produced anything.',
+    );
+  });
+
+  it('prefers the real report over either', () => {
+    expect(spawnReportSummary({ text: 'Read 14 pages.', state: 'crashed', at: 1 })).toBe(
+      'Read 14 pages.',
+    );
+  });
+});
+
+/**
+ * WHAT THE CARD SAYS HAPPENED.
+ *
+ * `delivered` used to be the only word, rendered as mono grey text, and `failed`
+ * did not exist at all — which was not a wording problem: a crashed worker KEEPS
+ * its live row on purpose, so the card read it as still working and span forever.
+ */
+describe('spawnState', () => {
+  const kidAt = (over: Partial<MentionChat>) => chat({ tabName: 'kid', tabId: 'k', ...over });
+
+  it('is working while the chat is live', () => {
+    expect(spawnState(kidAt({}))).toBe('working');
+  });
+
+  it('is delivered when the work landed', () => {
+    expect(spawnState(kidAt({ done: true, doneReason: 'delivered' }))).toBe('delivered');
+  });
+
+  it('is done for a chat that left the live list any other way', () => {
+    expect(spawnState(kidAt({ done: true, doneReason: 'archived' }))).toBe('done');
+    expect(spawnState(kidAt({ done: true, doneReason: 'decayed' }))).toBe('done');
+    expect(spawnState(kidAt({ done: true }))).toBe('done');
+  });
+
+  it('IS FAILED FOR A CRASHED WORKER, WHICH NEVER RETIRES', () => {
+    // The one state that is not derived from the lifecycle, because the
+    // lifecycle cannot see it: `done` is false and stays false.
+    const crashed = kidAt({ report: { text: null, state: 'crashed', at: 5 } });
+    expect(crashed.done).toBeUndefined();
+    expect(spawnState(crashed)).toBe('failed');
+  });
+
+  it('lets the crash outrank a delivery — the last thing that happened wins', () => {
+    const revived = kidAt({
+      done: true,
+      doneReason: 'delivered',
+      report: { text: 'died half way', state: 'crashed', at: 5 },
+    });
+    expect(spawnState(revived)).toBe('failed');
+  });
+});
+
+/**
  * WHERE A CARD SITS IN THE LOG.
  *
  * The user's spec: "when you launch them have that UI component in the chat as an
@@ -910,7 +1069,11 @@ describe('spawnCards', () => {
  * turn and hoping.
  */
 describe('interleaveSpawnCards', () => {
-  const card = (id: string, at: number) => ({ chat: chat({ tabName: id, tabId: id }), at });
+  const card = (id: string, at: number) => ({
+    chat: chat({ tabName: id, tabId: id }),
+    kind: 'spawn' as const,
+    at,
+  });
   const shape = (out: ReturnType<typeof interleaveSpawnCards<string>>) =>
     out.map((x) => (x.kind === 'card' ? `[${x.card.chat.tabId}]` : x.node));
 

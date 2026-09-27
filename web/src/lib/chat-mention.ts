@@ -45,6 +45,26 @@ import {
  * same one the prototype shipped.
  */
 
+/**
+ * A worker's report, as the log needs it.
+ *
+ * `text` is the SUMMARY — a few sentences, capped server-side at 400 characters.
+ * It is an INDEX, not a substitute: the work itself (a 25 KB research report, a
+ * published url) is fetched from the transcript when the card is expanded, which
+ * is why nothing here grew a second, larger field. See lib/spawn-work.ts.
+ */
+export interface SpawnReport {
+  /** Null is meaningful: `none` and a `crashed` worker that got nothing done
+   *  both have a state and no sentences. */
+  text: string | null;
+  /** 'ok' a report · 'none' it produced nothing and says so · 'crashed' its last
+   *  turn was fatal. A report we could not produce at all is no report field. */
+  state: 'ok' | 'none' | 'crashed';
+  /** When it was written — the report entry's place in the log, which is the
+   *  moment the result LANDED rather than the spawn hours further up. */
+  at: number;
+}
+
 /** A chat, as the picker and the chip need it. Superset of `SearchableTab`. */
 export interface MentionChat extends SearchableTab {
   /**
@@ -94,6 +114,20 @@ export interface MentionChat extends SearchableTab {
    */
   parentName?: string | undefined;
   /**
+   * WHAT THIS WORKER DID — the spawn report, when it has one.
+   *
+   * Written server-side by reading the child's own transcript the moment its work
+   * ends (server/src/chat/spawn-report.ts), published on the child's tab row, and
+   * shown as its own entry in the PARENT's conversation. Absent for every chat
+   * nobody spawned, and for a worker still working.
+   *
+   * Three fields rather than a bare string because the STATE is the half that
+   * decides what to draw: a worker that produced nothing says so, and a crashed
+   * one is the only case where a card must stop spinning without its chat having
+   * retired. See `spawnState`.
+   */
+  report?: SpawnReport | undefined;
+  /**
    * What `ChatChip` (and `chatTooltip`) need off this chat, built ONCE here.
    *
    * The chip is territory B's component and its prop shape is deliberately
@@ -113,6 +147,10 @@ type TabWithLifecycle = {
   created_at?: number | null;
   /** Present-but-NULL means there is no clock at all — see toMentionChats. */
   clock?: ChatClock | null;
+  /** The spawn report's three columns. All three absent together, always. */
+  spawn_report?: string | null;
+  spawn_report_at?: number | null;
+  spawn_report_state?: 'ok' | 'none' | 'crashed' | null;
 };
 
 /**
@@ -144,6 +182,20 @@ export function toMentionChats(groups: readonly WorkspaceTabs[]): MentionChat[] 
       ...(row?.spawned_by ? { parentId: row.spawned_by } : {}),
       ...(parentName ? { parentName } : {}),
       ...(typeof row?.created_at === 'number' ? { createdAt: row.created_at } : {}),
+      // THE REPORT, gated on the STATE and on the timestamp together. Both are
+      // needed to draw the entry at all — a state with no time has no place in
+      // the log to sit — and the server publishes them as a set, so a row
+      // carrying one without the other is a server that predates this or a
+      // half-written row, and the honest reading of either is "no report yet".
+      ...(row?.spawn_report_state && typeof row.spawn_report_at === 'number'
+        ? {
+            report: {
+              text: row.spawn_report ?? null,
+              state: row.spawn_report_state,
+              at: row.spawn_report_at,
+            },
+          }
+        : {}),
       chip: {
         name: t.tabName,
         icon: t.icon ?? null,
@@ -238,11 +290,70 @@ function spawnedAt(c: MentionChat): number {
   return c.createdAt ?? 0;
 }
 
-/** A spawn, as the conversation places it: the child, and WHEN it was started. */
+/**
+ * One card in the conversation: a child chat, and WHEN this card is about.
+ *
+ * TWO KINDS, and a child that reported has both:
+ *
+ *   `spawn`  at the child's `created_at` — "you started this, here".
+ *   `report` at its `spawn_report_at`    — "and here is what came back".
+ *
+ * They are separate entries because they happened at separate times, and the
+ * second one is the whole point of the feature: a worker that ran for three
+ * hours has its result at the moment it landed, not three hours up a log the
+ * reader has already scrolled past. The push notification arrives when the
+ * report does, so the bottom of the log is exactly where the reader is looking.
+ */
 export interface SpawnCard {
   chat: MentionChat;
-  /** Epoch ms of the spawn — the child's `created_at`. Never moves. */
+  kind: 'spawn' | 'report';
+  /** Epoch ms this card is about. Never moves. */
   at: number;
+}
+
+/**
+ * What a child's card says about it — the one state resolution, in one place.
+ *
+ * A pure function rather than ternaries in the renderer because it decides three
+ * things that were previously wrong or unavailable:
+ *
+ *   · `failed` EXISTS. A crashed worker deliberately keeps its live row (a
+ *     crashed run is what you want to look at), so `!done` read it as still
+ *     working and its card span forever. The report's `crashed` state is the
+ *     only signal that says otherwise, and it comes from an OBSERVED fatal turn
+ *     rather than from anything a model concluded.
+ *   · `delivered` vs `done`. Delivered means it finished its work; done means the
+ *     chat left the live list some other way (you archived it, or it decayed
+ *     without ever being a worker that delivered).
+ *   · everything else is `working`, read off the corpus at render time so the
+ *     mark stays honest after the card has scrolled up.
+ */
+export type SpawnState = 'working' | 'delivered' | 'done' | 'failed';
+
+/**
+ * What a report card SAYS when the generator wrote no sentences.
+ *
+ * Both fallbacks are statements of fact rather than apologies, and neither is an
+ * invented summary — "a child that produced nothing useful says so plainly" is
+ * the requirement, and the server distinguishes "nothing to report" from "we
+ * could not summarise" precisely so that this function is never reached for the
+ * second one (no report field at all → no card).
+ *
+ * Here rather than in the JSX so the wording is one string in one place, and so a
+ * test can hold it: these two sentences are the entire content of the card in the
+ * two cases where a reader is most likely to think something broke.
+ */
+export function spawnReportSummary(report: SpawnReport): string {
+  if (report.text) return report.text;
+  return report.state === 'crashed'
+    ? 'Crashed before it produced anything.'
+    : 'Finished with nothing to report.';
+}
+
+export function spawnState(chat: MentionChat): SpawnState {
+  if (chat.report?.state === 'crashed') return 'failed';
+  if (!chat.done) return 'working';
+  return chat.doneReason === 'delivered' ? 'delivered' : 'done';
 }
 
 /**
@@ -265,8 +376,26 @@ export function spawnCards(
   tabId: string | undefined | null,
   max: number = MAX_SPAWN_CARDS,
 ): SpawnCard[] {
-  return spawnedChildren(corpus, tabId, max).map((chat) => ({ chat, at: spawnedAt(chat) }));
+  const out: SpawnCard[] = [];
+  // THE CAP COUNTS CHILDREN, NOT ENTRIES, and deliberately: what a reader is
+  // drowning in is a dispatcher's forty workers, not the fact that each of them
+  // both started and finished. A child's two entries are shed together, because
+  // shedding one would leave a result with no spawn or a spawn whose result is
+  // silently missing.
+  for (const chat of spawnedChildren(corpus, tabId, max)) {
+    out.push({ chat, kind: 'spawn', at: spawnedAt(chat) });
+    if (chat.report) out.push({ chat, kind: 'report', at: chat.report.at });
+  }
+  // Re-sorted because a slow worker's report lands AFTER a later sibling's spawn,
+  // and `interleaveSpawnCards` walks this list once against the transcript's own
+  // times. `kind` breaks a tie so a report can never be drawn above the spawn it
+  // answers (a worker that finishes inside one millisecond is not a real case,
+  // but "the order is total" is what keeps two renders identical).
+  out.sort((a, b) => a.at - b.at || KIND_ORDER[a.kind] - KIND_ORDER[b.kind]);
+  return out;
 }
+
+const KIND_ORDER: Record<SpawnCard['kind'], number> = { spawn: 0, report: 1 };
 
 /** The children still working — the number above the composer. */
 export function liveSpawnedChildren(

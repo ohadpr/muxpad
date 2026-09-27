@@ -519,7 +519,7 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
       .get() as { version: number };
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
-    expect(LATEST_SCHEMA_VERSION).toBe(28);
+    expect(LATEST_SCHEMA_VERSION).toBe(29);
   });
 });
 
@@ -984,5 +984,49 @@ describe('migrations v28 — retirement', () => {
     expect(
       db.prepare('SELECT retired_at, retired_reason FROM tabs WHERE id = ?').get('t1'),
     ).toEqual({ retired_at: 5_000, retired_reason: 'delivered' });
+  });
+});
+
+describe('migrations v29 — the spawn report', () => {
+  /** A v28 database — retirement exists, the report does not. */
+  function v28(): Database.Database {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 28 });
+    db.prepare(
+      'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+    ).run('w1', 'wslug1aa', 'W', 0, 1, 1);
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at)
+       VALUES ('t1', 's1', 'T', '""', 'w1', 0, 1, 1)`,
+    ).run();
+    return db;
+  }
+
+  it('adds the three columns with nothing in them', () => {
+    // No backfill, and there cannot be one: a report is READ OFF a transcript
+    // at the moment a child finishes, and no existing child is finishing now.
+    // An absent report is the correct state for every row that predates it.
+    const db = v28();
+    runMigrations(db);
+    expect(
+      db
+        .prepare('SELECT spawn_report, spawn_report_at, spawn_report_state FROM tabs WHERE id = ?')
+        .get('t1'),
+    ).toEqual({ spawn_report: null, spawn_report_at: null, spawn_report_state: null });
+  });
+
+  it('keeps the attempt clock and the text in separate columns', () => {
+    // `spawn_report_at` is a rate limiter AND the report entry's place in the
+    // parent's log, so it is stamped on a FAILED attempt too — with no text
+    // and no state. The pair (at, state=NULL) is "we tried and got nothing
+    // usable", which must be representable.
+    const db = v28();
+    runMigrations(db);
+    db.prepare('UPDATE tabs SET spawn_report_at = ? WHERE id = ?').run(7_000, 't1');
+    expect(
+      db
+        .prepare('SELECT spawn_report, spawn_report_at, spawn_report_state FROM tabs WHERE id = ?')
+        .get('t1'),
+    ).toEqual({ spawn_report: null, spawn_report_at: 7_000, spawn_report_state: null });
   });
 });

@@ -13,6 +13,7 @@ import { adoptServePanes } from './apps/adopt-serve-panes.js';
 import { ArchiveDb } from './archive/ArchiveDb.js';
 import { Archiver } from './archive/Archiver.js';
 import { HeadlineWriter } from './chat/HeadlineWriter.js';
+import { SpawnReportWriter } from './chat/SpawnReportWriter.js';
 import { projectsDir } from './chat/TranscriptReader.js';
 import { glossaryCache } from './chat/glossary.js';
 import { sweepImplausibleHeadlines } from './chat/headline.js';
@@ -145,7 +146,23 @@ tabActivity.attach(ptyd);
 // not a reason to keep a delivered sub-chat in the live list. Declared lazily
 // because the bridge is constructed further down; it is only ever CALLED from
 // a turn event, which cannot arrive before the bridge exists.
-const retireDeps = { db, cache, events, blocked: (paneId: string) => agentBridge.blocked(paneId) };
+// THE SPAWN REPORT's writer, built here so `retireDeps` below can hand it the
+// one signal it needs. A worker retires the moment it delivers, so without this
+// the parent's log says "you started this" and never says what came back — the
+// whole of "i don't see the summary of the work of this card anywhere". It reads
+// the child's own transcript rather than asking the child for a summary, which
+// is what makes it survive a crash (chat/spawn-report.ts).
+const spawnReports = new SpawnReportWriter({ db, events, cache, dataDir: config.dataDir });
+const retireDeps = {
+  db,
+  cache,
+  events,
+  blocked: (paneId: string) => agentBridge.blocked(paneId),
+  // Called when a sub-chat's WORK ends — which is not the same moment as its row
+  // leaving the live list (a crashed worker keeps its row and still has plenty
+  // to report). Fire-and-forget; retirement never waits on a model call.
+  onFinished: spawnReports.onFinished,
+};
 const clockSweeper = new ChatClockSweeper(db, (tabId, { announce }) => {
   // A chat that has decayed is not "finished, waiting for you" — it is four
   // days past anyone caring. Clearing the marks as it crosses is the third
