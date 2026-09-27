@@ -90,6 +90,21 @@
    beside it gives way first), because it is what tells two same-named sub-chats
    apart — but it is capped and ellipsises rather than pushing the row past the
    panel, which a chat named in a full sentence would otherwise do. */
+/* The workspace. Plain text rather than the bordered tag next to it: it is on
+   EVERY row, and a box on every row is a box that has stopped being a mark.
+   Shrinks before the name does and after the snippet does — if the row runs out
+   of space, "which chat" matters more than "where", and both matter more than a
+   preview. */
+.chat-mention-ws {
+  flex: 0 2 auto;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--chat-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .chat-mention-under {
   flex: 0 1 auto;
   max-width: 45%;
