@@ -181,3 +181,34 @@ export async function probeEditable(
   await wait(retryAfterMs);
   return read();
 }
+
+/** A text field's box in viewport CSS pixels: [x, y, width, height]. */
+export type FieldRect = readonly [number, number, number, number];
+
+/**
+ * Whether a tap landed on a text field, decided LOCALLY.
+ *
+ * Without this the viewer has to guess. It focuses its hidden sink on every tap
+ * — it must, because iOS raises a keyboard only from inside a gesture — and then
+ * waits for the host to say whether that was right. A tap on a link therefore
+ * slides a keyboard up and, a third of a second later, slides it back down. The
+ * fix for a missing keyboard should not be a flashing one.
+ *
+ * So the host ships the boxes of every text field on the page and the viewer
+ * answers for itself, with no round trip at all: the keyboard appears on the tap
+ * or not at all.
+ *
+ * Unknown rects are NOT "no fields". A page whose boxes have not arrived yet
+ * must fall back to guessing, because a keyboard that flashes is a blemish and a
+ * keyboard that never comes is the bug. Hence null, which callers treat as
+ * "focus optimistically", rather than an empty array.
+ */
+export function tapHitsField(
+  point: { x: number; y: number },
+  fields: readonly FieldRect[] | null,
+): boolean | null {
+  if (fields === null) return null;
+  return fields.some(
+    ([x, y, w, h]) => point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h,
+  );
+}

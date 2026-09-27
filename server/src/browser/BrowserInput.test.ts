@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { MOD, imageToPageCoords, keyEvents, mouseEvent, probeEditable } from './BrowserInput.js';
+import {
+  type FieldRect,
+  MOD,
+  imageToPageCoords,
+  keyEvents,
+  mouseEvent,
+  probeEditable,
+  tapHitsField,
+} from './BrowserInput.js';
 
 /**
  * Translating what the human did in their muxpad session into CDP input.
@@ -148,6 +156,39 @@ describe('deciding whether a keyboard belongs on the screen', () => {
   });
 
   it('says no when it is still no', async () => {
-    expect(await probeEditable(async () => false, async () => {})).toBe(false);
+    expect(
+      await probeEditable(
+        async () => false,
+        async () => {},
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('deciding locally whether a tap wants a keyboard', () => {
+  const box: FieldRect = [10, 20, 100, 40];
+
+  it('says yes inside a field', () => {
+    expect(tapHitsField({ x: 50, y: 30 }, [box])).toBe(true);
+  });
+
+  it('counts the edges, because a tap on a border is a tap on the field', () => {
+    expect(tapHitsField({ x: 10, y: 20 }, [box])).toBe(true);
+    expect(tapHitsField({ x: 110, y: 60 }, [box])).toBe(true);
+  });
+
+  it('says no outside every field', () => {
+    expect(tapHitsField({ x: 200, y: 200 }, [box])).toBe(false);
+  });
+
+  it('says no when the page has no fields at all', () => {
+    expect(tapHitsField({ x: 50, y: 30 }, [])).toBe(false);
+  });
+
+  it('says it DOES NOT KNOW before the boxes have arrived', () => {
+    // Not the same as "no fields". A page whose layout has not been reported yet
+    // must fall back to focusing optimistically: a keyboard that flashes is a
+    // blemish, a keyboard that never appears is the bug.
+    expect(tapHitsField({ x: 50, y: 30 }, null)).toBe(null);
   });
 });
