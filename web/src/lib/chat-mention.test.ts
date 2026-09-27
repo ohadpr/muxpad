@@ -884,9 +884,9 @@ describe('spawnCards', () => {
 
   it('carries the spawn MOMENT with each card — that is what places it', () => {
     expect(spawnCards(rows, 'p')).toEqual([
-      { chat: rows[0], at: 100 },
-      { chat: rows[1], at: 200 },
-      { chat: rows[2], at: 300 },
+      { chat: rows[0], kind: 'launch', at: 100 },
+      { chat: rows[1], kind: 'launch', at: 200 },
+      { chat: rows[2], kind: 'launch', at: 300 },
     ]);
   });
 
@@ -932,41 +932,103 @@ describe('spawnCards', () => {
  * own transcript; this is the half that decides WHERE it appears and WHAT the
  * card says about it.
  */
-describe('spawnCards — ONE card per child', () => {
-  const reported = (over: Partial<MentionChat> = {}) =>
-    chat({
-      tabName: 'browser-use',
-      tabId: 'bu',
-      parentId: 'p',
-      createdAt: 100,
-      done: true,
-      doneReason: 'delivered',
-      report: { text: 'Read 14 pages and wrote /tmp/browser-use.md.', state: 'ok', at: 9_000 },
-      ...over,
-    });
+describe('spawnCards — TWO entries per child: the launch, then the completion', () => {
+  const kid = (over: Partial<MentionChat> = {}) =>
+    chat({ tabName: 'dead-css', tabId: 'dc', parentId: 'p', createdAt: 100, ...over });
 
-  it('draws ONE card for a child that reported, not two', () => {
-    // It was two entries — "you started this" at the spawn, "here is what came
-    // back" at the report. Looking at the real thing, the card at the spawn is
-    // the one you see, and leaving it saying `delivered` with nothing under it
-    // and no way in is the whole complaint. The result belongs ON that card.
-    expect(spawnCards([reported()], 'p')).toEqual([{ chat: reported(), at: 100 }]);
+  const finished = (over: Partial<MentionChat> = {}) =>
+    kid({ done: true, doneReason: 'delivered', doneAt: 9_000, ...over });
+
+  it('a RUNNING child has only its launch card', () => {
+    // Nothing appears at the bottom until it actually finishes.
+    expect(spawnCards([kid()], 'p')).toEqual([{ chat: kid(), kind: 'launch', at: 100 }]);
   });
 
-  it('places it at the SPAWN, so it cannot move once drawn', () => {
-    // The card's time is the child's `created_at` and nothing else. A card that
-    // re-sorted itself when the report landed would walk down the conversation
-    // while you were reading it.
-    const slow = reported({ tabId: 'slow', createdAt: 100 });
-    const later = chat({ tabName: 'later', tabId: 'later', parentId: 'p', createdAt: 5_000 });
-    expect(spawnCards([slow, later], 'p').map((c) => [c.chat.tabId, c.at])).toEqual([
-      ['slow', 100],
-      ['later', 5_000],
+  it('A FINISHED CHILD ADDS A SECOND ENTRY, where it FINISHED', () => {
+    // "if the chat has progressed then it doesn't help much to update the
+    // original card … when the sub-chat is done we should add another card
+    // marking its completion with the summary etc, and that card should be added
+    // at the bottom of the chat so the user will see it."
+    //
+    // A card that mutates in place is invisible once the conversation has
+    // scrolled past it — which is exactly when a long job finishes.
+    expect(spawnCards([finished()], 'p')).toEqual([
+      { chat: finished(), kind: 'launch', at: 100 },
+      { chat: finished(), kind: 'completion', at: 9_000 },
     ]);
   });
 
-  it('a report does not make a finished child count as running', () => {
-    expect(liveSpawnedChildren([reported()], 'p')).toEqual([]);
+  it('draws BOTH back to back when nothing happened in between', () => {
+    // Explicitly fine, and explicitly not to be suppressed, collapsed or merged.
+    const quick = finished({ createdAt: 500, doneAt: 501 });
+    expect(spawnCards([quick], 'p').map((c) => [c.kind, c.at])).toEqual([
+      ['launch', 500],
+      ['completion', 501],
+    ]);
+  });
+
+  it('IS STABLE — the same two places on every render', () => {
+    // Neither entry moves once placed, and a reload puts them back in the same
+    // two spots: both times are server-stamped columns, and nothing here reads
+    // a clock or an activity bump.
+    const rows = [finished(), kid({ tabId: 'other', createdAt: 3_000 })];
+    const once = spawnCards(rows, 'p');
+    const twice = spawnCards(rows, 'p');
+    expect(twice).toEqual(once);
+    expect(once.map((c) => [c.chat.tabId, c.kind, c.at])).toEqual([
+      ['dc', 'launch', 100],
+      ['other', 'launch', 3_000],
+      ['dc', 'completion', 9_000],
+    ]);
+  });
+
+  it('a child that finished BEFORE this shipped lands back in old history', () => {
+    // Correct and consistent: its completion is a fact about a moment, and that
+    // moment was hours ago. Not special-cased to the foot of the log.
+    const old = finished({ createdAt: 10, doneAt: 20 });
+    const recent = kid({ tabId: 'now', createdAt: 8_000 });
+    expect(spawnCards([old, recent], 'p').map((c) => c.at)).toEqual([10, 20, 8_000]);
+  });
+
+  it('falls back through the timestamps it has, and draws nothing with none', () => {
+    // `done_at` is the truth. A CRASHED worker never retires, so it has none —
+    // its report's stamp is the only "when" that exists for it. `lastActivityAt`
+    // is the last resort: a finished child on a server that predates `done_at`
+    // still gets a completion card rather than silently losing one.
+    const crashed = kid({
+      report: { text: 'died half way', state: 'crashed', at: 4_000 },
+      lastActivityAt: 7_777,
+    });
+    expect(spawnCards([crashed], 'p').map((c) => [c.kind, c.at])).toEqual([
+      ['launch', 100],
+      ['completion', 4_000],
+    ]);
+    const older = finished({ doneAt: undefined, lastActivityAt: 6_000 });
+    expect(spawnCards([older], 'p').map((c) => [c.kind, c.at])).toEqual([
+      ['launch', 100],
+      ['completion', 6_000],
+    ]);
+    const timeless = finished({ doneAt: undefined, lastActivityAt: undefined });
+    expect(spawnCards([timeless], 'p').map((c) => c.kind)).toEqual(['launch']);
+  });
+
+  it("sheds a child's TWO entries together when the cap bites", () => {
+    // Half a pair is worse than neither: a launch whose completion is missing
+    // reads as work that vanished, and a completion with no launch as one that
+    // came from nowhere.
+    const rows = [
+      ...Array.from({ length: 4 }, (_, i) =>
+        finished({ tabId: `r${i}`, createdAt: i, doneAt: 500 + i }),
+      ),
+      kid({ tabId: 'live', createdAt: 900 }),
+    ];
+    const ids = spawnCards(rows, 'p', 2).map((c) => c.chat.tabId);
+    expect(ids.filter((id) => id === 'r3')).toHaveLength(2);
+    expect(ids).not.toContain('r0');
+  });
+
+  it('a completion does not make a finished child count as running', () => {
+    expect(liveSpawnedChildren([finished()], 'p')).toEqual([]);
   });
 });
 
@@ -1043,7 +1105,11 @@ describe('spawnState', () => {
  * turn and hoping.
  */
 describe('interleaveSpawnCards', () => {
-  const card = (id: string, at: number) => ({ chat: chat({ tabName: id, tabId: id }), at });
+  const card = (id: string, at: number) => ({
+    chat: chat({ tabName: id, tabId: id }),
+    kind: 'launch' as const,
+    at,
+  });
   const shape = (out: ReturnType<typeof interleaveSpawnCards<string>>) =>
     out.map((x) => (x.kind === 'card' ? `[${x.card.chat.tabId}]` : x.node));
 
@@ -1095,6 +1161,27 @@ describe('interleaveSpawnCards', () => {
     const finished = { ...working, chat: { ...working.chat, done: true } };
     const at = (c: typeof working) => shape(interleaveSpawnCards(entries, [c])).indexOf('[kid]');
     expect(at(finished)).toBe(at(working));
+  });
+
+  it("PLACES A CHILD'S TWO ENTRIES IN TWO DIFFERENT SLOTS, and keeps them there", () => {
+    // The whole point of the pair, driven through the real join: the launch
+    // lands next to the message that caused it and the completion lands next to
+    // whatever the conversation had reached by the time the work ended — which
+    // is where the reader is looking when a long job finishes.
+    const child = chat({
+      tabName: 'dead-css',
+      tabId: 'dc',
+      parentId: 'p',
+      createdAt: 120,
+      done: true,
+      doneReason: 'delivered',
+      doneAt: 280,
+    });
+    const place = () => shape(interleaveSpawnCards(entries, spawnCards([child], 'p')));
+    expect(place()).toEqual(['msg-1', '[dc]', 'msg-2', '[dc]', 'msg-3']);
+    // STABLE: the same two slots on a re-render, and on a reload — both times
+    // are server-stamped columns, so nothing here can drift.
+    expect(place()).toEqual(place());
   });
 
   it('is not placed by an entry with no timestamp — that is a guess', () => {

@@ -127,6 +127,23 @@ describe('tab-clock', () => {
       expect(resolve(child).done).toBe(false);
     });
 
+    it('PUBLISHES WHEN IT FINISHED, which is where its completion card goes', () => {
+      // The conversation draws TWO entries for a worker: the launch, at its
+      // `created_at`, and the completion, at this. A card that mutated in place
+      // instead is invisible the moment the log has scrolled past it — which is
+      // exactly when a long job finishes.
+      //
+      // It is the RETIREMENT stamp and not the report's: the report's timestamp
+      // is an attempt clock that advances on failures too, and it lands up to
+      // half an hour after the work actually ended.
+      const parent = chat('parent', 0);
+      const child = chat('child', 0, parent);
+      expect(resolve(child).done_at).toBeNull();
+      const at = Date.now() - 5_000;
+      tabs.retire(child, 'delivered', at);
+      expect(resolve(child).done_at).toBe(at);
+    });
+
     it('is done the moment it is marked delivered', () => {
       const parent = chat('parent', 0);
       const child = chat('child', 0, parent);

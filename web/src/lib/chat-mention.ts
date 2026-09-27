@@ -114,6 +114,14 @@ export interface MentionChat extends SearchableTab {
    */
   parentName?: string | undefined;
   /**
+   * WHEN it finished — the anchor for its COMPLETION card.
+   *
+   * `done_at`, passed through: the server's retirement stamp. Absent while the
+   * chat is live, and absent from a server that predates the field — see
+   * `finishedAt`, which is what actually resolves it.
+   */
+  doneAt?: number | undefined;
+  /**
    * WHAT THIS WORKER DID — the spawn report, when it has one.
    *
    * Written server-side by reading the child's own transcript the moment its work
@@ -147,6 +155,8 @@ type TabWithLifecycle = {
   created_at?: number | null;
   /** Present-but-NULL means there is no clock at all — see toMentionChats. */
   clock?: ChatClock | null;
+  /** Epoch ms it finished — the retirement stamp. Null while live. */
+  done_at?: number | null;
   /** The spawn report's three columns. All three absent together, always. */
   spawn_report?: string | null;
   spawn_report_at?: number | null;
@@ -182,6 +192,7 @@ export function toMentionChats(groups: readonly WorkspaceTabs[]): MentionChat[] 
       ...(row?.spawned_by ? { parentId: row.spawned_by } : {}),
       ...(parentName ? { parentName } : {}),
       ...(typeof row?.created_at === 'number' ? { createdAt: row.created_at } : {}),
+      ...(typeof row?.done_at === 'number' ? { doneAt: row.done_at } : {}),
       // THE REPORT, gated on the STATE and on the timestamp together. Both are
       // needed to draw the entry at all — a state with no time has no place in
       // the log to sit — and the server publishes them as a set, so a row
@@ -291,44 +302,60 @@ function spawnedAt(c: MentionChat): number {
 }
 
 /**
- * One card in the conversation: a child chat, and WHEN it was spawned.
+ * One entry a child chat puts in its parent's conversation.
  *
- * ONE CARD PER CHILD, and it lives at the spawn. A draft of this drew a second
- * entry when the report landed — "you started this, here" and "here is what came
- * back" as two dated statements — which is defensible on paper and wrong in
- * front of you: the card you actually see is the one at the spawn, so the
- * second entry left the first one saying `delivered` with nothing under it and
- * no way in. That card IS the thing the user was looking at when they said
- * "idk what this agent did".
+ * TWO PER CHILD, and this is the correction that matters most in the whole
+ * feature:
  *
- * So the result lands on the card that is already there. The time stays the
- * child's `created_at` and never moves — a card that re-sorted itself when its
- * worker finished would walk down the conversation while you read it.
+ *   `launch`      at the child's `created_at` — "you started this, it is
+ *                 running". A name and a spinner. Nothing to summarise yet.
+ *   `completion`  at the moment it FINISHED — the green tick, the summary, the
+ *                 expand, the way in. Everything the result is.
+ *
+ * A draft of this drew ONE card that gained the result in place. It is a trap,
+ * and the user named it exactly: "if the chat has progressed then it doesn't
+ * help much to update the original card". A card that mutates where it sits is
+ * invisible the moment the conversation has scrolled past it — which is
+ * precisely when a long job finishes. The completion has to arrive where the
+ * reader is LOOKING, and in a log that means a new entry at the bottom.
+ *
+ * Both are anchored to SERVER-STAMPED columns, so neither moves once drawn and
+ * a reload puts them back in the same two places. Two cards back to back when
+ * nothing happened in between is a correct and expected rendering, not a defect
+ * to suppress: it says a thing started and finished, which is what happened.
  */
 export interface SpawnCard {
   chat: MentionChat;
-  /** Epoch ms of the spawn — the child's `created_at`. Never moves. */
+  kind: 'launch' | 'completion';
+  /** Epoch ms this entry is about. Never moves. */
   at: number;
 }
 
 /**
- * What a child's card says about it — the one state resolution, in one place.
+ * When a child FINISHED — or null if we cannot say, in which case it gets no
+ * completion entry at all rather than one in an invented place.
  *
- * A pure function rather than ternaries in the renderer because it decides three
- * things that were previously wrong or unavailable:
+ * Three sources, in descending order of how directly each answers the question:
  *
- *   · `failed` EXISTS. A crashed worker deliberately keeps its live row (a
- *     crashed run is what you want to look at), so `!done` read it as still
- *     working and its card span forever. The report's `crashed` state is the
- *     only signal that says otherwise, and it comes from an OBSERVED fatal turn
- *     rather than from anything a model concluded.
- *   · `delivered` vs `done`. Delivered means it finished its work; done means the
- *     chat left the live list some other way (you archived it, or it decayed
- *     without ever being a worker that delivered).
- *   · everything else is `working`, read off the corpus at render time so the
- *     mark stays honest after the card has scrolled up.
+ *   1. `doneAt` — the server's RETIREMENT stamp. The truth, and the only one of
+ *      the three that is an event rather than an approximation.
+ *   2. the spawn report's timestamp — for a CRASHED worker, which by design
+ *      never retires (a crashed run keeps its live row so you can look at it),
+ *      so it has no stamp at 1 and this is the only "when" that exists for it.
+ *   3. `lastActivityAt` — the last resort, and a deliberately temporary one: a
+ *      child that finished on a server built before `done_at` existed still
+ *      gets its completion card instead of silently losing one. For a retired
+ *      worker nothing touches it again, so it is stable in practice.
+ *
+ * NOT the report's timestamp first: that is an ATTEMPT clock which advances on
+ * failures too and is rate-limited to once per half hour, so preferring it would
+ * put the card up to thirty minutes away from where the work actually ended.
  */
-export type SpawnState = 'working' | 'delivered' | 'done' | 'failed';
+function finishedAt(c: MentionChat): number | null {
+  if (typeof c.doneAt === 'number') return c.doneAt;
+  if (c.report) return c.report.at;
+  return typeof c.lastActivityAt === 'number' ? c.lastActivityAt : null;
+}
 
 /**
  * What a report card SAYS when the generator wrote no sentences.
@@ -349,6 +376,25 @@ export function spawnReportSummary(report: SpawnReport): string {
     ? 'Crashed before it produced anything.'
     : 'Finished with nothing to report.';
 }
+
+/**
+ * What a card says about its worker — the one state resolution, in one place.
+ *
+ * A pure function rather than ternaries in the renderer because it decides three
+ * things that were previously wrong or unavailable:
+ *
+ *   · `failed` EXISTS. A crashed worker deliberately keeps its live row (a
+ *     crashed run is what you want to look at), so `!done` read it as still
+ *     working and its card span forever. The report's `crashed` state is the
+ *     only signal that says otherwise, and it comes from an OBSERVED fatal turn
+ *     rather than from anything a model concluded.
+ *   · `delivered` vs `done`. Delivered means it finished its work; done means the
+ *     chat left the live list some other way (you archived it, or it decayed
+ *     without ever being a worker that delivered).
+ *   · everything else is `working` — which on a LAUNCH card is the spinner, and
+ *     is the only thing that card ever says.
+ */
+export type SpawnState = 'working' | 'delivered' | 'done' | 'failed';
 
 export function spawnState(chat: MentionChat): SpawnState {
   if (chat.report?.state === 'crashed') return 'failed';
@@ -376,8 +422,30 @@ export function spawnCards(
   tabId: string | undefined | null,
   max: number = MAX_SPAWN_CARDS,
 ): SpawnCard[] {
-  return spawnedChildren(corpus, tabId, max).map((chat) => ({ chat, at: spawnedAt(chat) }));
+  const out: SpawnCard[] = [];
+  // THE CAP COUNTS CHILDREN, NOT ENTRIES. What a reader drowns in is a
+  // dispatcher's forty workers, not the fact that each of them both started and
+  // finished — and a child's two entries are shed together, because half a pair
+  // is worse than neither: a launch whose completion is missing reads as work
+  // that vanished, and a completion with no launch as one that came from nowhere.
+  for (const chat of spawnedChildren(corpus, tabId, max)) {
+    out.push({ chat, kind: 'launch', at: spawnedAt(chat) });
+    // Only once it has actually finished. Nothing arrives at the bottom of the
+    // conversation while the work is still running.
+    if (!chat.done && chat.report?.state !== 'crashed') continue;
+    const at = finishedAt(chat);
+    if (at !== null) out.push({ chat, kind: 'completion', at });
+  }
+  // Sorted because a slow worker finishes AFTER a later sibling was launched,
+  // and `interleaveSpawnCards` walks this list once against the transcript's own
+  // times. `kind` breaks a tie so a completion can never be drawn above the
+  // launch it answers — which is what a worker that finished inside the same
+  // millisecond would otherwise do, a coin-flip per render.
+  out.sort((a, b) => a.at - b.at || KIND_ORDER[a.kind] - KIND_ORDER[b.kind]);
+  return out;
 }
+
+const KIND_ORDER: Record<SpawnCard['kind'], number> = { launch: 0, completion: 1 };
 
 /** The children still working — the number above the composer. */
 export function liveSpawnedChildren(

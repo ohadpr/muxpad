@@ -88,6 +88,23 @@ export interface TabLifecycle {
   done: boolean;
   /** Absent while the chat is live. */
   done_reason?: RetireReason | 'decayed';
+  /**
+   * WHEN it finished — epoch ms, null while it is live.
+   *
+   * Published because a worker's conversation draws TWO entries for it: the
+   * launch at its `created_at`, and the COMPLETION at this. One card that
+   * mutated in place instead is invisible the moment the log has scrolled past
+   * it, which is exactly when a long job finishes — the result has to arrive
+   * where the reader is looking.
+   *
+   * It is the RETIREMENT stamp, deliberately, and not the spawn report's: the
+   * report's timestamp is an ATTEMPT clock (it advances on a failure too, and
+   * it is rate-limited), so it can land half an hour after the work ended and
+   * would put the card in the wrong place in the log. For a chat that decayed
+   * rather than retiring there is no event to stamp, so it is the clock's own
+   * expiry — the moment it crossed.
+   */
+  done_at: number | null;
   /** Null for a sub-chat — it has no clock, by design (see the file comment). */
   clock: ChatClock | null;
 }
@@ -155,10 +172,11 @@ export function resolveTabClock(index: ClockIndex, tabId: string, now: number): 
   // An unknown id (a tab deleted between the read and the decoration) is
   // reported LIVE with no clock. Nothing should render it, and if something
   // does, "still here" is the harmless direction to be wrong in.
-  if (!self) return { done: false, clock: null };
+  if (!self) return { done: false, done_at: null, clock: null };
   if (self.pinned) {
     return {
       done: false,
+      done_at: null,
       // A pinned chat still shows its (stopped) clock; anything that had no
       // clock still has none. Pinning answers "does this expire", not "is
       // there a clock here to stop".
@@ -174,8 +192,13 @@ export function resolveTabClock(index: ClockIndex, tabId: string, now: number): 
     // busy, and a clock would retire it mid-sentence; a terminal you have kept
     // open for a month is not stale either, it is a terminal.
     return self.retired_at === null
-      ? { done: false, clock: null }
-      : { done: true, done_reason: self.retired_reason ?? 'archived', clock: null };
+      ? { done: false, done_at: null, clock: null }
+      : {
+          done: true,
+          done_reason: self.retired_reason ?? 'archived',
+          done_at: self.retired_at,
+          clock: null,
+        };
   }
   // A row whose clock was never stamped (a tab created by something that
   // bypassed TabStore.create, or a restore from a pre-v27 backup) is treated
@@ -186,11 +209,19 @@ export function resolveTabClock(index: ClockIndex, tabId: string, now: number): 
   // RETIREMENT WINS over the clock when both apply: it is the more specific
   // statement ("you archived this"), and it is the one somebody performed.
   if (self.retired_at !== null) {
-    return { done: true, done_reason: self.retired_reason ?? 'archived', clock };
+    return {
+      done: true,
+      done_reason: self.retired_reason ?? 'archived',
+      done_at: self.retired_at,
+      clock,
+    };
   }
+  // A DECAYED chat was never stamped by anything — nothing performed it — so
+  // the honest "when" is the moment its clock crossed, which is exactly what
+  // `expires_at` is.
   return chatClockDone(clock, now)
-    ? { done: true, done_reason: 'decayed', clock }
-    : { done: false, clock };
+    ? { done: true, done_reason: 'decayed', done_at: clock.expires_at, clock }
+    : { done: false, done_at: null, clock };
 }
 
 /**
@@ -211,7 +242,7 @@ export function resolveTabClock(index: ClockIndex, tabId: string, now: number): 
 export function tabLifecycle(db: Database.Database, tabId: string, now: number): TabLifecycle {
   const tabs = new TabStore(db);
   const self = tabs.clockRow(tabId);
-  if (!self) return { done: false, clock: null };
+  if (!self) return { done: false, done_at: null, clock: null };
   // Only the PARENT's existence matters, never its contents — a sub-chat has
   // no clock, so there is nothing of the parent's to read.
   const parent = self.spawned_by ? tabs.clockRow(self.spawned_by) : null;

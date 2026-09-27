@@ -176,15 +176,45 @@ describe('the spawn cards and the roster read ONE list', () => {
     expect(BODY).toContain("working={state === 'working'}");
   });
 
+  it('draws a LAUNCH entry and a COMPLETION entry, not one card that mutates', () => {
+    // "the original card should be an indication of launching/progress and when
+    // the sub-chat is done we should add another card marking its completion
+    // with the summary etc, and that card should be added at the bottom of the
+    // chat so the user will see it."
+    // TWO renders, and two separate anchors — which is also what lets the scroll
+    // memory address them independently and expanding one hold the right row.
+    expect(BODY).toContain("if (x.card.kind === 'launch')");
+    expect(BODY).toContain('`spawn-${kid.tabId}`');
+    expect(BODY).toContain('`done-${kid.tabId}`');
+    expect(BODY.split('<ChatMentionCard').length - 1).toBe(2);
+  });
+
+  it('gives the LAUNCH entry no summary, no expand, and no mark once it is over', () => {
+    // At a launch there is nothing to summarise. And once the work is finished
+    // its outcome lives on the completion card at the bottom — repeating it here
+    // would be the same fact in two places, with the copy nobody can see being
+    // the one that claims to be current.
+    expect(BODY).toMatch(
+      /if \(x\.card\.kind === 'launch'\)[\s\S]{0,1200}working=\{state === 'working'\}/,
+    );
+    expect(BODY).toMatch(
+      /if \(x\.card\.kind === 'launch'\)[\s\S]{0,1200}<\/ChatMentionCard>|if \(x\.card\.kind === 'launch'\)[\s\S]{0,1200}\/>/,
+    );
+    const launch = BODY.slice(
+      BODY.indexOf("if (x.card.kind === 'launch')"),
+      BODY.indexOf('// THE COMPLETION'),
+    );
+    expect(launch).not.toContain('onToggleExpanded');
+    expect(launch).not.toContain('spawnReportSummary');
+    expect(launch).not.toContain('tone=');
+  });
+
   it('NEVER PUTS THE HEADLINE UNDER THE NAME', () => {
     // The card read `biggest-files / largest source files in muxpad / delivered`
     // and the middle line is HeadlineWriter's label: it restates the PROMPT, it
     // is generated on a 6-minute interval so it turns up long after the work is
     // done, and it says nothing about what the worker FOUND. "that explanation
     // line took a ton of time to show and its like meaningless."
-    //
-    // The subtitle is now the generated report summary or NOTHING. A blank line
-    // is better than a slow meaningless one.
     expect(BODY).not.toContain('kid.headline');
     // …and the summary that replaces it goes in the BODY, which wraps. `sub`
     // clips with an ellipsis — it turned the summary into "Ranked the repo by
@@ -193,30 +223,18 @@ describe('the spawn cards and the roster read ONE list', () => {
     expect(BODY).not.toMatch(/sub=\{[^}]*report/);
   });
 
-  it('EXPANDS EVERY FINISHED CHILD — the toggle does not wait on the server', () => {
+  it('EXPANDS EVERY COMPLETION — the toggle does not wait on the server', () => {
     // "there's no toggle to expand to see a longer summary or whatever like idk
     // what this agent did. i have to click it to go view its entire work."
     //
-    // Gated on `finished`, NOT on the generated summary existing: the expansion
-    // is the child's own final message, read from the transcript endpoint, so it
-    // answers "what did this thing do" for every delivered worker already in the
-    // log — with or without a server that has written a report yet.
-    expect(BODY).toContain("const finished = state !== 'working'");
-    expect(BODY).toContain('onToggleExpanded={finished ?');
+    // Not gated on the generated summary existing: the expansion is the child's
+    // own final message, read from the transcript endpoint, so it answers "what
+    // did this thing do" for every finished worker already in the log — with or
+    // without a server that has written a report yet.
+    expect(BODY).toContain('onToggleExpanded={() => toggleReport(kid, anchorId)}');
     expect(BODY).toContain('<SpawnWorkBody');
     // …and the click-through survives alongside it.
     expect(BODY).toContain('onOpen={() => openChat(kid)}');
-  });
-
-  it('holds the reader’s row when a card changes height', () => {
-    // A disclosure in the middle of a scrolling log is the ActionGroup fold's
-    // problem exactly, and it has a solution already: measure the row BEFORE the
-    // commit. The card has to carry the anchor for that to resolve — without
-    // `anchorId` the hold is a silent no-op.
-    expect(SRC).toMatch(
-      /const toggleReport = useCallback\(\s*\n?\s*\([^)]*\) => \{\s*\n(\s*\/\/[^\n]*\n)*\s*onFoldToggled\(anchorId\);/,
-    );
-    expect(BODY).toContain('anchorId={anchorId}');
   });
 
   it('keeps the expansion EPHEMERAL — a disclosure is not a preference', () => {

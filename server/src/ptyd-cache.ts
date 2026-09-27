@@ -837,6 +837,11 @@ export function decorateTab(
     ...(cron ? { crons: cron.count, next_cron: cron.next } : {}),
     done: lifecycle.done,
     ...(lifecycle.done_reason ? { done_reason: lifecycle.done_reason } : {}),
+    // WHEN it finished. Unconditional (null while live) for the same coalescing
+    // reason `done` is: a field omitted when absent would leave a stale stamp on
+    // a client's cached row after a revival, and that stamp is where a worker's
+    // completion card is DRAWN in its parent's log.
+    done_at: lifecycle.done_at,
     clock: lifecycle.clock,
   };
 }
