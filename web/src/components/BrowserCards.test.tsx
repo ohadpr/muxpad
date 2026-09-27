@@ -88,6 +88,31 @@ describe('listing', () => {
   });
 });
 
+describe('what gets a card at all', () => {
+  it('draws NOTHING when the browser is merely registered', async () => {
+    // The common case, and the reason this exists: a profile is registered at
+    // boot and stays registered, so without this every conversation carries a
+    // permanent card that says nothing and cannot be opened.
+    const { impl } = fakeFetch(() => [browser({ state: 'registered' })]);
+    const { host } = await mount(<BrowserCards by="pane-7" fetchImpl={impl} pollMs={100000} />);
+    expect(host.querySelectorAll('[data-testid="browser-card"]')).toHaveLength(0);
+  });
+
+  it('draws one the moment it is running', async () => {
+    const { impl } = fakeFetch(() => [browser({ state: 'running' })]);
+    const { host } = await mount(<BrowserCards by="pane-7" fetchImpl={impl} pollMs={100000} />);
+    expect(host.querySelectorAll('[data-testid="browser-card"]')).toHaveLength(1);
+  });
+
+  it('draws a stopped browser that is ASKING for you', async () => {
+    const { impl } = fakeFetch(() => [
+      browser({ state: 'registered', needsYou: { reason: 'captcha', at: 1 } }),
+    ]);
+    const { host } = await mount(<BrowserCards by="pane-7" fetchImpl={impl} pollMs={100000} />);
+    expect(host.querySelectorAll('[data-testid="browser-card"]')).toHaveLength(1);
+  });
+});
+
 describe('opening', () => {
   it('TAKES THE WHEEL before showing the stream', async () => {
     const { impl, calls } = fakeFetch(() => [browser()]);
@@ -138,17 +163,6 @@ describe('opening', () => {
     await click(buttons(host)[0]);
     expect(openTab).toHaveBeenCalledWith('http://127.0.0.1:9510');
     expect(document.querySelector('[data-testid="browser-modal"]')).toBeNull();
-  });
-
-  it('starts a registered browser rather than opening a dead viewer', async () => {
-    const { impl, calls } = fakeFetch(() => [browser({ state: 'registered' })]);
-    const { host } = await mount(
-      <BrowserCards by="pane-7" fetchImpl={impl} pollMs={100000} viewportWidth={1440} />,
-    );
-    await click(buttons(host)[0]);
-    const create = calls.find((c) => c.url === '/api/browsers' && c.method === 'POST');
-    expect(create?.body).toMatchObject({ profile: 'shopping' });
-    expect(calls.find((c) => c.url.includes('/wheel/take'))).toBeUndefined();
   });
 });
 

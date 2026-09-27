@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { BrowserCardData } from '../lib/browser-card';
+import { type BrowserCardData, visibleBrowsers } from '../lib/browser-card';
 import { BrowserCard } from './BrowserCard';
 import { BrowserModal } from './BrowserModal';
 
@@ -111,17 +111,20 @@ export function BrowserCards({
     [by, doFetch, refresh],
   );
 
-  const active = browsers.find((b) => b.profile === openProfile) ?? null;
+  // A browser that is not running gets no card. See visibleBrowsers — without
+  // this, the profile registered at boot sits at the top of every conversation
+  // forever, saying nothing.
+  const shown = visibleBrowsers(browsers);
+  const active = shown.find((b) => b.profile === openProfile) ?? null;
 
   return (
     <>
-      {browsers.map((data) => (
+      {shown.map((data) => (
         <BrowserCard
           key={data.profile}
           data={data}
           {...(viewportWidth !== undefined ? { viewportWidth } : {})}
           onOpen={(mode) => void open(data, mode)}
-          onStart={() => void post('/api/browsers', { profile: data.profile })}
         />
       ))}
       {active ? (

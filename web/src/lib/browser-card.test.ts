@@ -5,6 +5,7 @@ import {
   browserCardView,
   browserOpenMode,
   shouldRenewWheel,
+  visibleBrowsers,
   wheelCountdown,
 } from './browser-card.js';
 
@@ -56,12 +57,6 @@ describe('what the card says', () => {
     expect(view.tone).toBe('working');
     expect(view.action).toBe('Watch');
     expect(view.urgent).toBe(false);
-  });
-
-  it('offers to start a browser that is only registered', () => {
-    const view = browserCardView({ ...base, state: 'registered' });
-    expect(view.action).toBe('Start');
-    expect(view.detail).toBe('not running');
   });
 
   it('always names the profile, so two cards are tellable apart', () => {
@@ -117,5 +112,43 @@ describe('renewing', () => {
 
   it('does not divide by zero on a zero-length lease', () => {
     expect(shouldRenewWheel(lease({ expiresAt: 1_000_000 }), 1_000_000)).toBe(false);
+  });
+});
+
+describe('which browsers are worth a card', () => {
+  // A card in every conversation for a browser that is not running is pure
+  // noise: it says nothing, it cannot be looked at, and it is there forever.
+  // The card exists to tell you something is HAPPENING.
+  const running = { ...base, state: 'running' as const };
+  const stopped = { ...base, state: 'registered' as const };
+
+  it('shows a running browser', () => {
+    expect(visibleBrowsers([running])).toHaveLength(1);
+  });
+
+  it('hides one that is merely registered', () => {
+    expect(visibleBrowsers([stopped])).toHaveLength(0);
+  });
+
+  it('shows one that is asking for you, whatever the state says', () => {
+    // If these ever disagree, "an agent is waiting for you" wins. A missed
+    // summons is far worse than a card that lingers a poll too long.
+    expect(visibleBrowsers([{ ...stopped, needsYou: { reason: 'captcha', at: 1 } }])).toHaveLength(
+      1,
+    );
+  });
+
+  it('shows one somebody is driving, whatever the state says', () => {
+    expect(visibleBrowsers([{ ...stopped, wheel: lease() }])).toHaveLength(1);
+  });
+
+  it('keeps the order it was given, so cards do not jump around', () => {
+    const a = { ...running, profile: 'a' };
+    const b = { ...running, profile: 'b' };
+    expect(visibleBrowsers([a, b]).map((x) => x.profile)).toEqual(['a', 'b']);
+  });
+
+  it('is empty when nothing is running — the common case', () => {
+    expect(visibleBrowsers([stopped, stopped])).toEqual([]);
   });
 });

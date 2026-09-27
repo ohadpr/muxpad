@@ -26,14 +26,12 @@ export interface BrowserCardProps {
   data: BrowserCardData;
   /** Opens the stream. Modal on a desktop, a new tab on a phone. */
   onOpen: (mode: 'modal' | 'tab') => void;
-  /** Starts a browser that is registered but not running. */
-  onStart?: () => void;
   /** Injected in tests; defaults to the real viewport. */
   viewportWidth?: number;
   now?: number;
 }
 
-export function BrowserCard({ data, onOpen, onStart, viewportWidth, now }: BrowserCardProps) {
+export function BrowserCard({ data, onOpen, viewportWidth, now }: BrowserCardProps) {
   const view = browserCardView(data);
   const [tick, setTick] = useState(() => now ?? Date.now());
 
@@ -48,10 +46,7 @@ export function BrowserCard({ data, onOpen, onStart, viewportWidth, now }: Brows
 
   const countdown = wheelCountdown(data.wheel, now ?? tick);
 
-  const act = () => {
-    if (view.action === 'Start') return onStart?.();
-    onOpen(browserOpenMode(viewportWidth ?? window.innerWidth));
-  };
+  const act = () => onOpen(browserOpenMode(viewportWidth ?? window.innerWidth));
 
   return (
     <div
