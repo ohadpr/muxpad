@@ -41,7 +41,17 @@ beforeEach(() => {
     cwd TEXT NOT NULL, command TEXT NOT NULL, url TEXT NOT NULL,
     autostart INTEGER NOT NULL, enabled INTEGER NOT NULL, pane_id TEXT,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
-  registry = { start: vi.fn(async () => {}), stop: vi.fn(async () => {}) };
+  // The real AppRegistry.start ENABLES the row and stop disables it. A fake
+  // that does neither makes every row look permanently stopped, which silently
+  // skips the branches keyed on it — the command-drift restart, for one.
+  registry = {
+    start: vi.fn(async (id: string) => {
+      db.prepare('UPDATE apps SET enabled = 1 WHERE id = ?').run(id);
+    }),
+    stop: vi.fn(async (id: string) => {
+      db.prepare('UPDATE apps SET enabled = 0 WHERE id = ?').run(id);
+    }),
+  };
 });
 
 describe('registering', () => {
@@ -155,5 +165,35 @@ describe('listing', () => {
     const listed = listBrowserApps(db);
     expect(listed).toHaveLength(1);
     expect(listed[0]?.profile).toBe('shopping');
+  });
+});
+
+describe('command drift', () => {
+  it('repairs a row whose command is out of date, and restarts it', async () => {
+    // The command is baked into the row at creation and into the PANE at
+    // materialise time. Adding a flag to browserHostCommand therefore does
+    // nothing for a browser registered before it existed — it keeps running the
+    // old line forever, and the feature silently never arrives. Observed: the
+    // cookie jar flag landed and no jar was ever written.
+    await ensureBrowserApp('shopping', deps());
+    const store = new AppStore(db);
+    const row = store.getBySlug('browser-shopping');
+    store.update(row?.id as string, { command: 'node /old/cli.js --profile=shopping' });
+    registry.start.mockClear();
+
+    await ensureBrowserApp('shopping', deps());
+
+    const after = store.getBySlug('browser-shopping');
+    expect(after?.command).toContain('--jar=');
+    expect(registry.stop).toHaveBeenCalled();
+    expect(registry.start).toHaveBeenCalled();
+  });
+
+  it('leaves a row whose command already matches alone', async () => {
+    await ensureBrowserApp('shopping', deps());
+    registry.start.mockClear();
+    registry.stop.mockClear();
+    await ensureBrowserApp('shopping', deps());
+    expect(registry.stop).not.toHaveBeenCalled();
   });
 });

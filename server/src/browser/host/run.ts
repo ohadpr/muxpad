@@ -8,6 +8,7 @@ import { type KeyInput, type MouseInput, keyEvents, mouseEvent } from '../Browse
 import { browserLaunchSpec } from '../BrowserLaunch.js';
 import { browserViewerPort } from '../BrowserProfile.js';
 import { CdpConnection } from '../CdpConnection.js';
+import { type CdpCookie, cdpCookiesToStorageState } from '../CookieJar.js';
 import { ScreencastSession } from '../ScreencastSession.js';
 import { VIEWER_HTML } from './viewer.js';
 
@@ -46,6 +47,8 @@ export interface BrowserHostOptions {
   chromePath: string;
   /** Overrides the derived viewer port. Tests only; production wants it stable. */
   viewerPort?: number;
+  /** Where the shared cookie jar is written. Agents read it with --storage-state. */
+  jarPath?: string;
   log?: (line: string) => void;
 }
 
@@ -62,6 +65,7 @@ const CDP_READY_TIMEOUT_MS = 20_000;
 
 export async function startBrowserHost(opts: BrowserHostOptions): Promise<BrowserHost> {
   const log = opts.log ?? ((line: string) => console.log(line));
+  const jarPath = opts.jarPath ?? null;
   const spec = browserLaunchSpec(opts);
 
   mkdirSync(spec.profileDir, { recursive: true });
@@ -178,6 +182,29 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
 
     if (path === '/' || path === '/index.html') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(VIEWER_HTML);
+      return;
+    }
+    // The shared jar. Agents start warm from this file — see CookieJar.ts for
+    // why they cannot simply share this browser. Written on demand rather than
+    // on a timer: it is only read when an agent starts, and a stale file is
+    // better than a write every few seconds against a live profile.
+    if (path === '/storage-state') {
+      try {
+        const { cookies } = (await cdp.send('Storage.getCookies')) as unknown as {
+          cookies: CdpCookie[];
+        };
+        const state = cdpCookiesToStorageState(cookies);
+        if (jarPath) writeFileSync(jarPath, JSON.stringify(state));
+        res
+          .writeHead(200, { 'content-type': 'application/json' })
+          .end(JSON.stringify({ ok: true, cookies: state.cookies.length, path: jarPath }));
+      } catch (err) {
+        res
+          .writeHead(500, { 'content-type': 'application/json' })
+          .end(
+            JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }),
+          );
+      }
       return;
     }
     if (path === '/healthz') {

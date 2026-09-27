@@ -220,3 +220,14 @@ export function pickBrowserPort(profile: string, taken: ReadonlySet<number>): nu
   }
   throw new Error(`no free browser port in ${lo}-${hi} (${taken.size} taken)`);
 }
+
+/**
+ * Where a profile's shared cookie jar is written.
+ *
+ * Beside the profile rather than inside it: the profile directory belongs to
+ * Chrome and is locked while it runs, and this file is read by OTHER processes
+ * — every agent that starts warm — so it must not live behind that lock.
+ */
+export function browserJarPath(dataDir: string, profile: string): string {
+  return `${dataDir.replace(/\/+$/, '')}/${BROWSER_PROFILES_DIRNAME}/${normalizeProfileName(profile)}.cookies.json`;
+}
