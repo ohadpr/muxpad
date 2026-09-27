@@ -12,6 +12,10 @@ import { createAppStatusProbe } from './apps/AppStatus.js';
 import { adoptServePanes } from './apps/adopt-serve-panes.js';
 import { ArchiveDb } from './archive/ArchiveDb.js';
 import { Archiver } from './archive/Archiver.js';
+import { ensureBrowserApp } from './browser/BrowserApps.js';
+import { DEFAULT_BROWSER_PROFILES } from './browser/BrowserProfile.js';
+import { findChrome } from './browser/findChrome.js';
+import { browserHostEntry } from './browser/hostEntry.js';
 import { HeadlineWriter } from './chat/HeadlineWriter.js';
 import { SpawnReportWriter } from './chat/SpawnReportWriter.js';
 import { projectsDir } from './chat/TranscriptReader.js';
@@ -561,6 +565,35 @@ void ensureTunnel({ start: false })
     if (r.state === 'disabled' && r.reason) console.log(`[tunnel] not running: ${r.reason}`);
   })
   .catch((err) => console.error('[tunnel] boot check failed', err));
+
+// Browsers muxpad owns. Registered at boot, NOT started: a browser is ~200 MB
+// and most boots are followed by nobody browsing at all, so the row exists (and
+// so its card, its URL and its port are stable and knowable) while the process
+// waits to be asked for.
+//
+// Best-effort, like the tunnel above. A machine with no Chrome installed is a
+// configuration fact, not a reason to hold up a boot — and it is reported once
+// here rather than as a 503 the first time somebody clicks something.
+void (async () => {
+  const chrome = findChrome();
+  if (!chrome) {
+    console.log(
+      '[browser] no Chrome found — `npx playwright install chromium`, or set MUXPAD_CHROME_BIN',
+    );
+    return;
+  }
+  for (const profile of DEFAULT_BROWSER_PROFILES) {
+    await ensureBrowserApp(profile, {
+      db,
+      dataDir: config.dataDir,
+      chromePath: chrome,
+      hostEntry: browserHostEntry(),
+      registry: appRegistry,
+      cwd: config.dataDir,
+      start: false,
+    });
+  }
+})().catch((err) => console.error('[browser] boot registration failed', err));
 
 // Durable schedules. The tick starts only now, with the ws layer attached and
 // the runner registry live behind the bridge; its own 15s startup grace then
