@@ -12,6 +12,7 @@ import {
   type MentionPick,
   NO_MENTION_SEARCH,
   applyMention,
+  canExpandSpawn,
   detectMentionRun,
   hitsFor,
   interleaveSpawnCards,
@@ -1029,6 +1030,78 @@ describe('spawnCards — TWO entries per child: the launch, then the completion'
 
   it('a completion does not make a finished child count as running', () => {
     expect(liveSpawnedChildren([finished()], 'p')).toEqual([]);
+  });
+});
+
+/**
+ * WHAT A COMPLETION CARD IS ALLOWED TO CLAIM.
+ *
+ * Three report states exist in the wild at once and they are not
+ * interchangeable — measured on the real database: `ok` (a summary), `none` (it
+ * finished having produced nothing, and said so), and UNSET (the generation was
+ * attempted and came back unusable; `spawn_report_at` is stamped and
+ * `spawn_report_state` is NULL). A card must not promise something behind a
+ * control for the last two.
+ */
+describe('canExpandSpawn — an expander only where there is a result behind it', () => {
+  const withState = (state: 'ok' | 'none' | 'crashed' | null) =>
+    chat({
+      tabName: 'kid',
+      tabId: 'k',
+      done: true,
+      doneReason: 'delivered',
+      ...(state ? { report: { text: state === 'ok' ? 'found 2' : null, state, at: 5 } } : {}),
+    });
+
+  it('offers it for a real report', () => {
+    expect(canExpandSpawn(withState('ok'))).toBe(true);
+  });
+
+  it('REFUSES IT when the generator said there was nothing', () => {
+    // The card says "Finished with nothing to report." A control under that
+    // sentence promises a second opinion that does not exist.
+    expect(canExpandSpawn(withState('none'))).toBe(false);
+  });
+
+  it('REFUSES IT when there is no report at all', () => {
+    // The case that produced the complaint: with nothing to show, the expander
+    // fell through to the transcript and dumped the worker's entire narration.
+    // Better to offer nothing than to offer the story of how it worked.
+    expect(canExpandSpawn(withState(null))).toBe(false);
+  });
+
+  it('offers it for a crashed worker — what it got done before dying IS the result', () => {
+    expect(canExpandSpawn(withState('crashed'))).toBe(true);
+  });
+});
+
+/**
+ * A WORKER THAT IS WORKING IS NOT FINISHED, whatever its row says.
+ *
+ * Measured on the real database: `sidebar-slack` carries `retired_at` with
+ * reason `delivered` — the server retired it at a turn end, correctly — while
+ * the user is still working in it. Its card wore a green tick. Retirement is a
+ * statement about a DELIVERY; the pane's live status is a statement about right
+ * now, and right now outranks it.
+ */
+describe('spawnState — the live status outranks a stale retirement', () => {
+  const retired = (over: Partial<MentionChat> = {}) =>
+    chat({ tabName: 'sidebar-slack', tabId: 'ss', done: true, doneReason: 'delivered', ...over });
+
+  it('is WORKING while its pane is working, even though the row says delivered', () => {
+    expect(spawnState(retired({ status: 'working' }))).toBe('working');
+  });
+
+  it('is delivered again the moment it goes quiet', () => {
+    expect(spawnState(retired({ status: 'idle' }))).toBe('delivered');
+    expect(spawnState(retired())).toBe('delivered');
+  });
+
+  it('and draws NO completion entry while it is working', () => {
+    // Nothing arrives at the bottom of the conversation for work that is still
+    // going on — which is the whole rule the two-card split rests on.
+    const busy = retired({ parentId: 'p', createdAt: 100, doneAt: 900, status: 'working' });
+    expect(spawnCards([busy], 'p').map((c) => c.kind)).toEqual(['launch']);
   });
 });
 

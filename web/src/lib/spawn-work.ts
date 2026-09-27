@@ -24,17 +24,24 @@ import type { ChatEvent } from '@muxpad/shared';
  * still answers for a RETIRED child — the `agent_sessions` row is durable and
  * the JSONL is on disk; retiring a chat removes neither.
  *
- * ─── WHAT "THE WORK" IS: the child's FINAL TURN ───────────────────────────────
- * Walk the tail backwards and collect assistant prose until the previous user
- * message. That is the last thing the worker said, which for a worker IS the
- * report — everything before it is the working-out, and the link in the card's
- * head is how you go and read that.
+ * ─── WHAT "THE WORK" IS: the child's LAST MESSAGE ────────────────────────────
+ * The single message it ended on, and nothing before it.
  *
- * Bounded by a TURN BOUNDARY rather than a character count, which is what makes
- * the bound honest: `SPAWN_WORK_MAX_CHARS` is a backstop for a pathological turn
- * and, when it bites, it SAYS SO (`truncated`) instead of quietly ending
- * mid-sentence. Truncating silently is the `HEADLINE_MAX_CHARS` mistake — you
- * cannot tell whether the part that was cut was the part you wanted.
+ * This was the final TURN — every assistant message back to the previous user
+ * message — and that was wrong in a way only real output shows. A worker
+ * narrates as it works ("I'll start by reading the constraints doc", "Now the
+ * core of item 1 —", "Now the scattered re-inks"), and all of it is ONE turn,
+ * because one instruction started it. So "the final turn" was the entire story
+ * of how the job was done: "way too verbose and contains the entire story".
+ *
+ * The last message is what it said when it was FINISHED — its answer, carrying
+ * the counts, the conclusion and the paths inline. Everything before it is
+ * working-out, and the working-out already has a home: the sub-chat itself, one
+ * click away through the card's head.
+ *
+ * It still never reaches back past the last user message. A worker that ended on
+ * a tool call or a question has said nothing since its task arrived, and the
+ * message before THAT is an answer to something else.
  */
 
 /** Events asked of the endpoint. A final turn of prose plus its tool calls sits
@@ -44,9 +51,9 @@ export const SPAWN_WORK_TAIL = 400;
 /**
  * Backstop on the expanded body.
  *
- * NOT the design bound — the turn boundary is. This exists so one worker that
- * printed a megabyte of log into its last message cannot make the parent's
- * conversation unscrollable, and it announces itself when it fires.
+ * NOT the design bound — one message is. This exists so a worker that printed a
+ * megabyte of log into its last message cannot make the parent's conversation
+ * unscrollable, and it announces itself when it fires.
  */
 export const SPAWN_WORK_MAX_CHARS = 8_000;
 
@@ -59,35 +66,32 @@ export type SpawnWork =
   | { kind: 'gone'; reason: string };
 
 /**
- * The child's final turn, as prose.
+ * The child's final answer — the last thing it said, bounded.
  *
- * Pure, and separately tested, because it is the half that can be wrong: "the
- * last thing it said" is a walk backwards over a normalized event list, and the
- * failure modes (picking up the previous turn, dropping the last message, losing
- * the order) are all invisible in a fetch test.
+ * Pure, and separately tested, because it is the half that can be wrong: every
+ * way of mis-picking it looks the same on screen, and the expensive mistake
+ * (taking the whole turn) reads as a feature until you see a real worker's
+ * output in it.
  *
- * Tool calls and thinking are skipped — the expansion is what the worker SAID,
- * and its actions are in the sub-chat itself, one click away through the head.
+ * Tool calls and thinking are skipped on the way back — they are not something
+ * it SAID — but a user message stops the walk outright.
  */
-export function finalTurnText(events: readonly ChatEvent[]): {
+export function finalAnswer(events: readonly ChatEvent[]): {
   text: string;
   truncated: boolean;
 } {
-  const said: string[] = [];
+  let said = '';
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i] as ChatEvent;
-    // The turn boundary. A worker's task arrived as a user message, so the first
-    // one walking back is where its answer began.
+    // The turn boundary. A worker's task arrived as a user message, so anything
+    // past this belongs to a different question.
     if (e.kind === 'user') break;
     if (e.kind !== 'assistant' || !e.text?.trim()) continue;
-    said.unshift(e.text.trim());
+    said = e.text.trim();
+    break;
   }
-  // Blank line between messages: a turn that streamed in several assistant
-  // messages is several paragraphs, and joining them with a newline would glue a
-  // heading onto the paragraph above it once markdown renders.
-  const joined = said.join('\n\n');
-  if (joined.length <= SPAWN_WORK_MAX_CHARS) return { text: joined, truncated: false };
-  return { text: joined.slice(0, SPAWN_WORK_MAX_CHARS), truncated: true };
+  if (said.length <= SPAWN_WORK_MAX_CHARS) return { text: said, truncated: false };
+  return { text: said.slice(0, SPAWN_WORK_MAX_CHARS), truncated: true };
 }
 
 /** Parse the endpoint's JSONL. A torn last line is skipped, never thrown on —
@@ -135,7 +139,7 @@ export async function fetchSpawnWork(paneIds: readonly string[]): Promise<SpawnW
       lastReason = "couldn't reach the server for this worker's transcript";
       continue;
     }
-    const { text, truncated } = finalTurnText(parseTranscriptJsonl(body));
+    const { text, truncated } = finalAnswer(parseTranscriptJsonl(body));
     if (!text) continue;
     return { kind: 'work', text, truncated };
   }

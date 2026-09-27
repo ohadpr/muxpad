@@ -397,9 +397,44 @@ export function spawnReportSummary(report: SpawnReport): string {
 export type SpawnState = 'working' | 'delivered' | 'done' | 'failed';
 
 export function spawnState(chat: MentionChat): SpawnState {
+  // RIGHT NOW OUTRANKS THE ROW. A sub-chat retires at a turn end, by design —
+  // so a worker you are still using carries `retired_at` with reason
+  // `delivered` between its turns, and its card wore a green tick while it was
+  // busy. Retirement is a statement about a DELIVERY that happened; the pane's
+  // live status is a statement about this moment, and this moment wins.
+  //
+  // Checked FIRST, ahead of the crash, because a crashed run that has been
+  // revived and is working again is working.
+  if (chat.status === 'working' || chat.status === 'blocked') return 'working';
   if (chat.report?.state === 'crashed') return 'failed';
   if (!chat.done) return 'working';
   return chat.doneReason === 'delivered' ? 'delivered' : 'done';
+}
+
+/**
+ * Is there anything behind an expander on this child's completion card?
+ *
+ * Only a REPORT earns one. Three states exist in the wild at once — measured on
+ * the real database — and two of them have nothing to show:
+ *
+ *   `ok` / `crashed`  a generated report. Expanding shows the child's final
+ *                     answer beneath it: its conclusion, and the file path or
+ *                     url it names.
+ *   `none`            the generator judged that it produced nothing, and the
+ *                     card says exactly that. A control under that sentence
+ *                     would promise a second opinion that does not exist.
+ *   UNSET             the generation was attempted and came back unusable
+ *                     (`spawn_report_at` stamped, `spawn_report_state` NULL).
+ *                     We know nothing about this run.
+ *
+ * The last case is the one that produced the complaint. With no report the
+ * expander still opened — onto the transcript — and a worker narrates as it
+ * works, so what it opened onto was the entire story of how the job was done:
+ * "way too verbose and contains the entire story". Offering nothing is better
+ * than offering that; the sub-chat is still one click away through the head.
+ */
+export function canExpandSpawn(chat: MentionChat): boolean {
+  return chat.report?.state === 'ok' || chat.report?.state === 'crashed';
 }
 
 /**
@@ -430,9 +465,15 @@ export function spawnCards(
   // that vanished, and a completion with no launch as one that came from nowhere.
   for (const chat of spawnedChildren(corpus, tabId, max)) {
     out.push({ chat, kind: 'launch', at: spawnedAt(chat) });
-    // Only once it has actually finished. Nothing arrives at the bottom of the
-    // conversation while the work is still running.
-    if (!chat.done && chat.report?.state !== 'crashed') continue;
+    // ONLY ONCE IT HAS ACTUALLY FINISHED. Nothing arrives at the bottom of the
+    // conversation while the work is still going on — which is the rule the
+    // whole two-card split rests on.
+    //
+    // Through `spawnState`, so the live pane status is what decides: a worker
+    // you are still using is retired between its turns (that is what a sub-chat
+    // does), and a completion card for it would be announcing a result while it
+    // was mid-sentence.
+    if (spawnState(chat) === 'working') continue;
     const at = finishedAt(chat);
     if (at !== null) out.push({ chat, kind: 'completion', at });
   }

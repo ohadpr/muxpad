@@ -223,17 +223,26 @@ describe('the spawn cards and the roster read ONE list', () => {
     expect(BODY).not.toMatch(/sub=\{[^}]*report/);
   });
 
-  it('EXPANDS EVERY COMPLETION — the toggle does not wait on the server', () => {
-    // "there's no toggle to expand to see a longer summary or whatever like idk
-    // what this agent did. i have to click it to go view its entire work."
-    //
-    // Not gated on the generated summary existing: the expansion is the child's
-    // own final message, read from the transcript endpoint, so it answers "what
-    // did this thing do" for every finished worker already in the log — with or
-    // without a server that has written a report yet.
-    expect(BODY).toContain('onToggleExpanded={() => toggleReport(kid, anchorId)}');
-    expect(BODY).toContain('<SpawnWorkBody');
-    // …and the click-through survives alongside it.
+  it('RENDERS THE GENERATED SUMMARY, and never transcript text in its place', () => {
+    // The defect this replaces: the collapsed card showed nothing and the
+    // expander dumped the child's narration — "I'll start by reading the
+    // constraints doc", "Now the core of item 1 —". The summary the server had
+    // generated (`spawn_report`, 356 characters of it for `dead-css`) was on the
+    // wire the whole time; the card has to be the thing that reads it.
+    expect(BODY).toContain('body={report ? spawnReportSummary(report) : undefined}');
+    // And the transcript is NOT a substitute for it: the fetched work is only
+    // ever reached for behind a report that earned the expander.
+    expect(BODY).toContain('const canExpand = canExpandSpawn(kid)');
+    expect(BODY).toContain('work={expanded ? <SpawnWorkBody');
+    expect(BODY).toContain('expanded={expanded}');
+  });
+
+  it('offers NO expander when there is nothing behind it', () => {
+    // Three report states in the wild — `ok`, `none`, and unset — and two of
+    // them have nothing to show. An expander over those fell through to the
+    // transcript, which is how the narration got on screen.
+    expect(BODY).toContain('onToggleExpanded={canExpand ?');
+    // …and the click-through survives either way.
     expect(BODY).toContain('onOpen={() => openChat(kid)}');
   });
 
