@@ -381,6 +381,31 @@ describe('the moments a conversation shows', () => {
     expect(body.events[0]?.tabId).toBe('01KRG3EMB8F6NFHXZH40HNKZGK');
   });
 
+  it('says it ONCE, however many times the host restarts', async () => {
+    // The host announces on its first page, so a restart announces again — and
+    // it restarts for reasons nothing to do with the person: a crash, a reap, a
+    // change to its command line.
+    await ensure();
+    await post('/api/browsers/shopping/opened', {});
+    const res = await post('/api/browsers/shopping/opened', {});
+    const body = (await res.json()) as { events: Array<{ kind: string }> };
+    expect(body.events.map((e) => e.kind)).toEqual(['opened']);
+  });
+
+  it('and not at all once the chat has been summoned', async () => {
+    // Seen in a real chat: a summons, then a bare "Browser opened" nine minutes
+    // later, arriving after the agent had already explained itself. A summons
+    // is a louder statement of the same fact — there is a browser here, and
+    // here is the way in — so repeating it quietly afterwards is noise with a
+    // button on it.
+    await ensure();
+    await post('/api/browsers/shopping/needs-you', { reason: 'log in' });
+    await post('/api/browsers/shopping/opened', {});
+    const res = await get('/api/browsers/shopping');
+    const body = (await res.json()) as { events: Array<{ kind: string }> };
+    expect(body.events.map((e) => e.kind)).toEqual(['needs-you']);
+  });
+
   it('does NOT retire the card when you take the wheel', async () => {
     // While you hold the browser that card is the way BACK to it. Navigate away
     // on a phone and, if it has gone, there is nothing left in the conversation
