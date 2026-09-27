@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sessionBrowsersToReap } from './SessionReaper.js';
+import { isDisposableSessionProfile, sessionBrowsersToReap } from './SessionReaper.js';
 
 /**
  * Stopping session browsers whose session is gone.
@@ -39,5 +39,31 @@ describe('what gets reaped', () => {
     // A ULID is uppercase and a profile name is not; comparing them raw would
     // reap every live session on the machine.
     expect(sessionBrowsersToReap(profiles('s-01m3abc'), new Set(['01M3ABC']))).toEqual([]);
+  });
+});
+
+describe('clearing up after a reaped session', () => {
+  // Stopping alone left the app row behind, disabled — and the sweep skipped
+  // disabled rows, so nothing looked at them again. One permanent row per agent
+  // session ever opened, each holding a port out of a hundred and a profile
+  // directory on disk. Ninety-nine of them before anybody noticed.
+  it('lets a session profile go', () => {
+    expect(isDisposableSessionProfile('s-01m3j6k782sn07tt2p062s37tn')).toBe(true);
+  });
+
+  it('never the browser a person logs into', () => {
+    // This one holds every login on the machine and is the source of the jar.
+    expect(isDisposableSessionProfile('default')).toBe(false);
+    expect(isDisposableSessionProfile('shopping')).toBe(false);
+  });
+
+  it('refuses path syntax, because this answer authorises a delete', () => {
+    expect(isDisposableSessionProfile('s-../../default')).toBe(false);
+    expect(isDisposableSessionProfile('s-a/b')).toBe(false);
+    expect(isDisposableSessionProfile('s-a\\b')).toBe(false);
+  });
+
+  it('refuses the bare prefix', () => {
+    expect(isDisposableSessionProfile('s-')).toBe(false);
   });
 });

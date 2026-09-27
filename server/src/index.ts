@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import type { Server } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,10 +14,11 @@ import { adoptServePanes } from './apps/adopt-serve-panes.js';
 import { ArchiveDb } from './archive/ArchiveDb.js';
 import { Archiver } from './archive/Archiver.js';
 import { ensureBrowserApp, listBrowserApps } from './browser/BrowserApps.js';
-import { browserAppSlug } from './browser/BrowserProfile.js';
+import { BrowserEvents } from './browser/BrowserEvents.js';
+import { browserAppSlug, browserProfileDir } from './browser/BrowserProfile.js';
 import { DEFAULT_BROWSER_PROFILES } from './browser/BrowserProfile.js';
 import { parseBrowserProxyPath } from './browser/BrowserProxy.js';
-import { sessionBrowsersToReap } from './browser/SessionReaper.js';
+import { isDisposableSessionProfile, sessionBrowsersToReap } from './browser/SessionReaper.js';
 import { findChrome } from './browser/findChrome.js';
 import { browserHostEntry } from './browser/hostEntry.js';
 import { HeadlineWriter } from './chat/HeadlineWriter.js';
@@ -645,8 +647,21 @@ const reapSessionBrowsers = async () => {
     const apps = new AppStore(db);
     for (const profile of sessionBrowsersToReap(listBrowserApps(db), live)) {
       const row = apps.getBySlug(browserAppSlug(profile));
-      if (!row?.enabled) continue;
-      await appRegistry.stop(row.id);
+      if (!row) continue;
+      if (row.enabled) await appRegistry.stop(row.id);
+      // AND THEN REMOVE IT. Stopping alone left the row behind disabled, and the
+      // condition above used to skip disabled rows — so nothing ever looked at
+      // them again. `muxpad app list` grew one permanent row per agent session
+      // ever opened, ninety-nine of them, each still holding a port out of a
+      // hundred-port space and a profile directory on disk.
+      //
+      // A tab id is never reissued, so this session cannot come back and wants
+      // none of it. The name is checked before anything is deleted, because the
+      // adjacent directory holds every login on the machine.
+      if (!isDisposableSessionProfile(profile)) continue;
+      apps.delete(row.id);
+      new BrowserEvents(db).clear(profile);
+      await rm(browserProfileDir(config.dataDir, profile), { recursive: true, force: true });
       console.log(`[browser] reaped '${profile}' — its tab is gone`);
     }
   } catch (err) {
