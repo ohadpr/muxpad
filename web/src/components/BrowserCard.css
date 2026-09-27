@@ -1,0 +1,136 @@
+/*
+ * The browser card.
+ *
+ * Sits in a conversation next to spawn cards, so it borrows their weight and
+ * rhythm rather than inventing a second visual language. The one thing it does
+ * that they do not is go LOUD — and only in the blocked state, because a card
+ * that is always shouting is a card nobody reads.
+ */
+
+.browser-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  margin: 6px 0;
+  border: 1px solid var(--border, #2a2a36);
+  border-radius: 10px;
+  background: var(--surface-raised, #16161d);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.browser-card__glyph {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 700;
+  background: #23232e;
+  color: #8b8b9c;
+}
+
+.browser-card__body {
+  min-width: 0;
+  flex: 1;
+}
+
+.browser-card__title {
+  color: var(--text, #e4e4ec);
+  font-weight: 560;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.browser-card__detail {
+  color: var(--text-dim, #8b8b9c);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.browser-card__countdown {
+  flex: none;
+  color: var(--text-dim, #8b8b9c);
+  font-size: 11px;
+  /* Tabular so a countdown does not jitter the layout every second. */
+  font-variant-numeric: tabular-nums;
+}
+
+.browser-card__action {
+  flex: none;
+  padding: 5px 11px;
+  border-radius: 7px;
+  border: 1px solid var(--border, #33333f);
+  background: transparent;
+  color: var(--text, #d6d6e0);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.browser-card__action:hover {
+  background: #23232e;
+}
+
+.browser-card__action[data-urgent="true"] {
+  background: #b4442e;
+  border-color: #c9563f;
+  color: #fff;
+  font-weight: 560;
+}
+
+.browser-card__action[data-urgent="true"]:hover {
+  background: #c9563f;
+}
+
+/* The agent is driving: present, not attention-seeking. */
+.browser-card--working .browser-card__glyph {
+  color: #6ea8ff;
+}
+
+/* You hold the wheel: a quiet confirmation, since you already know. */
+.browser-card--yours {
+  border-color: #2e5c3c;
+}
+.browser-card--yours .browser-card__glyph {
+  background: #16351f;
+  color: #5fd98a;
+}
+
+/*
+ * Blocked. The ONE loud state — something cannot continue without you, and it
+ * has probably been true for a while before you looked.
+ */
+.browser-card--blocked {
+  border-color: #8a3a28;
+  background: #24140f;
+}
+.browser-card--blocked .browser-card__glyph {
+  background: #b4442e;
+  color: #fff;
+}
+.browser-card--blocked .browser-card__title {
+  color: #ffd9cf;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .browser-card--blocked .browser-card__glyph {
+    animation: browser-card-pulse 2s ease-in-out infinite;
+  }
+}
+
+@keyframes browser-card-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(180, 68, 46, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(180, 68, 46, 0);
+  }
+}
