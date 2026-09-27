@@ -244,3 +244,38 @@ describe('clicking a mention inside a report goes to the mention, once', () => {
     expect(box.querySelector('button button')).toBeNull();
   });
 });
+
+/**
+ * WHICH WORKSPACE — the column that makes two identical names pickable apart.
+ *
+ * The `@` list is the only surface that spans workspaces. The sidebar shows one
+ * at a time, so a chat name is unique THERE and is not unique here: searching
+ * "main" returned a `Main` from Trayo and a `Main` from Trayobot as two rows
+ * distinguished only by an emoji and whatever headline each happened to carry.
+ * Picking the wrong one directs work to the wrong chat, which is the failure
+ * this grammar exists to prevent.
+ */
+describe('a mention row says which workspace the chat is in', () => {
+  it('tells two identically-named chats apart', () => {
+    const out = picker(
+      [
+        { chat: chat({ tabName: 'Main', workspaceName: 'Trayo' }), via: 'name' },
+        { chat: chat({ tabName: 'Main', workspaceName: 'Trayobot' }), via: 'name' },
+      ],
+      { query: 'main' },
+    );
+    expect(out).toContain('Trayo<');
+    expect(out).toContain('Trayobot<');
+  });
+
+  it('shows it on an ORDINARY live row, not only a delivered or nested one', () => {
+    // The two colliding names are both plain chats, so a tag that appeared only
+    // for delivered or nested rows would not have separated them. `provenance`
+    // is deliberately empty here — this is a second, always-on column, not a
+    // longer version of that one.
+    const out = picker([{ chat: INV, via: 'name' }]);
+    expect(out.split('chat-mention-ws').length - 1).toBe(1);
+    expect(out).toContain('Personal<');
+    expect(out).not.toContain('chat-mention-under');
+  });
+});
