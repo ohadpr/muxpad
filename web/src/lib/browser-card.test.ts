@@ -312,12 +312,14 @@ describe('a card drawn from a moment', () => {
     expect(view.tone).toBe('yours');
   });
 
-  it('offers the same one verb however the browser is being used', () => {
-    // "Take the wheel" and "Watch" describe the same click — opening the stream
-    // takes the wheel either way — and both were longer than a phone could
-    // afford. The title and the reason carry the why.
+  it('offers no button at all when it is only reporting, however the browser is used', () => {
+    // These are notes: the browser opened, and somebody may or may not be
+    // driving it. None of that is a request, so none of it gets a button — the
+    // card takes the click itself for anyone who wants to look.
     for (const wheel of [null, lease(), lease({ holder: 'agent' as const })]) {
-      expect(browserMomentView(moment({ browser: { ...base, wheel } })).action).toBe('Open');
+      const view = browserMomentView(moment({ browser: { ...base, wheel } }));
+      expect(view.action).toBeNull();
+      expect(view.openable).toBe(true);
     }
   });
 
@@ -488,5 +490,40 @@ describe('what the card shows, and what it leaves out', () => {
       }),
     );
     expect(view.urgent).toBe(true);
+  });
+});
+
+
+describe('a card that is only telling you something', () => {
+  const m = (over: Record<string, unknown> = {}): BrowserMoment => ({
+    kind: 'opened', at: 1, profile: 's-abc', browser: base, ...over,
+  });
+
+  it('offers NO button when nothing needs you', () => {
+    // "a browser opened" is a note. A button — even a quiet one — reads as a
+    // thing to deal with, and 99% of the time there is nothing to deal with.
+    const view = browserMomentView(m());
+    expect(view.action).toBeNull();
+    expect(view.passive).toBe(true);
+  });
+
+  it('is still openable, just not advertised', () => {
+    // The card itself takes the click. Looking is always allowed; being asked
+    // to look is what was wrong.
+    expect(browserMomentView(m()).openable).toBe(true);
+  });
+
+  it('keeps the button when it is actually asking', () => {
+    const view = browserMomentView(
+      m({ kind: 'needs-you', reason: 'Amazon needs a login', browser: { ...base, needsYou: { reason: 'x', at: 1 } } }),
+    );
+    expect(view.action).toBe('Open');
+    expect(view.passive).toBe(false);
+  });
+
+  it('is neither openable nor actionable once the browser has gone', () => {
+    const view = browserMomentView(m({ browser: { ...base, state: 'registered' } }));
+    expect(view.action).toBeNull();
+    expect(view.openable).toBe(false);
   });
 });

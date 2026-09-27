@@ -49,8 +49,22 @@ export interface BrowserCardView {
   title: string;
   /** Secondary line. Empty string when there is nothing worth saying. */
   detail: string;
-  /** Label of the primary action, or null when there is no action. */
+  /**
+   * Label of the primary action, or null when the card is only telling you
+   * something. See {@link passive}.
+   */
   action: string | null;
+  /**
+   * The card is a NOTE, not a request.
+   *
+   * "A browser opened" is news; a button on it — even a quiet one — reads as a
+   * thing to deal with, and almost always there is nothing to deal with. A
+   * passive card carries no button and takes the click itself, so looking stays
+   * possible without being asked for.
+   */
+  passive: boolean;
+  /** Whether clicking it can show you anything. False once the browser is gone. */
+  openable: boolean;
   /** Whether this card should pull the eye. */
   urgent: boolean;
   /**
@@ -87,6 +101,8 @@ export function browserCardView(data: BrowserCardData): BrowserCardView {
       action: 'Open',
       urgent: true,
       countdown: false,
+      passive: false,
+      openable: true,
     };
   }
 
@@ -98,6 +114,8 @@ export function browserCardView(data: BrowserCardData): BrowserCardView {
       action: 'Open',
       urgent: false,
       countdown: true,
+      passive: true,
+      openable: true,
     };
   }
 
@@ -109,6 +127,8 @@ export function browserCardView(data: BrowserCardData): BrowserCardView {
       action: 'Open',
       urgent: false,
       countdown: false,
+      passive: true,
+      openable: true,
     };
   }
 
@@ -119,6 +139,8 @@ export function browserCardView(data: BrowserCardData): BrowserCardView {
     action: 'Open',
     urgent: false,
     countdown: false,
+    passive: true,
+    openable: true,
   };
 }
 
@@ -295,6 +317,8 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
       action: live ? 'Open' : null,
       urgent: true,
       countdown: false,
+      passive: false,
+      openable: live,
     };
   }
 
@@ -309,9 +333,12 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
       tone: yours ? 'yours' : 'idle',
       title: 'Handled',
       detail: moment.reason ?? detail,
-      action,
+      // Passive too: a summons already answered is a record, not a request.
+      action: null,
       urgent: false,
       countdown: yours,
+      passive: true,
+      openable: live,
     };
   }
 
@@ -322,9 +349,11 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
     // somebody NAMED is worth showing, because they chose the word.
     title: isSessionProfile(moment.profile) ? 'Browser opened' : `Browser · ${moment.profile}`,
     detail,
-    action,
+    action: null,
     urgent: false,
     countdown: yours,
+    passive: true,
+    openable: live,
   };
 }
 

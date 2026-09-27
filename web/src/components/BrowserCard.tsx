@@ -53,14 +53,31 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
 
   return (
     <div
-      className={`browser-card browser-card--${view.tone}`}
+      className={`browser-card browser-card--${view.tone}${view.passive ? ' browser-card--passive' : ''}`}
       data-testid="browser-card"
       data-tone={view.tone}
+      // A passive card takes the click ITSELF rather than carrying a button.
+      // Looking is always allowed; being ASKED to look is what was wrong — a
+      // button, however quiet, reads as a thing that needs dealing with, and
+      // almost always there is nothing to deal with.
+      {...(view.passive && view.openable
+        ? {
+            role: 'button',
+            tabIndex: 0,
+            onClick: act,
+            onKeyDown: (e: React.KeyboardEvent) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                act();
+              }
+            },
+          }
+        : {})}
     >
       {/* A BROWSER, unmistakably. A dot said "some card"; next to a spawn card
-        in the same log the two were telling apart only by their words. A window
-        with a title bar and a dot for the traffic light reads as a browser at
-        14px, which is the size it has to work at. */}
+        in the same log the two were tellable apart only by their words. A
+        window with a title bar and one light reads as a browser at 15px, which
+        is the size it has to work at. */}
       <span className="browser-card__glyph" aria-hidden="true">
         <svg viewBox="0 0 16 14" width="15" height="14">
           <rect x="0.75" y="0.75" width="14.5" height="12.5" rx="2.5" />
@@ -71,7 +88,7 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
       <div className="browser-card__body">
         {view.title ? <div className="browser-card__title">{view.title}</div> : null}
         {view.detail ? (
-          // The full text on the title, since the visible line is clamped.
+          // The full text on the title attribute, since the visible line is clamped.
           <div className="browser-card__detail" title={view.detail}>
             {view.detail}
           </div>
@@ -81,14 +98,7 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
         <div className="browser-card__countdown">{countdown}</div>
       ) : null}
       {view.action ? (
-        <button
-          type="button"
-          className="browser-card__action"
-          onClick={act}
-          // The urgent one is the only button on the card that should read as a
-          // call to action; the rest are "you may look at this".
-          data-urgent={view.urgent ? 'true' : 'false'}
-        >
+        <button type="button" className="browser-card__action" onClick={act} data-urgent="true">
           {view.action}
         </button>
       ) : null}

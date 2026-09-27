@@ -102,23 +102,34 @@ describe('the card', () => {
     expect(host.querySelector('[data-testid="browser-card"]')?.getAttribute('data-tone')).not.toBe(
       'waiting',
     );
-    expect(buttons(host)[0]?.dataset.urgent).toBe('false');
+    // No button at all: an answered summons is a record, not a request.
+    expect(buttons(host)).toHaveLength(0);
     expect(host.textContent).toMatch(/handled/i);
   });
 
   it('opens a MODAL on a wide viewport and a TAB on a phone', () => {
+    // Clicking the CARD, because a passive one carries no button.
     const onOpen = vi.fn();
     const wide = mount(
       <BrowserCard moment={moment(base)} onOpen={onOpen} viewportWidth={1440} now={1} />,
     );
-    click(buttons(wide.host)[0]);
+    click(wide.host.querySelector('[data-testid="browser-card"]') ?? undefined);
     expect(onOpen).toHaveBeenCalledWith('modal');
 
     const phone = mount(
       <BrowserCard moment={moment(base)} onOpen={onOpen} viewportWidth={390} now={1} />,
     );
-    click(buttons(phone.host)[0]);
+    click(phone.host.querySelector('[data-testid="browser-card"]') ?? undefined);
     expect(onOpen).toHaveBeenLastCalledWith('tab');
+  });
+
+  it('a card with nothing to show is not clickable at all', () => {
+    const onOpen = vi.fn();
+    const { host } = mount(
+      <BrowserCard moment={moment({ ...base, state: 'registered' })} onOpen={onOpen} now={1} />,
+    );
+    click(host.querySelector('[data-testid="browser-card"]') ?? undefined);
+    expect(onOpen).not.toHaveBeenCalled();
   });
 
   it('offers nothing once the browser is gone', () => {
