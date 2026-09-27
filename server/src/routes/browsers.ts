@@ -281,6 +281,23 @@ export function browsersRoutes(deps: {
   app.post('/:profile/opened', (c) => {
     const profile = profileParam(c.req.param('profile'));
     if (!profile) return c.json({ error: 'invalid profile name' }, 400);
+
+    // ONCE PER CONVERSATION, and the rule is about the chat rather than the
+    // process. The host announces on its first page, so a host that RESTARTS
+    // announces again — and it restarts for reasons that are nothing to do with
+    // the person: a crash, a reap, a change to its command line. Seen in a real
+    // chat: a summons at 17:37 and a bare "Browser opened" at 17:46, arriving
+    // after the agent had already explained itself and saying nothing the
+    // conversation did not already know.
+    //
+    // A summons counts as having said it. It is a louder statement of the same
+    // fact — there is a browser here, and here is the way into it — so a card
+    // repeating it quietly afterwards is noise with a button on it.
+    const already = events
+      .list(profile)
+      .some((e) => e.kind === 'opened' || e.kind === 'needs-you');
+    if (already) return c.json({ ok: true, events: events.list(profile) }, 200);
+
     const tabId = owner.get(profile);
     events.record(profile, { kind: 'opened', ...(tabId ? { tabId } : {}) });
     return c.json({ ok: true, events: events.list(profile) }, 201);
