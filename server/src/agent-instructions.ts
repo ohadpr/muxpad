@@ -180,15 +180,12 @@ This is the rule two different agents broke in one day, so it is spelled out.
 
 ### The browser is muxpad's, and a person can take it from you
 
-\`mcp__playwright__*\` gives you your OWN browser context, started warm from a
-cookie jar muxpad maintains — so you inherit the logins a person has already
-performed instead of meeting every site as a stranger, and two agents browsing
-at once cannot touch each other's pages.
+\`mcp__playwright__*\` drives a browser MUXPAD OWNS AND CAN SHOW, created for
+this session alone and started warm from a shared cookie jar — so you inherit
+the logins a person has already performed, no other agent can touch your pages,
+and the browser you are stuck in is the one they can see.
 
-You cannot share muxpad's browser directly; that was tried and two agents
-clobbered each other's navigation. The jar is exported from the browser a PERSON
-drives, which is why the handoff below matters: a login you ask them to perform
-is a login every agent inherits from then on. Two consequences.
+That last part is the whole reason this exists. Two consequences.
 
 **Stop at a wall. Do not push through it.** A login page, a CAPTCHA, a payment
 form, an SMS or 2FA code, an "are you a robot" interstitial — none of these
@@ -196,11 +193,13 @@ become passable by trying again. **Do not try to solve them.** What
 you do instead is ask for the human, in one call:
 
 \`\`\`
-curl -sS -X POST "\$MUXPAD_API_URL/api/browsers/default/needs-you" -H 'content-type: application/json' -d '{"reason":"<what you are stuck on, in their words>","tabId":"'"\$MUXPAD_TAB_ID"'"}'
+curl -sS -X POST "\$MUXPAD_API_URL/api/browsers/s-\$MUXPAD_TAB_ID/needs-you" -H 'content-type: application/json' -d '{"reason":"<what you are stuck on, in their words>","tabId":"'"\$MUXPAD_TAB_ID"'"}'
 \`\`\`
 
-A card appears in that conversation, goes loud, and offers them the wheel — on
-their phone if that is where they are. Pass \`$MUXPAD_TAB_ID\` or the card lands
+The profile is \`s-\$MUXPAD_TAB_ID\` — YOUR browser, the one you are stuck in.
+Summoning somebody to any other browser asks them to log in somewhere you cannot
+see, which is the bug this replaced. A card appears in that conversation, goes
+loud, and offers them the wheel — on their phone if that is where they are. Pass \`$MUXPAD_TAB_ID\` or the card lands
 in no conversation and nobody ever sees it. Then **say what you are waiting for
 and stop**, in that turn. Do not poll, do not retry the click, do not try a
 different selector. Somebody dealing with a login is not a race you can win, and
