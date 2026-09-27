@@ -67,6 +67,7 @@ import {
   type MentionSearchState,
   NO_MENTION_SEARCH,
   applyMention,
+  canExpandSpawn,
   detectMentionRun,
   directTo,
   hitsFor,
@@ -4525,7 +4526,13 @@ export function ChatPane({
           // is where the reader is looking when a long job finishes. Everything
           // the result is lives here.
           const report = kid.report;
-          const expanded = expandedReports.has(kid.tabId);
+          // AN EXPANDER ONLY WHERE THERE IS A RESULT BEHIND IT. Three report
+          // states exist in the wild at once and two of them have nothing to
+          // show; over those the control used to fall through to the transcript,
+          // and what it opened onto was the worker's entire narration. See
+          // `canExpandSpawn`, which is where the three cases are written out.
+          const canExpand = canExpandSpawn(kid);
+          const expanded = canExpand && expandedReports.has(kid.tabId);
           const work = expanded ? reportWork.get(kid.tabId) : undefined;
           // Its own anchor, so the two entries are separately addressable by the
           // scroll memory and expanding one holds the right row.
@@ -4558,12 +4565,11 @@ export function ChatPane({
               tone={state === 'working' ? undefined : state}
               expanded={expanded}
               work={expanded ? <SpawnWorkBody work={work} onOpenImage={setOpenImage} /> : undefined}
-              // ALWAYS OFFERED, and deliberately NOT gated on the summary
-              // existing. The expansion is the child's own final message, read
-              // from the transcript endpoint — so "what did this thing actually
-              // do" is answerable for every worker already in this log, whether or
-              // not a report has ever been generated for it.
-              onToggleExpanded={() => toggleReport(kid, anchorId)}
+              // Offered only behind a real report. The expansion is then the
+              // child's own FINAL MESSAGE — its answer, with the path or url it
+              // names in it — and not the story of how it worked, which is what
+              // the whole final turn turned out to be.
+              onToggleExpanded={canExpand ? () => toggleReport(kid, anchorId) : undefined}
               onOpen={() => openChat(kid)}
             />
           );
