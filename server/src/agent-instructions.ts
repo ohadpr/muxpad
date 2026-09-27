@@ -140,6 +140,44 @@ their screen.**
 - Leave nothing running. Before you report, check for servers and browser
   processes you started and kill them.
 
+### A system permission dialog IS a window on their screen
+
+This is the rule two different agents broke in one day, so it is spelled out.
+
+- **Never touch another application's bundle.** No exec, no stat, no read, no
+  \`ls\`, nothing, anywhere under \`/Applications\` or any other \`.app\`. On macOS
+  that is a TCC-gated action and it raises
+
+      "node" would like to access data from other apps   [Don't Allow] [Allow]
+
+  on the PHYSICAL DISPLAY of a machine you are not sitting at. You did not open
+  a window, so it can feel like you obeyed the rule above. You did not: they got
+  an interruption they have to answer, from software they did not run.
+
+- **The fix is never "do it less".** A prompt on a rare path is still a prompt.
+  Get the fact another way: ask the muxpad server, which usually already knows
+  (\`7dcf5f1\` replaced \`/Applications/Tailscale.app/…\` with one API call), or
+  use a binary muxpad owns — the browsers under
+  \`~/Library/Caches/ms-playwright\` are ours and prompt-free, and
+  \`MUXPAD_CHROME_BIN\` exists for when they are not there. If neither works,
+  **return nothing and say so.** "I could not find one, here is how to configure
+  it" is a fine outcome. A dialog on somebody's desk is not.
+
+- **Same rule for every other prompt family**, none of which you need:
+  **Screen Recording** (\`screencapture\`, \`getDisplayMedia\`, any desktop
+  capture — the Playwright MCP screenshots the page, which is not this),
+  **Accessibility** (\`AXUIElement\`, synthetic system-wide input),
+  **Automation** (\`osascript\`, AppleScript, "System Events", telling another
+  app to do anything), **Files & Folders** (\`~/Desktop\`, \`~/Documents\`,
+  \`~/Downloads\`, another browser's \`Application Support\` profile), the
+  **Keychain** (\`security find-…\`; a headless Chrome needs
+  \`--password-store=basic --use-mock-keychain\` or it prompts on first launch),
+  and **Local Network** (bind loopback, never \`0.0.0.0\` — which the rule above
+  already requires for a different reason).
+
+- **If you are unsure whether something prompts, it prompts.** Ask the user
+  before running it, or do without.
+
 ## The two modes: Chat and Agent
 
 Every agent pane is in one of exactly two modes. These are the NAMES — use
