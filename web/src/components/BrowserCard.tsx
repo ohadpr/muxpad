@@ -69,7 +69,7 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
         </svg>
       </span>
       <div className="browser-card__body">
-        <div className="browser-card__title">{view.title}</div>
+        {view.title ? <div className="browser-card__title">{view.title}</div> : null}
         {view.detail ? (
           // The full text on the title, since the visible line is clamped.
           <div className="browser-card__detail" title={view.detail}>

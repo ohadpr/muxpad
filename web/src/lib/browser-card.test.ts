@@ -411,7 +411,7 @@ describe('what the card says, in as few words as possible', () => {
     expect(browserMomentView(m({ profile: 'shopping' })).title).toContain('shopping');
   });
 
-  it('keeps the summons to two words and lets the reason carry it', () => {
+  it('gives the summons NO title — the reason is the whole card', () => {
     const view = browserMomentView(
       m({
         kind: 'needs-you',
@@ -419,7 +419,10 @@ describe('what the card says, in as few words as possible', () => {
         browser: { ...base, needsYou: { reason: 'Amazon is signed out', at: 1 } },
       }),
     );
-    expect(view.title).toBe('Needs you');
+    // The colour, the mark and the button already say "your turn". A label
+    // repeating it cost a line and, on a phone, pushed the reason onto a
+    // second row.
+    expect(view.title).toBe('');
     expect(view.detail).toBe('Amazon is signed out');
   });
 

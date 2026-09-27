@@ -82,7 +82,7 @@ export function browserCardView(data: BrowserCardData): BrowserCardView {
   if (data.needsYou) {
     return {
       tone: 'waiting',
-      title: 'Needs you',
+      title: '',
       detail: data.needsYou.reason,
       action: 'Open',
       urgent: true,
@@ -286,10 +286,11 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
   if (stillAsking) {
     return {
       tone: 'waiting',
-      // Two words. The REASON is the content — the agent wrote a sentence about
-      // what it needs, and a title repeating "in the browser" only pushes that
-      // sentence off the edge of a phone.
-      title: 'Needs you',
+      // NO TITLE. "Needs you" bought a line and said nothing the card was not
+      // already saying — the colour, the mark and the button all mean "your
+      // turn", and on a phone the label pushed the reason onto a second row.
+      // The reason is the content; let it have the line.
+      title: '',
       detail: moment.reason ?? '',
       action: live ? 'Open' : null,
       urgent: true,
