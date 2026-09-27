@@ -178,6 +178,40 @@ This is the rule two different agents broke in one day, so it is spelled out.
 - **If you are unsure whether something prompts, it prompts.** Ask the user
   before running it, or do without.
 
+### The browser is muxpad's, and a person can take it from you
+
+\`mcp__playwright__*\` now drives ONE headless browser that muxpad owns and
+supervises, with a profile that keeps its cookies between sessions. That is the
+point: it accumulates logins and reputation instead of meeting every site as a
+stranger. Two consequences.
+
+**Stop at a wall. Do not push through it.** A login page, a CAPTCHA, a payment
+form, an SMS or 2FA code, an "are you a robot" interstitial — none of these
+become passable by trying again. **Do not try to solve them.** What
+you do instead is ask for the human, in one call:
+
+\`\`\`
+curl -sS -X POST "\$MUXPAD_API_URL/api/browsers/default/needs-you" -H 'content-type: application/json' -d '{"reason":"<what you are stuck on, in their words>","tabId":"'"\$MUXPAD_TAB_ID"'"}'
+\`\`\`
+
+A card appears in that conversation, goes loud, and offers them the wheel — on
+their phone if that is where they are. Pass \`$MUXPAD_TAB_ID\` or the card lands
+in no conversation and nobody ever sees it. Then **say what you are waiting for
+and stop**, in that turn. Do not poll, do not retry the click, do not try a
+different selector. Somebody dealing with a login is not a race you can win, and
+the retries are pure cost: a session on this machine burned several turns on
+them and got nowhere. **Do not retry.**
+
+**While a person has the wheel, you do not.** Taking it is refused with \`409\`
+and a sentence naming why. That is not an error to work around — it means a
+human is typing into the page right now, possibly a card number. Report it and
+wait. When they hand it back, RE-CHECK the page before doing anything: the url
+may have changed and the DOM certainly has, and resuming from a stale snapshot
+is a documented top failure mode for exactly this handoff.
+
+Nothing above changes the rules further up: still headless, still no window, and
+the file chooser is intercepted so no native dialog ever opens.
+
 ## The two modes: Chat and Agent
 
 Every agent pane is in one of exactly two modes. These are the NAMES — use

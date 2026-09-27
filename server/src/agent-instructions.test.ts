@@ -192,3 +192,42 @@ describe('the browser policy names app bundles specifically', () => {
     expect(policy).toMatch(/osascript|Automation/i);
   });
 });
+
+/**
+ * Handing the browser to a person.
+ *
+ * The expensive failure this replaces, from a session on this machine:
+ * "I burned several turns on retries that were never going to work." A login
+ * wall does not become passable by trying again, and neither does a CAPTCHA —
+ * the industry position, including Claude Code's own Chrome integration, is to
+ * stop and ask the human. muxpad can now DO that, so the instruction has to
+ * name the move.
+ */
+describe('the browser policy teaches the handoff', () => {
+  const policy = AGENT_INSTRUCTIONS_SEED;
+
+  it('names the endpoint an agent calls to ask for a person', () => {
+    expect(policy).toContain('/needs-you');
+  });
+
+  it('says NOT to retry, and not to try to solve it', () => {
+    expect(policy).toMatch(/do not retry/i);
+    expect(policy).toMatch(/do not (try to )?solve/i);
+  });
+
+  it('lists the walls this applies to', () => {
+    expect(policy).toMatch(/login/i);
+    expect(policy).toMatch(/CAPTCHA/i);
+    expect(policy).toMatch(/payment|card/i);
+  });
+
+  it('tells the agent to pass its tab, or the card lands in no conversation', () => {
+    // Scoping is the difference between a summons in the chat that is waiting
+    // for it and a summons nobody ever sees.
+    expect(policy).toMatch(/MUXPAD_TAB_ID/);
+  });
+
+  it('says a refusal means WAIT, not try again', () => {
+    expect(policy).toMatch(/409|human has the wheel/i);
+  });
+});
