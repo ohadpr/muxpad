@@ -1,3 +1,4 @@
+import { createServer } from 'node:http';
 import Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -283,6 +284,58 @@ describe('asking for a person', () => {
   it('400s an ask with no reason — a card that says nothing is not actionable', async () => {
     await ensure();
     expect((await post('/api/browsers/shopping/needs-you', {})).status).toBe(400);
+  });
+});
+
+describe('a browser starts when something reaches for it, not before', () => {
+  /**
+   * Every agent session used to launch a real Chrome when its MCP server
+   * started — before the person had typed, and whether or not that session
+   * would ever browse. Most never do. Ninety-seven of them accumulated on one
+   * machine, which is the memory complaint this subsystem exists to answer,
+   * arriving from inside it.
+   */
+  /** A stand-in for Chrome's HTTP side, on the port this profile was given. */
+  async function fakeChromeOn(cdpUrl: string) {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ webSocketDebuggerUrl: 'ws://127.0.0.1:1/devtools/browser/abc' }));
+    });
+    await new Promise<void>((r) => server.listen(Number(new URL(cdpUrl).port), '127.0.0.1', r));
+    return () => new Promise<void>((r) => server.close(() => r()));
+  }
+
+  it('registers a row without launching anything', async () => {
+    const res = await post('/api/browsers', { profile: 'shopping', start: false });
+    expect(res.status).toBe(201);
+    expect(registry.start).not.toHaveBeenCalled();
+  });
+
+  it('starts it when the CDP endpoint is first asked for', async () => {
+    // This is the first browser tool call arriving. playwright-mcp does not
+    // touch its --cdp-endpoint until then, which is the measured fact the whole
+    // arrangement rests on.
+    const body = (await (
+      await post('/api/browsers', { profile: 'shopping', start: false })
+    ).json()) as { cdpUrl: string };
+    const close = await fakeChromeOn(body.cdpUrl);
+    try {
+      const res = await app.request('/api/browsers/shopping/cdp/json/version');
+      expect(registry.start).toHaveBeenCalledTimes(1);
+      // And the reply is Chrome's own, so playwright talks to it directly from
+      // then on rather than through muxpad.
+      expect(res.status).toBe(200);
+      expect((await res.json()) as { webSocketDebuggerUrl: string }).toMatchObject({
+        webSocketDebuggerUrl: expect.stringContaining('ws://'),
+      });
+    } finally {
+      await close();
+    }
+  });
+
+  it('refuses a profile name that is not one', async () => {
+    const res = await app.request('/api/browsers/..%2Fetc/cdp/json/version');
+    expect(res.status).toBe(400);
   });
 });
 

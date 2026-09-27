@@ -26,7 +26,7 @@ describe('what it decides to run', () => {
   });
 
   it('says WHY either way, because this runs unattended', () => {
-    expect(sessionMcpPlan({ cdpUrl: 'http://x', jarPath: JAR }).why).toMatch(/attached/i);
+    expect(sessionMcpPlan({ cdpUrl: 'http://x', jarPath: JAR }).why).toMatch(/first use/i);
     expect(sessionMcpPlan({ cdpUrl: null, jarPath: JAR }).why).toMatch(/isolated/i);
   });
 });
@@ -35,16 +35,20 @@ describe('resolving the session browser', () => {
   const ok = (cdpUrl: string) =>
     vi.fn(async () => ({ ok: true, json: async () => ({ cdpUrl }) })) as unknown as typeof fetch;
 
-  it('asks muxpad for a browser named after this session', async () => {
+  it('reserves a browser named after this session, and starts NOTHING', async () => {
+    // Registration is a row; starting is 200 MB of Chrome. Doing both here is
+    // what gave every session a browser before the person had typed a word.
     const f = ok('http://127.0.0.1:9410');
     const url = await resolveSessionBrowser(
       { MUXPAD_TAB_ID: 'tab1', MUXPAD_API_URL: 'http://127.0.0.1:7777' },
       f,
     );
-    expect(url).toBe('http://127.0.0.1:9410');
     const call = (f as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as unknown[];
     const init = call[1] as { body: string };
-    expect(JSON.parse(init.body)).toMatchObject({ profile: 's-tab1', tabId: 'tab1' });
+    expect(JSON.parse(init.body)).toMatchObject({ profile: 's-tab1', tabId: 'tab1', start: false });
+    // And playwright is pointed at the endpoint that WILL start one, not at the
+    // Chrome port in the reply — nothing is listening there yet.
+    expect(url).toBe('http://127.0.0.1:7777/api/browsers/s-tab1/cdp');
   });
 
   it('is null outside a muxpad pane, so the caller falls back', async () => {
