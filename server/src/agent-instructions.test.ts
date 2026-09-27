@@ -247,3 +247,24 @@ describe('the summons is one short line', () => {
     expect(policy).toMatch(/Amazon needs a login|e\.g\./i);
   });
 });
+
+
+describe('the handoff lands where the work is', () => {
+  const policy = AGENT_INSTRUCTIONS_SEED;
+
+  it('tells the agent to reach the wall before summoning', () => {
+    // Handing somebody a home page and letting them hunt for the sign-in link
+    // is not a handoff, it is a forward. The agent can click through to the
+    // actual form; it just has to be told that is its job.
+    expect(policy).toMatch(/before you (ask|summon)|walk|get the page to/i);
+    expect(policy).toMatch(/login form|the form itself|point of action/i);
+  });
+
+  it('asks it to VERIFY the form is there, not assume', () => {
+    expect(policy).toMatch(/verify|confirm|check that/i);
+  });
+
+  it('asks for a selector so the viewer can point at it', () => {
+    expect(policy).toContain('selector');
+  });
+});

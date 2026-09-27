@@ -194,6 +194,15 @@ export class BrowserWheel {
 export interface NeedsYou {
   reason: string;
   at: number;
+  /**
+   * CSS selector for the thing that needs a person — the password field, the
+   * captcha, the card number box.
+   *
+   * Optional and untrusted: it is evaluated in the page and a wrong one simply
+   * finds nothing, which leaves the browser open where it already was. It buys
+   * arriving at the field instead of at a page.
+   */
+  selector?: string;
 }
 
 const NEEDS_PREFIX = 'browser_needs_you_';
@@ -220,8 +229,8 @@ export class BrowserAttention {
   }
 
   /** An agent asks for a person, and says what for. */
-  raise(profile: string, reason: string): NeedsYou {
-    const asked: NeedsYou = { reason, at: this.now() };
+  raise(profile: string, reason: string, selector?: string): NeedsYou {
+    const asked: NeedsYou = { reason, at: this.now(), ...(selector ? { selector } : {}) };
     this.globals.set(NEEDS_PREFIX + normalizeProfileName(profile), JSON.stringify(asked));
     return asked;
   }

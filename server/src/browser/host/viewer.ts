@@ -35,7 +35,13 @@ export const VIEWER_HTML = String.raw`<!doctype html>
      scroll the FRAME — while one finger still reaches the listeners below and
      becomes a tap or a drag inside the page. */
   #wrap{flex:1;overflow:auto;background:#000;touch-action:pinch-zoom;-webkit-overflow-scrolling:touch}
+  #stage{position:relative;display:inline-block;line-height:0}
   #screen{display:block;background:#000;outline:none;transform-origin:0 0}
+  /* A ring around the thing that needs you — see the host's reveal handler for
+     why this is a highlight and not a crop. Fades out; a pointer, not a mode. */
+  #ring{position:absolute;border:2px solid #f0943f;border-radius:6px;pointer-events:none;
+        box-shadow:0 0 0 3px rgba(240,148,63,.25);opacity:0;transition:opacity .5s ease}
+  #ring.on{opacity:1}
   /* Desktop has room to fit the whole page; a phone does not, and shrinking it
      to fit is the thing that made it useless. */
   @media (min-width: 700px) { #screen{max-width:100%} }
@@ -53,7 +59,7 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   <span id="url" title="">–</span>
   <span id="msg"></span>
 </div>
-<div id="wrap"><img id="screen" tabindex="0" alt="the agent's browser"></div>
+<div id="wrap"><div id="stage"><img id="screen" tabindex="0" alt="the agent's browser"><div id="ring"></div></div></div>
 <!-- THE KEYBOARD. A phone shows one only when something in THIS page is
      focused, so tapping a text box in a video stream summons nothing. This
      input is the thing that gets focused; what you type into it is forwarded and
@@ -91,6 +97,7 @@ ws.onmessage = (e) => {
     // The page says a text field is focused, so put a keyboard on the phone.
     // This is what makes tapping a login box behave like tapping a login box.
     if (m.t === 'focus') { if (m.editable) setKb(true); return }
+    if (m.t === 'revealed') { ringAt(m.rect); return }
     if (m.t === 'frame') { meta = m.meta }
     else if (m.t === 'fileChooser') { document.getElementById('drop').classList.add('on') }
     else if (m.t === 'error') { msg.textContent = m.error }
@@ -139,6 +146,43 @@ img.addEventListener('wheel', (e) => {
   const p = pt(e); if (p) send({ t:'mouse', type:'mouseWheel', ...p, deltaX:e.deltaX, deltaY:e.deltaY, modifiers:mods(e) })
 }, { passive:false })
 img.addEventListener('keydown', (e) => { e.preventDefault(); send({ t:'key', key:e.key, modifiers:mods(e) }) })
+
+// ── pointing at the thing that needs you ────────────────────────────────────
+const ring = document.getElementById('ring')
+let ringTimer = null
+const ringAt = (rect) => {
+  if (!rect || !nw || !meta) return
+  // Page CSS px -> image px -> rendered px, so the ring lands on the field
+  // wherever the stream happens to be scaled to.
+  const r = img.getBoundingClientRect()
+  const toImg = nw / meta.deviceWidth
+  const shown = r.width / nw
+  const k = toImg * shown
+  ring.style.left = (rect.x * k) + 'px'
+  ring.style.top = (rect.y * k) + 'px'
+  ring.style.width = (rect.w * k) + 'px'
+  ring.style.height = (rect.h * k) + 'px'
+  ring.classList.add('on')
+  ring.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' })
+  clearTimeout(ringTimer)
+  // It fades rather than persisting: forms move as you type, and a ring that
+  // stays put starts pointing at the wrong place the moment you begin.
+  ringTimer = setTimeout(() => ring.classList.remove('on'), 4000)
+}
+
+// The summons says what needs a person. Ask muxpad, because this page is served
+// from its origin — then tell the host to scroll there.
+const revealFromSummons = async () => {
+  const profile = location.pathname.split('/').filter(Boolean)[1]
+  if (!profile) return
+  try {
+    const r = await fetch('/api/browsers/' + profile)
+    if (!r.ok) return
+    const sel = (await r.json())?.needsYou?.selector
+    if (sel) send({ t: 'reveal', selector: sel })
+  } catch { /* nothing to point at is fine */ }
+}
+ws.addEventListener('open', () => setTimeout(revealFromSummons, 900), { once: true })
 
 // ── the keyboard ────────────────────────────────────────────────────────────
 const sink = document.getElementById('sink')
