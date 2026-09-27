@@ -70,7 +70,7 @@ import {
   detectMentionRun,
   directTo,
   hitsFor,
-  liveSpawnedChildren,
+  interleaveSpawnCards,
   nextMentionRun,
   nextSearchLimit,
   parseDirectMarker,
@@ -79,6 +79,7 @@ import {
   parseReportMarker,
   rankMentions,
   repinPicks,
+  spawnCards,
   toMentionChats,
   withContentRows,
 } from '../lib/chat-mention';
@@ -2115,14 +2116,27 @@ export function ChatPane({
   // made by `muxpad agent new` from inside a pane set `spawned_by` and wrote
   // nothing here, so the parent had no record that it had started anything.
   //
-  // ONE list, and it is the LIVE one. There were two — `spawnedChildren` (every
-  // child ever) fed the cards while `liveSpawnedChildren` fed the status cell's
-  // roster — so the two surfaces answered "what is this chat running" with
-  // different sets, and the cards' answer included every agent that had already
-  // finished. That is the bug the user saw as six delivered chats parked at the
-  // foot of the conversation. Now the roster and the cards read the same list,
-  // which is the only way they cannot drift.
-  const spawnedLive = useMemo(() => liveSpawnedChildren(corpus, myChat?.tabId), [corpus, myChat]);
+  // ─── A CARD IS A TRANSCRIPT ENTRY, not furniture ─────────────────────────
+  // These used to be a block pinned at the foot of the log, above the composer.
+  // Live-only, because that block had to be: a finished child's card stayed there
+  // forever, so six delivered agents sat permanently between the last message and
+  // the composer, saying what the status cell's "2 agents" already said.
+  //
+  // Placed at the SPAWN instead (`interleaveSpawnCards`, by the child's
+  // `created_at`) the constraint goes away and the card becomes what the user
+  // asked for: "have that UI component in the chat as an indication that u
+  // launched". It scrolls away with the conversation, it keeps the finished ones —
+  // that is the record of what this chat started — and its mark says which.
+  //
+  // ONE list still, and that is load-bearing: the roster below is DERIVED from
+  // this one by the done filter, so the cards and the running count cannot answer
+  // "what is this chat running" differently, which is exactly how they drifted
+  // before.
+  const spawnedCards = useMemo(() => spawnCards(corpus, myChat?.tabId), [corpus, myChat]);
+  const spawnedLive = useMemo(
+    () => spawnedCards.filter((c) => !c.chat.done).map((c) => c.chat),
+    [spawnedCards],
+  );
 
   // Everything this pane resolves through a chat, in one condition. Declared
   // here rather than up with the corpus because a card is one of the three
@@ -4321,11 +4335,14 @@ export function ChatPane({
     // prose, which folds even alone. The rule lives in chat-voice.ts
     // (foldsAsActionRun) next to the demotion that creates those events, so
     // the two can be pinned together by a test.
-    const items: React.ReactNode[] = [];
+    // Each top-level row, WITH the moment it happened — the spawn cards are
+    // placed against these times (see the interleave below), so an entry that
+    // records no time simply isn't a boundary. Nothing else reads `at`.
+    const items: { at: number | null; node: React.ReactNode }[] = [];
     for (let i = 0; i < renderable.length; ) {
       const e = renderable[i] as ChatEvent;
       if (!isAction(e)) {
-        items.push(renderEvent(e, e.id));
+        items.push({ at: e.ts, node: renderEvent(e, e.id) });
         i++;
         continue;
       }
@@ -4335,7 +4352,7 @@ export function ChatPane({
       if (!foldsAsActionRun(run)) {
         // Explicit arrow, not `.map(renderEvent)`: Array#map passes the INDEX
         // as the second argument, which is now the anchor id.
-        items.push(...run.map((ev) => renderEvent(ev, ev.id)));
+        items.push(...run.map((ev) => ({ at: ev.ts, node: renderEvent(ev, ev.id) })));
       } else {
         // ONE id for the React key and the scroll anchor, and it is the run's
         // FIRST event. These used to differ: the key flipped between the
@@ -4357,24 +4374,31 @@ export function ChatPane({
         // written into `expandedGroups`, so the fold snaps back the moment the
         // highlight is dismissed rather than leaving the chat rearranged.
         const holdsHit = !!jumpTargetId && run.some((ev) => ev.id === jumpTargetId);
-        items.push(
-          <ActionGroup
-            key={`group-${anchorId}`}
-            events={run}
-            expanded={actionRunExpanded(run, expandedGroups) || holdsHit}
-            anchorId={anchorId}
-            onToggle={() => {
-              // A fold toggle is a height change the READER caused, in the
-              // middle of the document — so it is an INPUT, not something to be
-              // detected afterwards. The intent becomes "hold this header where
-              // it is right now", measured before the commit that changes its
-              // height, and the commit subscription satisfies it.
-              onFoldToggled(anchorId);
-              setExpandedGroups((prev) => toggleActionRun(run, prev));
-            }}
-            renderEvent={renderEvent}
-          />,
-        );
+        items.push({
+          // A folded run is placed by its HEAD, which is the same event the key
+          // and the scroll anchor use — so a card whose spawn happened inside a
+          // long run lands after the whole group, and stays there as the run
+          // grows at its tail.
+          at: (run[0] as ChatEvent).ts,
+          node: (
+            <ActionGroup
+              key={`group-${anchorId}`}
+              events={run}
+              expanded={actionRunExpanded(run, expandedGroups) || holdsHit}
+              anchorId={anchorId}
+              onToggle={() => {
+                // A fold toggle is a height change the READER caused, in the
+                // middle of the document — so it is an INPUT, not something to be
+                // detected afterwards. The intent becomes "hold this header where
+                // it is right now", measured before the commit that changes its
+                // height, and the commit subscription satisfies it.
+                onFoldToggled(anchorId);
+                setExpandedGroups((prev) => toggleActionRun(run, prev));
+              }}
+              renderEvent={renderEvent}
+            />
+          ),
+        });
       }
       i = j;
     }
@@ -4386,7 +4410,37 @@ export function ChatPane({
             <div className="chat-empty-spinner" />
           </div>
         ) : null}
-        {items}
+        {/* The spawn cards, dropped in WHERE THE SPAWN HAPPENED — the child's
+            `created_at` against the entries' own times. Everything that makes
+            them what they are is in that one call: they scroll with the
+            conversation, they cannot become furniture, and they cannot drift,
+            because nothing here remembers a position.
+
+            Not deduped against the directed cards below any more. That dedup was
+            right while both were blocks at the foot of the log — one chat, two
+            adjacent cards, drawn twice. They are different statements in
+            different places now: this one is "you started this, here", and the
+            other is "a request to it is in flight". Suppressing the spawn entry
+            because of an unrelated later `@` would delete a piece of the record
+            from the middle of the conversation. */}
+        {interleaveSpawnCards(items, spawnedCards).map((x) =>
+          x.kind === 'entry' ? (
+            x.node
+          ) : (
+            <ChatMentionCard
+              key={`spawn-${x.card.chat.tabId}`}
+              chat={x.card.chat.chip}
+              sub={x.card.chat.headline ?? undefined}
+              // WORKING OR DONE, read off the corpus every render — which is what
+              // keeps the mark honest after the card has scrolled up. The corpus
+              // is live-patched from the server's own `tab.updated`
+              // (lib/all-tabs), so nothing here polls and nothing caches a state.
+              working={!x.card.chat.done}
+              state={x.card.chat.done ? (x.card.chat.doneReason ?? 'done') : undefined}
+              onOpen={() => openChat(x.card.chat)}
+            />
+          ),
+        )}
       </>
     );
   }, [
@@ -4414,6 +4468,12 @@ export function ChatPane({
     queue,
     chooseTerminal,
     chooseWeb,
+    // The cards live in the transcript now, so the transcript re-renders when a
+    // child is spawned or finishes. That is one memo recompute per `tab.updated`
+    // for this chat's children — the rows themselves are memoized, which is what
+    // makes the indicator update in place instead of re-parsing the log.
+    spawnedCards,
+    openChat,
   ]);
 
   // The agent is working when: we're driving a turn (`sending`), tokens are
@@ -4769,53 +4829,20 @@ export function ChatPane({
                 />
               );
             })}
-            {/* Work this chat SPAWNED — a child chat, however it was started.
-              The same card, the same densities: a spawn through the in-chat path
-              and a spawn through `muxpad agent new` from inside this pane are
-              the same act, and only the first one used to leave a trace here.
-              No storage behind these: the child row IS the record, which is why
-              they appear on every device and why a card cannot disagree with the
-              sidebar about what is running.
-              Deduped against the directed cards above — @-directing your own
-              child would otherwise draw it twice.
+            {/* Work this chat SPAWNED used to be a block RIGHT HERE — one card
+              per live child, pinned above the composer for as long as the child
+              ran. It is in the transcript now, at the moment of the spawn (see
+              `interleaveSpawnCards` in the body memo above), which is what the
+              user asked for: an indication in the chat that you launched
+              something, scrolling away with the conversation like any other
+              entry, and no longer a second copy of what the status cell's
+              "2 agents" says in the same eyeful.
 
-              LIVE CHILDREN ONLY — `spawnedLive`, the same list the status cell's
-              roster counts, not `spawnedChildren`. This shipped rendering every
-              child ever spawned, and since a child is never deleted that meant a
-              card per delivered agent pinned to the foot of the conversation for
-              good: six of them after one afternoon, each one furniture the user
-              had to scroll past to reach their own composer.
-
-              `spawnedChildren` has a CAP but no age, and the neighbouring store
-              had already written down why both are needed — "a single old card at
-              the foot of a conversation you have moved on from is clutter that
-              never earns its place back" (lib/chat-directed). Under the cap,
-              nothing ever expired.
-
-              An age is not the fix either, because a DELIVERED card here has no
-              report body in it — just the name and headline the sidebar row
-              already carries. So it was a second, device-local, chronologically
-              misplaced copy of a row that already exists in the done group under
-              this very chat and is already reachable by `@`. Two surfaces
-              deriving one value, again. The foot of the log is for work in
-              FLIGHT; the record of finished work is the sidebar.
-
-              (This does mean nothing lands in the conversation when a child
-              delivers. That was already true in substance — the card carried no
-              result — and closing it properly needs the durable spawn-notes row
-              the primitives note describes, not a longer-lived local echo.) */}
-            {spawnedLive
-              .filter((k) => !directed.some((d) => d.tabId === k.tabId))
-              .map((kid) => (
-                <ChatMentionCard
-                  key={kid.tabId}
-                  chat={kid.chip}
-                  sub={kid.headline ?? undefined}
-                  working={!kid.done}
-                  state={kid.done ? (kid.doneReason ?? 'done') : undefined}
-                  onOpen={() => openChat(kid)}
-                />
-              ))}
+              Nothing replaces it here. A card at the foot of the log is furniture
+              by construction — it cannot scroll away, so it has to keep earning
+              its place forever, and neither a cap nor an age ever made that true
+              (see the history in lib/chat-mention). If you are adding a spawn
+              card back to this block, the placement is the bug. */}
             {/* Server-owned pending queue rides at the BOTTOM of the chat —
               pending user bubbles under the latest message + working indicator,
               scrolling with the log. Dashed + muted = "waiting its turn"; edit

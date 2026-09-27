@@ -102,48 +102,106 @@ describe('the status strip counts child chats as running work', () => {
 });
 
 /**
- * …AND THE CARDS MUST COUNT THE SAME CHILDREN THE ROSTER DOES.
+ * …AND THE CARDS ARE TRANSCRIPT ENTRIES, NOT FURNITURE.
  *
- * The roster above reads `liveSpawnedChildren`. The foot-of-log cards read
- * `spawnedChildren` — every child ever spawned — so the two surfaces answered
- * "what is this chat running" with different sets, and the cards' answer
- * included every agent that had already finished. A child is never deleted, so
- * those cards were permanent: six delivered agents parked between the last
- * message and the composer after a single afternoon, reported as "why do all
- * these older chats persist here".
+ * Two bugs, one block. The cards were a fixed list at the FOOT of the log, above
+ * the composer, and because a card there can never scroll away it had to keep
+ * earning its place forever — so it was cut back to live children only, and then
+ * said the same thing the status cell's "2 agents" already said, two inches
+ * apart. Before that it rendered every child ever spawned (`spawnedChildren`)
+ * while the roster counted `liveSpawnedChildren`: two lists, one question, six
+ * delivered agents parked between the last message and the composer.
  *
- * `spawnedChildren` has a CAP and no age. The neighbouring store had already
- * written down why that is not enough — "a single old card at the foot of a
- * conversation you have moved on from is clutter that never earns its place
- * back" (lib/chat-directed) — but under the cap nothing ever expired.
+ * Placing the card at the SPAWN — the child's own `created_at`, joined against
+ * the transcript's times — settles both. It scrolls away like the message that
+ * caused it, so nothing has to expire; and the finished ones can stay, because a
+ * card in the log is the record that this chat started something and it landed.
  *
- * ─── Why this is a SOURCE assertion and not a rendered one ────────────────
+ * WHAT THIS FILE STILL HAS TO PIN, whatever the shape:
+ *   1. the cards and the roster cannot disagree about what is RUNNING, and
+ *   2. the foot-of-log block cannot come back.
+ *
+ * ─── Why these are SOURCE assertions and not rendered ones ────────────────
  * Stated plainly because the weaker kind of test is how this class of bug keeps
  * shipping here: `data-child` was emitted on no element for three reviews while
  * a grouping test and a stylesheet test both passed, each right about its own
- * half. The list-choice is one identifier deep inside a 6,200-line render that
+ * half. Both facts above are wiring decisions inside a 6,200-line render that
  * needs a socket, a router, a corpus and a transcript to mount, and a mount that
- * elaborate is its own source of false greens. So this pins the SEAM instead:
- * both surfaces must name the same list. It would not catch a card list that
- * re-filtered wrongly downstream — `chat-mention.test.ts` owns what the list
- * itself contains, and that half is already covered.
+ * elaborate is its own source of false greens. What the lists CONTAIN and where
+ * a card LANDS are pure functions, and `chat-mention.test.ts` tests them against
+ * real timestamps — that is the half a source assertion cannot cover.
  */
 describe('the spawn cards and the roster read ONE list', () => {
   const SRC = readFileSync(join(process.cwd(), 'src/components/ChatPane.tsx'), 'utf8');
+  /** The transcript builder — everything the log is assembled from. */
+  const BODY = (() => {
+    const start = SRC.indexOf('const body = useMemo');
+    const end = SRC.indexOf('// The agent is working when', start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    return SRC.slice(start, end);
+  })();
+  /** Everything AFTER it — the pane's own chrome, where the block used to be. */
+  const AFTER_BODY = SRC.slice(SRC.indexOf('// The agent is working when'));
 
   it('never re-derives the card list from every child ever spawned', () => {
-    // The whole bug in one symbol. `spawnedChildren` is still exported and still
-    // tested — it is simply not what a conversation's live furniture is made of.
+    // The old two-list bug in one symbol. `spawnedChildren` is still exported and
+    // still tested — it is simply not what this component reaches for.
     expect(SRC).not.toContain('spawnedChildren(');
   });
 
-  it('renders the cards from the same list the roster counts', () => {
-    // One memo, both consumers. Two lists is what let them disagree.
-    expect(SRC).toContain('liveSpawnedChildren(corpus, myChat?.tabId)');
-    expect(SRC).toContain('{spawnedLive');
+  it('derives the roster from the CARDS, so they cannot disagree', () => {
+    // Not two calls into the lib that happen to agree: one memo, and the running
+    // list is that memo minus the done ones. `spawnCards` keeps every live child
+    // past the cap (chat-mention.test.ts) so this stays a complete count.
+    expect(SRC).toContain('spawnCards(corpus, myChat?.tabId)');
+    expect(SRC).toContain('spawnedCards.filter((c) => !c.chat.done)');
     expect(SRC).toContain('for (const kid of spawnedLive)');
-    // …and exactly one definition of it, so a future edit cannot quietly fork
-    // the card list off a second memo again.
+    // …and exactly one definition of each, so a future edit cannot quietly fork
+    // a second card list off a second memo again.
+    expect(SRC.split('const spawnedCards').length - 1).toBe(1);
     expect(SRC.split('const spawnedLive').length - 1).toBe(1);
+  });
+
+  it('builds the cards INSIDE the transcript, placed by time', () => {
+    expect(BODY).toContain('interleaveSpawnCards(items, spawnedCards)');
+    expect(BODY).toContain('<ChatMentionCard');
+    // The indicator is read off the corpus at render time — not latched at spawn
+    // — which is what keeps it honest after the card has scrolled up.
+    expect(BODY).toContain('working={!x.card.chat.done}');
+  });
+
+  it('cannot park the cards at the foot of the log again', () => {
+    // The two ways the block was ever written: map the card list, or map the live
+    // list. Neither is reachable from the pane's chrome, because the card list is
+    // not named there at all.
+    expect(AFTER_BODY).not.toContain('spawnedCards');
+    expect(AFTER_BODY).not.toMatch(/\{spawnedLive/);
+  });
+});
+
+/**
+ * THE CORPUS IS ASKED FOR ON MOUNT.
+ *
+ * "They were not there, then I refreshed and they were." The corpus is lazy and
+ * push-only (lib/all-tabs: nothing fetches it, `tab.updated` patches it only if
+ * a copy is already held), and the cards are derived from it — so a pane that
+ * never asked showed no cards at all until something ELSE in the app happened to
+ * fetch one. Every card in a conversation depends on this one effect.
+ *
+ * The laziness is kept where it earns its keep: a workspace nobody has opened
+ * still costs nothing, because the fix is a fetch on first USE, not a poll. It is
+ * one shared single-flight cache, so this is one request per app, not per pane.
+ */
+describe('a conversation asks for the corpus when it opens', () => {
+  const SRC = readFileSync(join(process.cwd(), 'src/components/ChatPane.tsx'), 'utf8');
+
+  it('asks unconditionally — any chat may have children, and looking is the only way to know', () => {
+    expect(SRC).toContain('const mayHaveSpawnedWork = true;');
+    expect(SRC).toMatch(/const needsCorpus =\s*\n?\s*mayHaveSpawnedWork \|\|/);
+  });
+
+  it('and does it in an effect, which is what makes it happen on mount', () => {
+    expect(SRC).toMatch(/useEffect\(\(\) => \{\s*\n\s*if \(needsCorpus\) ensureCorpus\(\);/);
   });
 });

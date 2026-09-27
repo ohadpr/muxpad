@@ -72,6 +72,18 @@ export interface MentionChat extends SearchableTab {
    */
   parentId?: string | undefined;
   /**
+   * When this chat was CREATED — `created_at`, passed through.
+   *
+   * For a child chat this is the moment of the spawn, and that is what it is
+   * carried for: the spawn card sits in the parent's log where the spawn
+   * happened, so the card needs a time, and the only honest one is the one the
+   * server stamped on the row. No new storage, durable, the same on every
+   * device. Optional here for the same wire-compat reason as everything else on
+   * this interface, though `created_at` has been on the tab row since the first
+   * migration.
+   */
+  createdAt?: number | undefined;
+  /**
    * The chat this one was spawned under, resolved to a NAME within the corpus.
    *
    * A delivered sub-chat is usually named after its task ("Work review"), and
@@ -97,6 +109,8 @@ type TabWithLifecycle = {
   done?: boolean | null;
   done_reason?: 'decayed' | 'delivered' | 'archived' | null;
   spawned_by?: string | null;
+  /** Epoch ms the row was created — for a child, the moment of the spawn. */
+  created_at?: number | null;
   /** Present-but-NULL means there is no clock at all — see toMentionChats. */
   clock?: ChatClock | null;
 };
@@ -129,6 +143,7 @@ export function toMentionChats(groups: readonly WorkspaceTabs[]): MentionChat[] 
       ...(reason ? { doneReason: reason } : {}),
       ...(row?.spawned_by ? { parentId: row.spawned_by } : {}),
       ...(parentName ? { parentName } : {}),
+      ...(typeof row?.created_at === 'number' ? { createdAt: row.created_at } : {}),
       chip: {
         name: t.tabName,
         icon: t.icon ?? null,
@@ -155,19 +170,21 @@ export function toMentionChats(groups: readonly WorkspaceTabs[]): MentionChat[] 
 // ── What this chat SPAWNED ───────────────────────────────────────────────────
 
 /**
- * How many spawn cards one conversation shows at its foot.
+ * How many spawn cards one conversation carries.
  *
  * The same shape of cap as the directed cards next door, and for the same
  * reason: a chat used as a dispatcher accumulates children forever, and forty
  * cards is not a record of anything you can read. LIVE children are never
- * dropped — they are the work still running, which is the whole point of the
- * card — so the cap only ever sheds delivered ones, oldest first. What it sheds
- * is not lost: the sidebar's `done` group and `@` both still hold it.
+ * dropped — they are the work still running, and the running count is derived
+ * from this very list — so the cap only ever sheds finished ones, OLDEST FIRST.
+ * What it sheds is not lost: the sidebar's `done` group and `@` both still hold
+ * it, and the oldest spawn is also the one furthest up a log you have scrolled
+ * past.
  */
 export const MAX_SPAWN_CARDS = 12;
 
 /**
- * The chats spawned under `tabId`, as the conversation renders them.
+ * The chats spawned under `tabId`, in the order they were spawned.
  *
  * This is the whole of fix 4's data layer, and it needed no new storage: a child
  * chat IS the record that a spawn happened. The card could have been a
@@ -177,10 +194,17 @@ export const MAX_SPAWN_CARDS = 12;
  * appears everywhere, for whoever made it, and it cannot disagree with the
  * sidebar about what is running because it is the same rows.
  *
- * Order is OLDEST FIRST by last activity, so a new spawn appends at the bottom
- * of the log like the message that caused it. `tabId` breaks ties, keeping the
- * order total — two spawns in the same millisecond must not swap places between
- * two renders.
+ * ─── Ordered by CREATION, not by activity ────────────────────────────────────
+ * This used to sort on `lastActivityAt`, which was defensible while the cards
+ * were pinned furniture at the foot of the log — they were a list of what was
+ * running, and the busiest child belonged at the bottom. They are transcript
+ * entries now, placed where the spawn happened, and an entry in a log is a fact
+ * about a MOMENT: a card that reorders itself every time the child says
+ * something is a message that walks around the conversation while you read it.
+ * `created_at` is that moment, it is the server's, and it never changes.
+ *
+ * `tabId` breaks ties, keeping the order total — two spawns in the same
+ * millisecond must not swap places between two renders.
  */
 export function spawnedChildren(
   corpus: readonly MentionChat[],
@@ -189,11 +213,9 @@ export function spawnedChildren(
 ): MentionChat[] {
   if (!tabId) return [];
   const kids = corpus.filter((c) => c.parentId === tabId && c.tabId !== tabId);
-  kids.sort(
-    (a, b) => (a.lastActivityAt ?? 0) - (b.lastActivityAt ?? 0) || a.tabId.localeCompare(b.tabId),
-  );
+  kids.sort((a, b) => spawnedAt(a) - spawnedAt(b) || a.tabId.localeCompare(b.tabId));
   if (kids.length <= max) return kids;
-  // Shed DELIVERED ones from the front; keep every live child and fill the rest
+  // Shed FINISHED ones from the front; keep every live child and fill the rest
   // of the budget with the most recent results.
   const live = kids.filter((k) => !k.done);
   const finished = kids.filter((k) => k.done);
@@ -203,12 +225,101 @@ export function spawnedChildren(
   return kids.filter((k) => (k.done ? keepFinished.includes(k) : true));
 }
 
+/**
+ * When a chat was spawned, as a number the ordering can rely on.
+ *
+ * A row with no `created_at` sorts to the very beginning rather than to "now":
+ * the front of the log is a STABLE place, and "now" is the one answer that would
+ * move the card on every render. (Unreachable against any real server —
+ * `created_at` is non-optional on the tab row — so this is the shape of the
+ * fallback, not a case that happens.)
+ */
+function spawnedAt(c: MentionChat): number {
+  return c.createdAt ?? 0;
+}
+
+/** A spawn, as the conversation places it: the child, and WHEN it was started. */
+export interface SpawnCard {
+  chat: MentionChat;
+  /** Epoch ms of the spawn — the child's `created_at`. Never moves. */
+  at: number;
+}
+
+/**
+ * The spawn cards for `tabId`'s conversation — every child, live and finished.
+ *
+ * FINISHED CHILDREN ARE IN, which is the opposite of what the foot-of-log
+ * version did, and for the reason the amendment turns on: a card is no longer
+ * furniture that has to earn its place above the composer forever. It is an
+ * entry in the log at the moment of the spawn, so a delivered child's card is
+ * the record that this chat started something and it finished — the same reading
+ * as any older message, and it scrolls away like one.
+ *
+ * ONE list feeds both the cards and the running count (see
+ * `liveSpawnedChildren`, which this must agree with by construction). That is
+ * the property the seam test pins: two surfaces answering "what is this chat
+ * running" from two lists is how they came to disagree in the first place.
+ */
+export function spawnCards(
+  corpus: readonly MentionChat[],
+  tabId: string | undefined | null,
+  max: number = MAX_SPAWN_CARDS,
+): SpawnCard[] {
+  return spawnedChildren(corpus, tabId, max).map((chat) => ({ chat, at: spawnedAt(chat) }));
+}
+
 /** The children still working — the number above the composer. */
 export function liveSpawnedChildren(
   corpus: readonly MentionChat[],
   tabId: string | undefined | null,
 ): MentionChat[] {
   return spawnedChildren(corpus, tabId, Number.POSITIVE_INFINITY).filter((c) => !c.done);
+}
+
+/** One thing the conversation draws: a rendered transcript entry, or a card. */
+export type LogEntry<T> = { kind: 'entry'; node: T } | { kind: 'card'; card: SpawnCard };
+
+/**
+ * Interleave the spawn cards into a conversation's entries, by TIME.
+ *
+ * `entries` are the transcript's top-level rows in the order they are rendered,
+ * each with the epoch ms it happened at (`null` for a row whose transcript line
+ * carried no parseable timestamp). `cards` are `spawnCards`' output — ascending
+ * by spawn time.
+ *
+ * A card is emitted before the first entry that happened AFTER it, which is what
+ * "where the spawn happened" means when the spawn itself is not a transcript
+ * line: the tool call that created the child is somewhere in the turn, and the
+ * card lands between that turn and whatever came next. Cards older than the
+ * oldest loaded entry come out at the top (they belong further back than the
+ * history window reaches, and the top is where "further back" is); cards newer
+ * than the last entry come out at the bottom, which is where a spawn that just
+ * happened belongs.
+ *
+ * An entry with NO time is not a boundary — it cannot say whether the spawn came
+ * before or after it, and guessing would put the card in a different place on
+ * the next reload.
+ *
+ * Pure and generic over the node type on purpose: placement is the half of this
+ * that can be wrong, and it is worth being able to test it against `['a','b']`
+ * rather than a mounted 6,000-line component.
+ */
+export function interleaveSpawnCards<T>(
+  entries: readonly { at: number | null; node: T }[],
+  cards: readonly SpawnCard[],
+): LogEntry<T>[] {
+  const out: LogEntry<T>[] = [];
+  let i = 0;
+  for (const entry of entries) {
+    if (entry.at !== null) {
+      while (i < cards.length && (cards[i] as SpawnCard).at <= entry.at) {
+        out.push({ kind: 'card', card: cards[i++] as SpawnCard });
+      }
+    }
+    out.push({ kind: 'entry', node: entry.node });
+  }
+  for (; i < cards.length; i++) out.push({ kind: 'card', card: cards[i] as SpawnCard });
+  return out;
 }
 
 // ── The run under the caret ──────────────────────────────────────────────────
