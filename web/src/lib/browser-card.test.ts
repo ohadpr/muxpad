@@ -7,6 +7,7 @@ import {
   browserMomentView,
   browserMoments,
   browserOpenMode,
+  browserOpenIntent,
   browserViewerPath,
   injectBrowserMoments,
   shouldRenewWheel,
@@ -508,5 +509,39 @@ describe('there are exactly two kinds of browser card', () => {
     );
     expect(moments).toHaveLength(1);
     expect(moments[0]?.at).toBe(1200);
+  });
+});
+
+
+describe('what opening a card is meant to do', () => {
+  const m = (over: Record<string, unknown> = {}): BrowserMoment => ({
+    kind: 'opened', at: 1, profile: 's-abc', browser: base, ...over,
+  });
+
+  it('WATCHES when you open the session card', () => {
+    // Looking over the agent's shoulder must not stop it working. Taking the
+    // wheel to satisfy curiosity is a stall the agent cannot see the reason for.
+    expect(browserOpenIntent(m())).toBe('watch');
+  });
+
+  it('DRIVES when you answer a summons', () => {
+    // The agent asked for a person; arriving without the wheel would put you in
+    // front of a page you cannot type into.
+    expect(
+      browserOpenIntent(
+        m({ kind: 'needs-you', browser: { ...base, needsYou: { reason: 'x', at: 1 } } }),
+      ),
+    ).toBe('drive');
+  });
+
+  it('watches even while the agent is driving', () => {
+    expect(browserOpenIntent(m({ browser: { ...base, wheel: lease({ holder: 'agent' }) } }))).toBe(
+      'watch',
+    );
+  });
+
+  it('puts the intent in the url, so a tab on a phone gets it too', () => {
+    expect(browserViewerPath('default', 'watch')).toBe('/browser/default/?mode=watch');
+    expect(browserViewerPath('default', 'drive')).toBe('/browser/default/');
   });
 });

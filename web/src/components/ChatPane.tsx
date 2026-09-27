@@ -51,7 +51,7 @@ import {
   composeOutgoingMessage,
   splitMessageAttachments,
 } from '../lib/attachments';
-import { injectBrowserMoments } from '../lib/browser-card';
+import { browserOpenIntent, injectBrowserMoments } from '../lib/browser-card';
 import {
   type DirectedWork,
   addDirected,
@@ -4505,7 +4505,7 @@ export function ChatPane({
             <BrowserCard
               key={`browser:${moment.profile}:${moment.at}:${moment.kind}`}
               moment={moment}
-              onOpen={(mode) => openBrowser(moment.browser, mode)}
+              onOpen={(mode) => openBrowser(moment.browser, mode, browserOpenIntent(moment))}
             />
           )),
           spawnedCards,
