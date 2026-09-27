@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MOD, imageToPageCoords, keyEvents, mouseEvent } from './BrowserInput.js';
+import { MOD, imageToPageCoords, keyEvents, mouseEvent, probeEditable } from './BrowserInput.js';
 
 /**
  * Translating what the human did in their muxpad session into CDP input.
@@ -114,5 +114,40 @@ describe('coordinates', () => {
     // naturalWidth is 0 for the instant between assigning src and decoding. A
     // NaN here reaches CDP as a protocol error and the click is simply lost.
     expect(imageToPageCoords({ x: 10, y: 10 }, { naturalWidth: 0, deviceWidth: 1280 })).toBeNull();
+  });
+});
+
+describe('deciding whether a keyboard belongs on the screen', () => {
+  const never = async () => {
+    throw new Error('should not have waited');
+  };
+
+  it('believes a yes immediately, without a second round trip', async () => {
+    let reads = 0;
+    const yes = async () => {
+      reads++;
+      return true;
+    };
+    expect(await probeEditable(yes, never)).toBe(true);
+    expect(reads).toBe(1);
+  });
+
+  it('asks again before believing a no', async () => {
+    // A page that focuses its input in a click handler answers "no" on the
+    // first read. Believing it takes the keyboard away from somebody who just
+    // tapped a login box.
+    const answers = [false, true];
+    const waits: number[] = [];
+    const read = async () => answers.shift() ?? false;
+    expect(
+      await probeEditable(read, async (ms) => {
+        waits.push(ms);
+      }),
+    ).toBe(true);
+    expect(waits).toEqual([150]);
+  });
+
+  it('says no when it is still no', async () => {
+    expect(await probeEditable(async () => false, async () => {})).toBe(false);
   });
 });

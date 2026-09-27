@@ -150,3 +150,34 @@ export function imageToPageCoords(
   const scale = frame.deviceWidth / frame.naturalWidth;
   return { x: Math.round(point.x * scale), y: Math.round(point.y * scale) };
 }
+
+/**
+ * Whether the page has a text field focused, asked more than once.
+ *
+ * The viewer raises the phone's keyboard DURING the tap, because iOS honours a
+ * focus() only inside a real gesture — so by the time this answer arrives, a
+ * keyboard is already up and this decides whether it stays. That makes the two
+ * possible mistakes wildly asymmetric:
+ *
+ *   · a false "yes" leaves a keyboard up over a page that ignores typing —
+ *     untidy, and one tap to dismiss;
+ *   · a false "no" DISMISSES a keyboard a quarter-second after the person
+ *     tapped a login box, which is indistinguishable from the bug where it
+ *     never appeared at all.
+ *
+ * And a false "no" is easy to get: plenty of pages focus their input in a click
+ * handler, an effect, or after a layout pass, so the first read lands before
+ * `activeElement` has moved. Measured on the real browser the first read is
+ * already correct for a plain input — this exists for the ones that are not.
+ *
+ * So: ask again before believing "no", and never re-ask after a "yes".
+ */
+export async function probeEditable(
+  read: () => Promise<boolean>,
+  wait: (ms: number) => Promise<void>,
+  retryAfterMs = 150,
+): Promise<boolean> {
+  if (await read()) return true;
+  await wait(retryAfterMs);
+  return read();
+}
