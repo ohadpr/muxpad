@@ -17,7 +17,7 @@ let db: Database.Database;
 let app: Hono;
 let registry: { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> };
 
-const CHROME = '/bin/chrome';
+const CHROME = { path: '/bin/chrome', source: 'test' };
 
 beforeEach(() => {
   db = new Database(':memory:');
@@ -103,6 +103,28 @@ describe('creating', () => {
     expect(((await res.json()) as { error: string }).error).toMatch(
       /MUXPAD_CHROME_BIN|playwright install/,
     );
+  });
+
+  it('never tells anyone to go find their real Chrome', async () => {
+    // The message is the last place a "just point it at /Applications" habit
+    // could creep back in. See findChrome.ts for why that is forbidden.
+    const noChrome = new Hono().route(
+      '/api/browsers',
+      browsersRoutes({
+        db,
+        dataDir: '/data',
+        hostEntry: '/opt/cli.js',
+        cwd: '/home',
+        registry,
+        chromePath: () => null,
+      }),
+    );
+    const res = await noChrome.request('/api/browsers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ profile: 'shopping' }),
+    });
+    expect(((await res.json()) as { error: string }).error).not.toContain('/Applications');
   });
 
   it('404s a browser that was never registered', async () => {
