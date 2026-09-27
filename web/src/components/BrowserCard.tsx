@@ -57,9 +57,17 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
       data-testid="browser-card"
       data-tone={view.tone}
     >
-      <div className="browser-card__glyph" aria-hidden="true">
-        {view.tone === 'waiting' ? '↑' : '◉'}
-      </div>
+      {/* A BROWSER, unmistakably. A dot said "some card"; next to a spawn card
+        in the same log the two were telling apart only by their words. A window
+        with a title bar and a dot for the traffic light reads as a browser at
+        14px, which is the size it has to work at. */}
+      <span className="browser-card__glyph" aria-hidden="true">
+        <svg viewBox="0 0 16 14" width="15" height="14">
+          <rect x="0.75" y="0.75" width="14.5" height="12.5" rx="2.5" />
+          <path d="M0.75 4.25h14.5" />
+          <circle cx="3.1" cy="2.5" r="0.75" className="browser-card__light" />
+        </svg>
+      </span>
       <div className="browser-card__body">
         <div className="browser-card__title">{view.title}</div>
         {view.detail ? <div className="browser-card__detail">{view.detail}</div> : null}

@@ -18,30 +18,50 @@
   grid-template-columns: auto 1fr auto;
   align-items: center;
   column-gap: 9px;
-  row-gap: 2px;
+  row-gap: 3px;
+  /* SIZED TO ITS CONTENT, like the spawn card beside it. Full width made every
+     browser moment look like a banner across the conversation; these are log
+     entries and should end where their words do. */
+  width: fit-content;
+  max-width: min(460px, 94%);
+  align-self: flex-start;
+  box-sizing: border-box;
   padding: 7px 11px;
-  margin: 3px 10px;
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--chat-fg, #1c1c22) 4%, transparent);
+  margin: 4px 10px;
+  border-radius: 10px;
+  /* The same two-stop wash the spawn card uses, so they read as siblings — a
+     flat fill next to it looked unfinished. */
+  background: linear-gradient(
+      color-mix(in srgb, var(--chat-fg, #1c1c22) 5%, transparent),
+      transparent 70%
+    ), var(--chat-panel, #fff);
+  border: 1px solid var(--chat-border, #dcdce6);
   color: var(--chat-fg, #1c1c22);
   font-family: var(--chrome-font, inherit);
   font-size: 12.5px;
-  line-height: 1.4;
+  line-height: 1.38;
 }
 
-/* Small, and out of the way. It is punctuation, not an icon. */
+/*
+ * The browser mark. Next to a spawn card in the same log, a coloured dot said
+ * only "some card" — the two were tellable apart by their words alone. A window
+ * outline reads as a browser at the size it has to work at.
+ */
 .browser-card__glyph {
   grid-column: 1;
   grid-row: 1;
-  width: 15px;
-  height: 15px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  font-size: 9px;
-  font-weight: 700;
-  background: color-mix(in srgb, var(--chat-fg, #1c1c22) 14%, transparent);
-  color: var(--chat-panel, #fff);
+  display: block;
+  line-height: 0;
+  color: var(--chat-faint, #8b8b9c);
+}
+.browser-card__glyph svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.2;
+}
+.browser-card__glyph .browser-card__light {
+  fill: currentColor;
+  stroke: none;
 }
 
 .browser-card__body {
@@ -109,15 +129,19 @@
 
 /* The agent is driving: present, not attention-seeking. */
 .browser-card--working .browser-card__glyph {
-  background: var(--chat-accent, #5b5bd6);
+  color: var(--chat-accent, #5b5bd6);
 }
 
-/* You hold the wheel. A tint, not a border — you already know. */
+/* You hold the wheel. A wash, not a border — you already know. */
 .browser-card--yours {
-  background: color-mix(in srgb, var(--chat-accent, #5b5bd6) 9%, transparent);
+  border-color: color-mix(in srgb, var(--chat-accent, #5b5bd6) 35%, var(--chat-border, #dcdce6));
+  background: linear-gradient(
+      color-mix(in srgb, var(--chat-accent, #5b5bd6) 10%, transparent),
+      transparent 70%
+    ), var(--chat-panel, #fff);
 }
 .browser-card--yours .browser-card__glyph {
-  background: var(--chat-accent, #5b5bd6);
+  color: var(--chat-accent, #5b5bd6);
 }
 
 /*
@@ -129,11 +153,15 @@
  * find at a glance, not enough to look like a failure.
  */
 .browser-card--waiting {
-  background: color-mix(in srgb, var(--warn, #c98a2e) 11%, transparent);
+  border-color: color-mix(in srgb, var(--warn, #c98a2e) 55%, transparent);
+  background: linear-gradient(
+      color-mix(in srgb, var(--warn, #c98a2e) 16%, transparent),
+      color-mix(in srgb, var(--warn, #c98a2e) 5%, transparent) 75%
+    ), var(--chat-panel, #fff);
   box-shadow: inset 2px 0 0 var(--warn, #c98a2e);
 }
 .browser-card--waiting .browser-card__glyph {
-  background: var(--warn, #c98a2e);
+  color: var(--warn, #c98a2e);
 }
 .browser-card--waiting .browser-card__title {
   color: color-mix(in srgb, var(--warn, #c98a2e) 75%, var(--chat-fg, #1c1c22));
@@ -155,40 +183,38 @@
  * Full width for the words; the button follows underneath.
  */
 @media (max-width: 560px) {
-  /* Default stays one row: a card with only a title must not spend a second
-     line on its button — that is the wasted row this redesign set out to kill. */
+  /*
+   * ONE ROW, ALWAYS. The action used to drop to a line of its own when there
+   * was a reason to read, which on a phone left a mostly-empty row under every
+   * summons — the card looked airy and said no more. A one-word button is
+   * narrow enough to sit beside the title at 390px, so the reason wraps under
+   * the title inside its own column and nothing gets a row to itself.
+   */
   .browser-card,
   .browser-card:has(.browser-card__countdown) {
     grid-template-columns: auto 1fr auto;
+    max-width: 100%;
   }
-  .browser-card__glyph {
-    align-self: start;
-    margin-top: 2px;
-  }
-
-  /* ONLY when there is a reason to read does the action step down, so the
-     sentence gets the full width instead of a ribbon four words wide. */
-  .browser-card:has(.browser-card__detail) {
-    grid-template-columns: auto 1fr;
-  }
-  .browser-card:has(.browser-card__detail) .browser-card__body {
+  .browser-card__body {
     grid-column: 2;
     flex-direction: column;
     align-items: flex-start;
-    row-gap: 1px;
+    row-gap: 0;
   }
-  .browser-card:has(.browser-card__detail) .browser-card__detail {
+  .browser-card__detail {
     white-space: normal;
   }
-  .browser-card:has(.browser-card__detail) .browser-card__action {
-    grid-column: 2;
-    grid-row: 2;
-    justify-self: end;
+  /* Beside the first LINE, not floating in the middle of a wrapped block. */
+  .browser-card__glyph,
+  .browser-card__action {
+    align-self: start;
   }
-  .browser-card:has(.browser-card__detail) .browser-card__countdown {
-    grid-column: 2;
-    grid-row: 2;
-    justify-self: start;
-    align-self: center;
+  .browser-card__action {
+    grid-column: 3;
+    grid-row: 1;
+  }
+  /* The countdown joins the title rather than claiming a row. */
+  .browser-card__countdown {
+    display: none;
   }
 }
