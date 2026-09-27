@@ -310,19 +310,41 @@ describe('the moments a conversation shows', () => {
     expect(body.events[1]).toMatchObject({ reason: 'log in to Amazon', tabId: 'tab-1' });
   });
 
-  it('records that you answered it, so the log reads as a story', async () => {
+  it('does NOT retire the card when you take the wheel', async () => {
+    // While you hold the browser that card is the way BACK to it. Navigate away
+    // on a phone and, if it has gone, there is nothing left in the conversation
+    // to tap.
     await ensure();
     await post('/api/browsers/shopping/needs-you', { reason: 'captcha' });
     const res = await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
     const body = (await res.json()) as { events: Array<{ kind: string }> };
+    expect(body.events.map((e) => e.kind)).toEqual(['opened', 'needs-you']);
+  });
+
+  it('retires it when you hand the browser back', async () => {
+    await ensure();
+    await post('/api/browsers/shopping/needs-you', { reason: 'captcha' });
+    await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
+    const res = await del('/api/browsers/shopping/wheel', { by: 'pane-7' });
+    const body = (await res.json()) as { events: Array<{ kind: string }> };
     expect(body.events.map((e) => e.kind)).toEqual(['opened', 'needs-you', 'resolved']);
+  });
+
+  it('does not retire it for somebody who was not holding it', async () => {
+    await ensure();
+    await post('/api/browsers/shopping/needs-you', { reason: 'captcha' });
+    await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
+    const res = await del('/api/browsers/shopping/wheel', { by: 'someone-else' });
+    const body = (await res.json()) as { events: Array<{ kind: string }> };
+    expect(body.events.map((e) => e.kind)).toEqual(['opened', 'needs-you']);
   });
 
   it('does not record a "resolved" when nothing was asking', async () => {
     await ensure();
-    const res = await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
+    await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
+    const res = await del('/api/browsers/shopping/wheel', { by: 'pane-7' });
     const body = (await res.json()) as { events: Array<{ kind: string }> };
-    expect(body.events.map((e) => e.kind)).toEqual(['opened']);
+    expect(body.events.map((e) => e.kind)).toEqual(['opened', 'resolved']);
   });
 });
 
