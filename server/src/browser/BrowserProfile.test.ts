@@ -5,6 +5,7 @@ import {
   browserAppName,
   browserAppSlug,
   browserAppUrl,
+  browserJarPath,
   browserProfileDir,
   browserViewerPort,
   isBrowserAppSlug,
@@ -151,5 +152,20 @@ describe('port allocation', () => {
     const full = new Set<number>();
     for (let p = lo; p <= hi; p++) full.add(p);
     expect(() => pickBrowserPort('shopping', full)).toThrow(/no free/i);
+  });
+});
+
+describe('the shared cookie jar', () => {
+  it('sits BESIDE the profile, not inside it', () => {
+    // The profile directory is Chrome's and is locked while it runs; this file
+    // is read by every agent that starts warm, so it cannot live behind that.
+    expect(browserJarPath('/data', 'shopping')).toBe(
+      '/data/browser-profiles/shopping.cookies.json',
+    );
+    expect(browserJarPath('/data', 'shopping')).not.toContain('/shopping/');
+  });
+
+  it('normalizes, so one profile has one jar', () => {
+    expect(browserJarPath('/data', 'Shopping')).toBe(browserJarPath('/data', 'shopping'));
   });
 });

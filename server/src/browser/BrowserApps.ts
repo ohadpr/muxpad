@@ -5,6 +5,7 @@ import {
   browserAppName,
   browserAppSlug,
   browserAppUrl,
+  browserJarPath,
   browserViewerPort,
   isBrowserAppSlug,
   normalizeProfileName,
@@ -80,6 +81,7 @@ export function browserHostCommand(opts: {
     `--port=${opts.port}`,
     `--data-dir=${JSON.stringify(opts.dataDir)}`,
     `--chrome=${JSON.stringify(opts.chromePath)}`,
+    `--jar=${JSON.stringify(browserJarPath(opts.dataDir, opts.profile))}`,
   ].join(' ');
 }
 
@@ -156,6 +158,35 @@ export async function ensureBrowserApp(
       cdpUrl: cdp === null ? '' : browserAppUrl(cdp),
       state: existing.enabled ? 'running' : 'registered',
     };
+
+    // COMMAND DRIFT. The command is baked into the row at creation and into the
+    // pane at materialise time, so a browser registered before a flag existed
+    // keeps running the old line forever and the feature silently never
+    // arrives. That is not hypothetical — the cookie jar flag landed, and no jar
+    // was written for the already-registered profile until this existed.
+    // Same repair the tunnel does, for the same reason.
+    const wanted =
+      cdp === null
+        ? existing.command
+        : browserHostCommand({
+            hostEntry: deps.hostEntry,
+            profile,
+            port: cdp,
+            dataDir: deps.dataDir,
+            chromePath: deps.chromePath,
+          });
+    if (wanted !== existing.command) {
+      new AppStore(deps.db).update(existing.id, { command: wanted });
+      log(`[browser] command drifted for '${slug}' — repaired`);
+      if (existing.enabled) {
+        // The pane holds the OLD line until it is rebuilt, so a repair that
+        // does not restart is a repair that has not happened.
+        await deps.registry.stop(existing.id);
+        await deps.registry.start(existing.id);
+        return { ...state, state: 'started' };
+      }
+    }
+
     if (deps.start !== false && !existing.enabled) {
       await deps.registry.start(existing.id);
       return { ...state, state: 'started' };

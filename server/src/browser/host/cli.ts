@@ -36,6 +36,7 @@ const host = await startBrowserHost({
   port: Number(required('port')),
   dataDir: required('data-dir'),
   chromePath: required('chrome'),
+  ...(flag('jar') ? { jarPath: flag('jar') as string } : {}),
 });
 
 console.log(`browser host ready · viewer ${host.url} · cdp ${host.cdpUrl}`);
