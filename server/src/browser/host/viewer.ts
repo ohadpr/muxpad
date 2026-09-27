@@ -35,7 +35,12 @@ export const VIEWER_HTML = String.raw`<!doctype html>
 <script>
 const img = document.getElementById('screen')
 const msg = document.getElementById('msg')
-const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws')
+// Everything is relative to WHERE THIS PAGE IS SERVED FROM, not to the origin
+// root: muxpad proxies this viewer at /browser/<profile>/ so the link can be a
+// tailnet one, and an absolute '/ws' would dial the cockpit's socket instead.
+// Served directly on the host's own port, base is '/' and this is unchanged.
+const base = location.pathname.replace(/[^/]*$/, '')
+const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + base + 'ws')
 ws.binaryType = 'arraybuffer'
 
 let meta = null, url = null, nw = 0, nh = 0
@@ -100,7 +105,7 @@ img.addEventListener('keydown', (e) => { e.preventDefault(); send({ t:'key', key
 
 document.getElementById('fpick').addEventListener('change', async (e) => {
   const f = e.target.files[0]; if (!f) return
-  const r = await fetch('/upload', { method:'POST', headers:{ 'x-filename': f.name }, body: await f.arrayBuffer() })
+  const r = await fetch(base + 'upload', { method:'POST', headers:{ 'x-filename': f.name }, body: await f.arrayBuffer() })
   const j = await r.json().catch(() => ({ ok:false, error:'upload failed' }))
   msg.textContent = j.ok ? '' : j.error
   document.getElementById('drop').classList.remove('on')

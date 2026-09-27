@@ -126,7 +126,17 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
   await screencast.start();
 
   const http = createServer((req, res) => void handleHttp(req, res));
-  const wss = new WebSocketServer({ server: http, path: '/ws' });
+  // The path is NOT pinned to '/ws': muxpad proxies this viewer under
+  // /browser/<profile>/, and the upgrade arrives with that prefix intact.
+  // Anything ending in /ws is us — nothing else is listening on this port.
+  const wss = new WebSocketServer({ noServer: true });
+  http.on('upgrade', (req, socket, head) => {
+    if (!new URL(req.url ?? '/', 'http://127.0.0.1').pathname.endsWith('/ws')) {
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+  });
 
   wss.on('connection', (socket) => {
     viewers.add(socket);
@@ -161,7 +171,10 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
   }
 
   async function handleHttp(req: IncomingMessage, res: ServerResponse) {
-    const path = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
+    // Served either directly or behind muxpad's /browser/<profile>/ proxy, so
+    // match on the TAIL rather than the whole path.
+    const full = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
+    const path = `/${full.split('/').pop() ?? ''}`;
 
     if (path === '/' || path === '/index.html') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(VIEWER_HTML);

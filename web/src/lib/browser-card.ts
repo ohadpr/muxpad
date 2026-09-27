@@ -18,6 +18,7 @@ export interface BrowserWheelLease {
 
 export interface BrowserCardData {
   profile: string;
+  /** Absolute, tailnet when known — the link you can open on a phone. */
   viewerUrl: string;
   state: 'registered' | 'started' | 'running';
   wheel: BrowserWheelLease | null;
@@ -150,4 +151,18 @@ export function visibleBrowsers(browsers: readonly BrowserCardData[]): BrowserCa
   return browsers.filter(
     (b) => b.state === 'running' || b.state === 'started' || b.needsYou || b.wheel,
   );
+}
+
+/**
+ * Where the modal's iframe points.
+ *
+ * RELATIVE, deliberately, while {@link BrowserCardData.viewerUrl} stays
+ * absolute. They are for different jobs: the absolute one is a link you can
+ * send to a phone, and the relative one is always same-origin with whatever
+ * host you happen to have the cockpit open on — loopback at your desk, the
+ * tailnet name from the sofa. Hard-coding either into the iframe makes one of
+ * those two cases a cross-origin frame for no reason.
+ */
+export function browserViewerPath(profile: string): string {
+  return `/browser/${profile}/`;
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { BrowserCardData } from '../lib/browser-card.js';
-import { shouldRenewWheel, wheelCountdown } from '../lib/browser-card.js';
+import { browserViewerPath, shouldRenewWheel, wheelCountdown } from '../lib/browser-card.js';
 import './BrowserModal.css';
 
 /**
@@ -85,10 +85,11 @@ export function BrowserModal({
         <iframe
           className="browser-modal__frame"
           title={`browser ${data.profile}`}
-          src={data.viewerUrl}
-          // The viewer is a loopback origin muxpad owns and the whole point is
-          // that it takes keyboard and pointer input, so it is NOT sandboxed
-          // into uselessness. It has no access to this document either way.
+          src={browserViewerPath(data.profile)}
+          // RELATIVE, so the frame is same-origin however you reached the
+          // cockpit — loopback at the desk, tailnet from the sofa. Not
+          // sandboxed: taking keyboard and pointer input is the entire point,
+          // and it has no access to this document either way.
           allow="clipboard-read; clipboard-write"
         />
       </div>

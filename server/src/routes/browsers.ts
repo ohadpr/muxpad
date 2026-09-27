@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { type BrowserAppState, ensureBrowserApp, listBrowserApps } from '../browser/BrowserApps.js';
 import { normalizeProfileName } from '../browser/BrowserProfile.js';
+import { browserViewerLink, parseBrowserProxyPath } from '../browser/BrowserProxy.js';
 import {
   BrowserAttention,
   BrowserWheel,
@@ -45,6 +46,8 @@ import { findChrome } from '../browser/findChrome.js';
  */
 
 export interface BrowserView extends BrowserAppState {
+  /** The host's loopback origin. Used by the proxy, not by a person. */
+  localUrl: string;
   /** Who is driving, or null. */
   wheel: WheelLease | null;
   /** Set when an agent has asked for a person, and why. */
@@ -88,6 +91,52 @@ function takeRequest(
   };
 }
 
+/**
+ * Passes a viewer request through to the host on loopback.
+ *
+ * Streaming rather than buffering: a screencast frame is ~50 KB and the viewer
+ * page itself is the only thing here small enough to buffer without thinking
+ * about it. `duplex: 'half'` is required by undici for a request with a body.
+ */
+export function browserProxyRoutes(deps: {
+  db: Database.Database;
+  fetchImpl?: typeof fetch;
+}) {
+  const app = new Hono();
+  const doFetch = deps.fetchImpl ?? fetch;
+
+  app.all('/*', async (c) => {
+    const parsed = parseBrowserProxyPath(new URL(c.req.url).pathname);
+    if (!parsed) return c.text('not found', 404);
+
+    const state = listBrowserApps(deps.db).find((b) => b.profile === parsed.profile);
+    if (!state) return c.text('no such browser', 404);
+    // The row's url IS the viewer's loopback origin. Nothing else is trusted
+    // here — the profile came off a URL and is only ever used as a lookup key.
+    const target = `${state.viewerUrl}${parsed.rest}${new URL(c.req.url).search}`;
+
+    try {
+      const upstream = await doFetch(target, {
+        method: c.req.method,
+        headers: c.req.raw.headers,
+        ...(c.req.method === 'GET' || c.req.method === 'HEAD'
+          ? {}
+          : { body: c.req.raw.body, duplex: 'half' }),
+      } as RequestInit);
+      return new Response(upstream.body, {
+        status: upstream.status,
+        headers: upstream.headers,
+      });
+    } catch {
+      // The browser is registered but its host is not up. Say so plainly — an
+      // iframe showing a connection error reads as "muxpad is broken".
+      return c.text('the browser is not running', 502);
+    }
+  });
+
+  return app;
+}
+
 export function browsersRoutes(deps: {
   db: Database.Database;
   dataDir: string;
@@ -95,6 +144,8 @@ export function browsersRoutes(deps: {
   cwd: string;
   registry: { start(appId: string): Promise<unknown>; stop(appId: string): Promise<unknown> };
   chromePath?: () => { path: string; source: string } | null;
+  /** This machine's tailnet host, so the link works from a phone. */
+  tailnetHost?: () => string | null;
 }) {
   const app = new Hono();
   const wheel = new BrowserWheel(deps.db);
@@ -103,6 +154,12 @@ export function browsersRoutes(deps: {
 
   const view = (state: BrowserAppState): BrowserView => ({
     ...state,
+    // What a PERSON is given: muxpad's own origin, tailnet when we know it, so
+    // the link opens on a phone. The loopback url stays on `localUrl` because
+    // the proxy still needs it — and because "which one do I dial" should not
+    // be a judgement the client has to make.
+    viewerUrl: browserViewerLink(state.profile, deps.tailnetHost?.() ?? null),
+    localUrl: state.viewerUrl,
     wheel: wheel.holder(state.profile),
     needsYou: attention.get(state.profile),
   });

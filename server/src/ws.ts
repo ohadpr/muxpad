@@ -342,6 +342,12 @@ function makeRefusalLogger(log: (line: string) => void): (origin: string, why: s
 
 export function attachWsServer(deps: {
   http: Server;
+  /**
+   * Resolves a `/browser/<profile>/ws` path to the host's loopback socket url,
+   * or null when there is no such browser. Injected rather than imported so the
+   * ws layer keeps knowing nothing about the browser subsystem.
+   */
+  browserViewerSocket?: (pathname: string) => string | null;
   db: Database.Database;
   ptyd: PtydClient;
   cache: PtydCache;
@@ -1208,6 +1214,42 @@ export function attachWsServer(deps: {
     // App-level event stream. One socket per browser; receives JSON-encoded
     // MuxpadEvent frames for structural state changes (panes/tabs/workspaces).
     // PTY I/O still goes through /ws/pane/:id below.
+    // The browser viewer's frame stream, proxied so the link can be a tailnet
+    // one (see browser/BrowserProxy.ts). It rides the origin check above, which
+    // is the main reason it lives here rather than on the host's own port.
+    if (url.pathname.startsWith('/browser/') && url.pathname.endsWith('/ws')) {
+      const target = deps.browserViewerSocket?.(url.pathname);
+      if (!target) {
+        refuseUpgrade(socket, 'no such browser');
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        // A plain byte pipe in both directions. Nothing here inspects frames:
+        // the host already validates every input message, and a second opinion
+        // about the protocol is a second thing to keep in sync.
+        const upstream = new WebSocket(target);
+        upstream.binaryType = 'nodebuffer';
+        const closeBoth = () => {
+          try {
+            ws.close();
+          } catch {}
+          try {
+            upstream.close();
+          } catch {}
+        };
+        upstream.on('open', () => {
+          ws.on('message', (d) => upstream.readyState === 1 && upstream.send(d));
+        });
+        upstream.on('message', (d, isBinary) => {
+          if (ws.readyState === 1) ws.send(d, { binary: isBinary });
+        });
+        upstream.on('close', closeBoth);
+        upstream.on('error', closeBoth);
+        ws.on('close', closeBoth);
+        ws.on('error', closeBoth);
+      });
+      return;
+    }
     if (url.pathname === '/ws/events') {
       wss.handleUpgrade(req, socket, head, (ws) => {
         // Heartbeat participation: the sweep above pings every wss client.
