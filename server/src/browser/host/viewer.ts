@@ -112,7 +112,7 @@ ws.onmessage = (e) => {
       // The tap already focused the sink; this is the page telling us whether
       // that was right. Keeping it is what makes the keyboard STAY up.
       if (m.editable) setKb(true)
-      else if (!kbSticky) setKb(false)
+      else if (!kbSticky && !kbFromTap) setKb(false)
       return
     }
     if (m.t === 'fields') { if (Array.isArray(m.rects)) fields = m.rects; return }
@@ -171,6 +171,7 @@ img.addEventListener('pointerdown', (e) => {
   if (!watching) {
     const p0 = pt(e)
     const hit = p0 ? hitsField(p0) : null
+    kbFromTap = hit === true
     if (hit !== false) sink.focus({ preventScroll: true })
   }
   buttons = 1
@@ -247,6 +248,14 @@ const kbBtn = document.getElementById('kb')
 // Pressed by hand, the keyboard stays up regardless of what the page says is
 // focused — some pages take text without ever focusing an input.
 let kbSticky = false
+// Set when the tap landed inside a box the host told us is a text field.
+//
+// THE LOCAL EVIDENCE WINS. The page's own answer cannot see into a cross-origin
+// frame — nothing can — so a "not editable" from it is sometimes just ignorance,
+// and acting on it takes the keyboard away from somebody who has just tapped a
+// login box. The hit-test knows where the field IS; that beats a no from a
+// document that cannot look where the field lives.
+let kbFromTap = false
 const setKb = (on) => {
   kbBtn.setAttribute('aria-pressed', String(on))
   if (on) sink.focus({ preventScroll: true }); else sink.blur()

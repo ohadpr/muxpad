@@ -20,6 +20,7 @@ import {
   storageStateToCdpCookies,
 } from '../CookieJar.js';
 import { emulationParams } from '../MobileEmulation.js';
+import { focusProbeExpression } from '../FocusProbe.js';
 import { isBrowsingUrl } from '../PageAttachment.js';
 import { clearStaleProfileLock } from '../ProfileLock.js';
 import { ScreencastSession } from '../ScreencastSession.js';
@@ -359,14 +360,12 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
         if (message.type === 'mouseReleased') {
           try {
             const read = async () => {
+              // Descends into shadow roots and same-origin frames — see
+              // FocusProbe.ts. The flat version reported the IFRAME or the
+              // shadow HOST, said "not editable", and the viewer took the
+              // keyboard away a third of a second after the tap raised it.
               const r = (await cdp.send('Runtime.evaluate', {
-                expression: `(() => { const a = document.activeElement; if (!a) return false;
-                const t = (a.tagName || '').toLowerCase();
-                if (t === 'textarea') return true;
-                if (a.isContentEditable) return true;
-                if (t !== 'input') return false;
-                return !['button','submit','reset','checkbox','radio','file','range','color','image'].includes((a.type||'text').toLowerCase());
-              })()`,
+                expression: focusProbeExpression(),
                 returnByValue: true,
               })) as unknown as { result?: { value?: boolean } };
               return Boolean(r.result?.value);

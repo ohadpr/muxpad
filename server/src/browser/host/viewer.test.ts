@@ -268,6 +268,31 @@ describe('the keyboard on a phone', () => {
     expect(h.el('sink').focused).toBe(true);
   });
 
+  it('KEEPS the keyboard when the page contradicts a tap on a known field', () => {
+    // The page's answer cannot see into a cross-origin frame, so its "no" is
+    // sometimes ignorance rather than information — and acting on it takes the
+    // keyboard away from somebody who has just tapped a login box. Measured on
+    // the real browser: an input inside an iframe or a shadow root reports
+    // activeElement as the frame or the host element, and answers "not
+    // editable" for a field the person is looking straight at.
+    const h = ready(run());
+    h.receive({ t: 'fields', rects: [[0, 0, 100, 50]] });
+    h.el('screen').fire('pointerdown', { clientX: 20, clientY: 20, button: 0 });
+    expect(h.el('sink').focused).toBe(true);
+    h.receive({ t: 'focus', editable: false });
+    expect(h.el('sink').focused).toBe(true);
+  });
+
+  it('still takes it back when the tap was NOT on a known field', () => {
+    // The guess must still be correctable, or every tap anywhere leaves a
+    // keyboard up over a page that ignores typing.
+    const h = ready(run());
+    h.el('screen').fire('pointerdown', { clientX: 300, clientY: 300, button: 0 });
+    expect(h.el('sink').focused).toBe(true);
+    h.receive({ t: 'focus', editable: false });
+    expect(h.el('sink').focused).toBe(false);
+  });
+
   it('does not raise one while you are only watching', () => {
     // Watch mode takes no wheel and sends no input. A keyboard there offers to
     // type into a page that will ignore it.
