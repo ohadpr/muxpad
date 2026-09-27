@@ -164,7 +164,14 @@ export function browserViewerPath(profile: string, intent: BrowserOpenIntent = '
 export type BrowserOpenIntent = 'watch' | 'drive';
 
 export function browserOpenIntent(moment: BrowserMoment): BrowserOpenIntent {
-  return moment.kind === 'needs-you' && moment.browser.needsYou ? 'drive' : 'watch';
+  if (moment.kind !== 'needs-you') return 'watch';
+  // ALREADY HOLDING IT COUNTS. `needsYou` is cleared the instant you arrive, so
+  // reading intent from it alone means the second visit — after the phone's back
+  // button, mid-login — opens a viewer that refuses your typing. You did not
+  // become a spectator by navigating away.
+  return moment.browser.needsYou || moment.browser.wheel?.holder === 'human'
+    ? 'drive'
+    : 'watch';
 }
 
 /** One card in a conversation: a thing that happened, plus the browser it happened to. */
@@ -286,7 +293,11 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
 
   // The session card. No action label: it is a note, and the card itself takes
   // the click for anyone who wants to watch.
-  const detail = live ? '' : 'closed';
+  //
+  // A SUMMONS YOU ARE ANSWERING keeps its reason. This is the card you come back
+  // to when you leave the viewer and return, and without the reason it is a row
+  // saying "Browser opened" for an errand you are halfway through.
+  const detail = live ? (moment.kind === 'needs-you' ? (moment.reason ?? '') : '') : 'closed';
 
   return {
     tone: yours ? 'yours' : browser.wheel ? 'working' : 'idle',

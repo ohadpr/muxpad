@@ -545,3 +545,51 @@ describe('what opening a card is meant to do', () => {
     expect(browserViewerPath('default', 'drive')).toBe('/browser/default/');
   });
 });
+
+describe('finding the way back to a browser you are driving', () => {
+  // A phone has a back button, and the viewer is a page. Tapping back lands you
+  // in the conversation — and if answering the summons deleted the card, there
+  // is no longer anything to tap, mid-login, with the agent still waiting.
+  const held = (reason: string): BrowserCardData => ({
+    profile: 's-abc',
+    viewerUrl: 'https://host/browser/s-abc/',
+    state: 'running',
+    // Cleared: you arrived. The summons is no longer SHOUTING.
+    needsYou: null,
+    wheel: { holder: 'human', by: 'pane-1', takenAt: 0, expiresAt: 600_000 },
+    events: [
+      { kind: 'opened', at: 1, tabId: 'tab-1' },
+      { kind: 'needs-you', at: 2, tabId: 'tab-1', reason },
+    ],
+  });
+
+  it('keeps a card in the conversation while you hold the wheel', () => {
+    const moments = browserMoments([held('log in')], 'tab-1');
+    expect(moments.map((m) => m.kind)).toEqual(['opened', 'needs-you']);
+  });
+
+  it('still says what you came for, so the card is not a mystery', () => {
+    const moments = browserMoments([held('log in to Amazon')], 'tab-1');
+    const view = browserMomentView(moments[1] as BrowserMoment);
+    expect(view.detail).toBe('log in to Amazon');
+    expect(view.urgent).toBe(false);
+    expect(view.openable).toBe(true);
+  });
+
+  it('reopens it in DRIVE mode — you are mid-task, not spectating', () => {
+    // The bug this pins: needsYou is cleared the moment you arrive, so intent
+    // read from it alone sends you back into a viewer that refuses your typing.
+    const moments = browserMoments([held('log in')], 'tab-1');
+    expect(browserOpenIntent(moments[1] as BrowserMoment)).toBe('drive');
+  });
+
+  it('and it goes once you hand the browser back', () => {
+    const b = held('log in');
+    const done: BrowserCardData = {
+      ...b,
+      wheel: null,
+      events: [...(b.events ?? []), { kind: 'resolved', at: 3, tabId: 'tab-1' }],
+    };
+    expect(browserMoments([done], 'tab-1').map((m) => m.kind)).toEqual(['opened']);
+  });
+});

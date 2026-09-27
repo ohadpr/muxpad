@@ -273,9 +273,10 @@ export function browsersRoutes(deps: {
     if (!parsed.success) return c.json({ error: 'by is required' }, 400);
 
     wheel.take(profile, takeRequest(parsed.data, 'human'));
-    // Arriving IS the acknowledgement. An explicit ack nobody presses is how a
-    // card ends up shouting after the thing was dealt with.
-    if (attention.get(profile)) events.record(profile, { kind: 'resolved' });
+    // Arriving IS the acknowledgement, so the card stops SHOUTING here — but it
+    // does not disappear here. While you hold the wheel that card is your way
+    // back to the browser: navigate away on a phone and, without it, there is
+    // nothing in the conversation to tap. It is retired on release instead.
     attention.clear(profile);
     return c.json(view(state));
   });
@@ -354,7 +355,13 @@ export function browsersRoutes(deps: {
     const parsed = TakeSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: 'by is required' }, 400);
 
+    const held = wheel.holder(profile);
     wheel.release(profile, parsed.data.by);
+    // Handed back: the errand is over, so the card retires. Only for the person
+    // who actually held it — a failed release must not retire somebody's card.
+    if (held?.by === parsed.data.by && held.holder === 'human') {
+      events.record(profile, { kind: 'resolved' });
+    }
     // A person has just finished with the browser, which is overwhelmingly when
     // a LOGIN has just happened. Harvest it into the shared jar now, so the next
     // session starts warm — otherwise the login only ever reaches whoever
