@@ -161,7 +161,7 @@ describe('opening', () => {
         viewportWidth={1440}
       />,
     );
-    await click(buttons(host)[0]);
+    await click(host.querySelector('[data-testid="browser-card"]') ?? undefined);
     const take = calls.find((c) => c.url.includes('/wheel/take'));
     expect(take).toBeTruthy();
     expect(take?.method).toBe('POST');
@@ -181,7 +181,7 @@ describe('opening', () => {
         viewportWidth={1440}
       />,
     );
-    await click(buttons(host)[0]);
+    await click(host.querySelector('[data-testid="browser-card"]') ?? undefined);
     expect(calls.find((c) => c.url.includes('/wheel/take'))?.body).toMatchObject({
       reason: 'log in to Amazon',
     });
@@ -198,7 +198,7 @@ describe('opening', () => {
         viewportWidth={1440}
       />,
     );
-    await click(buttons(host)[0]);
+    await click(host.querySelector('[data-testid="browser-card"]') ?? undefined);
     expect(document.querySelector('[data-testid="browser-modal"]')).toBeTruthy();
   });
 
@@ -215,7 +215,7 @@ describe('opening', () => {
         openTab={openTab}
       />,
     );
-    await click(buttons(host)[0]);
+    await click(host.querySelector('[data-testid="browser-card"]') ?? undefined);
     expect(openTab).toHaveBeenCalledWith('https://host.ts.net/browser/shopping/');
     expect(document.querySelector('[data-testid="browser-modal"]')).toBeNull();
   });
@@ -235,7 +235,7 @@ describe('closing', () => {
         viewportWidth={1440}
       />,
     );
-    await click(buttons(host)[0]);
+    await click(host.querySelector('[data-testid="browser-card"]') ?? undefined);
     const done = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Done');
     await click(done);
     const release = calls.find((c) => c.method === 'DELETE');

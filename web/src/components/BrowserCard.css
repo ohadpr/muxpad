@@ -149,6 +149,29 @@
   outline-offset: 1px;
 }
 
+/*
+ * PASSIVE — a card that is telling you something, not asking.
+ *
+ * No button, because a button is a job. It is still clickable, because looking
+ * should always be possible; the affordance just waits to be looked for. On a
+ * pointer device the mark brightens and the whole card lifts a little on hover.
+ * On a phone there is no hover, and that is fine — the card is a note, and
+ * anyone who wants the browser will tap it.
+ */
+.browser-card--passive {
+  cursor: pointer;
+  /* Quieter than a card with something to say. */
+  --b-wash: 9%;
+}
+.browser-card--passive:hover {
+  --b-wash: 16%;
+  border-color: color-mix(in srgb, var(--b-idle) 42%, transparent);
+}
+.browser-card--passive:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--b-live) 55%, transparent);
+  outline-offset: 2px;
+}
+
 /* The agent is driving: a periwinkle wash. Present, not attention-seeking. */
 .browser-card--working {
   --b-idle: var(--b-live);
