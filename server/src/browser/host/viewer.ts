@@ -16,13 +16,15 @@ export const VIEWER_HTML = String.raw`<!doctype html>
 <style>
   :root{color-scheme:dark}
   body{margin:0;background:#0b0b0f;color:#d8d8e2;font:13px system-ui;display:flex;flex-direction:column;height:100dvh}
-  #bar{flex:none;display:flex;gap:14px;align-items:center;padding:7px 12px;background:#15151c;border-bottom:1px solid #26262f}
+  /* gap was 14px, which on a 390px phone spent 100px of a 390px bar on nothing
+     and squeezed the address to "..b". */
+  #bar{flex:none;display:flex;gap:7px;align-items:center;padding:7px 10px;background:#15151c;border-bottom:1px solid #26262f}
   #bar b{color:#6ea8ff;font-variant-numeric:tabular-nums}
   /* Opened in a TAB on a phone there is no chrome around this page and no
      modal to dismiss — without this you are simply stranded. */
   #home{color:#d8d8e2;text-decoration:none;font-size:15px;line-height:1;padding:4px 8px;border-radius:6px;border:1px solid #33333f;flex:none}
   #home:hover{background:#23232e}
-  #bar button{flex:none;background:transparent;border:1px solid #33333f;color:#d8d8e2;border-radius:6px;font:inherit;font-size:15px;line-height:1;padding:4px 9px;cursor:pointer}
+  #bar button{flex:none;background:transparent;border:1px solid #33333f;color:#d8d8e2;border-radius:6px;font:inherit;font-size:15px;line-height:1;padding:4px 7px;cursor:pointer}
   #bar button:hover{background:#23232e}
   #bar button[aria-pressed="true"]{background:#2b3a55;border-color:#4a6ea8;color:#cfe2ff}
   #takeover{background:#c98a2e;border-color:#c98a2e;color:#fff;font-size:11px;white-space:nowrap}
@@ -31,7 +33,10 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   body.watching #screen{cursor:default}
   /* The address, truncated from the LEFT: the end of a url is the part that
      says which page you are on. */
-  #url{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;color:#9a9aab;font-size:11px}
+  /* The address is the one thing here that is information rather than a control,
+     so it gets a floor: buttons give up their slack first, and it never shrinks
+     to the two characters it was showing. */
+  #url{flex:1 1 92px;min-width:92px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;color:#9a9aab;font-size:11px}
   #msg{color:#e9a}
   /* PINCH AND PAN. The stream is a 1280px page; on a phone, fitted to the
      viewport it is unreadable, and touch-action: none made it unzoomable
@@ -60,7 +65,7 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   <button id="navReload" title="reload">&#8635;</button>
   <button id="mobile" title="mobile site" aria-pressed="false">&#128241;</button>
   <button id="kb" title="keyboard" aria-pressed="false">&#9000;</button>
-  <button id="paste" title="paste">paste</button>
+  <button id="paste" title="paste" aria-label="paste">&#128203;</button>
   <button id="takeover" title="take the wheel" hidden>take the wheel</button>
   <span id="url" title="">–</span>
   <span id="msg"></span>
