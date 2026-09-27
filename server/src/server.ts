@@ -4,6 +4,7 @@ import type { AgentBridge } from './agent-bridge.js';
 import type { AppRegistry } from './apps/AppRegistry.js';
 import type { AppStatusProbe } from './apps/AppStatus.js';
 import type { ArchiveDb } from './archive/ArchiveDb.js';
+import { browserHostEntry } from './browser/hostEntry.js';
 import type { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
 import { type Funnel, localFunnel } from './funnel.js';
@@ -14,6 +15,7 @@ import { agentLaunchRoutes } from './routes/agent-launch.js';
 import { agentSessionsRoutes } from './routes/agent-sessions.js';
 import { appsRoutes } from './routes/apps.js';
 import { attachmentsRoutes } from './routes/attachments.js';
+import { browsersRoutes } from './routes/browsers.js';
 import { cronsRoutes } from './routes/crons.js';
 import { eventsRoutes } from './routes/events.js';
 import { openRoutes } from './routes/open.js';
@@ -208,6 +210,26 @@ export function createApp(deps: AppDeps): Hono {
       ...(resolved.apps?.status ? { status: resolved.apps.status } : {}),
     }),
   );
+  // Browsers muxpad OWNS — one headless Chrome per named profile, with a
+  // screencast a person can take the wheel of. Mounted next to apps because
+  // that is what a browser owner IS (an app row in a hidden workspace); what
+  // lives on its own surface is the profile naming and the wheel.
+  //
+  // Only mounted when the app registry is present: without a registry there is
+  // nothing that could start a browser, and a route that 500s on every call is
+  // worse than a 404.
+  if (resolved.apps?.registry) {
+    app.route(
+      '/api/browsers',
+      browsersRoutes({
+        db: resolved.db,
+        dataDir: resolved.dataDir,
+        hostEntry: browserHostEntry(),
+        cwd: resolved.dataDir,
+        registry: resolved.apps.registry,
+      }),
+    );
+  }
   // Artifact publishing (copies into <dataDir>/public, served by the separate
   // public-port app). Default funnel is exec-free — see AppDeps.publish.
   app.route(
