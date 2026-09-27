@@ -4495,34 +4495,49 @@ export function ChatPane({
           // live-patched from the server's own `tab.updated` (lib/all-tabs), so
           // nothing here polls and nothing caches a state.
           const state = spawnState(kid);
-          // The REPORT card — "here is what came back" — against the spawn card's
-          // "you started this, here". Two entries because they happened at two
-          // times, and the report's own time is the one the reader is looking at
-          // when the push notification arrives.
-          const report = x.card.kind === 'report' ? kid.report : undefined;
-          const expanded = report ? expandedReports.has(kid.tabId) : false;
+          // ITS WORK IS OVER — delivered, archived, or crashed. The one condition
+          // that decides whether this card has anything to show beyond a name.
+          const finished = state !== 'working';
+          // The generated report, when the server has written one
+          // (server/src/chat/spawn-report.ts). Absent is the ordinary state for
+          // every child that finished before this existed.
+          const report = kid.report;
+          const expanded = finished && expandedReports.has(kid.tabId);
           const work = expanded ? reportWork.get(kid.tabId) : undefined;
           // Also the scroll anchor, so expanding holds the row (see toggleReport).
-          const anchorId = `${x.card.kind}-${kid.tabId}`;
+          const anchorId = `spawn-${kid.tabId}`;
           return (
             <ChatMentionCard
               key={anchorId}
               anchorId={anchorId}
               chat={kid.chip}
-              // The headline says what the worker is ABOUT, which is the useful
-              // second line at the spawn. On the report card the summary below is
-              // saying something better, so it would only be noise.
-              sub={report ? undefined : (kid.headline ?? undefined)}
+              // NOTHING UNDER THE NAME unless there is a real summary — and it
+              // is emphatically not the chat's headline, which is what used to be
+              // here. That is HeadlineWriter's label: it restates the PROMPT
+              // ("largest source files in muxpad" under a card named
+              // `biggest-files`), and it is written on a six-minute interval, so
+              // it turns up long after the work finished and then says nothing
+              // about what the worker FOUND. A blank line beats a slow
+              // meaningless one.
+              //
+              // The summary goes in the BODY, not in `sub`. `sub` is a one-line
+              // slot that clips with an ellipsis — right for the directed card,
+              // whose sub is the request you typed, and wrong for prose: it turned
+              // a three-sentence summary into "Ranked the repo by line count:
+              // ws.ts (4,812) and C…", which is the truncation this whole feature
+              // is written against. The body wraps and takes a reading measure.
+              body={report ? spawnReportSummary(report) : undefined}
               working={state === 'working'}
               state={state === 'working' ? undefined : state}
               tone={state === 'working' ? undefined : state}
-              body={report ? spawnReportSummary(report) : undefined}
               expanded={expanded}
               work={expanded ? <SpawnWorkBody work={work} onOpenImage={setOpenImage} /> : undefined}
-              // Offered on EVERY report card, `none` included: when the summary
-              // says the worker produced nothing, its last turn is the only thing
-              // that can say why.
-              onToggleExpanded={report ? () => toggleReport(kid, anchorId) : undefined}
+              // OFFERED ON EVERY FINISHED CHILD, and deliberately NOT gated on the
+              // summary existing. The expansion is the child's own final message,
+              // read from the transcript endpoint — so "what did this thing
+              // actually do" is answerable for every worker already in this log,
+              // whether or not a report has ever been generated for it.
+              onToggleExpanded={finished ? () => toggleReport(kid, anchorId) : undefined}
               onOpen={() => openChat(kid)}
             />
           );

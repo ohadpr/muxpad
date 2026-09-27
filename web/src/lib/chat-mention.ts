@@ -291,23 +291,23 @@ function spawnedAt(c: MentionChat): number {
 }
 
 /**
- * One card in the conversation: a child chat, and WHEN this card is about.
+ * One card in the conversation: a child chat, and WHEN it was spawned.
  *
- * TWO KINDS, and a child that reported has both:
+ * ONE CARD PER CHILD, and it lives at the spawn. A draft of this drew a second
+ * entry when the report landed — "you started this, here" and "here is what came
+ * back" as two dated statements — which is defensible on paper and wrong in
+ * front of you: the card you actually see is the one at the spawn, so the
+ * second entry left the first one saying `delivered` with nothing under it and
+ * no way in. That card IS the thing the user was looking at when they said
+ * "idk what this agent did".
  *
- *   `spawn`  at the child's `created_at` — "you started this, here".
- *   `report` at its `spawn_report_at`    — "and here is what came back".
- *
- * They are separate entries because they happened at separate times, and the
- * second one is the whole point of the feature: a worker that ran for three
- * hours has its result at the moment it landed, not three hours up a log the
- * reader has already scrolled past. The push notification arrives when the
- * report does, so the bottom of the log is exactly where the reader is looking.
+ * So the result lands on the card that is already there. The time stays the
+ * child's `created_at` and never moves — a card that re-sorted itself when its
+ * worker finished would walk down the conversation while you read it.
  */
 export interface SpawnCard {
   chat: MentionChat;
-  kind: 'spawn' | 'report';
-  /** Epoch ms this card is about. Never moves. */
+  /** Epoch ms of the spawn — the child's `created_at`. Never moves. */
   at: number;
 }
 
@@ -376,26 +376,8 @@ export function spawnCards(
   tabId: string | undefined | null,
   max: number = MAX_SPAWN_CARDS,
 ): SpawnCard[] {
-  const out: SpawnCard[] = [];
-  // THE CAP COUNTS CHILDREN, NOT ENTRIES, and deliberately: what a reader is
-  // drowning in is a dispatcher's forty workers, not the fact that each of them
-  // both started and finished. A child's two entries are shed together, because
-  // shedding one would leave a result with no spawn or a spawn whose result is
-  // silently missing.
-  for (const chat of spawnedChildren(corpus, tabId, max)) {
-    out.push({ chat, kind: 'spawn', at: spawnedAt(chat) });
-    if (chat.report) out.push({ chat, kind: 'report', at: chat.report.at });
-  }
-  // Re-sorted because a slow worker's report lands AFTER a later sibling's spawn,
-  // and `interleaveSpawnCards` walks this list once against the transcript's own
-  // times. `kind` breaks a tie so a report can never be drawn above the spawn it
-  // answers (a worker that finishes inside one millisecond is not a real case,
-  // but "the order is total" is what keeps two renders identical).
-  out.sort((a, b) => a.at - b.at || KIND_ORDER[a.kind] - KIND_ORDER[b.kind]);
-  return out;
+  return spawnedChildren(corpus, tabId, max).map((chat) => ({ chat, at: spawnedAt(chat) }));
 }
-
-const KIND_ORDER: Record<SpawnCard['kind'], number> = { spawn: 0, report: 1 };
 
 /** The children still working — the number above the composer. */
 export function liveSpawnedChildren(

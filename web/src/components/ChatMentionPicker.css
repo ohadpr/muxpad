@@ -381,27 +381,103 @@ button.chat-mention-card-head {
   background: color-mix(in srgb, var(--state-hue) var(--status-chip-wash, 22%), transparent);
   color: color-mix(in srgb, var(--state-hue) var(--status-ink-mix, 55%), var(--chat-fg));
 }
-/* DELIVERED is the green the rail already uses for "finished, waiting for you" —
+/* An ANNOTATION, not a lifecycle state ("reported", "directed here"). Neutral on
+   purpose — see the `tone` prop. It is the only thing left that draws a WORD. */
+.chat-mention-card-state[data-state="note"] {
+  --state-hue: var(--chat-faint);
+}
+
+/* ── The lifecycle MARK ───────────────────────────────────────────────────
+   A tick, an ✕ or a dot in the slot where a working card spins — never a word.
+
+   The word was the complaint, in the user's own terms: "delivered needs to be
+   replaced with a green checkmark". It is right, and it is the rail's own rule
+   arriving here late — the sidebar settled on "the SAME 10px mark in the same
+   slot" for exactly this reason. A label in a mark's slot is read on purpose,
+   every time, to learn something that has not changed.
+
+   DRAWN, not typed: a ✓ from a font lands differently in every theme's UI font
+   and carries emoji presentation on some platforms. Two borders rotated 45° are
+   the same two lines at every size and DPI, and they take `currentColor`.
+
+   The hue is the status channel's, re-stepped per theme in styles.css — so
+   nothing here names a colour, and the green a light theme gets is a darker
+   green rather than a washed one. */
+.chat-mention-card-tick {
+  flex: 0 0 auto;
+  position: relative;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  /* A disc of the hue at the chip wash, so the mark is a SHAPE at a glance
+     rather than two thin strokes floating at the card's edge. */
+  background: color-mix(in srgb, var(--state-hue) var(--status-chip-wash, 22%), transparent);
+  color: var(--state-hue);
+}
+.chat-mention-card-tick::after {
+  content: "";
+  position: absolute;
+  box-sizing: border-box;
+}
+/* DELIVERED — the green the rail already uses for "finished, waiting for you",
    which is precisely what a worker's result is. */
-.chat-mention-card-state[data-state="delivered"] {
+.chat-mention-card-tick[data-state="delivered"] {
   --state-hue: var(--status-ready);
+}
+/* The checkmark: the short arm and the long arm of an L, rotated. Positioned off
+   the CENTRE rather than the box, and nudged up a hair, because a tick's optical
+   centre sits below its bounding box's. */
+.chat-mention-card-tick[data-state="delivered"]::after {
+  left: 4.5px;
+  top: 3.5px;
+  width: 5px;
+  height: 8px;
+  border-right: 1.7px solid currentColor;
+  border-bottom: 1.7px solid currentColor;
+  transform: rotate(45deg);
 }
 /* FAILED is grey, not red, and that is the channel's rule rather than this
    sheet's taste: red means "you are needed", and a crashed worker needs nothing
    until you decide it does. --status-dead over --status-quiet because quiet is
    tuned to recede and a dead run still has to be findable. */
-.chat-mention-card-state[data-state="failed"] {
+.chat-mention-card-tick[data-state="failed"] {
   --state-hue: var(--status-dead);
 }
-/* DONE — archived, or decayed without ever delivering. The quietest of the four:
-   it is the one state with nothing to tell you. */
-.chat-mention-card-state[data-state="done"] {
+/* An ✕, as two crossed rules on one element (the second is a linear-gradient, so
+   it needs no extra box). */
+.chat-mention-card-tick[data-state="failed"]::after {
+  left: 4px;
+  top: 7px;
+  width: 7px;
+  height: 1.6px;
+  background: currentColor;
+  box-shadow: 0 0 0 0 transparent;
+  transform: rotate(45deg);
+  border-radius: 1px;
+}
+.chat-mention-card-tick[data-state="failed"]::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 7px;
+  width: 7px;
+  height: 1.6px;
+  background: currentColor;
+  transform: rotate(-45deg);
+  border-radius: 1px;
+}
+/* DONE — archived, or decayed without ever delivering. A filled dot: the state
+   with the least to tell you gets the mark with the least shape in it. */
+.chat-mention-card-tick[data-state="done"] {
   --state-hue: var(--chat-faint);
 }
-/* An ANNOTATION, not a lifecycle state ("reported", "directed here"). Neutral on
-   purpose — see the `tone` prop. */
-.chat-mention-card-state[data-state="note"] {
-  --state-hue: var(--chat-faint);
+.chat-mention-card-tick[data-state="done"]::after {
+  left: 5.5px;
+  top: 5.5px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 /* ── The disclosure ───────────────────────────────────────────────────────

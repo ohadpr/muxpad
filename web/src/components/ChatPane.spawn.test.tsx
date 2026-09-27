@@ -176,13 +176,36 @@ describe('the spawn cards and the roster read ONE list', () => {
     expect(BODY).toContain("working={state === 'working'}");
   });
 
-  it('EXPANDS THE REPORT IN PLACE, and keeps the link out too', () => {
-    // "the summary when it shows should have an expand button to show the
-    // archived sub-chat or something." Both controls, not one: the disclosure
-    // reads the work here, the head still goes there.
-    expect(BODY).toContain('onToggleExpanded={report ?');
-    expect(BODY).toContain('onOpen={() => openChat(kid)}');
+  it('NEVER PUTS THE HEADLINE UNDER THE NAME', () => {
+    // The card read `biggest-files / largest source files in muxpad / delivered`
+    // and the middle line is HeadlineWriter's label: it restates the PROMPT, it
+    // is generated on a 6-minute interval so it turns up long after the work is
+    // done, and it says nothing about what the worker FOUND. "that explanation
+    // line took a ton of time to show and its like meaningless."
+    //
+    // The subtitle is now the generated report summary or NOTHING. A blank line
+    // is better than a slow meaningless one.
+    expect(BODY).not.toContain('kid.headline');
+    // …and the summary that replaces it goes in the BODY, which wraps. `sub`
+    // clips with an ellipsis — it turned the summary into "Ranked the repo by
+    // line count: ws.ts (4,812) and C…".
+    expect(BODY).toContain('body={report ? spawnReportSummary(report) : undefined}');
+    expect(BODY).not.toMatch(/sub=\{[^}]*report/);
+  });
+
+  it('EXPANDS EVERY FINISHED CHILD — the toggle does not wait on the server', () => {
+    // "there's no toggle to expand to see a longer summary or whatever like idk
+    // what this agent did. i have to click it to go view its entire work."
+    //
+    // Gated on `finished`, NOT on the generated summary existing: the expansion
+    // is the child's own final message, read from the transcript endpoint, so it
+    // answers "what did this thing do" for every delivered worker already in the
+    // log — with or without a server that has written a report yet.
+    expect(BODY).toContain("const finished = state !== 'working'");
+    expect(BODY).toContain('onToggleExpanded={finished ?');
     expect(BODY).toContain('<SpawnWorkBody');
+    // …and the click-through survives alongside it.
+    expect(BODY).toContain('onOpen={() => openChat(kid)}');
   });
 
   it('holds the reader’s row when a card changes height', () => {
