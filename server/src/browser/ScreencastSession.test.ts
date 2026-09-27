@@ -235,3 +235,94 @@ describe('a caller that owns emulation', () => {
     expect(cdp.methods()).not.toContain('Emulation.clearDeviceMetricsOverride');
   });
 });
+
+describe('a start that was refused, and never tried again', () => {
+  /**
+   * The third silent death, found in a live host. Chrome refuses
+   * `startScreencast` on a WebUI page — `chrome://newtab` among them, which is
+   * where every browser begins. The error was reported and dropped, `running`
+   * stayed true, the page later navigated somewhere real, and nothing ever
+   * tried again: a viewer black since boot, with every layer reporting health.
+   */
+  function refusingOnce() {
+    const calls: string[] = [];
+    let refuse = true;
+    const cdp: CdpTransport = {
+      async send(method) {
+        calls.push(method);
+        if (method === 'Page.startScreencast' && refuse) {
+          throw new Error('Not attached to an active page');
+        }
+        return {};
+      },
+      on() {},
+    };
+    return {
+      cdp,
+      calls,
+      allow: () => {
+        refuse = false;
+      },
+    };
+  }
+
+  it('tries again when no frame has ever arrived', async () => {
+    const { cdp, calls, allow } = refusingOnce();
+    const session = new ScreencastSession(cdp, { onFrame: () => {}, kick: async () => {} });
+    await session.start().catch(() => {});
+    allow();
+    expect(await session.ensureStreaming(10_000)).toBe(true);
+    expect(calls.filter((c) => c === 'Page.startScreencast').length).toBeGreaterThan(1);
+  });
+
+  it('leaves a stream that is delivering frames alone', async () => {
+    // Re-arming a working stream costs a stop, a start and a forced repaint —
+    // a visible stutter for somebody mid-sentence in a form.
+    let clock = 1000;
+    const cdp: CdpTransport = {
+      async send() {
+        return {};
+      },
+      on() {},
+    };
+    const session = new ScreencastSession(cdp, {
+      onFrame: () => {},
+      kick: async () => {},
+      now: () => clock,
+    });
+    await session.start();
+    await session.frameForTest({ data: '', sessionId: 1, metadata: {} });
+    clock = 2000;
+    expect(await session.ensureStreaming(clock)).toBe(false);
+  });
+
+  it('but re-arms one that has gone quiet', async () => {
+    let clock = 1000;
+    const cdp: CdpTransport = {
+      async send() {
+        return {};
+      },
+      on() {},
+    };
+    const session = new ScreencastSession(cdp, {
+      onFrame: () => {},
+      kick: async () => {},
+      now: () => clock,
+    });
+    await session.start();
+    await session.frameForTest({ data: '', sessionId: 1, metadata: {} });
+    clock = 1000 + 60_000;
+    expect(await session.ensureStreaming(clock)).toBe(true);
+  });
+
+  it('does nothing at all when it was never started', async () => {
+    const cdp: CdpTransport = {
+      async send() {
+        return {};
+      },
+      on() {},
+    };
+    const session = new ScreencastSession(cdp, { onFrame: () => {} });
+    expect(await session.ensureStreaming(10_000)).toBe(false);
+  });
+});

@@ -1,3 +1,4 @@
+import { type TargetInfo, targetToAttach } from './PageAttachment.js';
 import type { CdpTransport } from './ScreencastSession.js';
 
 /**
@@ -68,6 +69,7 @@ export class CdpConnection implements CdpTransport {
   private readonly handlers = new Map<string, Array<(params: never) => void>>();
   /** Flat session for the page we attached to. Null until {@link attachToPage}. */
   private sessionId: string | null = null;
+  private attachedTargetId: string | null = null;
 
   constructor(private readonly opts: CdpConnectionOptions) {}
 
@@ -94,18 +96,45 @@ export class CdpConnection implements CdpTransport {
    * target, and attaching to it would stream a picture of the debugger.
    */
   async attachToPage(): Promise<PageTarget> {
-    const { targetInfos } = (await this.sendOn(null, 'Target.getTargets')) as unknown as {
-      targetInfos: Array<{ targetId: string; type: string; url: string }>;
-    };
-    const page = targetInfos.find((t) => t.type === 'page' && !t.url.startsWith('devtools://'));
+    const page = targetToAttach(null, await this.listTargets());
     if (!page) throw new Error(`no page target at ${this.opts.endpoint}`);
+    await this.attachTo(page.targetId);
+    return { targetId: page.targetId, url: page.url };
+  }
 
+  /**
+   * Re-attaches if the page we were holding has gone, and says whether it did.
+   *
+   * Chrome can move a page into a NEW target — navigating away from
+   * `chrome://newtab` does it, which is the first navigation of every session.
+   * The old session then survives as a handle to nothing: no error is raised,
+   * input goes nowhere, the screencast refuses, and the viewer is black for
+   * good. So the host asks, rather than assuming.
+   *
+   * Returns false when nothing changed, which is the common case and must stay
+   * cheap — re-attaching needlessly drops every enabled domain for a blink.
+   */
+  async reattachIfLost(): Promise<PageTarget | null> {
+    const page = targetToAttach(this.attachedTargetId, await this.listTargets());
+    if (!page) return null;
+    await this.attachTo(page.targetId);
+    return { targetId: page.targetId, url: page.url };
+  }
+
+  private async listTargets(): Promise<TargetInfo[]> {
+    const { targetInfos } = (await this.sendOn(null, 'Target.getTargets')) as unknown as {
+      targetInfos: TargetInfo[];
+    };
+    return targetInfos ?? [];
+  }
+
+  private async attachTo(targetId: string): Promise<void> {
     const attached = (await this.sendOn(null, 'Target.attachToTarget', {
-      targetId: page.targetId,
+      targetId,
       flatten: true,
     })) as unknown as { sessionId: string };
     this.sessionId = attached.sessionId;
-    return { targetId: page.targetId, url: page.url };
+    this.attachedTargetId = targetId;
   }
 
   /** Sends to the attached page session. */
