@@ -5130,24 +5130,6 @@ export function ChatPane({
                 onDismiss={() => voice.stop('user')}
               />
             ) : null}
-            <SessionBar
-              paneId={paneId}
-              folder={folder}
-              status={agentStatus}
-              {...(session?.assistant ? { assistant: session.assistant } : {})}
-              liveLabel={liveLabel}
-              agents={rosterAgents}
-              onOpenChat={openChat}
-              mode={mode}
-              send={(obj) => {
-                const sock = wsRef.current;
-                if (!sock || sock.readyState !== WebSocket.OPEN) {
-                  setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
-                  return;
-                }
-                sock.send(JSON.stringify(obj));
-              }}
-            />
             {/* Absolutely positioned (see ChatMentionPicker.css): the composer
               wrap's measured height is what reserves room at the foot of the
               transcript, so a picker in its flow would scroll the conversation
@@ -5164,6 +5146,30 @@ export function ChatPane({
               />
             ) : null}
             <div className="chat-composer">
+              {/* INSIDE the pill, not stacked above it. As its own floating
+                strip this was a second object with its own border, its own
+                background and a 10px gap under it — 37px of a 119px bar, a
+                third of the whole thing, spent on a line you read and almost
+                never press. Sharing the pill's surface costs nothing but the
+                text's own height. */}
+              <SessionBar
+                paneId={paneId}
+                folder={folder}
+                status={agentStatus}
+                {...(session?.assistant ? { assistant: session.assistant } : {})}
+                liveLabel={liveLabel}
+                agents={rosterAgents}
+                onOpenChat={openChat}
+                mode={mode}
+                send={(obj) => {
+                  const sock = wsRef.current;
+                  if (!sock || sock.readyState !== WebSocket.OPEN) {
+                    setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
+                    return;
+                  }
+                  sock.send(JSON.stringify(obj));
+                }}
+              />
               {/* No `capture` attribute, deliberately: with one, iOS goes straight
                 to the camera. Without it — and with an `accept` that is not
                 image-only — the share sheet offers Photo Library, Take Photo,
