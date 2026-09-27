@@ -151,16 +151,14 @@
 .swiperow-action.-unread {
   background: #2c7a80;
 }
-/* Close is red because it destroys — the same meaning the desktop ×'s
-   danger-red hover carries. */
-.swiperow-action.-close {
-  background: #b8433c;
-}
-/* Armed: one tap turned it into a confirmation. Darker and heavier, so the
-   state change is unmistakable — the button you are about to press twice must
-   not look like the one you pressed once. */
-.swiperow-action.-close[data-armed="true"] {
-  background: #8c2a24;
+/* NOT RED, and that is the change rather than an oversight. Red was honest when
+   this button destroyed a chat; it archives now, which is tidying — the same
+   thing the done group does on its own after a while. A danger colour on a
+   reversible action is what teaches people not to press it, which is how the
+   rail filled up in the first place. Slate: present, unalarming, clearly not
+   the same as the two beside it. */
+.swiperow-action.-archive {
+  background: #5a6076;
 }
 .swiperow-action:active {
   filter: brightness(0.88);

@@ -80,12 +80,15 @@ export interface SwipeRowProps {
   /** Toggle the manual unread mark — the same action the desktop context menu
    *  offers, reaching the same route. `true` marks unread, `false` marks read. */
   onSetUnread: (want: boolean) => void;
-  onClose: () => void;
+  /**
+   * Move the row to done. NOT a delete — see the button's own comment.
+   */
+  onArchive: () => void;
   pinned: boolean;
   /** Whether the row currently carries the unread mark (the `ready` state's
    *  persisted flag) — decides which way the middle action toggles. */
   unread: boolean;
-  /** For the actions' accessible names ("Close chat Investing"). */
+  /** For the actions' accessible names ("Archive chat Investing"). */
   label: string;
 }
 
@@ -94,18 +97,13 @@ export function SwipeRow({
   children,
   onPin,
   onSetUnread,
-  onClose,
+  onArchive,
   pinned,
   unread,
   label,
 }: SwipeRowProps) {
   const [offset, setOffset] = useState(0);
   const [dragging, setDragging] = useState(false);
-  // Close is destructive and there is no undo, so it takes two taps: the first
-  // arms the button ("Sure?"), the second destroys. Deliberately NOT
-  // window.confirm — it is unreliable in an iOS PWA in standalone mode (the
-  // dialog can be suppressed outright), which is exactly where this row lives.
-  const [armed, setArmed] = useState(false);
   const gesture = useRef({ x: 0, y: 0, base: 0, axis: 'undecided' as SwipeAxis, dx: 0 });
   /** The row's outer element — used to find the scroller it actually lives in. */
   const shell = useRef<HTMLDivElement>(null);
@@ -118,7 +116,6 @@ export function SwipeRow({
 
   const close = useCallback(() => {
     setOffset(0);
-    setArmed(false);
   }, []);
 
   // Someone else opened a row (or the list scrolled) — stand down.
@@ -211,7 +208,6 @@ export function SwipeRow({
     if (g.axis !== 'horizontal') return;
     const open = settleOpen(offset, g.dx);
     setOffset(open ? -SWIPE_TRAY_WIDTH : 0);
-    if (!open) setArmed(false);
     setOpenRow(open ? id : null);
   };
 
@@ -284,25 +280,34 @@ export function SwipeRow({
           </span>
           {unread ? 'Read' : 'Unread'}
         </button>
+        {/*
+          ARCHIVE, IN ONE TAP, and the two facts are the same fact.
+          
+          This button used to DELETE, so it was armed: tap once for "Sure?", tap
+          again to destroy — and the handler it called then raised a
+          window.confirm of its own. Three deliberate acts to tidy a row, for an
+          action that the desktop × had already stopped performing.
+          
+          It archives now. Nothing is destroyed: the chat drops into the done
+          group with its transcript intact, stays findable by `@`, and a message
+          revives it. An action you can undo by talking to the chat does not need
+          a gate in front of it, let alone two — and a gate is what taught people
+          not to touch the old one, which is why the rail filled up instead.
+        */}
         <button
           type="button"
-          className="swiperow-action -close"
-          data-armed={armed ? 'true' : undefined}
+          className="swiperow-action -archive"
           tabIndex={isOpen ? 0 : -1}
           onClick={() => {
-            if (!armed) {
-              setArmed(true);
-              return;
-            }
             setOpenRow(null);
-            onClose();
+            onArchive();
           }}
-          aria-label={armed ? `Confirm close ${label}` : `Close ${label}`}
+          aria-label={`Archive ${label}`}
         >
           <span className="swiperow-action-glyph" aria-hidden="true">
-            {armed ? '⚠' : '✕'}
+            ↓
           </span>
-          {armed ? 'Sure?' : 'Close'}
+          Archive
         </button>
       </div>
       {/* biome-ignore lint/a11y/useKeyWithClickEvents: the row's own link owns the keyboard path; this handler only swallows a post-swipe click */}

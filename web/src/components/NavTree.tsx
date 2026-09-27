@@ -1457,9 +1457,7 @@ export function TabList({
    * learn not to touch, so the rail filled up instead. An action you can undo
    * by talking to the chat does not need a gate in front of it.
    */
-  const archiveTab = async (e: React.MouseEvent, tab: Tab) => {
-    e.stopPropagation();
-    e.preventDefault();
+  const archiveTabBody = async (tab: Tab) => {
     try {
       await api.archiveTab(tab.id);
       await refreshTabs(workspace.id);
@@ -1468,6 +1466,19 @@ export function TabList({
       console.error('archiveTab failed', err);
       window.alert(`Failed to archive chat: ${String(err)}`);
     }
+  };
+
+  /**
+   * The event is OPTIONAL because three surfaces archive and only one of them
+   * has a click to stop: the desktop ×, the long-press menu, and the sheet's
+   * swipe tray. The menu used to hand in a hand-made `{stopPropagation(){}}`
+   * cast to a MouseEvent to satisfy the signature, which is a note saying the
+   * signature was wrong.
+   */
+  const archiveTab = async (e: React.MouseEvent | undefined, tab: Tab) => {
+    e?.stopPropagation();
+    e?.preventDefault();
+    await archiveTabBody(tab);
   };
 
   /**
@@ -1853,7 +1864,7 @@ interface TabRowProps {
   setEditing: (e: Editing) => void;
   onNavigate?: (() => void) | undefined;
   /** Retire to the done group. The row's ×, and reversible. */
-  onArchive: (e: React.MouseEvent) => void;
+  onArchive: (e?: React.MouseEvent) => void;
   /** Permanent. Context menu only — never a one-click affordance on the row. */
   onDelete: () => void;
   /** Toggle the manual unread mark — true flags the dot, false clears it. */
@@ -2568,20 +2579,19 @@ function TabRow({
   if (sheet) {
     return (
       <>
-        {/* The swipe shell wraps every row: pin, mark-unread and close live
+        {/* The swipe shell wraps every row: pin, mark-unread and archive live
             UNDER it, and they are the sheet's only per-row actions. Not while
             EDITING — a rename input you can swipe out from under is a way to
             lose what you typed.
 
-            STILL WIRED TO DELETE, and that is the honest reading rather than a
-            miss. The desktop × became archive because its GLYPH and its tooltip
-            changed with it; this tray's button is labelled "Close" and arms a
-            "Sure?" confirm, both of which live in SwipeRow.tsx. Repointing it at
-            archive without touching those would give the sheet a button that
-            says Close, asks you to confirm, and then does something reversible
-            and different — worse than leaving it truthful. SwipeRow.tsx is not
-            this territory's; the swap is written up in the report. Archive is
-            reachable on touch today via the long-press menu. */}
+            IT ARCHIVES NOW, matching the desktop ×. It used to delete, which
+            cost three deliberate acts to tidy one row: the swipe, an armed
+            "Sure?" inside SwipeRow, and a window.confirm inside deleteTab. The
+            label and the confirm were the reason not to repoint it before —
+            a button saying Close that asks twice and then does something
+            reversible would be worse than a truthful one — so they went with
+            it. Delete is still reachable, from the long-press menu, where the
+            rare and irreversible thing belongs. */}
         {isEditing ? (
           sheetRow
         ) : (
@@ -2592,7 +2602,7 @@ function TabRow({
             unread={tab.unread === true}
             onPin={() => onSetPinned(!tab.pinned)}
             onSetUnread={onSetUnread}
-            onClose={onDelete}
+            onArchive={onArchive}
           >
             {sheetRow}
           </SwipeRow>
