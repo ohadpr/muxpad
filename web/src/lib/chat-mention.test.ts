@@ -884,9 +884,9 @@ describe('spawnCards', () => {
 
   it('carries the spawn MOMENT with each card — that is what places it', () => {
     expect(spawnCards(rows, 'p')).toEqual([
-      { chat: rows[0], kind: 'spawn', at: 100 },
-      { chat: rows[1], kind: 'spawn', at: 200 },
-      { chat: rows[2], kind: 'spawn', at: 300 },
+      { chat: rows[0], at: 100 },
+      { chat: rows[1], at: 200 },
+      { chat: rows[2], at: 300 },
     ]);
   });
 
@@ -932,7 +932,7 @@ describe('spawnCards', () => {
  * own transcript; this is the half that decides WHERE it appears and WHAT the
  * card says about it.
  */
-describe('spawnCards — the report is its own entry', () => {
+describe('spawnCards — ONE card per child', () => {
   const reported = (over: Partial<MentionChat> = {}) =>
     chat({
       tabName: 'browser-use',
@@ -945,54 +945,28 @@ describe('spawnCards — the report is its own entry', () => {
       ...over,
     });
 
-  it('draws the report WHERE IT LANDED, not at the spawn', () => {
-    // The card for a worker that ran for hours would otherwise put its result
-    // three hours up the log — and the push notification that says "it is done"
-    // arrives at the bottom, which is where the reader then looks.
-    expect(spawnCards([reported()], 'p')).toEqual([
-      { chat: reported(), kind: 'spawn', at: 100 },
-      { chat: reported(), kind: 'report', at: 9_000 },
-    ]);
+  it('draws ONE card for a child that reported, not two', () => {
+    // It was two entries — "you started this" at the spawn, "here is what came
+    // back" at the report. Looking at the real thing, the card at the spawn is
+    // the one you see, and leaving it saying `delivered` with nothing under it
+    // and no way in is the whole complaint. The result belongs ON that card.
+    expect(spawnCards([reported()], 'p')).toEqual([{ chat: reported(), at: 100 }]);
   });
 
-  it('draws no report entry for a worker that has not written one', () => {
-    const working = chat({ tabName: 'kid', tabId: 'k', parentId: 'p', createdAt: 100 });
-    expect(spawnCards([working], 'p').map((c) => c.kind)).toEqual(['spawn']);
-  });
-
-  it('keeps the whole list in TIME order across both kinds', () => {
-    // A slow worker's report lands after a later sibling's spawn. The interleave
-    // walks this list once against the transcript, so a list that is not sorted
-    // silently drops entries into the wrong slots.
+  it('places it at the SPAWN, so it cannot move once drawn', () => {
+    // The card's time is the child's `created_at` and nothing else. A card that
+    // re-sorted itself when the report landed would walk down the conversation
+    // while you were reading it.
     const slow = reported({ tabId: 'slow', createdAt: 100 });
     const later = chat({ tabName: 'later', tabId: 'later', parentId: 'p', createdAt: 5_000 });
-    expect(spawnCards([slow, later], 'p').map((c) => [c.chat.tabId, c.kind, c.at])).toEqual([
-      ['slow', 'spawn', 100],
-      ['later', 'spawn', 5_000],
-      ['slow', 'report', 9_000],
+    expect(spawnCards([slow, later], 'p').map((c) => [c.chat.tabId, c.at])).toEqual([
+      ['slow', 100],
+      ['later', 5_000],
     ]);
-  });
-
-  it("sheds a child's TWO entries together when the cap bites", () => {
-    // Half a pair is worse than neither: a spawn whose result is missing reads
-    // as work that vanished, and a report with no spawn as one that came from
-    // nowhere.
-    const rows = [
-      ...Array.from({ length: 4 }, (_, i) =>
-        reported({ tabId: `r${i}`, createdAt: i, report: { text: 'x', state: 'ok', at: 500 + i } }),
-      ),
-      chat({ tabName: 'live', tabId: 'live', parentId: 'p', createdAt: 900 }),
-    ];
-    const ids = spawnCards(rows, 'p', 2).map((c) => c.chat.tabId);
-    expect(ids.filter((id) => id === 'r3')).toHaveLength(2);
-    expect(ids).not.toContain('r0');
   });
 
   it('a report does not make a finished child count as running', () => {
-    // The roster agreement, restated against the new entry: two cards for one
-    // child must not become two agents.
-    const rows = [reported()];
-    expect(liveSpawnedChildren(rows, 'p')).toEqual([]);
+    expect(liveSpawnedChildren([reported()], 'p')).toEqual([]);
   });
 });
 
@@ -1069,11 +1043,7 @@ describe('spawnState', () => {
  * turn and hoping.
  */
 describe('interleaveSpawnCards', () => {
-  const card = (id: string, at: number) => ({
-    chat: chat({ tabName: id, tabId: id }),
-    kind: 'spawn' as const,
-    at,
-  });
+  const card = (id: string, at: number) => ({ chat: chat({ tabName: id, tabId: id }), at });
   const shape = (out: ReturnType<typeof interleaveSpawnCards<string>>) =>
     out.map((x) => (x.kind === 'card' ? `[${x.card.chat.tabId}]` : x.node));
 

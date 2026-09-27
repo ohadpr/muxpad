@@ -327,8 +327,23 @@ export function ChatMentionCard({
         )}
         {working ? (
           <span className="chat-mention-card-mark" aria-hidden="true" />
+        ) : tone && tone !== 'note' ? (
+          // A LIFECYCLE STATE IS A MARK, NOT A WORD. `delivered` used to be
+          // written out in the slot the rest of the app draws a mark in, and the
+          // complaint was exactly that: a tick is read in one glance, a label is
+          // something you stop and read, and it said the same thing every time.
+          //
+          // The glyph is CSS (see the sheet) so the only text here is the name —
+          // which a screen reader still needs, because a mark with no name is a
+          // state that simply does not exist for anyone not looking at it.
+          <span className="chat-mention-card-tick" data-state={tone} title={state}>
+            <span className="chat-mention-card-sr">{state}</span>
+          </span>
         ) : state ? (
-          <span className="chat-mention-card-state" data-state={tone ?? 'note'}>
+          // An ANNOTATION keeps its word: "reported" / "directed here" are notes
+          // about an exchange between two chats, not marks on a worker, and a
+          // tick there would be claiming something this card does not know.
+          <span className="chat-mention-card-state" data-state="note">
             {state}
           </span>
         ) : null}

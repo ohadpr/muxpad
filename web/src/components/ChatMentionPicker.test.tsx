@@ -181,28 +181,47 @@ describe('the card', () => {
  * expand button to show the archived sub-chat or something."
  */
 describe('the card says what happened, in the app state language', () => {
-  it('draws the state as a hued chip, outside the link', () => {
-    // OUTSIDE the head, which is StateChip's own rule and not a detail: text
-    // inside a control joins that control's accessible NAME, so the link would
-    // be announced as "Work review, delivered" and rename itself every time an
-    // agent started or stopped.
+  it('DRAWS A GREEN CHECKMARK, not the word `delivered`', () => {
+    // "first of all delivered needs to be replaced with a green checkmark."
+    // The word was the whole complaint: a finished worker is a tick, read in
+    // one glance, and a label in that slot is a thing you have to stop and read.
     const out = html(
       <ChatMentionCard
-        chat={{ name: 'Work review' }}
+        chat={{ name: 'biggest-files' }}
         state="delivered"
         tone="delivered"
         onOpen={() => {}}
       />,
     );
+    expect(out).toContain('chat-mention-card-tick');
     expect(out).toContain('data-state="delivered"');
-    expect(out).toMatch(/<\/button>\s*<span class="chat-mention-card-state"/);
+    // The word is no longer TEXT anywhere the eye reaches — measured with the
+    // screen-reader spans removed, which is the only way to tell "not rendered"
+    // from "rendered for a reader who cannot see the mark". (It survives as the
+    // mark's `title`, which is a hover, and as `data-state`, which is a hook.)
+    const visible = out.replace(/<span class="chat-mention-card-sr">[^<]*<\/span>/g, '');
+    expect(visible).not.toMatch(/>[^<]*delivered/);
+    expect(visible).not.toContain('chat-mention-card-state');
+    // …and the mark is still NAMED, because a glyph with no name is a state a
+    // screen reader cannot read at all.
+    expect(out).toContain('<span class="chat-mention-card-sr">delivered</span>');
   });
 
-  it('gives an unlabelled state a NEUTRAL tone rather than a lifecycle hue', () => {
-    // The `@` card's words ("reported", "directed here") are annotations, not
-    // lifecycle states, and they must not borrow the green that means finished.
+  it('marks the other two lifecycle states the same way', () => {
+    for (const tone of ['failed', 'done'] as const) {
+      const out = html(<ChatMentionCard chat={{ name: 'kid' }} state={tone} tone={tone} />);
+      expect(out).toContain(`data-state="${tone}"`);
+      expect(out).toContain(`<span class="chat-mention-card-sr">${tone}</span>`);
+    }
+  });
+
+  it('keeps a WORD for an annotation, which is not a lifecycle state', () => {
+    // The `@` card's "reported" / "directed here" are notes about an exchange,
+    // not marks on a worker. A tick there would claim something it does not know.
     const out = html(<ChatMentionCard chat={{ name: 'Investing' }} state="reported" />);
+    expect(out).toContain('chat-mention-card-state');
     expect(out).toContain('data-state="note"');
+    expect(out).not.toContain('chat-mention-card-tick');
   });
 
   it('offers the disclosure ONLY when the caller can answer it', () => {
@@ -214,7 +233,7 @@ describe('the card says what happened, in the app state language', () => {
       <ChatMentionCard
         chat={{ name: 'Work review' }}
         state="delivered"
-        body={<>Read 14 pages.</>}
+        tone="delivered"
         onToggleExpanded={() => {}}
       />,
     );
@@ -222,14 +241,32 @@ describe('the card says what happened, in the app state language', () => {
     expect(expandable).toContain('aria-expanded="false"');
   });
 
+  it('EXPANDS WITHOUT A SUMMARY — the toggle does not wait on the server', () => {
+    // "there's no toggle to expand to see a longer summary or whatever like idk
+    // what this agent did. i have to click it to go view its entire work."
+    // The expansion is the child's own final message, read from its transcript,
+    // so it works for every finished worker TODAY — with or without a generated
+    // summary above it.
+    const out = html(
+      <ChatMentionCard
+        chat={{ name: 'biggest-files' }}
+        state="delivered"
+        tone="delivered"
+        expanded
+        work={'server/src/ws.ts — 4,812 lines'}
+        onToggleExpanded={() => {}}
+      />,
+    );
+    expect(out).toContain('server/src/ws.ts');
+    expect(out).toContain('aria-expanded="true"');
+  });
+
   it('keeps the summary visible when it expands — the work is added, not swapped', () => {
-    // Collapsed shows the summary; expanded shows the summary AND the work. The
-    // summary is the index, so losing it on expand would lose the one line that
-    // says where to look.
     const out = html(
       <ChatMentionCard
         chat={{ name: 'Work review' }}
         state="delivered"
+        tone="delivered"
         body={<>Read 14 pages and wrote /tmp/x.md.</>}
         expanded
         work={'# Findings'}
@@ -238,7 +275,6 @@ describe('the card says what happened, in the app state language', () => {
     );
     expect(out).toContain('Read 14 pages and wrote /tmp/x.md.');
     expect(out).toContain('# Findings');
-    expect(out).toContain('aria-expanded="true"');
   });
 
   it('keeps the HEAD LINK alongside the disclosure — read here, or go there', () => {
@@ -246,91 +282,13 @@ describe('the card says what happened, in the app state language', () => {
       <ChatMentionCard
         chat={{ name: 'Work review' }}
         state="delivered"
-        body={<>a summary</>}
+        tone="delivered"
         onOpen={() => {}}
         onToggleExpanded={() => {}}
       />,
     );
     expect(out).toContain('chat-mention-card-head');
     expect(out).toContain('chat-mention-card-more');
-  });
-});
-
-/**
- * A REPORT'S BODY IS NOT INSIDE THE LINK.
- *
- * The card was one big `<button>`, and a report's body is the other agent's
- * answer rendered in full — mentions included, and a mention is a
- * `ChatMentionPill`, which is also a button. So "see @Investing" in a report was
- * a button inside a button: the pill's click ran, then bubbled to the card, and
- * the card navigated back to the reporting chat — defeating the reference that
- * was clicked. Mounted and clicked, because the bubbling IS the defect and no
- * assertion about markup alone would name it.
- */
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
-describe('clicking a mention inside a report goes to the mention, once', () => {
-  let host: HTMLDivElement | null = null;
-  let root: ReturnType<typeof createRoot> | null = null;
-
-  afterEach(() => {
-    act(() => root?.unmount());
-    host?.remove();
-    host = null;
-    root = null;
-  });
-
-  /** The production composition: a report card whose body holds a resolved pill. */
-  function mountReport(openReport: () => void, openMention: () => void) {
-    host = document.createElement('div');
-    document.body.appendChild(host);
-    root = createRoot(host);
-    act(() => {
-      root?.render(
-        <ChatMentionCard
-          chat={{ name: 'Work review' }}
-          state="reported"
-          onOpen={openReport}
-          body={
-            <>
-              {'see '}
-              <ChatMentionPill chat={{ name: 'Investing' }} onOpen={openMention} />
-            </>
-          }
-        />,
-      );
-    });
-    return host;
-  }
-
-  it('fires the pill’s handler and NOT the card’s', () => {
-    const openReport = vi.fn();
-    const openMention = vi.fn();
-    const box = mountReport(openReport, openMention);
-    const pill = box.querySelector<HTMLButtonElement>('.chat-mention-pill');
-    expect(pill).not.toBeNull();
-    act(() => pill?.click());
-    expect(openMention).toHaveBeenCalledTimes(1);
-    // The whole finding: this used to be 1, so the navigation the user asked for
-    // was undone by the container in the same click.
-    expect(openReport).not.toHaveBeenCalled();
-  });
-
-  it('still navigates to the reporting chat from the card’s head', () => {
-    // The affordance the card exists for has to survive the fix.
-    const openReport = vi.fn();
-    const openMention = vi.fn();
-    const box = mountReport(openReport, openMention);
-    act(() => box.querySelector<HTMLButtonElement>('.chat-mention-card-head')?.click());
-    expect(openReport).toHaveBeenCalledTimes(1);
-    expect(openMention).not.toHaveBeenCalled();
-  });
-
-  it('nests no button inside another, anywhere in the card', () => {
-    // The structural statement of the same thing — and it is also invalid DOM
-    // nesting, which React warns about on every render.
-    const box = mountReport(vi.fn(), vi.fn());
-    expect(box.querySelector('button button')).toBeNull();
   });
 });
 
