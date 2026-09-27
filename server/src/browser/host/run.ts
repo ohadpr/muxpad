@@ -9,6 +9,7 @@ import { browserLaunchSpec } from '../BrowserLaunch.js';
 import { browserViewerPort } from '../BrowserProfile.js';
 import { CdpConnection } from '../CdpConnection.js';
 import { type CdpCookie, cdpCookiesToStorageState } from '../CookieJar.js';
+import { clearStaleProfileLock } from '../ProfileLock.js';
 import { ScreencastSession } from '../ScreencastSession.js';
 import { VIEWER_HTML } from './viewer.js';
 
@@ -49,6 +50,8 @@ export interface BrowserHostOptions {
   viewerPort?: number;
   /** Where the shared cookie jar is written. Agents read it with --storage-state. */
   jarPath?: string;
+  /** Called when Chrome exits on its own. Defaults to taking this process with it. */
+  onChromeExit?: () => void;
   log?: (line: string) => void;
 }
 
@@ -66,12 +69,27 @@ const CDP_READY_TIMEOUT_MS = 20_000;
 export async function startBrowserHost(opts: BrowserHostOptions): Promise<BrowserHost> {
   const log = opts.log ?? ((line: string) => console.log(line));
   const jarPath = opts.jarPath ?? null;
+  const onChromeExit = opts.onChromeExit ?? (() => process.exit(1));
+  let closing = false;
   const spec = browserLaunchSpec(opts);
 
   mkdirSync(spec.profileDir, { recursive: true });
+  // A lock left by an unclean exit makes every subsequent launch die on
+  // startup, which `muxpad serve` then retries forever. One profile has one
+  // owner, so a lock present as WE start is by definition stale.
+  clearStaleProfileLock(spec.profileDir);
   const chrome = spawn(spec.command, spec.args, { stdio: ['ignore', 'pipe', 'pipe'] });
   chrome.stderr?.on('data', (b) => log(`[chrome] ${String(b).trimEnd()}`));
-  chrome.on('exit', (code) => log(`[chrome] exited ${code}`));
+  // WHEN CHROME DIES, THIS PROCESS DIES. It used to just log, and the result was
+  // a host serving a viewer against a dead browser: the socket opened, no frames
+  // ever came, and /healthz cheerfully said ok. `muxpad serve` already supplies
+  // crash-loop backoff, so exiting is how a restart happens — a second opinion
+  // about recovery, inside a process whose CDP connection is already gone, is
+  // how you get a thing that looks alive and does nothing.
+  chrome.on('exit', (code) => {
+    log(`[chrome] exited ${code}`);
+    if (!closing) onChromeExit();
+  });
 
   // findChrome deliberately does NOT verify a path inside an app bundle —
   // stat-ing there is what raises a macOS permission dialog on the real screen.
@@ -208,6 +226,21 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
       return;
     }
     if (path === '/healthz') {
+      // PROBE, do not assert. This used to return ok:true unconditionally, so a
+      // host whose Chrome had died reported healthy to the app status probe and
+      // to anyone reading it — while the viewer sat black. A health check that
+      // cannot fail is worse than none, because it is believed.
+      try {
+        await cdp.send('Runtime.evaluate', { expression: '1', returnByValue: true });
+      } catch (err) {
+        res.writeHead(503, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            ok: false,
+            error: `browser unreachable: ${err instanceof Error ? err.message : String(err)}`,
+          }),
+        );
+        return;
+      }
       res
         .writeHead(200, { 'content-type': 'application/json' })
         .end(JSON.stringify({ ok: true, viewers: viewers.size, url: currentUrl }));
@@ -255,6 +288,7 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     url: `http://127.0.0.1:${viewerPort}`,
     cdpUrl: spec.url,
     async close() {
+      closing = true;
       await screencast.stop().catch(() => {});
       cdp.close();
       wss.close();

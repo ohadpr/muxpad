@@ -18,6 +18,10 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   body{margin:0;background:#0b0b0f;color:#d8d8e2;font:13px system-ui;display:flex;flex-direction:column;height:100dvh}
   #bar{flex:none;display:flex;gap:14px;align-items:center;padding:7px 12px;background:#15151c;border-bottom:1px solid #26262f}
   #bar b{color:#6ea8ff;font-variant-numeric:tabular-nums}
+  /* Opened in a TAB on a phone there is no chrome around this page and no
+     modal to dismiss — without this you are simply stranded. */
+  #back{color:#d8d8e2;text-decoration:none;font-size:17px;line-height:1;padding:2px 6px;border-radius:6px;border:1px solid #33333f}
+  #back:hover{background:#23232e}
   #msg{color:#e9a}
   #wrap{flex:1;overflow:auto;display:grid;place-items:start center;padding:8px}
   #screen{display:block;max-width:100%;background:#000;touch-action:none;outline:none}
@@ -25,6 +29,7 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   #drop.on{display:grid}
 </style>
 <div id="bar">
+  <a id="back" href="/" title="back to muxpad">&#8592;</a>
   <span>handoff</span>
   <span>fps <b id="fps">–</b></span>
   <span><b id="kb">–</b> KB</span>
@@ -46,7 +51,8 @@ ws.binaryType = 'arraybuffer'
 let meta = null, url = null, nw = 0, nh = 0
 const times = []
 
-ws.onclose = () => { msg.textContent = 'disconnected' }
+ws.onclose = () => { msg.textContent = 'disconnected — the browser may have restarted' }
+ws.onerror = () => { msg.textContent = 'cannot reach the browser' }
 ws.onmessage = (e) => {
   if (typeof e.data === 'string') {
     const m = JSON.parse(e.data)
