@@ -956,7 +956,10 @@
 .chat-composer {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  /* The strip sits on the pill's surface, so the only thing holding it off the
+     text below is this. 2px read as crammed — enough space to be a separate
+     line, not enough to be a separate thought. */
+  gap: 6px;
   max-width: 768px;
   margin: 0 auto;
   /* Symmetric side insets: the filled send circle carries more visual weight
@@ -1152,7 +1155,10 @@
   flex: 0 0 auto;
   display: inline-flex;
   flex-direction: column;
-  gap: 2px;
+  /* The strip sits on the pill's surface, so the only thing holding it off the
+     text below is this. 2px read as crammed — enough space to be a separate
+     line, not enough to be a separate thought. */
+  gap: 6px;
 }
 .chat-queued-edit,
 .chat-queued-cancel {
@@ -1271,7 +1277,10 @@
 .chat-question-option {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  /* The strip sits on the pill's surface, so the only thing holding it off the
+     text below is this. 2px read as crammed — enough space to be a separate
+     line, not enough to be a separate thought. */
+  gap: 6px;
   padding: 8px 11px;
   border: 1px solid var(--chat-border);
   border-radius: 10px;
@@ -1700,7 +1709,9 @@
   max-width: 100%;
   /* Right-aligned over the input below it, and clear of the pill's rounded
      corner. No bottom margin: the pill's own row gap is the separation. */
-  margin: 0 2px 0 auto;
+  /* A little clear of the pill's top edge as well as its right one, so it sits
+     IN the pill rather than against its corner. */
+  margin: 2px 4px 0 auto;
   border-radius: 8px;
   /* Menus escape via position:absolute on .chat-status-menu; segment buttons
      clip their own labels so long model names can't paint over the live cell. */
@@ -1800,7 +1811,10 @@
 .chat-roster-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  /* The strip sits on the pill's surface, so the only thing holding it off the
+     text below is this. 2px read as crammed — enough space to be a separate
+     line, not enough to be a separate thought. */
+  gap: 6px;
   margin: 0;
   padding: 0;
   list-style: none;

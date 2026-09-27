@@ -63,11 +63,12 @@ describe('the status strip shares the pill rather than floating above it', () =>
     expect(decl('.chat-status-bar', 'background')).toBeNull();
   });
 
-  it('leaves no gap beneath it', () => {
-    // 10px of clearance from the pill it now lives inside would be a gap
-    // between two halves of one thing.
-    const margin = decl('.chat-status-bar', 'margin');
-    expect(margin).toBe('0 2px 0 auto');
+  it('leaves no gap BENEATH it, because the pill\u2019s row gap is that job', () => {
+    // Two things could hold the strip off the text below — its own bottom
+    // margin and the composer's row gap — and having both is how a bar drifts
+    // taller one nudge at a time. The gap owns it; this margin stays zero.
+    const margin = (decl('.chat-status-bar', 'margin') ?? '').split(/\s+/);
+    expect(margin[2]).toBe('0');
   });
 });
 
