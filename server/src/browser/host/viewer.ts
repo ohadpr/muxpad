@@ -39,6 +39,7 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   /* Desktop has room to fit the whole page; a phone does not, and shrinking it
      to fit is the thing that made it useless. */
   @media (min-width: 700px) { #screen{max-width:100%} }
+  #sink{position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:0;border:0;padding:0}
   #drop{position:fixed;inset:0;background:#000c;display:none;place-items:center;padding:20px;text-align:center}
   #drop.on{display:grid}
 </style>
@@ -48,10 +49,19 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   <button id="navFwd" title="forward">&#8250;</button>
   <button id="navReload" title="reload">&#8635;</button>
   <button id="mobile" title="mobile site" aria-pressed="false">&#128241;</button>
+  <button id="kb" title="keyboard" aria-pressed="false">&#9000;</button>
   <span id="url" title="">–</span>
   <span id="msg"></span>
 </div>
 <div id="wrap"><img id="screen" tabindex="0" alt="the agent's browser"></div>
+<!-- THE KEYBOARD. A phone shows one only when something in THIS page is
+     focused, so tapping a text box in a video stream summons nothing. This
+     input is the thing that gets focused; what you type into it is forwarded and
+     it is emptied again, so it never holds anything and never shows what you
+     typed twice. Off-screen rather than hidden: display:none and
+     visibility:hidden cannot take focus, and a phone will not open a keyboard
+     for an element it considers invisible. -->
+<textarea id="sink" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
 <div id="drop"><div>The page is asking for a file.<br><br><input type="file" id="fpick"></div></div>
 <script>
 const img = document.getElementById('screen')
@@ -78,6 +88,9 @@ ws.onmessage = (e) => {
   if (typeof e.data === 'string') {
     const m = JSON.parse(e.data)
     if (m.t === 'url') { showUrl(m.url); return }
+    // The page says a text field is focused, so put a keyboard on the phone.
+    // This is what makes tapping a login box behave like tapping a login box.
+    if (m.t === 'focus') { if (m.editable) setKb(true); return }
     if (m.t === 'frame') { meta = m.meta }
     else if (m.t === 'fileChooser') { document.getElementById('drop').classList.add('on') }
     else if (m.t === 'error') { msg.textContent = m.error }
@@ -126,6 +139,31 @@ img.addEventListener('wheel', (e) => {
   const p = pt(e); if (p) send({ t:'mouse', type:'mouseWheel', ...p, deltaX:e.deltaX, deltaY:e.deltaY, modifiers:mods(e) })
 }, { passive:false })
 img.addEventListener('keydown', (e) => { e.preventDefault(); send({ t:'key', key:e.key, modifiers:mods(e) }) })
+
+// ── the keyboard ────────────────────────────────────────────────────────────
+const sink = document.getElementById('sink')
+const kbBtn = document.getElementById('kb')
+const setKb = (on) => {
+  kbBtn.setAttribute('aria-pressed', String(on))
+  if (on) sink.focus({ preventScroll: true }); else sink.blur()
+}
+kbBtn.addEventListener('click', () => setKb(kbBtn.getAttribute('aria-pressed') !== 'true'))
+
+// Typed text goes as TEXT, so autocorrect, dictation and emoji survive. The box
+// is emptied immediately, so it never accumulates and never double-types.
+sink.addEventListener('input', () => {
+  const text = sink.value
+  sink.value = ''
+  if (text) send({ t:'text', text })
+})
+// Keys that produce no text still have to travel.
+sink.addEventListener('keydown', (e) => {
+  if (['Backspace','Enter','Tab','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Escape'].includes(e.key)) {
+    e.preventDefault()
+    send({ t:'key', key:e.key, modifiers:mods(e) })
+  }
+})
+sink.addEventListener('blur', () => kbBtn.setAttribute('aria-pressed','false'))
 
 for (const [id, action] of [['navBack','back'],['navFwd','forward'],['navReload','reload']]) {
   document.getElementById(id).addEventListener('click', () => send({ t:'nav', action }))

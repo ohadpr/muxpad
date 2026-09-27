@@ -33,7 +33,7 @@ const lease = (over: Partial<BrowserWheelLease> = {}): BrowserWheelLease => ({
 describe('what the card says', () => {
   it('shouts when the agent is waiting for you', () => {
     const view = browserCardView({ ...base, needsYou: { reason: 'log in to Amazon', at: 1 } });
-    expect(view.tone).toBe('blocked');
+    expect(view.tone).toBe('waiting');
     expect(view.urgent).toBe(true);
     expect(view.action).toBe('Take the wheel');
     expect(view.detail).toBe('log in to Amazon');
@@ -48,7 +48,7 @@ describe('what the card says', () => {
       wheel: lease({ holder: 'agent', by: 'chat-1' }),
       needsYou: { reason: 'captcha', at: 1 },
     });
-    expect(view.tone).toBe('blocked');
+    expect(view.tone).toBe('waiting');
   });
 
   it('says so plainly when you have the wheel', () => {
@@ -278,7 +278,7 @@ describe('a card drawn from a moment', () => {
   });
 
   it('reads as an event, not a status light', () => {
-    expect(browserMomentView(moment()).title).toMatch(/opened/i);
+    expect(browserMomentView(moment()).title).toMatch(/opened|browser/i);
   });
 
   it('shouts while the summons is STILL live', () => {
@@ -289,7 +289,7 @@ describe('a card drawn from a moment', () => {
         browser: { ...base, needsYou: { reason: 'captcha', at: 1 } },
       }),
     );
-    expect(view.tone).toBe('blocked');
+    expect(view.tone).toBe('waiting');
     expect(view.urgent).toBe(true);
     expect(view.action).toBe('Take the wheel');
   });
@@ -302,8 +302,8 @@ describe('a card drawn from a moment', () => {
       moment({ kind: 'needs-you', reason: 'captcha', browser: { ...base, needsYou: null } }),
     );
     expect(view.urgent).toBe(false);
-    expect(view.tone).not.toBe('blocked');
-    expect(view.title).toMatch(/needed you/i);
+    expect(view.tone).not.toBe('waiting');
+    expect(view.title).toMatch(/handled/i);
     expect(view.detail).toBe('captcha');
   });
 
@@ -384,5 +384,58 @@ describe('placing moments in a conversation', () => {
   it('changes nothing when there are no moments', () => {
     const entries = [entry(100, 'a'), entry(200, 'b')];
     expect(shape(injectBrowserMoments(entries, [], () => '[card]'))).toEqual(['a', 'b']);
+  });
+});
+
+
+describe('what the card says, in as few words as possible', () => {
+  const m = (over: Record<string, unknown> = {}): BrowserMoment => ({
+    kind: 'opened',
+    at: 1,
+    profile: 's-01m3hwabcdef',
+    browser: base,
+    ...over,
+  });
+
+  it('does not put a session slug in front of a person', () => {
+    // `Browser opened · s-01m3hw…` is a database key wearing a label. It says
+    // nothing, and on a phone it ate the whole line.
+    const view = browserMomentView(m());
+    expect(view.title).toBe('Browser opened');
+    expect(view.title).not.toContain('s-');
+  });
+
+  it('DOES name a profile a person chose', () => {
+    expect(browserMomentView(m({ profile: 'shopping' })).title).toContain('shopping');
+  });
+
+  it('keeps the summons to two words and lets the reason carry it', () => {
+    const view = browserMomentView(
+      m({
+        kind: 'needs-you',
+        reason: 'Amazon is signed out',
+        browser: { ...base, needsYou: { reason: 'Amazon is signed out', at: 1 } },
+      }),
+    );
+    expect(view.title).toBe('Needs you');
+    expect(view.detail).toBe('Amazon is signed out');
+  });
+
+  it('is NOT an error — that tone is reserved for things that broke', () => {
+    // Red says "something went wrong". Nothing has: the agent reached a step
+    // only a person can take, which is the system working.
+    const view = browserMomentView(
+      m({ kind: 'needs-you', browser: { ...base, needsYou: { reason: 'x', at: 1 } } }),
+    );
+    expect(view.tone).toBe('waiting');
+    expect(view.urgent).toBe(true);
+  });
+
+  it('reads as finished once it has been dealt with', () => {
+    const view = browserMomentView(
+      m({ kind: 'needs-you', reason: 'x', browser: { ...base, needsYou: null } }),
+    );
+    expect(view.title).toBe('Handled');
+    expect(view.urgent).toBe(false);
   });
 });
