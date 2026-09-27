@@ -2329,39 +2329,26 @@ function TabRow({
     { label: 'Delete permanently…', danger: true, onSelect: () => onDelete() },
   ];
 
-  /** The icon, the rename input and the overlays — the parts both row shapes
-   *  render identically. */
-  const iconCell = (
-    /* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard path is the context menu's "Change icon…" item */
-    <span
-      className="navtree-tab-icon"
-      title="Change icon"
-      onClick={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        setPicker({ x: r.left, y: r.bottom + 4 });
-      }}
-      onDoubleClick={(e) => {
-        // Don't let a fast double-click on the icon trip the row's
-        // rename-on-doubleclick.
-        e.preventDefault();
-        e.stopPropagation();
-      }}
-    >
-      {/* No stored icon yet — draw a stable, per-tab stand-in rather than one
-          shared default, so a rail of not-yet-labelled rows is still scannable
-          by shape. Derived from the id, never persisted. */}
-      {tab.icon ?? fallbackTabIcon(tab.id)}
-    </span>
-  );
+  /** Clicking the leading cell opens the icon picker under it. Both surfaces'
+   *  cells do this and it is the only thing either does. */
+  const openPicker = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setPicker({ x: r.left, y: r.bottom + 4 });
+  };
+  /** Don't let a fast double-click on the mark trip the row's
+   *  rename-on-doubleclick. */
+  const swallowDoubleClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
   /**
    * The DESKTOP rail's leading cell — the chip, which is the clock.
    *
-   * It replaces the plain emoji-on-a-plate that `iconCell` above still draws
-   * for the sheet, and it keeps that cell's one job: clicking it opens the icon
-   * picker. A span rather than a button so the row can still be dragged by it,
-   * and mouse-only by design — the keyboard path is the context menu's
+   * It keeps the one job the emoji cell it replaced had: clicking it opens the
+   * icon picker. A span rather than a button so the row can still be dragged by
+   * it, and mouse-only by design — the keyboard path is the context menu's
    * "Change icon…", exactly as before.
    *
    * For a CHILD row this same component draws a 6px dot instead of a tile, in a
@@ -2380,39 +2367,45 @@ function TabRow({
       shape={parent ? 'dot' : 'tile'}
       className="navtree-tab-chip"
       title="Change icon"
-      onClick={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        setPicker({ x: r.left, y: r.bottom + 4 });
-      }}
-      onDoubleClick={(e) => {
-        // Don't let a fast double-click on the chip trip the row's
-        // rename-on-doubleclick.
-        e.preventDefault();
-        e.stopPropagation();
-      }}
+      onClick={openPicker}
+      onDoubleClick={swallowDoubleClick}
     />
   );
   /**
-   * The SHEET's leading cell.
+   * The SHEET's leading cell — THE SAME CHIP, in this surface's own box.
    *
-   * A top-level chat keeps its bare emoji — the plate is deleted on this
-   * surface deliberately (NavTree.css), and none of that changes. A CHILD gets
-   * the same 6px dot the desktop child row gets, from the same component, so
-   * the two surfaces cannot drift on what "still working" and "delivered" look
-   * like.
+   * It was a bare emoji, and the two surfaces were one drawing apart: the sheet
+   * deleted the desktop's plate on purpose (a plate on every row is a mark on
+   * every row, which is the rule this rail is built on), so the phone drew the
+   * glyph on the row's own ground while the rail drew it in a tile. A2 deletes
+   * that tile on the desktop too — a `tile` now IS a glyph on the row's own
+   * ground — so the difference the fork existed to protect is gone, and keeping
+   * it would only mean the phone never gets the clock. It never had one: a
+   * top-level chat one day from leaving the live list looked exactly like one
+   * talked to a minute ago, on the one device this list is actually read on.
    *
-   * The dot sits in the emoji's own fixed box, and that is the load-bearing
-   * part: it is why every child name on the sheet lands on the same x as every
-   * other child name instead of at an indent chosen per row. The dot is the
-   * "soft signifier" a nested row needs — without it a child is a word floating
-   * under its parent, which is exactly how it read when the sheet was flat.
+   * The CELL is unchanged — same class, so the sheet's own geometry still owns
+   * it: a fixed 20px box at 14px from the edge, lifted 1px optically, with no
+   * plate behind it (NavTree.css). The chip is sized BY that cell rather than
+   * bringing its 24px box along, which is what keeps every name on this list
+   * starting at 42px. A CHILD still gets the 6px dot — a sub-chat has no clock,
+   * and nothing here changes that.
    */
   const sheetLeadCell = parent ? (
     <ChatChip density="row" chat={tab} shape="dot" className="navtree-rail-dot" title={tab.name} />
   ) : (
-    iconCell
+    <ChatChip
+      density="row"
+      // No stored icon yet — a stable, per-tab stand-in rather than one shared
+      // default, so a list of not-yet-labelled rows is still scannable by shape.
+      // Derived from the id, never persisted.
+      chat={{ ...tab, icon: tab.icon ?? fallbackTabIcon(tab.id) }}
+      shape="tile"
+      className="navtree-tab-icon"
+      title="Change icon"
+      onClick={openPicker}
+      onDoubleClick={swallowDoubleClick}
+    />
   );
   /** Name · headline · where the clock stands. The one-line row's whole
    *  second line, moved to where it costs nothing until you ask for it.

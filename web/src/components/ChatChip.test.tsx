@@ -31,28 +31,39 @@ const aged = (days: number, extra: Partial<ChatChipChat> = {}): ChatChipChat => 
 };
 
 describe('chipClock', () => {
-  it('starts clean — a fresh chat has no fill at all', () => {
-    expect(chipClock(aged(0))).toEqual({ phase: 'fresh', daysLeft: 4, fill: 0 });
+  it('starts clean — a fresh chat is at step 0, the mark at full presence', () => {
+    expect(chipClock(aged(0))).toEqual({ phase: 'fresh', daysLeft: 4, step: 0 });
   });
 
-  // The whole visual language: the tile fills in quarter steps as the days
-  // pass. These numbers ARE the spec, so they are asserted as numbers.
-  it('quantises the server’s continuous fill into quarter steps', () => {
-    expect(chipClock(aged(1)).fill).toBe(25);
-    expect(chipClock(aged(2)).fill).toBe(50);
-    // Day 3 is the final day — the tile stops being a tile and hands over to
-    // the dashed outline, so it reports no fill. 75% is never drawn.
+  // The whole visual language: the GLYPH fades, one rung per day, with its
+  // colour draining alongside. `step` is that rung, and these numbers ARE the
+  // spec, so they are asserted as numbers.
+  it('quantises the server’s continuous fill into the four rungs there are', () => {
+    expect(chipClock(aged(1)).step).toBe(1);
+    expect(chipClock(aged(2)).step).toBe(2);
+    // Day 3 is the final day — the outline arrives and the glyph steps down to
+    // sit inside it, so there is no rung left to report. There is no third
+    // fade: `last_day` is read BEFORE the quantisation, so the ladder is
+    // fresh / −1d / −2d / last and a step of 3 is unreachable by construction.
     expect(chipClock(aged(3)).phase).toBe('last-day');
-    expect(chipClock(aged(3)).fill).toBe(0);
+    expect(chipClock(aged(3)).step).toBe(0);
   });
 
-  it('holds a step for the whole day rather than creeping through it', () => {
+  it('carries no `fill` any more — the tile it filled is gone', () => {
+    // The descending fill was the tile's, and A2 deletes the tile. A leftover
+    // percentage on this result is a second encoding of the same clock waiting
+    // to disagree with the one the stylesheet reads.
+    expect(chipClock(aged(1))).not.toHaveProperty('fill');
+    expect(chipClock(aged(3))).not.toHaveProperty('fill');
+  });
+
+  it('holds a rung for the whole day rather than creeping through it', () => {
     // The server's fill is continuous; the chip's is not. Three readings
-    // spread across one day must all draw the same tile.
-    expect(chipClock(aged(1)).fill).toBe(25);
-    expect(chipClock(aged(1.01)).fill).toBe(25);
-    expect(chipClock(aged(1.99)).fill).toBe(25);
-    expect(chipClock(aged(2)).fill).toBe(50);
+    // spread across one day must all draw the same mark.
+    expect(chipClock(aged(1)).step).toBe(1);
+    expect(chipClock(aged(1.01)).step).toBe(1);
+    expect(chipClock(aged(1.99)).step).toBe(1);
+    expect(chipClock(aged(2)).step).toBe(2);
   });
 
   it('crosses into done when the clock runs out', () => {
@@ -71,10 +82,10 @@ describe('chipClock', () => {
     expect(chipClock(aged(9, { done: false })).phase).not.toBe('done');
   });
 
-  it('never fills a pinned chat, however old — the clock is stopped', () => {
+  it('never ages a pinned chat, however old — the clock is stopped', () => {
     const pinnedOld = aged(99, { pinned: true });
     expect(pinnedOld.clock?.stopped).toBe(true);
-    expect(chipClock(pinnedOld)).toEqual({ phase: 'pinned', daysLeft: 4, fill: 0 });
+    expect(chipClock(pinnedOld)).toEqual({ phase: 'pinned', daysLeft: 4, step: 0 });
     expect(isChatDone(pinnedOld)).toBe(false);
   });
 
@@ -86,15 +97,15 @@ describe('chipClock', () => {
   // status bar vs the roster, the agents counter vs spawned panes). Every one
   // was two surfaces deriving one value with no single owner.
   describe('derives no lifecycle of its own', () => {
-    it('draws a clean tile when there is NO clock, and claims nothing', () => {
+    it('draws a mark at full presence when there is NO clock, and claims nothing', () => {
       // `null` (a sub-chat, which cannot decay) and `undefined` (not told) both
       // land here, and both must render as "nothing to report" rather than as a
       // guess in either direction.
-      expect(chipClock({ name: 'x' })).toEqual({ phase: 'fresh', daysLeft: 4, fill: 0 });
+      expect(chipClock({ name: 'x' })).toEqual({ phase: 'fresh', daysLeft: 4, step: 0 });
       expect(chipClock({ name: 'x', clock: null })).toEqual({
         phase: 'fresh',
         daysLeft: 4,
-        fill: 0,
+        step: 0,
       });
       expect(isChatDone({ name: 'x' })).toBe(false);
     });
@@ -103,7 +114,7 @@ describe('chipClock', () => {
       // `last_activity_at` is not even in the prop type any more; passing one
       // must not resurrect a countdown through some other path.
       const ancient = { name: 'x', last_activity_at: NOW - 99 * DAY } as ChatChipChat;
-      expect(chipClock(ancient)).toEqual({ phase: 'fresh', daysLeft: 4, fill: 0 });
+      expect(chipClock(ancient)).toEqual({ phase: 'fresh', daysLeft: 4, step: 0 });
       expect(isChatDone(ancient)).toBe(false);
     });
 
@@ -180,40 +191,47 @@ describe('isChatRetired — the sub-chat’s one question', () => {
  *
  * The logic was beautifully tested and the RENDERING is the deliverable. These
  * assert the markup the browser is handed, because that is the only place the
- * fill, the ring and the shape exist. The pixels themselves belong to
+ * rung, the ring and the shape exist. The pixels themselves belong to
  * ChatChip.css (and its own test); this is the seam between them.
  */
 describe('what the chip actually renders', () => {
   const html = (chat: ChatChipChat, shape?: 'tile' | 'dot') =>
     renderToStaticMarkup(<ChatChip density="row" chat={chat} {...(shape ? { shape } : {})} />);
-  /** The fill's height as the browser gets it, or null when the element is gone. */
-  const fillHeight = (markup: string) =>
-    markup.match(/class="chatchip-fill"[^>]*style="height:([^"]*)"/)?.[1] ?? null;
+  /** The rung the stylesheet reads, or null when the attribute is gone. */
+  const step = (markup: string) => markup.match(/data-step="([^"]*)"/)?.[1] ?? null;
 
-  it('puts the DESCENDING FILL on the element, as a height', () => {
-    // The fill is `background: var(--clock)` on a block whose HEIGHT moves —
-    // emphatically not the tile at a fraction of its opacity (see the component).
-    // So the height is the whole encoding, and it is an inline style: nothing in
-    // the stylesheet can assert it and nothing else in the app carries it.
-    expect(fillHeight(html(aged(1)))).toBe('25%');
-    expect(fillHeight(html(aged(2)))).toBe('50%');
+  it('puts the RUNG on the element, as the one thing the fade hangs off', () => {
+    // A2: the clock is the glyph fading with its colour draining, and the two
+    // middle rungs are `--fade-1` / `--fade-2` (ChatChip.css). `data-step` is
+    // the entire seam between this component and those two declarations, so if
+    // it stops arriving the clock silently stops running.
+    expect(step(html(aged(1)))).toBe('1');
+    expect(step(html(aged(2)))).toBe('2');
   });
 
-  it('keeps the fill in the DOM at zero, so the tile animates rather than snaps', () => {
-    // Always present, at height 0 when there is nothing to bury: that is what
-    // gives the transition something to run between when a chat is talked to and
-    // its fill animates back UP.
-    expect(fillHeight(html(aged(0)))).toBe('0%');
-    expect(html(aged(0))).toContain('chatchip-fill');
+  it('says 0 at the fresh end rather than going quiet, so the fade can animate back', () => {
+    // The attribute is always there. A chat that is talked to steps back to 0
+    // and the glyph animates UP to full presence, which is only possible while
+    // there is a value for the transition to run between.
+    expect(step(html(aged(0)))).toBe('0');
   });
 
-  it('draws the last day and done as a tile with nothing left to fill', () => {
-    // Both hand over to the dashed outline, which is the stylesheet's business —
-    // what this owns is that the phase reaches the element and the fill is empty.
+  it('never re-encodes the clock as a FILL — that element is deleted', () => {
+    // The descending fill was the tile's, and the tile is gone. The note in the
+    // component is still right about the fill and this is its guard: nothing may
+    // quietly bring back a second encoding of the same clock.
+    for (const days of [0, 1, 2, 3, CHAT_DECAY_DAYS]) {
+      expect(html(aged(days))).not.toContain('chatchip-fill');
+    }
+  });
+
+  it('draws the last day and done as a tile with no rung left to report', () => {
+    // Both hand over to the dotted outline, which is the stylesheet's business —
+    // what this owns is that the phase reaches the element and the ladder is done.
     for (const days of [3, CHAT_DECAY_DAYS]) {
       const out = html(aged(days));
       expect(out).toContain('data-shape="tile"');
-      expect(fillHeight(out)).toBe('0%');
+      expect(step(out)).toBe('0');
     }
     expect(html(aged(3))).toContain('data-phase="last-day"');
     expect(html(aged(CHAT_DECAY_DAYS))).toContain('data-phase="done"');
@@ -233,9 +251,10 @@ describe('what the chip actually renders', () => {
       const out = html(sub(false));
       expect(out).toContain('data-shape="dot"');
       expect(out).toContain('class="chatchip-dot"');
-      // No fill element at all: there is no clock to draw, so there is nothing
-      // for a fill to mean.
-      expect(out).not.toContain('chatchip-fill');
+      // A2 CHANGED THE TILE AND NOTHING ELSE. A sub-chat has no clock, so it
+      // has no rung either — the fade ladder must not reach the dot, in any
+      // phase, and the attribute the ladder hangs off is simply absent here.
+      expect(out).not.toContain('data-step');
     });
 
     it('goes HOLLOW once it has delivered, and not before', () => {
@@ -254,9 +273,9 @@ describe('what the chip actually renders', () => {
       // belongs to nothing. And the row that IS a child is told 'dot' even
       // though its own `spawned_by` would have said so anyway.
       expect(html(sub(false), 'tile')).toContain('data-shape="tile"');
-      expect(html(sub(false), 'tile')).toContain('chatchip-fill');
+      expect(html(sub(false), 'tile')).toContain('data-step="0"');
       expect(html({ ...aged(1) }, 'dot')).toContain('data-shape="dot"');
-      expect(html({ ...aged(1) }, 'dot')).not.toContain('chatchip-fill');
+      expect(html({ ...aged(1) }, 'dot')).not.toContain('data-step');
     });
   });
 

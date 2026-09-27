@@ -16,41 +16,63 @@ import './ChatChip.css';
  * leading slot. Whoever renders a container owns the container; the material
  * inside it is decided here, once, so the three surfaces cannot drift.
  *
- * ─── The material ────────────────────────────────────────────────────────
+ * ─── The material: NO CONTAINER FOR FOUR DAYS ────────────────────────────
  *
- *   fresh      a clean WHITE tile, 1px border, the emoji at full colour
- *   ageing     a SOLID fill of --clock descends from the TOP, burying the
- *              emoji: 25% / 50% / 75% as the days pass
- *   last day   the tile is gone — a dashed border in --clock around a ghosted
- *              emoji (grayscale, 0.34 opacity)
- *   done       drawn exactly as `last day`. The tile has nothing left to say
+ *   fresh      the emoji at 20px on the row's OWN surface, full colour,
+ *              nothing around it
+ *   −1 day     the same glyph at --fade-1, 50% of the colour drained
+ *   −2 days    at --fade-2, 85% drained
+ *   last day   the outline arrives, ONCE: a dotted 24px box, the glyph
+ *              stepping to 18px so it lands inside it, ghosted (grayscale,
+ *              0.34 opacity)
+ *   done       drawn exactly as `last day`. The mark has nothing left to say
  *              about time, and the row's PLACE (inside the done group) is what
  *              says it is over. Two phases, one drawing, on purpose.
- *   pinned     a clean tile with no fill, ever. The clock is stopped.
- *   child      the same material at dot size — 6px of --clock, becoming a
- *              hollow RING on the last day
+ *   pinned     the fresh mark, forever. The clock is stopped.
+ *   child      a 6px dot of --clock, becoming a hollow RING once it delivers
  *
- * ─── The fill is a COLOUR, not an opacity ────────────────────────────────
- * The fill is `background: var(--clock)` on a block whose HEIGHT animates from
- * 0 to 100%. It is emphatically NOT the tile at a fraction of its opacity.
- * This went through several rounds and the difference is the whole idea: a
- * definite colour descending from the top reads as a vessel FILLING UP, which
- * is what a clock running down looks like. The same information encoded as
- * opacity reads as "this row is DIMMED" — a disabled state, not a countdown —
- * and at 50% it is indistinguishable from a row that has simply been
- * de-emphasised. Never re-encode this as opacity, however much simpler the
- * CSS gets.
+ * Three of every four rows therefore have no frame at all, and the glyph is
+ * 20px on the row's own ground — 2× the area of the 14px it had inside the
+ * tile, off the white plate that was working against it. The shipped tile was
+ * 24×24 around that 14px glyph (2.9× its area) and neither half of it was loud
+ * alone: the fill measured a 1.16:1 step off the sidebar surface, the hairline
+ * 1.20:1. A lighter field inside a darker outline at a hard radius is what
+ * makes the eye resolve a SHAPE anyway, and the tile was --bg-elev — correct
+ * for a vessel that must read as empty, wrong when it makes the brightest pixel
+ * on the row the one with no information in it.
  *
- * --clock is ONE colour at every size — the 24px tile's fill and the 6px
- * sub-chat dot are the same ink, so they read as one substance at two scales
- * rather than as two indicators that happen to sit near each other. It is a
+ * ─── THE GLYPH IS NOT THE TILE ───────────────────────────────────────────
+ * A container at 50% opacity reads *disabled*; an ICON fading out of a row
+ * reads *departing*. What survives from the deleted fill's rule is the part
+ * underneath it: encode the clock in something with a FIXED ZERO. The
+ * descending fill had one (the tile's bottom). Saturation does NOT — an emoji
+ * that starts grey has nowhere to drain to, and the material is user-chosen.
+ * Opacity does. So opacity CARRIES the clock and the drain RIDES ALONG; on an
+ * achromatic icon the drain does nothing and the fade still does the whole job.
+ * (The first version of this was saturation-only, and a stress strip of ⌚ 🧾 🐑
+ * 📄 through every step is why it was unshippable.)
+ *
+ * The rule the fill left behind, kept because it is still true of any
+ * CONTAINER: never re-encode the clock as the tile at a fraction of its
+ * opacity. The answer was to delete the tile, not to dim it.
+ *
+ * --clock survives as the SUB-CHAT DOT's ink — 6px of it, and the one thing on
+ * a row that is a definite colour rather than the user's own artwork. It is a
  * THEME token (styles.css): the accent cut to 34%, with the colour it is cut
- * with re-stepping per theme the way --status-* do.
+ * with re-stepping per theme the way --status-* do. The two fade alphas
+ * re-step there for the same reason, arriving through a different channel: an
+ * emoji composited at α over a LIGHT ground loses contrast faster than the same
+ * α over a dark one.
  *
  * ─── Densities ───────────────────────────────────────────────────────────
  * Three, and they differ in SIZE ONLY — same phases, same ink, same drawing:
  *
- *   row    24px — the sidebar row's leading mark
+ *   row    24px box, 20px glyph — the sidebar row's leading mark. The box is
+ *                 what the last day's outline is drawn on and what a child's dot
+ *                 is centred in; for four days out of five nothing paints it.
+ *                 The mobile sheet renders this same density in its own 20px
+ *                 cell, with the two glyph sizes re-scaled by the same ratios
+ *                 (NavTree.css) — one drawing on both surfaces, not two.
  *   card   24px — a chat card inline in a conversation (a chat spawning, or
  *                 reporting back). Identical to `row` by construction: a card
  *                 is a row in a different container, and the day the two
@@ -58,8 +80,12 @@ import './ChatChip.css';
  *                 will look like. It has its own token so a future divergence
  *                 is a one-line change rather than a fork.
  *   chip   16px — inline in running text, from an `@` mention. Sized to sit on
- *                 a text line without driving its leading; a 24px tile in a
+ *                 a text line without driving its leading; a 24px mark in a
  *                 20px line box pushes the line apart and the paragraph ripples.
+ *                 A2 is safe here for one reason: the BOX does not move. The
+ *                 pill is already the container the tile was duplicating, so
+ *                 deleting the tile takes a container out of a container and
+ *                 the glyph inside grows to 13px within the same 16px box.
  *
  * ─── A SUB-CHAT HAS NO CLOCK, so its dot has two states and no fill ──────
  * A sub-chat is not a small chat that ages more quietly — it is a piece of
@@ -121,13 +147,11 @@ export function ChatChip({
   };
 
   return (
-    <span {...common} data-shape="tile">
-      {/* The descending fill. Always in the DOM, at height 0 when there is
-          nothing to bury, so the transition has something to run between and a
-          chat that is talked to animates back UP rather than snapping. */}
-      {/* Empty and unlabelled, so it contributes nothing to the a11y tree on
-          its own — no aria-hidden needed, and biome rightly objects to one. */}
-      <i className="chatchip-fill" style={{ height: `${clock.fill}%` }} />
+    // `data-step` is the whole seam between this component and the fade: the
+    // stylesheet reads it and nothing else. Always present, 0 included, so a
+    // chat that is talked to has a value to animate back UP from rather than an
+    // attribute appearing and disappearing under the transition.
+    <span {...common} data-shape="tile" data-step={clock.step}>
       <b className="chatchip-glyph">{chat.icon ?? '•'}</b>
     </span>
   );
@@ -203,8 +227,16 @@ export interface ChipClock {
   phase: ChipPhase;
   /** Whole days remaining, DECAY_DAYS…0. */
   daysLeft: number;
-  /** Percent of the tile buried from the top. 0 for pinned, last-day and done. */
-  fill: number;
+  /**
+   * WHICH RUNG of the fade the mark is on: 0 fresh, 1 one day gone, 2 two.
+   * 0 for pinned, last-day and done — they are drawn by their phase, not by the
+   * ladder. There is no 3: `last_day` is read before the quantisation below, so
+   * the fourth day is the outline and not a third fade.
+   *
+   * This was `fill` — a percentage of a tile that no longer exists. Same
+   * quantisation, named for what it now drives.
+   */
+  step: number;
 }
 
 /**
@@ -213,7 +245,7 @@ export interface ChipClock {
  * ONE OWNER. `stopped`, `last_day` and `done` are READ off the row — the
  * client does not decide, re-check or second-guess any of them, and there is
  * no timestamp anywhere in this function. The only number it computes is the
- * fill's RESOLUTION.
+ * clock's RESOLUTION.
  *
  * This is stricter than it looks, and it is stricter on purpose. It used to
  * carry a fallback that derived the whole lifecycle from `last_activity_at`
@@ -224,15 +256,15 @@ export interface ChipClock {
  * would have been handed a countdown), and it is the exact shape of the bug
  * muxpad has shipped three times: two surfaces deriving one value, agreeing
  * today, drifting the moment either moves. The fallback is gone. A row with no
- * clock draws a clean tile and says nothing.
+ * clock draws a mark at full presence and says nothing.
  *
  * The quantisation that remains is a RENDERING decision, not a disagreement:
  *
- *   · it is the settled visual language — "25% / 50% / 75% as days pass" is
- *     what the prototype does and what eight rounds with the user converged on;
- *   · 24px of tile cannot carry a continuous value. The difference between 61%
- *     and 62% buried is not information, and animating it would have every
- *     chip in the rail re-rendering on a timer to say nothing.
+ *   · it is the settled visual language — one rung per day, and the ladder is
+ *     what nine rounds with the user converged on;
+ *   · a 20px glyph cannot carry a continuous value. The difference between 61%
+ *     and 62% faded is not information, and animating it would have every chip
+ *     in the rail re-rendering on a timer to say nothing.
  *
  * It takes no `now`, and that absence is load-bearing: a function with a clock
  * in it is a function that can disagree with the server about what time it is.
@@ -242,26 +274,30 @@ export function chipClock(chat: ChatChipChat): ChipClock {
 
   // NO CLOCK — and there is nothing to work out. A sub-chat (`clock: null`)
   // does not decay, and a row the server has said nothing about is not the
-  // client's to guess at. Both draw a clean tile: no fill, no countdown, no
-  // claim. "I have not been told" renders as "nothing to report", which is the
-  // only honest option and the only one that cannot be wrong.
-  if (!published) return { phase: 'fresh', daysLeft: DECAY_DAYS, fill: 0 };
+  // client's to guess at. Both draw the mark at full presence: no fade, no
+  // countdown, no claim. "I have not been told" renders as "nothing to report",
+  // which is the only honest option and the only one that cannot be wrong.
+  if (!published) return { phase: 'fresh', daysLeft: DECAY_DAYS, step: 0 };
 
   // Everything below is READ, not derived. Three fields off the row, in the
   // server's own precedence.
-  if (published.stopped) return { phase: 'pinned', daysLeft: DECAY_DAYS, fill: 0 };
-  if (chat.done) return { phase: 'done', daysLeft: 0, fill: 0 };
-  if (published.last_day) return { phase: 'last-day', daysLeft: 1, fill: 0 };
+  if (published.stopped) return { phase: 'pinned', daysLeft: DECAY_DAYS, step: 0 };
+  if (chat.done) return { phase: 'done', daysLeft: 0, step: 0 };
+  // READ BEFORE THE QUANTISATION, and that is why the ladder has four live
+  // phases rather than five: by the time a row could reach rung 3 the server has
+  // already flagged its last day, so the outline takes over instead. A rung 3 is
+  // unreachable by construction — not a missing case.
+  if (published.last_day) return { phase: 'last-day', daysLeft: 1, step: 0 };
 
   // The ONE thing this function computes, and it is a rendering decision
   // rather than a second opinion: the server's continuous `fill` (0 → 1)
-  // quantised to the four steps a 24px tile actually has. The value is A's;
-  // only its resolution is ours.
-  const steps = Math.floor(clamp01(published.fill) * DECAY_DAYS);
+  // quantised to the rungs the fade actually has. The value is A's; only its
+  // resolution is ours.
+  const step = Math.floor(clamp01(published.fill) * DECAY_DAYS);
   return {
-    phase: steps === 0 ? 'fresh' : 'ageing',
-    daysLeft: Math.max(0, DECAY_DAYS - steps),
-    fill: (steps / DECAY_DAYS) * 100,
+    phase: step === 0 ? 'fresh' : 'ageing',
+    daysLeft: Math.max(0, DECAY_DAYS - step),
+    step,
   };
 }
 

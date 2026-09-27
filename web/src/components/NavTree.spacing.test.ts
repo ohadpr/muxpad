@@ -648,6 +648,25 @@ describe('the MOBILE RAIL — a flex line, and its four numbers', () => {
     expect(resolve(decl(icon, 'inset-block-start'), SHEET)).toBe(-1);
   });
 
+  it('that box now holds the CHIP, scaled to it, so the phone runs the same clock', () => {
+    // The cell is unchanged — same class, same 20px box, same lift, same deleted
+    // plate — and what sits in it is the rail's own component (NavTree.tsx). That
+    // is why the four numbers above still hold after the convergence: the chip is
+    // sized BY this rule rather than bringing its own 24px box.
+    const icon = ruleBody(NAV_CSS, '.navtree[data-variant="sheet"] .navtree-tab-icon');
+    // 17/20 and 15/20 are A2's 20/24 and 18/24 at this surface's scale — and 17px
+    // is the size this sheet's emoji has always rendered at, so convergence
+    // changes nothing visible on a fresh row and adds the clock to an aged one.
+    expect(decl(icon, '--chatchip-glyph')).toBe('17px');
+    expect(decl(icon, '--chatchip-glyph-last')).toBe('15px');
+    // RESTATED, not inherited, and that is the point: `.chatchip` and
+    // `.navtree-tab-icon` are both one class, so which display wins would be
+    // decided by the order two stylesheets happen to be bundled in. This rule
+    // carries the variant and cannot lose.
+    expect(decl(icon, 'display')).toBe('inline-grid');
+    expect(decl(icon, 'place-items')).toBe('center');
+  });
+
   it('so every name starts at 42px, on every row, in every script', () => {
     expect(chatNameLeft()).toBe(42);
   });
