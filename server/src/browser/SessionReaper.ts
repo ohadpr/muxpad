@@ -31,3 +31,30 @@ export function sessionBrowsersToReap(
     .filter((b) => !live.has(b.profile.slice(SESSION_PROFILE_PREFIX.length)))
     .map((b) => b.profile);
 }
+
+/**
+ * Whether a reaped session browser's leftovers can be deleted.
+ *
+ * STOPPING IS NOT ENOUGH, and this is the fault that made a hundred rows.
+ * Reaping only stopped the process, which left the app row behind disabled —
+ * and the sweep skipped disabled rows, so nothing ever looked at them again.
+ * `muxpad app list` grew one permanent row per agent session ever opened, each
+ * still holding a port out of a hundred-port space, and each still holding a
+ * profile directory on disk. Ninety-nine of them by the time it was noticed.
+ *
+ * A session profile is safe to delete outright: its tab is gone and a tab id is
+ * never reissued, so nothing can ever want it again, and it holds no logins
+ * worth keeping — agents read cookies from the SHARED jar, which lives
+ * elsewhere and belongs to the browser a person drives.
+ *
+ * The guard is on the name, because the consequence of getting it wrong is
+ * deleting the directory holding every login on the machine. Only a profile
+ * carrying the session prefix and no path syntax at all may be removed.
+ */
+export function isDisposableSessionProfile(profile: string): boolean {
+  if (!profile.startsWith(SESSION_PROFILE_PREFIX)) return false;
+  // Belt and braces over normalizeProfileName: this answer authorises an rm -rf.
+  if (profile.includes('/') || profile.includes('\\') || profile.includes('..')) return false;
+  // A prefix and nothing after it is not a session; it is the prefix.
+  return profile.length > SESSION_PROFILE_PREFIX.length;
+}
