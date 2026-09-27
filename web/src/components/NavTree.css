@@ -652,23 +652,20 @@
 .navtree-tab-row[data-active="true"] .navtree-tab-icon::before {
   background: color-mix(in srgb, var(--accent-fg) 18%, transparent);
 }
-/* The CHIP on the accent block. Its resting colours are a white tile with a
-   --border hairline and a --clock fill, all three of which are tuned against
-   the rail's background and none of which survives a saturated fill: a white
-   tile on the accent reads as a hole punched in the row, and --clock (34%
-   accent) against the accent itself is very nearly invisible — which would
-   silently delete the clock on exactly the row you are looking at.
-   So the whole chip is re-derived from the block's own ink: a translucent
-   plate, no hairline, and a fill that is a stronger step of the same ink. The
-   dashed last-day outline and the ghosted glyph are left alone — they are
-   already drawn in greys and read fine on the block. */
-.navtree-tab-row[data-active="true"] .chatchip[data-shape="tile"] {
-  background: color-mix(in srgb, var(--accent-fg) 20%, transparent);
-  border-color: transparent;
-}
-.navtree-tab-row[data-active="true"] .chatchip-fill {
-  background: color-mix(in srgb, var(--accent-fg) 38%, transparent);
-}
+/* THE TILE NEEDS NOTHING HERE ANY MORE, and two rules are gone rather than
+   re-tuned. They re-inked a white plate, a --border hairline and a --clock fill
+   against the block, because none of the three survived a saturated fill (a
+   white tile on the accent reads as a hole punched in the row, and --clock at
+   34% accent on the accent itself is very nearly invisible — which silently
+   deleted the clock on exactly the row you were looking at). A2 deletes all
+   three outright: what is left on an active row is the user's own emoji, which
+   is artwork and not a derived colour, and it reads on the block as it reads
+   anywhere. Restoring a translucent plate here would put the container back on
+   the one row the eye is already on.
+
+   The last-day outline and the ghosted glyph are left alone, as they were before
+   — they are drawn in greys and read fine on the block. The DOT does still need
+   re-inking: it is a definite colour, and --clock is that colour. */
 .navtree-tab-row[data-active="true"] .chatchip-dot {
   background: var(--accent-fg);
 }
@@ -1953,16 +1950,32 @@ body.sidenav-resizing iframe {
   display: flex;
 }
 
-/* ─── The emoji ───────────────────────────────────────────────────────────
+/* ─── The emoji, which is now THE CHIP at this surface's scale ─────────────
    Kept, because it is the fastest recognition token in the list — faster than
    reading a Hebrew name — and it is the one channel the brief protects.
 
-   The PLATE behind it is deleted. On the desktop rail the chip is load-bearing
-   (emoji ink coverage runs 11%–48%, so a glyph's own edge is not a column
-   edge, and the chip replaces the thing being anchored on). Here the emoji sits
-   in a FIXED 20px box at a fixed 14px from the row's edge, so the box already
-   is the column edge — and a plate on every row is one more mark on every row,
-   which is the rule this rail is built on.
+   The PLATE behind it is deleted, and it stays deleted: a plate on every row is
+   one more mark on every row, which is the rule this rail is built on. Here the
+   emoji sits in a FIXED 20px box at a fixed 14px from the row's edge, so the box
+   already is the column edge.
+
+   WHAT CHANGED is what sits in that box: the rail's own ChatChip (NavTree.tsx),
+   so the phone runs the same clock the desktop does. It could not before — this
+   cell drew a bare emoji and the desktop drew a tile, and the tile was the whole
+   difference. A2 deletes the tile there, which leaves the two surfaces drawing
+   the same thing and this cell the only reason they would still diverge.
+
+   The cell keeps owning the GEOMETRY, and that is the load-bearing half: the
+   chip is sized BY these declarations rather than bringing its own 24px box, so
+   the four numbers this rail is pinned to (14 / 20 / 8 / 12) are untouched and
+   every name still starts at 42px. 17px and 15px are A2's 20/24 and 18/24 at
+   this box's scale — and 17px is the size this emoji has always rendered at, so
+   a fresh row is pixel-identical and only an ageing one looks different.
+
+   `display` and `place-items` are RESTATED, not inherited: `.chatchip` and
+   `.navtree-tab-icon` are both a single class, so which of the two sheets' box
+   models won would otherwise be decided by bundling order. This rule carries the
+   variant and cannot lose.
 
    `inset-block-start: -1px` is an optical lift: emoji artwork sits low against
    a Latin baseline and reads as sagging next to 15px text. */
@@ -1970,9 +1983,10 @@ body.sidenav-resizing iframe {
   flex: 0 0 var(--nt-rail-emoji);
   inline-size: var(--nt-rail-emoji);
   block-size: var(--nt-rail-emoji);
-  font-size: 17px;
-  line-height: 1;
-  text-align: center;
+  display: inline-grid;
+  place-items: center;
+  --chatchip-glyph: 17px;
+  --chatchip-glyph-last: 15px;
   position: relative;
   inset-block-start: -1px;
   /* Above the stretched link below, or tapping the emoji navigates instead of

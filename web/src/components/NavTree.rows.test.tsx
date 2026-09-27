@@ -1,4 +1,4 @@
-import type { Tab, Workspace } from '@muxpad/shared';
+import { type Tab, type Workspace, chatClock } from '@muxpad/shared';
 import { type ReactNode, act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -93,6 +93,11 @@ function railHtml(tabs: Tab[]): string {
 /** How many times `needle` occurs — a count, because "at least one" would pass
  *  on a list that renders the child's mark twice or the parent's not at all. */
 const count = (haystack: string, needle: string) => haystack.split(needle).length - 1;
+
+/** A clock `days` old, built by the SERVER's own deriver rather than by hand, so
+ *  a change to the decay curve reaches these rows instead of a stale copy. */
+const aged = (days: number) =>
+  chatClock({ started_at: NOW - days * 86_400_000, now: NOW, pinned: false });
 
 describe('the rail hands a child row the things that make it look like a child', () => {
   const rail = () => railHtml([tab('root'), tab('kid', { spawned_by: 'root' })]);
@@ -252,13 +257,33 @@ describe('the sheet nests a child under its parent and files done chats away', (
     expect(count(out, 'data-child="true"')).toBe(1);
   });
 
-  it('gives the child a dot in the emoji column and the parent its bare emoji', () => {
+  it('gives the child a dot in the emoji column and the parent the same CHIP the rail draws', () => {
     // The dot is what makes this read as nesting: it stands in the emoji's own
-    // fixed box, which lands every child name on one x. The parent keeps the
-    // plateless emoji this surface is built on — no tile is introduced here.
+    // fixed box, which lands every child name on one x.
+    //
+    // THE PARENT'S CELL CONVERGED WITH THE DESKTOP'S, and this assertion is the
+    // inverse of what it used to be. It read "no tile is introduced here",
+    // because a tile was a plate and the plate is deleted on this surface. A2
+    // deletes the plate on the DESKTOP too: what a `tile` is now is a bare glyph
+    // on the row's own ground, which is exactly what the sheet already drew — so
+    // the two surfaces were one drawing apart and diverging on everything else.
+    // With the same component on both, the phone gets the clock it never had
+    // (its top-level rows aged invisibly) and cannot drift from the rail again.
     const out = sheetHtml([tab('root'), tab('kid', { spawned_by: 'root', clock: null })]);
     expect(count(out, 'data-shape="dot"')).toBe(1);
-    expect(out).not.toContain('data-shape="tile"');
+    expect(count(out, 'data-shape="tile"')).toBe(1);
+    // Same cell, so the sheet's own geometry rules still reach it (the 20px box
+    // and the 1px optical lift live on this class — NavTree.spacing.test.ts).
+    expect(out).toContain('chatchip navtree-tab-icon');
+  });
+
+  it('runs the CLOCK on a top-level sheet row, which it never did before', () => {
+    // The whole point of converging: the phone is the device this list is read
+    // on, and its rows carried no time at all — a chat one day from leaving the
+    // live list looked exactly like one talked to a minute ago.
+    const out = sheetHtml([tab('root', { clock: aged(2) }), tab('old', { clock: aged(3) })]);
+    expect(out).toContain('data-step="2"');
+    expect(out).toContain('data-phase="last-day"');
   });
 
   it('puts the child AFTER its parent, whatever the flat order says', () => {

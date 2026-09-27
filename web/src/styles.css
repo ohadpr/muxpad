@@ -64,23 +64,53 @@
      to clear 4.5:1 against the chip's own fill on every theme and surface. */
   --status-ink-mix: 55%;
 
-  /* ─── The chat CLOCK's ink ─────────────────────────────────────────────
-     What the sidebar chip's descending fill is made of, and — at 6px — the
-     sub-chat dot. ONE colour at every size, so the tile and the dot read as
-     the same substance at two scales (components/ChatChip.css).
+  /* ─── The chat CLOCK's two rungs ───────────────────────────────────────
+     The chip's clock is the GLYPH FADING, with its colour draining alongside
+     (components/ChatChip.css). These are the two middle rungs' alphas, and they
+     re-step per theme for the same class of reason --status-* do, arriving
+     through a different channel: an emoji composited at α over a LIGHT ground
+     loses contrast faster than the same α over a dark one, because the glyph's
+     own luminance sits nearer the light surface.
 
-     Stated as a MIX so the relationship is the constant: the clock is always
-     the accent cut to 34%, on every theme, and only what it is cut WITH
-     re-steps. That base is the token below, and it re-steps for exactly the
-     reason --status-* do — the clock has to sit at a fixed distance from the
-     TILE it fills (--bg-elev), and a single literal cannot do that on a white
-     surface and a near-black one at once. It was `#d9d3ea` for every theme:
-     drawn against the white cockpit, correct there, and a bright lilac wash
-     shouting off a dark tile everywhere else.
+     Measured against a mid-grey glyph — the drain has taken the hue by these
+     steps — as contrast against the row's surface:
+
+              α      vs #f0edf7 (alucard)   vs #282a36 (dracula)
+             1.00          3.42                   3.61
+             0.70          2.23                   2.49
+             0.46          1.65                   1.82
+
+     One ladder would leave the dark themes a step brighter at exactly the end
+     where the rungs are already compressed — the whole visible ladder spans
+     3.42 → 1.65, barely a 2× range, which is also why the drain is there at all:
+     it is a second, independent channel, and the fade alone has only that 2× to
+     work with. The FRESH end needs no step (1.00 vs 0.95 is not one), so this is
+     two numbers per theme rather than a ladder each.
+
+     DARK-surface step here, as everywhere else in this block; the light themes
+     re-step it below. */
+  --fade-1: 0.61;
+  --fade-2: 0.39;
+
+  /* ─── The sub-chat dot's ink ───────────────────────────────────────────
+     6px of definite colour, and the one mark on a row that is not the user's
+     own artwork. It was the tile's descending fill as well, at two scales; the
+     fill is gone (the glyph carries the clock now) and the dot is what is left
+     of that substance — six pixels cannot carry a fade, and a sub-chat has no
+     clock to fade with anyway.
+
+     Stated as a MIX so the relationship is the constant: the mark is always the
+     accent cut to 34%, on every theme, and only what it is cut WITH re-steps.
+     That base is the token below, and it re-steps for exactly the reason
+     --status-* do — the mark has to sit at a fixed distance from the surface it
+     is drawn on, and a single literal cannot do that on a white row and a
+     near-black one at once. It was `#d9d3ea` for every theme: drawn against the
+     white cockpit, correct there, and a bright lilac shouting off a dark row
+     everywhere else.
 
      DARK-surface step here; the light themes re-step it below. Dark wants a
-     MID tone (lighter than the tile, so the fill reads as filled) and light
-     wants a PALE one (darker than the tile, same reason) — the base moves to
+     MID tone (lighter than the row, so the mark reads as present) and light
+     wants a PALE one (darker than the row, same reason) — the base moves to
      the opposite side of the surface, which is why it cannot be derived from
      --border or --bg-hover and is written out per theme.
 
@@ -145,6 +175,9 @@
   --danger: #f7768e;
   --accent: #7aa2f7;
   --accent-fg: #1a1b26;
+  /* Dark ground: the fade keeps its α, an emoji holding contrast better here. */
+  --fade-1: 0.61;
+  --fade-2: 0.39;
   /* Dark surface (--bg-elev #1f2335): a MID slate the accent lightens. */
   --clock-base: #3d4663;
   --hit-bg: #f2c55c;
@@ -170,6 +203,10 @@
   --danger: #ff5555;
   --accent: #bd93f9;
   --accent-fg: #282a36;
+  /* Dark ground, and the one the fade was MEASURED on: 0.61 gives 2.49:1 and
+     0.39 gives 1.82:1 against #282a36. */
+  --fade-1: 0.61;
+  --fade-2: 0.39;
   /* Dark surface (--bg-elev #21222c): a MID purple-grey. */
   --clock-base: #454758;
   --hit-bg: #f1fa8c;
@@ -206,6 +243,11 @@
   --danger: #c62828;
   --accent: #6641d6;
   --accent-fg: #ffffff;
+  /* Light re-step, and the one the fade was MEASURED on: an emoji at α loses
+     contrast faster over this ground, so both middle rungs go UP — 0.70 gives
+     2.23:1 against #f0edf7 and 0.46 gives 1.65:1. */
+  --fade-1: 0.7;
+  --fade-2: 0.46;
   /* Light re-step, and the ORIGINAL: this pale lilac on the white cockpit is
      the colour the prototype was drawn against and signed off on. Every other
      theme is a re-step of it, never the other way round. */
@@ -244,6 +286,9 @@
   --xterm-fg: #1f2328;
   --danger: #cf222e;
   --accent: #0969da;
+  /* Light ground — alucard's ladder. */
+  --fade-1: 0.7;
+  --fade-2: 0.46;
   /* Light re-step, neutral-cool to match the surface. Stepped DOWN from the
      obvious pale value until the fill reads at least as clearly against white
      as alucard's does (2.36 vs 2.30) — alucard is the reference because it is
@@ -295,6 +340,10 @@
   --xterm-fg: #0d0d12;
   --danger: #d83a5b;
   --accent: #6f55ff;
+  /* Light ground — alucard's ladder, cream being no kinder to a faded glyph
+     than white is. */
+  --fade-1: 0.7;
+  --fade-2: 0.46;
   /* Light re-step on a WARM cream surface, so the base carries a little warmth
      rather than going grey against it — and stepped down to alucard's
      readability for the same reason as github-light above. */
@@ -336,6 +385,9 @@
   --xterm-fg: #ebe5d2;
   --danger: #ff7a99;
   --accent: #9d85f5;
+  /* Dark ground — dracula's ladder. */
+  --fade-1: 0.61;
+  --fade-2: 0.39;
   /* Dark surface, and a deep VIOLET one (--bg-elev #2c1d5b) rather than a
      neutral — the base is lifted out of that violet, not out of grey, or the
      fill reads as a muddy patch instead of a step up from the tile. */
