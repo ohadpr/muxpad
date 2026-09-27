@@ -13,6 +13,7 @@ import {
   cdpCookiesToStorageState,
   storageStateToCdpCookies,
 } from '../CookieJar.js';
+import { emulationParams } from '../MobileEmulation.js';
 import { clearStaleProfileLock } from '../ProfileLock.js';
 import { ScreencastSession } from '../ScreencastSession.js';
 import { VIEWER_HTML } from './viewer.js';
@@ -135,7 +136,29 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
   const viewers = new Set<WsSocket>();
   let pendingFileChooser: { backendNodeId: number } | null = null;
 
+  // The host owns emulation, so it owns the repaint kick too — the default one
+  // clears device metrics and would wipe the mobile layout on every re-arm.
+  let emulation = emulationParams(false);
+  const applyEmulation = async () => {
+    if (emulation.metrics) await cdp.send('Emulation.setDeviceMetricsOverride', emulation.metrics);
+    else await cdp.send('Emulation.clearDeviceMetricsOverride');
+  };
   const screencast = new ScreencastSession(cdp, {
+    kick: async () => {
+      // One pixel taller than whatever is currently in force, then back — a
+      // commit without losing the override.
+      const base = emulation.metrics ?? {
+        width: 1280,
+        height: 900,
+        deviceScaleFactor: 0,
+        mobile: false,
+      };
+      await cdp.send('Emulation.setDeviceMetricsOverride', {
+        ...base,
+        height: (base.height as number) + 1,
+      });
+      await applyEmulation();
+    },
     onError: (where, err) => log(`[screencast] ${where}: ${err.message}`),
     onFrame: ({ bytes, metadata }) => {
       const header = JSON.stringify({ t: 'frame', meta: metadata, bytes: bytes.length });
@@ -209,6 +232,16 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     try {
       if (message.t === 'mouse') {
         await cdp.send('Input.dispatchMouseEvent', mouseEvent(message as unknown as MouseInput));
+      } else if (message.t === 'emulate') {
+        // Phone layout on demand. All three signals together — see
+        // MobileEmulation.ts for why metrics alone is not enough.
+        emulation = emulationParams(Boolean(message.mobile));
+        await applyEmulation();
+        await cdp.send('Emulation.setTouchEmulationEnabled', emulation.touch);
+        await cdp.send('Emulation.setUserAgentOverride', emulation.userAgent ?? { userAgent: '' });
+        // The page has to be re-fetched for a server-rendered mobile layout;
+        // a resize alone gets a desktop page in a narrow window.
+        await cdp.send('Page.reload', {});
       } else if (message.t === 'nav') {
         // Back, forward and reload. A person looking at a page they did not
         // navigate to needs a way out of it that is not "ask the agent".

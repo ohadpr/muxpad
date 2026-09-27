@@ -219,3 +219,19 @@ describe('stopping', () => {
     expect(onFrame).not.toHaveBeenCalled();
   });
 });
+
+describe('a caller that owns emulation', () => {
+  it('uses the injected kick instead of clearing device metrics', async () => {
+    // The default kick toggles a metrics override and CLEARS it, which wipes a
+    // deliberate mobile emulation. Observed: enabling the mobile layout, then a
+    // reload re-armed the screencast, whose kick cleared the metrics — leaving a
+    // 1280px page still claiming to be a phone.
+    const cdp = new FakeCdp();
+    cdp.results.set('Page.getLayoutMetrics', metrics);
+    const kick = vi.fn(async () => {});
+    const s = new ScreencastSession(cdp, { onFrame: vi.fn(), kick });
+    await s.start();
+    expect(kick).toHaveBeenCalled();
+    expect(cdp.methods()).not.toContain('Emulation.clearDeviceMetricsOverride');
+  });
+});
