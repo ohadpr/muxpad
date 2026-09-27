@@ -105,22 +105,6 @@ describe('the card', () => {
     expect(onOpen).toHaveBeenLastCalledWith('tab');
   });
 
-  it('starts a registered browser instead of trying to open it', () => {
-    const onOpen = vi.fn();
-    const onStart = vi.fn();
-    const { host } = mount(
-      <BrowserCard
-        data={{ ...base, state: 'registered' }}
-        onOpen={onOpen}
-        onStart={onStart}
-        now={1}
-      />,
-    );
-    click(buttonNamed(host, 'Start'));
-    expect(onStart).toHaveBeenCalledOnce();
-    expect(onOpen).not.toHaveBeenCalled();
-  });
-
   it('shows how long the wheel is held for, and nothing when it is free', () => {
     const held = mount(
       <BrowserCard data={{ ...base, wheel: lease() }} onOpen={() => {}} now={1_000_000} />,

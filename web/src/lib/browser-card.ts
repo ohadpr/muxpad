@@ -42,6 +42,10 @@ export interface BrowserCardView {
 /**
  * The card, as a person reads it.
  *
+ * There is no "start it" state: {@link visibleBrowsers} means a card only
+ * exists for a browser that is already running (or asking for you), so a
+ * not-running branch here would be unreachable code behind a passing test.
+ *
  * ORDER MATTERS AND IS NOT ALPHABETICAL. "The agent needs you" outranks
  * everything, including the agent holding the wheel — because an agent that has
  * asked for help is still nominally driving, and if the holder check came first
@@ -77,16 +81,6 @@ export function browserCardView(data: BrowserCardData): BrowserCardView {
       title: `Browsing · ${profile}`,
       detail: '',
       action: 'Watch',
-      urgent: false,
-    };
-  }
-
-  if (data.state === 'registered') {
-    return {
-      tone: 'idle',
-      title: `Browser · ${profile}`,
-      detail: 'not running',
-      action: 'Start',
       urgent: false,
     };
   }
@@ -133,4 +127,27 @@ export function shouldRenewWheel(lease: BrowserWheelLease | null, now: number): 
   const total = lease.expiresAt - lease.takenAt;
   if (total <= 0) return false;
   return now - lease.takenAt >= total / 2 && now < lease.expiresAt;
+}
+
+/**
+ * The browsers worth a card in a conversation.
+ *
+ * A card for a browser that is not running is pure noise: it says nothing you
+ * can act on, it cannot be looked at, and — because a profile is registered at
+ * boot and stays registered — it would sit at the top of every conversation
+ * forever. The card exists to tell you something is HAPPENING.
+ *
+ * The two overrides are deliberate. A browser that is asking for you, or that
+ * somebody is driving, gets a card whatever its reported state says. Those
+ * facts and the app-row state are read from different places and can disagree
+ * for a poll or two, and the asymmetry of being wrong is severe: a card that
+ * lingers briefly is untidy, a missed "an agent is waiting for you" is the
+ * failure this whole feature exists to end.
+ *
+ * Order is preserved so cards do not reshuffle under a poll.
+ */
+export function visibleBrowsers(browsers: readonly BrowserCardData[]): BrowserCardData[] {
+  return browsers.filter(
+    (b) => b.state === 'running' || b.state === 'started' || b.needsYou || b.wheel,
+  );
 }
