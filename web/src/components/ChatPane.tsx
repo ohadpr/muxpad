@@ -79,7 +79,6 @@ import {
   parseReportMarker,
   rankMentions,
   repinPicks,
-  spawnedChildren,
   toMentionChats,
   withContentRows,
 } from '../lib/chat-mention';
@@ -2111,12 +2110,18 @@ export function ChatPane({
 
   // ── Work this chat SPAWNED ────────────────────────────────────────────────
   // The children of this chat, from the corpus — no storage of its own, because
-  // a child chat IS the record that a spawn happened (see spawnedChildren). The
-  // cards are the conversation's copy of what the sidebar already knows: before
-  // this, a spawn made by `muxpad agent new` from inside a pane set `spawned_by`
-  // and wrote nothing here, so the parent had no record that it had started
-  // anything at all.
-  const spawned = useMemo(() => spawnedChildren(corpus, myChat?.tabId), [corpus, myChat]);
+  // a child chat IS the record that a spawn happened. The cards are the
+  // conversation's copy of what the sidebar already knows: before this, a spawn
+  // made by `muxpad agent new` from inside a pane set `spawned_by` and wrote
+  // nothing here, so the parent had no record that it had started anything.
+  //
+  // ONE list, and it is the LIVE one. There were two — `spawnedChildren` (every
+  // child ever) fed the cards while `liveSpawnedChildren` fed the status cell's
+  // roster — so the two surfaces answered "what is this chat running" with
+  // different sets, and the cards' answer included every agent that had already
+  // finished. That is the bug the user saw as six delivered chats parked at the
+  // foot of the conversation. Now the roster and the cards read the same list,
+  // which is the only way they cannot drift.
   const spawnedLive = useMemo(() => liveSpawnedChildren(corpus, myChat?.tabId), [corpus, myChat]);
 
   // Everything this pane resolves through a chat, in one condition. Declared
@@ -4768,12 +4773,38 @@ export function ChatPane({
               The same card, the same densities: a spawn through the in-chat path
               and a spawn through `muxpad agent new` from inside this pane are
               the same act, and only the first one used to leave a trace here.
-              No storage behind these (see spawnedChildren): the child row IS the
-              record, which is why they appear on every device and why a card
-              cannot disagree with the sidebar about what is running.
+              No storage behind these: the child row IS the record, which is why
+              they appear on every device and why a card cannot disagree with the
+              sidebar about what is running.
               Deduped against the directed cards above — @-directing your own
-              child would otherwise draw it twice. */}
-            {spawned
+              child would otherwise draw it twice.
+
+              LIVE CHILDREN ONLY — `spawnedLive`, the same list the status cell's
+              roster counts, not `spawnedChildren`. This shipped rendering every
+              child ever spawned, and since a child is never deleted that meant a
+              card per delivered agent pinned to the foot of the conversation for
+              good: six of them after one afternoon, each one furniture the user
+              had to scroll past to reach their own composer.
+
+              `spawnedChildren` has a CAP but no age, and the neighbouring store
+              had already written down why both are needed — "a single old card at
+              the foot of a conversation you have moved on from is clutter that
+              never earns its place back" (lib/chat-directed). Under the cap,
+              nothing ever expired.
+
+              An age is not the fix either, because a DELIVERED card here has no
+              report body in it — just the name and headline the sidebar row
+              already carries. So it was a second, device-local, chronologically
+              misplaced copy of a row that already exists in the done group under
+              this very chat and is already reachable by `@`. Two surfaces
+              deriving one value, again. The foot of the log is for work in
+              FLIGHT; the record of finished work is the sidebar.
+
+              (This does mean nothing lands in the conversation when a child
+              delivers. That was already true in substance — the card carried no
+              result — and closing it properly needs the durable spawn-notes row
+              the primitives note describes, not a longer-lived local echo.) */}
+            {spawnedLive
               .filter((k) => !directed.some((d) => d.tabId === k.tabId))
               .map((kid) => (
                 <ChatMentionCard
