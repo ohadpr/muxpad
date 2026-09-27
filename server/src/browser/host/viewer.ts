@@ -20,19 +20,33 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   #bar b{color:#6ea8ff;font-variant-numeric:tabular-nums}
   /* Opened in a TAB on a phone there is no chrome around this page and no
      modal to dismiss — without this you are simply stranded. */
-  #back{color:#d8d8e2;text-decoration:none;font-size:17px;line-height:1;padding:2px 6px;border-radius:6px;border:1px solid #33333f}
-  #back:hover{background:#23232e}
+  #home{color:#d8d8e2;text-decoration:none;font-size:15px;line-height:1;padding:4px 8px;border-radius:6px;border:1px solid #33333f;flex:none}
+  #home:hover{background:#23232e}
+  #bar button{flex:none;background:transparent;border:1px solid #33333f;color:#d8d8e2;border-radius:6px;font:inherit;font-size:15px;line-height:1;padding:4px 9px;cursor:pointer}
+  #bar button:hover{background:#23232e}
+  /* The address, truncated from the LEFT: the end of a url is the part that
+     says which page you are on. */
+  #url{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;color:#9a9aab;font-size:11px}
   #msg{color:#e9a}
-  #wrap{flex:1;overflow:auto;display:grid;place-items:start center;padding:8px}
-  #screen{display:block;max-width:100%;background:#000;touch-action:none;outline:none}
+  /* PINCH AND PAN. The stream is a 1280px page; on a phone, fitted to the
+     viewport it is unreadable, and touch-action: none made it unzoomable
+     besides. pinch-zoom keeps two-finger gestures for the browser — zoom and
+     scroll the FRAME — while one finger still reaches the listeners below and
+     becomes a tap or a drag inside the page. */
+  #wrap{flex:1;overflow:auto;background:#000;touch-action:pinch-zoom;-webkit-overflow-scrolling:touch}
+  #screen{display:block;background:#000;outline:none;transform-origin:0 0}
+  /* Desktop has room to fit the whole page; a phone does not, and shrinking it
+     to fit is the thing that made it useless. */
+  @media (min-width: 700px) { #screen{max-width:100%} }
   #drop{position:fixed;inset:0;background:#000c;display:none;place-items:center;padding:20px;text-align:center}
   #drop.on{display:grid}
 </style>
 <div id="bar">
-  <a id="back" href="/" title="back to muxpad">&#8592;</a>
-  <span>handoff</span>
-  <span>fps <b id="fps">–</b></span>
-  <span><b id="kb">–</b> KB</span>
+  <a id="home" href="/" title="back to muxpad">&#9776;</a>
+  <button id="navBack" title="back">&#8249;</button>
+  <button id="navFwd" title="forward">&#8250;</button>
+  <button id="navReload" title="reload">&#8635;</button>
+  <span id="url" title="">–</span>
   <span id="msg"></span>
 </div>
 <div id="wrap"><img id="screen" tabindex="0" alt="the agent's browser"></div>
@@ -53,10 +67,16 @@ const times = []
 
 ws.onclose = () => { msg.textContent = 'disconnected — the browser may have restarted' }
 ws.onerror = () => { msg.textContent = 'cannot reach the browser' }
+const urlEl = document.getElementById('url')
+const showUrl = (u) => {
+  urlEl.textContent = u || '–'
+  urlEl.title = u || ''
+}
 ws.onmessage = (e) => {
   if (typeof e.data === 'string') {
     const m = JSON.parse(e.data)
-    if (m.t === 'frame') { meta = m.meta; document.getElementById('kb').textContent = (m.bytes/1024).toFixed(0) }
+    if (m.t === 'url') { showUrl(m.url); return }
+    if (m.t === 'frame') { meta = m.meta }
     else if (m.t === 'fileChooser') { document.getElementById('drop').classList.add('on') }
     else if (m.t === 'error') { msg.textContent = m.error }
     return
@@ -67,10 +87,6 @@ ws.onmessage = (e) => {
   if (old) setTimeout(() => URL.revokeObjectURL(old), 50)
   times.push(performance.now())
   if (times.length > 120) times.shift()
-  if (times.length > 1) {
-    const fps = 1000 * (times.length - 1) / (times[times.length-1] - times[0])
-    document.getElementById('fps').textContent = fps.toFixed(0)
-  }
 }
 
 img.addEventListener('load', () => { if (img.naturalWidth) { nw = img.naturalWidth; nh = img.naturalHeight } })
@@ -108,6 +124,10 @@ img.addEventListener('wheel', (e) => {
   const p = pt(e); if (p) send({ t:'mouse', type:'mouseWheel', ...p, deltaX:e.deltaX, deltaY:e.deltaY, modifiers:mods(e) })
 }, { passive:false })
 img.addEventListener('keydown', (e) => { e.preventDefault(); send({ t:'key', key:e.key, modifiers:mods(e) }) })
+
+for (const [id, action] of [['navBack','back'],['navFwd','forward'],['navReload','reload']]) {
+  document.getElementById(id).addEventListener('click', () => send({ t:'nav', action }))
+}
 
 document.getElementById('fpick').addEventListener('change', async (e) => {
   const f = e.target.files[0]; if (!f) return

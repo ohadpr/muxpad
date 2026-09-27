@@ -116,8 +116,16 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
   // stale the first time anything navigates — and this value is what a card in
   // a chat says the browser is looking at, so a stale one is a card that lies.
   let currentUrl = target.url;
+  const announceUrl = () => {
+    const msg = JSON.stringify({ t: 'url', url: currentUrl });
+    for (const viewer of viewers) if (viewer.readyState === 1) viewer.send(msg);
+  };
   cdp.on('Page.frameNavigated', ((p: { frame: { parentId?: string; url: string } }) => {
-    if (!p.frame.parentId) currentUrl = p.frame.url;
+    if (p.frame.parentId) return;
+    currentUrl = p.frame.url;
+    // The viewer shows the address, so it has to hear about every navigation —
+    // including ones the AGENT made, which is most of them.
+    announceUrl();
   }) as never);
 
   const viewers = new Set<WsSocket>();
@@ -162,6 +170,8 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
 
   wss.on('connection', (socket) => {
     viewers.add(socket);
+    // Tell a new viewer where the browser IS, before any frame arrives.
+    if (socket.readyState === 1) socket.send(JSON.stringify({ t: 'url', url: currentUrl }));
     // A viewer that arrives after the page settled would otherwise see black
     // forever: the compositor only commits on change, and a finished page never
     // changes again. Cost is one frame.
@@ -180,6 +190,16 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     try {
       if (message.t === 'mouse') {
         await cdp.send('Input.dispatchMouseEvent', mouseEvent(message as unknown as MouseInput));
+      } else if (message.t === 'nav') {
+        // Back, forward and reload. A person looking at a page they did not
+        // navigate to needs a way out of it that is not "ask the agent".
+        if (message.action === 'back')
+          await cdp.send('Page.goBack' as string, {}).catch(async () => {
+            await cdp.send('Runtime.evaluate', { expression: 'history.back()' });
+          });
+        else if (message.action === 'forward')
+          await cdp.send('Runtime.evaluate', { expression: 'history.forward()' });
+        else if (message.action === 'reload') await cdp.send('Page.reload', {});
       } else if (message.t === 'key') {
         for (const event of keyEvents(message as unknown as KeyInput)) {
           await cdp.send('Input.dispatchKeyEvent', event);
