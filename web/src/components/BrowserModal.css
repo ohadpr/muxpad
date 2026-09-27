@@ -1,0 +1,93 @@
+/*
+ * The take-the-wheel modal.
+ *
+ * Big on purpose. Somebody opened this to read a page and type into it, and a
+ * polite little dialog showing a 1280px page at a third of its size is the one
+ * thing guaranteed not to work for that. On a phone we do not use this at all —
+ * see browserOpenMode.
+ */
+
+.browser-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+}
+
+.browser-modal__scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.66);
+}
+
+.browser-modal__panel {
+  position: relative;
+  width: min(1340px, 96vw);
+  height: min(900px, 92vh);
+  display: flex;
+  flex-direction: column;
+  background: #0d0d12;
+  border: 1px solid #2c2c38;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+}
+
+.browser-modal__bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px 8px 14px;
+  background: #15151c;
+  border-bottom: 1px solid #26262f;
+  font-size: 12px;
+  color: #a4a4b4;
+}
+
+.browser-modal__title {
+  font-weight: 560;
+  color: #e2e2ea;
+}
+
+.browser-modal__wheel {
+  padding: 2px 8px;
+  border-radius: 20px;
+  background: #23232e;
+}
+
+/* You are driving — worth saying, because it governs whether the agent can. */
+.browser-modal__wheel[data-yours="true"] {
+  background: #16351f;
+  color: #7ee0a2;
+}
+
+.browser-modal__countdown {
+  font-variant-numeric: tabular-nums;
+}
+
+.browser-modal__close {
+  margin-left: auto;
+  padding: 5px 13px;
+  border-radius: 7px;
+  border: 1px solid #3a3a48;
+  background: transparent;
+  color: #d8d8e2;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.browser-modal__close:hover {
+  background: #23232e;
+}
+
+.browser-modal__frame {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: #000;
+  /* The stream is the point; never let the frame letterbox it away. */
+  display: block;
+}
