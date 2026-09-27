@@ -29,6 +29,16 @@ describe('the headless invariant', () => {
     expect(chromeArgv(sneaky).some((a) => a.startsWith('--headless'))).toBe(true);
   });
 
+  it('never touches the macOS Keychain, which is a system password PROMPT', () => {
+    // Observed in the first real run: Chrome reaches for the Keychain to
+    // encrypt its password store. On this machine that is a modal dialog on the
+    // user's actual screen — the exact thing headless is here to prevent, and it
+    // would appear with no agent able to dismiss it.
+    const argv = chromeArgv(OPTS);
+    expect(argv).toContain('--password-store=basic');
+    expect(argv).toContain('--use-mock-keychain');
+  });
+
   it('never asks to be the default browser or shows first-run UI', () => {
     const argv = chromeArgv(OPTS);
     expect(argv).toContain('--no-first-run');

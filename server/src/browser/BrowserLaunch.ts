@@ -98,6 +98,19 @@ export function chromeArgv(opts: BrowserLaunchOptions): string[] {
     // reputation between runs. Emphatically NOT --incognito or --guest.
     `--user-data-dir=${browserProfileDir(opts.dataDir, profile)}`,
 
+    // NO KEYCHAIN. Chrome reaches for the macOS Keychain to encrypt its saved
+    // password store, and on this machine that is a MODAL SYSTEM DIALOG on the
+    // user's real screen — headless or not, because it belongs to the OS rather
+    // than to the browser. Observed on the first real run of the host. Nothing
+    // would be able to dismiss it either, since no agent can see it.
+    //
+    // The cost is that saved passwords are not encrypted at rest by the
+    // Keychain. That is the right trade here: these profiles hold session
+    // cookies muxpad manages, not a password vault, and a browser that cannot
+    // start unattended is worth nothing.
+    '--password-store=basic',
+    '--use-mock-keychain',
+
     `--window-size=${win.width},${win.height}`,
     '--no-first-run',
     '--no-default-browser-check',
