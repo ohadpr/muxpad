@@ -1719,32 +1719,6 @@ cmd_agent_new() {
   [ -n "$landed" ] && workspace_id="$landed"
   local pane_id
   pane_id="$(http_request GET "/api/tabs/$tab_id" | jq -r '.panes[0].id')"
-  # REPORT BACK TO WHOEVER ASKED. For a spawn with a parent the server composes a
-  # briefing — the same `<muxpad-direct>` marker and the same report-back
-  # instruction an `@`-direction carries — and hands it back on the create
-  # response. It is prepended to the first message, because the server knows the
-  # parent and this side knows the task; see server/src/spawn-brief.ts.
-  #
-  # NOT composed here, deliberately. The instruction contains a `muxpad agent
-  # send '<pane>' '<marker>'` command whose quoting has already been got wrong
-  # once (a chat called "Ohad's project" ended the quote inside its own name), and
-  # there are tests running /bin/sh -n over the generated line. A second copy of
-  # that string in shell would be a second place for it to be wrong. Here it is
-  # inert DATA: it goes through json_string into a JSON body, and nothing in this
-  # script ever executes it.
-  #
-  # Empty for a root spawn, or when the parent has no pane that could accept a
-  # send — then the message is exactly what the caller wrote, as before.
-  #
-  # The BLANK LINE is re-added here, and it is not cosmetic: the briefing ends
-  # with one (the marker block and the task are separate paragraphs), and `$( )`
-  # strips every trailing newline off a command substitution — so a naive
-  # concatenation glued the task onto `</muxpad-direct>` with nothing between
-  # them. The marker still parsed, which is exactly why this needed a test rather
-  # than an eye. Joined explicitly, the string is what the server composed.
-  local brief
-  brief="$(printf '%s' "$tab_json" | jq -r '.spawn_brief // empty')"
-  [ -n "$brief" ] && message="$(printf '%s\n\n%s' "$brief" "$message")"
   # Poll the send until the runner registers (409 + reason until then).
   # http_request exits on non-2xx, so drive curl directly here.
   local send_body status tmp deadline

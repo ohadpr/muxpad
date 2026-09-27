@@ -37,11 +37,6 @@ describe('muxpad agent new — the workspace it names', () => {
   let tmp: string;
   /** Every POST /api/tabs body the script sent, parsed. */
   let posted: Record<string, unknown>[] = [];
-  /** Every first-message body it sent afterwards — the other half of a spawn. */
-  let sent: { text?: string }[] = [];
-  /** What the stub server answers `POST /api/tabs` with, so a test can put a
-   *  `spawn_brief` in it the way the real route does. */
-  let tabResponse: Record<string, unknown> = {};
 
   beforeAll(async () => {
     tmp = mkdtempSync(join(tmpdir(), 'muxpad-cli-spawn-'));
@@ -60,12 +55,7 @@ describe('muxpad agent new — the workspace it names', () => {
           posted.push(JSON.parse(raw || '{}') as Record<string, unknown>);
           // The server answers with where it PUT the tab — which for a spawn is
           // the parent's workspace, and is the only way the caller finds out.
-          json(201, {
-            id: 't-child',
-            slug: 'child-slug',
-            workspace_id: 'ws-parent',
-            ...tabResponse,
-          });
+          json(201, { id: 't-child', slug: 'child-slug', workspace_id: 'ws-parent' });
         });
         return;
       }
@@ -73,15 +63,8 @@ describe('muxpad agent new — the workspace it names', () => {
         return json(200, { id: 't-child', panes: [{ id: 'p-child' }] });
       }
       if (req.method === 'POST' && url === '/api/agent-sessions/p-child/send') {
-        let raw = '';
-        req.on('data', (c) => {
-          raw += c;
-        });
-        req.on('end', () => {
-          sent.push(JSON.parse(raw || '{}') as { text?: string });
-          json(202, { queued: false });
-        });
-        return;
+        req.resume();
+        return json(202, { queued: false });
       }
       if (req.method === 'GET' && url.startsWith('/api/workspaces')) {
         return json(200, [
@@ -103,8 +86,6 @@ describe('muxpad agent new — the workspace it names', () => {
 
   afterEach(() => {
     posted = [];
-    sent = [];
-    tabResponse = {};
   });
 
   function run(env: Record<string, string>, args: string[] = ['agent', 'new', 'go']) {
@@ -163,51 +144,5 @@ describe('muxpad agent new — the workspace it names', () => {
       /--workspace=<id> required/,
     );
     expect(posted).toHaveLength(0);
-  });
-
-  /**
-   * THE REPORT-BACK BRIEFING, from the server's response into the worker's first
-   * message.
-   *
-   * "I just got a push notification about A2 completing their work and I come
-   * here and I can't find anything about that subject." The server composes the
-   * instruction (it knows the parent and its pane); this script knows the task.
-   * So the only thing the CLI does is put one in front of the other — and the
-   * reason it does no more than that is the quoting: the briefing contains a
-   * `muxpad agent send '<pane>' '<marker>'` command that has already been got
-   * wrong once, there are /bin/sh -n tests over it, and a second copy of it in
-   * shell would be a second place for it to break. Here it is inert data.
-   */
-  describe('the spawn briefing it prepends', () => {
-    const brief =
-      '<muxpad-direct id="t-child" from="Ohad\'s project" pane="p-parent">\nreport back with: muxpad agent send \'p-parent\' \'<muxpad-report/>\n</muxpad-direct>\n\n';
-
-    it('puts the server’s briefing in front of the task, verbatim', async () => {
-      tabResponse = { spawn_brief: brief };
-      await run({ MUXPAD_PANE_ID: 'p-parent' });
-      expect(sent).toHaveLength(1);
-      // Byte-for-byte: the briefing ends with its own blank line, so the two
-      // halves concatenate into the string a one-shot compose would have made.
-      expect(sent[0]?.text).toBe(`${brief}go`);
-    });
-
-    it('does not mangle the marker or the quoted command on the way through', async () => {
-      // It rides a JSON body, so an apostrophe in a chat name, a `<`, a newline
-      // and a single-quoted shell word all arrive as themselves. This is the
-      // whole reason the composition is not done here.
-      tabResponse = { spawn_brief: brief };
-      await run({ MUXPAD_PANE_ID: 'p-parent' });
-      expect(sent[0]?.text).toContain('from="Ohad\'s project"');
-      expect(sent[0]?.text).toContain("muxpad agent send 'p-parent'");
-    });
-
-    it('sends the message UNTOUCHED when the server offers no briefing', async () => {
-      // A root spawn, or a parent with no pane that could receive a send. The
-      // old behaviour exactly — and `// empty` rather than `//""` so a `null`
-      // cannot reach the message as the four characters "null".
-      tabResponse = { spawn_brief: null };
-      await run({ MUXPAD_PANE_ID: '', MUXPAD_WORKSPACE_ID: 'ws-parent' });
-      expect(sent[0]?.text).toBe('go');
-    });
   });
 });
