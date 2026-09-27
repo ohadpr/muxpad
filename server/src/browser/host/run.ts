@@ -232,6 +232,35 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     try {
       if (message.t === 'mouse') {
         await cdp.send('Input.dispatchMouseEvent', mouseEvent(message as unknown as MouseInput));
+        // After a RELEASE, report whether the page now has a text field focused.
+        // A phone shows no keyboard unless something on ITS side is focused, so
+        // the viewer needs to know when to put one there — tapping a text box in
+        // a video stream is otherwise a tap into a picture.
+        if (message.type === 'mouseReleased') {
+          try {
+            const r = (await cdp.send('Runtime.evaluate', {
+              expression: `(() => { const a = document.activeElement; if (!a) return false;
+                const t = (a.tagName || '').toLowerCase();
+                if (t === 'textarea') return true;
+                if (a.isContentEditable) return true;
+                if (t !== 'input') return false;
+                return !['button','submit','reset','checkbox','radio','file','range','color','image'].includes((a.type||'text').toLowerCase());
+              })()`,
+              returnByValue: true,
+            })) as unknown as { result?: { value?: boolean } };
+            if (socket.readyState === 1) {
+              socket.send(JSON.stringify({ t: 'focus', editable: Boolean(r.result?.value) }));
+            }
+          } catch {
+            // Not knowing is fine; the viewer keeps whatever it had.
+          }
+        }
+      } else if (message.t === 'text') {
+        // Whole strings, not keystrokes. A phone keyboard gives autocorrect,
+        // dictation and emoji as composed text, and replaying that as synthetic
+        // keydowns loses all three — insertText is what the page would have got
+        // from a real IME.
+        await cdp.send('Input.insertText', { text: String(message.text ?? '') });
       } else if (message.t === 'emulate') {
         // Phone layout on demand. All three signals together — see
         // MobileEmulation.ts for why metrics alone is not enough.

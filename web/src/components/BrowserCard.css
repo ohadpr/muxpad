@@ -93,14 +93,8 @@
 
 /* The one call to action in the whole component. */
 .browser-card__action[data-urgent="true"] {
-  background: var(--chat-danger, #d2453f);
-  border-color: var(--chat-danger, #d2453f);
   color: #fff;
   font-weight: 560;
-}
-
-.browser-card__action[data-urgent="true"]:hover {
-  background: color-mix(in srgb, var(--chat-danger, #d2453f) 85%, #000);
 }
 
 /* The agent is driving: present, not attention-seeking. */
@@ -119,33 +113,75 @@
 }
 
 /*
- * Blocked. The ONE loud state — something cannot continue without you, and it
- * has probably been true for a while before you looked.
+ * WAITING — the one state that asks for you, and deliberately NOT red.
+ *
+ * Red means something broke. Nothing has: the agent reached a step only a person
+ * can take, which is the system working as designed. It should read like a
+ * hand-off — "your turn" — not like an alarm. Amber carries "next step" without
+ * borrowing the colour that means failure.
  */
-.browser-card--blocked {
-  border-color: var(--chat-danger, #d2453f);
-  background: color-mix(in srgb, var(--chat-danger, #d2453f) 9%, var(--chat-panel, #fff));
+.browser-card--waiting {
+  border-color: var(--warn, #c98a2e);
+  background: color-mix(in srgb, var(--warn, #c98a2e) 10%, var(--chat-panel, #fff));
 }
-.browser-card--blocked .browser-card__glyph {
-  background: var(--chat-danger, #d2453f);
+.browser-card--waiting .browser-card__glyph {
+  background: var(--warn, #c98a2e);
   color: #fff;
 }
-.browser-card--blocked .browser-card__title {
-  color: var(--chat-danger, #d2453f);
+.browser-card--waiting .browser-card__title {
+  color: color-mix(in srgb, var(--warn, #c98a2e) 80%, var(--chat-fg, #1c1c22));
+}
+.browser-card--waiting .browser-card__action[data-urgent="true"] {
+  background: var(--warn, #c98a2e);
+  border-color: var(--warn, #c98a2e);
+}
+.browser-card--waiting .browser-card__action[data-urgent="true"]:hover {
+  background: color-mix(in srgb, var(--warn, #c98a2e) 85%, #000);
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .browser-card--blocked .browser-card__glyph {
-    animation: browser-card-pulse 2s ease-in-out infinite;
+  .browser-card--waiting .browser-card__glyph {
+    animation: browser-card-pulse 2.4s ease-in-out infinite;
   }
 }
 
 @keyframes browser-card-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--chat-danger, #d2453f) 55%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--warn, #c98a2e) 50%, transparent);
   }
   50% {
     box-shadow: 0 0 0 5px transparent;
+  }
+}
+
+/*
+ * NARROW SCREENS. On a phone the title, the reason and the button fought over
+ * one line and all three lost — "Needs you in the…" next to "Amazon is signed
+ * o…" is a card that says nothing. Stack them and let the reason wrap: it is
+ * the only part carrying information.
+ */
+@media (max-width: 560px) {
+  .browser-card {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .browser-card__body {
+    flex: 1 1 100%;
+    order: 1;
+  }
+  .browser-card__glyph {
+    order: 0;
+  }
+  .browser-card__detail {
+    white-space: normal;
+    overflow: visible;
+  }
+  .browser-card__action {
+    order: 2;
+    margin-left: auto;
+  }
+  .browser-card__countdown {
+    order: 2;
   }
 }

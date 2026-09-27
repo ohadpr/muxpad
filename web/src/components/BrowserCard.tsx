@@ -58,7 +58,7 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
       data-tone={view.tone}
     >
       <div className="browser-card__glyph" aria-hidden="true">
-        {view.tone === 'blocked' ? '!' : '◉'}
+        {view.tone === 'waiting' ? '↑' : '◉'}
       </div>
       <div className="browser-card__body">
         <div className="browser-card__title">{view.title}</div>

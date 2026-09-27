@@ -35,7 +35,13 @@ export interface BrowserCardData {
   events?: BrowserEvent[];
 }
 
-export type BrowserCardTone = 'idle' | 'working' | 'blocked' | 'yours';
+/**
+ * `waiting` rather than `blocked`, and the colour follows the name. Red means
+ * something broke; nothing has. The agent reached a step only a person can take,
+ * which is the system working exactly as designed — it should read as a
+ * hand-off, not an alarm.
+ */
+export type BrowserCardTone = 'idle' | 'working' | 'waiting' | 'yours';
 
 export interface BrowserCardView {
   tone: BrowserCardTone;
@@ -67,8 +73,8 @@ export function browserCardView(data: BrowserCardData): BrowserCardView {
 
   if (data.needsYou) {
     return {
-      tone: 'blocked',
-      title: 'Needs you in the browser',
+      tone: 'waiting',
+      title: 'Needs you',
       detail: data.needsYou.reason,
       action: 'Take the wheel',
       urgent: true,
@@ -233,6 +239,11 @@ export function browserMoments(
   return out.sort((a, b) => a.at - b.at);
 }
 
+/** Session browsers are named after the session, which is not a word for a person. */
+function isSessionProfile(profile: string): boolean {
+  return profile.startsWith('s-');
+}
+
 /** Whether a browser can still be looked at. */
 function isLive(browser: BrowserCardData): boolean {
   return browser.state === 'running' || browser.state === 'started';
@@ -259,8 +270,11 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
 
   if (stillAsking) {
     return {
-      tone: 'blocked',
-      title: 'Needs you in the browser',
+      tone: 'waiting',
+      // Two words. The REASON is the content — the agent wrote a sentence about
+      // what it needs, and a title repeating "in the browser" only pushes that
+      // sentence off the edge of a phone.
+      title: 'Needs you',
       detail: moment.reason ?? '',
       action: live ? 'Take the wheel' : null,
       urgent: true,
@@ -273,7 +287,7 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
   if (moment.kind === 'needs-you') {
     return {
       tone: browser.wheel?.holder === 'human' ? 'yours' : 'idle',
-      title: 'Needed you in the browser',
+      title: 'Handled',
       detail: moment.reason ?? detail,
       action,
       urgent: false,
@@ -282,7 +296,10 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
 
   return {
     tone: browser.wheel?.holder === 'human' ? 'yours' : browser.wheel ? 'working' : 'idle',
-    title: `Browser opened · ${moment.profile}`,
+    // A session profile is `s-01m3hw…` — a database key wearing a label. It
+    // says nothing to a person and on a phone it ate the whole line. A profile
+    // somebody NAMED is worth showing, because they chose the word.
+    title: isSessionProfile(moment.profile) ? 'Browser opened' : `Browser · ${moment.profile}`,
     detail,
     action,
     urgent: false,

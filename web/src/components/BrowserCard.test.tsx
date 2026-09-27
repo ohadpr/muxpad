@@ -71,7 +71,7 @@ const moment = (browser: BrowserCardData, over: Partial<BrowserMoment> = {}): Br
 describe('the card', () => {
   it('reads as something that happened, not a status light', () => {
     const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
-    expect(host.textContent).toMatch(/opened/i);
+    expect(host.textContent).toMatch(/opened|browser/i);
     expect(host.textContent).toContain('shopping');
   });
 
@@ -85,7 +85,7 @@ describe('the card', () => {
       />,
     );
     expect(host.querySelector('[data-testid="browser-card"]')?.getAttribute('data-tone')).toBe(
-      'blocked',
+      'waiting',
     );
     expect(host.textContent).toContain('log in to Amazon');
     expect(buttons(host)[0]?.dataset.urgent).toBe('true');
@@ -100,10 +100,10 @@ describe('the card', () => {
       />,
     );
     expect(host.querySelector('[data-testid="browser-card"]')?.getAttribute('data-tone')).not.toBe(
-      'blocked',
+      'waiting',
     );
     expect(buttons(host)[0]?.dataset.urgent).toBe('false');
-    expect(host.textContent).toMatch(/needed you/i);
+    expect(host.textContent).toMatch(/handled/i);
   });
 
   it('opens a MODAL on a wide viewport and a TAB on a phone', () => {
