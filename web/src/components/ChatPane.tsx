@@ -113,6 +113,7 @@ import { type SpawnWork, fetchSpawnWork } from '../lib/spawn-work';
 import type { AgentLink } from '../lib/voice/session';
 import { useVoice } from '../lib/voice/use-voice';
 import { AgentBackendLogo, backendFromAssistant } from './AgentLogos';
+import { BrowserCards } from './BrowserCards';
 import { ChatDraft, type ChatDraftHandle } from './ChatDraft';
 import { ChatMentionCard, ChatMentionPicker, ChatMentionPill } from './ChatMentionPicker';
 import { CopyablePre } from './CopyablePre';
@@ -4812,6 +4813,12 @@ export function ChatPane({
     // when the CORPUS lands and not on the frames in between.
     <ChatMentionContext.Provider value={mentionContext}>
       <div className="chat-pane" ref={paneRef}>
+        {/* Browsers muxpad owns. Above the transcript rather than interleaved
+          into it, because a browser is not an EVENT that happened at a moment —
+          it is a thing that is currently true, and one that can start needing
+          you long after the message that opened it scrolled away. Interleaving
+          would bury "an agent is waiting for you" under an hour of log. */}
+        <BrowserCards by={paneId} />
         {/* We were asked to show WHERE the term is, and could not — so say so.
           Silently landing on an unchanged chat is the one outcome that reads as
           a broken search. Floats over the transcript rather than sitting in the
