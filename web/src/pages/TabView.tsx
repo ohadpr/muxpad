@@ -14,6 +14,7 @@ import {
   collectLayoutLeaves,
   isAgentPane,
   spliceLayoutAtTarget,
+  tabShowsPaneStrip,
   tabTakesPanes,
 } from '@muxpad/shared';
 import { type TabWithPanes, api } from '../api';
@@ -1478,117 +1479,126 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
 
     return (
       <div className="workspace-root">
-        <nav className="desktop-tab-strip" aria-label="Panes">
-          <div className="desktop-tab-strip-tabs" role="tablist">
-            {paneIds.map((paneId) => {
-              const p = tab.panes.find((x) => x.id === paneId);
-              const isActiveTab = paneId === activeId;
-              const isEditing = editingPaneId === paneId;
-              return (
-                <div
-                  key={paneId}
-                  className="desktop-tab"
-                  data-active={isActiveTab ? 'true' : undefined}
-                  data-drop={paneDropTargetId === paneId ? paneDropSide : undefined}
-                  data-dragging={paneDragId === paneId ? 'true' : undefined}
-                  // Editing borrows the header for a text input; dragging then
-                  // would steal the pointer selection, so disable it mid-edit.
-                  draggable={!isEditing}
-                  onDragStart={(e) => onPaneDragStart(e, paneId)}
-                  onDragOver={(e) => onPaneDragOver(e, paneId)}
-                  onDragEnd={onPaneDragEnd}
-                  onDrop={(e) => onPaneDrop(e, paneId)}
-                >
-                  {isEditing ? (
-                    <input
-                      ref={paneEditRef}
-                      className="desktop-tab-input"
-                      value={paneDraft}
-                      onChange={(e) => setPaneDraft(e.target.value)}
-                      onBlur={() => void commitPaneRename()}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          void commitPaneRename();
-                        } else if (e.key === 'Escape') {
-                          e.preventDefault();
-                          cancelPaneRename();
-                        }
-                      }}
-                      size={Math.max(6, paneDraft.length + 1)}
-                    />
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={isActiveTab}
-                        className="desktop-tab-select"
-                        onClick={() => setMobileActiveId(paneId)}
-                        onDoubleClick={() => startPaneRename(paneId)}
-                        title={p?.name ? p.name : 'Double-click to rename'}
-                      >
-                        <span
-                          className="desktop-tab-kind"
-                          title={paneSurfaceLabel(p)}
-                          aria-label={paneSurfaceLabel(p)}
-                        >
-                          {paneSurfaceIcon(p)}
-                        </span>
-                        <span className="desktop-tab-label">{paneLabel(paneId)}</span>
-                        {/* The same status rail the navigator uses — one
-                            component, so the strip and the sidebar can never
-                            tell different stories about the same pane. */}
-                        <StatusMark status={p?.status} />
-                      </button>
-                      {/* Trailing slot holds only the hover-revealed × now —
-                          status moved to LEAD the label. */}
-                      <span className="desktop-tab-trailing">
+        {/* THE STRIP ONLY PAINTS WHEN IT HAS A JOB — see tabShowsPaneStrip.
+            Dropping the `+` from a chat tab was only half of "one pane per tab,
+            except terminals": this row still painted for every chat, carrying a
+            label for the pane already on screen, a second copy of the sidebar's
+            status mark, a × that only empties the tab, and an "Expand to split"
+            with nothing to split. The mobile branch above already refuses to
+            paint an empty bar; this is the same rule on the other surface. */}
+        {tabShowsPaneStrip(tab.panes) ? (
+          <nav className="desktop-tab-strip" aria-label="Panes">
+            <div className="desktop-tab-strip-tabs" role="tablist">
+              {paneIds.map((paneId) => {
+                const p = tab.panes.find((x) => x.id === paneId);
+                const isActiveTab = paneId === activeId;
+                const isEditing = editingPaneId === paneId;
+                return (
+                  <div
+                    key={paneId}
+                    className="desktop-tab"
+                    data-active={isActiveTab ? 'true' : undefined}
+                    data-drop={paneDropTargetId === paneId ? paneDropSide : undefined}
+                    data-dragging={paneDragId === paneId ? 'true' : undefined}
+                    // Editing borrows the header for a text input; dragging then
+                    // would steal the pointer selection, so disable it mid-edit.
+                    draggable={!isEditing}
+                    onDragStart={(e) => onPaneDragStart(e, paneId)}
+                    onDragOver={(e) => onPaneDragOver(e, paneId)}
+                    onDragEnd={onPaneDragEnd}
+                    onDrop={(e) => onPaneDrop(e, paneId)}
+                  >
+                    {isEditing ? (
+                      <input
+                        ref={paneEditRef}
+                        className="desktop-tab-input"
+                        value={paneDraft}
+                        onChange={(e) => setPaneDraft(e.target.value)}
+                        onBlur={() => void commitPaneRename()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            void commitPaneRename();
+                          } else if (e.key === 'Escape') {
+                            e.preventDefault();
+                            cancelPaneRename();
+                          }
+                        }}
+                        size={Math.max(6, paneDraft.length + 1)}
+                      />
+                    ) : (
+                      <>
                         <button
                           type="button"
-                          className="desktop-tab-close"
-                          title="Close pane"
-                          aria-label="Close pane"
-                          onClick={() => closePane(paneId)}
+                          role="tab"
+                          aria-selected={isActiveTab}
+                          className="desktop-tab-select"
+                          onClick={() => setMobileActiveId(paneId)}
+                          onDoubleClick={() => startPaneRename(paneId)}
+                          title={p?.name ? p.name : 'Double-click to rename'}
                         >
-                          {/* 13 → ~8px drawn X with a light stroke — reads
+                          <span
+                            className="desktop-tab-kind"
+                            title={paneSurfaceLabel(p)}
+                            aria-label={paneSurfaceLabel(p)}
+                          >
+                            {paneSurfaceIcon(p)}
+                          </span>
+                          <span className="desktop-tab-label">{paneLabel(paneId)}</span>
+                          {/* The same status rail the navigator uses — one
+                            component, so the strip and the sidebar can never
+                            tell different stories about the same pane. */}
+                          <StatusMark status={p?.status} />
+                        </button>
+                        {/* Trailing slot holds only the hover-revealed × now —
+                          status moved to LEAD the label. */}
+                        <span className="desktop-tab-trailing">
+                          <button
+                            type="button"
+                            className="desktop-tab-close"
+                            title="Close pane"
+                            aria-label="Close pane"
+                            onClick={() => closePane(paneId)}
+                          >
+                            {/* 13 → ~8px drawn X with a light stroke — reads
                               as the face glyph's equal (a 16px X overpowered
                               its thin 14px outline). */}
-                          <SvgClose size={13} />
-                        </button>
-                      </span>
-                    </>
-                  )}
-                </div>
-              );
-            })}
-            {/* Browser-standard lone "+"; always opens the harness picker
+                            <SvgClose size={13} />
+                          </button>
+                        </span>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+              {/* Browser-standard lone "+"; always opens the harness picker
                 (Claude / Codex / Cursor + Terminal below).
                 GONE for a tab that is nothing but agents — see tabTakesPanes.
                 This `+` was how the user got more chats without a sidebar row,
                 and children-under-a-parent replaced it: a second agent in this
                 tab is a chat with no parent, no clock and no card. */}
-            {tabTakesPanes(tab.panes) ? (
-              <NewTabButton
-                idleLabel="+"
-                idleTitle="New pane"
-                idleClassName="desktop-tab-add desktop-tab-add-plus"
-                onCreate={() => void addPane()}
-              />
-            ) : null}
-          </div>
-          <div className="desktop-tab-strip-actions">
-            <button
-              type="button"
-              className="pane-chrome-btn"
-              title="Expand to split"
-              aria-label="Expand to split view"
-              onClick={() => changeViewMode('split')}
-            >
-              <SvgSplitView />
-            </button>
-          </div>
-        </nav>
+              {tabTakesPanes(tab.panes) ? (
+                <NewTabButton
+                  idleLabel="+"
+                  idleTitle="New pane"
+                  idleClassName="desktop-tab-add desktop-tab-add-plus"
+                  onCreate={() => void addPane()}
+                />
+              ) : null}
+            </div>
+            <div className="desktop-tab-strip-actions">
+              <button
+                type="button"
+                className="pane-chrome-btn"
+                title="Expand to split"
+                aria-label="Expand to split view"
+                onClick={() => changeViewMode('split')}
+              >
+                <SvgSplitView />
+              </button>
+            </div>
+          </nav>
+        ) : null}
         <main className="workspace-body">
           {/* Render the pane bodies in a STABLE order (sorted pane id), NOT in
               tab-strip order. Only one slot is visible at a time (absolutely
