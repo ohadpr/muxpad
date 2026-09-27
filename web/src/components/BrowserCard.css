@@ -27,10 +27,13 @@
   --b-live: #6f7bf7;
   --b-wait: #f0943f;
   --b-wash: 13%;
+  /* One line box, shared by the glyph, the text and the button, so all three
+     centre on the SAME thing instead of each centring on itself. */
+  --b-line: 18px;
 
   display: grid;
   grid-template-columns: auto 1fr auto;
-  align-items: center;
+  align-items: start;
   column-gap: 9px;
   row-gap: 3px;
   /* SIZED TO ITS CONTENT, like the spawn card beside it. Full width made every
@@ -40,7 +43,7 @@
   max-width: min(460px, 94%);
   align-self: flex-start;
   box-sizing: border-box;
-  padding: 7px 11px;
+  padding: 8px 11px;
   margin: 4px 10px;
   border-radius: 10px;
   /* The same two-stop wash the spawn card uses, so they read as siblings — a
@@ -64,8 +67,13 @@
 .browser-card__glyph {
   grid-column: 1;
   grid-row: 1;
-  display: block;
-  line-height: 0;
+  /* A box exactly one line tall, with the mark centred inside it. Aligned to
+     the FIRST line rather than to the card, so a wrapped reason does not drag
+     the icon down to the middle of a paragraph — and a one-line card still has
+     it dead level with the words. */
+  height: var(--b-line);
+  display: grid;
+  place-items: center;
   color: var(--b-idle);
 }
 .browser-card__glyph svg {
@@ -86,6 +94,13 @@
   align-items: baseline;
   flex-wrap: wrap;
   column-gap: 8px;
+}
+
+/* Every line in the body is the same height as the glyph's box, which is what
+   makes them line up without nudging anything by hand. */
+.browser-card__title,
+.browser-card__detail {
+  line-height: var(--b-line);
 }
 
 .browser-card__title {
@@ -111,6 +126,9 @@
 .browser-card__countdown {
   grid-column: 3;
   grid-row: 1;
+  height: var(--b-line);
+  display: grid;
+  place-items: center;
   color: var(--chat-faint, #8b8b9c);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
@@ -125,7 +143,12 @@
   grid-column: 4;
   grid-row: 1;
   justify-self: end;
-  padding: 3px 8px;
+  /* Centred on the first line like everything else. The padding grows the
+     button around that line rather than pushing the row taller on one side. */
+  height: var(--b-line);
+  display: grid;
+  place-items: center;
+  padding: 0 9px;
   border-radius: 6px;
   border: 1px solid transparent;
   background: transparent;
@@ -250,11 +273,6 @@
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
     line-clamp: 2;
-  }
-  /* Beside the first LINE, not floating in the middle of a wrapped block. */
-  .browser-card__glyph,
-  .browser-card__action {
-    align-self: start;
   }
   .browser-card__action {
     grid-column: 3;
