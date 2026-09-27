@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -96,5 +98,52 @@ describe('the status strip counts child chats as running work', () => {
     act(() => box.querySelector<HTMLButtonElement>('.chat-status-seg.-live')?.click());
     expect(box.querySelector('.chat-roster-link')).toBeNull();
     expect(box.textContent).toContain('grep the logs');
+  });
+});
+
+/**
+ * …AND THE CARDS MUST COUNT THE SAME CHILDREN THE ROSTER DOES.
+ *
+ * The roster above reads `liveSpawnedChildren`. The foot-of-log cards read
+ * `spawnedChildren` — every child ever spawned — so the two surfaces answered
+ * "what is this chat running" with different sets, and the cards' answer
+ * included every agent that had already finished. A child is never deleted, so
+ * those cards were permanent: six delivered agents parked between the last
+ * message and the composer after a single afternoon, reported as "why do all
+ * these older chats persist here".
+ *
+ * `spawnedChildren` has a CAP and no age. The neighbouring store had already
+ * written down why that is not enough — "a single old card at the foot of a
+ * conversation you have moved on from is clutter that never earns its place
+ * back" (lib/chat-directed) — but under the cap nothing ever expired.
+ *
+ * ─── Why this is a SOURCE assertion and not a rendered one ────────────────
+ * Stated plainly because the weaker kind of test is how this class of bug keeps
+ * shipping here: `data-child` was emitted on no element for three reviews while
+ * a grouping test and a stylesheet test both passed, each right about its own
+ * half. The list-choice is one identifier deep inside a 6,200-line render that
+ * needs a socket, a router, a corpus and a transcript to mount, and a mount that
+ * elaborate is its own source of false greens. So this pins the SEAM instead:
+ * both surfaces must name the same list. It would not catch a card list that
+ * re-filtered wrongly downstream — `chat-mention.test.ts` owns what the list
+ * itself contains, and that half is already covered.
+ */
+describe('the spawn cards and the roster read ONE list', () => {
+  const SRC = readFileSync(join(process.cwd(), 'src/components/ChatPane.tsx'), 'utf8');
+
+  it('never re-derives the card list from every child ever spawned', () => {
+    // The whole bug in one symbol. `spawnedChildren` is still exported and still
+    // tested — it is simply not what a conversation's live furniture is made of.
+    expect(SRC).not.toContain('spawnedChildren(');
+  });
+
+  it('renders the cards from the same list the roster counts', () => {
+    // One memo, both consumers. Two lists is what let them disagree.
+    expect(SRC).toContain('liveSpawnedChildren(corpus, myChat?.tabId)');
+    expect(SRC).toContain('{spawnedLive');
+    expect(SRC).toContain('for (const kid of spawnedLive)');
+    // …and exactly one definition of it, so a future edit cannot quietly fork
+    // the card list off a second memo again.
+    expect(SRC.split('const spawnedLive').length - 1).toBe(1);
   });
 });
