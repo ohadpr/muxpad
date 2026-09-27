@@ -439,3 +439,49 @@ describe('what the card says, in as few words as possible', () => {
     expect(view.urgent).toBe(false);
   });
 });
+
+
+describe('what the card shows, and what it leaves out', () => {
+  const m = (over: Record<string, unknown> = {}): BrowserMoment => ({
+    kind: 'opened',
+    at: 1,
+    profile: 's-abc',
+    browser: base,
+    ...over,
+  });
+
+  it('shows the countdown ONLY while you hold the wheel', () => {
+    // It is your lease running out. On a card about something the agent did, or
+    // about a browser nobody is driving, it is a number with no referent.
+    expect(browserMomentView(m({ browser: { ...base, wheel: lease() } })).countdown).toBe(true);
+    expect(browserMomentView(m()).countdown).toBe(false);
+    expect(
+      browserMomentView(m({ browser: { ...base, wheel: lease({ holder: 'agent' }) } })).countdown,
+    ).toBe(false);
+  });
+
+  it('never asks for you while you are already driving', () => {
+    // "Needs you · Take the wheel" when you HAVE the wheel is a card asking for
+    // something already done. It reads as handled, because it is.
+    const view = browserMomentView(
+      m({
+        kind: 'needs-you',
+        reason: 'Amazon is signed out',
+        browser: { ...base, needsYou: { reason: 'x', at: 1 }, wheel: lease() },
+      }),
+    );
+    expect(view.urgent).toBe(false);
+    expect(view.title).toBe('Handled');
+  });
+
+  it('still shouts when the agent holds the wheel and is stuck', () => {
+    const view = browserMomentView(
+      m({
+        kind: 'needs-you',
+        reason: 'captcha',
+        browser: { ...base, needsYou: { reason: 'x', at: 1 }, wheel: lease({ holder: 'agent' }) },
+      }),
+    );
+    expect(view.urgent).toBe(true);
+  });
+});

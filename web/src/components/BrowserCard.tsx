@@ -64,7 +64,9 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
         <div className="browser-card__title">{view.title}</div>
         {view.detail ? <div className="browser-card__detail">{view.detail}</div> : null}
       </div>
-      {countdown ? <div className="browser-card__countdown">{countdown}</div> : null}
+      {view.countdown && countdown ? (
+        <div className="browser-card__countdown">{countdown}</div>
+      ) : null}
       {view.action ? (
         <button
           type="button"
