@@ -84,7 +84,7 @@ export function browserCardView(data: BrowserCardData): BrowserCardView {
       tone: 'waiting',
       title: 'Needs you',
       detail: data.needsYou.reason,
-      action: 'Take the wheel',
+      action: 'Open',
       urgent: true,
       countdown: false,
     };
@@ -106,7 +106,7 @@ export function browserCardView(data: BrowserCardData): BrowserCardView {
       tone: 'working',
       title: `Browsing · ${profile}`,
       detail: '',
-      action: 'Watch',
+      action: 'Open',
       urgent: false,
       countdown: false,
     };
@@ -291,13 +291,16 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
       // sentence off the edge of a phone.
       title: 'Needs you',
       detail: moment.reason ?? '',
-      action: live ? 'Take the wheel' : null,
+      action: live ? 'Open' : null,
       urgent: true,
       countdown: false,
     };
   }
 
-  const action = !live ? null : browser.wheel?.holder === 'agent' ? 'Watch' : 'Open';
+  // ONE verb. "Take the wheel" and "Watch" describe the same click — opening the
+  // stream takes the wheel either way — and both were longer than a phone could
+  // afford. The title and the reason carry the why; the button says what happens.
+  const action = live ? 'Open' : null;
   const detail = live ? (moment.kind === 'needs-you' ? (moment.reason ?? '') : '') : 'closed';
 
   if (moment.kind === 'needs-you') {

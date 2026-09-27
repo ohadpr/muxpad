@@ -35,7 +35,7 @@ describe('what the card says', () => {
     const view = browserCardView({ ...base, needsYou: { reason: 'log in to Amazon', at: 1 } });
     expect(view.tone).toBe('waiting');
     expect(view.urgent).toBe(true);
-    expect(view.action).toBe('Take the wheel');
+    expect(view.action).toBe('Open');
     expect(view.detail).toBe('log in to Amazon');
   });
 
@@ -61,7 +61,7 @@ describe('what the card says', () => {
   it('is calm while the agent is browsing', () => {
     const view = browserCardView({ ...base, wheel: lease({ holder: 'agent', by: 'chat-1' }) });
     expect(view.tone).toBe('working');
-    expect(view.action).toBe('Watch');
+    expect(view.action).toBe('Open');
     expect(view.urgent).toBe(false);
   });
 
@@ -291,7 +291,7 @@ describe('a card drawn from a moment', () => {
     );
     expect(view.tone).toBe('waiting');
     expect(view.urgent).toBe(true);
-    expect(view.action).toBe('Take the wheel');
+    expect(view.action).toBe('Open');
   });
 
   it('STOPS shouting once you have answered it', () => {
@@ -312,11 +312,13 @@ describe('a card drawn from a moment', () => {
     expect(view.tone).toBe('yours');
   });
 
-  it('offers to watch while the agent drives', () => {
-    const view = browserMomentView(
-      moment({ browser: { ...base, wheel: lease({ holder: 'agent' as const }) } }),
-    );
-    expect(view.action).toBe('Watch');
+  it('offers the same one verb however the browser is being used', () => {
+    // "Take the wheel" and "Watch" describe the same click — opening the stream
+    // takes the wheel either way — and both were longer than a phone could
+    // afford. The title and the reason carry the why.
+    for (const wheel of [null, lease(), lease({ holder: 'agent' as const })]) {
+      expect(browserMomentView(moment({ browser: { ...base, wheel } })).action).toBe('Open');
+    }
   });
 
   it('cannot be opened once the browser is gone', () => {
