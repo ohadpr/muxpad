@@ -95,6 +95,20 @@ export class ScreencastSession {
   }
 
   /**
+   * Force a repaint for a viewer that arrived after the page settled.
+   *
+   * {@link start} already kicks one, but a person opening the viewer ten minutes
+   * later attaches to a page that has not changed since — and the compositor has
+   * nothing to send them. They get a black rectangle until something moves on
+   * its own, which on a finished page is never. Found by the end-to-end run;
+   * the unit tests could not see it because they only ever connect at start.
+   */
+  async repaint(): Promise<void> {
+    if (!this.running) return;
+    await this.kickRepaint();
+  }
+
+  /**
    * Force one compositor commit.
    *
    * Resizing the viewport by a single pixel and immediately clearing the

@@ -79,6 +79,14 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
   const target = await cdp.attachToPage();
   log(`[host] attached to ${target.url}`);
 
+  // The page the browser is ON, kept current. Captured once at attach it goes
+  // stale the first time anything navigates — and this value is what a card in
+  // a chat says the browser is looking at, so a stale one is a card that lies.
+  let currentUrl = target.url;
+  cdp.on('Page.frameNavigated', ((p: { frame: { parentId?: string; url: string } }) => {
+    if (!p.frame.parentId) currentUrl = p.frame.url;
+  }) as never);
+
   const viewers = new Set<WsSocket>();
   let pendingFileChooser: { backendNodeId: number } | null = null;
 
@@ -111,6 +119,10 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
 
   wss.on('connection', (socket) => {
     viewers.add(socket);
+    // A viewer that arrives after the page settled would otherwise see black
+    // forever: the compositor only commits on change, and a finished page never
+    // changes again. Cost is one frame.
+    void screencast.repaint();
     socket.on('close', () => viewers.delete(socket));
     socket.on('message', (raw) => void handleInput(socket, raw.toString()));
   });
@@ -147,7 +159,7 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     if (path === '/healthz') {
       res
         .writeHead(200, { 'content-type': 'application/json' })
-        .end(JSON.stringify({ ok: true, viewers: viewers.size, url: target.url }));
+        .end(JSON.stringify({ ok: true, viewers: viewers.size, url: currentUrl }));
       return;
     }
     if (path === '/upload' && req.method === 'POST') {

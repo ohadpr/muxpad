@@ -91,6 +91,31 @@ describe('starting', () => {
     );
   });
 
+  it('repaints on demand, for a viewer that arrives AFTER the page settled', async () => {
+    // Found by the end-to-end run, not by these tests. start() kicks a repaint,
+    // but a person opening the viewer ten minutes later attaches to a page that
+    // has not changed since — and the compositor has nothing to send. They see
+    // black until something moves. The host calls this on every viewer connect.
+    const { cdp, s } = session();
+    await s.start();
+    const before = cdp.calls.filter(
+      (c) => c.method === 'Emulation.setDeviceMetricsOverride',
+    ).length;
+    await s.repaint();
+    expect(
+      cdp.calls.filter((c) => c.method === 'Emulation.setDeviceMetricsOverride').length,
+    ).toBeGreaterThan(before);
+  });
+
+  it('does not repaint once stopped', async () => {
+    const { cdp, s } = session();
+    await s.start();
+    await s.stop();
+    const before = cdp.calls.length;
+    await s.repaint();
+    expect(cdp.calls.length).toBe(before);
+  });
+
   it('survives a browser that will not report layout metrics', async () => {
     const { cdp, s } = session();
     cdp.failing.add('Page.getLayoutMetrics');

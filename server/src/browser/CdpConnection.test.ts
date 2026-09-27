@@ -160,6 +160,22 @@ describe('after attaching', () => {
     expect(seen).toHaveBeenCalledWith({ frame: { url: 'https://x/' } });
   });
 
+  it('delivers to EVERY listener, not just the last one registered', async () => {
+    // A Map<event, handler> silently replaces. The near-miss this pins:
+    // ScreencastSession listens for Page.frameNavigated to re-arm the stream and
+    // the host listens for the same event to track the current URL. With one
+    // slot the second listener disables re-arming, and the only symptom is a
+    // frozen picture after a navigation.
+    const { conn, socket } = await attached();
+    const first = vi.fn();
+    const second = vi.fn();
+    conn.on('Page.frameNavigated', first);
+    conn.on('Page.frameNavigated', second);
+    socket.event('Page.frameNavigated', { frame: { url: 'https://x/' } });
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).toHaveBeenCalledOnce();
+  });
+
   it('ignores an event nothing is listening for, rather than throwing', async () => {
     const { conn, socket } = await attached();
     void conn;
