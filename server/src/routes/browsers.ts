@@ -74,6 +74,15 @@ const EnsureSchema = z.object({
   profile: z.string().min(1).max(64),
   /** The chat this happened in, so its card lands in the right log. */
   tabId: z.string().min(1).max(64).optional(),
+  /**
+   * False registers the row and launches NOTHING.
+   *
+   * This is how an agent's session gets a browser without one existing: about
+   * 200 MB of Chrome per session, for every session, most of which never browse.
+   * The agent's wrapper registers and is handed a LAZY endpoint; the browser
+   * starts the first time a tool actually reaches for it. See /:profile/cdp.
+   */
+  start: z.boolean().optional(),
 });
 
 /** What the agent is stuck on, in words a person can act on. */
@@ -243,6 +252,7 @@ export function browsersRoutes(deps: {
       registry: deps.registry,
       cwd: deps.cwd,
       ...(deps.apiUrl ? { apiUrl: deps.apiUrl } : {}),
+      ...(parsed.data.start === false ? { start: false } : {}),
     });
     // NOT the moment for a card. This runs when the agent's MCP server starts,
     // which is before the person has typed anything — so an "opened" recorded
@@ -274,6 +284,72 @@ export function browsersRoutes(deps: {
     const tabId = owner.get(profile);
     events.record(profile, { kind: 'opened', ...(tabId ? { tabId } : {}) });
     return c.json({ ok: true, events: events.list(profile) }, 201);
+  });
+
+  /**
+   * THE LAZY CDP ENDPOINT — where a session browser actually starts.
+   *
+   * Every agent session used to launch a real Chrome, about 200 MB, when its
+   * MCP server started: before the person had typed a word, and whether or not
+   * that session would ever browse. Most never do. That is the memory complaint
+   * this whole subsystem was built to answer, arriving from inside it.
+   *
+   * It works because playwright-mcp is lazy and we are not obliged to be eager.
+   * Measured on the real thing: it advertises all 25 browser tools, answers
+   * `initialize` and `tools/list`, and does not touch its `--cdp-endpoint`
+   * until the first tool call — at which point it fetches `/json/version`. So
+   * the wrapper registers the row without launching anything and hands
+   * playwright THIS url. The first tool call lands here, the browser starts,
+   * and the reply carries Chrome's own `webSocketDebuggerUrl`, which points at
+   * loopback — so playwright talks to Chrome directly from then on and nothing
+   * proxies the actual session.
+   *
+   * A catch-all rather than just `/json/version`, because what a client pokes
+   * at a CDP endpoint is playwright's business and a 404 here reads as a broken
+   * browser.
+   */
+  app.get('/:profile/cdp/*', async (c) => {
+    const profile = profileParam(c.req.param('profile'));
+    if (!profile) return c.json({ error: 'invalid profile name' }, 400);
+    // chromeFor, not deps.chromePath: the dependency is optional and falls back
+    // to discovery, which is how the POST route finds one. Reading the raw dep
+    // here made this the only route that could not find a browser the rest of
+    // the server was already using.
+    const chrome = chromeFor();
+    if (!chrome) return c.json({ error: 'no browser muxpad can own' }, 503);
+
+    const state = await ensureBrowserApp(profile, {
+      db: deps.db,
+      dataDir: deps.dataDir,
+      chromePath: chrome.path,
+      hostEntry: deps.hostEntry,
+      registry: deps.registry,
+      cwd: deps.cwd,
+      ...(deps.apiUrl ? { apiUrl: deps.apiUrl } : {}),
+    });
+
+    // Chrome takes a couple of seconds from cold. The agent's first tool call
+    // waits for it, which is the whole bargain: a small pause the first time
+    // something browses, instead of a browser for every session that never does.
+    const upstream = `${state.cdpUrl}${new URL(c.req.url).pathname.split('/cdp')[1] ?? '/'}`;
+    const deadline = Date.now() + 30_000;
+    for (;;) {
+      try {
+        const res = await fetch(upstream);
+        if (res.ok) {
+          return new Response(await res.text(), {
+            status: 200,
+            headers: { 'content-type': res.headers.get('content-type') ?? 'application/json' },
+          });
+        }
+      } catch {
+        // Not listening yet.
+      }
+      if (Date.now() > deadline) {
+        return c.json({ error: `browser for '${profile}' did not start` }, 504);
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
   });
 
   app.get('/:profile', (c) => {

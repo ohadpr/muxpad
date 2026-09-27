@@ -38,7 +38,7 @@ export function sessionMcpPlan(opts: {
   if (opts.cdpUrl) {
     return {
       args: [`--cdp-endpoint=${opts.cdpUrl}`],
-      why: `attached to this session's muxpad browser at ${opts.cdpUrl}`,
+      why: `this session's muxpad browser, started on first use — ${opts.cdpUrl}`,
     };
   }
   return {
@@ -47,7 +47,20 @@ export function sessionMcpPlan(opts: {
   };
 }
 
-/** Asks muxpad for this session's browser, creating it if needed. */
+/**
+ * Reserves this session's browser WITHOUT starting one.
+ *
+ * Registration is a row in a table; starting is 200 MB of Chrome. This used to
+ * do both, at MCP startup — so every agent session launched a browser before
+ * the person had typed a word, and most sessions never browse. Ninety-seven of
+ * them accumulated on this machine.
+ *
+ * The url returned is muxpad's LAZY endpoint, not Chrome's. Nothing is running
+ * behind it yet; the first tool call that reaches for a browser is what starts
+ * one. Safe because playwright-mcp does not touch the endpoint until then —
+ * measured, not assumed: 25 tools advertised, `initialize` and `tools/list`
+ * answered, endpoint untouched.
+ */
 export async function resolveSessionBrowser(
   env: NodeJS.ProcessEnv,
   fetchImpl: typeof fetch = fetch,
@@ -55,33 +68,26 @@ export async function resolveSessionBrowser(
   const profile = sessionBrowserProfile(env);
   const api = env.MUXPAD_API_URL;
   if (!profile || !api) return null;
+  const base = api.replace(/\/+$/, '');
   try {
-    const res = await fetchImpl(`${api.replace(/\/+$/, '')}/api/browsers`, {
+    const res = await fetchImpl(`${base}/api/browsers`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ profile, ...(env.MUXPAD_TAB_ID ? { tabId: env.MUXPAD_TAB_ID } : {}) }),
+      body: JSON.stringify({
+        profile,
+        ...(env.MUXPAD_TAB_ID ? { tabId: env.MUXPAD_TAB_ID } : {}),
+        // The whole point: a row, not a browser.
+        start: false,
+      }),
     });
     if (!res.ok) return null;
-    const body = (await res.json()) as { cdpUrl?: string };
-    return body.cdpUrl || null;
+    // The reply names Chrome's own port, which is not listening. Hand back the
+    // endpoint that starts it instead.
+    return `${base}/api/browsers/${encodeURIComponent(profile)}/cdp`;
   } catch {
     // Server down, or no browser to be had. The caller falls back.
     return null;
   }
-}
-
-/** Waits for the browser to actually answer before handing it to playwright. */
-async function waitForCdp(cdpUrl: string, fetchImpl: typeof fetch, timeoutMs = 30_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      if ((await fetchImpl(`${cdpUrl}/json/version`)).ok) return true;
-    } catch {
-      // not up yet
-    }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  return false;
 }
 
 export async function main(argv: string[] = process.argv.slice(2)) {
@@ -89,10 +95,10 @@ export async function main(argv: string[] = process.argv.slice(2)) {
     argv.find((a) => a.startsWith('--jar='))?.slice('--jar='.length) ??
     `${process.env.HOME}/.muxpad/browser-profiles/default.cookies.json`;
 
-  let cdpUrl = await resolveSessionBrowser(process.env);
-  // A browser that is registered but not yet listening would hand playwright a
-  // dead endpoint, and playwright-mcp hangs on those rather than failing.
-  if (cdpUrl && !(await waitForCdp(cdpUrl, fetch))) cdpUrl = null;
+  // NOT waited on, deliberately. There is nothing listening yet and there is
+  // not meant to be: the endpoint starts a browser when something first asks it
+  // for one, and waiting here would put back the eager launch this removes.
+  const cdpUrl = await resolveSessionBrowser(process.env);
 
   const plan = sessionMcpPlan({ cdpUrl, jarPath });
   console.error(`[muxpad-browser-mcp] ${plan.why}`);
