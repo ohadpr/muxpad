@@ -14,6 +14,7 @@ import {
   applyMention,
   detectMentionRun,
   hitsFor,
+  interleaveSpawnCards,
   liveSpawnedChildren,
   nextMentionRun,
   nextSearchLimit,
@@ -26,6 +27,7 @@ import {
   renderReportMarker,
   repinPicks,
   runIsSettled,
+  spawnCards,
   spawnedChildren,
   toMentionChats,
   withContentRows,
@@ -672,6 +674,7 @@ describe('toMentionChats — the corpus', () => {
           spawned_by: 't1',
           clock: null,
           last_activity_at: 9_000,
+          created_at: 7_000,
         },
       ] as never,
     },
@@ -718,11 +721,17 @@ describe('toMentionChats — the corpus', () => {
   it('keeps the parent ID too — the card in the parent is asked the other way round', () => {
     expect(toMentionChats(groups).map((c) => c.parentId)).toEqual([undefined, 't1', 't1']);
   });
+
+  it('carries created_at — for a child, that IS the moment of the spawn', () => {
+    // The anchor for the card in the parent's log. Server-side, durable,
+    // cross-device, and already on the row: no new storage was needed for it.
+    expect(toMentionChats(groups).map((c) => c.createdAt)).toEqual([undefined, undefined, 7_000]);
+  });
 });
 
 /**
- * WHAT THIS CHAT SPAWNED — the cards at the foot of its log, and the count above
- * its composer.
+ * WHAT THIS CHAT SPAWNED — the cards IN its log, and the count above its
+ * composer.
  *
  * Derived from the corpus rather than stored: a child chat IS the record that a
  * spawn happened, so a spawn made by the CLI (an agent delegating work) shows up
@@ -749,13 +758,34 @@ describe('spawnedChildren', () => {
     );
   });
 
-  it('is OLDEST FIRST, so a new spawn appends at the bottom of the log', () => {
+  it('is ordered by WHEN IT WAS SPAWNED, so a new spawn comes last', () => {
     const rows = [
-      kid('third', { lastActivityAt: 300 }),
-      kid('first', { lastActivityAt: 100 }),
-      kid('second', { lastActivityAt: 200 }),
+      kid('third', { createdAt: 300 }),
+      kid('first', { createdAt: 100 }),
+      kid('second', { createdAt: 200 }),
     ];
     expect(spawnedChildren(rows, 'p').map((c) => c.tabName)).toEqual(['first', 'second', 'third']);
+  });
+
+  it('does NOT reorder when a child says something — a card is anchored to the spawn', () => {
+    // The whole point of the amendment. The cards are transcript entries now, so
+    // an entry that walks up and down the log every time the busiest child
+    // speaks is a message that moves while you read it. Ordering on
+    // `lastActivityAt` — which is what this did while the cards were pinned
+    // furniture — puts `first` last here.
+    const rows = [
+      kid('first', { createdAt: 100, lastActivityAt: 9_000 }),
+      kid('second', { createdAt: 200, lastActivityAt: 150 }),
+    ];
+    expect(spawnedChildren(rows, 'p').map((c) => c.tabName)).toEqual(['first', 'second']);
+  });
+
+  it('puts a row with no creation time at the FRONT, not at "now"', () => {
+    // Unreachable against a real server (`created_at` is non-optional on the
+    // row); what matters is that the fallback is a STABLE place rather than one
+    // that moves on every render.
+    const rows = [kid('dated', { createdAt: 100 }), kid('undated')];
+    expect(spawnedChildren(rows, 'p').map((c) => c.tabName)).toEqual(['undated', 'dated']);
   });
 
   it('orders TOTALLY, so two rows cannot swap places between renders', () => {
@@ -774,11 +804,11 @@ describe('spawnedChildren', () => {
           tabId: `d${i}`,
           parentId: 'p',
           done: true,
-          lastActivityAt: i,
+          createdAt: i,
         }),
       ),
       ...Array.from({ length: 3 }, (_, i) =>
-        chat({ tabName: `live-${i}`, tabId: `l${i}`, parentId: 'p', lastActivityAt: 100 + i }),
+        chat({ tabName: `live-${i}`, tabId: `l${i}`, parentId: 'p', createdAt: 100 + i }),
       ),
     ];
     const kept = spawnedChildren(rows, 'p', 4).map((c) => c.tabId);
@@ -788,7 +818,7 @@ describe('spawnedChildren', () => {
 
   it('keeps every live child even when they alone exceed the cap', () => {
     const rows = Array.from({ length: 5 }, (_, i) =>
-      chat({ tabName: `live-${i}`, tabId: `l${i}`, parentId: 'p', lastActivityAt: i }),
+      chat({ tabName: `live-${i}`, tabId: `l${i}`, parentId: 'p', createdAt: i }),
     );
     expect(spawnedChildren(rows, 'p', 2)).toHaveLength(5);
   });
@@ -799,5 +829,161 @@ describe('spawnedChildren', () => {
       kid('delivered', { tabId: 'd', done: true, doneReason: 'delivered' }),
     ];
     expect(liveSpawnedChildren(rows, 'p').map((c) => c.tabId)).toEqual(['w']);
+  });
+});
+
+/**
+ * THE CARDS AND THE COUNT CANNOT DISAGREE.
+ *
+ * `spawnCards` is what the conversation draws; `liveSpawnedChildren` is the
+ * number above the composer and the status cell's roster. They were two lists
+ * once, which is how the log came to show six finished agents while the roster
+ * said nothing was running. The cards now KEEP the finished ones — a card is an
+ * entry at the moment of the spawn, not furniture that has to justify itself
+ * forever — so the agreement that matters is narrower and must be stated: the
+ * cards that say WORKING are exactly the children the roster counts.
+ */
+describe('spawnCards', () => {
+  const rows = [
+    chat({ tabName: 'first', tabId: 'a', parentId: 'p', createdAt: 100 }),
+    chat({
+      tabName: 'second',
+      tabId: 'b',
+      parentId: 'p',
+      createdAt: 200,
+      done: true,
+      doneReason: 'delivered',
+    }),
+    chat({ tabName: 'third', tabId: 'c', parentId: 'p', createdAt: 300 }),
+  ];
+
+  it('carries the spawn MOMENT with each card — that is what places it', () => {
+    expect(spawnCards(rows, 'p')).toEqual([
+      { chat: rows[0], at: 100 },
+      { chat: rows[1], at: 200 },
+      { chat: rows[2], at: 300 },
+    ]);
+  });
+
+  it('KEEPS a delivered child, which the foot-of-log list could not', () => {
+    // Pinned above the composer this was clutter forever; in the log it is the
+    // record that this chat started something and it finished, and it scrolls
+    // away like any other message.
+    expect(spawnCards(rows, 'p').map((c) => c.chat.tabId)).toContain('b');
+  });
+
+  it('agrees with the roster about what is RUNNING, exactly', () => {
+    const working = spawnCards(rows, 'p')
+      .filter((c) => !c.chat.done)
+      .map((c) => c.chat.tabId);
+    expect(working).toEqual(liveSpawnedChildren(rows, 'p').map((c) => c.tabId));
+  });
+
+  it('agrees with the roster even past the cap, where cards are shed', () => {
+    // The cap sheds FINISHED cards only, so no amount of shedding can make the
+    // card list and the running count disagree.
+    const many = [
+      ...Array.from({ length: 30 }, (_, i) =>
+        chat({ tabName: `d${i}`, tabId: `d${i}`, parentId: 'p', done: true, createdAt: i }),
+      ),
+      ...Array.from({ length: 20 }, (_, i) =>
+        chat({ tabName: `l${i}`, tabId: `l${i}`, parentId: 'p', createdAt: 1_000 + i }),
+      ),
+    ];
+    const working = spawnCards(many, 'p')
+      .filter((c) => !c.chat.done)
+      .map((c) => c.chat.tabId);
+    expect(working).toEqual(liveSpawnedChildren(many, 'p').map((c) => c.tabId));
+    expect(working).toHaveLength(20);
+  });
+});
+
+/**
+ * WHERE A CARD SITS IN THE LOG.
+ *
+ * The user's spec: "when you launch them have that UI component in the chat as an
+ * indication that u launched … don't glue it to the bottom." A spawn is not a
+ * transcript line — the tool call that made the child is, but the child's row is
+ * the record — so placement is a join on TIME between the transcript's entries
+ * and the children's `created_at`. This is that join, and it is pure so the
+ * ordering can be tested against real timestamps rather than by appending to a
+ * turn and hoping.
+ */
+describe('interleaveSpawnCards', () => {
+  const card = (id: string, at: number) => ({ chat: chat({ tabName: id, tabId: id }), at });
+  const shape = (out: ReturnType<typeof interleaveSpawnCards<string>>) =>
+    out.map((x) => (x.kind === 'card' ? `[${x.card.chat.tabId}]` : x.node));
+
+  const entries = [
+    { at: 100, node: 'msg-1' },
+    { at: 200, node: 'msg-2' },
+    { at: 300, node: 'msg-3' },
+  ];
+
+  it('places a card between the messages that bracket the spawn', () => {
+    expect(shape(interleaveSpawnCards(entries, [card('kid', 250)]))).toEqual([
+      'msg-1',
+      'msg-2',
+      '[kid]',
+      'msg-3',
+    ]);
+  });
+
+  it('a spawn that just happened lands at the bottom — and only there', () => {
+    expect(shape(interleaveSpawnCards(entries, [card('kid', 9_000)]))).toEqual([
+      'msg-1',
+      'msg-2',
+      'msg-3',
+      '[kid]',
+    ]);
+  });
+
+  it('a spawn older than the loaded history lands at the top', () => {
+    // Its turn is further back than the window reaches, and the top is where
+    // "further back" is. Loading older messages moves it into its own slot —
+    // which is the same join, not a card drifting.
+    expect(shape(interleaveSpawnCards(entries, [card('kid', 1)]))).toEqual([
+      '[kid]',
+      'msg-1',
+      'msg-2',
+      'msg-3',
+    ]);
+  });
+
+  it('keeps several spawns in spawn order, each in its own slot', () => {
+    const out = interleaveSpawnCards(entries, [card('a', 150), card('b', 160), card('c', 250)]);
+    expect(shape(out)).toEqual(['msg-1', '[a]', '[b]', 'msg-2', '[c]', 'msg-3']);
+  });
+
+  it('does not move a card when the child changes — only when the LOG does', () => {
+    // The indicator has to keep updating in place after the card has scrolled
+    // up: same `at`, new `done`, same slot.
+    const working = card('kid', 250);
+    const finished = { ...working, chat: { ...working.chat, done: true } };
+    const at = (c: typeof working) => shape(interleaveSpawnCards(entries, [c])).indexOf('[kid]');
+    expect(at(finished)).toBe(at(working));
+  });
+
+  it('is not placed by an entry with no timestamp — that is a guess', () => {
+    // A transcript line with no parseable time cannot say whether the spawn came
+    // before or after it, and guessing would put the card somewhere else on the
+    // next reload.
+    const mixed = [
+      { at: null, node: 'undated' },
+      { at: 300, node: 'msg-3' },
+    ];
+    expect(shape(interleaveSpawnCards(mixed, [card('kid', 250)]))).toEqual([
+      'undated',
+      '[kid]',
+      'msg-3',
+    ]);
+  });
+
+  it('is the entries themselves when there is nothing spawned', () => {
+    expect(shape(interleaveSpawnCards(entries, []))).toEqual(['msg-1', 'msg-2', 'msg-3']);
+  });
+
+  it('draws every card even when there are no entries at all', () => {
+    expect(shape(interleaveSpawnCards([], [card('a', 1), card('b', 2)]))).toEqual(['[a]', '[b]']);
   });
 });
