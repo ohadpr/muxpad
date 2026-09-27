@@ -183,3 +183,35 @@ describe('the wheel over HTTP', () => {
     expect(((await res.json()) as { wheel: unknown }).wheel).toBeNull();
   });
 });
+
+describe('asking for a person', () => {
+  it('raises the flag while the agent KEEPS the wheel', async () => {
+    await ensure();
+    await post('/api/browsers/shopping/wheel/claim', { by: 'chat-1' });
+    const res = await post('/api/browsers/shopping/needs-you', { reason: 'log in to Amazon' });
+    const body = (await res.json()) as { needsYou: { reason: string }; wheel: { holder: string } };
+    expect(body.needsYou.reason).toBe('log in to Amazon');
+    expect(body.wheel.holder).toBe('agent');
+  });
+
+  it('is LOWERED by a person taking the wheel, with no separate ack', async () => {
+    // An ack nobody presses is how a card ends up shouting after the thing was
+    // already dealt with.
+    await ensure();
+    await post('/api/browsers/shopping/needs-you', { reason: 'captcha' });
+    const res = await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
+    expect(((await res.json()) as { needsYou: unknown }).needsYou).toBeNull();
+  });
+
+  it('can be withdrawn when the agent gets past it alone', async () => {
+    await ensure();
+    await post('/api/browsers/shopping/needs-you', { reason: 'captcha' });
+    const res = await del('/api/browsers/shopping/needs-you');
+    expect(((await res.json()) as { needsYou: unknown }).needsYou).toBeNull();
+  });
+
+  it('400s an ask with no reason — a card that says nothing is not actionable', async () => {
+    await ensure();
+    expect((await post('/api/browsers/shopping/needs-you', {})).status).toBe(400);
+  });
+});

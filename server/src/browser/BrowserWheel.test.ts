@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { BrowserWheel } from './BrowserWheel.js';
+import { BrowserAttention, BrowserWheel } from './BrowserWheel.js';
 
 /**
  * Who is driving.
@@ -161,5 +161,40 @@ describe('durability', () => {
     );
     expect(wheel.holder('shopping')).toBeNull();
     expect(wheel.take('shopping', { holder: 'agent', by: 'chat-1' }).granted).toBe(true);
+  });
+});
+
+describe('asking for a person', () => {
+  it('is SEPARATE from the wheel — the agent keeps driving while it waits', () => {
+    // If asking for help released the wheel, the browser would sit unclaimed and
+    // another agent could wander in and click through the very page somebody is
+    // being summoned to.
+    const attention = new BrowserAttention(db, () => now);
+    wheel.take('shopping', { holder: 'agent', by: 'chat-1' });
+    attention.raise('shopping', 'log in to Amazon');
+    expect(wheel.holder('shopping')?.holder).toBe('agent');
+    expect(attention.get('shopping')).toMatchObject({ reason: 'log in to Amazon' });
+  });
+
+  it('is cleared, and stays cleared', () => {
+    const attention = new BrowserAttention(db, () => now);
+    attention.raise('shopping', 'captcha');
+    attention.clear('shopping');
+    expect(attention.get('shopping')).toBeNull();
+  });
+
+  it('keeps profiles apart', () => {
+    const attention = new BrowserAttention(db, () => now);
+    attention.raise('shopping', 'captcha');
+    expect(attention.get('research')).toBeNull();
+  });
+
+  it('treats a corrupt or empty row as nobody asking', () => {
+    const attention = new BrowserAttention(db, () => now);
+    db.prepare('INSERT INTO globals (key, value) VALUES (?, ?)').run(
+      'browser_needs_you_shopping',
+      'not json',
+    );
+    expect(attention.get('shopping')).toBeNull();
   });
 });

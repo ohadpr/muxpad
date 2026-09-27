@@ -176,3 +176,57 @@ export class BrowserWheel {
     return true;
   }
 }
+
+/**
+ * "I need a person here."
+ *
+ * SEPARATE FROM THE WHEEL, and that separation is the point. An agent that hits
+ * a login wall still HOLDS the wheel — it has not handed anything over, it is
+ * stuck. If asking for help were modelled as releasing the wheel, the browser
+ * would sit unclaimed and another agent could wander in and start clicking
+ * through the very page a person is being summoned to.
+ *
+ * So this is a flag beside the lease: the agent keeps the wheel and raises a
+ * hand. Taking the wheel is what lowers it — not a separate acknowledgement,
+ * because a person who has arrived and is driving has self-evidently seen it,
+ * and an "ack" nobody presses is how a card ends up shouting forever.
+ */
+export interface NeedsYou {
+  reason: string;
+  at: number;
+}
+
+const NEEDS_PREFIX = 'browser_needs_you_';
+
+export class BrowserAttention {
+  private readonly globals: GlobalsStore;
+
+  constructor(
+    db: Database.Database,
+    private readonly now: () => number = () => Date.now(),
+  ) {
+    this.globals = new GlobalsStore(db);
+  }
+
+  get(profile: string): NeedsYou | null {
+    const raw = this.globals.get(NEEDS_PREFIX + normalizeProfileName(profile));
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as NeedsYou;
+      return parsed?.reason ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** An agent asks for a person, and says what for. */
+  raise(profile: string, reason: string): NeedsYou {
+    const asked: NeedsYou = { reason, at: this.now() };
+    this.globals.set(NEEDS_PREFIX + normalizeProfileName(profile), JSON.stringify(asked));
+    return asked;
+  }
+
+  clear(profile: string): void {
+    this.globals.set(NEEDS_PREFIX + normalizeProfileName(profile), '');
+  }
+}

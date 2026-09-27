@@ -1,21 +1,29 @@
 /*
  * The browser card.
  *
- * Sits in a conversation next to spawn cards, so it borrows their weight and
- * rhythm rather than inventing a second visual language. The one thing it does
- * that they do not is go LOUD — and only in the blocked state, because a card
- * that is always shouting is a card nobody reads.
+ * Sits on the CHAT surface, so it uses the `--chat-*` variables rather than the
+ * chrome ones. That is not a detail: the first version hard-coded dark hex
+ * fallbacks and rendered as a black slab in a light-themed muxpad, which is
+ * exactly what a card that "works on my machine" looks like. Every colour below
+ * is a theme variable, and the fallbacks are only for a stylesheet loaded
+ * without them.
+ *
+ * The one thing it does that the other chat cards do not is go LOUD — and only
+ * in the blocked state, because a card that always shouts is a card nobody
+ * reads.
  */
 
 .browser-card {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 11px;
-  margin: 6px 0;
-  border: 1px solid var(--border, #2a2a36);
+  padding: 8px 11px;
+  margin: 6px 10px;
+  border: 1px solid var(--chat-border, #d6d6e0);
   border-radius: 10px;
-  background: var(--surface-raised, #16161d);
+  background: var(--chat-panel, #fff);
+  color: var(--chat-fg, #1c1c22);
+  font-family: var(--chrome-font, inherit);
   font-size: 13px;
   line-height: 1.35;
 }
@@ -29,8 +37,8 @@
   border-radius: 50%;
   font-size: 12px;
   font-weight: 700;
-  background: #23232e;
-  color: #8b8b9c;
+  background: color-mix(in srgb, var(--chat-fg, #1c1c22) 8%, transparent);
+  color: var(--chat-dim, #6b6b7a);
 }
 
 .browser-card__body {
@@ -39,7 +47,7 @@
 }
 
 .browser-card__title {
-  color: var(--text, #e4e4ec);
+  color: var(--chat-fg, #1c1c22);
   font-weight: 560;
   white-space: nowrap;
   overflow: hidden;
@@ -47,7 +55,7 @@
 }
 
 .browser-card__detail {
-  color: var(--text-dim, #8b8b9c);
+  color: var(--chat-dim, #6b6b7a);
   font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
@@ -56,7 +64,7 @@
 
 .browser-card__countdown {
   flex: none;
-  color: var(--text-dim, #8b8b9c);
+  color: var(--chat-faint, #8b8b9c);
   font-size: 11px;
   /* Tabular so a countdown does not jitter the layout every second. */
   font-variant-numeric: tabular-nums;
@@ -66,41 +74,48 @@
   flex: none;
   padding: 5px 11px;
   border-radius: 7px;
-  border: 1px solid var(--border, #33333f);
+  border: 1px solid var(--chat-border-strong, #c2c2d0);
   background: transparent;
-  color: var(--text, #d6d6e0);
+  color: var(--chat-fg, #1c1c22);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
 }
 
 .browser-card__action:hover {
-  background: #23232e;
+  background: color-mix(in srgb, var(--chat-fg, #1c1c22) 7%, transparent);
 }
 
+.browser-card__action:focus-visible {
+  outline: 1px solid var(--chat-accent, #5b5bd6);
+  outline-offset: 1px;
+}
+
+/* The one call to action in the whole component. */
 .browser-card__action[data-urgent="true"] {
-  background: #b4442e;
-  border-color: #c9563f;
+  background: var(--chat-danger, #d2453f);
+  border-color: var(--chat-danger, #d2453f);
   color: #fff;
   font-weight: 560;
 }
 
 .browser-card__action[data-urgent="true"]:hover {
-  background: #c9563f;
+  background: color-mix(in srgb, var(--chat-danger, #d2453f) 85%, #000);
 }
 
 /* The agent is driving: present, not attention-seeking. */
 .browser-card--working .browser-card__glyph {
-  color: #6ea8ff;
+  color: var(--chat-accent, #5b5bd6);
+  background: color-mix(in srgb, var(--chat-accent, #5b5bd6) 14%, transparent);
 }
 
 /* You hold the wheel: a quiet confirmation, since you already know. */
 .browser-card--yours {
-  border-color: #2e5c3c;
+  border-color: color-mix(in srgb, var(--chat-accent, #5b5bd6) 45%, transparent);
 }
 .browser-card--yours .browser-card__glyph {
-  background: #16351f;
-  color: #5fd98a;
+  color: var(--chat-accent, #5b5bd6);
+  background: color-mix(in srgb, var(--chat-accent, #5b5bd6) 18%, transparent);
 }
 
 /*
@@ -108,15 +123,15 @@
  * has probably been true for a while before you looked.
  */
 .browser-card--blocked {
-  border-color: #8a3a28;
-  background: #24140f;
+  border-color: var(--chat-danger, #d2453f);
+  background: color-mix(in srgb, var(--chat-danger, #d2453f) 9%, var(--chat-panel, #fff));
 }
 .browser-card--blocked .browser-card__glyph {
-  background: #b4442e;
+  background: var(--chat-danger, #d2453f);
   color: #fff;
 }
 .browser-card--blocked .browser-card__title {
-  color: #ffd9cf;
+  color: var(--chat-danger, #d2453f);
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -128,9 +143,9 @@
 @keyframes browser-card-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(180, 68, 46, 0.55);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--chat-danger, #d2453f) 55%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 5px rgba(180, 68, 46, 0);
+    box-shadow: 0 0 0 5px transparent;
   }
 }
