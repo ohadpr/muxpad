@@ -81,7 +81,7 @@ export function browserHostCommand(opts: {
     `--port=${opts.port}`,
     `--data-dir=${JSON.stringify(opts.dataDir)}`,
     `--chrome=${JSON.stringify(opts.chromePath)}`,
-    `--jar=${JSON.stringify(browserJarPath(opts.dataDir, opts.profile))}`,
+    `--jar=${JSON.stringify(browserJarPath(opts.dataDir))}`,
   ].join(' ');
 }
 

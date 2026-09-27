@@ -29,9 +29,7 @@ beforeEach(() => {
 describe('recording', () => {
   it('stamps an event with when it happened and where', () => {
     events.record('shopping', { kind: 'opened', tabId: 'tab-1' });
-    expect(events.list('shopping')).toEqual([
-      { kind: 'opened', tabId: 'tab-1', at: 1_000_000 },
-    ]);
+    expect(events.list('shopping')).toEqual([{ kind: 'opened', tabId: 'tab-1', at: 1_000_000 }]);
   });
 
   it('keeps a reason, which is the whole content of a summons', () => {

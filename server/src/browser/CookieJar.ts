@@ -87,3 +87,52 @@ export function cdpCookiesToStorageState(cookies: readonly CdpCookie[]): Storage
     origins: [],
   };
 }
+
+/** A cookie shaped for CDP's `Storage.setCookies`. */
+export interface CdpSetCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite: 'Strict' | 'Lax' | 'None';
+  expires?: number;
+}
+
+/**
+ * Pours the jar into a browser muxpad has just launched.
+ *
+ * The opposite direction to {@link cdpCookiesToStorageState}, and the round trip
+ * has to survive: a login that exports cleanly and imports as garbage is worse
+ * than no jar at all, because the browser then looks warm and behaves cold.
+ *
+ * Two asymmetries with the export, both load-bearing:
+ *
+ *   · a SESSION cookie is `-1` in a storage state and is expressed to CDP by
+ *     OMITTING expires — sending -1 sets a date in 1969 and the cookie is dead
+ *     on arrival;
+ *   · an already-expired cookie is dropped rather than sent, so the seeded
+ *     count is not a lie about how warm the browser really is.
+ */
+export function storageStateToCdpCookies(state: StorageState): CdpSetCookie[] {
+  const cookies = Array.isArray(state?.cookies) ? state.cookies : [];
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const out: CdpSetCookie[] = [];
+  for (const c of cookies) {
+    if (!c?.name || !c.domain) continue;
+    const session = typeof c.expires !== 'number' || c.expires <= 0;
+    if (!session && (c.expires as number) <= nowSeconds) continue;
+    out.push({
+      name: c.name,
+      value: c.value ?? '',
+      domain: c.domain,
+      path: c.path || '/',
+      httpOnly: Boolean(c.httpOnly),
+      secure: Boolean(c.secure),
+      sameSite: c.sameSite ?? 'Lax',
+      ...(session ? {} : { expires: c.expires as number }),
+    });
+  }
+  return out;
+}

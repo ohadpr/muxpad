@@ -156,16 +156,16 @@ describe('port allocation', () => {
 });
 
 describe('the shared cookie jar', () => {
-  it('sits BESIDE the profile, not inside it', () => {
-    // The profile directory is Chrome's and is locked while it runs; this file
-    // is read by every agent that starts warm, so it cannot live behind that.
-    expect(browserJarPath('/data', 'shopping')).toBe(
-      '/data/browser-profiles/shopping.cookies.json',
-    );
-    expect(browserJarPath('/data', 'shopping')).not.toContain('/shopping/');
+  it('is ONE file for the machine, not one per profile', () => {
+    // The jar is the contact point between the browser a person logs into and
+    // the throwaway browsers agents get. Per-profile would give every session
+    // its own empty jar — a cold browser with extra steps.
+    expect(browserJarPath('/data')).toBe('/data/browser-profiles/shared.cookies.json');
   });
 
-  it('normalizes, so one profile has one jar', () => {
-    expect(browserJarPath('/data', 'Shopping')).toBe(browserJarPath('/data', 'shopping'));
+  it('sits BESIDE the profiles, not inside one', () => {
+    // A profile directory is Chrome's and is locked while it runs; this file is
+    // read by other processes.
+    expect(browserJarPath('/data')).not.toMatch(/browser-profiles\/[^/]+\//);
   });
 });

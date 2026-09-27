@@ -222,12 +222,17 @@ export function pickBrowserPort(profile: string, taken: ReadonlySet<number>): nu
 }
 
 /**
- * Where a profile's shared cookie jar is written.
+ * The ONE shared cookie jar for this machine.
  *
- * Beside the profile rather than inside it: the profile directory belongs to
- * Chrome and is locked while it runs, and this file is read by OTHER processes
- * — every agent that starts warm — so it must not live behind that lock.
+ * Deliberately not per-profile. The jar is the point of contact between the
+ * browser a PERSON logs into and the throwaway browsers agents get: one file
+ * that the human's browser exports to and every session browser seeds from. A
+ * jar per profile would give each session its own empty one, which is a cold
+ * browser with extra steps — the exact failure this was built to end.
+ *
+ * Beside the profiles rather than inside one: a profile directory belongs to
+ * Chrome and is locked while it runs, and this file is read by other processes.
  */
-export function browserJarPath(dataDir: string, profile: string): string {
-  return `${dataDir.replace(/\/+$/, '')}/${BROWSER_PROFILES_DIRNAME}/${normalizeProfileName(profile)}.cookies.json`;
+export function browserJarPath(dataDir: string): string {
+  return `${dataDir.replace(/\/+$/, '')}/${BROWSER_PROFILES_DIRNAME}/shared.cookies.json`;
 }

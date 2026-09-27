@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { type IncomingMessage, type ServerResponse, createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,7 +8,11 @@ import { type KeyInput, type MouseInput, keyEvents, mouseEvent } from '../Browse
 import { browserLaunchSpec } from '../BrowserLaunch.js';
 import { browserViewerPort } from '../BrowserProfile.js';
 import { CdpConnection } from '../CdpConnection.js';
-import { type CdpCookie, cdpCookiesToStorageState } from '../CookieJar.js';
+import {
+  type CdpCookie,
+  cdpCookiesToStorageState,
+  storageStateToCdpCookies,
+} from '../CookieJar.js';
 import { clearStaleProfileLock } from '../ProfileLock.js';
 import { ScreencastSession } from '../ScreencastSession.js';
 import { VIEWER_HTML } from './viewer.js';
@@ -152,6 +156,21 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
       if (viewer.readyState === 1) viewer.send(JSON.stringify({ t: 'fileChooser' }));
     }
   }) as never);
+  // SEED FROM THE SHARED JAR. A browser muxpad launches for an agent starts
+  // with the logins a PERSON has already performed — that is the whole point of
+  // the jar, and without it a per-session browser is just a cold one with extra
+  // steps. Best-effort: a missing or unreadable jar is the ordinary first-run
+  // case, not a reason to refuse to start.
+  if (jarPath && existsSync(jarPath)) {
+    try {
+      const cookies = storageStateToCdpCookies(JSON.parse(readFileSync(jarPath, 'utf8')));
+      if (cookies.length) await cdp.send('Storage.setCookies', { cookies });
+      log(`[host] seeded ${cookies.length} cookies from the shared jar`);
+    } catch (err) {
+      log(`[host] could not seed cookies: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   await cdp.send('Page.setInterceptFileChooserDialog', { enabled: true });
   await screencast.start();
 
