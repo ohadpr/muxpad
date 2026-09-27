@@ -54,7 +54,18 @@ export class CdpConnection implements CdpTransport {
   private socket: WebSocket | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
-  private readonly handlers = new Map<string, (params: never) => void>();
+  /**
+   * MANY handlers per event, not one.
+   *
+   * A Map<event, handler> looks fine until a second subscriber for the same
+   * event silently REPLACES the first. The concrete near-miss: ScreencastSession
+   * listens for Page.frameNavigated to re-arm the stream, and the host wants the
+   * same event to track the current URL — with one slot, adding the second
+   * listener would have quietly disabled re-arming, and the only symptom is a
+   * frozen picture after a navigation, which is the exact bug the re-arm exists
+   * to fix.
+   */
+  private readonly handlers = new Map<string, Array<(params: never) => void>>();
   /** Flat session for the page we attached to. Null until {@link attachToPage}. */
   private sessionId: string | null = null;
 
@@ -103,7 +114,9 @@ export class CdpConnection implements CdpTransport {
   }
 
   on(event: string, handler: (params: never) => void): void {
-    this.handlers.set(event, handler);
+    const existing = this.handlers.get(event);
+    if (existing) existing.push(handler);
+    else this.handlers.set(event, [handler]);
   }
 
   close(): void {
@@ -157,8 +170,9 @@ export class CdpConnection implements CdpTransport {
     }
 
     if (message.method) {
-      const handler = this.handlers.get(message.method);
-      if (handler) (handler as (p: unknown) => void)(message.params);
+      for (const handler of this.handlers.get(message.method) ?? []) {
+        (handler as (p: unknown) => void)(message.params);
+      }
     }
   }
 }
