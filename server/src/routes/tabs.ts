@@ -17,7 +17,6 @@ import { type PtydCache, cronsByTab, decoratePane, decorateTab } from '../ptyd-c
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { randomWorkspaceName } from '../random-name.js';
 import { safeCwd } from '../safe-cwd.js';
-import { spawnBrief } from '../spawn-brief.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
@@ -177,36 +176,11 @@ export function tabsRoutes(deps: {
       // row, bare or not. A bare row's advantage is that it has no headline
       // either, so its first accepted label is by definition a change.)
     });
-    /**
-     * …AND THE CONTRACT THAT ITS ANSWER COMES BACK.
-     *
-     * A spawn is a DIRECTION — another chat's agent asked for work and is waiting
-     * on the answer — and it was the one kind of direction never told to report.
-     * The worker finished, retired as `delivered`, and its parent conversation
-     * held not one sentence about what it found. See spawn-brief.ts for the
-     * evidence and for why this is composed here and delivered by the caller.
-     *
-     * Rides the CREATE response for the same reason `workspace_id` does: the
-     * spawner asks for a tab and then sends the first message, so this is the one
-     * moment both halves are known to one caller. Absent (not empty) when there
-     * is nothing to report to — no parent, or a parent with no pane that could
-     * accept a send — so a client can tell "no contract" from "a contract that
-     * says nothing".
-     */
-    const brief =
-      spawned_by && body.bootstrap === 'agent'
-        ? spawnBrief(deps.db, {
-            parentTabId: spawned_by,
-            ...(body.spawned_by_pane ? { spawnedByPane: body.spawned_by_pane } : {}),
-            childTabId: created.tab.id,
-            ...(created.pane ? { childPane: created.pane.id } : {}),
-          })
-        : null;
     // `workspace_id` rides the CREATE response (and only this one) because the
     // caller no longer decides it: a spawn is told where it landed. The CLI
     // needs it to print a URL, and a launcher that wants to look at its worker
     // should not have to guess the answer it just delegated.
-    return c.json({ ...created.tab, workspace_id, ...(brief ? { spawn_brief: brief } : {}) }, 201);
+    return c.json({ ...created.tab, workspace_id }, 201);
   });
 
   /**

@@ -6,7 +6,6 @@ import type { MuxpadEvent } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../events.js';
-import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { openDb } from '../store/db.js';
 import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
@@ -435,62 +434,6 @@ describe('tabs routes', () => {
     const tab = (await res.json()) as { id: string; icon?: string };
     expect(tab.icon).toBeUndefined();
     expect(new TabStore(db).getById(tab.id)?.icon).toBeUndefined();
-  });
-
-  /**
-   * A SPAWN CARRIES THE CONTRACT THAT ITS ANSWER COMES BACK.
-   *
-   * "I just got a push notification about A2 completing their work and I come
-   * here and I can't find anything about that subject." The `@`-directed flow has
-   * always handed the receiving agent an instruction to report back, and the
-   * report renders in the asking chat as a card with the agent's own prose in it.
-   * A spawned worker — which is nearly every child that exists — was told none of
-   * it. This is the create response growing the missing half; the spawner
-   * prepends it to the first message it was already sending.
-   *
-   * What the briefing SAYS is tested where it is built (shared/chat-direct) and
-   * where the pane is chosen (spawn-brief). This is the door: does it come out of
-   * the real route, and is it absent when there is nobody to report to.
-   */
-  describe('spawn_brief on the create response', () => {
-    const spawn = async (extra: object) =>
-      (await (await postTab({ name: 'kid', bootstrap: 'agent', ...extra })).json()) as {
-        id: string;
-        spawn_brief?: string;
-      };
-
-    it('rides the response for a spawn with a parent that can be reported to', async () => {
-      const parent = await spawn({ name: 'Sidebar work' });
-      const parentPane = new PaneStore(db).listByTab(parent.id)[0]?.id;
-      const child = await spawn({ spawned_by_pane: parentPane });
-      expect(child.spawn_brief).toContain('<muxpad-direct');
-      expect(child.spawn_brief).toContain(`muxpad agent send '${parentPane}'`);
-      // Addressed BY ID to the child, so the answer can be matched to the card
-      // that announced the spawn without anything storing a mapping.
-      expect(child.spawn_brief).toContain(`id="${child.id}"`);
-    });
-
-    it('is ABSENT for an ordinary chat nobody spawned', async () => {
-      // Absent rather than empty: a client can tell "no contract" from "a
-      // contract that says nothing".
-      const root = await spawn({});
-      expect('spawn_brief' in root).toBe(false);
-    });
-
-    it('is absent when the parent is gone, which is a spawn that still succeeds', async () => {
-      const orphan = await spawn({ spawned_by: 'no-such-tab' });
-      expect('spawn_brief' in orphan).toBe(false);
-    });
-
-    it('is absent for a NON-agent bootstrap — a shell has no agent to brief', async () => {
-      const parent = await spawn({ name: 'Sidebar work' });
-      const res = await postTab({
-        name: 'shell',
-        bootstrap: 'shell',
-        spawned_by: parent.id,
-      });
-      expect('spawn_brief' in ((await res.json()) as object)).toBe(false);
-    });
   });
 
   // ── event coverage: the manual unread mark, and the mutating GET ─────────

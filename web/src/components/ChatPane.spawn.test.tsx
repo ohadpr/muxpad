@@ -169,10 +169,6 @@ describe('the spawn cards and the roster read ONE list', () => {
     // The indicator is read off the corpus at render time — not latched at spawn
     // — which is what keeps it honest after the card has scrolled up.
     expect(BODY).toContain('working={!x.card.chat.done}');
-    // …and "its answer is in this log" is read off the TRANSCRIPT, by the same
-    // id the briefing correlates on (the child's tab id). Not stored anywhere:
-    // `reportedIds` is the report markers found in the messages.
-    expect(BODY).toContain("reportedIds.has(x.card.chat.tabId)\n                  ? 'reported'");
   });
 
   it('cannot park the cards at the foot of the log again', () => {

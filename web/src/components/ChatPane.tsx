@@ -4436,23 +4436,7 @@ export function ChatPane({
               // is live-patched from the server's own `tab.updated`
               // (lib/all-tabs), so nothing here polls and nothing caches a state.
               working={!x.card.chat.done}
-              // …and "reported" OUTRANKS "delivered", because they are different
-              // claims and only one of them is about this conversation. `done`
-              // means the worker stopped; `reported` means its answer is IN THIS
-              // LOG, a few entries down, in its own card.
-              //
-              // Read off the transcript, not stored: a spawn's report carries the
-              // CHILD'S TAB ID as its correlation id (shared/chat-direct
-              // `renderSpawnBriefing`), which is the handle this card is already
-              // made of — so `reportedIds`, which is just the report markers found
-              // in the messages, answers it with no ledger on either side.
-              state={
-                reportedIds.has(x.card.chat.tabId)
-                  ? 'reported'
-                  : x.card.chat.done
-                    ? (x.card.chat.doneReason ?? 'done')
-                    : undefined
-              }
+              state={x.card.chat.done ? (x.card.chat.doneReason ?? 'done') : undefined}
               onOpen={() => openChat(x.card.chat)}
             />
           ),
@@ -4490,7 +4474,6 @@ export function ChatPane({
     // makes the indicator update in place instead of re-parsing the log.
     spawnedCards,
     openChat,
-    reportedIds,
   ]);
 
   // The agent is working when: we're driving a turn (`sending`), tokens are
