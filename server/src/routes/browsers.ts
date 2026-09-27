@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { type BrowserAppState, ensureBrowserApp, listBrowserApps } from '../browser/BrowserApps.js';
 import { type BrowserEvent, BrowserEvents } from '../browser/BrowserEvents.js';
+import { BrowserOwner } from '../browser/BrowserOwner.js';
 import { normalizeProfileName } from '../browser/BrowserProfile.js';
 import { browserViewerLink, parseBrowserProxyPath } from '../browser/BrowserProxy.js';
 import {
@@ -170,11 +171,14 @@ export function browsersRoutes(deps: {
   chromePath?: () => { path: string; source: string } | null;
   /** This machine's tailnet host, so the link works from a phone. */
   tailnetHost?: () => string | null;
+  /** This server's loopback address, so a host can announce its first page. */
+  apiUrl?: string;
 }) {
   const app = new Hono();
   const wheel = new BrowserWheel(deps.db);
   const attention = new BrowserAttention(deps.db);
   const events = new BrowserEvents(deps.db);
+  const owner = new BrowserOwner(deps.db);
   const chromeFor = deps.chromePath ?? (() => findChrome());
 
   const view = (state: BrowserAppState): BrowserView => ({
@@ -238,18 +242,38 @@ export function browsersRoutes(deps: {
       hostEntry: deps.hostEntry,
       registry: deps.registry,
       cwd: deps.cwd,
+      ...(deps.apiUrl ? { apiUrl: deps.apiUrl } : {}),
     });
-    // Only when it actually STARTS. ensureBrowserApp says 'started' exactly when
-    // it launched one and 'running' when it was already up — asking twice is
-    // idempotent, and an "opened" card per poll would bury the conversation it
-    // is supposed to sit inside.
-    if (state.state === 'started') {
-      events.record(profile, {
-        kind: 'opened',
-        ...(parsed.data.tabId ? { tabId: parsed.data.tabId } : {}),
-      });
-    }
+    // NOT the moment for a card. This runs when the agent's MCP server starts,
+    // which is before the person has typed anything — so an "opened" recorded
+    // here is stamped earlier than the prompt that caused it and sorts above it,
+    // every time, in every new chat. The conversation gets its card when a page
+    // is actually visited; see POST /:profile/opened, which the host calls.
+    //
+    // The tab is remembered here because this is the only place that knows it.
+    if (parsed.data.tabId) owner.set(profile, parsed.data.tabId);
     return c.json(view(state), 201);
+  });
+
+  /**
+   * THE HOST SAYS A PAGE WAS ACTUALLY VISITED.
+   *
+   * This — not registration — is when a browser becomes a thing that happened
+   * in a conversation. Called once per host process, on the first page that is
+   * a page (a browser parked on its start screen has not been used), so a
+   * session that never browses says nothing at all rather than announcing a
+   * process nobody asked about.
+   *
+   * The tab comes from what registration remembered rather than from the
+   * caller: the host has no idea which chat it belongs to, and a card scoped to
+   * the wrong one is worse than no card.
+   */
+  app.post('/:profile/opened', (c) => {
+    const profile = profileParam(c.req.param('profile'));
+    if (!profile) return c.json({ error: 'invalid profile name' }, 400);
+    const tabId = owner.get(profile);
+    events.record(profile, { kind: 'opened', ...(tabId ? { tabId } : {}) });
+    return c.json({ ok: true, events: events.list(profile) }, 201);
   });
 
   app.get('/:profile', (c) => {

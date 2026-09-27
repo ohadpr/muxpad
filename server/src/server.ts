@@ -54,6 +54,12 @@ export interface AppDeps {
    */
   browserTailnetHost?: () => string | null;
   /**
+   * This server's own loopback address, handed to a browser host so it can say
+   * a page was actually visited. Loopback rather than the tailnet name: the
+   * host runs on this machine and the call is an internal one.
+   */
+  selfUrl?: string;
+  /**
    * In-process pub/sub for structural state-change events. Routes emit
    * here after a successful mutation; the /ws/events upgrade arm
    * (server/src/ws.ts) fans the events out to subscribed browsers.
@@ -233,6 +239,7 @@ export function createApp(deps: AppDeps): Hono {
         hostEntry: browserHostEntry(),
         cwd: resolved.dataDir,
         registry: resolved.apps.registry,
+        ...(resolved.selfUrl ? { apiUrl: resolved.selfUrl } : {}),
         ...(resolved.browserTailnetHost ? { tailnetHost: resolved.browserTailnetHost } : {}),
       }),
     );
