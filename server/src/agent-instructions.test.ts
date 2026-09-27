@@ -148,3 +148,47 @@ describe('agent-instructions', () => {
     );
   });
 });
+
+/**
+ * The TCC rule.
+ *
+ * Two agents put a macOS permission dialog on the user's real screen in one day,
+ * both by reaching into an application bundle for a fact — `7dcf5f1` exec'd the
+ * binary inside Tailscale.app to print a URL, and browser discovery stat'd
+ * /Applications/Google Chrome.app to find a browser. Both had read the existing
+ * policy. "Never put a window on their screen" did not stop either of them,
+ * because neither thought they were opening a window.
+ *
+ * So the instruction has to name the ACTION, not just the outcome.
+ */
+describe('the browser policy names app bundles specifically', () => {
+  const policy = AGENT_INSTRUCTIONS_SEED;
+
+  it('forbids touching an app bundle, in those words', () => {
+    expect(policy).toMatch(/\.app\b/);
+    expect(policy).toMatch(/\/Applications/);
+    expect(policy).toMatch(/bundle/i);
+  });
+
+  it('says that a SYSTEM DIALOG counts as a window on their screen', () => {
+    // The gap that let this happen twice: an agent can believe it is obeying
+    // "no windows" while provoking a dialog it never renders itself.
+    expect(policy).toMatch(/permission dialog|system dialog/i);
+  });
+
+  it('names the prompt text, so the next agent recognises it on sight', () => {
+    expect(policy).toMatch(/access data from other apps/i);
+  });
+
+  it('gives the alternative, not just the prohibition', () => {
+    // A rule with no escape hatch gets worked around. Both real fixes had the
+    // same shape: ask something that already knows, or use a binary we own.
+    expect(policy).toMatch(/MUXPAD_CHROME_BIN|ms-playwright|ask the server/i);
+  });
+
+  it('covers the other prompt families, not just this one', () => {
+    expect(policy).toMatch(/Screen Recording/i);
+    expect(policy).toMatch(/Accessibility/i);
+    expect(policy).toMatch(/osascript|Automation/i);
+  });
+});
