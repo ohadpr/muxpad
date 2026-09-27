@@ -70,7 +70,12 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
       </span>
       <div className="browser-card__body">
         <div className="browser-card__title">{view.title}</div>
-        {view.detail ? <div className="browser-card__detail">{view.detail}</div> : null}
+        {view.detail ? (
+          // The full text on the title, since the visible line is clamped.
+          <div className="browser-card__detail" title={view.detail}>
+            {view.detail}
+          </div>
+        ) : null}
       </div>
       {view.countdown && countdown ? (
         <div className="browser-card__countdown">{countdown}</div>
