@@ -1,4 +1,7 @@
-import type { ChatClock } from '@muxpad/shared';
+// `DirectMarker` / `renderDirectMarker` are ALSO used right here (directTo, at
+// the foot of this file), so they are imported as well as re-exported below —
+// a re-export does not bind a name locally.
+import { type ChatClock, type DirectMarker, renderDirectMarker } from '@muxpad/shared';
 import { type ArchiveSearchHit, req } from '../api';
 import type { ChatChipChat } from '../components/ChatChip';
 import {
@@ -653,183 +656,29 @@ export function parseDirective(
 
 // ── The markers ──────────────────────────────────────────────────────────────
 //
-// A directed message and its answer are REAL delivered messages: muxpad never
-// writes an agent's transcript, it tails the file the harness owns. So each one
-// carries a delimited block that is at once a genuine instruction to the agent
-// receiving it ("this came from another chat") and the render hook this client
-// keys on to draw a card instead of a wall of XML. Same shape, and the same
-// reasoning, as the cron fire marker (shared/src/cron.ts) — read that first if
-// you are changing this.
-
-const DIRECT_OPEN = /^\s*<muxpad-direct\b([^>]*)>([\s\S]*?)<\/muxpad-direct>\s*/;
-const REPORT_TAG = /^\s*<muxpad-report\b([^>]*)>/;
-const REPORT_CLOSE = '</muxpad-report>';
-
-function attr(attrs: string, name: string): string | null {
-  const m = attrs.match(new RegExp(`\\b${name}="([^"]*)"`));
-  return m ? (m[1] as string) : null;
-}
-
-/** Attribute values are interpolated into a `"`-quoted attribute. */
-function esc(v: string): string {
-  return v.replace(/[<>"&]/g, (c) =>
-    c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&amp;',
-  );
-}
-
-/**
- * A value as LITERAL TEXT inside a `'…'` shell word.
- *
- * XML escaping is not shell quoting, and `esc` above is XML escaping. It leaves
- * the apostrophe alone — correctly, for an attribute in a `"`-quoted slot — and
- * the report-back command interpolates those same attributes into a
- * single-quoted shell argument. So a chat called `Ohad's project` produced a
- * ready-to-copy command whose quote ended in the middle of its own name:
- *
- *   muxpad agent send p1 '<muxpad-report … from="Ohad's project" …>
- *
- * `/bin/sh -n` rejects it with an unterminated quote, and the round trip then
- * depended on the receiving agent noticing and repairing our command. Review 3
- * named the real hole here: "shell quoting" was a boundary nobody's territory
- * claimed, in a file otherwise concerned with XML.
- *
- * `'\''` is the POSIX idiom — close the quote, an escaped literal apostrophe,
- * reopen — and it is the whole trick, because inside `'…'` nothing else has any
- * meaning at all.
- */
-function shq(v: string): string {
-  return v.replace(/'/g, `'\\''`);
-}
-
-function unesc(v: string): string {
-  return v
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&amp;/g, '&');
-}
-
-export interface DirectMarker {
-  /** Correlates the report with the card the sending chat is already showing. */
-  id: string;
-  /** Name of the chat that asked, for the receiving agent to say out loud. */
-  from: string;
-  /** Pane of the chat that asked — where the report has to be sent back to. */
-  pane: string;
-  /** The chat RECEIVING this. Pre-filled into the report template it copies, so
-   *  the answer identifies itself without the agent having to know its own
-   *  chat's name (it doesn't, reliably). */
-  to?: string | undefined;
-  /** …and its pane, so a device with no local record of the request can still
-   *  resolve which chat the report came from. */
-  toPane?: string | undefined;
-}
-
-/**
- * Wrap a directed request with its marker AND the instruction that makes the
- * round trip actually happen.
- *
- * The report-back line is a CLI invocation on purpose. `muxpad agent send` is
- * already the supported way one session talks to another (it queues if the
- * target is mid-turn), it needs no new server surface, and an agent that can
- * run a command can run this one. What it must not do is improvise the marker:
- * the first line is quoted here verbatim so that `parseReportMarker` on the
- * other side is matching a string this file also wrote.
- */
-export function renderDirectMarker(marker: DirectMarker, body: string): string {
-  // Fully pre-filled: the receiving agent copies a line, it does not compose
-  // one. Every attribute in it is something this side already knows, and an
-  // agent asked to invent `from` would invent something wrong.
-  const report = `<muxpad-report id="${esc(marker.id)}" from="${esc(
-    marker.to ?? '',
-  )}" pane="${esc(marker.toPane ?? '')}"></muxpad-report>`;
-  // Line by line, joined: the exact shape of these lines is the contract with
-  // the agent reading them, so they are worth being able to see.
-  //
-  // Both interpolations into the COMMAND go through `shq` — see it for the
-  // apostrophe that broke the template. The last line is the other half of the
-  // same problem and cannot be escaped from here: the agent writes its own
-  // prose, and "it's done" would end the quote just as a name did. So the marker
-  // is stated as the contract and the delivery is explicitly not — an agent that
-  // would rather POST, or quote differently, is doing the right thing as long as
-  // the first line is the marker. (The durable fix is a stdin form of
-  // `muxpad agent send`, which is the CLI's to add, not this file's.)
-  const note = [
-    `Directed here from the muxpad chat "${marker.from}" — another chat's user, not this chat's.`,
-    'Do the work in THIS chat, then report back once, in one message:',
-    `  muxpad agent send '${shq(marker.pane)}' '${shq(report)}`,
-    "  <two or three sentences: what you did and what the answer is>'",
-    "The single quotes are the shell's, so an apostrophe inside your sentences has",
-    "to be written '\\'' — or send the message any other way you like. What matters",
-    'is only that its FIRST LINE is exactly the marker above.',
-    'Nothing else is needed — the chat that asked renders that message as a card.',
-  ].join('\n');
-  return `<muxpad-direct id="${esc(marker.id)}" from="${esc(marker.from)}" pane="${esc(
-    marker.pane,
-  )}">\n${note}\n</muxpad-direct>\n\n${body}`;
-}
-
-/** Split a delivered directed message back into its marker and the request. */
-export function parseDirectMarker(text: string): { marker: DirectMarker; body: string } | null {
-  const m = text.match(DIRECT_OPEN);
-  if (!m) return null;
-  const attrs = m[1] ?? '';
-  const id = attr(attrs, 'id');
-  const from = attr(attrs, 'from');
-  const pane = attr(attrs, 'pane');
-  if (!id || !from || !pane) return null;
-  return {
-    marker: { id, from: unesc(from), pane: unesc(pane) },
-    body: text.slice(m[0].length),
-  };
-}
-
-export interface ReportMarker {
-  /** The directive this answers. Empty when the agent omitted it. */
-  id: string;
-  /** The chat that is answering. Empty when the agent dropped the attribute. */
-  from: string;
-  /** Its pane — the fallback way to resolve which chat that was. */
-  pane: string;
-}
-
-/** The answer's marker — written by the OTHER agent, parsed here. */
-export function renderReportMarker(marker: ReportMarker, body: string): string {
-  return `<muxpad-report id="${esc(marker.id)}" from="${esc(marker.from)}" pane="${esc(
-    marker.pane,
-  )}"></muxpad-report>\n${body}`;
-}
-
-/**
- * Recognise a report coming back from a directed chat.
- *
- * TOLERANT BY CONSTRUCTION, and this is the half of the round trip that needs
- * it: the string was typed by ANOTHER agent from an instruction, so a missing
- * `id`, an attribute it invented, a closing tag it forgot, or the answer written
- * INSIDE the element instead of after it must all still render as a report. The
- * failure mode being avoided is a bubble of raw XML where a card should be. The
- * only hard requirement is a leading tag — text that merely mentions one
- * mid-message is ordinary prose (same rule as the cron marker).
- */
-export function parseReportMarker(text: string): { marker: ReportMarker; body: string } | null {
-  const m = text.match(REPORT_TAG);
-  if (!m) return null;
-  const rest = text.slice(m[0].length);
-  const close = rest.indexOf(REPORT_CLOSE);
-  const inner = close >= 0 ? rest.slice(0, close) : '';
-  const after = close >= 0 ? rest.slice(close + REPORT_CLOSE.length) : rest;
-  const attrs = m[1] ?? '';
-  return {
-    marker: {
-      id: unesc(attr(attrs, 'id') ?? ''),
-      from: unesc(attr(attrs, 'from') ?? ''),
-      pane: unesc(attr(attrs, 'pane') ?? ''),
-    },
-    // After the tag is the form we asked for; inside it is the form a model
-    // writes anyway. Prefer the first, fall back to the second, lose neither.
-    body: after.trim() || inner.trim(),
-  };
-}
+// MOVED TO `shared` (chat-direct.ts) and re-exported here, unchanged.
+//
+// They were written in this file because the composer was the only thing that
+// ever wrote a directive. Then a SPAWN turned out to be one too — another chat's
+// agent asking for work and waiting on the answer — and the server is what
+// composes a spawn's first message, so the builder had to be reachable from
+// there. Same move, and the same reason, as the cron fire marker: the server
+// writes it, this client renders it, and two copies of the grammar is how a
+// marker starts leaking into a conversation as raw XML.
+//
+// Re-exported rather than re-pointed at every call site: this module is the
+// `@`-mention vocabulary as far as the components are concerned, and the markers
+// are part of that vocabulary no matter which package now owns the string.
+export {
+  type DirectMarker,
+  type DirectOrigin,
+  type ReportMarker,
+  parseDirectMarker,
+  parseReportMarker,
+  renderDirectMarker,
+  renderReportMarker,
+  renderSpawnBriefing,
+} from '@muxpad/shared';
 
 // ── Sending ──────────────────────────────────────────────────────────────────
 
