@@ -73,6 +73,16 @@ export function browserViewerPort(cdpPort: number): number {
   return cdpPort + BROWSER_VIEWER_PORT_OFFSET;
 }
 
+/**
+ * Profiles registered at boot.
+ *
+ * Deliberately ONE. Every extra profile is another cookie jar that starts cold,
+ * and the value of this whole subsystem is a profile that has been used enough
+ * to look like a person's. A second profile is something you add when you have
+ * a reason — two accounts on one site — not something muxpad guesses for you.
+ */
+export const DEFAULT_BROWSER_PROFILES: readonly string[] = ['default'];
+
 /** Longest profile name. It becomes a slug, a pane title and a path segment. */
 const MAX_PROFILE_NAME = 64;
 
