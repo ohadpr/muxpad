@@ -79,6 +79,8 @@ const EnsureSchema = z.object({
 const NeedsYouSchema = z.object({
   reason: z.string().min(1).max(400),
   tabId: z.string().min(1).max(64).optional(),
+  /** What needs them, so the viewer can arrive pointing at it. */
+  selector: z.string().min(1).max(200).optional(),
 });
 
 /**
@@ -309,7 +311,7 @@ export function browsersRoutes(deps: {
     const parsed = NeedsYouSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: 'reason is required' }, 400);
 
-    attention.raise(profile, parsed.data.reason);
+    attention.raise(profile, parsed.data.reason, parsed.data.selector);
     events.record(profile, {
       kind: 'needs-you',
       reason: parsed.data.reason,

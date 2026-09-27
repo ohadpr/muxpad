@@ -255,6 +255,34 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
             // Not knowing is fine; the viewer keeps whatever it had.
           }
         }
+      } else if (message.t === 'reveal') {
+        // Scroll the thing that needs a person into view and report where it
+        // landed, so the viewer can ring it.
+        //
+        // SCROLL AND HIGHLIGHT, NOT CROP. A cropped login box with no address
+        // and no branding is indistinguishable from a phishing overlay, and
+        // credential entry is the one screen that must not lose its context.
+        // Forms move as you type, too — autocomplete, validation, multi-step
+        // logins — so a locked viewport ends up framing the wrong rectangle.
+        // Put the person in front of the field; let them keep the page.
+        const sel = String(message.selector ?? '');
+        try {
+          const r = (await cdp.send('Runtime.evaluate', {
+            expression: `(() => {
+              const el = document.querySelector(${JSON.stringify(sel)});
+              if (!el) return null;
+              el.scrollIntoView({ block: 'center', inline: 'center' });
+              const b = el.getBoundingClientRect();
+              return JSON.stringify({ x: b.x, y: b.y, w: b.width, h: b.height });
+            })()`,
+            returnByValue: true,
+          })) as unknown as { result?: { value?: string | null } };
+          const rect = r.result?.value ? JSON.parse(r.result.value) : null;
+          if (socket.readyState === 1) socket.send(JSON.stringify({ t: 'revealed', rect }));
+        } catch {
+          // A selector that does not resolve is not an error — the browser is
+          // simply left where it was, which is the old behaviour.
+        }
       } else if (message.t === 'text') {
         // Whole strings, not keystrokes. A phone keyboard gives autocorrect,
         // dictation and emoji as composed text, and replaying that as synthetic

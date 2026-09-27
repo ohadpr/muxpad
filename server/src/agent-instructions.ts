@@ -193,8 +193,20 @@ become passable by trying again. **Do not try to solve them.** What
 you do instead is ask for the human, in one call:
 
 \`\`\`
-curl -sS -X POST "\$MUXPAD_API_URL/api/browsers/s-\$MUXPAD_TAB_ID/needs-you" -H 'content-type: application/json' -d '{"reason":"<what you are stuck on, in their words>","tabId":"'"\$MUXPAD_TAB_ID"'"}'
+curl -sS -X POST "\$MUXPAD_API_URL/api/browsers/s-\$MUXPAD_TAB_ID/needs-you" -H 'content-type: application/json' -d '{"reason":"<five words>","selector":"input[type=password]","tabId":"'"\$MUXPAD_TAB_ID"'"}'
 \`\`\`
+
+WALK TO THE WALL FIRST. Do not hand somebody a home page and let them hunt for
+the sign-in link — that is a forward, not a handoff. Get the page to the POINT OF
+ACTION: click through to the login form itself, open the payment step, reach the
+captcha. Then VERIFY it is there before you summon anybody —
+\`document.querySelector('input[type=password]')\` and its like are cheap, and a
+summons to the wrong page costs a person a trip to their phone for nothing.
+
+Send a \`selector\` for the thing that needs them, when you can name one. The
+viewer scrolls to it and rings it, so they arrive looking at the field rather
+than at a page. It is optional and a wrong one is harmless — the browser simply
+opens as it is.
 
 \`reason\` IS THE CARD. Keep it to ONE SHORT LINE — about five words, no
 trailing period. It appears on a phone, in a conversation, at the width of a
