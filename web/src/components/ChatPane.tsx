@@ -51,6 +51,7 @@ import {
   composeOutgoingMessage,
   splitMessageAttachments,
 } from '../lib/attachments';
+import { injectBrowserMoments } from '../lib/browser-card';
 import {
   type DirectedWork,
   addDirected,
@@ -114,7 +115,8 @@ import { type SpawnWork, fetchSpawnWork } from '../lib/spawn-work';
 import type { AgentLink } from '../lib/voice/session';
 import { useVoice } from '../lib/voice/use-voice';
 import { AgentBackendLogo, backendFromAssistant } from './AgentLogos';
-import { BrowserCards } from './BrowserCards';
+import { BrowserCard } from './BrowserCard';
+import { useBrowsers } from './BrowserCards';
 import { ChatDraft, type ChatDraftHandle } from './ChatDraft';
 import { ChatMentionCard, ChatMentionPicker, ChatMentionPill } from './ChatMentionPicker';
 import { CopyablePre } from './CopyablePre';
@@ -1938,6 +1940,14 @@ export function ChatPane({
 
   /** Which chat this pane belongs to — excluded from its own picker. */
   const myChat = useMemo(() => paneIndex(corpus).get(paneId), [corpus, paneId]);
+
+  // Browsers muxpad owns. The machinery lives in the hook; the CARDS are placed
+  // in the log below, at the moment each thing happened.
+  const {
+    moments: browserMoments,
+    open: openBrowser,
+    modal: browserModal,
+  } = useBrowsers({ by: paneId, tabId: myChat?.tabId ?? '' });
   /** By tab id — how a stored card finds the chat it was sent to, now. */
   const corpusById = useMemo(() => new Map(corpus.map((c) => [c.tabId, c])), [corpus]);
 
@@ -4486,7 +4496,20 @@ export function ChatPane({
             other is "a request to it is in flight". Suppressing the spawn entry
             because of an unrelated later `@` would delete a piece of the record
             from the middle of the conversation. */}
-        {interleaveSpawnCards(items, spawnedCards).map((x) => {
+        {interleaveSpawnCards(
+          // Browser moments go in FIRST, as ordinary timed entries, so the
+          // spawn-card interleave — and the file it lives in — never has to
+          // know browsers exist. A browser opening and an agent getting stuck
+          // are two moments in the log, not a status light above it.
+          injectBrowserMoments(items, browserMoments, (moment) => (
+            <BrowserCard
+              key={`browser:${moment.profile}:${moment.at}:${moment.kind}`}
+              moment={moment}
+              onOpen={(mode) => openBrowser(moment.browser, mode)}
+            />
+          )),
+          spawnedCards,
+        ).map((x) => {
           if (x.kind === 'entry') return x.node;
           const kid = x.card.chat;
           // ONE state resolution for both kinds of card, in the lib and tested
@@ -4612,6 +4635,12 @@ export function ChatPane({
     expandedReports,
     reportWork,
     toggleReport,
+    // Same reason as `spawnedCards` above: browser cards live IN the transcript,
+    // so the transcript has to rebuild when one arrives or changes. Without
+    // this the cards render once and then lie — a summons answered ten minutes
+    // ago keeps shouting, because the memo never recomputes.
+    browserMoments,
+    openBrowser,
   ]);
 
   // The agent is working when: we're driving a turn (`sending`), tokens are
@@ -4844,12 +4873,10 @@ export function ChatPane({
     // when the CORPUS lands and not on the frames in between.
     <ChatMentionContext.Provider value={mentionContext}>
       <div className="chat-pane" ref={paneRef}>
-        {/* Browsers muxpad owns. Above the transcript rather than interleaved
-          into it, because a browser is not an EVENT that happened at a moment —
-          it is a thing that is currently true, and one that can start needing
-          you long after the message that opened it scrolled away. Interleaving
-          would bury "an agent is waiting for you" under an hour of log. */}
-        <BrowserCards by={paneId} />
+        {/* Fixed-position, draws nothing until you take the wheel. Mounted here
+          rather than beside a card because the card that opened it may scroll
+          away — or be unmounted by a poll — while the modal is still open. */}
+        {browserModal}
         {/* We were asked to show WHERE the term is, and could not — so say so.
           Silently landing on an unchanged chat is the one outcome that reads as
           a broken search. Floats over the transcript rather than sitting in the

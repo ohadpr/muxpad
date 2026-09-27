@@ -27,7 +27,17 @@ beforeEach(() => {
     autostart INTEGER NOT NULL, enabled INTEGER NOT NULL, pane_id TEXT,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
     CREATE TABLE globals (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
-  registry = { start: vi.fn(async () => {}), stop: vi.fn(async () => {}) };
+  // The real AppRegistry.start ENABLES the row; a fake that does not model
+  // that makes every ensure() look like a fresh launch, which is exactly the
+  // signal the "opened" event is keyed on.
+  registry = {
+    start: vi.fn(async (id: string) => {
+      db.prepare('UPDATE apps SET enabled = 1 WHERE id = ?').run(id);
+    }),
+    stop: vi.fn(async (id: string) => {
+      db.prepare('UPDATE apps SET enabled = 0 WHERE id = ?').run(id);
+    }),
+  };
   app = new Hono().route(
     '/api/browsers',
     browsersRoutes({
@@ -267,5 +277,52 @@ describe('asking for a person', () => {
   it('400s an ask with no reason — a card that says nothing is not actionable', async () => {
     await ensure();
     expect((await post('/api/browsers/shopping/needs-you', {})).status).toBe(400);
+  });
+});
+
+
+describe('the moments a conversation shows', () => {
+  it('records an "opened" when the browser actually starts', async () => {
+    const res = await post('/api/browsers', { profile: 'shopping', tabId: 'tab-1' });
+    const body = (await res.json()) as { events: Array<{ kind: string; tabId?: string }> };
+    expect(body.events).toHaveLength(1);
+    expect(body.events[0]).toMatchObject({ kind: 'opened', tabId: 'tab-1' });
+  });
+
+  it('does NOT record one for a browser that is already running', async () => {
+    // POST is idempotent, and the UI polls. An "opened" card per poll would
+    // bury the conversation it is supposed to sit inside.
+    await ensure();
+    await post('/api/browsers', { profile: 'shopping' });
+    await post('/api/browsers', { profile: 'shopping' });
+    const res = await app.request('/api/browsers/shopping');
+    const body = (await res.json()) as { events: unknown[] };
+    expect(body.events).toHaveLength(1);
+  });
+
+  it('records the summons as its own moment, with the reason', async () => {
+    await ensure();
+    const res = await post('/api/browsers/shopping/needs-you', {
+      reason: 'log in to Amazon',
+      tabId: 'tab-1',
+    });
+    const body = (await res.json()) as { events: Array<{ kind: string; reason?: string }> };
+    expect(body.events.map((e) => e.kind)).toEqual(['opened', 'needs-you']);
+    expect(body.events[1]).toMatchObject({ reason: 'log in to Amazon', tabId: 'tab-1' });
+  });
+
+  it('records that you answered it, so the log reads as a story', async () => {
+    await ensure();
+    await post('/api/browsers/shopping/needs-you', { reason: 'captcha' });
+    const res = await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
+    const body = (await res.json()) as { events: Array<{ kind: string }> };
+    expect(body.events.map((e) => e.kind)).toEqual(['opened', 'needs-you', 'resolved']);
+  });
+
+  it('does not record a "resolved" when nothing was asking', async () => {
+    await ensure();
+    const res = await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
+    const body = (await res.json()) as { events: Array<{ kind: string }> };
+    expect(body.events.map((e) => e.kind)).toEqual(['opened']);
   });
 });

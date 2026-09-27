@@ -1,29 +1,31 @@
 import { useEffect, useState } from 'react';
 import {
-  type BrowserCardData,
-  browserCardView,
+  type BrowserMoment,
+  browserMomentView,
   browserOpenMode,
   wheelCountdown,
 } from '../lib/browser-card.js';
 import './BrowserCard.css';
 
 /**
- * A browser, as it appears in a conversation.
+ * One browser MOMENT, as it appears in a conversation.
  *
- * The shape follows the spawn card deliberately: muxpad says it opened a
- * browser, the card stays in the log, and it stays clickable forever after. The
- * difference is that this one can become URGENT — a spawn card reports what
- * happened, this one sometimes needs you right now.
+ * The shape follows the spawn card deliberately, and now so does the placement:
+ * a card sits at the point in the log where the thing happened, and the chat
+ * continues past it. Opening a browser is one card; getting stuck at a login
+ * wall, twenty minutes later, is another.
  *
- * WHY THE CARD AND NOT A LINK. A link in a transcript is findable only by
- * scrolling to the moment it was written, which on a conversation that has been
- * running for two days is the same as not having it. The card is a component
- * with live state read at render time, so "is the browser waiting for me" is
- * answered by looking, not by remembering.
+ * It was previously one pinned card per browser, above the transcript. That
+ * made a sequence of events look like a status light, and it meant every
+ * conversation carried it whether or not anything had happened there.
+ *
+ * The moment is fixed; the LIVE browser is read at render time, so "can I still
+ * open this" and "is it still asking for me" are answered by looking rather
+ * than by what was true when the line was written.
  */
 
 export interface BrowserCardProps {
-  data: BrowserCardData;
+  moment: BrowserMoment;
   /** Opens the stream. Modal on a desktop, a new tab on a phone. */
   onOpen: (mode: 'modal' | 'tab') => void;
   /** Injected in tests; defaults to the real viewport. */
@@ -31,8 +33,9 @@ export interface BrowserCardProps {
   now?: number;
 }
 
-export function BrowserCard({ data, onOpen, viewportWidth, now }: BrowserCardProps) {
-  const view = browserCardView(data);
+export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardProps) {
+  const view = browserMomentView(moment);
+  const data = moment.browser;
   const [tick, setTick] = useState(() => now ?? Date.now());
 
   // The countdown is the only live thing on the card. One timer, one second,

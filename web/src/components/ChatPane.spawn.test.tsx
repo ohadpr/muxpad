@@ -164,7 +164,15 @@ describe('the spawn cards and the roster read ONE list', () => {
   });
 
   it('builds the cards INSIDE the transcript, placed by time', () => {
-    expect(BODY).toContain('interleaveSpawnCards(items, spawnedCards)');
+    // The entries handed to the interleave are `items`, possibly wrapped —
+    // browser moments are injected as ordinary timed entries first, so they
+    // land in the log by time without this interleave knowing they exist. What
+    // this pins is that the cards are built from THE TRANSCRIPT's entries and
+    // the one spawned-card list, not from some second source.
+    expect(BODY).toMatch(
+      /interleaveSpawnCards\(\s*(?:\/\/[^\n]*\n\s*)*(?:injectBrowserMoments\()?items[,)]/,
+    );
+    expect(BODY).toContain('spawnedCards,');
     expect(BODY).toContain('<ChatMentionCard');
     // The indicator is read off the corpus at render time — not latched at spawn
     // — which is what keeps it honest after the card has scrolled up. It used to
