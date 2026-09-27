@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { type BrowserCardData, visibleBrowsers } from '../lib/browser-card';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { type BrowserCardData, type BrowserMoment, browserMoments } from '../lib/browser-card';
 import { BrowserCard } from './BrowserCard';
 import { BrowserModal } from './BrowserModal';
 
@@ -26,6 +26,8 @@ const POLL_MS = 4000;
 export interface BrowserCardsProps {
   /** Identifies this pane to the wheel. */
   by: string;
+  /** The chat these cards belong to; moments from elsewhere are not shown. */
+  tabId: string;
   /** Injected in tests. */
   fetchImpl?: typeof fetch;
   pollMs?: number;
@@ -33,8 +35,18 @@ export interface BrowserCardsProps {
   viewportWidth?: number;
 }
 
-export function BrowserCards({
+/**
+ * The browser machinery, as a hook.
+ *
+ * A hook rather than a wrapper component because the CARDS belong inside the
+ * conversation's log, interleaved by time, and only ChatPane knows where that
+ * is — while the polling, the wheel and the modal belong here. Wrapping the log
+ * in a render prop would have meant reshaping six thousand lines of JSX to move
+ * two cards.
+ */
+export function useBrowsers({
   by,
+  tabId,
   fetchImpl,
   pollMs = POLL_MS,
   openTab,
@@ -111,30 +123,53 @@ export function BrowserCards({
     [by, doFetch, refresh],
   );
 
-  // A browser that is not running gets no card. See visibleBrowsers — without
-  // this, the profile registered at boot sits at the top of every conversation
-  // forever, saying nothing.
-  const shown = visibleBrowsers(browsers);
-  const active = shown.find((b) => b.profile === openProfile) ?? null;
+  // One card per MOMENT, in the conversation where it happened. See
+  // browserMoments — a browser that merely exists produces no cards at all.
+  //
+  // MEMOIZED, and not as a micro-optimisation: this array is a dependency of
+  // the transcript memo in ChatPane. A fresh identity every render would
+  // rebuild a six-thousand-line conversation on every keystroke.
+  const moments = useMemo(() => browserMoments(browsers, tabId), [browsers, tabId]);
+  // Stable identity for the same reason `moments` is memoized.
+  const openSync = useCallback(
+    (browser: BrowserCardData, mode: 'modal' | 'tab') => void open(browser, mode),
+    [open],
+  );
 
+  const active = browsers.find((b) => b.profile === openProfile) ?? null;
+
+  return {
+    /** What this conversation should draw, oldest first. */
+    moments,
+    /** Takes the wheel and shows the stream. Stable — see `moments`. */
+    open: openSync,
+    /** Render this anywhere; it is fixed-position and draws nothing when closed. */
+    modal: active ? (
+      <BrowserModal
+        data={active}
+        by={by}
+        onClose={() => void close(active.profile)}
+        onRenew={() => void post(`/api/browsers/${active.profile}/wheel/renew`, { by })}
+      />
+    ) : null,
+    viewportWidth,
+  };
+}
+
+/** Standalone use: draws every moment in order, then the modal. */
+export function BrowserCards(props: BrowserCardsProps) {
+  const { moments, open, modal, viewportWidth } = useBrowsers(props);
   return (
     <>
-      {shown.map((data) => (
+      {moments.map((moment: BrowserMoment) => (
         <BrowserCard
-          key={data.profile}
-          data={data}
+          key={`${moment.profile}:${moment.at}:${moment.kind}`}
+          moment={moment}
           {...(viewportWidth !== undefined ? { viewportWidth } : {})}
-          onOpen={(mode) => void open(data, mode)}
+          onOpen={(mode) => open(moment.browser, mode)}
         />
       ))}
-      {active ? (
-        <BrowserModal
-          data={active}
-          by={by}
-          onClose={() => void close(active.profile)}
-          onRenew={() => void post(`/api/browsers/${active.profile}/wheel/renew`, { by })}
-        />
-      ) : null}
+      {modal}
     </>
   );
 }

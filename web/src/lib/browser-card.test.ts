@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   type BrowserCardData,
+  type BrowserEvent,
+  type BrowserMoment,
   type BrowserWheelLease,
   browserCardView,
+  browserMomentView,
+  browserMoments,
   browserOpenMode,
   browserViewerPath,
+  injectBrowserMoments,
   shouldRenewWheel,
   visibleBrowsers,
   wheelCountdown,
@@ -161,5 +166,193 @@ describe('where the iframe points', () => {
     expect(browserViewerPath('default')).toBe('/browser/default/');
     expect(browserViewerPath('default').startsWith('/')).toBe(true);
     expect(browserViewerPath('default')).not.toContain('://');
+  });
+});
+
+describe('the moments a conversation draws', () => {
+  const ev = (kind: BrowserEvent['kind'], at: number, over: Record<string, unknown> = {}) =>
+    ({ kind, at, ...over }) as BrowserEvent;
+
+  it('turns an opened and a summons into two separate cards', () => {
+    // The whole point of the redesign: a browser opening and an agent getting
+    // stuck are two things that happened, at two moments, not one status light.
+    const moments = browserMoments(
+      [{ ...base, events: [ev('opened', 100), ev('needs-you', 500, { reason: 'captcha' })] }],
+      'tab-1',
+    );
+    expect(moments.map((m) => [m.kind, m.at])).toEqual([
+      ['opened', 100],
+      ['needs-you', 500],
+    ]);
+  });
+
+  it('keeps the reason on the summons, because that IS the card', () => {
+    const [m] = browserMoments(
+      [{ ...base, events: [ev('needs-you', 1, { reason: 'log in to Amazon' })] }],
+      'tab-1',
+    );
+    expect(m?.reason).toBe('log in to Amazon');
+  });
+
+  it('shows a moment that happened in THIS chat', () => {
+    expect(
+      browserMoments([{ ...base, events: [ev('opened', 1, { tabId: 'tab-1' })] }], 'tab-1'),
+    ).toHaveLength(1);
+  });
+
+  it('hides one that happened in a DIFFERENT chat', () => {
+    // Otherwise every browser event appears in every conversation, which is the
+    // noise the pinned card had, moved somewhere worse.
+    expect(
+      browserMoments([{ ...base, events: [ev('opened', 1, { tabId: 'other' })] }], 'tab-1'),
+    ).toHaveLength(0);
+  });
+
+  it('shows one that belongs to NO chat, so nothing is invisible', () => {
+    // A browser started from the CLI has no conversation. Hiding it everywhere
+    // would mean a summons nobody can see.
+    expect(browserMoments([{ ...base, events: [ev('opened', 1)] }], 'tab-1')).toHaveLength(1);
+  });
+
+  it('drops "resolved" — it is bookkeeping, not something to read', () => {
+    expect(
+      browserMoments([{ ...base, events: [ev('opened', 1), ev('resolved', 2)] }], 'tab-1'),
+    ).toHaveLength(1);
+  });
+
+  it('sorts across profiles by when they happened', () => {
+    const a = { ...base, profile: 'a', events: [ev('opened', 300)] };
+    const b = { ...base, profile: 'b', events: [ev('opened', 100)] };
+    expect(browserMoments([a, b], 'tab-1').map((m) => m.profile)).toEqual(['b', 'a']);
+  });
+
+  it('carries the live browser with each moment, so the card can act', () => {
+    // A card drawn from a moment still needs to open the CURRENT browser and
+    // know who holds the wheel right now.
+    const [m] = browserMoments([{ ...base, events: [ev('opened', 1)] }], 'tab-1');
+    expect(m?.browser.viewerUrl).toBe(base.viewerUrl);
+  });
+
+  it('is empty when nothing has happened', () => {
+    expect(browserMoments([{ ...base, events: [] }], 'tab-1')).toEqual([]);
+  });
+});
+
+describe('a card drawn from a moment', () => {
+  const moment = (over: Record<string, unknown> = {}) => ({
+    kind: 'opened' as const,
+    at: 100,
+    profile: 'shopping',
+    browser: base,
+    ...over,
+  });
+
+  it('reads as an event, not a status light', () => {
+    expect(browserMomentView(moment()).title).toMatch(/opened/i);
+  });
+
+  it('shouts while the summons is STILL live', () => {
+    const view = browserMomentView(
+      moment({
+        kind: 'needs-you',
+        reason: 'captcha',
+        browser: { ...base, needsYou: { reason: 'captcha', at: 1 } },
+      }),
+    );
+    expect(view.tone).toBe('blocked');
+    expect(view.urgent).toBe(true);
+    expect(view.action).toBe('Take the wheel');
+  });
+
+  it('STOPS shouting once you have answered it', () => {
+    // The moment stays in the log forever — it happened. But a card that keeps
+    // demanding attention for something dealt with an hour ago trains you to
+    // ignore the one that matters.
+    const view = browserMomentView(
+      moment({ kind: 'needs-you', reason: 'captcha', browser: { ...base, needsYou: null } }),
+    );
+    expect(view.urgent).toBe(false);
+    expect(view.tone).not.toBe('blocked');
+    expect(view.title).toMatch(/needed you/i);
+    expect(view.detail).toBe('captcha');
+  });
+
+  it('says you are driving when you are', () => {
+    const view = browserMomentView(moment({ browser: { ...base, wheel: lease() } }));
+    expect(view.tone).toBe('yours');
+  });
+
+  it('offers to watch while the agent drives', () => {
+    const view = browserMomentView(
+      moment({ browser: { ...base, wheel: lease({ holder: 'agent' as const }) } }),
+    );
+    expect(view.action).toBe('Watch');
+  });
+
+  it('cannot be opened once the browser is gone', () => {
+    // The moment outlives the browser. Offering to open a viewer that is not
+    // there is a connection error in an iframe, which reads as "muxpad broke".
+    const view = browserMomentView(moment({ browser: { ...base, state: 'registered' as const } }));
+    expect(view.action).toBeNull();
+    expect(view.detail).toMatch(/closed|not running/i);
+  });
+});
+
+describe('placing moments in a conversation', () => {
+  const entry = (at: number | null, node: string) => ({ at, node });
+  const m = (at: number): BrowserMoment => ({
+    kind: 'opened',
+    at,
+    profile: 'shopping',
+    browser: base,
+  });
+  const shape = (out: ReturnType<typeof injectBrowserMoments<string>>) => out.map((e) => e.node);
+
+  it('lands a moment before the first entry that came after it', () => {
+    const entries = [entry(100, 'a'), entry(300, 'b')];
+    expect(shape(injectBrowserMoments(entries, [m(200)], () => '[card]'))).toEqual([
+      'a',
+      '[card]',
+      'b',
+    ]);
+  });
+
+  it('puts one that just happened at the BOTTOM, where it belongs', () => {
+    const entries = [entry(100, 'a'), entry(200, 'b')];
+    expect(shape(injectBrowserMoments(entries, [m(9_000)], () => '[card]'))).toEqual([
+      'a',
+      'b',
+      '[card]',
+    ]);
+  });
+
+  it('puts one older than the loaded history at the top', () => {
+    const entries = [entry(500, 'a')];
+    expect(shape(injectBrowserMoments(entries, [m(1)], () => '[card]'))).toEqual(['[card]', 'a']);
+  });
+
+  it('does not treat an untimed entry as a boundary', () => {
+    // Guessing would move the card on the next reload.
+    const entries = [entry(null, 'pending'), entry(300, 'b')];
+    expect(shape(injectBrowserMoments(entries, [m(200)], () => '[card]'))).toEqual([
+      'pending',
+      '[card]',
+      'b',
+    ]);
+  });
+
+  it('keeps several moments in order', () => {
+    const entries = [entry(100, 'a'), entry(400, 'b')];
+    expect(shape(injectBrowserMoments(entries, [m(200), m(300)], (x) => `[${x.at}]`))).toEqual([
+      'a',
+      '[200]',
+      '[300]',
+      'b',
+    ]);
+  });
+
+  it('changes nothing when there are no moments', () => {
+    const entries = [entry(100, 'a'), entry(200, 'b')];
+    expect(shape(injectBrowserMoments(entries, [], () => '[card]'))).toEqual(['a', 'b']);
   });
 });

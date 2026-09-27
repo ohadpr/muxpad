@@ -1,22 +1,23 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { BrowserCardData } from '../lib/browser-card';
+import type { BrowserCardData, BrowserMoment } from '../lib/browser-card';
 import { BrowserCard } from './BrowserCard';
 import { BrowserModal } from './BrowserModal';
 
 /**
- * The card and the modal.
+ * A browser moment in a conversation, and the modal it opens.
  *
  * The claims worth holding, in the order they matter:
  *
- *   1. the BLOCKED state is loud, and it is the only loud one — a card that
- *      always shouts is a card nobody reads;
+ *   1. a LIVE summons is loud, and an ANSWERED one is not — the moment stays in
+ *      the log forever, but a card still demanding attention for something
+ *      dealt with an hour ago trains you to ignore the one that counts;
  *   2. a phone gets a tab, not a modal, because a modal on a phone is the one
  *      shape guaranteed not to work for the thing you opened it to do;
- *   3. a browser that is not running gets STARTED, not opened — opening the
- *      viewer of a dead host is a connection-refused inside an iframe, which
- *      reads as "muxpad is broken";
+ *   3. a moment whose browser is gone offers no action — opening a viewer that
+ *      is not running is a connection error inside an iframe, which reads as
+ *      "muxpad is broken";
  *   4. the lease is renewed from the modal, halfway through, because a person
  *      with the modal open is the only evidence a person is still there.
  */
@@ -31,10 +32,7 @@ function mount(node: React.ReactNode) {
   hosts.push(host);
   const root = createRoot(host);
   act(() => root.render(node));
-  return {
-    host,
-    rerender: (next: React.ReactNode) => act(() => root.render(next)),
-  };
+  return { host, rerender: (next: React.ReactNode) => act(() => root.render(next)) };
 }
 
 afterEach(() => {
@@ -42,8 +40,6 @@ afterEach(() => {
 });
 
 const buttons = (host: HTMLElement) => [...host.querySelectorAll('button')];
-const buttonNamed = (host: HTMLElement, label: string) =>
-  buttons(host).find((b) => b.textContent === label);
 const click = (el: Element | undefined) =>
   act(() => {
     el?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -51,7 +47,7 @@ const click = (el: Element | undefined) =>
 
 const base: BrowserCardData = {
   profile: 'shopping',
-  viewerUrl: 'http://127.0.0.1:9510',
+  viewerUrl: 'https://host.ts.net/browser/shopping/',
   state: 'running',
   wheel: null,
 };
@@ -64,62 +60,87 @@ const lease = (over: Partial<NonNullable<BrowserCardData['wheel']>> = {}) => ({
   ...over,
 });
 
+const moment = (browser: BrowserCardData, over: Partial<BrowserMoment> = {}): BrowserMoment => ({
+  kind: 'opened',
+  at: 100,
+  profile: browser.profile,
+  browser,
+  ...over,
+});
+
 describe('the card', () => {
-  it('renders the blocked state loudly and offers the wheel', () => {
+  it('reads as something that happened, not a status light', () => {
+    const { host } = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1} />);
+    expect(host.textContent).toMatch(/opened/i);
+    expect(host.textContent).toContain('shopping');
+  });
+
+  it('shouts while the summons is still live', () => {
+    const browser = { ...base, needsYou: { reason: 'log in to Amazon', at: 1 } };
     const { host } = mount(
       <BrowserCard
-        data={{ ...base, needsYou: { reason: 'log in to Amazon', at: 1 } }}
+        moment={moment(browser, { kind: 'needs-you', reason: 'log in to Amazon' })}
         onOpen={() => {}}
-        now={1_000_000}
+        now={1}
       />,
     );
     expect(host.querySelector('[data-testid="browser-card"]')?.getAttribute('data-tone')).toBe(
       'blocked',
     );
     expect(host.textContent).toContain('log in to Amazon');
-    expect(buttonNamed(host, 'Take the wheel')?.dataset.urgent).toBe('true');
+    expect(buttons(host)[0]?.dataset.urgent).toBe('true');
   });
 
-  it('is the ONLY state with an urgent button', () => {
-    for (const data of [
-      base,
-      { ...base, wheel: lease() },
-      { ...base, wheel: lease({ holder: 'agent' as const }) },
-      { ...base, state: 'registered' as const },
-    ]) {
-      const { host } = mount(<BrowserCard data={data} onOpen={() => {}} now={1_000_000} />);
-      expect(buttons(host)[0]?.dataset.urgent, JSON.stringify(data.wheel ?? data.state)).toBe(
-        'false',
-      );
-    }
+  it('STOPS shouting once it has been answered', () => {
+    const { host } = mount(
+      <BrowserCard
+        moment={moment({ ...base, needsYou: null }, { kind: 'needs-you', reason: 'captcha' })}
+        onOpen={() => {}}
+        now={1}
+      />,
+    );
+    expect(host.querySelector('[data-testid="browser-card"]')?.getAttribute('data-tone')).not.toBe(
+      'blocked',
+    );
+    expect(buttons(host)[0]?.dataset.urgent).toBe('false');
+    expect(host.textContent).toMatch(/needed you/i);
   });
 
   it('opens a MODAL on a wide viewport and a TAB on a phone', () => {
     const onOpen = vi.fn();
-    const wide = mount(<BrowserCard data={base} onOpen={onOpen} viewportWidth={1440} now={1} />);
+    const wide = mount(
+      <BrowserCard moment={moment(base)} onOpen={onOpen} viewportWidth={1440} now={1} />,
+    );
     click(buttons(wide.host)[0]);
     expect(onOpen).toHaveBeenCalledWith('modal');
 
-    const phone = mount(<BrowserCard data={base} onOpen={onOpen} viewportWidth={390} now={1} />);
+    const phone = mount(
+      <BrowserCard moment={moment(base)} onOpen={onOpen} viewportWidth={390} now={1} />,
+    );
     click(buttons(phone.host)[0]);
     expect(onOpen).toHaveBeenLastCalledWith('tab');
   });
 
+  it('offers nothing once the browser is gone', () => {
+    const { host } = mount(
+      <BrowserCard moment={moment({ ...base, state: 'registered' })} onOpen={() => {}} now={1} />,
+    );
+    expect(buttons(host)).toHaveLength(0);
+    expect(host.textContent).toMatch(/closed/i);
+  });
+
   it('shows how long the wheel is held for, and nothing when it is free', () => {
     const held = mount(
-      <BrowserCard data={{ ...base, wheel: lease() }} onOpen={() => {}} now={1_000_000} />,
+      <BrowserCard
+        moment={moment({ ...base, wheel: lease() })}
+        onOpen={() => {}}
+        now={1_000_000}
+      />,
     );
     expect(held.host.textContent).toContain('10m left');
 
-    const free = mount(<BrowserCard data={base} onOpen={() => {}} now={1_000_000} />);
+    const free = mount(<BrowserCard moment={moment(base)} onOpen={() => {}} now={1_000_000} />);
     expect(free.host.textContent).not.toContain('left');
-  });
-
-  it('names the profile, so two cards are tellable apart', () => {
-    const { host } = mount(
-      <BrowserCard data={{ ...base, profile: 'research' }} onOpen={() => {}} now={1} />,
-    );
-    expect(host.textContent).toContain('research');
   });
 });
 
@@ -134,8 +155,7 @@ describe('the modal', () => {
 
   it('frames the viewer RELATIVELY, so it is same-origin either way', () => {
     const { host } = mount(<BrowserModal {...props} />);
-    const frame = host.querySelector('iframe');
-    expect(frame?.getAttribute('src')).toBe('/browser/shopping/');
+    expect(host.querySelector('iframe')?.getAttribute('src')).toBe('/browser/shopping/');
   });
 
   it('says whether the wheel is YOURS or you are only watching', () => {

@@ -16,6 +16,13 @@ export interface BrowserWheelLease {
   expiresAt: number;
 }
 
+export interface BrowserEvent {
+  kind: 'opened' | 'needs-you' | 'resolved';
+  at: number;
+  tabId?: string;
+  reason?: string;
+}
+
 export interface BrowserCardData {
   profile: string;
   /** Absolute, tailnet when known — the link you can open on a phone. */
@@ -24,6 +31,8 @@ export interface BrowserCardData {
   wheel: BrowserWheelLease | null;
   /** Set when an agent has explicitly asked for a person. */
   needsYou?: { reason: string; at: number } | null;
+  /** The moments worth a card, oldest first. */
+  events?: BrowserEvent[];
 }
 
 export type BrowserCardTone = 'idle' | 'working' | 'blocked' | 'yours';
@@ -165,4 +174,152 @@ export function visibleBrowsers(browsers: readonly BrowserCardData[]): BrowserCa
  */
 export function browserViewerPath(profile: string): string {
   return `/browser/${profile}/`;
+}
+
+/** One card in a conversation: a thing that happened, plus the browser it happened to. */
+export interface BrowserMoment {
+  kind: 'opened' | 'needs-you';
+  at: number;
+  reason?: string;
+  profile: string;
+  /** The browser as it is NOW, so the card can open it and read the wheel. */
+  browser: BrowserCardData;
+}
+
+/**
+ * The moments this conversation should draw, oldest first.
+ *
+ * WHAT CHANGED AND WHY. The card used to be pinned above the transcript: one
+ * per browser, always there, showing whatever was currently true. That made it
+ * a status light for a thing that is really a sequence of events — the browser
+ * opened, then later it got stuck. Both belong in the log where they happened,
+ * with the chat continuing past them, like a spawned worker's launch and its
+ * report.
+ *
+ * SCOPING, and the one judgement in here. A moment belongs to the chat it
+ * happened in, or it would appear in every conversation — the same noise the
+ * pinned card had, moved somewhere worse. But a moment with NO chat (a browser
+ * started from the CLI, or before anything recorded a tab) is shown everywhere
+ * rather than nowhere: a summons nobody can see is the failure this whole
+ * feature exists to prevent, and a card in the wrong place is merely untidy.
+ *
+ * `resolved` is dropped. It is bookkeeping that lets the server know a summons
+ * was answered; as a line in a conversation it says nothing a person needs.
+ */
+export function browserMoments(
+  browsers: readonly BrowserCardData[],
+  tabId: string,
+): BrowserMoment[] {
+  const out: BrowserMoment[] = [];
+  for (const browser of browsers) {
+    for (const event of browser.events ?? []) {
+      if (event.kind === 'resolved') continue;
+      if (event.tabId && event.tabId !== tabId) continue;
+      out.push({
+        kind: event.kind,
+        at: event.at,
+        ...(event.reason !== undefined ? { reason: event.reason } : {}),
+        profile: browser.profile,
+        browser,
+      });
+    }
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+
+/** Whether a browser can still be looked at. */
+function isLive(browser: BrowserCardData): boolean {
+  return browser.state === 'running' || browser.state === 'started';
+}
+
+/**
+ * A card drawn from a moment in the log.
+ *
+ * THE RULE THAT MATTERS: a summons stops shouting once it has been answered.
+ * The moment stays in the conversation forever — it happened, and the log is a
+ * record — but a card still demanding attention for something dealt with an
+ * hour ago is how you train somebody to ignore the one that counts. So
+ * urgency comes from the browser's CURRENT state, while the words come from
+ * what happened.
+ *
+ * And a moment outlives its browser. When the browser is gone there is no
+ * action: offering to open a viewer that is not running is a connection error
+ * inside an iframe, which reads as "muxpad is broken".
+ */
+export function browserMomentView(moment: BrowserMoment): BrowserCardView {
+  const { browser } = moment;
+  const live = isLive(browser);
+  const stillAsking = moment.kind === 'needs-you' && Boolean(browser.needsYou);
+
+  if (stillAsking) {
+    return {
+      tone: 'blocked',
+      title: 'Needs you in the browser',
+      detail: moment.reason ?? '',
+      action: live ? 'Take the wheel' : null,
+      urgent: true,
+    };
+  }
+
+  const action = !live ? null : browser.wheel?.holder === 'agent' ? 'Watch' : 'Open';
+  const detail = live ? (moment.kind === 'needs-you' ? (moment.reason ?? '') : '') : 'closed';
+
+  if (moment.kind === 'needs-you') {
+    return {
+      tone: browser.wheel?.holder === 'human' ? 'yours' : 'idle',
+      title: 'Needed you in the browser',
+      detail: moment.reason ?? detail,
+      action,
+      urgent: false,
+    };
+  }
+
+  return {
+    tone: browser.wheel?.holder === 'human' ? 'yours' : browser.wheel ? 'working' : 'idle',
+    title: `Browser opened · ${moment.profile}`,
+    detail,
+    action,
+    urgent: false,
+  };
+}
+
+/**
+ * Injects browser moments into a conversation's entries, in time order.
+ *
+ * Deliberately the same placement rule as spawn cards: a moment is emitted
+ * before the first entry that happened AFTER it, moments older than the loaded
+ * history come out at the top, and ones newer than the last entry come out at
+ * the bottom — which is where a browser that just opened belongs. An entry with
+ * NO time is not a boundary, because it cannot say whether the moment came
+ * before or after it, and guessing would move the card on the next reload.
+ *
+ * It returns ENTRIES rather than a tagged union, so the result drops straight
+ * into the existing spawn-card interleave without that function — or the file it
+ * lives in — needing to know browsers exist.
+ *
+ * Generic over the node type for the same reason as its sibling: placement is
+ * the half that can be wrong, and it is worth testing against ['a','b'] rather
+ * than a mounted six-thousand-line component.
+ */
+export function injectBrowserMoments<T>(
+  entries: readonly { at: number | null; node: T }[],
+  moments: readonly BrowserMoment[],
+  render: (moment: BrowserMoment) => T,
+): { at: number | null; node: T }[] {
+  const out: { at: number | null; node: T }[] = [];
+  let i = 0;
+  for (const entry of entries) {
+    if (entry.at !== null) {
+      while (i < moments.length && (moments[i] as BrowserMoment).at <= entry.at) {
+        const moment = moments[i++] as BrowserMoment;
+        out.push({ at: moment.at, node: render(moment) });
+      }
+    }
+    out.push(entry);
+  }
+  for (; i < moments.length; i++) {
+    const moment = moments[i] as BrowserMoment;
+    out.push({ at: moment.at, node: render(moment) });
+  }
+  return out;
 }

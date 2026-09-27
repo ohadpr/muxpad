@@ -26,9 +26,11 @@ afterEach(() => {
 
 const browser = (over: Record<string, unknown> = {}) => ({
   profile: 'shopping',
-  viewerUrl: 'http://127.0.0.1:9510',
+  viewerUrl: 'https://host.ts.net/browser/shopping/',
   state: 'running',
   wheel: null,
+  // A card is drawn from a MOMENT, so a browser with no history draws nothing.
+  events: [{ kind: 'opened', at: 100 }],
   ...over,
 });
 
@@ -63,9 +65,11 @@ const click = async (el: Element | undefined) =>
   });
 
 describe('listing', () => {
-  it('draws a card per browser the server reports', async () => {
+  it('draws a card per moment the server reports', async () => {
     const { impl } = fakeFetch(() => [browser(), browser({ profile: 'research' })]);
-    const { host } = await mount(<BrowserCards by="pane-7" fetchImpl={impl} pollMs={100000} />);
+    const { host } = await mount(
+      <BrowserCards by="pane-7" tabId="tab-1" fetchImpl={impl} pollMs={100000} />,
+    );
     expect(host.querySelectorAll('[data-testid="browser-card"]')).toHaveLength(2);
     expect(host.textContent).toContain('research');
   });
@@ -78,7 +82,9 @@ describe('listing', () => {
     }) as unknown as typeof fetch;
 
     vi.useFakeTimers();
-    const { host } = await mount(<BrowserCards by="pane-7" fetchImpl={impl} pollMs={50} />);
+    const { host } = await mount(
+      <BrowserCards by="pane-7" tabId="tab-1" fetchImpl={impl} pollMs={50} />,
+    );
     expect(host.querySelectorAll('[data-testid="browser-card"]')).toHaveLength(1);
     fail = true;
     await act(async () => {
@@ -89,27 +95,39 @@ describe('listing', () => {
 });
 
 describe('what gets a card at all', () => {
-  it('draws NOTHING when the browser is merely registered', async () => {
-    // The common case, and the reason this exists: a profile is registered at
-    // boot and stays registered, so without this every conversation carries a
-    // permanent card that says nothing and cannot be opened.
-    const { impl } = fakeFetch(() => [browser({ state: 'registered' })]);
-    const { host } = await mount(<BrowserCards by="pane-7" fetchImpl={impl} pollMs={100000} />);
+  it('draws NOTHING for a browser nothing has happened to', async () => {
+    // The old pinned card meant every conversation carried one forever. A card
+    // is now a MOMENT, so a browser that merely exists produces none.
+    const { impl } = fakeFetch(() => [browser({ events: [] })]);
+    const { host } = await mount(
+      <BrowserCards by="pane-7" tabId="tab-1" fetchImpl={impl} pollMs={100000} />,
+    );
     expect(host.querySelectorAll('[data-testid="browser-card"]')).toHaveLength(0);
   });
 
-  it('draws one the moment it is running', async () => {
-    const { impl } = fakeFetch(() => [browser({ state: 'running' })]);
-    const { host } = await mount(<BrowserCards by="pane-7" fetchImpl={impl} pollMs={100000} />);
-    expect(host.querySelectorAll('[data-testid="browser-card"]')).toHaveLength(1);
+  it('draws one card per moment, so opening and getting stuck are separate', async () => {
+    const { impl } = fakeFetch(() => [
+      browser({
+        events: [
+          { kind: 'opened', at: 100 },
+          { kind: 'needs-you', at: 500, reason: 'captcha' },
+        ],
+      }),
+    ]);
+    const { host } = await mount(
+      <BrowserCards by="pane-7" tabId="tab-1" fetchImpl={impl} pollMs={100000} />,
+    );
+    expect(host.querySelectorAll('[data-testid="browser-card"]')).toHaveLength(2);
   });
 
-  it('draws a stopped browser that is ASKING for you', async () => {
+  it('ignores a moment that happened in ANOTHER chat', async () => {
     const { impl } = fakeFetch(() => [
-      browser({ state: 'registered', needsYou: { reason: 'captcha', at: 1 } }),
+      browser({ events: [{ kind: 'opened', at: 100, tabId: 'somewhere-else' }] }),
     ]);
-    const { host } = await mount(<BrowserCards by="pane-7" fetchImpl={impl} pollMs={100000} />);
-    expect(host.querySelectorAll('[data-testid="browser-card"]')).toHaveLength(1);
+    const { host } = await mount(
+      <BrowserCards by="pane-7" tabId="tab-1" fetchImpl={impl} pollMs={100000} />,
+    );
+    expect(host.querySelectorAll('[data-testid="browser-card"]')).toHaveLength(0);
   });
 });
 
@@ -117,7 +135,13 @@ describe('opening', () => {
   it('TAKES THE WHEEL before showing the stream', async () => {
     const { impl, calls } = fakeFetch(() => [browser()]);
     const { host } = await mount(
-      <BrowserCards by="pane-7" fetchImpl={impl} pollMs={100000} viewportWidth={1440} />,
+      <BrowserCards
+        by="pane-7"
+        tabId="tab-1"
+        fetchImpl={impl}
+        pollMs={100000}
+        viewportWidth={1440}
+      />,
     );
     await click(buttons(host)[0]);
     const take = calls.find((c) => c.url.includes('/wheel/take'));
@@ -131,7 +155,13 @@ describe('opening', () => {
       browser({ needsYou: { reason: 'log in to Amazon', at: 1 } }),
     ]);
     const { host } = await mount(
-      <BrowserCards by="pane-7" fetchImpl={impl} pollMs={100000} viewportWidth={1440} />,
+      <BrowserCards
+        by="pane-7"
+        tabId="tab-1"
+        fetchImpl={impl}
+        pollMs={100000}
+        viewportWidth={1440}
+      />,
     );
     await click(buttons(host)[0]);
     expect(calls.find((c) => c.url.includes('/wheel/take'))?.body).toMatchObject({
@@ -142,7 +172,13 @@ describe('opening', () => {
   it('opens a modal on a desktop', async () => {
     const { impl } = fakeFetch(() => [browser()]);
     const { host } = await mount(
-      <BrowserCards by="pane-7" fetchImpl={impl} pollMs={100000} viewportWidth={1440} />,
+      <BrowserCards
+        by="pane-7"
+        tabId="tab-1"
+        fetchImpl={impl}
+        pollMs={100000}
+        viewportWidth={1440}
+      />,
     );
     await click(buttons(host)[0]);
     expect(document.querySelector('[data-testid="browser-modal"]')).toBeTruthy();
@@ -154,6 +190,7 @@ describe('opening', () => {
     const { host } = await mount(
       <BrowserCards
         by="pane-7"
+        tabId="tab-1"
         fetchImpl={impl}
         pollMs={100000}
         viewportWidth={390}
@@ -161,7 +198,7 @@ describe('opening', () => {
       />,
     );
     await click(buttons(host)[0]);
-    expect(openTab).toHaveBeenCalledWith('http://127.0.0.1:9510');
+    expect(openTab).toHaveBeenCalledWith('https://host.ts.net/browser/shopping/');
     expect(document.querySelector('[data-testid="browser-modal"]')).toBeNull();
   });
 });
@@ -172,7 +209,13 @@ describe('closing', () => {
     // the same stall the whole feature is meant to remove.
     const { impl, calls } = fakeFetch(() => [browser()]);
     const { host } = await mount(
-      <BrowserCards by="pane-7" fetchImpl={impl} pollMs={100000} viewportWidth={1440} />,
+      <BrowserCards
+        by="pane-7"
+        tabId="tab-1"
+        fetchImpl={impl}
+        pollMs={100000}
+        viewportWidth={1440}
+      />,
     );
     await click(buttons(host)[0]);
     const done = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Done');

@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { type BrowserAppState, ensureBrowserApp, listBrowserApps } from '../browser/BrowserApps.js';
 import { normalizeProfileName } from '../browser/BrowserProfile.js';
+import { type BrowserEvent, BrowserEvents } from '../browser/BrowserEvents.js';
 import { browserViewerLink, parseBrowserProxyPath } from '../browser/BrowserProxy.js';
 import {
   BrowserAttention,
@@ -48,6 +49,8 @@ import { findChrome } from '../browser/findChrome.js';
 export interface BrowserView extends BrowserAppState {
   /** The host's loopback origin. Used by the proxy, not by a person. */
   localUrl: string;
+  /** The moments worth a card in a conversation, oldest first. */
+  events: BrowserEvent[];
   /** Who is driving, or null. */
   wheel: WheelLease | null;
   /** Set when an agent has asked for a person, and why. */
@@ -66,10 +69,17 @@ const TakeSchema = z.object({
     .optional(),
 });
 
-const EnsureSchema = z.object({ profile: z.string().min(1).max(64) });
+const EnsureSchema = z.object({
+  profile: z.string().min(1).max(64),
+  /** The chat this happened in, so its card lands in the right log. */
+  tabId: z.string().min(1).max(64).optional(),
+});
 
 /** What the agent is stuck on, in words a person can act on. */
-const NeedsYouSchema = z.object({ reason: z.string().min(1).max(400) });
+const NeedsYouSchema = z.object({
+  reason: z.string().min(1).max(400),
+  tabId: z.string().min(1).max(64).optional(),
+});
 
 /**
  * Builds a TakeRequest without undefined-valued keys.
@@ -150,6 +160,7 @@ export function browsersRoutes(deps: {
   const app = new Hono();
   const wheel = new BrowserWheel(deps.db);
   const attention = new BrowserAttention(deps.db);
+  const events = new BrowserEvents(deps.db);
   const chromeFor = deps.chromePath ?? (() => findChrome());
 
   const view = (state: BrowserAppState): BrowserView => ({
@@ -162,6 +173,7 @@ export function browsersRoutes(deps: {
     localUrl: state.viewerUrl,
     wheel: wheel.holder(state.profile),
     needsYou: attention.get(state.profile),
+    events: events.list(state.profile),
   });
 
   const find = (profile: string): BrowserAppState | null =>
@@ -213,6 +225,13 @@ export function browsersRoutes(deps: {
       registry: deps.registry,
       cwd: deps.cwd,
     });
+    // Only when it actually STARTS. ensureBrowserApp says 'started' exactly when
+    // it launched one and 'running' when it was already up — asking twice is
+    // idempotent, and an "opened" card per poll would bury the conversation it
+    // is supposed to sit inside.
+    if (state.state === 'started') {
+      events.record(profile, { kind: 'opened', ...(parsed.data.tabId ? { tabId: parsed.data.tabId } : {}) });
+    }
     return c.json(view(state), 201);
   });
 
@@ -239,6 +258,7 @@ export function browsersRoutes(deps: {
     wheel.take(profile, takeRequest(parsed.data, 'human'));
     // Arriving IS the acknowledgement. An explicit ack nobody presses is how a
     // card ends up shouting after the thing was dealt with.
+    if (attention.get(profile)) events.record(profile, { kind: 'resolved' });
     attention.clear(profile);
     return c.json(view(state));
   });
@@ -275,6 +295,11 @@ export function browsersRoutes(deps: {
     if (!parsed.success) return c.json({ error: 'reason is required' }, 400);
 
     attention.raise(profile, parsed.data.reason);
+    events.record(profile, {
+      kind: 'needs-you',
+      reason: parsed.data.reason,
+      ...(parsed.data.tabId ? { tabId: parsed.data.tabId } : {}),
+    });
     return c.json(view(state));
   });
 
