@@ -28,7 +28,7 @@ const props = (over: Partial<Parameters<typeof SwipeRow>[0]> = {}) => ({
   unread: false,
   onPin: vi.fn(),
   onSetUnread: vi.fn(),
-  onClose: vi.fn(),
+  onArchive: vi.fn(),
   ...over,
 });
 
@@ -41,14 +41,16 @@ describe('the tray offers three actions', () => {
     expect(buttons).toHaveLength(SWIPE_ACTION_COUNT);
   });
 
-  it('orders them Pin · Unread · Close — destructive LAST', () => {
+  it('orders them Pin · Unread · Archive — the one you mean LAST', () => {
     const h = render();
     // The tray is `justify-content: flex-end`, so DOM order is left-to-right
     // and the last button sits hard against the row's right edge — the same
-    // 0..SWIPE_ACTION_WIDTH band Close occupied before the third action
-    // arrived, which is the one position worth holding still.
+    // 0..SWIPE_ACTION_WIDTH band this action occupied before the third one
+    // arrived, which is the one position worth holding still. It is also the
+    // position a thumb reaches first, which matters more now that it is the
+    // action somebody actually wants rather than the one they were avoiding.
     expect(h.indexOf('-pin')).toBeLessThan(h.indexOf('-unread'));
-    expect(h.indexOf('-unread')).toBeLessThan(h.indexOf('-close'));
+    expect(h.indexOf('-unread')).toBeLessThan(h.indexOf('-archive'));
   });
 
   it('lays the rendered buttons out to exactly the distance the row slides', () => {
@@ -75,11 +77,11 @@ describe('mark unread names the state it produces', () => {
     expect(render()).toContain('aria-label="Mark chat Investing unread"');
   });
 
-  it('keeps Close armed-on-second-tap — the confirm is not traded away', () => {
-    // The tray gained an action; the destructive one keeps its two-tap gate.
+  it('offers ARCHIVE, not close — the tray destroys nothing', () => {
     const h = render();
-    expect(h).toContain('aria-label="Close chat Investing"');
-    expect(h).toContain('Close');
+    expect(h).toContain('aria-label="Archive chat Investing"');
+    expect(h).toContain('Archive');
+    expect(h).not.toContain('Sure?');
   });
 
   it('hides every action from the tab order while the row is shut', () => {
@@ -181,38 +183,46 @@ describe('tapping mark unread', () => {
     const m = mount();
     m.click('-unread');
     expect(m.p.onPin).not.toHaveBeenCalled();
-    expect(m.p.onClose).not.toHaveBeenCalled();
+    expect(m.p.onArchive).not.toHaveBeenCalled();
   });
 });
 
-describe('Close still takes two taps, with a third action in the tray', () => {
-  const armed = (m: ReturnType<typeof mount>) =>
-    (m.el().querySelector('.swiperow-action.-close') as HTMLElement).getAttribute('data-armed');
-
-  it('arms on the first tap and only destroys on the second', () => {
+describe('archiving takes ONE tap, and that is the change', () => {
+  /**
+   * It used to take three deliberate acts to tidy one row: the swipe, an armed
+   * "Sure?" here, and a window.confirm inside the delete it called. All three
+   * were honest while the button destroyed a chat — and all three were why
+   * nobody used it, so the rail filled up instead.
+   *
+   * It archives now. The chat drops into the done group with its transcript
+   * intact, stays findable by `@`, and a message revives it. An action you can
+   * undo by talking to the chat does not need a gate, let alone two.
+   */
+  it('fires on the first tap', () => {
     const m = mount();
     m.swipeOpen();
-    m.click('-close');
-    expect(m.p.onClose).not.toHaveBeenCalled();
-    expect(armed(m)).toBe('true');
-    expect((m.el().querySelector('.swiperow-action.-close') as HTMLElement).textContent).toContain(
-      'Sure?',
-    );
-    m.click('-close');
-    expect(m.p.onClose).toHaveBeenCalledTimes(1);
+    m.click('-archive');
+    expect(m.p.onArchive).toHaveBeenCalledTimes(1);
   });
 
-  it('DISARMS when the tray is dismissed by another action', () => {
-    // Arming points a loaded Close at a chat. Tapping Unread closes the tray,
-    // and a tray that came back still armed would destroy on what the user
-    // experiences as a first tap. Only observable through a real open/close
-    // cycle — the disarm rides the "someone closed this row" listener.
+  it('shuts the tray as it goes, so the row does not sit open behind it', () => {
     const m = mount();
     m.swipeOpen();
-    m.click('-close');
-    expect(armed(m)).toBe('true');
-    m.click('-unread');
-    expect(armed(m)).toBeNull();
-    expect(m.p.onClose).not.toHaveBeenCalled();
+    m.click('-archive');
+    expect(m.el().querySelector('.swiperow-face')).not.toHaveProperty(
+      'style.transform',
+      expect.stringContaining('-'),
+    );
+  });
+
+  it('has no armed state left to come back wrong', () => {
+    // The old disarm bug: a tray dismissed while armed and reopened would
+    // destroy on what the user experiences as a first tap. There is nothing to
+    // arm now, which is the only fix that cannot regress.
+    const m = mount();
+    m.swipeOpen();
+    expect(
+      (m.el().querySelector('.swiperow-action.-archive') as HTMLElement).getAttribute('data-armed'),
+    ).toBeNull();
   });
 });
