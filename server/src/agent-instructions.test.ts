@@ -231,3 +231,19 @@ describe('the browser policy teaches the handoff', () => {
     expect(policy).toMatch(/409|human has the wheel/i);
   });
 });
+
+
+describe('the summons is one short line', () => {
+  const policy = AGENT_INSTRUCTIONS_SEED;
+
+  it('asks for a handful of words, not a paragraph', () => {
+    // The reason is the whole content of a card in a conversation, and a card
+    // is one line wide on a phone. A model given no budget writes three
+    // sentences of context nobody reads on a 390px screen.
+    expect(policy).toMatch(/five|5 words|one line/i);
+  });
+
+  it('shows what a good one looks like, because a rule alone is ignored', () => {
+    expect(policy).toMatch(/Amazon needs a login|e\.g\./i);
+  });
+});

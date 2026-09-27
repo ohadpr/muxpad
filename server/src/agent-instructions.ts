@@ -196,6 +196,21 @@ you do instead is ask for the human, in one call:
 curl -sS -X POST "\$MUXPAD_API_URL/api/browsers/s-\$MUXPAD_TAB_ID/needs-you" -H 'content-type: application/json' -d '{"reason":"<what you are stuck on, in their words>","tabId":"'"\$MUXPAD_TAB_ID"'"}'
 \`\`\`
 
+\`reason\` IS THE CARD. Keep it to ONE SHORT LINE — about five words, no
+trailing period. It appears on a phone, in a conversation, at the width of a
+sentence; three sentences of context get truncated and nobody reads the rest.
+Say the thing that is in the way, not the story of how you got there:
+
+    good    "Amazon needs a login"
+    good    "Captcha on the checkout page"
+    good    "Ulta Labs blocks my browser"
+    bad     "Amazon bounced me to the sign-in page for your order history — sign
+             in (and clear any 2FA) and hand the browser back, and I'll read
+             your recent orders."
+
+What you would have put in the long version belongs in your REPLY, where there
+is room for it. The card is a doorbell, not a letter.
+
 The profile is \`s-\$MUXPAD_TAB_ID\` — YOUR browser, the one you are stuck in.
 Summoning somebody to any other browser asks them to log in somewhere you cannot
 see, which is the bug this replaced. A card appears in that conversation, goes
