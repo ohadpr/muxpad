@@ -280,7 +280,6 @@ describe('asking for a person', () => {
   });
 });
 
-
 describe('the moments a conversation shows', () => {
   it('records an "opened" when the browser actually starts', async () => {
     const res = await post('/api/browsers', { profile: 'shopping', tabId: 'tab-1' });
@@ -324,5 +323,28 @@ describe('the moments a conversation shows', () => {
     const res = await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
     const body = (await res.json()) as { events: Array<{ kind: string }> };
     expect(body.events.map((e) => e.kind)).toEqual(['opened']);
+  });
+});
+
+describe('harvesting the jar', () => {
+  it('exports after a person hands the browser back', async () => {
+    // That moment is overwhelmingly "a login just happened". Without this the
+    // login reaches the jar only if somebody calls /storage-state later, which
+    // is nobody, and the next session starts cold.
+    const seen: string[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (url: string) => {
+      seen.push(String(url));
+      return { ok: true, json: async () => ({}) };
+    }) as unknown as typeof fetch;
+    try {
+      await ensure();
+      await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
+      await del('/api/browsers/shopping/wheel', { by: 'pane-7' });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(seen.some((u) => u.endsWith('/storage-state'))).toBe(true);
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });

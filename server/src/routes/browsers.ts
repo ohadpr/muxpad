@@ -2,8 +2,8 @@ import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { type BrowserAppState, ensureBrowserApp, listBrowserApps } from '../browser/BrowserApps.js';
-import { normalizeProfileName } from '../browser/BrowserProfile.js';
 import { type BrowserEvent, BrowserEvents } from '../browser/BrowserEvents.js';
+import { normalizeProfileName } from '../browser/BrowserProfile.js';
 import { browserViewerLink, parseBrowserProxyPath } from '../browser/BrowserProxy.js';
 import {
   BrowserAttention,
@@ -147,6 +147,18 @@ export function browserProxyRoutes(deps: {
   return app;
 }
 
+/**
+ * Asks a host to write the shared jar.
+ *
+ * Fire-and-forget on purpose: it runs on the path where a person hands the
+ * browser back, and that response must not wait on — or fail because of — a
+ * cookie export. A jar that is one login stale is a much smaller problem than a
+ * handoff that appears to hang.
+ */
+async function harvestJar(localUrl: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  await fetchImpl(`${localUrl}/storage-state`).catch(() => undefined);
+}
+
 export function browsersRoutes(deps: {
   db: Database.Database;
   dataDir: string;
@@ -230,7 +242,10 @@ export function browsersRoutes(deps: {
     // idempotent, and an "opened" card per poll would bury the conversation it
     // is supposed to sit inside.
     if (state.state === 'started') {
-      events.record(profile, { kind: 'opened', ...(parsed.data.tabId ? { tabId: parsed.data.tabId } : {}) });
+      events.record(profile, {
+        kind: 'opened',
+        ...(parsed.data.tabId ? { tabId: parsed.data.tabId } : {}),
+      });
     }
     return c.json(view(state), 201);
   });
@@ -338,6 +353,11 @@ export function browsersRoutes(deps: {
     if (!parsed.success) return c.json({ error: 'by is required' }, 400);
 
     wheel.release(profile, parsed.data.by);
+    // A person has just finished with the browser, which is overwhelmingly when
+    // a LOGIN has just happened. Harvest it into the shared jar now, so the next
+    // session starts warm — otherwise the login only ever reaches whoever
+    // happens to call /storage-state later, which is nobody.
+    void harvestJar(state.viewerUrl).catch(() => {});
     return c.json(view(state));
   });
 

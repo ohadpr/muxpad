@@ -13,8 +13,10 @@ import { adoptServePanes } from './apps/adopt-serve-panes.js';
 import { ArchiveDb } from './archive/ArchiveDb.js';
 import { Archiver } from './archive/Archiver.js';
 import { ensureBrowserApp, listBrowserApps } from './browser/BrowserApps.js';
+import { browserAppSlug } from './browser/BrowserProfile.js';
 import { DEFAULT_BROWSER_PROFILES } from './browser/BrowserProfile.js';
 import { parseBrowserProxyPath } from './browser/BrowserProxy.js';
+import { sessionBrowsersToReap } from './browser/SessionReaper.js';
 import { findChrome } from './browser/findChrome.js';
 import { browserHostEntry } from './browser/hostEntry.js';
 import { HeadlineWriter } from './chat/HeadlineWriter.js';
@@ -36,6 +38,7 @@ import { releaseResidentPane } from './resident-release.js';
 import { startServeSupervisor } from './serve-supervisor.js';
 import { createApp } from './server.js';
 import { mountStaticWeb } from './static-assets.js';
+import { AppStore } from './store/AppStore.js';
 import { GlobalsStore } from './store/GlobalsStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
@@ -621,6 +624,37 @@ void (async () => {
     });
   }
 })().catch((err) => console.error('[browser] boot registration failed', err));
+
+// Session browsers whose tab is gone. Each one is a real Chrome — about 200 MB
+// — and one per agent tab with nothing collecting them is the memory complaint
+// this whole project started from, rebuilt out of its own parts.
+//
+// Swept on a timer rather than on tab.removed, because the interesting case is
+// the one no event covers: a tab that went away while the server was down.
+const REAP_EVERY_MS = 5 * 60 * 1000;
+const reapSessionBrowsers = async () => {
+  try {
+    const live = new Set(
+      db
+        .prepare('SELECT id FROM tabs')
+        .all()
+        .map((r) => String((r as { id: string }).id)),
+    );
+    // An empty table is a real answer ONLY if the read worked; a throw lands in
+    // the catch below and reaps nothing, which is the safe direction.
+    const apps = new AppStore(db);
+    for (const profile of sessionBrowsersToReap(listBrowserApps(db), live)) {
+      const row = apps.getBySlug(browserAppSlug(profile));
+      if (!row?.enabled) continue;
+      await appRegistry.stop(row.id);
+      console.log(`[browser] reaped '${profile}' — its tab is gone`);
+    }
+  } catch (err) {
+    console.error('[browser] reap failed', err);
+  }
+};
+setInterval(() => void reapSessionBrowsers(), REAP_EVERY_MS).unref();
+void reapSessionBrowsers();
 
 // Durable schedules. The tick starts only now, with the ws layer attached and
 // the runner registry live behind the bridge; its own 15s startup grace then

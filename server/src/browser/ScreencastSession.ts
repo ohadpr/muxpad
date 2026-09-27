@@ -47,6 +47,17 @@ export interface ScreencastFrame {
 
 export interface ScreencastOptions {
   onFrame: (frame: ScreencastFrame) => void;
+  /**
+   * Forces one compositor commit.
+   *
+   * Overridable because the DEFAULT — toggle a device-metrics override, then
+   * clear it — destroys any emulation somebody else has deliberately set. That
+   * is not hypothetical: turning on the mobile layout applied metrics, a reload
+   * re-armed the screencast, the re-arm's kick cleared them, and the page went
+   * back to 1280px while still claiming to be a phone. A caller that owns
+   * emulation state passes its own kick that restores rather than clears.
+   */
+  kick?: () => Promise<void>;
   /** JPEG quality, 0-100. */
   quality?: number;
   /** Send every Nth frame; 1 is every frame. */
@@ -118,6 +129,14 @@ export class ScreencastSession {
    * until the page next changes by itself.
    */
   private async kickRepaint(): Promise<void> {
+    if (this.opts.kick) {
+      try {
+        await this.opts.kick();
+      } catch (err) {
+        this.report('kick', err);
+      }
+      return;
+    }
     try {
       const m = (await this.cdp.send('Page.getLayoutMetrics')) as {
         cssLayoutViewport?: { clientWidth: number; clientHeight: number };

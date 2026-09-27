@@ -24,6 +24,7 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   #home:hover{background:#23232e}
   #bar button{flex:none;background:transparent;border:1px solid #33333f;color:#d8d8e2;border-radius:6px;font:inherit;font-size:15px;line-height:1;padding:4px 9px;cursor:pointer}
   #bar button:hover{background:#23232e}
+  #bar button[aria-pressed="true"]{background:#2b3a55;border-color:#4a6ea8;color:#cfe2ff}
   /* The address, truncated from the LEFT: the end of a url is the part that
      says which page you are on. */
   #url{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;color:#9a9aab;font-size:11px}
@@ -46,6 +47,7 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   <button id="navBack" title="back">&#8249;</button>
   <button id="navFwd" title="forward">&#8250;</button>
   <button id="navReload" title="reload">&#8635;</button>
+  <button id="mobile" title="mobile site" aria-pressed="false">&#128241;</button>
   <span id="url" title="">–</span>
   <span id="msg"></span>
 </div>
@@ -127,6 +129,23 @@ img.addEventListener('keydown', (e) => { e.preventDefault(); send({ t:'key', key
 
 for (const [id, action] of [['navBack','back'],['navFwd','forward'],['navReload','reload']]) {
   document.getElementById(id).addEventListener('click', () => send({ t:'nav', action }))
+}
+
+// Mobile layout. Defaults ON when the viewer itself is phone-sized, because
+// that is the case it exists for and asking somebody to find a toggle first is
+// asking them to read a desktop page on a phone once.
+const mobileBtn = document.getElementById('mobile')
+let mobileOn = false
+const setMobile = (on) => {
+  mobileOn = on
+  mobileBtn.setAttribute('aria-pressed', String(on))
+  send({ t:'emulate', mobile: on })
+}
+mobileBtn.addEventListener('click', () => setMobile(!mobileOn))
+if (window.innerWidth < 700) {
+  // After the socket is up, not before — the message would be dropped.
+  const arm = () => setMobile(true)
+  if (ws.readyState === 1) arm(); else ws.addEventListener('open', arm, { once: true })
 }
 
 document.getElementById('fpick').addEventListener('change', async (e) => {
