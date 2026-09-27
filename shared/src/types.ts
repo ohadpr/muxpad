@@ -476,6 +476,22 @@ export const TabSchema = z.object({
   //                 parent as a card
   //   'archived'  — the user did it by hand (the row's ×)
   done_reason: z.enum(['decayed', 'delivered', 'archived']).optional(),
+  // WHEN it finished — epoch ms, null while it is live.
+  //
+  // A worker's conversation draws TWO entries for it: the LAUNCH at its
+  // `created_at` ("you started this") and the COMPLETION at this one ("and here
+  // is what came back"). One card that mutated in place instead is invisible the
+  // moment the log has scrolled past it, which is exactly when a long job
+  // finishes — so the result has to arrive where the reader is looking.
+  //
+  // The RETIREMENT stamp, not the spawn report's: that one is an attempt clock
+  // which advances on failures and is rate-limited, so it can land half an hour
+  // after the work ended. For a chat that decayed there was no event to stamp,
+  // so it is the clock's own expiry.
+  //
+  // Unconditional (null, not absent) for the same reason as `done` — a client
+  // coalescing rows must be able to un-say it.
+  done_at: z.number().nullable().optional(),
   // How far through its clock the chat is — the one input the sidebar chip
   // renders (white → filling → dashed on the last day).
   //

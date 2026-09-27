@@ -4496,17 +4496,40 @@ export function ChatPane({
           // live-patched from the server's own `tab.updated` (lib/all-tabs), so
           // nothing here polls and nothing caches a state.
           const state = spawnState(kid);
-          // ITS WORK IS OVER — delivered, archived, or crashed. The one condition
-          // that decides whether this card has anything to show beyond a name.
-          const finished = state !== 'working';
-          // The generated report, when the server has written one
-          // (server/src/chat/spawn-report.ts). Absent is the ordinary state for
-          // every child that finished before this existed.
+          // ONE state resolution shared by both entries, read off the corpus
+          // every render — which is what keeps it honest after either card has
+          // scrolled up. The corpus is live-patched from the server's own
+          // `tab.updated` (lib/all-tabs), so nothing here polls.
+          if (x.card.kind === 'launch') {
+            // THE LAUNCH. "you started this, and it is running." Nothing else:
+            // at a launch there is nothing to summarise, and once the work is
+            // over its outcome lives on the completion entry at the bottom of the
+            // log. Repeating it here would put the same fact in two places, with
+            // the copy nobody can see being the one claiming to be current.
+            //
+            // So the mark SPINS while the child works and the slot is EMPTY once
+            // it is finished. This card stops being a live indicator and becomes
+            // what it always was underneath: the record that a launch happened.
+            const anchorId = `spawn-${kid.tabId}`;
+            return (
+              <ChatMentionCard
+                key={anchorId}
+                anchorId={anchorId}
+                chat={kid.chip}
+                working={state === 'working'}
+                onOpen={() => openChat(kid)}
+              />
+            );
+          }
+          // THE COMPLETION — a SECOND entry, at the moment the work ended, which
+          // is where the reader is looking when a long job finishes. Everything
+          // the result is lives here.
           const report = kid.report;
-          const expanded = finished && expandedReports.has(kid.tabId);
+          const expanded = expandedReports.has(kid.tabId);
           const work = expanded ? reportWork.get(kid.tabId) : undefined;
-          // Also the scroll anchor, so expanding holds the row (see toggleReport).
-          const anchorId = `spawn-${kid.tabId}`;
+          // Its own anchor, so the two entries are separately addressable by the
+          // scroll memory and expanding one holds the right row.
+          const anchorId = `done-${kid.tabId}`;
           return (
             <ChatMentionCard
               key={anchorId}
@@ -4528,17 +4551,19 @@ export function ChatPane({
               // ws.ts (4,812) and C…", which is the truncation this whole feature
               // is written against. The body wraps and takes a reading measure.
               body={report ? spawnReportSummary(report) : undefined}
-              working={state === 'working'}
+              // A completion card only exists for a finished child, so `working`
+              // is unreachable here — narrowed rather than asserted, because the
+              // compiler cannot know that and a cast would hide it if it changed.
               state={state === 'working' ? undefined : state}
               tone={state === 'working' ? undefined : state}
               expanded={expanded}
               work={expanded ? <SpawnWorkBody work={work} onOpenImage={setOpenImage} /> : undefined}
-              // OFFERED ON EVERY FINISHED CHILD, and deliberately NOT gated on the
-              // summary existing. The expansion is the child's own final message,
-              // read from the transcript endpoint — so "what did this thing
-              // actually do" is answerable for every worker already in this log,
-              // whether or not a report has ever been generated for it.
-              onToggleExpanded={finished ? () => toggleReport(kid, anchorId) : undefined}
+              // ALWAYS OFFERED, and deliberately NOT gated on the summary
+              // existing. The expansion is the child's own final message, read
+              // from the transcript endpoint — so "what did this thing actually
+              // do" is answerable for every worker already in this log, whether or
+              // not a report has ever been generated for it.
+              onToggleExpanded={() => toggleReport(kid, anchorId)}
               onOpen={() => openChat(kid)}
             />
           );
