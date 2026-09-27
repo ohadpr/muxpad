@@ -226,6 +226,114 @@ describe('retiring a sub-chat when it delivers', () => {
     });
   });
 
+  /**
+   * ── THE OTHER QUESTION THE SAME TURN-END ANSWERS ───────────────────────────
+   *
+   * "Is this worker finished?" and "should its row leave the live list?" are two
+   * questions, and the keep-list answers both at once — which is why hanging the
+   * spawn report off RETIREMENT would have missed the two cases that need it
+   * most. A crashed worker and one that produced a file both keep their live
+   * rows deliberately, and both have unambiguously stopped working.
+   *
+   * So `keepOpen` is split by WHY it holds the row, and the report rides the
+   * finish rather than the retirement:
+   *
+   *   still working / not one unit of work  → neither. Nothing has happened yet.
+   *   finished, but keep the row            → report, no retirement.
+   *   finished, nothing holding it          → both.
+   *
+   * Retirement itself is byte-for-byte the same decision it was — every test
+   * above still holds — which is the property this describe block exists to pin
+   * alongside the new one.
+   */
+  describe('onFinished — the work has ended, whether or not the row leaves', () => {
+    /** Run one turn-end and report what each half decided. */
+    function turn(
+      paneId: string,
+      phase: 'done' | 'fatal',
+    ): { retired: boolean; finished: Array<{ tabId: string; crashed: boolean }> } {
+      const finished: Array<{ tabId: string; crashed: boolean }> = [];
+      const retirer = new ChatRetirer({
+        ...deps,
+        onFinished: (tabId, _paneId, o) => finished.push({ tabId, crashed: o.crashed }),
+      });
+      const retired = retirer.onTurnEnded({ pane_id: paneId, phase });
+      return { retired, finished };
+    }
+
+    it('fires alongside an ordinary retirement', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const { retired, finished } = turn(child.pane, 'done');
+      expect(retired).toBe(true);
+      expect(finished).toEqual([{ tabId: child.tab, crashed: false }]);
+    });
+
+    it('FIRES FOR A CRASHED WORKER, which never retires', () => {
+      // The case that decided the trigger. `keepOpen` holds a fatal run open
+      // because a crashed run is what you want to look at — so a report hung off
+      // retirement alone would be silent about exactly the failure the parent
+      // most needs to hear about, and the card would spin forever.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const { retired, finished } = turn(child.pane, 'fatal');
+      expect(retired).toBe(false);
+      expect(finished).toEqual([{ tabId: child.tab, crashed: true }]);
+    });
+
+    it('fires for a worker held open by an ARTIFACT — it made you something', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      db.prepare(
+        'INSERT INTO attachments (id, pane_id, mime, path, created_at) VALUES (?,?,?,?,?)',
+      ).run('a1', child.pane, 'image/png', '/tmp/x.png', Date.now());
+      const { retired, finished } = turn(child.pane, 'done');
+      expect(retired).toBe(false);
+      expect(finished.map((f) => f.tabId)).toEqual([child.tab]);
+    });
+
+    it('stays silent while the worker still has work coming', () => {
+      // Each of these means the agent is not finished, so there is nothing to
+      // report on yet — and a report per intermediate turn is a model call per
+      // intermediate turn.
+      const parent = chat('parent');
+      const blocked = chat('blocked', parent.tab);
+      blockedPanes.add(blocked.pane);
+      expect(turn(blocked.pane, 'done').finished).toEqual([]);
+
+      const busy = chat('busy', parent.tab);
+      cache.setSubagentCount(busy.pane, 1);
+      expect(turn(busy.pane, 'done').finished).toEqual([]);
+
+      const queued = chat('queued', parent.tab);
+      db.prepare(
+        'INSERT INTO agent_queue (id, pane_id, seq, text, created_at) VALUES (?,?,?,?,?)',
+      ).run('q1', queued.pane, 1, 'and then this', Date.now());
+      expect(turn(queued.pane, 'done').finished).toEqual([]);
+
+      const split = chat('split', parent.tab);
+      panes.create({ tab_id: split.tab, shell: '/bin/zsh', cwd: '/tmp' });
+      expect(turn(split.pane, 'done').finished).toEqual([]);
+    });
+
+    it('reports a PINNED worker, which is finished but never retires', () => {
+      // Pinning answers "does this row expire", not "did this work end". A
+      // pinned worker whose card said nothing forever would be the original
+      // complaint, reachable by one click of the pin.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      tabs.setPinned(child.tab, true);
+      const { retired, finished } = turn(child.pane, 'done');
+      expect(retired).toBe(false);
+      expect(finished.map((f) => f.tabId)).toEqual([child.tab]);
+    });
+
+    it('stays silent for a TOP-LEVEL chat — it has no parent to report to', () => {
+      const top = chat('top');
+      expect(turn(top.pane, 'done').finished).toEqual([]);
+    });
+  });
+
   describe('clearReadyMarks — the ready expiry itself', () => {
     it('clears the tab mark and every pane mark, and says so', () => {
       const c = chat('x');

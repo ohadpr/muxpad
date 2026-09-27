@@ -38,6 +38,9 @@ interface TabRow {
   clock_started_at: number | null;
   retired_at: number | null;
   retired_reason: string | null;
+  spawn_report: string | null;
+  spawn_report_at: number | null;
+  spawn_report_state: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -45,6 +48,23 @@ interface TabRow {
 /** Why a chat left the live list by an ACT rather than by the clock.
  *  `decayed` is never stored — it is what the clock says. */
 export type RetireReason = 'delivered' | 'archived';
+
+/**
+ * What KIND of spawn report a child's row carries.
+ *
+ * Three outcomes that must not read as one shrug (see the v29 migration):
+ * `ok` we wrote one, `none` the child produced nothing and says so, `crashed`
+ * its last turn was fatal. A fourth state — we could not summarise at all — is
+ * the ABSENCE of this column, deliberately: nothing renders for it.
+ */
+export type SpawnReportState = 'ok' | 'none' | 'crashed';
+
+/** A generated report, as it is written. `report` is null for a state that
+ *  stands on its own (`none`, and a `crashed` child that got nothing done). */
+export interface SpawnReportWrite {
+  report: string | null;
+  state: SpawnReportState;
+}
 
 /**
  * ONE projection, used by both the list read and the single-row read, so the
@@ -551,6 +571,46 @@ export class TabStore {
     this.db.prepare('UPDATE tabs SET headline_at = ? WHERE id = ?').run(at, id);
   }
 
+  /**
+   * Write a sub-chat's spawn report, stamping the attempt clock in the same
+   * statement so the two can never disagree — `setHeadline`'s arrangement, for
+   * `setHeadline`'s reason, including staying off `update()` and therefore off
+   * `updated_at` (a report is not a structural edit to the tab).
+   *
+   * The TEXT and the STATE are written together and either may be null-ish:
+   * `{report: null, state: 'none'}` is the child that produced nothing, and it
+   * is a real answer rather than a failure. The failure is
+   * {@link touchSpawnReportAt}, which writes neither.
+   */
+  setSpawnReport(id: string, write: SpawnReportWrite, at: number = Date.now()): void {
+    this.db
+      .prepare(
+        'UPDATE tabs SET spawn_report = ?, spawn_report_state = ?, spawn_report_at = ? WHERE id = ?',
+      )
+      .run(write.report, write.state, at, id);
+  }
+
+  /**
+   * Advance the spawn-report rate limiter WITHOUT writing a report.
+   *
+   * `touchHeadlineAt`'s twin, and the same hard-won rule: the clock counts
+   * ATTEMPTS, because the expensive thing is the call. A child whose model call
+   * keeps failing — no login, an SDK import error, a reply that is not a report
+   * — would otherwise spawn a fresh subprocess every time it finished a turn,
+   * and a crashed child finishes turns in a loop.
+   */
+  touchSpawnReportAt(id: string, at: number = Date.now()): void {
+    this.db.prepare('UPDATE tabs SET spawn_report_at = ? WHERE id = ?').run(at, id);
+  }
+
+  /** When a spawn report was last ATTEMPTED for this chat; null if never. */
+  spawnReportAt(id: string): number | null {
+    const r = this.db.prepare('SELECT spawn_report_at FROM tabs WHERE id = ?').get(id) as
+      | { spawn_report_at: number | null }
+      | undefined;
+    return r?.spawn_report_at ?? null;
+  }
+
   /** When this tab's headline was last written; null if never. */
   headlineAt(id: string): number | null {
     const r = this.db.prepare('SELECT headline_at FROM tabs WHERE id = ?').get(id) as
@@ -687,6 +747,21 @@ export class TabStore {
       // publishes as `clock`. Shipping the raw column too would put two
       // timestamps on one row that disagree for every child chat.
       ...(x.spawned_by ? { spawned_by: x.spawned_by } : {}),
+      // THE SPAWN REPORT, present only when there is one — which for every chat
+      // nobody spawned is never. Three null fields on every row of every
+      // sidebar poll would be payload, and three more inputs to the client's
+      // change-dedup signature, for a permanent non-state. `_at` rides on the
+      // STATE rather than on its own: an attempt with nothing to show for it
+      // (state NULL) is a rate-limiter fact the client has no use for, and
+      // publishing the timestamp alone would put a report entry in the log with
+      // nothing in it.
+      ...(x.spawn_report_state
+        ? {
+            spawn_report: x.spawn_report,
+            spawn_report_at: x.spawn_report_at,
+            spawn_report_state: x.spawn_report_state as SpawnReportState,
+          }
+        : {}),
       // `icon_sticky` is deliberately NOT surfaced. Nothing on the client
       // branches on it — the picker sets it as a side effect of PATCHing an
       // icon, and the rail renders whatever glyph it is handed — so adding it

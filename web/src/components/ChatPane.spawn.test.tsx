@@ -167,8 +167,42 @@ describe('the spawn cards and the roster read ONE list', () => {
     expect(BODY).toContain('interleaveSpawnCards(items, spawnedCards)');
     expect(BODY).toContain('<ChatMentionCard');
     // The indicator is read off the corpus at render time — not latched at spawn
-    // — which is what keeps it honest after the card has scrolled up.
-    expect(BODY).toContain('working={!x.card.chat.done}');
+    // — which is what keeps it honest after the card has scrolled up. It used to
+    // be `working={!x.card.chat.done}` inline; the resolution moved to
+    // `spawnState` in the lib (where `failed` is tested, and where the reason a
+    // crashed worker must not read as working is written down), but the property
+    // this pins is the same one: a fresh read of the corpus row, every render.
+    expect(BODY).toContain('spawnState(kid)');
+    expect(BODY).toContain("working={state === 'working'}");
+  });
+
+  it('EXPANDS THE REPORT IN PLACE, and keeps the link out too', () => {
+    // "the summary when it shows should have an expand button to show the
+    // archived sub-chat or something." Both controls, not one: the disclosure
+    // reads the work here, the head still goes there.
+    expect(BODY).toContain('onToggleExpanded={report ?');
+    expect(BODY).toContain('onOpen={() => openChat(kid)}');
+    expect(BODY).toContain('<SpawnWorkBody');
+  });
+
+  it('holds the reader’s row when a card changes height', () => {
+    // A disclosure in the middle of a scrolling log is the ActionGroup fold's
+    // problem exactly, and it has a solution already: measure the row BEFORE the
+    // commit. The card has to carry the anchor for that to resolve — without
+    // `anchorId` the hold is a silent no-op.
+    expect(SRC).toMatch(
+      /const toggleReport = useCallback\(\s*\n?\s*\([^)]*\) => \{\s*\n(\s*\/\/[^\n]*\n)*\s*onFoldToggled\(anchorId\);/,
+    );
+    expect(BODY).toContain('anchorId={anchorId}');
+  });
+
+  it('keeps the expansion EPHEMERAL — a disclosure is not a preference', () => {
+    // Nothing persisted and nothing synced: opening a report on the phone must
+    // not open it on the desktop. The two stores are keyed by CHILD TAB ID, the
+    // only handle that cannot move when the log grows or the memo rebuilds.
+    expect(SRC).toContain('useState<ReadonlySet<string>>(EMPTY_EXPANDED)');
+    expect(SRC).not.toMatch(/expandedReports[\s\S]{0,400}localStorage/);
+    expect(SRC).toContain('next.add(chat.tabId)');
   });
 
   it('cannot park the cards at the foot of the log again', () => {

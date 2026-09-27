@@ -20,17 +20,28 @@
  *      and decay.
  *
  * ── WHAT HOLDS A SUB-CHAT OPEN ───────────────────────────────────────────────
- * The keep-list is cron's, deliberately unchanged
- * (CronScheduler.onTurnEnded) — that code has been making this exact judgement
- * in production, and a second, subtly different opinion about "is this agent
- * finished" is how the two drift:
+ * The keep-list is cron's (CronScheduler.onTurnEnded) — that code has been
+ * making this exact judgement in production, and a second, subtly different
+ * opinion about "is this agent finished" is how the two drift. Every entry is
+ * kept; what changed is that they are now sorted into the TWO QUESTIONS one
+ * turn-end answers, because the spawn report needs the first answer and
+ * retirement needs both:
  *
- *   · a FATAL turn — a crashed run is exactly what you want to look at
+ *   NOT FINISHED (`stillWorking`) — nothing has happened yet
  *   · a pending QUESTION — it is blocked on you, which is the opposite of done
- *   · an ARTIFACT on the pane — it made you something
  *   · LIVE BACKGROUND SUBAGENTS — the work it spawned outlives the turn that
  *     spawned it, and their results land after this moment
  *   · QUEUED messages — more work is already waiting; let the last one retire it
+ *   · a SECOND PANE — a multi-pane tab is not one unit of work
+ *
+ *   FINISHED, ROW STAYS (`holdOpen`) — it ended, and there is something in
+ *   there for you
+ *   · a FATAL turn — a crashed run is exactly what you want to look at
+ *   · an ARTIFACT on the pane — it made you something
+ *
+ * A worker in the second group reports to its parent and keeps its row; that is
+ * the whole reason for the split, and without it the spawn report would be
+ * silent about a crash (see `onFinished`).
  *
  * Cron adds one more at the end: it deletes the tab. This does not. Retiring
  * moves the row into the parent's `done` group, where it stays reachable from
@@ -51,6 +62,21 @@ export interface RetireDeps {
   /** The live blocked check (a question is pending). Cron reads the same
    *  signal through its own dep; here the cache already knows. */
   blocked?: ((paneId: string) => boolean) | undefined;
+  /**
+   * A sub-chat's WORK HAS ENDED — whether or not its row left the live list.
+   *
+   * The seam the spawn report hangs off (chat/SpawnReportWriter.ts). Its own
+   * hook rather than a line inside `retireChat` because the two questions have
+   * different answers: a crashed worker and one that produced a file both KEEP
+   * their live rows on purpose, and both have unambiguously stopped — so a
+   * report triggered by retirement would be silent about the two cases the
+   * parent most needs told (see `ChatRetirer.onTurnEnded`).
+   *
+   * Called synchronously from the bus handler, so an implementation must be
+   * fire-and-forget and must never throw. This file deliberately knows nothing
+   * about models.
+   */
+  onFinished?: ((tabId: string, paneId: string, opts: { crashed: boolean }) => void) | undefined;
 }
 
 /**
@@ -151,19 +177,30 @@ export class ChatRetirer {
     // leaves on its clock or when you archive it, never because an agent in it
     // stopped talking.
     if (!isSubChat(index, pane.tab_id)) return false;
-    if (index.get(pane.tab_id)?.pinned) return false; // pinning outranks everything
-    if (this.keepOpen(e)) return false;
+    // ── TWO QUESTIONS, ONE TURN-END ──────────────────────────────────────────
+    // "Has this worker finished?" and "should its row leave the live list?" are
+    // different, and the old single keep-list answered them together. Splitting
+    // it is what lets the spawn report cover the cases that need it most: a
+    // FATAL run and one that produced an ARTIFACT both keep their rows on
+    // purpose, and both have plainly stopped working.
+    if (this.stillWorking(e)) return false;
+    this.deps.onFinished?.(pane.tab_id, e.pane_id, { crashed: e.phase === 'fatal' });
+    // Retirement proper, unchanged: pinning outranks it, and so does anything
+    // the agent still has FOR YOU that retiring would bury.
+    if (index.get(pane.tab_id)?.pinned) return false;
+    if (this.holdOpen(e)) return false;
     return retireChat(this.deps, pane.tab_id, 'delivered');
   }
 
   /**
-   * Cron's keep-list, verbatim in intent (see the file comment). Each of these
-   * means the agent still has something FOR YOU that retiring would bury.
+   * The agent is NOT FINISHED — or this tab is not one unit of work, which comes
+   * to the same thing: there is nothing yet to retire or to report on.
+   *
+   * The first half of cron's keep-list, verbatim in intent (see the file
+   * comment).
    */
-  private keepOpen(e: { pane_id: string; phase: 'done' | 'fatal' }): boolean {
-    if (e.phase === 'fatal') return true;
-    if (this.deps.blocked?.(e.pane_id) === true) return true;
-    if (this.hasArtifact(e.pane_id)) return true;
+  private stillWorking(e: { pane_id: string; phase: 'done' | 'fatal' }): boolean {
+    if (this.deps.blocked?.(e.pane_id) === true) return true; // blocked on you
     // Its own BACKGROUND SUBAGENTS are still running. A turn that ends while
     // the roster is non-empty has not delivered — the work it spawned is
     // still out there, and its results arrive after this moment. The same
@@ -180,6 +217,19 @@ export class ChatRetirer {
     // A multi-pane tab is not a single unit of work: one agent finishing says
     // nothing about the others, and retiring the tab would hide them.
     return new PaneStore(this.deps.db).listByTab(this.tabOf(e.pane_id)).length > 1;
+  }
+
+  /**
+   * The work has ended, but the ROW stays live — because there is something in
+   * there for you to look at that retiring would bury.
+   *
+   * The second half of cron's keep-list. Both of these are states the spawn
+   * report still describes: "it crashed after doing X" and "it made you this"
+   * are the two most useful things a card in the parent's log can say.
+   */
+  private holdOpen(e: { pane_id: string; phase: 'done' | 'fatal' }): boolean {
+    if (e.phase === 'fatal') return true; // a crashed run is what you want to look at
+    return this.hasArtifact(e.pane_id); // it made you something
   }
 
   private tabOf(paneId: string): string {

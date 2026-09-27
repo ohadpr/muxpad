@@ -80,6 +80,8 @@ import {
   rankMentions,
   repinPicks,
   spawnCards,
+  spawnReportSummary,
+  spawnState,
   toMentionChats,
   withContentRows,
 } from '../lib/chat-mention';
@@ -107,6 +109,7 @@ import {
   pickSearchTarget,
   takeSearchJump,
 } from '../lib/search-jump';
+import { type SpawnWork, fetchSpawnWork } from '../lib/spawn-work';
 import type { AgentLink } from '../lib/voice/session';
 import { useVoice } from '../lib/voice/use-voice';
 import { AgentBackendLogo, backendFromAssistant } from './AgentLogos';
@@ -137,6 +140,11 @@ import { liveStatusLabel } from '../lib/live-status';
 import { isMobileLayout } from '../lib/mobile-layout';
 import { useDismissable } from '../lib/use-dismissable';
 import './ChatPane.css';
+
+/** Stable empties for the report-expansion state, so a pane that never opens one
+ *  contributes no new identity to the transcript memo on every render. */
+const EMPTY_EXPANDED: ReadonlySet<string> = new Set();
+const EMPTY_WORK: ReadonlyMap<string, SpawnWork | null> = new Map();
 
 // Assistant + streaming text is rendered as GitHub-flavored markdown. No raw
 // HTML is allowed through (no rehype-raw) so user/model content can't inject
@@ -2136,6 +2144,59 @@ export function ChatPane({
   const spawnedLive = useMemo(
     () => spawnedCards.filter((c) => !c.chat.done).map((c) => c.chat),
     [spawnedCards],
+  );
+
+  // ── THE REPORT, EXPANDED ──────────────────────────────────────────────────
+  // "if I just got a summary of it I'd be bummed that I lost everything."
+  //
+  // The summary on a report card is an INDEX — three sentences and where the work
+  // is. Expanding fetches the child's final turn and renders it in place, under
+  // the summary, so a 25 KB research report is readable without leaving the
+  // conversation. The head link still goes to the sub-chat: expand to read it
+  // here, the link to go there and continue.
+  //
+  // Both pieces of state are EPHEMERAL, per-device, keyed by CHILD TAB ID:
+  //
+  //   · A disclosure is not a preference. Nothing is persisted and nothing is
+  //     synced — opening a report on the phone must not open it on the desktop.
+  //   · Keyed by tab id because that is the only handle that cannot move. Not an
+  //     index (the log grows), not a memo identity (the transcript memo rebuilds
+  //     on every corpus patch), not an event id (a report entry has none).
+  //   · Held HERE rather than inside the card, for the reason `expandedGroups` is:
+  //     the element tree is rebuilt whenever the transcript or the corpus changes,
+  //     and state inside the card would collapse every open report when it did.
+  const [expandedReports, setExpandedReports] = useState<ReadonlySet<string>>(EMPTY_EXPANDED);
+  // The fetched work, cached per child so collapse→re-expand costs nothing.
+  // `undefined` = never asked, `null` = in flight.
+  const [reportWork, setReportWork] = useState<ReadonlyMap<string, SpawnWork | null>>(EMPTY_WORK);
+  const toggleReport = useCallback(
+    (chat: MentionChat, anchorId: string) => {
+      // The height change is READER-CAUSED and in the middle of the document, so
+      // it is an INPUT rather than something to detect afterwards: hold this row
+      // where it is, measured before the commit that changes its height. Without
+      // it, expanding a card above the viewport pulls the text out from under
+      // whoever pressed the button. Same machinery as an action-run fold.
+      onFoldToggled(anchorId);
+      setExpandedReports((prev) => {
+        const next = new Set(prev);
+        if (next.has(chat.tabId)) next.delete(chat.tabId);
+        else next.add(chat.tabId);
+        return next;
+      });
+      setReportWork((prev) => {
+        // Asked once. A `gone` answer is cached too — re-requesting a pruned
+        // transcript on every toggle would be a request per click with one
+        // possible answer.
+        if (prev.has(chat.tabId)) return prev;
+        const next = new Map(prev);
+        next.set(chat.tabId, null);
+        void fetchSpawnWork(chat.paneIds).then((work) => {
+          setReportWork((cur) => new Map(cur).set(chat.tabId, work));
+        });
+        return next;
+      });
+    },
+    [onFoldToggled],
   );
 
   // Everything this pane resolves through a chat, in one condition. Declared
@@ -4423,24 +4484,49 @@ export function ChatPane({
             other is "a request to it is in flight". Suppressing the spawn entry
             because of an unrelated later `@` would delete a piece of the record
             from the middle of the conversation. */}
-        {interleaveSpawnCards(items, spawnedCards).map((x) =>
-          x.kind === 'entry' ? (
-            x.node
-          ) : (
+        {interleaveSpawnCards(items, spawnedCards).map((x) => {
+          if (x.kind === 'entry') return x.node;
+          const kid = x.card.chat;
+          // ONE state resolution for both kinds of card, in the lib and tested
+          // there — including the `failed` that did not exist: a crashed worker
+          // KEEPS its live row on purpose, so `!done` read it as still working and
+          // its card span forever. Read off the corpus every render, which is what
+          // keeps it honest after the card has scrolled up; the corpus is
+          // live-patched from the server's own `tab.updated` (lib/all-tabs), so
+          // nothing here polls and nothing caches a state.
+          const state = spawnState(kid);
+          // The REPORT card — "here is what came back" — against the spawn card's
+          // "you started this, here". Two entries because they happened at two
+          // times, and the report's own time is the one the reader is looking at
+          // when the push notification arrives.
+          const report = x.card.kind === 'report' ? kid.report : undefined;
+          const expanded = report ? expandedReports.has(kid.tabId) : false;
+          const work = expanded ? reportWork.get(kid.tabId) : undefined;
+          // Also the scroll anchor, so expanding holds the row (see toggleReport).
+          const anchorId = `${x.card.kind}-${kid.tabId}`;
+          return (
             <ChatMentionCard
-              key={`spawn-${x.card.chat.tabId}`}
-              chat={x.card.chat.chip}
-              sub={x.card.chat.headline ?? undefined}
-              // WORKING OR DONE, read off the corpus every render — which is what
-              // keeps the mark honest after the card has scrolled up. The corpus
-              // is live-patched from the server's own `tab.updated`
-              // (lib/all-tabs), so nothing here polls and nothing caches a state.
-              working={!x.card.chat.done}
-              state={x.card.chat.done ? (x.card.chat.doneReason ?? 'done') : undefined}
-              onOpen={() => openChat(x.card.chat)}
+              key={anchorId}
+              anchorId={anchorId}
+              chat={kid.chip}
+              // The headline says what the worker is ABOUT, which is the useful
+              // second line at the spawn. On the report card the summary below is
+              // saying something better, so it would only be noise.
+              sub={report ? undefined : (kid.headline ?? undefined)}
+              working={state === 'working'}
+              state={state === 'working' ? undefined : state}
+              tone={state === 'working' ? undefined : state}
+              body={report ? spawnReportSummary(report) : undefined}
+              expanded={expanded}
+              work={expanded ? <SpawnWorkBody work={work} onOpenImage={setOpenImage} /> : undefined}
+              // Offered on EVERY report card, `none` included: when the summary
+              // says the worker produced nothing, its last turn is the only thing
+              // that can say why.
+              onToggleExpanded={report ? () => toggleReport(kid, anchorId) : undefined}
+              onOpen={() => openChat(kid)}
             />
-          ),
-        )}
+          );
+        })}
       </>
     );
   }, [
@@ -4474,6 +4560,11 @@ export function ChatPane({
     // makes the indicator update in place instead of re-parsing the log.
     spawnedCards,
     openChat,
+    // The expansion is a disclosure the READER drives, so the transcript has to
+    // rebuild when it changes — and when the fetched work lands under it.
+    expandedReports,
+    reportWork,
+    toggleReport,
   ]);
 
   // The agent is working when: we're driving a turn (`sending`), tokens are
@@ -5497,6 +5588,48 @@ function UserText({
         ),
         (m) => onOpenImage?.(m),
       )}
+    </>
+  );
+}
+
+/**
+ * THE WORKER'S WORK, inside its card.
+ *
+ * Rendered with `AssistantText` and not with the card's plain `body`, because a
+ * research worker's final turn IS assistant prose: markdown, and
+ * `/attachments/…` paths that become an inline gallery. Through the plain body it
+ * would arrive as a wall of literal `##` and `-` (that path sets
+ * `white-space: pre-wrap`, which actively fights a markdown renderer).
+ *
+ * THREE STATES AND NO FOURTH. An expansion must never open onto a blank: that
+ * reads as "the work is gone" while claiming to have found it. So a pruned
+ * transcript says so in words — Claude prunes its own on a retention window, and
+ * the locator this uses never looks at the archive's byte copy, so an old
+ * worker's expansion WILL be unreadable one day — and the card's head is still
+ * the way into the chat itself.
+ */
+function SpawnWorkBody({
+  work,
+  onOpenImage,
+}: {
+  /** `undefined` not asked yet, `null` in flight. */
+  work: SpawnWork | null | undefined;
+  onOpenImage?: OpenMedia | undefined;
+}) {
+  if (!work) return <span className="chat-mention-card-cut">Fetching what it said…</span>;
+  if (work.kind === 'gone') {
+    return <span className="chat-mention-card-cut">{work.reason}. Open the chat to look.</span>;
+  }
+  return (
+    <>
+      <AssistantText text={work.text} onOpenImage={onOpenImage} />
+      {/* Never silent about a bound. A read that stops without saying so reads as
+          a report that ends mid-sentence. */}
+      {work.truncated ? (
+        <span className="chat-mention-card-cut">
+          Cut off here — open the chat for the rest of it.
+        </span>
+      ) : null}
     </>
   );
 }

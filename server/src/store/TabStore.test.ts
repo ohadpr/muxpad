@@ -157,4 +157,50 @@ describe('TabStore', () => {
     store.setPinned(w.id, true);
     expect(store.clockRows().find((r) => r.id === w.id)?.pinned).toBe(true);
   });
+  it('setSpawnReport publishes the report on the row, without a structural edit', () => {
+    // Same split as setHeadline: `updated_at` is what clients key cache
+    // invalidation off, and a report landing is not an edit to the tab.
+    const w = store.create({ name: 'Work review', layout: 'p', workspace_id: workspaceId });
+    store.setSpawnReport(w.id, { report: 'Counted 41 todos across 6 files.', state: 'ok' }, 5_000);
+    const row = store.getById(w.id);
+    expect(row?.spawn_report).toBe('Counted 41 todos across 6 files.');
+    expect(row?.spawn_report_state).toBe('ok');
+    expect(row?.spawn_report_at).toBe(5_000);
+    expect(row?.updated_at).toBe(w.updated_at);
+  });
+
+  it('carries a stateful report with NO text — "nothing to report" is an answer', () => {
+    // The state and the text are independent: `none` and `crashed` are both
+    // meaningful with a NULL body, and conflating them with "we failed to
+    // summarise" (state NULL) is the thing the column exists to prevent.
+    const w = store.create({ name: 'Work review', layout: 'p', workspace_id: workspaceId });
+    store.setSpawnReport(w.id, { report: null, state: 'none' }, 5_000);
+    const row = store.getById(w.id);
+    expect(row?.spawn_report ?? null).toBeNull();
+    expect(row?.spawn_report_state).toBe('none');
+  });
+
+  it('touchSpawnReportAt advances the attempt clock and writes nothing else', () => {
+    // A FAILURE IS AN ATTEMPT — headline.ts's hardest-won rule. Without this a
+    // broken install (no login, an SDK import error) spawns a subprocess per
+    // retirement forever.
+    const w = store.create({ name: 'Work review', layout: 'p', workspace_id: workspaceId });
+    expect(store.spawnReportAt(w.id)).toBeNull();
+    store.touchSpawnReportAt(w.id, 9_000);
+    expect(store.spawnReportAt(w.id)).toBe(9_000);
+    expect(store.getById(w.id)?.spawn_report ?? null).toBeNull();
+    expect(store.getById(w.id)?.spawn_report_state).toBeUndefined();
+  });
+
+  it('omits the report fields entirely from a row that has none', () => {
+    // Absent, not null: every tab in the sidebar carries this row on every
+    // poll, and three null fields per row is three fields of payload — and
+    // three more inputs to the client's change-dedup signature — for a state
+    // that is permanent for every chat nobody spawned.
+    const w = store.create({ name: 'Dev', layout: 'p', workspace_id: workspaceId });
+    const row = store.getById(w.id) as Record<string, unknown>;
+    expect('spawn_report' in row).toBe(false);
+    expect('spawn_report_at' in row).toBe(false);
+    expect('spawn_report_state' in row).toBe(false);
+  });
 });

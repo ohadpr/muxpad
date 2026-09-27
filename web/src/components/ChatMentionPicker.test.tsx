@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup as html } from 'react-dom/server';
@@ -168,6 +170,93 @@ describe('the card', () => {
 });
 
 /**
+ * THE STATE READS AS A STATE, AND THE WORK IS ONE CLICK AWAY.
+ *
+ * "'delivered' feels weird — use icons or make the text look better. also this
+ * card is a bit dull, make it a bit nicer." It was mono grey 10.5px text in the
+ * slot where the rest of the app draws its state language, so it read as a
+ * leftover debug string rather than as "this finished".
+ *
+ * And the other half of the same card: "the summary when it shows should have an
+ * expand button to show the archived sub-chat or something."
+ */
+describe('the card says what happened, in the app state language', () => {
+  it('draws the state as a hued chip, outside the link', () => {
+    // OUTSIDE the head, which is StateChip's own rule and not a detail: text
+    // inside a control joins that control's accessible NAME, so the link would
+    // be announced as "Work review, delivered" and rename itself every time an
+    // agent started or stopped.
+    const out = html(
+      <ChatMentionCard
+        chat={{ name: 'Work review' }}
+        state="delivered"
+        tone="delivered"
+        onOpen={() => {}}
+      />,
+    );
+    expect(out).toContain('data-state="delivered"');
+    expect(out).toMatch(/<\/button>\s*<span class="chat-mention-card-state"/);
+  });
+
+  it('gives an unlabelled state a NEUTRAL tone rather than a lifecycle hue', () => {
+    // The `@` card's words ("reported", "directed here") are annotations, not
+    // lifecycle states, and they must not borrow the green that means finished.
+    const out = html(<ChatMentionCard chat={{ name: 'Investing' }} state="reported" />);
+    expect(out).toContain('data-state="note"');
+  });
+
+  it('offers the disclosure ONLY when the caller can answer it', () => {
+    // A prop with no handler would be a control that does nothing — the dead
+    // affordance the 77c1583 revert was about.
+    const bare = html(<ChatMentionCard chat={{ name: 'Work review' }} state="delivered" />);
+    expect(bare).not.toContain('chat-mention-card-more');
+    const expandable = html(
+      <ChatMentionCard
+        chat={{ name: 'Work review' }}
+        state="delivered"
+        body={<>Read 14 pages.</>}
+        onToggleExpanded={() => {}}
+      />,
+    );
+    expect(expandable).toContain('chat-mention-card-more');
+    expect(expandable).toContain('aria-expanded="false"');
+  });
+
+  it('keeps the summary visible when it expands — the work is added, not swapped', () => {
+    // Collapsed shows the summary; expanded shows the summary AND the work. The
+    // summary is the index, so losing it on expand would lose the one line that
+    // says where to look.
+    const out = html(
+      <ChatMentionCard
+        chat={{ name: 'Work review' }}
+        state="delivered"
+        body={<>Read 14 pages and wrote /tmp/x.md.</>}
+        expanded
+        work={'# Findings'}
+        onToggleExpanded={() => {}}
+      />,
+    );
+    expect(out).toContain('Read 14 pages and wrote /tmp/x.md.');
+    expect(out).toContain('# Findings');
+    expect(out).toContain('aria-expanded="true"');
+  });
+
+  it('keeps the HEAD LINK alongside the disclosure — read here, or go there', () => {
+    const out = html(
+      <ChatMentionCard
+        chat={{ name: 'Work review' }}
+        state="delivered"
+        body={<>a summary</>}
+        onOpen={() => {}}
+        onToggleExpanded={() => {}}
+      />,
+    );
+    expect(out).toContain('chat-mention-card-head');
+    expect(out).toContain('chat-mention-card-more');
+  });
+});
+
+/**
  * A REPORT'S BODY IS NOT INSIDE THE LINK.
  *
  * The card was one big `<button>`, and a report's body is the other agent's
@@ -242,6 +331,63 @@ describe('clicking a mention inside a report goes to the mention, once', () => {
     // nesting, which React warns about on every render.
     const box = mountReport(vi.fn(), vi.fn());
     expect(box.querySelector('button button')).toBeNull();
+  });
+});
+
+/**
+ * THE CARD IN SIX THEMES — the CSS contract, read off the stylesheet.
+ *
+ * Rules rather than computed pixels, for StateChip.test's reason: jsdom does not
+ * implement color-mix, so a computed-style assertion here would be testing jsdom.
+ * What IS checkable, and what actually breaks, is whether a value was written as
+ * a colour instead of derived from a token — tokyo-night, dracula, alucard,
+ * github-light, acme and acme-dark re-step every one of them, and a hex in this
+ * sheet is a card that looks tuned on one theme and wrong on the other five.
+ */
+describe('the card names no colour of its own', () => {
+  const CSS = readFileSync(join(import.meta.dirname, 'ChatMentionPicker.css'), 'utf8');
+  /** Every declaration inside a `.chat-mention-card*` rule. */
+  const CARD_RULES = CSS.split('}')
+    .filter((block) => /\.chat-mention-card[\w-]*[^{]*\{/.test(block))
+    .join('}');
+
+  it('uses no hex or named colour anywhere in the card', () => {
+    // `rgb(0 0 0 / …)` is the ONE exception and it is deliberate: a shadow has to
+    // be black at low alpha on every theme, because one mixed from --chat-fg
+    // would be a white glow on the four dark ones.
+    const withoutShadows = CARD_RULES.replace(/box-shadow:[^;]+;/g, '');
+    expect(withoutShadows).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+    expect(withoutShadows).not.toMatch(/\b(?:rgba?|hsla?)\(/);
+  });
+
+  it('draws each state from the status channel, never from --accent or --danger', () => {
+    // The channel's own rule: it must not change hue with the theme, and every
+    // theme re-tunes --danger to fit its palette.
+    expect(CARD_RULES).toContain('--state-hue: var(--status-ready)');
+    expect(CARD_RULES).toContain('--state-hue: var(--status-dead)');
+    const stateRules = CSS.split('}')
+      .filter((b) => b.includes('.chat-mention-card-state['))
+      .join('}');
+    expect(stateRules).not.toMatch(/--danger|--chat-accent/);
+  });
+
+  it('does not put a scroller inside the log', () => {
+    // A scrolling region inside a scrolling document is a scroll trap: the wheel
+    // stops working depending on where the pointer is. The expansion is bounded
+    // at the FETCH instead (lib/spawn-work.ts).
+    const work = CSS.split('}')
+      .filter((b) => b.includes('.chat-mention-card-work'))
+      .join('}');
+    expect(work).not.toMatch(/overflow(-y)?:\s*(auto|scroll)/);
+    expect(work).not.toMatch(/max-height/);
+  });
+
+  it('keeps the card shrunk to its contents', () => {
+    // It was a fixed `min(420px, 94%)`, which drew a spawn card for `count-todos`
+    // as a 420px pill holding 90px of text. The `-report` rule still sets a
+    // measure, because a body needs one.
+    const base = CSS.split('}').find((b) => /\.chat-mention-card\s*\{/.test(b)) ?? '';
+    expect(base).toContain('width: fit-content');
   });
 });
 
