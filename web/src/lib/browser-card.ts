@@ -78,73 +78,6 @@ export interface BrowserCardView {
 }
 
 /**
- * The card, as a person reads it.
- *
- * There is no "start it" state: {@link visibleBrowsers} means a card only
- * exists for a browser that is already running (or asking for you), so a
- * not-running branch here would be unreachable code behind a passing test.
- *
- * ORDER MATTERS AND IS NOT ALPHABETICAL. "The agent needs you" outranks
- * everything, including the agent holding the wheel — because an agent that has
- * asked for help is still nominally driving, and if the holder check came first
- * the card would say "the agent is browsing" at the exact moment it is stuck
- * waiting for you. That is the failure this whole feature exists to end.
- */
-export function browserCardView(data: BrowserCardData): BrowserCardView {
-  const profile = data.profile;
-
-  if (data.needsYou) {
-    return {
-      tone: 'waiting',
-      title: '',
-      detail: data.needsYou.reason,
-      action: 'Open',
-      urgent: true,
-      countdown: false,
-      passive: false,
-      openable: true,
-    };
-  }
-
-  if (data.wheel?.holder === 'human') {
-    return {
-      tone: 'yours',
-      title: 'You have the wheel',
-      detail: data.wheel.reason ?? '',
-      action: 'Open',
-      urgent: false,
-      countdown: true,
-      passive: true,
-      openable: true,
-    };
-  }
-
-  if (data.wheel?.holder === 'agent') {
-    return {
-      tone: 'working',
-      title: `Browsing · ${profile}`,
-      detail: '',
-      action: 'Open',
-      urgent: false,
-      countdown: false,
-      passive: true,
-      openable: true,
-    };
-  }
-
-  return {
-    tone: 'idle',
-    title: `Browser · ${profile}`,
-    detail: 'idle',
-    action: 'Open',
-    urgent: false,
-    countdown: false,
-    passive: true,
-    openable: true,
-  };
-}
-
-/**
  * Whether to open the stream in a modal or a new tab.
  *
  * A modal on a phone is a postage stamp of a 1280px page inside a 390px
@@ -256,8 +189,17 @@ export function browserMoments(
 ): BrowserMoment[] {
   const out: BrowserMoment[] = [];
   for (const browser of browsers) {
-    for (const event of browser.events ?? []) {
+    const events = browser.events ?? [];
+    // When each summons stopped asking. A `resolved` answers the most recent
+    // `needs-you` before it, so answering one does not silence a later one.
+    const resolvedAfter = events.filter((e) => e.kind === 'resolved').map((e) => e.at);
+    for (const event of events) {
       if (event.kind === 'resolved') continue;
+      // AN ANSWERED SUMMONS IS NOT A CARD. It used to become "Handled", which
+      // was a third kind of row explaining a state nobody had asked about. The
+      // asking is over; the record of it is the agent's reply, not a line in
+      // the log.
+      if (event.kind === 'needs-you' && resolvedAfter.some((at) => at > event.at)) continue;
       // A moment belongs to ONE conversation: the one it happened in. An
       // untagged moment is not shown anywhere.
       if (event.tabId !== tabId) continue;
@@ -286,12 +228,14 @@ function isLive(browser: BrowserCardData): boolean {
 /**
  * A card drawn from a moment in the log.
  *
- * THE RULE THAT MATTERS: a summons stops shouting once it has been answered.
- * The moment stays in the conversation forever — it happened, and the log is a
- * record — but a card still demanding attention for something dealt with an
- * hour ago is how you train somebody to ignore the one that counts. So
- * urgency comes from the browser's CURRENT state, while the words come from
- * what happened.
+ * THERE ARE EXACTLY TWO CARDS. One when a browser session starts — context, and
+ * a way in for anyone who wants to watch. One when it needs a person. Nothing
+ * else earns a line in somebody's conversation.
+ *
+ * An answered summons is neither, so it is dropped upstream by
+ * {@link browserMoments} rather than becoming a third card. It briefly said
+ * "Handled", which explained a state nobody had asked about — the asking is
+ * over, and the record of it is the agent's reply.
  *
  * And a moment outlives its browser. When the browser is gone there is no
  * action: offering to open a viewer that is not running is a connection error
@@ -322,25 +266,9 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
     };
   }
 
-  // ONE verb. "Take the wheel" and "Watch" describe the same click — opening the
-  // stream takes the wheel either way — and both were longer than a phone could
-  // afford. The title and the reason carry the why; the button says what happens.
-  const action = live ? 'Open' : null;
-  const detail = live ? (moment.kind === 'needs-you' ? (moment.reason ?? '') : '') : 'closed';
-
-  if (moment.kind === 'needs-you') {
-    return {
-      tone: yours ? 'yours' : 'idle',
-      title: 'Handled',
-      detail: moment.reason ?? detail,
-      // Passive too: a summons already answered is a record, not a request.
-      action: null,
-      urgent: false,
-      countdown: yours,
-      passive: true,
-      openable: live,
-    };
-  }
+  // The session card. No action label: it is a note, and the card itself takes
+  // the click for anyone who wants to watch.
+  const detail = live ? '' : 'closed';
 
   return {
     tone: yours ? 'yours' : browser.wheel ? 'working' : 'idle',

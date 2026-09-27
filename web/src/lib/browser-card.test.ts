@@ -4,7 +4,6 @@ import {
   type BrowserEvent,
   type BrowserMoment,
   type BrowserWheelLease,
-  browserCardView,
   browserMomentView,
   browserMoments,
   browserOpenMode,
@@ -28,46 +27,6 @@ const lease = (over: Partial<BrowserWheelLease> = {}): BrowserWheelLease => ({
   takenAt: 1_000_000,
   expiresAt: 1_600_000,
   ...over,
-});
-
-describe('what the card says', () => {
-  it('shouts when the agent is waiting for you', () => {
-    const view = browserCardView({ ...base, needsYou: { reason: 'log in to Amazon', at: 1 } });
-    expect(view.tone).toBe('waiting');
-    expect(view.urgent).toBe(true);
-    expect(view.action).toBe('Open');
-    expect(view.detail).toBe('log in to Amazon');
-  });
-
-  it('puts "needs you" ABOVE the agent holding the wheel', () => {
-    // An agent that has asked for help is still nominally driving. If the
-    // holder check came first, the card would say "browsing" at the exact
-    // moment it is stuck waiting for you — the failure this feature ends.
-    const view = browserCardView({
-      ...base,
-      wheel: lease({ holder: 'agent', by: 'chat-1' }),
-      needsYou: { reason: 'captcha', at: 1 },
-    });
-    expect(view.tone).toBe('waiting');
-  });
-
-  it('says so plainly when you have the wheel', () => {
-    const view = browserCardView({ ...base, wheel: lease() });
-    expect(view.tone).toBe('yours');
-    expect(view.title).toMatch(/you have the wheel/i);
-    expect(view.urgent).toBe(false);
-  });
-
-  it('is calm while the agent is browsing', () => {
-    const view = browserCardView({ ...base, wheel: lease({ holder: 'agent', by: 'chat-1' }) });
-    expect(view.tone).toBe('working');
-    expect(view.action).toBe('Open');
-    expect(view.urgent).toBe(false);
-  });
-
-  it('always names the profile, so two cards are tellable apart', () => {
-    expect(browserCardView({ ...base, profile: 'research' }).title).toContain('research');
-  });
 });
 
 describe('where it opens', () => {
@@ -294,19 +253,6 @@ describe('a card drawn from a moment', () => {
     expect(view.action).toBe('Open');
   });
 
-  it('STOPS shouting once you have answered it', () => {
-    // The moment stays in the log forever — it happened. But a card that keeps
-    // demanding attention for something dealt with an hour ago trains you to
-    // ignore the one that matters.
-    const view = browserMomentView(
-      moment({ kind: 'needs-you', reason: 'captcha', browser: { ...base, needsYou: null } }),
-    );
-    expect(view.urgent).toBe(false);
-    expect(view.tone).not.toBe('waiting');
-    expect(view.title).toMatch(/handled/i);
-    expect(view.detail).toBe('captcha');
-  });
-
   it('says you are driving when you are', () => {
     const view = browserMomentView(moment({ browser: { ...base, wheel: lease() } }));
     expect(view.tone).toBe('yours');
@@ -391,7 +337,6 @@ describe('placing moments in a conversation', () => {
   });
 });
 
-
 describe('what the card says, in as few words as possible', () => {
   const m = (over: Record<string, unknown> = {}): BrowserMoment => ({
     kind: 'opened',
@@ -437,16 +382,7 @@ describe('what the card says, in as few words as possible', () => {
     expect(view.tone).toBe('waiting');
     expect(view.urgent).toBe(true);
   });
-
-  it('reads as finished once it has been dealt with', () => {
-    const view = browserMomentView(
-      m({ kind: 'needs-you', reason: 'x', browser: { ...base, needsYou: null } }),
-    );
-    expect(view.title).toBe('Handled');
-    expect(view.urgent).toBe(false);
-  });
 });
-
 
 describe('what the card shows, and what it leaves out', () => {
   const m = (over: Record<string, unknown> = {}): BrowserMoment => ({
@@ -467,20 +403,6 @@ describe('what the card shows, and what it leaves out', () => {
     ).toBe(false);
   });
 
-  it('never asks for you while you are already driving', () => {
-    // "Needs you · Take the wheel" when you HAVE the wheel is a card asking for
-    // something already done. It reads as handled, because it is.
-    const view = browserMomentView(
-      m({
-        kind: 'needs-you',
-        reason: 'Amazon is signed out',
-        browser: { ...base, needsYou: { reason: 'x', at: 1 }, wheel: lease() },
-      }),
-    );
-    expect(view.urgent).toBe(false);
-    expect(view.title).toBe('Handled');
-  });
-
   it('still shouts when the agent holds the wheel and is stuck', () => {
     const view = browserMomentView(
       m({
@@ -493,10 +415,13 @@ describe('what the card shows, and what it leaves out', () => {
   });
 });
 
-
 describe('a card that is only telling you something', () => {
   const m = (over: Record<string, unknown> = {}): BrowserMoment => ({
-    kind: 'opened', at: 1, profile: 's-abc', browser: base, ...over,
+    kind: 'opened',
+    at: 1,
+    profile: 's-abc',
+    browser: base,
+    ...over,
   });
 
   it('offers NO button when nothing needs you', () => {
@@ -515,7 +440,11 @@ describe('a card that is only telling you something', () => {
 
   it('keeps the button when it is actually asking', () => {
     const view = browserMomentView(
-      m({ kind: 'needs-you', reason: 'Amazon needs a login', browser: { ...base, needsYou: { reason: 'x', at: 1 } } }),
+      m({
+        kind: 'needs-you',
+        reason: 'Amazon needs a login',
+        browser: { ...base, needsYou: { reason: 'x', at: 1 } },
+      }),
     );
     expect(view.action).toBe('Open');
     expect(view.passive).toBe(false);
@@ -525,5 +454,59 @@ describe('a card that is only telling you something', () => {
     const view = browserMomentView(m({ browser: { ...base, state: 'registered' } }));
     expect(view.action).toBeNull();
     expect(view.openable).toBe(false);
+  });
+});
+
+describe('there are exactly two kinds of browser card', () => {
+  const ev = (kind: BrowserEvent['kind'], at: number, over: Record<string, unknown> = {}) =>
+    ({ kind, at, tabId: 'tab-1', ...over }) as BrowserEvent;
+
+  it('shows the session starting, and a summons that is still live', () => {
+    // One card when the browser session begins — context, and a way in. One
+    // card when it needs you. Nothing else earns a line in a conversation.
+    const moments = browserMoments(
+      [
+        {
+          ...base,
+          needsYou: { reason: 'Amazon needs a login', at: 500 },
+          events: [ev('opened', 100), ev('needs-you', 500, { reason: 'Amazon needs a login' })],
+        },
+      ],
+      'tab-1',
+    );
+    expect(moments.map((m) => m.kind)).toEqual(['opened', 'needs-you']);
+  });
+
+  it('DROPS a summons once it has been answered', () => {
+    // "Handled" was a third kind of card explaining a state nobody asked about.
+    // The asking is over; the record of it is the agent's reply, not a row.
+    const moments = browserMoments(
+      [
+        {
+          ...base,
+          needsYou: null,
+          events: [ev('opened', 100), ev('needs-you', 500), ev('resolved', 900)],
+        },
+      ],
+      'tab-1',
+    );
+    expect(moments.map((m) => m.kind)).toEqual(['opened']);
+  });
+
+  it('keeps a LATER summons when an earlier one was answered', () => {
+    // Resolution is per-moment, not per-browser: answering the first must not
+    // silence the second.
+    const moments = browserMoments(
+      [
+        {
+          ...base,
+          needsYou: { reason: 'and again', at: 1200 },
+          events: [ev('needs-you', 500), ev('resolved', 900), ev('needs-you', 1200)],
+        },
+      ],
+      'tab-1',
+    );
+    expect(moments).toHaveLength(1);
+    expect(moments[0]?.at).toBe(1200);
   });
 });
