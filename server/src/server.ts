@@ -15,7 +15,7 @@ import { agentLaunchRoutes } from './routes/agent-launch.js';
 import { agentSessionsRoutes } from './routes/agent-sessions.js';
 import { appsRoutes } from './routes/apps.js';
 import { attachmentsRoutes } from './routes/attachments.js';
-import { browsersRoutes } from './routes/browsers.js';
+import { browserProxyRoutes, browsersRoutes } from './routes/browsers.js';
 import { cronsRoutes } from './routes/crons.js';
 import { eventsRoutes } from './routes/events.js';
 import { openRoutes } from './routes/open.js';
@@ -47,6 +47,12 @@ export interface AppDeps {
    */
   cache: PtydCache;
   dataDir: string;
+  /**
+   * This machine's tailnet host, if known. The viewer link is built on it so a
+   * handoff can be answered from a phone; null falls back to loopback rather
+   * than assembling a hostname that would fail later and less visibly.
+   */
+  browserTailnetHost?: () => string | null;
   /**
    * In-process pub/sub for structural state-change events. Routes emit
    * here after a successful mutation; the /ws/events upgrade arm
@@ -227,8 +233,14 @@ export function createApp(deps: AppDeps): Hono {
         hostEntry: browserHostEntry(),
         cwd: resolved.dataDir,
         registry: resolved.apps.registry,
+        ...(resolved.browserTailnetHost ? { tailnetHost: resolved.browserTailnetHost } : {}),
       }),
     );
+    // The viewer, served underneath muxpad's own origin so the link a person is
+    // given is the tailnet one they can open on a phone. See BrowserProxy.ts —
+    // the alternative is exposing another port, or a `tailscale serve` mapping
+    // that would need the CLI inside the app bundle.
+    app.route('/browser', browserProxyRoutes({ db: resolved.db }));
   }
   // Artifact publishing (copies into <dataDir>/public, served by the separate
   // public-port app). Default funnel is exec-free — see AppDeps.publish.

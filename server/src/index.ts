@@ -12,8 +12,9 @@ import { createAppStatusProbe } from './apps/AppStatus.js';
 import { adoptServePanes } from './apps/adopt-serve-panes.js';
 import { ArchiveDb } from './archive/ArchiveDb.js';
 import { Archiver } from './archive/Archiver.js';
-import { ensureBrowserApp } from './browser/BrowserApps.js';
+import { ensureBrowserApp, listBrowserApps } from './browser/BrowserApps.js';
 import { DEFAULT_BROWSER_PROFILES } from './browser/BrowserProfile.js';
+import { parseBrowserProxyPath } from './browser/BrowserProxy.js';
 import { findChrome } from './browser/findChrome.js';
 import { browserHostEntry } from './browser/hostEntry.js';
 import { HeadlineWriter } from './chat/HeadlineWriter.js';
@@ -403,11 +404,24 @@ const ensureTunnel = (opts?: { start?: boolean }) =>
     ...(opts?.start !== undefined ? { start: opts.start } : {}),
   });
 
+// Resolved once at boot, prompt-free (reverse DNS on the 100.64/10 address —
+// see tailnet-hostname.ts). Cached because it does not change while the process
+// lives, and because the browser view is read on every poll.
+let cachedTailnetHost: string | null = null;
+void tailnetHostname()
+  .then((h) => {
+    cachedTailnetHost = h;
+    if (h) console.log(`[browser] viewer links will use https://${h}`);
+    else console.log('[browser] no tailnet name — viewer links will be loopback only');
+  })
+  .catch(() => {});
+
 const app = createApp({
   db,
   ptyd,
   cache,
   dataDir: config.dataDir,
+  browserTailnetHost: () => cachedTailnetHost,
   events,
   agentBridge,
   tabActivity,
@@ -488,6 +502,14 @@ const wsServer = attachWsServer({
   notifyPane,
   // A wall-clock-billed call must not outlive the chat view that started it.
   onChatPresence: (paneId, clients) => voice.noteChatPresence(paneId, clients),
+  // Resolve /browser/<profile>/ws to the host's loopback socket, so the viewer
+  // stream rides muxpad's tailnet origin and its upgrade guard.
+  browserViewerSocket: (pathname) => {
+    const parsed = parseBrowserProxyPath(pathname);
+    if (!parsed) return null;
+    const state = listBrowserApps(db).find((b) => b.profile === parsed.profile);
+    return state ? `${state.viewerUrl.replace(/^http/, 'ws')}/ws` : null;
+  },
 });
 
 // Straggler prevention: retry pane kills that failed in transit, and (once

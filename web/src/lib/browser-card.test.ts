@@ -4,6 +4,7 @@ import {
   type BrowserWheelLease,
   browserCardView,
   browserOpenMode,
+  browserViewerPath,
   shouldRenewWheel,
   visibleBrowsers,
   wheelCountdown,
@@ -150,5 +151,15 @@ describe('which browsers are worth a card', () => {
 
   it('is empty when nothing is running — the common case', () => {
     expect(visibleBrowsers([stopped, stopped])).toEqual([]);
+  });
+});
+
+describe('where the iframe points', () => {
+  it('is relative, so it is same-origin however you reached the cockpit', () => {
+    // Absolute would make one of "at my desk on loopback" and "on the sofa over
+    // the tailnet" a cross-origin frame for no reason.
+    expect(browserViewerPath('default')).toBe('/browser/default/');
+    expect(browserViewerPath('default').startsWith('/')).toBe(true);
+    expect(browserViewerPath('default')).not.toContain('://');
   });
 });

@@ -132,10 +132,10 @@ describe('the modal', () => {
     now: () => 1_000_000,
   };
 
-  it('frames the viewer url rather than re-rendering the page itself', () => {
+  it('frames the viewer RELATIVELY, so it is same-origin either way', () => {
     const { host } = mount(<BrowserModal {...props} />);
     const frame = host.querySelector('iframe');
-    expect(frame?.getAttribute('src')).toBe('http://127.0.0.1:9510');
+    expect(frame?.getAttribute('src')).toBe('/browser/shopping/');
   });
 
   it('says whether the wheel is YOURS or you are only watching', () => {

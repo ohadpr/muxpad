@@ -37,6 +37,7 @@ beforeEach(() => {
       cwd: '/home',
       registry,
       chromePath: () => CHROME,
+      tailnetHost: () => 'dt-mac-mini.example-tailnet.ts.net',
     }),
   );
 });
@@ -62,11 +63,42 @@ async function ensure(profile = 'shopping') {
 }
 
 describe('creating', () => {
-  it('registers a browser and reports both urls', async () => {
-    const body = (await ensure()) as { profile: string; viewerUrl: string; cdpUrl: string };
+  it('hands a person a link on muxpad’s own origin, not a loopback port', async () => {
+    // A loopback url is useless on the phone the handoff is FOR. The viewer is
+    // proxied under muxpad, so the link inherits the cockpit's reachability.
+    const body = (await ensure()) as {
+      profile: string;
+      viewerUrl: string;
+      localUrl: string;
+      cdpUrl: string;
+    };
     expect(body.profile).toBe('shopping');
-    expect(body.viewerUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-    expect(body.cdpUrl).not.toBe(body.viewerUrl);
+    expect(body.viewerUrl).toBe('https://dt-mac-mini.example-tailnet.ts.net/browser/shopping/');
+    // The loopback origin is still reported, because the proxy needs it — but
+    // it is not the thing a person is handed.
+    expect(body.localUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(body.cdpUrl).not.toBe(body.localUrl);
+  });
+
+  it('falls back to the cockpit origin when there is no tailnet name', async () => {
+    const noTailnet = new Hono().route(
+      '/api/browsers',
+      browsersRoutes({
+        db,
+        dataDir: '/data',
+        hostEntry: '/opt/cli.js',
+        cwd: '/home',
+        registry,
+        chromePath: () => CHROME,
+        tailnetHost: () => null,
+      }),
+    );
+    const res = await noTailnet.request('/api/browsers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ profile: 'shopping' }),
+    });
+    expect(((await res.json()) as { viewerUrl: string }).viewerUrl).toContain('/browser/shopping/');
   });
 
   it('is idempotent over the wire too', async () => {
