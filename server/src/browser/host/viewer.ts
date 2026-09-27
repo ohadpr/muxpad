@@ -110,6 +110,7 @@ ws.onmessage = (e) => {
       else if (!kbSticky) setKb(false)
       return
     }
+    if (m.t === 'fields') { if (Array.isArray(m.rects)) fields = m.rects; return }
     if (m.t === 'revealed') { ringAt(m.rect); return }
     if (m.t === 'frame') { meta = m.meta }
     else if (m.t === 'fileChooser') { document.getElementById('drop').classList.add('on') }
@@ -153,9 +154,20 @@ img.addEventListener('pointerdown', (e) => {
   e.preventDefault()
   // FOCUS INSIDE THE GESTURE. iOS raises a keyboard only for a focus() that
   // happens during a real user event — one issued later, when the page tells us
-  // a text field is focused, is silently ignored and no keyboard appears. So we
-  // focus optimistically on every tap and let the answer below take it back.
-  if (!watching) sink.focus({ preventScroll: true })
+  // a text field is focused, is silently ignored and no keyboard appears.
+  //
+  // Which is why the host ships the boxes of the page's text fields: without
+  // them the only option is to focus on EVERY tap and let the page's answer take
+  // it back, so tapping a link slides a keyboard up and then down again. With
+  // them the answer is known here, on the tap, with no round trip.
+  //
+  // No boxes yet means UNKNOWN, not "no fields" — then guess, because a keyboard
+  // that flashes is a blemish and a keyboard that never comes is the bug.
+  if (!watching) {
+    const p0 = pt(e)
+    const hit = p0 ? hitsField(p0) : null
+    if (hit !== false) sink.focus({ preventScroll: true })
+  }
   buttons = 1
   img.setPointerCapture?.(e.pointerId)
   const p = pt(e); if (p) send({ t:'mouse', type:'mousePressed', ...p, buttons:1, clickCount:e.detail||1, modifiers:mods(e) })
@@ -219,6 +231,13 @@ const revealFromSummons = async () => {
 ws.addEventListener('open', () => setTimeout(revealFromSummons, 900), { once: true })
 
 // ── the keyboard ────────────────────────────────────────────────────────────
+// Where the page's text fields are, in viewport coordinates, as last reported.
+// Null until the host says — see the pointerdown handler for why that is not the
+// same as "none".
+let fields = null
+const hitsField = (p) => fields === null
+  ? null
+  : fields.some(([x, y, w, h]) => p.x >= x && p.x <= x + w && p.y >= y && p.y <= y + h)
 const kbBtn = document.getElementById('kb')
 // Pressed by hand, the keyboard stays up regardless of what the page says is
 // focused — some pages take text without ever focusing an input.

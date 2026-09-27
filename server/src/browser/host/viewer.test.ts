@@ -192,6 +192,20 @@ describe('the page is alive at all', () => {
   });
 });
 
+/**
+ * A tap cannot be placed on the page until the viewer knows the size of the
+ * frame it is showing — until then it maps to nothing and every tap is a guess.
+ * This is what a viewer looks like once one frame has arrived.
+ */
+function ready(h: Harness): Harness {
+  const img = h.el('screen') as unknown as { naturalWidth: number; naturalHeight: number };
+  img.naturalWidth = 390;
+  img.naturalHeight = 844;
+  h.el('screen').fire('load');
+  h.receive({ t: 'frame', meta: { deviceWidth: 390, deviceHeight: 844 } });
+  return h;
+}
+
 describe('the keyboard on a phone', () => {
   it('focuses the text sink DURING the tap, not after the page replies', () => {
     // THE BUG. iOS raises a keyboard only for a focus() issued inside a real
@@ -226,6 +240,31 @@ describe('the keyboard on a phone', () => {
     h.el('kb').fire('click');
     expect(h.el('sink').focused).toBe(true);
     h.receive({ t: 'focus', editable: false });
+    expect(h.el('sink').focused).toBe(true);
+  });
+
+  it('raises NOTHING for a tap outside every known text field', () => {
+    // The whole point of the host shipping field boxes. Without them the tap
+    // focuses optimistically and the page's answer takes it back a third of a
+    // second later, so tapping a link slides a keyboard up and then down again.
+    const h = ready(run());
+    h.receive({ t: 'fields', rects: [[0, 0, 100, 50]] });
+    h.el('screen').fire('pointerdown', { clientX: 300, clientY: 300, button: 0 });
+    expect(h.el('sink').focused).toBe(false);
+  });
+
+  it('raises one for a tap INSIDE a known text field, with no round trip', () => {
+    const h = ready(run());
+    h.receive({ t: 'fields', rects: [[0, 0, 100, 50]] });
+    h.el('screen').fire('pointerdown', { clientX: 20, clientY: 20, button: 0 });
+    expect(h.el('sink').focused).toBe(true);
+  });
+
+  it('still guesses before any boxes have arrived', () => {
+    // Unknown is not "no fields". A keyboard that flashes is a blemish; one that
+    // never appears is the bug this all started as.
+    const h = ready(run());
+    h.el('screen').fire('pointerdown', { clientX: 300, clientY: 300, button: 0 });
     expect(h.el('sink').focused).toBe(true);
   });
 

@@ -226,7 +226,56 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     void screencast.repaint();
     socket.on('close', () => viewers.delete(socket));
     socket.on('message', (raw) => void handleInput(socket, raw.toString()));
+    // A viewer that has just connected knows nothing about the page, so its
+    // first tap would be a guess. Measure now, and keep measuring while it is
+    // attached: pages grow forms, collapse them and scroll themselves without
+    // anybody touching the mouse, and a stale box is a keyboard in the wrong
+    // place — or, worse, none where there should be one.
+    void sendFieldBoxes(socket);
+    const boxes = setInterval(() => {
+      if (socket.readyState !== 1) return;
+      void sendFieldBoxes(socket);
+    }, 2000);
+    socket.on('close', () => clearInterval(boxes));
   });
+
+  /**
+   * Every text field's box, so the viewer can answer a tap without asking.
+   *
+   * Viewport coordinates, which is what CDP mouse events already use, so no
+   * conversion is needed at either end — and they follow the page as it scrolls
+   * for free, provided they are refreshed after anything that scrolls it.
+   *
+   * Capped: a pathological page with a thousand inputs would put a payload on
+   * every scroll bigger than the frame it is decorating.
+   */
+  const FIELD_BOXES = `(() => {
+    const skip = ['button','submit','reset','checkbox','radio','file','range','color','image','hidden'];
+    const out = [];
+    for (const el of document.querySelectorAll('input,textarea,[contenteditable=""],[contenteditable=true]')) {
+      if ((el.tagName || '').toLowerCase() === 'input' && skip.includes((el.type || 'text').toLowerCase())) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) continue;
+      out.push([Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)]);
+      if (out.length >= 80) break;
+    }
+    return out;
+  })()`;
+
+  async function sendFieldBoxes(socket: WsSocket) {
+    try {
+      const r = (await cdp.send('Runtime.evaluate', {
+        expression: FIELD_BOXES,
+        returnByValue: true,
+      })) as unknown as { result?: { value?: unknown } };
+      const rects = r.result?.value;
+      if (Array.isArray(rects) && socket.readyState === 1) {
+        socket.send(JSON.stringify({ t: 'fields', rects }));
+      }
+    } catch {
+      // The viewer falls back to guessing, which is the old behaviour.
+    }
+  }
 
   async function handleInput(socket: WsSocket, raw: string) {
     let message: { t: string } & Record<string, unknown>;
@@ -259,14 +308,21 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
             };
             // Asked twice before believing "no" — see probeEditable. A keyboard
             // is already up by now, and taking it away wrongly is the bug.
-            const editable = await probeEditable(read, (ms) => new Promise((r) => setTimeout(r, ms)));
+            const editable = await probeEditable(
+              read,
+              (ms) => new Promise((r) => setTimeout(r, ms)),
+            );
             if (socket.readyState === 1) {
               socket.send(JSON.stringify({ t: 'focus', editable }));
             }
+            // A click can reveal a form, or move the page. Re-measure.
+            void sendFieldBoxes(socket);
           } catch {
             // Not knowing is fine; the viewer keeps whatever it had.
           }
         }
+        // Scrolling moves every box on the page.
+        if (message.type === 'mouseWheel') void sendFieldBoxes(socket);
       } else if (message.t === 'reveal') {
         // Scroll the thing that needs a person into view and report where it
         // landed, so the viewer can ring it.
@@ -321,6 +377,9 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
         else if (message.action === 'forward')
           await cdp.send('Runtime.evaluate', { expression: 'history.forward()' });
         else if (message.action === 'reload') await cdp.send('Page.reload', {});
+        // A different page has entirely different fields. Measured after a beat,
+        // because the boxes of a page mid-load are the boxes of the old one.
+        setTimeout(() => void sendFieldBoxes(socket), 700);
       } else if (message.t === 'key') {
         for (const event of keyEvents(message as unknown as KeyInput)) {
           await cdp.send('Input.dispatchKeyEvent', event);
