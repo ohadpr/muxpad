@@ -60,6 +60,7 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   <button id="navReload" title="reload">&#8635;</button>
   <button id="mobile" title="mobile site" aria-pressed="false">&#128241;</button>
   <button id="kb" title="keyboard" aria-pressed="false">&#9000;</button>
+  <button id="paste" title="paste">paste</button>
   <button id="takeover" title="take the wheel" hidden>take the wheel</button>
   <span id="url" title="">–</span>
   <span id="msg"></span>
@@ -77,6 +78,7 @@ export const VIEWER_HTML = String.raw`<!doctype html>
 <script>
 const img = document.getElementById('screen')
 const msg = document.getElementById('msg')
+const sink = document.getElementById('sink')
 // Everything is relative to WHERE THIS PAGE IS SERVED FROM, not to the origin
 // root: muxpad proxies this viewer at /browser/<profile>/ so the link can be a
 // tailnet one, and an absolute '/ws' would dial the cockpit's socket instead.
@@ -101,7 +103,13 @@ ws.onmessage = (e) => {
     if (m.t === 'url') { showUrl(m.url); return }
     // The page says a text field is focused, so put a keyboard on the phone.
     // This is what makes tapping a login box behave like tapping a login box.
-    if (m.t === 'focus') { if (m.editable) setKb(true); return }
+    if (m.t === 'focus') {
+      // The tap already focused the sink; this is the page telling us whether
+      // that was right. Keeping it is what makes the keyboard STAY up.
+      if (m.editable) setKb(true)
+      else if (!kbSticky) setKb(false)
+      return
+    }
     if (m.t === 'revealed') { ringAt(m.rect); return }
     if (m.t === 'frame') { meta = m.meta }
     else if (m.t === 'fileChooser') { document.getElementById('drop').classList.add('on') }
@@ -142,7 +150,13 @@ const send = (o) => {
 
 let buttons = 0
 img.addEventListener('pointerdown', (e) => {
-  e.preventDefault(); img.focus(); buttons = 1
+  e.preventDefault()
+  // FOCUS INSIDE THE GESTURE. iOS raises a keyboard only for a focus() that
+  // happens during a real user event — one issued later, when the page tells us
+  // a text field is focused, is silently ignored and no keyboard appears. So we
+  // focus optimistically on every tap and let the answer below take it back.
+  if (!watching) sink.focus({ preventScroll: true })
+  buttons = 1
   img.setPointerCapture?.(e.pointerId)
   const p = pt(e); if (p) send({ t:'mouse', type:'mousePressed', ...p, buttons:1, clickCount:e.detail||1, modifiers:mods(e) })
 })
@@ -160,7 +174,12 @@ img.addEventListener('wheel', (e) => {
   e.preventDefault()
   const p = pt(e); if (p) send({ t:'mouse', type:'mouseWheel', ...p, deltaX:e.deltaX, deltaY:e.deltaY, modifiers:mods(e) })
 }, { passive:false })
-img.addEventListener('keydown', (e) => { e.preventDefault(); send({ t:'key', key:e.key, modifiers:mods(e) }) })
+const isPasteChord = (e) => (e.metaKey || e.ctrlKey) && !e.altKey && (e.key === 'v' || e.key === 'V')
+img.addEventListener('keydown', (e) => {
+  e.preventDefault()
+  if (isPasteChord(e)) { pasteFromClipboard(); return }
+  send({ t:'key', key:e.key, modifiers:mods(e) })
+})
 
 // ── pointing at the thing that needs you ────────────────────────────────────
 const ring = document.getElementById('ring')
@@ -200,13 +219,18 @@ const revealFromSummons = async () => {
 ws.addEventListener('open', () => setTimeout(revealFromSummons, 900), { once: true })
 
 // ── the keyboard ────────────────────────────────────────────────────────────
-const sink = document.getElementById('sink')
 const kbBtn = document.getElementById('kb')
+// Pressed by hand, the keyboard stays up regardless of what the page says is
+// focused — some pages take text without ever focusing an input.
+let kbSticky = false
 const setKb = (on) => {
   kbBtn.setAttribute('aria-pressed', String(on))
   if (on) sink.focus({ preventScroll: true }); else sink.blur()
 }
-kbBtn.addEventListener('click', () => setKb(kbBtn.getAttribute('aria-pressed') !== 'true'))
+kbBtn.addEventListener('click', () => {
+  kbSticky = kbBtn.getAttribute('aria-pressed') !== 'true'
+  setKb(kbSticky)
+})
 
 // Typed text goes as TEXT, so autocorrect, dictation and emoji survive. The box
 // is emptied immediately, so it never accumulates and never double-types.
@@ -249,6 +273,27 @@ takeover.addEventListener('click', async () => {
   } catch { msg.textContent = 'could not reach muxpad' }
 })
 applyWatching()
+
+// PASTE, which cannot be left to the page.
+//
+// On a phone the sink is off-screen, so the system paste menu has nothing to
+// appear over. On a desktop it is worse than missing: Cmd+V forwarded as a
+// keystroke reaches the REMOTE Chrome and pastes from ITS clipboard, which is
+// empty — a gesture that silently does nothing is the most confusing outcome
+// available. So both routes read the clipboard HERE and send the text.
+//
+// The read has to happen inside the gesture; a browser refuses it otherwise.
+const pasteFromClipboard = async () => {
+  if (watching) return
+  try {
+    const text = await navigator.clipboard.readText()
+    if (text) { send({ t: 'text', text }); msg.textContent = '' }
+    else msg.textContent = 'nothing to paste'
+  } catch {
+    msg.textContent = 'your browser would not share the clipboard'
+  }
+}
+document.getElementById('paste').addEventListener('click', pasteFromClipboard)
 
 for (const [id, action] of [['navBack','back'],['navFwd','forward'],['navReload','reload']]) {
   document.getElementById(id).addEventListener('click', () => send({ t:'nav', action }))

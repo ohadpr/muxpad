@@ -4,7 +4,13 @@ import { type IncomingMessage, type ServerResponse, createServer } from 'node:ht
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
-import { type KeyInput, type MouseInput, keyEvents, mouseEvent } from '../BrowserInput.js';
+import {
+  type KeyInput,
+  type MouseInput,
+  keyEvents,
+  mouseEvent,
+  probeEditable,
+} from '../BrowserInput.js';
 import { browserLaunchSpec } from '../BrowserLaunch.js';
 import { browserViewerPort } from '../BrowserProfile.js';
 import { CdpConnection } from '../CdpConnection.js';
@@ -238,18 +244,24 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
         // a video stream is otherwise a tap into a picture.
         if (message.type === 'mouseReleased') {
           try {
-            const r = (await cdp.send('Runtime.evaluate', {
-              expression: `(() => { const a = document.activeElement; if (!a) return false;
+            const read = async () => {
+              const r = (await cdp.send('Runtime.evaluate', {
+                expression: `(() => { const a = document.activeElement; if (!a) return false;
                 const t = (a.tagName || '').toLowerCase();
                 if (t === 'textarea') return true;
                 if (a.isContentEditable) return true;
                 if (t !== 'input') return false;
                 return !['button','submit','reset','checkbox','radio','file','range','color','image'].includes((a.type||'text').toLowerCase());
               })()`,
-              returnByValue: true,
-            })) as unknown as { result?: { value?: boolean } };
+                returnByValue: true,
+              })) as unknown as { result?: { value?: boolean } };
+              return Boolean(r.result?.value);
+            };
+            // Asked twice before believing "no" — see probeEditable. A keyboard
+            // is already up by now, and taking it away wrongly is the bug.
+            const editable = await probeEditable(read, (ms) => new Promise((r) => setTimeout(r, ms)));
             if (socket.readyState === 1) {
-              socket.send(JSON.stringify({ t: 'focus', editable: Boolean(r.result?.value) }));
+              socket.send(JSON.stringify({ t: 'focus', editable }));
             }
           } catch {
             // Not knowing is fine; the viewer keeps whatever it had.
