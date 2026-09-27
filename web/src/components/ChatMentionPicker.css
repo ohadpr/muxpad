@@ -196,17 +196,25 @@
    body containing a mention put a button inside it. The properties that were
    here only to undo a button's own styling (color, font-family) are kept: the
    head is a button now, and inherits through them. */
+/* SHRINKS TO ITS CONTENTS. This was a fixed `min(420px, 94%)` — the width a
+   card needs when it is carrying a REPORT, applied to every card including the
+   ones that are a name and a spinner. A spawn card for `count-todos` came out as
+   a 420px pill holding 90px of text, which is mostly an empty box with a border
+   round it. The `-report` rule below still sets a width, because a body does
+   need one; this base rule now only sets a CEILING. */
 .chat-mention-card {
-  display: flex;
+  display: inline-flex;
   flex-direction: column;
+  align-self: flex-start;
   gap: 7px;
-  width: min(420px, 94%);
+  width: fit-content;
+  max-width: min(420px, 94%);
   margin: 2px 0;
-  padding: 8px 12px;
+  padding: 6px 11px;
   text-align: left;
   background: var(--chat-panel);
   border: 1px solid var(--chat-border-strong);
-  border-radius: 12px;
+  border-radius: 10px;
   color: inherit;
   font-family: inherit;
 }
@@ -226,7 +234,9 @@
 /* A report carries an answer, so it gets a message's width rather than a
    row's — the same reading measure as the assistant text around it. */
 .chat-mention-card.-report {
+  /* A body is prose and wants a measure, so this one overrides the shrink. */
   width: min(560px, 96%);
+  max-width: min(560px, 96%);
 }
 
 /* The card's one link. A button, so it is reachable by keyboard and announced as
