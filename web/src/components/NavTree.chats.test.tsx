@@ -194,3 +194,95 @@ describe('doneChatCount — the number in the done header', () => {
     expect(doneChatCount([])).toBe(0);
   });
 });
+
+/**
+ * DEPTH — a chat spawned by a chat that was itself spawned.
+ *
+ * `groupChats` was one hop deep: a chat's group was keyed on its IMMEDIATE
+ * parent, and only the tops were read back out. So a grandchild went into
+ * `childrenOf[itsParent.id]`, which nothing read, and it appeared in NEITHER
+ * list — not mis-nested, gone, and uncounted by the done header.
+ *
+ * It was survivable while the phone rendered a flat list, because a grandchild
+ * still reached the DOM as a top-level row. Turning grouping on for BOTH
+ * surfaces turned it into a disappearance on the device the grouping was turned
+ * on for. And a chain of handoffs is exactly a chain of grandchildren, so this
+ * is the ordinary case on this branch.
+ *
+ * The fix FLATTENS to one level rather than truncating at one level: the design
+ * is a single indent — a child's mark in its parent's mark column, every child
+ * name on one shared x — and neither survives arbitrary depth. Everything a chat
+ * spawned, however deep, lists under it.
+ *
+ * Every case here was run against the old implementation first; the first three
+ * failed.
+ */
+describe('a grandchild lists under the root, not into a hole', () => {
+  it('keeps a depth-2 chat in the tree at all', () => {
+    const { live, done } = groupChats([
+      tab('root'),
+      tab('child', { spawned_by: 'root' }),
+      tab('grandchild', { spawned_by: 'child' }),
+    ]);
+    // One level, so BOTH descendants sit under root — not grandchild under child.
+    expect(shape(live)).toEqual([['root', ['child', 'grandchild']]]);
+    expect(shape(done)).toEqual([]);
+  });
+
+  it('counts a delivered grandchild in the done header', () => {
+    // The header's number has to be what you find when you open the drawer, and
+    // a row in neither list was counted by neither.
+    const { live, done } = groupChats([
+      tab('root'),
+      tab('child', { spawned_by: 'root' }),
+      tab('grandchild', { spawned_by: 'child', done: true }),
+    ]);
+    expect(shape(live)).toEqual([['root', ['child']]]);
+    expect(shape(done)).toEqual([['root', ['grandchild']]]);
+    expect(done[0]?.contextOnly).toBe(true);
+  });
+
+  it('carries a whole chain of handoffs, four deep', () => {
+    // What `agent-orchestration` actually produces: a hands off to b hands off
+    // to c. Every one of them lists under the chat that started it.
+    const { live } = groupChats([
+      tab('root'),
+      tab('a', { spawned_by: 'root' }),
+      tab('b', { spawned_by: 'a' }),
+      tab('c', { spawned_by: 'b' }),
+    ]);
+    expect(shape(live)).toEqual([['root', ['a', 'b', 'c']]]);
+  });
+
+  it('takes the whole family down when the ROOT is done', () => {
+    // Unchanged rule, restated at depth: the family follows the root, not the
+    // nearest ancestor that happens to still be live.
+    const { live, done } = groupChats([
+      tab('root', { done: true }),
+      tab('child', { spawned_by: 'root' }),
+      tab('grandchild', { spawned_by: 'child' }),
+    ]);
+    expect(shape(live)).toEqual([]);
+    expect(shape(done)).toEqual([['root', ['child', 'grandchild']]]);
+  });
+
+  it('promotes a chat whose chain leaves this list', () => {
+    // `child`'s parent is in another workspace, so `child` is a top-level row —
+    // and `grandchild` resolves up to `child`, not into a hole.
+    const { live } = groupChats([
+      tab('child', { spawned_by: 'elsewhere' }),
+      tab('grandchild', { spawned_by: 'child' }),
+    ]);
+    expect(shape(live)).toEqual([['child', ['grandchild']]]);
+  });
+
+  it('does not spin on a spawned_by cycle', () => {
+    // Should be impossible. This function decides whether a row renders at all,
+    // which makes it the wrong place to find out that it wasn't.
+    const { live, done } = groupChats([
+      tab('a', { spawned_by: 'b' }),
+      tab('b', { spawned_by: 'a' }),
+    ]);
+    expect(live.length + done.length).toBeGreaterThan(0);
+  });
+});

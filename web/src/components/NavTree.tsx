@@ -1925,18 +1925,64 @@ export function groupChats(tabs: Tab[]): {
   done: ChatGroup[];
   livePinned: number;
 } {
-  const present = new Set(tabs.map((t) => t.id));
+  const byId = new Map(tabs.map((t) => [t.id, t]));
+  /**
+   * The TOP-LEVEL ancestor of a chat — walk `spawned_by` up until it runs out.
+   *
+   * It used to be one hop: a chat's group was keyed on its immediate parent, and
+   * only the tops were ever read back out. So a GRANDCHILD — a chat spawned by a
+   * chat that was itself spawned — went into `childrenOf[itsParent.id]`, which
+   * no loop below ever reads, and it appeared in NEITHER list. Not mis-nested:
+   * gone from the sidebar, and uncounted by the done header.
+   *
+   * That was survivable while the sheet rendered a flat list, because a
+   * grandchild still reached the DOM as a top-level row. Turning grouping on for
+   * both surfaces made it a disappearance on the phone — which is the device the
+   * grouping was turned on for. A chain of handoffs is exactly a chain of
+   * grandchildren, so this is the common case on this branch, not a corner.
+   *
+   * Resolving to the ROOT rather than rendering a second indent level is
+   * deliberate: the design is ONE level — a child's mark sits in its parent's
+   * mark column and every child name lands on one shared x, and neither survives
+   * arbitrary depth. So the tree is FLATTENED to one level rather than truncated
+   * at one level. Everything a chat spawned, however deep, is listed under it.
+   *
+   * Cycle-safe, and the degradation is chosen rather than incidental: an A→B→A
+   * `spawned_by` loop has NO top in it, so returning the nearest ancestor would
+   * make every member a child of another member and leave `tops` empty — the
+   * whole cycle would vanish, which is the bug this function was just fixed for,
+   * wearing a different hat. On a cycle the chat is its OWN root, so the members
+   * come out as plain top-level rows. Unnested, but every one of them on screen.
+   * This should be impossible; a function that decides whether a row renders at
+   * all is not the place to find out that it wasn't.
+   */
+  const rootOf = (t: Tab): Tab => {
+    let cur = t;
+    const seen = new Set<string>([t.id]);
+    for (;;) {
+      const parentId = cur.spawned_by ?? null;
+      if (parentId === null || parentId === cur.id) return cur;
+      if (seen.has(parentId)) return t;
+      const parent = byId.get(parentId);
+      if (!parent) return cur; // a dangling `spawned_by` promotes — see below
+      seen.add(parentId);
+      cur = parent;
+    }
+  };
   const childrenOf = new Map<string, Tab[]>();
   const tops: Tab[] = [];
   for (const t of tabs) {
-    const parentId = t.spawned_by ?? null;
-    if (parentId !== null && parentId !== t.id && present.has(parentId)) {
-      const siblings = childrenOf.get(parentId);
-      if (siblings) siblings.push(t);
-      else childrenOf.set(parentId, [t]);
-    } else {
+    // A chat whose `spawned_by` does not resolve in THIS list is a top-level row
+    // (it is in another workspace, or gone) — a dot with no parent above it
+    // belongs to nothing. `rootOf` returning the chat itself is that same rule.
+    const root = rootOf(t);
+    if (root.id === t.id) {
       tops.push(t);
+      continue;
     }
+    const siblings = childrenOf.get(root.id);
+    if (siblings) siblings.push(t);
+    else childrenOf.set(root.id, [t]);
   }
   const live: ChatGroup[] = [];
   const done: ChatGroup[] = [];
