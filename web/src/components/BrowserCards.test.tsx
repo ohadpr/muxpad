@@ -150,7 +150,9 @@ describe('what gets a card at all', () => {
 });
 
 describe('opening', () => {
-  it('TAKES THE WHEEL before showing the stream', async () => {
+  it('does NOT take the wheel when you are only watching', async () => {
+    // The session card is for looking over the agent's shoulder. Seizing the
+    // browser to do that stalls the task you asked for.
     const { impl, calls } = fakeFetch(() => [browser()]);
     const { host } = await mount(
       <BrowserCards
@@ -162,30 +164,27 @@ describe('opening', () => {
       />,
     );
     await click(host.querySelector('[data-testid="browser-card"]') ?? undefined);
-    const take = calls.find((c) => c.url.includes('/wheel/take'));
-    expect(take).toBeTruthy();
-    expect(take?.method).toBe('POST');
-    expect(take?.body).toMatchObject({ by: 'pane-7' });
+    expect(calls.find((c) => c.url.includes('/wheel/take'))).toBeUndefined();
   });
 
-  it('carries the reason the agent gave, so the lease says why', async () => {
+  it('TAKES THE WHEEL when you answer a summons', async () => {
+    // The agent asked for a person; arriving without it puts you in front of a
+    // page you cannot type into.
     const { impl, calls } = fakeFetch(() => [
-      browser({ needsYou: { reason: 'log in to Amazon', at: 1 } }),
+      browser({
+        needsYou: { reason: 'Amazon needs a login', at: 1 },
+        events: [{ kind: 'needs-you', at: 100, tabId: 'tab-1', reason: 'Amazon needs a login' }],
+      }),
     ]);
     const { host } = await mount(
-      <BrowserCards
-        by="pane-7"
-        tabId="tab-1"
-        fetchImpl={impl}
-        pollMs={100000}
-        viewportWidth={1440}
-      />,
+      <BrowserCards by="pane-7" tabId="tab-1" fetchImpl={impl} pollMs={100000} viewportWidth={1440} />,
     );
-    await click(host.querySelector('[data-testid="browser-card"]') ?? undefined);
-    expect(calls.find((c) => c.url.includes('/wheel/take'))?.body).toMatchObject({
-      reason: 'log in to Amazon',
-    });
+    await click(buttons(host)[0]);
+    const take = calls.find((c) => c.url.includes('/wheel/take'));
+    expect(take?.method).toBe('POST');
+    expect(take?.body).toMatchObject({ by: 'pane-7', reason: 'Amazon needs a login' });
   });
+
 
   it('opens a modal on a desktop', async () => {
     const { impl } = fakeFetch(() => [browser()]);
@@ -216,7 +215,8 @@ describe('opening', () => {
       />,
     );
     await click(host.querySelector('[data-testid="browser-card"]') ?? undefined);
-    expect(openTab).toHaveBeenCalledWith('https://host.ts.net/browser/shopping/');
+    // Watching, so the intent rides the url for the tab too.
+    expect(openTab).toHaveBeenCalledWith('https://host.ts.net/browser/shopping/?mode=watch');
     expect(document.querySelector('[data-testid="browser-modal"]')).toBeNull();
   });
 });

@@ -145,8 +145,26 @@ export function visibleBrowsers(browsers: readonly BrowserCardData[]): BrowserCa
  * tailnet name from the sofa. Hard-coding either into the iframe makes one of
  * those two cases a cross-origin frame for no reason.
  */
-export function browserViewerPath(profile: string): string {
-  return `/browser/${profile}/`;
+export function browserViewerPath(profile: string, intent: BrowserOpenIntent = 'drive'): string {
+  return intent === 'watch' ? `/browser/${profile}/?mode=watch` : `/browser/${profile}/`;
+}
+
+/**
+ * Whether opening this card should TAKE the browser or merely look at it.
+ *
+ * Watching must not stop the agent working. Looking over its shoulder is the
+ * common case — the session card exists precisely so you can — and taking the
+ * wheel to satisfy curiosity is a stall the agent cannot see a reason for, in
+ * the middle of a task you asked for.
+ *
+ * Answering a summons is the opposite: the agent has asked for a person, and
+ * arriving without the wheel would put you in front of a page you cannot type
+ * into.
+ */
+export type BrowserOpenIntent = 'watch' | 'drive';
+
+export function browserOpenIntent(moment: BrowserMoment): BrowserOpenIntent {
+  return moment.kind === 'needs-you' && moment.browser.needsYou ? 'drive' : 'watch';
 }
 
 /** One card in a conversation: a thing that happened, plus the browser it happened to. */

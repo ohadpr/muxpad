@@ -25,6 +25,10 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   #bar button{flex:none;background:transparent;border:1px solid #33333f;color:#d8d8e2;border-radius:6px;font:inherit;font-size:15px;line-height:1;padding:4px 9px;cursor:pointer}
   #bar button:hover{background:#23232e}
   #bar button[aria-pressed="true"]{background:#2b3a55;border-color:#4a6ea8;color:#cfe2ff}
+  #takeover{background:#c98a2e;border-color:#c98a2e;color:#fff;font-size:11px;white-space:nowrap}
+  /* Watching: the stream is a picture. Say so rather than letting somebody
+     press things that quietly go nowhere. */
+  body.watching #screen{cursor:default}
   /* The address, truncated from the LEFT: the end of a url is the part that
      says which page you are on. */
   #url{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;color:#9a9aab;font-size:11px}
@@ -56,6 +60,7 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   <button id="navReload" title="reload">&#8635;</button>
   <button id="mobile" title="mobile site" aria-pressed="false">&#128241;</button>
   <button id="kb" title="keyboard" aria-pressed="false">&#9000;</button>
+  <button id="takeover" title="take the wheel" hidden>take the wheel</button>
   <span id="url" title="">–</span>
   <span id="msg"></span>
 </div>
@@ -123,7 +128,17 @@ const pt = (e) => {
   return { x: (e.clientX - r.left) * (nw / r.width) * scale, y: (e.clientY - r.top) * (nh / r.height) * scale }
 }
 const mods = (e) => (e.altKey?1:0) | (e.ctrlKey?2:0) | (e.metaKey?4:0) | (e.shiftKey?8:0)
-const send = (o) => { if (ws.readyState === 1) ws.send(JSON.stringify(o)) }
+
+// WATCH MODE. Opening the session card is looking over the agent's shoulder,
+// and a look must not stop it working — so nothing that would change the page
+// leaves this tab. The wheel is not held and not requested; the stream is a
+// picture until somebody says otherwise.
+let watching = new URLSearchParams(location.search).get('mode') === 'watch'
+const INPUT = new Set(['mouse', 'key', 'text', 'nav', 'emulate'])
+const send = (o) => {
+  if (watching && INPUT.has(o.t)) return
+  if (ws.readyState === 1) ws.send(JSON.stringify(o))
+}
 
 let buttons = 0
 img.addEventListener('pointerdown', (e) => {
@@ -209,6 +224,32 @@ sink.addEventListener('keydown', (e) => {
 })
 sink.addEventListener('blur', () => kbBtn.setAttribute('aria-pressed','false'))
 
+// The way in, for when looking turns into doing. It asks muxpad for the wheel —
+// this page is served from muxpad's origin, so it can — and only then starts
+// forwarding input.
+const takeover = document.getElementById('takeover')
+const profileFromPath = () => location.pathname.split('/').filter(Boolean)[1]
+const applyWatching = () => {
+  document.body.classList.toggle('watching', watching)
+  takeover.hidden = !watching
+  msg.textContent = watching ? 'watching — the agent is still working' : ''
+}
+takeover.addEventListener('click', async () => {
+  const profile = profileFromPath()
+  if (!profile) return
+  try {
+    const r = await fetch('/api/browsers/' + profile + '/wheel/take', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ by: 'viewer-' + profile }),
+    })
+    if (!r.ok) { msg.textContent = 'could not take the wheel'; return }
+    watching = false
+    applyWatching()
+  } catch { msg.textContent = 'could not reach muxpad' }
+})
+applyWatching()
+
 for (const [id, action] of [['navBack','back'],['navFwd','forward'],['navReload','reload']]) {
   document.getElementById(id).addEventListener('click', () => send({ t:'nav', action }))
 }
@@ -224,7 +265,7 @@ const setMobile = (on) => {
   send({ t:'emulate', mobile: on })
 }
 mobileBtn.addEventListener('click', () => setMobile(!mobileOn))
-if (window.innerWidth < 700) {
+if (window.innerWidth < 700 && !watching) {
   // After the socket is up, not before — the message would be dropped.
   const arm = () => setMobile(true)
   if (ws.readyState === 1) arm(); else ws.addEventListener('open', arm, { once: true })

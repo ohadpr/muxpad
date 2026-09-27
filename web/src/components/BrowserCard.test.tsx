@@ -153,12 +153,20 @@ describe('the modal', () => {
     expect(host.querySelector('iframe')?.getAttribute('src')).toBe('/browser/shopping/');
   });
 
-  it('says whether the wheel is YOURS or you are only watching', () => {
-    const mine = mount(<BrowserModal {...props} />);
-    expect(mine.host.textContent).toContain('you have the wheel');
+  it('says plainly that watching does not stop the agent', () => {
+    // The whole reason watch mode exists: opening the session card must not
+    // read as "I have now taken this over".
+    const watching = mount(<BrowserModal {...props} intent="watch" />);
+    expect(watching.host.textContent).toContain('watching');
+    expect(watching.host.textContent).toMatch(/agent keeps working/i);
 
-    const theirs = mount(<BrowserModal {...props} by="someone-else" />);
-    expect(theirs.host.textContent).toContain('watching');
+    const driving = mount(<BrowserModal {...props} intent="drive" />);
+    expect(driving.host.textContent).toContain('you have the wheel');
+  });
+
+  it('frames the viewer read-only when watching', () => {
+    const { host } = mount(<BrowserModal {...props} intent="watch" />);
+    expect(host.querySelector('iframe')?.getAttribute('src')).toBe('/browser/shopping/?mode=watch');
   });
 
   it('closes on Escape, which is how the wheel gets handed back', () => {

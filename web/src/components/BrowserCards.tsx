@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { type BrowserCardData, type BrowserMoment, browserMoments } from '../lib/browser-card';
+import {
+  type BrowserCardData,
+  type BrowserMoment,
+  type BrowserOpenIntent,
+  browserMoments,
+  browserOpenIntent,
+  browserViewerPath,
+} from '../lib/browser-card';
 import { BrowserCard } from './BrowserCard';
 import { BrowserModal } from './BrowserModal';
 
@@ -55,6 +62,7 @@ export function useBrowsers({
   const doFetch = fetchImpl ?? fetch;
   const [browsers, setBrowsers] = useState<BrowserCardData[]>([]);
   const [openProfile, setOpenProfile] = useState<string | null>(null);
+  const [openIntent, setOpenIntent] = useState<BrowserOpenIntent>('watch');
 
   const refresh = useCallback(async () => {
     try {
@@ -92,16 +100,27 @@ export function useBrowsers({
   );
 
   const open = useCallback(
-    async (data: BrowserCardData, mode: 'modal' | 'tab') => {
-      // Take FIRST. A viewer that accepts input while the agent still holds the
-      // wheel is the exact race the wheel exists to prevent.
-      await post(`/api/browsers/${data.profile}/wheel/take`, {
-        by,
-        ...(data.needsYou ? { reason: data.needsYou.reason } : {}),
-      });
-      if (mode === 'tab')
-        (openTab ?? ((url: string) => window.open(url, '_blank')))(data.viewerUrl);
-      else setOpenProfile(data.profile);
+    async (data: BrowserCardData, mode: 'modal' | 'tab', intent: BrowserOpenIntent) => {
+      // WATCHING TAKES NOTHING. Looking over the agent's shoulder is the common
+      // case — the session card exists so you can — and seizing the browser to
+      // do it stalls a task you asked for, for a reason the agent cannot see.
+      //
+      // Answering a summons takes the wheel FIRST, before any input can reach
+      // the page: a viewer accepting clicks while the agent still holds it is
+      // the exact race the wheel exists to prevent.
+      if (intent === 'drive') {
+        await post(`/api/browsers/${data.profile}/wheel/take`, {
+          by,
+          ...(data.needsYou ? { reason: data.needsYou.reason } : {}),
+        });
+      }
+      if (mode === 'tab') {
+        const url = data.viewerUrl + (intent === 'watch' ? '?mode=watch' : '');
+        (openTab ?? ((u: string) => window.open(u, '_blank')))(url);
+      } else {
+        setOpenProfile(data.profile);
+        setOpenIntent(intent);
+      }
     },
     [by, post, openTab],
   );
@@ -132,7 +151,8 @@ export function useBrowsers({
   const moments = useMemo(() => browserMoments(browsers, tabId), [browsers, tabId]);
   // Stable identity for the same reason `moments` is memoized.
   const openSync = useCallback(
-    (browser: BrowserCardData, mode: 'modal' | 'tab') => void open(browser, mode),
+    (browser: BrowserCardData, mode: 'modal' | 'tab', intent: BrowserOpenIntent) =>
+      void open(browser, mode, intent),
     [open],
   );
 
@@ -147,6 +167,7 @@ export function useBrowsers({
     modal: active ? (
       <BrowserModal
         data={active}
+        intent={openIntent}
         by={by}
         onClose={() => void close(active.profile)}
         onRenew={() => void post(`/api/browsers/${active.profile}/wheel/renew`, { by })}
@@ -166,7 +187,7 @@ export function BrowserCards(props: BrowserCardsProps) {
           key={`${moment.profile}:${moment.at}:${moment.kind}`}
           moment={moment}
           {...(viewportWidth !== undefined ? { viewportWidth } : {})}
-          onOpen={(mode) => open(moment.browser, mode)}
+          onOpen={(mode) => open(moment.browser, mode, browserOpenIntent(moment))}
         />
       ))}
       {modal}

@@ -25,6 +25,8 @@ import './BrowserModal.css';
 
 export interface BrowserModalProps {
   data: BrowserCardData;
+  /** `watch` frames the viewer read-only, so the agent keeps working. */
+  intent?: 'watch' | 'drive';
   /** Identifies this claimant to the wheel — the pane holding the modal. */
   by: string;
   onClose: () => void;
@@ -37,6 +39,7 @@ export interface BrowserModalProps {
 
 export function BrowserModal({
   data,
+  intent = 'drive',
   by,
   onClose,
   onRenew,
@@ -57,12 +60,14 @@ export function BrowserModal({
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
+  // Only a lease you HOLD needs renewing. Watching holds nothing.
   useEffect(() => {
+    if (intent !== 'drive') return;
     const id = setInterval(() => {
       if (shouldRenewWheel(data.wheel, now())) onRenew();
     }, intervalMs);
     return () => clearInterval(id);
-  }, [data.wheel, onRenew, now, intervalMs]);
+  }, [data.wheel, onRenew, now, intervalMs, intent]);
 
   const countdown = wheelCountdown(data.wheel, now());
   const yours = data.wheel?.holder === 'human' && data.wheel.by === by;
@@ -75,7 +80,7 @@ export function BrowserModal({
         <div className="browser-modal__bar">
           <span className="browser-modal__title">browser · {data.profile}</span>
           <span className="browser-modal__wheel" data-yours={yours ? 'true' : 'false'}>
-            {yours ? 'you have the wheel' : 'watching'}
+            {intent === 'watch' ? 'watching — the agent keeps working' : 'you have the wheel'}
           </span>
           {countdown ? <span className="browser-modal__countdown">{countdown}</span> : null}
           <button type="button" className="browser-modal__close" onClick={onClose}>
@@ -85,7 +90,7 @@ export function BrowserModal({
         <iframe
           className="browser-modal__frame"
           title={`browser ${data.profile}`}
-          src={browserViewerPath(data.profile)}
+          src={browserViewerPath(data.profile, intent)}
           // RELATIVE, so the frame is same-origin however you reached the
           // cockpit — loopback at the desk, tailnet from the sofa. Not
           // sandboxed: taking keyboard and pointer input is the entire point,
