@@ -15,6 +15,7 @@ import { ArchiveDb } from './archive/ArchiveDb.js';
 import { Archiver } from './archive/Archiver.js';
 import { ensureBrowserApp, listBrowserApps } from './browser/BrowserApps.js';
 import { BrowserEvents } from './browser/BrowserEvents.js';
+import { BrowserOwner } from './browser/BrowserOwner.js';
 import { browserAppSlug, browserProfileDir } from './browser/BrowserProfile.js';
 import { DEFAULT_BROWSER_PROFILES } from './browser/BrowserProfile.js';
 import { parseBrowserProxyPath } from './browser/BrowserProxy.js';
@@ -427,6 +428,7 @@ const app = createApp({
   cache,
   dataDir: config.dataDir,
   browserTailnetHost: () => cachedTailnetHost,
+  selfUrl: `http://127.0.0.1:${config.port}`,
   events,
   agentBridge,
   tabActivity,
@@ -623,6 +625,10 @@ void (async () => {
       registry: appRegistry,
       cwd: config.dataDir,
       start: false,
+      // Must match what the route passes, or the two disagree about the command
+      // and each "repairs" it back — a browser restarted on every boot AND
+      // every registration, losing the flag either way round.
+      apiUrl: `http://127.0.0.1:${config.port}`,
     });
   }
 })().catch((err) => console.error('[browser] boot registration failed', err));
@@ -661,6 +667,7 @@ const reapSessionBrowsers = async () => {
       if (!isDisposableSessionProfile(profile)) continue;
       apps.delete(row.id);
       new BrowserEvents(db).clear(profile);
+      new BrowserOwner(db).clear(profile);
       await rm(browserProfileDir(config.dataDir, profile), { recursive: true, force: true });
       console.log(`[browser] reaped '${profile}' — its tab is gone`);
     }

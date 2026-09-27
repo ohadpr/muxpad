@@ -50,6 +50,8 @@ export interface EnsureBrowserAppDeps {
   cwd: string;
   /** Start it now. False registers the row without opening a browser. */
   start?: boolean;
+  /** Where the host announces the first page actually visited. */
+  apiUrl?: string;
   log?: (line: string) => void;
 }
 
@@ -70,6 +72,8 @@ export function browserHostCommand(opts: {
   port: number;
   dataDir: string;
   chromePath: string;
+  /** Where to announce the first page actually visited. */
+  apiUrl?: string;
 }): string {
   // Quoted because a data dir or a Chrome path can contain spaces. The profile
   // is already known to be a bare slug (normalizeProfileName), so it needs no
@@ -82,6 +86,9 @@ export function browserHostCommand(opts: {
     `--data-dir=${JSON.stringify(opts.dataDir)}`,
     `--chrome=${JSON.stringify(opts.chromePath)}`,
     `--jar=${JSON.stringify(browserJarPath(opts.dataDir))}`,
+    // How the host tells the conversation a page was visited. Optional so an
+    // older row without it still starts; the only thing lost is the card.
+    ...(opts.apiUrl ? [`--api=${JSON.stringify(opts.apiUrl)}`] : []),
   ].join(' ');
 }
 
@@ -174,6 +181,7 @@ export async function ensureBrowserApp(
             port: cdp,
             dataDir: deps.dataDir,
             chromePath: deps.chromePath,
+            ...(deps.apiUrl ? { apiUrl: deps.apiUrl } : {}),
           });
     if (wanted !== existing.command) {
       new AppStore(deps.db).update(existing.id, { command: wanted });
@@ -210,6 +218,7 @@ export async function ensureBrowserApp(
       port: cdpPort,
       dataDir: deps.dataDir,
       chromePath: deps.chromePath,
+      ...(deps.apiUrl ? { apiUrl: deps.apiUrl } : {}),
     }),
     // The VIEWER url: it is what a person opens, and what the app status probe
     // should be measuring. "Is the browser reachable" means "can somebody take

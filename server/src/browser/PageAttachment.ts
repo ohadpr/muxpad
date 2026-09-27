@@ -51,3 +51,25 @@ export function targetToAttach(
   if (currentTargetId && pages.some((t) => t.targetId === currentTargetId)) return null;
   return pages[0] ?? null;
 }
+
+/**
+ * Whether this URL means somebody is actually BROWSING.
+ *
+ * "Browser opened" is a line in a conversation, so it has to mark a thing that
+ * happened in that conversation. It used to be recorded when the browser was
+ * PROVISIONED — and provisioning happens when the agent's MCP server starts,
+ * which is before the person has typed anything. The card therefore sorted
+ * above the very prompt that caused it, every time, in every new chat. Nothing
+ * was wrong with the placement; the timestamp was plumbing.
+ *
+ * So the host announces the first page that is a page. A browser parked on its
+ * start screen has not been used, and a session that never browses now says
+ * nothing at all rather than announcing a process nobody asked about.
+ *
+ * `about:`, `chrome:` and `devtools:` are the browser talking to itself, and
+ * `data:` is a page built by a test harness rather than visited by anyone.
+ */
+export function isBrowsingUrl(url: string | null | undefined): boolean {
+  if (!url) return false;
+  return /^(https?|file):\/\//i.test(url.trim());
+}

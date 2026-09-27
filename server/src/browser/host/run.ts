@@ -20,6 +20,7 @@ import {
   storageStateToCdpCookies,
 } from '../CookieJar.js';
 import { emulationParams } from '../MobileEmulation.js';
+import { isBrowsingUrl } from '../PageAttachment.js';
 import { clearStaleProfileLock } from '../ProfileLock.js';
 import { ScreencastSession } from '../ScreencastSession.js';
 import { VIEWER_HTML } from './viewer.js';
@@ -61,6 +62,12 @@ export interface BrowserHostOptions {
   viewerPort?: number;
   /** Where the shared cookie jar is written. Agents read it with --storage-state. */
   jarPath?: string;
+  /**
+   * Where to announce the first page actually visited, so the conversation gets
+   * its card at the right moment. Optional: without it the browser works and
+   * simply says nothing.
+   */
+  apiUrl?: string;
   /** Called when Chrome exits on its own. Defaults to taking this process with it. */
   onChromeExit?: () => void;
   log?: (line: string) => void;
@@ -131,12 +138,38 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     const msg = JSON.stringify({ t: 'url', url: currentUrl });
     for (const viewer of viewers) if (viewer.readyState === 1) viewer.send(msg);
   };
+  /**
+   * "Browser opened", once, when a page is actually visited.
+   *
+   * NOT when the browser was provisioned. That happens as the agent's MCP
+   * server starts — before the person has typed anything — so a card stamped
+   * there sorted above the very prompt that caused it, in every new chat. And
+   * it announced a process rather than an event: a session that never browses
+   * got a card about a browser nobody used.
+   *
+   * Once per host process. A browser that navigates forty times has opened
+   * once, and the conversation is not a log of its address bar.
+   */
+  let announcedFirstPage = false;
+  const announceFirstPage = () => {
+    if (announcedFirstPage || !opts.apiUrl || !isBrowsingUrl(currentUrl)) return;
+    announcedFirstPage = true;
+    void fetch(`${opts.apiUrl}/api/browsers/${encodeURIComponent(opts.profile)}/opened`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+      // A card is decoration on a conversation. It must never be able to take
+      // the browser down with it, so a failure here is silence and nothing else.
+    }).catch(() => undefined);
+  };
+
   cdp.on('Page.frameNavigated', ((p: { frame: { parentId?: string; url: string } }) => {
     if (p.frame.parentId) return;
     currentUrl = p.frame.url;
     // The viewer shows the address, so it has to hear about every navigation —
     // including ones the AGENT made, which is most of them.
     announceUrl();
+    announceFirstPage();
   }) as never);
 
   const viewers = new Set<WsSocket>();

@@ -66,11 +66,15 @@ const del = (path: string, body: unknown = {}) =>
     body: JSON.stringify(body),
   });
 
-async function ensure(profile = 'shopping') {
-  const res = await post('/api/browsers', { profile });
+async function ensure(opts: { profile?: string; tabId?: string } | string = 'shopping') {
+  const { profile = 'shopping', tabId } =
+    typeof opts === 'string' ? { profile: opts, tabId: undefined } : opts;
+  const res = await post('/api/browsers', { profile, ...(tabId ? { tabId } : {}) });
   expect(res.status).toBe(201);
   return res.json();
 }
+
+const get = (path: string) => app.request(path);
 
 describe('creating', () => {
   it('hands a person a link on muxpad’s own origin, not a loopback port', async () => {
@@ -262,6 +266,7 @@ describe('asking for a person', () => {
     // An ack nobody presses is how a card ends up shouting after the thing was
     // already dealt with.
     await ensure();
+    await post('/api/browsers/shopping/opened', {});
     await post('/api/browsers/shopping/needs-you', { reason: 'captcha' });
     const res = await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
     expect(((await res.json()) as { needsYou: unknown }).needsYou).toBeNull();
@@ -269,6 +274,7 @@ describe('asking for a person', () => {
 
   it('can be withdrawn when the agent gets past it alone', async () => {
     await ensure();
+    await post('/api/browsers/shopping/opened', {});
     await post('/api/browsers/shopping/needs-you', { reason: 'captcha' });
     const res = await del('/api/browsers/shopping/needs-you');
     expect(((await res.json()) as { needsYou: unknown }).needsYou).toBeNull();
@@ -281,26 +287,9 @@ describe('asking for a person', () => {
 });
 
 describe('the moments a conversation shows', () => {
-  it('records an "opened" when the browser actually starts', async () => {
-    const res = await post('/api/browsers', { profile: 'shopping', tabId: 'tab-1' });
-    const body = (await res.json()) as { events: Array<{ kind: string; tabId?: string }> };
-    expect(body.events).toHaveLength(1);
-    expect(body.events[0]).toMatchObject({ kind: 'opened', tabId: 'tab-1' });
-  });
-
-  it('does NOT record one for a browser that is already running', async () => {
-    // POST is idempotent, and the UI polls. An "opened" card per poll would
-    // bury the conversation it is supposed to sit inside.
-    await ensure();
-    await post('/api/browsers', { profile: 'shopping' });
-    await post('/api/browsers', { profile: 'shopping' });
-    const res = await app.request('/api/browsers/shopping');
-    const body = (await res.json()) as { events: unknown[] };
-    expect(body.events).toHaveLength(1);
-  });
-
   it('records the summons as its own moment, with the reason', async () => {
     await ensure();
+    await post('/api/browsers/shopping/opened', {});
     const res = await post('/api/browsers/shopping/needs-you', {
       reason: 'log in to Amazon',
       tabId: 'tab-1',
@@ -310,11 +299,41 @@ describe('the moments a conversation shows', () => {
     expect(body.events[1]).toMatchObject({ reason: 'log in to Amazon', tabId: 'tab-1' });
   });
 
+  it('says NOTHING when a browser is merely provisioned', async () => {
+    // Provisioning happens as the agent's MCP server starts — before the person
+    // has typed anything. A card recorded there is stamped earlier than the
+    // prompt that caused it and sorts above it, in every new chat, and it
+    // announces a process rather than an event: a session that never browses
+    // used to get a card about a browser nobody used.
+    await ensure();
+    const res = await get('/api/browsers/shopping');
+    const body = (await res.json()) as { events: Array<{ kind: string }> };
+    expect(body.events).toEqual([]);
+  });
+
+  it('records it when the host says a page was actually visited', async () => {
+    await ensure();
+    const res = await post('/api/browsers/shopping/opened', {});
+    const body = (await res.json()) as { events: Array<{ kind: string }> };
+    expect(body.events.map((e) => e.kind)).toEqual(['opened']);
+  });
+
+  it('puts that card in the chat the browser was registered for', async () => {
+    // The host has no idea which conversation it belongs to, and the profile
+    // name cannot answer it either: a profile is a LOWERCASED slug of the tab
+    // id, and a card is shown only where the id matches exactly.
+    await ensure({ tabId: '01KRG3EMB8F6NFHXZH40HNKZGK' });
+    const res = await post('/api/browsers/shopping/opened', {});
+    const body = (await res.json()) as { events: Array<{ tabId?: string }> };
+    expect(body.events[0]?.tabId).toBe('01KRG3EMB8F6NFHXZH40HNKZGK');
+  });
+
   it('does NOT retire the card when you take the wheel', async () => {
     // While you hold the browser that card is the way BACK to it. Navigate away
     // on a phone and, if it has gone, there is nothing left in the conversation
     // to tap.
     await ensure();
+    await post('/api/browsers/shopping/opened', {});
     await post('/api/browsers/shopping/needs-you', { reason: 'captcha' });
     const res = await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
     const body = (await res.json()) as { events: Array<{ kind: string }> };
@@ -323,6 +342,7 @@ describe('the moments a conversation shows', () => {
 
   it('retires it when you hand the browser back', async () => {
     await ensure();
+    await post('/api/browsers/shopping/opened', {});
     await post('/api/browsers/shopping/needs-you', { reason: 'captcha' });
     await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
     const res = await del('/api/browsers/shopping/wheel', { by: 'pane-7' });
@@ -332,6 +352,7 @@ describe('the moments a conversation shows', () => {
 
   it('does not retire it for somebody who was not holding it', async () => {
     await ensure();
+    await post('/api/browsers/shopping/opened', {});
     await post('/api/browsers/shopping/needs-you', { reason: 'captcha' });
     await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
     const res = await del('/api/browsers/shopping/wheel', { by: 'someone-else' });
@@ -341,6 +362,7 @@ describe('the moments a conversation shows', () => {
 
   it('does not record a "resolved" when nothing was asking', async () => {
     await ensure();
+    await post('/api/browsers/shopping/opened', {});
     await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
     const res = await del('/api/browsers/shopping/wheel', { by: 'pane-7' });
     const body = (await res.json()) as { events: Array<{ kind: string }> };

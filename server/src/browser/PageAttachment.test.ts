@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type TargetInfo, targetToAttach } from './PageAttachment.js';
+import { type TargetInfo, isBrowsingUrl, targetToAttach } from './PageAttachment.js';
 
 const page = (id: string, url = 'https://example.com'): TargetInfo => ({
   targetId: id,
@@ -41,5 +41,32 @@ describe('noticing the page was swapped underneath us', () => {
     // turns a blink into a fault.
     expect(targetToAttach('gone', [])).toBeNull();
     expect(targetToAttach(null, [{ targetId: 'w', type: 'worker', url: '' }])).toBeNull();
+  });
+});
+
+describe('what counts as having used the browser', () => {
+  it('a real page does', () => {
+    expect(isBrowsingUrl('https://amazon.com/')).toBe(true);
+    expect(isBrowsingUrl('http://127.0.0.1:3000/')).toBe(true);
+    expect(isBrowsingUrl('file:///Users/x/page.html')).toBe(true);
+  });
+
+  it('the browser talking to itself does not', () => {
+    // This is the whole bug: a browser provisioned at session start sits on its
+    // start page, and announcing THAT put the card above the prompt that
+    // caused it.
+    expect(isBrowsingUrl('chrome://newtab/')).toBe(false);
+    expect(isBrowsingUrl('about:blank')).toBe(false);
+    expect(isBrowsingUrl('devtools://devtools/bundled/x.html')).toBe(false);
+  });
+
+  it('nor does a page a harness built rather than one anybody visited', () => {
+    expect(isBrowsingUrl('data:text/html,<input>')).toBe(false);
+  });
+
+  it('nor nothing at all', () => {
+    expect(isBrowsingUrl(null)).toBe(false);
+    expect(isBrowsingUrl('')).toBe(false);
+    expect(isBrowsingUrl('   ')).toBe(false);
   });
 });
