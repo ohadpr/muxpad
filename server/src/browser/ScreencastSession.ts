@@ -28,8 +28,20 @@
  *    You have to STOP and then START. That asymmetry is the reason
  *    {@link rearm} exists as a named thing instead of a second `start()` call.
  *
- * Neither of these shows up in a demo. Both show up the first time a handoff
- * follows a link.
+ * 3. A FAILED START IS NEVER RETRIED, and `running` goes on saying yes. Chrome
+ *    refuses `startScreencast` on a WebUI page — including `chrome://newtab`,
+ *    which is where every browser begins, so this is not an edge case but the
+ *    FIRST thing that happens in every session. The error was reported and
+ *    dropped; the flag stayed true; the page later navigated somewhere real and
+ *    nothing ever tried again. Found in a live host holding a loaded page with
+ *    a viewer that had been black since boot.
+ *
+ *    `running` is an INTENTION. Whether frames are arriving is a fact, and the
+ *    two are not the same thing — see {@link ensureStreaming}.
+ *
+ * Neither of the first two shows up in a demo. Both show up the first time a
+ * handoff follows a link, and the third shows up before anybody has done
+ * anything at all.
  */
 
 /** The slice of a CDP connection this needs. Injected, so it is testable without a browser. */
@@ -64,10 +76,15 @@ export interface ScreencastOptions {
   everyNthFrame?: number;
   /** Where to report errors that are handled rather than thrown. */
   onError?: (where: string, err: Error) => void;
+  /** The clock, injected so a test does not have to wait six seconds. */
+  now?: () => number;
 }
 
 export class ScreencastSession {
+  /** What we INTEND. Not evidence that anything is arriving — see lastFrameAt. */
   private running = false;
+  /** When a frame last actually arrived. Null means not one, ever. */
+  private lastFrameAt: number | null = null;
 
   constructor(
     private readonly cdp: CdpTransport,
@@ -87,6 +104,7 @@ export class ScreencastSession {
     await this.cdp.send('Page.enable');
     await this.cdp.send('DOM.enable');
     this.running = true;
+    this.lastFrameAt = null;
     await this.cdp.send('Page.startScreencast', {
       format: 'jpeg',
       quality: this.opts.quality ?? 60,
@@ -181,12 +199,39 @@ export class ScreencastSession {
     }
   }
 
+  /**
+   * Starts the stream again if it is not really running.
+   *
+   * The caller polls this while somebody is watching, because the failure it
+   * repairs is silent by construction: Chrome refused the start, the error was
+   * handled, and the flag still says yes. Asking "has a frame arrived lately"
+   * is the only question whose answer is a fact.
+   *
+   * A page that is genuinely idle sends nothing — the compositor commits only
+   * on change — so a quiet stream is not evidence of a broken one. That is what
+   * the kick inside rearm is for: it forces a commit, so if the stream is alive
+   * a frame follows, and if none does the next call tries again.
+   */
+  async ensureStreaming(now: number, quietForMs = 6000): Promise<boolean> {
+    if (!this.running) return false;
+    if (this.lastFrameAt !== null && now - this.lastFrameAt < quietForMs) return false;
+    await this.rearm();
+    return true;
+  }
+
+  /** Feeds a frame in, for tests: the real one arrives on a CDP event. */
+  async frameForTest(p: { data: string; sessionId: number; metadata: Record<string, unknown> }) {
+    await this.onScreencastFrame(p);
+  }
+
   private async onScreencastFrame(p: {
     data: string;
     sessionId: number;
     metadata: Record<string, unknown>;
   }) {
     if (!this.running) return;
+    // Evidence, as opposed to intention. ensureStreaming reads this.
+    this.lastFrameAt = this.opts.now ? this.opts.now() : Date.now();
     this.opts.onFrame({ bytes: Buffer.from(p.data, 'base64'), metadata: p.metadata });
     try {
       await this.cdp.send('Page.screencastFrameAck', { sessionId: p.sessionId });

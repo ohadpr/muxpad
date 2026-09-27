@@ -235,6 +235,38 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     const boxes = setInterval(() => {
       if (socket.readyState !== 1) return;
       void sendFieldBoxes(socket);
+      // AND CHECK THE PICTURE IS REAL. Chrome refuses startScreencast on a WebUI
+      // page, `chrome://newtab` included — which is where every browser begins,
+      // so the first start of every session can fail. That failure is silent:
+      // the error is handled, the session goes on saying it is running, and the
+      // viewer is black from boot with every layer reporting health. Caught on a
+      // live host holding a loaded page.
+      //
+      // Only while somebody is watching: a black viewer nobody has open is not a
+      // problem worth waking Chrome for.
+      void (async () => {
+        try {
+          // A page target can be swapped out from under us too — navigating away
+          // from the new-tab page does it — which leaves the session attached to
+          // something that no longer exists.
+          const moved = await cdp.reattachIfLost();
+          if (moved) {
+            log(`[host] re-attached to ${moved.url}`);
+            currentUrl = moved.url;
+            await screencast.start();
+            // Everyone watching is looking at an address that is no longer the
+            // one on screen.
+            for (const viewer of viewers) {
+              if (viewer.readyState === 1) {
+                viewer.send(JSON.stringify({ t: 'url', url: currentUrl }));
+              }
+            }
+          }
+          await screencast.ensureStreaming(Date.now());
+        } catch {
+          // Next tick tries again; this is the repair path, not the happy one.
+        }
+      })();
     }, 2000);
     socket.on('close', () => clearInterval(boxes));
   });
