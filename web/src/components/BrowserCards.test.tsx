@@ -30,7 +30,7 @@ const browser = (over: Record<string, unknown> = {}) => ({
   state: 'running',
   wheel: null,
   // A card is drawn from a MOMENT, so a browser with no history draws nothing.
-  events: [{ kind: 'opened', at: 100 }],
+  events: [{ kind: 'opened', at: 100, tabId: 'tab-1' }],
   ...over,
 });
 
@@ -109,8 +109,8 @@ describe('what gets a card at all', () => {
     const { impl } = fakeFetch(() => [
       browser({
         events: [
-          { kind: 'opened', at: 100 },
-          { kind: 'needs-you', at: 500, reason: 'captcha' },
+          { kind: 'opened', at: 100, tabId: 'tab-1' },
+          { kind: 'needs-you', at: 500, reason: 'captcha', tabId: 'tab-1' },
         ],
       }),
     ]);
@@ -118,6 +118,24 @@ describe('what gets a card at all', () => {
       <BrowserCards by="pane-7" tabId="tab-1" fetchImpl={impl} pollMs={100000} />,
     );
     expect(host.querySelectorAll('[data-testid="browser-card"]')).toHaveLength(2);
+  });
+
+  it('draws nothing in a BRAND-NEW chat, whatever happened elsewhere', async () => {
+    // The bug this pins: untagged moments used to show everywhere, so opening
+    // a new conversation greeted you with cards about things that happened
+    // before it existed.
+    const { impl } = fakeFetch(() => [
+      browser({
+        events: [
+          { kind: 'opened', at: 100 },
+          { kind: 'needs-you', at: 200, reason: 'captcha' },
+        ],
+      }),
+    ]);
+    const { host } = await mount(
+      <BrowserCards by="pane-7" tabId="brand-new" fetchImpl={impl} pollMs={100000} />,
+    );
+    expect(host.querySelectorAll('[data-testid="browser-card"]')).toHaveLength(0);
   });
 
   it('ignores a moment that happened in ANOTHER chat', async () => {
