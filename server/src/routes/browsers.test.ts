@@ -1,0 +1,185 @@
+import Database from 'better-sqlite3';
+import { Hono } from 'hono';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { browsersRoutes } from './browsers.js';
+
+/**
+ * The REST surface, and the one thing it must not get wrong.
+ *
+ * `holder` is not a field a caller supplies. If it were, an agent would simply
+ * claim to be a person and the asymmetry the whole feature rests on would be a
+ * convention rather than a rule. The routes are split by WHO MAY CALL THEM:
+ * /wheel/take is the UI and is always human, /wheel/claim is a tool and is
+ * always agent. These tests exist mostly to pin that.
+ */
+
+let db: Database.Database;
+let app: Hono;
+let registry: { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> };
+
+const CHROME = '/bin/chrome';
+
+beforeEach(() => {
+  db = new Database(':memory:');
+  db.exec(`CREATE TABLE apps (
+    id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
+    cwd TEXT NOT NULL, command TEXT NOT NULL, url TEXT NOT NULL,
+    autostart INTEGER NOT NULL, enabled INTEGER NOT NULL, pane_id TEXT,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+    CREATE TABLE globals (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
+  registry = { start: vi.fn(async () => {}), stop: vi.fn(async () => {}) };
+  app = new Hono().route(
+    '/api/browsers',
+    browsersRoutes({
+      db,
+      dataDir: '/data',
+      hostEntry: '/opt/cli.js',
+      cwd: '/home',
+      registry,
+      chromePath: () => CHROME,
+    }),
+  );
+});
+
+const post = (path: string, body: unknown = {}) =>
+  app.request(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+const del = (path: string, body: unknown = {}) =>
+  app.request(path, {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+async function ensure(profile = 'shopping') {
+  const res = await post('/api/browsers', { profile });
+  expect(res.status).toBe(201);
+  return res.json();
+}
+
+describe('creating', () => {
+  it('registers a browser and reports both urls', async () => {
+    const body = (await ensure()) as { profile: string; viewerUrl: string; cdpUrl: string };
+    expect(body.profile).toBe('shopping');
+    expect(body.viewerUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(body.cdpUrl).not.toBe(body.viewerUrl);
+  });
+
+  it('is idempotent over the wire too', async () => {
+    await ensure();
+    await ensure();
+    const res = await app.request('/api/browsers');
+    expect(((await res.json()) as { browsers: unknown[] }).browsers).toHaveLength(1);
+  });
+
+  it('400s a profile name that would escape the data dir', async () => {
+    const res = await post('/api/browsers', { profile: '../../etc' });
+    expect(res.status).toBe(400);
+  });
+
+  it('503s with a message that names the fix when there is no Chrome', async () => {
+    // "failed to start browser" sends somebody reading logs for twenty minutes.
+    const noChrome = new Hono().route(
+      '/api/browsers',
+      browsersRoutes({
+        db,
+        dataDir: '/data',
+        hostEntry: '/opt/cli.js',
+        cwd: '/home',
+        registry,
+        chromePath: () => null,
+      }),
+    );
+    const res = await noChrome.request('/api/browsers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ profile: 'shopping' }),
+    });
+    expect(res.status).toBe(503);
+    expect(((await res.json()) as { error: string }).error).toMatch(
+      /MUXPAD_CHROME_BIN|playwright install/,
+    );
+  });
+
+  it('404s a browser that was never registered', async () => {
+    expect((await app.request('/api/browsers/nope')).status).toBe(404);
+  });
+});
+
+describe('the wheel over HTTP', () => {
+  it('lets a person take it', async () => {
+    await ensure();
+    const res = await post('/api/browsers/shopping/wheel/take', {
+      by: 'pane-7',
+      reason: 'captcha',
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { wheel: unknown }).wheel).toMatchObject({
+      holder: 'human',
+      by: 'pane-7',
+    });
+  });
+
+  it('REFUSES an agent while a person is driving, with 409 and a reason', async () => {
+    await ensure();
+    await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
+    const res = await post('/api/browsers/shopping/wheel/claim', { by: 'chat-1' });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toMatch(/human/i);
+  });
+
+  it('lets a person take it FROM an agent', async () => {
+    await ensure();
+    await post('/api/browsers/shopping/wheel/claim', { by: 'chat-1' });
+    const res = await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { wheel: { holder: string } }).wheel.holder).toBe('human');
+  });
+
+  it('gives an agent no way to CLAIM to be a person', async () => {
+    // The route decides the holder, not the caller. If this ever reads a
+    // `holder` off the body, the asymmetry stops being a rule.
+    await ensure();
+    await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
+    const res = await post('/api/browsers/shopping/wheel/claim', {
+      by: 'chat-1',
+      holder: 'human',
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { wheel: { by: string } };
+    expect(body.wheel.by).toBe('pane-7');
+  });
+
+  it('hands it back, and only for the holder', async () => {
+    await ensure();
+    await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
+    const wrong = await del('/api/browsers/shopping/wheel', { by: 'chat-1' });
+    expect(((await wrong.json()) as { wheel: unknown }).wheel).not.toBeNull();
+    const right = await del('/api/browsers/shopping/wheel', { by: 'pane-7' });
+    expect(((await right.json()) as { wheel: unknown }).wheel).toBeNull();
+  });
+
+  it('409s a renew from somebody who is not holding it', async () => {
+    await ensure();
+    await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
+    const res = await post('/api/browsers/shopping/wheel/renew', { by: 'chat-1' });
+    expect(res.status).toBe(409);
+  });
+
+  it('400s a wheel request with no claimant', async () => {
+    await ensure();
+    expect((await post('/api/browsers/shopping/wheel/take', {})).status).toBe(400);
+  });
+
+  it('keeps wheels separate per profile', async () => {
+    await ensure('shopping');
+    await ensure('research');
+    await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
+    const res = await app.request('/api/browsers/research');
+    expect(((await res.json()) as { wheel: unknown }).wheel).toBeNull();
+  });
+});
