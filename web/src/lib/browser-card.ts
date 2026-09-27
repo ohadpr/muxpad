@@ -53,6 +53,14 @@ export interface BrowserCardView {
   action: string | null;
   /** Whether this card should pull the eye. */
   urgent: boolean;
+  /**
+   * Whether the lease countdown belongs on this card.
+   *
+   * Only while YOU hold the wheel — it is your lease running out. On a card
+   * about something the agent did, or a browser nobody is driving, it is a
+   * number with nothing to refer to.
+   */
+  countdown: boolean;
 }
 
 /**
@@ -78,6 +86,7 @@ export function browserCardView(data: BrowserCardData): BrowserCardView {
       detail: data.needsYou.reason,
       action: 'Take the wheel',
       urgent: true,
+      countdown: false,
     };
   }
 
@@ -88,6 +97,7 @@ export function browserCardView(data: BrowserCardData): BrowserCardView {
       detail: data.wheel.reason ?? '',
       action: 'Open',
       urgent: false,
+      countdown: true,
     };
   }
 
@@ -98,6 +108,7 @@ export function browserCardView(data: BrowserCardData): BrowserCardView {
       detail: '',
       action: 'Watch',
       urgent: false,
+      countdown: false,
     };
   }
 
@@ -107,6 +118,7 @@ export function browserCardView(data: BrowserCardData): BrowserCardView {
     detail: 'idle',
     action: 'Open',
     urgent: false,
+    countdown: false,
   };
 }
 
@@ -266,7 +278,10 @@ function isLive(browser: BrowserCardData): boolean {
 export function browserMomentView(moment: BrowserMoment): BrowserCardView {
   const { browser } = moment;
   const live = isLive(browser);
-  const stillAsking = moment.kind === 'needs-you' && Boolean(browser.needsYou);
+  const yours = browser.wheel?.holder === 'human';
+  // A summons while YOU are already driving is a card asking for something you
+  // have already done. It reads as handled, because it is.
+  const stillAsking = moment.kind === 'needs-you' && Boolean(browser.needsYou) && !yours;
 
   if (stillAsking) {
     return {
@@ -278,6 +293,7 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
       detail: moment.reason ?? '',
       action: live ? 'Take the wheel' : null,
       urgent: true,
+      countdown: false,
     };
   }
 
@@ -286,16 +302,17 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
 
   if (moment.kind === 'needs-you') {
     return {
-      tone: browser.wheel?.holder === 'human' ? 'yours' : 'idle',
+      tone: yours ? 'yours' : 'idle',
       title: 'Handled',
       detail: moment.reason ?? detail,
       action,
       urgent: false,
+      countdown: yours,
     };
   }
 
   return {
-    tone: browser.wheel?.holder === 'human' ? 'yours' : browser.wheel ? 'working' : 'idle',
+    tone: yours ? 'yours' : browser.wheel ? 'working' : 'idle',
     // A session profile is `s-01m3hw…` — a database key wearing a label. It
     // says nothing to a person and on a phone it ate the whole line. A profile
     // somebody NAMED is worth showing, because they chose the word.
@@ -303,6 +320,7 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
     detail,
     action,
     urgent: false,
+    countdown: yours,
   };
 }
 
