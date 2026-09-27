@@ -925,7 +925,7 @@
      failure mode resolve to the fallback and keep the layout that shipped. */
   bottom: var(--chat-keyboard-inset, 0px);
   z-index: 5;
-  padding: 6px 12px calc(16px + env(safe-area-inset-bottom, 0px));
+  padding: 6px 12px calc(10px + env(safe-area-inset-bottom, 0px));
   background: transparent;
   pointer-events: none; /* the transparent gaps don't eat scroll/clicks… */
 }
@@ -956,13 +956,13 @@
 .chat-composer {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   max-width: 768px;
   margin: 0 auto;
   /* Symmetric side insets: the filled send circle carries more visual weight
      than the small camera glyph, so equal padding reads balanced rather than
      edge-hugging. */
-  padding: 5px 8px 5px 8px;
+  padding: 4px 8px;
   background: color-mix(in srgb, var(--chat-elev) 92%, var(--chat-fg));
   border: 1px solid color-mix(in srgb, var(--chat-fg) 12%, var(--chat-border));
   border-radius: 26px;
@@ -1030,13 +1030,16 @@
   min-width: 0;
   box-sizing: border-box;
   resize: none;
-  /* One line is exactly button-height (36px = 22 line + 2×7 padding) so a
-     single line sits perfectly centered next to the round buttons; JS grows
-     `height` from here for multi-line. */
-  height: 48px;
-  min-height: 48px;
+  /* One line is 40px (22 line + 2×9 padding): a little taller than the 36px
+     round buttons beside it, so the text has room to breathe without the input
+     towering over its own controls. JS grows `height` from here for multi-line.
+     The comment here used to claim 36px while the rule said 48 — the number was
+     changed and the reasoning left behind, which is how a bar gets tall without
+     anybody deciding it should. */
+  height: 40px;
+  min-height: 40px;
   max-height: 200px;
-  padding: 13px 0;
+  padding: 9px 0;
   border: 0;
   background: transparent;
   color: var(--chat-fg);
@@ -1682,21 +1685,26 @@
   }
 }
 
-/* Option C status bar: one segmented strip (folder | model | live) above
-   the composer. Each segment opens its own upward panel; only one at a time. */
+/* One segmented strip (mode | folder | model | live). Each segment opens its
+   own upward panel; only one at a time.
+ *
+ * IT LIVES INSIDE THE COMPOSER PILL. Stacked above as its own floating object it
+ * carried a border, a background and a 10px gap, and cost 37px of a 119px bar —
+ * a third of the whole thing for a line you read and almost never press. On the
+ * pill's own surface it costs its text's height and nothing else: no second
+ * border to draw the eye, no gap between two things that were always one. */
 .chat-status-bar {
   display: flex;
   align-items: stretch;
   width: fit-content;
-  max-width: min(92vw, 420px);
-  /* Clear the composer pill below — 4px read as crammed against it. */
-  margin: 0 6px 10px auto;
-  border: 1px solid color-mix(in srgb, var(--border-strong, #3b4261) 70%, transparent);
-  border-radius: 10px;
+  max-width: 100%;
+  /* Right-aligned over the input below it, and clear of the pill's rounded
+     corner. No bottom margin: the pill's own row gap is the separation. */
+  margin: 0 2px 0 auto;
+  border-radius: 8px;
   /* Menus escape via position:absolute on .chat-status-menu; segment buttons
      clip their own labels so long model names can't paint over the live cell. */
   overflow: visible;
-  background: color-mix(in srgb, var(--bg-chrome, #16161e) 70%, transparent);
 }
 .chat-status-seg-wrap {
   position: relative;
@@ -1705,7 +1713,7 @@
   flex: 1 1 auto;
 }
 .chat-status-seg-wrap + .chat-status-seg-wrap {
-  border-left: 1px solid color-mix(in srgb, var(--border-strong, #3b4261) 55%, transparent);
+  border-left: 1px solid color-mix(in srgb, var(--border-strong, #3b4261) 45%, transparent);
 }
 .chat-status-seg {
   display: flex;
@@ -1715,13 +1723,13 @@
   width: 100%;
   max-width: 180px;
   min-width: 0;
-  padding: 5px 10px;
+  padding: 1px 7px;
   border: none;
   background: transparent;
   color: var(--fg-faint, #6f7488);
   font-family: var(--chrome-font, inherit);
   font-size: 11px;
-  line-height: 1.4;
+  line-height: 1.35;
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
