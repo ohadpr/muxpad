@@ -177,7 +177,15 @@ describe('the moments a conversation draws', () => {
     // The whole point of the redesign: a browser opening and an agent getting
     // stuck are two things that happened, at two moments, not one status light.
     const moments = browserMoments(
-      [{ ...base, events: [ev('opened', 100), ev('needs-you', 500, { reason: 'captcha' })] }],
+      [
+        {
+          ...base,
+          events: [
+            ev('opened', 100, { tabId: 'tab-1' }),
+            ev('needs-you', 500, { reason: 'captcha', tabId: 'tab-1' }),
+          ],
+        },
+      ],
       'tab-1',
     );
     expect(moments.map((m) => [m.kind, m.at])).toEqual([
@@ -188,7 +196,7 @@ describe('the moments a conversation draws', () => {
 
   it('keeps the reason on the summons, because that IS the card', () => {
     const [m] = browserMoments(
-      [{ ...base, events: [ev('needs-you', 1, { reason: 'log in to Amazon' })] }],
+      [{ ...base, events: [ev('needs-you', 1, { reason: 'log in to Amazon', tabId: 'tab-1' })] }],
       'tab-1',
     );
     expect(m?.reason).toBe('log in to Amazon');
@@ -208,28 +216,50 @@ describe('the moments a conversation draws', () => {
     ).toHaveLength(0);
   });
 
-  it('shows one that belongs to NO chat, so nothing is invisible', () => {
-    // A browser started from the CLI has no conversation. Hiding it everywhere
-    // would mean a summons nobody can see.
-    expect(browserMoments([{ ...base, events: [ev('opened', 1)] }], 'tab-1')).toHaveLength(1);
+  it('hides one that belongs to NO chat', () => {
+    // This was the other way round, and it was wrong. A moment with no chat —
+    // a browser started from the CLI — showed in EVERY conversation, so opening
+    // a brand-new chat greeted you with two cards about things that happened
+    // somewhere else before it existed. A card has to be about THIS chat.
+    expect(browserMoments([{ ...base, events: [ev('opened', 1)] }], 'tab-1')).toHaveLength(0);
+  });
+
+  it('shows nothing at all in a chat where nothing happened', () => {
+    // The shape a new conversation must have: empty.
+    const busy = {
+      ...base,
+      events: [ev('opened', 1, { tabId: 'old' }), ev('needs-you', 2, { tabId: 'old' })],
+    };
+    expect(browserMoments([busy], 'brand-new-tab')).toEqual([]);
   });
 
   it('drops "resolved" — it is bookkeeping, not something to read', () => {
     expect(
-      browserMoments([{ ...base, events: [ev('opened', 1), ev('resolved', 2)] }], 'tab-1'),
+      browserMoments(
+        [
+          {
+            ...base,
+            events: [ev('opened', 1, { tabId: 'tab-1' }), ev('resolved', 2, { tabId: 'tab-1' })],
+          },
+        ],
+        'tab-1',
+      ),
     ).toHaveLength(1);
   });
 
   it('sorts across profiles by when they happened', () => {
-    const a = { ...base, profile: 'a', events: [ev('opened', 300)] };
-    const b = { ...base, profile: 'b', events: [ev('opened', 100)] };
+    const a = { ...base, profile: 'a', events: [ev('opened', 300, { tabId: 'tab-1' })] };
+    const b = { ...base, profile: 'b', events: [ev('opened', 100, { tabId: 'tab-1' })] };
     expect(browserMoments([a, b], 'tab-1').map((m) => m.profile)).toEqual(['b', 'a']);
   });
 
   it('carries the live browser with each moment, so the card can act', () => {
     // A card drawn from a moment still needs to open the CURRENT browser and
     // know who holds the wheel right now.
-    const [m] = browserMoments([{ ...base, events: [ev('opened', 1)] }], 'tab-1');
+    const [m] = browserMoments(
+      [{ ...base, events: [ev('opened', 1, { tabId: 'tab-1' })] }],
+      'tab-1',
+    );
     expect(m?.browser.viewerUrl).toBe(base.viewerUrl);
   });
 

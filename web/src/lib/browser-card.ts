@@ -196,12 +196,16 @@ export interface BrowserMoment {
  * with the chat continuing past them, like a spawned worker's launch and its
  * report.
  *
- * SCOPING, and the one judgement in here. A moment belongs to the chat it
- * happened in, or it would appear in every conversation — the same noise the
- * pinned card had, moved somewhere worse. But a moment with NO chat (a browser
- * started from the CLI, or before anything recorded a tab) is shown everywhere
- * rather than nowhere: a summons nobody can see is the failure this whole
- * feature exists to prevent, and a card in the wrong place is merely untidy.
+ * SCOPING, and the one judgement in here. A moment is shown in the chat it
+ * happened in and NOWHERE ELSE — including moments with no chat at all.
+ *
+ * That last part was the other way round at first, reasoning that a summons
+ * nobody can see is worse than a card in the wrong place. It is worse; the
+ * mistake was thinking those were the only options. Showing untagged moments
+ * everywhere meant opening a brand-new conversation greeted you with cards
+ * about things that happened elsewhere, before that chat existed — which is the
+ * noise the pinned card had, wearing a different hat. A browser that no chat
+ * started belongs to no chat's log; `muxpad app list` is where it lives.
  *
  * `resolved` is dropped. It is bookkeeping that lets the server know a summons
  * was answered; as a line in a conversation it says nothing a person needs.
@@ -214,7 +218,9 @@ export function browserMoments(
   for (const browser of browsers) {
     for (const event of browser.events ?? []) {
       if (event.kind === 'resolved') continue;
-      if (event.tabId && event.tabId !== tabId) continue;
+      // A moment belongs to ONE conversation: the one it happened in. An
+      // untagged moment is not shown anywhere.
+      if (event.tabId !== tabId) continue;
       out.push({
         kind: event.kind,
         at: event.at,
