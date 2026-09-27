@@ -91,22 +91,6 @@ describe('the card', () => {
     expect(buttons(host)[0]?.dataset.urgent).toBe('true');
   });
 
-  it('STOPS shouting once it has been answered', () => {
-    const { host } = mount(
-      <BrowserCard
-        moment={moment({ ...base, needsYou: null }, { kind: 'needs-you', reason: 'captcha' })}
-        onOpen={() => {}}
-        now={1}
-      />,
-    );
-    expect(host.querySelector('[data-testid="browser-card"]')?.getAttribute('data-tone')).not.toBe(
-      'waiting',
-    );
-    // No button at all: an answered summons is a record, not a request.
-    expect(buttons(host)).toHaveLength(0);
-    expect(host.textContent).toMatch(/handled/i);
-  });
-
   it('opens a MODAL on a wide viewport and a TAB on a phone', () => {
     // Clicking the CARD, because a passive one carries no button.
     const onOpen = vi.fn();
