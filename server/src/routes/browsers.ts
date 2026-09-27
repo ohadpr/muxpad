@@ -3,7 +3,12 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { type BrowserAppState, ensureBrowserApp, listBrowserApps } from '../browser/BrowserApps.js';
 import { normalizeProfileName } from '../browser/BrowserProfile.js';
-import { BrowserWheel, type WheelLease } from '../browser/BrowserWheel.js';
+import {
+  BrowserAttention,
+  BrowserWheel,
+  type NeedsYou,
+  type WheelLease,
+} from '../browser/BrowserWheel.js';
 import { findChrome } from '../browser/findChrome.js';
 
 /**
@@ -35,11 +40,15 @@ import { findChrome } from '../browser/findChrome.js';
  *   POST   /api/browsers/:profile/wheel/claim   → BrowserView | 409 (agent asks)
  *   POST   /api/browsers/:profile/wheel/renew   → BrowserView | 409
  *   DELETE /api/browsers/:profile/wheel         → BrowserView  (hand it back)
+ *   POST   /api/browsers/:profile/needs-you     → BrowserView  (agent asks for a person)
+ *   DELETE /api/browsers/:profile/needs-you     → BrowserView  (agent got past it)
  */
 
 export interface BrowserView extends BrowserAppState {
   /** Who is driving, or null. */
   wheel: WheelLease | null;
+  /** Set when an agent has asked for a person, and why. */
+  needsYou: NeedsYou | null;
 }
 
 const TakeSchema = z.object({
@@ -55,6 +64,9 @@ const TakeSchema = z.object({
 });
 
 const EnsureSchema = z.object({ profile: z.string().min(1).max(64) });
+
+/** What the agent is stuck on, in words a person can act on. */
+const NeedsYouSchema = z.object({ reason: z.string().min(1).max(400) });
 
 /**
  * Builds a TakeRequest without undefined-valued keys.
@@ -86,11 +98,13 @@ export function browsersRoutes(deps: {
 }) {
   const app = new Hono();
   const wheel = new BrowserWheel(deps.db);
+  const attention = new BrowserAttention(deps.db);
   const chromeFor = deps.chromePath ?? (() => findChrome());
 
   const view = (state: BrowserAppState): BrowserView => ({
     ...state,
     wheel: wheel.holder(state.profile),
+    needsYou: attention.get(state.profile),
   });
 
   const find = (profile: string): BrowserAppState | null =>
@@ -159,6 +173,9 @@ export function browsersRoutes(deps: {
     if (!parsed.success) return c.json({ error: 'by is required' }, 400);
 
     wheel.take(profile, takeRequest(parsed.data, 'human'));
+    // Arriving IS the acknowledgement. An explicit ack nobody presses is how a
+    // card ends up shouting after the thing was dealt with.
+    attention.clear(profile);
     return c.json(view(state));
   });
 
@@ -178,6 +195,32 @@ export function browsersRoutes(deps: {
       // a client that only checks status still treats it as a refusal.
       return c.json({ ...view(state), error: result.reason }, 409);
     }
+    return c.json(view(state));
+  });
+
+  /**
+   * An agent asks for a person. It KEEPS the wheel — see BrowserAttention.
+   */
+  app.post('/:profile/needs-you', async (c) => {
+    const profile = profileParam(c.req.param('profile'));
+    if (!profile) return c.json({ error: 'invalid profile name' }, 400);
+    const state = find(profile);
+    if (!state) return c.json({ error: 'no such browser' }, 404);
+
+    const parsed = NeedsYouSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: 'reason is required' }, 400);
+
+    attention.raise(profile, parsed.data.reason);
+    return c.json(view(state));
+  });
+
+  /** The agent got past it on its own; put the hand down. */
+  app.delete('/:profile/needs-you', (c) => {
+    const profile = profileParam(c.req.param('profile'));
+    if (!profile) return c.json({ error: 'invalid profile name' }, 400);
+    const state = find(profile);
+    if (!state) return c.json({ error: 'no such browser' }, 404);
+    attention.clear(profile);
     return c.json(view(state));
   });
 
