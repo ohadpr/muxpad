@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import * as pty from 'node-pty';
 import { RingBuffer } from './RingBuffer.js';
+import { closeStrayPtmx, disownPty, ownPty } from './ptmx-leak.js';
 import { type AppUrlMarker, PtyScanner } from './pty-scanner.js';
 
 // Debounce window between a URL/marker sighting and the (async) confirm pass.
@@ -154,6 +155,8 @@ export function releasePtyHandle(process: unknown, onError?: (err: unknown) => v
 
 export class PaneRuntime extends EventEmitter {
   private process: pty.IPty | null = null;
+  /** The pty master descriptor, so it can be disowned when the shell dies. */
+  private ptyFd = -1;
   private buffer = new RingBuffer(RING_CAPACITY);
   private exited = false;
   private exitCode = 0;
@@ -241,6 +244,14 @@ export class PaneRuntime extends EventEmitter {
     // Always spawn the shell interactively (no `-c`). When startup_cmd is set,
     // it's auto-typed into the shell so that when it exits the user is left
     // at a prompt — same scrollback, same cwd, same pane.
+    // node-pty leaks one /dev/ptmx handle per spawn — not the pty's own, which it
+    // releases, but a second one opened inside the native forkpty and never
+    // recorded anywhere reachable. One per pane, for the life of the daemon,
+    // against a kern.tty.ptmx_max of 511. See ptmx-leak.ts, which has the
+    // measurements and the reason closing it is safe.
+    //
+    // NOTHING MAY AWAIT BETWEEN THESE TWO LINES. "Appeared during this spawn" is
+    // the whole safety argument, and it only holds while no other JS can run.
     this.process = pty.spawn(this.spec.shell, [], {
       name: 'xterm-256color',
       cols: this.cols,
@@ -248,6 +259,12 @@ export class PaneRuntime extends EventEmitter {
       cwd: this.spec.cwd,
       env,
     });
+    // Claim this pty, then close every OTHER pty descriptor in the process —
+    // they belong to nobody. Ownership rather than arrival: descriptor numbers
+    // are recycled, so "appeared during this spawn" silently matches nothing.
+    this.ptyFd = (this.process as unknown as { _fd?: number })._fd ?? -1;
+    ownPty(this.ptyFd);
+    closeStrayPtmx();
     this.process.onData((data) => {
       const ev = this.scanner.feed(data);
       if (ev.bel && !this.needsAttention) {
@@ -286,6 +303,8 @@ export class PaneRuntime extends EventEmitter {
       // supervisor does — would otherwise be asking for a pty while this one
       // still holds the slot it just finished with.
       releasePtyHandle(this.process);
+      // A recycled number must not keep looking like ours.
+      disownPty(this.ptyFd);
       this.emit('exit', exitCode);
     });
     if (this.spec.startup_cmd) {
