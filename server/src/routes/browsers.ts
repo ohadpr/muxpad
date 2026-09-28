@@ -293,9 +293,7 @@ export function browsersRoutes(deps: {
     // A summons counts as having said it. It is a louder statement of the same
     // fact — there is a browser here, and here is the way into it — so a card
     // repeating it quietly afterwards is noise with a button on it.
-    const already = events
-      .list(profile)
-      .some((e) => e.kind === 'opened' || e.kind === 'needs-you');
+    const already = events.list(profile).some((e) => e.kind === 'opened' || e.kind === 'needs-you');
     if (already) return c.json({ ok: true, events: events.list(profile) }, 200);
 
     const tabId = owner.get(profile);
@@ -348,7 +346,13 @@ export function browsersRoutes(deps: {
     // Chrome takes a couple of seconds from cold. The agent's first tool call
     // waits for it, which is the whole bargain: a small pause the first time
     // something browses, instead of a browser for every session that never does.
-    const upstream = `${state.cdpUrl}${new URL(c.req.url).pathname.split('/cdp')[1] ?? '/'}`;
+    // The path AFTER this route's own prefix. Splitting on '/cdp' looks
+    // equivalent and is not: a profile named `cdp` makes the first match the
+    // wrong one, and the request is proxied to the root of the browser instead
+    // of to /json/version. Anchored on the actual prefix instead.
+    const prefix = `/api/browsers/${c.req.param('profile')}/cdp`;
+    const path = new URL(c.req.url).pathname.slice(prefix.length) || '/';
+    const upstream = `${state.cdpUrl}${path}`;
     const deadline = Date.now() + 30_000;
     for (;;) {
       try {

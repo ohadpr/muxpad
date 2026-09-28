@@ -333,6 +333,30 @@ describe('a browser starts when something reaches for it, not before', () => {
     }
   });
 
+  it('proxies the exact path, even for a profile called "cdp"', async () => {
+    // Splitting the url on '/cdp' looks equivalent to trimming the prefix and
+    // is not: this profile makes the first match the wrong one, and the request
+    // lands on the browser's root instead of /json/version.
+    const body = (await (await post('/api/browsers', { profile: 'cdp', start: false })).json()) as {
+      cdpUrl: string;
+    };
+    const asked: string[] = [];
+    const server = createServer((req, res) => {
+      asked.push(req.url ?? '');
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{"webSocketDebuggerUrl":"ws://127.0.0.1:1/x"}');
+    });
+    await new Promise<void>((r) =>
+      server.listen(Number(new URL(body.cdpUrl).port), '127.0.0.1', r),
+    );
+    try {
+      await app.request('/api/browsers/cdp/cdp/json/version');
+      expect(asked).toEqual(['/json/version']);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
   it('refuses a profile name that is not one', async () => {
     const res = await app.request('/api/browsers/..%2Fetc/cdp/json/version');
     expect(res.status).toBe(400);
