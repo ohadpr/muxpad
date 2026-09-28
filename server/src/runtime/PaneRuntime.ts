@@ -115,6 +115,43 @@ export interface PaneRuntimeSpec {
 
 type Listener<T extends unknown[]> = (...args: T) => void;
 
+/**
+ * Hands the pty's file descriptor back to the kernel.
+ *
+ * WHY THIS IS NOT NODE-PTY'S JOB, apparently. Its `_close()` only flips a few
+ * flags — `readable = false`, a no-op `write` — and the descriptor is released
+ * when the read stream wrapping it is DESTROYED. On exit it tries to arrange
+ * that behind a macOS-specific timeout ("sometimes the socket never gets
+ * closed"), and when that path does not run the fd is simply kept.
+ *
+ * Kept fds are not free. Every pty needs an open handle on `/dev/ptmx`, and
+ * macOS caps those at `kern.tty.ptmx_max` — 511 on this machine. Measured on a
+ * live daemon after a day of panes coming and going: 505 handles held, 72 ptys
+ * actually in use, 362 of the daemon's descriptors in the kernel's `(revoked)`
+ * state — the pty long gone, the descriptor still ours. Six short of the
+ * ceiling, at which point NOTHING can spawn: not a browser, not an app, not a
+ * plain terminal tab. The whole cockpit stops being able to open anything, and
+ * the error it reports is about something else entirely.
+ *
+ * So we ask, rather than hoping. Idempotent — `destroy()` closes a socket that
+ * may already be closed, which is a no-op — and defensive about the method
+ * existing at all, because it is on the concrete UnixTerminal rather than the
+ * IPty interface we hold.
+ */
+export function releasePtyHandle(process: unknown, onError?: (err: unknown) => void): boolean {
+  const destroy = (process as { destroy?: () => void } | null)?.destroy;
+  if (typeof destroy !== 'function') return false;
+  try {
+    destroy.call(process);
+    return true;
+  } catch (err) {
+    // A descriptor we failed to release is a slow leak; one that throws here
+    // and takes the exit handler with it is every pane on the machine.
+    onError?.(err);
+    return false;
+  }
+}
+
 export class PaneRuntime extends EventEmitter {
   private process: pty.IPty | null = null;
   private buffer = new RingBuffer(RING_CAPACITY);
@@ -244,6 +281,11 @@ export class PaneRuntime extends EventEmitter {
     this.process.onExit(({ exitCode }) => {
       this.exited = true;
       this.exitCode = exitCode;
+      // Give the descriptor back BEFORE anyone reacts to the exit. A listener
+      // that spawns a replacement pane — which is exactly what the serve
+      // supervisor does — would otherwise be asking for a pty while this one
+      // still holds the slot it just finished with.
+      releasePtyHandle(this.process);
       this.emit('exit', exitCode);
     });
     if (this.spec.startup_cmd) {

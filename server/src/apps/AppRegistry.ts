@@ -201,11 +201,19 @@ export function createAppRegistry(deps: AppRegistryDeps): AppRegistry {
         tab_id: created.tabId,
         workspace_id: workspaceId,
       });
-    } catch {
-      // ptyd unreachable. The rows are committed and `pane_id` is set, so the
-      // serve supervisor's sweep (and its reconnect hook) brings the pty up
-      // shortly — with the cooldown rails. Nothing to undo.
-      log(`[apps] ${app.slug}: ptyd unreachable while starting — supervisor will retry`);
+    } catch (err) {
+      // The rows are committed and `pane_id` is set, so the serve supervisor's
+      // sweep (and its reconnect hook) brings the pty up shortly — with the
+      // cooldown rails. Nothing to undo.
+      //
+      // SAY WHAT ACTUALLY WENT WRONG. This read "ptyd unreachable" for every
+      // failure, and it was wrong in the one case that matters: with the pty
+      // table full — macOS caps /dev/ptmx handles at kern.tty.ptmx_max — ptyd
+      // is perfectly reachable and simply cannot make another pty. Hours went
+      // into the daemon before anyone counted the descriptors, because the log
+      // named a healthy component as the culprit.
+      const why = err instanceof Error ? err.message : String(err);
+      log(`[apps] ${app.slug}: could not start — ${why} (supervisor will retry)`);
     }
     return apps.getById(app.id);
   };
