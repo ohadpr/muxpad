@@ -51,6 +51,8 @@ interface Harness {
   fetches: Array<{ url: string; method?: string; body?: string }>;
   /** Runs the page's intervals once, and settles what they started. */
   tickTimers(): Promise<void>;
+  /** Lets async handlers finish before asserting on what they did. */
+  settle(): Promise<void>;
   /** Messages the page sent to the host. */
   sent: Array<Record<string, unknown>>;
   /** Push a message from the host to the page. */
@@ -112,6 +114,9 @@ function run(opts: RunOpts | string = {}): Harness {
         listeners.set(type, list);
       },
       removeEventListener() {},
+      listenerCount(type: string) {
+        return (listeners.get(type) ?? []).length;
+      },
       fire(type: string, event: Record<string, unknown> = {}) {
         const e = { preventDefault() {}, stopPropagation() {}, ...event };
         for (const fn of [...(listeners.get(type) ?? [])]) fn(e);
@@ -247,12 +252,22 @@ function run(opts: RunOpts | string = {}): Harness {
     },
     clipboard,
     fetches,
+    async settle() {
+      // Two awaited fetches deep in some handlers; a handful of microtasks is
+      // not enough, and a test that under-settles reads as a handler that never
+      // ran.
+      for (let i = 0; i < 4; i++) {
+        await new Promise((r) => setImmediate(r));
+        for (let n = 0; n < 8; n++) await Promise.resolve();
+      }
+    },
     async tickTimers() {
       for (const t of intervals) t.fn();
       // The handlers are async; let their promises settle before asserting.
-      for (let i = 0; i < 6; i++) await Promise.resolve();
-      await new Promise((r) => queueMicrotask(() => r(undefined)));
-      for (let i = 0; i < 6; i++) await Promise.resolve();
+      for (let i = 0; i < 4; i++) {
+        await new Promise((r) => setImmediate(r));
+        for (let n = 0; n < 8; n++) await Promise.resolve();
+      }
     },
   };
 }
@@ -595,6 +610,62 @@ describe('keeping the wheel while somebody is holding it', () => {
       fetchJson: { wheel: { holder: 'human', by: 'pane-7', takenAt: 0, expiresAt: 1000 } },
       nowMs: 900,
     });
+    await h.tickTimers();
+    expect(h.fetches.some((f) => f.url.endsWith('/wheel/renew'))).toBe(false);
+  });
+});
+
+describe('handing the browser back', () => {
+  /**
+   * Closing the desktop modal releases the wheel. Closing a tab on a phone does
+   * nothing — so there was no gesture for "I have finished" at all, and the
+   * agent waited out the whole lease: up to ten minutes of nothing at the end of
+   * every handoff, on the surface the handoff was built for.
+   */
+  it('offers a way out while driving', () => {
+    const h = run();
+    expect(h.el('handback').hidden).toBe(false);
+  });
+
+  it('offers none while only watching — there is nothing to give back', () => {
+    const h = run({ search: '?mode=watch' });
+    expect(h.el('handback').hidden).toBe(true);
+  });
+
+  it('releases the lease of whoever actually holds it', async () => {
+    // This page usually did not take the wheel; the card did. Releasing as
+    // somebody else is refused, which is the same as not releasing.
+    const h = run({
+      fetchJson: { wheel: { holder: 'human', by: 'pane-7', takenAt: 0, expiresAt: 1000 } },
+    });
+    h.el('handback').fire('click');
+    await h.settle();
+    const release = h.fetches.find((f) => f.method === 'DELETE');
+    expect(release?.url).toContain('/wheel');
+    expect(JSON.parse(release?.body ?? '{}')).toMatchObject({ by: 'pane-7' });
+  });
+
+  it('keeps showing the page afterwards, as a watcher', async () => {
+    // Finishing is not leaving. You may well want to see what the agent does
+    // next with what you just unlocked.
+    const h = run({
+      fetchJson: { wheel: { holder: 'human', by: 'pane-7', takenAt: 0, expiresAt: 1000 } },
+    });
+    h.el('handback').fire('click');
+    await h.settle();
+    expect(h.el('handback').hidden).toBe(true);
+    expect(h.el('takeover').hidden).toBe(false);
+  });
+
+  it('stops renewing once it has been handed back', async () => {
+    // Otherwise the page keeps the lease alive for an agent that now holds it.
+    const h = run({
+      fetchJson: { wheel: { holder: 'human', by: 'pane-7', takenAt: 0, expiresAt: 1000 } },
+      nowMs: 900,
+    });
+    h.el('handback').fire('click');
+    await h.settle();
+    h.fetches.length = 0;
     await h.tickTimers();
     expect(h.fetches.some((f) => f.url.endsWith('/wheel/renew'))).toBe(false);
   });
