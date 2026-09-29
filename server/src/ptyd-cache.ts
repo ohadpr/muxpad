@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { AppUrl, PaneSpec, PaneStatus, Tab, Workspace } from '@muxpad/shared';
 import { rollupStatus, tabTakesPanes } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
+import { provisionError } from './pane-provision-state.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { AppUrlDetector } from './runtime/app-url-detector.js';
 import type { AppUrlMarker } from './runtime/pty-scanner.js';
@@ -748,6 +749,12 @@ export function decoratePane(
     agents:
       cache.getSubagentCount(pane.id) + (db ? tabLiveChildCount(db, pane.tab_id, Date.now()) : 0),
     app_urls: cache.getAppUrls(pane.id),
+    // Why this pane has no pty, when something refused to make one. Decorated
+    // HERE, with every other runtime field, precisely because clients coalesce
+    // pane payloads onto the row they hold: an emitter that left it out would
+    // silently clear a live complaint on the next unrelated `pane.updated`.
+    // Normally null, which is the "nothing is known to be wrong" case.
+    provision_error: provisionError(pane.id),
   };
 }
 
