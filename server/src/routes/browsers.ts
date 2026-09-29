@@ -14,6 +14,11 @@ import {
   type NeedsYou,
   type WheelLease,
 } from '../browser/BrowserWheel.js';
+import {
+  agentPaneForTab,
+  nudgeForHandback,
+  outstandingSummons,
+} from '../browser/ResumeAfterHandback.js';
 import { findChrome } from '../browser/findChrome.js';
 
 /**
@@ -213,6 +218,13 @@ export function browsersRoutes(deps: {
   tailnetHost?: () => string | null;
   /** This server's loopback address, so a host can announce its first page. */
   apiUrl?: string;
+  /**
+   * Wakes the conversation that asked for a person, when they hand the browser
+   * back. Optional so the routes still stand up without a runner attached —
+   * a missing relay means the handoff works exactly as it did before, which is
+   * the right degradation for a convenience.
+   */
+  resumeAgent?: (paneId: string, text: string) => void;
 }) {
   const app = new Hono();
   const wheel = new BrowserWheel(deps.db);
@@ -593,12 +605,27 @@ export function browsersRoutes(deps: {
     if (!parsed.success) return c.json({ error: 'by is required' }, 400);
 
     const held = wheel.holder(profile);
+    // BEFORE the `resolved` below, which is the thing that closes it.
+    const waiting = outstandingSummons(events.list(profile));
     wheel.release(profile, parsed.data.by);
     // Handed back: the errand is over, so the card retires. Only for the person
     // who actually held it — a failed release must not retire somebody's card.
     if (held?.by === parsed.data.by && held.holder === 'human') {
       events.record(profile, { kind: 'resolved' });
     }
+    // AND THE AGENT IS TOLD, because it is the only party that does not already
+    // know. Pressing Done used to hand the browser back and leave the person to
+    // go and say so in words — two taps and a sentence to deliver a fact muxpad
+    // had the instant the wheel came back. See ResumeAfterHandback for every
+    // case where this deliberately stays quiet.
+    const tabId = owner.get(profile);
+    const nudge = nudgeForHandback({
+      held: held ? { holder: held.holder, by: held.by } : null,
+      by: parsed.data.by,
+      needsYou: waiting,
+      paneId: tabId ? agentPaneForTab(deps.db, tabId) : null,
+    });
+    if (nudge) deps.resumeAgent?.(nudge.paneId, nudge.text);
     // A person has just finished with the browser, which is overwhelmingly when
     // a LOGIN has just happened. Harvest it into the shared jar now, so the next
     // session starts warm — otherwise the login only ever reaches whoever

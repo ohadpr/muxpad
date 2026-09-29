@@ -24,16 +24,24 @@ let registry: { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> 
 const CHROME = { path: '/bin/chrome', source: 'test' };
 
 let tempDataDir: string;
+let resumed: Array<{ paneId: string; text: string }>;
+const resumeAgent = (paneId: string, text: string) => {
+  resumed.push({ paneId, text });
+};
 
 beforeEach(() => {
   tempDataDir = mkdtempSync(join(tmpdir(), 'browsers-route-'));
+  resumed = [];
   db = new Database(':memory:');
   db.exec(`CREATE TABLE apps (
     id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
     cwd TEXT NOT NULL, command TEXT NOT NULL, url TEXT NOT NULL,
     autostart INTEGER NOT NULL, enabled INTEGER NOT NULL, pane_id TEXT,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
-    CREATE TABLE globals (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
+    CREATE TABLE globals (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE panes (id TEXT PRIMARY KEY, tab_id TEXT NOT NULL,
+                        kind TEXT NOT NULL DEFAULT 'shell',
+                        created_at INTEGER NOT NULL);`);
   // The real AppRegistry.start ENABLES the row; a fake that does not model
   // that makes every ensure() look like a fresh launch, which is exactly the
   // signal the "opened" event is keyed on.
@@ -58,6 +66,7 @@ beforeEach(() => {
       registry,
       chromePath: () => CHROME,
       tailnetHost: () => 'dt-mac-mini.example-tailnet.ts.net',
+      resumeAgent,
     }),
   );
 });
@@ -628,5 +637,76 @@ describe('keeping a lease alive', () => {
       wheel: { expiresAt: number };
     };
     expect(after.wheel.expiresAt).toBeGreaterThan(before.wheel.expiresAt);
+  });
+});
+
+describe('handing the browser back wakes the agent that asked', () => {
+  /**
+   * The handoff was only ever built one way round. The agent raised a card and
+   * stopped — correctly, because a turn spent polling while somebody walks to
+   * their phone is a turn spent burning tokens on waiting. But the return leg
+   * did not exist: the person signed in, pressed Done, and then had to go and
+   * TELL the agent in words that they had finished. Two taps and a sentence to
+   * deliver a fact muxpad had the moment the wheel came back.
+   */
+  const handoff = async (opts: { pane?: boolean } = {}) => {
+    await ensure({ profile: 'shopping', tabId: 'TAB1' });
+    if (opts.pane !== false) {
+      db.prepare('INSERT INTO panes VALUES (?,?,?,?)').run('pane-9', 'TAB1', 'agent', 1);
+    }
+    await post('/api/browsers/shopping/needs-you', { reason: 'Amazon needs a login' });
+    await post('/api/browsers/shopping/wheel/take', { by: 'viewer-shopping' });
+  };
+
+  it('tells the conversation, naming what it had asked for', async () => {
+    await handoff();
+    await del('/api/browsers/shopping/wheel', { by: 'viewer-shopping' });
+    expect(resumed).toHaveLength(1);
+    expect(resumed[0]?.paneId).toBe('pane-9');
+    expect(resumed[0]?.text).toContain('Amazon needs a login');
+  });
+
+  it('puts the hand down, so the card stops asking for somebody who has been', async () => {
+    await handoff();
+    await del('/api/browsers/shopping/wheel', { by: 'viewer-shopping' });
+    const view = await (await get('/api/browsers/shopping')).json();
+    expect(view.needsYou).toBeNull();
+  });
+
+  it('says nothing when nobody was asked for', async () => {
+    // Somebody took the wheel to look at something. They interrupted nothing.
+    await ensure({ profile: 'shopping', tabId: 'TAB1' });
+    db.prepare('INSERT INTO panes VALUES (?,?,?,?)').run('pane-9', 'TAB1', 'agent', 1);
+    await post('/api/browsers/shopping/wheel/take', { by: 'viewer-shopping' });
+    await del('/api/browsers/shopping/wheel', { by: 'viewer-shopping' });
+    expect(resumed).toEqual([]);
+  });
+
+  it('says nothing when an agent releases its own wheel', async () => {
+    // It is the thing being told. Telling it would be a loop.
+    await ensure({ profile: 'shopping', tabId: 'TAB1' });
+    db.prepare('INSERT INTO panes VALUES (?,?,?,?)').run('pane-9', 'TAB1', 'agent', 1);
+    await post('/api/browsers/shopping/needs-you', { reason: 'a login' });
+    await post('/api/browsers/shopping/wheel/claim', { by: 'pane-9' });
+    await del('/api/browsers/shopping/wheel', { by: 'pane-9' });
+    expect(resumed).toEqual([]);
+  });
+
+  it('says nothing twice, however many times Done is pressed', async () => {
+    // The button is reachable after the lease is already gone, and a second
+    // message would read as a second handoff.
+    await handoff();
+    await del('/api/browsers/shopping/wheel', { by: 'viewer-shopping' });
+    await del('/api/browsers/shopping/wheel', { by: 'viewer-shopping' });
+    expect(resumed).toHaveLength(1);
+  });
+
+  it('hands back fine when the conversation has no pane left', async () => {
+    // A chat whose pane is gone. The release must still work — the browser
+    // coming back is the important half.
+    await handoff({ pane: false });
+    const res = await del('/api/browsers/shopping/wheel', { by: 'viewer-shopping' });
+    expect(res.status).toBe(200);
+    expect(resumed).toEqual([]);
   });
 });
