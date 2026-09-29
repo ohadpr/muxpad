@@ -331,12 +331,20 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
     title: isSessionProfile(moment.profile) ? 'Browser opened' : `Browser · ${moment.profile}`,
     detail,
     action: null,
-    // NO PICTURE ON THE QUIET CARD. A still is reassurance, and reassurance is
-    // only worth a hundred pixels of a conversation when there is something to
-    // be reassured ABOUT — a browser being asked for, or one that has closed.
-    // On "Browser opened" it illustrates a thing nobody was worried by, and a
-    // screenshot per session turns a log into a gallery.
-    shotUrl: live ? null : moment.shotUrl,
+    // THE PICTURE BELONGS TO THE MOMENT, NOT TO WHO HOLDS THE WHEEL.
+    //
+    // A summons keeps its still for as long as the card exists — including
+    // while you are answering it. Tying it to `stillAsking` meant the picture
+    // vanished the instant you tapped the card, because tapping takes the
+    // wheel: reported from a real session, "there was no card with screenshot",
+    // for a summons whose still had been captured and served perfectly well.
+    // The only window it was ever visible in was between the card arriving and
+    // you answering it.
+    //
+    // "Browser opened" still gets none while the browser is running — nothing
+    // has gone wrong, and a screenshot per session turns a log into a gallery —
+    // but keeps the one taken on the way out, which is the last page it was on.
+    shotUrl: moment.kind === 'needs-you' || !live ? moment.shotUrl : null,
     urgent: false,
     countdown: yours,
     passive: true,

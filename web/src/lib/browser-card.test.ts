@@ -657,6 +657,23 @@ describe('the picture on the card', () => {
     expect(browserMomentView(m as BrowserMoment).shotUrl).toBe('/api/browsers/s-abc/shot/1');
   });
 
+  it('KEEPS the picture while you are answering the summons', () => {
+    // Tapping the card takes the wheel, and tying the picture to "still asking"
+    // made it vanish at exactly that moment — so the only window it was visible
+    // in was before you answered. Reported from a real session as "there was no
+    // card with screenshot".
+    const answering: BrowserCardData = {
+      profile: 's-abc',
+      viewerUrl: 'https://host/browser/s-abc/',
+      state: 'running',
+      needsYou: null,
+      wheel: { holder: 'human', by: 'pane-1', takenAt: 0, expiresAt: 600_000 },
+      events: [{ kind: 'needs-you', at: 2, tabId: 'tab-1', reason: 'log in', shot: true }],
+    };
+    const [m] = browserMoments([answering], 'tab-1');
+    expect(browserMomentView(m as BrowserMoment).shotUrl).toBe('/api/browsers/s-abc/shot/2');
+  });
+
   it('points at the still for THAT moment', () => {
     const [m] = browserMoments([withShot(true)], 'tab-1');
     expect((m as BrowserMoment).shotUrl).toBe('/api/browsers/s-abc/shot/2');
