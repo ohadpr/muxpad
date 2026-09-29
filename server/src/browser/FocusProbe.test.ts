@@ -119,7 +119,7 @@ describe('finding where the text fields ARE', () => {
 
   it('skips the inputs that want no keyboard', () => {
     document.body.innerHTML = '<input type="checkbox"><input type="text">';
-    for (const el of document.querySelectorAll('input')) sized(el);
+    for (const el of Array.from(document.querySelectorAll('input'))) sized(el);
     expect(textFieldBoxes()).toHaveLength(1);
   });
 

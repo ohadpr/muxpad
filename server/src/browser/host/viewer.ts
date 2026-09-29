@@ -381,12 +381,31 @@ for (const [id, action] of [['navBack','back'],['navFwd','forward'],['navReload'
 // asking them to read a desktop page on a phone once.
 const mobileBtn = document.getElementById('mobile')
 let mobileOn = false
+// The area the page actually has to live in — the frame, not the window, so the
+// toolbar is not counted as somewhere a website can paint.
+const stageSize = () => {
+  const r = document.getElementById('wrap').getBoundingClientRect()
+  return { width: Math.round(r.width) || window.innerWidth, height: Math.round(r.height) || window.innerHeight }
+}
 const setMobile = (on) => {
   mobileOn = on
   mobileBtn.setAttribute('aria-pressed', String(on))
-  send({ t:'emulate', mobile: on })
+  send({ t:'emulate', mobile: on, ...stageSize() })
 }
 mobileBtn.addEventListener('click', () => setMobile(!mobileOn))
+
+// TURNING THE PHONE IS A RESIZE, not a new page. Without this the page keeps
+// its portrait shape in landscape and the difference is a black half-screen
+// beside a column of website. Debounced, because a rotation fires a burst of
+// these and each one is a viewport change in a real renderer.
+let resizeTimer = null
+const onViewportChange = () => {
+  if (!mobileOn || watching) return
+  if (resizeTimer) clearTimeout(resizeTimer)
+  resizeTimer = setTimeout(() => { resizeTimer = null; setMobile(true) }, 250)
+}
+window.addEventListener('resize', onViewportChange)
+window.addEventListener('orientationchange', onViewportChange)
 if (window.innerWidth < 700 && !watching) {
   // After the socket is up, not before — the message would be dropped.
   // On every connection: a restarted host has forgotten it was in phone mode,
