@@ -2,6 +2,7 @@ import { type Tab, sortSidebarTabs } from '@muxpad/shared';
 import { useEffect, useState } from 'react';
 import { api } from './api';
 import { subscribe, subscribeReconnect } from './events';
+import { mergeWorkspaceTabs, refreshCorpusForTab } from './lib/all-tabs';
 import { unreadRowPatch } from './lib/tab-unread';
 import { refreshWorkspaces } from './workspaces';
 
@@ -62,6 +63,23 @@ export async function refreshTabs(workspaceId: string): Promise<void> {
   caches.set(workspaceId, next);
   const subs = listenersByWs.get(workspaceId);
   if (subs) for (const fn of subs) fn(next);
+  // ─── …and on into the cross-workspace corpus ───────────────────────────────
+  // A LANDED LIST IS THE ONE THING A PUSH CANNOT REPLACE. `lib/all-tabs` is
+  // push-only with no poll by design, which leaves it blind to the single field
+  // no push carries: a tab's rolled-up `status`. That moves on `pane.updated`
+  // (the refetch scheduled below is this module's answer to it) and on no
+  // `tab.updated` at all — so the corpus froze that field at whatever its last
+  // fetch said, and finished agents went on spinning as cards beside sidebar
+  // rows that had already moved to the done drawer. Same truth, two clocks.
+  //
+  // Handing the corpus the list we just landed costs NO request — it is an
+  // answer fetched anyway — and makes the rail and the cards the same bytes.
+  // Every refetch this module already does (5s visible poll, pane status edge,
+  // reconnect) therefore refreshes the corpus too, for free.
+  //
+  // Only here, not in `applyTabRow`: see the note there. And a no-op unless a
+  // corpus is actually held, so all-tabs' laziness is untouched.
+  mergeWorkspaceTabs(workspaceId, next);
 }
 
 /**
@@ -208,6 +226,11 @@ function applyTabRow(next: Tab): void {
     caches.set(wsId, merged);
     const subs = listenersByWs.get(wsId);
     if (subs) for (const fn of subs) fn(merged);
+    // NOT merged into the corpus here, deliberately: `lib/all-tabs` subscribes
+    // to `tab.updated` itself and has already patched the same row from the
+    // same event. Doing it again would publish the group twice per event — a
+    // second repaint of every corpus reader, `ChatPane` included — to land
+    // bytes that are already there.
   }
 }
 
@@ -234,9 +257,21 @@ const unsubLiveRefresh = subscribe((e) => {
   ].join('|');
   if (lastPaneStatus.get(e.pane.id) === status) return; // title/fg-only → no list change
   lastPaneStatus.set(e.pane.id, status);
+  let held = false;
   for (const [wsId, list] of caches) {
-    if (list.some((t) => t.id === e.tab_id)) pendingWorkspaceRefresh.add(wsId);
+    if (list.some((t) => t.id === e.tab_id)) {
+      pendingWorkspaceRefresh.add(wsId);
+      held = true;
+    }
   }
+  // A status edge for a workspace the SIDEBAR has not loaded still moves rows
+  // the corpus renders — the flat 'recent' list spans every visible workspace,
+  // and a card can point at another one. Nothing above would refetch for it, so
+  // the corpus is asked to refresh itself. Only when no slot holds the tab:
+  // when one does, the refetch queued above already feeds the corpus through
+  // `mergeWorkspaceTabs`, and asking twice would spend a second request on an
+  // answer already on its way.
+  if (!held) refreshCorpusForTab(e.tab_id);
   scheduleLiveRefresh();
 });
 // Events don't replay across a reconnect, and pane.updated only fires on busy

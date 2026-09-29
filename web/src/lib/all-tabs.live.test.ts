@@ -29,6 +29,10 @@ vi.mock('../events', () => ({
     handlers.add(h);
     return () => handlers.delete(h);
   },
+  // Never fired here — these tests are about the PUSH path. The corpus's own
+  // reconnect refetch is held by sidebar-freshness.test.ts, which drives it
+  // alongside the sidebar cache because the property is that the two agree.
+  subscribeResync: () => () => {},
 }));
 
 const { cachedAllTabs, loadAllTabs, resetAllTabsCache, subscribeAllTabs } = await import(
