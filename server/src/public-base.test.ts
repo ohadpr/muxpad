@@ -648,8 +648,9 @@ describe('audience — the DEFAULT link is the one that still works tomorrow', (
 
   it('MUXPAD_PUBLIC_BASE_URL wins in BOTH audiences — a domain is both things', async () => {
     // The whole point of leaving env on top: the day a named tunnel exists on
-    // pub.rows.to, it becomes the default with no further change, and `--public`
-    // stops being a different answer because there is nothing private about it.
+    // whatever domain the user picks, it becomes the default with no further
+    // change, and `--public` stops being a different answer because there is
+    // nothing private about it.
     const domain = 'https://artifacts.example.com';
     reachable.add(domain);
     const r = make({ configuredBaseUrl: domain, tunnelBaseUrl: () => TUNNEL });

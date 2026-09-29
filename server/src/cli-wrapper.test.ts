@@ -306,12 +306,58 @@ describe('scripts/muxpad HTTP wrapper', () => {
       return p;
     };
 
-    const envFor = (bin: string) => ({
+    /**
+     * A stubbed `dig`, so the zone pre-check is driven rather than measured.
+     * Without it these tests would do a live DNS lookup for whatever hostname
+     * they pass and pass or fail depending on the network and on who happens to
+     * own `example.dev` — the same trap the tailscale stub exists for.
+     *
+     * `zoneNs` is what NS returns for the apex; empty means "no zone here", i.e.
+     * a domain that is not registered.
+     */
+    /**
+     * Emits real `dig +noall +answer` lines, because the parsing is the fragile
+     * part: `dig +short NS <host>` FOLLOWS A CNAME and prints the chain, so a
+     * hostname that is already a CNAME reads as its own zone (measured on
+     * `www.bbc.co.uk`). The command therefore filters on the record TYPE column,
+     * and a stub that emitted a bare list would not exercise that at all.
+     *
+     * `cname` makes the queried hostname itself answer with a CNAME line — the
+     * exact trap.
+     */
+    const digStub = (zoneNs: string, opts?: { apex?: string; cnameFor?: string }) => {
+      const p = join(home, 'dig-stub.sh');
+      const apex = opts?.apex ?? 'example.dev';
+      const nsLines = zoneNs
+        ? zoneNs
+            .split(',')
+            .map((ns) => `${apex}.\\t\\t300\\tIN\\tNS\\t${ns}`)
+            .join('\\n')
+        : '';
+      const cname = opts?.cnameFor
+        ? `  ${opts.cnameFor}) printf '%b\\n' "${opts.cnameFor}.\\t300\\tIN\\tCNAME\\tsomething.else." ;;\n`
+        : '';
+      // `%b`, not `%s`: the escapes have to become real tabs, or awk's
+      // whitespace splitting sees one field and the type filter never matches —
+      // which would make every one of these tests pass for the wrong reason.
+      writeFileSync(
+        p,
+        `#!/bin/sh\nfor a in "$@"; do case "$a" in\n${cname}  ${apex}) printf '%b\\n' "${nsLines}" ;;\nesac; done\nexit 0\n`,
+        { mode: 0o755 },
+      );
+      return p;
+    };
+
+    const CLOUDFLARE_NS = 'aliza.ns.cloudflare.com.,karl.ns.cloudflare.com.';
+    const OTHER_NS = 'dns1.registrar-servers.com.,dns2.registrar-servers.com.';
+
+    const envFor = (bin: string, dig?: string) => ({
       ...process.env,
       MUXPAD_API_URL: `http://127.0.0.1:${port}`,
       MUXPAD_CLOUDFLARED_BIN: bin,
       MUXPAD_DATA_DIR: data,
       MUXPAD_CLOUDFLARED_HOME: home,
+      MUXPAD_DIG_BIN: dig ?? digStub(CLOUDFLARE_NS),
     });
 
     beforeEach(() => {
@@ -404,11 +450,34 @@ exit 0`);
       expect(existsSync(log)).toBe(false); // nothing was run
     });
 
-    it('requires a hostname, and names the zone requirement when asked for none', async () => {
+    it('requires a hostname, and shows the POSITIONAL form', async () => {
+      // CORRECTED: this asserted on `--hostname`, which was the interface before
+      // the hostname became a plain argument. The flag still works for anything
+      // already written against it, but it is no longer what gets documented —
+      // one spelling in the usage text is better than two.
       const bin = stub('exit 0');
-      await expect(
-        execFileAsync(MUXPAD_BIN, ['tunnel', 'setup'], { env: envFor(bin), encoding: 'utf-8' }),
-      ).rejects.toMatchObject({ stderr: expect.stringContaining('--hostname') });
+      const err = await execFileAsync(MUXPAD_BIN, ['tunnel', 'setup'], {
+        env: envFor(bin),
+        encoding: 'utf-8',
+      }).catch((e: { stderr: string }) => e);
+      const stderr = (err as { stderr: string }).stderr;
+      expect(stderr).toContain('muxpad tunnel setup pub.example.com');
+      expect(stderr).toContain('Cloudflare nameservers');
+    });
+
+    it('still accepts the --hostname= form it shipped with', async () => {
+      writeFileSync(join(home, 'cert.pem'), 'x');
+      const bin = stub(`
+case "$2" in
+  create) printf '{"TunnelID":"u-1"}' > "${home}/u-1.json" ;;
+  list)   printf '[]' ;;
+esac
+exit 0`);
+      await execFileAsync(MUXPAD_BIN, ['tunnel', 'setup', '--hostname=pub.example.dev'], {
+        env: envFor(bin),
+        encoding: 'utf-8',
+      });
+      expect(readFileSync(log, 'utf-8')).toContain('tunnel route dns muxpad pub.example.dev');
     });
 
     it('does NOT write a config when routing the DNS fails', async () => {
@@ -430,6 +499,187 @@ exit 0`);
         }),
       ).rejects.toMatchObject({ stderr: expect.stringContaining('zone') });
       expect(existsSync(join(data, 'tunnel.json'))).toBe(false);
+    });
+
+    /**
+     * DOMAIN-AGNOSTIC. muxpad must not know or assume which domain this is —
+     * the hostname is an argument, the zone is whatever the user owns, and the
+     * one thing muxpad can usefully check for itself is whether that zone is on
+     * Cloudflare at all.
+     */
+    it('takes the hostname as a plain positional argument', async () => {
+      const bin = stub(`
+case "$2" in
+  login)  : > "${home}/cert.pem" ;;
+  create) printf '{"TunnelID":"u-1"}' > "${home}/u-1.json" ;;
+  list)   printf '[]' ;;
+esac
+exit 0`);
+      const { stdout } = await execFileAsync(MUXPAD_BIN, ['tunnel', 'setup', 'pub.example.dev'], {
+        env: envFor(bin),
+        encoding: 'utf-8',
+      });
+      expect(readFileSync(log, 'utf-8')).toContain('tunnel route dns muxpad pub.example.dev');
+      expect(stdout).toContain('https://pub.example.dev');
+    });
+
+    it('works the same for a hostname at any depth, and for the apex', async () => {
+      // No assumption that it looks like `artifacts.<something>`: whatever the
+      // user types is what gets routed.
+      for (const host of ['example.dev', 'deep.nested.example.dev']) {
+        rmSync(data, { recursive: true, force: true });
+        rmSync(log, { force: true });
+        writeFileSync(join(home, 'cert.pem'), 'x');
+        const bin = stub(`
+case "$2" in
+  create) printf '{"TunnelID":"u-1"}' > "${home}/u-1.json" ;;
+  list)   printf '[]' ;;
+esac
+exit 0`);
+        await execFileAsync(MUXPAD_BIN, ['tunnel', 'setup', host], {
+          env: envFor(bin),
+          encoding: 'utf-8',
+        });
+        expect(readFileSync(log, 'utf-8')).toContain(`tunnel route dns muxpad ${host}`);
+      }
+    });
+
+    it('REFUSES a zone that is not on Cloudflare, and says exactly what to do', async () => {
+      // The failure this exists to intercept. `cloudflared tunnel route dns`
+      // against a zone Cloudflare is not the authority for fails with an API
+      // error that does not mention nameservers, a registrar, or what to do —
+      // and by then a tunnel has already been created.
+      const bin = stub('exit 0');
+      const err = await execFileAsync(MUXPAD_BIN, ['tunnel', 'setup', 'pub.example.dev'], {
+        env: envFor(bin, digStub(OTHER_NS, {})),
+        encoding: 'utf-8',
+      }).catch((e: { stderr: string }) => e);
+      const stderr = (err as { stderr: string }).stderr;
+      expect(stderr).toContain('example.dev');
+      expect(stderr).toContain('not on Cloudflare');
+      // The actual steps, in the user's terms.
+      expect(stderr).toContain('Add a site');
+      expect(stderr).toContain('nameservers');
+      // Naming the CURRENT nameservers is how they know which registrar to go
+      // to — it is the one thing a generic checklist cannot tell them.
+      expect(stderr).toContain('registrar-servers.com');
+      // And the warning that matters, because repointing NS moves the WHOLE
+      // zone: an existing site or mail server goes down if its records are not
+      // imported first.
+      expect(stderr.toLowerCase()).toContain('whole zone');
+      // NOTHING was created. Not a tunnel, not a login, not a config.
+      expect(existsSync(log)).toBe(false);
+      expect(existsSync(join(data, 'tunnel.json'))).toBe(false);
+    });
+
+    it('finds the real zone when the hostname is ALREADY a CNAME', async () => {
+      // The bug this parsing exists for. `dig +short NS www.bbc.co.uk` returns
+      // the CNAME chain, not NS records, so a `+short`-based walk stops at the
+      // hostname and reports it as the zone — naming the wrong domain in advice
+      // the user is supposed to act on. Type-filtered, the walk carries on up.
+      const bin = stub('exit 0');
+      const err = await execFileAsync(MUXPAD_BIN, ['tunnel', 'setup', 'pub.example.dev'], {
+        env: envFor(bin, digStub(OTHER_NS, { cnameFor: 'pub.example.dev' })),
+        encoding: 'utf-8',
+      }).catch((e: { stderr: string }) => e);
+      const stderr = (err as { stderr: string }).stderr;
+      expect(stderr).toContain('the zone example.dev is not on Cloudflare');
+      expect(stderr).not.toContain('the zone pub.example.dev');
+    });
+
+    it('--skip-zone-check is the way past a Cloudflare zone on vanity nameservers', async () => {
+      // The check has a false-negative case that is real: Cloudflare's custom /
+      // vanity nameservers replace the `*.ns.cloudflare.com` pair, so a zone
+      // that IS on Cloudflare can look like it is not. A hard block with no way
+      // through would be worse than no block.
+      writeFileSync(join(home, 'cert.pem'), 'x');
+      const bin = stub(`
+case "$2" in
+  create) printf '{"TunnelID":"u-1"}' > "${home}/u-1.json" ;;
+  list)   printf '[]' ;;
+esac
+exit 0`);
+      await execFileAsync(MUXPAD_BIN, ['tunnel', 'setup', 'pub.example.dev', '--skip-zone-check'], {
+        env: envFor(bin, digStub(OTHER_NS, {})),
+        encoding: 'utf-8',
+      });
+      expect(readFileSync(log, 'utf-8')).toContain('tunnel route dns muxpad pub.example.dev');
+    });
+
+    it('and the refusal names that escape hatch, so it is not a dead end', async () => {
+      const bin = stub('exit 0');
+      const err = await execFileAsync(MUXPAD_BIN, ['tunnel', 'setup', 'pub.example.dev'], {
+        env: envFor(bin, digStub(OTHER_NS, {})),
+        encoding: 'utf-8',
+      }).catch((e: { stderr: string }) => e);
+      expect((err as { stderr: string }).stderr).toContain('--skip-zone-check');
+    });
+
+    it('distinguishes "no zone at all" from "zone on the wrong nameservers"', async () => {
+      // An unregistered or mistyped domain. Telling someone to move their
+      // nameservers would be the wrong instruction entirely.
+      const bin = stub('exit 0');
+      const err = await execFileAsync(MUXPAD_BIN, ['tunnel', 'setup', 'pub.example.dev'], {
+        env: envFor(bin, digStub('')),
+        encoding: 'utf-8',
+      }).catch((e: { stderr: string }) => e);
+      const stderr = (err as { stderr: string }).stderr;
+      expect(stderr).toContain('no DNS zone');
+      expect(stderr).not.toContain('Add a site');
+      expect(existsSync(log)).toBe(false);
+    });
+
+    it('--relogin re-authorises, for a zone the existing cert does not cover', async () => {
+      // `cloudflared tunnel login` writes a cert scoped to the zone you pick, so
+      // using a SECOND domain later needs another login. Without this the only
+      // way through is deleting cert.pem by hand.
+      writeFileSync(join(home, 'cert.pem'), 'x');
+      const bin = stub(`
+case "$2" in
+  login)  : > "${home}/cert.pem" ;;
+  create) printf '{"TunnelID":"u-1"}' > "${home}/u-1.json" ;;
+  list)   printf '[]' ;;
+esac
+exit 0`);
+      await execFileAsync(MUXPAD_BIN, ['tunnel', 'setup', 'pub.example.dev', '--relogin'], {
+        env: envFor(bin),
+        encoding: 'utf-8',
+      });
+      expect(readFileSync(log, 'utf-8')).toContain('tunnel login');
+    });
+
+    it('a failed route names the zone-not-authorised cause and the way out', async () => {
+      writeFileSync(join(home, 'cert.pem'), 'x');
+      const bin = stub(`
+case "$2" in
+  create) printf '{"TunnelID":"u-3"}' > "${home}/u-3.json" ;;
+  list)   printf '[]' ;;
+  route)  echo 'api error' >&2; exit 1 ;;
+esac
+exit 0`);
+      const err = await execFileAsync(MUXPAD_BIN, ['tunnel', 'setup', 'pub.example.dev'], {
+        env: envFor(bin),
+        encoding: 'utf-8',
+      }).catch((e: { stderr: string }) => e);
+      const stderr = (err as { stderr: string }).stderr;
+      // The cert is per-zone, and this is the likeliest cause once the NS check
+      // has already passed.
+      expect(stderr).toContain('--relogin');
+      expect(stderr).toContain('-f');
+    });
+
+    it('names no real domain in its usage text', async () => {
+      const bin = stub('exit 0');
+      const err = await execFileAsync(MUXPAD_BIN, ['tunnel', 'setup'], {
+        env: envFor(bin),
+        encoding: 'utf-8',
+      }).catch((e: { stderr: string }) => e);
+      const stderr = (err as { stderr: string }).stderr;
+      expect(stderr).toContain('example.com');
+      // muxpad has no business assuming which domain this is.
+      for (const assumed of ['ohad.', 'rows.to', 'trayo.ai']) {
+        expect(stderr).not.toContain(assumed);
+      }
     });
 
     it('prints the exact commands when cloudflared is missing, rather than half-doing it', async () => {

@@ -1433,8 +1433,14 @@ cmd_tunnel() {
   exec node "$runner" "$@"
 }
 
-# `muxpad tunnel setup --hostname=<host> [--name=muxpad]` — turn published links
-# PERMANENT and PUBLIC, in one command.
+# `muxpad tunnel setup <hostname> [--name=muxpad] [--relogin]` — turn published
+# links PERMANENT and PUBLIC, in one command.
+#
+# DOMAIN-AGNOSTIC BY CONSTRUCTION. The hostname is an argument and muxpad knows
+# nothing else about it: any name, any depth, any zone on the user's Cloudflare
+# account. No domain is assumed, defaulted or suggested anywhere in this script —
+# the one thing it does know how to check is whether the zone it was handed is on
+# Cloudflare at all, which it asks over plain DNS before touching anything.
 #
 # WHAT IT IS FOR. The default published link is your tailnet address: permanent,
 # but reachable only from your own devices. The quick tunnel is public, but
@@ -1454,26 +1460,45 @@ cmd_tunnel() {
 # real domain off the host and classes it `permanent`, and the durability ranking
 # puts it above everything. No plist, no launchd job, no daemon restart.
 cmd_tunnel_setup() {
-  local hostname='' name='muxpad' a
+  local hostname='' name='muxpad' relogin=0 skip_zone=0 a
   for a in "$@"; do
     case "$a" in
       --hostname=*) hostname="${a#--hostname=}" ;;
       --name=*) name="${a#--name=}" ;;
-      *) echo "muxpad tunnel setup: unknown flag '$a'" >&2; exit 1 ;;
+      --relogin) relogin=1 ;;
+      # The zone check has one real false-negative case — Cloudflare's custom /
+      # vanity nameservers replace the `*.ns.cloudflare.com` pair, so a zone that
+      # IS on Cloudflare can look like it is not. A hard block with no way
+      # through would be worse than no block.
+      --skip-zone-check) skip_zone=1 ;;
+      -*) echo "muxpad tunnel setup: unknown flag '$a'" >&2; exit 1 ;;
+      # THE HOSTNAME IS AN ARGUMENT, and muxpad knows nothing else about it. Any
+      # zone on the user's Cloudflare account works; nothing here assumes a
+      # domain, a naming convention, or a depth.
+      *)
+        if [ -n "$hostname" ]; then
+          echo "muxpad tunnel setup: two hostnames given ('$hostname' and '$a')" >&2
+          exit 1
+        fi
+        hostname="$a"
+        ;;
     esac
   done
 
   if [ -z "$hostname" ]; then
     cat >&2 <<'EOF'
-muxpad tunnel setup: --hostname is required.
+muxpad tunnel setup: a hostname is required.
 
-  muxpad tunnel setup --hostname=artifacts.yourdomain.com
+  muxpad tunnel setup pub.example.com
 
-The domain must already be on Cloudflare nameservers — the tunnel writes a CNAME
-into that zone, so Cloudflare has to be its DNS authority. A FIRST-level
-subdomain (artifacts.yourdomain.com) is covered by free Universal SSL; going
-deeper (<slug>.artifacts.yourdomain.com) needs Advanced Certificate Manager at
-$10/month and buys nothing, so don't.
+Any hostname in any zone on your Cloudflare account. The zone has to be on
+Cloudflare nameservers, because the tunnel writes a CNAME into it — if it is not,
+this will tell you exactly what to do rather than failing at the CNAME.
+
+One thing worth knowing before you choose: a FIRST-level subdomain
+(pub.example.com) is covered by free Universal SSL. Going deeper
+(<slug>.pub.example.com) needs Advanced Certificate Manager at $10/month and buys
+nothing muxpad can use — the public server routes by PATH, not by Host header.
 EOF
     exit 1
   fi
@@ -1484,14 +1509,103 @@ EOF
   # `https://https://…` downstream.
   case "$hostname" in
     *://* | */* | *:* | *' '* | '')
-      echo "muxpad tunnel setup: --hostname must be a bare hostname (got '$hostname') — no scheme, no port, no path" >&2
+      echo "muxpad tunnel setup: '$hostname' must be a bare hostname — no scheme, no port, no path" >&2
       exit 1
       ;;
   esac
   if ! printf '%s' "$hostname" | grep -qE '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$'; then
-    echo "muxpad tunnel setup: --hostname must be a bare hostname (got '$hostname')" >&2
+    echo "muxpad tunnel setup: '$hostname' must be a bare hostname" >&2
     exit 1
   fi
+
+  # IS THAT ZONE EVEN ON CLOUDFLARE? Asked FIRST, over plain DNS, because it is
+  # the one precondition muxpad can check for itself and the one whose native
+  # failure is useless: `cloudflared tunnel route dns` against a zone Cloudflare
+  # is not the authority for returns an API error that mentions neither
+  # nameservers nor a registrar — and by then a tunnel has been created and a
+  # browser login spent.
+  #
+  # Overridable binary for the same reason as MUXPAD_TAILSCALE_BIN: a test must
+  # drive this rather than depend on the network and on who owns the example
+  # domain this week.
+  local dig_bin="${MUXPAD_DIG_BIN:-dig}"
+  local apex='' zone_ns=''
+  local probe="$hostname"
+  # Walk UP from the hostname and take the longest suffix that has its own NS
+  # records — that is the zone apex. This is why there is no public-suffix list
+  # here and why `pub.example.co.uk` still works: `example.co.uk` has NS records
+  # and `pub.example.co.uk` does not, so the walk stops in the right place.
+  while [ "$skip_zone" = "0" ] && [ -n "$probe" ] && [ "$probe" != "${probe#*.}" ]; do
+    # `+noall +answer` and an explicit type filter, NOT `+short`. `+short NS`
+    # follows a CNAME and prints the chain, so a hostname that is already a CNAME
+    # (`www.bbc.co.uk`, measured) reads as though it were its own zone — the walk
+    # stops at the wrong level and the advice names the wrong domain. Column 4 is
+    # the record type; only a real NS line counts.
+    zone_ns="$("$dig_bin" +noall +answer +time=3 +tries=1 NS "$probe" 2>/dev/null \
+      | awk '$4 == "NS" { print $5 }' | grep -v '^$' || true)"
+    if [ -n "$zone_ns" ]; then
+      apex="$probe"
+      break
+    fi
+    probe="${probe#*.}"
+  done
+
+  if [ "$skip_zone" = "1" ]; then
+    # Taken at the user's word. `apex` is only used for messages from here on;
+    # the hostname stands in for it.
+    apex="$hostname"
+    printf '%s!%s skipping the Cloudflare zone check for %s\n' "$C_DIM" "$C_RESET" "$hostname"
+  elif [ -z "$apex" ]; then
+    cat >&2 <<EOF
+muxpad tunnel setup: found no DNS zone for $hostname.
+
+Nothing in that name answers an NS query, which usually means the domain is not
+registered, or it is a typo. Check the spelling; if the domain is new, DNS may
+not have propagated yet.
+
+Nothing was changed.
+EOF
+    exit 1
+  fi
+
+  if [ "$skip_zone" = "0" ] && ! printf '%s' "$zone_ns" | grep -qi '\.ns\.cloudflare\.com\.\?$'; then
+    cat >&2 <<EOF
+muxpad tunnel setup: the zone $apex is not on Cloudflare.
+
+Its nameservers right now are:
+
+$(printf '%s' "$zone_ns" | sed 's/^/    /')
+
+A tunnel hostname is a CNAME that Cloudflare has to be able to write, so $apex
+has to use Cloudflare as its DNS authority first. That is free, and it is three
+things:
+
+  1. dash.cloudflare.com → "Add a site" → enter: $apex   (the Free plan is fine)
+  2. Let Cloudflare scan the existing DNS records, and CHECK THE LIST it found.
+     Repointing nameservers moves the WHOLE ZONE, not just this one name — if a
+     website, mail (MX), or anything else lives on $apex and its records are not
+     in that list, add them before step 3 or they go dark.
+  3. At the registrar those nameservers point to today, replace them with the two
+     Cloudflare gives you. Cloudflare emails you when the zone goes active —
+     usually minutes, occasionally a few hours.
+
+Then re-run:
+
+  muxpad tunnel setup $hostname
+
+Nothing was changed, and nothing was created on your Cloudflare account.
+
+If you would rather not move that zone: pick a hostname in a domain you already
+have on Cloudflare, or leave it — published links already default to your tailnet
+address, which is permanent and works on all your own devices.
+
+Already on Cloudflare with CUSTOM (vanity) nameservers? Then this check is simply
+wrong about you — it looks for the \`*.ns.cloudflare.com\` pair. Re-run with
+--skip-zone-check.
+EOF
+    exit 1
+  fi
+  [ "$skip_zone" = "0" ] && printf '%s✓%s %s is on Cloudflare\n' "$C_GREEN" "$C_RESET" "$apex"
 
   # Honour the same override the server uses, so a test can drive this without a
   # Cloudflare account and a Homebrew-less machine can point at its own binary.
@@ -1516,16 +1630,26 @@ EOF
   # the real one — those are live credentials for a real account.
   local cfhome="${MUXPAD_CLOUDFLARED_HOME:-$HOME/.cloudflared}"
   mkdir -p "$cfhome"
+  # Exported ONCE, and as the env var cloudflared documents rather than
+  # `--origincert` on four command lines. Two reasons: the commands below then
+  # read exactly like the ones printed for a human to copy (a flag they do not
+  # need is a flag they will paste), and every call is covered — an earlier draft
+  # set it only on `login`, leaving `create` and `route dns` reading the DEFAULT
+  # `~/.cloudflared/cert.pem` while the rest of the command used the override.
+  export TUNNEL_ORIGIN_CERT="$cfhome/cert.pem"
 
   # STEP 1 — the account login. The ONE step that needs a human, and the one
   # thing this command will not do twice: cert.pem is the account credential and
   # re-running the flow would open a browser to re-learn what is already known.
-  if [ -f "$cfhome/cert.pem" ]; then
+  # `--relogin` forces it, because the cert is scoped to the zone picked at login
+  # time and a DIFFERENT domain later needs another one — without the flag the
+  # only way through is deleting cert.pem by hand.
+  if [ -f "$cfhome/cert.pem" ] && [ "$relogin" = "0" ]; then
     printf '%s✓%s already logged in to Cloudflare (%s)\n' "$C_GREEN" "$C_RESET" "$cfhome/cert.pem"
   else
-    printf '%s→%s opening your browser to authorise cloudflared — pick the zone for %s\n' \
-      "$C_DIM" "$C_RESET" "$hostname"
-    if ! TUNNEL_ORIGIN_CERT="$cfhome/cert.pem" "$cf" tunnel login; then
+    printf '%s→%s opening your browser to authorise cloudflared — pick the zone %s\n' \
+      "$C_DIM" "$C_RESET" "$apex"
+    if ! "$cf" tunnel login; then
       echo 'muxpad tunnel setup: cloudflared tunnel login failed — nothing was changed' >&2
       exit 1
     fi
@@ -1577,11 +1701,19 @@ EOF
     cat >&2 <<EOF
 muxpad tunnel setup: could not route $hostname to tunnel $name.
 
-The usual cause is the zone not being on Cloudflare nameservers, or a record for
-that name already existing. Nothing was written, so re-running this is safe. To
-replace an existing record:
+$apex IS on Cloudflare (checked above), so the two likely causes are:
 
-  $cf tunnel route dns -f $name $hostname
+  · THE LOGIN DOES NOT COVER THIS ZONE. \`cloudflared tunnel login\` writes a
+    cert scoped to the zone you picked, so a hostname in a different one is
+    refused. Re-authorise, picking $apex:
+
+      muxpad tunnel setup $hostname --relogin
+
+  · A RECORD FOR THAT NAME ALREADY EXISTS. Replace it — check what it is first:
+
+      $cf tunnel route dns -f $name $hostname
+
+No config was written, so re-running this is safe either way.
 EOF
     exit 1
   fi
@@ -3352,16 +3484,21 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      e.g. muxpad serve --url=http://host:4321 \
                                             --label=Notes -- ./start
 
-  tunnel setup --hostname=<host> [--name=muxpad]
+  tunnel setup <hostname> [--name=muxpad] [--relogin]
                                      make published links PERMANENT and PUBLIC,
-                                     in one command: logs in to Cloudflare
-                                     (browser, once — skipped if already done),
-                                     creates a named tunnel, routes the CNAME
-                                     and tells muxpad. Needs a domain already on
-                                     Cloudflare nameservers; costs $0/yr. After
-                                     this, links stop expiring and can be sent
-                                     to anyone. No plist and no restart — the
-                                     server re-reads it on the next publish.
+                                     in one command: checks the zone is on
+                                     Cloudflare, logs in (browser, once —
+                                     skipped if already done), creates a named
+                                     tunnel, routes the CNAME and tells muxpad.
+                                     e.g. `muxpad tunnel setup pub.example.com`
+                                     — ANY hostname in ANY zone on your
+                                     Cloudflare account. $0/yr. If the zone is
+                                     not on Cloudflare it says exactly what to
+                                     do instead of failing at the CNAME.
+                                     --relogin re-authorises, which a hostname
+                                     in a second zone needs. No plist and no
+                                     restart: the server re-reads the config on
+                                     the next publish.
   tunnel --port <public port>        run the tunnel that puts published
                                      artifacts on the internet, and re-pin
                                      muxpad's public base. Uses the NAMED tunnel
