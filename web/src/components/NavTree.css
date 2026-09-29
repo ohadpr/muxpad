@@ -79,6 +79,42 @@
   --nt-indent: 12px;
   --nt-pill: 6px; /* selection/hover pill corner radius */
 
+  /* ─── The two surfaces a row can take, and why they are DERIVED ──────────
+     Selection and hover are one scale with three rungs, and all three are
+     mixed from the row's own ground rather than taken from a theme token. That
+     is the whole fix, and the reason is measured:
+
+       --bg-hover IS A THEME TOKEN, TUNED FOR PANELS, AND IT IS NOT ONE VALUE
+       HERE. Against --bg-tabbar it measures 1.01:1 on acme, 1.05 on alucard,
+       1.07 on github-light — and 1.50 on tokyo-night and 2.09 on dracula. A
+       2× spread. While selection was a SOLID accent slab that never mattered:
+       nothing could out-shout a saturated fill. The moment selection becomes a
+       wash, it does matter, because a 20% accent wash is 1.33 against the
+       tokyo-night rail and 1.39 against dracula's — so on the two darkest
+       themes HOVERING AN UNSELECTED ROW would read louder than the row you are
+       actually on. Deriving hover from --fg pins it to 1.12–1.21 on all six,
+       which is under the wash everywhere. Pinned by
+       NavTree.selection.test.ts ("SELECTION OUT-RANKS HOVER").
+
+     The rungs, quietest first — and they must stay ordered, which is the one
+     thing the test cares about beyond the numbers:
+
+       --nt-hover      hover on an unresting row. The row's OWN ink at 8%, so
+                       it is a step of the surface rather than a colour.
+       --nt-sel        the row you are on. 20% of the accent, which is the
+                       value the SHEET already shipped (see the mobile rail's
+                       selection section) — the two surfaces now read it from
+                       here, so "where I am" cannot be drawn two ways again.
+       --nt-sel-hover  hover on the row you are already on. A step of the
+                       block's own fill, never a second colour: that row has
+                       almost nothing to say on hover, so it says it quietly.
+
+     --fg and --accent, never a literal: six themes, and the mix is what makes
+     one declaration land correctly on a warm cream rail and a near-black one. */
+  --nt-hover: color-mix(in srgb, var(--fg) 8%, transparent);
+  --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
+  --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
+
   /* ─── The row's spacing scale ──────────────────────────────────────────
      Every horizontal gap inside a nav row is one of exactly three steps off
      a 4px base, and which step a gap gets is decided by WHAT it separates:
@@ -265,15 +301,20 @@
   padding: 2px 0 14px;
 }
 
-/* Workspaces read as a flat list of quiet bold headers (chevron + name,
-   no fill) with their tabs indented below. A hairline + balanced space
-   separates groups, so the gap between workspaces reads as a deliberate
-   section break rather than undefined void. The active TAB's tint pill is
-   the one strong anchor. */
+/* ─── The seam between workspaces is WHITESPACE ───────────────────────────
+   It was `margin 9 / padding 9 / border-top 1px solid var(--border)`, and the
+   hairline is deleted rather than restyled. The reason is measured, not a
+   preference for Slack's look: --border against --bg-tabbar is 1.00:1 on alucard
+   (#ddd8ee on #ddd8ef — the same colour), 1.06 on acme and 1.14 on
+   github-light. The rule was already invisible on half the themes, so nothing is
+   being traded away on those; on the other half it was a hard line across a list
+   that has 25+ rows in one workspace, which is the "wall" this pass is about.
+   The SPACE does the whole job and does it identically on all six.
+   18px of air against the 19px it replaces (9 + the hairline + 9), so the seam
+   keeps its size to within the hairline's own 1px and the groups stay where they
+   were — only the line goes. */
 .navtree-group + .navtree-group {
-  margin-top: 9px;
-  padding-top: 9px;
-  border-top: 1px solid var(--border);
+  margin-top: 18px;
 }
 
 /* ─── Workspace row (banded header) ──────────────────────────────────── */
@@ -315,7 +356,7 @@
      a background-IMAGE (see StateChip.css) so that hovering a working row
      shows both. A shorthand here would silently reset it. Same everywhere a
      nav row takes a fill. */
-  background-color: var(--bg-hover);
+  background-color: var(--nt-hover);
 }
 /* Active workspace: the bold name alone marks it — the active TAB's tint
    pill is the dominant anchor, so a competing fill on the header would
@@ -617,75 +658,84 @@
    and still be honoured: a fixed track does not grow for its item's margin, so
    the `margin-right: var(--nt-gutter)` that used to be declared here bought
    exactly 0px and the measured gap was the track's 2px of slack. */
+/* --nt-hover, not --bg-hover: see the rung scale at the head of this file. The
+   theme token ran 1.01:1 to 2.09:1 against the rail across the six themes, which
+   was invisible while selection was a slab and is a defect the moment it is a
+   wash. */
 .navtree-tab-row:hover {
   color: var(--fg);
-  background-color: var(--bg-hover);
+  background-color: var(--nt-hover);
 }
-/* Active TAB = the row you are in: a SOLID accent block with the accent's own
-   ink. It was a 14% accent TINT, and a tint is no longer available to it —
-   every non-idle row now carries a faint tint of its state hue (StateChip.css),
-   and "where I am" and "what the machine is doing" cannot share an encoding
-   without the rail becoming unreadable the moment the row you are on starts
-   working. A solid block is unmistakably not a wash, at any tint strength, on
-   any theme.
-   Still no left-rail (it floated disconnected in the indent) and no bold —
-   weight means unread and nothing else. */
+/* ─── Active TAB = the row you are in: A WASH, and the rail's own ink ──────
+   It was a SOLID --accent block with the label inverted to --accent-fg, and it
+   was the brightest thing on a screen it is on permanently — so the row you
+   were on read as a different KIND of object rather than as a row. This is the
+   sheet's language, which was rebuilt this way first and shipped: --nt-sel over
+   the rail's own surface, --fg ink, and the step told by WEIGHT.
+
+   WHY THE SLAB WAS THERE, AND WHY THAT REASON IS GONE. The argument this
+   replaces was not arbitrary: "a tint is no longer available to it — every
+   non-idle row now carries a faint tint of its state hue (StateChip.css), and
+   'where I am' and 'what the machine is doing' cannot share an encoding". That
+   was true when it was written. It stopped being true when the row tint and the
+   3px state bar were deleted and the chat row stopped emitting `data-state` at
+   all (see RowMark in NavTree.tsx) — the row's state is one 10px mark at its
+   tail now, in a channel selection does not touch. The tint channel has been
+   free ever since and nothing came back for it. There is no collision left to
+   avoid, so the slab was paying a permanent cost for a constraint that had
+   already been removed.
+
+   WHAT IT HANDS BACK, which is the real argument for it. A saturated fill made
+   the selected row the ONE row whose contents could not be drawn correctly, and
+   thirty declarations existed to re-ink them: the four status hues flattened to
+   a single ink, the A2 chip's --clock (accent 34%) invisible on the accent
+   itself, a pinned tab's glyph measured at 1.00:1, and a specificity trap ~240
+   lines down that had to be commented twice so nobody "simplified" it. All of
+   it is deleted below rather than re-tuned. Over a wash every one of those
+   elements is on the rail's own ground and reads exactly as it does on any
+   other row, which is what selection should cost.
+
+   Still no left-rail — it floated disconnected in the indent, and that is
+   unchanged. Weight is 640, which sits clearly under the unread 700, so "you
+   are here" and "unread" stay separable without a second colour. */
 .navtree-tab-row[data-active="true"] {
-  background-color: var(--accent);
-  color: var(--accent-fg);
+  background-color: var(--nt-sel);
 }
 .navtree-tab-row[data-active="true"] .navtree-name-text {
-  color: var(--accent-fg);
+  color: var(--fg);
+  font-weight: 640;
 }
 /* Hover on the row you are already on has almost nothing to say, so it says it
-   quietly: a nudge of the block's own ink into the fill, rather than a second
-   colour. */
+   quietly: one step of the block's own fill, never a second colour. */
 .navtree-tab-row[data-active="true"]:hover {
-  background-color: color-mix(in srgb, var(--accent) 88%, var(--accent-fg));
+  background-color: var(--nt-sel-hover);
 }
-/* Everything else the row carries is re-inked against the block. These are all
-   elements whose resting colour is derived from --fg or --accent, both of
-   which are now the wrong side of the fill: on a solid accent row the only
-   colour guaranteed legible is the one the theme nominates for exactly that
-   job. (The icon chip keeps its geometry untouched — only what it is mixed
-   FROM changes.) */
-.navtree-tab-row[data-active="true"] .navtree-tab-icon::before {
-  background: color-mix(in srgb, var(--accent-fg) 18%, transparent);
-}
-/* THE TILE NEEDS NOTHING HERE ANY MORE, and two rules are gone rather than
-   re-tuned. They re-inked a white plate, a --border hairline and a --clock fill
-   against the block, because none of the three survived a saturated fill (a
-   white tile on the accent reads as a hole punched in the row, and --clock at
-   34% accent on the accent itself is very nearly invisible — which silently
-   deleted the clock on exactly the row you were looking at). A2 deletes all
-   three outright: what is left on an active row is the user's own emoji, which
-   is artwork and not a derived colour, and it reads on the block as it reads
-   anywhere. Restoring a translucent plate here would put the container back on
-   the one row the eye is already on.
+/* ─── THE THIRTY RE-INKS ARE GONE, not re-tuned ───────────────────────────
+   Recorded because the deletions are the change, and a future pass must not
+   restore any of them one at a time. Every rule here existed ONLY because the
+   fill was saturated, and each is now wrong twice over — redundant, and
+   illegible: --accent-fg over a 20% accent wash measures 1.04:1 on dracula and
+   1.81:1 on alucard, so an "inverted for legibility" ink is the one thing that
+   cannot be read on this surface. Pinned by NavTree.selection.test.ts, which
+   asserts NO --accent-fg under any [data-active] selector in this file.
 
-   The last-day outline and the ghosted glyph are left alone, as they were before
-   — they are drawn in greys and read fine on the block. The DOT does still need
-   re-inking: it is a definite colour, and --clock is that colour. */
-.navtree-tab-row[data-active="true"] .chatchip-dot {
-  background: var(--accent-fg);
-}
-.navtree-tab-row[data-active="true"] .chatchip-dot[data-hollow="true"] {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--accent-fg);
-}
-.navtree-tab-row[data-active="true"] .navtree-quicknum {
-  background: color-mix(in srgb, var(--accent-fg) 22%, transparent);
-  color: var(--accent-fg);
-}
-.navtree-tab-row[data-active="true"] .navtree-close {
-  color: color-mix(in srgb, var(--accent-fg) 78%, var(--accent));
-}
-/* The close × and the pin are re-inked too — but their rules live down in the
-   Pin affordance section, NOT here. `.navtree-tab-row:hover .navtree-pin.is-pinned`
-   is (0,4,0), the same weight as an override written here would be, and it is
-   declared ~240 lines further down, so it would win the tie on source order and
-   paint the pinned tab's glyph in --accent ON an --accent block. Measured:
-   1.00:1, an invisible glyph inside a visible hover square. */
+     · the icon chip's plate re-ink — and it was dead besides: the rail draws
+       A2's ChatChip (.navtree-tab-chip) here, not .navtree-tab-icon.
+     · .chatchip-dot and its hollow ring, forced to --accent-fg. The dot is
+       --clock now, on every row including this one, which is the whole point of
+       the chip being one component. A2's, drawn and not touched.
+     · .navtree-quicknum, .navtree-close, the pinned pin, .navtree-cron and its
+       glyph's opacity bump, .navtree-tab-headline, .navtree-pane-expander,
+       .navtree-ws-count.
+     · all four .navtree-mark state hues, plus the reduced-motion arm. The four
+       states are told apart BY colour, so flattening them to one ink made the
+       row you were on the only row whose state you could not read.
+     · the × 's danger-red inversion, which had to paint --accent-fg as a
+       BACKGROUND to get a readable red on top of it.
+
+   The two things the slab needed that a wash also needs are kept, and they are
+   both about the DESTRUCTIVE button rather than about selection: see the archive
+   overrides at the foot of the Pin section. */
 
 /* The 1fr cell: two stacked lines, both of which must be free to ellipsise.
    `min-width: 0` is load-bearing — a grid item's default `min-width: auto` is
@@ -738,16 +788,10 @@
 }
 /* The sheet's headline overrides are gone with the headline itself: the mobile
    rail is one line per chat, and that is what the deletion bought. */
-/* On the active row the headline is drawn in the block's own ink, for the same
-   measured reason as the schedule above: every step down from it — a mix
-   toward the accent, or the `opacity: 0.75` this replaced — lands 11.5px text
-   between 3.4:1 and 4.4:1 on the five themes, and the version before this
-   redesign was already failing at 3.9 on two of them. The hierarchy is carried
-   by size and weight instead (11.5px regular under a 14px medium), which is
-   the one step that costs no contrast. */
-.navtree-tab-row[data-active="true"] .navtree-tab-headline {
-  color: var(--accent-fg);
-}
+/* No active-row override any more. The headline's own --fg-faint was never the
+   problem — the saturated fill was, and it forced 11.5px text to the block's ink
+   to stay legible at all. Over a wash the resting colour reads as it does on
+   every other row. */
 
 /* ─── The chip cell, child rows, and the state mark ───────────────────────
    Desktop rail only. The sheet keeps its plain emoji plate — it is one flat
@@ -799,11 +843,14 @@
    carries it and this one did not, so this selector scored one step lower and
    lost — a selected child kept `--fg-dim` on the accent fill, which is grey
    ink on violet. Specificity, not a missing rule: the rule was right and
-   unreachable. Hover has the prefix for the same reason. */
+   unreachable. Hover has the prefix for the same reason.
+   It is still needed over a WASH, for the same reason and a quieter one: a
+   selected child should read like the selected parent does, and --fg-dim under
+   the row you are on is a step the selection has already spent. */
 .navtree[data-variant="sidebar"]
   .navtree-tab-row[data-child="true"][data-active="true"]
   .navtree-name-text {
-  color: var(--accent-fg);
+  color: var(--fg);
 }
 
 /* ─── THE state mark ──────────────────────────────────────────────────────
@@ -846,19 +893,12 @@
 .navtree-mark[data-state="dead"] {
   background: var(--status-dead);
 }
-/* On the accent block, the mark is drawn in the block's own ink — the status
-   hues are tuned against the rail's background and none of them is guaranteed
-   legible on a saturated fill. */
-.navtree-tab-row[data-active="true"] .navtree-mark[data-state="ready"],
-.navtree-tab-row[data-active="true"] .navtree-mark[data-state="blocked"],
-.navtree-tab-row[data-active="true"] .navtree-mark[data-state="dead"] {
-  background: var(--accent-fg);
-  opacity: 1;
-}
-.navtree-tab-row[data-active="true"] .navtree-mark[data-state="working"] {
-  border-color: var(--accent-fg);
-  border-top-color: transparent;
-}
+/* NO ACTIVE-ROW OVERRIDE, and its absence is the point. The status hues are
+   tuned against the rail's background — which is exactly what a wash leaves
+   underneath them, so they need nothing. The rules that used to be here drew all
+   four states in ONE ink (the block's), which made the row you were on the only
+   row in the list whose state you could not read: `ready`, `blocked` and `dead`
+   are told apart BY colour and nothing else. */
 /* ─── Reduced motion ──────────────────────────────────────────────────────
    `working` becomes a SOLID mark in its own hue: the same 10px in the same
    slot as the other three states, told apart by colour rather than by turning.
@@ -876,10 +916,10 @@
     border-color: var(--status-working);
     background: var(--status-working);
   }
-  .navtree-tab-row[data-active="true"] .navtree-mark[data-state="working"] {
-    border-color: var(--accent-fg);
-    background: var(--accent-fg);
-  }
+  /* The active-row arm is gone with the slab, like the four hues above it. It
+     mattered here more than anywhere: under reduced motion `working` is told
+     ONLY by its colour, so re-inking it on the selected row left that row with
+     no way to say it was working at all. */
 }
 
 /* ─── The done group ──────────────────────────────────────────────────────
@@ -1012,20 +1052,13 @@
      presentation so it matches the rest of the row's monochrome chrome. */
   font-variant-emoji: text;
 }
-/* On the solid block the schedule is drawn in the block's OWN ink, not a mix
-   back toward it. Every mix that keeps a visible step down from the name lands
-   this 10.5px text between 3.2:1 and 4.0:1 depending on theme (measured on all
-   five); only the undiluted ink clears 4.5. The hierarchy it gives up is paid
-   for by size — 10.5px monospace under a 14px name — which is a step that
-   costs no contrast. */
-.navtree-tab-row[data-active="true"] .navtree-cron {
-  color: var(--accent-fg);
-}
-/* The glyph is aria-hidden decoration next to the digits that carry the
-   meaning, but at the resting 0.6 it composites to ~2:1 on the block. */
-.navtree-tab-row[data-active="true"] .navtree-cron-glyph {
-  opacity: 0.8;
-}
+/* No active-row override. The measured problem was the block, not the token:
+   every mix that kept a visible step down from the name landed this 10.5px text
+   between 3.2:1 and 4.0:1 on a saturated fill, so it had to be forced to the
+   block's own ink and gave up its hierarchy to do it. Over a wash --fg-dim
+   clears 4.5 on all six themes, so the schedule keeps its step down from the
+   name on the selected row like everywhere else — and the glyph keeps its
+   resting 0.6 instead of being bumped to stay visible. */
 /* No sheet override: the schedule is a desktop-rail column now. On the mobile
    rail it was a permanent mark on a standing PROPERTY of a chat, in a list
    whose one job is to say which chats want you. A scheduled chat there looks
@@ -1125,28 +1158,37 @@
   color: var(--accent);
 }
 
-/* ─── …and both buttons, re-inked on the SELECTED row ────────────────────
-   Declared HERE, at the bottom of the section, and not up with the rest of the
-   active-row overrides: `.navtree-tab-row:hover .navtree-pin.is-pinned` above
-   is (0,4,0), and so is any override written with `[data-active="true"]`, so
-   the tie is settled by source order. Written 240 lines earlier it LOST, and a
-   pinned active tab drew its pin in --accent on an --accent block — 1.00:1,
-   an invisible glyph inside a perfectly visible hover square. */
-.navtree-tab-row[data-active="true"] .navtree-close,
-.navtree-tab-row[data-active="true"] .navtree-pin.is-pinned {
-  color: color-mix(in srgb, var(--accent-fg) 78%, var(--accent));
+/* ─── THE SPECIFICITY TRAP IS GONE WITH THE SLAB ──────────────────────────
+   What stood here re-inked the × and the pinned pin against the block, and had
+   to be declared at the FOOT of this section rather than with the other
+   active-row rules: `.navtree-tab-row:hover .navtree-pin.is-pinned` above is
+   (0,4,0), and so is any override written with `[data-active="true"]`, so the tie
+   went to source order. Written 240 lines earlier it LOST, and a pinned active
+   tab drew its pin in --accent on an --accent block — 1.00:1, an invisible glyph
+   inside a perfectly visible hover square.
+   Over a wash --accent IS the right ink for a pinned pin, on the selected row
+   exactly as on every other row, so there is no override to place and no tie to
+   lose. The trap was a property of the fill, not of the cascade. */
+
+/* The × keeps its destructive red wherever it lives, and over a wash it simply
+   KEEPS it: --danger reads on the rail's own surface, which is what the wash
+   leaves under it. The rule survives only to put the hover SQUARE on the rail's
+   own hover step instead of the theme token — a nudge, where it used to be an
+   inversion (`background: var(--accent-fg)`, a white plate, because red on a
+   saturated accent is unreadable). Kept rather than deleted because it is the
+   guard the archive mirror below is measured against; see that comment. */
+.navtree-tab-row[data-active="true"] button.navtree-close:not(.navtree-pin):hover {
+  background-color: var(--nt-hover);
+  color: var(--danger);
 }
-/* The pin is not destructive; it only has to be visible. */
-.navtree-tab-row[data-active="true"] .navtree-pin:hover,
-.navtree-tab-row[data-active="true"] .navtree-pin.is-pinned:hover {
-  background-color: color-mix(in srgb, var(--accent-fg) 22%, transparent);
-  color: var(--accent-fg);
-}
-/* The × keeps its destructive red wherever it lives — but red on the accent
-   block is unreadable, so the square behind it inverts to the block's ink and
-   the glyph stays --danger against THAT. Declared last so it wins for the one
-   button that is not a pin. */
-.navtree-tab-row[data-active="true"] button.navtree-close:not(.navtree-pin):hover,
+/* The PANE row is split out of that rule rather than sharing it, because its
+   selection is still a solid accent block (see the sheet's pane list, and the
+   note there on why it has to be): a pane row never stopped emitting
+   `data-state`, so it still carries a state tint and still cannot spend the tint
+   channel on selection. The inversion is therefore still exactly right HERE —
+   red on a saturated accent is unreadable, so the square becomes the block's own
+   ink and the glyph stays --danger against that. Sharing one rule across two
+   surfaces that no longer share a fill is what would be wrong. */
 .navtree-pane-row-wrap[data-active="true"] .navtree-close:hover {
   background-color: var(--accent-fg);
   color: var(--danger);
@@ -1169,22 +1211,18 @@
   color: var(--accent);
 }
 .navtree-tab-row[data-active="true"] button.navtree-archive:not(.navtree-pin):hover {
-  background-color: var(--accent-fg);
+  background-color: var(--nt-hover);
   color: var(--accent);
 }
 
-/* Two more things that sit ON the solid block and derive their colour from
-   --fg / --bg tokens that are now the wrong side of it. Both render on the
-   SHEET's active tab row: the pane chevron measured 1.4:1 on acme, and the
-   count chip is an OPAQUE --bg-hover blob, so it needs its fill replaced and
-   not just its ink. */
-.navtree-tab-row[data-active="true"] .navtree-pane-expander {
-  color: color-mix(in srgb, var(--accent-fg) 80%, var(--accent));
-}
-.navtree-tab-row[data-active="true"] .navtree-ws-count {
-  background: color-mix(in srgb, var(--accent-fg) 20%, transparent);
-  color: var(--accent-fg);
-}
+/* The chevron and the count chip used to be re-inked here too, "because both
+   render on the SHEET's active tab row". They were WRONG on that surface the
+   whole time: the sheet's selection has been a 20% accent wash with --fg ink
+   since it was rebuilt, and these painted --accent-fg over it — 1.04:1 on
+   dracula. They were written for the rail's slab and applied to a row that no
+   longer had one. Both are deleted; the sheet inks its own chevron in --fg-dim
+   in the mobile-rail section, and the count chip's resting --fg-dim on
+   --bg-hover reads on a wash. */
 
 /* The pane-count chip (`.navtree-pane-count`) is DELETED. It was the sheet's
    only hint that a row would expand rather than navigate — and the tap rule it
@@ -1193,17 +1231,18 @@
    looks exactly like a one-pane chat, which is the point: the rail spends its
    marks on one question, and a pane count does not answer it. */
 
-/* The seam between the pinned block and the auto-sorted one. A hairline with
-   generous air, not a labelled section header: the sidebar is already dense,
-   and the two blocks explain themselves once you've pinned something. */
+/* The seam between the pinned block and the auto-sorted one — now AIR, and
+   nothing else. It was a 1px gradient hairline; the element stays (TabList
+   renders it, aria-hidden, only when both blocks exist) and simply became the
+   gap.
+   Two reasons it does not need to draw anything. Pinning is already told twice
+   over: by POSITION, which is the whole point of a pinned block, and per-row by
+   the pin button's `aria-pressed` for anyone not reading position. And this is
+   the seam INSIDE a workspace, so it must read as a smaller break than the seam
+   BETWEEN workspaces above — 10px against that 18px says that with one number,
+   where a hairline against a hairline could only say it with weight. */
 .navtree-pin-divider {
-  height: 1px;
-  margin: 5px 10px 5px 22px;
-  background: linear-gradient(
-    to right,
-    color-mix(in srgb, var(--border-strong, #3b4261) 80%, transparent),
-    transparent
-  );
+  height: 10px;
 }
 
 /* ─── Sheet pane list (mobile: tab row expands into its panes) ───────── */
@@ -1542,9 +1581,12 @@
   border-radius: var(--nt-chip-radius);
   /* Derived from the row's own foreground, so it lands as a low-contrast
      container on the warm cream and the dark violet alike without either
-     theme needing its own value. Deliberately quieter than the hover wash
-     (--bg-hover) and the active row's 14% accent pill, so the chip recedes
-     into whichever state the row is in rather than competing with it. */
+     theme needing its own value. It is the same KIND of mix as the row's own
+     hover rung (--nt-hover, --fg at 8%) and a shade under it, which is what
+     keeps the chip receding into whichever state the row is in rather than
+     competing with it — and because both are translucent, the chip holds that
+     same step above its row on a hovered and a selected row alike instead of
+     being measured against one fixed surface. */
   background: color-mix(in srgb, var(--fg) 7%, transparent);
 }
 .navtree[data-variant="sheet"] .navtree-tab-icon {
@@ -1776,21 +1818,32 @@ body.sidenav-resizing iframe {
   flex: 0 0 auto;
   opacity: 0.75;
 }
+/* --nt-hover, like the tab rows': this row's SELECTION moved to --nt-sel, so its
+   hover had to move with it or the rung scale would hold on one row and not the
+   other. Left on --bg-hover it measured 2.09:1 against the dracula rail under a
+   selected row's 1.39 — hovering Hosted would have out-shouted the row you were
+   actually on, which is the exact defect the scale at the head of this file
+   exists to prevent. Pinned by NavTree.selection.test.ts, which now ranks BOTH
+   rows. */
 .navtree-foot-link:hover {
-  background: var(--bg-hover);
+  background: var(--nt-hover);
   color: var(--fg);
 }
 /* Same "you are here" anchor as the active tab — one grammar for selection
-   across the whole navigator. */
+   across the whole navigator, which is why it MOVED with the tab row rather
+   than being left behind. A solid accent Hosted row under a rail of quiet ones
+   would have made the loudest thing on the rail the one destination you are
+   least often in. `background-color`, not the shorthand, for the reason given
+   at every other nav fill. */
 .navtree-foot-link[data-active="true"] {
-  background: var(--accent);
-  color: var(--accent-fg);
+  background-color: var(--nt-sel);
+  color: var(--fg);
 }
 .navtree-foot-link[data-active="true"] svg {
   opacity: 1;
 }
 .navtree-foot-link[data-active="true"]:hover {
-  background: var(--accent);
+  background-color: var(--nt-sel-hover);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -2063,10 +2116,19 @@ body.sidenav-resizing iframe {
   font-size: 14px;
   color: var(--fg-dim);
 }
+/* --fg, and this one was WRONG BEFORE THIS PASS rather than by it. The sheet's
+   selection has been a 20% accent wash since it was rebuilt, and this painted
+   --accent-fg over it: 1.04:1 on dracula, 1.81 on alucard — the ink nominated for
+   a saturated fill is the one thing a wash cannot carry. It was written for the
+   rail's slab and left behind on a row that no longer had one, and it survived
+   the sweep because the guard in NavTree.selection.test.ts matched
+   `.navtree-tab-row[data-active="true"]` literally and `[data-child="true"]`
+   sits between the two. The guard is widened with this fix. Same ink as the
+   rail's twin above, for the reason given there. */
 .navtree[data-variant="sheet"]
   .navtree-tab-row[data-child="true"][data-active="true"]
   .navtree-name-text {
-  color: var(--accent-fg);
+  color: var(--fg);
 }
 
 /* ─── The name, and THE BIDI FIX ──────────────────────────────────────────
@@ -2182,20 +2244,48 @@ body.sidenav-resizing iframe {
       whole point is that almost nothing is loud. The name keeps --fg, which
       is also what stops selection from needing its own ink everywhere.
 
+   THE RAIL NOW AGREES, and the value moved to a token (--nt-sel) rather than
+   being written twice. This surface had it right first and the rail was the one
+   that came across — the paragraph above was the argument, and it turned out to
+   apply to a 280px rail whose state tints had already been deleted just as well
+   as to a phone. One declaration, both surfaces: "where I am" cannot be drawn
+   two ways again, which is what NavTree.selection.test.ts asserts.
+
    `background-color`, never the shorthand — see StateChip.css. */
 .navtree[data-variant="sheet"] .navtree-tab-row[data-active="true"] {
-  background-color: color-mix(in srgb, var(--accent) 20%, transparent);
+  background-color: var(--nt-sel);
   color: var(--fg);
 }
-/* The desktop rail re-inks everything on its row against --accent-fg, because
-   its selection is a solid accent block. Ours is a wash over the rail's own
-   surface, so --fg is still the right ink and those overrides have to stand
-   down — all of them tie at (0,3,0) or below against these. */
+/* This rule used to exist to STAND DOWN the rail's re-inks: the rail re-inked
+   everything on its row against --accent-fg because its selection was a solid
+   block, and the sheet had to win the tie back (all of those tied at (0,3,0) or
+   below against these). There is nothing left to stand down — the rail is the
+   same wash now and its overrides are deleted, not outranked. What the rule
+   still carries is the WEIGHT step below, which is the sheet's own, so it stays
+   rather than being folded away. */
 .navtree[data-variant="sheet"] .navtree-tab-row[data-active="true"] .navtree-name-text {
   color: var(--fg);
   /* A step of weight, not a colour: "you are here" and "unread" must stay
      distinguishable, and 640 sits clearly under the unread 700. */
   font-weight: 640;
+}
+/* …AND THE ROW THAT IS BOTH. The rule above states the invariant — 640 sits
+   under the unread 700 so the two stay distinguishable — and on this surface
+   the cascade was quietly defeating it: the sheet's unread rule is declared
+   ABOVE it at the same (0,5,0), so on a row that is selected AND unread the
+   640 won on source order and the unread signal disappeared from exactly the
+   chat you had open. Measured in the browser, both surfaces, one probe: the
+   RAIL returned 700 and the sheet 640.
+   The rail gets this right for free — its unread rule happens to sit below its
+   active rule — so the fix is declared rather than fixed by reordering, both
+   because an explicit arm cannot be undone by a later move and because unread
+   is the LOUDER of the two signals by design: "you are here" is already told by
+   the fill, and a row you are looking at is the one row whose unread mark you
+   are about to clear anyway. Pinned by NavTree.selection.test.ts. */
+.navtree[data-variant="sheet"]
+  .navtree-tab-row[data-active="true"][data-unread="true"]
+  .navtree-name-text {
+  font-weight: 700;
 }
 .navtree[data-variant="sheet"] .navtree-tab-row[data-active="true"] .navtree-pane-expander {
   color: var(--fg-dim);
@@ -2222,7 +2312,7 @@ body.sidenav-resizing iframe {
   padding-inline: var(--nt-rail-lead) var(--nt-rail-trail);
 }
 .navtree-wspick-row[data-active="true"] {
-  background-color: color-mix(in srgb, var(--accent) 20%, transparent);
+  background-color: var(--nt-sel);
 }
 .navtree-wspick-row[data-pressing="true"]:not([data-active="true"]) {
   background-color: var(--bg-hover);
