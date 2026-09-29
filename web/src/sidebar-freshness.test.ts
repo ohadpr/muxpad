@@ -30,8 +30,13 @@ import type { WorkspaceTabs } from './lib/nav-search';
 let WS_TABS: Tab[] = [];
 let CORPUS: WorkspaceTabs[] = [];
 
-const listTabs = vi.fn(async () => WS_TABS);
-const listAllTabs = vi.fn(async () => ({ workspaces: CORPUS }));
+// Cloned on the way out, exactly as a real fetch would be: every response is
+// freshly parsed JSON, so nothing downstream may rely on object identity with
+// what the test set up. Returning the same array made an identity assertion
+// pass for a reason that does not exist in the product.
+const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+const listTabs = vi.fn(async () => clone(WS_TABS));
+const listAllTabs = vi.fn(async () => ({ workspaces: clone(CORPUS) }));
 vi.mock('./api', () => ({
   api: { listTabs: () => listTabs(), listAllTabs: () => listAllTabs() },
 }));
@@ -65,6 +70,15 @@ const WS = 'w1';
 /** A workspace the sidebar never loads — only the corpus holds it. */
 const OTHER = 'w2';
 
+/** A live clock, as the server publishes one. `fill` moves on every read. */
+const CLOCK = {
+  started_at: 1_790_697_984_000,
+  expires_at: 1_791_043_584_000,
+  fill: 0.1,
+  last_day: false,
+  stopped: false,
+};
+
 const tab = (id: string, over: Partial<Tab> = {}): Tab =>
   ({
     id,
@@ -75,6 +89,7 @@ const tab = (id: string, over: Partial<Tab> = {}): Tab =>
     updated_at: 1,
     status: 'working',
     done: false,
+    clock: CLOCK,
     ...over,
   }) as Tab;
 
@@ -186,6 +201,31 @@ describe('a dropped-and-restored socket leaves every surface correct, with no re
     ).toBe(true);
   });
 
+  it('does not repaint when the refetch finds nothing changed', async () => {
+    // `subscribeResync` fires on every document-visible, which on a desktop is
+    // every time the user switches app and comes back. The FETCH is right —
+    // that is how a gap heals — but publishing its answer unconditionally
+    // repaints every corpus reader, `ChatPane` included, on each switch even
+    // when the answer is identical. The refetch is cheap; the repaint is not.
+    const { subscribeAllTabs } = await import('./lib/all-tabs');
+    const seen: WorkspaceTabs[][] = [];
+    const off = subscribeAllTabs((g) => seen.push(g));
+    fireResync();
+    await settle();
+    off();
+    expect(listAllTabs).toHaveBeenCalled(); // it DID go and look…
+    expect(seen).toEqual([]); // …and found nothing worth a repaint.
+  });
+
+  it('keeps the same array identity when nothing changed, so React bails out', async () => {
+    const before = cachedAllTabs();
+    fireResync();
+    await settle();
+    // Not merely deep-equal — the SAME object, which is what lets a memo or a
+    // `useState` comparison short-circuit instead of re-rendering.
+    expect(cachedAllTabs()).toBe(before);
+  });
+
   it('refetches even when the corpus is fresh by its own clock', async () => {
     // `loadAllTabs` short-circuits under FRESH_MS, and the corpus here landed
     // milliseconds ago. Fresh by that clock, stale by the only one that
@@ -249,6 +289,46 @@ describe('the two surfaces share one clock', () => {
     await refreshTabs(WS);
     off();
     expect(seen).toEqual([]);
+  });
+
+  it('ignores the clock fill that moves on every single read', async () => {
+    // MEASURED ON THE LIVE COCKPIT, and the reason the dedupe above needed a
+    // signature rather than a raw compare: `clock.fill` is derived from
+    // wall-clock time SERVER-SIDE, so it is a different float on every read.
+    // 31 of 72 rows differed by it alone, 6 seconds apart, with nothing
+    // happening. A raw `JSON.stringify` compare therefore never holds on a real
+    // workspace, and the 5s poll would repaint every corpus reader — `ChatPane`,
+    // a transcript — forever. That is the poll-on-everything through the back
+    // door, which this module exists to avoid.
+    const { subscribeAllTabs } = await import('./lib/all-tabs');
+    const seen: WorkspaceTabs[][] = [];
+    const off = subscribeAllTabs((g) => seen.push(g));
+    // The real delta, taken from the live diff: ~1.8e-5 over six seconds.
+    WS_TABS = [
+      tab('t1', { clock: { ...CLOCK, fill: CLOCK.fill + 0.0000178 } }),
+      tab('t2', { clock: { ...CLOCK, fill: CLOCK.fill + 0.0000178 } }),
+    ] as Tab[];
+    await refreshTabs(WS);
+    off();
+    expect(seen).toEqual([]);
+  });
+
+  it('still repaints when the fill crosses a rung the chip actually draws', async () => {
+    // The other side of it — the dedupe must not swallow a real change. The
+    // chip quantises with `Math.floor(fill * CHAT_DECAY_DAYS)` (ChatChip), so
+    // the signature uses that same function: the corpus repaints exactly when
+    // the ring would move, and never for a change too small to draw.
+    const { subscribeAllTabs } = await import('./lib/all-tabs');
+    const seen: WorkspaceTabs[][] = [];
+    const off = subscribeAllTabs((g) => seen.push(g));
+    // 0.1 → 0.6 crosses floor(f*4) from 0 to 2: a visible rung change.
+    WS_TABS = [
+      tab('t1', { clock: { ...CLOCK, fill: 0.6 } }),
+      tab('t2', { clock: { ...CLOCK, fill: 0.6 } }),
+    ] as Tab[];
+    await refreshTabs(WS);
+    off();
+    expect(seen).toHaveLength(1);
   });
 
   it('leaves a workspace the sidebar has not loaded to the corpus itself', async () => {

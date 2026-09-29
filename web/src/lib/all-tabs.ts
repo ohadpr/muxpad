@@ -1,4 +1,4 @@
-import type { Tab } from '@muxpad/shared';
+import { CHAT_DECAY_DAYS, type Tab } from '@muxpad/shared';
 import { api } from '../api';
 import { subscribe, subscribeResync } from '../events';
 import type { WorkspaceTabs } from './nav-search';
@@ -155,6 +155,65 @@ const unsubscribeLive = subscribe((e) => {
 });
 
 /**
+ * A workspace's rows, reduced to what its readers can actually SEE change.
+ *
+ * ─── `clock.fill` IS NOT A VALUE, IT IS A STOPWATCH ──────────────────────────
+ * Measured on the live cockpit: two reads of the same workspace six seconds
+ * apart, with nothing happening, differed on 31 of 72 rows — every one of them
+ * by `clock.fill` alone and by nothing else. The server derives it from
+ * wall-clock time at serialization (`clockSnapshot`), so it is a different float
+ * on every single read, forever.
+ *
+ * A raw `JSON.stringify` compare therefore NEVER holds on a real workspace, and
+ * the dedupe it was supposed to power silently does nothing: the 5s poll
+ * republishes the group every 5s and repaints every corpus reader with it.
+ * A transcript re-rendering on a timer is exactly the cost this module's
+ * laziness exists to prevent, so the comparison has to know what `fill` is.
+ *
+ * ─── QUANTISED BY THE RENDERER'S OWN FUNCTION, not by a guess ────────────────
+ * `ChatChip` draws the clock as `Math.floor(fill * CHAT_DECAY_DAYS)` — four
+ * rungs over the chat's whole life, "the value is A's; only its resolution is
+ * ours". Using that same expression here makes the dedupe exactly lossless: the
+ * corpus repaints precisely when the chip would move a rung, and never for a
+ * drift too small to draw. Not a tolerance, and not a field dropped — the
+ * renderer's resolution, borrowed.
+ *
+ * Everything else is compared verbatim, so any OTHER field that starts churning
+ * shows up as a repaint (today's behaviour) rather than as a missed update. The
+ * failure direction is the safe one.
+ */
+function signatureReplacer(key: string, value: unknown): unknown {
+  return key === 'fill' && typeof value === 'number'
+    ? Math.floor(Math.max(0, Math.min(1, value)) * CHAT_DECAY_DAYS)
+    : value;
+}
+
+function rowsSignature(tabs: readonly Tab[]): string {
+  return JSON.stringify(tabs, signatureReplacer);
+}
+
+/**
+ * Publish a freshly-FETCHED corpus, but only if a reader could tell.
+ *
+ * `subscribeResync` fires on every document-visible — on a desktop, every time
+ * the user switches away and comes back. Going to look is right, and is how a
+ * gap heals. Handing the answer to every subscriber unconditionally is not:
+ * with nothing changed it repaints the flat list, the cards and `ChatPane` on
+ * each switch, for bytes identical to the ones already on screen.
+ *
+ * Returns the array actually held, so an unchanged refetch keeps the PREVIOUS
+ * object. Identity is the point — a `useMemo`, a `useState` set, or a props
+ * compare can then short-circuit instead of re-rendering. Deep-equal is not
+ * enough; React compares by reference.
+ */
+function publishFetched(next: WorkspaceTabs[]): WorkspaceTabs[] {
+  if (cache && JSON.stringify(cache, signatureReplacer) === JSON.stringify(next, signatureReplacer))
+    return cache;
+  publish(next);
+  return next;
+}
+
+/**
  * Take a workspace's freshly-landed tab list into the corpus.
  *
  * Called by `tabs.ts` every time it publishes a list — a poll landing, a
@@ -180,10 +239,7 @@ export function mergeWorkspaceTabs(workspaceId: string, tabs: readonly Tab[]): v
   // anything moved, and every corpus reader would re-render on that interval —
   // including `ChatPane`, which is a transcript. That is exactly the poll-on-
   // everything this module exists to avoid, arriving through the back door.
-  // Stringify because both sides come off the same server serializer in the
-  // same key order, so it is a conservative comparison: equal means equal, and
-  // a false "changed" costs only the repaint we would have done anyway.
-  if (JSON.stringify(group.tabs) === JSON.stringify(tabs)) return;
+  if (rowsSignature(group.tabs) === rowsSignature(tabs)) return;
   publish(cache.map((g) => (g.id === workspaceId ? { ...g, tabs: [...tabs] } : g)));
 }
 
@@ -309,8 +365,9 @@ export async function loadAllTabs(): Promise<WorkspaceTabs[]> {
     .listAllTabs()
     .then((res) => {
       settledAt = Date.now();
-      publish(res.workspaces);
-      return res.workspaces;
+      // Landing is what makes the corpus fresh; publishing is only what tells
+      // the readers, and an answer identical to the one they hold is not news.
+      return publishFetched(res.workspaces);
     })
     .catch((err: unknown) => {
       // 404 = the route isn't there (older server). Anything else is a blip
