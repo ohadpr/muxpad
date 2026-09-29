@@ -145,26 +145,106 @@ export function flattenChats<W extends WorkspaceRef>(
   };
 }
 
+/** Invisible characters: the bidi marks and embeddings, and the zero-width
+ *  spaces. `\s` covers U+FEFF and the exotic blanks but stops at U+200A, one
+ *  code point short of the zero-width space, so not one of these counts as
+ *  whitespace as far as a regex is concerned. */
+const INVISIBLE = /[\u200B-\u200F\u061C\u2066-\u2069]/g;
+
+/**
+ * A chat's name as a HUMAN sees it, reduced to a key two rows compare on.
+ *
+ * Case is folded because 'Main' and 'main' are the same word on a screen, and
+ * whitespace is collapsed because a trailing space is not a distinction anyone
+ * can point at. Both use the locale-INDEPENDENT operations deliberately:
+ * `toLocaleLowerCase` would hand the browser's locale a say in whether two rows
+ * collide — under tr-TR it lowercases 'I' to 'ı' — so one list would label
+ * differently on a phone than on the laptop beside it.
+ *
+ * NFC first, and the invisible characters dropped, because this list holds
+ * Hebrew names: a name typed in place and a name pasted from elsewhere can be
+ * the same glyphs built from different code points (U+FB2E is alef-with-patah
+ * as one character; U+05D0 U+05B7 is the letter plus its mark), and pasted
+ * text routinely carries bidi marks that draw nothing at all. Anything the eye
+ * cannot see must not decide what the eye is told.
+ */
+export function displayedNameKey(name: string): string {
+  return name.normalize('NFC').replace(INVISIBLE, '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
 /**
  * Does this row need to say which workspace it is in?
  *
- * Only when it is NOT the one the surface already names. A flat row leaves the
- * workspace the sheet's bar (or the rail's tree) is about, so it has to say
- * where it goes — but on the live corpus 28 of 38 live chats are in the ONE
- * workspace you are already in, and a label on those is a word repeated down
- * three quarters of the list saying nothing.
+ * Two things earn the label, and nothing else does:
  *
- * It is also a width question, and that is why this is a function rather than
- * a prop the caller works out. The sheet's name cell is 336px of a 390px row;
- * a trailing label can cost up to 84px of it. Charging that to the rows that
- * genuinely change destination, and to no others, is what keeps the label
- * affordable at all.
+ *   IT LEAVES     the workspace the surface already names — the sheet's bar, or
+ *                 the rail's tree — so it has to say where it goes.
+ *   IT COLLIDES   with a row of ANOTHER workspace under the same displayed
+ *                 name, so without the label the list shows two rows called
+ *                 'Main' and nothing anywhere saying which is which.
+ *
+ * The first rule alone shipped, and the second exists because of how it failed:
+ * a row in the workspace you were already in was never labelled, so an
+ * ambiguous pair came out HALF labelled — 'Main · TRAYO' above a bare 'Main'.
+ * An unlabelled unique row reads as clean; one labelled row beside an identical
+ * bare one reads as a rendering fault.
+ *
+ * ─── THE BUDGET IS UNCHANGED, IT IS JUST SPENT WHERE IT DOES WORK ────────────
+ * Labelling every row was never on the table. On the live corpus 28 of 38 live
+ * chats are in the ONE workspace you are already in, and a label on those is a
+ * word repeated down three quarters of the list saying nothing. It is also a
+ * width question, and that is why this is a function rather than a prop the
+ * caller works out: the sheet's name cell is 336px of a 390px row and a
+ * trailing label can cost up to 84px of it. Charging that only to the rows it
+ * tells something is what keeps the label affordable at all. Collisions are
+ * rare, so the second rule spends a handful of what the first rule saved.
+ *
+ * ─── A COLLISION HAS TO CROSS A WORKSPACE, OR THE LABEL SAYS NOTHING ─────────
+ * Two chats both called 'Main' both in 'personal' are not helped by writing
+ * PERSONAL on both: the user still cannot tell them apart, and the two rows
+ * that were merely ambiguous are now ambiguous AND 84px narrower. So the
+ * colliding row must be in a DIFFERENT workspace — which makes the promise
+ * exact, since any two rows here that share a name then differ in their label.
+ *
+ * ─── PER RENDERED LIST; THE DRAWER IS A DIFFERENT LIST ───────────────────────
+ * `list` is the array this row is rendered from — the live list or the done
+ * drawer, never the two concatenated. The drawer is collapsed by default, so
+ * counting across that seam would make a live row sprout a label when you open
+ * the drawer and drop it when you close it. A label coming and going on a row
+ * that nothing happened to is worse than the ambiguity it resolves.
+ *
+ * ─── THE SET COMPARED IS THE SET LABELLED ────────────────────────────────────
+ * Only top-level rows of real groups are candidates, because only those can
+ * carry a label: the caller exempts children, and a `contextOnly` group's root
+ * is drawn as a heading over someone's retired workers rather than as a row. If
+ * a name that can never be labelled could cause a label, the asymmetry this
+ * function exists to remove would come straight back in a new shape. A child
+ * needs nothing of its own — it sits directly under its parent, which is the
+ * row that says where the pair lives, and repeating the word on the indented
+ * line would put it on two adjacent rows.
+ *
+ * O(n) per row over a list the size of a sidebar (38 rows on the live corpus),
+ * and it stops at the first collision.
  */
 export function needsWorkspaceLabel(
   row: FlatChatGroup<WorkspaceRef>,
   activeWorkspaceSlug: string,
+  list: readonly FlatChatGroup<WorkspaceRef>[],
 ): boolean {
-  return row.workspace.slug !== activeWorkspaceSlug;
+  // A heading, not a row — it has no label to carry, in either direction. The
+  // caller draws these as a plain `<div>` and never asks, and saying `true`
+  // here anyway would leave a trap for the next caller that does.
+  if (row.group.contextOnly) return false;
+  if (row.workspace.slug !== activeWorkspaceSlug) return true;
+  const name = displayedNameKey(row.group.chat.name);
+  // A different workspace is also, necessarily, a different row — so there is
+  // no identity check to get wrong here.
+  return list.some(
+    (other) =>
+      !other.group.contextOnly &&
+      other.workspace.slug !== row.workspace.slug &&
+      displayedNameKey(other.group.chat.name) === name,
+  );
 }
 
 /** How many CHATS the flat done drawer holds — the number in its header.
