@@ -1694,39 +1694,89 @@
   }
 }
 
-/* One segmented strip (mode | folder | model | live). Each segment opens its
-   own upward panel; only one at a time.
+/* ── The session line ─────────────────────────────────────────────────────
+ * A quiet line ABOUT the session (folder | model | live), sitting on the
+ * transparent gap above the composer pill. Each cell opens its own upward
+ * panel; only one at a time.
  *
- * IT LIVES INSIDE THE COMPOSER PILL. Stacked above as its own floating object it
- * carried a border, a background and a 10px gap, and cost 37px of a 119px bar —
- * a third of the whole thing for a line you read and almost never press. On the
- * pill's own surface it costs its text's height and nothing else: no second
- * border to draw the eye, no gap between two things that were always one. */
+ * IT IS NOT IN THE BOX, AND IT IS NOT A BOX. Both halves matter, because this
+ * strip has now been wrong in both directions. As a floating object above the
+ * pill it carried a border, a background and a 10px gap — 37px of a 119px bar
+ * for a line you read and almost never press. Moved ONTO the pill's surface to
+ * pay that back, it became chrome inside the thing you type in, crammed against
+ * the input: "it's all too tight there." So it is out of the pill again but
+ * keeps the diet — no border, no background, no second surface. It costs its
+ * own line of text plus the 6px that separates it from the pill, which is
+ * exactly what the pill's row gap used to spend on it. Out of the box for free.
+ *
+ * ── ONE LINE, BY CONSTRUCTION ──
+ * `height` is the load-bearing declaration: a FIXED one-line height, not a
+ * min-height and not a max-height. A min-height lets content add a second row;
+ * a max-height lets it lay one out and merely clips it, which shows as a
+ * half-visible line. With a fixed height there is no second row to clip.
+ *
+ * Everything else serves that: `flex-wrap: nowrap` said out loud (it is the
+ * initial value, so an explicit declaration is what a future edit has to
+ * consciously delete rather than silently override); `min-width: 0` on the cells
+ * so a long label ellipsizes instead of winning the argument and overflowing the
+ * pane; and `flex-shrink: 0` on the live cell alone, so when the width runs out
+ * it is the folder and the model that give way and never "2 agents".
+ *
+ * ChatPane.statusline.test.tsx pins this set and fails if any rule in the strip
+ * ever acquires a declaration that would permit a second line. */
 .chat-status-bar {
   display: flex;
-  align-items: stretch;
-  width: fit-content;
-  max-width: 100%;
-  /* Right-aligned over the input below it, and clear of the pill's rounded
-     corner. No bottom margin: the pill's own row gap is the separation. */
-  /* A little clear of the pill's top edge as well as its right one, so it sits
-     IN the pill rather than against its corner. */
-  margin: 2px 4px 0 auto;
-  border-radius: 8px;
+  flex-wrap: nowrap;
+  align-items: center;
+  /* Right-aligned over the input below it, at every pane width. */
+  justify-content: flex-end;
+  /* ONE LINE. Equal to the cells' line-height, which carry no block padding —
+     see the arithmetic tie in ChatPane.statusline.test.tsx. */
+  height: 16px;
+  /* The pill's own centering, repeated — that is the idiom every child of
+     `.chat-composer-wrap` uses (see .chat-notice), and it is what makes this
+     line's right edge sit over the PILL's right edge on a wide desktop instead
+     of way out at the pane's. */
+  width: 100%;
+  max-width: 768px;
+  /* The 6px is the whole separation between this line and the pill now that the
+     pill's row gap no longer reaches it. */
+  margin: 0 auto 6px;
+  padding-right: 2px;
   /* Menus escape via position:absolute on .chat-status-menu; segment buttons
      clip their own labels so long model names can't paint over the live cell. */
   overflow: visible;
 }
+/* `flex: 0 1 auto` — sized by content, never STRETCHED to fill the 768px above
+   (which would spread three cells across the whole pill), and shrinkable, which
+   is what hands the width to the live cell when it runs short. */
 .chat-status-seg-wrap {
   position: relative;
   display: flex;
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+  overflow: visible;
+}
+/* The live cell is a flex item of the BAR through this wrapper, so this — not the
+   button's own flex-shrink — is the declaration that actually protects
+   "12 agents" from being ellipsized at 320px. Both are set; this is the one that
+   does the work. */
+.chat-status-seg-wrap.-live {
+  flex: 0 0 auto;
+}
+/* THE YIELD ORDER. Flex shrinks items in proportion to their base size, so the
+   LONGEST cell keeps the most absolute width — at 320px that left the folder
+   reading `trayo-self-serve…` while the model was squeezed to `Op…`, which is
+   backwards: a clipped folder name is still recognisable, a clipped model name
+   is two letters. The folder gives way three times as fast. */
+.chat-status-seg-wrap.-folder {
+  flex-shrink: 3;
 }
 .chat-status-seg-wrap + .chat-status-seg-wrap {
-  border-left: 1px solid color-mix(in srgb, var(--border-strong, #3b4261) 45%, transparent);
+  border-left: 1px solid color-mix(in srgb, var(--chat-border-strong) 45%, transparent);
 }
 .chat-status-seg {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 5px;
@@ -1734,13 +1784,15 @@
   width: 100%;
   max-width: 180px;
   min-width: 0;
-  padding: 1px 7px;
+  /* No block padding, so the cell IS the line — the bar's fixed height and this
+     line-height are the same number on purpose. */
+  padding: 0 7px;
   border: none;
   background: transparent;
-  color: var(--fg-faint, #6f7488);
+  color: var(--chat-faint);
   font-family: var(--chrome-font, inherit);
   font-size: 11px;
-  line-height: 1.35;
+  line-height: 16px;
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
@@ -1749,17 +1801,32 @@
 }
 .chat-status-seg:hover,
 .chat-status-seg.is-open {
-  color: var(--fg, #d7dae0);
-  background: color-mix(in srgb, var(--fg, #d7dae0) 5%, transparent);
+  color: var(--chat-fg);
+  background: color-mix(in srgb, var(--chat-fg) 5%, transparent);
 }
 .chat-status-seg.-live {
-  /* Never shrink or ellipsize — "N agents" must fit whole. */
+  /* Never shrink or ellipsize — "N agents" must fit whole. It is the one cell
+     that reports something CHANGING, so it is the one the others yield to. */
+  flex-shrink: 0;
   width: auto;
   max-width: none;
   min-width: max-content;
+  /* Safe here and nowhere else: this cell's content always fits, so nothing can
+     paint out of it. The truncating cells keep their clip. What visibility buys
+     is the hit area below. */
   overflow: visible;
-  color: var(--accent, #7aa2f7);
+  color: var(--chat-accent);
   font-weight: 600;
+}
+/* A 16px line is a fine thing to READ and a poor thing to hit with a thumb. This
+   is the cell you actually press — it opens the roster of running children — so
+   its hit area is extended OFF-LAYOUT rather than by growing the row: the strip
+   stays one 16px line and the tappable box is 26px. Stops 4px short below so a
+   tap at the top of the composer still lands on the composer. */
+.chat-status-seg.-live::after {
+  content: "";
+  position: absolute;
+  inset: -6px 0 -4px;
 }
 .chat-status-seg.-live .chat-roster-spin {
   flex: 0 0 auto;
@@ -1768,15 +1835,18 @@
 .chat-status-seg svg {
   flex: 0 0 auto;
   /* Icons read as identity marks — keep them denser than the faint label. */
-  color: var(--fg-dim, #a9b1d6);
+  color: var(--chat-dim);
 }
 .chat-status-seg:hover svg,
 .chat-status-seg.is-open svg {
-  color: var(--fg, #d7dae0);
+  color: var(--chat-fg);
 }
 .chat-status-seg.-live svg {
-  color: var(--accent, #7aa2f7);
+  color: var(--chat-accent);
 }
+/* Where the truncation actually happens. `min-width: 0` is what lets a flex item
+   go below its min-content width at all — without it the label refuses to
+   shrink and the strip overflows the pane instead of ellipsizing. */
 .chat-status-seg-label {
   flex: 1 1 auto;
   min-width: 0;
@@ -1944,6 +2014,16 @@
 .chat-session-item:hover {
   background: var(--bg-hover, rgba(255, 255, 255, 0.06));
 }
+/* A row that STATES something rather than doing it (the Mode row). Same
+   typography as its neighbours — it belongs to the same list — but no pointer
+   and no hover, because a highlight on a row that cannot be pressed is a
+   promise the menu does not keep. */
+.chat-session-item.-static {
+  cursor: default;
+}
+.chat-session-item.-static:hover {
+  background: transparent;
+}
 .chat-session-item.is-active .chat-session-item-label {
   color: var(--accent, #4a9eff);
 }
@@ -1958,8 +2038,10 @@
   font-size: 10.5px;
   line-height: 1.35;
 }
-/* Mode chip (Chat / Agent). Never ellipsized: both labels are one short word,
-   and a truncated "Ch…" would be worse than no chip at all. */
+/* Mode chip — CHAT MODE ONLY (see SessionBar: in Agent mode the backend logo
+   beside the model already says which arrangement you are in, and the word was
+   the longest redundant thing on the line). Never ellipsized: the label is one
+   short word, and a truncated "Ch…" would be worse than no chip at all. */
 .chat-status-seg.-mode.-static {
   cursor: default;
 }
