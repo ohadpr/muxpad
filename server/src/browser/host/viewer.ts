@@ -371,6 +371,7 @@ takeover.addEventListener('click', async () => {
     })
     if (!r.ok) { msg.textContent = 'could not take the wheel'; return }
     watching = false
+    applyWatching()
   } catch { msg.textContent = 'could not reach muxpad' }
 })
 applyWatching()
