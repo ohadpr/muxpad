@@ -1399,6 +1399,19 @@ describe('a completion with no summary says so', () => {
     // generator produced nothing to expand from.
     expect(canExpandSpawn(finished())).toBe(false);
   });
+
+  it('TELLS APART "we tried and lost it" from "nobody has got to it yet"', () => {
+    // These two were one rendering, because `failed` was the ABSENCE of the
+    // report field and absence also means not-yet-attempted. So a worker whose
+    // summary a length rule threw away drew the same line as one still in the
+    // queue, and the difference existed only in server.log. Three real workers
+    // lost good reports this way.
+    expect(spawnCardSummary({ text: null, state: 'failed', at: 1 })).not.toBe(
+      spawnCardSummary(undefined),
+    );
+    // It says the WORK happened, because it did — only the summary was lost.
+    expect(spawnCardSummary({ text: null, state: 'failed', at: 1 })).toContain('work finished');
+  });
 });
 
 describe('spawnReportSummary — what the card says when there are no sentences', () => {

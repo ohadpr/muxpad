@@ -348,11 +348,20 @@ describe('maybeWriteSpawnReport — one attempt, and every failure is one', () =
     expect(new TabStore(db).getById(tabId)?.spawn_report_state).toBe('none');
   });
 
-  it('leaves the row untouched when the reply was not a report — but charges the attempt', async () => {
-    // headline.ts's contract: every failure path leaves the surface exactly as
-    // it was, with no placeholder and no error string. And a rejected attempt is
-    // still an attempt, or a model that keeps answering the conversation instead
-    // of reporting on it spins hardest of all.
+  it('RECORDS A REFUSED REPLY as `failed` — and charges the attempt', async () => {
+    // This used to assert the opposite: headline.ts's "every failure path leaves
+    // the surface exactly as it was". That contract is right about not inventing
+    // a PLACEHOLDER SUMMARY and wrong about saying nothing at all, because the
+    // untouched row was indistinguishable from one nobody had reached yet — so
+    // the card said "No summary was generated for this one" over work that had
+    // been summarised and then thrown away, and the only account of it was a
+    // line in server.log.
+    //
+    // `failed` is not a placeholder: it carries no sentences and claims nothing
+    // about the work. It says only that we tried and lost it.
+    //
+    // A rejected attempt is still an attempt, or a model that keeps answering
+    // the conversation instead of reporting on it spins hardest of all.
     const { tabId, paneId } = makeWorker(WORK);
     const out = await maybeWriteSpawnReport(
       db,
@@ -361,9 +370,10 @@ describe('maybeWriteSpawnReport — one attempt, and every failure is one', () =
       async () => "Sure! I'd be happy to summarise that for you.",
       { now: 4_000 },
     );
-    expect(out).toBeNull();
+    expect(out).toEqual({ report: null, state: 'failed' });
     const tab = new TabStore(db).getById(tabId);
-    expect(tab?.spawn_report_state).toBeUndefined();
+    expect(tab?.spawn_report_state).toBe('failed');
+    expect(tab?.spawn_report).toBeNull();
     expect(new TabStore(db).spawnReportAt(tabId)).toBe(4_000);
   });
 
@@ -410,7 +420,8 @@ describe('maybeWriteSpawnReport — one attempt, and every failure is one', () =
       },
       { now: 4_000 },
     );
-    expect(out).toBeNull();
+    // …and SAYS SO on the row, not only in the log. See the refused-reply test.
+    expect(out).toEqual({ report: null, state: 'failed' });
     expect(new TabStore(db).spawnReportAt(tabId)).toBe(4_000);
   });
 

@@ -526,7 +526,7 @@ export async function maybeWriteSpawnReport(
    * the crash itself, written once: skipped when the row already says `crashed`,
    * so a run that fails in a loop does not emit a `tab.updated` per failure.
    */
-  const fallback = (artifacts: string[] = []): SpawnReportWrite | null => {
+  const fallback = (artifacts: string[] = [], failed = false): SpawnReportWrite | null => {
     // THE ARTIFACTS LAND EVEN WHEN NOTHING ELSE DOES. They are a regex over the
     // transcript, not a generation, so a refused reply has no bearing on them —
     // and a refused reply is exactly when the card most needs something in it.
@@ -536,8 +536,17 @@ export async function maybeWriteSpawnReport(
     // that stops its card reading as an ordinary delivery, and both would be
     // lost if they rode the generation — which is exactly what happened to
     // `cross-ws`, whose report was refused and whose card then said nothing.
-    if (endState === 'ok' || tab.spawn_report_state === endState) return null;
-    const write: SpawnReportWrite = { report: null, state: endState };
+    // ATTEMPTED-AND-LOST IS ITS OWN OUTCOME, and only for an otherwise ordinary
+    // worker: `crashed` and `awaiting` are facts we observed about the turn and
+    // they still outrank a generation that went missing.
+    //
+    // This is the branch that used to return null and write nothing at all. The
+    // row kept a stamped `spawn_report_at` and a NULL state, which read as "not
+    // attempted yet" — so the card said "No summary was generated for this one"
+    // and the only account of what actually happened was a line in server.log.
+    const state: SpawnReportState = endState === 'ok' && failed ? 'failed' : endState;
+    if (state === 'ok' || tab.spawn_report_state === state) return null;
+    const write: SpawnReportWrite = { report: null, state };
     tabs.setSpawnReport(tabId, write, now);
     return write;
   };
@@ -577,7 +586,12 @@ export async function maybeWriteSpawnReport(
     // passes the gate unconditionally, so a persistent failure would otherwise
     // spawn a fresh subprocess on every finished turn indefinitely.
     tabs.touchSpawnReportAt(tabId, now);
-    return fallback();
+    // …AND THE ROW SAYS SO TOO. The log line above is for whoever is reading the
+    // log; `failed` is the same fact where the person who spawned the worker
+    // will actually meet it. Artifacts are a regex over the transcript with no
+    // model in the path, so they land even here — and a lost generation is
+    // exactly when a card most needs something in it.
+    return fallback(scrapeArtifacts(conversation), true);
   } finally {
     clearTimeout(timer);
   }
@@ -590,7 +604,7 @@ export async function maybeWriteSpawnReport(
       `[spawn-report] rejected (${reason}) for tab ${tabId}: ${JSON.stringify(reply.trim().slice(0, 80))}`,
     );
     tabs.touchSpawnReportAt(tabId, now);
-    return fallback(scrapeArtifacts(conversation));
+    return fallback(scrapeArtifacts(conversation), true);
   }
   // THREE OUTCOMES, kept apart on the row so the card can say three different
   // things: a report, a crash (with or without sentences), and a worker that
