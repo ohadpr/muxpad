@@ -685,6 +685,62 @@ export interface ConversionReceipt {
 }
 
 /**
+ * AN AGENT-BACKED PANE WITH NOTHING RUNNING IN IT.
+ *
+ * This used to read "No agent session here yet — start one with `muxpad agent`
+ * … in the terminal", which is wrong on both counts. It is wrong as ADVICE:
+ * mobile is the primary surface and a phone has no terminal, so the one action
+ * offered was unreachable on the device most likely to be showing it — and it
+ * is absurd under a button whose entire job is to start an agent. It is also
+ * wrong as a DIAGNOSIS: this pane is not unconfigured. Its row already carries
+ * the backend, the mode, the folder and the startup command; the only missing
+ * thing is a process.
+ *
+ * So the state offers the one verb that fits — start the thing this pane
+ * already is — and when that fails it says WHY, in the server's own words
+ * (`respawn` answers 503 with a reason when ptyd is unreachable). An honest
+ * error is the fallback, never shell homework.
+ *
+ * Exported for tests; `onStart` is wired to POST /api/panes/:id/respawn.
+ */
+export function ChatNoRunner({
+  busy,
+  error,
+  onStart,
+}: {
+  busy: boolean;
+  error: string | null;
+  onStart: () => void;
+}) {
+  // While it is coming up we show the SAME spinner the pre-grace state shows.
+  // The respawn request returning is not the agent being up — the runner still
+  // has to boot and hello — and flipping back to "nothing running" underneath a
+  // live boot is the same lie the old copy told, just faster.
+  if (busy)
+    return (
+      <div className="chat-empty">
+        <div className="chat-empty-spinner" aria-hidden="true" />
+        <p>Starting…</p>
+      </div>
+    );
+  return (
+    <div className="chat-empty">
+      <div className="chat-empty-mark" aria-hidden="true">
+        ✳
+      </div>
+      <p className="chat-empty-title">Nothing running here</p>
+      <p className="chat-empty-hint">This chat has no agent yet.</p>
+      <button type="button" className="chat-launch-go" onClick={onStart}>
+        Start agent
+      </button>
+      {/* <output> is the live region — announced without stealing the
+          composer's focus, same as the conversion refusal. */}
+      {error ? <output className="chat-convert-refusal">{error}</output> : null}
+    </div>
+  );
+}
+
+/**
  * The empty chat's greeting — and the whole reason a conversion is visible.
  *
  * Converting a pane's harness changes nothing about WHERE it is: same pane,
@@ -1679,6 +1735,17 @@ const CONVERT_STALL_MS = 60_000;
  *  Long enough to read on a phone you were not staring at; short enough that
  *  it is gone by the time you have typed your first message. */
 const CONVERT_CONFIRM_MS = 8_000;
+
+/**
+ * How long "Start agent" spins before handing the button back.
+ *
+ * The respawn route answers as soon as ptyd has the pty; the RUNNER then has
+ * to boot node, connect and hello, which is the part worth waiting through.
+ * Sized against the server's own patience (RESPAWN_STARTUP_GRACE_MS, 30s)
+ * rather than a feel: giving up sooner than the server does would offer a
+ * retry for a boot that is still perfectly on track.
+ */
+const AGENT_START_STALL_MS = 35_000;
 
 /** '.ext' when the filename carries an extension the upload route accepts —
  *  the picker's fallback for providers that report an empty MIME type (HEIC
@@ -4113,6 +4180,24 @@ export function ChatPane({
   const [pickBusy, setPickBusy] = useState<AgentBackendId | 'terminal' | 'web' | null>(null);
   const [pickError, setPickError] = useState<string | null>(null);
   /**
+   * STARTING AN AGENT-BACKED PANE THAT HAS NO RUNNER, from the chat itself.
+   *
+   * This pane already knows what it is — the row carries the backend, the mode
+   * and the startup command. The only thing missing is a live process, so the
+   * empty state's job is ONE button that starts it, not a sentence telling the
+   * reader to go type `muxpad agent` in a terminal. Mobile is the primary
+   * surface and there is no terminal on a phone; that instruction was
+   * unreachable advice on the one device it was most likely to be read on.
+   *
+   * `respawnPane` is the right verb rather than a conversion: it re-types the
+   * pane's OWN startup_cmd, so the chat comes back as itself (same harness,
+   * same mode, same folder, resuming its session where it has one) instead of
+   * being re-chosen.
+   */
+  const [startBusy, setStartBusy] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
+  const startStall = useRef<number | undefined>(undefined);
+  /**
    * The harness the user tapped, with its (pre-answered) folder and model,
    * waiting on "Start". Non-null = the launch card is open in place of the
    * strip. Nothing has been sent to the server yet — this is the step that
@@ -4304,6 +4389,47 @@ export function ChatPane({
     () => runConversion('web', 'could not open the web view', () => api.convertPaneToWeb(paneId)),
     [paneId, runConversion],
   );
+  /**
+   * Start the agent this pane is already configured to run.
+   *
+   * Success is NOT the 204 — it is the runner's hello, which arrives as a
+   * session frame some seconds later. So the button keeps spinning past the
+   * response and is released by whichever comes first: the session landing
+   * (the effect below) or the stall timer. A failure that the server can name
+   * (ptyd down → 503 with a reason) is shown verbatim; that sentence is the
+   * honest answer the shell instruction was standing in for.
+   */
+  const startAgent = useCallback(async () => {
+    setStartBusy(true);
+    setStartError(null);
+    window.clearTimeout(startStall.current);
+    startStall.current = window.setTimeout(() => {
+      setStartBusy(false);
+      setStartError('the agent did not come up — tap to try again');
+    }, AGENT_START_STALL_MS);
+    try {
+      await api.respawnPane(paneId);
+    } catch (e) {
+      window.clearTimeout(startStall.current);
+      setStartBusy(false);
+      setStartError(e instanceof Error && e.message ? e.message : 'could not start the agent');
+    }
+  }, [paneId]);
+  // The runner arrived — stop spinning and drop any stale complaint. Also the
+  // unmount/pane-switch cleanup, so a timer can't fire into a later pane.
+  useEffect(() => {
+    if (session?.current_sid) {
+      window.clearTimeout(startStall.current);
+      setStartBusy(false);
+      setStartError(null);
+    }
+  }, [session?.current_sid]);
+  useEffect(
+    () => () => {
+      window.clearTimeout(startStall.current);
+    },
+    [],
+  );
 
   const body = useMemo(() => {
     if (session === undefined)
@@ -4324,17 +4450,10 @@ export function ChatPane({
             <p>Starting…</p>
           </div>
         );
+      // Nothing is running here — but this pane already knows WHAT to run, so
+      // the affordance is a button, not shell homework. See ChatNoRunner.
       return (
-        <div className="chat-empty">
-          <div className="chat-empty-mark" aria-hidden="true">
-            ✳
-          </div>
-          <p className="chat-empty-title">No agent session here yet</p>
-          <p className="chat-empty-hint">
-            Start one with <code>muxpad agent</code> (chat-native) or <code>muxpad claude</code> in
-            the terminal.
-          </p>
-        </div>
+        <ChatNoRunner busy={startBusy} error={startError} onStart={() => void startAgent()} />
       );
     }
     if (events.length === 0 && !optimisticUser && !sending) {
@@ -4762,6 +4881,9 @@ export function ChatPane({
     toolIndex,
     pickBusy,
     pickError,
+    startBusy,
+    startError,
+    startAgent,
     staged,
     launchOptions,
     converted,
