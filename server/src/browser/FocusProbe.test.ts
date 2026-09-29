@@ -129,6 +129,44 @@ describe('finding where the text fields ARE', () => {
     expect(textFieldBoxes()).toEqual([]);
   });
 
+  it('offers a frame it CANNOT look into as a candidate', () => {
+    // An SSO widget, a payment field, a third-party login. Nothing here or in
+    // the focus probe can see whether it holds an input, and reporting nothing
+    // meant a tap on such a login box raised no keyboard at all — a dead end,
+    // not a blemish. The frame itself becomes the box.
+    document.body.innerHTML = '<iframe></iframe>';
+    const frame = document.querySelector('iframe') as HTMLIFrameElement;
+    sized(frame, { left: 20, top: 40, width: 600, height: 120 });
+    Object.defineProperty(frame, 'contentDocument', {
+      get() {
+        throw new Error('cross-origin');
+      },
+    });
+    expect(textFieldBoxes()).toContainEqual([20, 40, 600, 120]);
+  });
+
+  it('and one that answers NULL, which is what Chrome actually does', () => {
+    // The first version of this fix only caught a THROW, so it missed the very
+    // case it was written for: Chrome hands back null for a sandboxed frame.
+    // Measured against the real browser — zero boxes reported.
+    document.body.innerHTML = '<iframe></iframe>';
+    const frame = document.querySelector('iframe') as HTMLIFrameElement;
+    sized(frame, { left: 5, top: 10, width: 400, height: 90 });
+    Object.defineProperty(frame, 'contentDocument', { get: () => null });
+    expect(textFieldBoxes()).toContainEqual([5, 10, 400, 90]);
+  });
+
+  it('does not offer one it CAN look into and found nothing in', () => {
+    // A same-origin frame with no fields is a known quantity: there is nothing
+    // to type into, so a keyboard there would be noise with no upside.
+    document.body.innerHTML = '<iframe></iframe>';
+    const frame = document.querySelector('iframe') as HTMLIFrameElement;
+    sized(frame, { left: 0, top: 0, width: 300, height: 100 });
+    const empty = document.implementation.createHTMLDocument('');
+    Object.defineProperty(frame, 'contentDocument', { get: () => empty });
+    expect(textFieldBoxes()).toEqual([]);
+  });
+
   it('ships the same text it was tested with, and reaches into both', () => {
     expect(fieldBoxesExpression()).toContain('shadowRoot');
     expect(fieldBoxesExpression()).toContain('contentDocument');

@@ -162,18 +162,45 @@ export function textFieldBoxes(): Array<[number, number, number, number]> {
         tagName?: string;
         shadowRoot?: unknown;
         contentDocument?: unknown;
-        getBoundingClientRect?: () => { left: number; top: number };
+        getBoundingClientRect?: () => { left: number; top: number; width: number; height: number };
       };
       if (el.shadowRoot) collect(el.shadowRoot, dx, dy, depth + 1);
       const tag = (el.tagName || '').toLowerCase();
       if (tag === 'iframe' || tag === 'frame') {
+        let doc: unknown = null;
+        // Cross-origin THROWS in some engines and returns NULL in others —
+        // Chrome hands back null for a sandboxed frame, which is how the first
+        // version of this fix missed the very case it was written for. Both
+        // mean the same thing: we cannot look inside.
         try {
-          const doc = el.contentDocument;
-          const box = el.getBoundingClientRect?.();
-          // Cross-origin throws here, which is the web working as designed.
-          if (doc && box) collect(doc, dx + box.left, dy + box.top, depth + 1);
+          doc = el.contentDocument ?? null;
         } catch {
-          // Unknowable. The viewer falls back to guessing for taps in there.
+          doc = null;
+        }
+        const box = el.getBoundingClientRect?.();
+        if (doc && box) {
+          collect(doc, dx + box.left, dy + box.top, depth + 1);
+        } else {
+          // CANNOT LOOK IN, SO ASSUME THE WORST USEFUL THING. A cross-origin
+          // frame is an SSO widget, a payment field, a third-party login — and
+          // nothing in this page, or in the focus probe beside it, can see
+          // whether it holds an input. Reporting nothing meant a tap on such a
+          // login box raised no keyboard AT ALL, which is a dead end rather than
+          // a blemish.
+          //
+          // So the FRAME becomes the candidate. A tap inside it raises a
+          // keyboard the person can dismiss with one press; the alternative is a
+          // field they cannot type into. The same rule makes a tap on a
+          // cross-origin ad raise one too, which is the price and the right way
+          // round.
+          if (box && box.width > 0 && box.height > 0) {
+            out.push([
+              Math.round(box.left + dx),
+              Math.round(box.top + dy),
+              Math.round(box.width),
+              Math.round(box.height),
+            ]);
+          }
         }
       }
     }
