@@ -3,7 +3,36 @@
 // URL authorize a LOOPBACK probe, so a mis-classification here is the whole
 // guard — see routes/panes.ts's trust-model note.
 import { describe, expect, it } from 'vitest';
-import { classifyUrlHost } from './url-health.js';
+import { classifyStatus, classifyUrlHost } from './url-health.js';
+
+/**
+ * The gateway rule, which had no test at all — and it is now load-bearing for
+ * more than the iframe face it was written for.
+ *
+ * `MUXPAD_PUBLIC_BASE_URL` pins the published base in CONFIGURATION, so unlike
+ * the `tunnel` source it is not gated on the tunnel record and nothing
+ * structural demotes it when the connector behind it dies. The only thing that
+ * does is this classifier: a Cloudflare hostname whose tunnel has no connector
+ * answers 502, and 502 has to mean DEAD or public-base.ts keeps publishing links
+ * to a hostname that is answering nothing but an error page.
+ */
+describe('classifyStatus — a proxy answering for a backend that is gone', () => {
+  it('treats the gateway statuses as DEAD', () => {
+    for (const s of [502, 503, 504]) {
+      expect(classifyStatus(s), `status ${s}`).toEqual({ alive: false, reason: 'gateway' });
+    }
+  });
+
+  it('but an app answering badly is still alive — its own error beats our notice', () => {
+    // The distinction the whole file exists for: 500 is the app, 502 is a proxy
+    // saying the app is gone. Collapsing them either hides a real outage or
+    // reports a working app as stopped.
+    expect(classifyStatus(500).alive).toBe(true);
+    expect(classifyStatus(401).alive).toBe(true);
+    expect(classifyStatus(404).alive).toBe(true);
+    expect(classifyStatus(200).alive).toBe(true);
+  });
+});
 
 describe('classifyUrlHost', () => {
   it('refuses anything that is not parseable http(s)', () => {
