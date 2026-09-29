@@ -152,10 +152,18 @@ describe('the spawn cards and the roster read ONE list', () => {
 
   it('derives the roster from the CARDS, so they cannot disagree', () => {
     // Not two calls into the lib that happen to agree: one memo, and the running
-    // list is that memo minus the done ones. `spawnCards` keeps every live child
-    // past the cap (chat-mention.test.ts) so this stays a complete count.
+    // list is that memo filtered to the ones actually at work. `spawnCards`
+    // keeps every live child past the cap (chat-mention.test.ts) so this stays a
+    // complete count.
+    //
+    // The filter USED to be `!c.chat.done`, and this test pinned that string.
+    // It was wrong: `done` is retirement, not liveness, so the bar counted a
+    // worker between turns and one whose runner had DIED — "4 agents" over one
+    // working child. `runningChildren` reads the pane status the sidebar spins
+    // on. See ChatPane.liveset.test.tsx, which holds all three surfaces to one
+    // answer; what THIS test still owns is that there is exactly one list.
     expect(SRC).toContain('spawnCards(corpus, myChat?.tabId)');
-    expect(SRC).toContain('spawnedCards.filter((c) => !c.chat.done)');
+    expect(SRC).toContain('runningChildren(spawnedCards.map((c) => c.chat))');
     expect(SRC).toContain('for (const kid of spawnedLive)');
     // …and exactly one definition of each, so a future edit cannot quietly fork
     // a second card list off a second memo again.

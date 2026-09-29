@@ -142,7 +142,12 @@ import { ANCHOR_ATTR, domScrollSurface } from '../lib/chat-scroll-dom';
 import { TOP_PAGE_ZONE_PX, shouldPageOlder } from '../lib/chat-scroll-intent';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
 import { trackKeyboardInset } from '../lib/keyboard-inset';
-import { liveStatusLabel, sessionModelLabel } from '../lib/live-status';
+import {
+  childIsRunning,
+  liveStatusLabel,
+  runningChildren,
+  sessionModelLabel,
+} from '../lib/live-status';
 import { isMobileLayout } from '../lib/mobile-layout';
 import { useDismissable } from '../lib/use-dismissable';
 import './ChatPane.css';
@@ -2222,12 +2227,20 @@ export function ChatPane({
   // that is the record of what this chat started — and its mark says which.
   //
   // ONE list still, and that is load-bearing: the roster below is DERIVED from
-  // this one by the done filter, so the cards and the running count cannot answer
-  // "what is this chat running" differently, which is exactly how they drifted
-  // before.
+  // this one, so the cards and the running count cannot answer "what is this
+  // chat running" differently, which is exactly how they drifted before.
+  //
+  // THE FILTER IS `runningChildren`, NOT `!done`. It used to be the latter, and
+  // that shipped a bar reading "4 agents" over one working child, two idle ones
+  // and a DEAD one. `done` is retirement — whether the chat has left the live
+  // list — and a worker between turns, or one whose runner gave up, is unretired
+  // and not running. The pane's `status` is the field that means "is this
+  // working", it is what the sidebar spins on, and it is now what this counts.
+  // See live-status.ts for the measured scene and ChatPane.liveset.test.tsx for
+  // the test that holds all three surfaces to one answer.
   const spawnedCards = useMemo(() => spawnCards(corpus, myChat?.tabId), [corpus, myChat]);
   const spawnedLive = useMemo(
-    () => spawnedCards.filter((c) => !c.chat.done).map((c) => c.chat),
+    () => runningChildren(spawnedCards.map((c) => c.chat)),
     [spawnedCards],
   );
 
@@ -4841,15 +4854,20 @@ export function ChatPane({
   // …and the CHILD CHATS, which are the parallel work muxpad itself spawns.
   // This cell is the persistent "something is running" indicator, and it read 0
   // through a dozen working children because it counted the harness roster only
-  // — the user asked about that twice. A child is busy until it delivers (a
-  // sub-chat has no clock; it leaves the live list when its work lands), so
-  // `!done` IS the running state and no timer is involved.
+  // — the user asked about that twice.
+  //
+  // `busy` is READ, not asserted. It used to be the literal `true` on every
+  // child, on the reasoning that "a child is busy until it delivers" — which is
+  // how a chat whose runner had DIED got a spinning row in this list. The list
+  // is now already filtered to the running ones (`spawnedLive`), so liveness is
+  // settled in exactly one place and this reads the same predicate rather than
+  // overriding it with a constant.
   for (const kid of spawnedLive) {
     rosterAgents.push({
       id: `chat:${kid.tabId}`,
       label: kid.tabName,
       steps: 0,
-      busy: true,
+      busy: childIsRunning(kid),
       chat: { workspaceSlug: kid.workspaceSlug, tabSlug: kid.tabSlug },
     });
   }
