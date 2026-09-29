@@ -16,7 +16,7 @@
 import type { PaneSpec } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { bootstrapTab } from './agent-tab.js';
+import { bootstrapTab, deleteTabCascade } from './agent-tab.js';
 import { EventBus } from './events.js';
 import { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
@@ -24,7 +24,7 @@ import { WorkspaceStore } from './store/WorkspaceStore.js';
 import { openDb } from './store/db.js';
 
 /** Resolve after `ms`, for racing against the production cap. */
-const after = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const settle = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 interface Harness {
   db: Database.Database;
@@ -33,6 +33,10 @@ interface Harness {
   events: EventBus;
   /** Every spec ptyd was asked to ensure, in order. */
   ensured: PaneSpec[];
+  /** Pane ids ptyd is currently holding a pty for. */
+  live: Set<string>;
+  /** Every pane id ptyd was asked to kill, in order. */
+  killed: string[];
   wsId: string;
 }
 
@@ -47,13 +51,24 @@ function harness(ensureDelay: number): Harness {
   const db = openDb(':memory:');
   open.push(() => db.close());
   const ensured: PaneSpec[] = [];
+  // The pane ids ptyd is actually HOLDING, in order — a spawn adds, a kill
+  // removes. This is the thing an orphan is defined against: an id still in
+  // here after its row is gone.
+  const live = new Set<string>();
+  const killed: string[] = [];
   const ptyd = {
     socketPath: '/tmp/muxpad-agent-tab-test.sock',
     ensurePane: async (spec: PaneSpec) => {
       ensured.push(spec);
-      await after(ensureDelay);
+      await settle(ensureDelay);
+      live.add(spec.id); // the pty exists only once ptyd has acknowledged
     },
-    killPane: async () => {},
+    killPane: async (id: string) => {
+      killed.push(id);
+      // Exactly ptyd's semantics, and the whole trap: killing a pane it has
+      // not created yet SUCCEEDS and does nothing.
+      live.delete(id);
+    },
     getForegroundCommand: async () => null,
     on: () => {},
   } as unknown as PtydClient;
@@ -63,6 +78,8 @@ function harness(ensureDelay: number): Harness {
     cache: new PtydCache(),
     events: new EventBus(),
     ensured,
+    live,
+    killed,
     wsId: new WorkspaceStore(db).create({ name: 'W' }).id,
   };
 }
@@ -128,7 +145,45 @@ describe('bootstrapTab does not hold the response open for the pty spawn', () =>
     expect(created.tab.id).toBeTruthy();
     expect(created.pane).not.toBeNull();
     // Give the rejection a tick to go unhandled if it is going to.
-    await after(10);
+    await settle(10);
+  });
+
+  it('deleting before the spawn lands does not leave an orphaned pty', async () => {
+    // THE ONE THE CAP OPENED, and it was observed rather than theorised: a
+    // batch of agent tabs deleted while ptyd was saturated left eight runners
+    // alive with no rows behind them, reachable by nothing.
+    //
+    // The sequence: create answers at the cap (pty not up yet) -> delete ->
+    // killPane succeeds against a pane ptyd has not made, doing nothing ->
+    // the queued spawn lands -> a pty exists that no row, no UI and no kill
+    // queue can ever reach. Only the reconnect-time reconcile would catch it,
+    // and that reconnect is a ptyd restart that kills every pane on the box.
+    const h = harness(1_000);
+    const created = await agentTab(h);
+    const paneId = created.pane?.id as string;
+    // The cap fired: we are holding a tab whose pty does not exist yet. This
+    // is the window, and it is exactly what the blocking await used to deny.
+    expect(h.live.has(paneId)).toBe(false);
+
+    expect(await deleteTabCascade(h, created.tab.id)).toBe(true);
+    expect(h.killed).toContain(paneId);
+
+    // Past the spawn's own latency: the pty must NOT have appeared after the
+    // kill walked past it.
+    await settle(1_500);
+    expect(h.live.has(paneId)).toBe(false);
+  });
+
+  it('the delete itself does not wait for that spawn', async () => {
+    // Written as `await spawning` first, which fixed the orphan and introduced
+    // a worse bug: a delete inheriting the exact unbounded ptyd wait this file
+    // exists to remove. It hung a test teardown past its 10s hook timeout. A
+    // ptyd that never answers must leak a pty, not wedge the cascade.
+    const h = harness(60_000);
+    const created = await agentTab(h);
+    const started = Date.now();
+    expect(await deleteTabCascade(h, created.tab.id)).toBe(true);
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 
   it('an idle ptyd is answered at its own speed, not at the cap', async () => {
