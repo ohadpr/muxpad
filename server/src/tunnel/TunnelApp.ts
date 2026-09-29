@@ -6,6 +6,7 @@ import { AppStore } from '../store/AppStore.js';
 import { GlobalsStore } from '../store/GlobalsStore.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { findCloudflared } from './cloudflared.js';
+import type { NamedTunnel } from './named.js';
 
 /**
  * muxpad OWNING the Cloudflare tunnel — the server-side half.
@@ -65,6 +66,21 @@ import { findCloudflared } from './cloudflared.js';
  * Merely out-ranking it would leave a pointless quick tunnel dialling
  * Cloudflare forever, holding a public door open next to a real domain that
  * already works.
+ *
+ * …WITH ONE EXCEPTION, AND IT IS THE POINT OF tunnel/named.ts. That rule assumes
+ * the tunnel is a QUICK one, whose throwaway hostname has nothing to offer a
+ * machine that already has a domain. A NAMED tunnel is the opposite: it IS what
+ * puts the domain on the internet, so stopping it would take the domain down and
+ * then report the domain as the healthy base. See
+ * {@link EnsureTunnelDeps.namedTunnel}.
+ *
+ * WHICH TUNNEL, AND WHY THE ANSWER IS NOT A SETTING HERE. `muxpad tunnel setup`
+ * writes `<dataDir>/tunnel.json`; the runner reads it and runs
+ * `cloudflared tunnel run <name>` instead of the quick form. Nothing in the
+ * precedence chain needed a new tier for it: the named hostname arrives through
+ * the ordinary announce, public-base.ts's `baseDurability()` reads a real domain
+ * off the HOST and classes it `permanent`, and the durability ranking puts it
+ * above the tailnet fallback and the quick tunnel on its own merits.
  */
 
 /** Slug of the app row muxpad manages the tunnel through. */
@@ -241,8 +257,21 @@ export interface EnsureTunnelDeps {
   registry: AppRegistry;
   /** The PUBLIC static port — never the main port. See {@link tunnelCommand}. */
   publicPort: number;
-  /** MUXPAD_PUBLIC_BASE_URL, if set. Its presence DISABLES the tunnel. */
+  /**
+   * MUXPAD_PUBLIC_BASE_URL, if set. Its presence disables a QUICK tunnel — but
+   * see {@link EnsureTunnelDeps.namedTunnel}, which it does not disable.
+   */
   configuredBaseUrl?: string | undefined;
+  /**
+   * The configured named tunnel (tunnel/named.ts), or null.
+   *
+   * It changes the meaning of `configuredBaseUrl` completely. For a quick tunnel
+   * a real domain means "there is nothing for a throwaway hostname to do, stop
+   * dialling Cloudflare". For a NAMED tunnel the domain is the thing this
+   * process serves, so cancelling it would take the domain offline and then
+   * report the domain as the healthy base.
+   */
+  namedTunnel?: NamedTunnel | null;
   /** Injectable for tests; defaults to the real PATH search. */
   findBin?: () => string | null;
   cwd?: string;
@@ -308,8 +337,12 @@ export async function ensureTunnelApp(deps: EnsureTunnelDeps): Promise<TunnelEns
     return { state: 'disabled', reason };
   };
 
-  // 1. A real domain outranks everything, including the decision to run.
-  if (deps.configuredBaseUrl) {
+  // 1. A real domain outranks everything, including the decision to run —
+  //    UNLESS this tunnel is what serves it. A named tunnel and a configured
+  //    base are the same fact stated twice, not a conflict, and stopping the
+  //    tunnel there would take the domain down while still reporting it as the
+  //    base every link is built from.
+  if (deps.configuredBaseUrl && !deps.namedTunnel) {
     return disable(
       `MUXPAD_PUBLIC_BASE_URL is set (${deps.configuredBaseUrl}) — that is the public base, so no tunnel is needed`,
     );

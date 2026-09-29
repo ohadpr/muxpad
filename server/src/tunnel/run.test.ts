@@ -342,6 +342,166 @@ describe('createTunnelRunner', () => {
     expect(new Set(up.map((c) => c.body?.url))).toEqual(new Set([NAMES[0]]));
   });
 
+  /**
+   * A NAMED tunnel. Same supervisor, same retraction, same heartbeat — the only
+   * thing that changes is where the hostname comes from, and it changes
+   * completely: it is configuration, not output. So there is nothing to parse,
+   * and the announce does not wait for a banner that will never mention it.
+   */
+  describe('a named tunnel — public AND permanent', () => {
+    const NAMED = {
+      name: 'muxpad',
+      hostname: 'artifacts.example.dev',
+      credentialsFile: '/x/creds.json',
+    };
+
+    it('runs `tunnel run <name>` and announces the hostname it was configured with', async () => {
+      const { calls, fetchImpl } = harness();
+      const child = fakeChild();
+      let args: string[] = [];
+      const runner = createTunnelRunner({
+        publicPort: 7778,
+        apiUrl: API,
+        bin: '/x/cloudflared',
+        named: NAMED,
+        fetchImpl,
+        spawnChild: (_bin, a) => {
+          args = a;
+          return child;
+        },
+        sleep: async () => {},
+        log: () => {},
+        out: () => {},
+        announceIntervalMs: 0,
+        maxRuns: 1,
+      });
+      const done = runner.run();
+      await new Promise((r) => setTimeout(r, 10));
+      expect(args).toEqual([
+        'tunnel',
+        '--no-autoupdate',
+        'run',
+        '--url',
+        'http://127.0.0.1:7778',
+        'muxpad',
+      ]);
+      // Announced without any output at all — the hostname was never in the
+      // output to begin with.
+      expect(calls.filter((c) => c.method === 'POST').map((c) => c.body?.url)).toEqual([
+        'https://artifacts.example.dev',
+      ]);
+      child.exit(1);
+      expect(await done).toBe('max-runs');
+    });
+
+    it('retracts it when cloudflared exits, exactly like a quick tunnel', async () => {
+      // The hostname survives the process — that is the point of a named tunnel
+      // — but muxpad must still stop SERVING it while nothing is behind it,
+      // or the link 502s with no explanation anywhere.
+      const { calls, fetchImpl } = harness();
+      const child = fakeChild();
+      const runner = createTunnelRunner({
+        publicPort: 7778,
+        apiUrl: API,
+        bin: '/x/cloudflared',
+        named: NAMED,
+        fetchImpl,
+        spawnChild: () => child,
+        sleep: async () => {},
+        log: () => {},
+        out: () => {},
+        announceIntervalMs: 0,
+        maxRuns: 1,
+      });
+      const done = runner.run();
+      await new Promise((r) => setTimeout(r, 10));
+      child.exit(1);
+      await done;
+      expect(calls.map((c) => c.method)).toEqual(['POST', 'DELETE']);
+    });
+
+    it('announces the SAME hostname on every restart — the whole difference', async () => {
+      // A quick tunnel mints a new random name per start, which is the defect
+      // this feature exists to end. A named tunnel must re-announce one value,
+      // forever, across any number of cloudflared restarts.
+      const { calls, fetchImpl } = harness();
+      const children = [fakeChild(), fakeChild(), fakeChild()];
+      let n = 0;
+      const runner = createTunnelRunner({
+        publicPort: 7778,
+        apiUrl: API,
+        bin: '/x/cloudflared',
+        named: NAMED,
+        fetchImpl,
+        spawnChild: () => children[n++] as TunnelChild,
+        sleep: async () => {},
+        log: () => {},
+        out: () => {},
+        announceIntervalMs: 0,
+        maxRuns: 3,
+      });
+      const done = runner.run();
+      for (let i = 0; i < 3; i++) {
+        await new Promise((r) => setTimeout(r, 5));
+        (children[i] as ReturnType<typeof fakeChild>).exit(1);
+      }
+      await done;
+      const urls = calls.filter((c) => c.method === 'POST').map((c) => c.body?.url);
+      expect(urls).toEqual(Array(3).fill('https://artifacts.example.dev'));
+    });
+
+    it('still refuses to tunnel anything that is not the public server', async () => {
+      // The guard that matters most is not relaxed for a named tunnel — if
+      // anything it matters MORE, because the hostname is permanent and
+      // published, so a mistake here would be a lasting one.
+      const { fetchImpl } = harness({ target: { status: 200, csp: '' } });
+      const runner = createTunnelRunner({
+        publicPort: 7778,
+        apiUrl: API,
+        bin: '/x/cloudflared',
+        named: NAMED,
+        fetchImpl,
+        spawnChild: () => {
+          throw new Error('must not spawn');
+        },
+        sleep: async () => {},
+        log: () => {},
+        out: () => {},
+        announceIntervalMs: 0,
+      });
+      expect(await runner.run()).toBe('refused');
+    });
+
+    it('ignores a quick-tunnel name in the output, if one ever appeared', async () => {
+      // Defensive, and cheap: a named run has no reason to print one, but
+      // parsing it would swap a permanent hostname for an ephemeral one at
+      // random and the link would silently start expiring again.
+      const { calls, fetchImpl } = harness();
+      const child = fakeChild();
+      const runner = createTunnelRunner({
+        publicPort: 7778,
+        apiUrl: API,
+        bin: '/x/cloudflared',
+        named: NAMED,
+        fetchImpl,
+        spawnChild: () => child,
+        sleep: async () => {},
+        log: () => {},
+        out: () => {},
+        announceIntervalMs: 0,
+        maxRuns: 1,
+      });
+      const done = runner.run();
+      await new Promise((r) => setTimeout(r, 10));
+      child.emit(`INF |  ${NAMES[0]}  |`);
+      await new Promise((r) => setTimeout(r, 5));
+      child.exit(1);
+      await done;
+      const urls = new Set(calls.filter((c) => c.method === 'POST').map((c) => c.body?.url));
+      expect(urls).toEqual(new Set(['https://artifacts.example.dev']));
+    });
+  });
+
   it('survives the main server being unreachable while it announces', async () => {
     // The tunnel outlives the main server by design (ptyd owns it), so a
     // failed announce is normal and must never be fatal.

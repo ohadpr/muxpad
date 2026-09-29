@@ -1,4 +1,7 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { findCloudflared } from './cloudflared.js';
+import { readNamedTunnel } from './named.js';
 import { createTunnelRunner } from './run.js';
 
 /**
@@ -23,6 +26,15 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   const apiUrl = arg('api', argv) ?? process.env.MUXPAD_API_URL ?? 'http://127.0.0.1:7777';
+  // The NAMED tunnel, if `muxpad tunnel setup` has been run. Read here rather
+  // than passed on the command line so that setting one up does not require
+  // rewriting the app row's command — the runner picks it up on its next start.
+  const dataDir = process.env.MUXPAD_DATA_DIR ?? join(homedir(), '.muxpad');
+  const named = readNamedTunnel(dataDir);
+  if (named)
+    console.log(
+      `muxpad tunnel: named tunnel '${named.name}' → https://${named.hostname} (permanent; credentials ${named.credentialsFile})`,
+    );
 
   // The main port is refused by NAME here purely so the error is readable; the
   // real guarantee is run.ts's fingerprint of the target, which does not depend
@@ -40,6 +52,7 @@ async function main(): Promise<void> {
     apiUrl,
     paneId: process.env.MUXPAD_PANE_ID ?? null,
     bin: findCloudflared(),
+    named,
     log: (m) => console.log(m),
   });
   for (const sig of ['SIGINT', 'SIGTERM'] as const) {

@@ -735,6 +735,85 @@ describe('audience — the DEFAULT link is the one that still works tomorrow', (
   });
 });
 
+/**
+ * THE FULL CHAIN, with all three candidates present at once — which is the state
+ * a machine is in once `muxpad tunnel setup` has been run and the quick tunnel
+ * has not yet been stood down.
+ *
+ *   named tunnel  https://artifacts.example.dev        permanent  public + forever
+ *   tailnet       https://<host>.ts.net:8443           tailnet    forever, yours only
+ *   quick tunnel  https://<four-words>.trycloudflare…  ephemeral  public, hours
+ *
+ * A named tunnel needs NO new tier and no new precedence code, and that is the
+ * design: it arrives through the ordinary `tunnel` source, and `baseDurability()`
+ * reads a real domain off the HOST and calls it `permanent`. The ranking already
+ * knows what to do with that.
+ */
+describe('a named tunnel wins on its own merits, with no new precedence', () => {
+  const NAMED = 'https://artifacts.example.dev';
+
+  beforeEach(() => {
+    reachable.add(NAMED);
+    globals.set(PUBLIC_BASE_URL_KEY, FUNNEL); // the tailnet fallback
+  });
+
+  it('is classified permanent even though it arrives as the `tunnel` source', () => {
+    // Derived from the host, never the source — the same rule that stops a
+    // hand-pinned quick-tunnel name being mistaken for durable.
+    expect(baseDurability(NAMED, 'tunnel')).toBe('permanent');
+  });
+
+  it('beats the tailnet base AND the quick tunnel, in both audiences', async () => {
+    const r = make({ tunnelBaseUrl: () => NAMED });
+    for (const audience of ['tailnet', 'public'] as const) {
+      expect(await r.resolve({ probe: true, audience })).toMatchObject({
+        baseUrl: NAMED,
+        source: 'tunnel',
+        durability: 'permanent',
+      });
+    }
+  });
+
+  it('carries NO caveat — it is the first base that needs none', async () => {
+    const r = make({ tunnelBaseUrl: () => NAMED });
+    const got = await r.resolve({ probe: true });
+    expect(durabilityNote(got.durability)).toBeNull();
+    expect(durabilityNote(got.durability, 'public')).toBeNull();
+  });
+
+  it('is kept but REPORTED DOWN when it stops answering, not silently swapped', async () => {
+    // The existing tunnel rule, and it is still right here: muxpad owns the
+    // process that IS the tunnel, so a failed probe is more likely to be a local
+    // resolver artefact than a real outage (observed: MagicDNS negative-caching
+    // the tunnel's own hostname while Cloudflare served it 200). Swapping a
+    // permanent public base for a tailnet-only one on that evidence would be the
+    // worse mistake, so the probe informs rather than reorders.
+    const r = make({ tunnelBaseUrl: () => NAMED });
+    reachable.delete(NAMED);
+    const got = await r.resolve({ probe: true });
+    expect(got.baseUrl).toBe(NAMED);
+    expect(got.health?.alive).toBe(false);
+  });
+
+  it('and a supervisor in trouble DOES release it to the tailnet base', async () => {
+    const r = make({
+      tunnelBaseUrl: () => NAMED,
+      tunnelWarning: () => 'the cloudflare tunnel has failed to start 5 times in a row',
+    });
+    reachable.delete(NAMED);
+    const got = await r.resolve({ probe: true });
+    expect(got.baseUrl).toBe(FUNNEL);
+    expect(got.durability).toBe('tailnet');
+  });
+
+  it('MUXPAD_PUBLIC_BASE_URL still outranks it, for a front end that is not cloudflared', async () => {
+    const env = 'https://artifacts.elsewhere.example';
+    reachable.add(env);
+    const r = make({ configuredBaseUrl: env, tunnelBaseUrl: () => NAMED });
+    expect(await r.resolve({ probe: true })).toMatchObject({ baseUrl: env, source: 'env' });
+  });
+});
+
 describe('the note says what is true for the link just handed over', () => {
   it('names the tailnet limit plainly, and the flag that escapes it', () => {
     const note = durabilityNote('tailnet');
