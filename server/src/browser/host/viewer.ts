@@ -179,11 +179,26 @@ img.addEventListener('load', () => { if (img.naturalWidth) { nw = img.naturalWid
 // image pixel -> page CSS pixel. nw is CACHED: naturalWidth is 0 for the
 // instant between assigning src and decoding, and a NaN coordinate reaches CDP
 // as a protocol error, so the tap is simply lost.
+/**
+ * A point on the picture → the same point on the page.
+ *
+ * EACH AXIS BY ITS OWN SCALE. This multiplied the vertical by the HORIZONTAL
+ * ratio, which is correct only while the frame's aspect matches the viewport's
+ * exactly — true most of the time, and silently wrong the moment it is not.
+ * Chrome caps screencast frames, and a capped or unusually tall page then put
+ * every tap above or below what was aimed at: measured, a tap meant for y=800
+ * landing at y=200.
+ *
+ * Falls back to the width ratio when the frame carries no height, because a tap
+ * mapped by the wrong axis is still closer than no tap at all.
+ */
 const pt = (e) => {
   const r = img.getBoundingClientRect()
   if (!nw || !r.width || !meta) return null
-  const scale = meta.deviceWidth / nw
-  return { x: (e.clientX - r.left) * (nw / r.width) * scale, y: (e.clientY - r.top) * (nh / r.height) * scale }
+  const across = (e.clientX - r.left) / r.width
+  const down = (e.clientY - r.top) / r.height
+  const deviceHeight = meta.deviceHeight || (meta.deviceWidth * nh) / nw
+  return { x: across * meta.deviceWidth, y: down * deviceHeight }
 }
 const mods = (e) => (e.altKey?1:0) | (e.ctrlKey?2:0) | (e.metaKey?4:0) | (e.shiftKey?8:0)
 
