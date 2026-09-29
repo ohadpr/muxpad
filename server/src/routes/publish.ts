@@ -14,8 +14,10 @@ import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import type { Funnel } from '../funnel.js';
 import {
+  type PublicBase,
   type PublicBaseResolver,
   createPublicBaseResolver,
+  durabilityNote,
   normalizeBaseUrl,
 } from '../public-base.js';
 import {
@@ -118,6 +120,33 @@ export { PUBLIC_BASE_URL_KEY, normalizeBaseUrl } from '../public-base.js';
 
 function publicDirOf(dataDir: string): string {
   return join(dataDir, 'public');
+}
+
+/**
+ * The base block every surface reports, built in ONE place so the CLI, the
+ * Hosted view and the publish response cannot describe the same base
+ * differently.
+ *
+ * `durability` and `note` are the fix for the defect this route was shipping
+ * silently: the response said `reachable: true` about a Cloudflare quick tunnel
+ * that would lose its hostname at the next restart, and nothing anywhere said
+ * the link had a shelf life. `note` is the human sentence; `durability` is the
+ * machine-readable half, so a caller can decide without string-matching.
+ *
+ * `localAsNull` because a loopback fallback is not a shareable link — the
+ * listing reports it as no link at all rather than something that looks
+ * copyable and isn't — while `PUT /base` echoes back exactly what it stored.
+ */
+function baseInfo(resolved: PublicBase, opts?: { localAsNull?: boolean }) {
+  const note = durabilityNote(resolved.durability);
+  return {
+    url: opts?.localAsNull !== false && resolved.source === 'local' ? null : resolved.baseUrl,
+    source: resolved.source,
+    reachable: resolved.health ? resolved.health.alive : null,
+    durability: resolved.durability,
+    ...(note ? { note } : {}),
+    ...(resolved.warning ? { warning: resolved.warning } : {}),
+  };
 }
 
 /**
@@ -488,6 +517,11 @@ export function publishRoutes(deps: {
           n,
           url: `${resolved.baseUrl}/${versionDirName(slug, n)}/`,
         })),
+        // The publish response is where the shelf life MUST be stated: it is the
+        // one moment a human is handed the link and is about to paste it
+        // somewhere permanent. Everything else is a place they go to look it up
+        // again, which already implies they suspect something.
+        base: baseInfo(resolved, { localAsNull: false }),
         ...(resolved.warning ? { warning: resolved.warning } : {}),
       },
       201,
@@ -552,12 +586,7 @@ export function publishRoutes(deps: {
     // the page silently useless.
     return c.json({
       publishes,
-      base: {
-        url: baseUrl,
-        source: resolved.source,
-        reachable: resolved.health ? resolved.health.alive : null,
-        ...(resolved.warning ? { warning: resolved.warning } : {}),
-      },
+      base: baseInfo(resolved),
     });
   });
 
@@ -582,10 +611,7 @@ export function publishRoutes(deps: {
     const probe = c.req.query('probe') !== '0';
     const resolved = await base.resolve({ probe });
     return c.json({
-      url: resolved.source === 'local' ? null : resolved.baseUrl,
-      source: resolved.source,
-      reachable: resolved.health ? resolved.health.alive : null,
-      ...(resolved.warning ? { warning: resolved.warning } : {}),
+      ...baseInfo(resolved),
       candidates: base.candidates(),
       // For `muxpad publish`, which must decide whether to exec `tailscale` in
       // its own shell BEFORE it posts. False means "I already know a base" —
@@ -611,12 +637,7 @@ export function publishRoutes(deps: {
       );
     base.setPinned(url);
     const resolved = await base.resolve({ probe: true });
-    return c.json({
-      url: resolved.baseUrl,
-      source: resolved.source,
-      reachable: resolved.health ? resolved.health.alive : null,
-      ...(resolved.warning ? { warning: resolved.warning } : {}),
-    });
+    return c.json(baseInfo(resolved, { localAsNull: false }));
   });
 
   app.delete('/base', async (c) => {

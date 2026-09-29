@@ -387,12 +387,15 @@ describe('the public base every link is built from', () => {
     const shown = (await (await req('/api/publish/base')).json()) as {
       url: string;
       source: string;
-      candidates: { url: string; source: string }[];
+      candidates: { url: string; source: string; durability: string }[];
     };
     expect(shown).toMatchObject({ url: TUNNEL, source: 'pinned' });
+    // Each candidate carries how long its ADDRESS lives: the pinned quick
+    // tunnel loses its hostname at the next restart, and the tailnet runner-up
+    // keeps its name forever but is only reachable from the tailnet.
     expect(shown.candidates).toEqual([
-      { url: TUNNEL, source: 'pinned' },
-      { url: FUNNEL, source: 'persisted' },
+      { url: TUNNEL, source: 'pinned', durability: 'ephemeral' },
+      { url: FUNNEL, source: 'persisted', durability: 'tailnet' },
     ]);
 
     const cleared = (await (await req('/api/publish/base', { method: 'DELETE' })).json()) as {

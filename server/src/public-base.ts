@@ -78,6 +78,27 @@ import { probeUrlHealth } from './url-health.js';
  * can see a client-side block. That is precisely why ORDER is configuration
  * rather than measurement — the probe only demotes the dead, it never promotes
  * the unreachable.
+ *
+ * AND WHAT NO PROBE CAN EVER CATCH — see {@link BaseDurability}
+ * -------------------------------------------------------------
+ * The probe answers "does this answer NOW". The failure that actually kills
+ * published links answers YES to that, right up until it doesn't: a Cloudflare
+ * quick tunnel is perfectly healthy for days and then, at one restart, its
+ * hostname is reassigned and every link ever built from it is dead forever.
+ * Measured here on 2026-09-27: one ptyd restart took out nine days of links.
+ *
+ * Health and durability are therefore BOTH carried on every answer, because
+ * they fail independently and a caller that knows only the first will keep
+ * handing out links with a shelf life and calling them permanent.
+ *
+ * THE ORDER IS NOT SORTED BY DURABILITY, deliberately. The durable candidate on
+ * this machine is the `*.ts.net` funnel url, and it is tailnet-only (verified:
+ * Funnel is off, so :8443 hangs the TLS handshake from off-tailnet). Promoting
+ * it would trade a link that works everywhere for a week for one that works
+ * nowhere but here, forever. A base that is durable AND public has to be
+ * CONFIGURED — a named tunnel or a domain in MUXPAD_PUBLIC_BASE_URL — which is
+ * why `env` has always been the top rung. Until then the honest move is to keep
+ * serving the ephemeral link and SAY that it is ephemeral.
  */
 
 /** globals-KV key holding the last base a publish DISCOVERED (hint/funnel). */
@@ -135,6 +156,83 @@ export type PublicBaseSource =
   | 'persisted'
   | 'local';
 
+/**
+ * HOW LONG THE ADDRESS LIVES — a different question from `health`, and the one
+ * this module had no answer for.
+ *
+ * `health` asks "does this answer right now". Durability asks "will a link built
+ * from this still work tomorrow". A quick tunnel scores perfectly on the first
+ * and catastrophically on the second, and because only the first was ever
+ * measured, `muxpad publish` printed nine days of links with a shelf life and
+ * said nothing.
+ *
+ * The measured incident: every artifact published 2026-09-19 → 2026-09-27 was
+ * printed under `search-particle-rules-ten.trycloudflare.com`. At 19:45 on the
+ * 27th ptyd restarted (a deploy — not a crash; that cloudflared had run eight
+ * days and exited zero times), serve-supervisor.ts rebuilt the tunnel pane,
+ * tunnel/run.ts spawned a fresh cloudflared, and Cloudflare minted a new random
+ * name. The old one went NXDOMAIN, permanently and at once. The bytes never
+ * moved — all 150 artifacts are still on disk and still served. Only the ADDRESS
+ * rotted, and every link anyone had been given rotted with it.
+ *
+ *   permanent  a real domain. Outlives restarts, reboots, reinstalls.
+ *   ephemeral  a Cloudflare QUICK tunnel. Dies at the next tunnel restart,
+ *              taking every link ever built from it. This is the defect.
+ *   tailnet    a `*.ts.net` name. Durable — but reachable only from a device on
+ *              the tailnet, so it is not a shareable public link. Verified
+ *              2026-09-28: Tailscale Funnel is NOT enabled on this node, so
+ *              :8443 accepts TCP at Tailscale's shared ingress and then hangs
+ *              the TLS handshake for anyone off-tailnet.
+ *   local      loopback. Already warned about separately.
+ *
+ * DERIVED FROM THE HOST, NEVER FROM THE SOURCE. A quick-tunnel name a human
+ * pinned by hand rots exactly as fast as one muxpad minted for itself — which is
+ * the 2026-08-30 incident, where a hand-pinned
+ * `part-anonymous-brilliant-resume.trycloudflare.com` outlived its process by
+ * nineteen days while every surface reported it as the public base.
+ */
+export type BaseDurability = 'permanent' | 'ephemeral' | 'tailnet' | 'local';
+
+export function baseDurability(url: string, source: PublicBaseSource): BaseDurability {
+  if (source === 'local') return 'local';
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase().replace(/\.$/, '');
+  } catch {
+    return 'permanent';
+  }
+  if (isLoopbackHost(host)) return 'local';
+  // Suffix-with-a-dot, never a substring: `trycloudflare.com.evil.test` and
+  // `notts.net` are neither.
+  if (host.endsWith('.trycloudflare.com')) return 'ephemeral';
+  if (host.endsWith('.ts.net')) return 'tailnet';
+  return 'permanent';
+}
+
+/**
+ * The one line a human needs when the base they were just handed will not keep,
+ * or null when it will. Written here rather than in the CLI because three
+ * surfaces print it (publish output, `--base`, the Hosted view) and they must
+ * not drift.
+ */
+export function durabilityNote(d: BaseDurability): string | null {
+  if (d === 'ephemeral')
+    return 'this is a Cloudflare quick tunnel — its hostname is randomly reassigned every time the tunnel restarts, and every link built from it dies at that moment. `muxpad publish --url <slug>` reprints a live link for an artifact whose link has gone dead.';
+  if (d === 'tailnet')
+    // Deliberately hedged rather than flat. Whether a `*.ts.net:8443` address
+    // answers the public internet depends on Tailscale FUNNEL being enabled for
+    // this node, and the only way to know that server-side is to exec the
+    // Tailscale CLI — which on this machine lives inside the app bundle and
+    // costs a macOS "access data from other apps" prompt (see tailscale-bin.ts).
+    // Measured here on 2026-09-28, Funnel is OFF: the shared ingress accepts the
+    // TCP connection and then never completes the TLS handshake for anyone
+    // off-tailnet, so the link looks fine from the machine that published it and
+    // hangs for everybody else. That is precisely the failure that must not be
+    // asserted either way without checking.
+    return 'this is a Tailscale address on :8443 — it reaches the public internet only if Funnel is enabled for this node, and :8443 is blocked outbound on many networks even then. Open it from a device that is NOT on your tailnet before sharing it.';
+  return null;
+}
+
 export interface PublicBase {
   /** Base to prefix slugs with, no trailing slash. */
   baseUrl: string;
@@ -144,6 +242,8 @@ export interface PublicBase {
   warning?: string;
   /** Reachability of `baseUrl`, when probed. null = not probed. */
   health: UrlHealth | null;
+  /** Whether a link built from `baseUrl` will still work tomorrow. */
+  durability: BaseDurability;
 }
 
 /**
@@ -178,6 +278,9 @@ function isLoopbackHost(host: string): boolean {
 export interface PublicBaseCandidate {
   url: string;
   source: PublicBaseSource;
+  /** Carried per-candidate so `muxpad publish --base` can show, in one table,
+   *  that the winner is ephemeral and the runner-up is tailnet-only. */
+  durability: BaseDurability;
 }
 
 export interface PublicBaseDeps {
@@ -265,7 +368,7 @@ export function createPublicBaseResolver(deps: PublicBaseDeps): PublicBaseResolv
       const url = normalizeBaseUrl(raw);
       if (!url) return;
       if (out.some((c) => c.url === url)) return; // first source for a url wins
-      out.push({ url, source });
+      out.push({ url, source, durability: baseDurability(url, source) });
     };
     add(deps.configuredBaseUrl, 'env');
     add(globals.get(PUBLIC_BASE_PINNED_KEY), 'pinned');
@@ -356,7 +459,11 @@ export function createPublicBaseResolver(deps: PublicBaseDeps): PublicBaseResolv
       const viaTailnet = normalizeBaseUrl(await tailnetBase());
       if (viaTailnet) {
         globals.set(PUBLIC_BASE_URL_KEY, viaTailnet);
-        list.push({ url: viaTailnet, source: 'tailnet' });
+        list.push({
+          url: viaTailnet,
+          source: 'tailnet',
+          durability: baseDurability(viaTailnet, 'tailnet'),
+        });
       } else if (!attemptIsFresh()) {
         // Only now is an exec worth its cost — and it is the ONLY tier that can
         // CREATE a Funnel mapping rather than merely name one.
@@ -380,7 +487,7 @@ export function createPublicBaseResolver(deps: PublicBaseDeps): PublicBaseResolv
           const url = normalizeBaseUrl(discovered.baseUrl);
           if (url) {
             globals.set(PUBLIC_BASE_URL_KEY, url);
-            list.push({ url, source: 'funnel' });
+            list.push({ url, source: 'funnel', durability: baseDurability(url, 'funnel') });
           }
         }
       }
@@ -390,6 +497,7 @@ export function createPublicBaseResolver(deps: PublicBaseDeps): PublicBaseResolv
       return {
         baseUrl: discoveredLocal ?? `http://127.0.0.1:${deps.publicPort}`,
         source: 'local',
+        durability: 'local',
         // Most specific explanation first. A tunnel that keeps dying is the
         // reason there is no base, and saying so (with the command that shows
         // its logs) beats both the funnel's complaint and our generic one.
@@ -403,7 +511,12 @@ export function createPublicBaseResolver(deps: PublicBaseDeps): PublicBaseResolv
 
     if (!opts?.probe) {
       const first = list[0] as PublicBaseCandidate;
-      return { baseUrl: first.url, source: first.source, health: null };
+      return {
+        baseUrl: first.url,
+        source: first.source,
+        health: null,
+        durability: first.durability,
+      };
     }
 
     // Probe in order and take the first that answers. Dead candidates are
@@ -428,12 +541,22 @@ export function createPublicBaseResolver(deps: PublicBaseDeps): PublicBaseResolv
       // ...UNLESS the supervisor is itself reporting trouble. Its distress
       // signal is the one thing that can revoke this trust, because it is the
       // same source the trust came from — not a probe second-guessing it.
+      //
+      // MEASURED ANYWAY, AND THAT IS NOT A CONTRADICTION. "Do not RANK on the
+      // probe" was previously implemented as "do not RUN the probe", and those
+      // are different promises. The cost of conflating them was that
+      // `muxpad publish --base` reported `reachable: not checked` for the one
+      // candidate the user most wanted checked — every published link is built
+      // from it. So the probe runs and its result is REPORTED; the return is
+      // unconditional either way, which is the whole of the guarantee above.
       if (c.source === 'tunnel' && !deps.tunnelWarning?.()) {
-        return { baseUrl: c.url, source: c.source, health: null };
+        const health = await reach(c.url);
+        return { baseUrl: c.url, source: c.source, health, durability: c.durability };
       }
       const health = await reach(c.url);
       firstHealth ??= health;
-      if (health.alive) return { baseUrl: c.url, source: c.source, health };
+      if (health.alive)
+        return { baseUrl: c.url, source: c.source, health, durability: c.durability };
     }
     // Nothing answered. Return the top candidate anyway — it is still the
     // user's stated intent, and a loopback url would be actively misleading —
@@ -451,6 +574,7 @@ export function createPublicBaseResolver(deps: PublicBaseDeps): PublicBaseResolv
         ? `${first.url} is not answering — ${tunnelTrouble}`
         : `${first.url} is not answering — the tunnel may be down. The link may not work for anyone else.`,
       health: firstHealth,
+      durability: first.durability,
     };
   };
 

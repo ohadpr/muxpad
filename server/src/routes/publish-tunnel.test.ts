@@ -158,6 +158,53 @@ describe('publish tunnel routes', () => {
     expect(got.record?.url).toBe(FIRST);
   });
 
+  /**
+   * THE ACTUAL DEFECT, at the surface where it was shipped.
+   *
+   * Every link published between 2026-09-19 and 2026-09-27 was printed under
+   * one quick-tunnel hostname and died together when ptyd restarted on the
+   * 27th. At no point did any response say the link had a shelf life — the
+   * publish returned `reachable: true` and a url, which is precisely what a
+   * permanent link looks like.
+   */
+  it('the publish response says the link is EPHEMERAL, at the moment it hands it over', async () => {
+    await ensure();
+    await announce(FIRST, paneOfTunnel());
+    const res = await test.app.request('/api/publish', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: srcDir, name: 'report' }),
+    });
+    const body = (await res.json()) as {
+      url: string;
+      base: { durability: string; note?: string; source: string };
+    };
+    expect(body.url).toBe(`${FIRST}/report/`);
+    expect(body.base.source).toBe('tunnel');
+    expect(body.base.durability).toBe('ephemeral');
+    expect(body.base.note).toContain('quick tunnel');
+    // And it names the recovery, because the artifact outlives the address:
+    // the bytes are still on disk under the slug long after the host is gone.
+    expect(body.base.note).toContain('muxpad publish --url');
+  });
+
+  it('measures the tunnel it serves, instead of reporting "not checked"', async () => {
+    await ensure();
+    await announce(FIRST, paneOfTunnel());
+    const base = (await (await test.app.request('/api/publish/base')).json()) as {
+      source: string;
+      reachable: boolean | null;
+      durability: string;
+    };
+    expect(base.source).toBe('tunnel');
+    expect(base.durability).toBe('ephemeral');
+    // No cloudflared in a test, so the probe genuinely fails — the assertion is
+    // that an ANSWER is reported, and that a failed probe still does not unseat
+    // the tunnel (see public-base.ts: a false negative would swap a working
+    // public link for a blocked :8443 one).
+    expect(base.reachable).not.toBeNull();
+  });
+
   it('surfaces a tunnel that keeps failing on the base every surface reads', async () => {
     await test.app.request('/api/publish/tunnel', {
       method: 'DELETE',

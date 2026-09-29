@@ -158,7 +158,14 @@ describe('scripts/muxpad HTTP wrapper', () => {
       encoding: 'utf-8',
     });
     expect(first.stdout.trim()).toBe('https://stub-host.ts.net:8443/cli-hint/');
-    expect(first.stderr).toBe(''); // no warning — the URL is public
+    // stdout stays JUST the url, so `$(muxpad publish …)` keeps working — the
+    // caveat goes to stderr. And there IS a caveat: this assertion used to read
+    // `stderr === ''` with the comment "no warning — the URL is public", which
+    // is not a thing the server can know. A `*.ts.net:8443` address is public
+    // only if Tailscale Funnel is enabled, and on the machine that runs muxpad
+    // it is not (verified 2026-09-28: TLS never completes from off-tailnet).
+    expect(first.stderr).toContain('Funnel is enabled');
+    expect(first.stderr).toContain(':8443');
     const logged = readFileSync(stubLog, 'utf-8');
     expect(logged).toContain('funnel --bg --https=8443 http://127.0.0.1:7799');
     expect(logged).toContain('status --json');
@@ -171,7 +178,7 @@ describe('scripts/muxpad HTTP wrapper', () => {
       encoding: 'utf-8',
     });
     expect(second.stdout.trim()).toBe('https://stub-host.ts.net:8443/cli-fallback/');
-    expect(second.stderr).toBe('');
+    expect(second.stderr).toContain('Funnel is enabled');
 
     // Phase 3: THE BUG. tailscale is available again, and the CLI must still
     // not run it — the server already has a base, so the hint could only
@@ -192,6 +199,57 @@ describe('scripts/muxpad HTTP wrapper', () => {
     });
     expect(third.stdout.trim()).toBe('https://stub-host.ts.net:8443/cli-cached/');
     expect(existsSync(quietLog), 'publish execed tailscale despite a known base').toBe(false);
+  });
+
+  /**
+   * RECOVERING A LINK WHOSE HOSTNAME IS GONE.
+   *
+   * On 2026-09-27 at 19:45 a ptyd restart rebuilt the tunnel pane, cloudflared
+   * was handed a new random hostname, and every link published in the preceding
+   * nine days went NXDOMAIN at once — in chat transcripts, in reports, in
+   * anything anyone had been sent. The bytes were never touched: all 150
+   * artifacts were still on disk under slugs that had not moved.
+   *
+   * So the dead link is not lost information, it is a stale prefix on a live
+   * slug, and recovering it is mechanical. `--url` does the mechanical part,
+   * taking the dead URL WHOLE because that is the form the user has.
+   */
+  describe('publish --url reprints a link for an artifact whose address rotted', () => {
+    const env = () => ({ ...process.env, MUXPAD_API_URL: `http://127.0.0.1:${port}` });
+
+    it('accepts a bare slug', async () => {
+      const src = join(tmp, 'recover.html');
+      writeFileSync(src, '<html>recover</html>');
+      await execFileAsync(MUXPAD_BIN, ['publish', src, '--name=recoverable'], {
+        env: env(),
+        encoding: 'utf-8',
+      });
+      const { stdout } = await execFileAsync(MUXPAD_BIN, ['publish', '--url', 'recoverable'], {
+        env: env(),
+        encoding: 'utf-8',
+      });
+      expect(stdout.trim()).toMatch(/\/recoverable\/$/);
+    });
+
+    it('accepts the whole dead URL and reads the slug out of its path', async () => {
+      const dead = 'https://search-particle-rules-ten.trycloudflare.com/recoverable/';
+      const { stdout } = await execFileAsync(MUXPAD_BIN, ['publish', '--url', dead], {
+        env: env(),
+        encoding: 'utf-8',
+      });
+      expect(stdout.trim()).toMatch(/\/recoverable\/$/);
+      // The whole point: the answer is NOT the host it was handed.
+      expect(stdout).not.toContain('search-particle-rules-ten');
+    });
+
+    it('fails readably on a slug that was never published', async () => {
+      await expect(
+        execFileAsync(MUXPAD_BIN, ['publish', '--url', 'no-such-artifact'], {
+          env: env(),
+          encoding: 'utf-8',
+        }),
+      ).rejects.toMatchObject({ stderr: expect.stringContaining('no artifact named') });
+    });
   });
 
   it('a COLD publish prefers the no-exec PTR name over execing tailscale', async () => {

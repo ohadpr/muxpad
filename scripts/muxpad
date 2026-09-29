@@ -2527,6 +2527,28 @@ tailnet_hostname() {
   return 0
 }
 
+# Say it, when the link being handed over will not keep.
+#
+# THE DEFECT THIS CLOSES. `muxpad publish` printed a URL on stdout and nothing
+# else. On this machine that URL is a Cloudflare QUICK tunnel, whose hostname is
+# randomly reassigned every time the tunnel restarts — so every link printed
+# between 2026-09-19 and 2026-09-27 died together at 19:45 on the 27th, when a
+# ptyd restart rebuilt the tunnel pane. Nothing crashed and nothing was
+# misconfigured; that cloudflared ran eight days and exited zero times. The
+# links were simply handed out as permanent when they were not.
+#
+# STDERR, never stdout. `muxpad publish` documents stdout as JUST the url so it
+# can be piped, and a caveat that breaks `$(muxpad publish …)` would be a worse
+# bug than the one it warns about.
+base_note_line() {
+  local json="${1:-}" note
+  [ -z "$json" ] && return 0
+  note="$(printf '%s' "$json" | jq -r '.note // empty' 2>/dev/null || true)"
+  [ -z "$note" ] && return 0
+  printf '%smuxpad: %s%s\n' "$C_DIM" "$note" "$C_RESET" >&2
+  return 0
+}
+
 publish_base_url() {
   # probe=0: this is a pure DB question, and the probing variant walks every
   # candidate at up to 2.5s each — a dead tunnel would blow the 2s budget below,
@@ -2577,6 +2599,7 @@ cmd_publish() {
   local mode=publish
   local rest=()
   local set_base=''
+  local want_url=''
   local a
   while [ $# -gt 0 ]; do
     a="$1"
@@ -2584,6 +2607,25 @@ cmd_publish() {
       --list) mode=list ;;
       --base) mode=base ;;
       --clear-base) mode=clear-base ;;
+      # `--url <slug-or-dead-link>` — REPRINT a live link for something already
+      # published. The recovery path for the failure that motivated it: a
+      # Cloudflare quick tunnel's hostname is randomly reassigned on every
+      # restart, so every link handed out under the old name goes NXDOMAIN at
+      # once, permanently. The BYTES are untouched — they are a directory under
+      # `<dataDir>/public/<slug>` and the slug never changes — so the dead link
+      # is not lost information, it is a stale prefix on a live slug.
+      #
+      # Takes a whole dead URL as well as a bare slug, because that is the form
+      # the user actually has: it is sitting in a chat log or a report, and
+      # asking them to parse the slug out of it by hand is asking them to do the
+      # one mechanical step a script is for.
+      --url=*) mode=url; want_url="${a#--url=}" ;;
+      --url)
+        shift
+        want_url="${1:-}"
+        [ -z "$want_url" ] && { echo 'muxpad publish: --url requires a slug or a dead link' >&2; exit 1; }
+        mode=url
+        ;;
       --set-base=*) set_base="${a#--set-base=}" ;;
       --set-base)
         shift
@@ -2633,13 +2675,54 @@ cmd_publish() {
     printf '%s' "$res" | jq -r '
       "  base:      \(.url // "(none — links would be local-only)")",
       "  from:      \(.source)",
+      "  keeps:     \(
+         if .durability == "ephemeral" then "NO — dies at the next tunnel restart"
+         elif .durability == "tailnet" then "only on your tailnet, unless Funnel is on"
+         elif .durability == "local"   then "no — loopback, never shareable"
+         elif .durability == "permanent" then "yes"
+         # An older daemon that predates this field. "yes" would be the one
+         # answer that is unsafe to guess, since the whole point is that an
+         # ephemeral base looks exactly like a permanent one.
+         else "unknown (daemon predates this field)" end)",
       "  reachable: \(if .reachable == null then "not checked" else .reachable end)"
     '
+    local n
+    n="$(printf '%s' "$res" | jq -r '.note // empty')"
+    [ -n "$n" ] && printf '  %snote:      %s%s\n' "$C_DIM" "$n" "$C_RESET"
     local w
     w="$(printf '%s' "$res" | jq -r '.warning // empty')"
     [ -n "$w" ] && printf '  %swarning:   %s%s\n' "$C_DIM" "$w" "$C_RESET"
     printf '  %scandidates (highest first):%s\n' "$C_DIM" "$C_RESET"
-    printf '%s' "$res" | jq -r '.candidates[] | "    \(.source)\t\(.url)"'
+    printf '%s' "$res" | jq -r '.candidates[] | "    \(.source)\t\(.durability // "?")\t\(.url)"'
+    return
+  fi
+
+  # `--url <slug-or-dead-link>` — the recovery verb. See the flag parser above.
+  if [ "$mode" = "url" ]; then
+    # Accept a whole URL and keep only its first path segment; a bare slug falls
+    # through both substitutions unchanged. Also tolerates a `@N` version suffix
+    # so a link to `/report@2/` resolves back to `report`.
+    local slug="$want_url"
+    slug="${slug#*://}"          # drop scheme
+    case "$slug" in */*) slug="${slug#*/}" ;; *) slug='' ;; esac
+    [ -z "$slug" ] && slug="$want_url"
+    slug="${slug%%/*}"           # first path segment only
+    slug="${slug%%\?*}"          # …without a query
+    local res found
+    res="$(http_request GET /api/publish)"
+    found="$(printf '%s' "$res" | jq -r --arg s "${slug%%@*}" \
+      '(.publishes[]? | select(.slug == $s) | .url) // empty')"
+    if [ -z "$found" ] || [ "$found" = "null" ]; then
+      printf 'muxpad publish: no artifact named %s — `muxpad publish --list` shows what is here\n' \
+        "${slug%%@*}" >&2
+      exit 1
+    fi
+    # A version suffix survives the round trip: `--url .../report@2/` answers
+    # with the CURRENT link to that same version, not to the live one.
+    case "$slug" in
+      *@*) printf '%s\n' "${found%/"${slug%%@*}"/}/${slug}/" ;;
+      *) printf '%s\n' "$found" ;;
+    esac
     return
   fi
 
@@ -2650,12 +2733,17 @@ cmd_publish() {
       printf '%s\n' "$res"
       return
     fi
+    # The URL column is the point of the listing, not decoration: when a
+    # quick-tunnel hostname rotates, every link the user is holding is dead and
+    # this table is where the live ones are. It was printing everything about an
+    # artifact EXCEPT how to open it.
     print_table "$(printf '%s' "$res" | jq '.publishes')" \
       'SLUG:.slug' \
       'FILES:(.files | tostring)' \
-      'BYTES:(.bytes | tostring)' \
       'VERS:((.versions // []) | length | tostring)' \
-      'CREATED:(.created / 1000 | strflocaltime("%Y-%m-%d %H:%M"))'
+      'CREATED:(.created / 1000 | strflocaltime("%Y-%m-%d %H:%M"))' \
+      'URL:(.url // "—")'
+    base_note_line "$(printf '%s' "$res" | jq -c '.base')"
     return
   fi
 
@@ -2678,7 +2766,7 @@ cmd_publish() {
 
   local src="${POSITIONAL[0]:-}"
   if [ -z "$src" ]; then
-    echo 'usage: muxpad publish <file-or-dir> [--name=slug | --update=slug] | --list | --rm <slug>' >&2
+    echo 'usage: muxpad publish <file-or-dir> [--name=slug | --update=slug] | --list | --url <slug> | --rm <slug>' >&2
     exit 1
   fi
   # The server requires an absolute path — resolve relative ones here.
@@ -2703,6 +2791,9 @@ cmd_publish() {
   local warning
   warning="$(printf '%s' "$res" | jq -r '.warning // empty')"
   [ -n "$warning" ] && printf '%smuxpad: %s%s\n' "$C_DIM" "$warning" "$C_RESET" >&2
+  # The shelf life of the link about to be printed. This is the moment it
+  # matters: the user is about to paste it somewhere permanent.
+  base_note_line "$(printf '%s' "$res" | jq -c '.base // empty')"
   # stdout is JUST the URL — script-friendly.
   printf '%s' "$res" | jq -r '.url'
 }
@@ -3157,8 +3248,16 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      identical slug. Run `publish --list` first
                                      and reuse the slug when updating the same
                                      thing.
-  publish --list                     list published artifacts (slug, files,
-                                     bytes, versions, created)
+  publish --list                     list published artifacts, with the CURRENT
+                                     link for each (slug, files, versions,
+                                     created, url)
+  publish --url <slug-or-dead-link>  reprint a live link for something already
+                                     published. The bytes outlive the address:
+                                     when a quick tunnel restarts it is handed a
+                                     new random hostname and every link given
+                                     out under the old one goes dead, but the
+                                     slug never moves. Paste the dead URL in
+                                     whole — the slug is read out of its path.
   publish --rm <slug>                unpublish, versions included (the funnel
                                      stays up; run
                                      `tailscale funnel --https=8443 off` to

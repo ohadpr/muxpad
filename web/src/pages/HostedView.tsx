@@ -141,14 +141,20 @@ function BaseNote({ base }: { base: PublicBaseInfo }) {
   // `reachable === false` is the loud case: something IS configured and it is
   // not answering, so every Copy link on this page is handing out a dead URL.
   const bad = base.reachable === false;
+  // The QUIET case, and the one that actually cost nine days of links: a
+  // Cloudflare quick tunnel reports `reachable: true` right up until the
+  // restart that reassigns its hostname, at which point every Copy link on this
+  // page is dead forever. Not styled as an error — it is working — but the page
+  // must not present it as a permanent address, because it looks like one.
+  const ephemeral = base.durability === 'ephemeral';
   return (
     <span
       className={`hosted-base${bad ? ' hosted-base-bad' : ''}`}
-      title={base.warning ?? `Links are built from ${base.url} (${base.source})`}
+      title={base.note ?? base.warning ?? `Links are built from ${base.url} (${base.source})`}
     >
       {bad ? '⚠ ' : ''}
       {host}
-      {bad ? ' not answering' : ''}
+      {bad ? ' not answering' : ephemeral ? ' · temporary' : ''}
     </span>
   );
 }
