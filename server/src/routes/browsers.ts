@@ -319,14 +319,14 @@ export function browsersRoutes(deps: {
     if (already) return c.json({ ok: true, events: events.list(profile) }, 200);
 
     const tabId = owner.get(profile);
-    const state = find(profile);
-    const bytes = state ? await fetchShot(state) : null;
-    const moment = events.record(profile, {
+    // NO PICTURE HERE. A still taken now is the FIRST page the agent visited,
+    // and the only card that would ever show it is the one for a browser that
+    // has since closed — where the first page dressed as the last is a lie. The
+    // browser photographs itself on the way out instead; see /:profile/closing.
+    events.record(profile, {
       kind: 'opened',
       ...(tabId ? { tabId } : {}),
-      ...(bytes ? { shot: true } : {}),
     });
-    if (bytes) saveBrowserShot(deps.dataDir, profile, moment.at, bytes);
     return c.json({ ok: true, events: events.list(profile) }, 201);
   });
 
@@ -359,6 +359,29 @@ export function browsersRoutes(deps: {
    * a picture, which is what it did before these existed. Immutable once
    * written — the moment is in the past — so it is worth caching hard.
    */
+  /**
+   * THE LAST THING IT WAS LOOKING AT. Posted by the host on its way out.
+   *
+   * A still captured when the browser OPENED shows the first page it visited,
+   * and putting that on the card for a closed browser presents the beginning as
+   * the end — confidently wrong, which is worse than no picture at all. So the
+   * browser photographs itself as it shuts down and the newest moment adopts it.
+   *
+   * Best-effort by nature: a browser that is killed rather than asked to stop
+   * never gets here, and its card simply has no picture.
+   */
+  app.post('/:profile/closing', async (c) => {
+    const profile = profileParam(c.req.param('profile'));
+    if (!profile) return c.json({ error: 'invalid profile name' }, 400);
+    const moment = events.newestMoment(profile);
+    if (!moment) return c.json({ ok: true, attached: false });
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    if (!saveBrowserShot(deps.dataDir, profile, moment.at, bytes)) {
+      return c.json({ ok: true, attached: false });
+    }
+    return c.json({ ok: true, attached: events.attachShot(profile, moment.at) });
+  });
+
   app.get('/:profile/shot/:at', async (c) => {
     const profile = profileParam(c.req.param('profile'));
     const at = Number(c.req.param('at'));

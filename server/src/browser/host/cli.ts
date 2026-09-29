@@ -46,7 +46,12 @@ console.log(`browser host ready · viewer ${host.url} · cdp ${host.cdpUrl}`);
 // the profile lock — the next start would then fail with a lock error that
 // looks nothing like its cause.
 let closing = false;
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+// SIGHUP IS THE ONE THAT ACTUALLY ARRIVES. A pane is killed with SIGHUP —
+// PaneRuntime.kill defaults to it — so `muxpad app stop`, a face change and a
+// supervisor restart all reach this process that way and none of them reached
+// this handler. Everything the shutdown path does was therefore dead code in
+// the ordinary case: the profile left dirty, and no last picture for the card.
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
   process.on(signal, () => {
     if (closing) return;
     closing = true;

@@ -100,3 +100,44 @@ describe('clearing', () => {
     expect(events.list('shopping')).toEqual([]);
   });
 });
+
+describe('a picture that arrives after the moment did', () => {
+  /**
+   * The browser photographs itself on the way OUT, so the card for a closed one
+   * shows the last page it was on. A still captured when it opened would show
+   * the first page it visited, presented as what it did — which is worse than no
+   * picture, because it is confidently wrong.
+   */
+  it('marks the moment it belongs to', () => {
+    const m = events.record('shopping', { kind: 'opened', tabId: 'tab-1' });
+    expect(events.attachShot('shopping', m.at)).toBe(true);
+    expect(events.list('shopping')[0]?.shot).toBe(true);
+  });
+
+  it('says no when there is no such moment, rather than inventing one', () => {
+    events.record('shopping', { kind: 'opened' });
+    expect(events.attachShot('shopping', 999)).toBe(false);
+  });
+
+  it('leaves the other moments alone', () => {
+    const first = events.record('shopping', { kind: 'opened', tabId: 'tab-1' });
+    now += 10;
+    events.record('shopping', { kind: 'needs-you', reason: 'log in', tabId: 'tab-1' });
+    events.attachShot('shopping', first.at);
+    expect(events.list('shopping')[1]?.shot).toBeUndefined();
+  });
+
+  it('finds the newest moment, ignoring bookkeeping', () => {
+    // `resolved` is not a card, so it is not something to illustrate.
+    events.record('shopping', { kind: 'opened', tabId: 'tab-1' });
+    now += 5;
+    const ask = events.record('shopping', { kind: 'needs-you', reason: 'log in' });
+    now += 5;
+    events.record('shopping', { kind: 'resolved' });
+    expect(events.newestMoment('shopping')?.at).toBe(ask.at);
+  });
+
+  it('has no newest moment when nothing has happened', () => {
+    expect(events.newestMoment('quiet')).toBeNull();
+  });
+});
