@@ -67,3 +67,22 @@ describe('clearing up after a reaped session', () => {
     expect(isDisposableSessionProfile('s-')).toBe(false);
   });
 });
+
+describe('a chat you have archived is a chat you have finished with', () => {
+  /**
+   * The reaper asked which tabs EXIST. Archiving keeps the row — it is how you
+   * finish with a chat, and what the sidebar swipe does — so an archived chat's
+   * browser was counted as wanted forever. Measured on a real machine before
+   * this: 45 archived chats holding 45 browsers and 418 MB, seven still running
+   * Chrome.
+   */
+  it('reaps a browser whose chat has been archived', () => {
+    // The caller passes only LIVE tabs, so an archived one is simply absent —
+    // this is the rule that absence now means archived as well as deleted.
+    expect(sessionBrowsersToReap([{ profile: 's-abc' }], new Set(['other']))).toEqual(['s-abc']);
+  });
+
+  it('keeps one whose chat is still open', () => {
+    expect(sessionBrowsersToReap([{ profile: 's-abc' }], new Set(['ABC']))).toEqual([]);
+  });
+});

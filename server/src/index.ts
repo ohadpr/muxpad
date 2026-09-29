@@ -50,7 +50,7 @@ import { TabStore } from './store/TabStore.js';
 import { openDb } from './store/db.js';
 import { TabActivity } from './tab-activity.js';
 import { ChatClockSweeper } from './tab-clock.js';
-import { ChatRetirer, clearReadyMarks } from './tab-retire.js';
+import { ChatRetirer, clearReadyMarks, reconcileDeadChats } from './tab-retire.js';
 import { tailnetHostname } from './tailnet-hostname.js';
 import { clearOrphanedTunnelBase, ensureTunnelApp } from './tunnel/TunnelApp.js';
 import { readNamedTunnel } from './tunnel/named.js';
@@ -206,6 +206,14 @@ clockSweeper.start();
 // one difference: cron closes the tab, this one retires it.
 const chatRetirer = new ChatRetirer(retireDeps);
 chatRetirer.start();
+
+// …AND A SUB-CHAT WHOSE RUNNER DIED retires too, which turn-end cannot do for
+// it: three workers killed by the ptyd bug kept `retired_at IS NULL` for hours
+// and read as running. The one repair nothing live can reach — a retired chat
+// whose round was left open, which every hand-archive produced — is done once,
+// here, before anything is served. Its note carries the argument for what is
+// deliberately NOT swept at boot (a runner absent at boot is not a dead one).
+reconcileDeadChats(retireDeps);
 
 // An EXPLICIT app-url declaration (`muxpad app-url` / `muxpad serve` — the
 // OSC marker, not the output-scan heuristic) is the "this pane is a web app"
@@ -521,6 +529,11 @@ const wsServer = attachWsServer({
   notifyPane,
   // A wall-clock-billed call must not outlive the chat view that started it.
   onChatPresence: (paneId, clients) => voice.noteChatPresence(paneId, clients),
+  // The dead-runner sweep GAVE UP on a pane: end its sub-chat's lifecycle too.
+  // The sweep is the only thing that knows a runner is gone for good rather
+  // than for the moment — it has spent three respawns and a ptyd probe getting
+  // there — and nothing consumed that verdict before this line.
+  onRunnerDead: (paneId) => chatRetirer.onRunnerDead(paneId),
   // Resolve /browser/<profile>/ws to the host's loopback socket, so the viewer
   // stream rides muxpad's tailnet origin and its upgrade guard.
   browserViewerSocket: (pathname) => {
@@ -654,9 +667,19 @@ void (async () => {
 const REAP_EVERY_MS = 5 * 60 * 1000;
 const reapSessionBrowsers = async () => {
   try {
+    // ARCHIVED COUNTS AS GONE. A chat you have finished with is finished with,
+    // and archiving is the ordinary way to say so — it is what the swipe does.
+    // Counting a retired tab as live meant its browser, its profile directory,
+    // its moments and its stills all survived forever: measured on this machine,
+    // 45 archived chats holding 45 browsers and 418 MB, seven of them still
+    // running Chrome.
+    //
+    // Reviving an archived chat is a message away, and a browser that comes back
+    // starts warm from the shared jar — so nothing worth keeping is lost by
+    // letting it go.
     const live = new Set(
       db
-        .prepare('SELECT id FROM tabs')
+        .prepare('SELECT id FROM tabs WHERE retired_at IS NULL')
         .all()
         .map((r) => String((r as { id: string }).id)),
     );
