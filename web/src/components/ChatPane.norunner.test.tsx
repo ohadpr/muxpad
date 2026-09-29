@@ -53,4 +53,55 @@ describe('a chat with no runner', () => {
     // The retry stays available — the failure is not a dead end.
     expect(out).toContain('Start agent');
   });
+
+  /**
+   * ─── "NO AGENT YET" MUST NOT STAND IN FOR "THE AGENT FAILED TO START" ─────
+   *
+   * The user's report was that a new chat never starts its agent, and what they
+   * saw was the neutral screen above: "Nothing running here · This chat has no
+   * agent yet · [Start agent]". Every word of it describes a STEADY STATE, and
+   * it was being printed over a create whose pty spawn had failed seconds
+   * earlier and been swallowed. So the screen asked them to press a button to
+   * do the thing creating the chat was supposed to have done, and said nothing
+   * about what had gone wrong — the silence was the bug, and this copy was the
+   * face of it.
+   *
+   * The neutral wording STAYS for a pane that genuinely has no runner (a
+   * converted terminal, a pane whose agent was killed). `failed` is what stops
+   * it covering for a failure. Same verb, same button: the fix is the same, so
+   * only the sentences change.
+   */
+  describe('when the server knows the agent FAILED to start', () => {
+    const reason = 'cannot start the pty: posix_spawnp failed';
+    const failed = () =>
+      html(<ChatNoRunner busy={false} error={reason} failed={true} onStart={() => {}} />);
+
+    it('says it could not start, not that it has none yet', () => {
+      const out = failed();
+      expect(out).toContain('could not start');
+      // THE SENTENCE THAT WAS THE LIE. Its absence here is the assertion.
+      expect(out).not.toContain('no agent yet');
+      expect(out).not.toContain('Nothing running here');
+    });
+
+    it('names the reason, in the words of whatever refused', () => {
+      expect(failed()).toContain('posix_spawnp failed');
+    });
+
+    it('offers a retry, labelled as one', () => {
+      const out = failed();
+      expect(out).toMatch(/<button[^>]*>Try again<\/button>/);
+    });
+
+    it('is byte-identical to the neutral state when NOT failed', () => {
+      // The flag is the only difference, so a pane that merely has no runner
+      // cannot drift into the failure copy by accident.
+      const neutral = html(<ChatNoRunner busy={false} error={null} onStart={() => {}} />);
+      const explicit = html(
+        <ChatNoRunner busy={false} error={null} failed={false} onStart={() => {}} />,
+      );
+      expect(explicit).toBe(neutral);
+      expect(neutral).toContain('This chat has no agent yet');
+    });
+  });
 });
