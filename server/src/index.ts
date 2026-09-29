@@ -200,12 +200,19 @@ const clockSweeper = new ChatClockSweeper(db, (tabId, { announce }) => {
 });
 clockSweeper.start();
 
-// A SUB-CHAT retires the moment its work lands back in its parent. Subscribed
-// to the same `agent_turn` the cron scheduler watches, with cron's own
-// keep-list (fatal / a pending question / an artifact / more queued work), and
-// one difference: cron closes the tab, this one retires it.
+// A SUB-CHAT retires once its work has LANDED back in its parent and it has
+// stayed quiet — not the moment a turn ends, which is a thing a running job
+// does several times. Subscribed to the same `agent_turn` the cron scheduler
+// watches, with cron's own keep-list (fatal / a pending question / an artifact
+// / more queued work), and one difference: cron closes the tab, this retires
+// it.
 const chatRetirer = new ChatRetirer(retireDeps);
 chatRetirer.start();
+// A settle is an in-memory timer, so a worker that finished within one window
+// of a restart lost its retirement to the restart and has no turn left to
+// re-arm it. Arming is not deciding — everything is re-read when it fires, and
+// a reconnecting runner disarms it.
+chatRetirer.armLiveSubChats();
 
 // …AND A SUB-CHAT WHOSE RUNNER DIED retires too, which turn-end cannot do for
 // it: three workers killed by the ptyd bug kept `retired_at IS NULL` for hours

@@ -69,7 +69,7 @@ import { AgentQueueStore } from './store/AgentQueueStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { SpawnRoundStore } from './store/SpawnRoundStore.js';
 import { type RetireReason, TabStore } from './store/TabStore.js';
-import { clockIndex, isSubChat } from './tab-clock.js';
+import { clockIndex, isSubChat, reviveChat } from './tab-clock.js';
 
 export interface RetireDeps {
   db: Database.Database;
@@ -197,22 +197,93 @@ export function retireChat(deps: RetireDeps, tabId: string, reason: RetireReason
 }
 
 /**
+ * HOW LONG A WORKER MUST STAY QUIET before its job counts as over.
+ *
+ * Not a cosmetic delay — it is the whole difference between "this turn ended"
+ * and "this job ended", and the old code had no way to express the second.
+ *
+ * Sized against the gap it has to survive: the pause between two turns of ONE
+ * job. A tool call resuming the agent, a background task reporting back, a
+ * wakeup — these are seconds apart, and 90 s clears them with room to spare
+ * while still putting a finished worker's card in the parent's log promptly.
+ *
+ * The same shape, and the same argument, as RESPAWN_PROBATION_MS for the
+ * mirror-image problem: "it came back only counts if it STAYS". Here, it
+ * finished only counts if it stays finished.
+ */
+export const JOB_SETTLE_MS = 90_000;
+
+/**
  * Watch for sub-chats finishing their work, and retire them.
  *
  * Subscribes to the SAME `agent_turn` event the cron scheduler uses, for the
  * same reason: it is the one signal that means "the agent stopped", emitted
  * once, from the one place that knows (ws.ts). Nothing here reaches into the
  * ws layer.
+ *
+ * ── TURN-END IS NOT JOB-END, IN EITHER DIRECTION ─────────────────────────────
+ * This class used to treat one turn ending as the job ending, and that single
+ * assumption produced two opposite bugs:
+ *
+ *   TOO EARLY · a multi-turn worker ends turn 1 and keeps going — a background
+ *     task comes back, a wakeup fires, a tool call resumes it. It was retired
+ *     mid-job and vanished from the sidebar WHILE RUNNING (observed live: two
+ *     sub-chats with `retired_at` set and `spawn_report_state` UNSET while both
+ *     panes read `working`, the status bar saying "2 agents" over an empty
+ *     list). Its summary was then generated over an INCOMPLETE transcript, or
+ *     lost entirely, which is why three workers produced no report at all.
+ *   NEVER · a worker whose runner DIES never ends a turn, so it was never
+ *     retired at all (see `onRunnerDead`).
+ *
+ * Turn-end is neither necessary nor sufficient. What replaces it:
+ *
+ *   · a turn ending only ARMS a settle — it decides nothing;
+ *   · when the settle fires, every condition is RE-READ against the state as it
+ *     is THEN. The settle is not a delayed commitment to a decision already
+ *     taken, which is the distinction that makes it safe;
+ *   · a turn STARTING disarms it outright, and revives the chat if it had
+ *     already gone — so the one case a window cannot cover (a worker idle
+ *     longer than the settle because it waits on something no roster can see)
+ *     repairs itself before the user has to notice.
+ *
+ * The instantaneous checks were never wrong, only incomplete: `stillWorking`
+ * is still the necessary condition, and the settle is the sufficient one. That
+ * is the "two conditions" this file already reasoned about — it had the two
+ * QUESTIONS right ("has it finished", "should the row leave") and answered the
+ * first one at an instant, where it can only be answered over an interval.
  */
 export class ChatRetirer {
   private unsubscribe: (() => void) | null = null;
+  /**
+   * Armed settles, keyed by PANE — the unit a turn belongs to.
+   *
+   * The PHASE is carried with the timer, not re-derived when it fires: whether
+   * the last turn was `fatal` is a fact about a moment that has passed by then,
+   * and `holdOpen` (a crashed run keeps its row) and the card's `crashed` mark
+   * both depend on it.
+   */
+  private readonly settling = new Map<
+    string,
+    { timer: ReturnType<typeof setTimeout>; phase: 'done' | 'fatal' }
+  >();
 
-  constructor(private readonly deps: RetireDeps) {}
+  constructor(
+    private readonly deps: RetireDeps,
+    /** Overridden only by tests that want the timer path itself. */
+    private readonly settleMs: number = JOB_SETTLE_MS,
+  ) {}
 
   start(): void {
     if (this.unsubscribe) return;
     this.unsubscribe = this.deps.events.subscribe((e) => {
       if (e.type !== 'agent_turn') return;
+      // A TURN STARTING IS NEWS TOO, and this is the half that was missing.
+      // Nothing consumed it, so a worker that carried on working after a turn
+      // ended had no way to say so.
+      if (e.phase === 'start') {
+        this.onTurnStart(e.pane_id);
+        return;
+      }
       if (e.phase !== 'done' && e.phase !== 'fatal') return;
       this.onTurnEnded({ pane_id: e.pane_id, phase: e.phase });
     });
@@ -221,35 +292,182 @@ export class ChatRetirer {
   stop(): void {
     this.unsubscribe?.();
     this.unsubscribe = null;
+    for (const armed of this.settling.values()) clearTimeout(armed.timer);
+    this.settling.clear();
   }
 
-  /** Exposed so a test can drive the transition without a runner. */
-  onTurnEnded(e: { pane_id: string; phase: 'done' | 'fatal' }): boolean {
-    const panes = new PaneStore(this.deps.db);
-    const pane = panes.getById(e.pane_id);
+  /**
+   * A turn STARTED — this worker is not finished, whatever the last turn-end
+   * looked like.
+   *
+   * Two jobs, and the second is the safety net the settle cannot provide on its
+   * own. Disarming is the common case. REVIVING covers the worker that was idle
+   * longer than the window because it was waiting on something the subagent
+   * roster cannot see — a long background task — and so did retire: it rejoins
+   * the live list the instant it speaks again, with a `tab.updated` so the row
+   * reappears without waiting for a poll.
+   *
+   * Returns whether it revived a chat that had gone.
+   */
+  onTurnStart(paneId: string): boolean {
+    this.disarm(paneId);
+    const pane = new PaneStore(this.deps.db).getById(paneId);
     if (!pane) return false;
     const index = clockIndex(this.deps.db);
+    if (!isSubChat(index, pane.tab_id)) return false;
+    const row = index.get(pane.tab_id);
+    if (!row || row.retired_at === null) return false;
+    // A HAND ARCHIVE IS NOT OURS TO UNDO. Only a retirement THIS code made —
+    // `delivered` or `died`, both of them guesses about when work ended — is
+    // reopened by evidence that the guess was wrong. `archived` is the user
+    // saying they are finished with this chat, and a worker that keeps talking
+    // afterwards (a straggling background task, a wakeup) must not drag the row
+    // back into a sidebar somebody deliberately cleared it from.
+    if (row.retired_reason === 'archived') return false;
+    if (!reviveChat(this.deps.db, pane.tab_id)) return false;
+    const fresh = new TabStore(this.deps.db).getById(pane.tab_id);
+    if (fresh)
+      this.deps.events.emit({
+        type: 'tab.updated',
+        tab: decorateTab(this.deps.cache, this.deps.db, fresh),
+      });
+    return true;
+  }
+
+  /**
+   * A turn ENDED. Arm the settle; decide nothing.
+   *
+   * Returns whether a settle is now armed — NOT whether anything retired, which
+   * is `settleNow`'s answer. A turn ending is the weakest of the signals here:
+   * it is the one a running job emits several of.
+   *
+   * Exposed so a test can drive the transition without a runner.
+   */
+  onTurnEnded(e: { pane_id: string; phase: 'done' | 'fatal' }): boolean {
+    const pane = new PaneStore(this.deps.db).getById(e.pane_id);
+    if (!pane) return false;
     // ONLY sub-chats. A top-level chat is a conversation you are having; it
     // leaves on its clock or when you archive it, never because an agent in it
     // stopped talking.
+    if (!isSubChat(clockIndex(this.deps.db), pane.tab_id)) return false;
+    // Cheap early out: a worker that is plainly mid-job does not even need a
+    // timer. Not load-bearing — the settle re-reads all of this anyway — it
+    // just keeps a busy worker from arming one per turn.
+    if (this.stillWorking(e)) {
+      this.disarm(e.pane_id);
+      return false;
+    }
+    this.arm(e.pane_id, e.phase);
+    return true;
+  }
+
+  /** Drop any armed settle for this pane. */
+  private disarm(paneId: string): void {
+    const armed = this.settling.get(paneId);
+    if (!armed) return;
+    clearTimeout(armed.timer);
+    this.settling.delete(paneId);
+  }
+
+  private arm(paneId: string, phase: 'done' | 'fatal'): void {
+    this.disarm(paneId);
+    const timer = setTimeout(() => {
+      this.settling.delete(paneId);
+      this.settle(paneId, phase);
+    }, this.settleMs);
+    // Never hold the process open for a retirement.
+    timer.unref?.();
+    this.settling.set(paneId, { timer, phase });
+  }
+
+  /**
+   * Fire an armed settle NOW, with the phase it was armed with.
+   *
+   * Returns false when nothing is armed — which is the answer for a worker
+   * whose settle a turn-start already cancelled, and is why a test can assert
+   * "the job carried on" with the same call that asserts "it finished".
+   */
+  settleNow(paneId: string): boolean {
+    const armed = this.settling.get(paneId);
+    if (!armed) return false;
+    clearTimeout(armed.timer);
+    this.settling.delete(paneId);
+    return this.settle(paneId, armed.phase);
+  }
+
+  /**
+   * THE DECISION, taken against the state as it is NOW.
+   *
+   * Everything is re-read. The turn that armed this is old news by the time it
+   * fires, and the whole point of the window is that what happened DURING it is
+   * what decides — a subagent that started, a message that queued, a turn that
+   * is in flight again all mean the job is not over, and none of them were
+   * knowable when the turn ended.
+   */
+  private settle(paneId: string, phase: 'done' | 'fatal'): boolean {
+    const pane = new PaneStore(this.deps.db).getById(paneId);
+    if (!pane) return false;
+    const index = clockIndex(this.deps.db);
     if (!isSubChat(index, pane.tab_id)) return false;
-    // ── TWO QUESTIONS, ONE TURN-END ──────────────────────────────────────────
-    // "Has this worker finished?" and "should its row leave the live list?" are
-    // different, and the old single keep-list answered them together. Splitting
-    // it is what lets the spawn report cover the cases that need it most: a
-    // FATAL run and one that produced an ARTIFACT both keep their rows on
-    // purpose, and both have plainly stopped working.
+    const e = { pane_id: paneId, phase };
     if (this.stillWorking(e)) return false;
+    // AND THE DIRECT INSTRUMENT, which `stillWorking` does not have: is this
+    // pane working RIGHT NOW? That covers a turn already in flight again —
+    // the exact state the live failure was found in (`retired_at` set on a
+    // pane the daemon called `working`).
+    if (this.deps.cache.getBusy(paneId)) return false;
     // Read ONCE and passed both ways: the card has to say "awaiting you" using
     // the same judgement that decided not to retire, or the row and its card
     // would be free to disagree about the same worker.
-    const awaiting = this.deps.awaitingUser?.(e.pane_id) === true;
-    this.deps.onFinished?.(pane.tab_id, e.pane_id, { crashed: e.phase === 'fatal', awaiting });
+    const awaiting = this.deps.awaitingUser?.(paneId) === true;
+    // NOW the transcript is complete, and only now is it worth summarising.
+    this.deps.onFinished?.(pane.tab_id, paneId, { crashed: phase === 'fatal', awaiting });
     // Retirement proper: pinning outranks it, and so does anything the agent
     // still has FOR YOU that retiring would bury.
     if (index.get(pane.tab_id)?.pinned) return false;
     if (this.holdOpen(e, awaiting)) return false;
     return retireChat(this.deps, pane.tab_id, 'delivered');
+  }
+
+  /**
+   * ARM A SETTLE FOR EVERY LIVE SUB-CHAT. Call once at boot.
+   *
+   * A hole this class's own settle opens, and therefore its own to close: an
+   * armed settle is an in-memory timer, so a worker that finished within one
+   * window of a restart had its retirement cancelled by the restart and no
+   * turn of its will ever end again to re-arm it. That is the 41-row sidebar
+   * back, for a narrow population, and it is NEW — the synchronous version had
+   * nothing pending to lose.
+   *
+   * Safe for the workers that are still going, because arming is not deciding:
+   * every condition is re-read when it fires, and a runner reconnecting
+   * re-emits `turn-start` even when it comes back MID-TURN (ws.ts says why it
+   * must), which disarms this before it can fire. A worker that is genuinely
+   * mid-job but quiet — waiting on something no roster can see — retires and is
+   * revived the moment it speaks, which is the same two-layer guarantee every
+   * other path here gets.
+   *
+   * Note what this is NOT: it is not "retire the sub-chats whose runner is
+   * absent at boot", which `reconcileDeadChats` refuses for good reason. At
+   * boot every runner is absent. This asks the ordinary question — has this
+   * worker been quiet for a window? — and answers it with the ordinary
+   * machinery, a window later.
+   */
+  armLiveSubChats(): number {
+    const index = clockIndex(this.deps.db);
+    const panes = new PaneStore(this.deps.db);
+    let n = 0;
+    for (const row of index.values()) {
+      if (row.retired_at !== null) continue;
+      if (!isSubChat(index, row.id)) continue;
+      if (row.pinned) continue;
+      for (const pane of panes.listByTab(row.id)) {
+        this.arm(pane.id, 'done');
+        n += 1;
+      }
+    }
+    if (n > 0) console.log(`[tab-retire] boot: watching ${n} live worker pane(s) for a settle`);
+    return n;
   }
 
   /**
@@ -302,6 +520,16 @@ export class ChatRetirer {
    * keeping `died` distinct from `delivered`.
    */
   onRunnerDead(paneId: string): boolean {
+    // NO SETTLE HERE, and that is not an inconsistency with the rule above: the
+    // give-up has ALREADY spent one, and a far stronger one — ≥135 s of
+    // sustained death with three respawns attempted and failed. Making a
+    // corpse wait out another 90 s of quiet would be asking the same question
+    // a second time, with a worse instrument.
+    //
+    // It does cancel any armed settle: the last turn-end's verdict is about to
+    // be overtaken by a more specific one, and letting both land would report
+    // the worker twice — once as delivered, once as dead.
+    this.disarm(paneId);
     const panes = new PaneStore(this.deps.db);
     const pane = panes.getById(paneId);
     if (!pane) return false;
