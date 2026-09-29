@@ -853,7 +853,7 @@ function SheetRail({
             <span className="navtree-bar-wsname" dir="auto">
               {barLabel}
             </span>
-            <SvgCaret open={picking} />
+            <SvgCaret open={picking !== null} />
           </button>
           <button
             type="button"
