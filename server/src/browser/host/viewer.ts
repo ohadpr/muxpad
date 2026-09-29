@@ -89,20 +89,64 @@ const sink = document.getElementById('sink')
 // tailnet one, and an absolute '/ws' would dial the cockpit's socket instead.
 // Served directly on the host's own port, base is '/' and this is unchanged.
 const base = location.pathname.replace(/[^/]*$/, '')
-const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + base + 'ws')
-ws.binaryType = 'arraybuffer'
+/**
+ * The socket, RECONNECTING.
+ *
+ * It used to be opened once and, on close, replaced by the words "disconnected
+ * — the browser may have restarted". That is true and useless: the page then sat
+ * on a frozen image with an error across it until somebody thought to reload,
+ * and everything closes this socket sooner or later — a phone locking, wifi
+ * changing hands, the tailnet reconnecting, the cockpit restarting, the host
+ * being bounced. A viewer you have to reload is a viewer that is broken every
+ * few minutes.
+ *
+ * So it dials again, backing off to a few seconds, forever. The message says
+ * which it is: gone, or coming back.
+ */
+const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + base + 'ws'
+let ws = null
+let retryIn = 400
+let retryTimer = null
+// Work that must happen on EVERY fresh connection, not once per page load: the
+// host is a new process as far as this socket is concerned and remembers none
+// of what the last one was told.
+const onEachOpen = []
+const whenOpen = (fn) => {
+  onEachOpen.push(fn)
+  if (ws && ws.readyState === 1) fn()
+}
 
 let meta = null, url = null, nw = 0, nh = 0
 const times = []
 
-ws.onclose = () => { msg.textContent = 'disconnected — the browser may have restarted' }
-ws.onerror = () => { msg.textContent = 'cannot reach the browser' }
+const connect = () => {
+  if (retryTimer) { clearTimeout(retryTimer); retryTimer = null }
+  const sock = new WebSocket(WS_URL)
+  sock.binaryType = 'arraybuffer'
+  ws = sock
+  sock.onopen = () => {
+    retryIn = 400
+    msg.textContent = ''
+    for (const fn of onEachOpen) { try { fn() } catch { /* one hook must not stop the rest */ } }
+  }
+  sock.onclose = () => {
+    // Only the CURRENT socket may schedule a retry. A late close from a socket
+    // we already replaced would otherwise queue a second dial, and the two would
+    // race and multiply.
+    if (ws !== sock) return
+    msg.textContent = 'reconnecting…'
+    retryTimer = setTimeout(connect, retryIn)
+    retryIn = Math.min(retryIn * 2, 5000)
+  }
+  sock.onerror = () => { /* close follows, and that is where the retry lives */ }
+  sock.onmessage = onSocketMessage
+}
 const urlEl = document.getElementById('url')
 const showUrl = (u) => {
   urlEl.textContent = u || '–'
   urlEl.title = u || ''
 }
-ws.onmessage = (e) => {
+function onSocketMessage(e) {
   if (typeof e.data === 'string') {
     const m = JSON.parse(e.data)
     if (m.t === 'url') { showUrl(m.url); return }
@@ -151,7 +195,7 @@ let watching = new URLSearchParams(location.search).get('mode') === 'watch'
 const INPUT = new Set(['mouse', 'key', 'text', 'nav', 'emulate'])
 const send = (o) => {
   if (watching && INPUT.has(o.t)) return
-  if (ws.readyState === 1) ws.send(JSON.stringify(o))
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(o))
 }
 
 let buttons = 0
@@ -234,7 +278,7 @@ const revealFromSummons = async () => {
     if (sel) send({ t: 'reveal', selector: sel })
   } catch { /* nothing to point at is fine */ }
 }
-ws.addEventListener('open', () => setTimeout(revealFromSummons, 900), { once: true })
+whenOpen(() => setTimeout(revealFromSummons, 900))
 
 // ── the keyboard ────────────────────────────────────────────────────────────
 // Where the page's text fields are, in viewport coordinates, as last reported.
@@ -345,9 +389,15 @@ const setMobile = (on) => {
 mobileBtn.addEventListener('click', () => setMobile(!mobileOn))
 if (window.innerWidth < 700 && !watching) {
   // After the socket is up, not before — the message would be dropped.
-  const arm = () => setMobile(true)
-  if (ws.readyState === 1) arm(); else ws.addEventListener('open', arm, { once: true })
+  // On every connection: a restarted host has forgotten it was in phone mode,
+  // and a viewer that reconnects into a 1280px page on a phone is the bug this
+  // was added to fix, arriving later.
+  whenOpen(() => setMobile(true))
 }
+
+// Everything is wired; dial. Last rather than first so no handler can fire
+// against a half-built page.
+connect()
 
 document.getElementById('fpick').addEventListener('change', async (e) => {
   const f = e.target.files[0]; if (!f) return

@@ -39,6 +39,14 @@ interface StubEl {
 
 interface Harness {
   el(id: string): StubEl;
+  /** Every socket the page has opened, oldest first. */
+  sockets: Array<Record<string, unknown>>;
+  /** Fire `open` on the newest socket. */
+  open(): void;
+  /** Fire `close` on the newest socket, as a dropped connection does. */
+  drop(): void;
+  /** Pending timers, so a test can see the backoff rather than only its effect. */
+  timers: Array<{ fn: () => void; ms: number }>;
   /** Messages the page sent to the host. */
   sent: Array<Record<string, unknown>>;
   /** Push a message from the host to the page. */
@@ -104,20 +112,31 @@ function run(search = ''): Harness {
     return found;
   };
 
+  const timers: Array<{ fn: () => void; ms: number }> = [];
   const sent: Array<Record<string, unknown>> = [];
   const socketListeners = new Map<string, Array<(e: unknown) => void>>();
   const clipboard = { text: 'hunter2', reads: 0 };
 
-  const ws: Record<string, unknown> = {
-    readyState: 1,
-    onmessage: null,
-    send: (raw: string) => sent.push(JSON.parse(raw)),
-    close() {},
-    addEventListener(type: string, fn: (e: unknown) => void) {
-      const list = socketListeners.get(type) ?? [];
-      list.push(fn);
-      socketListeners.set(type, list);
-    },
+  // Every socket the page opens, in order. The page reconnects, so "the socket"
+  // is not a thing — the LATEST one is.
+  const sockets: Array<Record<string, unknown>> = [];
+  const makeSocket = (): Record<string, unknown> => {
+    const sock: Record<string, unknown> = {
+      readyState: 1,
+      onmessage: null,
+      onopen: null,
+      onclose: null,
+      onerror: null,
+      send: (raw: string) => sent.push(JSON.parse(raw)),
+      close() {},
+      addEventListener(type: string, fn: (e: unknown) => void) {
+        const list = socketListeners.get(type) ?? [];
+        list.push(fn);
+        socketListeners.set(type, list);
+      },
+    };
+    sockets.push(sock);
+    return sock;
   };
 
   const globals = {
@@ -131,7 +150,7 @@ function run(search = ''): Harness {
     },
     location: { pathname: '/browser/default/', host: 'h', protocol: 'https:', search },
     WebSocket: function WS() {
-      return ws;
+      return makeSocket();
     },
     navigator: {
       clipboard: {
@@ -144,8 +163,16 @@ function run(search = ''): Harness {
     },
     URLSearchParams,
     fetch: async () => ({ ok: true, json: async () => ({}) }),
-    setTimeout: () => 0,
-    clearTimeout: () => {},
+    // A clock the test drives. The reconnect backs off with setTimeout, so a
+    // stub that never fires makes a page that never reconnects look identical
+    // to one that does.
+    setTimeout: (fn: () => void, ms: number) => {
+      timers.push({ fn, ms });
+      return timers.length;
+    },
+    clearTimeout: (id: number) => {
+      if (timers[id - 1]) timers[id - 1] = { fn: () => {}, ms: 0 };
+    },
     setInterval: () => 0,
     requestAnimationFrame: () => 0,
     URL: { createObjectURL: () => 'blob:', revokeObjectURL: () => {} },
@@ -168,14 +195,28 @@ function run(search = ''): Harness {
   // eslint-disable-next-line no-new-func
   new Function(...Object.keys(globals), script())(...Object.values(globals));
 
+  // The page dials on load; open it so handlers that wait for a connection run.
+  const live = () => sockets[sockets.length - 1];
+  const open = () => (live()?.onopen as (() => void) | undefined)?.();
+  open();
+
   return {
     el,
     sent,
+    sockets,
+    open,
+    drop() {
+      const sock = live();
+      (sock?.onclose as (() => void) | undefined)?.();
+      // The retry is scheduled, not immediate — run the clock so the dial happens.
+      for (const t of timers.splice(0)) t.fn();
+    },
+    timers,
     receive(msg) {
       // The script assigns `ws.onmessage` rather than adding a listener. Getting
       // this wrong made a passing harness that delivered nothing — every
       // assertion about a received message was vacuously true.
-      const handler = ws.onmessage as ((e: unknown) => void) | null;
+      const handler = live()?.onmessage as ((e: unknown) => void) | null;
       if (!handler) throw new Error('nothing is listening for host messages');
       handler({ data: JSON.stringify(msg) });
       for (const fn of socketListeners.get('message') ?? []) fn({ data: JSON.stringify(msg) });
@@ -346,5 +387,58 @@ describe('paste', () => {
     h.el('paste').fire('click');
     await Promise.resolve();
     expect(h.clipboard.reads).toBe(0);
+  });
+});
+
+describe('a connection that drops', () => {
+  /**
+   * It used to be opened once and, on close, replaced by "disconnected — the
+   * browser may have restarted". True and useless: the page then sat on a frozen
+   * image with an error across it until somebody reloaded, and EVERYTHING closes
+   * this socket sooner or later — a phone locking, wifi changing hands, the
+   * tailnet reconnecting, the cockpit restarting.
+   */
+  it('dials again instead of giving up', () => {
+    const h = run();
+    expect(h.sockets).toHaveLength(1);
+    h.drop();
+    expect(h.sockets.length).toBeGreaterThan(1);
+  });
+
+  it('says it is coming back, not that it is gone', () => {
+    const h = run();
+    h.drop();
+    expect(h.el('msg').textContent).toMatch(/reconnect/i);
+    expect(h.el('msg').textContent).not.toMatch(/disconnected/i);
+  });
+
+  it('clears the message once it is back', () => {
+    const h = run();
+    h.drop();
+    h.open();
+    expect(h.el('msg').textContent).toBe('');
+  });
+
+  it('ignores a late close from a socket it already replaced', () => {
+    // Otherwise the dead socket queues a second dial, the two race, and the
+    // page ends up opening sockets faster than it closes them.
+    const h = run();
+    const stale = h.sockets[0];
+    h.drop();
+    const after = h.sockets.length;
+    (stale?.onclose as (() => void) | undefined)?.();
+    expect(h.sockets).toHaveLength(after);
+  });
+
+  it('tells the new host it is a phone again', () => {
+    // A restarted host remembers nothing it was told. Reconnecting into a
+    // 1280px page on a phone is the bug the mobile toggle exists to fix,
+    // arriving later and looking like a different one.
+    const h = run();
+    const mobileAsks = () => h.sent.filter((m) => m.t === 'emulate').length;
+    const before = mobileAsks();
+    h.drop();
+    h.open();
+    expect(mobileAsks()).toBeGreaterThan(before);
   });
 });
