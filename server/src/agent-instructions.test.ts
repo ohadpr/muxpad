@@ -232,7 +232,6 @@ describe('the browser policy teaches the handoff', () => {
   });
 });
 
-
 describe('the summons is one short line', () => {
   const policy = AGENT_INSTRUCTIONS_SEED;
 
@@ -247,7 +246,6 @@ describe('the summons is one short line', () => {
     expect(policy).toMatch(/Amazon needs a login|e\.g\./i);
   });
 });
-
 
 describe('the handoff lands where the work is', () => {
   const policy = AGENT_INSTRUCTIONS_SEED;
@@ -266,5 +264,31 @@ describe('the handoff lands where the work is', () => {
 
   it('asks for a selector so the viewer can point at it', () => {
     expect(policy).toContain('selector');
+  });
+});
+
+describe('what agents are told about a browser that is not running yet', () => {
+  /**
+   * Browsers became lazy tonight: nothing starts until the first tool call.
+   * Every agent on the machine reads these instructions, and an agent that
+   * treats the birth of a browser as a failure retries — which is the one
+   * behaviour that turns a one-second pause into a storm.
+   */
+  it('says the first call starts it, and that the wait is not a fault', () => {
+    const text = AGENT_INSTRUCTIONS_SEED;
+    expect(text).toMatch(/starts when you first reach for it/i);
+    expect(text).toMatch(/do not retry/i);
+  });
+
+  it('still tells them to stop at a wall rather than push through it', () => {
+    // The rule the whole handoff rests on; a doc edit must not cost it.
+    expect(AGENT_INSTRUCTIONS_SEED).toMatch(/stop at a wall/i);
+    expect(AGENT_INSTRUCTIONS_SEED).toMatch(/needs-you/);
+  });
+
+  it('still names the profile as the agent’s OWN browser', () => {
+    // Summoning somebody to another browser sends them to log in somewhere the
+    // agent cannot see — the bug this replaced.
+    expect(AGENT_INSTRUCTIONS_SEED).toContain('s-$MUXPAD_TAB_ID');
   });
 });
