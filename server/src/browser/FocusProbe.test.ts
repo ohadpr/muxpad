@@ -4,7 +4,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   deepEditableFocus,
   fieldBoxesExpression,
+  fillLoginExpression,
+  fillLoginForm,
+  findLoginForm,
   focusProbeExpression,
+  loginFormExpression,
   textFieldBoxes,
 } from './FocusProbe.js';
 
@@ -182,5 +186,107 @@ describe('finding where the text fields ARE', () => {
   it('carries no reference to anything outside itself', () => {
     expect(fieldBoxesExpression()).not.toContain('import');
     expect(fieldBoxesExpression()).not.toContain('require');
+  });
+});
+
+describe('noticing that a page wants a sign-in', () => {
+  /**
+   * A password manager fills the page it is LOOKING at, and that page is muxpad
+   * — not the site. 1Password sees a tailnet hostname it has no entry for, and
+   * the site's real form is a JPEG. So the viewer needs to know a sign-in is on
+   * screen in order to put up a real form of its own.
+   */
+  const sized = (el: Element, box: Partial<DOMRect> = {}) => {
+    (el as unknown as { getBoundingClientRect: () => DOMRect }).getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 200, height: 30, ...box }) as DOMRect;
+    return el;
+  };
+
+  it('sees an ordinary sign-in form', () => {
+    document.body.innerHTML = '<input type="text"><input type="password">';
+    for (const el of Array.from(document.querySelectorAll('input'))) sized(el);
+    const r = findLoginForm();
+    expect(r.present).toBe(true);
+    expect(r.username).toBe(true);
+  });
+
+  it('sees a password-only step, which is half of every two-step login', () => {
+    document.body.innerHTML = '<input type="password">';
+    sized(document.querySelector('input') as Element);
+    expect(findLoginForm()).toMatchObject({ present: true, username: false });
+  });
+
+  it('says no when there is nothing to sign into', () => {
+    document.body.innerHTML = '<input type="text"><input type="search">';
+    for (const el of Array.from(document.querySelectorAll('input'))) sized(el);
+    expect(findLoginForm().present).toBe(false);
+  });
+
+  it('ignores a hidden password field, which plenty of pages carry', () => {
+    document.body.innerHTML = '<input type="password">';
+    sized(document.querySelector('input') as Element, { width: 0, height: 0 });
+    expect(findLoginForm().present).toBe(false);
+  });
+
+  it('finds one inside a shadow root', () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = host.attachShadow({ mode: 'open' });
+    root.innerHTML = '<input type="password">';
+    sized(root.querySelector('input') as Element);
+    sized(host);
+    expect(findLoginForm().present).toBe(true);
+  });
+});
+
+describe('putting the details into the page', () => {
+  const sized = (el: Element) => {
+    (el as unknown as { getBoundingClientRect: () => DOMRect }).getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 200, height: 30 }) as DOMRect;
+    return el;
+  };
+
+  it('fills both fields', () => {
+    document.body.innerHTML = '<input id="u" type="text"><input id="p" type="password">';
+    for (const el of Array.from(document.querySelectorAll('input'))) sized(el);
+    expect(fillLoginForm('ohad', 'hunter2')).toBe(true);
+    expect((document.getElementById('u') as HTMLInputElement).value).toBe('ohad');
+    expect((document.getElementById('p') as HTMLInputElement).value).toBe('hunter2');
+  });
+
+  it('fires input and change, or the site does not believe the text is there', () => {
+    // Every modern login form is a controlled component: a value assigned
+    // without events leaves the submit button disabled.
+    document.body.innerHTML = '<input id="p" type="password">';
+    sized(document.querySelector('input') as Element);
+    const seen: string[] = [];
+    for (const type of ['input', 'change']) {
+      document.getElementById('p')?.addEventListener(type, () => seen.push(type));
+    }
+    fillLoginForm('', 'hunter2');
+    expect(seen).toEqual(['input', 'change']);
+  });
+
+  it('does NOT submit — pressing the button stays the person’s decision', () => {
+    document.body.innerHTML = '<form id="f"><input type="password"></form>';
+    sized(document.querySelector('input') as Element);
+    let submitted = false;
+    document.getElementById('f')?.addEventListener('submit', () => {
+      submitted = true;
+    });
+    fillLoginForm('', 'x');
+    expect(submitted).toBe(false);
+  });
+
+  it('says so when there is no form to fill', () => {
+    document.body.innerHTML = '<p>nothing here</p>';
+    expect(fillLoginForm('a', 'b')).toBe(false);
+  });
+
+  it('bakes the values in as JSON, so a quote cannot break the expression', () => {
+    // These go into an evaluated string. A password is exactly the kind of text
+    // that contains a quote.
+    const expr = fillLoginExpression('o"hara', "it's a 'quote'\\\\");
+    expect(() => new Function(`return ${expr.replace(/^\(function/, '(function')}`)).not.toThrow();
   });
 });

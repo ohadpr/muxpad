@@ -24,7 +24,10 @@ export const VIEWER_HTML = String.raw`<!doctype html>
      modal to dismiss — without this you are simply stranded. */
   #home{color:#d8d8e2;text-decoration:none;font-size:15px;line-height:1;padding:4px 8px;border-radius:6px;border:1px solid #33333f;flex:none}
   #home:hover{background:#23232e}
-  #bar button{flex:none;background:transparent;border:1px solid #33333f;color:#d8d8e2;border-radius:6px;font:inherit;font-size:15px;line-height:1;padding:4px 7px;cursor:pointer}
+  /* Words, not glyphs alone. A row of symbols is a guessing game, and this is a
+     surface people reach in the middle of a login they did not plan for. */
+  #bar button{flex:none;background:transparent;border:1px solid #33333f;color:#d8d8e2;border-radius:6px;font:inherit;font-size:12px;line-height:1;padding:5px 8px;cursor:pointer;white-space:nowrap}
+  #signin{border-color:#3f5d8f;color:#b8cdf0}
   #bar button:hover{background:#23232e}
   #bar button[aria-pressed="true"]{background:#2b3a55;border-color:#4a6ea8;color:#cfe2ff}
   #takeover{background:#c98a2e;border-color:#c98a2e;color:#fff;font-size:11px;white-space:nowrap}
@@ -56,20 +59,38 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   /* Desktop has room to fit the whole page; a phone does not, and shrinking it
      to fit is the thing that made it useless. */
   @media (min-width: 700px) { #screen{max-width:100%} }
-  #sink{position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:0;border:0;padding:0}
+  /* THE TEXT SINK, AND WHY IT IS ON SCREEN.
+     It used to sit at left:-9999px, the classic hidden-input trick, and iOS will
+     not hold a keyboard for an input that far outside the viewport: it raises
+     one and takes it back within the second. Reported from a real login — "the
+     keyboard comes up and immediately comes down", and after two or three tries
+     it sticks, which is the page having scrolled the sink into range.
+     So it is IN the viewport, one pixel, fully transparent, pinned so no scroll
+     can carry it away. Invisible to a person, present to the browser. */
+  #sink{position:fixed;left:0;bottom:0;width:1px;height:1px;opacity:0;border:0;padding:0;
+        margin:0;z-index:-1;font-size:16px;background:transparent;color:transparent}
+  #login{position:fixed;inset:0;background:#000d;display:grid;place-items:center;padding:20px;z-index:20}
+  #login[hidden]{display:none}
+  #loginForm{width:min(420px,100%);background:#17171f;border:1px solid #33333f;border-radius:12px;padding:16px;display:grid;gap:10px}
+  #loginWho{font-size:15px;color:#d8d8e2}
+  /* 16px or iOS zooms the whole viewer the moment you focus one. */
+  #login input{font-size:16px;padding:12px;border-radius:8px;border:1px solid #33333f;background:#0f0f16;color:#eee}
+  .loginRow{display:flex;gap:8px}
+  #loginGo{flex:1;background:#3f5d8f;border:0;color:#fff;font-size:15px;padding:12px;border-radius:8px}
+  #loginCancel{background:transparent;border:1px solid #33333f;color:#9a9aab;font-size:14px;padding:12px;border-radius:8px}
+  #loginNote{font-size:11.5px;color:#7c7c8c;line-height:1.4}
   #drop{position:fixed;inset:0;background:#000c;display:none;place-items:center;padding:20px;text-align:center}
   #drop.on{display:grid}
 </style>
 <div id="bar">
   <a id="home" href="/" title="back to muxpad">&#9776;</a>
-  <button id="navBack" title="back">&#8249;</button>
-  <button id="navFwd" title="forward">&#8250;</button>
-  <button id="navReload" title="reload">&#8635;</button>
-  <button id="mobile" title="mobile site" aria-pressed="false">&#128241;</button>
-  <button id="kb" title="keyboard" aria-pressed="false">&#9000;</button>
-  <button id="paste" title="paste" aria-label="paste">&#128203;</button>
-  <button id="takeover" title="take the wheel" hidden>take the wheel</button>
-  <button id="handback" title="give the browser back to the agent" hidden>done</button>
+  <button id="navBack" title="back">&#8249; Back</button>
+  <button id="navReload" title="reload">&#8635; Reload</button>
+  <button id="mobile" title="show the phone version of the site" aria-pressed="false">&#128241; Phone</button>
+  <button id="signin" title="sign in with a password manager" hidden>&#128273; Sign in</button>
+  <button id="paste" title="paste from your clipboard">&#128203; Paste</button>
+  <button id="takeover" title="take the wheel" hidden>Take over</button>
+  <button id="handback" title="give the browser back to the agent" hidden>Done</button>
   <span id="url" title="">–</span>
   <span id="msg"></span>
 </div>
@@ -82,6 +103,36 @@ export const VIEWER_HTML = String.raw`<!doctype html>
      visibility:hidden cannot take focus, and a phone will not open a keyboard
      for an element it considers invisible. -->
 <textarea id="sink" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+<!--
+  THE SIGN-IN PANEL, and why it is a real form.
+
+  A password manager fills the page it is LOOKING at. That page is muxpad — some
+  tailnet hostname it has never heard of — and the site's own form is a JPEG in a
+  canvas, invisible to it. So there is nothing for 1Password to offer, on the one
+  surface where you most want it.
+
+  This is a real <form> with real inputs and the autocomplete attributes managers
+  read, so 1Password will open on it. It will not know WHICH entry — the origin
+  is wrong and always will be — so you pick the site by hand, once. What it fills
+  here is then typed into the page over CDP.
+
+  It is also why the keyboard works at all now: a real, on-screen input is
+  something iOS will hold a keyboard for.
+-->
+<div id="login" hidden>
+  <form id="loginForm" autocomplete="on">
+    <div id="loginWho">Sign in</div>
+    <input id="loginUser" type="text" name="username" autocomplete="username"
+           placeholder="username or email" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <input id="loginPass" type="password" name="password" autocomplete="current-password"
+           placeholder="password">
+    <div class="loginRow">
+      <button type="submit" id="loginGo">Fill the page</button>
+      <button type="button" id="loginCancel">Cancel</button>
+    </div>
+    <div id="loginNote">Pick the site in your password manager — this form stands in for it.</div>
+  </form>
+</div>
 <div id="drop"><div>The page is asking for a file.<br><br><input type="file" id="fpick"></div></div>
 <script>
 const img = document.getElementById('screen')
@@ -163,6 +214,15 @@ function onSocketMessage(e) {
       return
     }
     if (m.t === 'fields') { if (Array.isArray(m.rects)) fields = m.rects; return }
+    if (m.t === 'login') {
+      // Looked up here rather than closed over: this handler is hoisted above
+      // the panel's own declarations, so a login report arriving during setup
+      // would reach a const that does not exist yet.
+      const btn = document.getElementById('signin')
+      if (btn) btn.hidden = !(Boolean(m.present) && !watching)
+      return
+    }
+    if (m.t === 'filled') { if (!m.ok) msg.textContent = 'could not find the form to fill'; return }
     if (m.t === 'revealed') { ringAt(m.rect); return }
     if (m.t === 'frame') { meta = m.meta }
     else if (m.t === 'fileChooser') { document.getElementById('drop').classList.add('on') }
@@ -306,7 +366,7 @@ let fields = null
 const hitsField = (p) => fields === null
   ? null
   : fields.some(([x, y, w, h]) => p.x >= x && p.x <= x + w && p.y >= y && p.y <= y + h)
-const kbBtn = document.getElementById('kb')
+const kbBtn = document.getElementById('kb') || { setAttribute() {}, getAttribute: () => null, addEventListener() {} }
 // Pressed by hand, the keyboard stays up regardless of what the page says is
 // focused — some pages take text without ever focusing an input.
 let kbSticky = false
@@ -371,7 +431,35 @@ takeover.addEventListener('click', async () => {
     })
     if (!r.ok) { msg.textContent = 'could not take the wheel'; return }
     watching = false
-    applyWatching()
+    /**
+ * The sign-in panel.
+ *
+ * Offered only when the page actually has a password field on screen — the host
+ * looks, through frames and shadow roots, and says so. Filling it types the
+ * values into the page and closes; it never submits, because pressing the
+ * button is the moment you notice it filled the wrong thing.
+ */
+const loginPanel = document.getElementById('login')
+const loginBtn = document.getElementById('signin')
+const showLogin = (on) => {
+  loginPanel.hidden = !on
+  if (on) setTimeout(() => document.getElementById('loginUser').focus(), 50)
+}
+loginBtn.addEventListener('click', () => showLogin(true))
+document.getElementById('loginCancel').addEventListener('click', () => showLogin(false))
+document.getElementById('loginForm').addEventListener('submit', (e) => {
+  e.preventDefault()
+  const user = document.getElementById('loginUser')
+  const pass = document.getElementById('loginPass')
+  send({ t: 'fillLogin', username: user.value, password: pass.value })
+  // Not kept a moment longer than it takes to send.
+  user.value = ''
+  pass.value = ''
+  showLogin(false)
+  msg.textContent = 'filled — check it, then press the page\u2019s own button'
+})
+
+applyWatching()
   } catch { msg.textContent = 'could not reach muxpad' }
 })
 applyWatching()
@@ -465,7 +553,11 @@ const pasteFromClipboard = async () => {
 }
 document.getElementById('paste').addEventListener('click', pasteFromClipboard)
 
-for (const [id, action] of [['navBack','back'],['navFwd','forward'],['navReload','reload']]) {
+// FORWARD IS GONE. Nobody arrives here having gone back — you arrive because an
+// agent left you somewhere and you want out of it, which is Back, or the page is
+// stale, which is Reload. A third button earning nothing costs width on the one
+// screen where width is scarce.
+for (const [id, action] of [['navBack','back'],['navReload','reload']]) {
   document.getElementById(id).addEventListener('click', () => send({ t:'nav', action }))
 }
 
