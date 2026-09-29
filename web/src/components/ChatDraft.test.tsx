@@ -201,6 +201,70 @@ describe('the DOM is rebuilt only when the chips change', () => {
   });
 });
 
+describe('the caret is restored only once the chips are DRAWN', () => {
+  /**
+   * THE REGRESSION, and it made the composer unusable on iOS.
+   *
+   * Typing `@Investing` and then a space left the draft reading ` @Investing`:
+   * the space at the HEAD of the message, and every character after it too.
+   * Measured in WebKit — Safari, and therefore every browser on iOS — where 7
+   * of 10 end-to-end typing scenarios put the text at offset 0. Chromium is
+   * unaffected, which is how it shipped: it was verified there.
+   *
+   * THE CAUSE is an ordering, not arithmetic. The reconcile built the child
+   * list, restored the caret, and only THEN let React portal the pill into the
+   * (empty) chip host. A caret beside a chip has no text node to live in, so it
+   * is a position BETWEEN CHILDREN of the editable; WebKit holds its editing
+   * caret as a rendered position rather than as that DOM offset and re-derives
+   * it when the tree under the editable changes, so the portal's insertion
+   * invalidated a caret placed one commit too early and WebKit re-resolved it
+   * to the start. The DOM Range still read back as the position we set — which
+   * is why nothing in the component could detect it, and why only the NEXT
+   * keystroke showed it.
+   *
+   * jsdom has no editing engine, so what is asserted here is the ORDERING
+   * itself, which is the defect: at the instant the selection is set, every
+   * chip host must already hold its pill. Watched fail first — before the fix
+   * the recorded host is empty.
+   */
+  function hostFillWhenCaretPlaced(m: Mounted, value: string): number[] {
+    const sel = window.getSelection() as Selection;
+    const proto = Object.getPrototypeOf(sel) as Selection;
+    const real = proto.addRange;
+    const seen: number[] = [];
+    proto.addRange = function patched(this: Selection, r: Range) {
+      seen.push(...hosts(m.el).map((h) => h.childNodes.length));
+      return real.call(this, r);
+    };
+    try {
+      m.set({ value });
+    } finally {
+      proto.addRange = real;
+    }
+    return seen;
+  }
+
+  it('never sets the selection while a chip host is still empty', () => {
+    const m = mount('');
+    act(() => m.el.focus());
+    expect(document.activeElement).toBe(m.el);
+    const filled = hostFillWhenCaretPlaced(m, '@Investing');
+    // The caret WAS restored (the field is focused and the chips changed)…
+    expect(filled.length).toBeGreaterThan(0);
+    // …and not once against a host React had not drawn into yet.
+    expect(filled).not.toContain(0);
+  });
+
+  it('still lands the caret where the model asks', () => {
+    // The deferral must not cost the restore itself: an outside `setInput` puts
+    // the caret at the end, chip or no chip.
+    const m = mount('');
+    act(() => m.el.focus());
+    m.set({ value: 'Ask @Investing' });
+    expect(m.handle.caret()).toBe('Ask @Investing'.length);
+  });
+});
+
 describe('the caret is addressed in string offsets', () => {
   it('setCaret past a chip lands after it, not ten characters into it', () => {
     // What `pickMention` does the frame after inserting a token. The offset is

@@ -113,6 +113,13 @@ export const ChatDraft = forwardRef<ChatDraftHandle, ChatDraftProps>(function Ch
   const echoed = useRef<string | null>(null);
   /** An IME is mid-composition. Touching the DOM during one cancels it. */
   const composing = useRef(false);
+  /**
+   * A caret waiting for its chips to be DRAWN. See the second effect below.
+   *
+   * Held with the exact chip list it belongs to, rather than as a bare offset,
+   * so the restore can only happen on the commit that drew those chips.
+   */
+  const pending = useRef<{ chips: DraftChip[]; caret: number } | null>(null);
 
   const readNow = useCallback((): { text: string; caret: number } => {
     const el = elRef.current;
@@ -171,10 +178,46 @@ export const ChatDraft = forwardRef<ChatDraftHandle, ChatDraftProps>(function Ch
     // in that case — `pickMention` is the one caller that wants somewhere else,
     // and it says so explicitly through `setCaret`.
     const caret = echoing && focused ? readNow().caret : value.length;
-    setChips(build(el, nodes, seq));
+    const next = build(el, nodes, seq);
+    // NOT `place(el, caret)` here — the hosts `build` just put in the child list
+    // are still EMPTY. See the effect below.
+    pending.current = focused ? { chips: next, caret } : null;
+    setChips(next);
     echoed.current = value;
-    if (focused) place(el, caret);
-  }, [value, corpus, readNow, place]);
+    // No `place` in the deps any more: the reconcile does not touch the
+    // selection at all — that is the next effect's whole job.
+  }, [value, corpus, readNow]);
+
+  // ── THE CARET GOES BACK ONLY ONCE THE CHIPS ARE DRAWN ─────────────────────
+  //
+  // THE BUG, measured in WebKit (Safari, and therefore every browser on iOS):
+  // restoring the caret above and letting the portals fill the hosts afterwards
+  // put the NEXT typed character at offset 0. Type `@Investing` and then a
+  // space, and the draft read ` @Investing` — the space at the head of the
+  // message, and every character after it too. Chromium is unaffected, which is
+  // why this shipped: it was verified there.
+  //
+  // WHY. A caret beside a chip has no text node to live in, so it is expressed
+  // as a position BETWEEN CHILDREN of the editable (see `caretRange`). WebKit
+  // keeps its own editing caret as a rendered position rather than as that DOM
+  // offset, and re-derives it when the tree under the editable changes — so the
+  // portal committing the pill INTO the host invalidated a caret that had been
+  // placed one commit too early, and WebKit re-resolved it to the start. The
+  // DOM Range still read back as the position we set, so nothing here could
+  // notice; only the next keystroke showed it.
+  //
+  // So the restore waits for the commit that actually draws the chips. `chips`
+  // is the identity check and not just the trigger: this must fire on the
+  // commit that rendered THESE hosts, never on the one that created them empty.
+  // Still a layout effect, and still the same frame — `setChips` above is
+  // called from one, so React re-renders synchronously before paint.
+  useLayoutEffect(() => {
+    const held = pending.current;
+    if (!held || held.chips !== chips) return;
+    pending.current = null;
+    const el = elRef.current;
+    if (el) place(el, held.caret);
+  }, [chips, place]);
 
   const emit = (fn: (text: string, caret: number) => void) => {
     const st = readNow();
