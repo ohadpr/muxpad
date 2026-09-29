@@ -18,7 +18,12 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   body{margin:0;background:#0b0b0f;color:#d8d8e2;font:13px system-ui;display:flex;flex-direction:column;height:100dvh}
   /* gap was 14px, which on a 390px phone spent 100px of a 390px bar on nothing
      and squeezed the address to "..b". */
-  #bar{flex:none;display:flex;gap:7px;align-items:center;padding:7px 10px;background:#15151c;border-bottom:1px solid #26262f}
+  /* IT WRAPS. Words on the buttons cost width — measured at 336px of buttons
+     plus gaps and padding against a 390px phone, so the row ran off the side of
+     the screen and the last control was unreachable. Wrapping is the only
+     arrangement that cannot overflow at any width, and the address gets a line
+     of its own rather than competing for the same one. */
+  #bar{flex:none;display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 8px;background:#15151c;border-bottom:1px solid #26262f}
   #bar b{color:#6ea8ff;font-variant-numeric:tabular-nums}
   /* Opened in a TAB on a phone there is no chrome around this page and no
      modal to dismiss — without this you are simply stranded. */
@@ -41,7 +46,10 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   /* The address is the one thing here that is information rather than a control,
      so it gets a floor: buttons give up their slack first, and it never shrinks
      to the two characters it was showing. */
-  #url{flex:1 1 92px;min-width:92px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;color:#9a9aab;font-size:11px}
+  /* Its own row: an address competing with seven buttons for one line is how a
+     toolbar ends up wider than the screen. */
+  #url{flex:1 0 100%;order:2;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;color:#9a9aab;font-size:11px}
+  #msg{order:3;flex:1 0 100%;font-size:11px}
   #msg{color:#e9a}
   /* PINCH AND PAN. The stream is a 1280px page; on a phone, fitted to the
      viewport it is unreadable, and touch-action: none made it unzoomable
@@ -67,8 +75,13 @@ export const VIEWER_HTML = String.raw`<!doctype html>
      it sticks, which is the page having scrolled the sink into range.
      So it is IN the viewport, one pixel, fully transparent, pinned so no scroll
      can carry it away. Invisible to a person, present to the browser. */
+  /* NOT BEHIND ANYTHING. z-index:-1 put it under the page background, and a
+     browser does not raise a keyboard for an input it considers invisible — the
+     first version of this fix stopped the keyboard appearing at all. It sits in
+     the normal stacking order, one transparent pixel, and takes no pointer
+     events so it can never swallow a tap meant for the page. */
   #sink{position:fixed;left:0;bottom:0;width:1px;height:1px;opacity:0;border:0;padding:0;
-        margin:0;z-index:-1;font-size:16px;background:transparent;color:transparent}
+        margin:0;font-size:16px;background:transparent;color:transparent;pointer-events:none}
   #login{position:fixed;inset:0;background:#000d;display:grid;place-items:center;padding:20px;z-index:20}
   #login[hidden]{display:none}
   #loginForm{width:min(420px,100%);background:#17171f;border:1px solid #33333f;border-radius:12px;padding:16px;display:grid;gap:10px}
@@ -431,37 +444,11 @@ takeover.addEventListener('click', async () => {
     })
     if (!r.ok) { msg.textContent = 'could not take the wheel'; return }
     watching = false
-    /**
- * The sign-in panel.
- *
- * Offered only when the page actually has a password field on screen — the host
- * looks, through frames and shadow roots, and says so. Filling it types the
- * values into the page and closes; it never submits, because pressing the
- * button is the moment you notice it filled the wrong thing.
- */
-const loginPanel = document.getElementById('login')
-const loginBtn = document.getElementById('signin')
-const showLogin = (on) => {
-  loginPanel.hidden = !on
-  if (on) setTimeout(() => document.getElementById('loginUser').focus(), 50)
-}
-loginBtn.addEventListener('click', () => showLogin(true))
-document.getElementById('loginCancel').addEventListener('click', () => showLogin(false))
-document.getElementById('loginForm').addEventListener('submit', (e) => {
-  e.preventDefault()
-  const user = document.getElementById('loginUser')
-  const pass = document.getElementById('loginPass')
-  send({ t: 'fillLogin', username: user.value, password: pass.value })
-  // Not kept a moment longer than it takes to send.
-  user.value = ''
-  pass.value = ''
-  showLogin(false)
-  msg.textContent = 'filled — check it, then press the page\u2019s own button'
-})
-
-applyWatching()
+    applyWatching()
   } catch { msg.textContent = 'could not reach muxpad' }
 })
+
+// The page opens in whatever mode the link asked for, before anyone clicks.
 applyWatching()
 
 /**
@@ -601,6 +588,34 @@ if (window.innerWidth < 700 && !watching) {
 
 // Everything is wired; dial. Last rather than first so no handler can fire
 // against a half-built page.
+/**
+ * The sign-in panel.
+ *
+ * Offered only when the page actually has a password field on screen — the host
+ * looks, through frames and shadow roots, and says so. Filling it types the
+ * values into the page and closes; it never submits, because pressing the
+ * button is the moment you notice it filled the wrong thing.
+ */
+const loginPanel = document.getElementById('login')
+const loginBtn = document.getElementById('signin')
+const showLogin = (on) => {
+  loginPanel.hidden = !on
+  if (on) setTimeout(() => document.getElementById('loginUser').focus(), 50)
+}
+loginBtn.addEventListener('click', () => showLogin(true))
+document.getElementById('loginCancel').addEventListener('click', () => showLogin(false))
+document.getElementById('loginForm').addEventListener('submit', (e) => {
+  e.preventDefault()
+  const user = document.getElementById('loginUser')
+  const pass = document.getElementById('loginPass')
+  send({ t: 'fillLogin', username: user.value, password: pass.value })
+  // Not kept a moment longer than it takes to send.
+  user.value = ''
+  pass.value = ''
+  showLogin(false)
+  msg.textContent = 'filled \u2014 check it, then press the page\u2019s own button'
+})
+
 connect()
 
 document.getElementById('fpick').addEventListener('change', async (e) => {
