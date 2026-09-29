@@ -690,12 +690,27 @@ function SheetRail({
   // The bar says which list you are looking at, because on this surface that is
   // the same question as "which workspace" and there is one control for both.
   const barLabel = view === 'recent' ? 'Recent' : (shown?.name ?? 'Workspaces');
+  /**
+   * Where the bar's "+" makes a chat.
+   *
+   * `shown` is the wrong answer in the flat view. It holds the last workspace
+   * you PICKED, and picking is how you leave this view — so after
+   * pick Trayo → switch back to Recent, "+" would silently create in Trayo
+   * while the bar says "Recent" and the list shows everything. Nothing on
+   * screen would name the destination.
+   *
+   * In the flat view the only workspace the surface still names is the one the
+   * chrome bar's breadcrumb is showing, which is where "new chat" has always
+   * meant. In the grouped view the bar names `shown`, so `shown` is right there.
+   */
+  const newChatIn =
+    view === 'recent' ? (workspaces.find((w) => w.slug === activeWorkspaceSlug) ?? shown) : shown;
 
   const newChat = async () => {
-    if (!shown || busy) return;
+    if (!newChatIn || busy) return;
     setBusy(true);
     try {
-      await createHouseTab(shown, navigate, onNavigate);
+      await createHouseTab(newChatIn, navigate, onNavigate);
     } catch (err) {
       console.error('createTab failed', err);
     } finally {
@@ -738,7 +753,7 @@ function SheetRail({
             type="button"
             className="navtree-bar-icon"
             onClick={() => void newChat()}
-            disabled={!shown || busy}
+            disabled={!newChatIn || busy}
             aria-label="New chat"
           >
             <SvgPlus />
