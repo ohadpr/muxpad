@@ -1,4 +1,4 @@
-import { type Tab, compareByUserTouch } from '@muxpad/shared';
+import { type SortableTab, type Tab, compareByUserTouch, tabWantsYou } from '@muxpad/shared';
 
 /**
  * ONE list of every chat in every visible workspace — the navigator's default
@@ -9,6 +9,51 @@ import { type Tab, compareByUserTouch } from '@muxpad/shared';
  * this returns decides what you can SEE, and the last time a grouping rule was
  * checked by eye it lost every grandchild in the sidebar (7e4ecfc) — on the
  * phone, which is the device this view is primarily for.
+ *
+ * ─── DOES A CHILD ROW'S POSITION STILL MEAN RECENCY? YES ─────────────────────
+ * Asked of the screenshot where one sub-chat sat indented under a parent at the
+ * very bottom of a recency-ordered list, and it is worth answering first,
+ * because the obvious reading — that a nested row is an EXCEPTION to the
+ * ordering rule, one row obeying a different law with nothing on screen to say
+ * so — is the reading that leads to flattening children onto their own keys,
+ * and that would be a regression this codebase has already measured once.
+ *
+ * A sub-chat has no recency of its own to override. Three facts, none of them
+ * cosmetic:
+ *
+ *   IT HAS NO CLOCK. "a sub-chat does not decay at all (it retires when it
+ *     delivers)", and its `clock_started_at` "is then ignored for as long as
+ *     its parent exists" (TabStore). Its own timestamps are, by design, not
+ *     consulted while it is somebody's child.
+ *   ITS USER-TOUCH STAMP IS NOT A USER TOUCH. A spawned chat gets
+ *     `last_user_at = now` at birth, and TabStore says why that is allowed:
+ *     "it nests under its parent anyway, so its own key decides nothing on
+ *     screen". The stamp is only honest BECAUSE of the nesting. Sort children
+ *     by it and a cron-spawned worker — which no act of yours produced — lands
+ *     at the top of "what was I just doing".
+ *   THAT FAILURE IS ALREADY ON RECORD. It is what `userTouchAt` and migration
+ *     v33 exist to prevent: 6 of 58 chats were `working` and held 6 of the
+ *     global top 7, all under a minute old, "none of them anything the user
+ *     had done. A list whose top is 'whichever agent printed a line most
+ *     recently' is a churn feed, not a way back to what you were doing."
+ *
+ * So a sub-chat's recency IS its parent's: you last touched that work when you
+ * last touched the chat that owns it. Nesting is not an exception to the
+ * ordering rule, it is the rule applied to a row with no clock — and there is
+ * accordingly nothing for the list to announce.
+ *
+ * What WAS wrong in that screenshot is the other half, and it was real: the
+ * group's rank ignored the rows it carries, so a child that went `blocked`
+ * could not raise its group and sat at the bottom, indented, asking a question
+ * nobody could see. The attention bit now reads the whole group; recency still
+ * reads the root alone. See `byGroup`.
+ *
+ * The row itself already says it is subordinate three ways over, so no fourth
+ * mark was added: one indent step, a dimmer and smaller name, and a dot
+ * standing in the parent's chip column (NavTree.css, pinned by
+ * NavTree.spacing.test.ts). A count once rode there too and was removed for
+ * moving the state mark off the scan line — the row's width is spoken for, and
+ * "whose sub-chat is this" is answered by the row directly above it.
  *
  * ─── THE UNIT IS THE GROUP, NEVER THE ROW ────────────────────────────────────
  * This is the whole design and everything else follows from it.
@@ -29,15 +74,18 @@ import { type Tab, compareByUserTouch } from '@muxpad/shared';
  *     It also un-hides delivered sub-chats: forty retired agents would come
  *     back as forty top-level rows, which is the sidebar `groupChats` exists
  *     to prevent.
- *   PROMOTE the parent by its children's keys — a working child would drag its
- *     parent up the list. Tempting, and rejected: it is the machine moving a
- *     row again, which is exactly the churn the recency key was introduced to
- *     get out of this list (see shared/tab-order `userTouchAt`).
+ *   PROMOTE the parent by its children's RECENCY keys — a working child would
+ *     drag its parent up the list. Tempting, and rejected: it is the machine
+ *     moving a row again, which is exactly the churn the recency key was
+ *     introduced to get out of this list (see shared/tab-order `userTouchAt`).
+ *     The group's ATTENTION bit is a different question and does read the
+ *     children — `blocked` is you being asked for something, not a machine
+ *     printing a line. See `byGroup` for where that line is drawn.
  *
- * So a group travels whole, and it ranks on its ROOT's key alone. A child's
- * position is its parent's, entirely — the same rule the per-workspace list
- * already follows, since `groupChats` reads the server's order for tops only
- * and never consults a child's.
+ * So a group travels whole, and it ranks on its ROOT's recency key alone. A
+ * child's position is its parent's, entirely — the same rule the per-workspace
+ * list already follows, since `groupChats` reads the server's order for tops
+ * only and never consults a child's.
  *
  * ─── PARENTAGE IS STILL RESOLVED PER WORKSPACE ───────────────────────────────
  * Each workspace is grouped by `groupChats` on its own tabs, exactly as today,
@@ -131,17 +179,89 @@ export function flattenChats<W extends WorkspaceRef>(
     for (const group of liveGroups) live.push({ workspace, group });
     for (const group of doneGroups) done.push({ workspace, group });
   }
-  // The ROOT's key, never a child's — see the file comment.
-  const byRoot = (a: FlatChatGroup<W>, b: FlatChatGroup<W>) =>
-    compareByUserTouch(a.group.chat, b.group.chat);
-  const pinned = live.filter((g) => g.group.chat.pinned).sort(byRoot);
-  const rest = live.filter((g) => !g.group.chat.pinned).sort(byRoot);
+  const pinned = live.filter((g) => g.group.chat.pinned).sort(byGroup);
+  const rest = live.filter((g) => !g.group.chat.pinned).sort(byGroup);
   return {
     live: [...pinned, ...rest],
     // Most recently touched first, so the chat you just archived is at the top
     // of the drawer you would go looking for it in.
-    done: done.sort(byRoot),
+    done: done.sort(byGroup),
     livePinned: pinned.length,
+  };
+}
+
+/**
+ * Does any row this group DRAWS want you?
+ *
+ * The rows, not the records: a `contextOnly` group's root is a heading over
+ * someone's retired workers and has a live row of its own up in the list, so
+ * its state belongs to THAT row and must not also rank this drawer entry. Same
+ * discipline as the workspace label below — what can raise a group is what the
+ * group renders.
+ */
+function groupWantsYou(group: ChatGroupLike): boolean {
+  return (!group.contextOnly && tabWantsYou(group.chat)) || group.children.some(tabWantsYou);
+}
+
+/**
+ * The flat list's order: the ATTENTION bit over the whole group, then recency
+ * on the ROOT's key alone.
+ *
+ * Two axes, and only one of them a machine can move — which is the entire
+ * reason this is not one comparator call on the root.
+ *
+ *   ATTENTION  reads every row the group draws, root or child. `blocked` is
+ *              the one bit this surface still promotes above all recency, and
+ *              a sub-chat cannot raise itself: it has no position of its own.
+ *              Ranking on the root alone therefore buried the surface's one
+ *              loud signal for exactly the rows that depend on it — an agent
+ *              parked on a question sat at the bottom of the list, indented
+ *              under a parent nobody had touched in a month. Reported as
+ *              "sub-chats in a weird non-helpful way", and this is the half of
+ *              it that was not cosmetic.
+ *   RECENCY    reads the root and NOTHING else, unchanged. A child's key may
+ *              never move a group, and not because of churn in the abstract: a
+ *              spawned chat is stamped `last_user_at = now` at birth
+ *              (TabStore), on the explicit grounds that "it nests under its
+ *              parent anyway, so its own key decides nothing on screen". A
+ *              cron that spawns a worker is not you touching anything. Honour
+ *              that stamp as a user touch and every machine-spawned row lands
+ *              at the top of "what was I just doing" — the exact churn feed
+ *              `userTouchAt` and migration v33 were written to remove, where 6
+ *              of 58 chats held 6 of the global top 7 and none of them was
+ *              anything the user had done.
+ *
+ * `blocked` crossing from a child while `working` does not is the whole line:
+ * one is you being asked for something, the other is a machine printing.
+ *
+ * Inside the attention partition `compareByUserTouch` partitions again on the
+ * ROOT's own state, so a chat asking you something outranks a chat whose agent
+ * is asking something. Deliberate, and the nearer question wins.
+ */
+function byGroup<W extends WorkspaceRef>(a: FlatChatGroup<W>, b: FlatChatGroup<W>): number {
+  const attn = Number(groupWantsYou(b.group)) - Number(groupWantsYou(a.group));
+  if (attn !== 0) return attn;
+  return compareByUserTouch(rankedAs(a.group), rankedAs(b.group));
+}
+
+/**
+ * The root as the ORDER may see it.
+ *
+ * `compareByUserTouch` carries its OWN attention partition, so delegating the
+ * tiebreak hands the root's state a second vote. For a real group that is what
+ * we want (it is what puts a chat asking you above a chat whose agent is). For
+ * a `contextOnly` heading it undoes the rule above: a blocked live parent would
+ * float its retired workers' drawer entry on the strength of a state that
+ * belongs to its row up in the LIVE list. So that one contributes its recency
+ * and nothing else — built by hand rather than spread, so the fields it does
+ * not pass on are visible here.
+ */
+function rankedAs(group: ChatGroupLike): SortableTab {
+  if (!group.contextOnly) return group.chat;
+  return {
+    id: group.chat.id,
+    last_activity_at: group.chat.last_activity_at,
+    last_user_at: group.chat.last_user_at,
   };
 }
 
