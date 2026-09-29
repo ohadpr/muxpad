@@ -4,6 +4,8 @@ import type { AgentBridge } from './agent-bridge.js';
 import type { AppRegistry } from './apps/AppRegistry.js';
 import type { AppStatusProbe } from './apps/AppStatus.js';
 import type { ArchiveDb } from './archive/ArchiveDb.js';
+import { wakeBrowser } from './browser/WakeBrowser.js';
+import { findChrome } from './browser/findChrome.js';
 import { browserHostEntry } from './browser/hostEntry.js';
 import type { CronScheduler } from './cron/CronScheduler.js';
 import { EventBus } from './events.js';
@@ -247,7 +249,38 @@ export function createApp(deps: AppDeps): Hono {
     // given is the tailnet one they can open on a phone. See BrowserProxy.ts —
     // the alternative is exposing another port, or a `tailscale serve` mapping
     // that would need the CLI inside the app bundle.
-    app.route('/browser', browserProxyRoutes({ db: resolved.db }));
+    app.route(
+      '/browser',
+      browserProxyRoutes({
+        db: resolved.db,
+        // Tapping a card is somebody asking to look. Start it for them.
+        wake: async (profile) => {
+          const chrome = findChrome();
+          const registry = resolved.apps?.registry;
+          if (!chrome || !registry) return false;
+          const { awake } = await wakeBrowser({
+            profile,
+            deps: {
+              db: resolved.db,
+              dataDir: resolved.dataDir,
+              chromePath: chrome.path,
+              hostEntry: browserHostEntry(),
+              registry,
+              cwd: resolved.dataDir,
+              ...(resolved.selfUrl ? { apiUrl: resolved.selfUrl } : {}),
+            },
+            probe: async (state) => {
+              try {
+                return (await fetch(`${state.viewerUrl}/healthz`)).ok;
+              } catch {
+                return false;
+              }
+            },
+          });
+          return awake;
+        },
+      }),
+    );
   }
   // Artifact publishing (copies into <dataDir>/public, served by the separate
   // public-port app). Default funnel is exec-free — see AppDeps.publish.

@@ -125,6 +125,15 @@ function takeRequest(
 export function browserProxyRoutes(deps: {
   db: Database.Database;
   fetchImpl?: typeof fetch;
+  /**
+   * Starts the browser, because somebody asked to look at it.
+   *
+   * Browsers are lazy now, so "registered but not running" is the ordinary
+   * state of one nobody has used for a while — and tapping its card used to
+   * land on a bare "the browser is not running" 502, a dead end at the exact
+   * moment somebody asked. Optional so the proxy still works standalone.
+   */
+  wake?: (profile: string) => Promise<boolean>;
 }) {
   const app = new Hono();
   const doFetch = deps.fetchImpl ?? fetch;
@@ -139,21 +148,41 @@ export function browserProxyRoutes(deps: {
     // here — the profile came off a URL and is only ever used as a lookup key.
     const target = `${state.viewerUrl}${parsed.rest}${new URL(c.req.url).search}`;
 
-    try {
-      const upstream = await doFetch(target, {
+    const pass = async () =>
+      doFetch(target, {
         method: c.req.method,
         headers: c.req.raw.headers,
         ...(c.req.method === 'GET' || c.req.method === 'HEAD'
           ? {}
           : { body: c.req.raw.body, duplex: 'half' }),
       } as RequestInit);
+
+    try {
+      const upstream = await pass();
       return new Response(upstream.body, {
         status: upstream.status,
         headers: upstream.headers,
       });
     } catch {
-      // The browser is registered but its host is not up. Say so plainly — an
-      // iframe showing a connection error reads as "muxpad is broken".
+      // Not up. ASK FOR IT rather than reporting a dead end: wanting to look at
+      // a browser is a perfectly good reason to start one, and since browsers
+      // became lazy this is the ordinary state of any that has been idle.
+      // Only for a request that can afford the wait — a GET of the page itself.
+      if (deps.wake && (c.req.method === 'GET' || c.req.method === 'HEAD')) {
+        try {
+          if (await deps.wake(parsed.profile)) {
+            const upstream = await pass();
+            return new Response(upstream.body, {
+              status: upstream.status,
+              headers: upstream.headers,
+            });
+          }
+        } catch {
+          // Fall through to the honest answer below.
+        }
+      }
+      // An iframe showing a connection error reads as "muxpad is broken", so
+      // say what is true instead.
       return c.text('the browser is not running', 502);
     }
   });
