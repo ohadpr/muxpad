@@ -442,3 +442,67 @@ describe('a connection that drops', () => {
     expect(mobileAsks()).toBeGreaterThan(before);
   });
 });
+
+describe('where a tap lands on the page', () => {
+  /**
+   * The viewer maps a tap on a JPEG to a point in a page, and nothing has ever
+   * checked the arithmetic. Every click, drag and keyboard-raising tap goes
+   * through it, so being a few percent out is a browser that almost works.
+   */
+  const framed = (
+    natural: { w: number; h: number },
+    rendered: { w: number; h: number },
+    device: { w: number; h: number },
+  ) => {
+    const h = run();
+    const img = h.el('screen') as unknown as {
+      naturalWidth: number;
+      naturalHeight: number;
+      getBoundingClientRect: () => { left: number; top: number; width: number; height: number };
+    };
+    img.naturalWidth = natural.w;
+    img.naturalHeight = natural.h;
+    img.getBoundingClientRect = () => ({ left: 0, top: 0, width: rendered.w, height: rendered.h });
+    h.el('screen').fire('load');
+    h.receive({ t: 'frame', meta: { deviceWidth: device.w, deviceHeight: device.h } });
+    return h;
+  };
+  const tapAt = (h: ReturnType<typeof run>, x: number, y: number) => {
+    h.el('screen').fire('pointerdown', { clientX: x, clientY: y, button: 0 });
+    return h.sent.filter((m) => m.t === 'mouse').at(-1) as { x: number; y: number } | undefined;
+  };
+
+  it('maps the middle of the picture to the middle of the page', () => {
+    // A phone: 3x pixels, shown at CSS size, page 390x844.
+    const h = framed({ w: 1170, h: 2532 }, { w: 390, h: 844 }, { w: 390, h: 844 });
+    const p = tapAt(h, 195, 422);
+    expect(Math.round(p?.x ?? -1)).toBe(195);
+    expect(Math.round(p?.y ?? -1)).toBe(422);
+  });
+
+  it('maps correctly when the picture is SHRUNK to fit', () => {
+    // Desktop: a 1280x800 page shown in a 640px-wide panel. Half size, so a tap
+    // at 320 is the middle of the page.
+    const h = framed({ w: 1280, h: 800 }, { w: 640, h: 400 }, { w: 1280, h: 800 });
+    const p = tapAt(h, 320, 200);
+    expect(Math.round(p?.x ?? -1)).toBe(640);
+    expect(Math.round(p?.y ?? -1)).toBe(400);
+  });
+
+  it('maps the VERTICAL axis by the vertical scale, not the horizontal one', () => {
+    // The two are only interchangeable while the frame's aspect matches the
+    // viewport's exactly. Chrome caps screencast frames, and the moment it does
+    // — or a page is unusually tall — a y computed from the WIDTH ratio is
+    // silently wrong, and every tap lands above or below what was aimed at.
+    const h = framed({ w: 800, h: 400 }, { w: 800, h: 400 }, { w: 800, h: 1600 });
+    const p = tapAt(h, 400, 200);
+    expect(Math.round(p?.x ?? -1)).toBe(400);
+    expect(Math.round(p?.y ?? -1)).toBe(800);
+  });
+
+  it('sends nothing before a frame has arrived', () => {
+    // No size, no map. A guess here is a click somewhere the person did not aim.
+    const h = run();
+    expect(tapAt(h, 10, 10)).toBeUndefined();
+  });
+});
