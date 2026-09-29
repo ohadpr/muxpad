@@ -22,6 +22,14 @@
 // Fully isolated: own tmpdir data dir, own ptyd socket, ephemeral loopback
 // port. MUXPAD_PORT is pointed at this instance before any pane spawns so a
 // pty's injected MUXPAD_API_URL can never reach the live cockpit on 7777.
+//
+// SHELL is `/bin/cat` for the same reason the app registry's tests use it: the
+// pty must SPAWN (that is assertion 1) without EXECUTING anything. A real shell
+// runs the startup command for real, and a real `muxpad agent` then registers
+// its own random sid — racing the scripted runner below for the same pane, so
+// the test passed or failed on whichever won. It also made the test depend on
+// a built `dist/agent-runner`. cat holds the pty open and swallows the typed
+// command, which is exactly the inert pane these assertions want.
 import { mkdtempSync, rmSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -57,6 +65,7 @@ describe('web "New chat" ends up with a live agent session', () => {
   let wsServer: ReturnType<typeof attachWsServer>;
   let wsId: string;
   let prevPort: string | undefined;
+  let prevShell: string | undefined;
   const openSockets: WebSocket[] = [];
 
   beforeAll(async () => {
@@ -75,6 +84,8 @@ describe('web "New chat" ends up with a live agent session', () => {
     port = addr.port;
     prevPort = process.env.MUXPAD_PORT;
     process.env.MUXPAD_PORT = String(port);
+    prevShell = process.env.SHELL;
+    process.env.SHELL = '/bin/cat';
     wsServer = attachWsServer({
       http: server as unknown as Server,
       db,
@@ -89,6 +100,8 @@ describe('web "New chat" ends up with a live agent session', () => {
   afterAll(async () => {
     if (prevPort === undefined) delete process.env.MUXPAD_PORT;
     else process.env.MUXPAD_PORT = prevPort;
+    if (prevShell === undefined) delete process.env.SHELL;
+    else process.env.SHELL = prevShell;
     for (const s of openSockets) {
       try {
         s.close();
