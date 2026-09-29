@@ -29,6 +29,7 @@ interface StubEl {
   id: string;
   focused: boolean;
   focusCount: number;
+  classes: string[];
   attrs: Record<string, string>;
   value: string;
   style: Record<string, string>;
@@ -68,6 +69,8 @@ interface RunOpts {
   nowMs?: number;
   /** Whether fetches succeed, so a refusal can be posed. */
   fetchOk?: boolean;
+  /** How wide the viewer is. Under 700px it is treated as a phone. */
+  width?: number;
 }
 
 function run(opts: RunOpts | string = {}): Harness {
@@ -76,6 +79,7 @@ function run(opts: RunOpts | string = {}): Harness {
     fetchJson = {},
     nowMs,
     fetchOk = true,
+    width = 390,
   } = typeof opts === 'string' ? { search: opts } : opts;
   const els = new Map<string, StubEl>();
   const make = (id: string): StubEl => {
@@ -95,7 +99,20 @@ function run(opts: RunOpts | string = {}): Harness {
       width: 390,
       height: 844,
       files: [],
-      classList: { add() {}, remove() {}, toggle() {} },
+      classes: [] as string[],
+      classList: {
+        add(c: string) {
+          if (!el.classes.includes(c)) el.classes.push(c);
+        },
+        remove(c: string) {
+          el.classes = el.classes.filter((x) => x !== c);
+        },
+        toggle(c: string, on?: boolean) {
+          if (on === undefined ? el.classes.includes(c) : !on) el.classList.remove(c);
+          else el.classList.add(c);
+        },
+        contains: (c: string) => el.classes.includes(c),
+      },
       getBoundingClientRect: () => ({ left: 0, top: 0, width: 390, height: 844 }),
       setAttribute(k: string, v: string) {
         el.attrs[k] = v;
@@ -215,7 +232,7 @@ function run(opts: RunOpts | string = {}): Harness {
     addEventListener: () => {},
     matchMedia: () => ({ matches: false, addEventListener() {} }),
     console: { log() {}, warn() {}, error() {} },
-    innerWidth: 390,
+    innerWidth: width,
     innerHeight: 844,
     devicePixelRatio: 3,
   } as Record<string, unknown>;
@@ -709,5 +726,106 @@ describe('taking the wheel from the page', () => {
     await h.settle();
     expect(h.el('msg').textContent).toMatch(/could not take/i);
     expect(h.el('takeover').hidden).toBe(false);
+  });
+});
+
+describe('the controls nothing had ever pressed', () => {
+  /**
+   * An audit, after the takeover button turned out to have been broken and
+   * shipped for want of a single test. These are every remaining interactive
+   * control in the toolbar, pressed once each.
+   */
+  it('back, forward and reload each ask for their own thing', () => {
+    const h = run();
+    for (const [id, action] of [
+      ['navBack', 'back'],
+      ['navFwd', 'forward'],
+      ['navReload', 'reload'],
+    ] as const) {
+      h.el(id).fire('click');
+      expect(h.sent.at(-1)).toMatchObject({ t: 'nav', action });
+    }
+  });
+
+  it('starts ON when the viewer is phone-sized, without being asked', () => {
+    // The case it exists for. Making somebody find a toggle first is making
+    // them read a desktop page on a phone once.
+    const h = run({ width: 390 });
+    expect(h.sent.filter((m) => m.t === 'emulate').at(-1)).toMatchObject({ mobile: true });
+    expect(h.el('mobile').attrs['aria-pressed']).toBe('true');
+  });
+
+  it('and the toggle turns it back off', () => {
+    const h = run({ width: 390 });
+    h.el('mobile').fire('click');
+    expect(h.sent.at(-1)).toMatchObject({ t: 'emulate', mobile: false });
+    expect(h.el('mobile').attrs['aria-pressed']).toBe('false');
+  });
+
+  it('starts OFF on a desktop, where the page already fits', () => {
+    // An agent scraping a desktop site must not silently get the mobile one.
+    const h = run({ width: 1280 });
+    expect(h.sent.filter((m) => m.t === 'emulate')).toEqual([]);
+    // The resting state is in the markup, which the DOM stub does not parse —
+    // so it is asserted where it actually lives.
+    expect(VIEWER_HTML).toContain('id="mobile" title="mobile site" aria-pressed="false"');
+  });
+
+  it('and the toggle turns it on there', () => {
+    const h = run({ width: 1280 });
+    h.el('mobile').fire('click');
+    expect(h.sent.at(-1)).toMatchObject({ t: 'emulate', mobile: true });
+    expect(h.el('mobile').attrs['aria-pressed']).toBe('true');
+  });
+
+  it('the phone toggle carries the size of the frame, not of the window', () => {
+    // Otherwise the toolbar counts as somewhere a website can paint.
+    const h = run({ width: 1280 });
+    h.el('mobile').fire('click');
+    const ask = h.sent.at(-1) as { width?: number; height?: number };
+    expect(typeof ask.width).toBe('number');
+    expect(typeof ask.height).toBe('number');
+  });
+
+  it('none of them send anything while only watching', () => {
+    // Watch mode takes no wheel; a navigation from a spectator is the two-writers
+    // race the wheel exists to prevent.
+    const h = run({ search: '?mode=watch' });
+    const before = h.sent.length;
+    h.el('navBack').fire('click');
+    h.el('navReload').fire('click');
+    h.el('mobile').fire('click');
+    expect(h.sent.length).toBe(before);
+  });
+
+  it('the file picker sends the chosen file under its own name', async () => {
+    const h = run();
+    const picker = h.el('fpick') as unknown as { files: unknown[] };
+    picker.files = [
+      { name: 'passport.jpg', arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer },
+    ];
+    h.el('fpick').fire('change', { target: picker });
+    await h.settle();
+    const up = h.fetches.find((f) => f.url.endsWith('upload'));
+    expect(up?.method).toBe('POST');
+    expect((up as unknown as { headers?: Record<string, string> })?.headers?.['x-filename']).toBe(
+      'passport.jpg',
+    );
+  });
+
+  it('and puts the file prompt away afterwards', async () => {
+    const h = run();
+    h.el('drop').classList.add('on');
+    const picker = h.el('fpick') as unknown as { files: unknown[] };
+    picker.files = [{ name: 'a.txt', arrayBuffer: async () => new Uint8Array([1]).buffer }];
+    h.el('fpick').fire('change', { target: picker });
+    await h.settle();
+    expect((h.el('drop') as unknown as { classes: string[] }).classes).not.toContain('on');
+  });
+
+  it('shows the file prompt when the page asks for one', () => {
+    const h = run();
+    h.receive({ t: 'fileChooser' });
+    expect((h.el('drop') as unknown as { classes: string[] }).classes).toContain('on');
   });
 });
