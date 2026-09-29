@@ -81,6 +81,24 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
     return { retirer, writer };
   }
 
+  /**
+   * A worker's JOB ends — its last turn ends and it then stays quiet.
+   *
+   * A turn ending no longer reports anything on its own: it arms a settle, and
+   * the report is generated when that fires, over a transcript that is
+   * complete (see tab-retire.ts, `turn-end is not job-end`). These tests are
+   * about the WRITER, so they say "the job finished" once, here, rather than
+   * restating the mechanism at every call.
+   */
+  function finishJob(
+    retirer: ChatRetirer,
+    paneId: string,
+    phase: 'done' | 'fatal' = 'done',
+  ): boolean {
+    retirer.onTurnEnded({ pane_id: paneId, phase });
+    return retirer.settleNow(paneId);
+  }
+
   const reports = (): Array<string | null | undefined> =>
     seen
       .filter((e): e is Extract<MuxpadEvent, { type: 'tab.updated' }> => e.type === 'tab.updated')
@@ -110,7 +128,7 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
   it('writes the report and publishes it on the row', async () => {
     const { retirer, writer } = wire(async () => GOOD);
     const kid = worker(parentChat());
-    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' });
+    finishJob(retirer, kid.paneId);
     await writer.idle();
     expect(new TabStore(db).getById(kid.tabId)?.spawn_report).toBe(GOOD);
     // The one event the card's whole delivery path rests on.
@@ -119,7 +137,10 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
 
   it('RETIRES FIRST AND REPORTS AFTER — the row never waits on a model', async () => {
     // A model call is up to 30 seconds. The sidebar has to move on the same tick
-    // it does today, so this is a promise the row cannot be allowed to hold.
+    // the DECISION is taken, so this is a promise the row cannot be allowed to
+    // hold. That tick is now the settle rather than the turn-end — what the
+    // report must not delay is the retirement, whenever it happens, and the
+    // ordering between the two is exactly as load-bearing as it always was.
     let release: (() => void) | null = null;
     const { retirer, writer } = wire(
       () =>
@@ -128,8 +149,8 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
         }),
     );
     const kid = worker(parentChat());
-    expect(retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' })).toBe(true);
-    // Retired, synchronously, with the report still in flight.
+    expect(finishJob(retirer, kid.paneId)).toBe(true);
+    // Retired, synchronously with the settle, and the report still in flight.
     expect(new TabStore(db).getById(kid.tabId)?.spawn_report).toBeUndefined();
     expect(
       seen.some((e) => e.type === 'tab.updated' && (e.tab as Tab).done_reason === 'delivered'),
@@ -150,9 +171,9 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
       });
     });
     const kid = worker(parentChat());
-    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'fatal' });
-    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'fatal' });
-    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'fatal' });
+    finishJob(retirer, kid.paneId, 'fatal');
+    finishJob(retirer, kid.paneId, 'fatal');
+    finishJob(retirer, kid.paneId, 'fatal');
     expect(calls).toBe(1);
     (release as unknown as () => void)();
     await writer.idle();
@@ -177,8 +198,8 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
       })}\n`,
     );
     const b = worker(parent);
-    retirer.onTurnEnded({ pane_id: a.paneId, phase: 'done' });
-    retirer.onTurnEnded({ pane_id: b.paneId, phase: 'done' });
+    finishJob(retirer, a.paneId);
+    finishJob(retirer, b.paneId);
     await writer.idle();
     const tabs = new TabStore(db);
     expect(tabs.getById(a.tabId)?.spawn_report).toMatch(/alpha/);
@@ -198,7 +219,7 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
       spawned_by: parentChat(),
     }).id;
     const paneId = new PaneStore(db).create({ tab_id: tabId, shell: '/bin/zsh', cwd: '/tmp' }).id;
-    retirer.onTurnEnded({ pane_id: paneId, phase: 'done' });
+    finishJob(retirer, paneId);
     const before = seen.length;
     await writer.idle();
     expect(seen.length).toBe(before);
@@ -212,7 +233,7 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
     // their reports this way.
     const { retirer, writer } = wire(async () => 'x'.repeat(900));
     const kid = worker(parentChat());
-    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' });
+    finishJob(retirer, kid.paneId);
     await writer.idle();
     const tab = new TabStore(db).getById(kid.tabId);
     expect(tab?.spawn_report_state).toBe('failed');
@@ -233,7 +254,7 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
       return GOOD;
     });
     const kid = worker(parentChat());
-    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' });
+    finishJob(retirer, kid.paneId);
     await writer.idle();
     expect(calls).toBe(2);
     const tab = new TabStore(db).getById(kid.tabId);
@@ -255,7 +276,7 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
       return GOOD;
     });
     const kid = worker(parentChat());
-    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' });
+    finishJob(retirer, kid.paneId);
     await writer.idle();
     expect(calls).toBe(2);
     expect(new TabStore(db).getById(kid.tabId)?.spawn_report).toBe(GOOD);
@@ -268,10 +289,10 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
       throw new Error('no login');
     });
     const kid = worker(parentChat());
-    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' });
+    finishJob(retirer, kid.paneId);
     await writer.idle();
     // …and a SECOND finished turn does not re-arm it either.
-    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' });
+    finishJob(retirer, kid.paneId);
     await writer.idle();
     expect(calls).toBe(2);
   });
@@ -285,7 +306,7 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
       return 'NOTHING';
     });
     const kid = worker(parentChat());
-    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' });
+    finishJob(retirer, kid.paneId);
     await writer.idle();
     expect(calls).toBe(1);
   });
@@ -295,7 +316,7 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
       throw new Error('no login');
     });
     const kid = worker(parentChat());
-    expect(retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' })).toBe(true);
+    expect(finishJob(retirer, kid.paneId)).toBe(true);
     await expect(writer.idle()).resolves.toBeUndefined();
   });
 
@@ -390,7 +411,7 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
     const rounds = new SpawnRoundStore(db);
     rounds.open(kid.tabId, 100);
 
-    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' });
+    finishJob(retirer, kid.paneId);
     // Closed already, before the model has answered.
     expect(rounds.openRound(kid.tabId)).toBeNull();
     expect(rounds.listByTab(kid.tabId)[0]?.report).toBeNull();
@@ -405,7 +426,7 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
     // A round with no beginning would be worse than no round.
     const { retirer, writer } = wire(async () => GOOD);
     const kid = worker(parentChat());
-    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' });
+    finishJob(retirer, kid.paneId);
     await writer.idle();
     expect(new SpawnRoundStore(db).listByTab(kid.tabId)).toEqual([]);
     // …and the tab row still carries the report, so nothing is lost while both
@@ -556,7 +577,7 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
   it('reports a CRASHED worker, which is the case retirement cannot see', async () => {
     const { retirer, writer } = wire(async () => 'Got through 38 of the files before dying.');
     const kid = worker(parentChat());
-    expect(retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'fatal' })).toBe(false);
+    expect(finishJob(retirer, kid.paneId, 'fatal')).toBe(false);
     await writer.idle();
     const tab = new TabStore(db).getById(kid.tabId);
     expect(tab?.spawn_report).toBe('Got through 38 of the files before dying.');
