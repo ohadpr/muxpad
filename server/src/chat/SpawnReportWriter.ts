@@ -3,6 +3,7 @@ import type { EventBus } from '../events.js';
 import { decorateTab } from '../ptyd-cache.js';
 import type { PtydCache } from '../ptyd-cache.js';
 import { PaneStore } from '../store/PaneStore.js';
+import { SpawnRoundStore } from '../store/SpawnRoundStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { clockIndex, isSubChat } from '../tab-clock.js';
 import { glossaryCache } from './glossary.js';
@@ -161,6 +162,15 @@ export class SpawnReportWriter {
     paneId: string,
     opts: { crashed: boolean; awaiting: boolean },
   ): void => {
+    // CLOSE THE ROUND FIRST, synchronously. A worker is handed successive jobs,
+    // and each one is a round with its own pair of cards; the round ends when
+    // the turn does, and that must not sit behind a model call the way the
+    // sentences below do. See store/SpawnRoundStore.
+    //
+    // A no-op for a child whose rounds predate the table — it finishes turns
+    // with nothing open, and an invented round with no beginning would be worse
+    // than none.
+    new SpawnRoundStore(this.db).close(tabId, Date.now());
     if (this.inFlight.has(tabId)) return;
     this.inFlight.add(tabId);
     const run = maybeWriteSpawnReport(this.db, tabId, paneId, this.model, {
@@ -169,6 +179,11 @@ export class SpawnReportWriter {
       glossary: this.glossary(),
     })
       .then((write) => {
+        // The sentences arrive up to thirty seconds after the round closed, so
+        // they are attached to the round that ENDED rather than to whatever is
+        // open now — a worker re-tasked in the meantime must not have the
+        // previous round's result land on its new one.
+        if (write) new SpawnRoundStore(this.db).writeResult(tabId, write);
         // Nothing written is the common case — inside the interval, a rejected
         // reply, a worker with no transcript — and it must reach nobody: an
         // event per no-op is a repaint per no-op on every connected client.

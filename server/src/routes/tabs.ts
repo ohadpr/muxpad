@@ -18,6 +18,7 @@ import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { randomWorkspaceName } from '../random-name.js';
 import { safeCwd } from '../safe-cwd.js';
 import { PaneStore } from '../store/PaneStore.js';
+import { SpawnRoundStore } from '../store/SpawnRoundStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { pruneDeadPanes } from '../store/migrations.js';
@@ -256,6 +257,25 @@ export function tabsRoutes(deps: {
       tabs: orderedForWorkspace(w.id, clocks),
     }));
     return c.json({ workspaces: list });
+  });
+
+  /**
+   * Every ROUND of every child of this chat, keyed by child tab id.
+   *
+   * ONE request for a whole conversation. A worker is handed successive jobs and
+   * each is a round with its own pair of cards, so the log needs the rounds of
+   * every child it draws — and a parent with thirty children is the case this is
+   * shaped for. Thirty round trips to draw one log is the problem the corpus
+   * already solved once.
+   *
+   * NOT on the tab row, deliberately: that rides every five-second sidebar poll,
+   * and a report is up to 800 characters × every round × every child. The same
+   * reasoning that kept the full transcript off the row.
+   */
+  app.get('/:id/spawn-rounds', (c) => {
+    const id = c.req.param('id');
+    const byChild = new SpawnRoundStore(deps.db).listByParent(id);
+    return c.json({ rounds: Object.fromEntries(byChild) });
   });
 
   app.get('/', (c) => {

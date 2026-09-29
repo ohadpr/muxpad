@@ -81,6 +81,8 @@ import {
   parseReportMarker,
   rankMentions,
   repinPicks,
+  MAX_SPAWN_CARDS,
+  type SpawnRoundsByChild,
   spawnCards,
   spawnHandle,
   spawnLabel,
@@ -113,6 +115,7 @@ import {
   pickSearchTarget,
   takeSearchJump,
 } from '../lib/search-jump';
+import { NO_ROUNDS, loadSpawnRounds } from '../lib/spawn-rounds';
 import { type SpawnWork, fetchSpawnWork } from '../lib/spawn-work';
 import type { AgentLink } from '../lib/voice/session';
 import { useVoice } from '../lib/voice/use-voice';
@@ -2238,9 +2241,43 @@ export function ChatPane({
   // working", it is what the sidebar spins on, and it is now what this counts.
   // See live-status.ts for the measured scene and ChatPane.liveset.test.tsx for
   // the test that holds all three surfaces to one answer.
-  const spawnedCards = useMemo(() => spawnCards(corpus, myChat?.tabId), [corpus, myChat]);
+  //
+  // ─── ROUNDS ────────────────────────────────────────────────────────────────
+  // A worker is not one job: `muxpad agent send` revives a retired one and hands
+  // it the next. Both cards were anchored to `created_at` and `retired_at`, one
+  // pair per TAB, so every round after the first left nothing in the log —
+  // measured at five handovers against one pair. `spawnCards` draws a pair per
+  // ROUND when it has them, and falls back to the tab pair when it does not
+  // (the corpus arrives first, and an older server sends none).
+  const [spawnRounds, setSpawnRounds] = useState<SpawnRoundsByChild>(NO_ROUNDS);
+  const myTabId = myChat?.tabId;
+  useEffect(() => {
+    if (!myTabId) return;
+    // NOTHING TO ASK FOR when this chat has spawned nothing, which is most
+    // chats — and the corpus is how that is known, which is also why it belongs
+    // in the dependency list: a round starting or ending moves the child's tab
+    // row, so the corpus patch that lands for it is exactly the moment these go
+    // stale. The fetch is coalesced and freshness-capped (lib/spawn-rounds).
+    if (!corpus.some((c) => c.parentId === myTabId)) return;
+    let live = true;
+    void loadSpawnRounds(myTabId).then((r) => {
+      if (live) setSpawnRounds(r);
+    });
+    return () => {
+      live = false;
+    };
+  }, [myTabId, corpus]);
+  const spawnedCards = useMemo(
+    () => spawnCards(corpus, myChat?.tabId, MAX_SPAWN_CARDS, spawnRounds),
+    [corpus, myChat, spawnRounds],
+  );
   const spawnedLive = useMemo(
-    () => runningChildren(spawnedCards.map((c) => c.chat)),
+    () =>
+      // DEDUPED BY CHILD before it is counted. With rounds a worker appears in
+      // several entries — one pair per round — and the bar counts CHATS, not
+      // cards. Without this a child with four rounds would read as four agents,
+      // which is the same inflation `runningChildren` was introduced to fix.
+      runningChildren([...new Map(spawnedCards.map((c) => [c.chat.tabId, c.chat])).values()]),
     [spawnedCards],
   );
 
@@ -4646,7 +4683,10 @@ export function ChatPane({
           // THE COMPLETION — a SECOND entry, at the moment the work ended, which
           // is where the reader is looking when a long job finishes. Everything
           // the result is lives here.
-          const report = kid.report;
+          // THIS ROUND's result, not the tab's newest one. The tab carries one
+          // report — the latest — so reading it for every completion card would
+          // make an old card restate a result that belongs to a later round.
+          const report = x.card.report ?? kid.report;
           // AN EXPANDER ONLY WHERE THERE IS A RESULT BEHIND IT. Three report
           // states exist in the wild at once and two of them have nothing to
           // show; over those the control used to fall through to the transcript,

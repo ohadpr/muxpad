@@ -11,6 +11,7 @@ import {
   type MentionChat,
   type MentionPick,
   NO_MENTION_SEARCH,
+  type SpawnRound,
   applyMention,
   canExpandSpawn,
   detectMentionRun,
@@ -935,6 +936,112 @@ describe('spawnCards', () => {
  * own transcript; this is the half that decides WHERE it appears and WHAT the
  * card says about it.
  */
+/**
+ * A WORKER IS HANDED SUCCESSIVE JOBS.
+ *
+ * "if the chat has progressed then it doesn't help much to update the original
+ * card" was answered with two entries per child — and both were anchored to tab
+ * timestamps, which happen ONCE. `muxpad agent send` revives a retired worker
+ * and starts fresh work; measured on the real database, the chat writing this
+ * had five handovers against one pair of timestamps, so four rounds left no
+ * card at all.
+ */
+describe('spawnCards — one pair of entries PER ROUND', () => {
+  const kid = (over: Partial<MentionChat> = {}) =>
+    chat({ tabName: 'card-summary', tabId: 'cs', parentId: 'p', createdAt: 100, ...over });
+
+  const round = (over: Partial<SpawnRound> = {}): SpawnRound => ({
+    id: `r${over.started_at ?? 0}`,
+    tab_id: 'cs',
+    started_at: 100,
+    ended_at: 200,
+    report: null,
+    report_state: null,
+    artifacts: [],
+    ...over,
+  });
+
+  it('DRAWS A PAIR FOR EVERY ROUND, not one for the tab', () => {
+    const rounds = new Map([
+      [
+        'cs',
+        [
+          round({ started_at: 100, ended_at: 200 }),
+          round({ started_at: 300, ended_at: 400 }),
+          round({ started_at: 500, ended_at: 600 }),
+        ],
+      ],
+    ]);
+    expect(spawnCards([kid({ done: true })], 'p', 12, rounds).map((c) => [c.kind, c.at])).toEqual([
+      ['launch', 100],
+      ['completion', 200],
+      ['launch', 300],
+      ['completion', 400],
+      ['launch', 500],
+      ['completion', 600],
+    ]);
+  });
+
+  it('leaves the RUNNING round with only its launch', () => {
+    // Nothing arrives at the bottom until the work actually ends — per round,
+    // exactly as it was per tab.
+    const rounds = new Map([
+      [
+        'cs',
+        [round({ started_at: 100, ended_at: 200 }), round({ started_at: 300, ended_at: null })],
+      ],
+    ]);
+    expect(spawnCards([kid()], 'p', 12, rounds).map((c) => [c.kind, c.at])).toEqual([
+      ['launch', 100],
+      ['completion', 200],
+      ['launch', 300],
+    ]);
+  });
+
+  it('gives each round ITS OWN result — an old card never restates a new one', () => {
+    const rounds = new Map([
+      [
+        'cs',
+        [
+          round({
+            started_at: 100,
+            ended_at: 200,
+            report: 'Found 2 dead rules.',
+            report_state: 'ok',
+          }),
+          round({
+            started_at: 300,
+            ended_at: 400,
+            report: 'Counted 41 todos.',
+            report_state: 'ok',
+          }),
+        ],
+      ],
+    ]);
+    const cards = spawnCards([kid({ done: true })], 'p', 12, rounds);
+    expect(cards.filter((c) => c.kind === 'completion').map((c) => c.report?.text)).toEqual([
+      'Found 2 dead rules.',
+      'Counted 41 todos.',
+    ]);
+  });
+
+  it('FALLS BACK to the tab pair when rounds have not loaded', () => {
+    // The corpus arrives before the rounds do, and a server that predates the
+    // table never sends any. Neither may blank the log.
+    const legacy = kid({ done: true, doneReason: 'delivered', doneAt: 900 });
+    expect(spawnCards([legacy], 'p').map((c) => [c.kind, c.at])).toEqual([
+      ['launch', 100],
+      ['completion', 900],
+    ]);
+  });
+
+  it('is STABLE — the same entries in the same places on every render', () => {
+    const rounds = new Map([['cs', [round({ started_at: 100, ended_at: 200 })]]]);
+    const once = spawnCards([kid({ done: true })], 'p', 12, rounds);
+    expect(spawnCards([kid({ done: true })], 'p', 12, rounds)).toEqual(once);
+  });
+});
+
 describe('spawnCards — TWO entries per child: the launch, then the completion', () => {
   const kid = (over: Partial<MentionChat> = {}) =>
     chat({ tabName: 'dead-css', tabId: 'dc', parentId: 'p', createdAt: 100, ...over });

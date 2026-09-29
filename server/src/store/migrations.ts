@@ -813,6 +813,58 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE tabs ADD COLUMN spawn_artifacts TEXT;
     `,
   },
+  {
+    // A WORKER IS A SEQUENCE OF ROUNDS, not one job.
+    //
+    // "if the chat has progressed then it doesn't help much to update the
+    // original card" was answered with two entries per child — a launch at
+    // `created_at` and a completion at `retired_at`. Both are ONE PAIR PER TAB,
+    // and a worker does not get one job: it gets handed successive ones with
+    // `muxpad agent send`, which revives the retired chat and starts fresh work.
+    // Every round after the first was invisible to the person who asked for it.
+    //
+    // Measured on the real database, and it is not a corner case: the chat
+    // writing this had FIVE user messages against a single pair of timestamps.
+    // Worse than invisible, in fact — `reviveChat` NULLs `retired_at`, so
+    // re-tasking a worker made its completion card disappear and reappear lower
+    // down the log when the new round ended.
+    //
+    // WHY A TABLE AND NOT MORE COLUMNS: rounds are 1:N and unbounded. No
+    // arrangement of a fixed pair carries them, which is the whole finding.
+    //
+    // WHY NOT DERIVED FROM THE ARCHIVE, which was the promising alternative:
+    // `archive.sqlite` already stores one row per message with `sid`/`ts`/`role`
+    // plus its own byte copy of each transcript, so rounds ARE reconstructible
+    // from it — durably, stably, and measured at 38 ms per sid over 33 247
+    // messages. It fails on LIVENESS. `Archiver` triggers on `agent_turn
+    // done|fatal` and a 15-minute timer, so the message that STARTS a round is
+    // archived when that round ENDS or up to a quarter of an hour later. A
+    // launch card that arrives after the work finishes is not a launch card.
+    // The archive remains the right BACKFILL for rounds that predate this table.
+    //
+    // The two live signals both already exist and are already wired:
+    //   START  TabActivity.noteUserMessage — ws.ts's single funnel for every
+    //          message into every agent pane, where `reviveChat` already fires.
+    //   END    ChatRetirer.onFinished — where the spawn report already fires.
+    //
+    // ON DELETE CASCADE because a round of a chat that is gone is nothing. This
+    // is the one place in the lifecycle where a cascade is right: everywhere
+    // else "nothing is ever deleted" is the rule, and a round has no meaning
+    // apart from its child.
+    version: 32,
+    sql: `
+      CREATE TABLE spawn_rounds (
+        id            TEXT PRIMARY KEY,
+        tab_id        TEXT NOT NULL REFERENCES tabs(id) ON DELETE CASCADE,
+        started_at    INTEGER NOT NULL,
+        ended_at      INTEGER,
+        report        TEXT,
+        report_state  TEXT,
+        artifacts     TEXT
+      );
+      CREATE INDEX spawn_rounds_tab ON spawn_rounds(tab_id, started_at);
+    `,
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

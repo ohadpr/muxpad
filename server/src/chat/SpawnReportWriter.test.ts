@@ -8,6 +8,7 @@ import { EventBus } from '../events.js';
 import { PtydCache } from '../ptyd-cache.js';
 import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import { PaneStore } from '../store/PaneStore.js';
+import { SpawnRoundStore } from '../store/SpawnRoundStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { openDb } from '../store/db.js';
@@ -284,6 +285,38 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
     await writer.idle();
     writer.stop();
     expect(calls).toBe(0);
+  });
+
+  it('CLOSES THE ROUND at turn-end, and attaches the result when it lands', async () => {
+    // Two moments, deliberately apart. The round closes SYNCHRONOUSLY — a
+    // retirement must never sit behind a model call — and the sentences arrive
+    // up to thirty seconds later and are attached to the round that ended.
+    const { retirer, writer } = wire(async () => GOOD);
+    const kid = worker(parentChat());
+    const rounds = new SpawnRoundStore(db);
+    rounds.open(kid.tabId, 100);
+
+    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' });
+    // Closed already, before the model has answered.
+    expect(rounds.openRound(kid.tabId)).toBeNull();
+    expect(rounds.listByTab(kid.tabId)[0]?.report).toBeNull();
+
+    await writer.idle();
+    expect(rounds.listByTab(kid.tabId)[0]?.report).toBe(GOOD);
+    expect(rounds.listByTab(kid.tabId)[0]?.report_state).toBe('ok');
+  });
+
+  it('does not invent a round for a worker that predates the table', async () => {
+    // Every child that existed before rounds finishes turns with nothing open.
+    // A round with no beginning would be worse than no round.
+    const { retirer, writer } = wire(async () => GOOD);
+    const kid = worker(parentChat());
+    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' });
+    await writer.idle();
+    expect(new SpawnRoundStore(db).listByTab(kid.tabId)).toEqual([]);
+    // …and the tab row still carries the report, so nothing is lost while both
+    // homes exist.
+    expect(new TabStore(db).getById(kid.tabId)?.spawn_report).toBe(GOOD);
   });
 
   it('reports a CRASHED worker, which is the case retirement cannot see', async () => {

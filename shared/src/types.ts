@@ -371,6 +371,30 @@ export type PaneSpec = z.infer<typeof PaneSpecSchema>;
  * layout (binary tree of pane ids) and N panes. Belongs to a parent
  * workspace via tab_id (server-side field on tab rows).
  */
+/**
+ * ONE ROUND of a worker's life — given a job, finished that job.
+ *
+ * A sub-chat is not one job: `muxpad agent send` revives a retired worker and
+ * hands it the next one. Both of its cards were anchored to `created_at` and
+ * `retired_at`, which are one pair per TAB, so every round after the first was
+ * invisible — measured at five handovers against one pair on the real database.
+ *
+ * Served from `GET /api/tabs/:id/spawn-rounds` for a whole conversation at once
+ * rather than published on the tab row: a parent with thirty children would put
+ * every round of every one of them into every five-second sidebar poll.
+ */
+export const SpawnRoundSchema = z.object({
+  id: z.string(),
+  tab_id: z.string(),
+  started_at: z.number(),
+  /** Null while this round is still running. */
+  ended_at: z.number().nullable(),
+  report: z.string().nullable(),
+  report_state: z.enum(['ok', 'none', 'crashed', 'awaiting']).nullable(),
+  artifacts: z.array(z.string()),
+});
+export type SpawnRound = z.infer<typeof SpawnRoundSchema>;
+
 export const TabSchema = z.object({
   id: z.string(),
   slug: z.string(),
