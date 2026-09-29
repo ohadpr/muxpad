@@ -48,6 +48,16 @@ const stubPtyd = () =>
     on: () => {},
   }) as unknown as PtydClient;
 
+/**
+ * The settle these tests run with.
+ *
+ * Real timer, real frames — only the WINDOW is shortened. The production 90 s
+ * is sized for the gap between two turns of one job (see JOB_SETTLE_MS); what
+ * these tests need is the same mechanism at a length a suite can wait out, and
+ * the ordering they exist to pin is unaffected by its size.
+ */
+const SETTLE_MS = 60;
+
 async function boot() {
   const db = openDb(':memory:');
   const tabs = new TabStore(db);
@@ -76,7 +86,7 @@ async function boot() {
   const wsServer = attachWsServer({ http, db, ptyd: stubPtyd(), cache, events });
   // The same wiring index.ts does — the retirer is what makes turn-done
   // retire a sub-chat, and it is subscribed to the same bus ws.ts emits on.
-  const retirer = new ChatRetirer({ db, cache, events });
+  const retirer = new ChatRetirer({ db, cache, events }, SETTLE_MS);
   retirer.start();
   await new Promise<void>((r) => http.listen(0, r));
   const port = (http.address() as AddressInfo).port;
@@ -154,7 +164,7 @@ describe('a retired sub-chat does not come back wearing a READY dot', () => {
     });
     const http = createServer();
     const wsServer = attachWsServer({ http, db, ptyd: stubPtyd(), cache, events });
-    const retirer = new ChatRetirer({ db, cache, events });
+    const retirer = new ChatRetirer({ db, cache, events }, SETTLE_MS);
     retirer.start();
     await new Promise<void>((r) => http.listen(0, r));
     const port = (http.address() as AddressInfo).port;
@@ -172,6 +182,72 @@ describe('a retired sub-chat does not come back wearing a READY dot', () => {
     await waitUntil(() => panes.getById(pane.id)?.unread === true);
     expect(panes.getById(pane.id)?.unread).toBe(true);
     expect(resolveTabClock(clockIndex(db), top.id, Date.now()).done).toBe(false);
+    runner.close();
+  });
+});
+
+/**
+ * THE TWIN, IN THE PRODUCTION ORDER: a worker archived while it was working.
+ *
+ * Observed live — two sub-chats with `retired_at` set and `spawn_report_state`
+ * UNSET while both panes read `working`, a status bar saying "2 agents" over a
+ * sidebar with no sub-chat rows in it. A worker's job is not one turn: a
+ * background task coming back, a wakeup, a tool call resuming it all end a turn
+ * and start another, and every one of those boundaries retired it.
+ *
+ * Driven with REAL runner frames over a REAL socket and a REAL timer, because
+ * the sequence is the finding — the unit tests can force a settle, but only
+ * this can show that an ordinary multi-turn conversation never reaches one.
+ */
+describe('a worker is not finished just because a turn ended', () => {
+  /** Long enough for a settle to have fired if one was going to. */
+  const pastTheSettle = () => new Promise((r) => setTimeout(r, SETTLE_MS * 4));
+
+  it('STAYS LIVE across turn boundaries, and retires after the last one', async () => {
+    const t = await boot();
+    const runner = await openSock(`ws://127.0.0.1:${t.port}/ws/agent-runner/${t.childPane}`);
+    runner.send(hello);
+
+    // Three turns of ONE job. Each boundary is exactly what used to archive it.
+    for (let i = 0; i < 3; i++) {
+      runner.send(JSON.stringify({ t: 'turn-start' }));
+      runner.send(JSON.stringify({ t: 'turn-done', ok: true }));
+      // The next turn begins before the window elapses — a background task
+      // reporting back, which is the real shape of the failure.
+      await new Promise((r) => setTimeout(r, SETTLE_MS / 3));
+      expect(t.done().done).toBe(false);
+    }
+
+    // Now it really stops.
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true }));
+    await waitUntil(() => t.done().done);
+    expect(t.done().done_reason).toBe('delivered');
+    runner.close();
+  });
+
+  it('COMES BACK ON ITS OWN if it turns out not to have finished', async () => {
+    // The case no window can cover: quiet for longer than the settle because
+    // it was waiting on something no roster can see. It retires — and then
+    // speaks again. It must rejoin the sidebar without the user doing anything,
+    // which is the difference between a bug they never notice and the one they
+    // reported.
+    const t = await boot();
+    const runner = await openSock(`ws://127.0.0.1:${t.port}/ws/agent-runner/${t.childPane}`);
+    runner.send(hello);
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true }));
+
+    await waitUntil(() => t.done().done);
+    expect(t.done().done).toBe(true);
+
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+
+    await waitUntil(() => !t.done().done);
+    expect(t.done().done).toBe(false);
+    // …and it is not re-retired while that turn is still running.
+    await pastTheSettle();
+    expect(t.done().done).toBe(false);
     runner.close();
   });
 });

@@ -45,6 +45,26 @@ describe('retiring a sub-chat when it delivers', () => {
 
   const isDone = (id: string) => resolveTabClock(clockIndex(db), id, Date.now()).done;
 
+  /**
+   * A worker's JOB ends: its last turn ends and it then stays quiet.
+   *
+   * The two halves are one event in intent and two in mechanism, because a turn
+   * ending is no longer evidence that a job has — see `turn-end is not
+   * job-end`. Every test below that means "this worker finished" says it
+   * through here, so none of them re-states the settle, and a test that cares
+   * about the boundary ITSELF drives the two halves by hand.
+   *
+   * Returns whether the chat retired.
+   */
+  function finishJob(
+    retirer: ChatRetirer,
+    paneId: string,
+    phase: 'done' | 'fatal' = 'done',
+  ): boolean {
+    retirer.onTurnEnded({ pane_id: paneId, phase });
+    return retirer.settleNow(paneId);
+  }
+
   beforeEach(() => {
     db = new Database(':memory:');
     runMigrations(db);
@@ -67,7 +87,7 @@ describe('retiring a sub-chat when it delivers', () => {
     // sequence is driven for real in tab-retire.ws.test.ts.
     panes.setUnread(child.pane, true);
 
-    expect(new ChatRetirer(deps).onTurnEnded({ pane_id: child.pane, phase: 'done' })).toBe(true);
+    expect(finishJob(new ChatRetirer(deps), child.pane)).toBe(true);
 
     expect(isDone(child.tab)).toBe(true);
     expect(resolveTabClock(clockIndex(db), child.tab, Date.now()).done_reason).toBe('delivered');
@@ -81,7 +101,7 @@ describe('retiring a sub-chat when it delivers', () => {
     // talking. It leaves on its clock, or when you archive it.
     const top = chat('top');
     panes.setUnread(top.pane, true);
-    expect(new ChatRetirer(deps).onTurnEnded({ pane_id: top.pane, phase: 'done' })).toBe(false);
+    expect(finishJob(new ChatRetirer(deps), top.pane)).toBe(false);
     expect(isDone(top.tab)).toBe(false);
     expect(panes.getById(top.pane)?.unread).toBe(true);
   });
@@ -93,7 +113,7 @@ describe('retiring a sub-chat when it delivers', () => {
     events.subscribe((e: MuxpadEvent) => {
       if (e.type === 'tab.updated') seen.push(e.tab);
     });
-    new ChatRetirer(deps).onTurnEnded({ pane_id: child.pane, phase: 'done' });
+    finishJob(new ChatRetirer(deps), child.pane);
     expect(seen.at(-1)?.id).toBe(child.tab);
     expect(seen.at(-1)?.done).toBe(true);
     expect(seen.at(-1)?.done_reason).toBe('delivered');
@@ -111,11 +131,13 @@ describe('retiring a sub-chat when it delivers', () => {
       sid: 'sid-1',
       backend: 'claude',
     });
+    // The bus arms; quiet decides. Both halves are the wiring under test.
+    expect(retirer.settleNow(child.pane)).toBe(true);
     expect(isDone(child.tab)).toBe(true);
     retirer.stop();
   });
 
-  it('ignores turn-START — only an ended turn can have delivered anything', () => {
+  it('never RETIRES on a turn-start — only an ended turn can have delivered anything', () => {
     const parent = chat('parent');
     const child = chat('child', parent.tab);
     const retirer = new ChatRetirer(deps);
@@ -137,9 +159,7 @@ describe('retiring a sub-chat when it delivers', () => {
     it('a FATAL turn — a crashed run is what you want to look at', () => {
       const parent = chat('parent');
       const child = chat('child', parent.tab);
-      expect(new ChatRetirer(deps).onTurnEnded({ pane_id: child.pane, phase: 'fatal' })).toBe(
-        false,
-      );
+      expect(finishJob(new ChatRetirer(deps), child.pane, 'fatal')).toBe(false);
       expect(isDone(child.tab)).toBe(false);
     });
 
@@ -147,7 +167,7 @@ describe('retiring a sub-chat when it delivers', () => {
       const parent = chat('parent');
       const child = chat('child', parent.tab);
       blockedPanes.add(child.pane);
-      expect(new ChatRetirer(deps).onTurnEnded({ pane_id: child.pane, phase: 'done' })).toBe(false);
+      expect(finishJob(new ChatRetirer(deps), child.pane)).toBe(false);
       expect(isDone(child.tab)).toBe(false);
     });
 
@@ -157,7 +177,7 @@ describe('retiring a sub-chat when it delivers', () => {
       db.prepare(
         'INSERT INTO attachments (id, pane_id, mime, path, created_at) VALUES (?,?,?,?,?)',
       ).run('a1', child.pane, 'image/png', '/tmp/x.png', Date.now());
-      expect(new ChatRetirer(deps).onTurnEnded({ pane_id: child.pane, phase: 'done' })).toBe(false);
+      expect(finishJob(new ChatRetirer(deps), child.pane)).toBe(false);
       expect(isDone(child.tab)).toBe(false);
     });
 
@@ -170,7 +190,7 @@ describe('retiring a sub-chat when it delivers', () => {
       const parent = chat('parent');
       const child = chat('child', parent.tab);
       cache.setSubagentCount(child.pane, 2);
-      expect(new ChatRetirer(deps).onTurnEnded({ pane_id: child.pane, phase: 'done' })).toBe(false);
+      expect(finishJob(new ChatRetirer(deps), child.pane)).toBe(false);
       expect(isDone(child.tab)).toBe(false);
       expect(cache.getStatus(child.pane, false)).toBe('working');
 
@@ -178,7 +198,7 @@ describe('retiring a sub-chat when it delivers', () => {
       // retires it. (A runner reports the empty roster before turn-done on
       // the ordinary path; this is the same edge either way.)
       cache.setSubagentCount(child.pane, 0);
-      expect(new ChatRetirer(deps).onTurnEnded({ pane_id: child.pane, phase: 'done' })).toBe(true);
+      expect(finishJob(new ChatRetirer(deps), child.pane)).toBe(true);
       expect(isDone(child.tab)).toBe(true);
     });
 
@@ -189,7 +209,7 @@ describe('retiring a sub-chat when it delivers', () => {
       const parent = chat('parent');
       const child = chat('child', parent.tab);
       cache.setSubagentCount(child.pane, 1);
-      new ChatRetirer(deps).onTurnEnded({ pane_id: child.pane, phase: 'done' });
+      finishJob(new ChatRetirer(deps), child.pane);
       expect(isDone(child.tab) && cache.getStatus(child.pane, false) === 'working').toBe(false);
     });
 
@@ -199,10 +219,10 @@ describe('retiring a sub-chat when it delivers', () => {
       db.prepare(
         'INSERT INTO agent_queue (id, pane_id, seq, text, created_at) VALUES (?,?,?,?,?)',
       ).run('q1', child.pane, 1, 'and then this', Date.now());
-      expect(new ChatRetirer(deps).onTurnEnded({ pane_id: child.pane, phase: 'done' })).toBe(false);
+      expect(finishJob(new ChatRetirer(deps), child.pane)).toBe(false);
       expect(isDone(child.tab)).toBe(false);
       db.prepare('DELETE FROM agent_queue').run();
-      expect(new ChatRetirer(deps).onTurnEnded({ pane_id: child.pane, phase: 'done' })).toBe(true);
+      expect(finishJob(new ChatRetirer(deps), child.pane)).toBe(true);
       expect(isDone(child.tab)).toBe(true);
     });
 
@@ -210,7 +230,7 @@ describe('retiring a sub-chat when it delivers', () => {
       const parent = chat('parent');
       const child = chat('child', parent.tab);
       panes.create({ tab_id: child.tab, shell: '/bin/zsh', cwd: '/tmp' });
-      expect(new ChatRetirer(deps).onTurnEnded({ pane_id: child.pane, phase: 'done' })).toBe(false);
+      expect(finishJob(new ChatRetirer(deps), child.pane)).toBe(false);
       expect(isDone(child.tab)).toBe(false);
     });
 
@@ -218,7 +238,7 @@ describe('retiring a sub-chat when it delivers', () => {
       const parent = chat('parent');
       const child = chat('child', parent.tab);
       tabs.setPinned(child.tab, true);
-      expect(new ChatRetirer(deps).onTurnEnded({ pane_id: child.pane, phase: 'done' })).toBe(false);
+      expect(finishJob(new ChatRetirer(deps), child.pane)).toBe(false);
       expect(isDone(child.tab)).toBe(false);
     });
 
@@ -268,7 +288,7 @@ describe('retiring a sub-chat when it delivers', () => {
         awaitingUser: (p: string) => awaiting.has(p),
         onFinished: (tabId, _paneId, o) => finished.push({ tabId, awaiting: o.awaiting }),
       });
-      return { retired: retirer.onTurnEnded({ pane_id: paneId, phase: 'done' }), finished };
+      return { retired: finishJob(retirer, paneId), finished };
     }
 
     beforeEach(() => {
@@ -325,7 +345,7 @@ describe('retiring a sub-chat when it delivers', () => {
         ...deps,
         onFinished: (tabId, _paneId, o) => finished.push({ tabId, crashed: o.crashed }),
       });
-      const retired = retirer.onTurnEnded({ pane_id: paneId, phase });
+      const retired = finishJob(retirer, paneId, phase);
       return { retired, finished };
     }
 
@@ -497,6 +517,293 @@ describe('retiring a sub-chat when it delivers', () => {
 
       retireChat(deps, child.tab, 'archived');
       expect(rounds.listByTab(child.tab)[0]?.ended_at).toBe(5_000);
+    });
+  });
+
+  /**
+   * THE TWIN, AND THE WORSE HALF: A WORKING WORKER RETIRED TOO EARLY.
+   *
+   * Observed live: two sub-chats carrying `retired_at`, reason recorded,
+   * `spawn_report_state` UNSET — while both panes were `working`. The status
+   * bar said "2 agents" and the sidebar showed no sub-chat rows at all.
+   *
+   * Same root cause as the crash, pointed the other way: TURN-END IS BEING
+   * TREATED AS JOB-END. A worker that ends turn 1 of a multi-turn job — a
+   * background task completing, a wakeup, a tool call resuming it — is archived
+   * out of the sidebar while alive, and its summary is generated over an
+   * incomplete transcript, or not at all.
+   */
+  describe('turn-end is not job-end', () => {
+    it('does NOT retire on a bare turn-end — it arms a settle', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const retirer = new ChatRetirer(deps);
+
+      expect(retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' })).toBe(true);
+      // The row is STILL LIVE at this instant. This is the assertion the old
+      // behaviour could not make: it retired synchronously, here.
+      expect(isDone(child.tab)).toBe(false);
+    });
+
+    it('A MULTI-TURN WORKER STAYS LIVE ACROSS TURN BOUNDARIES', () => {
+      // The live failure, in a test. Turn 1 ends; the job is not over; the next
+      // turn starts because a background task came back. The worker must never
+      // have left the sidebar.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const retirer = new ChatRetirer(deps);
+
+      for (let turn = 0; turn < 3; turn++) {
+        retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
+        retirer.onTurnStart(child.pane); // the job continues
+        expect(isDone(child.tab)).toBe(false);
+      }
+      // A turn-start DISARMS the settle outright — it does not merely postpone
+      // it — so settling now decides nothing about a job still running.
+      expect(retirer.settleNow(child.pane)).toBe(false);
+      expect(isDone(child.tab)).toBe(false);
+    });
+
+    it('retires once the worker is genuinely quiet for the settle', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const retirer = new ChatRetirer(deps);
+
+      retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
+      expect(retirer.settleNow(child.pane)).toBe(true);
+      expect(isDone(child.tab)).toBe(true);
+      expect(resolveTabClock(clockIndex(db), child.tab, Date.now()).done_reason).toBe('delivered');
+    });
+
+    it('RE-CHECKS AT THE SETTLE — work that resumed silently cancels it', () => {
+      // The settle is not a delayed commitment to a decision already made; the
+      // decision is made when it fires, against the state as it is THEN. A
+      // subagent that started after the turn ended is a job still running.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const retirer = new ChatRetirer(deps);
+
+      retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
+      cache.setSubagentCount(child.pane, 1);
+
+      expect(retirer.settleNow(child.pane)).toBe(false);
+      expect(isDone(child.tab)).toBe(false);
+    });
+
+    it('a pane that is WORKING at the settle is not finished', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const retirer = new ChatRetirer(deps);
+
+      retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
+      cache.setAgentBusy(child.pane, true); // a turn is in flight right now
+
+      expect(retirer.settleNow(child.pane)).toBe(false);
+      expect(isDone(child.tab)).toBe(false);
+    });
+
+    it('THE REPORT WAITS FOR THE SETTLE, so it sees a COMPLETE transcript', () => {
+      // Three workers produced no report at all today because the summary was
+      // generated the moment a turn ended — over a transcript of a job that was
+      // still running. `onFinished` is what triggers it, so it moves too.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const finished: Array<{ tabId: string; crashed: boolean }> = [];
+      const retirer = new ChatRetirer({
+        ...deps,
+        onFinished: (tabId, _p, o) => finished.push({ tabId, crashed: o.crashed }),
+      });
+
+      retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
+      expect(finished).toEqual([]); // not yet — the job may not be over
+
+      retirer.settleNow(child.pane);
+      expect(finished).toEqual([{ tabId: child.tab, crashed: false }]);
+    });
+
+    it('no report at all for a turn boundary the job continued through', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const finished: string[] = [];
+      const retirer = new ChatRetirer({
+        ...deps,
+        onFinished: (tabId) => finished.push(tabId),
+      });
+
+      retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
+      retirer.onTurnStart(child.pane);
+      retirer.settleNow(child.pane);
+
+      expect(finished).toEqual([]);
+    });
+
+    it('THE ROUND SURVIVES A TURN BOUNDARY', () => {
+      // A round is one JOB, and it was being closed by a turn. Measured live:
+      // two rounds on a worker that had been given one task.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const rounds = new SpawnRoundStore(db);
+      rounds.open(child.tab, 1_000);
+      const retirer = new ChatRetirer(deps);
+
+      retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
+      retirer.onTurnStart(child.pane);
+
+      expect(rounds.openRound(child.tab)).not.toBeNull();
+    });
+
+    it('A TURN-START REVIVES A CHAT THAT WAS ALREADY RETIRED', () => {
+      // The safety net for the case a settle cannot cover: a worker idle longer
+      // than the window because it is waiting on something the roster cannot
+      // see (a long background task). It retires, then comes back — and it must
+      // rejoin the sidebar on its own, before the user has to notice or act.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const retirer = new ChatRetirer(deps);
+      retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
+      retirer.settleNow(child.pane);
+      expect(isDone(child.tab)).toBe(true);
+
+      expect(retirer.onTurnStart(child.pane)).toBe(true);
+
+      expect(isDone(child.tab)).toBe(false);
+    });
+
+    it('announces the revival, so the row reappears without a poll', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const retirer = new ChatRetirer(deps);
+      retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
+      retirer.settleNow(child.pane);
+
+      const seen: Tab[] = [];
+      events.subscribe((e: MuxpadEvent) => {
+        if (e.type === 'tab.updated') seen.push(e.tab);
+      });
+      retirer.onTurnStart(child.pane);
+
+      expect(seen.at(-1)?.id).toBe(child.tab);
+      expect(seen.at(-1)?.done).toBe(false);
+    });
+
+    it('a turn-start on a LIVE chat changes nothing', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      expect(new ChatRetirer(deps).onTurnStart(child.pane)).toBe(false);
+      expect(isDone(child.tab)).toBe(false);
+    });
+
+    it('DOES NOT UNDO A HAND ARCHIVE', () => {
+      // The revival exists to correct OUR guess about when work ended. An
+      // archive is not a guess — it is the user saying they are done with this
+      // chat — and a straggling background task must not drag the row back
+      // into a sidebar they deliberately cleared it from.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      retireChat(deps, child.tab, 'archived');
+
+      expect(new ChatRetirer(deps).onTurnStart(child.pane)).toBe(false);
+
+      expect(isDone(child.tab)).toBe(true);
+      expect(resolveTabClock(clockIndex(db), child.tab, Date.now()).done_reason).toBe('archived');
+    });
+
+    it('DOES revive a worker that had been given up for dead', () => {
+      // `died` is our guess too — the supervisor's — and a runner that comes
+      // back and starts talking is exactly the evidence that refutes it.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      retireChat(deps, child.tab, 'died');
+
+      expect(new ChatRetirer(deps).onTurnStart(child.pane)).toBe(true);
+      expect(isDone(child.tab)).toBe(false);
+    });
+
+    it('drives the whole sequence off the BUS, not just the methods', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const retirer = new ChatRetirer(deps);
+      retirer.start();
+      const turn = (phase: 'start' | 'done') =>
+        events.emit({
+          type: 'agent_turn',
+          pane_id: child.pane,
+          phase,
+          sid: 'sid-1',
+          backend: 'claude',
+        });
+
+      turn('done');
+      turn('start'); // the job goes on
+      expect(isDone(child.tab)).toBe(false);
+
+      turn('done');
+      retirer.settleNow(child.pane);
+      expect(isDone(child.tab)).toBe(true);
+
+      // …and it comes back on its own if it turns out not to be finished.
+      turn('start');
+      expect(isDone(child.tab)).toBe(false);
+      retirer.stop();
+    });
+
+    it('re-arms live workers at BOOT, because a settle is only in memory', () => {
+      // The hole the settle itself opens: a worker that finished within one
+      // window of a restart had its retirement cancelled by the restart, and
+      // no turn of its will ever end again to re-arm it.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const retirer = new ChatRetirer(deps);
+
+      expect(retirer.armLiveSubChats()).toBe(1);
+      expect(isDone(child.tab)).toBe(false); // arming is not deciding
+
+      expect(retirer.settleNow(child.pane)).toBe(true);
+      expect(isDone(child.tab)).toBe(true);
+    });
+
+    it('a boot-armed settle is disarmed by a worker that is still going', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const retirer = new ChatRetirer(deps);
+      retirer.armLiveSubChats();
+
+      retirer.onTurnStart(child.pane); // its runner reconnected, mid-turn
+
+      expect(retirer.settleNow(child.pane)).toBe(false);
+      expect(isDone(child.tab)).toBe(false);
+    });
+
+    it('boot-arming skips top-level chats, pinned chats and retired ones', () => {
+      const parent = chat('parent');
+      chat('top'); // not a sub-chat
+      const pinned = chat('pinned', parent.tab);
+      tabs.setPinned(pinned.tab, true);
+      const gone = chat('gone', parent.tab);
+      retireChat(deps, gone.tab, 'archived');
+      const live = chat('live', parent.tab);
+
+      const retirer = new ChatRetirer(deps);
+      expect(retirer.armLiveSubChats()).toBe(1);
+      expect(retirer.settleNow(live.pane)).toBe(true);
+    });
+
+    it('a FATAL turn the worker recovers from produces no crash card', () => {
+      // A crash it came back from is not a crash worth telling the parent
+      // about, and the settle is what makes that distinction available at all.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const finished: Array<{ crashed: boolean }> = [];
+      const retirer = new ChatRetirer({
+        ...deps,
+        onFinished: (_t, _p, o) => finished.push({ crashed: o.crashed }),
+      });
+
+      retirer.onTurnEnded({ pane_id: child.pane, phase: 'fatal' });
+      retirer.onTurnStart(child.pane);
+      retirer.settleNow(child.pane);
+
+      expect(finished).toEqual([]);
     });
   });
 
