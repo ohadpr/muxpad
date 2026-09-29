@@ -29,6 +29,7 @@ interface TabRow {
   workspace_id: string;
   pinned: number;
   last_activity_at: number | null;
+  last_user_at: number | null;
   headline: string | null;
   headline_at: number | null;
   name_sticky: number;
@@ -190,7 +191,7 @@ export class TabStore {
     const spawned_by = input.spawned_by ?? null;
     this.db
       .prepare(
-        'INSERT INTO tabs (id, slug, name, icon, layout, workspace_id, view_mode, created_at, updated_at, position, last_activity_at, spawned_by, clock_started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO tabs (id, slug, name, icon, layout, workspace_id, view_mode, created_at, updated_at, position, last_activity_at, spawned_by, clock_started_at, last_user_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         id,
@@ -213,6 +214,13 @@ export class TabStore {
         // — falls back to a real timestamp instead of a null nobody can
         // interpret.
         now,
+        // `last_user_at`: making a chat IS a user touch, and it is the one the
+        // global recency list ranks a brand-new chat by until the first message
+        // lands. A chat spawned by an agent is stamped too — it appeared
+        // because of something you set in motion, it appears ONCE (unlike an
+        // output bump), and it nests under its parent anyway, so its own key
+        // decides nothing on screen.
+        now,
       );
     return {
       id,
@@ -229,6 +237,7 @@ export class TabStore {
       // recent thing the user did, and sorting it last (null = never) would
       // bury a just-created tab at the bottom of its workspace. Stamp it.
       last_activity_at: now,
+      last_user_at: now,
       // Same rule as `icon`/`headline`: absent, not null, when there is no
       // parent — so the overwhelmingly common case adds nothing to the payload
       // or to the client's change-dedup signature.
@@ -466,7 +475,22 @@ export class TabStore {
    * key cache invalidation off it.
    */
   resetClock(id: string, at: number = Date.now()): void {
-    this.db.prepare('UPDATE tabs SET clock_started_at = ? WHERE id = ?').run(at, id);
+    // `last_user_at` rides along in the SAME statement, and that is the whole
+    // design of the column rather than a convenience. Its promise is "the last
+    // act by the USER", and the acts that restart the decay clock are exactly
+    // that set — v27 chose them for the same reason ("it measures your
+    // attention rather than the machine's"). Writing it here makes the two
+    // agree by construction: there is no second call site to forget, and no way
+    // for the recency order and the clock to end up disagreeing about when you
+    // were last here.
+    //
+    // Note what this does NOT catch, deliberately: `delete()` starts an
+    // orphan's clock with its own UPDATE, because promoting a sub-chat to a
+    // root is something the parent's deletion did, not something the user did
+    // to the child.
+    this.db
+      .prepare('UPDATE tabs SET clock_started_at = ?, last_user_at = ? WHERE id = ?')
+      .run(at, at, id);
   }
 
   /**
@@ -788,6 +812,15 @@ export class TabStore {
       // Null (never observed) is a real state and stays null — see the
       // migration note; the ordering sinks nulls rather than faking a time.
       last_activity_at: x.last_activity_at ?? null,
+      // UNCONDITIONAL, like `last_activity_at` and for the sharper version of
+      // the same reason: clients coalesce `tab.updated` onto a cached row, so a
+      // field omitted when it happens to be null would leave the previous value
+      // sitting there. It is also the ONLY key the global list can be ordered
+      // by, so a row that arrives without it does not sort low — it sorts by
+      // the noisy column this exists to replace (see userTouchAt). v33
+      // backfills every row, so the `?? null` is reachable only for a row
+      // inserted by something that bypassed `create` above.
+      last_user_at: x.last_user_at ?? null,
       // Same rule: null means "never summarised", which is permanent for any
       // tab without an agent session. Only present when non-null, so a chat
       // that has no headline adds nothing to the payload — and nothing to the

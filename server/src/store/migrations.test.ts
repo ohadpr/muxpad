@@ -1,4 +1,4 @@
-import { CHAT_STAGGER_MS } from '@muxpad/shared';
+import { CHAT_STAGGER_MS, staggeredClockStart } from '@muxpad/shared';
 import Database from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
 import { LATEST_SCHEMA_VERSION, runMigrations } from './migrations.js';
@@ -519,7 +519,7 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
       .get() as { version: number };
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
-    expect(LATEST_SCHEMA_VERSION).toBe(32);
+    expect(LATEST_SCHEMA_VERSION).toBe(33);
   });
 });
 
@@ -1121,5 +1121,200 @@ describe('migrations v32 — a worker is a sequence of ROUNDS', () => {
     const db = v31();
     runMigrations(db);
     expect(db.prepare('SELECT count(*) AS n FROM spawn_rounds').get()).toEqual({ n: 0 });
+  });
+});
+
+describe('migrations v33 — the user-touch recency key', () => {
+  /**
+   * A v32-era database — head, minus this migration — with one workspace, so
+   * every test below walks the real upgrade path rather than asserting things
+   * about a database that was born current.
+   */
+  function v32(): Database.Database {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 32 });
+    db.prepare(
+      'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+    ).run('w1', 'wslug1aa', 'W', 0, 1, 1);
+    return db;
+  }
+
+  function addTab(
+    db: Database.Database,
+    id: string,
+    o: { createdAt: number; clock: number | null; lastActivityAt?: number },
+  ): void {
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at,
+                         last_activity_at, clock_started_at)
+       VALUES (?, ?, ?, '""', 'w1', 0, ?, ?, ?, ?)`,
+    ).run(id, `s-${id}`, id, o.createdAt, o.createdAt, o.lastActivityAt ?? null, o.clock);
+  }
+
+  function userAt(db: Database.Database, id: string): number | null {
+    return (
+      db.prepare('SELECT last_user_at FROM tabs WHERE id = ?').get(id) as {
+        last_user_at: number | null;
+      }
+    ).last_user_at;
+  }
+
+  /** v27's backfill, replayed: one boot instant, one id-derived offset each. */
+  function backfilled(ids: string[], boot: number): Map<string, number> {
+    return new Map(ids.map((id) => [id, staggeredClockStart(id, boot)]));
+  }
+
+  const DAY = 86_400_000;
+
+  it('discards v27’s SYNTHETIC clocks and keeps the ones a user really set', () => {
+    // The whole migration in one case. Six chats carry v27's backfilled clock —
+    // `boot + hash(id)`, which says nothing about the user — and two carry a
+    // clock a real message reset since. Only the two real ones may survive as a
+    // user-touch time; the six must fall back to their own creation.
+    const db = v32();
+    const boot = Date.now() - 3 * DAY;
+    const untouched = ['a', 'b', 'c', 'd', 'e', 'f'];
+    const clocks = backfilled(untouched, boot);
+    for (const id of untouched) {
+      addTab(db, id, { createdAt: boot - 20 * DAY, clock: clocks.get(id) as number });
+    }
+    const sentAt = Date.now() - 2 * 3_600_000;
+    addTab(db, 'messaged', { createdAt: boot - 40 * DAY, clock: sentAt });
+    const revivedAt = Date.now() - 20 * 60_000;
+    addTab(db, 'revived', { createdAt: boot - 40 * DAY, clock: revivedAt });
+
+    runMigrations(db);
+
+    expect(userAt(db, 'messaged')).toBe(sentAt);
+    expect(userAt(db, 'revived')).toBe(revivedAt);
+    for (const id of untouched) {
+      expect({ id, at: userAt(db, id) }).toEqual({ id, at: boot - 20 * DAY });
+    }
+  });
+
+  it('never leaves a key in the FUTURE — the defect that made v27 unusable here', () => {
+    // 4 of 36 live clocks on the real database were stamped up to ~17h ahead,
+    // because the stagger only ever moves a clock LATER. Sorting on a future
+    // timestamp puts an untouched chat above everything you actually did, which
+    // is strictly worse than the noisy key this column replaces.
+    const db = v32();
+    const boot = Date.now(); // every offset lands ahead of now
+    const ids = ['f1', 'f2', 'f3', 'f4', 'f5'];
+    const clocks = backfilled(ids, boot);
+    for (const id of ids)
+      addTab(db, id, { createdAt: boot - 10 * DAY, clock: clocks.get(id) as number });
+    // At least one of them really is in the future, or the test proves nothing.
+    expect([...clocks.values()].some((c) => c > boot)).toBe(true);
+
+    runMigrations(db);
+
+    const after = Date.now();
+    for (const id of ids) {
+      expect({ id, future: (userAt(db, id) as number) > after }).toEqual({ id, future: false });
+    }
+  });
+
+  it('orders the untouched population by CREATION, never by the id hash', () => {
+    // v27's fallback ordering is `hash(id)`, which is arbitrary but stable —
+    // so a test that only checked "not in the future" would pass on it. This
+    // pins the replacement: an untouched chat ranks by the last thing about it
+    // anybody can vouch for, which is when it was made.
+    const db = v32();
+    const boot = Date.now() - 2 * DAY;
+    const ids = ['z1', 'z2', 'z3', 'z4', 'z5', 'z6'];
+    const clocks = backfilled(ids, boot);
+    // Creation order deliberately OPPOSITE to the hash order, so the two
+    // rankings cannot be confused for each other.
+    const byHash = [...ids].sort((x, y) => (clocks.get(x) as number) - (clocks.get(y) as number));
+    const createdAt = new Map(byHash.map((id, i) => [id, boot - (i + 1) * DAY]));
+    for (const id of ids) {
+      addTab(db, id, { createdAt: createdAt.get(id) as number, clock: clocks.get(id) as number });
+    }
+
+    runMigrations(db);
+
+    const ranked = ids
+      .slice()
+      .sort((x, y) => (userAt(db, y) as number) - (userAt(db, x) as number));
+    expect(ranked).toEqual(byHash);
+  });
+
+  it('is not moved by pty output — a chat tailing a log stays where it was', () => {
+    // The sentence v27 wrote about the clock, restated for the sort key: this
+    // column must be blind to `last_activity_at`, which is bumped by sampled
+    // terminal OUTPUT. `tailing` has been noisy for a month and touched never.
+    const db = v32();
+    const boot = Date.now() - 2 * DAY;
+    const clocks = backfilled(['tailing', 'quiet'], boot);
+    addTab(db, 'tailing', {
+      createdAt: boot - 30 * DAY,
+      clock: clocks.get('tailing') as number,
+      lastActivityAt: Date.now(),
+    });
+    addTab(db, 'quiet', {
+      createdAt: boot - 10 * DAY,
+      clock: clocks.get('quiet') as number,
+      lastActivityAt: boot - 10 * DAY,
+    });
+
+    runMigrations(db);
+
+    // The quiet chat is the newer one and must rank above the noisy one.
+    expect(userAt(db, 'quiet') as number).toBeGreaterThan(userAt(db, 'tailing') as number);
+  });
+
+  it('never ranks a chat BEFORE it existed', () => {
+    // `created_at` is the floor in both arms. A clock somehow older than the
+    // row (a hand-edited database, a restore) must not produce a key that
+    // claims the user touched a chat that did not exist yet.
+    const db = v32();
+    const born = Date.now() - 5 * DAY;
+    addTab(db, 'odd', { createdAt: born, clock: born - 30 * DAY });
+    addTab(db, 'odd2', { createdAt: born, clock: born - 31 * DAY });
+    runMigrations(db);
+    expect(userAt(db, 'odd')).toBe(born);
+  });
+
+  it('reads every clock as REAL when no backfilled population is left', () => {
+    // The degradation that matters on a small or heavily-used install: v27 may
+    // have left nothing untouched, in which case there is no mode to find and
+    // nothing may be discarded. One row agreeing with itself is not a
+    // population — the guard is ≥ 2.
+    const db = v32();
+    const t1 = Date.now() - 3_600_000;
+    const t2 = Date.now() - 7_200_000;
+    addTab(db, 'one', { createdAt: Date.now() - 20 * DAY, clock: t1 });
+    addTab(db, 'two', { createdAt: Date.now() - 20 * DAY, clock: t2 });
+    runMigrations(db);
+    expect(userAt(db, 'one')).toBe(t1);
+    expect(userAt(db, 'two')).toBe(t2);
+  });
+
+  it('survives a row with no clock at all', () => {
+    const db = v32();
+    const born = Date.now() - 9 * DAY;
+    addTab(db, 'clockless', { createdAt: born, clock: null });
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(userAt(db, 'clockless')).toBe(born);
+  });
+
+  it('is idempotent in the real sense — a re-run cannot re-stamp a live key', () => {
+    // Same hazard v27 guarded, and the same guard: `IS NULL`. A second pass
+    // after the user has sent a message must not drag the key back to the
+    // migration's own reading.
+    const db = v32();
+    const boot = Date.now() - 2 * DAY;
+    const clocks = backfilled(['t1', 't2'], boot);
+    addTab(db, 't1', { createdAt: boot - 20 * DAY, clock: clocks.get('t1') as number });
+    addTab(db, 't2', { createdAt: boot - 20 * DAY, clock: clocks.get('t2') as number });
+    runMigrations(db);
+    const sent = Date.now() + 5_000;
+    db.prepare('UPDATE tabs SET last_user_at = ?, clock_started_at = ? WHERE id = ?').run(
+      sent,
+      sent,
+      't1',
+    );
+    runMigrations(db);
+    expect(userAt(db, 't1')).toBe(sent);
   });
 });

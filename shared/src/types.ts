@@ -445,6 +445,17 @@ export const TabSchema = z.object({
   // output. Drives the recency ordering of the unpinned block. Null on rows
   // migrated in before the column existed — those sort last.
   last_activity_at: z.number().nullable().optional(),
+  // Epoch ms of the last act by the USER on this chat: creating it, sending it
+  // a message, or unarchiving it. Nothing the machine does moves it — not pty
+  // output, not a turn finishing — which is the entire difference from
+  // `last_activity_at` above and the reason the GLOBAL (cross-workspace) list
+  // orders on this instead. See shared/tab-order `userTouchAt` for why one
+  // column cannot do both jobs, and migrations v33 for the backfill.
+  //
+  // ALWAYS SENT by a server that has the column. `.optional()` is wire-compat
+  // with one that predates it, where absent falls back to `last_activity_at` —
+  // i.e. to today's ordering — rather than to no order at all.
+  last_user_at: z.number().nullable().optional(),
   // How many ENABLED crons target a pane in this tab. A schedule is a
   // PROPERTY of a chat, not a status, so it deliberately does NOT ride the
   // status rail (which is transient and mutually exclusive by construction) —
