@@ -363,6 +363,34 @@ export interface SpawnCard {
   /** Epoch ms this entry is about. Never moves. */
   at: number;
   /**
+   * THE ROW THIS ENTRY IS DRAWN AS — its React key and its `data-eid`.
+   *
+   * ── WHY IT IS COMPUTED HERE AND NOT AT THE CALL SITE ─────────────────────
+   * It was `spawn-<child tab id>` / `done-<child tab id>`, built in ChatPane,
+   * and that was unique for exactly as long as a worker had one launch and one
+   * completion. `spawn_rounds` (v32) made a worker a SEQUENCE of jobs — the pair
+   * above became a pair PER ROUND — and every pair reused the same two ids.
+   * Measured on the real database: one child with 27 rounds, i.e. 27 rows in one
+   * log all answering to `spawn-<id>`.
+   *
+   * The scroll mechanism names the reader's place with a row id and resolves it
+   * with `rowBox`, which returns the FIRST row carrying it (in the DOM and in
+   * the sim alike). So a duplicate is not a weak anchor, it is a WRONG one: the
+   * reader is measured against the card they are on and re-placed against a
+   * different one, and the distance between the two is how far they are thrown.
+   * Measured in the sim: a reader who scrolled up onto the second card was sent
+   * 2,400 px back up the log by their own scroll event — "when I scroll up
+   * sometimes it jumps back". React's reconciler has the same complaint about
+   * the duplicate key, one layer up.
+   *
+   * So identity belongs with the thing that KNOWS whether this entry came from a
+   * round or from the tab-level fallback, which is this function and not the
+   * component. The fallback keeps the old unsuffixed id, because it is still the
+   * only entry of its kind for that child and reusing it keeps every position
+   * already parked on one readable.
+   */
+  anchorId: string;
+  /**
    * THIS ROUND's result, when the entry belongs to a round.
    *
    * Per-entry rather than per-chat because a worker is handed successive jobs
@@ -375,6 +403,20 @@ export interface SpawnCard {
    * fallback (where `chat.report` is the only thing there is).
    */
   report?: SpawnReport | undefined;
+}
+
+/**
+ * The id one entry is drawn under — see `SpawnCard.anchorId` for why it is a
+ * field rather than something the renderer rebuilds.
+ *
+ * `round` is the round's own id, or null for the tab-level fallback. A round id
+ * is a server-stamped primary key, so the anchor is stable across reloads and
+ * across the rounds arriving late — which is the one property a scroll memory
+ * needs of it.
+ */
+function cardAnchorId(chat: MentionChat, kind: SpawnCard['kind'], round: string | null): string {
+  const head = kind === 'launch' ? 'spawn' : 'done';
+  return round === null ? `${head}-${chat.tabId}` : `${head}-${chat.tabId}-${round}`;
 }
 
 /** One round's result, in the shape the card already reads. */
@@ -596,14 +638,30 @@ export function spawnCards(
       // ONE PAIR PER ROUND. Every handover left a launch where it happened, and
       // every finish left a result where the reader was looking.
       for (const r of mine) {
-        out.push({ chat, kind: 'launch', at: r.started_at });
+        out.push({
+          chat,
+          kind: 'launch',
+          at: r.started_at,
+          anchorId: cardAnchorId(chat, 'launch', r.id),
+        });
         if (r.ended_at === null) continue; // still running: nothing at the bottom yet
         const rep = roundReport(r);
-        out.push({ chat, kind: 'completion', at: r.ended_at, ...(rep ? { report: rep } : {}) });
+        out.push({
+          chat,
+          kind: 'completion',
+          at: r.ended_at,
+          anchorId: cardAnchorId(chat, 'completion', r.id),
+          ...(rep ? { report: rep } : {}),
+        });
       }
       continue;
     }
-    out.push({ chat, kind: 'launch', at: spawnedAt(chat) });
+    out.push({
+      chat,
+      kind: 'launch',
+      at: spawnedAt(chat),
+      anchorId: cardAnchorId(chat, 'launch', null),
+    });
     // ONLY ONCE IT HAS ACTUALLY FINISHED. Nothing arrives at the bottom of the
     // conversation while the work is still going on — which is the rule the
     // whole two-card split rests on.
@@ -619,7 +677,13 @@ export function spawnCards(
     // or an odd fallback can put the result above the spawn that caused it — and
     // the reader would see a worker finish before it started. Clamped rather
     // than dropped: the entry is real, only its time is unusable.
-    if (at !== null) out.push({ chat, kind: 'completion', at: Math.max(at, spawnedAt(chat)) });
+    if (at !== null)
+      out.push({
+        chat,
+        kind: 'completion',
+        at: Math.max(at, spawnedAt(chat)),
+        anchorId: cardAnchorId(chat, 'completion', null),
+      });
   }
   // Sorted because a slow worker finishes AFTER a later sibling was launched,
   // and `interleaveSpawnCards` walks this list once against the transcript's own
