@@ -29,6 +29,8 @@ import {
   repinPicks,
   runIsSettled,
   spawnCards,
+  spawnHandle,
+  spawnLabel,
   spawnReportSummary,
   spawnState,
   spawnedChildren,
@@ -1102,6 +1104,52 @@ describe('spawnState — the live status outranks a stale retirement', () => {
     // going on — which is the whole rule the two-card split rests on.
     const busy = retired({ parentId: 'p', createdAt: 100, doneAt: 900, status: 'working' });
     expect(spawnCards([busy], 'p').map((c) => c.kind)).toEqual(['launch']);
+  });
+});
+
+/**
+ * WHAT THE CARD IS CALLED.
+ *
+ * "Sub chats need a more purposeful card… At a minimum give them a sub-chat
+ * icon, and maybe a few words or a slightly more descriptive name — 4 words
+ * instead of 2." The cards read `status-line` and `cross-ws`: the `--name=`
+ * handles typed on a command line, which are not labels.
+ */
+describe('spawnLabel / spawnHandle — a sentence, and the handle under it', () => {
+  const kid = (over: Partial<MentionChat> = {}) =>
+    chat({ tabName: 'status-line', tabId: 'sl', ...over });
+
+  it('prefers the generated TASK label above everything', () => {
+    const c = kid({
+      headline: 'the status line',
+      task: 'Move the status line out of the composer',
+    });
+    expect(spawnLabel(c)).toBe('Move the status line out of the composer');
+  });
+
+  it('falls back to the HEADLINE, which is good at exactly this job', () => {
+    // The headline restates the PROMPT and is written on a six-minute interval.
+    // Both are why it was wrong under a finished card — it says nothing about
+    // what the worker FOUND — and both are fine here: what a worker was asked is
+    // precisely what a launch card wants, and by the time one is late the work
+    // is usually still running.
+    expect(spawnLabel(kid({ headline: 'largest source files in muxpad' }))).toBe(
+      'largest source files in muxpad',
+    );
+  });
+
+  it('falls back to the SLUG, never to nothing', () => {
+    // A handle is poor, not broken. A blank card is broken.
+    expect(spawnLabel(kid())).toBe('status-line');
+  });
+
+  it('keeps the HANDLE underneath — it is what you type and what the rail shows', () => {
+    expect(spawnHandle(kid({ headline: 'the status line' }))).toBe('status-line');
+  });
+
+  it('does not repeat the handle when it IS the label', () => {
+    // Two lines saying `status-line` is worse than one.
+    expect(spawnHandle(kid())).toBeUndefined();
   });
 });
 

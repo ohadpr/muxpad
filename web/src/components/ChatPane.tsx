@@ -82,6 +82,8 @@ import {
   rankMentions,
   repinPicks,
   spawnCards,
+  spawnHandle,
+  spawnLabel,
   spawnReportSummary,
   spawnState,
   toMentionChats,
@@ -140,7 +142,7 @@ import { ANCHOR_ATTR, domScrollSurface } from '../lib/chat-scroll-dom';
 import { TOP_PAGE_ZONE_PX, shouldPageOlder } from '../lib/chat-scroll-intent';
 import { companionTextForImagePaste, splitClipboard } from '../lib/clipboard-detect';
 import { trackKeyboardInset } from '../lib/keyboard-inset';
-import { liveStatusLabel } from '../lib/live-status';
+import { liveStatusLabel, sessionModelLabel } from '../lib/live-status';
 import { isMobileLayout } from '../lib/mobile-layout';
 import { useDismissable } from '../lib/use-dismissable';
 import './ChatPane.css';
@@ -850,17 +852,43 @@ const MODE_CHOICES: ReadonlyArray<{ id: AgentMode; label: string; desc: string }
 ];
 
 /**
- * Status bar: one segmented strip above the composer —
- * mode | folder | model · ctx | agents (when any). Each segment opens its own
- * upward panel; only one panel at a time. Parent-turn busy state stays in
- * the transcript Working… row; this agents cell is subagents only.
+ * The SESSION LINE: one quiet strip above the composer pill, never more than one
+ * line long. Each cell opens its own upward panel; only one panel at a time.
  *
- * WHY MODE LIVES HERE. It used to be deliberately hidden — internal plumbing
- * with no UI at all. Once the two modes got names a person can say (Chat /
- * Agent) that stopped being defensible: the pane's arrangement is part of its
- * identity, and identity already lives in this row. It is NOT in the sidebar
- * rail, which runs on a strict one-bit (status) budget; adding a second
- * channel there is how a rail becomes a dashboard.
+ * ── WHAT EARNS PERMANENT SPACE ──────────────────────────────────────────────
+ * It read `Agent · muxpad · claude-opus-5 · 25% · 2 agents`, and at 390px with
+ * a real folder name that wrapped — which, because the strip sat above the input
+ * INSIDE the bottom-anchored pill, shoved the composer down. Five cells was two
+ * too many, so they were sorted by whether they CHANGE:
+ *
+ *   · LIVE (`2 agents` / `Working…`) — the persistent "something is running"
+ *     indicator, asked for twice, and the only cell you can open. It is the
+ *     reason the line exists, so it is the one cell excused from shrinking.
+ *   · FOLDER — the fact that distinguishes two otherwise identical panes, and
+ *     only when the pane actually sits in a project (showFolderChip). Truncates.
+ *   · SESSION (backend logo + model) — the anchor for everything that IS a dial:
+ *     the model list, the context meter, compact, clear, and the folder path when
+ *     the chip is hidden. Truncates.
+ *
+ * And what came OFF the line, with where it went:
+ *   · THE MODE WORD, in Agent mode. The model cell — logo and all — renders only
+ *     in Agent mode, so its presence already states the arrangement; the word was
+ *     the longest thing on the line saying nothing new. It is listed in the
+ *     session menu instead. Chat mode KEEPS the word, because there the cell is
+ *     the only thing on the line and has to carry it alone.
+ *   · THE CONTEXT PERCENTAGE. A number that asks to be watched, in a strip you
+ *     glance at. The session menu has had a labelled meter and a token count the
+ *     whole time — strictly more information, one tap away, and nobody monitors
+ *     a context window continuously.
+ *   · THE VENDOR PREFIX of the model id (`claude-opus-5` → `Opus 5`, see
+ *     sessionModelLabel). The Claude logo is rendered immediately to its left.
+ *
+ * WHY MODE IS HERE AT ALL. It used to be deliberately hidden — internal plumbing
+ * with no UI. Once the two modes got names a person can say (Chat / Agent) that
+ * stopped being defensible: the pane's arrangement is part of its identity, and
+ * identity already lives in this row. It is NOT in the sidebar rail, which runs
+ * on a strict one-bit (status) budget; adding a second channel there is how a
+ * rail becomes a dashboard.
  */
 // Exported for its test (like ChatReadyGreeting / HarnessLaunchCard below): what
 // this strip claims is running is a load-bearing statement, and the defect it
@@ -1027,7 +1055,14 @@ export function SessionBar({
           control — a new pane in the mode you want gets the real thing, and
           that is the only honest way to change it. The mode is still settable
           at creation and over the API; it just isn't a button here. */}
-      {mode ? (
+      {/* CHAT MODE ONLY, and that is a width decision rather than a change of
+          heart. In Agent mode the model cell renders a backend logo and a model
+          name — neither of which Chat mode shows — so "Agent" next to them was
+          the longest cell on the line contributing nothing a reader could not
+          already see. It moves into the session menu, which is one tap from the
+          same spot. Chat mode has no model cell and no folder cell, so here the
+          word is the only thing identifying the pane and it stays. */}
+      {mode === 'chat' ? (
         <div
           className="chat-status-seg -mode -static"
           title={`${AGENT_MODE_LABELS[mode]} mode — ${
@@ -1071,15 +1106,28 @@ export function SessionBar({
             onClick={() => (status ? toggle('model') : undefined)}
             aria-haspopup={status ? 'menu' : undefined}
             aria-expanded={status ? panel === 'model' : undefined}
+            // The tooltip is where the full, exact id lives, alongside the mode
+            // the cell no longer spells out and a list of what the menu holds.
             title={
               status
-                ? `${assistantLabel(assistant)}${status.activeModel || status.model ? ` · ${status.activeModel ?? status.model}` : ''} — model, context, compact, clear`
+                ? `${AGENT_MODE_LABELS[mode ?? 'agent']} mode · ${assistantLabel(assistant)}${
+                    status.activeModel || status.model
+                      ? ` · ${status.activeModel ?? status.model}`
+                      : ''
+                  } — model, context, folder, compact, clear`
                 : assistantLabel(assistant)
             }
           >
             <AgentBackendLogo backend={backendFromAssistant(assistant)} size={12} />
+            {/* NO CONTEXT PERCENTAGE. It was the second-longest cell on a line
+                that could not afford five, and it is the one nobody watches
+                continuously — the menu below has a labelled meter AND the token
+                counts, which is more information in the place you go when you
+                actually want to know. The model id loses its vendor prefix for
+                the same reason the mode word went: the logo to its left is
+                already saying "Claude". */}
             <span className="chat-status-seg-label">
-              {status ? `${modelLabel}${ctx ? ` · ${ctx.pct}%` : ''}` : assistantLabel(assistant)}
+              {status ? sessionModelLabel(modelLabel) : assistantLabel(assistant)}
             </span>
           </button>
           {/* When the folder chip is hidden (a plain, non-project chat) the
@@ -1088,6 +1136,23 @@ export function SessionBar({
           {!folderChipVisible ? folderPanel : null}
           {panel === 'model' && status ? (
             <div className="chat-status-menu chat-session-menu" role="menu">
+              {/* THE MODE, since the bar no longer spells it out in this mode.
+                  Read-only for the same reason the chip was: no harness can
+                  rewrite a live session's system prompt, so a switch here could
+                  only ever deliver the new contract as a message the
+                  conversation drifts from. A new pane in the mode you want is
+                  the only honest way to change it. */}
+              {mode ? (
+                <>
+                  <div className="chat-session-head">Mode</div>
+                  <div className="chat-session-item -static">
+                    <span className="chat-session-item-label">{AGENT_MODE_LABELS[mode]}</span>
+                    <span className="chat-session-item-desc">
+                      {MODE_CHOICES.find((m) => m.id === mode)?.desc ?? ''}
+                    </span>
+                  </div>
+                </>
+              ) : null}
               {/* Working folder — only listed when it isn't already its own
                   cell in the bar, so the two never both show the path. */}
               {folder && !folderChipVisible ? (
@@ -1194,7 +1259,10 @@ export function SessionBar({
       ) : null}
 
       {liveLabel ? (
-        <div className="chat-status-seg-wrap">
+        // `-live` on the WRAPPER, not just the button: the wrapper is the bar's
+        // flex item, so this is where "never shrink" has to be declared for
+        // "12 agents" to survive 320px whole.
+        <div className="chat-status-seg-wrap -live">
           {/* A BUTTON only when there is a roster to open. With no subagents the
               label is "Working…", and the panel below renders nothing for an
               empty roster — so a button there would be a control that visibly
@@ -2009,7 +2077,7 @@ export function ChatPane({
     }
     // One request per (query, limit). Without this the escalation would re-fire
     // on every render that still shows a short list.
-    const asked = `${mentionQuery} ${mentionWantLimit}`;
+    const asked = `${mentionQuery}\0${mentionWantLimit}`;
     if (mentionAsked.current === asked) return;
     const mine = mentionTicket.current;
     setMentionSearching(true);
@@ -4539,7 +4607,19 @@ export function ChatPane({
               <ChatMentionCard
                 key={anchorId}
                 anchorId={anchorId}
-                chat={kid.chip}
+                // A SENTENCE, NOT A HANDLE. The card used to read `status-line`
+                // — the `--name=` value typed on a command line — beside a dot
+                // and a spinner, and two of those said nothing about what was
+                // running. `spawnLabel` reaches for the generated task line, then
+                // the headline, then the handle; it is never blank.
+                chat={{ ...kid.chip, name: spawnLabel(kid) }}
+                // …and the handle underneath it, because that is what the rail
+                // shows, what `@` completes, and what you would type to talk to
+                // this worker. Omitted when it IS the label.
+                sub={spawnHandle(kid)}
+                // "At a minimum give them a sub-chat icon." A branch, in place of
+                // the clock chip a sub-chat has no use for — see the component.
+                mark="spawn"
                 working={state === 'working'}
                 onOpen={() => openChat(kid)}
               />
@@ -4564,7 +4644,11 @@ export function ChatPane({
             <ChatMentionCard
               key={anchorId}
               anchorId={anchorId}
-              chat={kid.chip}
+              // The SAME label and the same mark as its launch card: the two
+              // entries are one worker seen twice, and a reader who scrolls past
+              // the first has to recognise the second as the same thing.
+              chat={{ ...kid.chip, name: spawnLabel(kid) }}
+              mark="spawn"
               // NOTHING UNDER THE NAME unless there is a real summary — and it
               // is emphatically not the chat's headline, which is what used to be
               // here. That is HeadlineWriter's label: it restates the PROMPT
@@ -5145,31 +5229,46 @@ export function ChatPane({
                 onHover={setMentionCursor}
               />
             ) : null}
+            {/* A SIBLING OF THE PILL, above it — not a child of it.
+
+                It has now been wrong in both directions, so both are written
+                down. As its own floating strip it was a second OBJECT: its own
+                border, its own background, a 10px gap, 37px of a 119px bar for a
+                line you read and almost never press. Moved onto the pill's
+                surface to pay that back, it became chrome inside the thing you
+                type in — "it's all too tight there" — and, worse, it sat above
+                the input INSIDE a bottom-anchored pill, so the one time it
+                mattered (a long model id and a folder name at 390px, wrapping)
+                it SHOVED THE COMPOSER DOWN.
+
+                Out here it costs the same as it did on the pill: one 16px line
+                plus the 6px that separates it, where the pill's own row gap used
+                to spend the same 6px on it. Its height is a constant in the
+                stylesheet and it can no longer wrap (ChatPane.statusline.test.tsx
+                pins both), so it cannot move the composer whatever it says. It
+                stays inside `.chat-composer-wrap` deliberately: the wrap is what
+                `composerRef` measures, and `.chat-composer-reserve` holds that
+                height clear at the foot of the log — a strip positioned outside
+                the measurement would float over the last message instead. */}
+            <SessionBar
+              paneId={paneId}
+              folder={folder}
+              status={agentStatus}
+              {...(session?.assistant ? { assistant: session.assistant } : {})}
+              liveLabel={liveLabel}
+              agents={rosterAgents}
+              onOpenChat={openChat}
+              mode={mode}
+              send={(obj) => {
+                const sock = wsRef.current;
+                if (!sock || sock.readyState !== WebSocket.OPEN) {
+                  setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
+                  return;
+                }
+                sock.send(JSON.stringify(obj));
+              }}
+            />
             <div className="chat-composer">
-              {/* INSIDE the pill, not stacked above it. As its own floating
-                strip this was a second object with its own border, its own
-                background and a 10px gap under it — 37px of a 119px bar, a
-                third of the whole thing, spent on a line you read and almost
-                never press. Sharing the pill's surface costs nothing but the
-                text's own height. */}
-              <SessionBar
-                paneId={paneId}
-                folder={folder}
-                status={agentStatus}
-                {...(session?.assistant ? { assistant: session.assistant } : {})}
-                liveLabel={liveLabel}
-                agents={rosterAgents}
-                onOpenChat={openChat}
-                mode={mode}
-                send={(obj) => {
-                  const sock = wsRef.current;
-                  if (!sock || sock.readyState !== WebSocket.OPEN) {
-                    setNotice({ text: 'Not connected — try again in a moment.', tone: 'info' });
-                    return;
-                  }
-                  sock.send(JSON.stringify(obj));
-                }}
-              />
               {/* No `capture` attribute, deliberately: with one, iOS goes straight
                 to the camera. Without it — and with an `accept` that is not
                 image-only — the share sheet offers Photo Library, Take Photo,

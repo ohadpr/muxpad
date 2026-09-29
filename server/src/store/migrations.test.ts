@@ -519,7 +519,7 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
       .get() as { version: number };
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
-    expect(LATEST_SCHEMA_VERSION).toBe(29);
+    expect(LATEST_SCHEMA_VERSION).toBe(30);
   });
 });
 
@@ -1028,5 +1028,38 @@ describe('migrations v29 — the spawn report', () => {
         .prepare('SELECT spawn_report, spawn_report_at, spawn_report_state FROM tabs WHERE id = ?')
         .get('t1'),
     ).toEqual({ spawn_report: null, spawn_report_at: 7_000, spawn_report_state: null });
+  });
+});
+
+describe('migrations v30 — what the worker was asked', () => {
+  function v29(): Database.Database {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 29 });
+    db.prepare(
+      'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+    ).run('w1', 'wslug1aa', 'W', 0, 1, 1);
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at)
+       VALUES ('t1', 's1', 'status-line', '""', 'w1', 0, 1, 1)`,
+    ).run();
+    return db;
+  }
+
+  it('adds the column empty — a label is read off a first message, and no existing child is sending one', () => {
+    const db = v29();
+    runMigrations(db);
+    expect(db.prepare('SELECT spawn_task FROM tabs WHERE id = ?').get('t1')).toEqual({
+      spawn_task: null,
+    });
+  });
+
+  it('is independent of the report — asked and concluded are two facts', () => {
+    const db = v29();
+    runMigrations(db);
+    db.prepare('UPDATE tabs SET spawn_task = ? WHERE id = ?').run('Move the status line', 't1');
+    expect(db.prepare('SELECT spawn_task, spawn_report FROM tabs WHERE id = ?').get('t1')).toEqual({
+      spawn_task: 'Move the status line',
+      spawn_report: null,
+    });
   });
 });

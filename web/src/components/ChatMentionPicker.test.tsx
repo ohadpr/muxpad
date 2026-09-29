@@ -293,6 +293,36 @@ describe('the card says what happened, in the app state language', () => {
 });
 
 /**
+ * A SUB-CHAT LOOKS LIKE A SUB-CHAT.
+ *
+ * "At a minimum give them a sub-chat icon." The leading mark was `ChatChip`'s
+ * 6px dot — the sidebar's child mark, which works there because there is a
+ * PARENT ROW above it to be a child of. In a card there is no such row, and
+ * ChatChip's own note says it: a dot with nothing to belong to "is just a lost
+ * mark". Beside a name it reads as a bullet.
+ */
+describe('the spawn mark', () => {
+  it('draws a BRANCH instead of the clock chip', () => {
+    const out = html(<ChatMentionCard chat={{ name: 'status-line' }} mark="spawn" working />);
+    expect(out).toContain('chat-mention-card-spawn');
+    // The clock chip is gone from this card — a sub-chat HAS no clock, and that
+    // component is the clock's, start to finish.
+    expect(out).not.toContain('chatchip');
+  });
+
+  it('is named, because a drawn glyph says nothing to a screen reader', () => {
+    const out = html(<ChatMentionCard chat={{ name: 'status-line' }} mark="spawn" working />);
+    expect(out).toContain('<span class="chat-mention-card-sr">Sub-chat</span>');
+  });
+
+  it('leaves the @ card its chip — that one is not a worker', () => {
+    const out = html(<ChatMentionCard chat={{ name: 'Investing' }} state="reported" />);
+    expect(out).toContain('chatchip');
+    expect(out).not.toContain('chat-mention-card-spawn');
+  });
+});
+
+/**
  * THE CARD IN SIX THEMES — the CSS contract, read off the stylesheet.
  *
  * Rules rather than computed pixels, for StateChip.test's reason: jsdom does not

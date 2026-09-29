@@ -204,6 +204,88 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
     await expect(writer.idle()).resolves.toBeUndefined();
   });
 
+  it('LABELS A WORKER FROM ITS FIRST TURN, off the bus', () => {
+    // The card's label has to land at the START of the work. A card that is
+    // unreadable until the job is over is the card this replaces — `status-line`
+    // beside a dot and a spinner.
+    const writer = new SpawnReportWriter({
+      db,
+      events,
+      cache,
+      model: async () => 'unused',
+      taskModel: async () => 'Move the status line out of the composer',
+    });
+    writer.start();
+    const kid = worker(parentChat());
+    events.emit({
+      type: 'agent_turn',
+      pane_id: kid.paneId,
+      phase: 'start',
+      sid: null,
+      backend: 'codex',
+    });
+    return writer.idle().then(() => {
+      writer.stop();
+      expect(new TabStore(db).getById(kid.tabId)?.spawn_task).toBe(
+        'Move the status line out of the composer',
+      );
+    });
+  });
+
+  it('asks ONCE per worker, however many turns it runs', async () => {
+    let calls = 0;
+    const writer = new SpawnReportWriter({
+      db,
+      events,
+      cache,
+      model: async () => 'unused',
+      taskModel: async () => {
+        calls++;
+        return 'Move the status line';
+      },
+    });
+    writer.start();
+    const kid = worker(parentChat());
+    for (const phase of ['start', 'done', 'start'] as const) {
+      events.emit({ type: 'agent_turn', pane_id: kid.paneId, phase, sid: null, backend: 'codex' });
+    }
+    await writer.idle();
+    writer.stop();
+    expect(calls).toBe(1);
+  });
+
+  it('leaves a TOP-LEVEL chat unlabelled — it is a conversation, not a task', async () => {
+    let calls = 0;
+    const writer = new SpawnReportWriter({
+      db,
+      events,
+      cache,
+      model: async () => 'unused',
+      taskModel: async () => {
+        calls++;
+        return 'nope';
+      },
+    });
+    writer.start();
+    // With a REAL transcript, so the sub-chat guard is what stops this and not
+    // an empty read — the mutation that deletes the guard has to go red.
+    const top = new TabStore(db).create({ name: 'Main', workspace_id: workspaceId, layout: '' }).id;
+    const pane = new PaneStore(db).create({ tab_id: top, shell: '/bin/zsh', cwd: '/tmp' }).id;
+    new AgentSessionStore(db).register({
+      pane_id: pane,
+      assistant: 'codex',
+      session_id: `sid-${pane}`,
+    });
+    writeFileSync(
+      join(dir, 'agent-transcripts', `sid-${pane}.jsonl`),
+      `${JSON.stringify({ id: '1', ts: 1, kind: 'user', text: 'what is the cash position' })}\n`,
+    );
+    events.emit({ type: 'agent_turn', pane_id: pane, phase: 'start', sid: null, backend: 'codex' });
+    await writer.idle();
+    writer.stop();
+    expect(calls).toBe(0);
+  });
+
   it('reports a CRASHED worker, which is the case retirement cannot see', async () => {
     const { retirer, writer } = wire(async () => 'Got through 38 of the files before dying.');
     const kid = worker(parentChat());

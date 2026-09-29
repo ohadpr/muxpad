@@ -122,6 +122,16 @@ export interface MentionChat extends SearchableTab {
    */
   doneAt?: number | undefined;
   /**
+   * WHAT THIS WORKER WAS ASKED — one short line of plain English, generated
+   * server-side from its FIRST message (server/src/chat/spawn-task.ts).
+   *
+   * `--name=status-line` is a handle typed on a command line; it is not a label,
+   * and a card carrying only that says nothing about what is running. Absent for
+   * every chat nobody spawned, and for a worker whose first turn has not been
+   * read yet — see `spawnLabel`, which never leaves the card blank.
+   */
+  task?: string | undefined;
+  /**
    * WHAT THIS WORKER DID — the spawn report, when it has one.
    *
    * Written server-side by reading the child's own transcript the moment its work
@@ -157,6 +167,8 @@ type TabWithLifecycle = {
   clock?: ChatClock | null;
   /** Epoch ms it finished — the retirement stamp. Null while live. */
   done_at?: number | null;
+  /** One line of what this worker was asked, generated from its first message. */
+  spawn_task?: string | null;
   /** The spawn report's three columns. All three absent together, always. */
   spawn_report?: string | null;
   spawn_report_at?: number | null;
@@ -193,6 +205,7 @@ export function toMentionChats(groups: readonly WorkspaceTabs[]): MentionChat[] 
       ...(parentName ? { parentName } : {}),
       ...(typeof row?.created_at === 'number' ? { createdAt: row.created_at } : {}),
       ...(typeof row?.done_at === 'number' ? { doneAt: row.done_at } : {}),
+      ...(row?.spawn_task ? { task: row.spawn_task } : {}),
       // THE REPORT, gated on the STATE and on the timestamp together. Both are
       // needed to draw the entry at all — a state with no time has no place in
       // the log to sit — and the server publishes them as a set, so a row
@@ -355,6 +368,43 @@ function finishedAt(c: MentionChat): number | null {
   if (typeof c.doneAt === 'number') return c.doneAt;
   if (c.report) return c.report.at;
   return typeof c.lastActivityAt === 'number' ? c.lastActivityAt : null;
+}
+
+/**
+ * WHAT A SPAWN CARD IS CALLED — a sentence, not a handle.
+ *
+ * The cards read `status-line` and `cross-ws`: the `--name=` values typed on a
+ * command line. They are chosen to be short enough to type and unique enough to
+ * grep, which are not the qualities a label needs, and two of them side by side
+ * say nothing about what is running.
+ *
+ * Three sources, in descending order of how well each answers "what is this
+ * worker for":
+ *
+ *   1. `task` — generated from the child's FIRST message the moment it starts
+ *      work. Written for this slot and nothing else.
+ *   2. the HEADLINE — and this is the one place it is genuinely good. It
+ *      restates the PROMPT and it arrives on a six-minute interval; both are
+ *      why it was wrong under a FINISHED card (it says nothing about what the
+ *      worker found), and both are fine here. What a worker was asked IS what a
+ *      launch card wants to say, and a label that is late by a few minutes is a
+ *      label on work that is usually still running.
+ *   3. the tab NAME — the handle. Poor, not broken, and never blank.
+ */
+export function spawnLabel(chat: MentionChat): string {
+  return chat.task || chat.headline || chat.tabName;
+}
+
+/**
+ * The handle, for the line under the label — `status-line` beneath "Move the
+ * status line out of the composer".
+ *
+ * Worth its line: it is what the sidebar row says, what `@` completes, and what
+ * you would type to talk to this worker from a terminal. Omitted when it IS the
+ * label, because two lines saying `status-line` are worse than one.
+ */
+export function spawnHandle(chat: MentionChat): string | undefined {
+  return spawnLabel(chat) === chat.tabName ? undefined : chat.tabName;
 }
 
 /**

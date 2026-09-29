@@ -522,6 +522,20 @@ export const TabSchema = z.object({
   // which is every chat nobody spawned. Unlike `done`/`clock` there is nothing
   // to un-say: a report is only ever written, never withdrawn, so a client
   // coalescing rows cannot be left holding a stale one.
+  // WHAT THIS WORKER WAS ASKED — one short line, read off its FIRST message the
+  // moment it starts work (server/src/chat/spawn-task.ts). The pair with
+  // `spawn_report` reads "asked" and "concluded".
+  //
+  // It exists for the same reason the report does and answers the earlier half:
+  // a spawn card showed `status-line`, the `--name=` handle typed on a command
+  // line, which says nothing about what is running. Deliberately NOT the
+  // headline — that is a tab-wide facility built for stillness (a 6-minute
+  // floor, an anti-drift prompt) and it answers "what is this chat ABOUT"
+  // rather than "what was this worker ASKED". The headline remains the card's
+  // fallback, which is the one job it is good at.
+  //
+  // Absent, not null, when there is none — which is every chat nobody spawned.
+  spawn_task: z.string().nullable().optional(),
   spawn_report: z.string().nullable().optional(),
   // Epoch ms the report was written. Its place in the parent's log — the moment
   // the result LANDED, not the spawn that may be hours further up.
