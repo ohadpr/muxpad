@@ -41,6 +41,9 @@ vi.mock('./events', () => ({
     return () => handlers.delete(h);
   },
   subscribeReconnect: () => () => {},
+  // This module now hands its landed lists to `lib/all-tabs`, which subscribes
+  // here too. Never fired: these tests assert the push path costs no fetch.
+  subscribeResync: () => () => {},
 }));
 
 const refreshWorkspaces = vi.fn(async () => {});

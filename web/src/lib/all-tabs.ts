@@ -1,5 +1,6 @@
+import type { Tab } from '@muxpad/shared';
 import { api } from '../api';
-import { subscribe } from '../events';
+import { subscribe, subscribeResync } from '../events';
 import type { WorkspaceTabs } from './nav-search';
 
 /**
@@ -32,6 +33,44 @@ import type { WorkspaceTabs } from './nav-search';
  * is a round trip saved and cannot drift from what the sidebar is showing —
  * because it IS what the sidebar is showing. No poll was added; there is still
  * exactly one request per time you go looking for something.
+ *
+ * ─── …and the two things a push CANNOT carry ────────────────────────────────
+ * Both were observed on the live cockpit, and neither is a bug in the patching
+ * above — they are the edges where no `tab.updated` exists to patch WITH.
+ *
+ * 1. `status` MOVES WITHOUT A `tab.updated`. A pane going working → idle emits
+ *    `pane.updated` and nothing else (server/src/index.ts `cache.on('paneChange')`
+ *    is the only emitter on that edge). The tab row's rolled-up `status` is what
+ *    `childIsRunning` reads, so a corpus that listens only for `tab.updated`
+ *    freezes that field at whatever the last fetch said — FOREVER, on a socket
+ *    that never dropped. `tabs.ts` never had this problem because it answers a
+ *    status-signature change by refetching the workspace; this module had no
+ *    such path, which is why finished agents went on spinning as cards while
+ *    the sidebar rows beside them had already moved to the done drawer.
+ *
+ * 2. A MISSED PUSH WAS PERMANENT. Events are not replayed across a reconnect
+ *    (see events.ts), and with no poll and no resync there was nothing left to
+ *    heal a gap. A phone whose socket died held its last snapshot until reload:
+ *    two finished agents spinning, "2 agents" in the status bar, indefinitely.
+ *
+ * The answer to both is the same one, and it is NOT a poll:
+ *
+ *   · `mergeWorkspaceTabs` lets the per-workspace cache hand this one its
+ *     freshly-landed list (`tabs.ts` `publishTabs`). That cache already refetches
+ *     on a status edge, on its 5s visible poll and on reconnect, so the corpus
+ *     inherits all three for every workspace the sidebar has loaded — at the
+ *     cost of ZERO extra requests, because it is re-using an answer that was
+ *     fetched anyway. This is what makes the cards and the rows agree: they are
+ *     now literally the same bytes.
+ *   · `subscribeResync` refetches the corpus on reconnect and on
+ *     document-visible, which is the backstop for the workspaces the sidebar has
+ *     NOT loaded — and only when a corpus is already held.
+ *
+ * THE LAZINESS IS INTACT. Nothing here fetches for a workspace nobody has asked
+ * about: with `cache === null` the merge is a no-op and the resync declines to
+ * fetch. The rule the header opens with — "one request per time you go looking
+ * for something" — still holds; what changed is that the answer stays true
+ * afterwards.
  */
 
 let cache: WorkspaceTabs[] | null = null;
@@ -94,8 +133,14 @@ const unsubscribeLive = subscribe((e) => {
       return { ...g, tabs: [...g.tabs, e.tab] };
     });
     // A workspace we are not holding: leave it to the next fetch rather than
-    // inventing a group out of an id and no name.
+    // inventing a group out of an id and no name. But STOP CALLING THE CORPUS
+    // FRESH — we have just been told, by the server, about a chat that is not
+    // in it, so the next `loadAllTabs` must actually ask instead of being
+    // short-circuited by FRESH_MS. This costs no request of its own; it only
+    // declines to serve a known-incomplete answer as a current one. (Reachable
+    // whenever a workspace is created after the corpus was fetched.)
     if (hit) publish(next);
+    else settledAt = 0;
     return;
   }
   if (e.type === 'tab.removed') {
@@ -109,11 +154,122 @@ const unsubscribeLive = subscribe((e) => {
   }
 });
 
+/**
+ * Take a workspace's freshly-landed tab list into the corpus.
+ *
+ * Called by `tabs.ts` every time it publishes a list — a poll landing, a
+ * reconnect refetch, the refetch it schedules off a pane status edge, and its
+ * optimistic local patches. That cache is the sidebar's, so this is the seam
+ * that makes the rail and the cards ONE surface rather than two clocks: the
+ * rows and the corpus are fed from the same array, in the same tick.
+ *
+ * Both routes decorate through `orderedForWorkspace` (server/src/routes/tabs.ts),
+ * so a group spliced in here is what `/api/tabs/all` would have returned for it.
+ *
+ * NO FETCH, and no group invented — same rule as the push handlers above. A
+ * corpus nobody has asked for stays unasked-for.
+ */
+export function mergeWorkspaceTabs(workspaceId: string, tabs: readonly Tab[]): void {
+  if (!cache) return;
+  const group = cache.find((g) => g.id === workspaceId);
+  // A workspace outside the corpus we hold — nothing to merge into. Same
+  // reasoning as `tab.added` above: an id with no name is not a group.
+  if (!group) return;
+  // THE DEDUPE IS LOAD-BEARING, not an optimization. Without it the 5s
+  // per-workspace poll would publish a new array every 5s whether or not
+  // anything moved, and every corpus reader would re-render on that interval —
+  // including `ChatPane`, which is a transcript. That is exactly the poll-on-
+  // everything this module exists to avoid, arriving through the back door.
+  // Stringify because both sides come off the same server serializer in the
+  // same key order, so it is a conservative comparison: equal means equal, and
+  // a false "changed" costs only the repaint we would have done anyway.
+  if (JSON.stringify(group.tabs) === JSON.stringify(tabs)) return;
+  publish(cache.map((g) => (g.id === workspaceId ? { ...g, tabs: [...tabs] } : g)));
+}
+
+/** Coalesce a burst of status edges into one corpus refetch. Matches the 250ms
+ *  `scheduleLiveRefresh` uses for the same job on the per-workspace caches. */
+const CORPUS_EDGE_MS = 250;
+let edgeTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * A pane status edge for a tab the SIDEBAR'S cache does not hold.
+ *
+ * The last cell of the table that read "not at all". `mergeWorkspaceTabs` gives
+ * the corpus the sidebar's clock, but only for workspaces the sidebar has
+ * actually loaded — the expanded ones, and the one you are in. The corpus is
+ * WIDER than that: the flat 'recent' list renders every visible workspace's
+ * chats, and a card can point at work directed to another workspace entirely.
+ * For those rows a `pane.updated` reached nobody, so their `status` sat at
+ * fetch-time truth until a resync happened along — the same frozen spinner,
+ * one workspace over.
+ *
+ * `tabs.ts` calls this only when NO cache slot holds the tab, so this never
+ * duplicates the refetch it is already scheduling for itself.
+ *
+ * NOT A POLL, and three guards keep it that way: it fires only on a real status
+ * change (`tabs.ts` gates on its per-pane signature), only for a row the corpus
+ * actually holds, and only while something is actually rendering from the
+ * corpus. A cockpit where nothing is happening sends nothing.
+ */
+export function refreshCorpusForTab(tabId: string): void {
+  if (!cache) return;
+  // No mounted reader means no pixels to correct; the next `loadAllTabs` on
+  // mount will fetch anyway. This is what keeps an idle page silent.
+  if (listeners.size === 0) return;
+  if (!cache.some((g) => g.tabs.some((t) => t.id === tabId))) return;
+  if (edgeTimer !== null) return;
+  edgeTimer = setTimeout(() => {
+    edgeTimer = null;
+    settledAt = 0;
+    void loadAllTabs();
+  }, CORPUS_EDGE_MS);
+}
+
+/**
+ * A resync refetch is queued behind an in-flight request, so a burst of
+ * reconnect + visibility events cannot stack a fetch each.
+ */
+let refetchQueued = false;
+
+/**
+ * Reconnect, and document-visible — the backstop for everything the pushes
+ * missed while the socket was down, and for the workspaces `mergeWorkspaceTabs`
+ * never hears about because the sidebar has not loaded them.
+ *
+ * Guarded on `cache`: with no corpus held, nobody has asked for one and a
+ * reconnect is not a reason to start. That guard IS the laziness.
+ */
+const unsubscribeResync = subscribeResync(() => {
+  if (!cache) return;
+  // Not merely "allowed to refetch" — REQUIRED to. `loadAllTabs` short-circuits
+  // on FRESH_MS, and a corpus that landed 4 seconds before the gap is fresh by
+  // that clock and stale by the only one that matters.
+  settledAt = 0;
+  const pending = inFlight;
+  if (!pending) {
+    void loadAllTabs();
+    return;
+  }
+  // A request issued BEFORE the gap can answer with pre-gap truth, and
+  // `loadAllTabs` would hand that to every subscriber as the new corpus. Let it
+  // settle — `inFlight` clears in its own `finally` — then ask again.
+  if (refetchQueued) return;
+  refetchQueued = true;
+  void pending.then(() => {
+    refetchQueued = false;
+    settledAt = 0;
+    void loadAllTabs();
+  });
+});
+
 // Vite HMR: same reasoning as tabs.ts — editing this module in dev must not
 // stack duplicate handlers. No-op in production.
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
     unsubscribeLive();
+    unsubscribeResync();
+    if (edgeTimer !== null) clearTimeout(edgeTimer);
     listeners.clear();
   });
 }
@@ -174,5 +330,10 @@ export function resetAllTabsCache(): void {
   settledAt = 0;
   inFlight = null;
   unsupported = false;
+  refetchQueued = false;
+  if (edgeTimer !== null) {
+    clearTimeout(edgeTimer);
+    edgeTimer = null;
+  }
   listeners.clear();
 }
