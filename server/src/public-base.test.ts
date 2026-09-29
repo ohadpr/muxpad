@@ -815,6 +815,62 @@ describe('a named tunnel wins on its own merits, with no new precedence', () => 
   });
 });
 
+/**
+ * MUXPAD_PUBLIC_BASE_URL *AND* A NAMED TUNNEL, pointed at the same hostname —
+ * the shape this machine is now configured in, and one the module had never been
+ * asked to hold before. Previously the two were alternatives: `env` meant "a real
+ * domain exists, so no tunnel is needed". Here the tunnel is what SERVES the
+ * domain, so both are true at once and both have to stay true.
+ */
+describe('a configured base in front of the tunnel that serves it', () => {
+  const NAMED = 'https://pub.example.org';
+
+  it('collapses to ONE candidate rather than listing the same url twice', async () => {
+    // `muxpad publish --base` prints this table. The same hostname appearing as
+    // both `env` and `tunnel` would read as two independent answers that happen
+    // to agree, which is not what it is.
+    reachable.add(NAMED);
+    globals.set(PUBLIC_BASE_URL_KEY, FUNNEL);
+    const r = make({ configuredBaseUrl: NAMED, tunnelBaseUrl: () => NAMED });
+    const list = r.candidates();
+    expect(list.filter((c) => c.url === NAMED)).toHaveLength(1);
+    expect(list[0]).toMatchObject({ source: 'env', durability: 'permanent' });
+    expect(await r.resolve({ probe: true })).toMatchObject({
+      baseUrl: NAMED,
+      source: 'env',
+      durability: 'permanent',
+    });
+  });
+
+  it('FALLS BACK to the tailnet base when the tunnel behind it is down', async () => {
+    // The cost of pinning the base in configuration: `env` is not gated on the
+    // tunnel record the way the `tunnel` source is, so nothing structural
+    // demotes it when the connector dies. What saves it is the PROBE, and this
+    // pins the half that lives here — a dead configured base is stepped over
+    // rather than served.
+    //
+    // The other half is that a Cloudflare hostname with no connector answers
+    // 502 and that 502 must classify as dead. This test cannot see it (the probe
+    // is injected), so it is pinned where it actually lives:
+    // url-health.test.ts, "classifyStatus — a proxy answering for a backend that
+    // is gone". Together they are the whole safety net for this configuration.
+    const r = make({ configuredBaseUrl: NAMED, tunnelBaseUrl: () => null });
+    globals.set(PUBLIC_BASE_URL_KEY, FUNNEL);
+    // NAMED deliberately absent from `reachable` — the gateway is answering,
+    // the backend is not.
+    const got = await r.resolve({ probe: true });
+    expect(got.baseUrl).toBe(FUNNEL);
+    expect(got.durability).toBe('tailnet');
+  });
+
+  it('keeps serving the configured base while it still answers', async () => {
+    reachable.add(NAMED);
+    const r = make({ configuredBaseUrl: NAMED, tunnelBaseUrl: () => null });
+    globals.set(PUBLIC_BASE_URL_KEY, FUNNEL);
+    expect(await r.resolve({ probe: true })).toMatchObject({ baseUrl: NAMED, source: 'env' });
+  });
+});
+
 describe('the note says what is true for the link just handed over', () => {
   it('names the tailnet limit plainly, and the flag that escapes it', () => {
     const note = durabilityNote('tailnet');
