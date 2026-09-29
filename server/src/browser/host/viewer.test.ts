@@ -955,3 +955,55 @@ describe('every control is wired at the TOP LEVEL of the script', () => {
     expect(body).toContain('applyWatching()');
   });
 });
+
+describe('the text sink is visible to WebKit, invisible to a person', () => {
+  /**
+   * Safari refuses — or withdraws — a keyboard for an input it considers not
+   * really on screen, and it does it WITHOUT blurring the field. That is why
+   * the symptom is so confusing: the keyboard flashes up and drops, and the
+   * page still says the field has focus, so every focus-side test passes.
+   *
+   * Each of these was a real regression. left:-9999px, then z-index:-1, then
+   * opacity:0 with a 1x1 box. The only way to hide this input from a person
+   * without hiding it from the browser is to render nothing: transparent ink
+   * on a transparent background, at full opacity, in a box with actual size.
+   */
+  const sinkCss = (): string => {
+    const css = VIEWER_HTML.slice(VIEWER_HTML.indexOf('#sink{'));
+    return css.slice(0, css.indexOf('}')).replace(/\s+/g, '');
+  };
+
+  it('is fully opaque — opacity:0 is invisible to WebKit too', () => {
+    expect(sinkCss()).toContain('opacity:1');
+  });
+
+  it('hides by having no ink rather than no substance', () => {
+    expect(sinkCss()).toContain('color:transparent');
+    expect(sinkCss()).toContain('caret-color:transparent');
+    expect(sinkCss()).toContain('background:transparent');
+  });
+
+  it('has a box big enough to count as a field', () => {
+    const w = Number(/width:(\d+)px/.exec(sinkCss())?.[1]);
+    const h = Number(/height:(\d+)px/.exec(sinkCss())?.[1]);
+    expect(w).toBeGreaterThanOrEqual(16);
+    expect(h).toBeGreaterThanOrEqual(16);
+  });
+
+  it('sits where an open keyboard cannot cover it', () => {
+    // A keyboard eats the bottom of the visual viewport. An input pinned to
+    // bottom:0 is off screen for exactly as long as the keyboard is up, which
+    // is the whole time it matters.
+    expect(sinkCss()).toContain('top:0');
+    expect(sinkCss()).not.toContain('bottom:0');
+  });
+
+  it('stays inside the viewport and in front of nothing', () => {
+    expect(sinkCss()).not.toMatch(/left:-\d/);
+    expect(sinkCss()).not.toContain('z-index:-');
+  });
+
+  it('never swallows a tap meant for the page', () => {
+    expect(sinkCss()).toContain('pointer-events:none');
+  });
+});

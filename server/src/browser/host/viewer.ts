@@ -75,13 +75,23 @@ export const VIEWER_HTML = String.raw`<!doctype html>
      it sticks, which is the page having scrolled the sink into range.
      So it is IN the viewport, one pixel, fully transparent, pinned so no scroll
      can carry it away. Invisible to a person, present to the browser. */
-  /* NOT BEHIND ANYTHING. z-index:-1 put it under the page background, and a
-     browser does not raise a keyboard for an input it considers invisible — the
-     first version of this fix stopped the keyboard appearing at all. It sits in
-     the normal stacking order, one transparent pixel, and takes no pointer
-     events so it can never swallow a tap meant for the page. */
-  #sink{position:fixed;left:0;bottom:0;width:1px;height:1px;opacity:0;border:0;padding:0;
-        margin:0;font-size:16px;background:transparent;color:transparent;pointer-events:none}
+  /* NOT BEHIND ANYTHING, NOT TRANSPARENT, NOT A SPECK.
+     WebKit decides for itself whether a focused input is really on screen, and
+     if it decides no it takes the keyboard back WITHOUT blurring the field —
+     which is the exact symptom: up, straight back down, still focused. Three
+     things it counts as invisible, and this input has collected all three in
+     turn: z-index:-1 (behind the page), opacity:0, and a 1x1 box.
+     So it is a real 40x40 box at full opacity, made invisible the only way that
+     does not also make it invisible to WebKit: transparent ink, transparent
+     caret, transparent background. Nothing renders, because there is nothing to
+     render — the element is as present as any other.
+     PINNED TO THE TOP, not the bottom: an open keyboard covers the bottom of
+     the visual viewport, so a field parked there is off screen for precisely as
+     long as the keyboard is up. Takes no pointer events, so it can never
+     swallow a tap meant for the page underneath it. */
+  #sink{position:fixed;left:0;top:0;width:40px;height:40px;opacity:1;border:0;padding:0;
+        margin:0;font-size:16px;resize:none;overflow:hidden;background:transparent;
+        color:transparent;caret-color:transparent;pointer-events:none}
   #login{position:fixed;inset:0;background:#000d;display:grid;place-items:center;padding:20px;z-index:20}
   #login[hidden]{display:none}
   #loginForm{width:min(420px,100%);background:#17171f;border:1px solid #33333f;border-radius:12px;padding:16px;display:grid;gap:10px}
