@@ -1696,6 +1696,32 @@ EOF
   # STEP 3 — the CNAME. Before writing any config, because a hostname with no
   # route resolves nowhere, and a config written anyway would have muxpad publish
   # links to a permanent address that is permanently dead.
+  #
+  # IS IT ALREADY ROUTED HERE? Asked first, because `cloudflared tunnel route dns`
+  # REFUSES an existing record without -f, and "re-running this is safe" has to be
+  # true — it was not. Found on the machine this was built for: the hostname had
+  # been routed by hand before muxpad knew about it, so setup failed at its last
+  # step on the one case that mattered most.
+  #
+  # Decided by FINGERPRINT, not by the Cloudflare API: the hostname must answer
+  # like muxpad's public artifact server — a 404 at `/` carrying a sandbox CSP,
+  # the same positive check run.ts makes before it will tunnel anything. A bare
+  # 404 is somebody else's server or a parked name, and skipping the route on
+  # that evidence would leave the hostname pointing wherever it already pointed
+  # while muxpad announced it as its own base.
+  local probe_url="${MUXPAD_TUNNEL_PROBE_URL:-https://$hostname}"
+  local probe_hdrs=''
+  probe_hdrs="$(curl -sS -o /dev/null -D - --max-time 8 "$probe_url/" 2>/dev/null || true)"
+  local already=0
+  if printf '%s' "$probe_hdrs" | grep -qiE '^HTTP/[0-9.]+ 404' \
+    && printf '%s' "$probe_hdrs" | grep -qi '^content-security-policy: *sandbox'; then
+    already=1
+  fi
+
+  if [ "$already" = "1" ]; then
+    printf '%s✓%s %s is already routed to this machine — leaving the DNS record alone\n' \
+      "$C_GREEN" "$C_RESET" "$hostname"
+  else
   printf '%s→%s routing %s to the tunnel\n' "$C_DIM" "$C_RESET" "$hostname"
   if ! "$cf" tunnel route dns "$name" "$hostname"; then
     cat >&2 <<EOF
@@ -1717,6 +1743,7 @@ No config was written, so re-running this is safe either way.
 EOF
     exit 1
   fi
+  fi
 
   # STEP 4 — tell muxpad. The server re-reads this on every publish, so it takes
   # effect with no restart.
@@ -1724,19 +1751,31 @@ EOF
   jq -n --arg n "$name" --arg h "$hostname" --arg c "$creds" \
     '{name: $n, hostname: $h, credentials_file: $c}' > "$cfg"
 
+  # STEP 5 — hand the tunnel to muxpad. The app's pane bakes its startup command
+  # in at materialise time and the runner reads the config at ITS start, so a
+  # tunnel that is already running is still running in QUICK mode until its pane
+  # is rebuilt. Restarting the app here is what makes one command enough; without
+  # it the hostname stays ephemeral until the next accidental restart.
+  #
+  # Best-effort: an instance with no tunnel app registered yet has nothing to
+  # restart, and the first publish will start it in named mode anyway.
+  if "$0" app list --json 2>/dev/null | jq -e '.[]? | select(.slug == "tunnel")' >/dev/null 2>&1; then
+    printf '%s→%s restarting the tunnel app so it runs the NAMED tunnel\n' "$C_DIM" "$C_RESET"
+    "$0" app restart tunnel >/dev/null 2>&1 || true
+  fi
+
   printf '\n%s✓%s published links are now permanent AND public:\n' "$C_GREEN" "$C_RESET"
   printf '    https://%s/<slug>/\n\n' "$hostname"
   cat <<EOF
   config:  $cfg
   creds:   $creds  (back this up — it is what claims the hostname)
 
-Next, and that is all:
+Nothing else to do. To confirm:
 
-  muxpad app stop tunnel     # drop the old quick tunnel, if one is running
   muxpad publish --base      # expect: keeps: yes
 
-The quick tunnel's four-word hostnames are now unused, and any link that died
-with one recovers under the new name:
+The quick tunnel's four-word hostnames are done with, and any link that died
+with one comes back under this name:
 
   muxpad publish --url <slug>
 EOF
