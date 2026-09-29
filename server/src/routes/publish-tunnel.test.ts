@@ -205,6 +205,85 @@ describe('publish tunnel routes', () => {
     expect(base.reachable).not.toBeNull();
   });
 
+  /**
+   * A tunnel supervised OUTSIDE muxpad (the launchd job in docs/launchd.md §3).
+   * `process.pid` stands in for the runner's, because it is a pid that is
+   * genuinely alive — the liveness check is a real syscall, not a stub.
+   */
+  it('a paneless runner owns the tunnel by pid, with no app row anywhere', async () => {
+    const res = await test.app.request('/api/publish/tunnel', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url: FIRST, pid: process.pid }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ url: FIRST, active: true, wanted: true });
+    expect(tunnelBaseUrl(db)).toBe(FIRST);
+    expect(new AppStore(db).getBySlug(TUNNEL_APP_SLUG)).toBeNull();
+
+    const got = (await (await test.app.request('/api/publish/tunnel')).json()) as {
+      url: string | null;
+      owner: string | null;
+    };
+    expect(got).toMatchObject({ url: FIRST, owner: 'process' });
+  });
+
+  it('a url-less POST is a CLAIM, not an answer', async () => {
+    const res = await test.app.request('/api/publish/tunnel', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pid: process.pid }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ url: null, owner: 'process' });
+    expect(tunnelBaseUrl(db)).toBeNull();
+    // And it still holds the tunnel, so a publish in this window does not start
+    // a rival one in a pane.
+    const pub = await test.app.request('/api/publish', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: srcDir, name: 'report' }),
+    });
+    expect(pub.status).toBe(201);
+    expect(new AppStore(db).getBySlug(TUNNEL_APP_SLUG)).toBeNull();
+  });
+
+  it('a retraction WITH a pid keeps the claim; one without deletes the record', async () => {
+    const retract = (body: Record<string, unknown>) =>
+      test.app.request('/api/publish/tunnel', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    await test.app.request('/api/publish/tunnel', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url: FIRST, pid: process.pid }),
+    });
+    await retract({ error: 'cloudflared exited (code 1) after 2s', attempts: 1, pid: process.pid });
+    let got = (await (await test.app.request('/api/publish/tunnel')).json()) as {
+      url: string | null;
+      owner: string | null;
+    };
+    expect(got).toMatchObject({ url: null, owner: 'process' });
+
+    await retract({});
+    got = (await (await test.app.request('/api/publish/tunnel')).json()) as {
+      url: string | null;
+      owner: string | null;
+    };
+    expect(got.owner).toBeNull();
+  });
+
+  it('a url-less POST with no pid is a bad request, not a silent no-op', async () => {
+    const res = await test.app.request('/api/publish/tunnel', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it('surfaces a tunnel that keeps failing on the base every surface reads', async () => {
     await test.app.request('/api/publish/tunnel', {
       method: 'DELETE',
@@ -291,5 +370,18 @@ describe('publish tunnel routes — MUXPAD_PUBLIC_BASE_URL is set', () => {
       source: string;
     };
     expect(base).toMatchObject({ url: 'https://artifacts.example.com', source: 'env' });
+  });
+
+  it('tells a launchd-supervised runner it is NOT WANTED, since muxpad cannot stop it', async () => {
+    // The whole reason the tunnel now survives a muxpad restart is that muxpad
+    // no longer owns the process — so `env` can no longer cancel the tunnel by
+    // stopping an app. The announce response is the channel instead, and the
+    // runner shuts itself down on `wanted: false` (tunnel/run.ts).
+    const res = await test.app.request('/api/publish/tunnel', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url: FIRST, pid: process.pid }),
+    });
+    expect(await res.json()).toMatchObject({ wanted: false, active: false });
   });
 });
