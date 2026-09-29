@@ -91,14 +91,45 @@ import { probeUrlHealth } from './url-health.js';
  * they fail independently and a caller that knows only the first will keep
  * handing out links with a shelf life and calling them permanent.
  *
- * THE ORDER IS NOT SORTED BY DURABILITY, deliberately. The durable candidate on
- * this machine is the `*.ts.net` funnel url, and it is tailnet-only (verified:
- * Funnel is off, so :8443 hangs the TLS handshake from off-tailnet). Promoting
- * it would trade a link that works everywhere for a week for one that works
- * nowhere but here, forever. A base that is durable AND public has to be
- * CONFIGURED — a named tunnel or a domain in MUXPAD_PUBLIC_BASE_URL — which is
- * why `env` has always been the top rung. Until then the honest move is to keep
- * serving the ephemeral link and SAY that it is ephemeral.
+ * THE DISCOVERED ORDER *IS* SORTED BY DURABILITY — see {@link PublicBaseAudience}
+ * -----------------------------------------------------------------------------
+ * This file used to argue the opposite, at length, and the argument was wrong.
+ * It read: promoting the durable `*.ts.net` candidate "would trade a link that
+ * works everywhere for a week for one that works nowhere but here, forever".
+ *
+ * Both halves of that are false in the case that actually happens.
+ *
+ * "Works everywhere for a week" — measured, it was hours. A ptyd bounce mints a
+ * new quick-tunnel hostname, this machine is deployed to constantly, and on
+ * 2026-09-28 at least six links went NXDOMAIN inside a single afternoon. A
+ * released quick-tunnel name can never be reclaimed, so every one of them is
+ * dead permanently.
+ *
+ * "Nowhere but here" — no: everywhere the READER is. These artifacts are opened
+ * on their author's own laptop and phone, and both are tailnet nodes. Verified
+ * 2026-09-29: Tailscale listens on `100.111.22.33:8443` — the tailnet address
+ * ONLY, not loopback and not 0.0.0.0 — and answers 200 for a published artifact
+ * in 20ms. That is a permanent address, with no login, no tunnel process, no
+ * supervision and nothing to install.
+ *
+ * So the default is now the most DURABLE candidate, and a PUBLIC link is
+ * something a caller asks for. The two orders are the same candidate list sorted
+ * by how long the address lives, for the audience it is meant for.
+ *
+ * TWO THINGS THE SORT DOES NOT TOUCH, both load-bearing:
+ *
+ *   · CONFIGURATION IS NOT RE-RANKED. `env` and `pinned` stay absolutely on top.
+ *     A human who typed `--set-base https://…trycloudflare.com` chose an
+ *     ephemeral base on purpose, and its documented job is to point every
+ *     surface at it; sorting it below a tailnet address would break that
+ *     silently. Only what muxpad worked out FOR ITSELF is re-ranked.
+ *   · THE PROBE STILL DEMOTES THE DEAD. Durability decides the order, health
+ *     decides whether a candidate is skipped. A tailnet base whose funnel
+ *     mapping has gone away steps aside for a live tunnel, exactly as before.
+ *
+ * And `env` on top is what makes this the last change needed here: the day a
+ * named tunnel exists on a real domain, it is `permanent`, it wins both
+ * audiences, and `--public` stops being a different answer at all.
  */
 
 /** globals-KV key holding the last base a publish DISCOVERED (hint/funnel). */
@@ -193,6 +224,36 @@ export type PublicBaseSource =
  */
 export type BaseDurability = 'permanent' | 'ephemeral' | 'tailnet' | 'local';
 
+/**
+ * WHO THE LINK IS FOR — the one input that decides whether durability or reach
+ * matters more, and therefore the whole of the ordering among discovered bases.
+ *
+ *   tailnet  the DEFAULT. A link for the author's own devices, every one of
+ *            which is a tailnet node. Prefer the address that will still work
+ *            tomorrow, because that is the property that was failing.
+ *   public   a link to SEND someone. It has to resolve off the tailnet at all,
+ *            so here an address with a shelf life genuinely beats one with no
+ *            reach — and the caller is told, in the same breath, that it has one.
+ *
+ * DEFAULTING TO `tailnet` IS THE FIX. Every other spelling of this — a flag that
+ * defaults to public, a config toggle, a heuristic on the reader's network —
+ * leaves the common path printing a link that dies, and the common path is the
+ * one that put six dead links into one afternoon.
+ */
+export type PublicBaseAudience = 'tailnet' | 'public';
+
+/**
+ * How much each durability class is worth, per audience. Lower wins.
+ *
+ * `permanent` is first in both because a real domain is durable AND public;
+ * there is no trade to make. `local` is last in both because loopback is not a
+ * link. The only row that moves is the middle pair, and that IS the feature.
+ */
+const DURABILITY_RANK: Record<PublicBaseAudience, Record<BaseDurability, number>> = {
+  tailnet: { permanent: 0, tailnet: 1, ephemeral: 2, local: 3 },
+  public: { permanent: 0, ephemeral: 1, tailnet: 2, local: 3 },
+};
+
 export function baseDurability(url: string, source: PublicBaseSource): BaseDurability {
   if (source === 'local') return 'local';
   let host: string;
@@ -215,21 +276,32 @@ export function baseDurability(url: string, source: PublicBaseSource): BaseDurab
  * surfaces print it (publish output, `--base`, the Hosted view) and they must
  * not drift.
  */
-export function durabilityNote(d: BaseDurability): string | null {
+export function durabilityNote(
+  d: BaseDurability,
+  audience: PublicBaseAudience = 'tailnet',
+): string | null {
   if (d === 'ephemeral')
     return 'this is a Cloudflare quick tunnel — its hostname is randomly reassigned every time the tunnel restarts, and every link built from it dies at that moment. `muxpad publish --url <slug>` reprints a live link for an artifact whose link has gone dead.';
-  if (d === 'tailnet')
-    // Deliberately hedged rather than flat. Whether a `*.ts.net:8443` address
-    // answers the public internet depends on Tailscale FUNNEL being enabled for
-    // this node, and the only way to know that server-side is to exec the
-    // Tailscale CLI — which on this machine lives inside the app bundle and
-    // costs a macOS "access data from other apps" prompt (see tailscale-bin.ts).
-    // Measured here on 2026-09-28, Funnel is OFF: the shared ingress accepts the
-    // TCP connection and then never completes the TLS handshake for anyone
-    // off-tailnet, so the link looks fine from the machine that published it and
-    // hangs for everybody else. That is precisely the failure that must not be
-    // asserted either way without checking.
-    return 'this is a Tailscale address on :8443 — it reaches the public internet only if Funnel is enabled for this node, and :8443 is blocked outbound on many networks even then. Open it from a device that is NOT on your tailnet before sharing it.';
+  if (d === 'tailnet') {
+    // A PUBLIC link was asked for and this is not one. Saying so is the whole
+    // difference between a fallback and a lie: `--public` on a machine with no
+    // tunnel would otherwise print a tailnet address that looks exactly like a
+    // share link and cannot be opened by the person it is sent to.
+    if (audience === 'public')
+      return 'no public base is available, so this is your TAILNET address — anyone you send it to cannot open it. Set up a permanent base (MUXPAD_PUBLIC_BASE_URL) or start the tunnel, then ask again.';
+    // Flat, where this used to hedge. The hedge ("it reaches the public internet
+    // only if Funnel is enabled for this node") was honest when this was a
+    // reluctant last resort nobody had measured, but it is now the DEFAULT, and
+    // the default has to state both halves of the truth plainly.
+    //
+    // Measured 2026-09-29: Tailscale listens on the tailnet address ONLY
+    // (100.111.22.33:8443 — not loopback, not 0.0.0.0) and answers 200. From
+    // off-tailnet the public DNS for a `*.ts.net` name points at Tailscale's
+    // SHARED ingress, which accepts the TCP connection and then never completes
+    // the TLS handshake — so a stranger gets a hang, not a clear error. Nothing
+    // muxpad can do about what their browser shows; it can be honest here.
+    return 'this is your tailnet address — permanent, and it works on every device on your tailnet, including your phone. It is NOT reachable from anywhere else: someone who is not on your tailnet gets a connection that hangs rather than a clear error. Use `--public` for a link you can send to somebody.';
+  }
   return null;
 }
 
@@ -328,11 +400,14 @@ export interface PublicBaseResolver {
    *   the Hosted view polls, and shelling out per poll would be absurd (and
    *   under launchd it fails anyway).
    * @param opts.probe           check reachability and skip dead candidates.
+   * @param opts.audience        who the link is for. Defaults to `tailnet` —
+   *   the durable answer. See {@link PublicBaseAudience}.
    */
   resolve(opts?: {
     hint?: unknown;
     allowDiscovery?: boolean;
     probe?: boolean;
+    audience?: PublicBaseAudience;
   }): Promise<PublicBase>;
   /**
    * Would a `resolve({ allowDiscovery: true })` actually shell out right now?
@@ -351,8 +426,14 @@ export interface PublicBaseResolver {
   discoveryNeeded(): boolean;
   /** Pin a base (or clear the pin with null). */
   setPinned(url: string | null): void;
-  /** The ordered candidate list, unprobed. Exposed for `--base` / diagnostics. */
-  candidates(opts?: { hint?: unknown }): PublicBaseCandidate[];
+  /**
+   * The ordered candidate list, unprobed. Exposed for `--base` / diagnostics.
+   *
+   * Ordered FOR THE AUDIENCE, so the table `muxpad publish --base` prints is the
+   * order the answer above it was actually chosen in. A table that disagreed
+   * with the resolved base would be worse than no table.
+   */
+  candidates(opts?: { hint?: unknown; audience?: PublicBaseAudience }): PublicBaseCandidate[];
 }
 
 export function createPublicBaseResolver(deps: PublicBaseDeps): PublicBaseResolver {
@@ -362,7 +443,17 @@ export function createPublicBaseResolver(deps: PublicBaseDeps): PublicBaseResolv
   const ttl = deps.probeTtlMs ?? BASE_PROBE_TTL_MS;
   const seen = new Map<string, { at: number; health: UrlHealth }>();
 
-  const candidates = (opts?: { hint?: unknown }): PublicBaseCandidate[] => {
+  /**
+   * Sources that are somebody's stated answer rather than muxpad's own finding.
+   * These are never re-ranked — see the header, "CONFIGURATION IS NOT
+   * RE-RANKED".
+   */
+  const CONFIGURED: ReadonlySet<PublicBaseSource> = new Set(['env', 'pinned']);
+
+  const candidates = (opts?: {
+    hint?: unknown;
+    audience?: PublicBaseAudience;
+  }): PublicBaseCandidate[] => {
     const out: PublicBaseCandidate[] = [];
     const add = (raw: string | null | undefined, source: PublicBaseSource) => {
       const url = normalizeBaseUrl(raw);
@@ -375,7 +466,28 @@ export function createPublicBaseResolver(deps: PublicBaseDeps): PublicBaseResolv
     add(deps.tunnelBaseUrl?.() ?? null, 'tunnel');
     add(typeof opts?.hint === 'string' ? opts.hint : null, 'hint');
     add(globals.get(PUBLIC_BASE_URL_KEY), 'persisted');
-    return out;
+    return rankByDurability(out, opts?.audience ?? 'tailnet');
+  };
+
+  /**
+   * Re-order the DISCOVERED tail of the list by how long its addresses live.
+   *
+   * A STABLE sort, and that is not an implementation detail: within one
+   * durability class the source order is still the whole tie-break, so
+   * `tunnel > hint > persisted` survives intact among equally durable
+   * candidates. The sort adds a rule, it does not replace one.
+   */
+  const rankByDurability = (
+    list: PublicBaseCandidate[],
+    audience: PublicBaseAudience,
+  ): PublicBaseCandidate[] => {
+    const configured = list.filter((c) => CONFIGURED.has(c.source));
+    const discovered = list.filter((c) => !CONFIGURED.has(c.source));
+    const rank = DURABILITY_RANK[audience];
+    // Array.prototype.sort is stable in every engine muxpad runs on (spec since
+    // ES2019), so equal ranks keep their insertion order.
+    discovered.sort((a, b) => rank[a.durability] - rank[b.durability]);
+    return [...configured, ...discovered];
   };
 
   /** True while a failed attempt is still inside DISCOVERY_RETRY_TTL_MS. */
@@ -420,8 +532,13 @@ export function createPublicBaseResolver(deps: PublicBaseDeps): PublicBaseResolv
     hint?: unknown;
     allowDiscovery?: boolean;
     probe?: boolean;
+    audience?: PublicBaseAudience;
   }): Promise<PublicBase> => {
-    const list = candidates({ ...(opts?.hint !== undefined ? { hint: opts.hint } : {}) });
+    const audience = opts?.audience ?? 'tailnet';
+    const list = candidates({
+      ...(opts?.hint !== undefined ? { hint: opts.hint } : {}),
+      audience,
+    });
 
     // A hint is the caller telling us something we did not know — persist it so
     // headless/cron publishes keep working. It does NOT jump the queue: a

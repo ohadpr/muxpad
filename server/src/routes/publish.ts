@@ -15,6 +15,7 @@ import { Hono } from 'hono';
 import type { Funnel } from '../funnel.js';
 import {
   type PublicBase,
+  type PublicBaseAudience,
   type PublicBaseResolver,
   createPublicBaseResolver,
   durabilityNote,
@@ -48,10 +49,17 @@ import { probeUrlHealth } from '../url-health.js';
  * hand.
  *
  * URL resolution does NOT live here. These routes call the ONE resolver in
- * public-base.ts (`createPublicBaseResolver`), which walks six tiers,
- * configuration before discovery:
+ * public-base.ts (`createPublicBaseResolver`), which puts configuration first
+ * and then ranks what it discovered by how long the address LIVES:
  *
- *   env > pinned > hint > funnel > persisted > local
+ *   env > pinned > [ tunnel / hint / tailnet / funnel / persisted,
+ *                    ordered by durability for the audience ] > local
+ *
+ * The default audience is `tailnet` — the durable answer, because these
+ * artifacts are read on their author's own devices and every one of those is a
+ * tailnet node. `audience: 'public'` (POST body, or `?audience=public` on the
+ * GETs) asks for the sendable form instead, and is told when it has a shelf
+ * life. See PublicBaseAudience.
  *
  *   env       MUXPAD_PUBLIC_BASE_URL — a permanent domain, set once.
  *   pinned    `public_base_url_pinned`, set by `muxpad publish --set-base`,
@@ -137,8 +145,14 @@ function publicDirOf(dataDir: string): string {
  * listing reports it as no link at all rather than something that looks
  * copyable and isn't — while `PUT /base` echoes back exactly what it stored.
  */
-function baseInfo(resolved: PublicBase, opts?: { localAsNull?: boolean }) {
-  const note = durabilityNote(resolved.durability);
+function baseInfo(
+  resolved: PublicBase,
+  opts?: { localAsNull?: boolean; audience?: PublicBaseAudience },
+) {
+  // The note depends on WHO ASKED, not only on what was found: a tailnet address
+  // is the right default answer and a wrong `--public` one, and the sentence has
+  // to say which of those just happened.
+  const note = durabilityNote(resolved.durability, opts?.audience ?? 'tailnet');
   return {
     url: opts?.localAsNull !== false && resolved.source === 'local' ? null : resolved.baseUrl,
     source: resolved.source,
@@ -300,8 +314,19 @@ export function publishRoutes(deps: {
    * where the daemon cannot) and reachability is checked, so `muxpad publish`
    * warns at the moment of publishing if the link it just printed is dead.
    */
-  const resolveForPublish = (hint: unknown) =>
-    base.resolve({ hint, allowDiscovery: true, probe: true });
+  const resolveForPublish = (hint: unknown, audience: PublicBaseAudience) =>
+    base.resolve({ hint, allowDiscovery: true, probe: true, audience });
+
+  /**
+   * `audience` off the wire, defaulting to the durable answer.
+   *
+   * Anything other than the literal `public` means the DEFAULT, deliberately —
+   * a typo, an older CLI, a field nobody sent. The failure mode of guessing
+   * wrong here is asymmetric: default-when-public-was-meant prints a link that
+   * works and is private, public-when-default-was-meant prints a link that dies.
+   */
+  const audienceOf = (raw: unknown): PublicBaseAudience =>
+    raw === 'public' ? 'public' : 'tailnet';
 
   app.post('/', async (c) => {
     const body = (await c.req.json().catch(() => null)) as {
@@ -309,6 +334,7 @@ export function publishRoutes(deps: {
       name?: unknown;
       update?: unknown;
       public_base_url?: unknown;
+      audience?: unknown;
     } | null;
     const src = typeof body?.path === 'string' ? body.path : '';
     if (!src || !isAbsolute(src))
@@ -506,7 +532,8 @@ export function publishRoutes(deps: {
         console.error('[tunnel] ensure failed during publish (link may be local-only)', err);
       }
     }
-    const resolved = await resolveForPublish(hint);
+    const audience = audienceOf(body?.audience);
+    const resolved = await resolveForPublish(hint, audience);
     return c.json(
       {
         slug,
@@ -521,7 +548,7 @@ export function publishRoutes(deps: {
         // one moment a human is handed the link and is about to paste it
         // somewhere permanent. Everything else is a place they go to look it up
         // again, which already implies they suspect something.
-        base: baseInfo(resolved, { localAsNull: false }),
+        base: baseInfo(resolved, { localAsNull: false, audience }),
         ...(resolved.warning ? { warning: resolved.warning } : {}),
       },
       201,
@@ -546,7 +573,12 @@ export function publishRoutes(deps: {
     //     and under launchd it fails anyway;
     //   · reachability IS checked, because that result is cached for 30s and a
     //     dead tunnel is precisely what the user needs to see here.
-    const resolved = await base.resolve({ probe: true });
+    // `?audience=public` so `muxpad publish --list --public` can show the
+    // sendable form of every url. The DEFAULT listing is the durable one,
+    // because after a hostname rotation this table is the recovery surface —
+    // and a recovery surface full of links that expire is not one.
+    const audience = audienceOf(c.req.query('audience'));
+    const resolved = await base.resolve({ probe: true, audience });
     // A loopback fallback is not a shareable link, so it is reported as no link
     // at all rather than something that looks copyable and isn't.
     const baseUrl = resolved.source === 'local' ? null : resolved.baseUrl;
@@ -586,7 +618,7 @@ export function publishRoutes(deps: {
     // the page silently useless.
     return c.json({
       publishes,
-      base: baseInfo(resolved),
+      base: baseInfo(resolved, { audience }),
     });
   });
 
@@ -609,10 +641,14 @@ export function publishRoutes(deps: {
     // which is the macOS prompt this whole change removes. Default stays ON:
     // `muxpad publish --base` and the Hosted view both want the check.
     const probe = c.req.query('probe') !== '0';
-    const resolved = await base.resolve({ probe });
+    const audience = audienceOf(c.req.query('audience'));
+    const resolved = await base.resolve({ probe, audience });
     return c.json({
-      ...baseInfo(resolved),
-      candidates: base.candidates(),
+      ...baseInfo(resolved, { audience }),
+      audience,
+      // Ordered for the SAME audience, so the table and the answer above it
+      // cannot disagree about which base won.
+      candidates: base.candidates({ audience }),
       // For `muxpad publish`, which must decide whether to exec `tailscale` in
       // its own shell BEFORE it posts. False means "I already know a base" —
       // and a hint that only re-confirms a known base is not worth the macOS
