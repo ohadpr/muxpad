@@ -65,41 +65,6 @@ import { findCloudflared } from './cloudflared.js';
  * Merely out-ranking it would leave a pointless quick tunnel dialling
  * Cloudflare forever, holding a public door open next to a real domain that
  * already works.
- *
- * THE APP MODEL WAS NOT ENOUGH — THE SECOND OWNER
- * ----------------------------------------------
- * Everything above is still true and still the default. What it did not survive
- * is A PTYD RESTART. ptyd owns the pane, so `muxpad restart --all` and every
- * deliberate ptyd bounce kill cloudflared, and Cloudflare mints a new four-word
- * name on the way back up. Measured on this machine: three rotations in 26
- * hours during a week of active development, each one killing every link
- * published since the last.
- *
- * So the tunnel may instead be supervised by launchd, as a third job that
- * neither `muxpad restart` nor `muxpad restart --all` can touch
- * (docs/launchd.md §3). The RUNNER is byte-identical — the same
- * `muxpad tunnel --port <n>`, the same parse/announce/retract/heartbeat — and
- * the only thing that changes is WHO IS HOLDING IT, which is the ownership
- * token in {@link TunnelRecord}:
- *
- *   · `pane_id`  — muxpad's own app. Invalidated by the pane going away.
- *   · `pid`      — a process nobody here supervises. Invalidated by the pid
- *                  dying, or by the LEASE expiring ({@link TUNNEL_LEASE_MS}).
- *
- * Neither needs any cleanup path to run, which is the property that made the
- * pane rule survive a crash and is the property the pid rule has to match. And
- * an external owner OUTRANKS the app: {@link ensureTunnelApp} stands down in
- * front of a live one rather than starting a second cloudflared next to it.
- *
- * THE TRADE, STATED PLAINLY: a tunnel that survives a muxpad restart is a
- * tunnel muxpad no longer supervises. `muxpad app logs/stop tunnel` do not
- * reach it (its log is the launchd job's, its stop is `launchctl bootout`), and
- * while muxpad is down the tunnel stays up in front of a port nothing is
- * serving — which is the POINT (the hostname comes back with muxpad instead of
- * rotating), but it also means the fingerprint check that keeps the main
- * unauthenticated server off the internet has to be RE-RUN, not just run once.
- * tunnel/run.ts re-checks it on every heartbeat and closes the door if anything
- * other than muxpad's public server answers on the port.
  */
 
 /** Slug of the app row muxpad manages the tunnel through. */
@@ -120,71 +85,14 @@ export const TUNNEL_STATUS_KEY = 'public_base_tunnel_status';
 /** Consecutive failures before the tunnel's trouble is worth saying out loud. */
 export const TUNNEL_WARN_AFTER_ATTEMPTS = 3;
 
-/**
- * How long a PROCESS-owned announce stays valid without a refresh — three
- * heartbeats' worth (tunnel/run.ts re-states its url every 30s).
- *
- * The pid check alone would not do. Pids are recycled, and a runner that is
- * alive but wedged looks exactly like a healthy one from the outside. The lease
- * bounds both, at the cost of up to 90s in which a hostname nothing is serving
- * is still being handed out — which is why it is the BACKSTOP and not the
- * mechanism: the runner retracts the instant cloudflared exits, and the pid
- * check catches a runner that was killed outright. The lease only ever fires for
- * the case neither of those can see.
- *
- * A pane-owned record has no lease. Its token is a row in `panes`, which does
- * not go stale on a clock.
- */
-export const TUNNEL_LEASE_MS = 90_000;
-
 export interface TunnelRecord {
-  /**
-   * The live base origin, e.g. `https://franklin-discuss-powers-usgs.trycloudflare.com`
-   * — or null for a CLAIM: a runner that owns the tunnel and has not been handed
-   * a hostname yet. Ownership starts before the name exists, so that a publish
-   * in cloudflared's four-second cold start cannot start a rival tunnel.
-   */
-  url: string | null;
+  /** The live base origin, e.g. `https://franklin-discuss-powers-usgs.trycloudflare.com`. */
+  url: string;
   /** The app pane that announced it. Ownership, not metadata. */
   pane_id: string | null;
-  /**
-   * The announcing PROCESS. Ownership too — the only kind available to a runner
-   * with no pane (a launchd job). Also recorded for a pane-owned tunnel, where
-   * it strictly strengthens the pane rule: see {@link tunnelBaseUrl}.
-   */
-  pid?: number | null;
-  /** When it was announced. Renewed by the heartbeat; see {@link TUNNEL_LEASE_MS}. */
+  /** When it was announced. */
   at: number;
 }
-
-/**
- * The liveness questions {@link tunnelBaseUrl} has to ask about a process it
- * does not supervise. Injectable because a test cannot conjure a pid that dies
- * on cue, and a clock-driven lease needs a drivable clock.
- */
-export interface TunnelLiveness {
-  alive?: (pid: number) => boolean;
-  now?: () => number;
-}
-
-/**
- * Is that pid still there?
- *
- * Signal 0 is the standard existence probe. EPERM means the pid EXISTS but
- * belongs to another user, and is treated as alive: guessing "gone" would drop a
- * url that may well be live, and the lease bounds the mistake either way.
- */
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
-/** Who is holding the tunnel — for diagnostics, and for the stand-down rule. */
-export type TunnelOwnerKind = 'pane' | 'process';
 
 export interface TunnelStatus {
   /** Last error text from the in-pane supervisor. */
@@ -228,77 +136,20 @@ function readJson<T>(db: Database.Database, key: string): T | null {
  * Both are pure SQLite — no ptyd round-trip — because this is read on a polled
  * path (the Hosted view refreshes every few seconds).
  *
- * Rule 3, WHEN THERE IS NO PANE (a launchd-supervised runner): the announcing
- * PROCESS must still be alive, and the announce must be within
- * {@link TUNNEL_LEASE_MS}. Same shape as rules 1 and 2 — nothing has to run for
- * the value to go invalid — and the same guarantee: a dead name cannot outlive
- * the process that minted it.
- *
- * A record with NEITHER token is never served. Nothing could invalidate it.
- *
- * THE HONEST LIMIT, NARROWED. This used to read: after a PTYD restart the pane
- * row still exists while the pty does not, so for the ~20s until
- * serve-supervisor.ts rebuilds it the last url is still returned. That window is
- * now closed whenever the record carries a pid — the pid check applies to BOTH
- * owner kinds, so a pane whose process is gone is caught at once rather than at
- * the next reconcile. public-base.ts's reachability probe remains underneath
- * either way; belt and braces, not one or the other.
+ * THE HONEST LIMIT, stated because the module it extends states its own: after
+ * a PTYD restart the pane row still exists while the pty does not, so for the
+ * ~20s until serve-supervisor.ts rebuilds it this returns the last url. That
+ * window is covered by public-base.ts's reachability probe, which demotes a
+ * name that stopped resolving — belt and braces, not one or the other.
  */
-export function tunnelBaseUrl(db: Database.Database, live?: TunnelLiveness): string | null {
+export function tunnelBaseUrl(db: Database.Database): string | null {
   const rec = readJson<TunnelRecord>(db, TUNNEL_BASE_KEY);
   if (!rec?.url) return null;
-  if (!tunnelOwnerOf(db, rec, live)) return null;
+  const app = new AppStore(db).getBySlug(TUNNEL_APP_SLUG);
+  if (!app || !app.enabled) return null;
+  if (!app.pane_id || app.pane_id !== rec.pane_id) return null;
+  if (!new PaneStore(db).getById(app.pane_id)) return null;
   return normalizeBaseUrl(rec.url);
-}
-
-/** The owner of a record, or null when nothing valid is holding it. */
-function tunnelOwnerOf(
-  db: Database.Database,
-  rec: TunnelRecord,
-  live?: TunnelLiveness,
-): TunnelOwnerKind | null {
-  // The process check applies to both owner kinds: an announcing process that
-  // is gone can never be serving the name it announced, whatever else is true.
-  if (rec.pid != null && !(live?.alive ?? pidAlive)(rec.pid)) return null;
-  if (rec.pane_id) {
-    const app = new AppStore(db).getBySlug(TUNNEL_APP_SLUG);
-    if (!app || !app.enabled) return null;
-    if (!app.pane_id || app.pane_id !== rec.pane_id) return null;
-    if (!new PaneStore(db).getById(app.pane_id)) return null;
-    return 'pane';
-  }
-  if (rec.pid == null) return null;
-  const now = (live?.now ?? Date.now)();
-  if (now - rec.at > TUNNEL_LEASE_MS) return null;
-  return 'process';
-}
-
-/** Who is holding the tunnel right now, or null. For `GET /api/publish/tunnel`. */
-export function tunnelOwnerKind(
-  db: Database.Database,
-  live?: TunnelLiveness,
-): TunnelOwnerKind | null {
-  const rec = readJson<TunnelRecord>(db, TUNNEL_BASE_KEY);
-  if (!rec) return null;
-  return tunnelOwnerOf(db, rec, live);
-}
-
-/**
- * The tunnel is held by a process muxpad does not supervise, or null.
- *
- * This is the stand-down signal. It is true of a CLAIM as well as of a live
- * url, deliberately: the runner owns the tunnel through cloudflared's cold start
- * and through every backoff window, and a publish landing in one of those must
- * not start a second cloudflared in a pane.
- */
-export function externalTunnelOwner(
-  db: Database.Database,
-  live?: TunnelLiveness,
-): { pid: number; url: string | null; at: number } | null {
-  const rec = readJson<TunnelRecord>(db, TUNNEL_BASE_KEY);
-  if (!rec || rec.pid == null || rec.pane_id) return null;
-  if (tunnelOwnerOf(db, rec, live) !== 'process') return null;
-  return { pid: rec.pid, url: rec.url, at: rec.at };
 }
 
 /** The raw record, for diagnostics and tests. No liveness rules applied. */
@@ -319,7 +170,7 @@ export function readTunnelStatus(db: Database.Database): TunnelStatus | null {
  */
 export function noteTunnelUp(
   db: Database.Database,
-  input: { url: string; paneId?: string | null; pid?: number | null; now?: number },
+  input: { url: string; paneId?: string | null; now?: number },
 ): string | null {
   const url = normalizeBaseUrl(input.url);
   // https-only, origin-only. A quick tunnel is always https, so anything else
@@ -329,7 +180,6 @@ export function noteTunnelUp(
   const rec: TunnelRecord = {
     url,
     pane_id: input.paneId ?? null,
-    ...(input.pid != null ? { pid: input.pid } : {}),
     at: input.now ?? Date.now(),
   };
   new GlobalsStore(db).set(TUNNEL_BASE_KEY, JSON.stringify(rec));
@@ -343,63 +193,15 @@ export function noteTunnelUp(
 }
 
 /**
- * A runner with no pane CLAIMS the tunnel, before it has a hostname to report.
- *
- * Ownership has to start earlier than the url does. cloudflared takes about four
- * seconds to be handed a name, and it is re-spawned after every failure with a
- * backoff of up to a minute — so a rule that read ownership off the url would
- * leave the tunnel unowned for exactly the windows in which a publish is most
- * likely to try to start one of its own.
- *
- * Also used by the heartbeat to renew the lease while there is no url, so a long
- * backoff cannot outlive the claim that suppresses the rival.
- */
-export function noteTunnelClaim(
-  db: Database.Database,
-  input: { pid: number; now?: number },
-): boolean {
-  if (!Number.isInteger(input.pid) || input.pid <= 0) return false;
-  const existing = readJson<TunnelRecord>(db, TUNNEL_BASE_KEY);
-  // A claim from the SAME runner keeps whatever url it already announced — the
-  // heartbeat must renew a lease, never blank a live hostname.
-  const url = existing?.pid === input.pid ? (existing?.url ?? null) : null;
-  const rec: TunnelRecord = { url, pane_id: null, pid: input.pid, at: input.now ?? Date.now() };
-  new GlobalsStore(db).set(TUNNEL_BASE_KEY, JSON.stringify(rec));
-  return true;
-}
-
-/**
  * The tunnel went down. Called the INSTANT cloudflared exits — before any
  * backoff — so the window in which the database advertises a hostname that
  * nothing is serving is a round-trip, not a retry cycle.
- *
- * `pid` is the difference between "cloudflared died" and "the tunnel is over".
- * A retraction from a runner that still owns the tunnel drops the URL and KEEPS
- * the claim (renewing its lease, because a backoff can be a minute long and the
- * heartbeat is silent while there is no url). Without a pid — a pane runner, or a
- * final stop — the record goes entirely, as it always did.
  */
 export function noteTunnelDown(
   db: Database.Database,
-  input?: {
-    error?: string | undefined;
-    attempts?: number | undefined;
-    pid?: number | null;
-    now?: number;
-  },
+  input?: { error?: string | undefined; attempts?: number | undefined; now?: number },
 ): void {
-  const existing = readJson<TunnelRecord>(db, TUNNEL_BASE_KEY);
-  if (input?.pid != null && existing && existing.pid === input.pid && !existing.pane_id) {
-    const kept: TunnelRecord = {
-      url: null,
-      pane_id: null,
-      pid: input.pid,
-      at: input.now ?? Date.now(),
-    };
-    new GlobalsStore(db).set(TUNNEL_BASE_KEY, JSON.stringify(kept));
-  } else {
-    del(db, TUNNEL_BASE_KEY);
-  }
+  del(db, TUNNEL_BASE_KEY);
   if (!input?.error) return;
   const status: TunnelStatus = {
     error: String(input.error).slice(0, 500),
@@ -420,17 +222,10 @@ export function noteTunnelDown(
  * the Hosted view's base line all say it without any of them knowing about
  * tunnels. One flaky restart says nothing; a run of them says it plainly.
  */
-export function tunnelWarning(db: Database.Database, live?: TunnelLiveness): string | null {
+export function tunnelWarning(db: Database.Database): string | null {
   const st = readTunnelStatus(db);
   if (!st || st.attempts < TUNNEL_WARN_AFTER_ATTEMPTS) return null;
-  // Name the log the reader can actually open. `muxpad app logs tunnel` reads a
-  // PANE's scrollback, and a launchd-supervised tunnel has no pane — pointing
-  // someone at it would be a dead end at the one moment they need the output.
-  const where =
-    externalTunnelOwner(db, live) !== null
-      ? "see the launchd job's log (`muxpad publish --tunnel` names it)"
-      : 'run `muxpad app logs tunnel`';
-  return `the cloudflare tunnel has failed to start ${st.attempts} times in a row (${st.error}) — ${where}`;
+  return `the cloudflare tunnel has failed to start ${st.attempts} times in a row (${st.error}) — run \`muxpad app logs tunnel\``;
 }
 
 export type TunnelEnsureState = 'started' | 'running' | 'disabled';
@@ -452,8 +247,6 @@ export interface EnsureTunnelDeps {
   findBin?: () => string | null;
   cwd?: string;
   log?: (msg: string) => void;
-  /** Injectable pid/clock for the external-owner check. Tests only. */
-  liveness?: TunnelLiveness;
   /**
    * Bring it UP, not merely make it correct. Default true — publishing is an
    * explicit "make this public", so it reopens a door the user closed.
@@ -506,18 +299,12 @@ export async function ensureTunnelApp(deps: EnsureTunnelDeps): Promise<TunnelEns
   const log = deps.log ?? ((m: string) => console.log(m));
   const existing = apps.getBySlug(TUNNEL_APP_SLUG);
 
-  const disable = async (
-    reason: string,
-    opts?: { keepRecord?: boolean },
-  ): Promise<TunnelEnsureResult> => {
+  const disable = async (reason: string): Promise<TunnelEnsureResult> => {
     if (existing?.enabled) {
       await deps.registry.stop(existing.id);
       log(`[tunnel] stopping: ${reason}`);
     }
-    // `keepRecord` is for standing down in front of SOMEBODY ELSE'S live tunnel.
-    // Retracting there would blank the base every published link is built from,
-    // for a hostname that is up and answering.
-    if (!opts?.keepRecord) noteTunnelDown(deps.db);
+    noteTunnelDown(deps.db);
     return { state: 'disabled', reason };
   };
 
@@ -525,25 +312,6 @@ export async function ensureTunnelApp(deps: EnsureTunnelDeps): Promise<TunnelEns
   if (deps.configuredBaseUrl) {
     return disable(
       `MUXPAD_PUBLIC_BASE_URL is set (${deps.configuredBaseUrl}) — that is the public base, so no tunnel is needed`,
-    );
-  }
-
-  // 1b. A tunnel supervised OUTSIDE muxpad outranks muxpad's own — it is the
-  //     same runner with a better owner (it survives `muxpad restart --all`, so
-  //     the hostname stops rotating on every deploy). Two cloudflareds would be
-  //     two public doors, and the app's would keep minting a new name per
-  //     deploy while this one kept a stable one.
-  //
-  //     Note the ORDER: below `configuredBaseUrl`, so a real domain still
-  //     cancels the tunnel outright. muxpad cannot stop a launchd job, so that
-  //     cancellation travels back to the runner as `wanted: false` on its next
-  //     announce (routes/publish.ts → tunnel/run.ts), which is why the env
-  //     branch above must run first and must still clear the record.
-  const external = externalTunnelOwner(deps.db, deps.liveness);
-  if (external) {
-    return disable(
-      `an external tunnel runner owns the tunnel (pid ${external.pid}) — it is supervised outside muxpad (launchd job dev.muxpad.tunnel), so muxpad neither starts nor stops it; \`launchctl bootout gui/$UID/dev.muxpad.tunnel\` closes that door`,
-      { keepRecord: true },
     );
   }
 
@@ -621,13 +389,10 @@ export async function ensureTunnelApp(deps: EnsureTunnelDeps): Promise<TunnelEns
  * cannot possibly be live. Cheap, and the alternative is a row that lies
  * forever.
  */
-export function clearOrphanedTunnelBase(db: Database.Database, live?: TunnelLiveness): boolean {
+export function clearOrphanedTunnelBase(db: Database.Database): boolean {
   const rec = readTunnelRecord(db);
   if (!rec) return false;
-  // A live external CLAIM has no url of its own — the runner is mid-backoff — and
-  // deleting it would hand the next publish permission to start a rival tunnel.
-  if (externalTunnelOwner(db, live)) return false;
-  if (tunnelBaseUrl(db, live)) return false;
+  if (tunnelBaseUrl(db)) return false;
   del(db, TUNNEL_BASE_KEY);
   return true;
 }
