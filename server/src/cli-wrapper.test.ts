@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { type ServerType, serve } from '@hono/node-server';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from './events.js';
 import { localFunnel } from './funnel.js';
 import { PtydCache } from './ptyd-cache.js';
@@ -283,6 +283,162 @@ describe('scripts/muxpad HTTP wrapper', () => {
           encoding: 'utf-8',
         }),
       ).rejects.toMatchObject({ stderr: expect.stringContaining('no artifact named') });
+    });
+  });
+
+  /**
+   * `muxpad tunnel setup` — the one command that turns published links
+   * permanent AND public.
+   *
+   * The plist approach was rejected for being annoying, so this must not be a
+   * nine-step checklist wearing a command's clothes. It is driven with a STUB
+   * cloudflared: the real one would talk to a live Cloudflare account, which is
+   * the user's and not something a test (or an agent) may touch.
+   */
+  describe('tunnel setup', () => {
+    let home: string;
+    let log: string;
+    let data: string;
+
+    const stub = (body: string) => {
+      const p = join(home, 'cloudflared-stub.sh');
+      writeFileSync(p, `#!/bin/sh\necho "$@" >> "${log}"\n${body}\n`, { mode: 0o755 });
+      return p;
+    };
+
+    const envFor = (bin: string) => ({
+      ...process.env,
+      MUXPAD_API_URL: `http://127.0.0.1:${port}`,
+      MUXPAD_CLOUDFLARED_BIN: bin,
+      MUXPAD_DATA_DIR: data,
+      MUXPAD_CLOUDFLARED_HOME: home,
+    });
+
+    beforeEach(() => {
+      home = mkdtempSync(join(tmpdir(), 'muxpad-cfhome-'));
+      data = mkdtempSync(join(tmpdir(), 'muxpad-cfdata-'));
+      log = join(home, 'calls.log');
+    });
+
+    it('logs in, creates, routes and writes the config — in one command', async () => {
+      // `create` must produce a credentials file, because that file's existence
+      // is what muxpad treats as "this tunnel is runnable" (tunnel/named.ts).
+      const bin = stub(`
+case "$2" in
+  login)  : > "${home}/cert.pem" ;;
+  create) printf '{"AccountTag":"a","TunnelSecret":"b","TunnelID":"u-1"}' > "${home}/u-1.json" ;;
+  list)   printf '[]' ;;
+esac
+exit 0`);
+      const { stdout } = await execFileAsync(
+        MUXPAD_BIN,
+        ['tunnel', 'setup', '--hostname=artifacts.example.dev'],
+        { env: envFor(bin), encoding: 'utf-8' },
+      );
+      const calls = readFileSync(log, 'utf-8');
+      expect(calls).toContain('tunnel login');
+      expect(calls).toContain('tunnel create muxpad');
+      expect(calls).toContain('tunnel route dns muxpad artifacts.example.dev');
+
+      // The config muxpad reads, with the credentials path resolved — not a
+      // guess, the file `create` actually wrote.
+      const cfg = JSON.parse(readFileSync(join(data, 'tunnel.json'), 'utf-8')) as {
+        name: string;
+        hostname: string;
+        credentials_file: string;
+      };
+      expect(cfg).toMatchObject({ name: 'muxpad', hostname: 'artifacts.example.dev' });
+      expect(cfg.credentials_file).toBe(join(home, 'u-1.json'));
+      // And it says what is now true, and what to do next.
+      expect(stdout).toContain('https://artifacts.example.dev');
+    });
+
+    it('SKIPS the browser login when the account cert is already there', async () => {
+      // The one genuinely interactive step. Re-running it on every setup would
+      // open a browser for no reason, which is exactly the annoyance being
+      // avoided.
+      writeFileSync(join(home, 'cert.pem'), 'x');
+      const bin = stub(`
+case "$2" in
+  create) printf '{"TunnelID":"u-2"}' > "${home}/u-2.json" ;;
+  list)   printf '[]' ;;
+esac
+exit 0`);
+      await execFileAsync(MUXPAD_BIN, ['tunnel', 'setup', '--hostname=a.example.dev'], {
+        env: envFor(bin),
+        encoding: 'utf-8',
+      });
+      expect(readFileSync(log, 'utf-8')).not.toContain('tunnel login');
+    });
+
+    it('reuses an existing tunnel of that name instead of failing on it', async () => {
+      // Re-running setup — after a typo in the hostname, say — must be safe.
+      writeFileSync(join(home, 'cert.pem'), 'x');
+      writeFileSync(join(home, 'u-9.json'), '{"TunnelID":"u-9"}');
+      const bin = stub(`
+case "$2" in
+  list) printf '[{"id":"u-9","name":"muxpad"}]' ;;
+esac
+exit 0`);
+      const { stdout } = await execFileAsync(
+        MUXPAD_BIN,
+        ['tunnel', 'setup', '--hostname=b.example.dev'],
+        { env: envFor(bin), encoding: 'utf-8' },
+      );
+      const calls = readFileSync(log, 'utf-8');
+      expect(calls).not.toContain('tunnel create');
+      expect(calls).toContain('tunnel route dns muxpad b.example.dev');
+      expect(stdout).toContain('already exists');
+    });
+
+    it('refuses a hostname that is not a hostname, before touching the account', async () => {
+      const bin = stub('exit 0');
+      for (const bad of ['https://x.example.dev', 'x.example.dev/p', 'not a host']) {
+        await expect(
+          execFileAsync(MUXPAD_BIN, ['tunnel', 'setup', `--hostname=${bad}`], {
+            env: envFor(bin),
+            encoding: 'utf-8',
+          }),
+        ).rejects.toMatchObject({ stderr: expect.stringContaining('bare hostname') });
+      }
+      expect(existsSync(log)).toBe(false); // nothing was run
+    });
+
+    it('requires a hostname, and names the zone requirement when asked for none', async () => {
+      const bin = stub('exit 0');
+      await expect(
+        execFileAsync(MUXPAD_BIN, ['tunnel', 'setup'], { env: envFor(bin), encoding: 'utf-8' }),
+      ).rejects.toMatchObject({ stderr: expect.stringContaining('--hostname') });
+    });
+
+    it('does NOT write a config when routing the DNS fails', async () => {
+      // The failure that must not be papered over: no CNAME means the hostname
+      // resolves nowhere, and a config written anyway would make muxpad announce
+      // a permanent base that is permanently dead.
+      writeFileSync(join(home, 'cert.pem'), 'x');
+      const bin = stub(`
+case "$2" in
+  create) printf '{"TunnelID":"u-3"}' > "${home}/u-3.json" ;;
+  list)   printf '[]' ;;
+  route)  echo 'failed to add route: zone not found' >&2; exit 1 ;;
+esac
+exit 0`);
+      await expect(
+        execFileAsync(MUXPAD_BIN, ['tunnel', 'setup', '--hostname=c.example.dev'], {
+          env: envFor(bin),
+          encoding: 'utf-8',
+        }),
+      ).rejects.toMatchObject({ stderr: expect.stringContaining('zone') });
+      expect(existsSync(join(data, 'tunnel.json'))).toBe(false);
+    });
+
+    it('prints the exact commands when cloudflared is missing, rather than half-doing it', async () => {
+      await expect(
+        execFileAsync(MUXPAD_BIN, ['tunnel', 'setup', '--hostname=d.example.dev'], {
+          env: { ...envFor(join(home, 'nope')), MUXPAD_CLOUDFLARED_BIN: join(home, 'nope') },
+          encoding: 'utf-8',
+        }),
+      ).rejects.toMatchObject({ stderr: expect.stringContaining('brew install cloudflared') });
     });
   });
 
