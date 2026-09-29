@@ -12,6 +12,32 @@
  * page is worse than one that fails.
  */
 
+/**
+ * The size the page is given, when the viewer says how big it actually is.
+ *
+ * A FIXED PORTRAIT 390x844 is wrong the moment somebody turns their phone. The
+ * page keeps its portrait shape, the viewer is now twice as wide as it is tall,
+ * and the difference is a black half-screen beside a column of website — which
+ * is exactly what a landscape screenshot of this showed. The page should be the
+ * shape of the thing it is being looked at on.
+ *
+ * Clamped rather than trusted. These numbers go straight into the renderer's
+ * viewport: a zero collapses the layout, and something enormous is a request to
+ * allocate a surface to match. The bounds are wide enough for any real phone
+ * held either way round and any tablet.
+ */
+export function phoneViewport(want: { width?: number; height?: number } | null | undefined): {
+  width: number;
+  height: number;
+} {
+  const fit = (n: unknown, fallback: number) =>
+    typeof n === 'number' && Number.isFinite(n) && n >= 240 && n <= 2048 ? Math.round(n) : fallback;
+  return {
+    width: fit(want?.width, MOBILE_DEVICE.width),
+    height: fit(want?.height, MOBILE_DEVICE.height),
+  };
+}
+
 /** A mainstream phone. Narrow enough to trip the layout breakpoints sites use. */
 export const MOBILE_DEVICE = {
   width: 390,
@@ -36,18 +62,22 @@ export interface EmulationParams {
  * agent and plenty switch on touch support, so sending one without the others
  * gets a layout that matches nothing.
  */
-export function emulationParams(mobile: boolean): EmulationParams {
+export function emulationParams(
+  mobile: boolean,
+  viewport?: { width?: number; height?: number } | null,
+): EmulationParams {
   if (!mobile) {
     return { metrics: null, touch: { enabled: false }, userAgent: null };
   }
+  const { width, height } = phoneViewport(viewport);
   return {
     metrics: {
-      width: MOBILE_DEVICE.width,
-      height: MOBILE_DEVICE.height,
+      width,
+      height,
       deviceScaleFactor: MOBILE_DEVICE.scale,
       mobile: true,
-      screenWidth: MOBILE_DEVICE.width,
-      screenHeight: MOBILE_DEVICE.height,
+      screenWidth: width,
+      screenHeight: height,
     },
     touch: { enabled: true, maxTouchPoints: 5 },
     userAgent: { userAgent: MOBILE_DEVICE.userAgent },

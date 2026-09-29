@@ -431,13 +431,27 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
       } else if (message.t === 'emulate') {
         // Phone layout on demand. All three signals together — see
         // MobileEmulation.ts for why metrics alone is not enough.
-        emulation = emulationParams(Boolean(message.mobile));
+        // THE SHAPE OF THE SCREEN LOOKING AT IT. The viewer sends its own size,
+        // so turning the phone gives the page a landscape viewport instead of
+        // leaving a portrait column with a black half beside it. Absent or
+        // implausible, it falls back to a phone — see phoneViewport.
+        const wanted = emulationParams(Boolean(message.mobile), {
+          width: Number(message.width),
+          height: Number(message.height),
+        });
+        // A RELOAD IS EXPENSIVE and an orientation change is not a new page.
+        // Reload only when the mobile SIGNALS change; a pure resize is a resize.
+        const signalsChanged =
+          Boolean(wanted.metrics) !== Boolean(emulation.metrics) ||
+          wanted.userAgent?.userAgent !== emulation.userAgent?.userAgent;
+        emulation = wanted;
         await applyEmulation();
         await cdp.send('Emulation.setTouchEmulationEnabled', emulation.touch);
         await cdp.send('Emulation.setUserAgentOverride', emulation.userAgent ?? { userAgent: '' });
         // The page has to be re-fetched for a server-rendered mobile layout;
-        // a resize alone gets a desktop page in a narrow window.
-        await cdp.send('Page.reload', {});
+        // a resize alone gets a desktop page in a narrow window. But re-fetching
+        // on every rotation would throw away whatever was typed into it.
+        if (signalsChanged) await cdp.send('Page.reload', {});
       } else if (message.t === 'nav') {
         // Back, forward and reload. A person looking at a page they did not
         // navigate to needs a way out of it that is not "ask the agent".
