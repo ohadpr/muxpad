@@ -18,13 +18,13 @@ import { applyModeToStartupCmd, modeFromStartupCmd } from '../agent-modes.js';
 import { agentStartupCmd } from '../agent-tab.js';
 import { agentPaneHasMessages } from '../chat/has-messages.js';
 import type { EventBus } from '../events.js';
-import { queuePaneKill } from '../pane-reaper.js';
 import {
   announceProvision,
   clearProvisionError,
   provisionPane,
   setProvisionError,
 } from '../pane-provision.js';
+import { queuePaneKill } from '../pane-reaper.js';
 import { agentCwd, hasProjectContext } from '../project-root.js';
 import { type PtydCache, decoratePane, decorateTab } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';

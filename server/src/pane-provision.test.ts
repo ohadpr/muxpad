@@ -104,18 +104,22 @@ describe('provisionPane retries a spawn that failed', () => {
     expect(provisionError(h.pane.id)).toBeNull();
   });
 
-  it('records the REASON when the ladder runs out, in ptyd’s own words', async () => {
-    const h = harness([
-      new Error('posix_spawnp failed'),
-      new Error('posix_spawnp failed'),
-      new Error('posix_spawnp failed'),
-      new Error('posix_spawnp failed'),
-    ]);
-    await provisionPane(h, spec(h)).settled;
-    // Every rung used, then the truth written down.
-    expect(h.ensured).toHaveLength(PROVISION_RETRY_DELAYS_MS.length + 1);
-    expect(provisionError(h.pane.id)).toContain('posix_spawnp failed');
-  }, LADDER_MS);
+  it(
+    'records the REASON when the ladder runs out, in ptyd’s own words',
+    async () => {
+      const h = harness([
+        new Error('posix_spawnp failed'),
+        new Error('posix_spawnp failed'),
+        new Error('posix_spawnp failed'),
+        new Error('posix_spawnp failed'),
+      ]);
+      await provisionPane(h, spec(h)).settled;
+      // Every rung used, then the truth written down.
+      expect(h.ensured).toHaveLength(PROVISION_RETRY_DELAYS_MS.length + 1);
+      expect(provisionError(h.pane.id)).toContain('posix_spawnp failed');
+    },
+    LADDER_MS,
+  );
 
   it('a pty that spawned and instantly died counts as a failure', async () => {
     // ptyd answers `ok: true` for ensurePane whether or not the runtime it just
@@ -142,7 +146,10 @@ describe('provisionPane retries a spawn that failed', () => {
     const seen: Array<{ id: string; err: unknown }> = [];
     h.events.subscribe((e) => {
       if (e.type === 'pane.updated')
-        seen.push({ id: e.pane.id, err: (e.pane as { provision_error?: unknown }).provision_error });
+        seen.push({
+          id: e.pane.id,
+          err: (e.pane as { provision_error?: unknown }).provision_error,
+        });
     });
     await provisionPane(h, { ...spec(h), attempts: 1 }).settled;
     const mine = seen.filter((s) => s.id === h.pane.id);
@@ -163,15 +170,19 @@ describe('provisionPane retries a spawn that failed', () => {
     expect(provisionError(h.pane.id)).toBeNull();
   });
 
-  it('the caller can wait for the FIRST attempt without waiting for the ladder', async () => {
-    // What keeps `POST /api/tabs` fast: bootstrapTab races the first attempt
-    // against its 250ms cap, and the retries run long after the response.
-    const h = harness([new Error('posix_spawnp failed'), new Error('posix_spawnp failed'), 'ok']);
-    const started = Date.now();
-    const p = provisionPane(h, spec(h));
-    await p.first;
-    expect(Date.now() - started).toBeLessThan(PROVISION_RETRY_DELAYS_MS[0] ?? 250);
-    await p.settled;
-    expect(provisionError(h.pane.id)).toBeNull();
-  }, LADDER_MS);
+  it(
+    'the caller can wait for the FIRST attempt without waiting for the ladder',
+    async () => {
+      // What keeps `POST /api/tabs` fast: bootstrapTab races the first attempt
+      // against its 250ms cap, and the retries run long after the response.
+      const h = harness([new Error('posix_spawnp failed'), new Error('posix_spawnp failed'), 'ok']);
+      const started = Date.now();
+      const p = provisionPane(h, spec(h));
+      await p.first;
+      expect(Date.now() - started).toBeLessThan(PROVISION_RETRY_DELAYS_MS[0] ?? 250);
+      await p.settled;
+      expect(provisionError(h.pane.id)).toBeNull();
+    },
+    LADDER_MS,
+  );
 });

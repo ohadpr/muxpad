@@ -15,8 +15,8 @@ import {
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import type { EventBus } from './events.js';
-import { queuePaneKill } from './pane-reaper.js';
 import { clearProvisionError, provisionPane } from './pane-provision.js';
+import { queuePaneKill } from './pane-reaper.js';
 import { agentCwd } from './project-root.js';
 import { type PtydCache, decoratePane, decorateTab } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
