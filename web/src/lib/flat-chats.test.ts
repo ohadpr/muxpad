@@ -163,6 +163,129 @@ describe('flattenChats — a CHILD travels with its parent', () => {
   });
 });
 
+describe('flattenChats — a group ranks on its ROOT, save for the one bit that is yours', () => {
+  it('floats a group whose CHILD wants you — the child cannot float on its own', () => {
+    // The screenshot: `muxpad` at the very BOTTOM of a long flat list with one
+    // sub-chat indented under it. A sub-chat has no position of its own (it
+    // rides its parent's, because it has no clock of its own), so ranking the
+    // group on the root ALONE meant the surface's one loud signal — `blocked`,
+    // the bit `compareByUserTouch` promotes above all recency — could never
+    // fire for exactly the rows that cannot raise it themselves. An agent
+    // asking you a question sat at the bottom of the list, indented, silent.
+    const flat = flattenOf(
+      [ws('personal'), [tab('fresh', { userAt: T })]],
+      [
+        ws('trayo'),
+        [
+          tab('stale', { userAt: T - 30 * 24 * HOUR }),
+          tab('asking', { spawnedBy: 'stale', status: 'blocked' }),
+        ],
+      ],
+    );
+    expect(ids(flat.live)).toEqual(['stale', 'fresh']);
+  });
+
+  it('does NOT float a group whose child is merely WORKING — that is the machine', () => {
+    // THE boundary the whole design rests on. `blocked` is you being asked for
+    // something; `working` is a machine printing a line. Letting the second one
+    // reorder is precisely the churn `userTouchAt` and migration v33 exist to
+    // remove — measured at 6 of 58 chats holding 6 of the global top 7, all
+    // under a minute old, none of them anything the user had done.
+    const flat = flattenOf(
+      [ws('personal'), [tab('fresh', { userAt: T })]],
+      [
+        ws('trayo'),
+        [
+          tab('stale', { userAt: T - 30 * 24 * HOUR }),
+          tab('busy', { spawnedBy: 'stale', status: 'working', activityAt: T }),
+        ],
+      ],
+    );
+    expect(ids(flat.live)).toEqual(['fresh', 'stale']);
+  });
+
+  it('keeps RECENCY on the root alone — a freshly created child promotes nothing', () => {
+    // A spawned chat is stamped `last_user_at = now` at birth (TabStore), on
+    // the stated grounds that "it nests under its parent anyway, so its own key
+    // decides nothing on screen". A cron that spawns a worker is not you
+    // touching anything, so that stamp may never rank a group.
+    const flat = flattenOf(
+      [ws('personal'), [tab('yours', { userAt: T - HOUR })]],
+      [
+        ws('trayo'),
+        [
+          tab('stale', { userAt: T - 30 * 24 * HOUR }),
+          tab('just-spawned', { spawnedBy: 'stale', userAt: T }),
+        ],
+      ],
+    );
+    expect(ids(flat.live)).toEqual(['yours', 'stale']);
+  });
+
+  it('lets a chat that wants you itself outrank one whose worker does', () => {
+    // Both are in the attention partition; inside it the root's own state still
+    // wins, because a chat asking you something is nearer than a chat whose
+    // agent is asking something.
+    const flat = flattenOf(
+      [ws('personal'), [tab('itself', { userAt: T - 40 * HOUR, status: 'blocked' })]],
+      [
+        ws('trayo'),
+        [
+          tab('via-kid', { userAt: T - HOUR }),
+          tab('kid', { spawnedBy: 'via-kid', status: 'blocked' }),
+        ],
+      ],
+    );
+    expect(ids(flat.live)).toEqual(['itself', 'via-kid']);
+  });
+
+  it('reads the rows the group DRAWS — a `contextOnly` heading is not one', () => {
+    // The same discipline as the workspace label: the set that can raise the
+    // group is the set the group renders. A live parent's row is up in the live
+    // list, so its state must not also rank its retired workers' drawer entry.
+    // `lead` is the OLDER of the two by user-touch, so recency alone settles
+    // the drawer's order and its `blocked` state is the only thing that could
+    // flip it. It must not: that state belongs to its row up in the live list.
+    const flat = flattenOf([
+      ws('personal'),
+      [
+        tab('lead', { userAt: T - 5 * HOUR, status: 'blocked' }),
+        tab('gone', { spawnedBy: 'lead', retired: true }),
+        tab('plain-done', { userAt: T, done: true }),
+      ],
+    ]);
+    expect(ids(flat.done)).toEqual(['plain-done', 'lead']);
+    // …while the same chat's LIVE row keeps every bit of that state.
+    expect(ids(flat.live)).toEqual(['lead']);
+  });
+});
+
+describe('flattenChats — every chat lands in exactly one place, at every depth', () => {
+  it('accounts for a whole three-deep family across both lists', () => {
+    // The constraint behind 7e4ecfc, stated as arithmetic rather than as a
+    // grouping rule: a grandchild was in NEITHER list and nothing noticed. A
+    // `contextOnly` group's root is a HEADING for a row that is still live
+    // above, so "exactly once" has to skip it or the root is counted twice.
+    const flat = flattenOf([
+      ws('personal'),
+      [
+        tab('root', { userAt: T }),
+        tab('kid', { spawnedBy: 'root' }),
+        tab('grandkid', { spawnedBy: 'kid' }),
+        tab('gone', { spawnedBy: 'root', retired: true }),
+        tab('decayed', { userAt: T - 9 * 24 * HOUR, done: true }),
+      ],
+    ]);
+    const drawn = [...flat.live, ...flat.done].flatMap((r) => [
+      ...(r.group.contextOnly ? [] : [r.group.chat.id]),
+      ...r.group.children.map((k) => k.id),
+    ]);
+    expect(drawn.sort()).toEqual(['decayed', 'gone', 'grandkid', 'kid', 'root']);
+    // …and the drawer's header equals what opening it shows: `gone` + `decayed`.
+    expect(flatDoneCount(flat.done)).toBe(2);
+  });
+});
+
 describe('flattenChats — pins and the done drawer', () => {
   it('floats every pinned chat above every unpinned one, across workspaces', () => {
     const flat = flattenOf(
