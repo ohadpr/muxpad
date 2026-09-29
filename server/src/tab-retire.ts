@@ -119,6 +119,29 @@ export interface RetireDeps {
    * a question an agent merely wrote in prose.
    */
   awaitingUser?: ((paneId: string) => boolean) | undefined;
+  /**
+   * IS A RUNNER STILL THERE? The registry's own answer: true mid-turn, false
+   * idle, **null when no runner is connected at all** (agent-bridge.ts).
+   *
+   * Consulted at the settle, and it settles a race between the two halves of
+   * this file. When a runner dies mid-turn the ws layer synthesises a
+   * `turn-done` for it ("agent disconnected"), so the settle arms — and would
+   * retire the worker as DELIVERED, with a summary, ninety seconds later. The
+   * dead-runner sweep cannot contradict that until it has GIVEN UP, which takes
+   * 135 seconds at the very least. The faster answer is the wrong one, and it
+   * files a crash as a delivery: precisely the confusion this file exists to
+   * remove.
+   *
+   * So a DELIVERY IS SOMETHING A LIVE AGENT DOES. With no runner there, nothing
+   * is retired here: either it comes back (and the next turn-end arms a fresh
+   * settle) or the sweep buries it as `died`. A ws blip mid-reconnect reads the
+   * same way, and "stays visible" is the harmless direction to be wrong in.
+   *
+   * Optional, and absent means "assume one is there": a harness with no ws layer
+   * (every unit test, and the boot reconcile) must keep deciding on the
+   * evidence it has rather than refusing to decide at all.
+   */
+  turnActive?: ((paneId: string) => boolean | null) | undefined;
 }
 
 /**
@@ -324,16 +347,35 @@ export class ChatRetirer {
     const index = clockIndex(this.deps.db);
     if (!isSubChat(index, pane.tab_id)) return false;
     const row = index.get(pane.tab_id);
-    if (!row || row.retired_at === null) return false;
-    // A HAND ARCHIVE IS NOT OURS TO UNDO. Only a retirement THIS code made —
-    // `delivered` or `died`, both of them guesses about when work ended — is
-    // reopened by evidence that the guess was wrong. `archived` is the user
+    if (!row) return false;
+    const tabs = new TabStore(this.deps.db);
+    // A HAND ARCHIVE IS NOT OURS TO UNDO, and it is checked FIRST so that none
+    // of the bookkeeping below touches it either. Only a retirement THIS code
+    // made — `delivered` or `died`, both of them guesses about when work ended —
+    // is reopened by evidence that the guess was wrong. `archived` is the user
     // saying they are finished with this chat, and a worker that keeps talking
     // afterwards (a straggling background task, a wakeup) must not drag the row
-    // back into a sidebar somebody deliberately cleared it from.
-    if (row.retired_reason === 'archived') return false;
+    // back into a sidebar somebody deliberately cleared it from — nor leave a
+    // reopened round spinning in the parent's log for a chat they filed away.
+    if (row.retired_at !== null && row.retired_reason === 'archived') return false;
+    // ── WORK IS UNDER WAY AGAIN, WHETHER OR NOT THE ROW EVER LEFT ────────────
+    // Both of these must happen for a worker that was never retired at all,
+    // which is why they sit ahead of the revival rather than inside it. The case
+    // that proves it is `awaiting`: a worker that stopped to ask KEEPS its live
+    // row (`holdOpen`) but its round was still closed and its verdict written,
+    // so it is the one shape where the row is fine and the bookkeeping is not.
+    // Measured live on `sidebar-fresh` — retired `delivered` with the row still
+    // reading `awaiting` from the round before.
+    //
+    // A round is REOPENED only when none is open. A genuinely new job has
+    // already opened one by now: the user's message goes through
+    // TabActivity.noteUserMessage before the runner can start a turn, so "no
+    // open round" means this turn belongs to the job we prematurely closed.
+    new SpawnRoundStore(this.deps.db).reopen(pane.tab_id);
+    tabs.clearSpawnReport(pane.tab_id);
+    if (row.retired_at === null) return false;
     if (!reviveChat(this.deps.db, pane.tab_id)) return false;
-    const fresh = new TabStore(this.deps.db).getById(pane.tab_id);
+    const fresh = tabs.getById(pane.tab_id);
     if (fresh)
       this.deps.events.emit({
         type: 'tab.updated',
@@ -424,6 +466,13 @@ export class ChatRetirer {
     // the exact state the live failure was found in (`retired_at` set on a
     // pane the daemon called `working`).
     if (this.deps.cache.getBusy(paneId)) return false;
+    // A DELIVERY IS SOMETHING A LIVE AGENT DOES. `null` means no runner is
+    // connected, so this turn-end was a DISCONNECT rather than a hand-off — see
+    // the dep's note for the race that loses. `true` is a turn in flight the
+    // cache has not caught up with. `undefined` is no probe wired at all, and
+    // only `false` — connected and idle — is a worker that finished.
+    const runner = this.deps.turnActive?.(paneId);
+    if (runner !== undefined && runner !== false) return false;
     // Read ONCE and passed both ways: the card has to say "awaiting you" using
     // the same judgement that decided not to retire, or the row and its card
     // would be free to disagree about the same worker.

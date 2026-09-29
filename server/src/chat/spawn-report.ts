@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { SpawnRoundStore } from '../store/SpawnRoundStore.js';
 import { type SpawnReportState, type SpawnReportWrite, TabStore } from '../store/TabStore.js';
 import { type HeadlineModel, agentSdkHeadlineModel, readRecentTurns } from './headline.js';
 
@@ -114,6 +115,11 @@ export interface SpawnReportGateInput {
   /** User+assistant turns visible in the transcript tail. */
   turns: number;
   now: number;
+  /**
+   * When the ROUND being reported on began — null when this child has no rounds
+   * (one that predates the table), which falls back to the plain interval.
+   */
+  roundStartedAt?: number | null;
 }
 
 /**
@@ -124,10 +130,32 @@ export interface SpawnReportGateInput {
  * entire life can be one turn (it was given a task and it answered), and that IS
  * the report. Zero turns is the only refusal, and it means the transcript has
  * nothing in it at all.
+ *
+ * ── A NEW ROUND IS NOT A RETRY ───────────────────────────────────────────────
+ * The interval is per-TAB and the report is per-ROUND, and that mismatch cost
+ * real cards. {@link SPAWN_REPORT_MIN_INTERVAL_MS}'s own note says the interval
+ * "only ever matters for a child that was revived and finished again" — which
+ * stopped being an edge case the moment rounds landed and made it the ORDINARY
+ * life of a worker: `muxpad agent send` hands one its next job, and if that
+ * landed inside half an hour the second job's card had nothing in it at all.
+ * Measured live: two rounds, one summary, and a child of mine with two rounds
+ * and no summary at all.
+ *
+ * So a round that began AFTER the last attempt gets its own call. That is not a
+ * hole in the rate limit, which exists to stop a broken install spinning: within
+ * one round `started_at` is fixed and the attempt clock moves past it on the
+ * first try, so every further attempt at the SAME round meets the floor again. A
+ * crashing worker still cannot spend a call per crash.
+ *
+ * Derived from data rather than remembered, so it survives a restart and needs
+ * no column of its own — the round's start and the attempt clock are both
+ * already persisted.
  */
 export function shouldConsiderSpawnReport(i: SpawnReportGateInput): boolean {
   if (i.turns < 1) return false;
   if (i.lastAt === null) return true;
+  if (i.roundStartedAt !== null && i.roundStartedAt !== undefined && i.roundStartedAt > i.lastAt)
+    return true;
   return i.now - i.lastAt >= SPAWN_REPORT_MIN_INTERVAL_MS;
 }
 
@@ -555,9 +583,21 @@ export async function maybeWriteSpawnReport(
   // the gate. The turn count the gate needs is only knowable from it.
   const { conversation, turns } = readRecentTurns(db, paneId);
   if (!conversation) return fallback();
+  // WHICH ROUND this report is for, so the interval can tell a new job from a
+  // retry. The round is CLOSED by the time we get here (the turn-end closes it
+  // synchronously, ahead of this call, which is the whole reason retirement
+  // never waits on a model), so the one that just ended is the one being
+  // reported on — and `writeResult` finds it again the same way.
+  const rounds = new SpawnRoundStore(db);
+  const round = rounds.openRound(tabId) ?? rounds.lastEnded(tabId);
   if (
     opts.force !== true &&
-    !shouldConsiderSpawnReport({ lastAt: tabs.spawnReportAt(tabId), turns, now })
+    !shouldConsiderSpawnReport({
+      lastAt: tabs.spawnReportAt(tabId),
+      turns,
+      now,
+      roundStartedAt: round?.started_at ?? null,
+    })
   ) {
     return fallback();
   }

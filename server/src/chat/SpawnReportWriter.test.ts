@@ -43,6 +43,17 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
   let seen: MuxpadEvent[];
 
   const GOOD = 'Counted the TODO comments: 41 across 6 files, listed in /tmp/todos.md.';
+  /**
+   * A second job's report, so a test can tell the two rounds apart.
+   *
+   * Cites NOTHING: `spawnReportRejectReason` refuses a report naming a path the
+   * transcript does not contain, and this fixture shares the one transcript
+   * `worker()` writes. A citation here would be rejected, retried and counted —
+   * which is the validator working, not the thing under test.
+   */
+  const SECOND = 'Then renamed the stale ones and pushed the branch.';
+  /** A third job's report — see SECOND for why none of these cite a path. */
+  const THIRD = 'Finally swept the duplicates and left a note for review.';
 
   /** A worker chat under `parent`, with a pane, a session and a transcript. */
   function worker(parent: string): { tabId: string; paneId: string } {
@@ -295,6 +306,90 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
     finishJob(retirer, kid.paneId);
     await writer.idle();
     expect(calls).toBe(2);
+  });
+
+  /**
+   * THE SECOND JOB USED TO GET NOTHING, and the first job's verdict was still
+   * on the row describing it.
+   *
+   * `sidebar-fresh`, measured live: two rounds, retired `delivered`, and
+   * `spawn_report_state` still reading `awaiting` from round one — so its card
+   * insisted it was waiting on the user about a job it had already finished.
+   * Two separate faults met here: the interval is per-TAB while the report is
+   * per-ROUND, and the verdict on the row outlived the round it was about.
+   */
+  describe('a worker handed a SECOND job', () => {
+    it('summarises the second round too, inside the interval', async () => {
+      let calls = 0;
+      const { retirer, writer } = wire(async () => {
+        calls++;
+        return calls === 1 ? GOOD : SECOND;
+      });
+      const kid = worker(parentChat());
+      const rounds = new SpawnRoundStore(db);
+
+      // Job one, reported.
+      rounds.open(kid.tabId, 1_000);
+      finishJob(retirer, kid.paneId);
+      await writer.idle();
+      expect(new TabStore(db).getById(kid.tabId)?.spawn_report).toBe(GOOD);
+
+      // Job two, handed over a minute later — well inside the 30-minute floor.
+      rounds.open(kid.tabId, Date.now() + 1);
+      new TabStore(db).clearSpawnReport(kid.tabId);
+      finishJob(retirer, kid.paneId);
+      await writer.idle();
+
+      expect(calls).toBe(2);
+      expect(new TabStore(db).getById(kid.tabId)?.spawn_report).toBe(SECOND);
+      // Each round carries its OWN result, which is what the cards read.
+      const all = rounds.listByTab(kid.tabId);
+      expect(all.map((r) => r.report)).toEqual([GOOD, SECOND]);
+    });
+
+    it('summarises a THIRD job too — the one-shot retry cannot cover for the gate', async () => {
+      // The second round survives a per-tab interval by accident: the writer's
+      // one retry per worker per process pushes it through with `force`. That
+      // budget is spent afterwards, so the THIRD job inside the half hour is
+      // where a tab-wide interval shows through — and a worker being handed jobs
+      // back to back is exactly what `muxpad agent send` does.
+      const answers = [GOOD, SECOND, THIRD];
+      let calls = 0;
+      const { retirer, writer } = wire(async () => answers[calls++] ?? THIRD);
+      const kid = worker(parentChat());
+      const rounds = new SpawnRoundStore(db);
+
+      for (let job = 0; job < 3; job++) {
+        // A new job arrives as a user message, which opens the round before the
+        // runner can start a turn (TabActivity.noteUserMessage).
+        rounds.open(kid.tabId, Date.now() + job);
+        retirer.onTurnStart(kid.paneId);
+        finishJob(retirer, kid.paneId);
+        await writer.idle();
+      }
+
+      expect(rounds.listByTab(kid.tabId).map((r) => r.report)).toEqual([GOOD, SECOND, THIRD]);
+    });
+
+    it('never leaves the FIRST round’s verdict describing the second', async () => {
+      // The `awaiting` that outlived its round. A worker stops to ask, is
+      // answered, and delivers — and the row must not still say it is waiting.
+      const { retirer, writer } = wire(async () => GOOD);
+      const kid = worker(parentChat());
+      const rounds = new SpawnRoundStore(db);
+      rounds.open(kid.tabId, 1_000);
+      // Round one ended by stopping to ask: an observed fact, written whether or
+      // not the model produced sentences, and it HOLDS THE ROW OPEN.
+      new TabStore(db).setSpawnReport(kid.tabId, { report: null, state: 'awaiting' }, 2_000);
+
+      // Answered: the job resumes. This is the door that was not clearing it.
+      retirer.onTurnStart(kid.paneId);
+      expect(new TabStore(db).getById(kid.tabId)?.spawn_report_state).toBeUndefined();
+
+      finishJob(retirer, kid.paneId);
+      await writer.idle();
+      expect(new TabStore(db).getById(kid.tabId)?.spawn_report_state).toBe('ok');
+    });
   });
 
   it('does not retry a worker that simply had nothing to report', async () => {

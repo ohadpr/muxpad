@@ -134,4 +134,90 @@ describe('SpawnRoundStore', () => {
     rounds.close(child, 200);
     expect(rounds.openRound(child)).toBeNull();
   });
+
+  it('knows which round ended most recently', () => {
+    expect(rounds.lastEnded(child)).toBeNull();
+    rounds.open(child, 100);
+    rounds.close(child, 200);
+    rounds.open(child, 300);
+    rounds.close(child, 400);
+    expect(rounds.lastEnded(child)?.started_at).toBe(300);
+  });
+
+  /**
+   * REOPENING — the counterpart to `reviveChat`.
+   *
+   * Retiring a worker mid-job and closing its round are one mistake, and undoing
+   * half of it leaves a worse state than either half: with the round shut and
+   * none open, everything the worker does next belongs to NOTHING. `close` has
+   * nothing to close and `writeResult` attaches the new summary to the round
+   * that already reported — overwriting a card the user had and drawing no new
+   * one.
+   */
+  describe('reopen — the job was not over after all', () => {
+    it('unshuts the last round instead of opening a second one', () => {
+      rounds.open(child, 100);
+      rounds.close(child, 200);
+
+      expect(rounds.reopen(child)).toBe(true);
+
+      expect(rounds.openRound(child)?.started_at).toBe(100);
+      // ONE job. The user asked once; a log that grows a pair of cards because
+      // the server changed its mind is reporting on our bookkeeping.
+      expect(rounds.listByTab(child)).toHaveLength(1);
+    });
+
+    it('drops the premature report, which described an unfinished job', () => {
+      rounds.open(child, 100);
+      rounds.close(child, 200, { report: 'half a job', state: 'ok' });
+
+      rounds.reopen(child);
+
+      const only = rounds.listByTab(child)[0];
+      expect(only?.report).toBeNull();
+      expect(only?.report_state).toBeNull();
+    });
+
+    it('KEEPS the artifacts — a published url does not stop existing', () => {
+      rounds.open(child, 100);
+      rounds.close(child, 200, {
+        report: 'half a job',
+        state: 'ok',
+        artifacts: ['https://example.test/p'],
+      });
+
+      rounds.reopen(child);
+
+      expect(rounds.listByTab(child)[0]?.artifacts).toEqual(['https://example.test/p']);
+    });
+
+    it('does nothing when a round is already open — there is no mistake to undo', () => {
+      rounds.open(child, 100);
+      expect(rounds.reopen(child)).toBe(false);
+      expect(rounds.openRound(child)?.started_at).toBe(100);
+    });
+
+    it('does nothing for a child that has never had a round', () => {
+      expect(rounds.reopen(child)).toBe(false);
+      expect(rounds.listByTab(child)).toEqual([]);
+    });
+
+    it('reopens the LATEST round, leaving earlier ones closed', () => {
+      rounds.open(child, 100);
+      rounds.close(child, 200, { report: 'job one', state: 'ok' });
+      rounds.open(child, 300);
+      rounds.close(child, 400, { report: 'job two', state: 'ok' });
+
+      rounds.reopen(child);
+
+      const all = rounds.listByTab(child);
+      expect(all).toHaveLength(2);
+      // The finished job keeps its card…
+      expect(all[0]?.report).toBe('job one');
+      expect(all[0]?.ended_at).toBe(200);
+      // …and only the one that turned out to be unfinished is running again.
+      expect(all[1]?.ended_at).toBeNull();
+      expect(all[1]?.report).toBeNull();
+    });
+  });
 });
