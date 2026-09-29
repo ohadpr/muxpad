@@ -1153,6 +1153,103 @@ describe('spawnLabel / spawnHandle — a sentence, and the handle under it', () 
   });
 });
 
+/**
+ * AWAITING YOU, ON THE CARD.
+ *
+ * `cross-ws` published a page, wrote a 13 KB report and stopped to ask which
+ * option to take. Its card said `delivered` with a green tick — the same thing a
+ * finished worker says. "I have no idea that it's waiting on me."
+ */
+describe('a worker that stopped to ask reads as AWAITING, not delivered', () => {
+  const asked = (over: Partial<MentionChat> = {}) =>
+    chat({
+      tabName: 'cross-ws',
+      tabId: 'cw',
+      report: { text: 'Published four options.', state: 'awaiting', at: 5 },
+      ...over,
+    });
+
+  it('is its own state, and not `working` either', () => {
+    // It is NOT running — the spinner would be as wrong as the tick. It stopped.
+    expect(spawnState(asked())).toBe('awaiting');
+  });
+
+  it('survives the chat NOT being retired, which is the whole point', () => {
+    // An awaiting worker keeps its live row on purpose, so `done` is false — and
+    // `!done` used to mean `working`. The report state is what outranks it.
+    expect(asked().done).toBeUndefined();
+    expect(spawnState(asked())).toBe('awaiting');
+  });
+
+  it('yields to the live status when it starts working again', () => {
+    // You answered it and it went back to work. Right now outranks the record of
+    // where it stopped.
+    expect(spawnState(asked({ status: 'working' }))).toBe('working');
+  });
+
+  it('DRAWS A COMPLETION ENTRY even though it never retired', () => {
+    // The round ended — that is what "it is waiting on you" means — so the card
+    // that says so has to arrive at the bottom of the log like any other result.
+    const kid = asked({
+      parentId: 'p',
+      createdAt: 100,
+      report: { text: 'Published four options.', state: 'awaiting', at: 900 },
+    });
+    expect(spawnCards([kid], 'p').map((c) => [c.kind, c.at])).toEqual([
+      ['launch', 100],
+      ['completion', 900],
+    ]);
+  });
+
+  it('never draws the result ABOVE the launch that caused it', () => {
+    // Two of the three timestamps `finishedAt` falls back through are not
+    // retirement stamps, so a skew can invert the pair. Clamped, not dropped:
+    // the entry is real, only its time is unusable.
+    const skewed = asked({
+      parentId: 'p',
+      createdAt: 100,
+      report: { text: 'x', state: 'awaiting', at: 5 },
+    });
+    expect(spawnCards([skewed], 'p').map((c) => [c.kind, c.at])).toEqual([
+      ['launch', 100],
+      ['completion', 100],
+    ]);
+  });
+
+  it('can be expanded — the question it asked is the thing you need to read', () => {
+    expect(canExpandSpawn(asked())).toBe(true);
+  });
+});
+
+describe('spawnArtifacts — where the work is, on the card', () => {
+  it('carries the urls and files off the row', () => {
+    const groups = [
+      {
+        id: 'w1',
+        slug: 'personal',
+        name: 'Personal',
+        tabs: [
+          {
+            id: 't1',
+            slug: 'a',
+            name: 'cross-ws',
+            layout: 'p1',
+            spawn_artifacts: ['https://x.test/muxpad-cross-workspace', '/tmp/x.md'],
+          },
+        ],
+      },
+    ] as never as WorkspaceTabs[];
+    expect(toMentionChats(groups)[0]?.artifacts).toEqual([
+      'https://x.test/muxpad-cross-workspace',
+      '/tmp/x.md',
+    ]);
+  });
+
+  it('is absent when the row has none — not an empty list to render', () => {
+    expect(CORPUS[0]?.artifacts).toBeUndefined();
+  });
+});
+
 describe('spawnReportSummary — what the card says when there are no sentences', () => {
   it('says it plainly, and invents nothing', () => {
     // "A child that produced nothing useful says so plainly. Do not invent a

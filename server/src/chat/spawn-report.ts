@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { type SpawnReportWrite, TabStore } from '../store/TabStore.js';
+import { type SpawnReportState, type SpawnReportWrite, TabStore } from '../store/TabStore.js';
 import { type HeadlineModel, agentSdkHeadlineModel, readRecentTurns } from './headline.js';
 
 /**
@@ -52,18 +52,37 @@ import { type HeadlineModel, agentSdkHeadlineModel, readRecentTurns } from './he
  */
 
 /**
- * Hard ceiling on a report. REJECTED above it, never truncated.
- *
- * HEADLINE_MAX_CHARS's lesson, which cost a sidebar row reading `I'm not
- * familiar with "muxpad" — is that an internal tool, a product name, or did you
- * mea…`: a model that overshot by 200% was not writing the thing you asked for,
- * so its first 400 characters are not that thing either. And a truncated report
- * is the worst possible version of this feature — you cannot tell whether the
- * part that was cut was the part you wanted.
- *
- * Sized for three sentences, which is what the prompt asks for.
+ * What the PROMPT asks for. Three sentences fit it comfortably, and the number
+ * is doing shape work — a model aiming at 400 writes a report, not an essay.
  */
-export const SPAWN_REPORT_MAX_CHARS = 400;
+export const SPAWN_REPORT_TARGET_CHARS = 400;
+
+/**
+ * The hard ceiling. REJECTED above it, never truncated — but it is TWICE the
+ * ask, and the gap between the two is the whole point.
+ *
+ * The ask and the ceiling used to be ONE number, and it threw good reports away.
+ * Measured in production, twice, and both were correct:
+ *
+ *   [spawn-report] rejected (over 400 chars) for tab …: "The worker was tasked
+ *   with designing cross-workspace navigation options. It deli…"
+ *
+ * The card then rendered a bare tick, so the user could not tell that a 13 KB
+ * write-up and a published page existed at all — the exact outcome this feature
+ * was built to prevent.
+ *
+ * The reject-don't-truncate rule is HEADLINE_MAX_CHARS's, and it is right THERE:
+ * 90 characters is a ceiling on a LABEL, so a 150-character reply is a category
+ * error — the model wrote a sentence where a noun phrase was asked for, and its
+ * first 90 characters are a sentence too. That reasoning does not transplant. A
+ * 450-character reply to "one to three sentences" is not a category error; it is
+ * three slightly long sentences, and refusing it loses everything.
+ *
+ * So the ceiling moves to where over-length IS a category error again. At twice
+ * the ask a reply is an essay or a transcript dump, and its first 800 characters
+ * are not a report either. The ask keeps shaping; the ceiling keeps refusing.
+ */
+export const SPAWN_REPORT_MAX_CHARS = 800;
 
 /**
  * Floor between model calls for one child.
@@ -145,7 +164,7 @@ const RULE_LINES: readonly string[] = [
   '- whether it succeeded',
   '',
   'Rules:',
-  `- One paragraph, one to three sentences, at most ${SPAWN_REPORT_MAX_CHARS} characters. No preamble, no heading, no bullet list, no markdown, no quotes.`,
+  `- One paragraph, one to three sentences, at most ${SPAWN_REPORT_TARGET_CHARS} characters. No preamble, no heading, no bullet list, no markdown, no quotes.`,
   '- Third person about the worker, or no subject at all. Never "I", "we" or "you".',
   '- Concrete. Name the actual numbers, files and findings; never "various improvements" or "several issues".',
   '- Report on the WORK, never on the log: no sentence about the transcript, the conversation, the session or yourself.',
@@ -389,6 +408,58 @@ export function parseSpawnReport(raw: string, conversation: string): ParsedSpawn
   return { report: collapse(s), nothing: false, reason: null };
 }
 
+// ── The ARTIFACTS ────────────────────────────────────────────────────────────
+
+/**
+ * WHERE THE WORK IS, scraped deterministically — no model anywhere in this path.
+ *
+ * `cross-ws` published `https://…/muxpad-cross-workspace` and wrote
+ * `/tmp/sidebar/cross-workspace.md`, and neither reached the conversation. A url
+ * or a report path is the single most valuable thing a completion card carries:
+ * it is the difference between a summary and something you can act on.
+ *
+ * It is scraped rather than asked for, and that is the whole reason it works for
+ * this case. The prompt already asks the model to name the path, and the report
+ * for `cross-ws` WAS generated and then refused by a length rule — so everything
+ * riding the model call vanished with it. A regex over the transcript tail does
+ * not.
+ *
+ * The SAME TAIL the summary is read from (`readRecentTurns`, 64 KB), which is
+ * not a limitation but the useful scope: verified against the real session, the
+ * tail holds the url this worker published and the report it wrote, while the
+ * whole file also holds a url belonging to a DIFFERENT worker that it happened
+ * to mention in passing. The recent window is what "this worker's output" means.
+ */
+export function scrapeArtifacts(conversation: string): string[] {
+  const out: string[] = [];
+  const add = (v: string) => {
+    const clean = v.replace(/[.,;:!?)\]}>'"]+$/, '');
+    if (clean.length > 4 && !out.includes(clean)) out.push(clean);
+  };
+  // A published page. Loopback and the local server are not artifacts — they are
+  // where muxpad itself lives, and a card linking to them says nothing.
+  for (const m of conversation.matchAll(/https?:\/\/[^\s<>"'`)]+/g)) {
+    const url = m[0] as string;
+    if (/^https?:\/\/(?:127\.0\.0\.1|localhost|0\.0\.0\.0)/.test(url)) continue;
+    add(url);
+  }
+  // A file it wrote: an absolute or `~` path ending in a document extension.
+  // Deliberately narrow — a source file it EDITED is not the deliverable, and a
+  // card listing every touched path would bury the one that matters.
+  for (const m of conversation.matchAll(
+    /(?:~|\/)[\w./~@%+-]*\.(?:md|html|csv|json|pdf|txt|png|jpg|svg)\b/g,
+  )) {
+    add(m[0] as string);
+  }
+  // Bounded: a worker that names forty files has not produced forty
+  // deliverables, and a card is not a directory listing.
+  return out.slice(0, MAX_ARTIFACTS);
+}
+
+/** How many artifacts a card will carry. Past a handful this stops being "where
+ *  the work is" and starts being a file listing. */
+export const MAX_ARTIFACTS = 4;
+
 // ── The write ────────────────────────────────────────────────────────────────
 
 /**
@@ -414,12 +485,21 @@ export async function maybeWriteSpawnReport(
     now?: number;
     /** The triggering turn ended `fatal`. */
     crashed?: boolean;
+    /** The worker STOPPED TO ASK the user something (chat/awaiting.ts). A fact
+     *  about its last message, decided before this runs, so it survives every
+     *  way this generation can fail. */
+    awaiting?: boolean;
     /** This install's vocabulary (chat/glossary.ts). Empty is fine. */
     glossary?: readonly string[];
   } = {},
 ): Promise<SpawnReportWrite | null> {
   const now = opts.now ?? Date.now();
   const crashed = opts.crashed === true;
+  const awaiting = opts.awaiting === true;
+  // CRASHED OUTRANKS AWAITING. A run that died mid-sentence may well have left a
+  // question hanging in its last message, and "it crashed" is the more serious
+  // and the more certain of the two.
+  const endState: SpawnReportState = crashed ? 'crashed' : awaiting ? 'awaiting' : 'ok';
   const tabs = new TabStore(db);
   const tab = tabs.getById(tabId);
   if (!tab) return null;
@@ -430,9 +510,18 @@ export async function maybeWriteSpawnReport(
    * the crash itself, written once: skipped when the row already says `crashed`,
    * so a run that fails in a loop does not emit a `tab.updated` per failure.
    */
-  const fallback = (): SpawnReportWrite | null => {
-    if (!crashed || tab.spawn_report_state === 'crashed') return null;
-    const write: SpawnReportWrite = { report: null, state: 'crashed' };
+  const fallback = (artifacts: string[] = []): SpawnReportWrite | null => {
+    // THE ARTIFACTS LAND EVEN WHEN NOTHING ELSE DOES. They are a regex over the
+    // transcript, not a generation, so a refused reply has no bearing on them —
+    // and a refused reply is exactly when the card most needs something in it.
+    tabs.setSpawnArtifacts(tabId, artifacts);
+    // A FACT we observed, written whether or not the model produced sentences:
+    // the crash, and the question the worker stopped on. Both are the only thing
+    // that stops its card reading as an ordinary delivery, and both would be
+    // lost if they rode the generation — which is exactly what happened to
+    // `cross-ws`, whose report was refused and whose card then said nothing.
+    if (endState === 'ok' || tab.spawn_report_state === endState) return null;
+    const write: SpawnReportWrite = { report: null, state: endState };
     tabs.setSpawnReport(tabId, write, now);
     return write;
   };
@@ -474,15 +563,18 @@ export async function maybeWriteSpawnReport(
       `[spawn-report] rejected (${reason}) for tab ${tabId}: ${JSON.stringify(reply.trim().slice(0, 80))}`,
     );
     tabs.touchSpawnReportAt(tabId, now);
-    return fallback();
+    return fallback(scrapeArtifacts(conversation));
   }
   // THREE OUTCOMES, kept apart on the row so the card can say three different
   // things: a report, a crash (with or without sentences), and a worker that
   // finished having produced nothing — which is a real answer and never an
   // invented summary.
+  // The artifacts are scraped from the SAME tail, with no model in the path, so
+  // they land even when the sentences above were refused.
+  const artifacts = scrapeArtifacts(conversation);
   const write: SpawnReportWrite = nothing
-    ? { report: null, state: crashed ? 'crashed' : 'none' }
-    : { report, state: crashed ? 'crashed' : 'ok' };
+    ? { report: null, state: crashed ? 'crashed' : awaiting ? 'awaiting' : 'none', artifacts }
+    : { report, state: endState, artifacts };
   tabs.setSpawnReport(tabId, write, now);
   return write;
 }

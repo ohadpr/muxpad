@@ -546,7 +546,19 @@ export const TabSchema = z.object({
   // this is the only thing that stops its card spinning forever. A report we
   // could not produce at all is the absence of these fields, and renders
   // nothing.
-  spawn_report_state: z.enum(['ok', 'none', 'crashed']).optional(),
+  // 'ok' a report · 'none' it produced nothing and said so · 'crashed' its last
+  // turn was fatal · 'awaiting' IT STOPPED TO ASK YOU SOMETHING.
+  //
+  // That last one is a different state from `delivered` and they were one, which
+  // is the bug it exists to fix: retirement fires at turn-end, so "I finished the
+  // job" and "I finished a turn and the ball is in your court" arrived as the
+  // same event — and the second was archived out of the live list, which is the
+  // worst response available to somebody waiting on you. See chat/awaiting.ts.
+  spawn_report_state: z.enum(['ok', 'none', 'crashed', 'awaiting']).optional(),
+  // WHERE THE WORK IS — the urls and files this worker produced, scraped from
+  // its transcript rather than asked of a model, so it survives a generation the
+  // model got wrong. Absent when there are none.
+  spawn_artifacts: z.array(z.string()).optional(),
 });
 export type Tab = z.infer<typeof TabSchema>;
 

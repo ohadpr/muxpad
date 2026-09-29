@@ -9,12 +9,15 @@ import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { openDb } from '../store/db.js';
 import {
+  MAX_ARTIFACTS,
   NOTHING,
   SPAWN_REPORT_MAX_CHARS,
   SPAWN_REPORT_MIN_INTERVAL_MS,
+  SPAWN_REPORT_TARGET_CHARS,
   buildSpawnReportPrompt,
   maybeWriteSpawnReport,
   parseSpawnReport,
+  scrapeArtifacts,
   shouldConsiderSpawnReport,
   spawnReportRejectReason,
 } from './spawn-report.js';
@@ -75,13 +78,32 @@ describe('spawnReportRejectReason — a report, or nothing at all', () => {
     expect(spawnReportRejectReason(GOOD, GOOD)).toBeNull();
   });
 
-  it('rejects rather than truncates a report that overshot', () => {
-    // HEADLINE_MAX_CHARS's lesson: truncating a reply that overshot is not
-    // salvage. A model that wrote 900 characters was not writing a report, so
-    // its first 400 are not one either.
-    const long = `${'Counted the todos and wrote them down. '.repeat(40)}`;
-    expect(long.length).toBeGreaterThan(SPAWN_REPORT_MAX_CHARS);
-    expect(spawnReportRejectReason(long, long)).toMatch(/over/);
+  it('ACCEPTS A GOOD REPORT THAT RAN LONG — the bug this shipped with', () => {
+    // Measured, in the wild, twice: `[spawn-report] rejected (over 400 chars)`
+    // for `cross-ws` ("The worker was tasked with designing cross-workspace
+    // navigation options. It deli…") and for the NavTree work. Both were CORRECT
+    // reports. The ceiling threw them away and the cards went blank.
+    //
+    // The reject-don't-truncate rule came from HEADLINE_MAX_CHARS, where it is
+    // right: 90 characters is a ceiling on a LABEL, so a 150-character reply is
+    // a category error — the model wrote a sentence when a noun phrase was
+    // asked for. It does not transplant. A 450-character reply to "1–3
+    // sentences" is not a category error, it is three slightly long sentences,
+    // and rejecting it produces exactly the outcome the whole feature exists to
+    // prevent.
+    const good =
+      'The worker was asked to design cross-workspace navigation options. It surveyed the existing rail, published a page comparing four separate arrangements, and recommended the switcher over the command palette because it is the only one that survives a cold load on mobile. The write-up, with the measurements behind that recommendation and the two rejected options, is at /tmp/sidebar/cross-workspace.md and published at https://example.ts.net/x/.';
+    expect(good.length).toBeGreaterThan(SPAWN_REPORT_TARGET_CHARS);
+    expect(spawnReportRejectReason(good, good)).toBeNull();
+  });
+
+  it('still rejects a reply that is evidently not a report', () => {
+    // The ceiling keeps its job at the size where over-length IS the category
+    // error again: a wall of text is a transcript dump or an essay, and its
+    // first 800 characters are not a report either.
+    const wall = `${'Counted the todos and wrote them down. '.repeat(40)}`;
+    expect(wall.length).toBeGreaterThan(SPAWN_REPORT_MAX_CHARS);
+    expect(spawnReportRejectReason(wall, wall)).toMatch(/over/);
   });
 
   it('rejects the first person — the worker is not the one talking', () => {
@@ -196,7 +218,7 @@ describe('buildSpawnReportPrompt', () => {
   it('asks for the sentinel by name, and for the path to the work', () => {
     const p = buildSpawnReportPrompt('assistant: done', { crashed: false });
     expect(p).toContain(NOTHING);
-    expect(p).toContain(String(SPAWN_REPORT_MAX_CHARS));
+    expect(p).toContain(String(SPAWN_REPORT_TARGET_CHARS));
     expect(p).toMatch(/exactly as it appears/i);
   });
 
@@ -208,6 +230,43 @@ describe('buildSpawnReportPrompt', () => {
     const p = buildSpawnReportPrompt('assistant: half way through', { crashed: true });
     expect(p).toMatch(/crashed/i);
     expect(buildSpawnReportPrompt('assistant: done', { crashed: false })).not.toMatch(/crashed/i);
+  });
+});
+
+describe('scrapeArtifacts — where the work is, with no model in the path', () => {
+  it('finds the published url and the report it wrote', () => {
+    // `cross-ws`, verbatim from the real transcript tail.
+    const convo = [
+      'assistant: published it',
+      'user: ok',
+      'assistant: The page is at https://physiology-tim-geek-larry.trycloudflare.com/muxpad-cross-workspace and the write-up is /tmp/sidebar/cross-workspace.md.',
+    ].join('\n');
+    expect(scrapeArtifacts(convo)).toEqual([
+      'https://physiology-tim-geek-larry.trycloudflare.com/muxpad-cross-workspace',
+      '/tmp/sidebar/cross-workspace.md',
+    ]);
+  });
+
+  it('strips the punctuation the sentence put on the end', () => {
+    expect(scrapeArtifacts('assistant: see (https://x.test/p/).')).toEqual(['https://x.test/p/']);
+  });
+
+  it('ignores loopback — that is where muxpad lives, not an artifact', () => {
+    expect(
+      scrapeArtifacts('assistant: running on http://127.0.0.1:7777/ and http://localhost:5173'),
+    ).toEqual([]);
+  });
+
+  it('ignores the source files it merely edited', () => {
+    // A card listing every touched path buries the one that matters.
+    expect(scrapeArtifacts('assistant: edited web/src/components/ChatPane.tsx and ws.ts')).toEqual(
+      [],
+    );
+  });
+
+  it('is bounded — a card is not a directory listing', () => {
+    const many = Array.from({ length: 12 }, (_, i) => `/tmp/r${i}.md`).join(' ');
+    expect(scrapeArtifacts(many)).toHaveLength(MAX_ARTIFACTS);
   });
 });
 
@@ -272,6 +331,8 @@ describe('maybeWriteSpawnReport — one attempt, and every failure is one', () =
     expect(out).toEqual({
       report: 'Counted the TODO comments: 41 across 6 files, listed in /tmp/todos.md.',
       state: 'ok',
+      // Scraped from the same tail, with no model in the path.
+      artifacts: ['/tmp/todos.md'],
     });
     const tab = new TabStore(db).getById(tabId);
     expect(tab?.spawn_report_state).toBe('ok');
@@ -281,7 +342,7 @@ describe('maybeWriteSpawnReport — one attempt, and every failure is one', () =
   it('records "nothing to report" as its own state, with no text', async () => {
     const { tabId, paneId } = makeWorker([{ kind: 'user', text: 'hi' }]);
     const out = await maybeWriteSpawnReport(db, tabId, paneId, async () => NOTHING, { now: 4_000 });
-    expect(out).toEqual({ report: null, state: 'none' });
+    expect(out).toEqual({ report: null, state: 'none', artifacts: [] });
     expect(new TabStore(db).getById(tabId)?.spawn_report_state).toBe('none');
   });
 
@@ -333,6 +394,43 @@ describe('maybeWriteSpawnReport — one attempt, and every failure is one', () =
     expect(calls).toBe(1);
   });
 
+  it('RECORDS THAT IT STOPPED TO ASK, even when the summary is unusable', () => {
+    // The `cross-ws` case end to end: the report is refused, and the state that
+    // says "this one is waiting on you" lands anyway — because it is a fact
+    // about the worker's last message, decided before this ran. Riding the
+    // generation is what lost it.
+    const { tabId, paneId } = makeWorker(WORK);
+    return maybeWriteSpawnReport(db, tabId, paneId, async () => 'Sure! Here you go.', {
+      now: 4_000,
+      awaiting: true,
+    }).then((out) => {
+      expect(out).toEqual({ report: null, state: 'awaiting' });
+      expect(new TabStore(db).getById(tabId)?.spawn_report_state).toBe('awaiting');
+    });
+  });
+
+  it('KEEPS THE ARTIFACT when the summary is refused — the point of scraping it', () => {
+    // `cross-ws` published a page and wrote a report, its summary was rejected
+    // for length, and the card showed nothing at all. The link does not depend
+    // on the sentences.
+    const { tabId, paneId } = makeWorker([
+      { kind: 'user', text: 'investigate cross-workspace navigation' },
+      {
+        kind: 'assistant',
+        text: 'Options are at https://x.trycloudflare.com/muxpad-cross-workspace and /tmp/sidebar/cross-workspace.md',
+      },
+    ]);
+    return maybeWriteSpawnReport(db, tabId, paneId, async () => 'Sure! Here you go.', {
+      now: 4_000,
+      awaiting: true,
+    }).then(() => {
+      expect(new TabStore(db).getById(tabId)?.spawn_artifacts).toEqual([
+        'https://x.trycloudflare.com/muxpad-cross-workspace',
+        '/tmp/sidebar/cross-workspace.md',
+      ]);
+    });
+  });
+
   it('SAYS A CRASHED CHILD CRASHED even when the summary is unusable', async () => {
     // The crash is a fact we OBSERVED (a fatal turn), not a generated claim, so
     // it does not depend on the model getting its sentences right. It is also
@@ -360,6 +458,7 @@ describe('maybeWriteSpawnReport — one attempt, and every failure is one', () =
     expect(out).toEqual({
       report: 'Counted 38 of the TODO comments before the run died.',
       state: 'crashed',
+      artifacts: ['/tmp/todos.md'],
     });
   });
 

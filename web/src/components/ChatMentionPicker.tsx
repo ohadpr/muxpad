@@ -240,6 +240,7 @@ export function ChatMentionCard({
   sub,
   working,
   mark,
+  artifacts,
   state,
   tone,
   body,
@@ -271,9 +272,18 @@ export function ChatMentionCard({
    * than a lifecycle state ("reported", "directed here"). Those must not borrow
    * the green that means a worker finished.
    */
-  tone?: 'delivered' | 'done' | 'failed' | 'note' | undefined;
+  tone?: 'delivered' | 'done' | 'failed' | 'awaiting' | 'note' | undefined;
   /** The report itself, rendered in full by the caller (markdown, links…). */
   body?: ReactNode | undefined;
+  /**
+   * WHERE THE WORK IS — the urls and files this worker produced.
+   *
+   * A row of its own under the summary, because a url you can press is worth
+   * more than any sentence describing one, and because it has to survive the
+   * summary: the worker that published a page and wrote a 13 KB report had its
+   * summary refused, and its card then showed nothing at all.
+   */
+  artifacts?: readonly string[] | undefined;
   /**
    * THE WORK the body is a summary of — shown only while `expanded`.
    *
@@ -391,6 +401,32 @@ export function ChatMentionCard({
       {body ? (
         <div className="chat-mention-card-body" dir="auto">
           {body}
+        </div>
+      ) : null}
+      {artifacts && artifacts.length > 0 ? (
+        <div className="chat-mention-card-artifacts">
+          {artifacts.map((a) =>
+            /^https?:\/\//.test(a) ? (
+              // `noreferrer` implies `noopener`; a published page is somebody
+              // else's origin and must not get a handle on this window.
+              <a
+                key={a}
+                className="chat-mention-card-artifact"
+                href={a}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {a.replace(/^https?:\/\//, '')}
+              </a>
+            ) : (
+              // A local path is NOT a link: a browser cannot open it, and a
+              // control that fails when pressed is worse than text. Shown as the
+              // thing you would paste into a terminal.
+              <span key={a} className="chat-mention-card-artifact" data-path="true">
+                {a}
+              </span>
+            ),
+          )}
         </div>
       ) : null}
       {/* THE SUMMARY STAYS. Expanding adds the work under it rather than

@@ -785,6 +785,34 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE tabs ADD COLUMN spawn_task TEXT;
     `,
   },
+  {
+    // WHERE THE WORK IS — a JSON array of the urls and files a worker produced.
+    //
+    //   tabs.spawn_artifacts — `["https://…/muxpad-cross-workspace",
+    //     "/tmp/sidebar/cross-workspace.md"]`, or NULL.
+    //
+    // `cross-ws` published a page and wrote a 13 KB report, and NEITHER reached
+    // the conversation: "it went and investigated, produced an artifact … and so
+    // I have no idea that it's waiting on me, that there's an artifact". A url or
+    // a report path is the most valuable thing a completion card can carry — the
+    // difference between a summary and something you can act on.
+    //
+    // ITS OWN COLUMN rather than a line inside `spawn_report`, and that is the
+    // whole reason it helps here. The report is a MODEL's sentences and can fail;
+    // for `cross-ws` it did (generated, then refused by a length rule), and
+    // anything riding it failed with it. This is scraped from the transcript by a
+    // regex, on the same read, and survives every failure the generator has. It
+    // also has to render as LINKS, which prose cannot.
+    //
+    // A JSON array in a TEXT column, not a side table: it is a short bounded list
+    // (4) belonging 1:1 to a row that already exists, and nothing ever queries
+    // ACROSS artifacts — the only reader wants "this child's", which is the one
+    // question a column answers better than a join.
+    version: 31,
+    sql: `
+      ALTER TABLE tabs ADD COLUMN spawn_artifacts TEXT;
+    `,
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

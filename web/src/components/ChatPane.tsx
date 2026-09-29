@@ -4670,6 +4670,11 @@ export function ChatPane({
               // ws.ts (4,812) and C…", which is the truncation this whole feature
               // is written against. The body wraps and takes a reading measure.
               body={report ? spawnReportSummary(report) : undefined}
+              // WHERE THE WORK IS. Not part of the summary and deliberately so:
+              // these are scraped from the transcript, not generated, so they
+              // land on a card whose summary was refused — which is exactly the
+              // card that had nothing on it at all.
+              artifacts={kid.artifacts}
               // A completion card only exists for a finished child, so `working`
               // is unreachable here — narrowed rather than asserted, because the
               // compiler cannot know that and a cast would hide it if it changed.

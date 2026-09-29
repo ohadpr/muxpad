@@ -58,8 +58,10 @@ export interface SpawnReport {
    *  both have a state and no sentences. */
   text: string | null;
   /** 'ok' a report · 'none' it produced nothing and says so · 'crashed' its last
-   *  turn was fatal. A report we could not produce at all is no report field. */
-  state: 'ok' | 'none' | 'crashed';
+   *  turn was fatal · 'awaiting' IT STOPPED TO ASK YOU SOMETHING, which is the
+   *  opposite of delivered and was reading as it. A report we could not produce
+   *  at all is no report field. */
+  state: 'ok' | 'none' | 'crashed' | 'awaiting';
   /** When it was written — the report entry's place in the log, which is the
    *  moment the result LANDED rather than the spawn hours further up. */
   at: number;
@@ -146,6 +148,15 @@ export interface MentionChat extends SearchableTab {
    */
   report?: SpawnReport | undefined;
   /**
+   * WHERE THE WORK IS — the urls and files this worker produced.
+   *
+   * Scraped server-side from its transcript rather than asked of a model, so it
+   * is there even when the summary was refused. That is not a hypothetical: the
+   * worker that published a page and wrote a 13 KB report had its summary
+   * rejected for length, and its card showed nothing at all.
+   */
+  artifacts?: readonly string[] | undefined;
+  /**
    * What `ChatChip` (and `chatTooltip`) need off this chat, built ONCE here.
    *
    * The chip is territory B's component and its prop shape is deliberately
@@ -169,10 +180,12 @@ type TabWithLifecycle = {
   done_at?: number | null;
   /** One line of what this worker was asked, generated from its first message. */
   spawn_task?: string | null;
+  /** Urls and files this worker produced. Absent when there are none. */
+  spawn_artifacts?: readonly string[] | null;
   /** The spawn report's three columns. All three absent together, always. */
   spawn_report?: string | null;
   spawn_report_at?: number | null;
-  spawn_report_state?: 'ok' | 'none' | 'crashed' | null;
+  spawn_report_state?: 'ok' | 'none' | 'crashed' | 'awaiting' | null;
 };
 
 /**
@@ -206,6 +219,7 @@ export function toMentionChats(groups: readonly WorkspaceTabs[]): MentionChat[] 
       ...(typeof row?.created_at === 'number' ? { createdAt: row.created_at } : {}),
       ...(typeof row?.done_at === 'number' ? { doneAt: row.done_at } : {}),
       ...(row?.spawn_task ? { task: row.spawn_task } : {}),
+      ...(row?.spawn_artifacts?.length ? { artifacts: row.spawn_artifacts } : {}),
       // THE REPORT, gated on the STATE and on the timestamp together. Both are
       // needed to draw the entry at all — a state with no time has no place in
       // the log to sit — and the server publishes them as a set, so a row
@@ -422,9 +436,12 @@ export function spawnHandle(chat: MentionChat): string | undefined {
  */
 export function spawnReportSummary(report: SpawnReport): string {
   if (report.text) return report.text;
-  return report.state === 'crashed'
-    ? 'Crashed before it produced anything.'
-    : 'Finished with nothing to report.';
+  if (report.state === 'crashed') return 'Crashed before it produced anything.';
+  // NEVER A BARE TICK AND NOTHING ELSE. A worker waiting on you with no summary
+  // is the exact case that produced this line: the card has to say what happened
+  // even when the generator gave us no sentences.
+  if (report.state === 'awaiting') return 'Stopped to ask you something.';
+  return 'Finished with nothing to report.';
 }
 
 /**
@@ -444,7 +461,7 @@ export function spawnReportSummary(report: SpawnReport): string {
  *   · everything else is `working` — which on a LAUNCH card is the spinner, and
  *     is the only thing that card ever says.
  */
-export type SpawnState = 'working' | 'delivered' | 'done' | 'failed';
+export type SpawnState = 'working' | 'delivered' | 'done' | 'failed' | 'awaiting';
 
 export function spawnState(chat: MentionChat): SpawnState {
   // RIGHT NOW OUTRANKS THE ROW. A sub-chat retires at a turn end, by design —
@@ -457,6 +474,10 @@ export function spawnState(chat: MentionChat): SpawnState {
   // revived and is working again is working.
   if (chat.status === 'working' || chat.status === 'blocked') return 'working';
   if (chat.report?.state === 'crashed') return 'failed';
+  // IT STOPPED TO ASK YOU SOMETHING. Ahead of the `done` check, because an
+  // awaiting worker deliberately does NOT retire — so `!chat.done` would read it
+  // as still working, and a spinner is as wrong here as the green tick was.
+  if (chat.report?.state === 'awaiting') return 'awaiting';
   if (!chat.done) return 'working';
   return chat.doneReason === 'delivered' ? 'delivered' : 'done';
 }
@@ -484,7 +505,10 @@ export function spawnState(chat: MentionChat): SpawnState {
  * than offering that; the sub-chat is still one click away through the head.
  */
 export function canExpandSpawn(chat: MentionChat): boolean {
-  return chat.report?.state === 'ok' || chat.report?.state === 'crashed';
+  const state = chat.report?.state;
+  // `awaiting` earns it most of all: the question the worker stopped on is in
+  // its last message, and that message is exactly what the expansion shows.
+  return state === 'ok' || state === 'crashed' || state === 'awaiting';
 }
 
 /**
@@ -525,7 +549,12 @@ export function spawnCards(
     // was mid-sentence.
     if (spawnState(chat) === 'working') continue;
     const at = finishedAt(chat);
-    if (at !== null) out.push({ chat, kind: 'completion', at });
+    // A COMPLETION CANNOT PRECEDE ITS OWN LAUNCH. Two of the three timestamps
+    // `finishedAt` falls back through are not retirement stamps, so a clock skew
+    // or an odd fallback can put the result above the spawn that caused it — and
+    // the reader would see a worker finish before it started. Clamped rather
+    // than dropped: the entry is real, only its time is unusable.
+    if (at !== null) out.push({ chat, kind: 'completion', at: Math.max(at, spawnedAt(chat)) });
   }
   // Sorted because a slow worker finishes AFTER a later sibling was launched,
   // and `interleaveSpawnCards` walks this list once against the transcript's own
