@@ -363,6 +363,16 @@ export const PaneSpecSchema = z.object({
   // confirmed listening. Decorated at the route layer from the ptyd cache.
   // Empty/absent for url panes and shells that aren't serving anything.
   app_urls: z.array(AppUrlSchema).optional(),
+  // Runtime-only. Why this pane has NO pty, in the words of whatever refused to
+  // make one ("posix_spawnp failed", "ptyd disconnected"). Set only after every
+  // retry is spent (see server/src/pane-provision.ts); absent/null is the
+  // normal case and means nothing is known to be wrong.
+  //
+  // It exists because "the rows are right and there is no process" used to be
+  // indistinguishable from "this pane has no agent yet", and the UI showed the
+  // second sentence for the first situation. A chat that could not start now
+  // says why and offers to try again.
+  provision_error: z.string().nullable().optional(),
 });
 export type PaneSpec = z.infer<typeof PaneSpecSchema>;
 
