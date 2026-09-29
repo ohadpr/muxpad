@@ -131,6 +131,17 @@ describe('inbound-message provenance', () => {
     expect((await senders(worker.tabId))[0]?.from_tab_id).toBeNull();
   });
 
+  it('records nothing when a chat sends into ITSELF', async () => {
+    // An agent running `muxpad agent send` against its own pane is the agent
+    // talking to itself — a queued note, a self-reminder. A "from" card on that
+    // says nothing the reader does not already know, and naming the chat they
+    // are reading as the sender reads as a bug.
+    const ws = await workspace();
+    const self = await chat(ws, 'worker');
+    expect((await send(self.paneId, 'remember to re-run the suite', self.paneId)).status).toBe(202);
+    expect(await senders(self.tabId)).toEqual([]);
+  });
+
   it('records nothing when the send was REJECTED', async () => {
     // Provenance for a message that never arrived would put a card on a bubble
     // that does not exist.
