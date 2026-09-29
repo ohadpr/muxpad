@@ -224,17 +224,16 @@ export function browsersRoutes(deps: {
    * not hold up the card that says so. Returns whether it landed, and the caller
    * records the moment either way.
    */
-  const captureShot = async (profile: string, state: BrowserAppState, at: number) => {
+  const fetchShot = async (state: BrowserAppState): Promise<Uint8Array | null> => {
     try {
       // state.viewerUrl is the LOOPBACK host url here — view() renames it to
       // localUrl for the client, but this is the raw row.
-      const res = await fetch(`${state.viewerUrl}/shot`, {
-        signal: AbortSignal.timeout(4000),
-      });
-      if (!res.ok) return false;
-      return saveBrowserShot(deps.dataDir, profile, at, new Uint8Array(await res.arrayBuffer()));
+      const res = await fetch(`${state.viewerUrl}/shot`, { signal: AbortSignal.timeout(4000) });
+      if (!res.ok) return null;
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      return bytes.length ? bytes : null;
     } catch {
-      return false;
+      return null;
     }
   };
 
@@ -321,13 +320,13 @@ export function browsersRoutes(deps: {
 
     const tabId = owner.get(profile);
     const state = find(profile);
-    const at = Date.now();
-    const shot = state ? await captureShot(profile, state, at) : false;
-    events.record(profile, {
+    const bytes = state ? await fetchShot(state) : null;
+    const moment = events.record(profile, {
       kind: 'opened',
       ...(tabId ? { tabId } : {}),
-      ...(shot ? { shot: true } : {}),
+      ...(bytes ? { shot: true } : {}),
     });
+    if (bytes) saveBrowserShot(deps.dataDir, profile, moment.at, bytes);
     return c.json({ ok: true, events: events.list(profile) }, 201);
   });
 
@@ -492,14 +491,18 @@ export function browsersRoutes(deps: {
     // THE MOMENT MOST WORTH A PICTURE. "Amazon needs a login" is a claim you
     // have to take on trust and a tap to check; the same card showing the
     // sign-in page is the claim with its evidence attached.
-    const at = Date.now();
-    const shot = await captureShot(profile, state, at);
-    events.record(profile, {
+    // TAKE THE PICTURE FIRST, NAME IT AFTERWARDS. `record` stamps its own `at`,
+    // and the still is found by that number — so a timestamp taken out here is a
+    // different one by however long the capture took (34ms, measured), and the
+    // card points at a file that does not exist.
+    const bytes = await fetchShot(state);
+    const moment = events.record(profile, {
       kind: 'needs-you',
       reason: parsed.data.reason,
       ...(parsed.data.tabId ? { tabId: parsed.data.tabId } : {}),
-      ...(shot ? { shot: true } : {}),
+      ...(bytes ? { shot: true } : {}),
     });
+    if (bytes) saveBrowserShot(deps.dataDir, profile, moment.at, bytes);
     return c.json(view(state));
   });
 
