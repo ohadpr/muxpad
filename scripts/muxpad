@@ -1420,12 +1420,195 @@ cmd_serve() {
 # name on every start), and that parser has to be unit-tested against real
 # captured output. A grep in a shell loop cannot be.
 cmd_tunnel() {
+  if [ "${1:-}" = "setup" ]; then
+    shift
+    cmd_tunnel_setup "$@"
+    return
+  fi
   local runner="$ROOT/server/dist/tunnel/index.js"
   if [ ! -f "$runner" ]; then
     echo "muxpad tunnel: not built ($runner missing) — run 'pnpm build' in $ROOT" >&2
     exit 1
   fi
   exec node "$runner" "$@"
+}
+
+# `muxpad tunnel setup --hostname=<host> [--name=muxpad]` — turn published links
+# PERMANENT and PUBLIC, in one command.
+#
+# WHAT IT IS FOR. The default published link is your tailnet address: permanent,
+# but reachable only from your own devices. The quick tunnel is public, but
+# Cloudflare reassigns its four-word hostname on every restart, so every link
+# built from one dies at the next deploy. A NAMED tunnel is the only option that
+# is both — you own the hostname, it is a CNAME to a UUID whose credentials live
+# on disk, and it survives restarts, reboots and a new IP.
+#
+# WHY IT IS A COMMAND AND NOT A CHECKLIST. The steps are `login`, `create`,
+# `route dns` and remembering what you chose, and getting any of them subtly
+# wrong leaves a hostname that resolves nowhere. Only ONE of them genuinely needs
+# a human — the browser login, which is an OAuth flow against your own Cloudflare
+# account — and this skips even that when the account cert is already there.
+#
+# WHAT IT DELIBERATELY DOES NOT DO: set MUXPAD_PUBLIC_BASE_URL. It does not need
+# to. The hostname lands in the ordinary tunnel announce, public-base.ts reads a
+# real domain off the host and classes it `permanent`, and the durability ranking
+# puts it above everything. No plist, no launchd job, no daemon restart.
+cmd_tunnel_setup() {
+  local hostname='' name='muxpad' a
+  for a in "$@"; do
+    case "$a" in
+      --hostname=*) hostname="${a#--hostname=}" ;;
+      --name=*) name="${a#--name=}" ;;
+      *) echo "muxpad tunnel setup: unknown flag '$a'" >&2; exit 1 ;;
+    esac
+  done
+
+  if [ -z "$hostname" ]; then
+    cat >&2 <<'EOF'
+muxpad tunnel setup: --hostname is required.
+
+  muxpad tunnel setup --hostname=artifacts.yourdomain.com
+
+The domain must already be on Cloudflare nameservers — the tunnel writes a CNAME
+into that zone, so Cloudflare has to be its DNS authority. A FIRST-level
+subdomain (artifacts.yourdomain.com) is covered by free Universal SSL; going
+deeper (<slug>.artifacts.yourdomain.com) needs Advanced Certificate Manager at
+$10/month and buys nothing, so don't.
+EOF
+    exit 1
+  fi
+
+  # Validated HERE, before anything touches the account. The same shape
+  # server/src/tunnel/named.ts enforces on read: a bare hostname, because this
+  # value becomes the origin of every published link and a scheme would produce
+  # `https://https://…` downstream.
+  case "$hostname" in
+    *://* | */* | *:* | *' '* | '')
+      echo "muxpad tunnel setup: --hostname must be a bare hostname (got '$hostname') — no scheme, no port, no path" >&2
+      exit 1
+      ;;
+  esac
+  if ! printf '%s' "$hostname" | grep -qE '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$'; then
+    echo "muxpad tunnel setup: --hostname must be a bare hostname (got '$hostname')" >&2
+    exit 1
+  fi
+
+  # Honour the same override the server uses, so a test can drive this without a
+  # Cloudflare account and a Homebrew-less machine can point at its own binary.
+  local cf="${MUXPAD_CLOUDFLARED_BIN:-}"
+  if [ -z "$cf" ]; then
+    cf="$(command -v cloudflared 2>/dev/null || true)"
+    [ -z "$cf" ] && [ -x /opt/homebrew/bin/cloudflared ] && cf=/opt/homebrew/bin/cloudflared
+    [ -z "$cf" ] && [ -x /usr/local/bin/cloudflared ] && cf=/usr/local/bin/cloudflared
+  fi
+  if [ -z "$cf" ] || [ ! -x "$cf" ]; then
+    cat >&2 <<EOF
+muxpad tunnel setup: cloudflared is not installed.
+
+  brew install cloudflared
+
+Then re-run: muxpad tunnel setup --hostname=$hostname
+EOF
+    exit 1
+  fi
+
+  # cloudflared's own home. Overridable so the test above never reads or writes
+  # the real one — those are live credentials for a real account.
+  local cfhome="${MUXPAD_CLOUDFLARED_HOME:-$HOME/.cloudflared}"
+  mkdir -p "$cfhome"
+
+  # STEP 1 — the account login. The ONE step that needs a human, and the one
+  # thing this command will not do twice: cert.pem is the account credential and
+  # re-running the flow would open a browser to re-learn what is already known.
+  if [ -f "$cfhome/cert.pem" ]; then
+    printf '%s✓%s already logged in to Cloudflare (%s)\n' "$C_GREEN" "$C_RESET" "$cfhome/cert.pem"
+  else
+    printf '%s→%s opening your browser to authorise cloudflared — pick the zone for %s\n' \
+      "$C_DIM" "$C_RESET" "$hostname"
+    if ! TUNNEL_ORIGIN_CERT="$cfhome/cert.pem" "$cf" tunnel login; then
+      echo 'muxpad tunnel setup: cloudflared tunnel login failed — nothing was changed' >&2
+      exit 1
+    fi
+  fi
+
+  # STEP 2 — the tunnel. Reusing an existing one by name makes re-running this
+  # safe, which matters because the most likely reason to re-run it is a typo in
+  # the hostname on the first attempt.
+  local existing_id=''
+  existing_id="$("$cf" tunnel list -o json -n "$name" 2>/dev/null \
+    | jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null || true)"
+  if [ -n "$existing_id" ]; then
+    printf '%s✓%s tunnel %s already exists (%s)\n' "$C_GREEN" "$C_RESET" "$name" "$existing_id"
+  else
+    printf '%s→%s creating tunnel %s\n' "$C_DIM" "$C_RESET" "$name"
+    if ! "$cf" tunnel create "$name"; then
+      echo "muxpad tunnel setup: cloudflared tunnel create $name failed" >&2
+      exit 1
+    fi
+  fi
+
+  # The credentials file `create` wrote. FOUND, not guessed: muxpad treats this
+  # file's existence as "the tunnel is runnable" (server/src/tunnel/named.ts), so
+  # recording a path that is not there would mean announcing a permanent hostname
+  # in front of a cloudflared that cannot authenticate.
+  local creds=''
+  if [ -n "$existing_id" ] && [ -f "$cfhome/$existing_id.json" ]; then
+    creds="$cfhome/$existing_id.json"
+  else
+    creds="$(ls -t "$cfhome"/*.json 2>/dev/null | head -1 || true)"
+  fi
+  if [ -z "$creds" ] || [ ! -f "$creds" ]; then
+    cat >&2 <<EOF
+muxpad tunnel setup: no tunnel credentials file in $cfhome.
+
+\`cloudflared tunnel create $name\` should have written one. If the tunnel exists
+but its credentials are on another machine, fetch them with:
+
+  cloudflared tunnel token --cred-file $cfhome/$name.json $name
+EOF
+    exit 1
+  fi
+
+  # STEP 3 — the CNAME. Before writing any config, because a hostname with no
+  # route resolves nowhere, and a config written anyway would have muxpad publish
+  # links to a permanent address that is permanently dead.
+  printf '%s→%s routing %s to the tunnel\n' "$C_DIM" "$C_RESET" "$hostname"
+  if ! "$cf" tunnel route dns "$name" "$hostname"; then
+    cat >&2 <<EOF
+muxpad tunnel setup: could not route $hostname to tunnel $name.
+
+The usual cause is the zone not being on Cloudflare nameservers, or a record for
+that name already existing. Nothing was written, so re-running this is safe. To
+replace an existing record:
+
+  $cf tunnel route dns -f $name $hostname
+EOF
+    exit 1
+  fi
+
+  # STEP 4 — tell muxpad. The server re-reads this on every publish, so it takes
+  # effect with no restart.
+  local cfg="$DATA_DIR/tunnel.json"
+  jq -n --arg n "$name" --arg h "$hostname" --arg c "$creds" \
+    '{name: $n, hostname: $h, credentials_file: $c}' > "$cfg"
+
+  printf '\n%s✓%s published links are now permanent AND public:\n' "$C_GREEN" "$C_RESET"
+  printf '    https://%s/<slug>/\n\n' "$hostname"
+  cat <<EOF
+  config:  $cfg
+  creds:   $creds  (back this up — it is what claims the hostname)
+
+Next, and that is all:
+
+  muxpad app stop tunnel     # drop the old quick tunnel, if one is running
+  muxpad publish --base      # expect: keeps: yes
+
+The quick tunnel's four-word hostnames are now unused, and any link that died
+with one recovers under the new name:
+
+  muxpad publish --url <slug>
+EOF
+  return 0
 }
 
 # `muxpad claude [claude args...]` — launch Claude Code in THIS pane as a
@@ -3169,11 +3352,25 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      e.g. muxpad serve --url=http://host:4321 \
                                             --label=Notes -- ./start
 
-  tunnel --port <public port>        run the Cloudflare quick tunnel that puts
-                                     published artifacts on the internet, and
-                                     re-pin muxpad's public base every time it
-                                     mints a new hostname. Started for you as
-                                     the `tunnel` app on the first publish —
+  tunnel setup --hostname=<host> [--name=muxpad]
+                                     make published links PERMANENT and PUBLIC,
+                                     in one command: logs in to Cloudflare
+                                     (browser, once — skipped if already done),
+                                     creates a named tunnel, routes the CNAME
+                                     and tells muxpad. Needs a domain already on
+                                     Cloudflare nameservers; costs $0/yr. After
+                                     this, links stop expiring and can be sent
+                                     to anyone. No plist and no restart — the
+                                     server re-reads it on the next publish.
+  tunnel --port <public port>        run the tunnel that puts published
+                                     artifacts on the internet, and re-pin
+                                     muxpad's public base. Uses the NAMED tunnel
+                                     when `tunnel setup` has been run (one fixed
+                                     hostname, forever); otherwise a QUICK
+                                     tunnel, whose four-word hostname Cloudflare
+                                     reassigns on every restart, killing every
+                                     link built from it. Started for you as the
+                                     `tunnel` app on the first publish —
                                      `muxpad app logs tunnel` to watch it,
                                      `muxpad app stop tunnel` to close the door.
 
