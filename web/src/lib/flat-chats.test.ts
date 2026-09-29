@@ -1,7 +1,13 @@
 import type { Tab } from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
 import { groupChats } from '../components/NavTree';
-import { flatDoneCount, flattenChats, needsWorkspaceLabel } from './flat-chats';
+import {
+  type FlatChatGroup,
+  displayedNameKey,
+  flatDoneCount,
+  flattenChats,
+  needsWorkspaceLabel,
+} from './flat-chats';
 
 const T = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -9,6 +15,7 @@ const HOUR = 3_600_000;
 function tab(
   id: string,
   o: {
+    name?: string;
     userAt?: number;
     activityAt?: number;
     spawnedBy?: string;
@@ -21,7 +28,7 @@ function tab(
   return {
     id,
     slug: id,
-    name: id,
+    name: o.name ?? id,
     layout: '',
     view_mode: 'tabbed',
     pinned: o.pinned ?? false,
@@ -211,14 +218,146 @@ describe('flattenChats — pins and the done drawer', () => {
 });
 
 describe('needsWorkspaceLabel — the trailing label’s budget', () => {
+  type Row = FlatChatGroup<ReturnType<typeof ws>>;
+  /** Exactly which rows of a rendered list would draw the label, by chat id. */
+  const labelled = (rows: Row[], activeSlug: string) =>
+    rows
+      .filter((r) => needsWorkspaceLabel(r, activeSlug, rows))
+      .map((r) => r.group.chat.id)
+      .sort();
+
   it('labels a row that leaves the workspace you are in, and only that row', () => {
     const [here, there] = [ws('personal'), ws('trayo')];
     const flat = flattenOf([here, [tab('mine')]], [there, [tab('theirs')]]);
     const row = (id: string) =>
       flat.live.find((r) => r.group.chat.id === id) as (typeof flat.live)[0];
-    expect(needsWorkspaceLabel(row('mine'), 'personal')).toBe(false);
-    expect(needsWorkspaceLabel(row('theirs'), 'personal')).toBe(true);
+    expect(needsWorkspaceLabel(row('mine'), 'personal', flat.live)).toBe(false);
+    expect(needsWorkspaceLabel(row('theirs'), 'personal', flat.live)).toBe(true);
     // And it follows you: the same row is unlabelled from the other side.
-    expect(needsWorkspaceLabel(row('theirs'), 'trayo')).toBe(false);
+    expect(needsWorkspaceLabel(row('theirs'), 'trayo', flat.live)).toBe(false);
+  });
+
+  it('labels BOTH halves of a name two workspaces share — the pair from the screenshot', () => {
+    // THE bug. Two rows called 'Main'; the Trayo one said TRAYO and the
+    // Personal one said nothing, because a row in the workspace you are already
+    // in was never labelled. One labelled row above an identical bare one reads
+    // as a rendering fault rather than as two chats that happen to share a name.
+    const flat = flattenOf(
+      [ws('personal'), [tab('p-main', { name: 'Main' })]],
+      [ws('trayo'), [tab('t-main', { name: 'Main' })]],
+    );
+    expect(labelled(flat.live, 'personal')).toEqual(['p-main', 't-main']);
+    // …and from either side. Whichever workspace you are in, both Mains speak.
+    expect(labelled(flat.live, 'trayo')).toEqual(['p-main', 't-main']);
+  });
+
+  it('still says nothing on a UNIQUE row, however many collisions are elsewhere', () => {
+    // The budget the first rule bought is not handed back: the collision rule
+    // spends labels on the ambiguous rows and on no others.
+    const flat = flattenOf(
+      [ws('personal'), [tab('p-main', { name: 'Main' }), tab('quiet', { name: 'Reading list' })]],
+      [ws('trayo'), [tab('t-main', { name: 'Main' })]],
+    );
+    expect(labelled(flat.live, 'personal')).toEqual(['p-main', 't-main']);
+  });
+
+  it('reads the name as a human does — case and stray whitespace are not distinctions', () => {
+    // 'Main' and 'main ' are the same word on a screen, so the pair is just as
+    // ambiguous and has to be labelled just the same.
+    const flat = flattenOf(
+      [ws('personal'), [tab('p-main', { name: '  Main' })]],
+      [ws('trayo'), [tab('t-main', { name: 'main ' })]],
+    );
+    expect(labelled(flat.live, 'personal')).toEqual(['p-main', 't-main']);
+  });
+
+  it('says nothing when the collision is INSIDE one workspace — the label cannot help', () => {
+    // Writing PERSONAL on both of these tells the user nothing they did not
+    // already know, and costs the name cell up to 84px twice. Two rows that
+    // were merely ambiguous would become ambiguous AND truncated.
+    const flat = flattenOf([
+      ws('personal'),
+      [tab('a', { name: 'Main' }), tab('b', { name: 'Main' })],
+    ]);
+    expect(labelled(flat.live, 'personal')).toEqual([]);
+    // But a third Main elsewhere does put every one of them on the record —
+    // each same-workspace row now collides with a row the label distinguishes.
+    const spread = flattenOf(
+      [ws('personal'), [tab('a', { name: 'Main' }), tab('b', { name: 'Main' })]],
+      [ws('trayo'), [tab('c', { name: 'Main' })]],
+    );
+    expect(labelled(spread.live, 'personal')).toEqual(['a', 'b', 'c']);
+  });
+
+  it('counts collisions per RENDERED list — the done drawer is a different list', () => {
+    // The drawer is collapsed by default, so counting across the seam would
+    // make a live row sprout a label when you open it and drop the label when
+    // you close it — a label coming and going on a row nothing happened to.
+    const flat = flattenOf(
+      [ws('personal'), [tab('live-main', { name: 'Main' })]],
+      [ws('trayo'), [tab('done-main', { name: 'Main', done: true })]],
+    );
+    expect(labelled(flat.live, 'personal')).toEqual([]);
+    // The archived one still says where it goes, by the first rule.
+    expect(labelled(flat.done, 'personal')).toEqual(['done-main']);
+  });
+
+  it('ignores names that can never carry a label — children and drawer headings', () => {
+    // The set compared has to be the set labelled, or the half-labelled pair
+    // comes straight back in a new shape. A CHILD is drawn under its parent,
+    // which is the row that says where the pair lives, so the caller exempts
+    // it — and it must not make its parent's namesake speak either.
+    const kids = flattenOf(
+      [ws('personal'), [tab('p-main', { name: 'Main' })]],
+      [
+        ws('trayo'),
+        [tab('lead', { userAt: T - HOUR }), tab('t-kid', { name: 'Main', spawnedBy: 'lead' })],
+      ],
+    );
+    expect(labelled(kids.live, 'personal')).toEqual(['lead']);
+    // Same for a `contextOnly` group's root: it is a heading over someone's
+    // retired workers, not a row, and it is never labelled.
+    const drawer = flattenOf(
+      [ws('personal'), [tab('p-done', { name: 'Main', done: true })]],
+      [
+        ws('trayo'),
+        [tab('main', { name: 'Main' }), tab('w1', { spawnedBy: 'main', retired: true })],
+      ],
+    );
+    expect(drawer.done.some((r) => r.group.contextOnly)).toBe(true);
+    expect(labelled(drawer.done, 'personal')).toEqual([]);
+  });
+});
+
+describe('displayedNameKey — the name as a human sees it', () => {
+  it('folds case and collapses whitespace', () => {
+    expect(displayedNameKey('  Main   Chat ')).toBe(displayedNameKey('main chat'));
+    expect(displayedNameKey('Main')).not.toBe(displayedNameKey('Mail'));
+  });
+
+  it('folds case WITHOUT asking the locale, so two devices agree', () => {
+    // `toLocaleLowerCase` would let the browser's locale decide whether two
+    // rows collide: under tr-TR it lowercases 'I' to 'ı', so the very same list
+    // would label differently on a phone than on the laptop beside it.
+    expect(displayedNameKey('INBOX')).toBe('inbox');
+  });
+
+  it('keys Hebrew by its glyphs, not by which code points happened to be typed', () => {
+    // Escaped rather than pasted on purpose: these two are the SAME glyph on
+    // screen, so written literally the assertion below would read as a typo.
+    // U+FB2E is alef-with-patah as one character; U+05D0 U+05B7 is the letter
+    // plus its mark. Two strings, one glyph, and NFC is what joins them.
+    const oneChar = '\uFB2E';
+    const letterPlusMark = '\u05D0\u05B7';
+    expect(oneChar).not.toBe(letterPlusMark);
+    expect(displayedNameKey(oneChar)).toBe(displayedNameKey(letterPlusMark));
+  });
+
+  it('drops the invisible marks pasted Hebrew carries', () => {
+    // An RLM draws nothing, so it cannot be what tells two rows apart. Nor can
+    // a zero-width space, which `\s` does not even count as whitespace.
+    const shalom = '\u05E9\u05DC\u05D5\u05DD';
+    expect(displayedNameKey(`\u200F${shalom}\u200E`)).toBe(displayedNameKey(shalom));
+    expect(displayedNameKey('\u05E9\u200B\u05DC\u05D5\u05DD')).toBe(displayedNameKey(shalom));
   });
 });

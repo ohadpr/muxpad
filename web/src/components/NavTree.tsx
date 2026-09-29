@@ -1766,8 +1766,9 @@ export function TabList({
  *   SOURCE   every workspace, merged by `flattenChats`, which also settles what
  *            a child row does (it travels with its parent) and where pins and
  *            the done drawer go.
- *   LABEL    a row leaving the workspace the surface names says where it goes,
- *            and no other row does (`needsWorkspaceLabel`).
+ *   LABEL    a row says where it goes when it leaves the workspace the surface
+ *            names, or when another workspace's row in the same list shares its
+ *            name — and no other row does (`needsWorkspaceLabel`).
  *
  * ─── NO DRAG, AND THAT IS HONEST RATHER THAN MISSING ─────────────────────────
  * The rail's drag is pinned-reordering, whose storage is a per-workspace
@@ -1814,7 +1815,15 @@ function RecentList({
   const doneCount = flatDoneCount(flat.done);
   const [doneOpen, setDoneOpen] = useState(false);
 
-  const renderRow = (row: FlatChatGroup<Workspace>, t: Tab, parent?: Tab) => {
+  // `list` is the array the row is rendered from — the live list or the done
+  // drawer. `needsWorkspaceLabel` weighs the row against its NEIGHBOURS, so it
+  // has to be told which population is on screen around it.
+  const renderRow = (
+    row: FlatChatGroup<Workspace>,
+    list: readonly FlatChatGroup<Workspace>[],
+    t: Tab,
+    parent?: Tab,
+  ) => {
     const actions = tabRowActions(row.workspace);
     return (
       <TabRow
@@ -1826,7 +1835,7 @@ function RecentList({
         // Only a CHILD is exempt: it sits under its parent, which already says
         // where the pair lives, and repeating the label on the indented line
         // would put the same word on two adjacent rows.
-        {...(!parent && needsWorkspaceLabel(row, activeWorkspaceSlug)
+        {...(!parent && needsWorkspaceLabel(row, activeWorkspaceSlug, list)
           ? { workspaceLabel: row.workspace.name }
           : {})}
         // No quick-switch numbers: Ctrl+1…9 is wired to the ACTIVE workspace's
@@ -1857,7 +1866,7 @@ function RecentList({
       />
     );
   };
-  const renderGroup = (row: FlatChatGroup<Workspace>) => (
+  const renderGroup = (row: FlatChatGroup<Workspace>, list: FlatChatGroup<Workspace>[]) => (
     <Fragment key={`${row.group.chat.id}${row.group.contextOnly ? ':retired' : ''}`}>
       {row.group.contextOnly ? (
         /* The parent is LIVE and has a row of its own up in the list. A label
@@ -1868,9 +1877,9 @@ function RecentList({
           {row.group.chat.name}
         </div>
       ) : (
-        renderRow(row, row.group.chat)
+        renderRow(row, list, row.group.chat)
       )}
-      {row.group.children.map((k) => renderRow(row, k, row.group.chat))}
+      {row.group.children.map((k) => renderRow(row, list, k, row.group.chat))}
     </Fragment>
   );
 
@@ -1885,7 +1894,7 @@ function RecentList({
           {!sheet && i === flat.livePinned && flat.livePinned > 0 ? (
             <div className="navtree-pin-divider" aria-hidden="true" />
           ) : null}
-          {renderGroup(row)}
+          {renderGroup(row, live)}
         </Fragment>
       ))}
       {live.length === 0 ? <div className="navtree-empty-note">No chats yet</div> : null}
@@ -1903,7 +1912,9 @@ function RecentList({
             <SvgCaret open={doneOpen} />
             {doneCount} done
           </button>
-          {doneOpen ? flat.done.map(renderGroup) : null}
+          {/* Its own population for the label rule: the drawer is collapsed by
+              default, so a live row must not gain or lose a label as it opens. */}
+          {doneOpen ? flat.done.map((row) => renderGroup(row, flat.done)) : null}
         </>
       ) : null}
     </div>
@@ -2099,14 +2110,15 @@ interface TabRowProps {
   /**
    * The workspace's name, drawn as a quiet trailing label — set ONLY by the
    * flat 'recent' list, and there only on a row that leaves the workspace the
-   * surface is naming (`needsWorkspaceLabel`).
+   * surface is naming or shares its name with another workspace's row in the
+   * same list (`needsWorkspaceLabel`).
    *
    * Absent is the overwhelmingly common case and means "say nothing": in the
    * grouped view the workspace is a header above the row, and in the flat view
-   * most rows are in the workspace you are already in. It is a WIDTH decision
-   * as much as a noise one — on the sheet the label can take up to 84px of a
-   * 336px name cell, which is affordable only while the rows that do not need
-   * it are not charged for it.
+   * most rows are in the workspace you are already in and uniquely named. It is
+   * a WIDTH decision as much as a noise one — on the sheet the label can take
+   * up to 84px of a 336px name cell, which is affordable only while the rows
+   * that do not need it are not charged for it.
    */
   workspaceLabel?: string | undefined;
   /** 1–9 chip shown while Ctrl is held (sidebar quick-switch); else undefined. */
