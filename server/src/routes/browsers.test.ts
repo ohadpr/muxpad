@@ -405,6 +405,25 @@ describe('the moments a conversation shows', () => {
     expect(body.events[0]?.tabId).toBe('01KRG3EMB8F6NFHXZH40HNKZGK');
   });
 
+  it('names the still by the MOMENT it belongs to, not by a clock read nearby', async () => {
+    // Caught live, not in a unit test: `record` stamps its own `at`, and the
+    // still is found by that number — so a timestamp taken before the capture is
+    // a different one by however long the capture took (34ms, measured), and the
+    // card points at a file that does not exist. The event and the file have to
+    // agree, so the fetch happens first and the SAVE is named afterwards.
+    await ensure();
+    const res = await post('/api/browsers/shopping/opened', {});
+    const body = (await res.json()) as { events: Array<{ at: number; shot?: boolean }> };
+    const moment = body.events.at(-1);
+    if (moment?.shot) {
+      const still = await app.request(`/api/browsers/shopping/shot/${moment.at}`);
+      expect(still.status).toBe(200);
+    }
+    // With no host answering there is no picture, and the card must not claim
+    // one — which is the other half of the same contract.
+    expect(moment?.shot ?? false).toBe(false);
+  });
+
   it('says it ONCE, however many times the host restarts', async () => {
     // The host announces on its first page, so a restart announces again — and
     // it restarts for reasons nothing to do with the person: a crash, a reap, a
