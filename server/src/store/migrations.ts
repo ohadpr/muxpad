@@ -1039,6 +1039,63 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // WHO SENT THE MESSAGE — provenance for a message delivered INTO a chat.
+    //
+    // `muxpad agent send` drops a message into another chat's conversation, and
+    // on the receiving side it has always rendered as an ordinary user bubble.
+    // A coordinator's multi-paragraph brief is therefore indistinguishable from
+    // something the human typed, in the worker's own transcript. This table is
+    // the record that says otherwise.
+    //
+    // ── WHY A ROW AND NOT A MARKER IN THE TEXT ───────────────────────────────
+    // The cron fire solves the same problem the other way: `renderCronMarker`
+    // wraps the prompt in a `<muxpad-cron>` block that IS delivered to the
+    // model, deliberately, because a scheduled job has to tell the agent it is
+    // not a human speaking.
+    //
+    // A chat-to-chat send must not do that. Prepending a block would change the
+    // prompt every worker in the fleet receives — a behaviour change wearing a
+    // presentation change's clothes. So this follows `spawn_rounds` instead: a
+    // muxpad-owned row, joined into the conversation by the client. muxpad does
+    // not write the agent's transcript (it tails the harness's file), so a
+    // sender label could never have been a transcript row anyway.
+    //
+    // ── WHY THE JOIN KEY IS A HASH OF THE TEXT ───────────────────────────────
+    // The row and the bubble share no id, and the obvious substitute — the
+    // timestamp — does not work: a send that lands mid-turn is persisted to the
+    // server-side queue and delivered when that turn ends, which on a long turn
+    // is many minutes later. The TEXT survives that trip unchanged, so it is
+    // what the two sides agree on. `at` is kept anyway, to break ties when the
+    // same text was sent twice, and to age rows out.
+    //
+    // ── WHY THE TEXT ITSELF IS NOT STORED ────────────────────────────────────
+    // It is already in the transcript. The messages this exists for run to
+    // several hundred lines; a second copy per send would grow the database by
+    // the size of the conversation for no fact it does not already hold.
+    //
+    // `from_tab_id` is the SENDING CHAT, resolved server-side from the pane the
+    // sender ran in — never a name supplied by the caller, so a card cannot be
+    // made to claim a chat it did not come from. NULL means muxpad recorded a
+    // send it cannot attribute, which renders as an ordinary bubble.
+    //
+    // ON DELETE CASCADE on the receiving tab, for the same reason `spawn_rounds`
+    // has one: provenance for a conversation that is gone is nothing. The
+    // SENDER is deliberately NOT a foreign key — deleting the coordinator must
+    // not erase the record that it once briefed a worker; an id that no longer
+    // resolves renders as an unattributed bubble, which is honest.
+    version: 35,
+    sql: `
+      CREATE TABLE inbound_messages (
+        id          TEXT PRIMARY KEY,
+        tab_id      TEXT NOT NULL REFERENCES tabs(id) ON DELETE CASCADE,
+        at          INTEGER NOT NULL,
+        text_key    TEXT NOT NULL,
+        from_tab_id TEXT
+      );
+      CREATE INDEX inbound_messages_tab ON inbound_messages(tab_id, at);
+    `,
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the
