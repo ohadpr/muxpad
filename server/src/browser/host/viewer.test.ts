@@ -47,6 +47,10 @@ interface Harness {
   drop(): void;
   /** Pending timers, so a test can see the backoff rather than only its effect. */
   timers: Array<{ fn: () => void; ms: number }>;
+  /** Every fetch the page made, so a test can see what it asked the server for. */
+  fetches: Array<{ url: string; method?: string; body?: string }>;
+  /** Runs the page's intervals once, and settles what they started. */
+  tickTimers(): Promise<void>;
   /** Messages the page sent to the host. */
   sent: Array<Record<string, unknown>>;
   /** Push a message from the host to the page. */
@@ -54,7 +58,16 @@ interface Harness {
   clipboard: { text: string; reads: number };
 }
 
-function run(search = ''): Harness {
+interface RunOpts {
+  search?: string;
+  /** What every fetch resolves to, so the wheel state can be posed. */
+  fetchJson?: unknown;
+  /** A fixed clock, so a lease can be put past its halfway point. */
+  nowMs?: number;
+}
+
+function run(opts: RunOpts | string = {}): Harness {
+  const { search = '', fetchJson = {}, nowMs } = typeof opts === 'string' ? { search: opts } : opts;
   const els = new Map<string, StubEl>();
   const make = (id: string): StubEl => {
     const listeners = new Map<string, Array<(e: unknown) => void>>();
@@ -113,6 +126,8 @@ function run(search = ''): Harness {
   };
 
   const timers: Array<{ fn: () => void; ms: number }> = [];
+  const fetches: Array<{ url: string; method?: string; body?: string }> = [];
+  const intervals: Array<{ fn: () => void; ms: number }> = [];
   const sent: Array<Record<string, unknown>> = [];
   const socketListeners = new Map<string, Array<(e: unknown) => void>>();
   const clipboard = { text: 'hunter2', reads: 0 };
@@ -162,7 +177,11 @@ function run(search = ''): Harness {
       maxTouchPoints: 5,
     },
     URLSearchParams,
-    fetch: async () => ({ ok: true, json: async () => ({}) }),
+    fetch: async (url: string, init?: { method?: string; body?: string }) => {
+      fetches.push({ url: String(url), ...(init ?? {}) });
+      return { ok: true, json: async () => fetchJson };
+    },
+    Date: nowMs === undefined ? Date : { ...Date, now: () => nowMs },
     // A clock the test drives. The reconnect backs off with setTimeout, so a
     // stub that never fires makes a page that never reconnects look identical
     // to one that does.
@@ -173,7 +192,12 @@ function run(search = ''): Harness {
     clearTimeout: (id: number) => {
       if (timers[id - 1]) timers[id - 1] = { fn: () => {}, ms: 0 };
     },
-    setInterval: () => 0,
+    // Intervals are collected, not run — a test drives them with tickTimers so
+    // a thirty-second renewal loop does not take thirty seconds to observe.
+    setInterval: (fn: () => void, ms: number) => {
+      intervals.push({ fn, ms });
+      return intervals.length;
+    },
     requestAnimationFrame: () => 0,
     URL: { createObjectURL: () => 'blob:', revokeObjectURL: () => {} },
     addEventListener: () => {},
@@ -222,6 +246,14 @@ function run(search = ''): Harness {
       for (const fn of socketListeners.get('message') ?? []) fn({ data: JSON.stringify(msg) });
     },
     clipboard,
+    fetches,
+    async tickTimers() {
+      for (const t of intervals) t.fn();
+      // The handlers are async; let their promises settle before asserting.
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+      await new Promise((r) => queueMicrotask(() => r(undefined)));
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+    },
   };
 }
 
@@ -504,5 +536,66 @@ describe('where a tap lands on the page', () => {
     // No size, no map. A guess here is a click somewhere the person did not aim.
     const h = run();
     expect(tapAt(h, 10, 10)).toBeUndefined();
+  });
+});
+
+describe('keeping the wheel while somebody is holding it', () => {
+  /**
+   * The lease lapses after ten minutes so a person who falls asleep holding the
+   * browser does not own it forever. Renewal lived only in the DESKTOP modal,
+   * and on a phone the card opens THIS page in a tab — so nothing renewed. Ten
+   * minutes is nothing for a real login: a password manager, a code from an
+   * email, two-factor on another device. Past that an agent could claim the
+   * browser and navigate the page out from under somebody still typing into it.
+   */
+  it('renews once the lease is past halfway', async () => {
+    const h = run({
+      fetchJson: { wheel: { holder: 'human', by: 'pane-7', takenAt: 0, expiresAt: 1000 } },
+      nowMs: 900,
+    });
+    await h.tickTimers();
+    expect(h.fetches.some((f) => f.url.endsWith('/wheel/renew'))).toBe(true);
+  });
+
+  it('leaves a fresh lease alone', async () => {
+    // A renewal per tick is a request every thirty seconds for nothing.
+    const h = run({
+      fetchJson: { wheel: { holder: 'human', by: 'pane-7', takenAt: 0, expiresAt: 1000 } },
+      nowMs: 100,
+    });
+    await h.tickTimers();
+    expect(h.fetches.some((f) => f.url.endsWith('/wheel/renew'))).toBe(false);
+  });
+
+  it('renews on behalf of whoever holds it, not as itself', async () => {
+    // This page usually did not take the wheel — the card did. Renewing as
+    // somebody else is refused by the server, which is the same as not renewing.
+    const h = run({
+      fetchJson: { wheel: { holder: 'human', by: 'pane-7', takenAt: 0, expiresAt: 1000 } },
+      nowMs: 900,
+    });
+    await h.tickTimers();
+    const renew = h.fetches.find((f) => f.url.endsWith('/wheel/renew'));
+    expect(JSON.parse(renew?.body ?? '{}')).toMatchObject({ by: 'pane-7' });
+  });
+
+  it('never renews an AGENT’s hold', async () => {
+    const h = run({
+      fetchJson: { wheel: { holder: 'agent', by: 'agent-1', takenAt: 0, expiresAt: 1000 } },
+      nowMs: 900,
+    });
+    await h.tickTimers();
+    expect(h.fetches.some((f) => f.url.endsWith('/wheel/renew'))).toBe(false);
+  });
+
+  it('never renews while only watching', async () => {
+    // Watching takes no wheel and must not extend anybody else's.
+    const h = run({
+      search: '?mode=watch',
+      fetchJson: { wheel: { holder: 'human', by: 'pane-7', takenAt: 0, expiresAt: 1000 } },
+      nowMs: 900,
+    });
+    await h.tickTimers();
+    expect(h.fetches.some((f) => f.url.endsWith('/wheel/renew'))).toBe(false);
   });
 });

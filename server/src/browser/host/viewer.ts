@@ -362,9 +362,52 @@ takeover.addEventListener('click', async () => {
     if (!r.ok) { msg.textContent = 'could not take the wheel'; return }
     watching = false
     applyWatching()
+
   } catch { msg.textContent = 'could not reach muxpad' }
 })
 applyWatching()
+
+/**
+ * KEEPS THE WHEEL WHILE SOMEBODY IS HOLDING IT.
+ *
+ * The lease expires after ten minutes so a person who takes the browser, puts
+ * the phone down and falls asleep does not own it forever. Renewal lived only
+ * in the DESKTOP modal — and on a phone the card opens this page in a tab
+ * instead, so nothing renewed at all. Ten minutes is nothing for a real login:
+ * a password manager, a code from an email, two-factor on another device. Past
+ * that the lease lapsed and an agent could claim the browser and navigate the
+ * page out from under somebody who was still typing into it — the exact failure
+ * the wheel exists to prevent.
+ *
+ * Renews at the HALFWAY point, not near the end: a renewal that fires at 90% of
+ * the lease is one dropped request away from losing it mid-sentence, and the
+ * request costs nothing.
+ *
+ * Renewed on behalf of whoever holds it, because this page did not necessarily
+ * take it — the card usually did. A viewer that is open and driving IS the
+ * evidence that a person is still there, which is the whole thing a lease is
+ * trying to measure.
+ */
+const keepTheWheel = async () => {
+  if (watching) return
+  const profile = profileFromPath()
+  if (!profile) return
+  try {
+    const r = await fetch('/api/browsers/' + profile)
+    if (!r.ok) return
+    const lease = (await r.json())?.wheel
+    if (!lease || lease.holder !== 'human') return
+    const total = lease.expiresAt - lease.takenAt
+    if (total <= 0) return
+    if (Date.now() - lease.takenAt < total / 2) return
+    await fetch('/api/browsers/' + profile + '/wheel/renew', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ by: lease.by }),
+    })
+  } catch { /* the next tick tries again */ }
+}
+setInterval(keepTheWheel, 30000)
 
 // PASTE, which cannot be left to the page.
 //
