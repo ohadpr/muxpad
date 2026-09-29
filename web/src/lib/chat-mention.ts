@@ -1,4 +1,4 @@
-import type { ChatClock } from '@muxpad/shared';
+import type { ChatClock, SpawnRound } from '@muxpad/shared';
 import { type ArchiveSearchHit, req } from '../api';
 import type { ChatChipChat } from '../components/ChatChip';
 import {
@@ -66,6 +66,12 @@ export interface SpawnReport {
    *  moment the result LANDED rather than the spawn hours further up. */
   at: number;
 }
+
+export type { SpawnRound };
+
+/** Every round of every child of one conversation, keyed by child tab id —
+ *  `GET /api/tabs/:id/spawn-rounds`, straight through. */
+export type SpawnRoundsByChild = ReadonlyMap<string, readonly SpawnRound[]>;
 
 /** A chat, as the picker and the chip need it. Superset of `SearchableTab`. */
 export interface MentionChat extends SearchableTab {
@@ -356,6 +362,25 @@ export interface SpawnCard {
   kind: 'launch' | 'completion';
   /** Epoch ms this entry is about. Never moves. */
   at: number;
+  /**
+   * THIS ROUND's result, when the entry belongs to a round.
+   *
+   * Per-entry rather than per-chat because a worker is handed successive jobs
+   * and each one concludes differently: round one found two dead rules, round
+   * two counted the todos. The tab carries ONE report — the newest — so reading
+   * it for every completion card would make every old card restate the latest
+   * result, which is precisely what "do not double-report" forbids.
+   *
+   * Absent on a launch entry, and on a completion built from the tab-level
+   * fallback (where `chat.report` is the only thing there is).
+   */
+  report?: SpawnReport | undefined;
+}
+
+/** One round's result, in the shape the card already reads. */
+function roundReport(r: SpawnRound): SpawnReport | undefined {
+  if (!r.report_state || r.ended_at === null) return undefined;
+  return { text: r.report, state: r.report_state, at: r.ended_at };
 }
 
 /**
@@ -530,6 +555,16 @@ export function spawnCards(
   corpus: readonly MentionChat[],
   tabId: string | undefined | null,
   max: number = MAX_SPAWN_CARDS,
+  /**
+   * The children's ROUNDS, when the conversation has fetched them.
+   *
+   * A worker is handed successive jobs and each is a round with its own pair of
+   * entries. Omitted — the corpus arrives before the rounds do, and a server
+   * that predates the table never sends any — the tab-level pair below is used
+   * instead, which is what shipped before and is still right for a child that
+   * has had exactly one round.
+   */
+  rounds?: SpawnRoundsByChild,
 ): SpawnCard[] {
   const out: SpawnCard[] = [];
   // THE CAP COUNTS CHILDREN, NOT ENTRIES. What a reader drowns in is a
@@ -538,6 +573,18 @@ export function spawnCards(
   // is worse than neither: a launch whose completion is missing reads as work
   // that vanished, and a completion with no launch as one that came from nowhere.
   for (const chat of spawnedChildren(corpus, tabId, max)) {
+    const mine = rounds?.get(chat.tabId);
+    if (mine?.length) {
+      // ONE PAIR PER ROUND. Every handover left a launch where it happened, and
+      // every finish left a result where the reader was looking.
+      for (const r of mine) {
+        out.push({ chat, kind: 'launch', at: r.started_at });
+        if (r.ended_at === null) continue; // still running: nothing at the bottom yet
+        const rep = roundReport(r);
+        out.push({ chat, kind: 'completion', at: r.ended_at, ...(rep ? { report: rep } : {}) });
+      }
+      continue;
+    }
     out.push({ chat, kind: 'launch', at: spawnedAt(chat) });
     // ONLY ONCE IT HAS ACTUALLY FINISHED. Nothing arrives at the bottom of the
     // conversation while the work is still going on — which is the rule the

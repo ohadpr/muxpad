@@ -11,8 +11,9 @@
 import type Database from 'better-sqlite3';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import { PaneStore } from './store/PaneStore.js';
+import { SpawnRoundStore } from './store/SpawnRoundStore.js';
 import { TabStore } from './store/TabStore.js';
-import { resetChatClock } from './tab-clock.js';
+import { clockIndex, isSubChat, resetChatClock } from './tab-clock.js';
 
 /** Output may reorder within one visible-poll interval, at most 12 writes/min
  * per continuously active tab. Sixty seconds made ordinary work look stale. */
@@ -199,6 +200,19 @@ export class TabActivity {
    * order says nothing about.
    */
   noteUserMessage(tabId: string, at: number = Date.now()): void {
+    // A ROUND BEGINS HERE, for a sub-chat. This method is ws.ts's single funnel
+    // for every message into every agent pane, which makes it the one place
+    // that sees a worker being handed work — including the RE-tasking that
+    // `resetChatClock` below is about to revive it for.
+    //
+    // Both cards used to be anchored to `created_at` and `retired_at`, one pair
+    // per tab, so every round after the first was invisible: five handovers,
+    // one pair of timestamps. See store/SpawnRoundStore.
+    //
+    // Idempotent while a round is open, which is what makes it safe here: three
+    // lines typed while the worker is mid-turn are one round, because the queue
+    // delivers them to the same turn.
+    if (isSubChat(clockIndex(this.db), tabId)) new SpawnRoundStore(this.db).open(tabId, at);
     const affected = resetChatClock(this.db, tabId, at);
     const { emitted } = this.writeTabInner(tabId, at);
     if (!this.onWrite) return;

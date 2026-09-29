@@ -519,7 +519,7 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
       .get() as { version: number };
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
-    expect(LATEST_SCHEMA_VERSION).toBe(31);
+    expect(LATEST_SCHEMA_VERSION).toBe(32);
   });
 });
 
@@ -1061,5 +1061,65 @@ describe('migrations v30 — what the worker was asked', () => {
       spawn_task: 'Move the status line',
       spawn_report: null,
     });
+  });
+});
+
+describe('migrations v32 — a worker is a sequence of ROUNDS', () => {
+  function v31(): Database.Database {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 31 });
+    db.prepare(
+      'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+    ).run('w1', 'wslug1aa', 'W', 0, 1, 1);
+    db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at)
+       VALUES ('t1', 's1', 'card-summary', '""', 'w1', 0, 1, 1)`,
+    ).run();
+    return db;
+  }
+
+  it('holds MANY rounds for one child, which the tab columns structurally cannot', () => {
+    // The hole, in one assertion. `created_at` and `retired_at` are one pair per
+    // tab: a worker handed five successive jobs has five rounds and the tab can
+    // express one. Measured on the real database — `card-summary` had 5 user
+    // messages against a single pair of timestamps.
+    const db = v31();
+    runMigrations(db);
+    const ins = db.prepare(
+      'INSERT INTO spawn_rounds (id, tab_id, started_at, ended_at) VALUES (?,?,?,?)',
+    );
+    ins.run('r1', 't1', 100, 200);
+    ins.run('r2', 't1', 300, 400);
+    ins.run('r3', 't1', 500, null);
+    expect(
+      db
+        .prepare(
+          'SELECT started_at, ended_at FROM spawn_rounds WHERE tab_id = ? ORDER BY started_at',
+        )
+        .all('t1'),
+    ).toEqual([
+      { started_at: 100, ended_at: 200 },
+      { started_at: 300, ended_at: 400 },
+      { started_at: 500, ended_at: null },
+    ]);
+  });
+
+  it('goes with the child when it is deleted — a round of nothing is nothing', () => {
+    const db = v31();
+    runMigrations(db);
+    db.pragma('foreign_keys = ON');
+    db.prepare('INSERT INTO spawn_rounds (id, tab_id, started_at) VALUES (?,?,?)').run(
+      'r1',
+      't1',
+      100,
+    );
+    db.prepare('DELETE FROM tabs WHERE id = ?').run('t1');
+    expect(db.prepare('SELECT count(*) AS n FROM spawn_rounds').get()).toEqual({ n: 0 });
+  });
+
+  it('adds no rounds to existing children — they are backfilled or they are not', () => {
+    const db = v31();
+    runMigrations(db);
+    expect(db.prepare('SELECT count(*) AS n FROM spawn_rounds').get()).toEqual({ n: 0 });
   });
 });
