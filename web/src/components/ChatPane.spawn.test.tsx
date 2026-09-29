@@ -51,7 +51,7 @@ describe('the status strip counts child chats as running work', () => {
           folder={null}
           status={null}
           send={() => {}}
-          liveLabel={liveStatusLabel({ agentCount: agents.length })}
+          liveLabel={liveStatusLabel({ chats: agents.length })}
           agents={agents}
           onOpenChat={onOpenChat}
           mode="chat"

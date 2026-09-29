@@ -255,7 +255,7 @@ describe('the session line spends its width on what changes', () => {
           folder={{ cwd: '/Users/me/muxpad', hasProject: true }}
           status={null}
           send={() => {}}
-          liveLabel={liveStatusLabel({ agentCount: 2 })}
+          liveLabel={liveStatusLabel({ chats: 2 })}
           agents={[
             { id: 'a', label: 'one', steps: 1, busy: true },
             { id: 'b', label: 'two', steps: 1, busy: true },

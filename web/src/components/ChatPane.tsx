@@ -5080,7 +5080,21 @@ export function ChatPane({
     return () => window.clearTimeout(t);
   });
 
-  const liveLabel = liveStatusLabel({ agentCount: rosterAgents.length, turnActive: sending });
+  // THE NUMBER IS THE CHILD CHATS, and the subagents are named separately.
+  // `rosterAgents` is a union of two populations — the chats spawned above, and
+  // the harness subagents from the two loops before them — and sizing the cell
+  // with `rosterAgents.length` made one number stand for both. Reported: the
+  // cell read `5 agents` over 2 sidebar rows, and the question that came back
+  // was whether it counts "some additional primitive that doesn't show up in
+  // the sidebar". It did. `chat` is the discriminator the roster already
+  // carries: a child chat has somewhere to navigate to, a subagent does not.
+  // See live-status.ts for why the number must equal the rows.
+  const rosterChats = rosterAgents.filter((a) => a.chat).length;
+  const liveLabel = liveStatusLabel({
+    chats: rosterChats,
+    subagents: rosterAgents.length - rosterChats,
+    turnActive: sending,
+  });
 
   // Harness pick: a `--pick` pane shows the picker here (not the tab bar).
   // Agents start a runner; Terminal / Web view convert the pane (URL chrome
