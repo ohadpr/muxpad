@@ -508,6 +508,32 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
       }
       return;
     }
+    /**
+     * A still of what the browser is looking at, right now.
+     *
+     * Page.captureScreenshot rather than the last streamed frame: the screencast
+     * only commits on CHANGE, so a page that has finished loading and is sitting
+     * still — which is exactly the moment worth photographing, the one an agent
+     * stops on — may not have produced a frame for minutes. This asks.
+     */
+    if (path === '/shot') {
+      try {
+        const shot = (await cdp.send('Page.captureScreenshot', {
+          format: 'jpeg',
+          quality: 55,
+          captureBeyondViewport: false,
+        })) as unknown as { data?: string };
+        const bytes = Buffer.from(shot.data ?? '', 'base64');
+        if (!bytes.length) throw new Error('empty screenshot');
+        res.writeHead(200, { 'content-type': 'image/jpeg', 'content-length': bytes.length });
+        res.end(bytes);
+      } catch (err) {
+        res
+          .writeHead(503, { 'content-type': 'application/json' })
+          .end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+      }
+      return;
+    }
     if (path === '/healthz') {
       // PROBE, do not assert. This used to return ok:true unconditionally, so a
       // host whose Chrome had died reported healthy to the app status probe and
