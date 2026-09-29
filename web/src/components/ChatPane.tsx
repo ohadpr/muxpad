@@ -2235,23 +2235,40 @@ export function ChatPane({
     if (!mentionRun) return;
     const next = applyMention(input, mentionRun, row.chat);
     mentionJustPicked.current = true;
+    // WHERE THE CARET GOES, SAID BEFORE THE VALUE LANDS.
+    //
+    // This used to be a `setCaret` inside a `requestAnimationFrame` after the
+    // `setInput` below, and that placed the caret TWICE. A value replaced from
+    // outside is not an echo, so the composer's reconcile parks the caret at
+    // the END of the draft — and for a mention picked MID-SENTENCE the end is
+    // wrong by however much was already written. The rAF then dragged it back.
+    //
+    // Measured in WebKit against the real composer: picking `@Investing` in
+    // `Ask @Inv about cash` left the caret at 25 for a whole frame before it
+    // landed at 15, and a character typed inside that frame went to the end —
+    // `"Ask @Investing about cashX"` rather than `"Ask @Investing Xabout cash"`
+    // — with the caret then jumping away from it. A desktop frame is ~16ms and
+    // hides this; on iOS the pick is a TAP, the keyboard is mid-animation, and
+    // rAF is throttled through that animation, which is why it reads as
+    // "sometimes the caret moves" rather than as something reproducible.
+    //
+    // Naming the caret first collapses the two placements into one, in the same
+    // commit that draws the chip. See `caretFor`.
+    inputRef.current?.caretFor(next.text, next.caret);
     setInput(next.text);
     // Remember WHICH chat this was, not just what it is called. Re-anchored
     // against the new draft first, so the stored list stays the size of the
     // mentions actually in the composer rather than growing per pick.
     setPicks((cur) => [...repinPicks(next.text, cur), next.pick]);
     closeMentions();
-    // After React has committed the new value: a draft replaced from outside
-    // parks the caret at the END, which after picking a mention mid-sentence is
-    // wrong by however much was already written.
-    //
-    // The offset is an offset into the STRING, and the composer maps it onto a
-    // DOM position — which now has to skip a chip rather than count ten
-    // characters of `@Investing`. That is `caretRange`'s job, and the reason the
-    // caret restore did not have to change shape when the field did.
+    // The frame of suppression, and NOTHING ELSE in here any more. Picking with
+    // Enter happens on keydown; the matching keyup then fires and would
+    // recompute the run from a draft React has already replaced, reopening the
+    // picker that was just closed. One frame covers that. The caret no longer
+    // waits for it — see `caretFor` above — so a late frame is now harmless
+    // rather than a caret landing in the wrong place.
     requestAnimationFrame(() => {
       mentionJustPicked.current = false;
-      inputRef.current?.setCaret(next.caret);
     });
   };
 

@@ -1,7 +1,7 @@
 import { act, createRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DRAFT_TOKEN_ATTR } from '../lib/chat-draft';
+import { DRAFT_TOKEN_ATTR, offsetOf } from '../lib/chat-draft';
 import type { MentionChat } from '../lib/chat-mention';
 import { ChatDraft, type ChatDraftHandle } from './ChatDraft';
 
@@ -262,6 +262,114 @@ describe('the caret is restored only once the chips are DRAWN', () => {
     act(() => m.el.focus());
     m.set({ value: 'Ask @Investing' });
     expect(m.handle.caret()).toBe('Ask @Investing'.length);
+  });
+});
+
+describe('a caret NAMED for the next value is placed once, and only there', () => {
+  /**
+   * THE SECOND CARET BUG, and it is not the portal one 8b124c1 fixed.
+   *
+   * `pickMention` replaced the draft and then moved the caret A FRAME LATER:
+   *
+   *     setInput(next.text);                                  // commit N
+   *     requestAnimationFrame(() => setCaret(next.caret));     // commit N+1
+   *
+   * A value replaced from outside is not `echoing`, so the reconcile parks the
+   * caret at the END of the draft — which for a mention picked MID-SENTENCE is
+   * wrong by however much was already written. The rAF then drags it back. So
+   * the caret was placed TWICE, in two different places, one frame apart.
+   *
+   * Measured in WebKit against the real component: picking `@Investing` in
+   * `Ask @Inv about cash` leaves the caret at 25 (the end) for a whole frame
+   * before it lands at 15 (beside the chip). A character typed in that frame
+   * goes to the end — `"Ask @Investing about cashX"` instead of
+   * `"Ask @Investing Xabout cash"` — and the caret then jumps away from it.
+   *
+   * On a desktop frame that window is ~16ms and you rarely catch it. On iOS the
+   * pick is a TAP, the keyboard is animating, and rAF is throttled through that
+   * animation — which is why this reads as "sometimes the caret moves" rather
+   * than as a reproducible bug.
+   *
+   * The fix is to say where the caret goes BEFORE the value lands, so the
+   * reconcile places it once, in the commit that draws the chip. What is held
+   * here is that ONCE: not "it ends up right", which the rAF also achieved, but
+   * that the composer never parks it somewhere the caller did not ask for.
+   */
+
+  /** Every caret offset the component SETS, in order, while `fn` runs. */
+  function caretsSet(m: Mounted, fn: () => void): number[] {
+    const sel = window.getSelection() as Selection;
+    const proto = Object.getPrototypeOf(sel) as Selection;
+    const real = proto.addRange;
+    const seen: number[] = [];
+    proto.addRange = function patched(this: Selection, r: Range) {
+      seen.push(offsetOf(m.el, r.startContainer, r.startOffset));
+      return real.call(this, r);
+    };
+    try {
+      fn();
+    } finally {
+      proto.addRange = real;
+    }
+    return seen;
+  }
+
+  const PICKED = 'Ask @Investing about cash';
+  const BESIDE_THE_CHIP = 'Ask @Investing '.length; // 15, not 25
+
+  it('places it ONCE, beside the chip — never at the end and back', () => {
+    const m = mount('Ask @Inv about cash');
+    act(() => m.el.focus());
+    const set = caretsSet(m, () => {
+      m.handle.caretFor(PICKED, BESIDE_THE_CHIP);
+      m.set({ value: PICKED });
+    });
+    expect(set).toEqual([BESIDE_THE_CHIP]);
+    expect(m.handle.caret()).toBe(BESIDE_THE_CHIP);
+  });
+
+  it('still waits for the chip to be DRAWN before placing it', () => {
+    // The hint must go through 8b124c1's deferral, not around it: the caret it
+    // names is beside a chip, which is precisely the position WebKit re-derives
+    // if it is set while the host is still an empty span.
+    const m = mount('Ask @Inv about cash');
+    act(() => m.el.focus());
+    const sel = window.getSelection() as Selection;
+    const proto = Object.getPrototypeOf(sel) as Selection;
+    const real = proto.addRange;
+    const filled: number[] = [];
+    proto.addRange = function patched(this: Selection, r: Range) {
+      filled.push(...hosts(m.el).map((h) => h.childNodes.length));
+      return real.call(this, r);
+    };
+    try {
+      m.handle.caretFor(PICKED, BESIDE_THE_CHIP);
+      m.set({ value: PICKED });
+    } finally {
+      proto.addRange = real;
+    }
+    expect(filled.length).toBeGreaterThan(0);
+    expect(filled).not.toContain(0);
+  });
+
+  it('is spent on the value it names, and never on a later one', () => {
+    // Identity, not a flag — the same discipline `pending` uses. A hint that
+    // missed its commit must not fire on the next unrelated replacement and
+    // drag the caret somewhere nobody asked for.
+    const m = mount('');
+    act(() => m.el.focus());
+    m.handle.caretFor(PICKED, BESIDE_THE_CHIP);
+    const set = caretsSet(m, () => m.set({ value: 'something else entirely' }));
+    expect(set).toEqual(['something else entirely'.length]);
+  });
+
+  it('leaves an ordinary outside replacement parking at the end', () => {
+    // A paste, a restored draft, `setInput('')` on send. No hint, no change:
+    // the end is what a textarea does and what every other caller wants.
+    const m = mount('');
+    act(() => m.el.focus());
+    const set = caretsSet(m, () => m.set({ value: 'Ask @Investing' }));
+    expect(set).toEqual(['Ask @Investing'.length]);
   });
 });
 

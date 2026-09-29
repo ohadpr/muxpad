@@ -67,6 +67,21 @@ export interface ChatDraftHandle {
   caret(): number;
   /** Put the caret at an offset into the draft string. */
   setCaret(offset: number): void;
+  /**
+   * Where the caret goes when `value` NEXT arrives as `text` — said in advance.
+   *
+   * A value replaced from outside parks the caret at the end (see the
+   * reconcile), which is right for a paste and wrong for a mention picked
+   * mid-sentence. The alternative a caller reaches for is to replace the value
+   * and then `setCaret` a frame later, and that is the bug this exists to
+   * remove: it places the caret TWICE, in two different places, and whatever is
+   * typed in between lands at the first of them.
+   *
+   * Keyed by the text it belongs to rather than held as a bare offset, for the
+   * same reason `pending` is keyed by its chip list: a hint that missed its
+   * commit must be spent, not carried forward onto some later value.
+   */
+  caretFor(text: string, offset: number): void;
   /** The element, for the callers that measure it (auto-grow, focus checks). */
   el(): HTMLDivElement | null;
 }
@@ -119,7 +134,15 @@ export const ChatDraft = forwardRef<ChatDraftHandle, ChatDraftProps>(function Ch
    * Held with the exact chip list it belongs to, rather than as a bare offset,
    * so the restore can only happen on the commit that drew those chips.
    */
-  const pending = useRef<{ chips: DraftChip[]; caret: number } | null>(null);
+  const pending = useRef<{ chips: DraftChip[]; caret: number; refocus: boolean } | null>(null);
+  /**
+   * A caret named for a value that has not arrived yet. See `caretFor`.
+   *
+   * Held with the TEXT it belongs to, so it can only be spent on the commit
+   * that value lands in — the same identity discipline as `pending`, one step
+   * earlier in the same journey.
+   */
+  const hinted = useRef<{ text: string; caret: number } | null>(null);
 
   const readNow = useCallback((): { text: string; caret: number } => {
     const el = elRef.current;
@@ -149,6 +172,9 @@ export const ChatDraft = forwardRef<ChatDraftHandle, ChatDraftProps>(function Ch
         el.focus();
         place(el, offset);
       },
+      caretFor: (text: string, offset: number) => {
+        hinted.current = { text, caret: offset };
+      },
       el: () => elRef.current,
     }),
     [readNow, place],
@@ -171,17 +197,37 @@ export const ChatDraft = forwardRef<ChatDraftHandle, ChatDraftProps>(function Ch
     const wanted = draftChipSignature(nodes);
     // Is the model merely catching up with an edit the browser already made?
     const echoing = echoed.current === value;
-    if (echoing && renderedChipSignature(el) === wanted) return;
+    // A caret this caller named in advance, for exactly this value. Spent here
+    // whether or not it is used, so it can never fire on a later commit.
+    const hint = hinted.current?.text === value ? hinted.current : null;
+    if (hint) hinted.current = null;
+    // A hint is an explicit instruction about the caret, so it is honoured even
+    // when the child list needs no rebuilding at all — otherwise the one commit
+    // it was named for is the one that returns early and ignores it.
+    if (!hint && echoing && renderedChipSignature(el) === wanted) return;
     const focused = document.activeElement === el || el.contains(document.activeElement);
-    // Where the caret must end up. Echoing: wherever the user left it. Otherwise
-    // the value was replaced from outside, and the end is what a textarea does
-    // in that case — `pickMention` is the one caller that wants somewhere else,
-    // and it says so explicitly through `setCaret`.
-    const caret = echoing && focused ? readNow().caret : value.length;
+    // Where the caret must end up, in three cases and in this order:
+    //   NAMED    — the caller said, before the value landed. `pickMention`.
+    //   ECHOING  — the browser already moved it; leave it exactly where it is.
+    //   OTHERWISE — the value was replaced from outside (a paste, a restored
+    //     draft, `setInput('')` on send) and the end is what a textarea does.
+    const caret = hint ? hint.caret : echoing && focused ? readNow().caret : value.length;
     const next = build(el, nodes, seq);
     // NOT `place(el, caret)` here — the hosts `build` just put in the child list
     // are still EMPTY. See the effect below.
-    pending.current = focused ? { chips: next, caret } : null;
+    //
+    // A NAMED caret is placed whether or not the field reads as focused, and
+    // takes the focus back if it has gone. `setCaret` — which is what named
+    // carets used to go through — called `el.focus()` first, and on iOS that is
+    // not ceremony: the pick is a TAP on a picker row, and a tap that lands on
+    // the row's button rather than on the field blurs the composer. Without
+    // this, the caret the caller asked for would be dropped on exactly the
+    // platform this whole hunt is about.
+    pending.current = hint
+      ? { chips: next, caret, refocus: true }
+      : focused
+        ? { chips: next, caret, refocus: false }
+        : null;
     setChips(next);
     echoed.current = value;
     // No `place` in the deps any more: the reconcile does not touch the
@@ -216,7 +262,9 @@ export const ChatDraft = forwardRef<ChatDraftHandle, ChatDraftProps>(function Ch
     if (!held || held.chips !== chips) return;
     pending.current = null;
     const el = elRef.current;
-    if (el) place(el, held.caret);
+    if (!el) return;
+    if (held.refocus) el.focus();
+    place(el, held.caret);
   }, [chips, place]);
 
   const emit = (fn: (text: string, caret: number) => void) => {
