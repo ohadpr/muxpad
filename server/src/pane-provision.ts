@@ -24,24 +24,46 @@
 //     socket is not OPEN, so any ptyd restart or blip turns every create in
 //     that window into a dead chat.
 //   · `posix_spawnp failed` — the process table is full. ptyd is connected and
-//     answering and simply cannot fork; it reaps its exited children in bursts
-//     rather than promptly, so a spawn burst can exhaust the table and recover
-//     seconds later.
+//     answering and simply cannot fork.
+//
+//     WHY IT FILLS, measured rather than assumed, because the obvious guess is
+//     wrong: ptyd is NOT leaking zombies and NOT reaping late. Sampled on the
+//     live daemon, its `<defunct>` children are all aged 00:00–00:03 and the
+//     count goes 0 → 0 → 24 between samples seconds apart. They are reaped
+//     promptly. What bursts is the SPAWNING: `PaneManager.pollCmds` fans out
+//     over every live runtime at once on a 10s timer, each shelling out up to
+//     two `execFile('ps')`, and `pollCwds` does an `execFileSync('lsof')` per
+//     pane on a 30s timer. At ~100 panes that is 150–200 forks in one burst
+//     every 10s — and the `lsof` one is SYNCHRONOUS, so it blocks the very
+//     event loop that has to fork our pty. A create landing inside a burst is
+//     the create that fails.
+//
+//     That is a real bug and it is not this file's: it lives in ptyd, which
+//     only picks up changes on a restart that kills every pane on the machine.
+//     The retry below is how we survive it in the meantime.
 //
 // Both clear on their own. So the first duty is to TRY AGAIN — a chat that
 // provisions itself on the second attempt is a chat the user never had to
 // think about. The recorded reason is what is left over when the ladder is
 // genuinely exhausted, not the primary fix.
 //
-// ─── Why hasPane, and not just the acknowledgement ─────────────────────────
+// ─── Why hasPane, and why not IMMEDIATELY ──────────────────────────────────
 // ptyd's `ensurePane` handler replies `{ ok: true }` after `getOrCreate`, which
 // ends in a synchronous `PaneRuntime.start()`. A spawn that THROWS therefore
 // does come back as a rejection — but a pty that starts and exits on the spot
 // (a bad shell path, a shell that dies on its rc files) acknowledges fine and
 // is gone a tick later. `muxpad pane read` then says "pane has no live pty",
-// which is exactly what was reported. Only `hasPane` separates those, so the
-// success condition here is "ptyd acknowledged AND still holds the pane",
-// never the acknowledgement alone.
+// which is exactly what was reported.
+//
+// So the success condition is "ptyd acknowledged AND still holds the pane" —
+// but the second half only means anything AFTER A DELAY, and getting that wrong
+// is the mistake this paragraph exists to stop someone repeating. `getOrCreate`
+// registers the runtime before anything could observe it exit, so a same-tick
+// `hasPane` answers true even for a pty that is already dying. Measured with
+// SHELL pointed at a path that does not exist: node-pty spawns, ptyd acks,
+// `hasPane` says TRUE, and the pane is gone a moment later with an EIO write.
+// The first version of this checked immediately and passed a test it should
+// have failed. See VERIFY_ALIVE_AFTER_MS.
 //
 // ─── Why it does not hold the response open ────────────────────────────────
 // `POST /api/tabs` is the web sidebar's entire create path and 22688ec exists
