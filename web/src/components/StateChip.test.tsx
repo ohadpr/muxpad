@@ -296,10 +296,29 @@ describe('the CSS mapping — hue, bar, tint', () => {
 });
 
 describe('the CSS mapping — selection is not a state', () => {
-  it('the selected row is a SOLID accent block with the accent ink', () => {
+  it('the selected CHAT row is a quiet wash, and keeps the rail’s own ink', () => {
+    // THIS ASSERTION WAS INVERTED, and the inversion is the change rather than a
+    // loosened test. It used to read "a SOLID accent block with the accent ink",
+    // which was correct for as long as the row carried a state TINT and could
+    // not spend that channel on selection. The chat row stopped emitting
+    // `data-state` when the tint and the 3px bar were deleted (see the arm
+    // below, which has always asserted that a selected row drops both), so the
+    // slab was the last thing still paying for a constraint that had been
+    // removed — a saturated fill on screen permanently, with thirty
+    // declarations re-inking the row's contents against it.
+    //
+    // The full grammar, the six-theme arithmetic behind the 20%, and the
+    // hover-out-ranks-selection defect it introduces are in
+    // NavTree.selection.test.ts. Here: the fill is a token, not a raw accent.
     expect(NAV_CSS).toMatch(
-      /\.navtree-tab-row\[data-active="true"\] \{ background-color: var\(--accent\); color: var\(--accent-fg\); \}/,
+      /\.navtree-tab-row\[data-active="true"\] \{ background-color: var\(--nt-sel\); \}/,
     );
+    expect(NAV_CSS).not.toMatch(
+      /\.navtree-tab-row\[data-active="true"\] \{ background-color: var\(--accent\);/,
+    );
+    // The PANE row is the deliberate exception and still a slab: it never
+    // stopped emitting `data-state`, so it still carries a state tint and still
+    // cannot put selection in the same channel.
     expect(NAV_CSS).toMatch(
       /\.navtree-pane-row-wrap\[data-active="true"\] \{ background-color: var\(--accent\);/,
     );
