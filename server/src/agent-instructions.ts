@@ -185,6 +185,12 @@ this session alone and started warm from a shared cookie jar — so you inherit
 the logins a person has already performed, no other agent can touch your pages,
 and the browser you are stuck in is the one they can see.
 
+**IT STARTS WHEN YOU FIRST REACH FOR IT.** Nothing is running until your first
+browser tool call, which then waits a second or two for Chrome — longer on a busy
+machine. That pause is the browser being born, not a failure: do not retry it,
+and do not conclude the browser is broken. A session that never browses never
+costs anything, which is why it works this way.
+
 That last part is the whole reason this exists. Two consequences.
 
 **Stop at a wall. Do not push through it.** A login page, a CAPTCHA, a payment
