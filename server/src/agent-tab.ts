@@ -110,6 +110,34 @@ export function agentStartupCmd(opts: {
 const EAGER_SPAWN_WAIT_MS = 250;
 
 /**
+ * Eager spawns that have been ASKED FOR but not yet acknowledged, by pane id.
+ *
+ * The cap above means `bootstrapTab` can answer before the pty exists, which
+ * opens a race the blocking await used to close by accident: **a pane can be
+ * deleted before its own spawn has landed.** `killPane` on a pane ptyd has not
+ * created yet is a successful no-op, so the delete completes, the queued spawn
+ * then arrives, and ptyd is left holding a pty whose DB row is gone — invisible
+ * to every UI and unreachable by anything except the straggler reconcile, which
+ * only runs on a ptyd reconnect (i.e. a restart that kills every pane).
+ *
+ * The kill queue cannot cover this either: the sweeper dequeues as soon as
+ * `killPane` *succeeds*, and against a not-yet-spawned pane it succeeds
+ * immediately, doing nothing.
+ *
+ * This was observed, not theorised — a batch of agent tabs deleted while ptyd
+ * was saturated left eight orphaned runners alive with no rows behind them.
+ * So a delete BOOKS A SECOND KILL against any pane whose spawn is still in
+ * flight, to run the moment that spawn lands.
+ *
+ * A chaser rather than an await, and the distinction is the whole design: the
+ * delete must not inherit the unbounded wait this file exists to remove, and a
+ * ptyd that never answers would hang the cascade instead of merely leaking a
+ * pty — strictly worse than the bug. The delete therefore stays exactly as
+ * fast as it was, and the chaser cleans up behind it.
+ */
+const inFlightSpawns = new Map<string, Promise<void>>();
+
+/**
  * Create a tab (optionally with its bootstrapped pane), emit the events, and
  * eagerly spawn the pty. Rows commit in one transaction so a mid-request
  * failure can't leave a half-bootstrapped ghost tab.
@@ -195,6 +223,15 @@ export async function bootstrapTab(
         // by the caller because nobody is necessarily awaiting this any more,
         // and an unhandled rejection would take the server down.
       });
+    // Published for deleteTabCascade — see inFlightSpawns. Cleared on settle,
+    // so a pane that is never deleted leaves nothing behind.
+    const paneId = created.pane.id;
+    inFlightSpawns.set(paneId, spawning);
+    void spawning.finally(() => {
+      // Only if we are still the spawn of record: a respawn/recreate for the
+      // same id must not have its entry dropped by an older settle.
+      if (inFlightSpawns.get(paneId) === spawning) inFlightSpawns.delete(paneId);
+    });
     let cap: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
       spawning,
@@ -224,6 +261,17 @@ export async function deleteTabCascade(
   const workspaceId = tabs.getWorkspaceId(tabId);
   const doomed = panes.listByTab(tabId);
   for (const p of doomed) {
+    // A pane whose own eager spawn has not landed yet gets a SECOND kill,
+    // booked for the moment it does — see inFlightSpawns. Deliberately not an
+    // `await`: the delete must not inherit the unbounded wait this file exists
+    // to remove, and awaiting a ptyd that never answers would hang the cascade
+    // outright (it hung a test teardown when written that way). So the kill
+    // below still runs now, at its normal speed, and this only adds a chaser
+    // for the one case where "now" was too early to catch anything.
+    const spawning = inFlightSpawns.get(p.id);
+    if (spawning) {
+      void spawning.then(() => deps.ptyd.killPane(p.id).catch(() => queuePaneKill(deps.db, p.id)));
+    }
     try {
       await deps.ptyd.killPane(p.id);
     } catch {
