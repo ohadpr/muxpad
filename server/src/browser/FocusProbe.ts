@@ -214,3 +214,179 @@ export function textFieldBoxes(): Array<[number, number, number, number]> {
 export function fieldBoxesExpression(): string {
   return `(${textFieldBoxes.toString()})()`;
 }
+
+/**
+ * Whether the page is asking somebody to sign in, and where.
+ *
+ * WHY THE VIEWER NEEDS TO KNOW. A password manager fills forms in the page it is
+ * looking at — and the page it is looking at is muxpad, not the site. 1Password
+ * sees `dt-mac-mini.ts.net/browser/s-01m…`, has no entry for it, and offers
+ * nothing; the site's real form is a JPEG. So the viewer puts up a REAL form of
+ * its own, which a password manager can see and fill from a manually chosen
+ * entry, and the values are then typed into the page over CDP.
+ *
+ * For that to work the viewer has to know a sign-in is on screen at all, and
+ * which fields to fill afterwards. This reports both: descending through frames
+ * and shadow roots exactly as the other two probes do, because a login form is
+ * more often inside one of those than not.
+ */
+export interface LoginFormReport {
+  /** A password field is on the page. */
+  present: boolean;
+  /** Whether a username-ish field was found next to it. */
+  username: boolean;
+  /** The page's own idea of who it is, for the panel to name. */
+  host: string;
+}
+
+export function findLoginForm(): LoginFormReport {
+  const USERNAME = ['text', 'email', 'tel'];
+  const scan = (root: unknown, depth: number): { pw: unknown; user: unknown } => {
+    const out: { pw: unknown; user: unknown } = { pw: null, user: null };
+    if (depth > 4) return out;
+    const scope = root as { querySelectorAll?: (s: string) => Iterable<unknown> };
+    let all: Iterable<unknown> = [];
+    try {
+      all = scope.querySelectorAll?.('input') ?? [];
+    } catch {
+      return out;
+    }
+    for (const node of all) {
+      const el = node as {
+        type?: string;
+        getBoundingClientRect?: () => { width: number; height: number };
+      };
+      const r = el.getBoundingClientRect?.();
+      if (!r || r.width <= 0 || r.height <= 0) continue;
+      const type = (el.type || 'text').toLowerCase();
+      if (type === 'password' && !out.pw) out.pw = el;
+      // The username is the last text-ish field BEFORE the password, which is
+      // how every sign-in form on the web is laid out.
+      else if (USERNAME.indexOf(type) !== -1 && !out.pw) out.user = el;
+    }
+    if (out.pw) return out;
+
+    let hosts: Iterable<unknown> = [];
+    try {
+      hosts = scope.querySelectorAll?.('*') ?? [];
+    } catch {
+      hosts = [];
+    }
+    for (const node of hosts) {
+      const el = node as { tagName?: string; shadowRoot?: unknown; contentDocument?: unknown };
+      const deeper = el.shadowRoot
+        ? scan(el.shadowRoot, depth + 1)
+        : (el.tagName || '').toLowerCase() === 'iframe'
+          ? (() => {
+              try {
+                return el.contentDocument ? scan(el.contentDocument, depth + 1) : out;
+              } catch {
+                return out;
+              }
+            })()
+          : out;
+      if (deeper.pw) return deeper;
+    }
+    return out;
+  };
+
+  const found = scan(document, 0);
+  return {
+    present: Boolean(found.pw),
+    username: Boolean(found.user),
+    host: location.hostname || '',
+  };
+}
+
+/** The expression the host evaluates. Same text as the tested function. */
+export function loginFormExpression(): string {
+  return `(${findLoginForm.toString()})()`;
+}
+
+/**
+ * Puts a username and password into the page's own sign-in form.
+ *
+ * Runs in the page, after a password manager has filled the viewer's stand-in
+ * form. Sets the value AND fires `input`/`change`, because every modern login
+ * form is a controlled component: a value assigned without events is a box with
+ * text in it that the site does not believe is there, and the submit button
+ * stays disabled.
+ *
+ * It does NOT submit. Pressing the button is the person's decision, and a form
+ * that submits itself the instant it is filled takes away the moment where you
+ * notice it filled the wrong thing.
+ */
+export function fillLoginForm(username: string, password: string): boolean {
+  const USERNAME = ['text', 'email', 'tel'];
+  const put = (el: unknown, value: string) => {
+    const input = el as {
+      value?: string;
+      dispatchEvent?: (e: unknown) => void;
+      focus?: () => void;
+    };
+    input.focus?.();
+    // The native setter, so React's own value tracker does not swallow it.
+    const proto = Object.getPrototypeOf(input) as object;
+    const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (desc?.set) desc.set.call(input, value);
+    else input.value = value;
+    for (const type of ['input', 'change']) {
+      input.dispatchEvent?.(new Event(type, { bubbles: true }));
+    }
+  };
+
+  const scan = (root: unknown, depth: number): { pw: unknown; user: unknown } => {
+    const out: { pw: unknown; user: unknown } = { pw: null, user: null };
+    if (depth > 4) return out;
+    const scope = root as { querySelectorAll?: (s: string) => Iterable<unknown> };
+    let all: Iterable<unknown> = [];
+    try {
+      all = scope.querySelectorAll?.('input') ?? [];
+    } catch {
+      return out;
+    }
+    for (const node of all) {
+      const el = node as {
+        type?: string;
+        getBoundingClientRect?: () => { width: number; height: number };
+      };
+      const r = el.getBoundingClientRect?.();
+      if (!r || r.width <= 0 || r.height <= 0) continue;
+      const type = (el.type || 'text').toLowerCase();
+      if (type === 'password' && !out.pw) out.pw = el;
+      else if (USERNAME.indexOf(type) !== -1 && !out.pw) out.user = el;
+    }
+    if (out.pw) return out;
+    let hosts: Iterable<unknown> = [];
+    try {
+      hosts = scope.querySelectorAll?.('*') ?? [];
+    } catch {
+      hosts = [];
+    }
+    for (const node of hosts) {
+      const el = node as { tagName?: string; shadowRoot?: unknown; contentDocument?: unknown };
+      let deeper = out;
+      if (el.shadowRoot) deeper = scan(el.shadowRoot, depth + 1);
+      else if ((el.tagName || '').toLowerCase() === 'iframe') {
+        try {
+          if (el.contentDocument) deeper = scan(el.contentDocument, depth + 1);
+        } catch {
+          // Cross-origin. Nothing to fill in there from here.
+        }
+      }
+      if (deeper.pw) return deeper;
+    }
+    return out;
+  };
+
+  const found = scan(document, 0);
+  if (!found.pw) return false;
+  if (found.user && username) put(found.user, username);
+  if (password) put(found.pw, password);
+  return true;
+}
+
+/** The expression the host evaluates, with the values baked in. */
+export function fillLoginExpression(username: string, password: string): string {
+  return `(${fillLoginForm.toString()})(${JSON.stringify(username)}, ${JSON.stringify(password)})`;
+}

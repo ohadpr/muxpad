@@ -19,7 +19,12 @@ import {
   cdpCookiesToStorageState,
   storageStateToCdpCookies,
 } from '../CookieJar.js';
-import { fieldBoxesExpression, focusProbeExpression } from '../FocusProbe.js';
+import {
+  fieldBoxesExpression,
+  fillLoginExpression,
+  focusProbeExpression,
+  loginFormExpression,
+} from '../FocusProbe.js';
 import { emulationParams } from '../MobileEmulation.js';
 import { isBrowsingUrl } from '../PageAttachment.js';
 import { clearStaleProfileLock } from '../ProfileLock.js';
@@ -317,7 +322,9 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     repairTimer = setInterval(() => {
       void repairOnce();
       for (const viewer of viewers) {
-        if (viewer.readyState === 1) void sendFieldBoxes(viewer);
+        if (viewer.readyState !== 1) continue;
+        void sendFieldBoxes(viewer);
+        void sendLoginState(viewer);
       }
     }, 2000);
   };
@@ -343,6 +350,7 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     // anybody touching the mouse, and a stale box is a keyboard in the wrong
     // place — or, worse, none where there should be one.
     void sendFieldBoxes(socket);
+    void sendLoginState(socket);
     startWatching();
     socket.on('close', () => {
       if (viewers.size === 0) stopWatching();
@@ -359,6 +367,28 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
    * Capped: a pathological page with a thousand inputs would put a payload on
    * every scroll bigger than the frame it is decorating.
    */
+
+  /**
+   * Tells the viewer whether a sign-in is on screen.
+   *
+   * The viewer answers by putting up a real form of its own — see the login
+   * panel there — because a password manager fills the page it is looking at,
+   * and that page is muxpad rather than the site.
+   */
+  async function sendLoginState(socket: WsSocket) {
+    try {
+      const r = (await cdp.send('Runtime.evaluate', {
+        expression: loginFormExpression(),
+        returnByValue: true,
+      })) as unknown as { result?: { value?: unknown } };
+      const login = r.result?.value as { present?: boolean } | undefined;
+      if (login && socket.readyState === 1) {
+        socket.send(JSON.stringify({ t: 'login', ...login }));
+      }
+    } catch {
+      // No panel offered. Typing by hand still works.
+    }
+  }
 
   async function sendFieldBoxes(socket: WsSocket) {
     try {
@@ -419,6 +449,22 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
         }
         // Scrolling moves every box on the page.
         if (message.type === 'mouseWheel') void sendFieldBoxes(socket);
+      } else if (message.t === 'fillLogin') {
+        // WHAT A PASSWORD MANAGER FILLED, PUT INTO THE PAGE. The viewer's own
+        // form is a stand-in: 1Password can see it, the site's cannot be seen at
+        // all. Typed here with the events a controlled form needs, and NOT
+        // submitted — pressing the button stays the person's decision.
+        const ok = (await cdp.send('Runtime.evaluate', {
+          expression: fillLoginExpression(
+            String(message.username ?? ''),
+            String(message.password ?? ''),
+          ),
+          returnByValue: true,
+        })) as unknown as { result?: { value?: boolean } };
+        if (socket.readyState === 1) {
+          socket.send(JSON.stringify({ t: 'filled', ok: Boolean(ok.result?.value) }));
+        }
+        void sendFieldBoxes(socket);
       } else if (message.t === 'reveal') {
         // Scroll the thing that needs a person into view and report where it
         // landed, so the viewer can ring it.

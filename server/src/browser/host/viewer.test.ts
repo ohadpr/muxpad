@@ -49,6 +49,8 @@ interface Harness {
   drop(): void;
   /** Pending timers, so a test can see the backoff rather than only its effect. */
   timers: Array<{ fn: () => void; ms: number }>;
+  /** Every getElementById the page made, in order. */
+  askedFor: string[];
   /** Every fetch the page made, so a test can see what it asked the server for. */
   fetches: Array<{ url: string; method?: string; body?: string }>;
   /** Runs the page's intervals once, and settles what they started. */
@@ -149,7 +151,9 @@ function run(opts: RunOpts | string = {}): Harness {
     } as unknown as StubEl & { addEventListener: unknown };
     return el as StubEl;
   };
+  const askedFor: string[] = [];
   const el = (id: string): StubEl => {
+    askedFor.push(id);
     const found = els.get(id) ?? make(id);
     els.set(id, found);
     return found;
@@ -276,6 +280,7 @@ function run(opts: RunOpts | string = {}): Harness {
       for (const fn of socketListeners.get('message') ?? []) fn({ data: JSON.stringify(msg) });
     },
     clipboard,
+    askedFor,
     fetches,
     async settle() {
       // Two awaited fetches deep in some handlers; a handful of microtasks is
@@ -736,11 +741,14 @@ describe('the controls nothing had ever pressed', () => {
    * shipped for want of a single test. These are every remaining interactive
    * control in the toolbar, pressed once each.
    */
-  it('back, forward and reload each ask for their own thing', () => {
+  it('back and reload each ask for their own thing', () => {
+    // FORWARD IS GONE on purpose: nobody arrives here having gone back. You
+    // arrive because an agent left you somewhere and you want out of it, or the
+    // page is stale. A third button earning nothing costs width on the one
+    // screen where width is scarce.
     const h = run();
     for (const [id, action] of [
       ['navBack', 'back'],
-      ['navFwd', 'forward'],
       ['navReload', 'reload'],
     ] as const) {
       h.el(id).fire('click');
@@ -769,7 +777,7 @@ describe('the controls nothing had ever pressed', () => {
     expect(h.sent.filter((m) => m.t === 'emulate')).toEqual([]);
     // The resting state is in the markup, which the DOM stub does not parse —
     // so it is asserted where it actually lives.
-    expect(VIEWER_HTML).toContain('id="mobile" title="mobile site" aria-pressed="false"');
+    expect(VIEWER_HTML).toMatch(/id="mobile"[^>]*aria-pressed="false"/);
   });
 
   it('and the toggle turns it on there', () => {
@@ -828,5 +836,71 @@ describe('the controls nothing had ever pressed', () => {
     const h = run();
     h.receive({ t: 'fileChooser' });
     expect((h.el('drop') as unknown as { classes: string[] }).classes).toContain('on');
+  });
+});
+
+describe('signing in with a password manager', () => {
+  /**
+   * 1Password fills the page it is LOOKING at, and that page is muxpad — a
+   * tailnet hostname it has never heard of — while the site's own form is a
+   * JPEG. So there was nothing for it to offer on the one surface where you
+   * most want it. The viewer puts up a real form of its own instead; what gets
+   * filled there is typed into the page.
+   */
+  it('offers nothing until the page actually asks for a password', () => {
+    // The resting state is in the markup, which the DOM stub does not parse.
+    expect(VIEWER_HTML).toMatch(/<button id="signin"[^>]*hidden/);
+    const h = run();
+    h.receive({ t: 'login', present: true, username: true, host: 'news.ycombinator.com' });
+    expect(h.el('signin').hidden).toBe(false);
+  });
+
+  it('withdraws the offer when the sign-in goes away', () => {
+    const h = run();
+    h.receive({ t: 'login', present: true });
+    h.receive({ t: 'login', present: false });
+    expect(h.el('signin').hidden).toBe(true);
+  });
+
+  it('offers nothing to a spectator, who cannot type anyway', () => {
+    const h = run({ search: '?mode=watch' });
+    h.receive({ t: 'login', present: true });
+    expect(h.el('signin').hidden).toBe(true);
+  });
+
+  /**
+   * The SUBMIT flow is verified against the real browser instead of here — see
+   * the gate's "signing in through the panel" section. This DOM stub does not
+   * carry a form's own submit semantics, and a test that pretends otherwise
+   * would be asserting the stub rather than the page.
+   */
+  it('is a form a password manager will act on, not three boxes', () => {
+    expect(VIEWER_HTML).toMatch(/<form[^>]*id="loginForm"/);
+    expect(VIEWER_HTML).toContain('autocomplete="username"');
+    expect(VIEWER_HTML).toContain('autocomplete="current-password"');
+    expect(VIEWER_HTML).toContain('type="password"');
+  });
+
+  it('tells you it cannot know which entry to use', () => {
+    // The origin is muxpad's and always will be, so the manager cannot match
+    // the site. Saying so is the difference between "broken" and "pick it".
+    expect(VIEWER_HTML).toMatch(/pick the site in your password manager/i);
+  });
+
+  it('says so when there was no form to fill after all', () => {
+    const h = run();
+    h.receive({ t: 'filled', ok: false });
+    expect(h.el('msg').textContent).toMatch(/could not find the form/i);
+  });
+
+  it('carries the attributes a password manager actually looks for', () => {
+    // Without these it is three boxes; with them it is a login form.
+    expect(VIEWER_HTML).toContain('autocomplete="username"');
+    expect(VIEWER_HTML).toContain('autocomplete="current-password"');
+    expect(VIEWER_HTML).toMatch(/<form[^>]*id="loginForm"/);
+  });
+
+  it('uses a 16px field, or iOS zooms the whole viewer on focus', () => {
+    expect(VIEWER_HTML).toMatch(/#login input\{font-size:16px/);
   });
 });
