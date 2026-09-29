@@ -22,6 +22,7 @@ import { queuePaneKill } from '../pane-reaper.js';
 import { agentCwd, hasProjectContext } from '../project-root.js';
 import { type PtydCache, decoratePane, decorateTab } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
+import { whyNot } from '../ptyd-failure.js';
 import { randomWorkspaceName } from '../random-name.js';
 import { safeCwd } from '../safe-cwd.js';
 import { AgentQueueStore } from '../store/AgentQueueStore.js';
@@ -720,14 +721,9 @@ export function panesScopedRoutes(deps: {
         tab_id: p.tab_id,
         ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
       });
-    } catch {
+    } catch (err) {
       return c.json(
-        {
-          error: {
-            code: 'ptyd_unavailable',
-            message: 'ptyd is unreachable; cannot respawn pane',
-          },
-        },
+        { error: { code: 'ptyd_unavailable', message: whyNot('respawn pane', err) } },
         503,
       );
     }
@@ -938,14 +934,9 @@ export function panesScopedRoutes(deps: {
         tab_id: p.tab_id,
         ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
       });
-    } catch {
+    } catch (err) {
       return c.json(
-        {
-          error: {
-            code: 'ptyd_unavailable',
-            message: 'ptyd is unreachable; cannot start the agent',
-          },
-        },
+        { error: { code: 'ptyd_unavailable', message: whyNot('start the agent', err) } },
         503,
       );
     }
@@ -1012,14 +1003,9 @@ export function panesScopedRoutes(deps: {
         tab_id: p.tab_id,
         ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
       });
-    } catch {
+    } catch (err) {
       return c.json(
-        {
-          error: {
-            code: 'ptyd_unavailable',
-            message: 'ptyd is unreachable; cannot start the terminal',
-          },
-        },
+        { error: { code: 'ptyd_unavailable', message: whyNot('start the terminal', err) } },
         503,
       );
     }
@@ -1136,11 +1122,9 @@ export function panesScopedRoutes(deps: {
         tab_id: p.tab_id,
         ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
       });
-    } catch {
+    } catch (err) {
       return c.json(
-        {
-          error: { code: 'ptyd_unavailable', message: 'ptyd is unreachable; cannot switch folder' },
-        },
+        { error: { code: 'ptyd_unavailable', message: whyNot('switch folder', err) } },
         503,
       );
     }

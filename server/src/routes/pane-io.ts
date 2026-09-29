@@ -5,6 +5,7 @@ import WebSocket from 'ws';
 import { z } from 'zod';
 import type { PtydCache } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
+import { whyNot } from '../ptyd-failure.js';
 import { PaneStore } from '../store/PaneStore.js';
 
 /**
@@ -226,8 +227,11 @@ export function paneIoRoutes(deps: {
     let running = false;
     try {
       running = await deps.ptyd.hasPane(id);
-    } catch {
-      return { status: 503, code: 'ptyd_unavailable', message: 'ptyd is unreachable' };
+    } catch (err) {
+      // This one really IS about reachability — asking ptyd whether a pane
+      // exists only fails if the call did not land. Say what it said anyway,
+      // because "unreachable" was the word that misdirected a whole day.
+      return { status: 503, code: 'ptyd_unavailable', message: whyNot('reach ptyd', err) };
     }
     if (!running) return { status: 400, code: 'bad_request', message: 'pane has no live pty' };
     return null;
