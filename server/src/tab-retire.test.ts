@@ -788,6 +788,149 @@ describe('retiring a sub-chat when it delivers', () => {
       expect(retirer.settleNow(live.pane)).toBe(true);
     });
 
+    it('REOPENS THE ROUND when a turn-start revives — it was one job all along', () => {
+      // Undoing a retirement has to undo the round close with it. It did not,
+      // and the consequence is silent and destructive: with no round open, the
+      // worker's remaining work belongs to nothing, its eventual close() is a
+      // no-op, and `writeResult` attaches the new summary to THE PREVIOUS
+      // ROUND — overwriting the card that was already there and drawing no new
+      // one. The job disappears into the round it had already finished.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const rounds = new SpawnRoundStore(db);
+      rounds.open(child.tab, 1_000);
+      const retirer = new ChatRetirer(deps);
+      retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
+      retirer.settleNow(child.pane);
+      expect(rounds.openRound(child.tab)).toBeNull();
+
+      retirer.onTurnStart(child.pane);
+
+      expect(rounds.openRound(child.tab)).not.toBeNull();
+      // ONE round, not two: the same job resumed, so the log must not grow a
+      // second pair of cards for work the user only asked for once.
+      expect(rounds.listByTab(child.tab)).toHaveLength(1);
+    });
+
+    it('DISCARDS the premature summary when it reopens', () => {
+      // The report it retired with was generated over an unfinished job. Keeping
+      // it would leave a stale conclusion on the round that is running again,
+      // and the real one lands at the real end.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const rounds = new SpawnRoundStore(db);
+      rounds.open(child.tab, 1_000);
+      const retirer = new ChatRetirer(deps);
+      retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
+      retirer.settleNow(child.pane);
+      rounds.writeResult(child.tab, { report: 'half a job', state: 'ok' });
+
+      retirer.onTurnStart(child.pane);
+
+      const only = rounds.listByTab(child.tab)[0];
+      expect(only?.report).toBeNull();
+      expect(only?.report_state).toBeNull();
+    });
+
+    it('KEEPS the artifacts it found — those did not stop existing', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const rounds = new SpawnRoundStore(db);
+      rounds.open(child.tab, 1_000);
+      const retirer = new ChatRetirer(deps);
+      retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
+      retirer.settleNow(child.pane);
+      rounds.writeResult(child.tab, {
+        report: 'half a job',
+        state: 'ok',
+        artifacts: ['https://example.test/page'],
+      });
+
+      retirer.onTurnStart(child.pane);
+
+      expect(rounds.listByTab(child.tab)[0]?.artifacts).toEqual(['https://example.test/page']);
+    });
+
+    it('CLEARS THE STALE VERDICT off the row when the job resumes', () => {
+      // Observed live on `sidebar-fresh`: retired `delivered` while the row
+      // still said `spawn_report_state = 'awaiting'` from an EARLIER round. The
+      // card reads that column, so it claimed the worker was waiting on the
+      // user about a job it had already delivered. The state is a fact about
+      // ONE round and was outliving it.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      new SpawnRoundStore(db).open(child.tab, 1_000);
+      const retirer = new ChatRetirer(deps);
+      retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
+      retirer.settleNow(child.pane);
+      tabs.setSpawnReport(child.tab, { report: 'asked a question', state: 'awaiting' }, 5_000);
+
+      retirer.onTurnStart(child.pane);
+
+      expect(tabs.getById(child.tab)?.spawn_report_state).toBeUndefined();
+      expect(tabs.getById(child.tab)?.spawn_report).toBeUndefined();
+      // The rate limiter's clock is NOT cleared — it bounds model calls, and a
+      // broken install must not get a fresh budget every time work resumes.
+      expect(tabs.spawnReportAt(child.tab)).toBe(5_000);
+    });
+
+    /**
+     * A DELIVERY IS SOMETHING A LIVE AGENT DOES.
+     *
+     * The race between the two halves of this feature, and it is a real one, not
+     * a test artifact. When a runner dies mid-turn, ws.ts synthesises a
+     * `turn-done` for it ("agent disconnected") — so the settle arms, and 90
+     * seconds later it would retire the worker as DELIVERED with a summary. The
+     * dead-runner sweep cannot contradict that until it has given up, which
+     * takes 135 seconds minimum. The faster, wronger answer wins, and the crash
+     * is filed as a delivery: the exact confusion this whole change exists to
+     * remove.
+     */
+    describe('a runner that is GONE has not delivered', () => {
+      it('does not retire when no runner is connected', () => {
+        const parent = chat('parent');
+        const child = chat('child', parent.tab);
+        // `turnActive` is the registry's own answer, and NULL means "no runner
+        // connected" — not idle, absent.
+        const retirer = new ChatRetirer({ ...deps, turnActive: () => null });
+
+        retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
+
+        expect(retirer.settleNow(child.pane)).toBe(false);
+        expect(isDone(child.tab)).toBe(false);
+      });
+
+      it('leaves it for the sweep, which files it as DIED', () => {
+        const parent = chat('parent');
+        const child = chat('child', parent.tab);
+        const retirer = new ChatRetirer({ ...deps, turnActive: () => null });
+        retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
+        retirer.settleNow(child.pane);
+
+        expect(retirer.onRunnerDead(child.pane)).toBe(true);
+        expect(resolveTabClock(clockIndex(db), child.tab, Date.now()).done_reason).toBe('died');
+      });
+
+      it('retires normally when a runner IS connected and idle', () => {
+        const parent = chat('parent');
+        const child = chat('child', parent.tab);
+        const retirer = new ChatRetirer({ ...deps, turnActive: () => false });
+
+        expect(finishJob(retirer, child.pane)).toBe(true);
+        expect(resolveTabClock(clockIndex(db), child.tab, Date.now()).done_reason).toBe(
+          'delivered',
+        );
+      });
+
+      it('does not retire while the registry says a turn is in flight', () => {
+        const parent = chat('parent');
+        const child = chat('child', parent.tab);
+        const retirer = new ChatRetirer({ ...deps, turnActive: () => true });
+        retirer.onTurnEnded({ pane_id: child.pane, phase: 'done' });
+        expect(retirer.settleNow(child.pane)).toBe(false);
+      });
+    });
+
     it('a FATAL turn the worker recovers from produces no crash card', () => {
       // A crash it came back from is not a crash worth telling the parent
       // about, and the settle is what makes that distinction available at all.

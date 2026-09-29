@@ -66,6 +66,57 @@ describe('shouldConsiderSpawnReport — the gate in front of the money', () => {
     // broken install cannot spin.
     expect(shouldConsiderSpawnReport({ lastAt: 5, turns: 9, now: 6 })).toBe(false);
   });
+
+  /**
+   * THE INTERVAL IS PER-TAB AND THE REPORT IS PER-ROUND.
+   *
+   * The constant's own note says the interval "only ever matters for a child
+   * that was revived and finished again" — which stopped being an edge case the
+   * moment rounds landed (v32) and made that the ORDINARY life of a worker.
+   * `muxpad agent send` hands a worker its next job; if that lands inside half
+   * an hour, the second job's card had nothing in it at all.
+   */
+  describe('a NEW ROUND is not a retry', () => {
+    it('asks for a round that began after the last attempt', () => {
+      const lastAt = 1_000_000;
+      expect(
+        shouldConsiderSpawnReport({
+          lastAt,
+          turns: 4,
+          now: lastAt + 60_000,
+          roundStartedAt: lastAt + 30_000,
+        }),
+      ).toBe(true);
+    });
+
+    it('still refuses a SECOND attempt at the same round', () => {
+      // The loop the interval exists to stop. Within one round `started_at` is
+      // fixed and the attempt clock has moved past it, so the floor applies
+      // again — a crashing worker cannot spend a call per crash.
+      const roundStartedAt = 1_000_000;
+      expect(
+        shouldConsiderSpawnReport({
+          lastAt: roundStartedAt + 10,
+          turns: 4,
+          now: roundStartedAt + 60_000,
+          roundStartedAt,
+        }),
+      ).toBe(false);
+    });
+
+    it('a round with no start at all falls back to the plain interval', () => {
+      const lastAt = 1_000_000;
+      expect(
+        shouldConsiderSpawnReport({ lastAt, turns: 4, now: lastAt + 60_000, roundStartedAt: null }),
+      ).toBe(false);
+    });
+
+    it('still needs a turn in it — a fresh round is not content', () => {
+      expect(
+        shouldConsiderSpawnReport({ lastAt: 1, turns: 0, now: 9_999, roundStartedAt: 9_000 }),
+      ).toBe(false);
+    });
+  });
 });
 
 describe('spawnReportRejectReason — a report, or nothing at all', () => {

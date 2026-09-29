@@ -692,6 +692,36 @@ export class TabStore {
   }
 
   /**
+   * FORGET THE LAST ROUND'S VERDICT, because a new one is under way.
+   *
+   * `spawn_report` and `spawn_report_state` describe ONE round, and they were
+   * outliving it. Measured live on `sidebar-fresh`: retired `delivered` with the
+   * row still reading `spawn_report_state = 'awaiting'` from an earlier round,
+   * so the card — which reads this column for the worker's state — insisted it
+   * was waiting on the user about a job it had already delivered. `awaiting` and
+   * `crashed` are the dangerous two, because both are facts we OBSERVED about a
+   * moment that has passed, and both outrank an ordinary delivery on the card.
+   *
+   * Cleared when work RESUMES rather than corrected when it ends, because at the
+   * moment a new round begins we know the old verdict is out of date and we do
+   * not yet know the new one. Absence is honest for that gap; the card already
+   * has a sentence for it.
+   *
+   * `spawn_report_at` is deliberately LEFT ALONE. It is the rate limiter's
+   * clock, not a verdict, and handing a broken install a fresh call budget every
+   * time a worker resumes is the failure `touchSpawnReportAt` exists to prevent.
+   * The round-aware gate (see chat/spawn-report.ts) is what lets a genuine new
+   * round through without clearing it.
+   *
+   * Artifacts stay too: they are urls and files that exist.
+   */
+  clearSpawnReport(id: string): void {
+    this.db
+      .prepare('UPDATE tabs SET spawn_report = NULL, spawn_report_state = NULL WHERE id = ?')
+      .run(id);
+  }
+
+  /**
    * Advance the spawn-report rate limiter WITHOUT writing a report.
    *
    * `touchHeadlineAt`'s twin, and the same hard-won rule: the clock counts

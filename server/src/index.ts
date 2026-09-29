@@ -177,6 +177,11 @@ const retireDeps = {
   // raises no such thing and was therefore being filed as `delivered`. A bounded
   // transcript read, no model — see chat/awaiting.ts.
   awaitingUser: (paneId: string) => paneAwaitsUser(db, paneId),
+  // IS A RUNNER STILL THERE? null means none is connected, and a worker with no
+  // runner has not DELIVERED — a dying runner's synthesised `turn-done` would
+  // otherwise be retired as a delivery ninety seconds before the dead-runner
+  // sweep could say `died`. See the dep's note.
+  turnActive: (paneId: string) => agentBridge.turnActive(paneId),
   // Called when a sub-chat's WORK ends — which is not the same moment as its row
   // leaving the live list (a crashed worker keeps its row and still has plenty
   // to report). Fire-and-forget; retirement never waits on a model call.
