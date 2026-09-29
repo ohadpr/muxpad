@@ -38,7 +38,13 @@ async function main(): Promise<void> {
   const runner = createTunnelRunner({
     publicPort,
     apiUrl,
+    // Both tokens, always. In a pane, MUXPAD_PANE_ID is set and the pane is the
+    // stronger owner (the pid then only sharpens it — see TunnelApp.ts). Under
+    // launchd there is no pane, and the pid is the ONLY thing whose liveness the
+    // server can check, so a paneless runner is not a special mode here: it is
+    // the same call with one of the two tokens absent.
     paneId: process.env.MUXPAD_PANE_ID ?? null,
+    pid: process.pid,
     bin: findCloudflared(),
     log: (m) => console.log(m),
   });
@@ -52,7 +58,13 @@ async function main(): Promise<void> {
   // A refusal or a missing binary is a real failure and must not look like a
   // clean stop: `muxpad serve` backs off and retries, the serve supervisor
   // eventually gives up, and giving up is what pushes a notification.
-  process.exit(outcome === 'stopped' || outcome === 'max-runs' ? 0 : 1);
+  //
+  // `not-wanted` is the deliberate exception and the reason this is not just
+  // `=== 'stopped'`: a permanent public base makes the tunnel pointless, and
+  // under launchd's `KeepAlive: {SuccessfulExit: false}` exiting 0 is the only
+  // way to say "and do not bring me back". Exiting 1 there would crash-loop a
+  // tunnel against a domain that already works.
+  process.exit(outcome === 'stopped' || outcome === 'max-runs' || outcome === 'not-wanted' ? 0 : 1);
 }
 
 void main();

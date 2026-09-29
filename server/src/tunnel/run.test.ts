@@ -40,9 +40,11 @@ interface Call {
  * announce, plus a `/` that answers like the PUBLIC artifact server unless a
  * test says otherwise.
  */
-function harness(opts?: { target?: { status: number; csp: string } | 'unreachable' }) {
+type Target = { status: number; csp: string } | 'unreachable';
+
+function harness(opts?: { target?: Target; reply?: Record<string, unknown> }) {
   const calls: Call[] = [];
-  const target = opts?.target ?? { status: 404, csp: 'sandbox allow-scripts' };
+  const state = { target: opts?.target ?? { status: 404, csp: 'sandbox allow-scripts' } };
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     if (url.includes('/api/publish/tunnel')) {
@@ -50,18 +52,22 @@ function harness(opts?: { target?: { status: number; csp: string } | 'unreachabl
         method: init?.method ?? 'GET',
         body: init?.body ? JSON.parse(String(init.body)) : null,
       });
-      return new Response(JSON.stringify({ ok: true }), {
+      return new Response(JSON.stringify({ ok: true, ...(opts?.reply ?? {}) }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
     }
-    if (target === 'unreachable') throw new Error('connect ECONNREFUSED');
+    if (state.target === 'unreachable') throw new Error('connect ECONNREFUSED');
     return new Response('not found', {
-      status: target.status,
-      headers: { 'content-security-policy': target.csp },
+      status: state.target.status,
+      headers: { 'content-security-policy': state.target.csp },
     });
   }) as unknown as typeof fetch;
-  return { calls, fetchImpl };
+  /** Change what :7778 answers, mid-run. */
+  const setTarget = (t: Target) => {
+    state.target = t;
+  };
+  return { calls, fetchImpl, setTarget };
 }
 
 describe('verifyPublicTarget — decision 5, enforced not documented', () => {
@@ -92,6 +98,16 @@ describe('verifyPublicTarget — decision 5, enforced not documented', () => {
     const res = await verifyPublicTarget('http://127.0.0.1:7778', fetchImpl);
     expect(res.ok).toBe(false);
     expect(res.ok === false && res.reason).toContain('nothing is listening');
+    // NOT LISTENING and ANSWERING WRONG are different failures and the runner
+    // treats them differently: the first is muxpad being restarted, the second
+    // is somebody else holding the port. See the heartbeat tests below.
+    expect(res.ok === false && res.listening).toBe(false);
+  });
+
+  it('separates "answered wrong" from "nothing there"', async () => {
+    const { fetchImpl } = harness({ target: { status: 200, csp: '' } });
+    const res = await verifyPublicTarget('http://127.0.0.1:7778', fetchImpl);
+    expect(res.ok === false && res.listening).toBe(true);
   });
 });
 
@@ -340,6 +356,189 @@ describe('createTunnelRunner', () => {
     expect(up.length).toBeGreaterThan(1);
     // Always the SAME url — a heartbeat restates, it never invents.
     expect(new Set(up.map((c) => c.body?.url))).toEqual(new Set([NAMES[0]]));
+  });
+
+  it('CLAIMS the tunnel with its pid before it spawns anything', async () => {
+    // The runner may be supervised by launchd rather than by a muxpad pane, in
+    // which case its pid is the ownership token that replaces the pane id. The
+    // claim goes out BEFORE cloudflared, because a publish landing in the four
+    // seconds before a hostname exists would otherwise start a rival tunnel in
+    // a pane.
+    const { calls, fetchImpl } = harness();
+    const child = fakeChild();
+    let spawned = 0;
+    const runner = createTunnelRunner({
+      publicPort: 7778,
+      apiUrl: API,
+      pid: 4242,
+      bin: '/x/cloudflared',
+      fetchImpl,
+      spawnChild: () => {
+        spawned += 1;
+        return child;
+      },
+      sleep: async () => {},
+      log: () => {},
+      out: () => {},
+      announceIntervalMs: 0,
+      maxRuns: 1,
+    });
+    const done = runner.run();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(calls[0]).toEqual({ method: 'POST', body: { pid: 4242 } });
+    expect(spawned).toBe(1);
+    child.emit(`INF |  ${NAMES[0]}  |`);
+    await new Promise((r) => setTimeout(r, 5));
+    child.exit(1);
+    await done;
+    // Every announce and retraction carries the pid, so the server can tell a
+    // live owner from a record nothing is behind.
+    expect(calls.filter((c) => c.method === 'POST').at(-1)?.body).toEqual({
+      url: NAMES[0],
+      pane_id: null,
+      pid: 4242,
+    });
+    expect(calls.filter((c) => c.method === 'DELETE').at(-1)?.body?.pid).toBe(4242);
+  });
+
+  it('WAITS for the public server instead of refusing when nothing is listening', async () => {
+    // Under launchd the tunnel job and the main server start together, and the
+    // tunnel usually wins the race. Exiting would work — launchd would retry —
+    // but every exit is a fresh cloudflared and therefore a new hostname, which
+    // is the bug.
+    const { calls, fetchImpl, setTarget } = harness({ target: 'unreachable' });
+    const child = fakeChild();
+    let spawned = 0;
+    const waits: number[] = [];
+    const runner = createTunnelRunner({
+      publicPort: 7778,
+      apiUrl: API,
+      bin: '/x/cloudflared',
+      fetchImpl,
+      spawnChild: () => {
+        spawned += 1;
+        return child;
+      },
+      sleep: async (ms) => {
+        waits.push(ms);
+        if (waits.length === 3) setTarget({ status: 404, csp: 'sandbox allow-scripts' });
+      },
+      log: () => {},
+      out: () => {},
+      announceIntervalMs: 0,
+      maxRuns: 1,
+    });
+    const done = runner.run();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(spawned).toBe(1); // it got there in the end
+    expect(waits.length).toBeGreaterThanOrEqual(3); // …after waiting, not exiting
+    child.exit(0);
+    expect(await done).toBe('max-runs');
+    // Nothing was ever tunnelled while the target was silent.
+    expect(calls.filter((c) => c.method === 'POST' && c.body?.url)).toHaveLength(0);
+  });
+
+  it('still refuses OUTRIGHT when the port answers and is not the public server', async () => {
+    // Waiting is only right for silence. Something that answers wrongly is
+    // somebody else's server, and waiting for it to become muxpad is waiting
+    // for a thing that will not happen.
+    const { fetchImpl } = harness({ target: { status: 200, csp: '' } });
+    const runner = createTunnelRunner({
+      publicPort: 7778,
+      apiUrl: API,
+      bin: '/x/cloudflared',
+      fetchImpl,
+      spawnChild: () => {
+        throw new Error('must not spawn');
+      },
+      sleep: async () => {},
+      log: () => {},
+      out: () => {},
+      announceIntervalMs: 0,
+    });
+    expect(await runner.run()).toBe('refused');
+  });
+
+  it('keeps the tunnel UP while muxpad is down — that is the whole point', async () => {
+    // The trade this feature makes: a tunnel that survives a muxpad restart is
+    // a tunnel muxpad is not supervising. For the window where nothing is
+    // listening on the public port, HOLDING the hostname is the goal — it is
+    // what makes the name come back with muxpad instead of rotating.
+    const { fetchImpl, setTarget } = harness();
+    const child = fakeChild();
+    const runner = createTunnelRunner({
+      publicPort: 7778,
+      apiUrl: API,
+      pid: 4242,
+      bin: '/x/cloudflared',
+      fetchImpl,
+      spawnChild: () => child,
+      sleep: () => new Promise((r) => setTimeout(r, 2)),
+      log: () => {},
+      out: () => {},
+      announceIntervalMs: 30_000,
+    });
+    const done = runner.run();
+    await new Promise((r) => setTimeout(r, 5));
+    child.emit(`INF |  ${NAMES[0]}  |`);
+    setTarget('unreachable'); // muxpad is being restarted
+    await new Promise((r) => setTimeout(r, 30));
+    runner.stop();
+    expect(await done).toBe('stopped'); // it never gave up on the hostname
+  });
+
+  it('CLOSES the door when something else takes the public port', async () => {
+    // The new failure mode, and its answer. A launchd tunnel outlives muxpad,
+    // so "nothing is listening on 7778" can become "something ELSE is listening
+    // on 7778" with no muxpad around to notice. The fingerprint is therefore
+    // re-checked on the heartbeat, not only at startup.
+    const { calls, fetchImpl, setTarget } = harness();
+    const child = fakeChild();
+    const runner = createTunnelRunner({
+      publicPort: 7778,
+      apiUrl: API,
+      pid: 4242,
+      bin: '/x/cloudflared',
+      fetchImpl,
+      spawnChild: () => child,
+      sleep: () => new Promise((r) => setTimeout(r, 2)),
+      log: () => {},
+      out: () => {},
+      announceIntervalMs: 30_000,
+    });
+    const done = runner.run();
+    await new Promise((r) => setTimeout(r, 5));
+    child.emit(`INF |  ${NAMES[0]}  |`);
+    await new Promise((r) => setTimeout(r, 5));
+    setTarget({ status: 200, csp: '' }); // somebody else's server, now public
+    expect(await done).toBe('refused');
+    // …and the url was retracted, so nothing publishes a link into it.
+    expect(calls.filter((c) => c.method === 'DELETE')).not.toHaveLength(0);
+  });
+
+  it('shuts down when the server says the tunnel is not wanted', async () => {
+    // MUXPAD_PUBLIC_BASE_URL still wins. muxpad cannot stop a launchd job, so
+    // the answer to an announce is authoritative: a real domain means there is
+    // nothing for a quick tunnel to do, and a clean exit is what keeps launchd
+    // from bringing it back (KeepAlive: SuccessfulExit false).
+    const { fetchImpl } = harness({ reply: { wanted: false } });
+    const child = fakeChild();
+    const runner = createTunnelRunner({
+      publicPort: 7778,
+      apiUrl: API,
+      pid: 4242,
+      bin: '/x/cloudflared',
+      fetchImpl,
+      spawnChild: () => child,
+      sleep: async () => {},
+      log: () => {},
+      out: () => {},
+      announceIntervalMs: 0,
+    });
+    const done = runner.run();
+    await new Promise((r) => setTimeout(r, 5));
+    child.emit(`INF |  ${NAMES[0]}  |`);
+    expect(await done).toBe('not-wanted');
   });
 
   it('survives the main server being unreachable while it announces', async () => {
