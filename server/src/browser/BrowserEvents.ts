@@ -90,6 +90,30 @@ export class BrowserEvents {
     return stamped;
   }
 
+  /**
+   * Marks the newest moment as having a picture.
+   *
+   * Used when the still arrives AFTER the moment did — the browser photographs
+   * itself on the way out, so the card for a closed browser shows the last page
+   * it was on rather than the first one it visited, which is what a capture at
+   * open time would have left behind.
+   */
+  attachShot(profile: string, at: number): boolean {
+    const name = normalizeProfileName(profile);
+    const list = this.list(name);
+    const i = list.findIndex((e) => e.at === at);
+    if (i === -1) return false;
+    const next = list.map((e, n) => (n === i ? { ...e, shot: true } : e));
+    this.globals.set(KEY_PREFIX + name, JSON.stringify(next));
+    return true;
+  }
+
+  /** The newest moment worth illustrating, or null when the log is empty. */
+  newestMoment(profile: string): BrowserEvent | null {
+    const list = this.list(normalizeProfileName(profile)).filter((e) => e.kind !== 'resolved');
+    return list.length ? (list[list.length - 1] as BrowserEvent) : null;
+  }
+
   clear(profile: string): void {
     this.globals.set(KEY_PREFIX + normalizeProfileName(profile), '[]');
   }

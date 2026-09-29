@@ -631,6 +631,31 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     cdpUrl: spec.url,
     async close() {
       closing = true;
+      // PHOTOGRAPH IT ON THE WAY OUT, before anything is torn down. The card for
+      // a closed browser is the only record of what it was doing, and a still
+      // captured when it OPENED would show the first page it visited dressed as
+      // the last — confidently wrong. Bounded and best-effort: a browser being
+      // shut down must not be held up by a picture of itself, and one that is
+      // killed outright never gets here at all.
+      if (opts.apiUrl) {
+        try {
+          const shot = (await Promise.race([
+            cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 55 }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('slow')), 2500)),
+          ])) as { data?: string };
+          const bytes = Buffer.from(shot?.data ?? '', 'base64');
+          if (bytes.length) {
+            await fetch(`${opts.apiUrl}/api/browsers/${encodeURIComponent(opts.profile)}/closing`, {
+              method: 'POST',
+              headers: { 'content-type': 'image/jpeg' },
+              body: bytes,
+              signal: AbortSignal.timeout(2500),
+            });
+          }
+        } catch (err) {
+          log(`[host] no last picture: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
       await screencast.stop().catch(() => {});
       cdp.close();
       wss.close();
