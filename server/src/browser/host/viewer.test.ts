@@ -904,3 +904,54 @@ describe('signing in with a password manager', () => {
     expect(VIEWER_HTML).toMatch(/#login input\{font-size:16px/);
   });
 });
+
+describe('every control is wired at the TOP LEVEL of the script', () => {
+  /**
+   * THREE TIMES I spliced a block into the middle of the takeover click
+   * handler. The anchor I inserted against — an indented `applyWatching()` —
+   * appears inside it as well as at top level, and `replace` takes the first.
+   * Each time, the listeners only registered if you pressed "take the wheel",
+   * which in the phone flow you never do. The last one shipped: the Sign in
+   * button appeared and did nothing.
+   *
+   * Nothing caught it. The script parsed, ran, threw no error, and every other
+   * test passed — because a listener that is never registered is not an error,
+   * it is an absence. So this measures the one thing that distinguishes a wired
+   * control from a dead one: how deep in braces its registration sits.
+   */
+  const depthOf = (needle: string): number => {
+    const src = script();
+    const at = src.indexOf(needle);
+    if (at === -1) throw new Error(`not in the script: ${needle}`);
+    let depth = 0;
+    for (const c of src.slice(0, at)) {
+      if (c === '{') depth++;
+      else if (c === '}') depth--;
+    }
+    return depth;
+  };
+
+  it.each([
+    ['takeover.addEventListener', 'take the wheel'],
+    ['handback.addEventListener', 'hand it back'],
+    ['loginBtn.addEventListener', 'sign in with a password manager'],
+    ["getElementById('loginForm').addEventListener", 'fill the page'],
+    ["getElementById('loginCancel').addEventListener", 'close the panel'],
+    ["getElementById('fpick').addEventListener", 'choose a file'],
+    ['mobileBtn.addEventListener', 'the phone layout'],
+    ['setInterval(keepTheWheel', 'keep the lease alive'],
+    ['connect()', 'dial the socket'],
+  ])('%s is registered unconditionally (%s)', (needle) => {
+    expect(depthOf(needle)).toBe(0);
+  });
+
+  it('the takeover handler still puts the page into driving mode', () => {
+    // Twice a splice ate this line while cutting the handler in half, and the
+    // button then changed a variable and nothing else.
+    const src = script();
+    const handler = src.slice(src.indexOf('takeover.addEventListener'));
+    const body = handler.slice(0, handler.indexOf('\n})'));
+    expect(body).toContain('watching = false');
+    expect(body).toContain('applyWatching()');
+  });
+});
