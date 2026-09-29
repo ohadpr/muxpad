@@ -33,6 +33,15 @@ export interface BrowserEvent {
   tabId?: string;
   /** What the agent said it was stuck on. */
   reason?: string;
+  /**
+   * Whether a still of the page was captured for this moment.
+   *
+   * A flag rather than a path: the file is derivable from (profile, at), and a
+   * stored path would be a second source of truth that goes stale the moment
+   * the data directory moves. False and absent mean the same thing — draw the
+   * card without a picture.
+   */
+  shot?: boolean;
 }
 
 /**

@@ -19,6 +19,7 @@ import { BrowserOwner } from './browser/BrowserOwner.js';
 import { browserAppSlug, browserProfileDir } from './browser/BrowserProfile.js';
 import { DEFAULT_BROWSER_PROFILES } from './browser/BrowserProfile.js';
 import { parseBrowserProxyPath } from './browser/BrowserProxy.js';
+import { clearBrowserShots } from './browser/BrowserShots.js';
 import { isDisposableSessionProfile, sessionBrowsersToReap } from './browser/SessionReaper.js';
 import { findChrome } from './browser/findChrome.js';
 import { browserHostEntry } from './browser/hostEntry.js';
@@ -674,6 +675,7 @@ const reapSessionBrowsers = async () => {
       apps.delete(row.id);
       new BrowserEvents(db).clear(profile);
       new BrowserOwner(db).clear(profile);
+      clearBrowserShots(config.dataDir, profile);
       await rm(browserProfileDir(config.dataDir, profile), { recursive: true, force: true });
       console.log(`[browser] reaped '${profile}' — its tab is gone`);
     }

@@ -102,6 +102,27 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
           {view.action}
         </button>
       ) : null}
+      {/* THE PAGE ITSELF, when we have it.
+        A card saying "Amazon needs a login" is a claim you take on trust and a
+        tap to check; the same card showing the sign-in page is the claim with
+        its evidence attached. It spans the full width underneath, so the line
+        above stays one line and the picture is the thing that grows.
+
+        `loading="lazy"` because a long chat can hold several, and onError
+        removes it rather than leaving a broken frame — the still is cache, and
+        one that has been pruned must read as "no picture", not as a fault. */}
+      {view.shotUrl ? (
+        <img
+          className="browser-card__shot"
+          src={view.shotUrl}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          onError={(e) => {
+            e.currentTarget.remove();
+          }}
+        />
+      ) : null}
     </div>
   );
 }

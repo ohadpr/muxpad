@@ -63,6 +63,7 @@ const lease = (over: Partial<NonNullable<BrowserCardData['wheel']>> = {}) => ({
 const moment = (browser: BrowserCardData, over: Partial<BrowserMoment> = {}): BrowserMoment => ({
   kind: 'opened',
   at: 100,
+  shotUrl: null,
   profile: browser.profile,
   browser,
   ...over,
@@ -200,5 +201,48 @@ describe('the modal', () => {
     act(() => vi.advanceTimersByTime(1100));
     expect(onRenew).toHaveBeenCalled();
     vi.useRealTimers();
+  });
+});
+
+describe('the picture on the card', () => {
+  const shot = (shotUrl: string | null) =>
+    mount(
+      <BrowserCard
+        moment={moment(
+          { ...base, needsYou: { reason: 'Amazon needs a login', at: 2 } },
+          { kind: 'needs-you', reason: 'Amazon needs a login', shotUrl },
+        )}
+        onOpen={() => {}}
+        now={1}
+      />,
+    ).host;
+
+  it('shows the page when a still was captured', () => {
+    // The difference between a card that CLAIMS the agent is stuck at a sign-in
+    // and one that shows you the sign-in page.
+    const img = shot('/api/browsers/s-abc/shot/2').querySelector('img');
+    expect(img?.getAttribute('src')).toBe('/api/browsers/s-abc/shot/2');
+  });
+
+  it('draws no image element at all when there is none', () => {
+    // Not an empty src — that is a request for the CURRENT page, which is how a
+    // card ends up illustrating itself with the wrong thing.
+    expect(shot(null).querySelector('img')).toBeNull();
+  });
+
+  it('carries an empty alt, because the words above already say it', () => {
+    // The reason is right there on the card. A screen reader announcing a
+    // filename on top of it is noise, not access.
+    expect(shot('/api/browsers/s-abc/shot/2').querySelector('img')?.getAttribute('alt')).toBe('');
+  });
+
+  it('loads lazily, because a long chat can hold several', () => {
+    expect(shot('/api/browsers/s-abc/shot/2').querySelector('img')?.getAttribute('loading')).toBe(
+      'lazy',
+    );
+  });
+
+  it('still shows the reason, so the picture illustrates rather than replaces', () => {
+    expect(shot('/api/browsers/s-abc/shot/2').textContent).toContain('Amazon needs a login');
   });
 });

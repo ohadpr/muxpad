@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -6,6 +7,7 @@ import { type BrowserEvent, BrowserEvents } from '../browser/BrowserEvents.js';
 import { BrowserOwner } from '../browser/BrowserOwner.js';
 import { normalizeProfileName } from '../browser/BrowserProfile.js';
 import { browserViewerLink, parseBrowserProxyPath } from '../browser/BrowserProxy.js';
+import { browserShotPath, saveBrowserShot } from '../browser/BrowserShots.js';
 import {
   BrowserAttention,
   BrowserWheel,
@@ -215,6 +217,27 @@ export function browsersRoutes(deps: {
     }
   };
 
+  /**
+   * Photographs the page for a moment that is about to be recorded.
+   *
+   * Best-effort and BOUNDED: a browser that is slow, wedged or already gone must
+   * not hold up the card that says so. Returns whether it landed, and the caller
+   * records the moment either way.
+   */
+  const captureShot = async (profile: string, state: BrowserAppState, at: number) => {
+    try {
+      // state.viewerUrl is the LOOPBACK host url here — view() renames it to
+      // localUrl for the client, but this is the raw row.
+      const res = await fetch(`${state.viewerUrl}/shot`, {
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!res.ok) return false;
+      return saveBrowserShot(deps.dataDir, profile, at, new Uint8Array(await res.arrayBuffer()));
+    } catch {
+      return false;
+    }
+  };
+
   app.get('/', (c) => c.json({ browsers: listBrowserApps(deps.db).map(view) }));
 
   app.post('/', async (c) => {
@@ -278,7 +301,7 @@ export function browsersRoutes(deps: {
    * caller: the host has no idea which chat it belongs to, and a card scoped to
    * the wrong one is worse than no card.
    */
-  app.post('/:profile/opened', (c) => {
+  app.post('/:profile/opened', async (c) => {
     const profile = profileParam(c.req.param('profile'));
     if (!profile) return c.json({ error: 'invalid profile name' }, 400);
 
@@ -297,7 +320,14 @@ export function browsersRoutes(deps: {
     if (already) return c.json({ ok: true, events: events.list(profile) }, 200);
 
     const tabId = owner.get(profile);
-    events.record(profile, { kind: 'opened', ...(tabId ? { tabId } : {}) });
+    const state = find(profile);
+    const at = Date.now();
+    const shot = state ? await captureShot(profile, state, at) : false;
+    events.record(profile, {
+      kind: 'opened',
+      ...(tabId ? { tabId } : {}),
+      ...(shot ? { shot: true } : {}),
+    });
     return c.json({ ok: true, events: events.list(profile) }, 201);
   });
 
@@ -323,6 +353,31 @@ export function browsersRoutes(deps: {
    * at a CDP endpoint is playwright's business and a 404 here reads as a broken
    * browser.
    */
+  /**
+   * The still for one moment, by its timestamp.
+   *
+   * CACHE, not record: a missing file is a 404 and the card simply draws without
+   * a picture, which is what it did before these existed. Immutable once
+   * written — the moment is in the past — so it is worth caching hard.
+   */
+  app.get('/:profile/shot/:at', async (c) => {
+    const profile = profileParam(c.req.param('profile'));
+    const at = Number(c.req.param('at'));
+    if (!profile || !Number.isFinite(at)) return c.json({ error: 'no such still' }, 400);
+    try {
+      const bytes = await readFile(browserShotPath(deps.dataDir, profile, at));
+      return new Response(new Uint8Array(bytes), {
+        status: 200,
+        headers: {
+          'content-type': 'image/jpeg',
+          'cache-control': 'public, max-age=31536000, immutable',
+        },
+      });
+    } catch {
+      return c.json({ error: 'no such still' }, 404);
+    }
+  });
+
   app.get('/:profile/cdp/*', async (c) => {
     const profile = profileParam(c.req.param('profile'));
     if (!profile) return c.json({ error: 'invalid profile name' }, 400);
@@ -434,10 +489,16 @@ export function browsersRoutes(deps: {
     if (!parsed.success) return c.json({ error: 'reason is required' }, 400);
 
     attention.raise(profile, parsed.data.reason, parsed.data.selector);
+    // THE MOMENT MOST WORTH A PICTURE. "Amazon needs a login" is a claim you
+    // have to take on trust and a tap to check; the same card showing the
+    // sign-in page is the claim with its evidence attached.
+    const at = Date.now();
+    const shot = await captureShot(profile, state, at);
     events.record(profile, {
       kind: 'needs-you',
       reason: parsed.data.reason,
       ...(parsed.data.tabId ? { tabId: parsed.data.tabId } : {}),
+      ...(shot ? { shot: true } : {}),
     });
     return c.json(view(state));
   });

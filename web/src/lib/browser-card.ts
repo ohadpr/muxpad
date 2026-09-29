@@ -21,6 +21,8 @@ export interface BrowserEvent {
   at: number;
   tabId?: string;
   reason?: string;
+  /** A still of the page was captured for this moment. */
+  shot?: boolean;
 }
 
 export interface BrowserCardData {
@@ -45,6 +47,15 @@ export type BrowserCardTone = 'idle' | 'working' | 'waiting' | 'yours';
 
 export interface BrowserCardView {
   tone: BrowserCardTone;
+  /**
+   * A still of the page at this moment, or null.
+   *
+   * It is the difference between a card that CLAIMS the agent is stuck at a
+   * sign-in and one that shows you the sign-in page. Null is ordinary: an old
+   * moment whose still has been pruned, a browser that was already gone, a
+   * capture that failed. The card is the same card without it.
+   */
+  shotUrl: string | null;
   /** One line, the card's headline. */
   title: string;
   /** Secondary line. Empty string when there is nothing worth saying. */
@@ -169,9 +180,7 @@ export function browserOpenIntent(moment: BrowserMoment): BrowserOpenIntent {
   // reading intent from it alone means the second visit — after the phone's back
   // button, mid-login — opens a viewer that refuses your typing. You did not
   // become a spectator by navigating away.
-  return moment.browser.needsYou || moment.browser.wheel?.holder === 'human'
-    ? 'drive'
-    : 'watch';
+  return moment.browser.needsYou || moment.browser.wheel?.holder === 'human' ? 'drive' : 'watch';
 }
 
 /** One card in a conversation: a thing that happened, plus the browser it happened to. */
@@ -179,6 +188,8 @@ export interface BrowserMoment {
   kind: 'opened' | 'needs-you';
   at: number;
   reason?: string;
+  /** Where the still for this moment lives, or null when none was captured. */
+  shotUrl: string | null;
   profile: string;
   /** The browser as it is NOW, so the card can open it and read the wheel. */
   browser: BrowserCardData;
@@ -232,12 +243,24 @@ export function browserMoments(
         kind: event.kind,
         at: event.at,
         ...(event.reason !== undefined ? { reason: event.reason } : {}),
+        shotUrl: event.shot ? browserShotUrl(browser.profile, event.at) : null,
         profile: browser.profile,
         browser,
       });
     }
   }
   return out.sort((a, b) => a.at - b.at);
+}
+
+/**
+ * Where a moment's still is served from.
+ *
+ * RELATIVE, like the viewer path and for the same reason: same-origin with
+ * whatever host the cockpit is open on, loopback at a desk and the tailnet name
+ * from a sofa. An absolute one would be wrong on one of them.
+ */
+export function browserShotUrl(profile: string, at: number): string {
+  return `/api/browsers/${encodeURIComponent(profile)}/shot/${Math.floor(at)}`;
 }
 
 /** Session browsers are named after the session, which is not a word for a person. */
@@ -284,6 +307,7 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
       title: '',
       detail: moment.reason ?? '',
       action: live ? 'Open' : null,
+      shotUrl: moment.shotUrl,
       urgent: true,
       countdown: false,
       passive: false,
@@ -307,6 +331,7 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
     title: isSessionProfile(moment.profile) ? 'Browser opened' : `Browser · ${moment.profile}`,
     detail,
     action: null,
+    shotUrl: moment.shotUrl,
     urgent: false,
     countdown: yours,
     passive: true,

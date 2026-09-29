@@ -6,8 +6,9 @@ import {
   type BrowserWheelLease,
   browserMomentView,
   browserMoments,
-  browserOpenMode,
   browserOpenIntent,
+  browserOpenMode,
+  browserShotUrl,
   browserViewerPath,
   injectBrowserMoments,
   shouldRenewWheel,
@@ -232,6 +233,7 @@ describe('a card drawn from a moment', () => {
   const moment = (over: Record<string, unknown> = {}) => ({
     kind: 'opened' as const,
     at: 100,
+    shotUrl: null,
     profile: 'shopping',
     browser: base,
     ...over,
@@ -284,6 +286,7 @@ describe('placing moments in a conversation', () => {
   const m = (at: number): BrowserMoment => ({
     kind: 'opened',
     at,
+    shotUrl: null,
     profile: 'shopping',
     browser: base,
   });
@@ -342,6 +345,7 @@ describe('what the card says, in as few words as possible', () => {
   const m = (over: Record<string, unknown> = {}): BrowserMoment => ({
     kind: 'opened',
     at: 1,
+    shotUrl: null,
     profile: 's-01m3hwabcdef',
     browser: base,
     ...over,
@@ -389,6 +393,7 @@ describe('what the card shows, and what it leaves out', () => {
   const m = (over: Record<string, unknown> = {}): BrowserMoment => ({
     kind: 'opened',
     at: 1,
+    shotUrl: null,
     profile: 's-abc',
     browser: base,
     ...over,
@@ -420,6 +425,7 @@ describe('a card that is only telling you something', () => {
   const m = (over: Record<string, unknown> = {}): BrowserMoment => ({
     kind: 'opened',
     at: 1,
+    shotUrl: null,
     profile: 's-abc',
     browser: base,
     ...over,
@@ -512,10 +518,14 @@ describe('there are exactly two kinds of browser card', () => {
   });
 });
 
-
 describe('what opening a card is meant to do', () => {
   const m = (over: Record<string, unknown> = {}): BrowserMoment => ({
-    kind: 'opened', at: 1, profile: 's-abc', browser: base, ...over,
+    kind: 'opened',
+    at: 1,
+    shotUrl: null,
+    profile: 's-abc',
+    browser: base,
+    ...over,
   });
 
   it('WATCHES when you open the session card', () => {
@@ -591,5 +601,57 @@ describe('finding the way back to a browser you are driving', () => {
       events: [...(b.events ?? []), { kind: 'resolved', at: 3, tabId: 'tab-1' }],
     };
     expect(browserMoments([done], 'tab-1').map((m) => m.kind)).toEqual(['opened']);
+  });
+});
+
+describe('the picture on the card', () => {
+  /**
+   * A card that says "Amazon needs a login" is a claim you take on trust and a
+   * tap to check. The same card showing the sign-in page is the claim with its
+   * evidence attached — which is the whole reason it is worth carrying.
+   */
+  const withShot = (shot: boolean): BrowserCardData => ({
+    profile: 's-abc',
+    viewerUrl: 'https://host/browser/s-abc/',
+    state: 'running',
+    needsYou: { reason: 'log in', at: 2 },
+    wheel: null,
+    events: [
+      {
+        kind: 'needs-you',
+        at: 2,
+        tabId: 'tab-1',
+        reason: 'log in',
+        ...(shot ? { shot: true } : {}),
+      },
+    ],
+  });
+
+  it('points at the still for THAT moment', () => {
+    const [m] = browserMoments([withShot(true)], 'tab-1');
+    expect((m as BrowserMoment).shotUrl).toBe('/api/browsers/s-abc/shot/2');
+    expect(browserMomentView(m as BrowserMoment).shotUrl).toBe('/api/browsers/s-abc/shot/2');
+  });
+
+  it('carries none when none was captured', () => {
+    // Ordinary, not exceptional: a pruned still, a browser already gone, a
+    // capture that failed. The card is the same card without it.
+    const [m] = browserMoments([withShot(false)], 'tab-1');
+    expect((m as BrowserMoment).shotUrl).toBeNull();
+    expect(browserMomentView(m as BrowserMoment).shotUrl).toBeNull();
+  });
+
+  it('is a RELATIVE url, like the viewer path and for the same reason', () => {
+    // Same-origin with whatever host the cockpit is open on: loopback at a desk,
+    // the tailnet name from a sofa. An absolute one is wrong on one of them.
+    expect(browserShotUrl('s-abc', 2)).toMatch(/^\/api\//);
+  });
+
+  it('never invents a fractional moment, because the file is named by one', () => {
+    expect(browserShotUrl('s-abc', 2.7)).toBe('/api/browsers/s-abc/shot/2');
+  });
+
+  it('escapes a profile name into the path', () => {
+    expect(browserShotUrl('a b', 1)).toBe('/api/browsers/a%20b/shot/1');
   });
 });

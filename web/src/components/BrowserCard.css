@@ -283,3 +283,50 @@
     display: none;
   }
 }
+
+/*
+ * THE STILL. A picture of the page at the moment the card is about.
+ *
+ * Full width under the line, in its own grid row, so the text above stays one
+ * line and the image is the only thing that grows — a card whose words reflow
+ * around a picture is two layouts pretending to be one.
+ *
+ * Height-capped and cropped from the TOP: a page's identity is in its first
+ * couple of hundred pixels — the logo, the heading, the form — and letting a
+ * tall screenshot run to its natural height would put a strip of footer in a
+ * conversation.
+ */
+.browser-card__shot {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  width: 100%;
+  max-height: 148px;
+  margin-top: 6px;
+  object-fit: cover;
+  object-position: top center;
+  border-radius: 7px;
+  /* A hairline rather than a shadow: it sits INSIDE a card that already floats,
+     and a second shadow inside the first reads as a sticker. */
+  border: 1px solid color-mix(in srgb, var(--chat-fg, #1c1c22) 10%, transparent);
+  /* Its own colours are the page's, which is the point — but a bright page in a
+     dark chat is a lamp. Taken down a touch so the card still reads as the
+     surface and the picture as its content. */
+  filter: saturate(0.94);
+  display: block;
+}
+
+/* The picture is the only thing that makes these cards worth widening. */
+.browser-card:has(.browser-card__shot) {
+  max-width: min(520px, 94%);
+}
+
+@media (max-width: 560px) {
+  .browser-card:has(.browser-card__shot) {
+    max-width: 100%;
+  }
+  /* Shorter on a phone: the card is a line in a conversation you are scrolling,
+     not a viewer. */
+  .browser-card__shot {
+    max-height: 116px;
+  }
+}
