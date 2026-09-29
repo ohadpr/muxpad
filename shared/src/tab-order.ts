@@ -29,6 +29,40 @@ export interface SortableTab {
   status?: 'blocked' | 'working' | 'ready' | 'dead' | 'idle' | undefined;
   attention?: boolean | undefined;
   last_activity_at?: number | null | undefined;
+  /** See {@link userTouchAt} — the key the GLOBAL list orders on. */
+  last_user_at?: number | null | undefined;
+}
+
+/**
+ * WHEN YOU LAST TOUCHED THIS CHAT — and why it is not `last_activity_at`.
+ *
+ * `last_activity_at` is bumped by pty OUTPUT (sampled every 5s) as well as by
+ * you. Inside ONE workspace that is tolerable and is the shipped behaviour: you
+ * already know where you are, the list is your current context, and a chat that
+ * is producing output is at least a chat that is doing something.
+ *
+ * ACROSS all workspaces it stops being tolerable, because there the order is
+ * the whole surface. Measured on the live cockpit while this was written: 6 of
+ * 58 chats were `working` and they held 6 of the global top 7, all under a
+ * minute old, none of them anything the user had done. A list whose top is
+ * "whichever agent printed a line most recently" is a churn feed, not a way
+ * back to what you were doing — and migration v27 had already written the
+ * sentence for a different column: *"a chat left tailing a log would be
+ * immortal"*.
+ *
+ * So the global list reads `last_user_at`: stamped by tab CREATION and by the
+ * acts that restart the decay clock (a message you sent, an unarchive), and by
+ * nothing the machine does on its own. See migrations v33.
+ *
+ * ── THE FALLBACK IS WIRE COMPAT, NOT A SECOND POLICY ─────────────────────────
+ * `last_user_at` is NOT NULL on every row a current server publishes, including
+ * rows that predate it (v33 backfills them). `undefined` here therefore means
+ * exactly one thing — an OLDER server that has no such column — and falling
+ * back to `last_activity_at` degrades that client to today's ordering rather
+ * than to no ordering at all. It is not a tier the current product ever enters.
+ */
+export function userTouchAt(t: SortableTab): number | null {
+  return t.last_user_at ?? t.last_activity_at ?? null;
 }
 
 /** "This tab wants you NOW" — the one condition still worth reordering for.
@@ -60,6 +94,39 @@ export function compareUnpinnedTabs(
   // the client's last published indices: status/recency can reorder them.
   // IDs give both sides the same total order, even when a push creates a tie.
   // The optional legacy argument is ignored; pinned manual order is separate.
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
+ * The GLOBAL list's order — the same shape as {@link compareUnpinnedTabs} with
+ * the recency key swapped for {@link userTouchAt}.
+ *
+ * Deliberately a SECOND comparator rather than a change to the first. The two
+ * lists answer different questions and the codebase already has the bug class
+ * where one value gets two meanings:
+ *
+ *   per workspace  "what is going on in here" — you chose the workspace, so
+ *                  the machine's activity is signal. Unchanged, and every
+ *                  surface that reads the server's published order (the tree,
+ *                  the sheet's picked list, quick-switch numbering, the search
+ *                  ranking) keeps exactly the order it has today.
+ *   globally       "what was I doing" — you chose nothing, so only YOUR acts
+ *                  can rank 58 chats across three workspaces.
+ *
+ * The attention partition is IDENTICAL and is kept on purpose: `blocked` is the
+ * one bit the mobile rail still draws per row, and a global list that buried a
+ * chat waiting on you would be a regression in the surface's one loud signal.
+ * Only the recency key below it moves.
+ */
+export function compareByUserTouch(a: SortableTab, b: SortableTab): number {
+  const attn = Number(tabWantsYou(b)) - Number(tabWantsYou(a));
+  if (attn !== 0) return attn;
+  // Nulls last, NaN-guarded — the same reasoning as compareUnpinnedTabs, and
+  // for the same reason: (-Inf) - (-Inf) is NaN, which makes a comparator
+  // inconsistent and its sort implementation-defined.
+  const at =
+    (userTouchAt(b) ?? Number.NEGATIVE_INFINITY) - (userTouchAt(a) ?? Number.NEGATIVE_INFINITY);
+  if (at !== 0 && !Number.isNaN(at)) return at < 0 ? -1 : 1;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 

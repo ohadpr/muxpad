@@ -802,3 +802,69 @@ describe('noteUserMessage — recency AND the decay clock', () => {
     expect(notified).toEqual([]);
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// `last_user_at` — the key the GLOBAL (cross-workspace) list is ordered on.
+// Everything above this line is about `last_activity_at`, which measures the
+// terminal; this is the column that measures YOU, and the only thing worth
+// testing about it is what does NOT move it.
+// ──────────────────────────────────────────────────────────────────────────
+describe('last_user_at — a key the machine cannot move', () => {
+  const userAt = (db: ReturnType<typeof openDb>, id: string) =>
+    (
+      db.prepare('SELECT last_user_at FROM tabs WHERE id = ?').get(id) as {
+        last_user_at: number | null;
+      }
+    ).last_user_at;
+
+  it('is stamped at creation — a chat you just made IS the thing you last did', () => {
+    const f = fixture();
+    const before = Date.now();
+    const t = f.tabs.create({ name: 'fresh', layout: '', workspace_id: f.ws.id });
+    const at = userAt(f.db, t.id) as number;
+    expect(at).toBeGreaterThanOrEqual(before);
+    // …and it is on the wire, unconditionally, or a client cannot order by it.
+    expect(t.last_user_at).toBe(at);
+    expect(f.tabs.getById(t.id)?.last_user_at).toBe(at);
+  });
+
+  it('moves on a message the user sends', () => {
+    const f = fixture();
+    const a = new TabActivity(f.db);
+    a.noteUserMessage(f.tab.id, 9_000_000);
+    expect(userAt(f.db, f.tab.id)).toBe(9_000_000);
+  });
+
+  it('does NOT move for output, keystrokes or a turn finishing', () => {
+    // THE test. `last_activity_at` moves for all three — that is its job — and
+    // this column must not, or the global list becomes the churn feed the
+    // whole key exists to avoid. A chat left tailing a log must stay exactly
+    // where the user left it.
+    const f = fixture();
+    const a = new TabActivity(f.db, { bootGraceMs: 0 });
+    a.noteUserMessage(f.tab.id, 1_000_000);
+    a.touchTab(f.tab.id, { source: 'output', at: 2_000_000 });
+    a.touchTab(f.tab.id, { at: 3_000_000 }); // keystrokes in the terminal
+    a.touchPane(f.pane.id, { force: true, at: 4_000_000 }); // turn-done
+    expect(userAt(f.db, f.tab.id)).toBe(1_000_000);
+    // The other column tracked all of it, which is what makes them two columns.
+    expect(f.read(f.tab.id)).toBe(4_000_000);
+  });
+
+  it('does NOT move when a deleted parent promotes an orphan', () => {
+    // `delete()` starts a promoted sub-chat's clock, and that is the one place
+    // a clock moves without the user doing anything. It writes the column
+    // directly rather than through resetClock for exactly this reason.
+    const f = fixture();
+    const parent = f.tabs.create({ name: 'p', layout: '', workspace_id: f.ws.id });
+    const child = f.tabs.create({
+      name: 'c',
+      layout: '',
+      workspace_id: f.ws.id,
+      spawned_by: parent.id,
+    });
+    const born = userAt(f.db, child.id);
+    f.tabs.delete(parent.id, Date.now() + 60_000);
+    expect(userAt(f.db, child.id)).toBe(born);
+  });
+});

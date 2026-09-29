@@ -3,6 +3,7 @@ import {
   pruneLayout,
   randomTabIcon,
   splitLeadingEmoji,
+  staggeredClockOffset,
   staggeredClockStart,
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
@@ -864,6 +865,116 @@ const MIGRATIONS: Migration[] = [
       );
       CREATE INDEX spawn_rounds_tab ON spawn_rounds(tab_id, started_at);
     `,
+  },
+  {
+    // WHEN THE USER LAST TOUCHED THIS CHAT — the key a GLOBAL recency list can
+    // be ordered on, which `last_activity_at` is not.
+    //
+    //   tabs.last_user_at — epoch ms of the last act by the USER on this chat:
+    //     its creation, a message sent into it, or an unarchive. NOT NULL from
+    //     here on. Nothing the machine does moves it — not pty output, not a
+    //     turn finishing, not an agent writing into the pane.
+    //
+    // ── WHY A FOURTH TIMESTAMP ───────────────────────────────────────────────
+    // The sidebar can now be ordered as ONE flat list across every workspace,
+    // and that turns the ordering key from a convenience into the product.
+    // `last_activity_at` is bumped by sampled pty OUTPUT, which inside one
+    // workspace is tolerable (you picked the workspace; the list is your
+    // current context) and globally is not: measured on the live database while
+    // this was written, 6 of 58 chats were `working` and held 6 of the global
+    // top 7 — all under a minute old, none of them anything the user did. v27
+    // had already written the sentence, about the same column, for the clock:
+    // "a chat left tailing a log would be immortal".
+    //
+    // ── WHY NOT REUSE clock_started_at, WHICH MEANS ALMOST EXACTLY THIS ──────
+    // Because it carries v27's backfill, and that backfill is deliberately NOT
+    // a user-touch time: it is `boot + hash(id)` (`staggeredClockStart`), which
+    // on the live database leaves 4 rows stamped in the FUTURE and 35 rows
+    // ordered by an id hash. An untouched chat sorting ABOVE everything you
+    // actually did — because its hash happens to be large — is strictly worse
+    // than the noisy key it was meant to replace.
+    //
+    // Nor may that column be corrected in place. Its OTHER reader is the decay
+    // clock the user watches count down on every chip, and v27 says why a
+    // re-stamp is off the table: "a restore must not re-deal every surviving
+    // chat a different death date than the one the user has been watching".
+    // Correcting the sort would silently move 35 expiry dates. So: a second
+    // column, with one writer, and v27's column left exactly as it is.
+    //
+    // ── THE BACKFILL: THE SYNTHETIC CLOCKS IDENTIFY THEMSELVES ───────────────
+    // v27 stamped every row it touched at `boot + staggeredClockOffset(id)` for
+    // ONE boot instant. Subtracting that offset therefore maps every row it
+    // backfilled — and only those — back onto that single shared value, while a
+    // clock a real message has since reset lands on some unrelated instant. The
+    // population is recoverable exactly, with no stored flag, because the offset
+    // was already required to be a pure function of the id.
+    //
+    // So: take the most common `clock_started_at - offset(id)` across the table.
+    // With ≥ 2 rows agreeing, that value is v27's boot and every row at it is
+    // UNTOUCHED — its clock says nothing about the user and is discarded. Every
+    // other row's clock IS a user act (a send, or an unarchive, both of which go
+    // through TabStore.resetClock) and is kept.
+    //
+    //   last_user_at = MAX(created_at, clock_started_at)  for a touched row
+    //                = created_at                         for an untouched one
+    //
+    // `created_at` is the floor in both arms and is itself a genuine user touch
+    // — somebody made this chat — so an untouched chat is not guessed at, it is
+    // ranked by the last thing about it anyone can actually vouch for. It sinks
+    // below everything you have messaged since, which is where it belongs, and
+    // it can never be in the future.
+    //
+    // Verified against the live 85-tab database before it was written: one
+    // candidate boot with 35 rows, every runner-up with exactly 1, and all 4 of
+    // the future-stamped clocks inside the 35. 50 rows kept a real user send.
+    //
+    // ── HOW IT DEGRADES, IN BOTH DIRECTIONS ──────────────────────────────────
+    // Fewer than 2 rows agree (a small or heavily-used install where v27 left
+    // nothing untouched): no population to discard, every clock is read as real.
+    // A row whose clock happens to collide with the boot value is read as
+    // untouched and falls back to `created_at` — one row, one rank, no lie.
+    // Both errors cost a position in a list; neither can produce a timestamp
+    // nobody earned, which is the failure v27's backfill actually shipped.
+    //
+    // A guard the arithmetic does not need but the data does: a kept clock is
+    // clamped to the migration instant. It cannot be in the future by
+    // construction (only the discarded population is), and clamping means a
+    // clock-skewed row cannot outrank the present anyway.
+    version: 33,
+    sql: 'ALTER TABLE tabs ADD COLUMN last_user_at INTEGER;',
+    apply: (db) => {
+      const now = Date.now();
+      const rows = db
+        .prepare('SELECT id, created_at, clock_started_at FROM tabs WHERE last_user_at IS NULL')
+        .all() as Array<{ id: string; created_at: number; clock_started_at: number | null }>;
+
+      // The mode of `clock_started_at - offset(id)` — v27's boot, if it is
+      // still legible in this table.
+      const tally = new Map<number, number>();
+      for (const r of rows) {
+        if (r.clock_started_at === null) continue;
+        const boot = r.clock_started_at - staggeredClockOffset(r.id);
+        tally.set(boot, (tally.get(boot) ?? 0) + 1);
+      }
+      let syntheticBoot: number | null = null;
+      let best = 1; // ≥ 2 to count: one row agreeing with itself is not a population
+      for (const [boot, n] of tally) {
+        if (n > best) {
+          best = n;
+          syntheticBoot = boot;
+        }
+      }
+
+      const update = db.prepare('UPDATE tabs SET last_user_at = ? WHERE id = ?');
+      for (const r of rows) {
+        const synthetic =
+          r.clock_started_at === null ||
+          (syntheticBoot !== null &&
+            r.clock_started_at - staggeredClockOffset(r.id) === syntheticBoot);
+        const touched = synthetic ? r.created_at : Math.min(r.clock_started_at as number, now);
+        update.run(Math.max(r.created_at, touched), r.id);
+      }
+    },
   },
 ];
 

@@ -154,6 +154,26 @@ export const CHAT_STAGGER_MS = CHAT_STAGGER_DAYS * DAY_MS;
  * timestamp prefix, so the hash must mix the whole string; FNV-1a does.
  */
 export function staggeredClockStart(id: string, boot: number): number {
+  return boot + staggeredClockOffset(id);
+}
+
+/**
+ * The offset alone — `staggeredClockStart(id, boot) - boot`.
+ *
+ * Split out for ONE caller and it is worth naming why, because the caller is a
+ * later migration reading this one's handwriting. v33 has to tell a
+ * `clock_started_at` a USER set (a real message; the thing a recency order
+ * wants) from one this backfill invented (an id hash; the thing that would put
+ * an untouched chat at the top of a list, sometimes at a time in the future).
+ * Subtracting this offset turns every backfilled row's clock back into the ONE
+ * boot instant they were all stamped from — so they identify themselves as a
+ * population, exactly, with no stored flag and no guessing.
+ *
+ * That only works while this is a pure function of the id, which it already had
+ * to be (see above). The migration is therefore reading a property this
+ * function already guaranteed, not asking it for a new one.
+ */
+export function staggeredClockOffset(id: string): number {
   let hash = 0x811c9dc5;
   for (let i = 0; i < id.length; i++) {
     hash ^= id.charCodeAt(i);
@@ -161,5 +181,5 @@ export function staggeredClockStart(id: string, boot: number): number {
     // multiply that plain `*` would lose precision on.
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
-  return boot + Math.floor((hash / 0x1_0000_0000) * CHAT_STAGGER_MS);
+  return Math.floor((hash / 0x1_0000_0000) * CHAT_STAGGER_MS);
 }
