@@ -46,7 +46,7 @@ function tab(id: string): Tab {
     updated_at: NOW,
     layout: { type: 'pane', id: `${id}-p` },
     done: false,
-  } as Tab;
+  } as unknown as Tab;
 }
 
 const CORPUS = [
