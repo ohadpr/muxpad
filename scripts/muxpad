@@ -1568,9 +1568,24 @@ cmd_claude() {
 printable_base() {
   local base="${MUXPAD_API_URL%/}"
   base="${base/0.0.0.0/127.0.0.1}"
-  if [ -n "${MUXPAD_PUBLIC_BASE_URL:-}" ]; then
-    printf '%s' "${MUXPAD_PUBLIC_BASE_URL%/}"; return
-  fi
+  # MUXPAD_PUBLIC_BASE_URL IS DELIBERATELY NOT CONSULTED HERE, and used to be.
+  #
+  # It is the ARTIFACT origin — config.ts: "the origin published artifact links
+  # are built from" — and this function builds the COCKPIT url, the
+  # `<base>/w/<ws>/t/<tab>` that `muxpad agent new` prints. Those are two
+  # different hosts on purpose. The artifact server is :7778: loopback-bound,
+  # serving nothing but `/<slug>/`, and the one intended to face the internet.
+  # The cockpit is :7777, it has NO authentication whatsoever, and its entire
+  # security model is being reachable only from the tailnet.
+  #
+  # So borrowing the artifact origin was wrong twice over: the printed link
+  # 404s (the public server has no `/w/...` route), and it puts a private,
+  # unauthenticated surface behind a name chosen to be public — the wrong
+  # direction to get confused in. The cockpit base is the tailnet name, which
+  # the rest of this function already works out; `candidates()` in
+  # public-base.ts still offers the persisted *.ts.net url when `env` is set,
+  # so nothing is lost by not looking here.
+  #
   # Ask the SERVER for a hostname it already knows, rather than executing the
   # Tailscale binary inside /Applications/Tailscale.app. Reaching into another
   # app's bundle is what makes macOS put up "node would like to access data

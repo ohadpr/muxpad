@@ -96,6 +96,41 @@ describe('the shell CLI agrees with the helper', () => {
     expect(stdout.trim()).toBe('http://127.0.0.1:59999');
   });
 
+  /**
+   * THE COCKPIT BASE IS NOT THE ARTIFACT BASE.
+   *
+   * `MUXPAD_PUBLIC_BASE_URL` is documented in exactly one way — config.ts, "the
+   * origin published artifact links are built from" — and `printable_base`
+   * builds something else entirely: the COCKPIT url, `<base>/w/<ws>/t/<tab>`,
+   * printed by `muxpad agent new`.
+   *
+   * The two are deliberately different hosts and must stay that way. The
+   * artifact server (:7778, loopback, serves only `/<slug>/`) is the one meant
+   * to be on the public internet; the cockpit (:7777) has NO authentication at
+   * all — its whole security model is being tailnet-only, and its api hands out
+   * the pane list and a shell. So reading the artifact origin here did two
+   * wrong things at once: printed agent links that 404 (no `/w/...` route
+   * exists on the public server), and advertised the private surface under the
+   * public hostname.
+   *
+   * Latent until someone sets the variable, which is precisely the migration
+   * that makes artifact links permanent — so it would have fired on the day the
+   * URLs finally stopped rotating.
+   */
+  it('does NOT build the cockpit url from the artifact base', async () => {
+    const { stdout } = await execFileAsync(MUXPAD_BIN, ['_printable-base'], {
+      env: {
+        ...process.env,
+        // Unreachable on purpose: it empties the candidate list, so the only
+        // ways out are the artifact origin (the bug) or this url (correct).
+        MUXPAD_API_URL: 'http://127.0.0.1:59999',
+        MUXPAD_PUBLIC_BASE_URL: 'https://artifacts.example.com',
+      },
+      encoding: 'utf-8',
+    });
+    expect(stdout.trim()).toBe('http://127.0.0.1:59999');
+  });
+
   // THE WHOLE POINT. Tailscale is a Mac App Store install, so the only binary
   // is inside the sandboxed bundle and touching it always prompts. The CLI must
   // therefore work out the tailnet name the way tailnet-hostname.ts does —
