@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { type IncomingMessage, type ServerResponse, createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -183,6 +183,29 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     if (emulation.metrics) await cdp.send('Emulation.setDeviceMetricsOverride', emulation.metrics);
     else await cdp.send('Emulation.clearDeviceMetricsOverride');
   };
+  /**
+   * Everything a CDP session has to be told, in one place.
+   *
+   * All of it is per-SESSION, and the session is replaced whenever the page
+   * target is swapped — which happens on its own, for reasons nothing to do with
+   * the person. Applied once at startup, each of these silently stopped being
+   * true the first time that happened:
+   *
+   *   · file-chooser interception — uploads then do nothing at all, because the
+   *     chooser is never intercepted and the viewer is never told to offer one.
+   *     Measured: broken on a re-attached host, perfect on a freshly started one.
+   *   · the phone layout — the page quietly reverts to 1280px mid-handoff.
+   *
+   * Called after every attach, so "what a session needs" is a list rather than a
+   * thing you remember.
+   */
+  const applySessionState = async () => {
+    await cdp.send('Page.setInterceptFileChooserDialog', { enabled: true });
+    await applyEmulation();
+    await cdp.send('Emulation.setTouchEmulationEnabled', emulation.touch);
+    await cdp.send('Emulation.setUserAgentOverride', emulation.userAgent ?? { userAgent: '' });
+  };
+
   const screencast = new ScreencastSession(cdp, {
     kick: async () => {
       // One pixel taller than whatever is currently in force, then back — a
@@ -234,7 +257,7 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     }
   }
 
-  await cdp.send('Page.setInterceptFileChooserDialog', { enabled: true });
+  await applySessionState();
   await screencast.start();
 
   const http = createServer((req, res) => void handleHttp(req, res));
@@ -272,6 +295,8 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
       if (moved) {
         log(`[host] re-attached to ${moved.url}`);
         currentUrl = moved.url;
+        // The new session knows none of what the old one was told.
+        await applySessionState();
         await screencast.start();
         // Everyone watching is looking at an address that is no longer the one
         // on screen.
@@ -565,8 +590,14 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
         // The page chose when to ask and the name rides a header, so basename
         // it — it must not be able to climb out of the temp dir.
         const raw = String(req.headers['x-filename'] ?? 'upload.bin');
-        const safe = raw.replace(/[/\\]/g, '_').slice(-120);
-        const file = join(tmpdir(), `muxpad-handoff-${safe}`);
+        const safe = raw.replace(/[/\\]/g, '_').slice(-120) || 'upload.bin';
+        // THE PAGE SEES THIS NAME. Prefixing the file made a photo arrive as
+        // "muxpad-handoff-IMG_0421.jpg" — measured — which is our plumbing
+        // written into somebody's upload, and a name a site is entitled to
+        // validate. The uniqueness goes in a directory instead, where the page
+        // never looks.
+        const dir = mkdtempSync(join(tmpdir(), 'muxpad-handoff-'));
+        const file = join(dir, safe);
         writeFileSync(file, Buffer.concat(chunks));
         await cdp.send('DOM.setFileInputFiles', {
           files: [file],
