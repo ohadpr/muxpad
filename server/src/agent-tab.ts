@@ -16,6 +16,7 @@ import {
 import type Database from 'better-sqlite3';
 import type { EventBus } from './events.js';
 import { queuePaneKill } from './pane-reaper.js';
+import { clearProvisionError, provisionPane } from './pane-provision.js';
 import { agentCwd } from './project-root.js';
 import { type PtydCache, decoratePane, decorateTab } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
@@ -201,31 +202,44 @@ export async function bootstrapTab(
       tab_id: created.tab.id,
       pane: decoratePane(deps.cache, created.pane, deps.db),
     });
-    // Eager spawn: an agent tab created from a phone (or by the cron tick,
-    // with no browser anywhere) starts its runner immediately.
+    // ─── PROVISIONING IS PART OF CREATING ──────────────────────────────────
+    // An agent tab created from a phone (or by the cron tick, with no browser
+    // anywhere) starts its runner immediately — and for a CHAT-face pane that
+    // is the only thing that ever will. Its client attaches to /ws/chat, never
+    // to the pty, so there is no lazy-spawn fallback behind this the way there
+    // is for a terminal.
     //
-    // STARTED eagerly, WAITED FOR only briefly — see EAGER_SPAWN_WAIT_MS. The
-    // spawn keeps running past the cap; we simply stop holding the response
-    // hostage to it.
-    const spawning = deps.ptyd
-      .ensurePane({
-        id: created.pane.id,
-        shell: created.pane.shell ?? process.env.SHELL ?? '/bin/zsh',
-        startup_cmd: created.pane.startup_cmd,
-        cwd: safeCwd(created.pane.cwd),
-        env: created.pane.env,
-        tab_id: created.tab.id,
-        workspace_id: input.workspace_id,
-      })
-      .catch(() => {
-        // ptyd unreachable: the rows are committed; the runtime spawns lazily
-        // when a client attaches and ptyd reconnects. Caught HERE rather than
-        // by the caller because nobody is necessarily awaiting this any more,
-        // and an unhandled rejection would take the server down.
-      });
-    // Published for deleteTabCascade — see inFlightSpawns. Cleared on settle,
-    // so a pane that is never deleted leaves nothing behind.
+    // This used to be one `ensurePane` inside a bare `.catch(() => {})` whose
+    // comment claimed the runtime would "spawn lazily when a client attaches".
+    // For this pane it would not, and the result was the user's top complaint:
+    // a new chat with correct rows, a correct startup_cmd, and no process,
+    // showing the neutral "This chat has no agent yet" — a sentence about a
+    // steady state, printed over a silent failure two seconds old.
+    //
+    // provisionPane RETRIES (the real failures — `ptyd disconnected` mid-blip,
+    // `posix_spawnp failed` on a full process table — are transient) and
+    // records the reason if it never lands, which is what the chat then shows
+    // instead of the neutral screen. See server/src/pane-provision.ts.
+    //
+    // STARTED eagerly, WAITED FOR only briefly — see EAGER_SPAWN_WAIT_MS. We
+    // race the FIRST attempt against the cap; the ladder runs long past the
+    // response, which is what keeps `POST /api/tabs` as fast as 22688ec made it.
+    const provisioning = provisionPane(deps, {
+      id: created.pane.id,
+      shell: created.pane.shell ?? process.env.SHELL ?? '/bin/zsh',
+      startup_cmd: created.pane.startup_cmd,
+      cwd: safeCwd(created.pane.cwd),
+      env: created.pane.env,
+      tab_id: created.tab.id,
+      workspace_id: input.workspace_id,
+    });
+    // Published for deleteTabCascade — see inFlightSpawns. The WHOLE ladder, not
+    // the first attempt: the chaser has to fire after the last thing that could
+    // hand ptyd a pty, or a delete that beats attempt 3 leaks exactly the runner
+    // inFlightSpawns exists to catch. Cleared on settle, so a pane that is never
+    // deleted leaves nothing behind.
     const paneId = created.pane.id;
+    const spawning = provisioning.settled;
     inFlightSpawns.set(paneId, spawning);
     void spawning.finally(() => {
       // Only if we are still the spawn of record: a respawn/recreate for the
@@ -234,7 +248,7 @@ export async function bootstrapTab(
     });
     let cap: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
-      spawning,
+      provisioning.first,
       new Promise<void>((resolve) => {
         cap = setTimeout(resolve, EAGER_SPAWN_WAIT_MS);
       }),
@@ -286,6 +300,11 @@ export async function deleteTabCascade(
   for (const p of doomed) {
     deps.cache.forget(p.id);
     deps.tabActivity?.forgetPane(p.id);
+    // A recorded provisioning failure must not outlive the pane it was about.
+    // Ids are ULIDs so nothing can reuse one, but the registry is process-lived
+    // and this is the only place a pane stops existing — leaving the entry is a
+    // small permanent leak for every chat that failed and was thrown away.
+    clearProvisionError(p.id);
   }
   deps.tabActivity?.forget(tabId);
   if (workspaceId) {

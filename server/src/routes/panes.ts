@@ -19,6 +19,12 @@ import { agentStartupCmd } from '../agent-tab.js';
 import { agentPaneHasMessages } from '../chat/has-messages.js';
 import type { EventBus } from '../events.js';
 import { queuePaneKill } from '../pane-reaper.js';
+import {
+  announceProvision,
+  clearProvisionError,
+  provisionPane,
+  setProvisionError,
+} from '../pane-provision.js';
 import { agentCwd, hasProjectContext } from '../project-root.js';
 import { type PtydCache, decoratePane, decorateTab } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
@@ -361,21 +367,27 @@ export function panesTabScopedRoutes(deps: {
     // Eager spawn: otherwise the PTY only starts when the frontend mounts
     // the XtermPane (i.e. when the user navigates to its tab). A CLI-created
     // pane with --cmd would sit idle until then. Same spec shape as ws.ts.
+    //
+    // Through provisionPane, exactly as bootstrapTab's is, because THIS route
+    // makes chat panes too — HOUSE_CHAT_PANE_CREATE splits a new Chat into an
+    // existing tab — and a chat-face pane has no lazy-spawn fallback: its client
+    // attaches to /ws/chat, never to the pty. The old bare `catch {}` here was
+    // the same silent death as the one on the tab path. A terminal pane loses
+    // nothing by going through it either; it gains the retry.
     const workspaceId = tabs.getWorkspaceId(tabId);
-    try {
-      await deps.ptyd.ensurePane({
-        id: pane.id,
-        shell: pane.shell ?? defaultShell,
-        startup_cmd: pane.startup_cmd,
-        cwd: safeCwd(pane.cwd),
-        env: pane.env,
-        tab_id: tabId,
-        workspace_id: workspaceId,
-      });
-    } catch {
-      // ptyd unreachable: the pane row is committed; the runtime will be
-      // created lazily when a client attaches and ptyd reconnects.
-    }
+    const provisioning = provisionPane(deps, {
+      id: pane.id,
+      shell: pane.shell ?? defaultShell,
+      startup_cmd: pane.startup_cmd,
+      cwd: safeCwd(pane.cwd),
+      env: pane.env,
+      tab_id: tabId,
+      workspace_id: workspaceId,
+    });
+    // The FIRST attempt only — same trade as the tab path: this route is on the
+    // client's create path, the retries are not worth holding it open for, and
+    // `settled` is a promise nobody has to hold (it cannot reject).
+    await provisioning.first;
     return c.json(pane, 201);
   });
 
@@ -722,11 +734,20 @@ export function panesScopedRoutes(deps: {
         ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
       });
     } catch (err) {
-      return c.json(
-        { error: { code: 'ptyd_unavailable', message: whyNot('respawn pane', err) } },
-        503,
-      );
+      // A respawn is a USER-INITIATED retry, so it answers straight away rather
+      // than starting a ladder underneath their finger — but the verdict is
+      // recorded all the same. Without this, tapping "Start agent" on a chat
+      // whose provisioning had failed and failing again would CLEAR the reason
+      // from the row (the button owns its own local error string, the row does
+      // not), so a reload came back to the neutral "no agent yet" and the
+      // diagnosis was lost.
+      const why = whyNot('respawn pane', err);
+      setProvisionError(id, { error: why, at: Date.now(), attempts: 1 });
+      announceProvision(deps, id);
+      return c.json({ error: { code: 'ptyd_unavailable', message: why } }, 503);
     }
+    // It started. Whatever we thought was wrong is not wrong any more.
+    if (clearProvisionError(id)) announceProvision(deps, id);
     return c.body(null, 204);
   });
 
