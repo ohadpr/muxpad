@@ -89,6 +89,29 @@ describe('insertTabRow — the row the create call already answered with', () =>
   // applyTabUnread all already use. Left uncovered deliberately rather than
   // covered by a stand-in that proves something else.
 
+  it('takes the UNDECORATED row the create response actually returns', async () => {
+    // What `POST /api/tabs` answers with is the raw row plus workspace_id — no
+    // `status`, no `agents`, no `clock`, none of the rollup `decorateTab` adds
+    // to the GET. So the row spliced here is a different shape from its
+    // neighbours for the one round trip before the push replaces them all, and
+    // it has to sort and survive in that state rather than throw on a missing
+    // field. (All three are `.optional()` on the wire type, and the
+    // comparators are null-guarded — this pins that it stays true.)
+    await refreshTabs(WS);
+    const raw = {
+      id: 't3',
+      slug: 't3',
+      name: 'New chat',
+      layout: 'p',
+      created_at: 9,
+      updated_at: 9,
+    };
+    insertTabRow(WS, raw as unknown as Tab);
+    const list = cachedTabsFor(WS);
+    expect(list.map((t) => t.id)).toContain('t3');
+    expect(list).toHaveLength(3);
+  });
+
   it('is idempotent when the tab.added push gets there first', async () => {
     await refreshTabs(WS);
     insertTabRow(WS, tab('t3'));
