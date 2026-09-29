@@ -33,7 +33,7 @@ import { useFrozenTabOrder } from '../lib/tab-freeze';
 import { tabRowActions } from '../lib/tab-row-actions';
 import { useAllChats } from '../lib/use-all-chats';
 import { useDismissable } from '../lib/use-dismissable';
-import { applyTabOrder, refreshTabs, useTabs } from '../tabs';
+import { applyTabOrder, insertTabRow, refreshTabs, useTabs } from '../tabs';
 import { useLongPress } from '../use-long-press';
 import { MAX_QUICK_SWITCH_TABS, useTabQuickSwitch } from '../use-tab-quickswitch';
 import {
@@ -453,6 +453,13 @@ function SidebarTree({
       // disagree about what a new thing is.
       const w = await api.createWorkspace();
       const t = await api.createTab(w.id, { ...HOUSE_CHAT_CREATE });
+      // THIS await STAYS, unlike the one createHouseTab dropped. The route we
+      // are about to navigate to resolves `wsSlug` out of the workspaces cache,
+      // and a workspace created this instant is in no cache anywhere — there is
+      // no `insertTabRow` equivalent to lean on, so the list has to land first.
+      // It is ~30ms against two creates that precede it, and the seconds this
+      // path used to cost were never here: they were the pty spawn inside the
+      // second create (EAGER_SPAWN_WAIT_MS).
       await refreshWorkspaces();
       onNavigate?.();
       void navigate({ to: '/w/$wsSlug/t/$tabSlug', params: { wsSlug: w.slug, tabSlug: t.slug } });
@@ -463,13 +470,6 @@ function SidebarTree({
     }
   };
 
-  return (
-    <nav className="navtree" data-variant={variant} aria-label="Workspaces and tabs">
-      {/* The box owns `.navtree-scroll` (it swaps the tree for its results
-          while it has a query), so it renders a fragment and the scroller
-          stays a direct flex child of this nav. */}
-      <NavSearch variant={variant} onNavigate={onNavigate}>
-        <NavViewSwitch view={view} onSwitch={setView} />
   /** The workspace the GROUPED view is about — the one you are in. */
   const activeWorkspace = workspaces.find((w) => w.slug === activeWorkspaceSlug);
 
@@ -486,27 +486,12 @@ function SidebarTree({
     }
   };
 
-        {picking && view === 'recent' ? (
-          <WorkspacePickList
-            purpose="create"
-            workspaces={workspaces}
-            // SHOWN, not assumed: the workspace you are in is a sensible
-            // default and it is marked as one, but the chat goes where you
-            // click, and the click is what names the destination.
-            shownId={activeWorkspace?.id ?? null}
-            recent={false}
-            editing={editing}
-            setEditing={setEditing}
-            onPick={(w) => void createTab(w)}
-            onDismiss={() => setPicking(false)}
-            onNavigate={onNavigate}
-          />
-        ) : view === 'recent' ? (
-          <RecentList
-            activeWorkspaceSlug={activeWorkspaceSlug}
-            activeTabSlug={activeTabSlug}
-            variant={variant}
-            editing={editing}
+  return (
+    <nav className="navtree" data-variant={variant} aria-label="Workspaces and tabs">
+      {/* The box owns `.navtree-scroll` (it swaps the tree for its results
+          while it has a query), so it renders a fragment and the scroller
+          stays a direct flex child of this nav. */}
+      <NavSearch variant={variant} onNavigate={onNavigate}>
         {/* ─── THE create action, and it is the FIRST thing in the scroller ──
             It used to be one button per workspace, at the BOTTOM of that
             workspace's tab list. Two things were wrong with that. It scrolled:
@@ -548,6 +533,28 @@ function SidebarTree({
             if (activeWorkspace) void createTab(activeWorkspace);
           }}
         />
+        <NavViewSwitch view={view} onSwitch={setView} />
+        {picking && view === 'recent' ? (
+          <WorkspacePickList
+            purpose="create"
+            workspaces={workspaces}
+            // SHOWN, not assumed: the workspace you are in is a sensible
+            // default and it is marked as one, but the chat goes where you
+            // click, and the click is what names the destination.
+            shownId={activeWorkspace?.id ?? null}
+            recent={false}
+            editing={editing}
+            setEditing={setEditing}
+            onPick={(w) => void createTab(w)}
+            onDismiss={() => setPicking(false)}
+            onNavigate={onNavigate}
+          />
+        ) : view === 'recent' ? (
+          <RecentList
+            activeWorkspaceSlug={activeWorkspaceSlug}
+            activeTabSlug={activeTabSlug}
+            variant={variant}
+            editing={editing}
             setEditing={setEditing}
             onNavigate={onNavigate}
           />
@@ -676,13 +683,36 @@ async function createHouseTab(
   // want to open?" screen — the alternatives live in the empty chat's own
   // "open instead:" strip, where they cost nothing until you want one.
   const t = await api.createTab(workspace.id, { ...HOUSE_CHAT_CREATE });
-  await refreshTabs(workspace.id);
-  await refreshWorkspaces();
+  // ─── ONE ROUND TRIP, THEN GO ───────────────────────────────────────────────
+  // This used to `await refreshTabs()` and `await refreshWorkspaces()` here,
+  // and only then navigate — so the sidebar's button sat in `Creating…` for
+  // the create PLUS two more round trips, and the user watched a disabled
+  // button instead of the thing they made. Both of those refreshes are already
+  // fired by main.tsx's `tab.added` handler, from the event the server emits
+  // during this very create; awaiting our own duplicates only moved the wait
+  // in front of the navigation.
+  //
+  // The create itself is now the only thing on the path, and the server no
+  // longer holds it open for the pty spawn (see EAGER_SPAWN_WAIT_MS). What the
+  // user waits for is one POST.
+  //
+  // The tab we just got back is spliced into the cache BEFORE navigating,
+  // because TabView resolves this slug through `freshTabs` and a
+  // still-fresh pre-create list would answer "tab not found" and bounce out of
+  // the new chat. See insertTabRow.
+  insertTabRow(workspace.id, t);
   onNavigate?.();
   void navigate({
     to: '/w/$wsSlug/t/$tabSlug',
     params: { wsSlug: workspace.slug, tabSlug: t.slug },
   });
+  // Reconciliation, off the critical path. The `tab.added` push normally gets
+  // here first and makes these no-ops; they are the fallback for a socket that
+  // is down, where otherwise the workspace rollup (tab_count, the corpus) would
+  // lag until the 5s poll. Deliberately not awaited and deliberately last: the
+  // user is already looking at the new chat.
+  void refreshTabs(workspace.id);
+  void refreshWorkspaces();
 }
 
 /**
@@ -935,40 +965,6 @@ function SheetRail({
  * selection, one trailing mark carrying the workspace's rolled-up state — so
  * the surface reads as the same list showing a different thing, not as a
  * second kind of navigator.
- */
-function WorkspacePickList({
-  purpose,
-  workspaces,
-  shownId,
-  recent,
-  editing,
-  setEditing,
-  onPick,
-  onPickRecent,
-  onNavigate,
-}: {
-  workspaces: Workspace[];
-  shownId: string | null;
-  /** Is the flat cross-workspace list the one currently shown? */
-  recent: boolean;
-  editing: Editing;
-  setEditing: (e: Editing) => void;
-  onPick: (w: Workspace) => void;
-  onPickRecent?: (() => void) | undefined;
-  /** Escape. Only the create surface is a detour you can cancel — the switch
-   *  surface has no "before" to go back to. */
-  onDismiss?: (() => void) | undefined;
-  onNavigate?: (() => void) | undefined;
-}) {
-  const navigate = useNavigate();
-  const [creating, setCreating] = useState(false);
-
-  const createWorkspace = async () => {
-    if (creating) return;
-    setCreating(true);
-    try {
-      // Bootstrap workspace + first Chat in one go so you land somewhere
-      // usable — identical to what the bar's "+" makes inside a workspace.
  *
  * It now answers a SECOND question, on BOTH surfaces, because "+ New tab" in
  * the flat view has to ask WHERE and this is already the list of answers. A
@@ -991,6 +987,46 @@ function WorkspacePickList({
  * The one row both keep is "+ New workspace": "somewhere new" is a legitimate
  * answer to "where", and it already makes the workspace AND its house chat in
  * one go — which is precisely what picking an existing one does.
+ */
+function WorkspacePickList({
+  purpose,
+  workspaces,
+  shownId,
+  recent,
+  editing,
+  setEditing,
+  onPick,
+  onPickRecent,
+  onDismiss,
+  onNavigate,
+}: {
+  purpose: 'switch' | 'create';
+  workspaces: Workspace[];
+  /** The row drawn as current. Under 'create' this is the DEFAULT, not a
+   *  choice already made: it is marked so the answer is on screen rather than
+   *  assumed, and it still takes a click. */
+  shownId: string | null;
+  /** Is the flat cross-workspace list the one currently shown? */
+  recent: boolean;
+  editing: Editing;
+  setEditing: (e: Editing) => void;
+  onPick: (w: Workspace) => void;
+  onPickRecent?: (() => void) | undefined;
+  /** Escape. Only the create surface is a detour you can cancel — the switch
+   *  surface has no "before" to go back to. */
+  onDismiss?: (() => void) | undefined;
+  onNavigate?: (() => void) | undefined;
+}) {
+  const navigate = useNavigate();
+  const [creating, setCreating] = useState(false);
+  const choosing = purpose === 'create';
+
+  const createWorkspace = async () => {
+    if (creating) return;
+    setCreating(true);
+    try {
+      // Bootstrap workspace + first Chat in one go so you land somewhere
+      // usable — identical to what the bar's "+" makes inside a workspace.
       const w = await api.createWorkspace();
       await createHouseTab(w, navigate, onNavigate);
     } catch (err) {
@@ -1000,14 +1036,9 @@ function WorkspacePickList({
     }
   };
 
-  onDismiss,
   const closeWorkspace = async (e: React.MouseEvent, w: Workspace) => {
     e.stopPropagation();
-  purpose: 'switch' | 'create';
     e.preventDefault();
-  /** The row drawn as current. Under 'create' this is the DEFAULT, not a
-   *  choice already made: it is marked so the answer is on screen rather than
-   *  assumed, and it still takes a click. */
     // No window.confirm: it is unreliable in an iOS PWA in standalone mode
     // (silently a no-op), which is exactly where this row lives.
     try {
@@ -1019,7 +1050,6 @@ function WorkspacePickList({
     }
   };
 
-  const choosing = purpose === 'create';
   return (
     // No focus trap and no tabIndex: this is a column of buttons in the
     // document flow, so Tab walks into it and Tab walks back out. Escape is
@@ -1067,6 +1097,7 @@ function WorkspacePickList({
         <WorkspacePickRow
           key={w.id}
           workspace={w}
+          choosing={choosing}
           isShown={w.id === shownId}
           isEditing={!choosing && editing?.kind === 'workspace' && editing.id === w.id}
           setEditing={setEditing}
@@ -1101,13 +1132,13 @@ function WorkspacePickList({
           </Link>
         </div>
       )}
-          choosing={choosing}
     </div>
   );
 }
 
 function WorkspacePickRow({
   workspace,
+  choosing,
   isShown,
   isEditing,
   setEditing,
@@ -1115,6 +1146,10 @@ function WorkspacePickRow({
   onClose,
 }: {
   workspace: Workspace;
+  /** Answering "where does the new chat go" rather than "show me that
+   *  workspace". Strips the row to a destination — no ×, no long-press
+   *  rename, no state mark; see the list's header for why each one goes. */
+  choosing: boolean;
   isShown: boolean;
   isEditing: boolean;
   setEditing: (e: Editing) => void;
@@ -1138,7 +1173,6 @@ function WorkspacePickRow({
               await api.patchWorkspace(workspace.id, { name });
             } catch (err) {
               console.error('rename workspace failed', err);
-  choosing,
             }
             await refreshWorkspaces();
           }}
@@ -1146,10 +1180,21 @@ function WorkspacePickRow({
         />
       </div>
     );
-  /** Answering "where does the new chat go" rather than "show me that
-   *  workspace". Strips the row to a destination — no ×, no long-press
-   *  rename, no state mark; see the list's header for why each one goes. */
-  choosing: boolean;
+  }
+  if (choosing) {
+    return (
+      <div className="navtree-wspick-row" data-active={isShown ? 'true' : undefined}>
+        <button type="button" className="navtree-wspick-name" onClick={onPick}>
+          <span className="navtree-name-text" dir="auto">
+            {workspace.name}
+          </span>
+        </button>
+        {/* The default is NAMED, not merely tinted. The band alone is the same
+            mark this list's other purpose uses for "you are here", and here it
+            has to survive being read at a glance, before a click. */}
+        {isShown ? <span className="navtree-wspick-note">default</span> : null}
+      </div>
+    );
   }
   return (
     <div
@@ -1181,21 +1226,6 @@ function WorkspacePickRow({
         onClick={onClose}
         title="Close workspace"
         aria-label={`Close workspace ${workspace.name}`}
-  if (choosing) {
-    return (
-      <div className="navtree-wspick-row" data-active={isShown ? 'true' : undefined}>
-        <button type="button" className="navtree-wspick-name" onClick={onPick}>
-          <span className="navtree-name-text" dir="auto">
-            {workspace.name}
-          </span>
-        </button>
-        {/* The default is NAMED, not merely tinted. The band alone is the same
-            mark this list's other purpose uses for "you are here", and here it
-            has to survive being read at a glance, before a click. */}
-        {isShown ? <span className="navtree-wspick-note">default</span> : null}
-      </div>
-    );
-  }
       >
         <SvgClose size={13} />
       </button>

@@ -77,9 +77,45 @@ export function agentStartupCmd(opts: {
 }
 
 /**
+ * How long a create request will wait for ptyd to acknowledge the eager spawn
+ * before answering anyway.
+ *
+ * WHY THERE IS A CAP AT ALL. ptyd's `ensurePane` RPC is nominally
+ * fire-and-forget — its handler calls `getOrCreate` and replies immediately —
+ * but `getOrCreate` ends in a SYNCHRONOUS `PaneRuntime.start()`, and the reply
+ * is written after it returns. So the acknowledgement is gated on a real pty
+ * fork on ptyd's single event loop, behind whatever else that loop is already
+ * doing for every other live pane. Measured on this machine, `POST /api/tabs`
+ * with an agent bootstrap: 0.03s idle, and 19.5s and 38.6s while ptyd was busy
+ * spawning. The same request with no bootstrap — rows only, no ptyd call — is
+ * 4–90ms throughout, which is where the seconds were.
+ *
+ * That wait bought the caller nothing. The result is discarded, the failure
+ * path is a swallowed catch, and the runtime is recoverable either way (a
+ * client attach re-ensures; ChatNoRunner offers "Start agent"). It was pure
+ * latency, and it was latency the WEB SIDEBAR sat in: the create button could
+ * not navigate until this resolved.
+ *
+ * WHY NOT ZERO. The common case is genuinely fast, and answering after it
+ * leaves the old guarantee intact — the pty exists by the time the client
+ * lands — which is what keeps ChatPane's 8s no-session grace measured against
+ * a live pty rather than against a queue. 250ms covers the idle case several
+ * times over and truncates the pathological one; it is a ceiling, not a delay,
+ * so an idle ptyd still returns in its own 30ms.
+ *
+ * NOT FIXABLE FROM HERE. The blocking spawn is ptyd's, and ptyd only picks up
+ * changes on a restart that kills every pane on the machine. This caps our
+ * exposure to it; it does not make ptyd faster.
+ */
+const EAGER_SPAWN_WAIT_MS = 250;
+
+/**
  * Create a tab (optionally with its bootstrapped pane), emit the events, and
  * eagerly spawn the pty. Rows commit in one transaction so a mid-request
  * failure can't leave a half-bootstrapped ghost tab.
+ *
+ * Resolves once the rows are committed and the events are out — NOT
+ * necessarily once the pty is up. See EAGER_SPAWN_WAIT_MS.
  */
 export async function bootstrapTab(
   deps: BootstrapTabDeps,
@@ -139,8 +175,12 @@ export async function bootstrapTab(
     });
     // Eager spawn: an agent tab created from a phone (or by the cron tick,
     // with no browser anywhere) starts its runner immediately.
-    try {
-      await deps.ptyd.ensurePane({
+    //
+    // STARTED eagerly, WAITED FOR only briefly — see EAGER_SPAWN_WAIT_MS. The
+    // spawn keeps running past the cap; we simply stop holding the response
+    // hostage to it.
+    const spawning = deps.ptyd
+      .ensurePane({
         id: created.pane.id,
         shell: created.pane.shell ?? process.env.SHELL ?? '/bin/zsh',
         startup_cmd: created.pane.startup_cmd,
@@ -148,11 +188,21 @@ export async function bootstrapTab(
         env: created.pane.env,
         tab_id: created.tab.id,
         workspace_id: input.workspace_id,
+      })
+      .catch(() => {
+        // ptyd unreachable: the rows are committed; the runtime spawns lazily
+        // when a client attaches and ptyd reconnects. Caught HERE rather than
+        // by the caller because nobody is necessarily awaiting this any more,
+        // and an unhandled rejection would take the server down.
       });
-    } catch {
-      // ptyd unreachable: the rows are committed; the runtime spawns lazily
-      // when a client attaches and ptyd reconnects.
-    }
+    let cap: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      spawning,
+      new Promise<void>((resolve) => {
+        cap = setTimeout(resolve, EAGER_SPAWN_WAIT_MS);
+      }),
+    ]);
+    clearTimeout(cap);
   }
   return created;
 }

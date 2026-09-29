@@ -96,6 +96,42 @@ export function cachedTabsFor(workspaceId: string): Tab[] {
 }
 
 /**
+ * Splice a tab the server has JUST CONFIRMED into its workspace's cache.
+ *
+ * This is not an optimistic row and it cannot leave a ghost: the only caller
+ * passes the body of a successful `POST /api/tabs`, so the row already exists
+ * server-side with the id and slug written here. A failed create throws before
+ * reaching this, and nothing is inserted.
+ *
+ * WHY IT IS NEEDED. Creating used to `await refreshTabs()` before navigating,
+ * so the list was guaranteed to contain the new tab by the time TabView looked
+ * for its slug. Navigating immediately removes that guarantee, and the gap is
+ * not benign: TabView resolves `tabSlug` through `freshTabs`, which serves the
+ * cache without a refetch while it is fresh (FRESH_MS) — and a list that
+ * landed a second before the create is fresh AND has no such slug in it. That
+ * is TabView's "tab not found" path, which bounces to the workspace root. The
+ * user would tap New chat and be thrown out of the chat they just made.
+ *
+ * So the cache is told directly rather than being raced for. `tab.added` still
+ * arrives over the socket and still drives the corpus and the workspace
+ * rollup — this only closes the one window that navigation reads
+ * synchronously. A no-op for a workspace with no cache slot: there is no stale
+ * list to correct, and `freshTabs` will fetch.
+ */
+export function insertTabRow(workspaceId: string, tab: Tab): void {
+  const list = caches.get(workspaceId);
+  if (!list) return;
+  if (list.some((t) => t.id === tab.id)) return; // the push beat us here
+  // Same version bump as applyTabRow / applyTabOrder: a refresh that started
+  // before this insert must not land after it and drop the row again.
+  versions.set(workspaceId, (versions.get(workspaceId) ?? 0) + 1);
+  const merged = sortSidebarTabs([...list, tab]);
+  caches.set(workspaceId, merged);
+  const subs = listenersByWs.get(workspaceId);
+  if (subs) for (const fn of subs) fn(merged);
+}
+
+/**
  * A tab list that is current "enough", without a guaranteed round trip.
  *
  * For callers that want to re-derive something from the server's list (e.g.
