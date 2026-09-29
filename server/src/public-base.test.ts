@@ -133,13 +133,35 @@ describe('precedence — configuration beats discovery', () => {
     expect(await r.resolve({ probe: true })).toMatchObject({ baseUrl: pinned, source: 'pinned' });
   });
 
-  it("the TUNNEL outranks the publish hint — the funnel's :8443 must not clobber it", async () => {
-    // This is the original bug in its new form: every publish sends the funnel
-    // url as a hint. A live, muxpad-owned tunnel on :443 must win.
+  /**
+   * CORRECTED, not accommodated. This asserted `baseUrl: TUNNEL` on the
+   * reasoning that a tunnel on :443 beats the funnel's blocked :8443 — and that
+   * single ranking is why every link handed out between 2026-09-19 and
+   * 2026-09-28 is dead. The tunnel was preferred for being PUBLIC, and the
+   * artifacts are read on the author's own devices, which are all on the
+   * tailnet, where there is nothing public to be.
+   *
+   * What the test was really guarding is that a HINT cannot clobber
+   * CONFIGURATION, and that survives untouched — `env` and `pinned` still sit
+   * above everything (the two tests above this one). What changed is the order
+   * among the candidates muxpad worked out for itself.
+   */
+  it('the durable tailnet hint now outranks the ephemeral tunnel, by default', async () => {
     const r = make({ tunnelBaseUrl: () => TUNNEL });
     const got = await r.resolve({ hint: FUNNEL, allowDiscovery: true, probe: true });
-    expect(got).toMatchObject({ baseUrl: TUNNEL, source: 'tunnel' });
+    expect(got).toMatchObject({ baseUrl: FUNNEL, source: 'hint', durability: 'tailnet' });
     expect(funnelCalls).toBe(0);
+  });
+
+  it('…and the tunnel wins the moment a PUBLIC link is what was asked for', async () => {
+    const r = make({ tunnelBaseUrl: () => TUNNEL });
+    const got = await r.resolve({
+      hint: FUNNEL,
+      allowDiscovery: true,
+      probe: true,
+      audience: 'public',
+    });
+    expect(got).toMatchObject({ baseUrl: TUNNEL, source: 'tunnel', durability: 'ephemeral' });
   });
 
   it('a tunnel that is down offers no candidate at all', async () => {
@@ -171,7 +193,10 @@ describe('precedence — configuration beats discovery', () => {
     const r = make({ tunnelBaseUrl: () => live });
     globals.set(PUBLIC_BASE_URL_KEY, FUNNEL);
     // `live` is NOT in `reachable` — the point is that it wins anyway.
-    const got = await r.resolve({ probe: true });
+    // `audience: 'public'` because that is now the only case in which a tunnel
+    // is the top candidate at all; the guarantee under test (a false-negative
+    // probe must not demote it) is unchanged and still matters there.
+    const got = await r.resolve({ probe: true, audience: 'public' });
     expect(got.baseUrl).toBe(live);
     expect(got.source).toBe('tunnel');
   });
@@ -499,9 +524,7 @@ describe('pinning', () => {
   it('de-duplicates a url reachable by two routes, keeping the higher source', () => {
     r.setPinned(TUNNEL);
     globals.set(PUBLIC_BASE_URL_KEY, TUNNEL);
-    expect(r.candidates()).toEqual([
-      { url: TUNNEL, source: 'pinned', durability: 'ephemeral' },
-    ]);
+    expect(r.candidates()).toEqual([{ url: TUNNEL, source: 'pinned', durability: 'ephemeral' }]);
   });
 });
 
@@ -575,6 +598,175 @@ describe('durability — how long the ADDRESS lives, not whether it answers now'
 });
 
 /**
+ * THE DEFECT THIS FIXES, and it is a ranking, not a mechanism.
+ *
+ * The candidate list already carried both answers — an ephemeral Cloudflare
+ * quick-tunnel name and a durable `*.ts.net` one — and it ranked the rotting one
+ * first, so that is what `muxpad publish` printed. On 2026-09-28 alone that put
+ * at least six dead links into a conversation: each one worked when it was
+ * printed and was NXDOMAIN within hours, because a ptyd bounce mints a new
+ * hostname and Cloudflare never gives the old one back.
+ *
+ * The premise behind the old order was that a public link beats a private one.
+ * It is wrong for the case that actually happens: these artifacts are read on
+ * the author's OWN devices — laptop, phone — and all of them are on the tailnet,
+ * where `https://<host>.ts.net:8443` is permanent, needs no login, no tunnel, no
+ * supervision and nothing installed. Verified 2026-09-29: Tailscale listens on
+ * 100.111.22.33:8443 (the tailnet address ONLY — not loopback, not 0.0.0.0) and
+ * answers 200 for a published artifact.
+ *
+ * So the default is the link that still works tomorrow, and a public link is
+ * something you ASK for. Both orders are the same list, sorted by how long the
+ * address lives — for the audience it is meant for.
+ */
+describe('audience — the DEFAULT link is the one that still works tomorrow', () => {
+  beforeEach(() => {
+    reachable.add(FUNNEL);
+    reachable.add(TUNNEL);
+  });
+
+  it('prefers the durable tailnet base over the ephemeral tunnel', async () => {
+    const r = make({ tunnelBaseUrl: () => TUNNEL });
+    globals.set(PUBLIC_BASE_URL_KEY, FUNNEL);
+    expect(await r.resolve({ probe: true })).toMatchObject({
+      baseUrl: FUNNEL,
+      durability: 'tailnet',
+    });
+  });
+
+  it('inverts exactly that for a link meant to be SENT to someone', async () => {
+    // Off the tailnet a `*.ts.net` name does not resolve to this machine at all,
+    // so for a public link an address with a shelf life genuinely beats one with
+    // no reach. The flag is the whole of the difference.
+    const r = make({ tunnelBaseUrl: () => TUNNEL });
+    globals.set(PUBLIC_BASE_URL_KEY, FUNNEL);
+    expect(await r.resolve({ probe: true, audience: 'public' })).toMatchObject({
+      baseUrl: TUNNEL,
+      durability: 'ephemeral',
+    });
+  });
+
+  it('MUXPAD_PUBLIC_BASE_URL wins in BOTH audiences — a domain is both things', async () => {
+    // The whole point of leaving env on top: the day a named tunnel exists on
+    // pub.rows.to, it becomes the default with no further change, and `--public`
+    // stops being a different answer because there is nothing private about it.
+    const domain = 'https://artifacts.example.com';
+    reachable.add(domain);
+    const r = make({ configuredBaseUrl: domain, tunnelBaseUrl: () => TUNNEL });
+    globals.set(PUBLIC_BASE_URL_KEY, FUNNEL);
+    for (const audience of ['tailnet', 'public'] as const) {
+      expect(await r.resolve({ probe: true, audience })).toMatchObject({
+        baseUrl: domain,
+        source: 'env',
+        durability: 'permanent',
+      });
+    }
+  });
+
+  it('a human PIN outranks the durability rule too — configuration is not a guess', async () => {
+    // Re-ranking applies to what muxpad DISCOVERED. `--set-base` is somebody
+    // typing an answer, and its documented job is pointing every surface at a
+    // tunnel they chose; sorting it below a tailnet address would silently
+    // break that.
+    const r = make({ tunnelBaseUrl: () => TUNNEL });
+    globals.set(PUBLIC_BASE_URL_KEY, FUNNEL);
+    r.setPinned(TUNNEL);
+    expect(await r.resolve({ probe: true })).toMatchObject({
+      baseUrl: TUNNEL,
+      source: 'pinned',
+      durability: 'ephemeral',
+    });
+  });
+
+  it('falls back to the tunnel when there is NO tailnet — no tailnet, no change', async () => {
+    // A machine that is not on a tailnet must behave exactly as it did before:
+    // the ephemeral link is the only one there is, and it is still better than
+    // loopback.
+    const r = make({ tunnelBaseUrl: () => TUNNEL });
+    expect(await r.resolve({ probe: true })).toMatchObject({
+      baseUrl: TUNNEL,
+      source: 'tunnel',
+    });
+  });
+
+  it('and to the tailnet base when there is no tunnel', async () => {
+    const r = make({ tunnelBaseUrl: () => null });
+    globals.set(PUBLIC_BASE_URL_KEY, FUNNEL);
+    // Even asking for a public link cannot invent one. It must not silently
+    // hand back a private address as though it were shareable — see the note.
+    const got = await r.resolve({ probe: true, audience: 'public' });
+    expect(got).toMatchObject({ baseUrl: FUNNEL, durability: 'tailnet' });
+  });
+
+  it('keeps the source order WITHIN a durability class', async () => {
+    // The re-rank is a stable sort, not a replacement: two tailnet candidates
+    // still break their tie the way they always did (hint above persisted).
+    const other = 'https://other-host.example-tailnet.ts.net:8443';
+    reachable.add(other);
+    const r = make();
+    globals.set(PUBLIC_BASE_URL_KEY, other);
+    const list = r.candidates({ hint: FUNNEL });
+    expect(list.map((c) => c.source)).toEqual(['hint', 'persisted']);
+  });
+
+  it('candidates() reports the order it will actually be resolved in', async () => {
+    // `muxpad publish --base` prints this table, and a table that disagreed with
+    // the answer above it would be worse than no table.
+    const r = make({ tunnelBaseUrl: () => TUNNEL });
+    globals.set(PUBLIC_BASE_URL_KEY, FUNNEL);
+    expect(r.candidates().map((c) => c.durability)).toEqual(['tailnet', 'ephemeral']);
+    expect(r.candidates({ audience: 'public' }).map((c) => c.durability)).toEqual([
+      'ephemeral',
+      'tailnet',
+    ]);
+  });
+
+  it('a dead durable base still steps aside for a live ephemeral one', async () => {
+    // Durability decides the ORDER; the probe still demotes the dead. A tailnet
+    // base whose funnel mapping has gone away must not take publishing down
+    // when there is a working tunnel sitting right behind it.
+    const r = make({ tunnelBaseUrl: () => TUNNEL });
+    globals.set(PUBLIC_BASE_URL_KEY, FUNNEL);
+    reachable.delete(FUNNEL);
+    expect(await r.resolve({ probe: true })).toMatchObject({
+      baseUrl: TUNNEL,
+      source: 'tunnel',
+    });
+  });
+});
+
+describe('the note says what is true for the link just handed over', () => {
+  it('names the tailnet limit plainly, and the flag that escapes it', () => {
+    const note = durabilityNote('tailnet');
+    expect(note).toContain('tailnet');
+    // The old text hedged ("it reaches the public internet only if Funnel is
+    // enabled…") because this was a reluctant fallback nobody had measured. It
+    // is now the DEFAULT, so it has to be plain about both halves: it works on
+    // your own devices, and it works nowhere else.
+    expect(note).toContain('--public');
+    expect(note).not.toContain('only if Funnel is enabled');
+  });
+
+  it('says a PUBLIC link was asked for and is not available', () => {
+    // The failure that must never be silent: `--public` on a machine with no
+    // tunnel would otherwise print a tailnet address and look like a share link.
+    const note = durabilityNote('tailnet', 'public');
+    expect(note).toContain('no public');
+    expect(note).toContain('cannot open it');
+  });
+
+  it('keeps the ephemeral warning for the link that has a shelf life', () => {
+    expect(durabilityNote('ephemeral')).toContain('quick tunnel');
+    expect(durabilityNote('ephemeral')).toContain('muxpad publish --url');
+  });
+
+  it('says nothing about a real domain, in either audience', () => {
+    expect(durabilityNote('permanent')).toBeNull();
+    expect(durabilityNote('permanent', 'public')).toBeNull();
+  });
+});
+
+/**
  * `reachable` used to be `null` for the winning tunnel, because the tunnel
  * branch returns before the probe. The REASON for that early return is sound and
  * unchanged (see public-base.ts): a probe can only ever demote a tunnel whose
@@ -602,7 +794,9 @@ describe('the tunnel is measured for reporting, never for ranking', () => {
     globals.set(PUBLIC_BASE_URL_KEY, FUNNEL); // a reachable alternative, deliberately
     // NOT in `reachable`: this machine's resolver NXDOMAINs the tunnel's own
     // hostname while Cloudflare's edge serves it 200. Observed live.
-    const got = await r.resolve({ probe: true });
+    // `audience: 'public'` for the same reason as the test above — that is where
+    // a tunnel leads the list now.
+    const got = await r.resolve({ probe: true, audience: 'public' });
     expect(got.baseUrl).toBe(live);
     expect(got.source).toBe('tunnel');
     expect(got.health?.alive).toBe(false);

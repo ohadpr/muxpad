@@ -5,7 +5,9 @@ import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type AppRegistry, createAppRegistry } from '../apps/AppRegistry.js';
 import type { Funnel } from '../funnel.js';
+import { PUBLIC_BASE_URL_KEY } from '../public-base.js';
 import { AppStore } from '../store/AppStore.js';
+import { GlobalsStore } from '../store/GlobalsStore.js';
 import { openDb } from '../store/db.js';
 import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
 import {
@@ -203,6 +205,98 @@ describe('publish tunnel routes', () => {
     // the tunnel (see public-base.ts: a false negative would swap a working
     // public link for a blocked :8443 one).
     expect(base.reachable).not.toBeNull();
+  });
+
+  /**
+   * THE RANKING, end to end through HTTP — the defect that killed every link in
+   * the conversation that produced this feature.
+   *
+   * Both candidates are present: an ephemeral quick-tunnel name and a durable
+   * tailnet one. The tunnel used to win, so `muxpad publish` printed a link with
+   * a shelf life of hours and said nothing until 416c9cc. Now the durable one
+   * wins by default and the tunnel is something you ASK for.
+   */
+  describe('audience — the default link is the durable one', () => {
+    const TAILNET = 'https://dt-mac-mini.example-tailnet.ts.net:8443';
+
+    const publish = (name: string, audience?: string) =>
+      test.app.request('/api/publish', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: srcDir, name, ...(audience ? { audience } : {}) }),
+      });
+
+    beforeEach(async () => {
+      new GlobalsStore(db).set(PUBLIC_BASE_URL_KEY, TAILNET);
+      await ensure();
+      await announce(FIRST, paneOfTunnel());
+      expect(tunnelBaseUrl(db)).toBe(FIRST);
+    });
+
+    it('publishes under the tailnet base, not the tunnel', async () => {
+      const body = (await (await publish('report')).json()) as {
+        url: string;
+        base: { source: string; durability: string; note?: string };
+      };
+      expect(body.url).toBe(`${TAILNET}/report/`);
+      expect(body.base.durability).toBe('tailnet');
+      // …and says what that means, in both directions.
+      expect(body.base.note).toContain('every device on your tailnet');
+      expect(body.base.note).toContain('--public');
+    });
+
+    it('publishes under the tunnel when a public link is asked for', async () => {
+      const body = (await (await publish('report', 'public')).json()) as {
+        url: string;
+        base: { durability: string; note?: string };
+      };
+      expect(body.url).toBe(`${FIRST}/report/`);
+      expect(body.base.durability).toBe('ephemeral');
+      // The ephemeral warning is the whole reason `--public` is a flag and not
+      // the default: you get the link you asked for AND its shelf life.
+      expect(body.base.note).toContain('quick tunnel');
+      expect(body.base.note).toContain('muxpad publish --url');
+    });
+
+    it('the LISTING is durable by default — it is the recovery surface', async () => {
+      await publish('report');
+      const list = (await (await test.app.request('/api/publish')).json()) as {
+        publishes: Array<{ slug: string; url: string }>;
+      };
+      expect(list.publishes.find((p) => p.slug === 'report')?.url).toBe(`${TAILNET}/report/`);
+      const pub = (await (await test.app.request('/api/publish?audience=public')).json()) as {
+        publishes: Array<{ slug: string; url: string }>;
+      };
+      expect(pub.publishes.find((p) => p.slug === 'report')?.url).toBe(`${FIRST}/report/`);
+    });
+
+    it('`--base` reports the audience and orders its table to match', async () => {
+      const dflt = (await (await test.app.request('/api/publish/base')).json()) as {
+        audience: string;
+        durability: string;
+        candidates: Array<{ durability: string }>;
+      };
+      expect(dflt.audience).toBe('tailnet');
+      expect(dflt.durability).toBe('tailnet');
+      expect(dflt.candidates.map((c) => c.durability)).toEqual(['tailnet', 'ephemeral']);
+
+      const pub = (await (await test.app.request('/api/publish/base?audience=public')).json()) as {
+        audience: string;
+        durability: string;
+        candidates: Array<{ durability: string }>;
+      };
+      expect(pub.audience).toBe('public');
+      expect(pub.durability).toBe('ephemeral');
+      expect(pub.candidates.map((c) => c.durability)).toEqual(['ephemeral', 'tailnet']);
+    });
+
+    it('an unknown audience means the DURABLE one, never the expiring one', async () => {
+      // A typo, or an older CLI. Guessing wrong in this direction prints a link
+      // that works and is private; guessing wrong the other way prints one that
+      // dies.
+      const body = (await (await publish('report', 'pubic')).json()) as { url: string };
+      expect(body.url).toBe(`${TAILNET}/report/`);
+    });
   });
 
   it('surfaces a tunnel that keeps failing on the base every surface reads', async () => {
