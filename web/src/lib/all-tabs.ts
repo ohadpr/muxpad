@@ -254,7 +254,21 @@ export function mergeWorkspaceTabs(workspaceId: string, tabs: readonly Tab[]): v
 /** Coalesce a burst of status edges into one corpus refetch. Matches the 250ms
  *  `scheduleLiveRefresh` uses for the same job on the per-workspace caches. */
 const CORPUS_EDGE_MS = 250;
+/**
+ * …and never more often than this, however fast the edges keep arriving.
+ *
+ * The 250ms window coalesces a BURST and says nothing about a sustained stream.
+ * A busy workspace the sidebar has not loaded can produce genuine status edges
+ * several times a second, and every window would then spend a full
+ * `/api/tabs/all` — measured at 40 KB against the live cockpit. Four of those a
+ * second is not "not a poll", it is worse than the poll this module refuses to
+ * have. The floor bounds the edge path to one fetch per two seconds while
+ * leaving it 250ms-responsive when things are quiet, which is the case that
+ * actually shows on screen.
+ */
+const CORPUS_EDGE_MIN_GAP_MS = 2000;
 let edgeTimer: ReturnType<typeof setTimeout> | null = null;
+let lastEdgeFetchAt = 0;
 
 /**
  * A pane status edge for a tab the SIDEBAR'S cache does not hold.
@@ -283,11 +297,18 @@ export function refreshCorpusForTab(tabId: string): void {
   if (listeners.size === 0) return;
   if (!cache.some((g) => g.tabs.some((t) => t.id === tabId))) return;
   if (edgeTimer !== null) return;
-  edgeTimer = setTimeout(() => {
-    edgeTimer = null;
-    settledAt = 0;
-    void loadAllTabs();
-  }, CORPUS_EDGE_MS);
+  // Held rather than dropped: a stream of edges still gets its refetch, just on
+  // the floor's schedule instead of its own.
+  const since = Date.now() - lastEdgeFetchAt;
+  edgeTimer = setTimeout(
+    () => {
+      edgeTimer = null;
+      lastEdgeFetchAt = Date.now();
+      settledAt = 0;
+      void loadAllTabs();
+    },
+    Math.max(CORPUS_EDGE_MS, CORPUS_EDGE_MIN_GAP_MS - since),
+  );
 }
 
 /**
@@ -400,5 +421,6 @@ export function resetAllTabsCache(): void {
     clearTimeout(edgeTimer);
     edgeTimer = null;
   }
+  lastEdgeFetchAt = 0;
   listeners.clear();
 }

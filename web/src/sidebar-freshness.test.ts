@@ -386,6 +386,24 @@ describe('a status edge in a workspace the sidebar never loaded', () => {
     expect(listAllTabs).not.toHaveBeenCalled();
   });
 
+  it('cannot be driven into a request storm by a stream of edges', async () => {
+    // The 250ms window coalesces a BURST, but says nothing about a sustained
+    // stream: a busy workspace the sidebar has not loaded can produce genuine
+    // status edges several times a second, and each window would then spend a
+    // full `/api/tabs/all` (~40 KB measured). Four a second is not a poll — it
+    // is worse than one. So the edge path also has a floor between fetches.
+    const { subscribeAllTabs } = await import('./lib/all-tabs');
+    const off = subscribeAllTabs(() => {});
+    // Two bursts, each past the 250ms coalescing window but inside the floor.
+    emit(paneEdge('t3', 'idle'));
+    await settleEdge();
+    emit(paneEdge('t3', 'working'));
+    await settleEdge();
+    off();
+    // The second burst is held, not dropped — it lands on the floor's timer.
+    expect(listAllTabs).toHaveBeenCalledTimes(1);
+  });
+
   it('does not fire for a row the sidebar already covers', async () => {
     // `t1` is in a loaded workspace, so the refetch queued by `tabs.ts` feeds
     // the corpus through `mergeWorkspaceTabs`. A second request here would buy
