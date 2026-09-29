@@ -331,7 +331,12 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
     title: isSessionProfile(moment.profile) ? 'Browser opened' : `Browser · ${moment.profile}`,
     detail,
     action: null,
-    shotUrl: moment.shotUrl,
+    // NO PICTURE ON THE QUIET CARD. A still is reassurance, and reassurance is
+    // only worth a hundred pixels of a conversation when there is something to
+    // be reassured ABOUT — a browser being asked for, or one that has closed.
+    // On "Browser opened" it illustrates a thing nobody was worried by, and a
+    // screenshot per session turns a log into a gallery.
+    shotUrl: live ? null : moment.shotUrl,
     urgent: false,
     countdown: yours,
     passive: true,
