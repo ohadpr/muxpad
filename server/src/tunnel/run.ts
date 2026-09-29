@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { TUNNEL_HEALTHY_RUN_MS, parseQuickTunnelUrl, tunnelBackoffMs } from './cloudflared.js';
+import { type NamedTunnel, namedTunnelArgs, namedTunnelBaseUrl, quickTunnelArgs } from './named.js';
 
 /**
  * `muxpad tunnel --port <public port>` — the process that IS the tunnel.
@@ -10,13 +11,25 @@ import { TUNNEL_HEALTHY_RUN_MS, parseQuickTunnelUrl, tunnelBackoffMs } from './c
  * cloudflared's output looks like:
  *
  *   1. refuse to tunnel anything that is not the hardened public server;
- *   2. run `cloudflared tunnel --url http://127.0.0.1:<port>`;
- *   3. read the minted hostname out of its output and ANNOUNCE it;
- *   4. the moment cloudflared exits, RETRACT it — then back off and restart,
- *      which mints a different hostname, which is announced in turn.
+ *   2. run `cloudflared tunnel …` against the public port;
+ *   3. ANNOUNCE the hostname it is serving;
+ *   4. the moment cloudflared exits, RETRACT it — then back off and restart.
  *
  * (3) and (4) are the feature. Supervision without them keeps a dead name
  * pinned with perfect uptime.
+ *
+ * THE TWO TUNNELS, and the difference is entirely in step 3:
+ *
+ *   NAMED (tunnel/named.ts, set up by `muxpad tunnel setup`) — the hostname is
+ *     a CNAME you own. It is CONFIGURATION: known before cloudflared starts,
+ *     never in its output, and the SAME on every restart. Public and permanent.
+ *     This is the answer; everything else here is a fallback.
+ *   QUICK (no setup) — the hostname is assigned by Cloudflare at connect time
+ *     and has to be parsed out of a human-facing banner. A NEW one every start,
+ *     so every link built from one dies at the next restart.
+ *
+ * Steps 1, 2 and 4 are byte-identical for both. Only the argument vector and the
+ * source of the name differ, which is why there is no second runner.
  *
  * WHY THE ANNOUNCE IS AN HTTP CALL TO THE MAIN SERVER rather than a direct
  * database write: policy belongs on the server. The server decides whether a
@@ -58,6 +71,15 @@ export interface TunnelRunnerDeps {
   paneId?: string | null;
   /** Resolved cloudflared path, or null when it is not installed. */
   bin: string | null;
+  /**
+   * The configured NAMED tunnel, or absent for the quick-tunnel fallback.
+   *
+   * Its presence changes two things and nothing else: the argument vector, and
+   * where the hostname comes from. Supervision, retraction, backoff and the
+   * heartbeat are the same code — the difference between the two tunnels is
+   * entirely about the NAME, so that is the only place they diverge.
+   */
+  named?: NamedTunnel | null;
   spawnChild?: (bin: string, args: string[]) => TunnelChild;
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
@@ -216,7 +238,12 @@ export function createTunnelRunner(deps: TunnelRunnerDeps): TunnelRunner {
     }
 
     if (announceEvery > 0) void heartbeat();
-    log(`muxpad tunnel: exposing ${localUrl} via ${deps.bin}`);
+    const named = deps.named ?? null;
+    log(
+      named
+        ? `muxpad tunnel: exposing ${localUrl} as https://${named.hostname} (named tunnel '${named.name}') via ${deps.bin}`
+        : `muxpad tunnel: exposing ${localUrl} via ${deps.bin}`,
+    );
 
     let attempt = 0;
     let runs = 0;
@@ -224,12 +251,38 @@ export function createTunnelRunner(deps: TunnelRunnerDeps): TunnelRunner {
       if (stopped) break;
       const startedAt = now();
       let sawUrl = false;
-      const c = spawnChild(deps.bin, ['tunnel', '--url', localUrl, '--no-autoupdate']);
+      const c = spawnChild(
+        deps.bin,
+        named ? namedTunnelArgs(named, localUrl) : quickTunnelArgs(localUrl),
+      );
       child = c;
+      if (named) {
+        // NOTHING TO PARSE, and nothing to wait for. A named tunnel's hostname is
+        // a CNAME that exists in DNS whether or not this process is running, so
+        // it is known before cloudflared starts and cannot be learned from its
+        // output. Announcing it at spawn is therefore not optimistic the way it
+        // would be for a quick tunnel: the name is already correct, and the only
+        // question is whether anything is behind it — which is answered by the
+        // two mechanisms that already exist, the retraction below (instant, on
+        // exit) and public-base.ts's reachability probe (which demotes a base
+        // that is not answering yet).
+        //
+        // The alternative, grepping for a "registered connection" line, would
+        // bind muxpad to a third-party log format for no gain in correctness.
+        const url = namedTunnelBaseUrl(named);
+        sawUrl = true;
+        current = url;
+        log(`muxpad tunnel: up at ${url}`);
+        void announceUp(url);
+      }
       c.onOutput((chunk) => {
         // Verbatim, so `muxpad app logs tunnel` is cloudflared's own output —
         // no new log format to learn when something goes wrong.
         out(chunk);
+        // A named run has no reason to print a quick-tunnel name, and if one
+        // ever appeared, believing it would swap a permanent hostname for an
+        // ephemeral one and the links would quietly start expiring again.
+        if (named) return;
         const url = parseQuickTunnelUrl(chunk);
         if (!url || url === current) return;
         sawUrl = true;

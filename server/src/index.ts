@@ -53,6 +53,7 @@ import { ChatClockSweeper } from './tab-clock.js';
 import { ChatRetirer, clearReadyMarks } from './tab-retire.js';
 import { tailnetHostname } from './tailnet-hostname.js';
 import { clearOrphanedTunnelBase, ensureTunnelApp } from './tunnel/TunnelApp.js';
+import { readNamedTunnel } from './tunnel/named.js';
 import { VoiceSessionManager, glossaryInstructions } from './voice/VoiceSessionManager.js';
 import { openAiVoiceTransport } from './voice/live.js';
 import { attachWsServer } from './ws.js';
@@ -408,11 +409,15 @@ const appStatus = createAppStatusProbe({
 // OUTRANK the tunnel, it cancels it: a real domain means there is nothing for a
 // quick tunnel to do, and running one anyway would hold a second public door
 // open forever for no reason.
+// Re-read on every call, not cached: `muxpad tunnel setup` writes this file
+// while the server is running, and the whole promise of that command is that it
+// takes effect without a restart.
 const ensureTunnel = (opts?: { start?: boolean }) =>
   ensureTunnelApp({
     db,
     registry: appRegistry,
     publicPort: config.publicPort,
+    namedTunnel: readNamedTunnel(config.dataDir),
     ...(config.publicBaseUrl ? { configuredBaseUrl: config.publicBaseUrl } : {}),
     ...(opts?.start !== undefined ? { start: opts.start } : {}),
   });

@@ -106,6 +106,78 @@ describe('ensureTunnelApp — decision 1: env wins, by cancelling the tunnel', (
   });
 });
 
+describe('ensureTunnelApp — a NAMED tunnel is the thing serving the domain', () => {
+  const NAMED = {
+    name: 'muxpad',
+    hostname: 'artifacts.example.dev',
+    credentialsFile: '/x/creds.json',
+  };
+
+  it('RUNS even though MUXPAD_PUBLIC_BASE_URL is set, when it serves that base', async () => {
+    // The rule above — env cancels the tunnel — is right for a QUICK tunnel: a
+    // real domain means there is nothing for a throwaway hostname to do. It is
+    // exactly wrong for a named one, because the named tunnel IS what puts the
+    // domain on the internet. Cancelling it would take the domain down and then
+    // report the domain as the healthy base.
+    const res = await ensureTunnelApp({
+      db,
+      registry,
+      publicPort: 7778,
+      configuredBaseUrl: 'https://artifacts.example.dev',
+      namedTunnel: NAMED,
+      findBin: () => '/x/cloudflared',
+      cwd: '/tmp',
+      log: () => {},
+    });
+    expect(res.state).toBe('started');
+    expect(apps.getBySlug(TUNNEL_APP_SLUG)?.enabled).toBe(true);
+  });
+
+  it('runs with no env var at all — the named hostname needs no plist', async () => {
+    // The point of the whole design: `muxpad tunnel setup` is enough. The
+    // hostname arrives as an ordinary tunnel announce, baseDurability() reads a
+    // real domain off the host and calls it `permanent`, and the ranking in
+    // public-base.ts does the rest. Nothing to edit, nothing to authorise.
+    const res = await ensureTunnelApp({
+      db,
+      registry,
+      publicPort: 7778,
+      namedTunnel: NAMED,
+      findBin: () => '/x/cloudflared',
+      cwd: '/tmp',
+      log: () => {},
+    });
+    expect(res.state).toBe('started');
+  });
+
+  it('still refuses when cloudflared is gone — credentials are not a binary', async () => {
+    const res = await ensureTunnelApp({
+      db,
+      registry,
+      publicPort: 7778,
+      namedTunnel: NAMED,
+      findBin: () => null,
+      log: () => {},
+    });
+    expect(res.state).toBe('disabled');
+    expect(res.reason).toContain('cloudflared is not installed');
+  });
+
+  it('and env still cancels a QUICK tunnel, which is the case it was written for', async () => {
+    const res = await ensureTunnelApp({
+      db,
+      registry,
+      publicPort: 7778,
+      configuredBaseUrl: 'https://artifacts.example.dev',
+      namedTunnel: null,
+      findBin: () => '/x/cloudflared',
+      log: () => {},
+    });
+    expect(res.state).toBe('disabled');
+    expect(res.reason).toContain('MUXPAD_PUBLIC_BASE_URL');
+  });
+});
+
 describe('ensureTunnelApp — cloudflared missing degrades cleanly', () => {
   it('registers nothing and explains, rather than crash-looping in a hidden pane', async () => {
     const res = await ensureTunnelApp({
