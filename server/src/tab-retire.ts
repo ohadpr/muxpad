@@ -11,8 +11,10 @@
  * Two fixes live here, and they are the same fix seen twice:
  *
  *   1. A SUB-CHAT RETIRES WHEN IT DELIVERS. Its result went back to the parent
- *      as a card; it has done its job; it leaves the live list immediately
- *      rather than waiting out a clock that was never about it.
+ *      as a card; it has done its job; it leaves the live list then, rather
+ *      than waiting out a clock that was never about it. (WHEN it has
+ *      delivered is the hard part, and it is not "when a turn ended" — see
+ *      `ChatRetirer`.)
  *   2. `ready` CLEARS WHEN THE RESULT REACHES THE USER — anywhere. Opening the
  *      tab is one way. The card landing in the parent is another, and it is
  *      the one that actually happens. Retiring a chat therefore clears its
@@ -23,9 +25,15 @@
  * The keep-list is cron's (CronScheduler.onTurnEnded) — that code has been
  * making this exact judgement in production, and a second, subtly different
  * opinion about "is this agent finished" is how the two drift. Every entry is
- * kept; what changed is that they are now sorted into the TWO QUESTIONS one
- * turn-end answers, because the spawn report needs the first answer and
+ * kept; what changed is that they are now sorted into the TWO QUESTIONS a job
+ * ending answers, because the spawn report needs the first answer and
  * retirement needs both:
+ *
+ * Both are read at the SETTLE and not at the turn-end that armed it. These
+ * lists were always right about WHAT to check and wrong about WHEN — every
+ * entry below is a fact that can change in the seconds after a turn ends, and
+ * reading them at the instant one did is the whole of the too-early bug. See
+ * `ChatRetirer`.
  *
  *   NOT FINISHED (`stillWorking`) — nothing has happened yet
  *   · a pending QUESTION — it is blocked on you, which is the opposite of done
