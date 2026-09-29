@@ -147,6 +147,12 @@ function BaseNote({ base }: { base: PublicBaseInfo }) {
   // page is dead forever. Not styled as an error — it is working — but the page
   // must not present it as a permanent address, because it looks like one.
   const ephemeral = base.durability === 'ephemeral';
+  // The mirror image, now that the DEFAULT base is the tailnet one: these links
+  // are permanent and they are NOT shareable. A page of Copy buttons that says
+  // nothing invites someone to paste one into a chat where it cannot be opened,
+  // which is the same class of mistake `· temporary` exists to prevent — just in
+  // the other direction. Neither is an error state; both are the truth.
+  const tailnetOnly = base.durability === 'tailnet';
   return (
     <span
       className={`hosted-base${bad ? ' hosted-base-bad' : ''}`}
@@ -154,7 +160,7 @@ function BaseNote({ base }: { base: PublicBaseInfo }) {
     >
       {bad ? '⚠ ' : ''}
       {host}
-      {bad ? ' not answering' : ephemeral ? ' · temporary' : ''}
+      {bad ? ' not answering' : ephemeral ? ' · temporary' : tailnetOnly ? ' · tailnet only' : ''}
     </span>
   );
 }

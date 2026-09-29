@@ -159,13 +159,18 @@ describe('scripts/muxpad HTTP wrapper', () => {
     });
     expect(first.stdout.trim()).toBe('https://stub-host.ts.net:8443/cli-hint/');
     // stdout stays JUST the url, so `$(muxpad publish …)` keeps working — the
-    // caveat goes to stderr. And there IS a caveat: this assertion used to read
+    // caveat goes to stderr. And there IS a caveat: this assertion once read
     // `stderr === ''` with the comment "no warning — the URL is public", which
-    // is not a thing the server can know. A `*.ts.net:8443` address is public
-    // only if Tailscale Funnel is enabled, and on the machine that runs muxpad
-    // it is not (verified 2026-09-28: TLS never completes from off-tailnet).
-    expect(first.stderr).toContain('Funnel is enabled');
-    expect(first.stderr).toContain(':8443');
+    // is not a thing the server can know.
+    //
+    // CORRECTED AGAIN, and in the opposite direction. It then asserted the
+    // hedged wording ("it reaches the public internet only if Funnel is enabled
+    // for this node"), which was right while a tailnet address was a reluctant
+    // fallback. It is now the DEFAULT, and the note has to be plain rather than
+    // hedged: it works on every device on your tailnet, and nowhere else.
+    expect(first.stderr).toContain('every device on your tailnet');
+    expect(first.stderr).toContain('--public');
+    expect(first.stderr).not.toContain('Funnel is enabled');
     const logged = readFileSync(stubLog, 'utf-8');
     expect(logged).toContain('funnel --bg --https=8443 http://127.0.0.1:7799');
     expect(logged).toContain('status --json');
@@ -178,7 +183,7 @@ describe('scripts/muxpad HTTP wrapper', () => {
       encoding: 'utf-8',
     });
     expect(second.stdout.trim()).toBe('https://stub-host.ts.net:8443/cli-fallback/');
-    expect(second.stderr).toContain('Funnel is enabled');
+    expect(second.stderr).toContain('every device on your tailnet');
 
     // Phase 3: THE BUG. tailscale is available again, and the CLI must still
     // not run it — the server already has a base, so the hint could only
@@ -240,6 +245,35 @@ describe('scripts/muxpad HTTP wrapper', () => {
       expect(stdout.trim()).toMatch(/\/recoverable\/$/);
       // The whole point: the answer is NOT the host it was handed.
       expect(stdout).not.toContain('search-particle-rules-ten');
+    });
+
+    /**
+     * The recovery verb is the thing that was most wrong: its whole job is to
+     * replace a dead link, and it was replacing it with another link built on
+     * the same rotating hostname. Default it to the durable base and the SECOND
+     * recovery becomes unnecessary.
+     */
+    it('reprints the DURABLE link, not another one that expires', async () => {
+      const { stdout } = await execFileAsync(MUXPAD_BIN, ['publish', '--url', 'recoverable'], {
+        env: env(),
+        encoding: 'utf-8',
+      });
+      expect(stdout.trim()).toBe('https://stub-host.ts.net:8443/recoverable/');
+      expect(stdout).not.toContain('trycloudflare');
+    });
+
+    it('--public asks for a sendable link and SAYS when there is not one', async () => {
+      // This server has no tunnel, so the only base is the tailnet one. The flag
+      // must reach the server (or the note would be the default's) and the
+      // answer must not look like a share link it is not.
+      const { stdout, stderr } = await execFileAsync(
+        MUXPAD_BIN,
+        ['publish', '--url', 'recoverable', '--public'],
+        { env: env(), encoding: 'utf-8' },
+      );
+      expect(stdout.trim()).toBe('https://stub-host.ts.net:8443/recoverable/');
+      expect(stderr).toContain('no public base is available');
+      expect(stderr).toContain('cannot open it');
     });
 
     it('fails readably on a slug that was never published', async () => {

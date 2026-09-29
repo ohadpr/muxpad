@@ -2615,10 +2615,23 @@ cmd_publish() {
   local rest=()
   local set_base=''
   local want_url=''
+  # WHO THE LINK IS FOR, and the default is the whole fix.
+  #
+  # Every artifact link handed out before this defaulted to the Cloudflare quick
+  # tunnel, whose hostname Cloudflare reassigns on every restart — so the link
+  # printed here worked when it was printed and was NXDOMAIN within hours. At
+  # least six went dead in one afternoon on 2026-09-28.
+  #
+  # These artifacts are read on the author's own laptop and phone, and both are
+  # tailnet nodes, where `https://<host>.ts.net:8443` is permanent and needs
+  # nothing installed. So that is the default, and `--public` is how you ask for
+  # a link you can send to somebody else — with its shelf life stated.
+  local audience=''
   local a
   while [ $# -gt 0 ]; do
     a="$1"
     case "$a" in
+      --public) audience=public ;;
       --list) mode=list ;;
       --base) mode=base ;;
       --clear-base) mode=clear-base ;;
@@ -2654,6 +2667,11 @@ cmd_publish() {
   reset_flags name rm update
   parse_flags name rm update -- "${rest[@]+"${rest[@]}"}"
 
+  # Query suffix for the read paths. Empty when nothing was asked for, so the
+  # server's own default — the durable base — is what answers.
+  local aq=''
+  [ -n "$audience" ] && aq="?audience=$audience"
+
   # `--set-base <url>` pins the origin every published link is built from.
   #
   # This exists because Tailscale Funnel's :8443 is blocked outbound on many
@@ -2685,14 +2703,15 @@ cmd_publish() {
   # `--base` shows what every link is being built from, and why.
   if [ "$mode" = "base" ]; then
     local res
-    res="$(http_request GET /api/publish/base)"
+    res="$(http_request GET "/api/publish/base$aq")"
     if [ "$JSON_OUTPUT" = "1" ]; then printf '%s\n' "$res"; return; fi
     printf '%s' "$res" | jq -r '
       "  base:      \(.url // "(none — links would be local-only)")",
       "  from:      \(.source)",
+      "  for:       \(.audience // "tailnet" | if . == "public" then "anyone (--public)" else "your own devices — the default" end)",
       "  keeps:     \(
          if .durability == "ephemeral" then "NO — dies at the next tunnel restart"
-         elif .durability == "tailnet" then "only on your tailnet, unless Funnel is on"
+         elif .durability == "tailnet" then "yes, forever — but only on your tailnet"
          elif .durability == "local"   then "no — loopback, never shareable"
          elif .durability == "permanent" then "yes"
          # An older daemon that predates this field. "yes" would be the one
@@ -2724,7 +2743,7 @@ cmd_publish() {
     slug="${slug%%/*}"           # first path segment only
     slug="${slug%%\?*}"          # …without a query
     local res found
-    res="$(http_request GET /api/publish)"
+    res="$(http_request GET "/api/publish$aq")"
     found="$(printf '%s' "$res" | jq -r --arg s "${slug%%@*}" \
       '(.publishes[]? | select(.slug == $s) | .url) // empty')"
     if [ -z "$found" ] || [ "$found" = "null" ]; then
@@ -2738,12 +2757,18 @@ cmd_publish() {
       *@*) printf '%s\n' "${found%/"${slug%%@*}"/}/${slug}/" ;;
       *) printf '%s\n' "$found" ;;
     esac
-    return
+    # The recovery verb now says what it just handed over. stdout stays JUST the
+    # url — `$(muxpad publish --url x)` has to keep working — so the caveat goes
+    # to stderr, which is where the publish path already puts it. This matters
+    # most for `--public`: the note is how you learn that the link you asked to
+    # be sendable is not one.
+    base_note_line "$(printf '%s' "$res" | jq -c '.base // empty')"
+    return 0
   fi
 
   if [ "$mode" = "list" ]; then
     local res
-    res="$(http_request GET /api/publish)"
+    res="$(http_request GET "/api/publish$aq")"
     if [ "$JSON_OUTPUT" = "1" ]; then
       printf '%s\n' "$res"
       return
@@ -2796,6 +2821,10 @@ cmd_publish() {
   [ -n "$slug" ] && body="$body,\"name\":$(json_string "$slug")"
   [ -n "$update_slug" ] && body="$body,\"update\":true"
   [ -n "$base_url" ] && body="$body,\"public_base_url\":$(json_string "$base_url")"
+  # Sent only when asked for. An absent field means the server's default, which
+  # is the durable base — so an older CLI, a script, and the Hosted view all get
+  # the link that still works tomorrow without knowing this field exists.
+  [ -n "$audience" ] && body="$body,\"audience\":$(json_string "$audience")"
   body="$body}"
   local res
   res="$(http_request POST /api/publish "$body")"
@@ -3273,13 +3302,28 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      out under the old one goes dead, but the
                                      slug never moves. Paste the dead URL in
                                      whole — the slug is read out of its path.
+                                     Answers with the PERMANENT tailnet link, so
+                                     recovering a dead link twice is not a
+                                     thing that happens; add --public for the
+                                     sendable form.
   publish --rm <slug>                unpublish, versions included (the funnel
                                      stays up; run
                                      `tailscale funnel --https=8443 off` to
                                      close it entirely)
+  publish --public                   ask for a link you can SEND to somebody.
+                                     By default every published link uses your
+                                     TAILNET address, which is permanent and
+                                     works on all your own devices (phone
+                                     included) but nowhere else. --public uses
+                                     the Cloudflare tunnel instead — reachable
+                                     by anyone, and its hostname is reassigned
+                                     on every tunnel restart, so the link dies
+                                     then. The caveat is printed to stderr
+                                     either way. Combines with --list, --base
+                                     and --url.
   publish --base                     show the origin every published link is
-                                     built from, whether it is answering, and
-                                     the full candidate list
+                                     built from, who it is for, whether it is
+                                     answering, and the full candidate list
   publish --set-base=<https://…>     pin that origin. Tailscale Funnel's :8443
                                      is blocked outbound on many real networks,
                                      so a discovered funnel URL gives links that
