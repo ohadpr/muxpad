@@ -2091,7 +2091,11 @@ cmd_agent_new() {
   # Poll the send until the runner registers (409 + reason until then).
   # http_request exits on non-2xx, so drive curl directly here.
   local send_body status tmp deadline
-  send_body="{\"text\":$(json_string "$message")}"
+  # WHO IS BRIEFING THE WORKER. The spawn's first message is a chat talking to a
+  # chat exactly as `agent send` is, so it carries the same provenance — see
+  # cmd_agent_send. Empty when muxpad is driven from an ordinary shell, which is
+  # a human and renders as one.
+  send_body="{\"text\":$(json_string "$message")$(inbound_from_field)}"
   tmp="$(mktemp)"
   deadline=$((SECONDS + 30))
   while :; do
@@ -2238,6 +2242,21 @@ cmd_agent_respawn() {
   printf '%s%d respawned%s\n' "$C_DIM" "$ok" "$C_RESET"
 }
 
+# WHO IS SENDING — `,"from_pane":"p-…"`, or the empty string.
+#
+# Every process inside a muxpad pane carries $MUXPAD_PANE_ID (PaneRuntime injects
+# it), so an agent running `muxpad agent send` can say which chat it is. The
+# server resolves that pane to a TAB and stores the tab id, and the receiving
+# conversation draws a card naming the chat instead of an anonymous user bubble.
+#
+# EMPTY FROM AN ORDINARY SHELL, deliberately. Nobody claimed to be a chat, so
+# nothing is recorded and the message renders exactly as it always has — which
+# is the correct answer for a human at a terminal.
+inbound_from_field() {
+  [ -n "${MUXPAD_PANE_ID:-}" ] || return 0
+  printf ',"from_pane":%s' "$(json_string "$MUXPAD_PANE_ID")"
+}
+
 # `muxpad agent send <paneId> "message"` — deliver a message to the pane's
 # agent runner via the server-side queue. Exit codes: 0 sent, 0 queued
 # (behind an in-flight turn; noted on stderr), 1 rejected (reason printed).
@@ -2258,7 +2277,7 @@ cmd_agent_send() {
   tmp="$(mktemp)"
   status="$(curl -sS -o "$tmp" -w '%{http_code}' \
     -X POST -H 'content-type: application/json' \
-    --data "{\"text\":$(json_string "$message")}" \
+    --data "{\"text\":$(json_string "$message")$(inbound_from_field)}" \
     "${MUXPAD_API_URL%/}/api/agent-sessions/$pane_id/send" || echo 000)"
   if [ "$status" = "202" ]; then
     local queued

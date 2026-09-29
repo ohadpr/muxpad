@@ -17,6 +17,7 @@ import { type PtydCache, cronsByTab, decoratePane, decorateTab } from '../ptyd-c
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
 import { randomWorkspaceName } from '../random-name.js';
 import { safeCwd } from '../safe-cwd.js';
+import { InboundMessageStore } from '../store/InboundMessageStore.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { SpawnRoundStore } from '../store/SpawnRoundStore.js';
 import { TabStore } from '../store/TabStore.js';
@@ -276,6 +277,24 @@ export function tabsRoutes(deps: {
     const id = c.req.param('id');
     const byChild = new SpawnRoundStore(deps.db).listByParent(id);
     return c.json({ rounds: Object.fromEntries(byChild) });
+  });
+
+  /**
+   * WHO SENT the messages delivered INTO this chat.
+   *
+   * The mirror of `spawn-rounds`: that one is work going OUT of a conversation,
+   * this is work coming IN. A coordinator's brief arrives as an ordinary user
+   * bubble because muxpad does not write the agent's transcript — it tails the
+   * harness's file — so the attribution cannot be a transcript row and is joined
+   * back in by the client instead, keyed on the message text.
+   *
+   * ONE request per conversation, and OFF THE TAB ROW for the same reason the
+   * rounds are: the row rides every five-second sidebar poll, and this is a list
+   * that grows with every job a standing worker is handed.
+   */
+  app.get('/:id/inbound-senders', (c) => {
+    const senders = new InboundMessageStore(deps.db).listByTab(c.req.param('id'));
+    return c.json({ senders });
   });
 
   app.get('/', (c) => {
