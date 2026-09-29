@@ -186,14 +186,60 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
   });
 
   it('emits NOTHING when nothing was written', async () => {
-    // A rejected reply leaves the row exactly as it was, and an event per no-op
-    // is a repaint per no-op on every connected client.
-    const { retirer, writer } = wire(async () => "Sure! I'd be happy to help with that.");
-    const kid = worker(parentChat());
-    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' });
+    // An event per no-op is a repaint per no-op on every connected client. The
+    // real no-op is a worker with NO TRANSCRIPT — nothing was attempted, so
+    // there is nothing to say about it. (A rejected reply used to be filed here
+    // too; it is now a `failed` state and it does reach the client. See below.)
+    const { retirer, writer } = wire(async () => GOOD);
+    const tabId = new TabStore(db).create({
+      name: 'Silent',
+      workspace_id: workspaceId,
+      layout: '',
+      spawned_by: parentChat(),
+    }).id;
+    const paneId = new PaneStore(db).create({ tab_id: tabId, shell: '/bin/zsh', cwd: '/tmp' }).id;
+    retirer.onTurnEnded({ pane_id: paneId, phase: 'done' });
     const before = seen.length;
     await writer.idle();
     expect(seen.length).toBe(before);
+  });
+
+  it('TELLS THE USER when a good summary was refused, instead of only the log', async () => {
+    // The rejection used to live in server.log and nowhere else: the row kept a
+    // NULL state, which the card could not tell apart from "not attempted yet",
+    // so it drew "No summary was generated for this one" over work that HAD been
+    // summarised and then thrown away by a length rule. Three real workers lost
+    // their reports this way.
+    const { retirer, writer } = wire(async () => 'x'.repeat(900));
+    const kid = worker(parentChat());
+    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' });
+    await writer.idle();
+    const tab = new TabStore(db).getById(kid.tabId);
+    expect(tab?.spawn_report_state).toBe('failed');
+    expect(tab?.spawn_report).toBeNull();
+    // …and it REACHES the client, which is the whole point of the state.
+    expect(
+      seen.some((e) => e.type === 'tab.updated' && (e.tab as Tab).spawn_report_state === 'failed'),
+    ).toBe(true);
+  });
+
+  it('a `failed` state still counts as nothing for the retry', async () => {
+    // `failed` is a write, so it is truthy, and reading it as success would have
+    // silently undone the one retry a retired worker gets.
+    let calls = 0;
+    const { retirer, writer } = wire(async () => {
+      calls++;
+      if (calls === 1) throw new Error('transient');
+      return GOOD;
+    });
+    const kid = worker(parentChat());
+    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' });
+    await writer.idle();
+    expect(calls).toBe(2);
+    const tab = new TabStore(db).getById(kid.tabId);
+    expect(tab?.spawn_report).toBe(GOOD);
+    // The transient `failed` must not be left behind on the row.
+    expect(tab?.spawn_report_state).toBe('ok');
   });
 
   it('RETRIES ONCE when the generation failed — a retired worker gets no second turn', async () => {
@@ -365,6 +411,146 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
     // …and the tab row still carries the report, so nothing is lost while both
     // homes exist.
     expect(new TabStore(db).getById(kid.tabId)?.spawn_report).toBe(GOOD);
+  });
+
+  /**
+   * THE GAP THE IN-PROCESS RETRY CANNOT REACH.
+   *
+   * That retry hangs off `onFinished`, and `onFinished` comes from a turn
+   * ending. A worker that retired in a PREVIOUS process with its attempt stamped
+   * and no summary is unreachable by it forever — none of its turns will ever
+   * end again. Measured on the live database: four children sat permanently
+   * empty this way. Their transcripts are still on disk, which is the only
+   * reason this can work at all.
+   */
+  describe('recoverStuck — the boot sweep', () => {
+    /** A child that retired with the attempt stamped and nothing to show. */
+    function stuck(parent: string, state: 'failed' | null): { tabId: string; paneId: string } {
+      const kid = worker(parent);
+      const tabs = new TabStore(db);
+      tabs.retire(kid.tabId, 'delivered');
+      tabs.touchSpawnReportAt(kid.tabId, 1000);
+      if (state)
+        db.prepare('UPDATE tabs SET spawn_report_state = ? WHERE id = ?').run(state, kid.tabId);
+      return kid;
+    }
+
+    it('RETRIES a worker that retired in an earlier process with no summary', async () => {
+      const writer = new SpawnReportWriter({ db, events, cache, model: async () => GOOD });
+      const kid = stuck(parentChat(), null);
+      writer.recoverStuck();
+      await writer.idle();
+      const tab = new TabStore(db).getById(kid.tabId);
+      expect(tab?.spawn_report).toBe(GOOD);
+      expect(tab?.spawn_report_state).toBe('ok');
+      // It has to REACH the client too — nobody is going to reload for it.
+      expect(reports()).toContain(GOOD);
+    });
+
+    it('retries one whose summary was REFUSED, not only one that threw', async () => {
+      const writer = new SpawnReportWriter({ db, events, cache, model: async () => GOOD });
+      const kid = stuck(parentChat(), 'failed');
+      writer.recoverStuck();
+      await writer.idle();
+      expect(new TabStore(db).getById(kid.tabId)?.spawn_report).toBe(GOOD);
+    });
+
+    it('leaves a worker that was never ATTEMPTED alone', async () => {
+      // No `spawn_report_at` means nobody has got to it — every child that
+      // retired before the feature existed looks like this, and re-summarising
+      // the archive at every boot is exactly what the stamp guards against.
+      let calls = 0;
+      const writer = new SpawnReportWriter({
+        db,
+        events,
+        cache,
+        model: async () => {
+          calls++;
+          return GOOD;
+        },
+      });
+      const kid = worker(parentChat());
+      new TabStore(db).retire(kid.tabId, 'delivered');
+      writer.recoverStuck();
+      await writer.idle();
+      expect(calls).toBe(0);
+    });
+
+    it('leaves a LIVE worker alone — it still has turns to end', async () => {
+      let calls = 0;
+      const writer = new SpawnReportWriter({
+        db,
+        events,
+        cache,
+        model: async () => {
+          calls++;
+          return GOOD;
+        },
+      });
+      const kid = worker(parentChat());
+      new TabStore(db).touchSpawnReportAt(kid.tabId, 1000);
+      writer.recoverStuck();
+      await writer.idle();
+      expect(calls).toBe(0);
+    });
+
+    it('does not re-ask a worker that answered `none`, or one that crashed', async () => {
+      // Both are ANSWERS. Re-asking spends a call to be told the same thing.
+      let calls = 0;
+      const writer = new SpawnReportWriter({
+        db,
+        events,
+        cache,
+        model: async () => {
+          calls++;
+          return GOOD;
+        },
+      });
+      for (const state of ['none', 'crashed', 'awaiting'] as const) {
+        const kid = stuck(parentChat(), null);
+        db.prepare('UPDATE tabs SET spawn_report_state = ? WHERE id = ?').run(state, kid.tabId);
+      }
+      writer.recoverStuck();
+      await writer.idle();
+      expect(calls).toBe(0);
+    });
+
+    it('is BOUNDED — a boot must not become a model-call storm', async () => {
+      let calls = 0;
+      const writer = new SpawnReportWriter({
+        db,
+        events,
+        cache,
+        model: async () => {
+          calls++;
+          return GOOD;
+        },
+      });
+      const parent = parentChat();
+      for (let i = 0; i < 6; i++) stuck(parent, null);
+      writer.recoverStuck(2);
+      await writer.idle();
+      expect(calls).toBe(2);
+    });
+
+    it('asks ONCE per worker even if the sweep runs again', async () => {
+      let calls = 0;
+      const writer = new SpawnReportWriter({
+        db,
+        events,
+        cache,
+        model: async () => {
+          calls++;
+          throw new Error('still broken');
+        },
+      });
+      stuck(parentChat(), null);
+      writer.recoverStuck();
+      await writer.idle();
+      writer.recoverStuck();
+      await writer.idle();
+      expect(calls).toBe(1);
+    });
   });
 
   it('reports a CRASHED worker, which is the case retirement cannot see', async () => {

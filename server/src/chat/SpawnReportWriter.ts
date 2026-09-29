@@ -4,7 +4,7 @@ import { decorateTab } from '../ptyd-cache.js';
 import type { PtydCache } from '../ptyd-cache.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { SpawnRoundStore } from '../store/SpawnRoundStore.js';
-import { TabStore } from '../store/TabStore.js';
+import { type SpawnReportWrite, TabStore } from '../store/TabStore.js';
 import { clockIndex, isSubChat } from '../tab-clock.js';
 import { glossaryCache } from './glossary.js';
 import {
@@ -13,6 +13,13 @@ import {
   maybeWriteSpawnReport,
 } from './spawn-report.js';
 import { type SpawnTaskModel, maybeWriteSpawnTask } from './spawn-task.js';
+
+/**
+ * How many already-retired children a boot will retry a summary for. Small on
+ * purpose — see {@link SpawnReportWriter.recoverStuck}. Every one is a model
+ * call, and they are the tail of a list nobody is waiting on.
+ */
+export const RECOVER_LIMIT = 8;
 
 /**
  * Turns "a worker finished" into a report in its parent's log, and nothing else.
@@ -200,33 +207,20 @@ export class SpawnReportWriter {
         // Only when the row still has NO state: `none` is an answer, `crashed`
         // and `awaiting` are facts we observed, and re-asking any of them would
         // spend a second call to be told the same thing.
-        if (first) return first;
+        //
+        // `failed` COUNTS AS NOTHING HERE. It is a write, so it is truthy, and
+        // reading it as success would have quietly undone this retry the moment
+        // the failure paths started recording themselves — the state exists to
+        // describe a lost generation to the user, not to settle it.
+        if (first && first.state !== 'failed') return first;
         if (this.retried.has(tabId)) return first;
         const row = new TabStore(this.db).getById(tabId);
-        if (!row || row.spawn_report_state) return first;
+        if (!row || (row.spawn_report_state && row.spawn_report_state !== 'failed')) return first;
         this.retried.add(tabId);
-        return attempt(true);
+        return (await attempt(true)) ?? first;
       })
       .then((write) => {
-        // The sentences arrive up to thirty seconds after the round closed, so
-        // they are attached to the round that ENDED rather than to whatever is
-        // open now — a worker re-tasked in the meantime must not have the
-        // previous round's result land on its new one.
-        if (write) new SpawnRoundStore(this.db).writeResult(tabId, write);
-        // Nothing written is the common case — inside the interval, a rejected
-        // reply, a worker with no transcript — and it must reach nobody: an
-        // event per no-op is a repaint per no-op on every connected client.
-        if (!write) return;
-        const tab = new TabStore(this.db).getById(tabId);
-        if (!tab) return;
-        // The parent's conversation is watching the CHILD's row (the spawn cards
-        // derive from the tab corpus), so this one event is the whole delivery
-        // path: `tab.updated` → web/src/tabs.ts `applyTabRow` → the corpus → the
-        // card. No new protocol, and it reaches every connected device.
-        this.events.emit({
-          type: 'tab.updated',
-          tab: decorateTab(this.cache, this.db, tab),
-        });
+        this.deliver(tabId, write);
       })
       .catch((err) => {
         // Logged, never surfaced. See the class note.
@@ -237,4 +231,97 @@ export class SpawnReportWriter {
       });
     this.pending = this.pending.then(() => run);
   };
+
+  /**
+   * One result, to the round and to every connected client. Shared by the
+   * turn-end path and the boot sweep so the two cannot deliver differently.
+   */
+  private deliver(tabId: string, write: SpawnReportWrite | null): void {
+    // The sentences arrive up to thirty seconds after the round closed, so
+    // they are attached to the round that ENDED rather than to whatever is
+    // open now — a worker re-tasked in the meantime must not have the
+    // previous round's result land on its new one.
+    if (write) new SpawnRoundStore(this.db).writeResult(tabId, write);
+    // Nothing written is the common case — inside the interval, a worker with
+    // no transcript — and it must reach nobody: an event per no-op is a repaint
+    // per no-op on every connected client.
+    if (!write) return;
+    const tab = new TabStore(this.db).getById(tabId);
+    if (!tab) return;
+    // The parent's conversation is watching the CHILD's row (the spawn cards
+    // derive from the tab corpus), so this one event is the whole delivery
+    // path: `tab.updated` → web/src/tabs.ts `applyTabRow` → the corpus → the
+    // card. No new protocol, and it reaches every connected device.
+    this.events.emit({
+      type: 'tab.updated',
+      tab: decorateTab(this.cache, this.db, tab),
+    });
+  }
+
+  /**
+   * RETRY THE WORKERS THAT ALREADY RETIRED WITHOUT A SUMMARY. Call once at boot.
+   *
+   * The in-process retry above only ever runs inside `onFinished`, and
+   * `onFinished` comes from a turn ending. A worker that retired in a PREVIOUS
+   * process with its attempt stamped and nothing to show for it is therefore
+   * unreachable by it — no turn of its will ever end again. The retry's own note
+   * says "a restart is a fine moment to try once more", and it was the only part
+   * of that sentence nothing implemented: measured on the live database, four
+   * children sat permanently empty this way, three of them retired within the
+   * same half hour.
+   *
+   * Their transcripts are still on disk, which is the whole reason this can
+   * work: the generator reads the tail of the conversation, not anything the
+   * finished process held in memory.
+   *
+   * BOUNDED THREE WAYS, because a boot must not turn into a model-call storm:
+   * the most recent {@link RECOVER_LIMIT} candidates only, one attempt each
+   * (`retried`, shared with the turn-end path), and serialised behind the same
+   * `pending` chain as everything else. A worker nobody has looked at in weeks
+   * is not worth a call at every restart.
+   */
+  recoverStuck(limit = RECOVER_LIMIT): void {
+    // `spawn_report_at IS NOT NULL` is the load-bearing clause: it means we
+    // ATTEMPTED and lost it. Without it this would sweep up children that
+    // retired before the feature existed and re-summarise the archive.
+    const rows = this.db
+      .prepare(
+        `SELECT t.id AS tab_id, MIN(p.id) AS pane_id
+           FROM tabs t JOIN panes p ON p.tab_id = t.id
+          WHERE t.spawned_by IS NOT NULL
+            AND t.retired_at IS NOT NULL
+            AND t.spawn_report IS NULL
+            AND t.spawn_report_at IS NOT NULL
+            AND (t.spawn_report_state IS NULL OR t.spawn_report_state = 'failed')
+          GROUP BY t.id
+          ORDER BY t.retired_at DESC
+          LIMIT ?`,
+      )
+      .all(limit) as Array<{ tab_id: string; pane_id: string }>;
+    if (rows.length === 0) return;
+    console.log(`[spawn-report] boot sweep: retrying ${rows.length} worker(s) with no summary`);
+    for (const { tab_id: tabId, pane_id: paneId } of rows) {
+      if (this.retried.has(tabId)) continue;
+      this.retried.add(tabId);
+      // `force`, for the same reason the turn-end retry needs it: the failed
+      // attempt already charged the interval, and the gate would refuse.
+      //
+      // crashed/awaiting are NOT re-asserted here. They are facts about a turn
+      // this process never saw, and a row that carries either one is excluded by
+      // the query anyway — only a NULL or `failed` state gets this far.
+      const run = maybeWriteSpawnReport(this.db, tabId, paneId, this.model, {
+        crashed: false,
+        awaiting: false,
+        glossary: this.glossary(),
+        force: true,
+      })
+        .then((write) => {
+          this.deliver(tabId, write);
+        })
+        .catch((err) => {
+          console.error(`[spawn-report] boot sweep failed for tab ${tabId}`, err);
+        });
+      this.pending = this.pending.then(() => run);
+    }
+  }
 }

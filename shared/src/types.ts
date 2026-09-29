@@ -589,7 +589,14 @@ export const TabSchema = z.object({
   // job" and "I finished a turn and the ball is in your court" arrived as the
   // same event — and the second was archived out of the live list, which is the
   // worst response available to somebody waiting on you. See chat/awaiting.ts.
-  spawn_report_state: z.enum(['ok', 'none', 'crashed', 'awaiting']).optional(),
+  //
+  // 'failed' WE TRIED AND LOST IT — the generator threw, timed out, or answered
+  // with something the parser refused. Distinct from the column's ABSENCE, which
+  // now means only "not attempted yet": those two were one value, and the card
+  // said "No summary was generated" for both, so a worker whose 13 KB write-up
+  // was thrown away by a length rule was indistinguishable from one nobody had
+  // got to yet. The rejection used to appear in server.log alone.
+  spawn_report_state: z.enum(['ok', 'none', 'crashed', 'awaiting', 'failed']).optional(),
   // WHERE THE WORK IS — the urls and files this worker produced, scraped from
   // its transcript rather than asked of a model, so it survives a generation the
   // model got wrong. Absent when there are none.

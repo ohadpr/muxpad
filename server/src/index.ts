@@ -706,6 +706,11 @@ headlines.start();
 // its first message. Subscribed here (the report half is driven by ChatRetirer's
 // `onFinished` instead — see the class note for why the two differ).
 spawnReports.start();
+// And retry the children that retired in an EARLIER process with the attempt
+// stamped and no summary to show for it. Nothing else can reach them: the
+// in-process retry hangs off a turn ending, and none of their turns will ever
+// end again. Bounded to the most recent few — see `recoverStuck`.
+spawnReports.recoverStuck();
 
 // One-time repair of headlines written before the shape check existed — the
 // generation that answered the conversation ("I'm not familiar with muxpad —

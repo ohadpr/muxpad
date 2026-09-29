@@ -59,9 +59,12 @@ export interface SpawnReport {
   text: string | null;
   /** 'ok' a report · 'none' it produced nothing and says so · 'crashed' its last
    *  turn was fatal · 'awaiting' IT STOPPED TO ASK YOU SOMETHING, which is the
-   *  opposite of delivered and was reading as it. A report we could not produce
-   *  at all is no report field. */
-  state: 'ok' | 'none' | 'crashed' | 'awaiting';
+   *  opposite of delivered and was reading as it · 'failed' WE TRIED AND LOST IT
+   *  (the generator threw, or its answer was refused). That last one used to be
+   *  the absence of the report field, sharing that absence with "not attempted
+   *  yet" — so the card could not tell the two apart and the only record was a
+   *  line in server.log. Absence now means only "not attempted". */
+  state: 'ok' | 'none' | 'crashed' | 'awaiting' | 'failed';
   /** When it was written — the report entry's place in the log, which is the
    *  moment the result LANDED rather than the spawn hours further up. */
   at: number;
@@ -522,6 +525,14 @@ export function spawnCardSummary(report: SpawnReport | undefined): string {
 export function spawnReportSummary(report: SpawnReport): string {
   if (report.text) return report.text;
   if (report.state === 'crashed') return 'Crashed before it produced anything.';
+  // WE TRIED AND LOST IT, said where the person who spawned the worker will
+  // actually see it. This used to be indistinguishable from "not attempted yet"
+  // — both drew "No summary was generated for this one" — and the fact that a
+  // summary had been produced and then refused lived only in server.log. It
+  // says "the work happened" because it did: the artifacts on this same card
+  // are scraped from the transcript and survive the generation that was lost.
+  if (report.state === 'failed')
+    return 'The work finished, but its summary could not be generated. Its transcript still has the detail.';
   // NEVER A BARE TICK AND NOTHING ELSE. A worker waiting on you with no summary
   // is the exact case that produced this line: the card has to say what happened
   // even when the generator gave us no sentences.

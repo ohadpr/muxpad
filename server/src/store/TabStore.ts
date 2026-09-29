@@ -55,12 +55,22 @@ export type RetireReason = 'delivered' | 'archived';
 /**
  * What KIND of spawn report a child's row carries.
  *
- * Three outcomes that must not read as one shrug (see the v29 migration):
+ * Outcomes that must not read as one shrug (see the v29 migration):
  * `ok` we wrote one, `none` the child produced nothing and says so, `crashed`
- * its last turn was fatal. A fourth state — we could not summarise at all — is
- * the ABSENCE of this column, deliberately: nothing renders for it.
+ * its last turn was fatal, `awaiting` it stopped to ask.
+ *
+ * `failed` — WE TRIED AND LOST IT. This used to be the ABSENCE of the column,
+ * "deliberately: nothing renders for it", and that was wrong in the one case it
+ * mattered. Absence also means NOT ATTEMPTED YET, so the two were one value and
+ * the card drew the same line for both: a worker whose summary a length rule
+ * threw away looked exactly like one the generator had not reached. The only
+ * record of the difference was a `[spawn-report] rejected` line in server.log,
+ * which is not a place a user looks.
+ *
+ * Now absence means only "not attempted", `failed` is attempted-and-lost, and
+ * the boot sweep in SpawnReportWriter retries the second one.
  */
-export type SpawnReportState = 'ok' | 'none' | 'crashed' | 'awaiting';
+export type SpawnReportState = 'ok' | 'none' | 'crashed' | 'awaiting' | 'failed';
 
 /** A generated report, as it is written. `report` is null for a state that
  *  stands on its own (`none`, and a `crashed` child that got nothing done). */
