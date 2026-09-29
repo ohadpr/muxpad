@@ -216,11 +216,19 @@ function publishFetched(next: WorkspaceTabs[]): WorkspaceTabs[] {
 /**
  * Take a workspace's freshly-landed tab list into the corpus.
  *
- * Called by `tabs.ts` every time it publishes a list — a poll landing, a
- * reconnect refetch, the refetch it schedules off a pane status edge, and its
- * optimistic local patches. That cache is the sidebar's, so this is the seam
- * that makes the rail and the cards ONE surface rather than two clocks: the
- * rows and the corpus are fed from the same array, in the same tick.
+ * Called from ONE place — `tabs.ts` `refreshTabs`, where a list LANDS from the
+ * server. That covers the 5s visible poll, the reconnect refetch, and the
+ * refetch scheduled off a pane status edge, because all three land through it.
+ * That cache is the sidebar's, so this is the seam that makes the rail and the
+ * cards one surface rather than two clocks: the rows and the corpus are fed
+ * from the same array, in the same tick.
+ *
+ * NOT from `applyTabRow`, and not from the optimistic local patches
+ * (`applyTabOrder` / `applyTabUnread`). The first would double-publish — this
+ * module subscribes to `tab.updated` itself and has already patched that row
+ * from the same event. The other two move only `position` and `unread`, which
+ * no corpus reader renders, and each is followed by a refetch that lands here
+ * anyway.
  *
  * Both routes decorate through `orderedForWorkspace` (server/src/routes/tabs.ts),
  * so a group spliced in here is what `/api/tabs/all` would have returned for it.
