@@ -2621,7 +2621,6 @@ cmd_publish() {
     case "$a" in
       --list) mode=list ;;
       --base) mode=base ;;
-      --tunnel) mode=tunnel ;;
       --clear-base) mode=clear-base ;;
       # `--url <slug-or-dead-link>` — REPRINT a live link for something already
       # published. The recovery path for the failure that motivated it: a
@@ -2711,57 +2710,6 @@ cmd_publish() {
     printf '  %scandidates (highest first):%s\n' "$C_DIM" "$C_RESET"
     printf '%s' "$res" | jq -r '.candidates[] | "    \(.source)\t\(.durability // "?")\t\(.url)"'
     return
-  fi
-
-  # `--tunnel` — who is holding the Cloudflare tunnel, and how to turn it off.
-  #
-  # This exists because the answer to "how do I stop it" DEPENDS on the owner and
-  # the two answers do not overlap. A tunnel muxpad runs as an app is stopped
-  # with `muxpad app stop tunnel` and read with `muxpad app logs tunnel`; a
-  # tunnel supervised by launchd (docs/launchd.md §3 — which is how the hostname
-  # survives `muxpad restart --all`) has no pane, so both of those report success
-  # and do nothing. Printing the owner next to the right command is the whole
-  # feature.
-  if [ "$mode" = "tunnel" ]; then
-    local res
-    res="$(http_request GET /api/publish/tunnel)"
-    if [ "$JSON_OUTPUT" = "1" ]; then printf '%s\n' "$res"; return; fi
-    local owner
-    owner="$(printf '%s' "$res" | jq -r '.owner // empty')"
-    printf '%s' "$res" | jq -r '
-      "  url:       \(.url // "(none — no tunnel hostname right now)")",
-      "  owner:     \(
-         if .owner == "process" then "a process muxpad does not supervise (pid \(.record.pid // "?")) — launchd job dev.muxpad.tunnel"
-         elif .owner == "pane" then "muxpad, as the `tunnel` app in a pane"
-         else "nobody" end)"
-    '
-    # A record that exists but is being IGNORED is the interesting case: it means
-    # the hostname in the database is one nothing is serving, and saying "no
-    # tunnel" would hide that.
-    local ignored
-    ignored="$(printf '%s' "$res" | jq -r 'if .url == null and .record.url != null then .record.url else empty end')"
-    [ -n "$ignored" ] && printf '  %signored:   %s — its owner is gone%s\n' "$C_DIM" "$ignored" "$C_RESET"
-    case "$owner" in
-      process)
-        printf '  logs:      %s/tunnel.log\n' "${DATA_DIR}"
-        printf '  stop:      launchctl bootout gui/%s/dev.muxpad.tunnel\n' "$UID"
-        printf '  %skeeps its hostname across `muxpad restart --all`; a reboot still rotates it.%s\n' \
-          "$C_DIM" "$C_RESET"
-        ;;
-      pane)
-        printf '  logs:      muxpad app logs tunnel\n'
-        printf '  stop:      muxpad app stop tunnel\n'
-        printf '  %srotates its hostname on every ptyd restart — see docs/launchd.md §3.%s\n' \
-          "$C_DIM" "$C_RESET"
-        ;;
-    esac
-    local w
-    w="$(printf '%s' "$res" | jq -r '.warning // empty')"
-    [ -n "$w" ] && printf '  %swarning:   %s%s\n' "$C_DIM" "$w" "$C_RESET"
-    # An explicit 0: a bare `return` inherits the last command's status, and the
-    # last command here is a `[ -n … ]` test that is FALSE in the ordinary case
-    # (no warning). That made a healthy tunnel report exit 1.
-    return 0
   fi
 
   # `--url <slug-or-dead-link>` — the recovery verb. See the flag parser above.
@@ -3332,13 +3280,6 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
   publish --base                     show the origin every published link is
                                      built from, whether it is answering, and
                                      the full candidate list
-  publish --tunnel                   show WHO is holding the Cloudflare tunnel,
-                                     and the log + stop command that actually
-                                     work for that owner. muxpad's own tunnel
-                                     lives in a pane (`muxpad app stop tunnel`);
-                                     a launchd-supervised one has no pane, and
-                                     survives `muxpad restart --all` instead of
-                                     rotating its hostname. docs/launchd.md §3.
   publish --set-base=<https://…>     pin that origin. Tailscale Funnel's :8443
                                      is blocked outbound on many real networks,
                                      so a discovered funnel URL gives links that

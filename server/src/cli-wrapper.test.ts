@@ -252,51 +252,6 @@ describe('scripts/muxpad HTTP wrapper', () => {
     });
   });
 
-  /**
-   * `publish --tunnel` is the surface that replaces `muxpad app logs tunnel` and
-   * `muxpad app stop tunnel` for a tunnel muxpad does not supervise. Those verbs
-   * read and kill a PANE, and a launchd-owned runner has neither — so without
-   * this the answer to "how do I see it / turn it off" is "there isn't one".
-   */
-  describe('publish --tunnel says who owns the tunnel, and how to turn it off', () => {
-    const env = () => ({ ...process.env, MUXPAD_API_URL: `http://127.0.0.1:${port}` });
-    const api = (method: string, body: unknown) =>
-      fetch(`http://127.0.0.1:${port}/api/publish/tunnel`, {
-        method,
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-
-    it('reports nobody when no tunnel is running', async () => {
-      await api('DELETE', {});
-      const { stdout } = await execFileAsync(MUXPAD_BIN, ['publish', '--tunnel'], {
-        env: env(),
-        encoding: 'utf-8',
-      });
-      expect(stdout).toContain('owner:     nobody');
-    });
-
-    it('names the launchd job for a tunnel muxpad does not supervise', async () => {
-      // `process.pid` stands in for the runner's — a pid that is genuinely
-      // alive, so the server's liveness check is real.
-      await api('POST', {
-        url: 'https://franklin-discuss-powers-usgs.trycloudflare.com',
-        pid: process.pid,
-      });
-      const { stdout } = await execFileAsync(MUXPAD_BIN, ['publish', '--tunnel'], {
-        env: env(),
-        encoding: 'utf-8',
-      });
-      expect(stdout).toContain('franklin-discuss-powers-usgs');
-      expect(stdout).toContain('launchd');
-      // The stop command has to be the one that WORKS. `muxpad app stop tunnel`
-      // would report success and leave the tunnel up.
-      expect(stdout).toContain('launchctl bootout gui/');
-      expect(stdout).not.toContain('muxpad app stop tunnel');
-      await api('DELETE', {});
-    });
-  });
-
   it('a COLD publish prefers the no-exec PTR name over execing tailscale', async () => {
     // The other half of the fix, and the half the App Store constraint forces:
     // even with nothing persisted, the CLI must not open the app bundle. It

@@ -22,13 +22,11 @@ import {
 } from '../public-base.js';
 import {
   type TunnelEnsureResult,
-  noteTunnelClaim,
   noteTunnelDown,
   noteTunnelUp,
   readTunnelRecord,
   readTunnelStatus,
   tunnelBaseUrl,
-  tunnelOwnerKind,
   tunnelWarning,
   waitForTunnelUrl,
 } from '../tunnel/TunnelApp.js';
@@ -657,65 +655,35 @@ export function publishRoutes(deps: {
    * server: the in-pane process reports a fact (a hostname appeared, a process
    * exited) and is told nothing about precedence.
    *
-   *   POST   /tunnel { url, pane_id?, pid? }       a tunnel is up at this hostname
-   *   POST   /tunnel { pid }                       …or is being started by this process
-   *   DELETE /tunnel { error?, attempts?, pid? }   it is not any more
-   *   GET    /tunnel                               what muxpad thinks, for humans
+   *   POST   /tunnel { url, pane_id? }        a tunnel is up at this hostname
+   *   DELETE /tunnel { error?, attempts? }    it is not any more
+   *   GET    /tunnel                          what muxpad thinks, for humans
    *
    * No new authorization question: the main port is unauthenticated by design
    * and `PUT /base` already lets any caller on it pin any origin. What is
    * checked is SHAPE — https, an origin with no path — because this value
    * becomes the prefix of every published link.
-   *
-   * `pid` is what lets a runner muxpad does NOT supervise own the tunnel (the
-   * launchd job in docs/launchd.md §3, which is how the hostname survives a
-   * `muxpad restart --all`). A url-less POST carrying only a pid is a CLAIM: it
-   * holds the tunnel through cloudflared's cold start so a publish in that
-   * window cannot start a second one. See tunnel/TunnelApp.ts.
    */
   app.post('/tunnel', async (c) => {
     const body = (await c.req.json().catch(() => null)) as {
       url?: unknown;
       pane_id?: unknown;
-      pid?: unknown;
     } | null;
     const url = typeof body?.url === 'string' ? body.url : '';
     const paneId = typeof body?.pane_id === 'string' ? body.pane_id : null;
-    const pid = typeof body?.pid === 'number' && Number.isInteger(body.pid) ? body.pid : null;
-    const bad = () =>
-      c.json(
-        {
-          error: {
-            code: 'bad_request',
-            message: 'url must be a well-formed https origin (or send just a pid, to claim)',
-          },
-        },
+    const stored = noteTunnelUp(deps.db, { url, paneId });
+    if (!stored)
+      return c.json(
+        { error: { code: 'bad_request', message: 'url must be a well-formed https origin' } },
         400,
       );
-    // A tunnel that has not been handed a hostname yet still has an owner. The
-    // claim is the only thing that can say so, and a pid is the only token in it
-    // whose liveness can be checked later — so a claim without one is refused
-    // rather than stored as a record nothing could ever invalidate.
-    let stored: string | null = null;
-    if (url) {
-      stored = noteTunnelUp(deps.db, { url, paneId, ...(pid != null ? { pid } : {}) });
-      if (!stored) return bad();
-    } else if (pid != null) {
-      if (!noteTunnelClaim(deps.db, { pid })) return bad();
-    } else {
-      return bad();
-    }
-    // Tell the reporter whether its url is actually being used, and — the part a
-    // launchd-supervised runner cannot work out for itself — whether it should be
-    // running AT ALL. `ensureTunnelApp` cancels an in-pane tunnel by stopping its
-    // app when MUXPAD_PUBLIC_BASE_URL is set; it cannot stop a launchd job, so
-    // this field is how that cancellation reaches one.
+    // Tell the reporter whether its url is actually being used. A tunnel
+    // running next to a configured MUXPAD_PUBLIC_BASE_URL is a door held open
+    // for nothing, and its own log should say so.
     const resolved = await base.resolve();
     return c.json({
       url: stored,
       active: resolved.source === 'tunnel',
-      wanted: !deps.publicBaseUrl,
-      owner: tunnelOwnerKind(deps.db),
       base: resolved.baseUrl,
       source: resolved.source,
     });
@@ -725,14 +693,10 @@ export function publishRoutes(deps: {
     const body = (await c.req.json().catch(() => null)) as {
       error?: unknown;
       attempts?: unknown;
-      pid?: unknown;
     } | null;
     noteTunnelDown(deps.db, {
       ...(typeof body?.error === 'string' ? { error: body.error } : {}),
       ...(typeof body?.attempts === 'number' ? { attempts: body.attempts } : {}),
-      // With a pid this means "cloudflared died", and the runner's CLAIM on the
-      // tunnel survives it. Without one it means the tunnel is over.
-      ...(typeof body?.pid === 'number' && Number.isInteger(body.pid) ? { pid: body.pid } : {}),
     });
     return c.body(null, 204);
   });
@@ -743,14 +707,8 @@ export function publishRoutes(deps: {
       // The live answer, with the ownership rules applied…
       url: tunnelBaseUrl(deps.db),
       // …and the raw row, so a url that is being IGNORED (its pane is gone, the
-      // app is stopped, the announcing process is dead) is visible as such
-      // instead of just missing.
+      // app is stopped) is visible as such instead of just missing.
       record,
-      // WHO is holding it: `pane` is muxpad's own app, `process` is a runner
-      // muxpad does not supervise, null is nobody. This is the difference
-      // between `muxpad app stop tunnel` and `launchctl bootout`, so it is the
-      // one thing a human needs before trying to turn the tunnel off.
-      owner: tunnelOwnerKind(deps.db),
       status: readTunnelStatus(deps.db),
       warning: tunnelWarning(deps.db),
     });
