@@ -25,6 +25,7 @@ import {
   focusProbeExpression,
   loginFormExpression,
 } from '../FocusProbe.js';
+import { appendKeyboardLog } from '../KeyboardLog.js';
 import { emulationParams } from '../MobileEmulation.js';
 import { isBrowsingUrl } from '../PageAttachment.js';
 import { clearStaleProfileLock } from '../ProfileLock.js';
@@ -449,6 +450,17 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
         }
         // Scrolling moves every box on the page.
         if (message.type === 'mouseWheel') void sendFieldBoxes(socket);
+      } else if (message.t === 'diag') {
+        // A phone reporting what its keyboard actually did. The browser runs
+        // here and the keyboard is three hundred miles away on somebody's
+        // handset, so without this the only evidence available is a person
+        // describing what they saw — which is how three fixes in a row came to
+        // be aimed at the wrong thing. Appended, never read back by the page.
+        appendKeyboardLog(
+          opts.dataDir,
+          opts.profile,
+          message as { what?: unknown; events?: unknown },
+        );
       } else if (message.t === 'fillLogin') {
         // WHAT A PASSWORD MANAGER FILLED, PUT INTO THE PAGE. The viewer's own
         // form is a stand-in: 1Password can see it, the site's cannot be seen at

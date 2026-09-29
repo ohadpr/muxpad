@@ -317,7 +317,10 @@ img.addEventListener('pointerdown', (e) => {
     const p0 = pt(e)
     const hit = p0 ? hitsField(p0) : null
     kbFromTap = hit === true
-    if (hit !== false) sink.focus({ preventScroll: true })
+    if (hit !== false) {
+      sink.focus({ preventScroll: true })
+      reportKeyboard(hit)
+    }
   }
   buttons = 1
   img.setPointerCapture?.(e.pointerId)
@@ -409,6 +412,50 @@ kbBtn.addEventListener('click', () => {
   kbSticky = kbBtn.getAttribute('aria-pressed') !== 'true'
   setKb(kbSticky)
 })
+
+/**
+ * THE KEYBOARD LOG.
+ *
+ * Three fixes for the vanishing keyboard have now missed, because the thing
+ * that has to be explained cannot be seen from here: the keyboard is a piece of
+ * the operating system, and no page is told when it opens or closes. Every fix
+ * was therefore a guess about which invisible rule WebKit was applying.
+ *
+ * visualViewport.height is the one honest witness. It shrinks by the height of
+ * the keyboard when the keyboard is up and springs back when it goes, so a
+ * shrink followed by a growth IS the keyboard appearing and being taken away —
+ * observed rather than inferred. Recorded beside the focus and blur events, it
+ * separates the two explanations that look identical from the outside: the field
+ * lost focus, or the field kept focus and the keyboard was withdrawn anyway.
+ *
+ * Bounded and silent: a handful of entries, sent once a couple of seconds after
+ * a tap that asked for a keyboard, and never on a tap that did not.
+ */
+const kbLog = []
+const T0 = Date.now()
+const note = (what, extra) => {
+  if (kbLog.length < 40) kbLog.push({ at: Date.now() - T0, what, ...(extra || {}) })
+}
+const vv = window.visualViewport
+if (vv) {
+  vv.addEventListener('resize', () => note('viewport', { h: Math.round(vv.height) }))
+  vv.addEventListener('scroll', () => note('viewportScroll', { top: Math.round(vv.offsetTop) }))
+}
+sink.addEventListener('focus', () => note('sink focus'))
+sink.addEventListener('blur', () => note('sink blur'))
+let kbReportAt = 0
+function reportKeyboard(hit) {
+  note('tap', { onAField: hit, viewport: vv ? Math.round(vv.height) : null })
+  clearTimeout(kbReportAt)
+  kbReportAt = setTimeout(() => {
+    note('settled', {
+      stillFocused: document.activeElement === sink,
+      viewport: vv ? Math.round(vv.height) : null,
+    })
+    send({ t: 'diag', what: 'keyboard', events: kbLog.slice() })
+    kbLog.length = 0
+  }, 2500)
+}
 
 // Typed text goes as TEXT, so autocorrect, dictation and emoji survive. The box
 // is emptied immediately, so it never accumulates and never double-types.

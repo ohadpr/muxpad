@@ -243,6 +243,15 @@ export function createApp(deps: AppDeps): Hono {
         registry: resolved.apps.registry,
         ...(resolved.selfUrl ? { apiUrl: resolved.selfUrl } : {}),
         ...(resolved.browserTailnetHost ? { tailnetHost: resolved.browserTailnetHost } : {}),
+        // Pressing Done in the viewer tells the conversation that asked. The
+        // relay is the same one the chat composer uses, so a message that
+        // arrives mid-turn queues rather than being dropped.
+        ...(resolved.agentBridge
+          ? {
+              resumeAgent: (paneId: string, text: string) =>
+                resolved.agentBridge?.send(paneId, text),
+            }
+          : {}),
       }),
     );
     // The viewer, served underneath muxpad's own origin so the link a person is
