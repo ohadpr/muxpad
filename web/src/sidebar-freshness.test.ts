@@ -91,7 +91,7 @@ const corpusRows = (): Tab[] => cachedAllTabs()?.find((g) => g.id === WS)?.tabs 
 
 /** The composer's live cell, derived exactly as ChatPane derives it. */
 const agentLabel = (): string | null =>
-  liveStatusLabel({ agentCount: runningChildren(corpusRows()).length });
+  liveStatusLabel({ chats: runningChildren(corpusRows()).length });
 
 const fireResync = () => {
   for (const h of [...resyncHandlers]) h();

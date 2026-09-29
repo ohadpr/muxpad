@@ -27,12 +27,54 @@
  *
  * So the contract is now the name: null means NOTHING is running. A turn with
  * no subagents is still a turn.
+ *
+ * ── TWO POPULATIONS, AND THE NUMBER ONLY EVER MEANT ONE ─────────────────────
+ * Observed: the cell read `5 agents` while the sidebar showed 2 rows, and the
+ * sidebar was right — of five workers spawned, three had finished. The question
+ * that came back was "do the 5 agents count some additional primitive that
+ * doesn't show up in the sidebar?", and THAT IT HAD TO BE ASKED IS THE BUG.
+ *
+ * It could be asked because the roster this cell sizes is a UNION of two
+ * different things:
+ *
+ *   CHILD CHATS      panes muxpad spawned. They are rows in the sidebar, they
+ *                    have a workspace and a slug, you can navigate to one.
+ *   HARNESS SUBAGENTS the Task/Agent fan-out inside a single turn. They are not
+ *                    panes, have no row anywhere, and cannot be visited.
+ *
+ * `agentCount` was `roster.length` — the two added together — and the word
+ * "agents" then silently meant whichever mix happened to be running. A reader
+ * comparing it against the sidebar is comparing against the child-chat half
+ * alone, so any subagent at all makes the two disagree by construction.
+ *
+ * THE NUMBER IS NOW THE CHILD CHATS, full stop, so it equals the rows the
+ * sidebar draws — one predicate (`childIsRunning`), one population, no
+ * reconciling to do. Subagents are still reported, because they are real work
+ * and the cell exists to say something is running, but they are reported as
+ * THEMSELVES in a term of their own. The label can be longer than it was in the
+ * mixed case; it can no longer be wrong, and a truncated `2 agents · …` still
+ * beats a confident `5 agents`. (The full string rides `title`/`aria-label`.)
+ *
+ * NOTE f8ce795 is not this fix. It corrected the child-chat half — from "chats
+ * that exist" to "chats that work" — and left the union in place, which is why
+ * the cell was still over-reporting afterwards.
  */
-export function liveStatusLabel(opts: { agentCount: number; turnActive?: boolean }): string | null {
-  const { agentCount, turnActive = false } = opts;
-  // Subagents win the label when they exist: "3 agents" is strictly more
-  // informative than "Working…", and it is the one that opens a roster.
-  if (agentCount > 0) return `${agentCount} agent${agentCount === 1 ? '' : 's'}`;
+export function liveStatusLabel(opts: {
+  /** Child chats actually running — `runningChildren`, the sidebar's own set. */
+  chats: number;
+  /** Harness subagents in this turn's roster. A different population. */
+  subagents?: number;
+  turnActive?: boolean;
+}): string | null {
+  const { chats, subagents = 0, turnActive = false } = opts;
+  const parts: string[] = [];
+  // Chats first: they are the ones with rows to compare against, so the number
+  // a reader checks against the sidebar is the one they read first.
+  if (chats > 0) parts.push(`${chats} agent${chats === 1 ? '' : 's'}`);
+  if (subagents > 0) parts.push(`${subagents} subagent${subagents === 1 ? '' : 's'}`);
+  // Either population beats "Working…": it is strictly more informative, and it
+  // is the one that opens a roster.
+  if (parts.length > 0) return parts.join(' · ');
   return turnActive ? 'Working…' : null;
 }
 

@@ -103,17 +103,43 @@ describe('the bar, the roster and the sidebar name the same running children', (
   /** What the bar and the roster are built from — the one predicate. */
   const running = () => runningChildren(CHILDREN);
 
-  function mountBar(kids: readonly Kid[]) {
+  /**
+   * The roster EXACTLY as ChatPane builds it: child chats carry `chat` (there
+   * is somewhere to navigate to), harness subagents do not. That one field is
+   * the discriminator the component splits on, so the test splits on it too.
+   */
+  function rosterFor(kids: readonly Kid[], subagents = 0) {
+    return [
+      ...kids.map((k) => ({
+        id: `chat:${k.tabId}`,
+        label: k.tabName,
+        steps: 0,
+        busy: true,
+        chat: { workspaceSlug: 'personal', tabSlug: k.tabId },
+      })),
+      // No `chat` — a Task fan-out inside one turn. Not a pane, no row anywhere,
+      // cannot be visited. It is the population that used to be added into the
+      // same number as the chats.
+      ...Array.from({ length: subagents }, (_, i) => ({
+        id: `sub-${i}`,
+        label: `explore-${i}`,
+        steps: 3,
+        busy: true,
+      })),
+    ];
+  }
+
+  /** ChatPane's own derivation, so the label under test is the shipped one. */
+  const labelFor = (agents: ReturnType<typeof rosterFor>) => {
+    const chats = agents.filter((a) => 'chat' in a && a.chat).length;
+    return liveStatusLabel({ chats, subagents: agents.length - chats });
+  };
+
+  function mountBar(kids: readonly Kid[], subagents = 0) {
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
-    const agents = kids.map((k) => ({
-      id: `chat:${k.tabId}`,
-      label: k.tabName,
-      steps: 0,
-      busy: true,
-      chat: { workspaceSlug: 'personal', tabSlug: k.tabId },
-    }));
+    const agents = rosterFor(kids, subagents);
     act(() => {
       root?.render(
         <SessionBar
@@ -121,7 +147,7 @@ describe('the bar, the roster and the sidebar name the same running children', (
           folder={null}
           status={null}
           send={() => {}}
-          liveLabel={liveStatusLabel({ agentCount: agents.length })}
+          liveLabel={labelFor(agents)}
           agents={agents}
           mode="chat"
         />,
@@ -138,7 +164,7 @@ describe('the bar, the roster and the sidebar name the same running children', (
 
   it('and on HOW MANY — the number above the composer', () => {
     const truth = sidebarSpins();
-    expect(liveStatusLabel({ agentCount: running().length })).toBe(
+    expect(liveStatusLabel({ chats: running().length })).toBe(
       `${truth.length} agent${truth.length === 1 ? '' : 's'}`,
     );
   });
@@ -188,12 +214,137 @@ describe('the bar, the roster and the sidebar name the same running children', (
     // demoting every `working` row, so it cannot rot when a row is added above.
     const quiet = CHILDREN.map((k) => ({ ...k, status: 'idle' as const }));
     expect(runningChildren(quiet)).toEqual([]);
-    expect(liveStatusLabel({ agentCount: runningChildren(quiet).length })).toBe(null);
+    expect(liveStatusLabel({ chats: runningChildren(quiet).length })).toBe(null);
+  });
+});
+
+/**
+ * THE COUNT EQUALS THE ROWS — the live instance that reopened this.
+ *
+ * "The status cell read '5 agents'. The sidebar showed 2 rows. The sidebar was
+ *  RIGHT: of the five workers I spawned, three had already finished."
+ *
+ * Verified against the server at the time: exactly two children were `working`.
+ * The user's question was "do the 5 agents count some additional primitive that
+ * doesn't show up in the sidebar?" — and it does: the roster is a UNION of child
+ * chats and harness subagents, and the cell was sized with `roster.length`.
+ *
+ * That the question had to be ASKED is the failure, so these pin the number to
+ * the rows rather than to a literal — and do it through the RENDERED roster, so
+ * the number and the list it opens cannot drift apart.
+ */
+describe('the number above the composer equals the child rows, whatever else runs', () => {
+  let host: HTMLDivElement | null = null;
+  let root: ReturnType<typeof createRoot> | null = null;
+
+  afterEach(() => {
+    act(() => root?.unmount());
+    host?.remove();
+    host = null;
+    root = null;
+  });
+
+  function mount(agents: ReturnType<typeof buildRoster>) {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    const chats = agents.filter((a) => 'chat' in a && a.chat).length;
+    act(() => {
+      root?.render(
+        <SessionBar
+          paneId="p1"
+          folder={null}
+          status={null}
+          send={() => {}}
+          liveLabel={liveStatusLabel({ chats, subagents: agents.length - chats })}
+          agents={agents}
+          mode="chat"
+        />,
+      );
+    });
+    return host;
+  }
+
+  function buildRoster(kids: readonly Kid[], subagents: number) {
+    return [
+      ...kids.map((k) => ({
+        id: `chat:${k.tabId}`,
+        label: k.tabName,
+        steps: 0,
+        busy: true,
+        chat: { workspaceSlug: 'personal', tabSlug: k.tabId },
+      })),
+      ...Array.from({ length: subagents }, (_, i) => ({
+        id: `sub-${i}`,
+        label: `explore-${i}`,
+        steps: 3,
+        busy: true,
+      })),
+    ];
+  }
+
+  /** The leading number the cell renders. */
+  const leadingCount = (box: HTMLElement) =>
+    Number(
+      box
+        .querySelector('.chat-status-seg.-live .chat-status-seg-label')
+        ?.textContent?.match(/^(\d+)/)?.[1] ?? -1,
+    );
+
+  it('reads the sidebar count, not the roster length, with subagents present', () => {
+    // THE OBSERVED SCENE, reconstructed: the running children of the real set,
+    // plus three harness subagents. `5 agents` is what shipped.
+    const truth = sidebarSpins();
+    const box = mount(buildRoster(runningChildren(CHILDREN), 3));
+    expect(leadingCount(box)).toBe(truth.length);
+    expect(
+      box.querySelector('.chat-status-seg.-live .chat-status-seg-label')?.textContent,
+    ).not.toBe(`${truth.length + 3} agents`);
+  });
+
+  it('names the subagents instead of folding them in', () => {
+    const box = mount(buildRoster(runningChildren(CHILDREN), 3));
+    // The second population is reported — it is real work — but as ITSELF.
+    expect(
+      box.querySelector('.chat-status-seg.-live .chat-status-seg-label')?.textContent,
+    ).toContain('3 subagents');
+  });
+
+  it('matches the number of NAVIGABLE rows the roster opens', () => {
+    // The tightest form of "one source": the number and the list it opens are
+    // rendered from the same array, so a child row and a subagent row cannot be
+    // counted alike. Only child chats render a link — a subagent has nowhere to
+    // go — which is the same `chat` field the count splits on.
+    const box = mount(buildRoster(runningChildren(CHILDREN), 4));
+    act(() => box.querySelector<HTMLButtonElement>('.chat-status-seg.-live')?.click());
+    expect(box.querySelectorAll('.chat-roster-link')).toHaveLength(leadingCount(box));
+    // …and the roster still lists everything that is running, both kinds.
+    expect(box.querySelectorAll('.chat-roster-item')).toHaveLength(
+      runningChildren(CHILDREN).length + 4,
+    );
+  });
+
+  it('says nothing about agents when only subagents are running', () => {
+    // No children at all: the cell must not borrow the word that means "a chat
+    // you can open", because there is no row anywhere to reconcile it against.
+    const box = mount(buildRoster([], 2));
+    expect(box.querySelector('.chat-status-seg.-live .chat-status-seg-label')?.textContent).toBe(
+      '2 subagents',
+    );
   });
 });
 
 describe('the pane wires the roster to that predicate', () => {
   const SRC = readFileSync(join(__dirname, 'ChatPane.tsx'), 'utf8');
+
+  it('sizes the cell from the child chats, not the whole roster', () => {
+    // `agentCount: rosterAgents.length` is the exact expression that put two
+    // populations behind one number. The pure functions above are only the
+    // truth if the component splits them the same way.
+    expect(SRC).not.toContain('agentCount: rosterAgents.length');
+    expect(SRC).toContain('rosterAgents.filter((a) => a.chat).length');
+    expect(SRC).toContain('subagents: rosterAgents.length - rosterChats');
+  });
 
   it('derives the live children with runningChildren, not by negating done', () => {
     // The pure functions above are only the truth if the component calls them.
