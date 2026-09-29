@@ -8,7 +8,9 @@ import {
   PUBLIC_BASE_URL_KEY,
   type PublicBaseResolver,
   TAILSCALE_DISCOVERY_KEY,
+  baseDurability,
   createPublicBaseResolver,
+  durabilityNote,
   normalizeBaseUrl,
 } from './public-base.js';
 import { GlobalsStore } from './store/GlobalsStore.js';
@@ -485,18 +487,143 @@ describe('pinning', () => {
     expect(globals.get(PUBLIC_BASE_PINNED_KEY)).toBeNull();
   });
 
-  it('exposes the ordered candidates for diagnosis', () => {
+  it('exposes the ordered candidates for diagnosis, each with its durability', () => {
     r.setPinned(TUNNEL);
     globals.set(PUBLIC_BASE_URL_KEY, FUNNEL);
     expect(r.candidates()).toEqual([
-      { url: TUNNEL, source: 'pinned' },
-      { url: FUNNEL, source: 'persisted' },
+      { url: TUNNEL, source: 'pinned', durability: 'ephemeral' },
+      { url: FUNNEL, source: 'persisted', durability: 'tailnet' },
     ]);
   });
 
   it('de-duplicates a url reachable by two routes, keeping the higher source', () => {
     r.setPinned(TUNNEL);
     globals.set(PUBLIC_BASE_URL_KEY, TUNNEL);
-    expect(r.candidates()).toEqual([{ url: TUNNEL, source: 'pinned' }]);
+    expect(r.candidates()).toEqual([
+      { url: TUNNEL, source: 'pinned', durability: 'ephemeral' },
+    ]);
+  });
+});
+
+/**
+ * THE DEFECT THESE COVER — measured on the live machine, 2026-09-28.
+ *
+ * Every artifact published between 2026-09-19 and 2026-09-27 was printed under
+ * `search-particle-rules-ten.trycloudflare.com`. At 19:45 on the 27th ptyd
+ * restarted, the tunnel pane was rebuilt, cloudflared was handed a NEW random
+ * hostname, and that name stopped resolving — NXDOMAIN, permanently. Every link
+ * in every report and every chat transcript from those nine days died at once.
+ *
+ * Nothing was broken. The resolver picked correctly, the supervisor restarted
+ * correctly, the bytes never moved. The defect is that `muxpad publish` printed
+ * a URL with a shelf life and said nothing about it, so nine days of links were
+ * handed out as if they were permanent.
+ *
+ * So durability is now a property of the ANSWER, carried on every surface that
+ * prints one. It is derived from the HOST, never from the source: a quick-tunnel
+ * name a human pinned by hand rots exactly as fast as one muxpad minted for
+ * itself — which is the 2026-08-30 incident, where a hand-pinned
+ * `part-anonymous-brilliant-resume.trycloudflare.com` outlived its process by
+ * nineteen days.
+ */
+describe('durability — how long the ADDRESS lives, not whether it answers now', () => {
+  it('classifies a quick tunnel as ephemeral, whatever rung it came in on', () => {
+    for (const source of ['pinned', 'tunnel', 'hint', 'persisted'] as const)
+      expect(baseDurability('https://any-name.trycloudflare.com', source)).toBe('ephemeral');
+  });
+
+  it('classifies a tailnet name as tailnet-only — durable, but not public', () => {
+    expect(baseDurability(FUNNEL, 'persisted')).toBe('tailnet');
+    expect(baseDurability('https://dt.example-tailnet.ts.net', 'funnel')).toBe('tailnet');
+  });
+
+  it('classifies a real domain as permanent', () => {
+    expect(baseDurability('https://pub.example.com', 'env')).toBe('permanent');
+    expect(baseDurability('https://pub.example.com', 'pinned')).toBe('permanent');
+  });
+
+  it('classifies the loopback fallback as local', () => {
+    expect(baseDurability('http://127.0.0.1:7778', 'local')).toBe('local');
+  });
+
+  it('writes the sentence the CLI prints, and nothing for a base that keeps', () => {
+    expect(durabilityNote('ephemeral')).toContain('quick tunnel');
+    expect(durabilityNote('ephemeral')).toContain('muxpad publish --url');
+    expect(durabilityNote('tailnet')).toContain('tailnet');
+    expect(durabilityNote('permanent')).toBeNull();
+    expect(durabilityNote('local')).toBeNull();
+  });
+
+  it('rides along on the resolved base, so every caller can say it', async () => {
+    const live = 'https://any-name.trycloudflare.com';
+    const r = make({ tunnelBaseUrl: () => live });
+    reachable.add(live);
+    expect(await r.resolve({ probe: true })).toMatchObject({
+      source: 'tunnel',
+      durability: 'ephemeral',
+    });
+  });
+
+  it('reports the tailnet funnel as durable-but-private, not as a public base', async () => {
+    const r = make();
+    globals.set(PUBLIC_BASE_URL_KEY, FUNNEL);
+    expect(await r.resolve({ probe: true })).toMatchObject({
+      source: 'persisted',
+      durability: 'tailnet',
+    });
+  });
+});
+
+/**
+ * `reachable` used to be `null` for the winning tunnel, because the tunnel
+ * branch returns before the probe. The REASON for that early return is sound and
+ * unchanged (see public-base.ts): a probe can only ever demote a tunnel whose
+ * liveness we already know by construction, and a false negative swaps a working
+ * public link for a blocked :8443 one.
+ *
+ * But "do not RANK on it" was implemented as "do not MEASURE it", and those are
+ * different. `muxpad publish --base` printed `reachable: not checked` for the one
+ * candidate the user most wanted checked. So: probe it, report it, and still
+ * return it regardless.
+ */
+describe('the tunnel is measured for reporting, never for ranking', () => {
+  it('reports health for a tunnel that answers', async () => {
+    const live = 'https://any-name.trycloudflare.com';
+    const r = make({ tunnelBaseUrl: () => live });
+    reachable.add(live);
+    const got = await r.resolve({ probe: true });
+    expect(got.source).toBe('tunnel');
+    expect(got.health?.alive).toBe(true);
+  });
+
+  it('still returns the tunnel when the probe says dead — the whole point', async () => {
+    const live = 'https://any-name.trycloudflare.com';
+    const r = make({ tunnelBaseUrl: () => live });
+    globals.set(PUBLIC_BASE_URL_KEY, FUNNEL); // a reachable alternative, deliberately
+    // NOT in `reachable`: this machine's resolver NXDOMAINs the tunnel's own
+    // hostname while Cloudflare's edge serves it 200. Observed live.
+    const got = await r.resolve({ probe: true });
+    expect(got.baseUrl).toBe(live);
+    expect(got.source).toBe('tunnel');
+    expect(got.health?.alive).toBe(false);
+  });
+
+  it('does not probe the tunnel when probing was not asked for', async () => {
+    let calls = 0;
+    const live = 'https://any-name.trycloudflare.com';
+    const r = createPublicBaseResolver({
+      db,
+      funnel,
+      publicPort: 7778,
+      tunnelBaseUrl: () => live,
+      probe: async () => {
+        calls += 1;
+        return ALIVE;
+      },
+    });
+    const got = await r.resolve();
+    expect(got.baseUrl).toBe(live);
+    expect(got.health).toBeNull();
+    expect(calls).toBe(0);
   });
 });
