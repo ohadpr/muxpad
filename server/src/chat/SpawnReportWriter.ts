@@ -52,6 +52,17 @@ export class SpawnReportWriter {
   private readonly inFlight = new Set<string>();
   /** Tabs whose task label has been ATTEMPTED this process — see `start`. */
   private readonly taskTried = new Set<string>();
+  /**
+   * Tabs whose report has already been RETRIED this process.
+   *
+   * One retry, ever, per worker per boot. The gate in spawn-report.ts assumes
+   * another turn-end will come along to try again on; a RETIRED worker never
+   * finishes another turn, so without this a transient failure was permanent —
+   * three of six children in one afternoon, each with the attempt stamped and no
+   * state at all. In memory rather than a column because what it bounds is a
+   * BROKEN INSTALL spinning, and a restart is a fine moment to try once more.
+   */
+  private readonly retried = new Set<string>();
   private unsubscribe: (() => void) | null = null;
   /** Tests await this to let a triggered generation settle. */
   private pending: Promise<unknown> = Promise.resolve();
@@ -173,11 +184,29 @@ export class SpawnReportWriter {
     new SpawnRoundStore(this.db).close(tabId, Date.now());
     if (this.inFlight.has(tabId)) return;
     this.inFlight.add(tabId);
-    const run = maybeWriteSpawnReport(this.db, tabId, paneId, this.model, {
-      crashed: opts.crashed,
-      awaiting: opts.awaiting,
-      glossary: this.glossary(),
-    })
+    const attempt = (force: boolean) =>
+      maybeWriteSpawnReport(this.db, tabId, paneId, this.model, {
+        crashed: opts.crashed,
+        awaiting: opts.awaiting,
+        glossary: this.glossary(),
+        force,
+      });
+    const run = attempt(false)
+      .then(async (first) => {
+        // RETRY ONCE on a generation that produced nothing. `force` is what gets
+        // past the interval the failed attempt just charged — see the option's
+        // note for why a retired worker has no other way back here.
+        //
+        // Only when the row still has NO state: `none` is an answer, `crashed`
+        // and `awaiting` are facts we observed, and re-asking any of them would
+        // spend a second call to be told the same thing.
+        if (first) return first;
+        if (this.retried.has(tabId)) return first;
+        const row = new TabStore(this.db).getById(tabId);
+        if (!row || row.spawn_report_state) return first;
+        this.retried.add(tabId);
+        return attempt(true);
+      })
       .then((write) => {
         // The sentences arrive up to thirty seconds after the round closed, so
         // they are attached to the round that ENDED rather than to whatever is

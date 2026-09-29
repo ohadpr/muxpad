@@ -976,6 +976,69 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // THE WORKERS THAT FINISHED BEFORE ROUNDS EXISTED.
+    //
+    // `spawn_rounds` only records what happens after v32 lands, and five workers
+    // had already been spawned, run and retired by then — so the user watched
+    // five jobs finish with nothing in the conversation at all. Their rounds are
+    // reconstructible from what the row already says, exactly, with no model
+    // call and no guess:
+    //
+    //   started_at  = created_at    the spawn IS the handover, for the first round
+    //   ended_at    = retired_at    NULL for one still running, which is right
+    //   report      = spawn_report  whatever was generated for it, if anything
+    //
+    // ONE round per child, because that is all the tab columns can express —
+    // which is the whole reason the table exists. A worker re-tasked four times
+    // before this ran gets one round covering the lot, and that is the honest
+    // limit of the data rather than a defect of the backfill: the boundaries of
+    // rounds 2..N were never written down anywhere. (The archive knows them, at
+    // its own 15-minute lag — see the v32 note. Not worth a model call or a scan
+    // for history nobody is looking at.)
+    //
+    // A RETIRED CHILD WITH NO REPORT STILL GETS ITS ROUND. An honest empty card
+    // beats no card: the round is the record that it ran and finished, and the
+    // missing summary is a separate fact the card says out loud.
+    //
+    // IDEMPOTENT, and by the data rather than by the version gate: it inserts
+    // only for children with NO round at all. The gate already prevents a second
+    // pass, but a migration that would double every card in every conversation
+    // if it ever ran twice is one restore-from-backup away from doing it.
+    version: 34,
+    apply: (db) => {
+      const orphans = db
+        .prepare(
+          `SELECT t.id, t.created_at, t.retired_at, t.spawn_report, t.spawn_report_state
+             FROM tabs t
+            WHERE t.spawned_by IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM spawn_rounds r WHERE r.tab_id = t.id)`,
+        )
+        .all() as Array<{
+        id: string;
+        created_at: number;
+        retired_at: number | null;
+        spawn_report: string | null;
+        spawn_report_state: string | null;
+      }>;
+      const ins = db.prepare(
+        `INSERT INTO spawn_rounds (id, tab_id, started_at, ended_at, report, report_state)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      );
+      for (const t of orphans) {
+        // A deterministic id, so a restore that somehow reaches this twice
+        // collides on the primary key rather than inserting a twin.
+        ins.run(
+          `backfill-${t.id}`,
+          t.id,
+          t.created_at,
+          t.retired_at,
+          t.spawn_report,
+          t.spawn_report_state,
+        );
+      }
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

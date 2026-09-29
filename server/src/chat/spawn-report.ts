@@ -491,6 +491,22 @@ export async function maybeWriteSpawnReport(
     awaiting?: boolean;
     /** This install's vocabulary (chat/glossary.ts). Empty is fine. */
     glossary?: readonly string[];
+    /**
+     * Skip the interval gate — a RETRY after a failure.
+     *
+     * The gate assumes another turn-end is coming along to try again on, and for
+     * a RETIRED worker none ever does: it has delivered, its row has left the
+     * live list, and nothing will call this again for thirty minutes or ever.
+     * So one transient failure meant a permanently empty card. Measured in the
+     * wild: three of six children had the attempt stamped and no state at all,
+     * and re-running the real generator over one of those transcripts produced a
+     * good 379-character report in 12.5 seconds.
+     *
+     * Bounded by the CALLER (SpawnReportWriter allows one retry per worker per
+     * process), because the thing the gate protects against — a broken install
+     * spawning a subprocess per turn forever — is still real.
+     */
+    force?: boolean;
   } = {},
 ): Promise<SpawnReportWrite | null> {
   const now = opts.now ?? Date.now();
@@ -530,7 +546,10 @@ export async function maybeWriteSpawnReport(
   // the gate. The turn count the gate needs is only knowable from it.
   const { conversation, turns } = readRecentTurns(db, paneId);
   if (!conversation) return fallback();
-  if (!shouldConsiderSpawnReport({ lastAt: tabs.spawnReportAt(tabId), turns, now })) {
+  if (
+    opts.force !== true &&
+    !shouldConsiderSpawnReport({ lastAt: tabs.spawnReportAt(tabId), turns, now })
+  ) {
     return fallback();
   }
 
@@ -545,8 +564,16 @@ export async function maybeWriteSpawnReport(
       }),
       abort.signal,
     );
-  } catch {
-    // Silent by contract. The CLOCK STILL ADVANCES — a child with no report yet
+  } catch (err) {
+    // SAY SO. This was silent "by contract", and that contract was wrong: three
+    // workers in one afternoon produced no summary and left not one line
+    // anywhere to say why, so the only way to find out was to re-run the
+    // generator by hand against their transcripts. A rail that cannot explain
+    // itself is worse than a noisy one.
+    console.warn(
+      `[spawn-report] generation failed for tab ${tabId}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    // The CLOCK STILL ADVANCES — a child with no report yet
     // passes the gate unconditionally, so a persistent failure would otherwise
     // spawn a fresh subprocess on every finished turn indefinitely.
     tabs.touchSpawnReportAt(tabId, now);

@@ -29,6 +29,7 @@ import {
   renderReportMarker,
   repinPicks,
   runIsSettled,
+  spawnCardSummary,
   spawnCards,
   spawnHandle,
   spawnLabel,
@@ -1354,6 +1355,44 @@ describe('spawnArtifacts — where the work is, on the card', () => {
 
   it('is absent when the row has none — not an empty list to render', () => {
     expect(CORPUS[0]?.artifacts).toBeUndefined();
+  });
+});
+
+/**
+ * AN HONEST EMPTY CARD BEATS NO CARD.
+ *
+ * Three of six children finished real work and produced no summary — the
+ * generator threw, silently, and a retired worker never gets another turn to
+ * retry on. Backfilled rounds have the same shape: a child that ran before the
+ * table existed has a round and, often, nothing to say about it.
+ *
+ * The card used to render a bare tick for all of them, which reads as "this
+ * finished and there was nothing to it" — a claim we have no basis for.
+ */
+describe('a completion with no summary says so', () => {
+  const finished = (over: Partial<MentionChat> = {}) =>
+    chat({ tabName: 'xws-build-2', tabId: 'xb', done: true, doneReason: 'delivered', ...over });
+
+  it('names the gap rather than leaving a bare tick', () => {
+    expect(spawnCardSummary(undefined)).toBe('No summary was generated for this one.');
+  });
+
+  it('still prefers a real summary, and the two honest verdicts', () => {
+    expect(spawnCardSummary({ text: 'Found 2 dead rules.', state: 'ok', at: 1 })).toBe(
+      'Found 2 dead rules.',
+    );
+    expect(spawnCardSummary({ text: null, state: 'none', at: 1 })).toBe(
+      'Finished with nothing to report.',
+    );
+    expect(spawnCardSummary({ text: null, state: 'awaiting', at: 1 })).toBe(
+      'Stopped to ask you something.',
+    );
+  });
+
+  it('does not offer an expander over a gap', () => {
+    // There is nothing behind it — the summary is missing precisely because the
+    // generator produced nothing to expand from.
+    expect(canExpandSpawn(finished())).toBe(false);
   });
 });
 

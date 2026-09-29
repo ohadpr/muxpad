@@ -297,6 +297,8 @@ describe('maybeWriteSpawnReport — one attempt, and every failure is one', () =
     return { tabId, paneId };
   }
 
+  const GOOD_REPORT = 'Counted the TODO comments: 41 across 6 files, listed in /tmp/todos.md.';
+
   const WORK = [
     { kind: 'user', text: 'count every TODO comment in the repo' },
     { kind: 'assistant', text: 'found 41, in 6 files; wrote the list to /tmp/todos.md' },
@@ -363,6 +365,36 @@ describe('maybeWriteSpawnReport — one attempt, and every failure is one', () =
     const tab = new TabStore(db).getById(tabId);
     expect(tab?.spawn_report_state).toBeUndefined();
     expect(new TabStore(db).spawnReportAt(tabId)).toBe(4_000);
+  });
+
+  it('FORCED past the interval, because a retired worker has no second turn', async () => {
+    // The trap this closes. The interval gate assumes another turn-end will come
+    // along to retry on — and for a RETIRED worker none ever does, so one
+    // transient failure meant a permanently empty card. Measured in the wild:
+    // three of six children had `spawn_report_at` stamped and no state at all,
+    // and re-running the real generator against one of those transcripts
+    // produced a perfectly good 379-character report in 12.5 seconds.
+    const { tabId, paneId } = makeWorker(WORK);
+    await maybeWriteSpawnReport(
+      db,
+      tabId,
+      paneId,
+      async () => {
+        throw new Error('transient');
+      },
+      { now: 4_000 },
+    );
+    // Inside the interval, so the ordinary path would refuse…
+    expect(
+      await maybeWriteSpawnReport(db, tabId, paneId, async () => GOOD_REPORT, { now: 5_000 }),
+    ).toBeNull();
+    // …and the retry goes anyway.
+    expect(
+      await maybeWriteSpawnReport(db, tabId, paneId, async () => GOOD_REPORT, {
+        now: 6_000,
+        force: true,
+      }),
+    ).toMatchObject({ state: 'ok' });
   });
 
   it('charges the attempt when the model THREW', async () => {
