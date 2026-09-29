@@ -1614,10 +1614,10 @@
 /* ─── Actions ────────────────────────────────────────────────────────── */
 
 /* "+ New tab" / "+ New workspace" — both read as an ACTION, not another
-   row: smaller, accent-colored, quiet until hover. ONE shared style; the
-   only difference is the left indent (each sits at its own list's level).
-   "+ New tab" is outdented from the tab text column; "+ New workspace"
-   sits at the workspace (outer) level. */
+   row: smaller, accent-colored, quiet until hover. ONE shared style, and both
+   now sit at the workspace (outer) level, because both are outer-level
+   actions: "+ New tab" left the tab column when it left the bottom of one
+   workspace's list for the head of the whole scroller. */
 .navtree-add {
   display: block;
   padding: 4px 8px;
@@ -1645,12 +1645,15 @@
   opacity: 0.4;
   cursor: default;
 }
+/* At the HEAD of the scroller now, above the view switch, in both views. It
+   used to be indented to the tab text column, because it closed one
+   workspace's tab list; there is no such list above it any more. */
 .navtree-new-tab {
-  margin: 2px 8px 4px calc(var(--nt-indent) - 4px);
+  margin: 2px 8px 6px 8px;
 }
-/* Extra top space sets "+ New workspace" apart from the last group's
-   "+ New tab" so it reads as the outer-level action, not part of the
-   group above it. */
+/* Extra top space sets "+ New workspace" apart from whatever list it follows,
+   so it reads as the outer-level action rather than part of the block above
+   it. */
 .navtree-new-workspace {
   margin: 16px 8px 6px 8px;
 }
@@ -2346,6 +2349,49 @@ body.sidenav-resizing iframe {
 .navtree-wspick-row > .navtree-rail-mark {
   flex: 0 0 auto;
   margin-inline-start: var(--nt-rail-gap);
+}
+
+/* ─── …and the same picker on the RAIL ────────────────────────────────────
+   Same markup, same component, the rail's own numbers. The four --nt-rail-*
+   tokens above are declared on the SHEET variant only (they describe a 44px
+   thumb row and nothing else), so a row that simply inherited them here would
+   come out with no height and no insets at all. These are the rail's three
+   steps — the ones every other row on this surface is built from — so the
+   picker cannot drift away from the list it replaces.
+   It is a pill like every other rail row, not a full-bleed band: the bleed is
+   the sheet's language, and the rail's rows float off its edges. */
+.navtree[data-variant="sidebar"] .navtree-wspick-row {
+  gap: var(--nt-gutter);
+  block-size: var(--nt-row-ws);
+  padding-inline: var(--nt-pad) var(--nt-air);
+  margin-inline: 8px;
+  border-radius: 4px;
+}
+.navtree[data-variant="sidebar"] .navtree-wspick-row:hover {
+  background-color: var(--bg-hover);
+}
+.navtree[data-variant="sidebar"] .navtree-wspick-name {
+  /* The sheet bumps its rows to 15px for a thumb; the rail reads at its own
+     14px, like every row beside it. */
+  font-size: inherit;
+}
+/* --nt-rail-gap does not exist here (see above), so the note would sit flush
+   against the name it trails. */
+.navtree[data-variant="sidebar"] .navtree-wspick-note {
+  padding-inline-start: var(--nt-air);
+}
+
+/* The create surface's caption — "New tab in…". A label, at the quiet weight
+   the done-drawer head uses, saying what clicking a row in THIS list does.
+   The switch surface has none: it is the navigator, and a caption over the
+   navigator says nothing. */
+.navtree-wspick-head {
+  padding: 6px 8px 2px 8px;
+  color: var(--fg-dim);
+  font-size: var(--chrome-size-sm);
+}
+.navtree[data-variant="sheet"] .navtree-wspick-head {
+  padding: 10px var(--nt-rail-trail) 4px var(--nt-rail-lead);
 }
 
 /* ─── The sheet's pane list, re-indented ──────────────────────────────────
