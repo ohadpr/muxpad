@@ -85,3 +85,105 @@ export function deepEditableFocus(): boolean {
 export function focusProbeExpression(): string {
   return `(${deepEditableFocus.toString()})()`;
 }
+
+/**
+ * Every text field's box, in top-document viewport coordinates.
+ *
+ * IT DESCENDS, for the same reason the focus probe does — and because the two
+ * disagreeing is worse than either being wrong alone. On a page whose input
+ * lives in an iframe or a shadow root, the flat version returned NO fields: the
+ * viewer then knew of nowhere worth a keyboard, so a tap on the login box raised
+ * nothing on its own and waited for the page's answer, which is exactly the
+ * round trip the boxes exist to avoid. One half of the pair had been taught
+ * about frames and the other had not.
+ *
+ * Frame rects are OFFSET by the frame's own position, because the viewer
+ * hit-tests a tap in the top document's coordinates and an inner rect is
+ * relative to the inner document. An unoffset box is a keyboard that appears
+ * for taps somewhere else entirely.
+ */
+export function textFieldBoxes(): Array<[number, number, number, number]> {
+  const SKIP = [
+    'button',
+    'submit',
+    'reset',
+    'checkbox',
+    'radio',
+    'file',
+    'range',
+    'color',
+    'image',
+    'hidden',
+  ];
+  const SELECTOR = 'input,textarea,[contenteditable=""],[contenteditable=true]';
+  const out: Array<[number, number, number, number]> = [];
+  const CAP = 80;
+
+  const collect = (root: unknown, dx: number, dy: number, depth: number): void => {
+    if (depth > 4 || out.length >= CAP) return;
+    const scope = root as {
+      querySelectorAll?: (s: string) => Iterable<unknown>;
+    };
+    let found: Iterable<unknown> = [];
+    try {
+      found = scope.querySelectorAll?.(SELECTOR) ?? [];
+    } catch {
+      return;
+    }
+    for (const node of found) {
+      if (out.length >= CAP) return;
+      const el = node as {
+        tagName?: string;
+        type?: string;
+        getBoundingClientRect?: () => { left: number; top: number; width: number; height: number };
+      };
+      const tag = (el.tagName || '').toLowerCase();
+      if (tag === 'input' && SKIP.indexOf((el.type || 'text').toLowerCase()) !== -1) continue;
+      const r = el.getBoundingClientRect?.();
+      if (!r || r.width <= 0 || r.height <= 0) continue;
+      out.push([
+        Math.round(r.left + dx),
+        Math.round(r.top + dy),
+        Math.round(r.width),
+        Math.round(r.height),
+      ]);
+    }
+
+    // Shadow roots: the host element is in this scope, its fields are not.
+    let hosts: Iterable<unknown> = [];
+    try {
+      hosts = scope.querySelectorAll?.('*') ?? [];
+    } catch {
+      hosts = [];
+    }
+    for (const node of hosts) {
+      if (out.length >= CAP) return;
+      const el = node as {
+        tagName?: string;
+        shadowRoot?: unknown;
+        contentDocument?: unknown;
+        getBoundingClientRect?: () => { left: number; top: number };
+      };
+      if (el.shadowRoot) collect(el.shadowRoot, dx, dy, depth + 1);
+      const tag = (el.tagName || '').toLowerCase();
+      if (tag === 'iframe' || tag === 'frame') {
+        try {
+          const doc = el.contentDocument;
+          const box = el.getBoundingClientRect?.();
+          // Cross-origin throws here, which is the web working as designed.
+          if (doc && box) collect(doc, dx + box.left, dy + box.top, depth + 1);
+        } catch {
+          // Unknowable. The viewer falls back to guessing for taps in there.
+        }
+      }
+    }
+  };
+
+  collect(document, 0, 0, 0);
+  return out;
+}
+
+/** The expression the host evaluates. Same text as the tested function. */
+export function fieldBoxesExpression(): string {
+  return `(${textFieldBoxes.toString()})()`;
+}
