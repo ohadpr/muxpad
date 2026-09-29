@@ -709,10 +709,26 @@ export interface ConversionReceipt {
 export function ChatNoRunner({
   busy,
   error,
+  failed = false,
   onStart,
 }: {
   busy: boolean;
   error: string | null;
+  /**
+   * The server knows this pane's agent FAILED to start, rather than merely not
+   * being there. Changes the two lines of copy and nothing else — same verb,
+   * same button, because the fix is the same.
+   *
+   * Why it exists: the neutral screen below describes a steady state, and the
+   * bug it was masking is that creating a chat could fail silently. The user
+   * tapped New chat, landed on "This chat has no agent yet", and was asked to
+   * press Start agent for something they had just created — with no hint that
+   * anything had gone wrong, let alone what. The neutral copy stays, because it
+   * is still correct for a pane nobody has started (a converted terminal, a
+   * pane whose runner was killed); this flag is what stops it standing in for a
+   * failure.
+   */
+  failed?: boolean;
   onStart: () => void;
 }) {
   // While it is coming up we show the SAME spinner the pre-grace state shows.
@@ -731,10 +747,16 @@ export function ChatNoRunner({
       <div className="chat-empty-mark" aria-hidden="true">
         ✳
       </div>
-      <p className="chat-empty-title">Nothing running here</p>
-      <p className="chat-empty-hint">This chat has no agent yet.</p>
+      <p className="chat-empty-title">
+        {failed ? 'This chat’s agent could not start' : 'Nothing running here'}
+      </p>
+      <p className="chat-empty-hint">
+        {failed
+          ? 'muxpad tried a few times and gave up. Try again:'
+          : 'This chat has no agent yet.'}
+      </p>
       <button type="button" className="chat-launch-go" onClick={onStart}>
-        Start agent
+        {failed ? 'Try again' : 'Start agent'}
       </button>
       {/* <output> is the live region — announced without stealing the
           composer's focus, same as the conversion refusal. */}
@@ -1450,6 +1472,19 @@ type ServerMsg =
        *  asynchronously, so a real conversation reads as empty for a beat on
        *  every reconnect. */
       hasMessages?: boolean;
+      /**
+       * Why this pane has NO agent, when something refused to make one
+       * ("posix_spawnp failed", "ptyd disconnected"). Absent in every healthy
+       * case, which is the majority of frames.
+       *
+       * It is the difference between the two sentences the empty chat can say.
+       * "This chat has no agent yet" describes a steady state and is true of a
+       * pane nobody has started; printing it over a create whose spawn failed
+       * ten seconds ago was the user's top complaint, because it asked them to
+       * press Start agent for a chat they had just made and said nothing about
+       * what had gone wrong. When this is set the chat says the reason instead.
+       */
+      provisionError?: string;
       // True when a headless turn is already in flight for this pane — a
       // reconnect mid-turn restores the working/Stop state from this.
       turnRunning?: boolean;
@@ -2624,6 +2659,15 @@ export function ChatPane({
   // TRUE — "assume there is history until told otherwise" — so a slow first
   // frame can never flash the alternatives over someone's conversation.
   const [hasMessages, setHasMessages] = useState(true);
+  /**
+   * Why this pane has no agent, from the session frame. Null = nothing is known
+   * to be wrong, which is the normal case.
+   *
+   * Starts NULL — "assume it is coming up" — because the ordinary create is
+   * exactly that: rows first, pty a moment later, and a pessimistic default
+   * would flash a failure over every healthy new chat.
+   */
+  const [provisionError, setProvisionError] = useState<string | null>(null);
   // The pane's agent mode (Chat / Agent), from the session frame. NULL means
   // "not told yet" and is rendered as NO chip at all — an older server omits
   // the field, and drawing "Agent" for it would put a confident claim about
@@ -2760,6 +2804,12 @@ export function ChatPane({
         setMode(msg.mode ?? null);
         // Absent (older server) → assume history: never flash the offer.
         setHasMessages(msg.hasMessages !== false);
+        // ASSIGNED UNCONDITIONALLY, `?? null`. The server omits the key when
+        // provisioning is healthy, and that absence is a meaningful value — it
+        // is how a RECOVERY arrives (a later retry landed, or a runner said
+        // hello). Guarding on presence would leave a fixed chat showing a dead
+        // complaint until the next reload.
+        setProvisionError(msg.provisionError ?? null);
         // Server-owned pending queue: authoritative on every (re)connect.
         setQueue(msg.queue ?? []);
         // The session frame is a FULL SNAPSHOT of the server's durable roster,
@@ -4534,7 +4584,12 @@ export function ChatPane({
       // Grace: a just-created agent tab has no session row until its runner
       // boots and hellos (a few seconds) — spin briefly before declaring
       // there's nothing here.
-      if (!stale)
+      //
+      // …UNLESS the server has already told us the spawn failed. Then the grace
+      // is a spinner over a known answer, and the honest screen is available
+      // now. `provisionError` is only set once every retry is spent, so this
+      // cannot pre-empt a provision that is still in progress.
+      if (!stale && !provisionError)
         return (
           <div className="chat-empty">
             <div className="chat-empty-spinner" aria-hidden="true" />
@@ -4543,7 +4598,21 @@ export function ChatPane({
         );
       // Nothing is running here — but this pane already knows WHAT to run, so
       // the affordance is a button, not shell homework. See ChatNoRunner.
-      return <ChatNoRunner busy={startBusy} error={startError} onStart={() => void startAgent()} />;
+      //
+      // `failed` is what turns the neutral screen into an honest one: same verb,
+      // same button, different sentence — because "this chat has no agent yet"
+      // and "this chat's agent could not be started, here is what said no" are
+      // different facts and were being reported as the same one. `startError`
+      // (this session's own failed tap) still wins when there is one: it is the
+      // newer of the two.
+      return (
+        <ChatNoRunner
+          busy={startBusy}
+          error={startError ?? provisionError}
+          failed={provisionError !== null}
+          onStart={() => void startAgent()}
+        />
+      );
     }
     if (events.length === 0 && !optimisticUser && !sending) {
       // The server SAYS there is history, we just haven't rendered it yet —
