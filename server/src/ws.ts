@@ -31,6 +31,7 @@ import {
 import { TranscriptTail, identityNormalize, muxpadLocate } from './chat/TranscriptReader.js';
 import { agentPaneHasMessages } from './chat/has-messages.js';
 import type { EventBus } from './events.js';
+import { clearProvisionError, provisionError } from './pane-provision.js';
 import { hasProjectContext } from './project-root.js';
 import { type PtydCache, decoratePane, decorateTab } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
@@ -1470,6 +1471,14 @@ export function attachWsServer(deps: {
             // deliberate act by the user, so re-arm supervision immediately.
             if (respawns.get(paneId)?.gaveUp) respawns.delete(paneId);
             else armProbation(paneId);
+            // A runner saying hello is the strongest possible refutation of a
+            // recorded provisioning failure: the pty not only exists, something
+            // in it booted and connected back. Drop the complaint — the whole
+            // point of recording it was to stop a working chat from being
+            // described as broken, and describing a WORKING one as broken is
+            // the same bug wearing the other hat. The syncSession below is what
+            // repaints the open chat.
+            clearProvisionError(paneId);
             agents.attachRunner({
               pane_id: paneId,
               cwd: frame.cwd,
@@ -1963,6 +1972,8 @@ export function attachWsServer(deps: {
         // Mode last delivered to this socket — the gate for the pane.updated
         // subscription below.
         let lastSentMode: AgentMode = BASELINE_AGENT_MODE;
+        // Provisioning verdict last delivered, for the same gate.
+        let lastSentProvision: string | null = null;
         // "Has anything been said here?" — shipped on the session frame so the
         // empty-state UI never has to GUESS from `events.length`, which is 0
         // for a beat on every reconnect while history replays asynchronously.
@@ -2002,8 +2013,25 @@ export function attachWsServer(deps: {
           // with nothing behind it.
           const paneMode = panes.getById(chatPaneId)?.mode ?? BASELINE_AGENT_MODE;
           const hasMessages = paneHasMessages(session?.current_sid ?? null);
+          // WHY THIS PANE HAS NO AGENT, when something refused to make one.
+          //
+          // It rides the session frame because the chat view's whole model of
+          // the world is this socket, and the alternative it replaces was a
+          // guess: with no session and the grace window elapsed, the UI showed
+          // "Nothing running here · This chat has no agent yet", which is the
+          // right sentence for a pane that never had one and a LIE for a pane
+          // whose spawn failed thirty seconds ago. The client renders this
+          // instead when it is set. See server/src/pane-provision.ts.
+          //
+          // In the hello signature (below) so a failure recorded after this
+          // socket connected — which is the normal order, the ladder runs for
+          // seconds — actually re-pushes, and so does the recovery that clears
+          // it. Null in every healthy case, so it adds nothing to the common
+          // frame and cannot cause churn.
+          const provision = provisionError(chatPaneId);
           const hello = JSON.stringify({
             sid: session?.current_sid ?? null,
+            provision,
             writer: session?.writer ?? null,
             view: session?.view_mode ?? null,
             mode: paneMode,
@@ -2023,6 +2051,7 @@ export function attachWsServer(deps: {
           if (first || hello !== lastHello) {
             lastHello = hello;
             lastSentMode = paneMode;
+            lastSentProvision = provision;
             const runner = agentRunners.get(chatPaneId);
             const turnRunning = runner?.turnActive === true;
             const streamText = streamBufs.get(chatPaneId);
@@ -2033,6 +2062,9 @@ export function attachWsServer(deps: {
               session,
               mode: paneMode,
               hasMessages,
+              // Only when set: an absent field reads the same as null to the
+              // client, and the healthy frame stays exactly the bytes it was.
+              ...(provision ? { provisionError: provision } : {}),
               turnRunning,
               // Server-owned pending queue so a (re)connecting or reloaded
               // client renders the same bubbles — the queue is authoritative
@@ -2087,7 +2119,15 @@ export function attachWsServer(deps: {
           // that changes maybe twice a day.
           else if (e.type === 'pane.updated' && e.pane.id === chatPaneId) {
             const m = e.pane.mode ?? BASELINE_AGENT_MODE;
-            if (m !== lastSentMode) syncSession(false);
+            // A provisioning verdict (failed, or recovered) is the OTHER thing
+            // worth a resync, and it has to be here rather than on the 10s poll:
+            // the user is looking at a spinner that is about to be wrong either
+            // way, and ten seconds of "Starting…" over a spawn that has already
+            // given up is the silence this whole change exists to remove.
+            // Compared, not merely present, for the same reason `mode` is — this
+            // event also fires on every busy/title/cwd churn.
+            const nextProvision = e.pane.provision_error ?? null;
+            if (m !== lastSentMode || nextProvision !== lastSentProvision) syncSession(false);
           }
         });
         const sessionPoll = setInterval(() => syncSession(false), 10_000);

@@ -207,4 +207,95 @@ describe('web "New chat" ends up with a live agent session', () => {
     ).json()) as { current_sid: string };
     expect(byPane.current_sid).toBe(SID);
   }, 20_000);
+
+  // ─── AND WHEN IT CANNOT BE PROVISIONED, IT SAYS SO ─────────────────────────
+  // The assertion above pins the happy path, and it PASSED throughout the bug
+  // it was written to catch — because the bug is not that the spawn is never
+  // asked for, it is that a spawn that FAILS is swallowed. `bootstrapTab` asked
+  // ptyd inside a bare `.catch(() => {})`, so a rejected `ensurePane` produced a
+  // tab with correct rows, a correct startup_cmd and no process, and the chat
+  // rendered its neutral "This chat has no agent yet" — a sentence about a
+  // steady state, printed over a silent failure. Nothing recorded the reason.
+  //
+  // A REAL FAILING SPAWN, not a stubbed one: SHELL points at a path that does
+  // not exist, which is what `posix_spawnp failed` looks like from ptyd's side.
+  // Whether node-pty rejects the spawn or hands back a pty that dies on the spot
+  // is exactly the distinction the provisioner covers with hasPane, so this test
+  // deliberately does not care which of the two happens.
+  it('a chat whose pty CANNOT be spawned reports the reason, with a retry', async () => {
+    const goodShell = process.env.SHELL;
+    process.env.SHELL = '/nonexistent/muxpad-test-shell';
+    let paneId: string;
+    try {
+      const created = await newChat();
+      paneId = created.pane.id;
+      // The response is still fast and the rows are still right — the create
+      // does not start failing, it starts being HONEST about failing.
+      expect(created.pane.face).toBe('chat');
+    } finally {
+      if (goodShell === undefined) delete process.env.SHELL;
+      else process.env.SHELL = goodShell;
+    }
+
+    // THE CLIENT CONNECTS FIRST, exactly as the web app does — it navigates on
+    // the create's response and opens /ws/chat before any runner could exist. So
+    // the failure has to be PUSHED to a socket that is already open; a one-shot
+    // hello would leave this chat spinning "Starting…" and then settle on the
+    // neutral "no agent yet", which is the reported symptom.
+    const chat = new WebSocket(`ws://127.0.0.1:${port}/ws/chat/${paneId}`);
+    openSockets.push(chat);
+    const frames: Array<Record<string, unknown>> = [];
+    chat.on('message', (d) => frames.push(JSON.parse(String(d))));
+    await new Promise<void>((res, rej) => {
+      chat.once('open', () => res());
+      chat.once('error', rej);
+    });
+    // The first frame says what is true right now: no session, nothing wrong
+    // yet. The ladder has not given up, and the UI is spinning.
+    await settle(300);
+    const hello = frames.find((f) => f.t === 'session');
+    expect(hello).toBeDefined();
+    expect(hello?.provisionError ?? null).toBeNull();
+
+    // The verdict lands after the retry ladder, which is the whole point: the
+    // failures this exists for are transient, so it tries again before it
+    // complains. Poll until the row carries the reason.
+    // Generous: the ladder is four attempts with a liveness wait on each, ~10s
+    // of real spawning, and this is the assertion that it ARRIVES rather than an
+    // assertion about how fast. A tight window here is a flake on a loaded box.
+    const deadline = Date.now() + 30_000;
+    let detail: { provision_error?: string | null } | undefined;
+    while (Date.now() < deadline) {
+      try {
+        const res = (await (await fetch(`${base()}/api/panes/${paneId}`)).json()) as {
+          provision_error?: string | null;
+        };
+        if (res.provision_error) {
+          detail = res;
+          break;
+        }
+      } catch {
+        // A single dropped poll is not the assertion. This test has four real
+        // failing pty spawns going on underneath it and one `fetch failed` on a
+        // loaded box would otherwise fail a run that was about to pass.
+      }
+      await settle(200);
+    }
+    expect(
+      detail?.provision_error,
+      'the pane row said nothing about why it has no pty',
+    ).toBeTruthy();
+    // ptyd really has no pane for it — this is a genuine dead chat, not a
+    // synthesized complaint.
+    expect(await ptyd.client.hasPane(paneId)).toBe(false);
+
+    // …and the socket that was open the whole time has been TOLD, without
+    // reconnecting and without waiting for its 10s poll — the failure fans out
+    // as `pane.updated`, which this socket already subscribes to. This frame is
+    // what swaps the spinner for the reason and a retry.
+    const told = frames.find((f) => f.t === 'session' && f.provisionError);
+    expect(told?.provisionError, 'the open chat socket was never told why').toContain(
+      String(detail?.provision_error),
+    );
+  }, 60_000);
 });
