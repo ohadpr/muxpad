@@ -28,6 +28,8 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   #bar button:hover{background:#23232e}
   #bar button[aria-pressed="true"]{background:#2b3a55;border-color:#4a6ea8;color:#cfe2ff}
   #takeover{background:#c98a2e;border-color:#c98a2e;color:#fff;font-size:11px;white-space:nowrap}
+  /* Quieter than "take the wheel": that one is an offer, this is a finish. */
+  #handback{border-color:#3d6b4a;color:#9fdcb0;font-size:11px;white-space:nowrap}
   /* Watching: the stream is a picture. Say so rather than letting somebody
      press things that quietly go nowhere. */
   body.watching #screen{cursor:default}
@@ -67,6 +69,7 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   <button id="kb" title="keyboard" aria-pressed="false">&#9000;</button>
   <button id="paste" title="paste" aria-label="paste">&#128203;</button>
   <button id="takeover" title="take the wheel" hidden>take the wheel</button>
+  <button id="handback" title="give the browser back to the agent" hidden>done</button>
   <span id="url" title="">–</span>
   <span id="msg"></span>
 </div>
@@ -344,10 +347,17 @@ sink.addEventListener('blur', () => kbBtn.setAttribute('aria-pressed','false'))
 // this page is served from muxpad's origin, so it can — and only then starts
 // forwarding input.
 const takeover = document.getElementById('takeover')
+const handback = document.getElementById('handback')
 const profileFromPath = () => location.pathname.split('/').filter(Boolean)[1]
 const applyWatching = () => {
   document.body.classList.toggle('watching', watching)
   takeover.hidden = !watching
+  // The way OUT. Closing the desktop modal hands the browser back; closing a tab
+  // on a phone does nothing, so without this there was no gesture for "I have
+  // finished" at all and the agent waited out the whole lease — up to ten
+  // minutes of nothing, at the end of every handoff, on the surface the handoff
+  // was built for.
+  handback.hidden = watching
   msg.textContent = watching ? 'watching — the agent is still working' : ''
 }
 takeover.addEventListener('click', async () => {
@@ -361,11 +371,35 @@ takeover.addEventListener('click', async () => {
     })
     if (!r.ok) { msg.textContent = 'could not take the wheel'; return }
     watching = false
-    applyWatching()
-
   } catch { msg.textContent = 'could not reach muxpad' }
 })
 applyWatching()
+
+/**
+ * HANDS IT BACK, deliberately.
+ *
+ * Not on pagehide, which is the tempting automatic version and is wrong here:
+ * iOS fires it when you switch apps, and switching apps is exactly what a login
+ * IS — going to get the code out of your email. Releasing there would hand the
+ * browser back mid-two-factor. So it is a button, and an abandoned lease is
+ * left to lapse on its own.
+ */
+handback.addEventListener('click', async () => {
+  const profile = profileFromPath()
+  if (!profile) return
+  try {
+    const r = await fetch('/api/browsers/' + profile)
+    const lease = r.ok ? (await r.json())?.wheel : null
+    await fetch('/api/browsers/' + profile + '/wheel', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ by: lease?.by ?? ('viewer-' + profile) }),
+    })
+    // Still looking, no longer driving — the agent can get on with it.
+    watching = true
+    applyWatching()
+  } catch { msg.textContent = 'could not reach muxpad' }
+})
 
 /**
  * KEEPS THE WHEEL WHILE SOMEBODY IS HOLDING IT.
