@@ -250,6 +250,15 @@ describe('the spawn cards and the roster read ONE list', () => {
     expect(BODY).toContain('expanded={expanded}');
   });
 
+  it('SHOWS WHERE THE WORK IS, and says something even with no summary', () => {
+    // The `cross-ws` case: a published page, a 13 KB report, a refused summary,
+    // and a card that was a green tick and nothing else. The artifacts do not
+    // ride the summary — that is why they survive it — and the summary line
+    // falls back to a sentence rather than to a blank.
+    expect(BODY).toContain('artifacts={kid.artifacts}');
+    expect(BODY).toContain('body={report ? spawnReportSummary(report) : undefined}');
+  });
+
   it('offers NO expander when there is nothing behind it', () => {
     // Three report states in the wild — `ok`, `none`, and unset — and two of
     // them have nothing to show. An expander over those fell through to the

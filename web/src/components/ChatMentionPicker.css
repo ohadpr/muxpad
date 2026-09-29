@@ -523,6 +523,36 @@ button.chat-mention-card-head {
   transform: rotate(-45deg);
   border-radius: 1px;
 }
+/* AWAITING YOU — the one state on this card that WANTS something, so it takes
+   the channel that means exactly that. `--status-blocked` is the rail's "it
+   wants you NOW", and this is the same claim in a different container.
+   Deliberately the loudest mark here: a worker holding a question is the only
+   thing on a completion card that is not already over. */
+.chat-mention-card-tick[data-state="awaiting"] {
+  --state-hue: var(--status-blocked);
+}
+/* A question mark, drawn: the dot of one, and the hook above it as a rotated
+   elbow. Two pseudo-elements, like every other mark here, so it takes
+   currentColor and stays the same shape at any DPI. */
+.chat-mention-card-tick[data-state="awaiting"]::before {
+  content: "";
+  position: absolute;
+  left: 5.5px;
+  top: 3px;
+  width: 5px;
+  height: 4px;
+  border: 1.6px solid currentColor;
+  border-bottom: 0;
+  border-radius: 3px 3px 0 0;
+}
+.chat-mention-card-tick[data-state="awaiting"]::after {
+  left: 6.8px;
+  top: 7px;
+  width: 1.6px;
+  height: 4.5px;
+  background: currentColor;
+  border-radius: 1px;
+}
 /* DONE — archived, or decayed without ever delivering. A filled dot: the state
    with the least to tell you gets the mark with the least shape in it. */
 .chat-mention-card-tick[data-state="done"] {
@@ -625,6 +655,48 @@ button.chat-mention-card-head {
 .chat-mention-card-work > :last-child {
   margin-bottom: 0;
 }
+/* ── WHERE THE WORK IS ────────────────────────────────────────────────────
+   The urls and files the worker produced, under the summary.
+
+   Its own row rather than a line inside the prose, because these are the one
+   thing on the card you press. The worker that published a page and wrote a
+   13 KB report had its summary refused and its card showed nothing at all —
+   these are scraped, not generated, so they are what survives that. */
+.chat-mention-card-artifacts {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+.chat-mention-card-artifact {
+  max-width: 100%;
+  font-size: 12.5px;
+  /* The one place a path is worth monospacing: it is a thing to copy, and the
+     shape of a path is how you recognise it. */
+  font-family: var(--mono-font, ui-monospace, monospace);
+  color: var(--chat-accent);
+  /* Truncate from the LEFT: the end of a url or a path is what identifies it
+     (`…/muxpad-cross-workspace`), and the origin is the part you can lose. */
+  direction: rtl;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* …but the text inside still reads left to right — `direction: rtl` on the box
+   only decides which end the ellipsis eats. */
+.chat-mention-card-artifact > * {
+  direction: ltr;
+}
+/* A local path is not pressable — there is nothing for a browser to open — so it
+   is ink rather than a link, and says so by being quiet. */
+.chat-mention-card-artifact[data-path="true"] {
+  color: var(--chat-dim);
+}
+a.chat-mention-card-artifact:hover {
+  text-decoration: underline;
+}
+
 /* The one line that is ours rather than the worker's: what was NOT shown, and
    where the rest is. Never silent — a bounded read that says nothing reads as a
    complete report that stops mid-sentence. */

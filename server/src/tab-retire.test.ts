@@ -246,6 +246,73 @@ describe('retiring a sub-chat when it delivers', () => {
    * above still holds — which is the property this describe block exists to pin
    * alongside the new one.
    */
+  describe('AWAITING YOU is not DELIVERED', () => {
+    // "it went and investigated, produced an artifact, and is essentially
+    // awaiting instructions — but it's marked as done." `cross-ws`, in the
+    // database: `retired_reason = delivered`.
+    //
+    // Retirement fires at turn-end, so "I finished the job" and "I finished a
+    // turn and the ball is in your court" arrived here as the same event. They
+    // are opposites — one wants archiving, the other wants your attention — and
+    // archiving the second is the worst response available.
+    let awaiting: Set<string>;
+
+    function turn(paneId: string): {
+      retired: boolean;
+      finished: Array<{ tabId: string; awaiting: boolean }>;
+    } {
+      const finished: Array<{ tabId: string; awaiting: boolean }> = [];
+      const retirer = new ChatRetirer({
+        ...deps,
+        awaitingUser: (p: string) => awaiting.has(p),
+        onFinished: (tabId, _paneId, o) => finished.push({ tabId, awaiting: o.awaiting }),
+      });
+      return { retired: retirer.onTurnEnded({ pane_id: paneId, phase: 'done' }), finished };
+    }
+
+    beforeEach(() => {
+      awaiting = new Set();
+    });
+
+    it('DOES NOT RETIRE a worker that stopped to ask', () => {
+      const parent = chat('parent');
+      const child = chat('cross-ws', parent.tab);
+      awaiting.add(child.pane);
+      expect(turn(child.pane).retired).toBe(false);
+      expect(isDone(child.tab)).toBe(false);
+    });
+
+    it('…but still says the round ENDED, so the card can say what happened', () => {
+      // It is not working any more. Suppressing the finish would leave its card
+      // spinning, which is the opposite mistake and just as wrong.
+      const parent = chat('parent');
+      const child = chat('cross-ws', parent.tab);
+      awaiting.add(child.pane);
+      expect(turn(child.pane).finished).toEqual([{ tabId: child.tab, awaiting: true }]);
+    });
+
+    it('keeps the READY mark, because it is the one thing that wants you', () => {
+      // `retireChat` clears every unread mark — correctly, for a delivery. A
+      // worker waiting on you is precisely the case where that mark is true.
+      const parent = chat('parent');
+      const child = chat('cross-ws', parent.tab);
+      panes.setUnread(child.pane, true);
+      awaiting.add(child.pane);
+      turn(child.pane);
+      expect(panes.getById(child.pane)?.unread).toBe(true);
+    });
+
+    it('retires the ordinary worker exactly as before', () => {
+      // The common case, and the one that must not regress: a worker that did
+      // the job and said so still leaves the live list.
+      const parent = chat('parent');
+      const child = chat('count-todos', parent.tab);
+      const out = turn(child.pane);
+      expect(out.retired).toBe(true);
+      expect(out.finished).toEqual([{ tabId: child.tab, awaiting: false }]);
+    });
+  });
+
   describe('onFinished — the work has ended, whether or not the row leaves', () => {
     /** Run one turn-end and report what each half decided. */
     function turn(

@@ -25,6 +25,7 @@ import { browserHostEntry } from './browser/hostEntry.js';
 import { HeadlineWriter } from './chat/HeadlineWriter.js';
 import { SpawnReportWriter } from './chat/SpawnReportWriter.js';
 import { projectsDir } from './chat/TranscriptReader.js';
+import { paneAwaitsUser } from './chat/awaiting.js';
 import { glossaryCache } from './chat/glossary.js';
 import { sweepImplausibleHeadlines } from './chat/headline.js';
 import { paneCarryover } from './chat/summarize.js';
@@ -169,6 +170,11 @@ const retireDeps = {
   cache,
   events,
   blocked: (paneId: string) => agentBridge.blocked(paneId),
+  // DID IT STOP TO ASK YOU SOMETHING? `blocked` above is the harness reporting a
+  // pending prompt; this is the worker ending its prose with a question, which
+  // raises no such thing and was therefore being filed as `delivered`. A bounded
+  // transcript read, no model — see chat/awaiting.ts.
+  awaitingUser: (paneId: string) => paneAwaitsUser(db, paneId),
   // Called when a sub-chat's WORK ends — which is not the same moment as its row
   // leaving the live list (a crashed worker keeps its row and still has plenty
   // to report). Fire-and-forget; retirement never waits on a model call.

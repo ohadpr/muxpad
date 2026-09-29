@@ -37,6 +37,8 @@
  *   FINISHED, ROW STAYS (`holdOpen`) — it ended, and there is something in
  *   there for you
  *   · a FATAL turn — a crashed run is exactly what you want to look at
+ *   · it STOPPED TO ASK YOU SOMETHING (see `awaitingUser`) — the opposite of a
+ *     delivery, and the one this list was missing
  *   · an ARTIFACT on the pane — it made you something
  *
  * A worker in the second group reports to its parent and keeps its row; that is
@@ -76,7 +78,25 @@ export interface RetireDeps {
    * fire-and-forget and must never throw. This file deliberately knows nothing
    * about models.
    */
-  onFinished?: ((tabId: string, paneId: string, opts: { crashed: boolean }) => void) | undefined;
+  onFinished?:
+    | ((tabId: string, paneId: string, opts: { crashed: boolean; awaiting: boolean }) => void)
+    | undefined;
+  /**
+   * Did this worker STOP TO ASK the user something?
+   *
+   * `delivered` and `awaiting you` were one state and they are opposites — one
+   * wants archiving, the other wants your attention. Retirement fires at
+   * TURN-END, so a worker that investigated, published a page and ended its turn
+   * asking which option to take was filed as finished (`cross-ws`, in the
+   * database: `retired_reason = delivered`).
+   *
+   * Injected, like `blocked`, so this file keeps deciding POLICY and reads no
+   * transcripts of its own. The implementation is chat/awaiting.ts, and its note
+   * carries the argument for reading the last MESSAGE rather than the pane's
+   * `blocked` flag — which `stillWorking` already consults, and which cannot see
+   * a question an agent merely wrote in prose.
+   */
+  awaitingUser?: ((paneId: string) => boolean) | undefined;
 }
 
 /**
@@ -184,11 +204,15 @@ export class ChatRetirer {
     // FATAL run and one that produced an ARTIFACT both keep their rows on
     // purpose, and both have plainly stopped working.
     if (this.stillWorking(e)) return false;
-    this.deps.onFinished?.(pane.tab_id, e.pane_id, { crashed: e.phase === 'fatal' });
-    // Retirement proper, unchanged: pinning outranks it, and so does anything
-    // the agent still has FOR YOU that retiring would bury.
+    // Read ONCE and passed both ways: the card has to say "awaiting you" using
+    // the same judgement that decided not to retire, or the row and its card
+    // would be free to disagree about the same worker.
+    const awaiting = this.deps.awaitingUser?.(e.pane_id) === true;
+    this.deps.onFinished?.(pane.tab_id, e.pane_id, { crashed: e.phase === 'fatal', awaiting });
+    // Retirement proper: pinning outranks it, and so does anything the agent
+    // still has FOR YOU that retiring would bury.
     if (index.get(pane.tab_id)?.pinned) return false;
-    if (this.holdOpen(e)) return false;
+    if (this.holdOpen(e, awaiting)) return false;
     return retireChat(this.deps, pane.tab_id, 'delivered');
   }
 
@@ -227,8 +251,14 @@ export class ChatRetirer {
    * report still describes: "it crashed after doing X" and "it made you this"
    * are the two most useful things a card in the parent's log can say.
    */
-  private holdOpen(e: { pane_id: string; phase: 'done' | 'fatal' }): boolean {
+  private holdOpen(e: { pane_id: string; phase: 'done' | 'fatal' }, awaiting: boolean): boolean {
     if (e.phase === 'fatal') return true; // a crashed run is what you want to look at
+    // IT STOPPED TO ASK YOU SOMETHING. The newest member of this list and the
+    // one that motivated splitting it: a worker waiting on an answer is the
+    // opposite of one that delivered, and archiving it — which also clears the
+    // `ready` mark that is the only thing saying it wants you — is the worst
+    // response available.
+    if (awaiting) return true;
     return this.hasArtifact(e.pane_id); // it made you something
   }
 

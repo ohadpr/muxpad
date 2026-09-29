@@ -156,11 +156,16 @@ export class SpawnReportWriter {
    * nearly the same transcript and then race to write. The interval gate in
    * spawn-report.ts is the real limiter; this is the cheap one.
    */
-  onFinished = (tabId: string, paneId: string, opts: { crashed: boolean }): void => {
+  onFinished = (
+    tabId: string,
+    paneId: string,
+    opts: { crashed: boolean; awaiting: boolean },
+  ): void => {
     if (this.inFlight.has(tabId)) return;
     this.inFlight.add(tabId);
     const run = maybeWriteSpawnReport(this.db, tabId, paneId, this.model, {
       crashed: opts.crashed,
+      awaiting: opts.awaiting,
       glossary: this.glossary(),
     })
       .then((write) => {

@@ -293,6 +293,57 @@ describe('the card says what happened, in the app state language', () => {
 });
 
 /**
+ * AWAITING YOU, AND THE THING IT MADE.
+ *
+ * `cross-ws` published a page, wrote a 13 KB report, and stopped to ask which
+ * option to take. Its card was a green tick and nothing else: no sign that it
+ * was waiting, and no sign that either artifact existed.
+ */
+describe('the card says it is waiting, and shows what it made', () => {
+  it('draws AWAITING in the channel that means "wants you"', () => {
+    const out = html(
+      <ChatMentionCard chat={{ name: 'cross-ws' }} state="awaiting" tone="awaiting" />,
+    );
+    expect(out).toContain('data-state="awaiting"');
+    expect(out).toContain('<span class="chat-mention-card-sr">awaiting</span>');
+    // NOT the finished mark. That was the bug.
+    expect(out).not.toContain('data-state="delivered"');
+  });
+
+  it('LINKS THE ARTIFACTS, which is the whole point of them', () => {
+    // A url the user can press beats any sentence describing it.
+    const out = html(
+      <ChatMentionCard
+        chat={{ name: 'cross-ws' }}
+        state="awaiting"
+        tone="awaiting"
+        artifacts={['https://x.test/muxpad-cross-workspace', '/tmp/sidebar/cross-workspace.md']}
+      />,
+    );
+    expect(out).toContain('href="https://x.test/muxpad-cross-workspace"');
+    expect(out).toContain('target="_blank"');
+    expect(out).toContain('rel="noreferrer"');
+    // A local path is not a link — there is nothing for a browser to open — so
+    // it is shown as the text you would paste, not as a control that fails.
+    expect(out).toContain('/tmp/sidebar/cross-workspace.md');
+    expect(out).not.toContain('href="/tmp/sidebar/cross-workspace.md"');
+  });
+
+  it('shows the artifacts even with no summary at all', () => {
+    // The `cross-ws` case exactly: the summary was refused, the link survived.
+    const out = html(
+      <ChatMentionCard chat={{ name: 'cross-ws' }} artifacts={['https://x.test/p/']} />,
+    );
+    expect(out).toContain('href="https://x.test/p/"');
+  });
+
+  it('draws no artifact row when there are none', () => {
+    const out = html(<ChatMentionCard chat={{ name: 'cross-ws' }} state="delivered" />);
+    expect(out).not.toContain('chat-mention-card-artifacts');
+  });
+});
+
+/**
  * A SUB-CHAT LOOKS LIKE A SUB-CHAT.
  *
  * "At a minimum give them a sub-chat icon." The leading mark was `ChatChip`'s

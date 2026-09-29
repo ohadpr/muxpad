@@ -39,6 +39,7 @@ interface TabRow {
   retired_at: number | null;
   retired_reason: string | null;
   spawn_task: string | null;
+  spawn_artifacts: string | null;
   spawn_report: string | null;
   spawn_report_at: number | null;
   spawn_report_state: string | null;
@@ -58,13 +59,17 @@ export type RetireReason = 'delivered' | 'archived';
  * its last turn was fatal. A fourth state — we could not summarise at all — is
  * the ABSENCE of this column, deliberately: nothing renders for it.
  */
-export type SpawnReportState = 'ok' | 'none' | 'crashed';
+export type SpawnReportState = 'ok' | 'none' | 'crashed' | 'awaiting';
 
 /** A generated report, as it is written. `report` is null for a state that
  *  stands on its own (`none`, and a `crashed` child that got nothing done). */
 export interface SpawnReportWrite {
   report: string | null;
   state: SpawnReportState;
+  /** Urls and files this worker produced, scraped from its transcript. Written
+   *  with the report because it is read on the same pass — but it is NOT the
+   *  model's output, and it survives a generation the model got wrong. */
+  artifacts?: string[] | undefined;
 }
 
 /**
@@ -128,6 +133,16 @@ export interface TabClockRow {
    * tab-clock.ts.
    */
   has_agent: boolean;
+}
+
+/** The stored JSON array, or [] for anything unparseable. */
+function parseArtifacts(raw: string): string[] {
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 export class TabStore {
@@ -586,9 +601,35 @@ export class TabStore {
   setSpawnReport(id: string, write: SpawnReportWrite, at: number = Date.now()): void {
     this.db
       .prepare(
-        'UPDATE tabs SET spawn_report = ?, spawn_report_state = ?, spawn_report_at = ? WHERE id = ?',
+        `UPDATE tabs SET spawn_report = ?, spawn_report_state = ?, spawn_report_at = ?,
+           spawn_artifacts = COALESCE(?, spawn_artifacts) WHERE id = ?`,
       )
-      .run(write.report, write.state, at, id);
+      .run(
+        write.report,
+        write.state,
+        at,
+        // COALESCE, so a later round that finds none does not ERASE the link a
+        // previous one published. An artifact does not stop existing.
+        write.artifacts?.length ? JSON.stringify(write.artifacts) : null,
+        id,
+      );
+  }
+
+  /**
+   * Write ONLY the artifacts — the urls and files a worker produced.
+   *
+   * Separate from {@link setSpawnReport} because the two have different failure
+   * modes and that is the entire point: the report is a model's sentences and
+   * can be refused, the artifacts are a regex over the same text and cannot.
+   * `cross-ws` published a page, had its summary rejected for length, and showed
+   * an empty card — the link has to land on the path where the sentences did
+   * not.
+   */
+  setSpawnArtifacts(id: string, artifacts: readonly string[]): void {
+    if (artifacts.length === 0) return;
+    this.db
+      .prepare('UPDATE tabs SET spawn_artifacts = ? WHERE id = ?')
+      .run(JSON.stringify(artifacts), id);
   }
 
   /**
@@ -772,6 +813,9 @@ export class TabStore {
       // long before there is anything to report, and that is exactly when the
       // card needs it.
       ...(x.spawn_task ? { spawn_task: x.spawn_task } : {}),
+      // Parsed here so no client ever has to. A malformed value reads as none —
+      // it is a link list, and the honest degradation is showing no links.
+      ...(x.spawn_artifacts ? { spawn_artifacts: parseArtifacts(x.spawn_artifacts) } : {}),
       ...(x.spawn_report_state
         ? {
             spawn_report: x.spawn_report,
