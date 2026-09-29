@@ -5,9 +5,12 @@ import {
   isPtmxFd,
   openFds,
   ownPty,
+  ownedFdSet,
   ownedPtyCount,
   ptmxRdev,
   strayPtmxFds,
+  sweepMode,
+  sweepStrayPtmx,
 } from './ptmx-leak.js';
 
 /**
@@ -101,9 +104,11 @@ describe('listing our own descriptors', () => {
 describe('the register of ptys we own', () => {
   it('remembers and forgets', () => {
     const start = ownedPtyCount();
-    ownPty(4242);
+    // fd 1 is real, so it has a device to key on. A number with nothing behind
+    // it cannot be claimed — see the next test.
+    ownPty(1);
     expect(ownedPtyCount()).toBe(start + 1);
-    disownPty(4242);
+    disownPty(1);
     expect(ownedPtyCount()).toBe(start);
   });
 
@@ -113,6 +118,57 @@ describe('the register of ptys we own', () => {
     const start = ownedPtyCount();
     ownPty(-1);
     ownPty(Number.NaN);
+    // Nothing is open on this number, so there is no device to claim it for.
+    ownPty(99_999);
     expect(ownedPtyCount()).toBe(start);
+  });
+
+  it('is shared across module instances, not one per import', () => {
+    // vitest gives every test file its own module registry. With a per-instance
+    // register, THIS file's live pty is absent from THAT file's register and
+    // reads as nobody's — which in close mode is one test closing another's
+    // terminal. The register lives on globalThis so there is only ever one.
+    ownPty(1);
+    const shared = (globalThis as Record<symbol, unknown>)[Symbol.for('muxpad.ownedPtys')];
+    expect(shared).toBeInstanceOf(Map);
+    expect((shared as Map<number, number>).has(1)).toBe(true);
+    disownPty(1);
+  });
+
+  it('drops a claim when the number stops pointing at the device we claimed', () => {
+    // Descriptor numbers are RECYCLED. Keyed on the number alone, a fresh
+    // descriptor would inherit whatever claim the previous holder left behind
+    // and be treated as ours forever.
+    ownPty(1);
+    expect(ownedFdSet(new Map([[1, 999_999]])).has(1)).toBe(false);
+    expect(ownedFdSet().has(1)).toBe(true);
+    disownPty(1);
+  });
+});
+
+describe('what the sweep does when it finds something', () => {
+  it('counts without closing, unless closing is asked for', () => {
+    expect(sweepMode({})).toBe('observe');
+    expect(sweepMode({ MUXPAD_PTMX_SWEEP: 'close' })).toBe('close');
+    // Anything else is observe. Closing descriptors in the daemon that owns
+    // every terminal is not something a typo should be able to turn on.
+    expect(sweepMode({ MUXPAD_PTMX_SWEEP: '1' })).toBe('observe');
+    expect(sweepMode({ MUXPAD_PTMX_SWEEP: 'true' })).toBe('observe');
+  });
+
+  it('closes nothing on a platform with no pty driver', () => {
+    const result = sweepStrayPtmx(null, 'close');
+    expect(result.strays).toEqual([]);
+    expect(result.closed).toBe(0);
+  });
+
+  it('leaves this process alone in observe mode', () => {
+    // The real thing, against the real descriptor table: it must report without
+    // touching anything. If it closed one of vitest's own fds the run would die.
+    const result = sweepStrayPtmx(ptmxRdev(), 'observe');
+    expect(result.mode).toBe('observe');
+    expect(result.closed).toBe(0);
+    expect(openFds()).toContain(1);
+    expect(openFds()).toContain(2);
   });
 });

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import * as pty from 'node-pty';
 import { RingBuffer } from './RingBuffer.js';
-import { closeStrayPtmx, disownPty, ownPty } from './ptmx-leak.js';
+import { disownPty, ownPty, sweepStrayPtmx } from './ptmx-leak.js';
 import { type AppUrlMarker, PtyScanner } from './pty-scanner.js';
 
 // Debounce window between a URL/marker sighting and the (async) confirm pass.
@@ -244,14 +244,13 @@ export class PaneRuntime extends EventEmitter {
     // Always spawn the shell interactively (no `-c`). When startup_cmd is set,
     // it's auto-typed into the shell so that when it exits the user is left
     // at a prompt — same scrollback, same cwd, same pane.
-    // node-pty leaks one /dev/ptmx handle per spawn — not the pty's own, which it
-    // releases, but a second one opened inside the native forkpty and never
-    // recorded anywhere reachable. One per pane, for the life of the daemon,
-    // against a kern.tty.ptmx_max of 511. See ptmx-leak.ts, which has the
-    // measurements and the reason closing it is safe.
-    //
-    // NOTHING MAY AWAIT BETWEEN THESE TWO LINES. "Appeared during this spawn" is
-    // the whole safety argument, and it only holds while no other JS can run.
+    // THE ONLY pty.spawn IN THE TREE. The tripwire below assumes it: a pty
+    // descriptor this process holds and nobody registered is, by that argument,
+    // leaked. A second spawn site elsewhere would make its own live ptys look
+    // like strays — harmless while the sweep only counts, a closed terminal if
+    // MUXPAD_PTMX_SWEEP=close is ever set. If you add one, call ownPty() with
+    // its master descriptor. Verified by grep at the time of writing: this is
+    // the sole `import * as pty from 'node-pty'` in server/src.
     this.process = pty.spawn(this.spec.shell, [], {
       name: 'xterm-256color',
       cols: this.cols,
@@ -259,12 +258,20 @@ export class PaneRuntime extends EventEmitter {
       cwd: this.spec.cwd,
       env,
     });
-    // Claim this pty, then close every OTHER pty descriptor in the process —
-    // they belong to nobody. Ownership rather than arrival: descriptor numbers
-    // are recycled, so "appeared during this spawn" silently matches nothing.
+    // Claim this pty, then look for pty descriptors nobody claims. node-pty is
+    // pinned to a version that does not leak them, so the expected answer is
+    // none; a non-zero count means that stopped being true and the daemon is on
+    // its way to the kern.tty.ptmx_max ceiling again. Counted, not closed — see
+    // ptmx-leak.ts for why that trade changed once the leak was fixed upstream.
     this.ptyFd = (this.process as unknown as { _fd?: number })._fd ?? -1;
     ownPty(this.ptyFd);
-    closeStrayPtmx();
+    const sweep = sweepStrayPtmx();
+    if (sweep.strays.length > 0) {
+      const which = sweep.strays.join(',');
+      console.error(
+        `[ptmx] ${sweep.strays.length} pty descriptor(s) belong to nobody (${which}), mode=${sweep.mode}, closed=${sweep.closed}. node-pty is leaking again — check the node-pty pin in server/package.json.`,
+      );
+    }
     this.process.onData((data) => {
       const ev = this.scanner.feed(data);
       if (ev.bel && !this.needsAttention) {
