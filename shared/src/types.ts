@@ -504,13 +504,22 @@ export const TabSchema = z.object({
   // unconditional. `.optional()` here is wire-compat with a server that
   // predates the column, where absent correctly reads as "not done".
   done: z.boolean().optional(),
-  // WHY it is done — the three are visually distinct in the done group and in
-  // a tooltip, and only the server can tell them apart. Absent while live.
+  // WHY it is done — each is visually distinct in the done group and in a
+  // tooltip, and only the server can tell them apart. Absent while live.
   //   'decayed'   — four days with no message
   //   'delivered' — a sub-chat finished its work; its result went to the
   //                 parent as a card
   //   'archived'  — the user did it by hand (the row's ×)
-  done_reason: z.enum(['decayed', 'delivered', 'archived']).optional(),
+  //   'died'      — its RUNNER was given up on, and the work is INCOMPLETE.
+  //                 The one reason here that is not an ending anybody chose:
+  //                 a killed worker and a finished one both stop existing and
+  //                 they mean opposite things, so filing the first as
+  //                 `delivered` is how a job disappears without being noticed.
+  //                 Enumerated HERE and not only on the server because this is
+  //                 a strict zod parse on the client — an unlisted reason
+  //                 fails the whole tab row, so the row for the one chat that
+  //                 most needs explaining would be the one that vanishes.
+  done_reason: z.enum(['decayed', 'delivered', 'archived', 'died']).optional(),
   // WHEN it finished — epoch ms, null while it is live.
   //
   // A worker's conversation draws TWO entries for it: the LAUNCH at its

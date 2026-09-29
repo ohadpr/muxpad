@@ -389,6 +389,22 @@ export function attachWsServer(deps: {
    * socket layer.
    */
   onChatPresence?: (paneId: string, clients: number) => void;
+  /**
+   * The dead-runner sweep has GIVEN UP on this pane — three respawns spent, no
+   * runner, and the foreground probe answered (a ptyd outage skips the pane
+   * instead of reaching here). Wired to `ChatRetirer.onRunnerDead`, which
+   * retires a sub-chat whose worker died as `died` rather than leaving it
+   * looking live for ever.
+   *
+   * An injected callback and not a bus event, deliberately: `MuxpadEventSchema`
+   * is a strict discriminated union the client `.parse()`s, so a new event type
+   * would have to be taught to every client for a fact none of them needs — a
+   * browser learns about this as the `tab.updated` and `pane.updated` that
+   * already fire. Same seam shape as RetireDeps' own `onFinished`/`blocked`.
+   *
+   * Called synchronously from the sweep, so it must never throw.
+   */
+  onRunnerDead?: (paneId: string) => void;
 }): WsServerHandle {
   const wss = new WebSocketServer({ noServer: true });
   const allowedOrigins =
@@ -962,6 +978,19 @@ export function attachWsServer(deps: {
           // bubbles don't linger, and a much-later hand-restart (a fresh session)
           // doesn't suddenly flood them all in. New sends are already rejected.
           if (queue.clear(pane.id) > 0) broadcastQueue(pane.id);
+          // …AND ITS TAB'S LIFECYCLE ENDS TOO, if it is a sub-chat. This is the
+          // only place that knows a runner is gone FOR GOOD rather than for the
+          // moment, and until it said so the tab kept `retired_at IS NULL` for
+          // ever: three workers killed by the ptyd bug sat in the sidebar for
+          // hours reading exactly like running ones. Everything the tab
+          // lifecycle hangs off — retirement, the spawn report, the round —
+          // fires at TURN-END, and a dead runner never reaches one.
+          //
+          // The POLICY (sub-chat only, not pinned, not multi-pane, reported as
+          // a crash) is tab-retire.ts's; this is the one line of fact. Same
+          // separation as the queue clear above, and the same reason cron's
+          // keep-list is not re-derived here.
+          deps.onRunnerDead?.(pane.id);
           continue;
         }
         bcastToPane(pane.id, {

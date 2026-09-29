@@ -48,9 +48,22 @@ interface TabRow {
   updated_at: number;
 }
 
-/** Why a chat left the live list by an ACT rather than by the clock.
- *  `decayed` is never stored — it is what the clock says. */
-export type RetireReason = 'delivered' | 'archived';
+/**
+ * Why a chat left the live list by an ACT rather than by the clock.
+ * `decayed` is never stored — it is what the clock says.
+ *
+ * `died` — ITS RUNNER WAS GIVEN UP ON, and the work is INCOMPLETE. A third
+ * reason rather than a flavour of `delivered`, for the reason 3af1ba2 split
+ * `awaiting` off: a worker that finished its job and one that was killed
+ * mid-sentence both stop existing, and they mean opposite things to the person
+ * who spawned them. Filing the second as `delivered` is how three jobs vanish
+ * quietly — which is exactly what happened (new-chat-fix, xws-build,
+ * artifact-urls, all hand-archived hours later).
+ *
+ * Only the dead-runner sweep's GIVE-UP writes it (see tab-retire.ts
+ * `onRunnerDead`), never a pane that merely looks dead for a moment.
+ */
+export type RetireReason = 'delivered' | 'archived' | 'died';
 
 /**
  * What KIND of spawn report a child's row carries.
@@ -119,8 +132,20 @@ function toClockRow(r: RawClockRow): TabClockRow {
     // Anything unrecognised reads as a hand archive: it is the conservative
     // one (it claims only that a person did this), and the alternative would
     // be a row that is retired for no stated reason at all.
+    //
+    // EVERY REASON MUST BE LISTED HERE. The fallback is not a pass-through —
+    // it REWRITES — so a reason the database holds and this switch has not
+    // learnt is published as `archived`, i.e. "a person did this", about a
+    // machine event nobody performed. `died` in particular would be laundered
+    // into the very state it exists to be distinguishable from.
     retired_reason:
-      r.retired_at === null ? null : r.retired_reason === 'delivered' ? 'delivered' : 'archived',
+      r.retired_at === null
+        ? null
+        : r.retired_reason === 'delivered'
+          ? 'delivered'
+          : r.retired_reason === 'died'
+            ? 'died'
+            : 'archived',
     has_agent: !!r.has_agent,
   };
 }
