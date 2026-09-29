@@ -1,7 +1,12 @@
 /** @vitest-environment jsdom */
 /// <reference lib="dom" />
 import { afterEach, describe, expect, it } from 'vitest';
-import { deepEditableFocus, focusProbeExpression } from './FocusProbe.js';
+import {
+  deepEditableFocus,
+  fieldBoxesExpression,
+  focusProbeExpression,
+  textFieldBoxes,
+} from './FocusProbe.js';
 
 afterEach(() => {
   document.body.innerHTML = '';
@@ -71,5 +76,73 @@ describe('what actually gets shipped into the page', () => {
     // bug, arriving by a new door.
     expect(focusProbeExpression()).not.toContain('import');
     expect(focusProbeExpression()).not.toContain('require');
+  });
+});
+
+describe('finding where the text fields ARE', () => {
+  /**
+   * The pair has to agree. The focus probe was taught about frames and shadow
+   * roots and this was not, so on exactly the pages that fix was for, the viewer
+   * was told there were NO fields anywhere — and a tap on the login box raised
+   * nothing on its own and waited for the page's answer, which is the round trip
+   * the boxes exist to remove.
+   */
+  /**
+   * jsdom has no layout, so every rect is 0x0 and a box with no size is skipped
+   * — correctly, since an invisible field is not somewhere to send a keyboard.
+   * These give the elements a size so the test measures the RULE rather than
+   * jsdom's lack of a renderer.
+   */
+  const sized = (el: Element, box: Partial<DOMRect> = {}) => {
+    (el as unknown as { getBoundingClientRect: () => DOMRect }).getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 100, height: 20, ...box }) as DOMRect;
+    return el;
+  };
+
+  it('finds a plain input', () => {
+    document.body.innerHTML = '<input id="t">';
+    sized(document.querySelector('input') as Element);
+    expect(textFieldBoxes()).toEqual([[0, 0, 100, 20]]);
+  });
+
+  it('finds one inside a SHADOW ROOT', () => {
+    // The flat version returned NOTHING here, so the viewer believed the page
+    // had no fields at all and every tap on the login box was a guess.
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = host.attachShadow({ mode: 'open' });
+    root.innerHTML = '<input>';
+    sized(root.querySelector('input') as Element);
+    sized(host);
+    expect(textFieldBoxes()).toContainEqual([0, 0, 100, 20]);
+  });
+
+  it('skips the inputs that want no keyboard', () => {
+    document.body.innerHTML = '<input type="checkbox"><input type="text">';
+    for (const el of document.querySelectorAll('input')) sized(el);
+    expect(textFieldBoxes()).toHaveLength(1);
+  });
+
+  it('skips a field with no size, because that is nowhere to send a keyboard', () => {
+    document.body.innerHTML = '<input>';
+    sized(document.querySelector('input') as Element, { width: 0, height: 0 });
+    expect(textFieldBoxes()).toEqual([]);
+  });
+
+  it('ships the same text it was tested with, and reaches into both', () => {
+    expect(fieldBoxesExpression()).toContain('shadowRoot');
+    expect(fieldBoxesExpression()).toContain('contentDocument');
+    expect(fieldBoxesExpression()).toMatch(/^\(function textFieldBoxes/);
+  });
+
+  it('offsets a frame\u2019s boxes, because the viewer hit-tests in top coordinates', () => {
+    // An unoffset inner rect is a keyboard that appears for taps somewhere else.
+    expect(fieldBoxesExpression()).toContain('dx + box.left');
+    expect(fieldBoxesExpression()).toContain('dy + box.top');
+  });
+
+  it('carries no reference to anything outside itself', () => {
+    expect(fieldBoxesExpression()).not.toContain('import');
+    expect(fieldBoxesExpression()).not.toContain('require');
   });
 });

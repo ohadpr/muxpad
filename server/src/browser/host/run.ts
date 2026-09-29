@@ -19,7 +19,7 @@ import {
   cdpCookiesToStorageState,
   storageStateToCdpCookies,
 } from '../CookieJar.js';
-import { focusProbeExpression } from '../FocusProbe.js';
+import { fieldBoxesExpression, focusProbeExpression } from '../FocusProbe.js';
 import { emulationParams } from '../MobileEmulation.js';
 import { isBrowsingUrl } from '../PageAttachment.js';
 import { clearStaleProfileLock } from '../ProfileLock.js';
@@ -334,23 +334,11 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
    * Capped: a pathological page with a thousand inputs would put a payload on
    * every scroll bigger than the frame it is decorating.
    */
-  const FIELD_BOXES = `(() => {
-    const skip = ['button','submit','reset','checkbox','radio','file','range','color','image','hidden'];
-    const out = [];
-    for (const el of document.querySelectorAll('input,textarea,[contenteditable=""],[contenteditable=true]')) {
-      if ((el.tagName || '').toLowerCase() === 'input' && skip.includes((el.type || 'text').toLowerCase())) continue;
-      const r = el.getBoundingClientRect();
-      if (r.width <= 0 || r.height <= 0) continue;
-      out.push([Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)]);
-      if (out.length >= 80) break;
-    }
-    return out;
-  })()`;
 
   async function sendFieldBoxes(socket: WsSocket) {
     try {
       const r = (await cdp.send('Runtime.evaluate', {
-        expression: FIELD_BOXES,
+        expression: fieldBoxesExpression(),
         returnByValue: true,
       })) as unknown as { result?: { value?: unknown } };
       const rects = r.result?.value;
