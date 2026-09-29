@@ -1084,16 +1084,21 @@ const MIGRATIONS: Migration[] = [
     // SENDER is deliberately NOT a foreign key — deleting the coordinator must
     // not erase the record that it once briefed a worker; an id that no longer
     // resolves renders as an unattributed bubble, which is honest.
+    // IF NOT EXISTS, for the reason v34 states in its own note: a restore from
+    // backup is one step from re-running a migration, and the version gate is
+    // not the only thing that decides whether this runs twice. `migrations.test`
+    // exercises exactly that — it clears `schema_version` above a point and runs
+    // the tail again — so a bare CREATE here fails every later migration's test.
     version: 35,
     sql: `
-      CREATE TABLE inbound_messages (
+      CREATE TABLE IF NOT EXISTS inbound_messages (
         id          TEXT PRIMARY KEY,
         tab_id      TEXT NOT NULL REFERENCES tabs(id) ON DELETE CASCADE,
         at          INTEGER NOT NULL,
         text_key    TEXT NOT NULL,
         from_tab_id TEXT
       );
-      CREATE INDEX inbound_messages_tab ON inbound_messages(tab_id, at);
+      CREATE INDEX IF NOT EXISTS inbound_messages_tab ON inbound_messages(tab_id, at);
     `,
   },
 ];

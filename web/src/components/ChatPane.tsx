@@ -7,6 +7,7 @@ import {
   type AgentQuestion,
   type AgentSessionStatus,
   type ChatEvent,
+  type InboundSender,
   LAUNCH_ACK_RE,
   type NoticeEvent,
   type SubagentProgress,
@@ -100,6 +101,7 @@ import {
   lastTurnStartId,
   toggleActionRun,
 } from '../lib/chat-voice';
+import { NO_SENDERS, loadInboundSenders, matchInboundSenders } from '../lib/inbound-senders';
 import { showFolderChip } from '../lib/nav-row-affordances';
 import { type WorkspaceTabs, paneIndex } from '../lib/nav-search';
 import {
@@ -125,6 +127,7 @@ import { useBrowsers } from './BrowserCards';
 import { ChatDraft, type ChatDraftHandle } from './ChatDraft';
 import { ChatMentionCard, ChatMentionPicker, ChatMentionPill } from './ChatMentionPicker';
 import { CopyablePre } from './CopyablePre';
+import { FromAgentMessage } from './FromAgentMessage';
 import { SvgAgentGlyph, SvgGlobe, SvgTerminalGlyph } from './PaneWebSwitch';
 import { VoiceBar, VoiceControl } from './VoiceControl';
 
@@ -2284,7 +2287,6 @@ export function ChatPane({
   );
   // What every rendered mention in the log resolves through. Memoized so the
   // transcript re-renders when the corpus lands, not on every frame around it.
-  const mentionContext = useMemo(() => ({ corpus, open: openChat }), [corpus, openChat]);
 
   // ── Directed work ─────────────────────────────────────────────────────────
   // Cards for requests this chat has sent to another one. Local echo — see
@@ -2354,6 +2356,69 @@ export function ChatPane({
   const spawnedCards = useMemo(
     () => spawnCards(corpus, myChat?.tabId, MAX_SPAWN_CARDS, spawnRounds),
     [corpus, myChat, spawnRounds],
+  );
+
+  /**
+   * WHO SENT THE MESSAGES IN THIS CHAT — the mirror of the spawn cards above.
+   * Those are work going OUT of this conversation; this is work coming IN.
+   *
+   * A message delivered by `muxpad agent send` is a REAL user message (muxpad
+   * does not write the agent's transcript, it tails the harness's file), so it
+   * arrives here as an ordinary bubble with nothing on it to say a coordinator
+   * rather than the human typed it. The server records that separately; this
+   * joins it back on. See lib/inbound-senders.
+   */
+  const [inboundSenders, setInboundSenders] = useState<InboundSender[]>(NO_SENDERS);
+  /**
+   * The newest user bubble's id — the ONLY thing that can make the list stale,
+   * and the reason this is not a poll.
+   *
+   * Keying the fetch on "a user message arrived" bounds it by real deliveries.
+   * The obvious alternative — re-asking whenever some bubble is unattributed —
+   * would re-ask forever in the common case, because a chat the human types
+   * into has unattributed bubbles by definition and always will.
+   */
+  const newestUserId = useMemo(() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const e = events[i];
+      if (e?.kind === 'user') return e.id;
+    }
+    return null;
+  }, [events]);
+  useEffect(() => {
+    if (!myTabId || !newestUserId) return;
+    let live = true;
+    void loadInboundSenders(myTabId).then((s) => {
+      if (live) setInboundSenders(s);
+    });
+    return () => {
+      live = false;
+    };
+  }, [myTabId, newestUserId]);
+  const inboundByEvent = useMemo(
+    () => matchInboundSenders(events, inboundSenders),
+    [events, inboundSenders],
+  );
+  /**
+   * A FOURTH kind of card wants the corpus, and no amount of scanning the text
+   * can find it: a message another chat sent here carries no marker at all.
+   * That is the point — the prompt the agent receives is untouched — so the
+   * recorded senders are the only tell, and they ask for the corpus themselves.
+   *
+   * Down here rather than beside the other three because it reads
+   * `inboundSenders`, which is declared above this line and not above those.
+   */
+  useEffect(() => {
+    if (!transcriptNeedsCorpus && inboundSenders.length > 0) setTranscriptNeedsCorpus(true);
+  }, [inboundSenders, transcriptNeedsCorpus]);
+
+  // `inbound` rides the SAME context as the `@` resolver for the same reason it
+  // exists: rows are drawn by a memoized component reached from several call
+  // sites, and threading a map through all of them would be a prop on every
+  // event shape in the file.
+  const mentionContext = useMemo(
+    () => ({ corpus, open: openChat, inbound: inboundByEvent }),
+    [corpus, openChat, inboundByEvent],
   );
   const spawnedLive = useMemo(
     () =>
@@ -5717,8 +5782,19 @@ export function ChatPane({
 interface ChatMentionResolver {
   corpus: readonly MentionChat[];
   open: (chat: { workspaceSlug: string; tabSlug: string }) => void;
+  /**
+   * WHICH MESSAGES CAME FROM ANOTHER CHAT — event id → sending tab id.
+   *
+   * Empty by default, which is also the honest answer everywhere the map has
+   * not arrived (or the server is too old to have it): every bubble renders as
+   * it always has. An absent entry is never an invitation to guess.
+   */
+  inbound?: ReadonlyMap<string, string> | undefined;
 }
-const ChatMentionContext = createContext<ChatMentionResolver>({ corpus: [], open: () => {} });
+export const ChatMentionContext = createContext<ChatMentionResolver>({
+  corpus: [],
+  open: () => {},
+});
 
 /**
  * A user message, which may be a chat talking to a chat.
@@ -5734,20 +5810,47 @@ const ChatMentionContext = createContext<ChatMentionResolver>({ corpus: [], open
  * which is the whole affordance: a card is the handle on the conversation that
  * is happening somewhere else.
  */
-function MentionMessage({
+export function MentionMessage({
+  eventId,
   text,
   onOpenImage,
   hl,
 }: {
+  /** This row's transcript id — how a recorded sender finds its bubble. */
+  eventId?: string | undefined;
   text: string;
   onOpenImage?: OpenMedia | undefined;
   hl?: readonly string[] | undefined;
 }) {
-  const { corpus, open } = useContext(ChatMentionContext);
+  const { corpus, open, inbound } = useContext(ChatMentionContext);
   const report = parseReportMarker(text);
   const direct = report ? null : parseDirectMarker(text);
   const marker = report?.marker ?? direct?.marker;
   if (!marker) {
+    // A FOURTH SHAPE, and the only one that is not in the text: a message
+    // another chat DELIVERED here. It carries no marker because nothing was
+    // added to it — the prompt the agent received is exactly what was sent, and
+    // changing that to decorate the UI would change every worker's behaviour.
+    // So the tell is a muxpad-owned row, matched to this bubble upstream.
+    const fromTabId = eventId ? inbound?.get(eventId) : undefined;
+    if (fromTabId) {
+      // The sending chat, looked up LIVE — so a chat renamed since it sent this
+      // shows its current name. Null when it has since been deleted, which the
+      // card handles by dropping the link rather than the card.
+      const sender = corpus.find((c) => c.tabId === fromTabId) ?? null;
+      return (
+        <FromAgentMessage
+          from={sender}
+          text={text}
+          render={(t) => <UserText text={t} onOpenImage={onOpenImage} hl={hl} />}
+          // `hl` is passed to the ONE row a search jump landed on and to no
+          // other, so its presence IS "the hit is in this message" — and the
+          // hit may well be in the part the preview cuts off.
+          forceOpen={!!hl?.length}
+          {...(sender ? { onOpen: () => open(sender) } : {})}
+        />
+      );
+    }
     return (
       <div className="chat-bubble" dir="auto">
         <UserText text={text} onOpenImage={onOpenImage} hl={hl} />
@@ -5937,7 +6040,7 @@ const ChatRow = memo(function ChatRow({
       // cron marker's own expander exists to prevent.
       return (
         <div className="chat-turn chat-turn-user" data-eid={anchorId} data-search-hit={found}>
-          <MentionMessage text={event.text} onOpenImage={onOpenImage} hl={hl} />
+          <MentionMessage eventId={event.id} text={event.text} onOpenImage={onOpenImage} hl={hl} />
         </div>
       );
     case 'assistant':
