@@ -136,6 +136,29 @@ describe('GET /api/tabs/all — the cross-workspace search corpus', () => {
       // them is a result row that jumps when you land on it.
       expect(grouped).toEqual(perWorkspace);
       expect(grouped.map((t) => t.name)).toEqual(['C', 'B', 'A']);
+
+      // …and byte-identical INCLUDING KEY ORDER, which `toEqual` does not see.
+      //
+      // The web client depends on this exactly: `lib/all-tabs.mergeWorkspaceTabs`
+      // takes the list the sidebar just fetched from THIS route's per-workspace
+      // twin and splices it into the cross-workspace corpus, so the two surfaces
+      // are the same bytes. It decides whether anything changed with a
+      // `JSON.stringify` signature, which IS key-order sensitive. If the two
+      // paths ever built their rows in a different key order the payloads would
+      // stay deep-equal — this file would still pass — while every 5s poll
+      // looked like a change and repainted every corpus reader, ChatPane
+      // included. That is a silent performance cliff with no failing test, so
+      // the stronger comparison is pinned here rather than inferred there.
+      expect(JSON.stringify(grouped)).toBe(JSON.stringify(perWorkspace));
+      // ANTI-VACUITY: prove the line above is strictly stronger than the
+      // `toEqual` above it. A row with the same fields in a different order is
+      // deep-equal and NOT stringify-equal — so if key order ever diverges,
+      // only the new assertion catches it.
+      const reordered = perWorkspace.map(
+        (t) => Object.fromEntries(Object.entries(t).reverse()) as unknown as Tab,
+      );
+      expect(reordered).toEqual(perWorkspace);
+      expect(JSON.stringify(reordered)).not.toBe(JSON.stringify(perWorkspace));
       // Anti-vacuity: the rows being compared actually carry a lifecycle, and
       // not all the same one. Without agent panes these would all be
       // `clock: null` and the comparison would hold for the wrong reason.
