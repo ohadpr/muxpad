@@ -196,6 +196,54 @@ describe('SpawnReportWriter — a finished worker becomes a card', () => {
     expect(seen.length).toBe(before);
   });
 
+  it('RETRIES ONCE when the generation failed — a retired worker gets no second turn', async () => {
+    // Three of six children in one afternoon had the attempt stamped and no
+    // state at all, and re-running the real generator over one of those
+    // transcripts produced a good report in 12.5 seconds. The failures were
+    // transient; what made them permanent is that a RETIRED worker never
+    // finishes another turn, so nothing ever called this again.
+    let calls = 0;
+    const { retirer, writer } = wire(async () => {
+      calls++;
+      if (calls === 1) throw new Error('transient');
+      return GOOD;
+    });
+    const kid = worker(parentChat());
+    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' });
+    await writer.idle();
+    expect(calls).toBe(2);
+    expect(new TabStore(db).getById(kid.tabId)?.spawn_report).toBe(GOOD);
+  });
+
+  it('retries ONCE, not forever — a broken install must not spin', async () => {
+    let calls = 0;
+    const { retirer, writer } = wire(async () => {
+      calls++;
+      throw new Error('no login');
+    });
+    const kid = worker(parentChat());
+    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' });
+    await writer.idle();
+    // …and a SECOND finished turn does not re-arm it either.
+    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' });
+    await writer.idle();
+    expect(calls).toBe(2);
+  });
+
+  it('does not retry a worker that simply had nothing to report', async () => {
+    // `none` is an ANSWER, not a failure. Retrying it would spend a second call
+    // to be told the same thing.
+    let calls = 0;
+    const { retirer, writer } = wire(async () => {
+      calls++;
+      return 'NOTHING';
+    });
+    const kid = worker(parentChat());
+    retirer.onTurnEnded({ pane_id: kid.paneId, phase: 'done' });
+    await writer.idle();
+    expect(calls).toBe(1);
+  });
+
   it('SURVIVES A MODEL THAT THROWS — a failed report cannot fail a turn', async () => {
     const { retirer, writer } = wire(async () => {
       throw new Error('no login');

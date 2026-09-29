@@ -61,12 +61,14 @@ import {
 } from '../lib/chat-directed';
 import {
   MAX_MENTION_ROWS,
+  MAX_SPAWN_CARDS,
   type MentionChat,
   type MentionPick,
   type MentionRow,
   type MentionRun,
   type MentionSearchState,
   NO_MENTION_SEARCH,
+  type SpawnRoundsByChild,
   applyMention,
   canExpandSpawn,
   detectMentionRun,
@@ -81,12 +83,10 @@ import {
   parseReportMarker,
   rankMentions,
   repinPicks,
-  MAX_SPAWN_CARDS,
-  type SpawnRoundsByChild,
+  spawnCardSummary,
   spawnCards,
   spawnHandle,
   spawnLabel,
-  spawnReportSummary,
   spawnState,
   toMentionChats,
   withContentRows,
@@ -4452,9 +4452,7 @@ export function ChatPane({
         );
       // Nothing is running here — but this pane already knows WHAT to run, so
       // the affordance is a button, not shell homework. See ChatNoRunner.
-      return (
-        <ChatNoRunner busy={startBusy} error={startError} onStart={() => void startAgent()} />
-      );
+      return <ChatNoRunner busy={startBusy} error={startError} onStart={() => void startAgent()} />;
     }
     if (events.length === 0 && !optimisticUser && !sending) {
       // The server SAYS there is history, we just haven't rendered it yet —
@@ -4841,7 +4839,7 @@ export function ChatPane({
               // a three-sentence summary into "Ranked the repo by line count:
               // ws.ts (4,812) and C…", which is the truncation this whole feature
               // is written against. The body wraps and takes a reading measure.
-              body={report ? spawnReportSummary(report) : undefined}
+              body={spawnCardSummary(report)}
               // WHERE THE WORK IS. Not part of the summary and deliberately so:
               // these are scraped from the transcript, not generated, so they
               // land on a card whose summary was refused — which is exactly the

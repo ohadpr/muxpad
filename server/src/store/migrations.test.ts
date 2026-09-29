@@ -519,7 +519,7 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
       .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
       .get() as { version: number };
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
-    expect(LATEST_SCHEMA_VERSION).toBe(33);
+    expect(LATEST_SCHEMA_VERSION).toBe(34);
   });
 });
 
@@ -1316,5 +1316,103 @@ describe('migrations v33 — the user-touch recency key', () => {
     );
     runMigrations(db);
     expect(userAt(db, 't1')).toBe(sent);
+  });
+});
+
+describe('migrations v34 — the workers that finished before rounds existed', () => {
+  /** A v33 database with a parent and some children, mid-flight and finished. */
+  function v33(): Database.Database {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 33 });
+    db.prepare(
+      'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+    ).run('w1', 'wslug1aa', 'W', 0, 1, 1);
+    const tab = db.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at,
+                         spawned_by, retired_at, spawn_report, spawn_report_state)
+       VALUES (?,?,?,'""','w1',0,?,?,?,?,?,?)`,
+    );
+    tab.run('parent', 'sp', 'muxpad', 1, 1, null, null, null, null);
+    tab.run('done1', 's1', 'slack-land', 100, 100, 'parent', 200, 'Found the rail.', 'ok');
+    tab.run('done2', 's2', 'xws-build-2', 300, 300, 'parent', 400, null, null);
+    tab.run('live1', 's3', 'still-going', 500, 500, 'parent', null, null, null);
+    tab.run('root1', 's4', 'not-a-worker', 600, 600, null, 700, null, null);
+    return db;
+  }
+
+  const rounds = (db: Database.Database) =>
+    db
+      .prepare(
+        'SELECT tab_id, started_at, ended_at, report, report_state FROM spawn_rounds ORDER BY tab_id',
+      )
+      .all();
+
+  it('gives every existing child ONE round from what the row already says', () => {
+    // Five workers finished before the table landed and left no trace in the
+    // conversation at all. `created_at` is when the work was handed over,
+    // `retired_at` is when it came back, and `spawn_report` is what it said.
+    const db = v33();
+    runMigrations(db);
+    expect(rounds(db)).toEqual([
+      {
+        tab_id: 'done1',
+        started_at: 100,
+        ended_at: 200,
+        report: 'Found the rail.',
+        report_state: 'ok',
+      },
+      { tab_id: 'done2', started_at: 300, ended_at: 400, report: null, report_state: null },
+      { tab_id: 'live1', started_at: 500, ended_at: null, report: null, report_state: null },
+    ]);
+  });
+
+  it('A RETIRED CHILD WITH NO REPORT STILL GETS ITS ROUND', () => {
+    // "an honest empty card beats no card." `xws-build-2` did real work and the
+    // generator produced nothing for it; the round is still the record that it
+    // ran and finished.
+    const db = v33();
+    runMigrations(db);
+    const r = rounds(db).find((x) => (x as { tab_id: string }).tab_id === 'done2');
+    expect(r).toMatchObject({ ended_at: 400, report: null });
+  });
+
+  it('leaves a RUNNING child its round open, not closed at some invented time', () => {
+    const db = v33();
+    runMigrations(db);
+    const r = rounds(db).find((x) => (x as { tab_id: string }).tab_id === 'live1');
+    expect(r).toMatchObject({ started_at: 500, ended_at: null });
+  });
+
+  it('backfills only CHILDREN — a root chat has no rounds', () => {
+    const db = v33();
+    runMigrations(db);
+    expect(rounds(db).map((r) => (r as { tab_id: string }).tab_id)).not.toContain('root1');
+    expect(rounds(db).map((r) => (r as { tab_id: string }).tab_id)).not.toContain('parent');
+  });
+
+  it('IS IDEMPOTENT — it cannot manufacture a second round', () => {
+    // The guard that matters: re-running must not double every card in every
+    // conversation. Written as a real second pass rather than trusting the
+    // version gate, because a restore from backup is one step from running it.
+    const db = v33();
+    runMigrations(db);
+    const first = rounds(db);
+    db.prepare('DELETE FROM schema_version WHERE version >= 34').run();
+    runMigrations(db);
+    expect(rounds(db)).toEqual(first);
+  });
+
+  it('does not touch a child that already has a round of its own', () => {
+    const db = v33();
+    db.prepare('INSERT INTO spawn_rounds (id, tab_id, started_at, ended_at) VALUES (?,?,?,?)').run(
+      'r-live',
+      'done1',
+      111,
+      222,
+    );
+    runMigrations(db);
+    const mine = rounds(db).filter((r) => (r as { tab_id: string }).tab_id === 'done1');
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({ started_at: 111, ended_at: 222 });
   });
 });

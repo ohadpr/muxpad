@@ -243,7 +243,9 @@ describe('the spawn cards and the roster read ONE list', () => {
     // …and the summary that replaces it goes in the BODY, which wraps. `sub`
     // clips with an ellipsis — it turned the summary into "Ranked the repo by
     // line count: ws.ts (4,812) and C…".
-    expect(BODY).toContain('body={report ? spawnReportSummary(report) : undefined}');
+    // …and a completion ALWAYS carries a line. A bare tick over a missing
+    // summary claims "there was nothing to it", which nobody has a basis for.
+    expect(BODY).toContain('body={spawnCardSummary(report)}');
     expect(BODY).not.toMatch(/sub=\{[^}]*report/);
   });
 
@@ -253,7 +255,7 @@ describe('the spawn cards and the roster read ONE list', () => {
     // constraints doc", "Now the core of item 1 —". The summary the server had
     // generated (`spawn_report`, 356 characters of it for `dead-css`) was on the
     // wire the whole time; the card has to be the thing that reads it.
-    expect(BODY).toContain('body={report ? spawnReportSummary(report) : undefined}');
+    expect(BODY).toContain('body={spawnCardSummary(report)}');
     // And the transcript is NOT a substitute for it: the fetched work is only
     // ever reached for behind a report that earned the expander.
     expect(BODY).toContain('const canExpand = canExpandSpawn(kid)');
@@ -267,7 +269,7 @@ describe('the spawn cards and the roster read ONE list', () => {
     // ride the summary — that is why they survive it — and the summary line
     // falls back to a sentence rather than to a blank.
     expect(BODY).toContain('artifacts={kid.artifacts}');
-    expect(BODY).toContain('body={report ? spawnReportSummary(report) : undefined}');
+    expect(BODY).toContain('body={spawnCardSummary(report)}');
   });
 
   it('offers NO expander when there is nothing behind it', () => {

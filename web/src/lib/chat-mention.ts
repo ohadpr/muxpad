@@ -459,6 +459,24 @@ export function spawnHandle(chat: MentionChat): string | undefined {
  * test can hold it: these two sentences are the entire content of the card in the
  * two cases where a reader is most likely to think something broke.
  */
+/**
+ * WHAT A COMPLETION CARD SAYS, including when there is nothing to say.
+ *
+ * A completion entry always carries a line. The alternative — a bare tick and a
+ * name — reads as "this finished and there was nothing to it", which is a claim
+ * nobody has any basis for: three of six children in one afternoon finished real
+ * work and produced no summary because the generator threw, and every worker
+ * that ran before the rounds table existed is backfilled with a round and often
+ * no report at all.
+ *
+ * "An honest empty card beats no card", and an honest one has to say which kind
+ * of empty it is.
+ */
+export function spawnCardSummary(report: SpawnReport | undefined): string {
+  if (!report) return 'No summary was generated for this one.';
+  return spawnReportSummary(report);
+}
+
 export function spawnReportSummary(report: SpawnReport): string {
   if (report.text) return report.text;
   if (report.state === 'crashed') return 'Crashed before it produced anything.';
