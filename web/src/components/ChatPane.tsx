@@ -1075,7 +1075,12 @@ export function SessionBar({
       ) : null}
 
       {folderChipVisible && folder ? (
-        <div className="chat-status-seg-wrap">
+        // `-folder` buys it a FASTER shrink than its neighbours. Flex shrinks in
+        // proportion to base size, so the longest cell keeps the most absolute
+        // width — at 320px that gave `trayo-self-serve…` room while squeezing the
+        // model to `Op…`, which is exactly backwards. A clipped folder name is
+        // still recognisable; a clipped model name is two letters.
+        <div className="chat-status-seg-wrap -folder">
           <button
             type="button"
             className={`chat-status-seg${panel === 'folder' ? ' is-open' : ''}`}

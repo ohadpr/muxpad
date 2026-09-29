@@ -15,13 +15,24 @@ import { describe, expect, it } from 'vitest';
  *     the reasoning left behind, which is how a bar gets tall without anybody
  *     deciding it should.
  *
- * The strip now shares the composer pill's surface instead of floating above it
- * as a second object, and the input is 40px. 119px → 85px.
+ * The strip stopped being a second object and the input became 40px.
+ * 119px → 85px.
  *
  * This is a CSS-contract test rather than a screenshot because the thing that
  * made the strip a separate object is a set of DECLARATIONS — a border, a
  * background, a margin. A picture shows it looks fine; only the rule says
  * whether the next person will reintroduce them by habit.
+ *
+ * ─── UPDATE: the strip is back OUTSIDE the pill, and the budget survived ───
+ * Sharing the pill's surface paid the 37px back and over-corrected: a line about
+ * the session became chrome inside the thing you type in ("it's all too tight
+ * there"), and because it sat above the input inside a bottom-anchored pill, the
+ * one time it wrapped it shoved the composer down. It is a sibling above the
+ * pill again — but WITHOUT the border, the background and the 10px gap that made
+ * the original expensive. That distinction is the whole point of this file, so
+ * what it asserts is the diet, not the address: the strip may live where it
+ * likes as long as it costs one line of text and one small gap. See
+ * ChatPane.statusline.test.tsx for the placement and the one-line construction.
  */
 
 const css = readFileSync(join(__dirname, 'ChatPane.css'), 'utf8');
@@ -52,10 +63,10 @@ const decl = (selector: string, prop: string): string | null => {
   return hit ? (hit[2] ?? '').trim() : null;
 };
 
-describe('the status strip shares the pill rather than floating above it', () => {
+describe('the status strip is a line, not a second object', () => {
   it('draws no border of its own', () => {
-    // A second border around a strip that sits on the pill reads as a second
-    // object, which is what it was.
+    // A border around the strip is what made it read as a second object stacked
+    // on the composer, and a third of the bar's height went on drawing it.
     expect(decl('.chat-status-bar', 'border')).toBeNull();
   });
 
@@ -63,12 +74,23 @@ describe('the status strip shares the pill rather than floating above it', () =>
     expect(decl('.chat-status-bar', 'background')).toBeNull();
   });
 
-  it('leaves no gap BENEATH it, because the pill\u2019s row gap is that job', () => {
+  it('costs one line and one gap \u2014 the whole budget, wherever it sits', () => {
     // Two things could hold the strip off the text below — its own bottom
     // margin and the composer's row gap — and having both is how a bar drifts
-    // taller one nudge at a time. The gap owns it; this margin stays zero.
-    const margin = (decl('.chat-status-bar', 'margin') ?? '').split(/\s+/);
-    expect(margin[2]).toBe('0');
+    // taller one nudge at a time.
+    //
+    // Outside the pill again, the strip's OWN bottom margin is the only thing
+    // that can hold it off the pill — so what is asserted is that there is still
+    // exactly one separation and it is no bigger than the row gap it replaces.
+    const own = (decl('.chat-status-bar', 'margin') ?? '').split(/\s+/);
+    const below = Number((own[2] ?? '').replace('px', ''));
+    const pillGap = Number((decl('.chat-composer', 'gap') ?? '').replace('px', ''));
+    expect(below).toBeGreaterThan(0);
+    expect(below).toBeLessThanOrEqual(pillGap);
+    // And the line is FIXED, not a value its content can grow — which is what
+    // makes this a budget rather than a hope. See ChatPane.statusline.test.tsx.
+    const h = Number((decl('.chat-status-bar', 'height') ?? '').replace('px', ''));
+    expect(h + below).toBeLessThanOrEqual(24);
   });
 });
 
