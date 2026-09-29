@@ -627,6 +627,36 @@ describe('the picture on the card', () => {
     ],
   });
 
+  it('shows NOTHING on the quiet card, while the browser is just running', () => {
+    // A still is reassurance, and reassurance costs a hundred pixels of a
+    // conversation. On "Browser opened" there is nothing to be reassured about,
+    // and a screenshot per session turns a log into a gallery.
+    const running: BrowserCardData = {
+      profile: 's-abc',
+      viewerUrl: 'https://host/browser/s-abc/',
+      state: 'running',
+      needsYou: null,
+      wheel: null,
+      events: [{ kind: 'opened', at: 1, tabId: 'tab-1', shot: true }],
+    };
+    const [m] = browserMoments([running], 'tab-1');
+    expect(browserMomentView(m as BrowserMoment).shotUrl).toBeNull();
+  });
+
+  it('shows it once the browser has CLOSED, which is the other moment worth one', () => {
+    // The last thing it was looking at, after the fact — the only record left.
+    const closed: BrowserCardData = {
+      profile: 's-abc',
+      viewerUrl: 'https://host/browser/s-abc/',
+      state: 'registered',
+      needsYou: null,
+      wheel: null,
+      events: [{ kind: 'opened', at: 1, tabId: 'tab-1', shot: true }],
+    };
+    const [m] = browserMoments([closed], 'tab-1');
+    expect(browserMomentView(m as BrowserMoment).shotUrl).toBe('/api/browsers/s-abc/shot/1');
+  });
+
   it('points at the still for THAT moment', () => {
     const [m] = browserMoments([withShot(true)], 'tab-1');
     expect((m as BrowserMoment).shotUrl).toBe('/api/browsers/s-abc/shot/2');
