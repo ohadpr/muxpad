@@ -4,11 +4,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from './events.js';
 import { PtydCache } from './ptyd-cache.js';
 import { PaneStore } from './store/PaneStore.js';
+import { SpawnRoundStore } from './store/SpawnRoundStore.js';
 import { TabStore } from './store/TabStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
 import { runMigrations } from './store/migrations.js';
 import { clockIndex, resolveTabClock } from './tab-clock.js';
-import { ChatRetirer, clearReadyMarks, retireChat } from './tab-retire.js';
+import { ChatRetirer, clearReadyMarks, reconcileDeadChats, retireChat } from './tab-retire.js';
 
 /**
  * The 41-agent sidebar, in a test. Every row READY, every one finished hours
@@ -468,6 +469,208 @@ describe('retiring a sub-chat when it delivers', () => {
       const c = chat('x');
       retireChat(deps, c.tab, 'archived');
       expect(retireChat(deps, c.tab, 'archived')).toBe(false);
+    });
+
+    it('CLOSES THE OPEN ROUND, by every door', () => {
+      // Measured on the live database: all three workers the ptyd bug killed
+      // were archived BY HAND and every one still had `ended_at IS NULL`, so
+      // their cards are mid-flight in the parent's log to this day. Only the
+      // turn-end path ever closed a round; the archive door never did.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const rounds = new SpawnRoundStore(db);
+      rounds.open(child.tab, 1_000);
+      expect(rounds.openRound(child.tab)).not.toBeNull();
+
+      expect(retireChat(deps, child.tab, 'archived')).toBe(true);
+      expect(rounds.openRound(child.tab)).toBeNull();
+    });
+
+    it('stamps the round with the RETIREMENT instant, not the second call', () => {
+      // `retire` is idempotent and keeps the original stamp, so a later pass
+      // must not re-date the round either — the card sorts on it.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const rounds = new SpawnRoundStore(db);
+      rounds.open(child.tab, 1_000);
+      tabs.retire(child.tab, 'delivered', 5_000);
+
+      retireChat(deps, child.tab, 'archived');
+      expect(rounds.listByTab(child.tab)[0]?.ended_at).toBe(5_000);
+    });
+  });
+
+  /**
+   * THE HOLE THE WHOLE FILE WAS MISSING: retirement fires at turn-end, and a
+   * runner that DIES never reaches one.
+   *
+   * Three workers killed by the ptyd/node-pty bug kept `retired_at IS NULL` for
+   * hours and were indistinguishable in the data from working ones — which is
+   * the real defect: the absence of a death notice read as evidence of life.
+   */
+  describe('onRunnerDead — the supervisor gave up', () => {
+    /** Drive the give-up and report what each half decided. */
+    function died(paneId: string): {
+      retired: boolean;
+      finished: Array<{ tabId: string; crashed: boolean }>;
+    } {
+      const finished: Array<{ tabId: string; crashed: boolean }> = [];
+      const retirer = new ChatRetirer({
+        ...deps,
+        onFinished: (tabId, _paneId, o) => finished.push({ tabId, crashed: o.crashed }),
+      });
+      return { retired: retirer.onRunnerDead(paneId), finished };
+    }
+
+    it('retires the sub-chat as DIED, not as delivered', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+
+      expect(died(child.pane).retired).toBe(true);
+
+      expect(isDone(child.tab)).toBe(true);
+      // The distinction the user loses three jobs without: a worker that
+      // finished and one that was killed mid-sentence both stop existing, and
+      // they mean opposite things.
+      expect(resolveTabClock(clockIndex(db), child.tab, Date.now()).done_reason).toBe('died');
+    });
+
+    it('reports it as a CRASH, so the card is not a green tick', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      // `crashed` is what puts `spawn_report_state = 'crashed'` on the row by
+      // every path — including a worker with no transcript at all — which is
+      // what makes the card say so instead of wearing a delivery's tick.
+      expect(died(child.pane).finished).toEqual([{ tabId: child.tab, crashed: true }]);
+    });
+
+    it('closes the round, so the card does not stay mid-flight', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const rounds = new SpawnRoundStore(db);
+      rounds.open(child.tab, 1_000);
+
+      died(child.pane);
+
+      expect(rounds.openRound(child.tab)).toBeNull();
+    });
+
+    it('leaves a TOP-LEVEL chat alone', () => {
+      // A conversation you are having. Its agent dying is a thing to fix, and
+      // filing the conversation away is not the response to it.
+      const top = chat('top');
+      expect(died(top.pane).retired).toBe(false);
+      expect(isDone(top.tab)).toBe(false);
+    });
+
+    it('leaves a PINNED sub-chat alone', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      tabs.setPinned(child.tab, true);
+      expect(died(child.pane).retired).toBe(false);
+      expect(isDone(child.tab)).toBe(false);
+    });
+
+    it('leaves a MULTI-PANE tab alone — one agent dying says nothing about the others', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      panes.create({ tab_id: child.tab, shell: '/bin/zsh', cwd: '/tmp' });
+      expect(died(child.pane).retired).toBe(false);
+      expect(isDone(child.tab)).toBe(false);
+    });
+
+    it('does NOT treat a stale blocked flag or subagent roster as still working', () => {
+      // Every liveness clause of `stillWorking` is an assertion that the agent
+      // is working, which is exactly what a corpse is not: the pending question
+      // belongs to a runner that no longer exists, and its background subagents
+      // died with it. Reading either as "keep the row live" is how the corpse
+      // stayed in the sidebar.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      blockedPanes.add(child.pane);
+      cache.setSubagentCount(child.pane, 2);
+
+      expect(died(child.pane).retired).toBe(true);
+      expect(resolveTabClock(clockIndex(db), child.tab, Date.now()).done_reason).toBe('died');
+    });
+
+    it('is idempotent — a second give-up does not re-date the first', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      died(child.pane);
+      const first = resolveTabClock(clockIndex(db), child.tab, Date.now()).done_at;
+      died(child.pane);
+      expect(resolveTabClock(clockIndex(db), child.tab, Date.now()).done_at).toBe(first);
+    });
+
+    it('does nothing for an unknown pane', () => {
+      expect(died('nope').retired).toBe(false);
+    });
+  });
+
+  /**
+   * THE BOOT RECONCILE, and the thing it deliberately refuses to do.
+   */
+  describe('reconcileDeadChats', () => {
+    it('closes a round stranded open by a retired chat, at the chat’s own stamp', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      const rounds = new SpawnRoundStore(db);
+      rounds.open(child.tab, 1_000);
+      // The exact state the three hand-archives left: retired, round open.
+      tabs.retire(child.tab, 'archived', 5_000);
+
+      expect(reconcileDeadChats(deps)).toEqual({ roundsClosed: 1, orphansRetired: 0 });
+      // Its own retirement instant, not boot — stamping `now` would sort every
+      // recovered card to the top of the log at every restart.
+      expect(rounds.listByTab(child.tab)[0]?.ended_at).toBe(5_000);
+    });
+
+    it('is idempotent — a second boot changes nothing', () => {
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      new SpawnRoundStore(db).open(child.tab, 1_000);
+      tabs.retire(child.tab, 'archived', 5_000);
+
+      reconcileDeadChats(deps);
+      expect(reconcileDeadChats(deps)).toEqual({ roundsClosed: 0, orphansRetired: 0 });
+    });
+
+    it('retires a live sub-chat NO SUPERVISOR CAN EVER REACH', () => {
+      // The dead-runner sweep only looks at `startup_cmd LIKE 'muxpad agent%'`.
+      // A live sub-chat with no such pane will never end a turn and will never
+      // be judged dead, so it is live for ever with nothing able to change it.
+      const parent = chat('parent');
+      const orphan = tabs.create({
+        name: 'orphan',
+        layout: '',
+        workspace_id: workspaceId,
+        spawned_by: parent.tab,
+      });
+
+      expect(reconcileDeadChats(deps)).toEqual({ roundsClosed: 0, orphansRetired: 1 });
+      expect(resolveTabClock(clockIndex(db), orphan.id, Date.now()).done_reason).toBe('died');
+    });
+
+    it('DOES NOT TOUCH A HEALTHY LIVE SUB-CHAT — the fix that would archive the machine', () => {
+      // At boot every runner is absent; they reconnect seconds later. A pass
+      // that read absence as death would retire every healthy chat on the box
+      // on the first tick after every restart. What covers a genuinely dead one
+      // is the sweep, which re-judges it after three respawn attempts.
+      const parent = chat('parent');
+      const child = chat('child', parent.tab);
+      panes.setStartupCmd(child.pane, 'muxpad agent --resume abc');
+
+      expect(reconcileDeadChats(deps)).toEqual({ roundsClosed: 0, orphansRetired: 0 });
+      expect(isDone(child.tab)).toBe(false);
+    });
+
+    it('leaves a TOP-LEVEL chat with no agent pane alone', () => {
+      // A terminal tab, a web view, an empty tab. Not work, and not anybody's
+      // child — it decays on its own clock or leaves when you archive it.
+      const top = tabs.create({ name: 'terminal', layout: '', workspace_id: workspaceId });
+      expect(reconcileDeadChats(deps).orphansRetired).toBe(0);
+      expect(isDone(top.id)).toBe(false);
     });
   });
 });

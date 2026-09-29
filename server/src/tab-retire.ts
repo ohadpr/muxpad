@@ -48,12 +48,26 @@
  * Cron adds one more at the end: it deletes the tab. This does not. Retiring
  * moves the row into the parent's `done` group, where it stays reachable from
  * the card, from `@`, and from a message that revives it.
+ *
+ * ── THE OTHER WAY A SUB-CHAT ENDS: IT DIES ───────────────────────────────────
+ * Everything above hangs off TURN-END, and a runner that DIES never reaches
+ * one. So its tab kept `retired_at IS NULL` forever: three workers killed by
+ * the ptyd/node-pty bug (new-chat-fix, xws-build, artifact-urls) sat in the
+ * sidebar for hours looking exactly like running ones, and were archived by
+ * hand. The defect is not that they stayed — it is that **the absence of a
+ * death notice was being read as evidence of life**, by the sidebar and by
+ * every agent that queried `retired_at IS NULL` to ask who was still working.
+ *
+ * `onRunnerDead` is that missing edge, and its note carries the argument for
+ * why the signal it listens to is already FINAL — the thing that would be
+ * catastrophic to get wrong.
  */
 import type Database from 'better-sqlite3';
 import type { EventBus } from './events.js';
 import { type PtydCache, decoratePane, decorateTab } from './ptyd-cache.js';
 import { AgentQueueStore } from './store/AgentQueueStore.js';
 import { PaneStore } from './store/PaneStore.js';
+import { SpawnRoundStore } from './store/SpawnRoundStore.js';
 import { type RetireReason, TabStore } from './store/TabStore.js';
 import { clockIndex, isSubChat } from './tab-clock.js';
 
@@ -137,12 +151,25 @@ export function clearReadyMarks(deps: RetireDeps, tabId: string): boolean {
 }
 
 /**
- * Move a chat into the `done` group and take its `ready` mark with it.
+ * Move a chat into the `done` group and take its `ready` mark — and its OPEN
+ * ROUND — with it.
  *
- * ONE function for both doors — a sub-chat delivering and a user archiving —
- * because they are the same destination reached two ways, and the thing that
- * must not diverge between them is precisely the part that is easy to forget
- * on the second copy: clearing the marks.
+ * ONE function for every door — a sub-chat delivering, a user archiving, a
+ * runner dying — because they are the same destination reached three ways, and
+ * the thing that must not diverge between them is precisely the part that is
+ * easy to forget on the second copy: clearing the marks.
+ *
+ * ── THE ROUND CLOSES HERE, NOT AT ONE CALLER ─────────────────────────────────
+ * `A RETIRED CHAT HAS NO OPEN ROUND` is the invariant the cards need, and until
+ * now only the turn-end path upheld it (SpawnReportWriter.onFinished). The
+ * HAND-ARCHIVE path never did, and the live database says so: all three workers
+ * archived by hand after the ptyd bug killed them still carry
+ * `spawn_rounds.ended_at IS NULL` — so their cards are still mid-flight in the
+ * parent's log, with a spinner, after the tabs themselves were dealt with.
+ *
+ * Putting it at the one door means a reason added later cannot forget it. It is
+ * a no-op when there is nothing open, so the delivered path — which closes the
+ * round first, synchronously, before the model call — is unaffected.
  *
  * Returns whether anything moved. Retiring an already-retired chat is a no-op
  * (the store keeps the original stamp), but the marks are still cleared — a
@@ -152,8 +179,17 @@ export function clearReadyMarks(deps: RetireDeps, tabId: string): boolean {
 export function retireChat(deps: RetireDeps, tabId: string, reason: RetireReason): boolean {
   const tabs = new TabStore(deps.db);
   const retired = tabs.retire(tabId, reason);
+  // Stamped with the RETIREMENT instant and not with `now`, so the round's end
+  // and the row's `retired_at` agree — they are the same moment, and the card
+  // sorts on one while the `done` group sorts on the other. Re-read rather than
+  // assumed, because `retire` is idempotent: for a chat that was already
+  // retired the stamp we want is the ORIGINAL one, not this call's.
+  const closed = new SpawnRoundStore(deps.db).close(
+    tabId,
+    tabs.clockRow(tabId)?.retired_at ?? Date.now(),
+  );
   const cleared = clearReadyMarks(deps, tabId);
-  if (!retired && !cleared) return false;
+  if (!retired && !cleared && !closed) return false;
   const fresh = tabs.getById(tabId);
   if (fresh)
     deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, fresh) });
@@ -217,6 +253,80 @@ export class ChatRetirer {
   }
 
   /**
+   * ITS RUNNER IS GONE FOR GOOD — the supervisor gave up. Retire it as `died`.
+   *
+   * Wire this to the dead-runner sweep's GIVE-UP (ws.ts, beside
+   * `cache.setDead`). Everything else in this class hangs off a turn ending,
+   * and a dead runner never ends one; without this edge its tab keeps
+   * `retired_at IS NULL` forever and reads as working. That is the whole bug.
+   *
+   * ── WHY THIS SIGNAL IS ALREADY FINAL, AND NO GRACE IS ADDED HERE ───────────
+   * Retiring on the first sighting of `status === 'dead'` would archive every
+   * chat on the machine the next time ptyd bounced. It does not, because what
+   * this listens to is NOT "a pane looked dead" — it is the sweep's GIVE-UP,
+   * which a pane can only reach by surviving all four rails in
+   * respawn-policy.ts:
+   *
+   *   · 30 s STARTUP GRACE — a pane created seconds ago is never judged;
+   *   · the ptyd FOREGROUND PROBE SUCCEEDED and found no agent-runner. A ptyd
+   *     outage makes it REJECT, and the sweep then skips the pane entirely:
+   *     no attempt spent, no cooldown anchor moved (see ws.ts, "A THROW IS NOT
+   *     DEATH"). This is why a bounce cannot retire anything — a bounce never
+   *     reaches the branch that calls this at all;
+   *   · 3 REAL RESPAWN ATTEMPTS, each a killPane + ensurePane that retypes the
+   *     startup command and resumes the session, 45 s apart. So ≥135 s of
+   *     sustained death with three recoveries attempted and failed;
+   *   · 60 s PROBATION — a runner that comes back and STAYS wipes the record.
+   *
+   * The grace window, the respawn attempt and the registry check are therefore
+   * all already spent by the time this is called, and re-deriving any of them
+   * here would be the second, subtly different opinion this file's header
+   * warns about (see the note on cron's keep-list). Subscribe to the verdict;
+   * never re-judge it.
+   *
+   * ── WHY IT RETIRES WHEN A FATAL TURN DELIBERATELY DOES NOT ─────────────────
+   * `holdOpen` keeps a crashed RUN's row live, and that is not in tension with
+   * this, because the two rows make different claims. A fatal turn leaves a
+   * live pane with a live agent — you can open it, read it, re-run it — so its
+   * live row is TRUE. A runner the supervisor has given up on leaves no agent
+   * at all, so its live row is FALSE, and it is exactly that false row that
+   * cost three jobs. Nothing is buried either way: the row moves into the
+   * parent's `done` group, still reachable from the card, from `@`, and from a
+   * message that revives it (which respawns the runner).
+   *
+   * ── AND IT IS REPORTED AS A CRASH, NOT AS A DELIVERY ───────────────────────
+   * `onFinished(crashed: true)` closes the round and puts `crashed` on the row
+   * — a state the report writer records on EVERY path, including a worker with
+   * no transcript at all. So the card says "Crashed before it produced
+   * anything" instead of wearing a green tick, which is the whole point of
+   * keeping `died` distinct from `delivered`.
+   */
+  onRunnerDead(paneId: string): boolean {
+    const panes = new PaneStore(this.deps.db);
+    const pane = panes.getById(paneId);
+    if (!pane) return false;
+    const index = clockIndex(this.deps.db);
+    // ONLY sub-chats, exactly as at turn-end. A top-level chat is a
+    // conversation you are having; its agent dying is a thing to FIX, and
+    // filing the conversation away is not the response to it.
+    if (!isSubChat(index, pane.tab_id)) return false;
+    if (index.get(pane.tab_id)?.pinned) return false;
+    // A MULTI-PANE TAB IS NOT ONE UNIT OF WORK — the single clause of
+    // `stillWorking` that survives a death. One agent dying says nothing about
+    // the others, and retiring the tab would hide them.
+    //
+    // The other three clauses are all assertions that the agent is STILL
+    // WORKING, which is precisely what it is not: a pending question belongs
+    // to a runner that no longer exists, its background subagents died with
+    // it, and the sweep has already cleared its queue on the way to this call
+    // (nothing will ever drain it). Treating any of them as a reason to keep
+    // the row live is how the corpse stayed in the sidebar in the first place.
+    if (panes.listByTab(pane.tab_id).length > 1) return false;
+    this.deps.onFinished?.(pane.tab_id, paneId, { crashed: true, awaiting: false });
+    return retireChat(this.deps, pane.tab_id, 'died');
+  }
+
+  /**
    * The agent is NOT FINISHED — or this tab is not one unit of work, which comes
    * to the same thing: there is nothing yet to retire or to report on.
    *
@@ -276,4 +386,102 @@ export class ChatRetirer {
       return false;
     }
   }
+}
+
+/** What one boot's reconcile actually changed. Returned (and logged) rather
+ *  than silent, because a repair nobody can see is indistinguishable from one
+ *  that did not run. */
+export interface ReconcileResult {
+  /** Retired tabs whose round was still open — closed at their own stamp. */
+  roundsClosed: number;
+  /** Live sub-chats no supervisor could ever reach — retired `died`. */
+  orphansRetired: number;
+}
+
+/**
+ * ONE IDEMPOTENT PASS AT BOOT over the states nothing live can reach.
+ *
+ * Two repairs, and one deliberate refusal that is the important part.
+ *
+ * ── (a) A RETIRED CHAT WITH AN OPEN ROUND ────────────────────────────────────
+ * Unambiguously wrong, and it needs no judgement about liveness at all: the tab
+ * left the live list, so the round it was in cannot still be running. This is
+ * the state the hand-archives left behind — measured on the live database, all
+ * three workers killed by the ptyd bug and archived by hand still had
+ * `ended_at IS NULL`, so their cards are mid-flight in the parent's log to this
+ * day. `retireChat` now closes the round at every door, so this is the backlog
+ * that door was never opened for.
+ *
+ * Closed at the tab's OWN `retired_at`, not at boot: the honest "when" is when
+ * the chat ended, and stamping it `now` would sort every recovered card to the
+ * top of the log at every restart.
+ *
+ * ── (b) A LIVE SUB-CHAT NO SUPERVISOR CAN EVER REACH ─────────────────────────
+ * The dead-runner sweep judges panes matching `startup_cmd LIKE 'muxpad
+ * agent%'`. A live sub-chat with no such pane is invisible to it — no turn of
+ * its will ever end, and no sweep will ever declare it dead — so it is live
+ * forever with nothing able to change that. There is nothing that could come
+ * back, so no grace is owed and none is given.
+ *
+ * Empty on this install today. It is a GUARD, not a sweep with a population,
+ * and it is cheap enough to be worth having for the case where a pane is
+ * deleted out from under a running child.
+ *
+ * ── THE REFUSAL: "retire live sub-chats whose runner is absent at boot" ──────
+ * That is the naive fix, and it archives the machine. At boot EVERY runner is
+ * absent — they reconnect over ws seconds later, and the panes ptyd lost to a
+ * restart are respawned by the sweep with their sessions resumed. A pass that
+ * read absence as death would retire every healthy chat on the box on the
+ * first tick after every restart, which is worse than the bug it fixes.
+ *
+ * What covers those is the sweep itself: anything still genuinely dead is
+ * re-judged within ~2.5 minutes of boot, after three respawn attempts, and
+ * `ChatRetirer.onRunnerDead` then retires it through exactly the same edge as
+ * a death at runtime. THE SWEEP IS THE BOOT RECONCILE — it is the code that
+ * has been making this call correctly in production, and this function's job
+ * is only the two states the sweep structurally cannot see.
+ */
+export function reconcileDeadChats(deps: RetireDeps): ReconcileResult {
+  const rounds = new SpawnRoundStore(deps.db);
+  const out: ReconcileResult = { roundsClosed: 0, orphansRetired: 0 };
+
+  // (a) Retired, with a round still open. One row per tab: `close` ends the
+  // single open round, which is the invariant SpawnRoundStore is built around.
+  const stale = deps.db
+    .prepare(
+      `SELECT DISTINCT t.id AS tab_id, t.retired_at AS retired_at
+         FROM tabs t JOIN spawn_rounds r ON r.tab_id = t.id
+        WHERE t.retired_at IS NOT NULL AND r.ended_at IS NULL`,
+    )
+    .all() as Array<{ tab_id: string; retired_at: number }>;
+  for (const row of stale) {
+    if (rounds.close(row.tab_id, row.retired_at)) out.roundsClosed += 1;
+  }
+
+  // (b) Live sub-chats with no pane the dead-runner sweep will ever look at.
+  // `isSubChat` (not a bare `spawned_by`) so a child whose parent is gone is
+  // left alone — it is a root in its own right and decays on its own clock.
+  const index = clockIndex(deps.db);
+  const orphans = deps.db
+    .prepare(
+      `SELECT t.id AS tab_id
+         FROM tabs t
+        WHERE t.spawned_by IS NOT NULL
+          AND t.retired_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM panes p
+                           WHERE p.tab_id = t.id AND p.startup_cmd LIKE 'muxpad agent%')`,
+    )
+    .all() as Array<{ tab_id: string }>;
+  for (const { tab_id: tabId } of orphans) {
+    if (!isSubChat(index, tabId)) continue;
+    if (index.get(tabId)?.pinned) continue;
+    if (retireChat(deps, tabId, 'died')) out.orphansRetired += 1;
+  }
+
+  if (out.roundsClosed > 0 || out.orphansRetired > 0) {
+    console.log(
+      `[tab-retire] boot reconcile: closed ${out.roundsClosed} stranded round(s), retired ${out.orphansRetired} unreachable sub-chat(s)`,
+    );
+  }
+  return out;
 }
