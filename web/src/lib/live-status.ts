@@ -36,6 +36,53 @@ export function liveStatusLabel(opts: { agentCount: number; turnActive?: boolean
   return turnActive ? 'Working…' : null;
 }
 
+/**
+ * Is this child chat RUNNING, right now?
+ *
+ * ── ONE QUESTION, ONE ANSWER, AND IT IS THE SIDEBAR'S ──────────────────────
+ * Three surfaces reported on the same four children of `muxpad` and gave three
+ * answers. Measured against the database:
+ *
+ *   child           retired_at   the bar   sidebar   pane status
+ *   status-line     NULL         busy      spinner   working
+ *   artifact-urls   NULL         busy      —         idle
+ *   xws-build       NULL         busy      —         DEAD
+ *   new-chat-fix    NULL         busy      —         idle
+ *
+ * The bar said four. One was running. It had been counting every child with
+ * `retired_at IS NULL`, and RETIREMENT IS A LIFECYCLE FACT — "has this chat left
+ * the live list" — not a liveness one. A worker that finished its turn and is
+ * waiting is unretired; a worker whose runner died is unretired. `xws-build` was
+ * literally dead while the bar advertised it as an agent at work.
+ *
+ * The pane's `status` is the only field that answers "is this working": for a
+ * runner-owned pane it is the runner's own registry, which is why the sidebar
+ * spins on it. So it is the source here too, and the bar now reads what the
+ * sidebar reads.
+ *
+ * WHY `blocked` IS NOT RUNNING. It means the child stopped to ask YOU something
+ * — the opposite of working, and the sidebar draws it as a dot rather than a
+ * spinner for exactly that reason. Counting it here would put a spinner and the
+ * words "1 agent" on a chat that is waiting on you and will wait forever.
+ * `StateChip`'s rule is the definition; ChatPane.liveset.test.tsx derives the
+ * expected set by rendering that component rather than restating it, so if the
+ * rule ever changes this predicate is forced to follow.
+ *
+ * WHY AN ABSENT STATUS IS NOT RUNNING. A row from a server too old to report one
+ * tells us nothing, and no evidence of running is not evidence of running. The
+ * opposite default is precisely what produced four phantom agents.
+ */
+export function childIsRunning(chat: { status?: string | null | undefined }): boolean {
+  return chat.status === 'working';
+}
+
+/** The children actually at work — the set behind the number above the composer. */
+export function runningChildren<T extends { status?: string | null | undefined }>(
+  kids: readonly T[],
+): T[] {
+  return kids.filter(childIsRunning);
+}
+
 /** The families we are willing to rename. Anything else is left alone. */
 const CLAUDE_FAMILIES: Record<string, string> = {
   opus: 'Opus',
