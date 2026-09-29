@@ -1,4 +1,4 @@
-import { rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -40,6 +40,12 @@ export function clearStaleProfileLock(profileDir: string): string[] {
   const cleared: string[] = [];
   for (const file of staleLockFiles(profileDir)) {
     try {
+      // ASK FIRST. `rmSync` with `force` does not throw for a file that is not
+      // there, so removing unconditionally and recording the removal reported
+      // all three as cleared on every clean start — a return value describing
+      // work that never happened. Nothing reads it today; the next thing to
+      // read it would have been told a story.
+      if (!existsSync(file)) continue;
       rmSync(file, { force: true });
       cleared.push(file);
     } catch {
