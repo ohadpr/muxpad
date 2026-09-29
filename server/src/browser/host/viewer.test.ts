@@ -66,10 +66,17 @@ interface RunOpts {
   fetchJson?: unknown;
   /** A fixed clock, so a lease can be put past its halfway point. */
   nowMs?: number;
+  /** Whether fetches succeed, so a refusal can be posed. */
+  fetchOk?: boolean;
 }
 
 function run(opts: RunOpts | string = {}): Harness {
-  const { search = '', fetchJson = {}, nowMs } = typeof opts === 'string' ? { search: opts } : opts;
+  const {
+    search = '',
+    fetchJson = {},
+    nowMs,
+    fetchOk = true,
+  } = typeof opts === 'string' ? { search: opts } : opts;
   const els = new Map<string, StubEl>();
   const make = (id: string): StubEl => {
     const listeners = new Map<string, Array<(e: unknown) => void>>();
@@ -184,7 +191,7 @@ function run(opts: RunOpts | string = {}): Harness {
     URLSearchParams,
     fetch: async (url: string, init?: { method?: string; body?: string }) => {
       fetches.push({ url: String(url), ...(init ?? {}) });
-      return { ok: true, json: async () => fetchJson };
+      return { ok: fetchOk, json: async () => fetchJson };
     },
     Date: nowMs === undefined ? Date : { ...Date, now: () => nowMs },
     // A clock the test drives. The reconnect backs off with setTimeout, so a
@@ -668,5 +675,39 @@ describe('handing the browser back', () => {
     h.fetches.length = 0;
     await h.tickTimers();
     expect(h.fetches.some((f) => f.url.endsWith('/wheel/renew'))).toBe(false);
+  });
+});
+
+describe('taking the wheel from the page', () => {
+  /**
+   * Untested until now, and I broke it while editing around it: the handler set
+   * `watching = false` and stopped calling applyWatching(), so pressing "take
+   * the wheel" changed the variable and nothing else — the button stayed, the
+   * hand-back stayed hidden, and the body kept the class that marks a viewer as
+   * a spectator. Nothing noticed, because nothing looked.
+   */
+  it('asks for the wheel', async () => {
+    const h = run({ search: '?mode=watch' });
+    h.el('takeover').fire('click');
+    await h.settle();
+    const take = h.fetches.find((f) => f.url.endsWith('/wheel/take'));
+    expect(take?.method).toBe('POST');
+  });
+
+  it('and then actually looks like a driver', async () => {
+    const h = run({ search: '?mode=watch' });
+    expect(h.el('takeover').hidden).toBe(false);
+    h.el('takeover').fire('click');
+    await h.settle();
+    expect(h.el('takeover').hidden).toBe(true);
+    expect(h.el('handback').hidden).toBe(false);
+  });
+
+  it('says so, rather than silently staying a spectator', async () => {
+    const h = run({ search: '?mode=watch', fetchOk: false });
+    h.el('takeover').fire('click');
+    await h.settle();
+    expect(h.el('msg').textContent).toMatch(/could not take/i);
+    expect(h.el('takeover').hidden).toBe(false);
   });
 });
