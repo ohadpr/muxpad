@@ -139,7 +139,22 @@ describe('web "New chat" ends up with a live agent session', () => {
     // The step whose failure is swallowed. Nothing else would start this pane:
     // a chat-face pane's client never attaches to the pty, so there is no
     // lazy-spawn fallback behind this.
-    expect(await ptyd.client.hasPane(pane.id)).toBe(true);
+    //
+    // POLLED, not read once. The guarantee is that the spawn is ASKED FOR
+    // eagerly, not that it has landed by the time the response does:
+    // bootstrapTab waits EAGER_SPAWN_WAIT_MS for ptyd's acknowledgement and
+    // then answers regardless, because that acknowledgement is gated on a
+    // synchronous pty fork in ptyd and was costing the web sidebar entire
+    // seconds. Asserting it at the exact instant of the 201 would re-pin this
+    // test to the boundary that change deliberately removed, and would go flaky
+    // on a loaded CI box for a reason that is not a bug.
+    const deadline = Date.now() + 5_000;
+    let live = false;
+    while (!live && Date.now() < deadline) {
+      live = await ptyd.client.hasPane(pane.id);
+      if (!live) await settle(25);
+    }
+    expect(live).toBe(true);
   });
 
   it('pushes the session to a chat client that connected BEFORE the runner', async () => {
