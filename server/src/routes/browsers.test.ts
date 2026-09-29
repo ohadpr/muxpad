@@ -1,7 +1,10 @@
+import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { Hono } from 'hono';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { browsersRoutes } from './browsers.js';
 
 /**
@@ -20,7 +23,10 @@ let registry: { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> 
 
 const CHROME = { path: '/bin/chrome', source: 'test' };
 
+let tempDataDir: string;
+
 beforeEach(() => {
+  tempDataDir = mkdtempSync(join(tmpdir(), 'browsers-route-'));
   db = new Database(':memory:');
   db.exec(`CREATE TABLE apps (
     id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
@@ -43,7 +49,10 @@ beforeEach(() => {
     '/api/browsers',
     browsersRoutes({
       db,
-      dataDir: '/data',
+      // A REAL directory: the routes that store a card's picture actually write
+      // one, and '/data' silently fails every write — which reads as "the
+      // feature does not work" when it is the fixture that does not.
+      dataDir: tempDataDir,
       hostEntry: '/opt/cli.js',
       cwd: '/home',
       registry,
@@ -51,6 +60,10 @@ beforeEach(() => {
       tailnetHost: () => 'dt-mac-mini.example-tailnet.ts.net',
     }),
   );
+});
+
+afterEach(() => {
+  rmSync(tempDataDir, { recursive: true, force: true });
 });
 
 const post = (path: string, body: unknown = {}) =>
@@ -511,5 +524,109 @@ describe('harvesting the jar', () => {
     } finally {
       globalThis.fetch = original;
     }
+  });
+});
+
+describe('the last picture, and serving it back', () => {
+  /**
+   * Both of these were written tonight and checked only by hand against a live
+   * browser. An audit of which routes nothing had ever called found them.
+   */
+  it('attaches a still to the newest moment', async () => {
+    await ensure();
+    await post('/api/browsers/shopping/opened', {});
+    const res = await app.request('/api/browsers/shopping/closing', {
+      method: 'POST',
+      headers: { 'content-type': 'image/jpeg' },
+      body: new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { attached: boolean }).toMatchObject({ attached: true });
+    const view = (await (await get('/api/browsers/shopping')).json()) as {
+      events: Array<{ at: number; shot?: boolean }>;
+    };
+    expect(view.events.at(-1)?.shot).toBe(true);
+  });
+
+  it('serves that still back at the moment it belongs to', async () => {
+    await ensure();
+    await post('/api/browsers/shopping/opened', {});
+    await app.request('/api/browsers/shopping/closing', {
+      method: 'POST',
+      body: new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 9]),
+    });
+    const view = (await (await get('/api/browsers/shopping')).json()) as {
+      events: Array<{ at: number }>;
+    };
+    const at = view.events.at(-1)?.at;
+    const still = await app.request(`/api/browsers/shopping/shot/${at}`);
+    expect(still.status).toBe(200);
+    expect(still.headers.get('content-type')).toBe('image/jpeg');
+  });
+
+  it('404s for a moment with no picture, rather than half-serving one', async () => {
+    // The card draws without it. A broken image reads as a fault.
+    await ensure();
+    expect((await app.request('/api/browsers/shopping/shot/12345')).status).toBe(404);
+  });
+
+  it('refuses a still request that is not a moment', async () => {
+    await ensure();
+    expect((await app.request('/api/browsers/shopping/shot/not-a-time')).status).toBe(400);
+  });
+
+  it('says so when there is no moment to attach one to', async () => {
+    // A browser that has never been used has nothing to illustrate.
+    await ensure();
+    const res = await app.request('/api/browsers/shopping/closing', {
+      method: 'POST',
+      body: new Uint8Array([1, 2, 3]),
+    });
+    expect((await res.json()) as { attached: boolean }).toMatchObject({ attached: false });
+  });
+
+  it('does not claim to have attached an EMPTY picture', async () => {
+    // A zero-byte file renders as a hole, which is worse than no picture.
+    await ensure();
+    await post('/api/browsers/shopping/opened', {});
+    const res = await app.request('/api/browsers/shopping/closing', {
+      method: 'POST',
+      body: new Uint8Array([]),
+    });
+    expect((await res.json()) as { attached: boolean }).toMatchObject({ attached: false });
+  });
+});
+
+describe('keeping a lease alive', () => {
+  it('renews for the person holding it', async () => {
+    await ensure();
+    await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
+    const res = await post('/api/browsers/shopping/wheel/renew', { by: 'pane-7' });
+    expect(res.status).toBe(200);
+  });
+
+  it('refuses anybody else, so an open tab cannot extend a stranger’s hold', async () => {
+    await ensure();
+    await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
+    const res = await post('/api/browsers/shopping/wheel/renew', { by: 'someone-else' });
+    expect(res.status).toBe(409);
+  });
+
+  it('refuses when nobody holds it at all', async () => {
+    await ensure();
+    expect((await post('/api/browsers/shopping/wheel/renew', { by: 'pane-7' })).status).toBe(409);
+  });
+
+  it('pushes the expiry out, which is the whole point', async () => {
+    await ensure();
+    await post('/api/browsers/shopping/wheel/take', { by: 'pane-7', ttlMs: 1000 });
+    const before = (await (await get('/api/browsers/shopping')).json()) as {
+      wheel: { expiresAt: number };
+    };
+    await post('/api/browsers/shopping/wheel/renew', { by: 'pane-7', ttlMs: 60_000 });
+    const after = (await (await get('/api/browsers/shopping')).json()) as {
+      wheel: { expiresAt: number };
+    };
+    expect(after.wheel.expiresAt).toBeGreaterThan(before.wheel.expiresAt);
   });
 });

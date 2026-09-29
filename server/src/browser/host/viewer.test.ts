@@ -30,6 +30,7 @@ interface StubEl {
   focused: boolean;
   focusCount: number;
   classes: string[];
+  classList: { add(c: string): void; remove(c: string): void; contains(c: string): boolean };
   attrs: Record<string, string>;
   value: string;
   style: Record<string, string>;
