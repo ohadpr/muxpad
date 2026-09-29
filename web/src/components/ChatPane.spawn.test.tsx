@@ -202,19 +202,24 @@ describe('the spawn cards and the roster read ONE list', () => {
     // its outcome lives on the completion card at the bottom — repeating it here
     // would be the same fact in two places, with the copy nobody can see being
     // the one that claims to be current.
-    expect(BODY).toMatch(
-      /if \(x\.card\.kind === 'launch'\)[\s\S]{0,1200}working=\{state === 'working'\}/,
-    );
-    expect(BODY).toMatch(
-      /if \(x\.card\.kind === 'launch'\)[\s\S]{0,1200}<\/ChatMentionCard>|if \(x\.card\.kind === 'launch'\)[\s\S]{0,1200}\/>/,
-    );
     const launch = BODY.slice(
       BODY.indexOf("if (x.card.kind === 'launch')"),
       BODY.indexOf('// THE COMPLETION'),
     );
+    expect(launch).toContain("working={state === 'working'}");
     expect(launch).not.toContain('onToggleExpanded');
     expect(launch).not.toContain('spawnReportSummary');
     expect(launch).not.toContain('tone=');
+    expect(launch).not.toContain('state=');
+  });
+
+  it('gives the launch card a LABEL, a HANDLE and a SUB-CHAT MARK', () => {
+    // The cards read `status-line` and `cross-ws` — a dot, a slug and a spinner,
+    // and nothing else. "Sub chats need a more purposeful card, something more
+    // informative."
+    expect(BODY).toContain('mark="spawn"');
+    expect(BODY).toContain('name: spawnLabel(kid)');
+    expect(BODY).toContain('sub={spawnHandle(kid)}');
   });
 
   it('NEVER PUTS THE HEADLINE UNDER THE NAME', () => {

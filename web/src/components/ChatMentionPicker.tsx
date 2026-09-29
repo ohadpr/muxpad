@@ -239,6 +239,7 @@ export function ChatMentionCard({
   chat,
   sub,
   working,
+  mark,
   state,
   tone,
   body,
@@ -253,6 +254,13 @@ export function ChatMentionCard({
   sub?: string | undefined;
   /** The other chat is still on it: the same 10px mark as everywhere else. */
   working?: boolean | undefined;
+  /**
+   * `spawn` swaps the leading clock chip for a BRANCH — "another chat started
+   * this one", which is the one thing a worker's card has to say before anything
+   * else. Omitted everywhere the card is about a chat you addressed rather than
+   * one that was spawned, which keeps the `@` surfaces exactly as they were.
+   */
+  mark?: 'spawn' | undefined;
   /** A word for what happened, when nothing is spinning. */
   state?: string | undefined;
   /**
@@ -299,7 +307,23 @@ export function ChatMentionCard({
 }) {
   const head = (
     <>
-      <ChatChip density="card" chat={chat} />
+      {mark === 'spawn' ? (
+        // A SUB-CHAT'S OWN MARK. Not `ChatChip`: that component is the decay
+        // CLOCK, a sub-chat has no clock, and what it draws for one is the
+        // sidebar's 6px child dot — which works in the rail because there is a
+        // parent ROW above it to be a child of. In a card there is nothing for it
+        // to belong to, and ChatChip's own note says what that makes it: "a dot
+        // with no parent row above it to belong to is just a lost mark". Beside a
+        // name it reads as a bullet.
+        //
+        // This is a different fact — "another chat started this one" — so it gets
+        // a different mark: a branch, drawn in CSS like the tick and the chevron.
+        <span className="chat-mention-card-spawn" data-working={working ? 'true' : undefined}>
+          <span className="chat-mention-card-sr">Sub-chat</span>
+        </span>
+      ) : (
+        <ChatChip density="card" chat={chat} />
+      )}
       <span className="chat-mention-card-text">
         <span className="chat-mention-card-name">{chat.name}</span>
         {sub ? (

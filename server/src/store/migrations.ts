@@ -741,6 +741,50 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE tabs ADD COLUMN spawn_report_state TEXT;
     `,
   },
+  {
+    // WHAT THE WORKER WAS ASKED — the other half of the pair, and the one the
+    // reader sees FIRST.
+    //
+    //   tabs.spawn_task — one short line of plain English, read off the child's
+    //     FIRST message when it starts work. NULL until then, and for every chat
+    //     nobody spawned.
+    //
+    // A worker's card read `status-line`, beside a dot and a spinner, and
+    // nothing else: `--name=` values are handles typed on a command line, chosen
+    // to be short enough to type and unique enough to grep, which are not the
+    // qualities a label needs. Two of them side by side say nothing about what
+    // is running.
+    //
+    // WHY NOT THE HEADLINE, which already exists and already restates the
+    // prompt. Two reasons, and the second is the one that decides it:
+    //
+    //   · It is a TAB-WIDE facility with a deliberately different cadence. The
+    //     whole of chat/headline.ts is an argument for STILLNESS — a 6-minute
+    //     floor, an anti-drift prompt, a "rewording is not a change" rule —
+    //     because it is the sidebar's second line for every chat in the app.
+    //     Making it fire immediately to serve a card would change what every
+    //     row in the rail does, to fix one card.
+    //   · It answers a different question. The headline names what a chat is
+    //     ABOUT and keeps re-answering that as the subject moves; this names
+    //     what a worker was ASKED, once, and is never revised — the task does
+    //     not drift, and a label that changed under a running card would be the
+    //     drift the headline exists to prevent, reintroduced next door.
+    //
+    // So: its own column, 1:1 with the child, write-once, beside `spawn_report`
+    // — the pair reads "asked" and "concluded" — and written by the same writer
+    // through the same model seam, firing on the first turn instead of the last.
+    // The headline is still the card's FALLBACK (see web `spawnLabel`), which is
+    // the one job it is genuinely good at.
+    //
+    // No backfill: a label is read off a first message and no existing child is
+    // sending one. Absent is correct for every row that predates this, and the
+    // card falls back through the headline to the handle rather than going
+    // blank.
+    version: 30,
+    sql: `
+      ALTER TABLE tabs ADD COLUMN spawn_task TEXT;
+    `,
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

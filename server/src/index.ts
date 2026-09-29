@@ -689,6 +689,10 @@ cronScheduler.start();
 // sid changes). See docs/plans/2026-08-28-session-archive.md.
 archiver?.start();
 headlines.start();
+// The other half of the spawn card: the LABEL on a worker's card, generated from
+// its first message. Subscribed here (the report half is driven by ChatRetirer's
+// `onFinished` instead — see the class note for why the two differ).
+spawnReports.start();
 
 // One-time repair of headlines written before the shape check existed — the
 // generation that answered the conversation ("I'm not familiar with muxpad —

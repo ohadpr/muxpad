@@ -218,7 +218,13 @@
   flex-direction: column;
   align-self: flex-start;
   gap: 7px;
+  /* SHRINK TO FIT, but not below a common measure. A bare name made a 90px pill
+     and the one under it a 150px pill, and a pair of them looked ragged — the
+     complaint was "noticeably different widths". A floor rather than a fixed
+     width: two launch cards now share an edge, a long label still grows to its
+     own, and nothing goes back to the 420px box that was mostly empty border. */
   width: fit-content;
+  min-width: min(280px, 100%);
   max-width: min(420px, 94%);
   margin: 3px 0;
   padding: 7px 12px 8px;
@@ -385,6 +391,57 @@ button.chat-mention-card-head {
    purpose — see the `tone` prop. It is the only thing left that draws a WORD. */
 .chat-mention-card-state[data-state="note"] {
   --state-hue: var(--chat-faint);
+}
+
+/* ── The SUB-CHAT mark ────────────────────────────────────────────────────
+   A BRANCH: a stem coming down from above and turning out to the right, with a
+   node on its end. "Another chat started this one."
+
+   It replaces `ChatChip` on a spawn card rather than joining it. That component
+   is the decay CLOCK, a sub-chat has no clock, and what it draws for one is the
+   rail's 6px child dot — which works in the rail because a parent ROW sits above
+   it. Here there is nothing above it to belong to, and it read as a bullet.
+
+   Drawn, like the tick and the chevron: two borders and a radius are the same
+   shape at every size and DPI, and a glyph from a font is not. `currentColor`
+   throughout, so the two states below set ONE property between them.
+
+   Quiet by default and the ACCENT while the worker runs — the only place on this
+   card where the accent appears, and it is carrying "this is live" beside the
+   spinner at the other edge rather than competing with it. */
+.chat-mention-card-spawn {
+  position: relative;
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  color: var(--chat-faint);
+}
+.chat-mention-card-spawn[data-working="true"] {
+  color: var(--chat-accent);
+}
+/* The stem and the elbow, in one box: a left border down, a bottom border out,
+   and a radius joining them. */
+.chat-mention-card-spawn::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 6px;
+  height: 8px;
+  border-left: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  border-bottom-left-radius: 4px;
+}
+/* The node the branch arrives at. */
+.chat-mention-card-spawn::after {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 6.5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 /* ── The lifecycle MARK ───────────────────────────────────────────────────

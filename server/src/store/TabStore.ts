@@ -38,6 +38,7 @@ interface TabRow {
   clock_started_at: number | null;
   retired_at: number | null;
   retired_reason: string | null;
+  spawn_task: string | null;
   spawn_report: string | null;
   spawn_report_at: number | null;
   spawn_report_state: string | null;
@@ -603,6 +604,18 @@ export class TabStore {
     this.db.prepare('UPDATE tabs SET spawn_report_at = ? WHERE id = ?').run(at, id);
   }
 
+  /**
+   * Write the one-line label for what this worker was ASKED.
+   *
+   * Write-once in practice — the generator only ever runs for a child whose
+   * column is empty — and off `update()` for the same reason `setHeadline` is:
+   * `updated_at` is what clients key cache invalidation off, and a label landing
+   * is not a structural edit to the tab.
+   */
+  setSpawnTask(id: string, task: string): void {
+    this.db.prepare('UPDATE tabs SET spawn_task = ? WHERE id = ?').run(task, id);
+  }
+
   /** When a spawn report was last ATTEMPTED for this chat; null if never. */
   spawnReportAt(id: string): number | null {
     const r = this.db.prepare('SELECT spawn_report_at FROM tabs WHERE id = ?').get(id) as
@@ -755,6 +768,10 @@ export class TabStore {
       // (state NULL) is a rate-limiter fact the client has no use for, and
       // publishing the timestamp alone would put a report entry in the log with
       // nothing in it.
+      // The ASK, published on its own: it exists from the child's first turn,
+      // long before there is anything to report, and that is exactly when the
+      // card needs it.
+      ...(x.spawn_task ? { spawn_task: x.spawn_task } : {}),
       ...(x.spawn_report_state
         ? {
             spawn_report: x.spawn_report,

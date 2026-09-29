@@ -2,13 +2,16 @@ import type Database from 'better-sqlite3';
 import type { EventBus } from '../events.js';
 import { decorateTab } from '../ptyd-cache.js';
 import type { PtydCache } from '../ptyd-cache.js';
+import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
+import { clockIndex, isSubChat } from '../tab-clock.js';
 import { glossaryCache } from './glossary.js';
 import {
   type SpawnReportModel,
   agentSdkSpawnReportModel,
   maybeWriteSpawnReport,
 } from './spawn-report.js';
+import { type SpawnTaskModel, maybeWriteSpawnTask } from './spawn-task.js';
 
 /**
  * Turns "a worker finished" into a report in its parent's log, and nothing else.
@@ -43,8 +46,12 @@ export class SpawnReportWriter {
   private readonly events: EventBus;
   private readonly cache: PtydCache;
   private readonly model: SpawnReportModel;
+  private readonly taskModel: SpawnTaskModel;
   private readonly glossary: () => readonly string[];
   private readonly inFlight = new Set<string>();
+  /** Tabs whose task label has been ATTEMPTED this process — see `start`. */
+  private readonly taskTried = new Set<string>();
+  private unsubscribe: (() => void) | null = null;
   /** Tests await this to let a triggered generation settle. */
   private pending: Promise<unknown> = Promise.resolve();
 
@@ -57,17 +64,83 @@ export class SpawnReportWriter {
     dataDir?: string;
     /** Test seam. Defaults to the Agent SDK haiku one-shot. */
     model?: SpawnReportModel;
+    /** Test seam for the task label — the same bare one-shot by default. */
+    taskModel?: SpawnTaskModel;
   }) {
     this.db = opts.db;
     this.events = opts.events;
     this.cache = opts.cache;
     this.model = opts.model ?? agentSdkSpawnReportModel;
+    this.taskModel = opts.taskModel ?? opts.model ?? agentSdkSpawnReportModel;
     // The SAME vocabulary the headline generator and the dictation cleanup pass
     // use, for a sharper version of the same reason: a cheap model summarising
     // work on "ptyd" is exactly the model that stops reporting and starts asking
     // what ptyd is. Cached, because a report is rate-limited but a boot is not.
     const dataDir = opts.dataDir;
     this.glossary = dataDir ? glossaryCache(opts.db, dataDir) : () => [];
+  }
+
+  /**
+   * Subscribe for the TASK half — the label on a worker's card, generated from
+   * its first message.
+   *
+   * This one DOES watch the bus, and the asymmetry is the point. "Has this
+   * worker finished" is a careful judgement that belongs to ChatRetirer and must
+   * not be re-derived (see the class note); "a turn happened in a sub-chat" is a
+   * raw fact with nothing to get wrong, and the label has to land at the START
+   * of the work rather than the end — a card that is unreadable until the job is
+   * over is the card being replaced.
+   *
+   * Bounded by ONE ATTEMPT PER TAB PER PROCESS rather than by a persisted clock.
+   * The column is write-once, so a label that lands is never asked for again;
+   * what this guards is the child whose label cannot be produced, and for that
+   * "once per boot" is the right ceiling and needs no column.
+   */
+  start(): void {
+    if (this.unsubscribe) return;
+    this.unsubscribe = this.events.subscribe((e) => {
+      if (e.type !== 'agent_turn') return;
+      this.scheduleTask(e.pane_id);
+    });
+  }
+
+  stop(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+  }
+
+  private scheduleTask(paneId: string): void {
+    const pane = new PaneStore(this.db).getById(paneId);
+    if (!pane) return;
+    // ONLY sub-chats. A top-level chat is a conversation, not a task, and it has
+    // no card in anyone's log to label.
+    if (!isSubChat(clockIndex(this.db), pane.tab_id)) return;
+    const tabId = pane.tab_id;
+    if (this.taskTried.has(tabId)) return;
+    const tab = new TabStore(this.db).getById(tabId);
+    if (!tab || tab.spawn_task) return;
+    this.taskTried.add(tabId);
+    const run = maybeWriteSpawnTask(this.db, tabId, paneId, this.taskModel)
+      .then((task) => {
+        // Nothing written reaches nobody — the common case is a first turn whose
+        // message has not hit the transcript yet.
+        if (!task) {
+          // …and THAT case is worth another go: the label is the card's whole
+          // content, and the next turn is seconds away.
+          this.taskTried.delete(tabId);
+          return;
+        }
+        const fresh = new TabStore(this.db).getById(tabId);
+        if (!fresh) return;
+        this.events.emit({
+          type: 'tab.updated',
+          tab: decorateTab(this.cache, this.db, fresh),
+        });
+      })
+      .catch((err) => {
+        console.error('[spawn-task] generation failed', err);
+      });
+    this.pending = this.pending.then(() => run);
   }
 
   /** In-flight work settles (tests await this between assertions). */
