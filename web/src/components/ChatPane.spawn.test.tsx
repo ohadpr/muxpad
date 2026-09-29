@@ -203,9 +203,14 @@ describe('the spawn cards and the roster read ONE list', () => {
     // TWO renders, and two separate anchors — which is also what lets the scroll
     // memory address them independently and expanding one hold the right row.
     expect(BODY).toContain("if (x.card.kind === 'launch')");
-    expect(BODY).toContain('`spawn-${kid.tabId}`');
-    expect(BODY).toContain('`done-${kid.tabId}`');
     expect(BODY.split('<ChatMentionCard').length - 1).toBe(2);
+    // Each takes its anchor FROM THE CARD. It used to be rebuilt here as
+    // `spawn-${kid.tabId}` / `done-${kid.tabId}`, which named one row per child
+    // — correct until `spawn_rounds` made a worker draw a pair per ROUND, at
+    // which point twenty-seven rows in one log shared an id and the reader was
+    // thrown 3,200px whenever they scrolled onto a later one. See
+    // `lib/spawn-card-scroll.test.ts`.
+    expect(BODY.match(/const anchorId = x\.card\.anchorId;/g)).toHaveLength(2);
   });
 
   it('gives the LAUNCH entry no summary, no expand, and no mark once it is over', () => {
@@ -298,11 +303,17 @@ describe('the spawn cards and the roster read ONE list', () => {
 
   it('keeps the expansion EPHEMERAL — a disclosure is not a preference', () => {
     // Nothing persisted and nothing synced: opening a report on the phone must
-    // not open it on the desktop. The two stores are keyed by CHILD TAB ID, the
-    // only handle that cannot move when the log grows or the memo rebuilds.
+    // not open it on the desktop.
     expect(SRC).toContain('useState<ReadonlySet<string>>(EMPTY_EXPANDED)');
     expect(SRC).not.toMatch(/expandedReports[\s\S]{0,400}localStorage/);
-    expect(SRC).toContain('next.add(chat.tabId)');
+    // Keyed by the CARD, not the child. Child tab id was the only handle that
+    // could not move while a worker had one completion entry; since
+    // `spawn_rounds` it has one per round, and a set keyed by the tab opened
+    // every one of them from a single tap — twenty-seven boxes on the measured
+    // child, most of them above the reader. The work CACHE is still per child:
+    // one child, one transcript.
+    expect(SRC).toContain('next.add(anchorId)');
+    expect(SRC).toContain('reportWork.get(kid.tabId)');
   });
 
   it('cannot park the cards at the foot of the log again', () => {

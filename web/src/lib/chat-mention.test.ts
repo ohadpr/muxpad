@@ -889,9 +889,9 @@ describe('spawnCards', () => {
 
   it('carries the spawn MOMENT with each card — that is what places it', () => {
     expect(spawnCards(rows, 'p')).toEqual([
-      { chat: rows[0], kind: 'launch', at: 100 },
-      { chat: rows[1], kind: 'launch', at: 200 },
-      { chat: rows[2], kind: 'launch', at: 300 },
+      { chat: rows[0], kind: 'launch', at: 100, anchorId: 'spawn-a' },
+      { chat: rows[1], kind: 'launch', at: 200, anchorId: 'spawn-b' },
+      { chat: rows[2], kind: 'launch', at: 300, anchorId: 'spawn-c' },
     ]);
   });
 
@@ -1052,7 +1052,9 @@ describe('spawnCards — TWO entries per child: the launch, then the completion'
 
   it('a RUNNING child has only its launch card', () => {
     // Nothing appears at the bottom until it actually finishes.
-    expect(spawnCards([kid()], 'p')).toEqual([{ chat: kid(), kind: 'launch', at: 100 }]);
+    expect(spawnCards([kid()], 'p')).toEqual([
+      { chat: kid(), kind: 'launch', at: 100, anchorId: 'spawn-dc' },
+    ]);
   });
 
   it('A FINISHED CHILD ADDS A SECOND ENTRY, where it FINISHED', () => {
@@ -1064,8 +1066,11 @@ describe('spawnCards — TWO entries per child: the launch, then the completion'
     // A card that mutates in place is invisible once the conversation has
     // scrolled past it — which is exactly when a long job finishes.
     expect(spawnCards([finished()], 'p')).toEqual([
-      { chat: finished(), kind: 'launch', at: 100 },
-      { chat: finished(), kind: 'completion', at: 9_000 },
+      // Two entries, and — since a worker draws a pair per ROUND — two distinct
+      // rows. See `SpawnCard.anchorId`: these are the unsuffixed fallback ids,
+      // which is what the tab-level path still emits.
+      { chat: finished(), kind: 'launch', at: 100, anchorId: 'spawn-dc' },
+      { chat: finished(), kind: 'completion', at: 9_000, anchorId: 'done-dc' },
     ]);
   });
 
@@ -1473,6 +1478,8 @@ describe('interleaveSpawnCards', () => {
     chat: chat({ tabName: id, tabId: id }),
     kind: 'launch' as const,
     at,
+    // Placement is all this function decides; the id is carried, not consulted.
+    anchorId: `spawn-${id}`,
   });
   const shape = (out: ReturnType<typeof interleaveSpawnCards<string>>) =>
     out.map((x) => (x.kind === 'card' ? `[${x.card.chat.tabId}]` : x.node));

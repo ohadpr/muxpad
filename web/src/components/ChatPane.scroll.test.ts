@@ -178,6 +178,30 @@ describe('the compensation cannot take a form that double-pays', () => {
     // double-pay defence is the arithmetic being absolute.
     expect(code).not.toContain("CSS.supports('overflow-anchor'");
   });
+
+  /**
+   * A ROW ID IS NEVER REBUILT AT THE CALL SITE.
+   *
+   * The regression this guards was not in any scroll file. ChatPane drew a spawn
+   * card's `data-eid` as `` `spawn-${kid.tabId}` `` — unique while a worker had
+   * one launch and one completion, and duplicated once `spawn_rounds` made a
+   * worker a SEQUENCE of rounds drawing a pair of entries EACH. `rowBox` answers
+   * with the FIRST row carrying an id, so the reader was measured against the
+   * card under their eyes and re-placed against a different one: measured in the
+   * sim, a 3,200px throw backwards off their own scroll event. See
+   * `lib/spawn-card-scroll.test.ts`, which drives the real ids through the
+   * mechanism.
+   *
+   * Identity belongs to `spawnCards`, which is the only thing that knows whether
+   * an entry came from a round or from the tab-level fallback. A template
+   * rebuilding one here is the shape of the bug, so it is the shape asserted
+   * against.
+   */
+  it('takes a card anchor from the card, never from the child tab', () => {
+    expect(code).not.toMatch(/`spawn-\$\{/);
+    expect(code).not.toMatch(/`done-\$\{/);
+    expect(code).toContain('x.card.anchorId');
+  });
 });
 
 describe('the composer clears the software keyboard', () => {

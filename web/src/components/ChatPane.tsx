@@ -2374,13 +2374,17 @@ export function ChatPane({
   // conversation. The head link still goes to the sub-chat: expand to read it
   // here, the link to go there and continue.
   //
-  // Both pieces of state are EPHEMERAL, per-device, keyed by CHILD TAB ID:
+  // Both pieces of state are EPHEMERAL and per-device:
   //
   //   · A disclosure is not a preference. Nothing is persisted and nothing is
   //     synced — opening a report on the phone must not open it on the desktop.
-  //   · Keyed by tab id because that is the only handle that cannot move. Not an
-  //     index (the log grows), not a memo identity (the transcript memo rebuilds
-  //     on every corpus patch), not an event id (a report entry has none).
+  //   · The OPEN SET is keyed by the card's `anchorId`, because a worker draws a
+  //     completion entry per round and this set is what says which one you
+  //     opened. Keyed by tab id — which is what it was, correctly, while a child
+  //     had exactly one — a single tap opened every round's card at once. The
+  //     WORK CACHE below stays keyed by tab id: one child, one transcript.
+  //   · Not an index (the log grows), not a memo identity (the transcript memo
+  //     rebuilds on every corpus patch), not an event id (a card has none).
   //   · Held HERE rather than inside the card, for the reason `expandedGroups` is:
   //     the element tree is rebuilt whenever the transcript or the corpus changes,
   //     and state inside the card would collapse every open report when it did.
@@ -2396,10 +2400,15 @@ export function ChatPane({
       // it, expanding a card above the viewport pulls the text out from under
       // whoever pressed the button. Same machinery as an action-run fold.
       onFoldToggled(anchorId);
+      // KEYED BY THE CARD, not by the child. A worker draws a completion entry
+      // per round, so a set keyed by tab id opened EVERY one of them from one
+      // tap — on the measured 27-round child, twenty-seven boxes growing at once,
+      // most of them above the reader. `anchorId` is per entry (see
+      // `SpawnCard.anchorId`), which is what "this disclosure" means.
       setExpandedReports((prev) => {
         const next = new Set(prev);
-        if (next.has(chat.tabId)) next.delete(chat.tabId);
-        else next.add(chat.tabId);
+        if (next.has(anchorId)) next.delete(anchorId);
+        else next.add(anchorId);
         return next;
       });
       setReportWork((prev) => {
@@ -4791,7 +4800,13 @@ export function ChatPane({
             // So the mark SPINS while the child works and the slot is EMPTY once
             // it is finished. This card stops being a live indicator and becomes
             // what it always was underneath: the record that a launch happened.
-            const anchorId = `spawn-${kid.tabId}`;
+            // THE CARD'S OWN ID, not one rebuilt from the child's tab. See
+            // `SpawnCard.anchorId`: a worker is a sequence of rounds and draws a
+            // pair of entries per round, so `spawn-${kid.tabId}` named 27 rows
+            // in one log on the real database — a duplicate React key, and a
+            // scroll anchor that resolved to the wrong card and threw the reader
+            // 2,400px up the log off their own scroll event.
+            const anchorId = x.card.anchorId;
             return (
               <ChatMentionCard
                 key={anchorId}
@@ -4821,17 +4836,24 @@ export function ChatPane({
           // report — the latest — so reading it for every completion card would
           // make an old card restate a result that belongs to a later round.
           const report = x.card.report ?? kid.report;
+          // Its own anchor, so the two entries are separately addressable by the
+          // scroll memory and expanding one holds the right row — and, since
+          // rounds, so are ROUND THREE's two entries and round four's. Built in
+          // `spawnCards`, which is the only thing that knows whether this entry
+          // came from a round or from the tab-level fallback.
+          const anchorId = x.card.anchorId;
           // AN EXPANDER ONLY WHERE THERE IS A RESULT BEHIND IT. Three report
           // states exist in the wild at once and two of them have nothing to
           // show; over those the control used to fall through to the transcript,
           // and what it opened onto was the worker's entire narration. See
           // `canExpandSpawn`, which is where the three cases are written out.
           const canExpand = canExpandSpawn(kid);
-          const expanded = canExpand && expandedReports.has(kid.tabId);
+          // The disclosure is per ENTRY — see `toggleReport`. Keyed by the child
+          // it opened every round's card at once.
+          const expanded = canExpand && expandedReports.has(anchorId);
+          // …but the WORK behind it is fetched per child (one transcript), so
+          // that cache stays keyed by the tab.
           const work = expanded ? reportWork.get(kid.tabId) : undefined;
-          // Its own anchor, so the two entries are separately addressable by the
-          // scroll memory and expanding one holds the right row.
-          const anchorId = `done-${kid.tabId}`;
           return (
             <ChatMentionCard
               key={anchorId}
