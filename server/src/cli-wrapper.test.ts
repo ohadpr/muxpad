@@ -299,6 +299,37 @@ describe('scripts/muxpad HTTP wrapper', () => {
     let home: string;
     let log: string;
     let data: string;
+    /**
+     * Stands in for `https://<hostname>/` when the route already exists. It
+     * answers like muxpad's PUBLIC ARTIFACT SERVER — 404 at `/` with a sandbox
+     * CSP — because that exact fingerprint is what proves the hostname already
+     * reaches this machine. A plain 404 must NOT be enough; something else
+     * answering on that name is not a route to us.
+     */
+    let probe: ServerType;
+    let probeUrl: string;
+
+    beforeAll(async () => {
+      const { createServer } = await import('node:http');
+      probe = createServer((_req, res) => {
+        res.writeHead(404, {
+          'content-security-policy': 'sandbox allow-scripts allow-forms',
+          'content-type': 'text/plain',
+        });
+        res.end('not found');
+      }).listen(0, '127.0.0.1') as unknown as ServerType;
+      await new Promise<void>((r) =>
+        (probe as unknown as import('node:http').Server).once('listening', () => r()),
+      );
+      const addr = (probe as unknown as import('node:http').Server).address();
+      probeUrl = `http://127.0.0.1:${(addr as { port: number }).port}`;
+    });
+
+    afterAll(async () => {
+      await new Promise<void>((r) =>
+        (probe as unknown as import('node:http').Server).close(() => r()),
+      );
+    });
 
     const stub = (body: string) => {
       const p = join(home, 'cloudflared-stub.sh');
@@ -606,6 +637,32 @@ exit 0`);
       expect(readFileSync(log, 'utf-8')).toContain('tunnel route dns muxpad pub.example.dev');
     });
 
+    it('does NOT skip routing for a hostname that merely 404s', async () => {
+      // A bare 404 is somebody else's server, or a parked name. Skipping the
+      // route on that evidence would leave the hostname pointing wherever it
+      // already pointed, and muxpad would announce it as its own public base.
+      const { createServer } = await import('node:http');
+      const bare = createServer((_req, res) => {
+        res.writeHead(404, { 'content-type': 'text/plain' });
+        res.end('nope');
+      }).listen(0, '127.0.0.1');
+      await new Promise<void>((r) => bare.once('listening', () => r()));
+      const bareUrl = `http://127.0.0.1:${(bare.address() as { port: number }).port}`;
+      writeFileSync(join(home, 'cert.pem'), 'x');
+      const bin = stub(`
+case "$2" in
+  create) printf '{"TunnelID":"u-1"}' > "${home}/u-1.json" ;;
+  list)   printf '[]' ;;
+esac
+exit 0`);
+      await execFileAsync(MUXPAD_BIN, ['tunnel', 'setup', 'pub.example.dev'], {
+        env: { ...envFor(bin), MUXPAD_TUNNEL_PROBE_URL: bareUrl },
+        encoding: 'utf-8',
+      });
+      expect(readFileSync(log, 'utf-8')).toContain('route dns muxpad pub.example.dev');
+      await new Promise<void>((r) => bare.close(() => r()));
+    });
+
     it('and the refusal names that escape hatch, so it is not a dead end', async () => {
       const bin = stub('exit 0');
       const err = await execFileAsync(MUXPAD_BIN, ['tunnel', 'setup', 'pub.example.dev'], {
@@ -613,6 +670,39 @@ exit 0`);
         encoding: 'utf-8',
       }).catch((e: { stderr: string }) => e);
       expect((err as { stderr: string }).stderr).toContain('--skip-zone-check');
+    });
+
+    it('SKIPS routing when the hostname already reaches this machine', async () => {
+      // Found the hard way: the hostname was already routed (by hand, before
+      // muxpad knew about it), and `cloudflared tunnel route dns` refuses an
+      // existing record without -f. So setup failed at the last step on the one
+      // machine it most needed to work on, and "re-running this is safe" — which
+      // this command claims — was not true.
+      //
+      // Detected empirically rather than through the Cloudflare API: if
+      // https://<hostname>/ already answers with the PUBLIC ARTIFACT SERVER's
+      // fingerprint (404 at / plus a sandbox CSP — the same positive check
+      // run.ts uses before tunnelling anything), then the route already leads
+      // here and there is nothing to create.
+      writeFileSync(join(home, 'cert.pem'), 'x');
+      const bin = stub(`
+case "$2" in
+  create) printf '{"TunnelID":"u-1"}' > "${home}/u-1.json" ;;
+  list)   printf '[]' ;;
+  route)  echo 'record already exists' >&2; exit 1 ;;
+esac
+exit 0`);
+      // `MUXPAD_TUNNEL_PROBE_URL` stands in for the live hostname so the test
+      // does not depend on anything resolving on the internet.
+      const { stdout } = await execFileAsync(MUXPAD_BIN, ['tunnel', 'setup', 'pub.example.dev'], {
+        env: { ...envFor(bin), MUXPAD_TUNNEL_PROBE_URL: probeUrl },
+        encoding: 'utf-8',
+      });
+      // It did not even try to route, so the `route` stub's failure never fired.
+      expect(readFileSync(log, 'utf-8')).not.toContain('route dns');
+      expect(stdout).toContain('already routed');
+      // …and it still wrote the config, which is the whole point of the run.
+      expect(existsSync(join(data, 'tunnel.json'))).toBe(true);
     });
 
     it('distinguishes "no zone at all" from "zone on the wrong nameservers"', async () => {
