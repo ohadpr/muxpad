@@ -565,15 +565,15 @@
 }
 /* …and the spacing between them is charged only once they have width. */
 .navtree-tab-row:hover > .navtree-tab-controls > * + *,
-.navtree-tab-row:focus-within > .navtree-tab-controls > * + *,
+.navtree-tab-row:has(:focus-visible) > .navtree-tab-controls > * + *,
 .navtree-ws-row:hover > .navtree-tab-controls > * + *,
-.navtree-ws-row:focus-within > .navtree-tab-controls > * + * {
+.navtree-ws-row:has(:focus-visible) > .navtree-tab-controls > * + * {
   margin-left: 2px;
 }
 .navtree-tab-row:hover > .navtree-tab-controls,
-.navtree-tab-row:focus-within > .navtree-tab-controls,
+.navtree-tab-row:has(:focus-visible) > .navtree-tab-controls,
 .navtree-ws-row:hover > .navtree-tab-controls,
-.navtree-ws-row:focus-within > .navtree-tab-controls {
+.navtree-ws-row:has(:focus-visible) > .navtree-tab-controls {
   margin-left: var(--nt-gutter);
 }
 
@@ -1114,16 +1114,50 @@
 .navtree[data-variant="sheet"] .navtree-pane-row-wrap[data-active="true"] .navtree-close {
   opacity: 0.4;
 }
+/* ── WHEN THE BUTTONS COME OUT ──────────────────────────────────────────────
+   `:has(:focus-visible)`, not `:focus-within`, and that is the whole of one of
+   the three complaints about the right-hand side of a row.
+
+   Clicking a chat moves focus to its link and leaves it there for as long as
+   you are in that chat — so `:focus-within` was true on the ACTIVE row
+   permanently, and the row you are actually using was the one row wearing a pin
+   and an archive button at all times, with its spinner or its schedule beside
+   them. It read as a hover state that had got stuck, because it was one.
+
+   `:focus-visible` is the browser's own answer to "did they arrive here by
+   keyboard?", so tabbing to a row still reveals its controls — they must stay
+   reachable without a mouse — and clicking one no longer pins them open. */
 .navtree-wspick-row:hover .navtree-close,
 .navtree-ws-row:hover .navtree-close,
-.navtree-ws-row:focus-within .navtree-close,
+.navtree-ws-row:has(:focus-visible) .navtree-close,
 .navtree-tab-row:hover .navtree-close,
-.navtree-tab-row:focus-within .navtree-close,
+.navtree-tab-row:has(:focus-visible) .navtree-close,
 .navtree-close:active,
 .navtree-close:focus-visible {
   flex-basis: 18px;
   width: 18px;
   opacity: 1;
+}
+
+/* ── THE SCHEDULE AND THE BUTTONS ARE NEVER BOTH THERE ──────────────────────
+   Two cells, one job: say something about this row on its right-hand side. They
+   were additive, so a scheduled chat under the pointer showed a pin, an archive
+   button, a clock, a time and a state mark — five things in a strip about 90px
+   wide, on rows whose names were already ellipsising.
+
+   They are mutually exclusive instead, because reading a schedule and reaching
+   for a button are not things anybody does at the same time. At rest the row
+   says when it next runs; while you are pointing at it, it offers what you can
+   do to it. The state mark is in neither cell and survives both — it is the one
+   thing that must never move, and it does not: the name is the 1fr track, so it
+   absorbs the whole swap and the mark keeps its line.
+
+   `display: none` rather than a width transition: an auto grid track with no
+   items in it collapses to nothing, gutter included, which is exactly the
+   accounting the rest of this grid already does with `:empty`. */
+.navtree-tab-row:hover > .navtree-tab-meta,
+.navtree-tab-row:has(:focus-visible) > .navtree-tab-meta {
+  display: none;
 }
 /* Same hover grammar as the strip tabs' ×: quiet hover square, danger-red
    glyph — "this deletes", consistent everywhere a close lives. */
@@ -1154,7 +1188,7 @@
   color: var(--accent);
 }
 .navtree-tab-row:hover .navtree-pin.is-pinned,
-.navtree-tab-row:focus-within .navtree-pin.is-pinned {
+.navtree-tab-row:has(:focus-visible) .navtree-pin.is-pinned {
   color: var(--accent);
 }
 
@@ -1327,8 +1361,10 @@
   flex: 1 1 auto;
   min-width: 0;
 }
+/* Same rule as the tab rows above, for the same reason: the pane you are
+   looking at holds focus, so `:focus-within` pinned its close button open. */
 .navtree-pane-row-wrap:hover .navtree-close,
-.navtree-pane-row-wrap:focus-within .navtree-close {
+.navtree-pane-row-wrap:has(:focus-visible) .navtree-close {
   flex-basis: 18px;
   width: 18px;
   margin-left: 0;
