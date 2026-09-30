@@ -1124,3 +1124,48 @@ describe('noticing that the sign-in went through', () => {
     expect(h.el('handback').classes).toContain('ready');
   });
 });
+
+describe('a tap that goes nowhere says so', () => {
+  /**
+   * Watch mode drops input deliberately — looking over an agent's shoulder must
+   * not stall it. But nothing said that at the moment it mattered, and the
+   * result, reported verbatim: "tapping either field does nothing, not even pop
+   * up the keyboard for a moment. maybe its just not responsive idk."
+   *
+   * The standing line at the top of the bar had said "watching" the whole time.
+   * A line that was already there before you acted is not an answer to what you
+   * just did.
+   */
+  it('answers the tap, and names the button that fixes it', () => {
+    const h = run({ search: '?mode=watch' });
+    h.el('screen').fire('pointerdown', { clientX: 100, clientY: 300 });
+    expect(h.el('msg').textContent).toContain('Take over');
+  });
+
+  it('draws attention to Take over, which is the only thing that helps', () => {
+    const h = run({ search: '?mode=watch' });
+    h.el('screen').fire('pointerdown', { clientX: 100, clientY: 300 });
+    expect(h.el('takeover').classes).toContain('ready');
+  });
+
+  it('still sends nothing — the point is to explain, not to start driving', () => {
+    // Taking the wheel off a stray tap is the stall this mode exists to avoid.
+    const h = run({ search: '?mode=watch' });
+    h.el('screen').fire('pointerdown', { clientX: 100, clientY: 300 });
+    expect(h.sent.some((m) => m.t === 'mouse')).toBe(false);
+    expect(h.el('sink').focused).toBe(false);
+  });
+
+  it('says nothing of the sort while driving', () => {
+    const h = run();
+    h.el('screen').fire('pointerdown', { clientX: 100, clientY: 300 });
+    expect(h.el('msg').textContent).not.toContain('Take over');
+  });
+
+  it('names the way out in the standing line too, not just the situation', () => {
+    // "watching — the agent is still working" describes the agent. What a person
+    // stuck on this page needs is the name of the button.
+    const h = run({ search: '?mode=watch' });
+    expect(h.el('msg').textContent).toContain('Take over');
+  });
+});
