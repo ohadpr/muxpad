@@ -1730,26 +1730,48 @@
    fill: it was caused by the 0.55–0.7 opacity `.navtree-add` carries for the
    QUIET actions, which this is not. So the ghost shape everything else here
    wears, at full strength, with the accent doing the work. */
-.navtree-new-tab {
-  margin: 2px 8px 6px 8px;
-  padding: 6px 8px;
-  opacity: 1;
-  font-weight: 600;
-}
 /* While the picker is open the button is the thing that opened it — say so, or
    the open list looks like it belongs to whatever is under it. */
-.navtree-new-tab[aria-expanded="true"] {
+/* THE WORKSPACE'S "+", on its header row, beside the × it is the opposite of.
+   `.navtree-close` gives it the 18px inset square and the hover surface every
+   other row control wears; everything here is about the ONE way it differs —
+   it does not hide.
+
+   That is the point of it. The × collapses to zero width until you point at the
+   row, which is right for a control that kills a workspace and every chat in
+   it. Creating is not that, and the two arrangements this replaces both failed
+   on exactly this axis: a hover-only control nobody finds, or a full-strength
+   accent pill that reads as bolted on ("weirdly designed", "it's hard to see"
+   — the same button, two opposite complaints). So: always there, at the weight
+   of the rest of the row's chrome, full strength on hover. */
+.navtree-ws-row > .navtree-tab-controls > .navtree-ws-add {
+  flex: 0 0 18px;
+  width: 18px;
+  opacity: 0.45;
+}
+
+.navtree-ws-row:hover > .navtree-tab-controls > .navtree-ws-add,
+.navtree-ws-row > .navtree-tab-controls > .navtree-ws-add:focus-visible {
+  opacity: 1;
+}
+
+/* Constructive, so it goes to the accent on hover rather than to the × 's
+   danger red. */
+.navtree-ws-row > .navtree-tab-controls > .navtree-ws-add:hover {
+  color: var(--accent);
   background: var(--bg-hover);
 }
-/* A WORKSPACE'S OWN create row — the first row under its heading, so it aligns
-   with the chat rows below rather than the workspace name above. Quiet by
-   default, and deliberately: there is one of these in every workspace you have
-   expanded, and at full accent strength the rail would be a column of them. It
-   comes up on hover with the rest of `.navtree-add`. */
-.navtree-add-ws {
-  padding: 3px var(--nt-air) 3px calc(var(--nt-pad) + var(--nt-indent));
-  opacity: 0.55;
-  font-size: 13px;
+
+.navtree-ws-row > .navtree-tab-controls > .navtree-ws-add:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
+/* It is always present, so the group it lives in always has width — the
+   `margin-left: 0` that let an empty control cell decline its gutter would
+   leave the `+` touching the workspace name. */
+.navtree-ws-row > .navtree-tab-controls {
+  margin-left: var(--nt-gutter);
 }
 /* Extra top space sets "+ New workspace" apart from whatever list it follows,
    so it reads as the outer-level action rather than part of the block above
@@ -2485,14 +2507,6 @@ body.sidenav-resizing iframe {
    the done-drawer head uses, saying what clicking a row in THIS list does.
    The switch surface has none: it is the navigator, and a caption over the
    navigator says nothing. */
-.navtree-wspick-head {
-  padding: 6px 8px 2px 8px;
-  color: var(--fg-dim);
-  font-size: var(--chrome-size-sm);
-}
-.navtree[data-variant="sheet"] .navtree-wspick-head {
-  padding: 10px var(--nt-rail-trail) 4px var(--nt-rail-lead);
-}
 
 /* ─── The sheet's pane list, re-indented ──────────────────────────────────
    The hierarchy step is still 18px under where a tab NAME starts — but a tab

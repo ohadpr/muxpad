@@ -12,18 +12,11 @@ import { createPortal } from 'react-dom';
 import { api } from '../api';
 import { HOUSE_CHAT_CREATE, HOUSE_CHAT_PANE_CREATE } from '../lib/agent-backend';
 import { createDragOrigin } from '../lib/drag-origin';
-import {
-  type FlatChatGroup,
-  flatDoneCount,
-  flattenChats,
-  needsWorkspaceLabel,
-} from '../lib/flat-chats';
 import { clearFollowTarget, setFollowTarget } from '../lib/follow-tab';
 import { getLastPaneId, setLastPaneId } from '../lib/last-visited';
 import { pushUndo } from '../lib/move-undo-store';
 import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansion';
 import { tabRowAffordances } from '../lib/nav-row-affordances';
-import { type NavView, useNavView } from '../lib/nav-view';
 import { nextCronLabel, railCronLabel } from '../lib/next-cron-label';
 import { PANE_DRAG_MIME, type PaneDragOrigin, paneDragOrigin } from '../lib/pane-drag';
 import { reorderByDrop } from '../lib/reorder';
@@ -54,7 +47,6 @@ import './NavTree.css';
 // workspace label's max width, the rail's view switch), and NavTree.css is
 // already the longest stylesheet here. It adds no geometry — the row is still
 // the row, pinned by NavTree.spacing.test.ts — so nothing in the two can drift.
-import './NavRecent.css';
 
 // Lazy so emoji-mart + its dataset load only when the picker is opened.
 const EmojiMartPicker = lazy(() => import('./EmojiMartPicker'));
@@ -402,28 +394,6 @@ function SidebarTree({
   // across the whole tree.
   const [editing, setEditing] = useState<Editing>(null);
   const [creatingWs, setCreatingWs] = useState(false);
-  const [creatingTab, setCreatingTab] = useState(false);
-  /**
-   * Is the "which workspace?" list open, in place of the chats. Only ever true
-   * in the flat view — see the "+ New tab" button below for why the grouped
-   * view never asks.
-   */
-  const [picking, setPicking] = useState(false);
-  /**
-   * WHICH LIST — the flat cross-workspace one, or the workspace tree.
-   *
-   * Same default and same stickiness as the sheet, and a SEPARATE stored value
-   * (lib/nav-view): these two surfaces forked deliberately, and one value would
-   * make a tap on the phone re-shape the rail on a machine you are not sitting
-   * at.
-   *
-   * The control is a pair of buttons at the head of the scroller rather than
-   * the sheet's picker row, because the rail has no picker to put a row in —
-   * its workspaces ARE the list. It sits inside the scroller, not above it, so
-   * it costs no permanent chrome height next to a search box that is already
-   * permanent chrome here.
-   */
-  const [view, setView] = useNavView('sidebar');
 
   // Drag-to-reorder workspaces (desktop sidebar). Persist the new order, then
   // refresh; on failure refresh anyway to snap back to the server's truth.
@@ -470,111 +440,51 @@ function SidebarTree({
     }
   };
 
-  /** The workspace the GROUPED view is about — the one you are in. */
-  const activeWorkspace = workspaces.find((w) => w.slug === activeWorkspaceSlug);
-
-  const createTab = async (target: Workspace) => {
-    if (creatingTab) return;
-    setCreatingTab(true);
-    try {
-      await createHouseTab(target, navigate, onNavigate);
-      setPicking(false);
-    } catch (err) {
-      console.error('createTab failed', err);
-    } finally {
-      setCreatingTab(false);
-    }
-  };
-
   return (
     <nav className="navtree" data-variant={variant} aria-label="Workspaces and tabs">
       {/* The box owns `.navtree-scroll` (it swaps the tree for its results
           while it has a query), so it renders a fragment and the scroller
           stays a direct flex child of this nav. */}
       <NavSearch variant={variant} onNavigate={onNavigate}>
-        {/* ─── The create action, and WHICH VIEW YOU ARE IN decides where it
-             lives ─────────────────────────────────────────────────────────────
-             grouped  NOTHING HERE. Every workspace in the tree carries its own
-                      "+ New chat" as its first row, so the workspace you are
-                      creating in is the heading directly above the button you
-                      pressed — no popup, no question, no chance of the answer
-                      being a workspace you were not looking at. That is the
-                      arrangement this navigator had, briefly did not, and has
-                      again; see TabList's row for why the round trip was worth
-                      making.
-             recent   THIS BUTTON, because the flat view renders no workspace
-                      nodes and therefore no per-workspace buttons — leaving it
-                      out is how that view ended up with no way to create at
-                      all. It has to ask WHERE: every row on screen belongs to a
-                      different workspace, so creating in whichever one some
-                      state happens to hold is how a chat lands somewhere you
-                      were not looking and cannot then find. */}
-        {view === 'recent' ? (
-          <NewTabButton
-            idleLabel={creatingTab ? 'Creating…' : '+ New chat'}
-            idleTitle="New chat — choose a workspace"
-            idleClassName="navtree-add navtree-new-tab"
-            disabled={creatingTab}
-            expanded={picking}
-            onCreate={() => setPicking((p) => !p)}
-          />
-        ) : null}
-        <NavViewSwitch view={view} onSwitch={setView} />
-        {picking && view === 'recent' ? (
-          <WorkspacePickList
-            purpose="create"
-            workspaces={workspaces}
-            // SHOWN, not assumed: the workspace you are in is a sensible
-            // default and it is marked as one, but the chat goes where you
-            // click, and the click is what names the destination.
-            shownId={activeWorkspace?.id ?? null}
-            recent={false}
-            editing={editing}
-            setEditing={setEditing}
-            onPick={(w) => void createTab(w)}
-            onDismiss={() => setPicking(false)}
-            onNavigate={onNavigate}
-          />
-        ) : view === 'recent' ? (
-          <RecentList
+        {/* NO CREATE CONTROL HERE, and none in the list either. It is on each
+            WORKSPACE HEADER — see WorkspaceNode. That is the row the action is
+            about, so the button needs no label saying where it creates and
+            costs the list no row of its own.
+
+            Its history, because this is the third arrangement: it began as a
+            "+ New tab" row at the BOTTOM of each workspace's list (scrolled out
+            of reach in a workspace with twenty chats), became one button at the
+            top of the rail with a workspace picker (read as bolted on, and
+            picking a workspace did not reliably land you in the chat), then a
+            row at the TOP of each list (fine, but still a row — and the list is
+            for chats). The header had been the right place the whole time. */}
+        {workspaces.map((w) => (
+          <WorkspaceNode
+            key={w.id}
+            workspace={w}
+            isActive={w.slug === activeWorkspaceSlug}
+            expanded={isExpanded(expansion, w.slug, activeWorkspaceSlug)}
             activeWorkspaceSlug={activeWorkspaceSlug}
             activeTabSlug={activeTabSlug}
             variant={variant}
             editing={editing}
             setEditing={setEditing}
             onNavigate={onNavigate}
+            rowDnd={variant === 'sidebar' ? wsDnd(w.id) : undefined}
           />
-        ) : (
-          workspaces.map((w) => (
-            <WorkspaceNode
-              key={w.id}
-              workspace={w}
-              isActive={w.slug === activeWorkspaceSlug}
-              expanded={isExpanded(expansion, w.slug, activeWorkspaceSlug)}
-              activeWorkspaceSlug={activeWorkspaceSlug}
-              activeTabSlug={activeTabSlug}
-              variant={variant}
-              editing={editing}
-              setEditing={setEditing}
-              onNavigate={onNavigate}
-              rowDnd={variant === 'sidebar' ? wsDnd(w.id) : undefined}
-            />
-          ))
-        )}
-        {/* Same action language as "+ New tab", at the workspace indent.
-            Hidden in the flat view: "+ New workspace" under a list with no
-            workspaces in it is an action with no context, and the grouped view
-            it belongs to is one click away. */}
-        {view === 'recent' ? null : (
-          <button
-            type="button"
-            className="navtree-add navtree-new-workspace"
-            onClick={() => void createWorkspace()}
-            disabled={creatingWs}
-          >
-            {creatingWs ? 'Creating…' : '+ New workspace'}
-          </button>
-        )}
+        ))}
+        {/* The one create action that is still a ROW, and it has to be: a new
+            WORKSPACE belongs to no workspace, so there is no header to hang it
+            on. It sits under the tree, at the workspace indent, in the same
+            action language the headers' `+` speaks. */}
+        <button
+          type="button"
+          className="navtree-add navtree-new-workspace"
+          onClick={() => void createWorkspace()}
+          disabled={creatingWs}
+        >
+          {creatingWs ? 'Creating…' : '+ New workspace'}
+        </button>
         {/* Hosted lives BELOW the tree, past a hairline, because it is not part
             of it: apps and artifacts belong to no workspace and occupy no tab —
             that is the whole point. Rendered in both variants, so the mobile
@@ -592,45 +502,6 @@ function SidebarTree({
         </div>
       </NavSearch>
     </nav>
-  );
-}
-
-/**
- * The DESKTOP rail's view switch — two words, at the head of the scroller.
- *
- * A segmented pair rather than the sheet's picker row, because the rail has no
- * picker: its workspaces are the list itself, so there is no existing surface
- * to hang an extra destination off. Two named buttons also suit a pointer,
- * which can read both labels at once and click either directly — where a thumb
- * wants one big target and a surface it can look at.
- *
- * Inside the scroller, deliberately. The rail's search box is already permanent
- * chrome above it, and a second permanent row would put the first chat one row
- * further down forever, for a control most people set once.
- */
-function NavViewSwitch({ view, onSwitch }: { view: NavView; onSwitch: (v: NavView) => void }) {
-  return (
-    // biome-ignore lint/a11y/useSemanticElements: <fieldset> is for grouping form INPUTS and pulls a <legend> requirement with it. These are two buttons that toggle a view, each already carrying aria-pressed; role="group" is what names the pair without claiming they are a form.
-    <div className="navtree-viewswitch" role="group" aria-label="Which chats to list">
-      {(
-        [
-          ['recent', 'Recent', 'Every workspace, by when you last used it'],
-          ['spaces', 'Workspaces', 'Grouped by workspace'],
-        ] as const
-      ).map(([value, label, title]) => (
-        <button
-          key={value}
-          type="button"
-          className="navtree-viewswitch-btn"
-          data-active={view === value ? 'true' : undefined}
-          aria-pressed={view === value}
-          title={title}
-          onClick={() => onSwitch(value)}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
   );
 }
 
@@ -749,7 +620,7 @@ function SheetRail({
    *   'switch'  the bar's `Name ⌄` — show me THAT workspace's chats.
    *   'create'  the bar's "+", in the flat view only — put the new chat THERE.
    */
-  const [picking, setPicking] = useState<'switch' | 'create' | null>(null);
+  const [picking, setPicking] = useState<'switch' | null>(null);
   // The magnifier's state. Opening it hides the bar — the search field takes
   // the bar's place rather than stacking under it, so the rail is never two
   // rows of chrome deep.
@@ -765,45 +636,10 @@ function SheetRail({
     workspaces.find((w) => w.slug === activeWorkspaceSlug) ??
     workspaces[0];
 
-  /**
-   * WHICH LIST — the flat cross-workspace one, or this workspace's.
-   *
-   * 'recent' is the default and the resting state; 'spaces' is exactly the
-   * surface that shipped before it, unchanged. Sticky per device (lib/nav-view),
-   * which is what keeps the cold-workspace path honest: Trayobot is ten days
-   * cold and no recency order can reach it, so getting there means flipping the
-   * view — and it has to be a flip you make ONCE, not a tax on every open.
-   *
-   * ─── THE TOGGLE IS THE PICKER, AND THAT IS WHY IT COSTS NO CHROME ───────────
-   * The bar's left control already opens a full-surface workspace picker. That
-   * picker gains ONE row at the top — "Recent", the whole list — so choosing a
-   * view and choosing a workspace are the same gesture on the same surface:
-   *
-   *   to a cold workspace   tap the bar, tap Trayobot          — 2 taps
-   *   back to recent        tap the bar, tap Recent            — 2 taps
-   *
-   * Two taps to another workspace is EXACTLY what it costs today, so nothing
-   * regresses for the case a recency default is worst at. No second bar, no
-   * segmented control, and the rail stays one bar and a column of chats.
-   */
-  const [view, setView] = useNavView('sheet');
-  // The bar says which list you are looking at, because on this surface that is
-  // the same question as "which workspace" and there is one control for both.
-  const barLabel = view === 'recent' ? 'Recent' : (shown?.name ?? 'Workspaces');
-  /**
-   * Where the bar's "+" makes a chat, in the GROUPED view. The bar names
-   * `shown`, so `shown` is the answer and it is already on screen.
-   *
-   * In the flat view there is no such answer, and this used to reach for one
-   * anyway. `shown` was wrong there — it holds the last workspace you PICKED,
-   * and picking is how you leave the flat view, so after pick Trayo → back to
-   * Recent, "+" created in Trayo while the bar said "Recent". Falling back to
-   * the URL's workspace was better but still a guess: the bar says "Recent",
-   * the list spans every workspace, and nothing on the surface names the one
-   * the chat went to. So the flat view does not guess — it opens the picker
-   * below, which is the same list the bar's other control already opens.
-   */
-  const newChatIn = view === 'recent' ? null : shown;
+  // The bar says which workspace you are looking at, and that is also where its
+  // "+" creates — one answer, already on screen, so the button never has to ask.
+  const barLabel = shown?.name ?? 'Workspaces';
+  const newChatIn = shown;
 
   const newChat = async (target: Workspace) => {
     if (busy) return;
@@ -830,11 +666,7 @@ function SheetRail({
             className="navtree-bar-ws"
             onClick={() => setPicking((p) => (p === 'switch' ? null : 'switch'))}
             aria-expanded={picking === 'switch'}
-            title={
-              view === 'recent'
-                ? 'Recent — every workspace. Tap to pick one instead.'
-                : `Workspace: ${shown?.name ?? '—'}`
-            }
+            title={`Workspace: ${shown?.name ?? '—'}`}
           >
             <span className="navtree-bar-wsname" dir="auto">
               {barLabel}
@@ -853,17 +685,9 @@ function SheetRail({
             type="button"
             className="navtree-bar-icon"
             onClick={() => {
-              // The flat view asks WHERE, on the surface the bar's other
-              // control already opens — see `newChatIn` for why it cannot
-              // answer that itself.
-              if (view === 'recent') {
-                setPicking((p) => (p === 'create' ? null : 'create'));
-                return;
-              }
               if (newChatIn) void newChat(newChatIn);
             }}
-            disabled={busy || (view !== 'recent' && !newChatIn)}
-            {...(view === 'recent' ? { 'aria-expanded': picking === 'create' } : {})}
+            disabled={busy || !newChatIn}
             aria-label="New chat"
           >
             <SvgPlus />
@@ -879,50 +703,16 @@ function SheetRail({
         onDismissBox={() => setSearching(false)}
         onNavigate={onNavigate}
       >
-        {picking === 'create' ? (
+        {picking === 'switch' ? (
           <WorkspacePickList
-            purpose="create"
             workspaces={workspaces}
-            // SHOWN, not assumed: the workspace the chrome bar names is a
-            // sensible default and it is marked as one, but it still takes a
-            // tap, and the tap is what names the destination.
-            shownId={workspaces.find((w) => w.slug === activeWorkspaceSlug)?.id ?? null}
-            recent={false}
+            shownId={shown?.id ?? null}
             editing={editing}
             setEditing={setEditing}
-            onPick={(w) => void newChat(w)}
-            onDismiss={() => setPicking(null)}
-            onNavigate={onNavigate}
-          />
-        ) : picking === 'switch' ? (
-          <WorkspacePickList
-            purpose="switch"
-            workspaces={workspaces}
-            shownId={view === 'recent' ? null : (shown?.id ?? null)}
-            recent={view === 'recent'}
-            editing={editing}
-            setEditing={setEditing}
-            onPickRecent={() => {
-              setView('recent');
-              setPicking(null);
-            }}
             onPick={(w) => {
-              // Picking a workspace IS choosing the grouped view — the two were
-              // never separable, and making them one gesture is what keeps the
-              // cold-workspace path at the two taps it costs today.
-              setView('spaces');
               setPicked(w.slug);
               setPicking(null);
             }}
-            onNavigate={onNavigate}
-          />
-        ) : view === 'recent' ? (
-          <RecentList
-            activeWorkspaceSlug={activeWorkspaceSlug}
-            activeTabSlug={activeTabSlug}
-            variant="sheet"
-            editing={editing}
-            setEditing={setEditing}
             onNavigate={onNavigate}
           />
         ) : shown ? (
@@ -952,60 +742,39 @@ function SheetRail({
  * the surface reads as the same list showing a different thing, not as a
  * second kind of navigator.
  *
- * It now answers a SECOND question, on BOTH surfaces, because "+ New tab" in
- * the flat view has to ask WHERE and this is already the list of answers. A
- * second component would only have been a second place for "what a workspace
- * row looks like" to drift.
+ * ONE question now, and one only: show me THAT workspace's chats. It briefly
+ * answered a second — "put the new chat THERE", for a top create button that had
+ * no workspace on screen to create in — and that button is gone: creating is on
+ * each workspace's own header row, where the destination is the thing you
+ * clicked. A picker is the right shape for a question whose answer you have to
+ * choose; it was always the wrong shape for one already on screen.
  *
- *   purpose="switch"  show me THAT workspace's chats. The original, unchanged.
- *                     Every affordance above, plus the "Recent" row at the
- *                     head — on this surface that is a destination like any
- *                     other.
- *   purpose="create"  put the new chat THERE. A plain list of destinations and
- *                     nothing else: no ×, no long-press rename, no state
- *                     marks, no "Recent". A × one row away from a create
- *                     action is a mis-tap that closes a workspace; a
- *                     workspace's rolled-up state says nothing about where a
- *                     NEW chat should go; and "everywhere" is not a place a
- *                     chat can live, so offering it would offer back exactly
- *                     the guess this list exists to replace.
+ * Gone with it: the "Recent" row at the head, which was the mobile half of the
+ * flat cross-workspace view. That view is removed entirely — see NavTree's
+ * header.
  *
  * The one row both keep is "+ New workspace": "somewhere new" is a legitimate
  * answer to "where", and it already makes the workspace AND its house chat in
  * one go — which is precisely what picking an existing one does.
  */
 function WorkspacePickList({
-  purpose,
   workspaces,
   shownId,
-  recent,
   editing,
   setEditing,
   onPick,
-  onPickRecent,
-  onDismiss,
   onNavigate,
 }: {
-  purpose: 'switch' | 'create';
   workspaces: Workspace[];
-  /** The row drawn as current. Under 'create' this is the DEFAULT, not a
-   *  choice already made: it is marked so the answer is on screen rather than
-   *  assumed, and it still takes a click. */
+  /** The row drawn as current — the workspace whose chats are on screen. */
   shownId: string | null;
-  /** Is the flat cross-workspace list the one currently shown? */
-  recent: boolean;
   editing: Editing;
   setEditing: (e: Editing) => void;
   onPick: (w: Workspace) => void;
-  onPickRecent?: (() => void) | undefined;
-  /** Escape. Only the create surface is a detour you can cancel — the switch
-   *  surface has no "before" to go back to. */
-  onDismiss?: (() => void) | undefined;
   onNavigate?: (() => void) | undefined;
 }) {
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
-  const choosing = purpose === 'create';
 
   const createWorkspace = async () => {
     if (creating) return;
@@ -1038,54 +807,18 @@ function WorkspacePickList({
 
   return (
     // No focus trap and no tabIndex: this is a column of buttons in the
-    // document flow, so Tab walks into it and Tab walks back out. Escape is
-    // caught HERE rather than on the window, so it can cancel this list and
-    // nothing else, and it bubbles up from whichever row holds focus. The
-    // interactive things are the buttons below; this element only listens for
-    // their Escape, and every one of them is reachable and operable without
-    // it, so the handler adds no keyboard-only path of its own.
-    <div
-      className="navtree-tab-list"
-      onKeyDown={
-        onDismiss
-          ? (e) => {
-              if (e.key !== 'Escape') return;
-              e.stopPropagation();
-              onDismiss();
-            }
-          : undefined
-      }
-    >
-      {/* The question, named. Only while CHOOSING: the switch surface IS the
-          navigator and needs no caption, but a list that appeared because you
-          asked for a new chat has to say what clicking a row does — otherwise
-          it reads as "go there", which is the other thing this same list means
-          one control away. */}
-      {choosing ? (
-        <div className="navtree-wspick-head">New tab in…</div>
-      ) : (
-        /* THE VIEW TOGGLE, and it is one row rather than a control because that
-           is what it costs here: this surface already exists, it is already a
-           list of destinations, and "everything" is simply the destination
-           above the three named ones. It reads as the same list showing a
-           different thing — which is exactly what it is.
-           It carries no state mark. A rollup over EVERY workspace is a mark
-           that is lit almost always, and a mark that is always on is not a
-           signal. */
-        <div className="navtree-wspick-row" data-active={recent ? 'true' : undefined}>
-          <button type="button" className="navtree-wspick-name" onClick={onPickRecent}>
-            <span className="navtree-name-text">Recent</span>
-            <span className="navtree-wspick-note">every workspace</span>
-          </button>
-        </div>
-      )}
+    // document flow, so Tab walks into it and Tab walks back out. It used to
+    // catch Escape too, for the create surface — a detour you could cancel back
+    // to the chats. The switch surface has no "before" to go back to (picking a
+    // workspace IS the navigation), and it is the only surface left.
+    <div className="navtree-tab-list">
       {workspaces.map((w) => (
         <WorkspacePickRow
           key={w.id}
           workspace={w}
-          choosing={choosing}
+          choosing={false}
           isShown={w.id === shownId}
-          isEditing={!choosing && editing?.kind === 'workspace' && editing.id === w.id}
+          isEditing={editing?.kind === 'workspace' && editing.id === w.id}
           setEditing={setEditing}
           onPick={() => onPick(w)}
           onClose={(e) => void closeWorkspace(e, w)}
@@ -1103,9 +836,8 @@ function WorkspacePickList({
           to no workspace and occupy no tab. It sits past a hairline, at the
           foot of the one surface that lists destinations — never in the chat
           list, which contains chats and nothing else.
-          Absent while choosing: this list is answering "where does the new
-          chat go", and Hosted is not an answer to that. */}
-      {choosing ? null : (
+      */}
+      {
         <div className="navtree-foot">
           <Link
             className="navtree-foot-link"
@@ -1117,7 +849,7 @@ function WorkspacePickList({
             <span className="navtree-name-text">Hosted</span>
           </Link>
         </div>
-      )}
+      }
     </div>
   );
 }
@@ -1337,6 +1069,40 @@ function WorkspaceNode({
     void movePaneToNewTabIn(paneId, workspace, paneDragOrigin.get());
   };
 
+  /**
+   * "+ New chat", ON THE HEADER, and this is where it belongs.
+   *
+   * The destination is the row the button is drawn on, so there is nothing to
+   * ask and nothing to label — which is what every previous arrangement was
+   * paying for. It began as a row at the bottom of the workspace's list, where
+   * twenty chats could scroll it out of reach; became one button at the top of
+   * the whole rail with a workspace picker, which read as bolted on and whose
+   * picker did not reliably leave you in the chat it made; then a row at the TOP
+   * of the list, which was reachable but still a row — and this list is for
+   * chats.
+   *
+   * On the header it costs the list nothing, never scrolls, and cannot be about
+   * the wrong workspace.
+   */
+  const [creating, setCreating] = useState(false);
+  const createHere = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (creating) return;
+    setCreating(true);
+    try {
+      // Creating in a COLLAPSED workspace opens it: you are about to be taken
+      // to the new chat, and coming back to a workspace still folded shut over
+      // the thing you just made is the one outcome nobody wants.
+      if (!expanded) toggleExpanded(workspace.slug, activeWorkspaceSlug);
+      await createHouseTab(workspace, navigate, onNavigate);
+    } catch (err) {
+      console.error('createTab failed', err);
+    } finally {
+      setCreating(false);
+    }
+  };
+
   const closeWorkspace = async (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
@@ -1494,6 +1260,23 @@ function WorkspaceNode({
             them would just double-signal. */}
         {!isEditing && (
           <span className="navtree-tab-controls">
+            {/* ALWAYS VISIBLE, unlike the × beside it. The two are opposites:
+                one makes a thing and one destroys a workspace and everything in
+                it, and a destructive control that is only there when you are
+                already pointing at the row is exactly right. Reported twice
+                about the old top button — "it's hard to see" — so this one does
+                not hide, it just sits at the weight of the rest of the row's
+                chrome and comes up on hover. */}
+            <button
+              type="button"
+              className="navtree-close navtree-ws-add"
+              onClick={(e) => void createHere(e)}
+              disabled={creating}
+              title={`New chat in ${workspace.name}`}
+              aria-label={`New chat in ${workspace.name}`}
+            >
+              <SvgPlus />
+            </button>
             <button
               type="button"
               className="navtree-close"
@@ -1693,21 +1476,6 @@ export function TabList({
     }
   };
 
-  // The workspace's own create. No picker and no target argument: the list
-  // this button sits in IS the workspace, so there is nothing to ask.
-  const [creating, setCreating] = useState(false);
-  const createHere = async () => {
-    if (creating) return;
-    setCreating(true);
-    try {
-      await createHouseTab(workspace, navigate, onNavigate);
-    } catch (err) {
-      console.error('createTab failed', err);
-    } finally {
-      setCreating(false);
-    }
-  };
-
   // Create a pane in `t` and land on it. Shared by the sheet pane list's
   // chooser and the tab context menu. Always opens the harness picker
   // (Claude / Codex / Cursor + Terminal / Web view below).
@@ -1899,34 +1667,6 @@ export function TabList({
 
   return (
     <div className="navtree-tab-list">
-      {/* ─── "+ New chat", one per workspace, INSIDE the workspace ──────────
-          Back after a spell as a single button above the whole rail, because
-          the thing that button had to do to work — ask WHERE, in a popup, and
-          then move you — is worse than what it replaced. Reported: "clicking it
-          and picking a workspace leaves me on my current tab", and the design
-          read as bolted on. A button inside a workspace never has to ask: the
-          heading above it IS the answer, so the click creates and goes, with no
-          intervening question.
-
-          AT THE TOP of the list, not the bottom. That much of the move stays —
-          the original sat below however many chats the workspace had, so in a
-          twenty-chat workspace "make another one" was a scroll away. First row
-          under the heading costs nothing and never scrolls out from under the
-          workspace it belongs to.
-
-          RAIL ONLY. The sheet's bar already carries one, already names the
-          workspace it will create in, and shows exactly one workspace at a
-          time — a second button three pixels below the first is not a second
-          affordance, it is a duplicate. */}
-      {!sheet ? (
-        <NewTabButton
-          idleLabel={creating ? 'Creating…' : '+ New chat'}
-          idleTitle={`New chat in ${workspace.name}`}
-          idleClassName="navtree-add navtree-add-ws"
-          disabled={creating}
-          onCreate={() => void createHere()}
-        />
-      ) : null}
       {liveGroups.map((g, i) => (
         <Fragment key={g.chat.id}>
           {/* The seam between "you arranged these" and "these arrange
@@ -1972,186 +1712,6 @@ export function TabList({
   );
 }
 
-/**
- * THE RECENT LIST — every chat in every visible workspace, in one column,
- * ordered by when YOU last touched it.
- *
- * The navigator's default view on both surfaces. It exists because the question
- * you have when you open a navigator is "what was I just doing", and until now
- * neither surface could answer it without you first naming a workspace — the
- * sheet listed one workspace and the rail listed a tree of them. The signal was
- * already computed and already on screen: the sheet's closed trigger paints a
- * rolled-up mark for everything elsewhere and then opens a list that by
- * construction cannot contain the thing the mark is about.
- *
- * ─── WHAT IT IS NOT ──────────────────────────────────────────────────────────
- * It is not a different KIND of list. Same `TabRow`, same 44px sheet row, same
- * one 10px state mark, same swipe tray, same long-press menu, same grouping
- * rule. Three things change and nothing else does:
- *
- *   ORDER    the group's key is `last_user_at`, not `last_activity_at` — see
- *            shared/tab-order `userTouchAt` for why a global list cannot be
- *            ordered on a column that pty output moves.
- *   SOURCE   every workspace, merged by `flattenChats`, which also settles what
- *            a child row does (it travels with its parent) and where pins and
- *            the done drawer go.
- *   LABEL    a row says where it goes when it leaves the workspace the surface
- *            names, or when another workspace's row in the same list shares its
- *            name — and no other row does (`needsWorkspaceLabel`).
- *
- * ─── NO DRAG, AND THAT IS HONEST RATHER THAN MISSING ─────────────────────────
- * The rail's drag is pinned-reordering, whose storage is a per-workspace
- * `position`. Across workspaces there is no such order to write, so a drop here
- * could only produce an arrangement that evaporates on the next poll — which is
- * precisely the reasoning `TabList` already applies to its own unpinned block.
- */
-function RecentList({
-  activeWorkspaceSlug,
-  activeTabSlug,
-  variant,
-  editing,
-  setEditing,
-  onNavigate,
-}: {
-  activeWorkspaceSlug: string;
-  activeTabSlug: string | null;
-  variant: NavTreeVariant;
-  editing: Editing;
-  setEditing: (e: Editing) => void;
-  onNavigate?: (() => void) | undefined;
-}) {
-  const spaces = useAllChats();
-  const sheet = variant === 'sheet';
-  // Grouped PER WORKSPACE — the same `groupChats` the tree runs, on the same
-  // input — then merged. Parentage is deliberately not resolved across
-  // workspaces; see flat-chats for why the two views must agree about that.
-  const flat = flattenChats(
-    spaces.map(({ workspace, tabs }) => {
-      const { live, done } = groupChats(tabs);
-      return { workspace, live, done };
-    }),
-  );
-  // The sheet's list-wide order freeze applies here for the same reason it
-  // applies to the per-workspace list, and more so: this list carries even less
-  // per-row ink and spans three workspaces' worth of activity, so a reshuffle
-  // under a thumb loses the row you were reaching for with nothing on screen
-  // saying why. Keyed on the ROOT's id, because the root is what is ordered.
-  const frozen = useFrozenSheetOrder(
-    flat.live.map((r) => ({ id: r.group.chat.id, row: r })),
-    sheet,
-  );
-  const live = frozen.map((f) => f.row);
-  const doneCount = flatDoneCount(flat.done);
-  const [doneOpen, setDoneOpen] = useState(false);
-
-  // `list` is the array the row is rendered from — the live list or the done
-  // drawer. `needsWorkspaceLabel` weighs the row against its NEIGHBOURS, so it
-  // has to be told which population is on screen around it.
-  const renderRow = (
-    row: FlatChatGroup<Workspace>,
-    list: readonly FlatChatGroup<Workspace>[],
-    t: Tab,
-    parent?: Tab,
-  ) => {
-    const actions = tabRowActions(row.workspace);
-    return (
-      <TabRow
-        key={t.id}
-        tab={t}
-        {...(parent ? { parent } : {})}
-        workspace={row.workspace}
-        isActiveTab={row.workspace.slug === activeWorkspaceSlug && t.slug === activeTabSlug}
-        // Only a CHILD is exempt: it sits under its parent, which already says
-        // where the pair lives, and repeating the label on the indented line
-        // would put the same word on two adjacent rows.
-        {...(!parent && needsWorkspaceLabel(row, activeWorkspaceSlug, list)
-          ? { workspaceLabel: row.workspace.name }
-          : {})}
-        // No quick-switch numbers: Ctrl+1…9 is wired to the ACTIVE workspace's
-        // tab bar (use-tab-quickswitch), so a badge here would name a row the
-        // chord cannot reach.
-        quickNumber={undefined}
-        variant={variant}
-        isEditing={editing?.kind === 'tab' && editing.id === t.id}
-        setEditing={setEditing}
-        onNavigate={onNavigate}
-        onArchive={(e) => {
-          e?.stopPropagation();
-          e?.preventDefault();
-          void actions.archive(t);
-        }}
-        onDelete={() => void actions.remove(t)}
-        onSetUnread={(want) => actions.setUnread(t, want)}
-        onSetIcon={(icon) => void actions.setIcon(t, icon)}
-        onSetPinned={(want) => void actions.setPinned(t, want)}
-        // The three drop targets. There is no drag in this list (see the
-        // header), so nothing can ever deliver one of these — they are wired to
-        // no-ops rather than made optional, so `TabRow`'s contract stays the
-        // same on both lists and a future drag source cannot silently find half
-        // a row.
-        onMergeInto={() => {}}
-        onAddPane={() => {}}
-        onMovePaneHere={() => {}}
-      />
-    );
-  };
-  const renderGroup = (row: FlatChatGroup<Workspace>, list: FlatChatGroup<Workspace>[]) => (
-    <Fragment key={`${row.group.chat.id}${row.group.contextOnly ? ':retired' : ''}`}>
-      {row.group.contextOnly ? (
-        /* The parent is LIVE and has a row of its own up in the list. A label
-           saying whose sub-chats these were — not a link, not a state mark.
-           It earns its place here more than it does at home: in a flat list it
-           is the only thing left saying where these workers came from. */
-        <div className="navtree-done-parent" aria-hidden="true">
-          {row.group.chat.name}
-        </div>
-      ) : (
-        renderRow(row, list, row.group.chat)
-      )}
-      {row.group.children.map((k) => renderRow(row, list, k, row.group.chat))}
-    </Fragment>
-  );
-
-  return (
-    <div className="navtree-tab-list">
-      {live.map((row, i) => (
-        <Fragment key={row.group.chat.id}>
-          {/* The pin seam. Drawn on the rail exactly as `TabList` draws it, and
-              never on the sheet — pinning there is ORDER, being at the top IS
-              the signal, and a hairline is one more mark in a list whose whole
-              point is that it has almost none. */}
-          {!sheet && i === flat.livePinned && flat.livePinned > 0 ? (
-            <div className="navtree-pin-divider" aria-hidden="true" />
-          ) : null}
-          {renderGroup(row, live)}
-        </Fragment>
-      ))}
-      {live.length === 0 ? <div className="navtree-empty-note">No chats yet</div> : null}
-      {/* ONE drawer, holding every workspace's done chats. Not one per
-          workspace: that would put workspace structure back into the view whose
-          point is that it has none. */}
-      {flat.done.length > 0 ? (
-        <>
-          <button
-            type="button"
-            className="navtree-done-head"
-            onClick={() => setDoneOpen((o) => !o)}
-            aria-expanded={doneOpen}
-          >
-            <SvgCaret open={doneOpen} />
-            {doneCount} done
-          </button>
-          {/* Its own population for the label rule: the drawer is collapsed by
-              default, so a live row must not gain or lose a label as it opens. */}
-          {doneOpen ? flat.done.map((row) => renderGroup(row, flat.done)) : null}
-        </>
-      ) : null}
-    </div>
-  );
-}
-
-/** Best-effort pane label for the sheet's pane rows — mirrors TabView's
- *  paneLabel priority (pinned name → url host → live title → fg cmd). */
 function sheetPaneLabel(p: PaneSpec, i: number): string {
   const custom = p.name?.trim();
   if (custom) return custom;
