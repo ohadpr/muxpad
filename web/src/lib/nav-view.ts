@@ -42,9 +42,34 @@ export type NavView = 'recent' | 'spaces';
 
 export type NavSurface = 'sheet' | 'sidebar';
 
-export const DEFAULT_NAV_VIEW: NavView = 'recent';
+/**
+ * 'spaces' — REVERTED FROM 'recent' after living with it.
+ *
+ * The flat view's argument was that "what was I just doing" is the question you
+ * have when you open a navigator, and that it is the only shape that answers it
+ * without you naming a workspace first. Both still true. What it missed is what
+ * the list LOOKS like once it succeeds: the user's verdict after a day was
+ * "sorting by recent is a big mess", and the screenshot says why — twelve rows,
+ * eight of them trailing the word `Personal`, because a cross-workspace list has
+ * to name a workspace on every row and most rows are from the same one.
+ *
+ * So the grouping does the work the label was doing, for free and in one place:
+ * a workspace heading says where its rows live once, and recency sorts WITHIN
+ * it. The flat view stays one tap away for the cold-workspace case it was right
+ * about; it is just not what you land on.
+ */
+export const DEFAULT_NAV_VIEW: NavView = 'spaces';
 
-const KEY = 'muxpad.navView.v1';
+/**
+ * v2 — the default flipped, and a stored `recent` from v1 would outrank it.
+ *
+ * Bumping the key drops every device back to the new default once. That is the
+ * point rather than a side effect: v1's value was written by a default nobody
+ * chose, so honouring it would leave the surface exactly as reported. Anyone who
+ * genuinely prefers the flat view is one tap from it, and this time the stored
+ * value means they picked it.
+ */
+const KEY = 'muxpad.navView.v2';
 
 type State = Partial<Record<NavSurface, NavView>>;
 

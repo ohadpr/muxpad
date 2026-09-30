@@ -6,23 +6,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * WHERE A NEW CHAT GOES, AND WHO SAID SO.
  *
- * The button used to live at the BOTTOM of each workspace's tab list, one per
- * workspace, which meant the flat 'recent' view — the navigator's default on
- * both surfaces — had no way to make a chat at all: it renders no workspace
- * nodes, so it rendered no "+ New tab" either.
+ * Two arrangements, one per view, because the two views know different amounts
+ * about WHERE:
  *
- * Moving it to ONE button at the top re-opens a question the per-workspace
- * button never had to answer: WHICH workspace. In the grouped view the surface
- * still names one (the workspace you are in). In the flat view nothing on
- * screen does — every row is a different workspace's — so the button ASKS
- * rather than guessing. That is the whole of this file:
+ *   grouped   ONE BUTTON PER WORKSPACE, as its list's first row. The heading
+ *             directly above the button is the answer, so the click creates and
+ *             goes and never asks. This is where it started, briefly was not,
+ *             and is again.
+ *   recent    ONE BUTTON AT THE TOP, and it ASKS. The flat view renders no
+ *             workspace nodes, so it has no per-workspace buttons to inherit —
+ *             which is how it once ended up with no way to create at all. And
+ *             nothing on that screen names a workspace: every row is a
+ *             different one's, so creating in whichever workspace some state
+ *             happened to hold is a chat you then cannot find.
  *
- *   grouped   one click, into the workspace you are in, no picker
- *   recent    click → a list of workspaces → the one you CHOSE gets the chat
- *
- * The guess is the bug this replaces: a chat created from a flat list landing
- * in whichever workspace some state happened to hold is a chat you then cannot
- * find, because nothing on screen ever named the destination.
+ * The middle arrangement — one top button in BOTH views, asking in one of them
+ * — is the one this file used to pin, and it failed for the grouped view in
+ * practice: reported as "weirdly designed", and picking a workspace from its
+ * popup did not reliably leave you in the chat you had just made. A button
+ * inside the workspace cannot have either problem.
  *
  * Mocks are the ambient four (router, tab cache, workspace cache, all-tabs)
  * plus `api`, which is the thing being asserted: `createTab(workspaceId, …)`.
@@ -161,32 +163,48 @@ afterEach(() => {
   resetNavView();
 });
 
-describe('the rail’s new-tab button — one, at the top, in both views', () => {
-  it('is a SINGLE button, ahead of the list, in the grouped view', () => {
+describe('the rail in the GROUPED view — one button per workspace, inside it', () => {
+  it('gives every EXPANDED workspace its own, and the rail none of its own', () => {
     const box = mount('sidebar', 'spaces');
-    const adds = box.querySelectorAll('.navtree-new-tab');
-    // One, not one per workspace. Three workspaces are rendered.
     expect(box.querySelectorAll('.navtree-ws-row').length).toBe(3);
-    expect(adds.length).toBe(1);
-    // …and it is the first thing in the scroller, ahead of the view switch.
-    const scroll = box.querySelector('.navtree-scroll');
-    expect(scroll?.firstElementChild?.classList.contains('navtree-new-tab')).toBe(true);
+    // No top button at all here: the workspaces carry it. A second one above
+    // the tree would be a fourth answer to a question already answered three
+    // times on the same screen.
+    expect(box.querySelectorAll('.navtree-new-tab').length).toBe(0);
+    // One per EXPANDED workspace — default expansion is active-workspace-only,
+    // and a collapsed workspace renders no list to put a row in.
+    const lists = box.querySelectorAll('.navtree-tab-list');
+    expect(box.querySelectorAll('.navtree-add-ws').length).toBe(lists.length);
+    expect(lists.length).toBeGreaterThan(0);
   });
 
-  it('is there in the RECENT view too — the view that had no way to create', () => {
-    const box = mount('sidebar', 'recent');
-    expect(box.querySelectorAll('.navtree-new-tab').length).toBe(1);
-    const scroll = box.querySelector('.navtree-scroll');
-    expect(scroll?.firstElementChild?.classList.contains('navtree-new-tab')).toBe(true);
-  });
-
-  it('grouped: creates in the workspace the surface is about, and asks nothing', async () => {
+  it('is the FIRST row of its workspace, not the last', () => {
     const box = mount('sidebar', 'spaces');
-    await click(box.querySelector('.navtree-new-tab'));
+    // The original sat below however many chats the workspace had, so in a
+    // twenty-chat workspace "make another one" was a scroll away.
+    const list = box.querySelector('.navtree-tab-list');
+    expect(list?.firstElementChild?.classList.contains('navtree-add-ws')).toBe(true);
+  });
+
+  it('creates in ITS OWN workspace and goes there, asking nothing', async () => {
+    const box = mount('sidebar', 'spaces');
+    await click(box.querySelector('.navtree-add-ws'));
     expect(CREATED).toEqual([{ workspaceId: 'w-personal', body: { ...HOUSE_CHAT_CREATE } }]);
+    // THE BUG THAT SENT IT BACK HERE: "picking a workspace leaves me on my
+    // current tab". One click, and the navigation is to the new chat.
     expect(WENT).toEqual([{ wsSlug: 'personal', tabSlug: 'new-chat' }]);
     // No picker was ever shown.
     expect(box.querySelectorAll('.navtree-wspick-name').length).toBe(0);
+  });
+});
+
+describe('the rail in the RECENT view — one button at the top', () => {
+  it('has one, because this view has no workspace rows to hang them on', () => {
+    const box = mount('sidebar', 'recent');
+    expect(box.querySelectorAll('.navtree-new-tab').length).toBe(1);
+    expect(box.querySelectorAll('.navtree-add-ws').length).toBe(0);
+    const scroll = box.querySelector('.navtree-scroll');
+    expect(scroll?.firstElementChild?.classList.contains('navtree-new-tab')).toBe(true);
   });
 });
 

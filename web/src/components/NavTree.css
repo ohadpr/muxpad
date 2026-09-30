@@ -1645,39 +1645,33 @@
   opacity: 0.4;
   cursor: default;
 }
-/* At the HEAD of the scroller now, above the view switch, in both views. It
-   used to be indented to the tab text column, because it closed one
-   workspace's tab list; there is no such list above it any more. */
-/* THE PRIMARY ACTION, styled like one.
-   `.navtree-add` above is a ghost link — 70% opacity, no surface, no border —
-   and that was right when this lived at the BOTTOM of a workspace's tab list,
-   a quiet footer affordance you went looking for. It is now the one way to
-   make a chat, at the top of the sidebar, on every surface and in both views.
-   Reported as "the button is on the top, which is great, but it's hard to
-   see": a ghost at the head of a list reads as a caption, not a control.
-   So: full opacity, a real surface, and its own edge. Tokens throughout — this
-   has to hold in all six themes. */
+/* The FLAT view's create button, and the ONLY one not inside a workspace.
+   It was briefly a filled accent pill with its own border — an attempt to answer
+   "the button is hard to see" with weight — and read as bolted onto a rail where
+   nothing else is a pill ("weirdly designed"). Hard-to-see was never fixed by a
+   fill: it was caused by the 0.55–0.7 opacity `.navtree-add` carries for the
+   QUIET actions, which this is not. So the ghost shape everything else here
+   wears, at full strength, with the accent doing the work. */
 .navtree-new-tab {
-  margin: 4px 8px 8px 8px;
-  padding: 7px 10px;
+  margin: 2px 8px 6px 8px;
+  padding: 6px 8px;
   opacity: 1;
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
   font-weight: 600;
 }
-.navtree-new-tab:hover {
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-}
-/* Touch has no hover, so the pressed state is the only feedback there is. */
-.navtree-new-tab:active {
-  background: color-mix(in srgb, var(--accent) 28%, transparent);
-}
-/* While the picker is open the button is the thing that opened it — say so,
-   or the open list looks like it belongs to whatever is under it. */
+/* While the picker is open the button is the thing that opened it — say so, or
+   the open list looks like it belongs to whatever is under it. */
 .navtree-new-tab[aria-expanded="true"] {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--bg-hover);
+}
+/* A WORKSPACE'S OWN create row — the first row under its heading, so it aligns
+   with the chat rows below rather than the workspace name above. Quiet by
+   default, and deliberately: there is one of these in every workspace you have
+   expanded, and at full accent strength the rail would be a column of them. It
+   comes up on hover with the rest of `.navtree-add`. */
+.navtree-add-ws {
+  padding: 3px var(--nt-air) 3px calc(var(--nt-pad) + var(--nt-indent));
+  opacity: 0.55;
+  font-size: 13px;
 }
 /* Extra top space sets "+ New workspace" apart from whatever list it follows,
    so it reads as the outer-level action rather than part of the block above
