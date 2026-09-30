@@ -492,47 +492,33 @@ function SidebarTree({
           while it has a query), so it renders a fragment and the scroller
           stays a direct flex child of this nav. */}
       <NavSearch variant={variant} onNavigate={onNavigate}>
-        {/* ─── THE create action, and it is the FIRST thing in the scroller ──
-            It used to be one button per workspace, at the BOTTOM of that
-            workspace's tab list. Two things were wrong with that. It scrolled:
-            in a workspace with twenty chats, "make another one" sat below all
-            twenty. And it did not exist AT ALL in the flat view, which is this
-            navigator's default on both surfaces — that view renders no
-            workspace nodes, so it rendered no way to create either.
-
-            One button, at the top, in both views. What the move costs is the
-            one-click "create in a workspace I am NOT in" that an expanded tree
-            used to offer; what it buys is an affordance in the same place on
-            every surface and in every view, above the list rather than past
-            the end of it. The flat view's picker gives that reach back, and
-            names the destination while it does.
-
-            WHERE IT CREATES is the question the per-workspace button never had
-            to answer, and the two views answer it differently ON PURPOSE:
-              grouped  the surface names a workspace — the one you are in — so
-                       the button simply creates there, with no picker.
-              recent   nothing on screen names one. Every row is a different
-                       workspace's, and creating in whichever workspace some
-                       state happens to hold is how a chat lands where you were
-                       not looking and cannot then be found. So it ASKS. */}
-        <NewTabButton
-          idleLabel={creatingTab ? 'Creating…' : '+ New tab'}
-          idleTitle={
-            view === 'recent'
-              ? 'New tab — choose a workspace'
-              : `New tab in ${activeWorkspace?.name ?? '—'}`
-          }
-          idleClassName="navtree-add navtree-new-tab"
-          disabled={creatingTab || (view !== 'recent' && !activeWorkspace)}
-          {...(view === 'recent' ? { expanded: picking } : {})}
-          onCreate={() => {
-            if (view === 'recent') {
-              setPicking((p) => !p);
-              return;
-            }
-            if (activeWorkspace) void createTab(activeWorkspace);
-          }}
-        />
+        {/* ─── The create action, and WHICH VIEW YOU ARE IN decides where it
+             lives ─────────────────────────────────────────────────────────────
+             grouped  NOTHING HERE. Every workspace in the tree carries its own
+                      "+ New chat" as its first row, so the workspace you are
+                      creating in is the heading directly above the button you
+                      pressed — no popup, no question, no chance of the answer
+                      being a workspace you were not looking at. That is the
+                      arrangement this navigator had, briefly did not, and has
+                      again; see TabList's row for why the round trip was worth
+                      making.
+             recent   THIS BUTTON, because the flat view renders no workspace
+                      nodes and therefore no per-workspace buttons — leaving it
+                      out is how that view ended up with no way to create at
+                      all. It has to ask WHERE: every row on screen belongs to a
+                      different workspace, so creating in whichever one some
+                      state happens to hold is how a chat lands somewhere you
+                      were not looking and cannot then find. */}
+        {view === 'recent' ? (
+          <NewTabButton
+            idleLabel={creatingTab ? 'Creating…' : '+ New chat'}
+            idleTitle="New chat — choose a workspace"
+            idleClassName="navtree-add navtree-new-tab"
+            disabled={creatingTab}
+            expanded={picking}
+            onCreate={() => setPicking((p) => !p)}
+          />
+        ) : null}
         <NavViewSwitch view={view} onSwitch={setView} />
         {picking && view === 'recent' ? (
           <WorkspacePickList
@@ -1707,6 +1693,21 @@ export function TabList({
     }
   };
 
+  // The workspace's own create. No picker and no target argument: the list
+  // this button sits in IS the workspace, so there is nothing to ask.
+  const [creating, setCreating] = useState(false);
+  const createHere = async () => {
+    if (creating) return;
+    setCreating(true);
+    try {
+      await createHouseTab(workspace, navigate, onNavigate);
+    } catch (err) {
+      console.error('createTab failed', err);
+    } finally {
+      setCreating(false);
+    }
+  };
+
   // Create a pane in `t` and land on it. Shared by the sheet pane list's
   // chooser and the tab context menu. Always opens the harness picker
   // (Claude / Codex / Cursor + Terminal / Web view below).
@@ -1898,6 +1899,34 @@ export function TabList({
 
   return (
     <div className="navtree-tab-list">
+      {/* ─── "+ New chat", one per workspace, INSIDE the workspace ──────────
+          Back after a spell as a single button above the whole rail, because
+          the thing that button had to do to work — ask WHERE, in a popup, and
+          then move you — is worse than what it replaced. Reported: "clicking it
+          and picking a workspace leaves me on my current tab", and the design
+          read as bolted on. A button inside a workspace never has to ask: the
+          heading above it IS the answer, so the click creates and goes, with no
+          intervening question.
+
+          AT THE TOP of the list, not the bottom. That much of the move stays —
+          the original sat below however many chats the workspace had, so in a
+          twenty-chat workspace "make another one" was a scroll away. First row
+          under the heading costs nothing and never scrolls out from under the
+          workspace it belongs to.
+
+          RAIL ONLY. The sheet's bar already carries one, already names the
+          workspace it will create in, and shows exactly one workspace at a
+          time — a second button three pixels below the first is not a second
+          affordance, it is a duplicate. */}
+      {!sheet ? (
+        <NewTabButton
+          idleLabel={creating ? 'Creating…' : '+ New chat'}
+          idleTitle={`New chat in ${workspace.name}`}
+          idleClassName="navtree-add navtree-add-ws"
+          disabled={creating}
+          onCreate={() => void createHere()}
+        />
+      ) : null}
       {liveGroups.map((g, i) => (
         <Fragment key={g.chat.id}>
           {/* The seam between "you arranged these" and "these arrange
@@ -1939,15 +1968,6 @@ export function TabList({
           {doneOpen ? doneGroups.map(renderGroup) : null}
         </>
       ) : null}
-      {/* NO "+ New tab" ROW, on either surface. It used to close this list on
-          the rail, one per workspace, below however many chats the workspace
-          had; the sheet never had one, because nothing lives in that scroller
-          which is not a chat. Both surfaces now create from the SAME place —
-          the top of the rail's scroller, the sheet's bar — so the affordance
-          sits above the list rather than past the end of it, is in the same
-          place in both views, and the flat view (which renders none of these
-          lists) finally has one at all.
-          See SidebarTree's button for what that costs and what it buys. */}
     </div>
   );
 }

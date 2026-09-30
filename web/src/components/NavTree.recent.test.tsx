@@ -58,6 +58,7 @@ vi.mock('../lib/all-tabs', () => ({
 }));
 
 const { NavTree } = await import('./NavTree');
+const { setNavView, resetNavView, DEFAULT_NAV_VIEW } = await import('../lib/nav-view');
 
 const NOW = 1_700_000_000_000;
 const HOUR = 3_600_000;
@@ -84,10 +85,15 @@ function flatHtml(
   opts: { variant: 'sheet' | 'sidebar'; activeWorkspaceSlug?: string },
 ): string {
   CORPUS = corpus.map((g) => ({ id: `w-${g.slug}`, slug: g.slug, name: g.slug, tabs: g.tabs }));
-  // localStorage is empty in jsdom, so the view falls through to its DEFAULT —
-  // which is the thing under test as much as the rendering is. If the default
-  // ever flips to 'spaces' these all break, which is correct: the whole feature
-  // is that this list is what you get without asking.
+  // ASKED FOR, EXPLICITLY. This used to lean on an empty localStorage falling
+  // through to a default of 'recent' — the comment here even said that if the
+  // default flipped these would all break, "which is correct". It flipped (the
+  // flat list was a mess to live with once it was the thing you landed on), so
+  // the tests say what they mean instead: this file is about the flat list as
+  // RENDERED, not about which view you get for free. That question now has one
+  // test of its own, below, and it is the only one that reads the default.
+  resetNavView();
+  setNavView(opts.variant, 'recent');
   return renderToStaticMarkup(
     <NavTree
       variant={opts.variant}
@@ -113,8 +119,15 @@ function order(html: string): string[] {
   ].map((m) => m[1] as string);
 }
 
-describe('the flat view is what you get WITHOUT asking', () => {
-  it('is the default on both surfaces, with no stored preference', () => {
+describe('the flat view is a CHOICE, and the grouped one is the default', () => {
+  // The one assertion in this file about which view you get for free. It reads
+  // DEFAULT_NAV_VIEW rather than restating 'spaces', so flipping the default
+  // again is a one-line change in one place and this test follows it.
+  it('is not what you get without asking — grouping is', () => {
+    expect(DEFAULT_NAV_VIEW).toBe('spaces');
+  });
+
+  it('puts both workspaces in ONE list once you do ask, on both surfaces', () => {
     const corpus = [
       { slug: 'personal', tabs: [tab('p1', { last_user_at: NOW - 3 * HOUR })] },
       { slug: 'trayo', tabs: [tab('t1', { last_user_at: NOW })] },
