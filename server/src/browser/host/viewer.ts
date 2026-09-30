@@ -38,6 +38,9 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   #takeover{background:#c98a2e;border-color:#c98a2e;color:#fff;font-size:11px;white-space:nowrap}
   /* Quieter than "take the wheel": that one is an offer, this is a finish. */
   #handback{border-color:#3d6b4a;color:#9fdcb0;font-size:11px;white-space:nowrap}
+  /* Once the password field has gone the errand is probably over, and this is
+     the only thing left to press. Loud enough to be found without reading. */
+  #handback.ready{background:#2f7d4a;border-color:#2f7d4a;color:#fff}
   /* Watching: the stream is a picture. Say so rather than letting somebody
      press things that quietly go nowhere. */
   body.watching #screen{cursor:default}
@@ -246,7 +249,9 @@ function onSocketMessage(e) {
       // the panel's own declarations, so a login report arriving during setup
       // would reach a const that does not exist yet.
       const btn = document.getElementById('signin')
-      if (btn) btn.hidden = !(Boolean(m.present) && !watching)
+      const present = Boolean(m.present)
+      if (btn) btn.hidden = !(present && !watching)
+      noticeSignIn(present)
       return
     }
     if (m.t === 'filled') { if (!m.ok) msg.textContent = 'could not find the form to fill'; return }
@@ -578,8 +583,45 @@ handback.addEventListener('click', async () => {
     // Still looking, no longer driving — the agent can get on with it.
     watching = true
     applyWatching()
+    // AND IT LEAVES. Done used to hand the wheel back and then sit there: the
+    // button removed itself, the stream carried on, and the only way out was the
+    // menu button in the corner. Pressing "Done" on a page means you are
+    // finished with the page — so it goes back to muxpad, which is where the
+    // conversation you came from is.
+    // Only when this IS the page. In the desktop modal the viewer is framed, and
+    // navigating in there would load muxpad inside its own dialog; the modal
+    // already has a way to close.
+    if (window.top === window) location.href = '/'
   } catch { msg.textContent = 'could not reach muxpad' }
 })
+
+/**
+ * NOTICES THAT THE SIGN-IN WENT THROUGH.
+ *
+ * Reported from a real login: the page changed to the signed-in page and nothing
+ * remarked on it. Everything muxpad knew at that moment said the errand was
+ * over, and the person was left to work out for themselves that they were done.
+ *
+ * The host already measures whether the page has a password field, every two
+ * seconds, through frames and shadow roots — that is what offers the Sign in
+ * button. A field that was there and is now GONE is the best available evidence
+ * that a sign-in succeeded, and it costs nothing extra to watch for.
+ *
+ * IT DOES NOT HAND THE BROWSER BACK BY ITSELF, deliberately. A two-factor step
+ * has no password field either, so "the password field went away" is also what
+ * the middle of a login looks like — and releasing the wheel there would let an
+ * agent navigate the page while somebody is waiting for a code. So it makes Done
+ * unmissable and says why, and the decision stays with the person who can see
+ * the screen.
+ */
+let sawLoginForm = false
+function noticeSignIn(present) {
+  if (present) { sawLoginForm = true; return }
+  if (!sawLoginForm || watching) return
+  sawLoginForm = false
+  msg.textContent = 'looks like you are signed in — press Done when you have finished'
+  handback.classList.add('ready')
+}
 
 /**
  * KEEPS THE WHEEL WHILE SOMEBODY IS HOLDING IT.

@@ -41,6 +41,8 @@ interface StubEl {
 
 interface Harness {
   el(id: string): StubEl;
+  /** Where the page navigated, if it did. */
+  location: { href?: string };
   /** Every socket the page has opened, oldest first. */
   sockets: Array<Record<string, unknown>>;
   /** Fire `open` on the newest socket. */
@@ -74,6 +76,11 @@ interface RunOpts {
   fetchOk?: boolean;
   /** How wide the viewer is. Under 700px it is treated as a phone. */
   width?: number;
+  /**
+   * Whether the page is inside the desktop modal's frame. The default is a
+   * top-level tab, which is how a phone opens it from a card.
+   */
+  framed?: boolean;
 }
 
 function run(opts: RunOpts | string = {}): Harness {
@@ -83,6 +90,7 @@ function run(opts: RunOpts | string = {}): Harness {
     nowMs,
     fetchOk = true,
     width = 390,
+    framed = false,
   } = typeof opts === 'string' ? { search: opts } : opts;
   const els = new Map<string, StubEl>();
   const make = (id: string): StubEl => {
@@ -244,6 +252,9 @@ function run(opts: RunOpts | string = {}): Harness {
   // The script reaches for `window.x` as well as bare `x`; point it at itself so
   // both spellings resolve to the same stub.
   globals.window = globals;
+  // `window.top === window` is how the page tells a tab from a frame. Undefined
+  // would read as "framed" and quietly skip everything that depends on it.
+  globals.top = framed ? ({} as Record<string, unknown>) : globals;
   globals.visualViewport = {
     height: 844,
     addEventListener() {},
@@ -262,6 +273,7 @@ function run(opts: RunOpts | string = {}): Harness {
     el,
     sent,
     sockets,
+    location: globals.location as { href?: string },
     open,
     drop() {
       const sock = live();
@@ -1024,5 +1036,91 @@ describe('the text sink is visible to WebKit, invisible to a person', () => {
 
   it('never swallows a tap meant for the page', () => {
     expect(sinkCss()).toContain('pointer-events:none');
+  });
+});
+
+describe('Done finishes the errand', () => {
+  /**
+   * Reported from a real login: "I hit Done and the Done button just disappeared
+   * and I was still looking at the browser." It released the wheel and then sat
+   * there — the stream carried on, and the only way out was the menu button in
+   * the corner. Pressing Done on a page means you are finished with the page.
+   */
+  const driving = { fetchJson: { wheel: { holder: 'human', by: 'pane-7' } } };
+
+  it('goes back to muxpad, where the conversation is', async () => {
+    const h = run(driving);
+    h.el('handback').fire('click');
+    await h.settle();
+    expect(h.location.href).toBe('/');
+  });
+
+  it('releases the wheel before it leaves', async () => {
+    // Navigating first would abandon the request and leave the agent locked out
+    // until the lease expired on its own.
+    const h = run(driving);
+    h.el('handback').fire('click');
+    await h.settle();
+    expect(h.fetches.some((f) => f.url.endsWith('/wheel') && f.method === 'DELETE')).toBe(true);
+  });
+
+  it('stays put when it is framed in the desktop modal', async () => {
+    // Navigating inside the frame would load muxpad into its own dialog, and
+    // the modal already has a way to close.
+    const h = run({ ...driving, framed: true });
+    h.el('handback').fire('click');
+    await h.settle();
+    expect(h.location.href).toBeUndefined();
+  });
+});
+
+describe('noticing that the sign-in went through', () => {
+  /**
+   * "The page in front of me changed to the signed-in page, nothing detected
+   * it." The host already measures whether the page has a password field, every
+   * two seconds, through frames and shadow roots — one that WAS there and is now
+   * gone is the best evidence available that a sign-in succeeded.
+   */
+  it('says so, and makes Done the obvious thing to press', () => {
+    const h = run();
+    h.receive({ t: 'login', present: true });
+    h.receive({ t: 'login', present: false });
+    expect(h.el('msg').textContent).toContain('signed in');
+    expect(h.el('handback').classes).toContain('ready');
+  });
+
+  it('says nothing about a page that never had a password field', () => {
+    // Most pages do not have one. Announcing a sign-in on all of them is noise.
+    const h = run();
+    h.receive({ t: 'login', present: false });
+    expect(h.el('handback').classes).not.toContain('ready');
+  });
+
+  it('does NOT hand the browser back on its own', () => {
+    // A two-factor step has no password field either, so this is also what the
+    // MIDDLE of a login looks like. Releasing there would let an agent navigate
+    // the page while somebody waits for a code on another device.
+    const h = run();
+    h.receive({ t: 'login', present: true });
+    h.receive({ t: 'login', present: false });
+    expect(h.fetches.some((f) => f.method === 'DELETE')).toBe(false);
+  });
+
+  it('stays quiet while only watching', () => {
+    const h = run({ search: '?mode=watch' });
+    h.receive({ t: 'login', present: true });
+    h.receive({ t: 'login', present: false });
+    expect(h.el('handback').classes).not.toContain('ready');
+  });
+
+  it('notices a SECOND sign-in later in the same session', () => {
+    // Two logins in one errand happens — a site and then its identity provider.
+    const h = run();
+    h.receive({ t: 'login', present: true });
+    h.receive({ t: 'login', present: false });
+    h.el('handback').classList.remove('ready');
+    h.receive({ t: 'login', present: true });
+    h.receive({ t: 'login', present: false });
+    expect(h.el('handback').classes).toContain('ready');
   });
 });
