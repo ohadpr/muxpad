@@ -36,6 +36,9 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   #bar button:hover{background:#23232e}
   #bar button[aria-pressed="true"]{background:#2b3a55;border-color:#4a6ea8;color:#cfe2ff}
   #takeover{background:#c98a2e;border-color:#c98a2e;color:#fff;font-size:11px;white-space:nowrap}
+  /* Once somebody has tried to type into a stream they cannot type into, this is
+     the only thing on the page that helps. */
+  #takeover.ready{box-shadow:0 0 0 3px rgba(201,138,46,.45)}
   /* Quieter than "take the wheel": that one is an offer, this is a finish. */
   #handback{border-color:#3d6b4a;color:#9fdcb0;font-size:11px;white-space:nowrap}
   /* Once the password field has gone the errand is probably over, and this is
@@ -210,7 +213,13 @@ const connect = () => {
   ws = sock
   sock.onopen = () => {
     retryIn = 400
+    // Clears the DISCONNECTION notice, and puts back whatever the page's own
+    // state has to say. A bare clear wiped the one line explaining that this
+    // viewer is read-only — so on a watch-mode tab the explanation was removed
+    // the moment the connection succeeded, and a person tapping fields that did
+    // nothing had nothing on screen to tell them why.
     msg.textContent = ''
+    if (watching) msg.textContent = 'watching — press Take over to type'
     for (const fn of onEachOpen) { try { fn() } catch { /* one hook must not stop the rest */ } }
   }
   sock.onclose = () => {
@@ -322,7 +331,16 @@ img.addEventListener('pointerdown', (e) => {
   //
   // No boxes yet means UNKNOWN, not "no fields" — then guess, because a keyboard
   // that flashes is a blemish and a keyboard that never comes is the bug.
-  if (!watching) {
+  if (watching) {
+    // A TAP THAT GOES NOWHERE HAS TO SAY SO. Watch mode drops input on purpose —
+    // looking over an agent's shoulder must not stall it — but nothing said that
+    // at the moment it mattered. Reported from a real attempt: "tapping either
+    // field does nothing, not even pop up the keyboard, maybe it's just not
+    // responsive." A standing line at the top of the bar is not an answer to a
+    // tap; this is, and it names the button that fixes it.
+    msg.textContent = 'watching only — press Take over to type'
+    takeover.classList.add('ready')
+  } else {
     const p0 = pt(e)
     const hit = p0 ? hitsField(p0) : null
     kbFromTap = hit === true
@@ -540,7 +558,7 @@ const applyWatching = () => {
   // minutes of nothing, at the end of every handoff, on the surface the handoff
   // was built for.
   handback.hidden = watching
-  msg.textContent = watching ? 'watching — the agent is still working' : ''
+  msg.textContent = watching ? 'watching — press Take over to type' : ''
 }
 takeover.addEventListener('click', async () => {
   const profile = profileFromPath()
