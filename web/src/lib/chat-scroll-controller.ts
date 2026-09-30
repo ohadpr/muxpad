@@ -97,6 +97,15 @@ export class ChatScrollController {
   private wrote: number | null = null;
   /** The row under the viewport top as of the last event or write. */
   private was: Anchor | null = null;
+  /**
+   * The `scrollTop` we last OBSERVED, whoever moved it. null = never looked.
+   *
+   * Only one question needs it, and only about a reader event: which WAY did
+   * they go. See `followingAfter`. Updated on every scroll event and after every
+   * place, so it is never a pre-engine-adjustment number that a later gesture
+   * would be compared against.
+   */
+  private sawTop: number | null = null;
 
   constructor(private readonly surface: ScrollSurface) {}
 
@@ -228,6 +237,7 @@ export class ChatScrollController {
    */
   private settled(): void {
     this.was = this.surface.anchorHere();
+    this.sawTop = this.surface.geometry().scrollTop;
   }
 
   /**
@@ -241,6 +251,13 @@ export class ChatScrollController {
   onScroll(): boolean {
     if (!this.surface.measurable()) return false;
     const geo = this.surface.geometry();
+    // Captured BEFORE anything can refresh it, and refreshed for every event —
+    // the reader's and the engine's alike. An engine adjustment that goes
+    // unrecorded here would leave a pre-adjustment number for the reader's next
+    // gesture to be compared against, and the direction below would be a
+    // statement about the engine's move rather than theirs.
+    const prevTop = this.sawTop;
+    this.sawTop = geo.scrollTop;
     const here = this.surface.anchorHere();
     const isReader = scrollEventIsTheReader({
       wrote: this.wrote,
@@ -265,7 +282,7 @@ export class ChatScrollController {
     // intent — including "the end", which is how following is regained. Their
     // position is by definition already satisfied, so the `place()` this
     // triggers computes a target equal to where they are and writes nothing.
-    this.dispatch({ t: 'reader-moved', here, atEnd: this.followingHere(geo) });
+    this.dispatch({ t: 'reader-moved', here, atEnd: this.followingAfter(geo, prevTop) });
     return true;
   }
 
@@ -276,15 +293,50 @@ export class ChatScrollController {
   }
 
   /**
-   * How close to the bottom still counts as following the live output.
+   * Is the reader still following the tail, after a move they just made?
    *
-   * Deliberately tight, and deliberately not the re-entry threshold: nudging up
-   * a line to re-read something should stop the log scrolling itself under you
-   * (this one), and should NOT park you in history tomorrow (that one, 160px,
-   * in `readerIsCaughtUp`). Persisting the first as the second is the bug that
-   * stranded a reader 5701px up after a single wheel notch.
+   * ── WHY DIRECTION, AND NOT JUST THE BAND ──────────────────────────────────
+   * The band alone made the bottom 40 px a DEAD ZONE. Measured in Chrome against
+   * the live chat, from a reader parked exactly at the end:
+   *
+   *     upward notch    net movement    writes
+   *        10 px            0 px          1
+   *        25 px            0 px          1
+   *        39 px            0 px          1
+   *        45 px           45 px          0
+   *        80 px           80 px          0
+   *
+   * Zero, not "moved then sprang back" — the write lands in the same turn as the
+   * reader's own scroll event, so nothing is ever painted at the new position.
+   * The reader pushes and the page does not move. That is the reported symptom
+   * verbatim: "if I go all the way to the bottom of this chat and try to scroll
+   * back it resists".
+   *
+   * And the docstring this replaces already described the right behaviour —
+   * "nudging up a line to re-read something should stop the log scrolling itself
+   * under you" — it was just wrong about the number being tight enough to do it.
+   * 40 px is three lines, and a trackpad's opening notches are 10–30 px, so the
+   * start of every gentle upward gesture landed inside it. Lowering the number
+   * only shrinks the dead zone: a trackpad ramps from 1–2 px, so SOME threshold
+   * always eats the first events of a slow gesture.
+   *
+   * So the band stops being the whole answer. A reader who moved AWAY from the
+   * end is not following, at any distance — that is what the gesture MEANT, and
+   * it needs no threshold to be read correctly. The band keeps the only job it
+   * was ever right about: deciding whether a move TOWARD the end (or one that
+   * did not change `scrollTop` at all) has arrived close enough to count as
+   * catching up, so following is regained by scrolling back down without having
+   * to land on the exact pixel.
+   *
+   * Still deliberately NOT the re-entry threshold (160 px, `readerIsCaughtUp`):
+   * a nudge should stop the log scrolling under you now, and should not park you
+   * in history tomorrow. Persisting the first as the second is the bug that
+   * stranded a reader 5701 px up after a single wheel notch.
    */
-  private followingHere(geo: ScrollGeometry): boolean {
+  private followingAfter(geo: ScrollGeometry, prevTop: number | null): boolean {
+    // Moved away from the tail. Their intent is the one thing that cannot be
+    // overruled by arithmetic about where they happen to have ended up.
+    if (prevTop !== null && geo.scrollTop < prevTop) return false;
     return geo.scrollHeight - geo.scrollTop - geo.clientHeight < FOLLOW_THRESHOLD_PX;
   }
 }

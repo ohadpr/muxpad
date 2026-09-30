@@ -675,6 +675,121 @@ describe('the live-follow threshold is not the re-entry threshold', () => {
   });
 });
 
+// ── THE BOTTOM 40 PIXELS WERE A DEAD ZONE ───────────────────────────────────
+// The threshold above is right about live output and was wrong about the reader.
+// Applied to a gesture, it swallowed it: at the end of the log, any upward move
+// that did not clear 40px in ONE event landed back inside the band, read as
+// "still following", and was written straight back to the bottom — in the same
+// turn as the reader's own scroll event, so nothing was ever painted at the new
+// position. Not a jump. No movement at all.
+//
+// Measured in Chrome against the live chat, from a reader parked at the end:
+//
+//     upward notch    net movement    writes
+//        10 px            0 px          1
+//        25 px            0 px          1
+//        39 px            0 px          1
+//        45 px           45 px          0
+//        80 px           80 px          0
+//
+// Reported as "if I go all the way to the bottom of this chat and try to scroll
+// back it resists" — which is what a page that does not move feels like when you
+// are pushing it.
+//
+// The number is not the fix; DIRECTION is. Lowering it only shrinks the dead
+// zone, because a trackpad ramps from 1–2px and any threshold eats the start of
+// a slow gesture. A reader who moved AWAY from the end is not following at any
+// distance, and the band keeps the only job it was right about — letting a move
+// back DOWN regain following without landing on the exact pixel.
+describe('an upward gesture is never swallowed by the follow band', () => {
+  function atEndThenUp(px: number) {
+    const sim = new SimScroller(simRows(40), { furnitureBelow: 100 });
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: RETIRED });
+    expect(c.phase(true)).toBe('FOLLOWING'); // parked at the end, following
+    const from = sim.scrollTop;
+    sim.readerScrollsBy(-px);
+    drainScroll(sim, c);
+    // Whatever else happens, a later commit must not reel them in either.
+    sim.append(simRows(1, 200, 'live'));
+    c.place();
+    drainScroll(sim, c);
+    return { moved: from - sim.scrollTop, phase: c.phase(true), c, sim };
+  }
+
+  // Every one of these was 0px before the fix.
+  //
+  // Starts at 2px, not 1: a ONE-pixel move is below the discriminator's noise
+  // floor (TARGET_EPSILON, in `scrollEventIsTheReader`) and is attributed to
+  // layout rather than to the reader — deliberately, because fractional
+  // geometry produces 1px deltas that nobody made. That floor is a different
+  // decision from this one and it is not what the reported resistance was: a
+  // trackpad is past 1px within the first event or two of any real gesture.
+  for (const px of [2, 10, 25, 39]) {
+    it(`keeps a ${px}px nudge — the whole of it`, () => {
+      const r = atEndThenUp(px);
+      expect(r.moved).toBe(px);
+      expect(r.phase).not.toBe('FOLLOWING');
+    });
+  }
+
+  // The far side of the old threshold, which always worked. Here so a
+  // regression that re-broke the small notches by breaking the large ones
+  // cannot pass.
+  for (const px of [45, 400]) {
+    it(`still keeps a ${px}px scroll`, () => {
+      expect(atEndThenUp(px).moved).toBe(px);
+    });
+  }
+
+  it('a 2px nudge is still CAUGHT UP — this fixes resistance, not the memory', () => {
+    // The two thresholds stay separate. Nudging a couple of pixels off the end
+    // must not park the reader in history tomorrow; that is the 160px question
+    // and it is still answered separately (see the block above).
+    //
+    // No append here, unlike the helper: 200px of new output below a reader who
+    // has stopped following puts them 202px from the end, which is genuinely not
+    // caught up. That is the append's doing, not the nudge's, and conflating the
+    // two would make this assertion about the wrong thing.
+    const sim = new SimScroller(simRows(40), { furnitureBelow: 100 });
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: RETIRED });
+    sim.readerScrollsBy(-2);
+    drainScroll(sim, c);
+    expect(c.phase(true)).not.toBe('FOLLOWING');
+    expect(c.record('s1')).toEqual(RETIRED);
+  });
+
+  it('scrolling back DOWN regains following without hitting the exact pixel', () => {
+    const { c, sim } = atEndThenUp(400);
+    expect(c.phase(true)).not.toBe('FOLLOWING');
+    // Short of the end by less than the band — the band's actual job.
+    sim.readerScrollsTo(sim.maxScrollTop - 20);
+    drainScroll(sim, c);
+    expect(c.phase(true)).toBe('FOLLOWING');
+  });
+
+  it('an ENGINE adjustment is not mistaken for the reader going backwards', () => {
+    // A prepend the engine pays for moves scrollTop DOWNWARD-in-number terms by
+    // growing the document above. If that unrecorded move became the baseline
+    // for the next real gesture, the direction test would be describing the
+    // engine's move rather than the reader's.
+    const sim = new SimScroller(simRows(40), { furnitureBelow: 100 });
+    const c = new ChatScrollController(sim);
+    c.dispatch({ t: 'mounted' });
+    c.dispatch({ t: 'shown', mem: RETIRED });
+    sim.prepend(simRows(5, 200, 'older'));
+    c.place();
+    drainScroll(sim, c);
+    // Now a move back DOWN to the end. It must read as following.
+    sim.readerScrollsToEnd();
+    drainScroll(sim, c);
+    expect(c.phase(true)).toBe('FOLLOWING');
+  });
+});
+
 // ── IDLE MUST NOT BE AN ABSORBING STATE ─────────────────────────────────────
 // Found by an acceptance run in a real browser, behind a green unit suite.
 //
@@ -792,7 +907,11 @@ describe('a search jump seeks history for a hit it cannot see yet', () => {
     // Rows BEFORE the hit as well as after it: a hit at the very top of the
     // document cannot be put a third of the way down, and clamping there is
     // correct rather than a failure.
-    sim.prepend([...simRows(3, 200, 'before'), { id: 'hit', height: 300 }, ...simRows(3, 200, 'after')]);
+    sim.prepend([
+      ...simRows(3, 200, 'before'),
+      { id: 'hit', height: 300 },
+      ...simRows(3, 200, 'after'),
+    ]);
     sim.hitId = 'hit';
     c.place();
     expect(sim.rowOffset('hit')).toBe(Math.round(sim.clientHeight / 3));
