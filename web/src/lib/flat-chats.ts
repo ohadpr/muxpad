@@ -356,6 +356,22 @@ export function needsWorkspaceLabel(
   // here anyway would leave a trap for the next caller that does.
   if (row.group.contextOnly) return false;
   if (row.workspace.slug !== activeWorkspaceSlug) return true;
+  // A LIST THAT MIXES WORKSPACES LABELS EVERY ROW.
+  //
+  // The rule below this line is the grouped view's: stay quiet for the
+  // workspace the surface already names, because repeating it down three
+  // quarters of the list says nothing. That reasoning holds only while the
+  // surface names A workspace. The flat Recent view names none — it is sorted
+  // by recency across all of them — so the same rule makes the absence of a
+  // label carry meaning ("this one is local"), which is a thing no row says out
+  // loud and no reader can be expected to infer. Reported as "not enough
+  // clarity on what workspace each tab belongs to", and it is the silence that
+  // caused it, not the labels.
+  //
+  // Self-determining rather than a flag from the caller: whether the list spans
+  // workspaces is a property OF the list, and asking it here means a future
+  // surface that mixes them cannot forget to opt in.
+  if (list.some((other) => other.workspace.slug !== row.workspace.slug)) return true;
   const name = displayedNameKey(row.group.chat.name);
   // A different workspace is also, necessarily, a different row — so there is
   // no identity check to get wrong here.
