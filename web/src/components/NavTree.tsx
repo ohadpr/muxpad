@@ -2626,7 +2626,13 @@ function CronMark({ tab }: { tab: Tab }) {
       <span className="navtree-cron-glyph" aria-hidden="true">
         ◷
       </span>
-      {label}
+      {/* Wrapped, so the row can drop the TIME on hover and keep the GLYPH.
+          The glyph is the part that says a schedule exists at all, and losing
+          it while you point at the row meant the one row you were looking at
+          was the one row that stopped saying so. It is 11px; the buttons have
+          the space. Hovering the glyph itself still opens this span's title,
+          which is where the full answer lives. */}
+      {label ? <span className="navtree-cron-time">{label}</span> : null}
     </span>
   );
 }
