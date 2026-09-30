@@ -109,14 +109,23 @@ export class PaneStore {
   }
 
   /**
-   * Every runner-owned pane: startup_cmd is the durable ownership marker
-   * (`muxpad agent`, possibly with --model/--resume args). Used by the
-   * dead-runner sweep in ws.ts to find panes whose runner process should
-   * be alive but isn't registered.
+   * Runner-owned panes that currently need a process: a live tab with a turn
+   * in flight or queued work. Idle chats start lazily when their next send is
+   * queued; keeping every historical chat resident exhausts the machine.
    */
   listAgentPanes(): PaneSpec[] {
     const rows = this.db
-      .prepare("SELECT * FROM panes WHERE startup_cmd LIKE 'muxpad agent%'")
+      .prepare(
+        `SELECT p.* FROM panes p
+           JOIN tabs t ON t.id = p.tab_id
+      LEFT JOIN agent_sessions s ON s.pane_id = p.id
+          WHERE p.startup_cmd LIKE 'muxpad agent%'
+            AND t.retired_at IS NULL
+            AND (
+              s.status = 'running'
+              OR EXISTS (SELECT 1 FROM agent_queue q WHERE q.pane_id = p.id)
+            )`,
+      )
       .all() as PaneRow[];
     return rows.map((r) => this.row(r) as PaneSpec);
   }

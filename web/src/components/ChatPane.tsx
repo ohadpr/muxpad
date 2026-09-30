@@ -5054,6 +5054,12 @@ export function ChatPane({
     pickError,
     startBusy,
     startError,
+    // LOAD-BEARING. The failure arrives on the socket LONG after this memo last
+    // ran — the ladder takes ~10s — so without it here the chat keeps rendering
+    // "Starting…" over a spawn that has already given up, and the whole
+    // server-side push chain lands on a view that never repaints. Same for the
+    // recovery in the other direction.
+    provisionError,
     startAgent,
     staged,
     launchOptions,
