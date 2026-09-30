@@ -18,12 +18,7 @@ import { applyModeToStartupCmd, modeFromStartupCmd } from '../agent-modes.js';
 import { agentStartupCmd } from '../agent-tab.js';
 import { agentPaneHasMessages } from '../chat/has-messages.js';
 import type { EventBus } from '../events.js';
-import {
-  announceProvision,
-  clearProvisionError,
-  provisionPane,
-  setProvisionError,
-} from '../pane-provision.js';
+import { announceProvision, provisionPane, setProvisionError } from '../pane-provision.js';
 import { queuePaneKill } from '../pane-reaper.js';
 import { agentCwd, hasProjectContext } from '../project-root.js';
 import { type PtydCache, decoratePane, decorateTab } from '../ptyd-cache.js';
@@ -746,8 +741,28 @@ export function panesScopedRoutes(deps: {
       announceProvision(deps, id);
       return c.json({ error: { code: 'ptyd_unavailable', message: why } }, 503);
     }
-    // It started. Whatever we thought was wrong is not wrong any more.
-    if (clearProvisionError(id)) announceProvision(deps, id);
+    // It was ACCEPTED. That is not the same as it being alive, and clearing the
+    // complaint here on the strength of the acknowledgement alone would rebuild
+    // the original bug inside the retry button: a respawn that acks and whose
+    // pty then dies would drop the reason and drop the chat back onto the
+    // neutral "no agent yet".
+    //
+    // So the verdict is settled the same way a create's is — one more
+    // `ensurePane` (idempotent: ptyd's getOrCreate hands back the runtime it
+    // already has) followed by a liveness check a beat later, which then either
+    // clears the reason or replaces it. `attempts: 1` because the user is
+    // already retrying by hand and a ladder under their finger only delays the
+    // honest answer. Unawaited: the 204 goes out now, exactly as it did before.
+    void provisionPane(deps, {
+      id: p.id,
+      shell: p.shell ?? defaultShell,
+      startup_cmd: p.startup_cmd,
+      cwd: safeCwd(p.cwd),
+      env: p.env,
+      tab_id: p.tab_id,
+      attempts: 1,
+      ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
+    }).settled;
     return c.body(null, 204);
   });
 
