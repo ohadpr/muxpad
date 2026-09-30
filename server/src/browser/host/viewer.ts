@@ -67,28 +67,32 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   /* Desktop has room to fit the whole page; a phone does not, and shrinking it
      to fit is the thing that made it useless. */
   @media (min-width: 700px) { #screen{max-width:100%} }
-  /* THE TEXT SINK, AND WHY IT IS ON SCREEN.
-     It used to sit at left:-9999px, the classic hidden-input trick, and iOS will
-     not hold a keyboard for an input that far outside the viewport: it raises
-     one and takes it back within the second. Reported from a real login — "the
-     keyboard comes up and immediately comes down", and after two or three tries
-     it sticks, which is the page having scrolled the sink into range.
-     So it is IN the viewport, one pixel, fully transparent, pinned so no scroll
-     can carry it away. Invisible to a person, present to the browser. */
-  /* NOT BEHIND ANYTHING, NOT TRANSPARENT, NOT A SPECK.
-     WebKit decides for itself whether a focused input is really on screen, and
-     if it decides no it takes the keyboard back WITHOUT blurring the field —
-     which is the exact symptom: up, straight back down, still focused. Three
-     things it counts as invisible, and this input has collected all three in
-     turn: z-index:-1 (behind the page), opacity:0, and a 1x1 box.
-     So it is a real 40x40 box at full opacity, made invisible the only way that
-     does not also make it invisible to WebKit: transparent ink, transparent
-     caret, transparent background. Nothing renders, because there is nothing to
-     render — the element is as present as any other.
-     PINNED TO THE TOP, not the bottom: an open keyboard covers the bottom of
-     the visual viewport, so a field parked there is off screen for precisely as
-     long as the keyboard is up. Takes no pointer events, so it can never
-     swallow a tap meant for the page underneath it. */
+  /* THE TEXT SINK: A REAL INPUT, PUT WHERE THE FINGER WENT.
+     Four attempts lived here, each hiding this input a different way and each
+     killing the keyboard, so the log that finally settled it is worth keeping:
+
+       50207  sink focus          <- our focus, inside the tap
+       50208  tap  onAField:true
+       50321  viewport 793 -> 417 <- the keyboard opens
+       50335  sink blur           <- 14ms later, iOS blurs it
+       50363  viewport 417 -> 793 <- and the keyboard goes
+
+     So it was never WebKit refusing a keyboard to an invisible field. iOS raised
+     one and then BLURRED the input, immediately after the keyboard changed the
+     visual viewport. That is what a fixed-position element parked at the top of
+     the layout viewport gets: the keyboard opens, iOS reflows fixed elements and
+     scrolls to reveal what has focus, the sink is no longer where it was, and an
+     input iOS cannot settle on is an input it drops.
+
+     The fix is to stop fighting the scroll-into-view and give it nothing to do:
+     the sink is MOVED TO THE TAP on every tap, so it is already exactly where
+     iOS wants to put it — under the finger, inside the visual viewport, next to
+     the field the person is looking at.
+
+     Everything else is unchanged and still load-bearing: full opacity and a real
+     40x40 box (opacity:0, 1x1 and z-index:-1 each read as invisible and got the
+     keyboard refused outright), hidden by having no ink rather than no substance,
+     and no pointer events so it never swallows a tap meant for the page. */
   #sink{position:fixed;left:0;top:0;width:40px;height:40px;opacity:1;border:0;padding:0;
         margin:0;font-size:16px;resize:none;overflow:hidden;background:transparent;
         color:transparent;caret-color:transparent;pointer-events:none}
@@ -318,6 +322,7 @@ img.addEventListener('pointerdown', (e) => {
     const hit = p0 ? hitsField(p0) : null
     kbFromTap = hit === true
     if (hit !== false) {
+      placeSink(e)
       sink.focus({ preventScroll: true })
       reportKeyboard(hit)
     }
@@ -431,12 +436,54 @@ kbBtn.addEventListener('click', () => {
  * Bounded and silent: a handful of entries, sent once a couple of seconds after
  * a tap that asked for a keyboard, and never on a tap that did not.
  */
+const vv = window.visualViewport
+/**
+ * Moves the sink to the tap, so iOS has nothing to scroll.
+ *
+ * Clamped inside the VISUAL viewport rather than the layout one: with a keyboard
+ * open those are different rectangles, and the difference is the keyboard — put
+ * the input in it and iOS is being asked to reveal something underneath the
+ * keyboard, which is the situation this whole comment exists because of.
+ */
+const placeSink = (e) => {
+  const h = vv ? vv.height : window.innerHeight
+  const w = vv ? vv.width : window.innerWidth
+  sink.style.left = Math.max(0, Math.min(e.clientX - 20, w - 40)) + 'px'
+  sink.style.top = Math.max(0, Math.min(e.clientY - 20, h - 40)) + 'px'
+}
+// A FOCUSABLE STREAM IS A SECOND FOCUS TARGET. The image carries tabindex so a
+// desktop user can click it and type; on a phone nobody tabs anywhere, and all
+// it can do there is win a tap and take the keyboard with it. Removed where
+// there is a finger rather than a pointer.
+if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
+  img.removeAttribute('tabindex')
+}
 const kbLog = []
 const T0 = Date.now()
-const note = (what, extra) => {
-  if (kbLog.length < 40) kbLog.push({ at: Date.now() - T0, what, ...(extra || {}) })
+// WHO HAS FOCUS AND WHERE THE SINK IS, on every entry. The first version of this
+// log proved the field is BLURRED rather than the keyboard withdrawn — which was
+// worth knowing and not enough, because it does not say who took the focus or
+// where the input had got to by then. Both are one line to record.
+const who = () => {
+  const a = document.activeElement
+  return a ? (a.id || a.tagName.toLowerCase()) : 'none'
 }
-const vv = window.visualViewport
+const place = () => {
+  const r = sink.getBoundingClientRect()
+  return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)].join(',')
+}
+const note = (what, extra) => {
+  if (kbLog.length < 40) {
+    kbLog.push({
+      at: Date.now() - T0,
+      what,
+      who: who(),
+      sinkAt: place(),
+      ...(vv ? { vvTop: Math.round(vv.offsetTop), vvH: Math.round(vv.height) } : {}),
+      ...(extra || {}),
+    })
+  }
+}
 if (vv) {
   vv.addEventListener('resize', () => note('viewport', { h: Math.round(vv.height) }))
   vv.addEventListener('scroll', () => note('viewportScroll', { top: Math.round(vv.offsetTop) }))
@@ -629,9 +676,10 @@ mobileBtn.addEventListener('click', () => setMobile(!mobileOn))
 // these and each one is a viewport change in a real renderer.
 let resizeTimer = null
 const onViewportChange = () => {
+  note('window resize')
   if (!mobileOn || watching) return
   if (resizeTimer) clearTimeout(resizeTimer)
-  resizeTimer = setTimeout(() => { resizeTimer = null; setMobile(true) }, 250)
+  resizeTimer = setTimeout(() => { resizeTimer = null; note('re-emulating'); setMobile(true) }, 250)
 }
 window.addEventListener('resize', onViewportChange)
 window.addEventListener('orientationchange', onViewportChange)

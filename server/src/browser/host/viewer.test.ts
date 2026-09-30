@@ -990,12 +990,31 @@ describe('the text sink is visible to WebKit, invisible to a person', () => {
     expect(h).toBeGreaterThanOrEqual(16);
   });
 
-  it('sits where an open keyboard cannot cover it', () => {
-    // A keyboard eats the bottom of the visual viewport. An input pinned to
-    // bottom:0 is off screen for exactly as long as the keyboard is up, which
-    // is the whole time it matters.
-    expect(sinkCss()).toContain('top:0');
-    expect(sinkCss()).not.toContain('bottom:0');
+  it('is moved to the tap, so iOS has nothing to scroll into view', () => {
+    // The log settled this one: iOS raised the keyboard and then BLURRED the
+    // field 14ms later, right after the keyboard resized the visual viewport.
+    // A fixed element parked in a corner is exactly what iOS reflows and then
+    // cannot settle on. Put it under the finger and there is nothing to do.
+    const src = script();
+    expect(src).toContain('placeSink');
+    const body = src.slice(src.indexOf('const placeSink'));
+    expect(body.slice(0, body.indexOf('\n}'))).toContain('clientX');
+  });
+
+  it('clamps into the VISUAL viewport, not the layout one', () => {
+    // With a keyboard open those are different rectangles and the difference is
+    // the keyboard. Clamping to the layout viewport can place the input
+    // underneath it, which is the situation being fixed.
+    const src = script();
+    const body = src.slice(src.indexOf('const placeSink'));
+    expect(body.slice(0, body.indexOf('\n}'))).toContain('vv.height');
+  });
+
+  it('stops the stream image competing for the focus on a touch screen', () => {
+    // tabindex on the img exists so a desktop user can click and type. On a
+    // phone it is only ever a second thing the tap can focus instead.
+    expect(script()).toContain("removeAttribute('tabindex')");
+    expect(script()).toContain('pointer: coarse');
   });
 
   it('stays inside the viewport and in front of nothing', () => {
