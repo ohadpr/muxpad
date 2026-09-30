@@ -988,6 +988,16 @@
   min-width: var(--nt-col-meta);
   margin-left: var(--nt-gutter);
 }
+
+/* …but a cell holding ONLY the clock glyph does not need a time column's worth
+   of it. The column width exists so times stack; the cell's contents are flush
+   right (justify-content: flex-end), so the glyph already lands on the same x a
+   time's last digit would, and nothing aligns to the cell's LEFT edge. Measured:
+   46px reserved for an 13px glyph, all of it taken off the name. Most schedules
+   are not due today, so this is most scheduled rows. */
+.navtree-tab-meta:not(:has(.navtree-cron-time)):not(:has(.navtree-tab-ws)) {
+  min-width: 0;
+}
 /* No schedule: no width AND no gutter. Most rows are this one. */
 .navtree-tab-meta:empty {
   margin-left: 0;
@@ -1152,12 +1162,44 @@
    thing that must never move, and it does not: the name is the 1fr track, so it
    absorbs the whole swap and the mark keeps its line.
 
-   `display: none` rather than a width transition: an auto grid track with no
-   items in it collapses to nothing, gutter included, which is exactly the
-   accounting the rest of this grid already does with `:empty`. */
+   THE CLOCK GLYPH SURVIVES, and only the time goes. Losing the whole cell made
+   the row under your pointer the one row that stopped saying it has a schedule
+   at all — an 11px glyph is not what was crowding anything, and it is the part
+   that answers "is this thing on a timer?" at a glance. It keeps its own
+   `title`, so pointing AT the glyph still opens the full "which cron, next at
+   —" tooltip; the row's own tooltip no longer shadows it, because the innermost
+   titled element wins.
+
+   `display: none` rather than a width transition: the hidden parts stop being
+   laid out entirely, so the cell shrinks to the glyph and the gutter accounting
+   is the same one the rest of this grid does with `:empty`. */
+.navtree-tab-row:hover > .navtree-tab-meta .navtree-cron-time,
+.navtree-tab-row:has(:focus-visible) > .navtree-tab-meta .navtree-cron-time,
+.navtree-tab-row:hover > .navtree-tab-meta .navtree-tab-ws,
+.navtree-tab-row:has(:focus-visible) > .navtree-tab-meta .navtree-tab-ws {
+  display: none;
+}
+
+/* …and the cell stops claiming a column's worth of width once its text is
+   gone, or a scheduled row would hold a `--nt-col-meta` gap open for an 11px
+   glyph and the controls would gain nothing. */
 .navtree-tab-row:hover > .navtree-tab-meta,
 .navtree-tab-row:has(:focus-visible) > .navtree-tab-meta {
+  min-width: 0;
+}
+
+/* An EMPTY meta cell on a hovered row — every row with no schedule — collapses
+   completely, gutter and all, so the controls start where the name ends. */
+.navtree-tab-row:hover > .navtree-tab-meta:not(:has(.navtree-cron)),
+.navtree-tab-row:has(:focus-visible) > .navtree-tab-meta:not(:has(.navtree-cron)) {
   display: none;
+}
+
+/* The glyph goes up to full strength on the row you are pointing at: it is the
+   only thing left in the cell, so the 0.6 it wears as a prefix to a time reads
+   as faded-out rather than quiet. */
+.navtree-tab-row:hover .navtree-cron-glyph {
+  opacity: 0.85;
 }
 /* Same hover grammar as the strip tabs' ×: quiet hover square, danger-red
    glyph — "this deletes", consistent everywhere a close lives. */

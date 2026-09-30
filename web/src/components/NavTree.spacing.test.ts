@@ -909,18 +909,41 @@ describe('the row’s right-hand side holds one thing at a time', () => {
     ).toEqual([]);
   });
 
-  it('hides the schedule while the controls are out — never both', () => {
-    const body = ruleBody(NAV_CSS, '.navtree-tab-row:hover > .navtree-tab-meta');
+  it('hides the schedule’s TIME while the controls are out — never both', () => {
+    const body = ruleBody(NAV_CSS, '.navtree-tab-row:hover > .navtree-tab-meta .navtree-cron-time');
     expect(decl(body, 'display')).toBe('none');
-    // The same rule has to carry the keyboard arm, or tabbing to a row shows
-    // the controls ON TOP of the schedule and the fix is half-applied.
-    const withFocus = rules(NAV_CSS).filter(
-      (r) =>
-        r.atRules.length === 0 &&
-        r.selectors.includes('.navtree-tab-row:has(:focus-visible) > .navtree-tab-meta'),
+    // The keyboard arm has to be on the same rule, or tabbing to a row shows
+    // the controls ON TOP of the time and the fix is half-applied.
+    expect(
+      rules(NAV_CSS).some(
+        (r) =>
+          r.atRules.length === 0 &&
+          r.selectors.includes(
+            '.navtree-tab-row:has(:focus-visible) > .navtree-tab-meta .navtree-cron-time',
+          ) &&
+          /(?:^|;)\s*display:\s*none/.test(r.body),
+      ),
+    ).toBe(true);
+  });
+
+  it('KEEPS the clock glyph on the hovered row — only the time goes', () => {
+    // Hiding the whole cell made the row under the pointer the one row that
+    // stopped saying it has a schedule at all. The glyph is 11px and is the
+    // part that answers "is this on a timer?"; the time is the part that was
+    // costing 90px.
+    const hidden = rules(NAV_CSS).filter(
+      // `decl` throws on a rule that never sets the property, and most rules
+      // here do not — this is a scan over the whole sheet, not a lookup.
+      (r) => r.atRules.length === 0 && /(?:^|;)\s*display:\s*none/.test(r.body),
     );
-    expect(withFocus.length).toBe(1);
-    expect(decl(withFocus[0]?.body ?? '', 'display')).toBe('none');
+    const hoverArms = hidden
+      .flatMap((r) => r.selectors)
+      .filter((sel) => sel.startsWith('.navtree-tab-row:hover'));
+    expect(hoverArms.some((s) => s.includes('.navtree-cron-time'))).toBe(true);
+    // Nothing may hide the glyph, and nothing may hide the whole meta cell on a
+    // row that HAS one (the empty-cell arm is explicitly scoped away from it).
+    expect(hoverArms.some((s) => s.includes('.navtree-cron-glyph'))).toBe(false);
+    expect(hoverArms).not.toContain('.navtree-tab-row:hover > .navtree-tab-meta');
   });
 
   it('leaves the state mark alone — it is in neither cell and must not move', () => {
