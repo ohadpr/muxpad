@@ -24,7 +24,7 @@ import { pushUndo } from '../lib/move-undo-store';
 import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansion';
 import { tabRowAffordances } from '../lib/nav-row-affordances';
 import { type NavView, useNavView } from '../lib/nav-view';
-import { nextCronLabel } from '../lib/next-cron-label';
+import { nextCronLabel, railCronLabel } from '../lib/next-cron-label';
 import { PANE_DRAG_MIME, type PaneDragOrigin, paneDragOrigin } from '../lib/pane-drag';
 import { reorderByDrop } from '../lib/reorder';
 import { useFrozenSheetOrder } from '../lib/sheet-order';
@@ -2595,10 +2595,13 @@ const MARK_TITLES: Record<Exclude<PaneStatus, 'idle'>, string> = {
  *
  * It used to be a bare ⏱ beside the name, which said a schedule EXISTS but
  * never when — so the one thing you actually want from a rail glance ("does
- * anything run before I go out?") still cost a hover. Now the time is the
- * mark: a dimmed clock set back from a monospace, tabular-figure time, right
- * aligned, so `◷ 07:00` and `◷ Sun 09:00` land on the same digits. The
- * tooltip still carries which cron and the full date.
+ * anything run before I go out?") still cost a hover. The answer was a clock
+ * plus a monospace time, in three shapes: `07:00`, `Sun 09:00`, `12 Sep`.
+ *
+ * It is now the clock plus a time TODAY ONLY, and the glyph alone otherwise —
+ * see `railCronLabel`. The glance question is a question about today, and the
+ * nine-character shape was a third of the rail's width on rows whose names were
+ * already ellipsising. The tooltip carries every other case in full.
  *
  * The server folds `crons` + `next_cron` into the tab row (decorateTab), so
  * this costs no request — and no per-row query on the server either.
@@ -2606,11 +2609,14 @@ const MARK_TITLES: Record<Exclude<PaneStatus, 'idle'>, string> = {
 function CronMark({ tab }: { tab: Tab }) {
   const next = tab.next_cron;
   const count = tab.crons ?? 0;
-  const label = next ? nextCronLabel(next.next_due_at) : null;
+  const label = next ? railCronLabel(next.next_due_at) : null;
+  // The tooltip is where the cases the row declines to spell out still live, so
+  // it carries the FULL label as well as the absolute date — a row showing a
+  // bare glyph has to be able to answer "when, then?" without opening the chat.
   const title = next
-    ? `${next.name} · next ${new Date(next.next_due_at).toLocaleString()}${
-        count > 1 ? ` (+${count - 1} more)` : ''
-      }`
+    ? `${next.name} · next ${nextCronLabel(next.next_due_at)} (${new Date(
+        next.next_due_at,
+      ).toLocaleString()})${count > 1 ? ` (+${count - 1} more)` : ''}`
     : `${count} scheduled job${count === 1 ? '' : 's'}`;
   return (
     <span className="navtree-cron" title={title} aria-label={title}>

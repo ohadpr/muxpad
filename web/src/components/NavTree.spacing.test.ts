@@ -869,3 +869,70 @@ describe('the row’s × archives, and never reads as delete', () => {
     ).toBe(true);
   });
 });
+
+/**
+ * THE RIGHT-HAND SIDE OF A ROW — HOW MANY THINGS MAY BE THERE AT ONCE.
+ *
+ * Reported with a screenshot: "too many things on the right side of the tab
+ * labels. scheduled cron time, spinner, action buttons." Three sources, and
+ * they were additive, so the worst row carried a pin, an archive button, a
+ * clock, a time and a state mark in a strip about 90px wide — on a 270px rail
+ * whose names were already ellipsising.
+ *
+ * Two of the three are fixed in this sheet and are pinned here, because both
+ * are one-selector changes that a later edit could undo without any test
+ * noticing. (The third — the cron's nine-character `Thu 11:08` shape — is a
+ * label, and lives in next-cron-label.test.)
+ */
+describe('the row’s right-hand side holds one thing at a time', () => {
+  // `:focus-within` is true on the ACTIVE row for as long as you are in that
+  // chat, because clicking its link leaves focus there. So the row you were
+  // using was the one row permanently wearing its hover controls. The reveal
+  // has to key off a KEYBOARD focus, which is what `:focus-visible` means — and
+  // the keyboard path must keep working, which is why the selector is replaced
+  // rather than deleted.
+  it('reveals the controls on hover or a KEYBOARD focus, never on a click', () => {
+    const revealing = rules(NAV_CSS).filter(
+      (r) => r.atRules.length === 0 && /flex-basis:\s*18px/.test(r.body),
+    );
+    expect(revealing.length).toBeGreaterThan(0);
+    const tabArms = revealing
+      .flatMap((r) => r.selectors)
+      .filter((sel) => sel.startsWith('.navtree-tab-row'));
+    // Hover still reveals…
+    expect(tabArms).toContain('.navtree-tab-row:hover .navtree-close');
+    // …and so does a keyboard focus…
+    expect(tabArms).toContain('.navtree-tab-row:has(:focus-visible) .navtree-close');
+    // …but a plain :focus-within arm is the bug, on any row kind.
+    expect(
+      revealing.flatMap((r) => r.selectors).filter((s) => s.includes(':focus-within')),
+    ).toEqual([]);
+  });
+
+  it('hides the schedule while the controls are out — never both', () => {
+    const body = ruleBody(NAV_CSS, '.navtree-tab-row:hover > .navtree-tab-meta');
+    expect(decl(body, 'display')).toBe('none');
+    // The same rule has to carry the keyboard arm, or tabbing to a row shows
+    // the controls ON TOP of the schedule and the fix is half-applied.
+    const withFocus = rules(NAV_CSS).filter(
+      (r) =>
+        r.atRules.length === 0 &&
+        r.selectors.includes('.navtree-tab-row:has(:focus-visible) > .navtree-tab-meta'),
+    );
+    expect(withFocus.length).toBe(1);
+    expect(decl(withFocus[0]?.body ?? '', 'display')).toBe('none');
+  });
+
+  it('leaves the state mark alone — it is in neither cell and must not move', () => {
+    // The mark is the LAST track and the name is the 1fr one, so the name
+    // absorbs the whole swap. A `display: none` that ever reached the mark, or
+    // a width on the meta cell that the mark had to share, would put the one
+    // thing you scan down the rail onto a different x for the row you happen to
+    // be pointing at.
+    const hoverMeta = ruleBody(NAV_CSS, '.navtree-tab-row:hover > .navtree-tab-meta');
+    expect(hoverMeta).not.toMatch(/navtree-mark/);
+    expect(decl(ruleBody(NAV_CSS, '.navtree-tab-row'), 'grid-template-columns')).toContain(
+      'minmax(0, 1fr)',
+    );
+  });
+});
