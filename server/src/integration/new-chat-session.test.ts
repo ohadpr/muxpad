@@ -73,7 +73,16 @@ describe('web "New chat" ends up with a live agent session', () => {
     db = openDb(':memory:');
     const events = new EventBus();
     const agentBridge = createAgentBridge();
-    ptyd = await spawnPtyd();
+    // SLOW POLLS ON PURPOSE. spawnPtyd defaults to 50ms cwd+fg ticks so tests
+    // that assert on decorations don't have to wait — this file asserts none of
+    // them, and the default is actively harmful here: every tick fans out over
+    // every live runtime and shells out (up to two `ps` each, plus a
+    // SYNCHRONOUS `lsof` per pane), inside this same process. By the third test
+    // there are several live ptys plus four that spawn and die, and the file
+    // starved itself: assertions that pass in 2s alone took 15s, and the two
+    // later tests failed alternately on whichever lost the race. Nothing about
+    // that was the behaviour under test.
+    ptyd = await spawnPtyd({ cwdPollInterval: 60_000, cmdPollInterval: 60_000 });
     const cache = new PtydCache();
     cache.attach(ptyd.client);
     const app = createApp({ db, ptyd: ptyd.client, cache, dataDir: tmp, events, agentBridge });
