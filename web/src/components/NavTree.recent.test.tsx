@@ -179,29 +179,34 @@ describe('a CHILD row still looks like a child in a list merged from three works
   });
 });
 
-describe('a row says where it goes, and only when that is somewhere else', () => {
+describe('in a list that mixes workspaces, every row says which one', () => {
   const corpus = [
     { slug: 'personal', tabs: [tab('here')] },
     { slug: 'trayo', tabs: [tab('there', { last_user_at: NOW - HOUR })] },
   ];
 
-  it('labels the away row on the SHEET and leaves the home row bare', () => {
+  it('labels BOTH rows on the SHEET, including the one you are in', () => {
+    // The rule used to leave the home row bare, on the reasoning that the bar
+    // already names that workspace. In the flat view the bar names no
+    // workspace — it says "Recent" — so the bare row silently meant "local",
+    // and the user reported exactly that as not being able to tell which
+    // workspace a tab belongs to.
     const html = flatHtml(corpus, { variant: 'sheet', activeWorkspaceSlug: 'personal' });
-    expect(count(html, 'navtree-rail-ws')).toBe(1);
+    expect(count(html, 'navtree-rail-ws')).toBe(2);
     expect(html).toContain('>trayo<');
-    // Not "personal" as a label anywhere — the bar already says it.
-    expect(html).not.toMatch(/navtree-rail-ws[^>]*>personal</);
-  });
-
-  it('labels it on the RAIL too, in the meta cell', () => {
-    const html = flatHtml(corpus, { variant: 'sidebar', activeWorkspaceSlug: 'personal' });
-    expect(count(html, 'navtree-tab-ws')).toBe(1);
-  });
-
-  it('follows you: the same row goes bare once you are in that workspace', () => {
-    const html = flatHtml(corpus, { variant: 'sheet', activeWorkspaceSlug: 'trayo' });
-    expect(count(html, 'navtree-rail-ws')).toBe(1);
     expect(html).toContain('>personal<');
+  });
+
+  it('labels both on the RAIL too, in the meta cell', () => {
+    const html = flatHtml(corpus, { variant: 'sidebar', activeWorkspaceSlug: 'personal' });
+    expect(count(html, 'navtree-tab-ws')).toBe(2);
+  });
+
+  it('is symmetric — which workspace you are in changes nothing here', () => {
+    const html = flatHtml(corpus, { variant: 'sheet', activeWorkspaceSlug: 'trayo' });
+    expect(count(html, 'navtree-rail-ws')).toBe(2);
+    expect(html).toContain('>personal<');
+    expect(html).toContain('>trayo<');
   });
 
   it('does not repeat the label on a child — the parent above already said it', () => {

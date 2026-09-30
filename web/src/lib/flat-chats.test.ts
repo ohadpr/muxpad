@@ -349,15 +349,33 @@ describe('needsWorkspaceLabel — the trailing label’s budget', () => {
       .map((r) => r.group.chat.id)
       .sort();
 
-  it('labels a row that leaves the workspace you are in, and only that row', () => {
+  it('labels EVERY row of a list that mixes workspaces', () => {
+    // Reported as "the recent view which mixes the workspaces is too confusing,
+    // there's not enough clarity on what workspace each tab belongs to".
+    //
+    // The old rule stayed quiet for the workspace you were in. That is right
+    // when the surface NAMES a workspace (the grouped view's header does) and
+    // wrong the moment it does not: in a flat recency-ordered list the absence
+    // of a label silently means "this one is local", which no row says out loud
+    // and no reader can infer. Whether the list mixes workspaces is a property
+    // OF the list, so the rule asks it rather than taking a flag.
     const [here, there] = [ws('personal'), ws('trayo')];
     const flat = flattenOf([here, [tab('mine')]], [there, [tab('theirs')]]);
-    const row = (id: string) =>
-      flat.live.find((r) => r.group.chat.id === id) as (typeof flat.live)[0];
-    expect(needsWorkspaceLabel(row('mine'), 'personal', flat.live)).toBe(false);
-    expect(needsWorkspaceLabel(row('theirs'), 'personal', flat.live)).toBe(true);
-    // And it follows you: the same row is unlabelled from the other side.
-    expect(needsWorkspaceLabel(row('theirs'), 'trayo', flat.live)).toBe(false);
+    expect(labelled(flat.live, 'personal')).toEqual(['mine', 'theirs']);
+    // Symmetric — which workspace you are in changes nothing in a mixed list.
+    expect(labelled(flat.live, 'trayo')).toEqual(['mine', 'theirs']);
+  });
+
+  it('stays quiet in a SINGLE-workspace list, which is the grouped view', () => {
+    // The budget the original rule bought is kept exactly where its reasoning
+    // still holds: one workspace on screen, named by the header above, so the
+    // word repeated down every row would say nothing. 84px of a 336px name cell
+    // is what it costs, and here it buys nothing.
+    const flat = flattenOf([
+      ws('personal'),
+      [tab('a', { name: 'Alpha' }), tab('b', { name: 'Beta' })],
+    ]);
+    expect(labelled(flat.live, 'personal')).toEqual([]);
   });
 
   it('labels BOTH halves of a name two workspaces share — the pair from the screenshot', () => {
@@ -374,14 +392,17 @@ describe('needsWorkspaceLabel — the trailing label’s budget', () => {
     expect(labelled(flat.live, 'trayo')).toEqual(['p-main', 't-main']);
   });
 
-  it('still says nothing on a UNIQUE row, however many collisions are elsewhere', () => {
-    // The budget the first rule bought is not handed back: the collision rule
-    // spends labels on the ambiguous rows and on no others.
+  it('labels the unique row too, once the list is mixed', () => {
+    // Previously this pinned "only the ambiguous rows speak". That was the
+    // budget rule doing double duty; the mixed-list rule supersedes it, and
+    // deliberately: a reader scanning a cross-workspace list needs to place
+    // EVERY row, not only the ones that happen to share a name with another.
+    // `Reading list` is unique and still says which workspace it is in.
     const flat = flattenOf(
       [ws('personal'), [tab('p-main', { name: 'Main' }), tab('quiet', { name: 'Reading list' })]],
       [ws('trayo'), [tab('t-main', { name: 'Main' })]],
     );
-    expect(labelled(flat.live, 'personal')).toEqual(['p-main', 't-main']);
+    expect(labelled(flat.live, 'personal')).toEqual(['p-main', 'quiet', 't-main']);
   });
 
   it('reads the name as a human does — case and stray whitespace are not distinctions', () => {
@@ -437,7 +458,11 @@ describe('needsWorkspaceLabel — the trailing label’s budget', () => {
         [tab('lead', { userAt: T - HOUR }), tab('t-kid', { name: 'Main', spawnedBy: 'lead' })],
       ],
     );
-    expect(labelled(kids.live, 'personal')).toEqual(['lead']);
+    // Both ROWS speak, because the list mixes workspaces. The point this test
+    // still pins is the one that matters: `t-kid` is a CHILD, drawn under
+    // `lead`, so it is not a row of its own and never draws a label — its
+    // parent is what says where the pair lives.
+    expect(labelled(kids.live, 'personal')).toEqual(['lead', 'p-main']);
     // Same for a `contextOnly` group's root: it is a heading over someone's
     // retired workers, not a row, and it is never labelled.
     const drawer = flattenOf(
@@ -448,7 +473,11 @@ describe('needsWorkspaceLabel — the trailing label’s budget', () => {
       ],
     );
     expect(drawer.done.some((r) => r.group.contextOnly)).toBe(true);
-    expect(labelled(drawer.done, 'personal')).toEqual([]);
+    // The drawer mixes workspaces too, so its real row speaks — and the
+    // `contextOnly` heading beside it still does not, which is the assertion
+    // this half exists for. A heading is a label over someone's retired
+    // workers, not a row, and it has nothing of its own to place.
+    expect(labelled(drawer.done, 'personal')).toEqual(['p-done']);
   });
 });
 
