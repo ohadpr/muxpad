@@ -141,6 +141,30 @@ describe('provisionPane retries a spawn that failed', () => {
     expect(provisionError(h.pane.id)).toBeNull();
   });
 
+  it('a single-attempt check REPLACES a stale reason rather than clearing it blind', async () => {
+    // The respawn route behind "Start agent" runs exactly this: attempts 1, off
+    // the response path. It used to clear the recorded reason the moment ptyd
+    // ACKNOWLEDGED the respawn — which rebuilt the original bug inside the retry
+    // button, because an ack is not a live pty. A respawn that acks and then
+    // dies would drop the reason and drop the chat back onto the neutral
+    // "no agent yet", which is the screen this whole change exists to stop
+    // standing in for a failure.
+    const h = harness([new Error('posix_spawnp failed'), 'gone']);
+    await provisionPane(h, { ...spec(h), attempts: 1 }).settled;
+    expect(provisionError(h.pane.id)).toContain('posix_spawnp failed');
+    // Now the user taps Try again. ptyd accepts it and the pty dies anyway.
+    await provisionPane(h, { ...spec(h), attempts: 1 }).settled;
+    expect(provisionError(h.pane.id)).toContain('exited immediately');
+  });
+
+  it('…and clears it when the retry genuinely holds', async () => {
+    const h = harness([new Error('posix_spawnp failed'), 'ok']);
+    await provisionPane(h, { ...spec(h), attempts: 1 }).settled;
+    expect(provisionError(h.pane.id)).toBeTruthy();
+    await provisionPane(h, { ...spec(h), attempts: 1 }).settled;
+    expect(provisionError(h.pane.id)).toBeNull();
+  });
+
   it('announces the failure as pane.updated so an open chat learns without polling', async () => {
     const h = harness([new Error('ptyd disconnected')]);
     const seen: Array<{ id: string; err: unknown }> = [];
