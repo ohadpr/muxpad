@@ -1668,28 +1668,44 @@ export function attachWsServer(deps: {
                   frame.ok !== false ? frame.summary?.trim() || 'finished its turn' : 'turn failed',
                 );
               }
-              // Bold the pane "done, unreviewed" in the nav until it's viewed.
-              // Same interactivity gate as the push: a turn you're actively
-              // driving isn't "unread" (you're watching it). If you're looking
-              // but not typing, the chat client clears this on turn-done.
-              //
-              // …unless that same turn just RETIRED the chat. `emitTurn('done')`
-              // above is a synchronous bus emit, so ChatRetirer has already run
-              // by the time control reaches here and has already cleared this
-              // pane's marks — re-setting one puts the row back into the exact
-              // state retirement exists to end (`done: true` wearing a READY
-              // dot), and nothing will ever clear it again, because nobody
-              // opens a tab that finished last week. The mark is not needed
-              // either way: a retired sub-chat delivered its result to the
-              // parent, which is what "reviewed" was asking about.
-              //
-              // The window is narrow but it is most real work — `setUnread`
-              // only runs past the two-minute interactivity gate, so this
-              // bites exactly the long turns you walked away from.
-              if (!chatHasLeftTheLiveList(paneId)) {
-                panes.setUnread(paneId, true);
-                emitPaneUpdated(paneId);
-              }
+            }
+            // ─── THE BOLD MARK — OUTSIDE THE PUSH GATE ────────────────────────
+            // Reported as "the sidebar isn't consistent in marking tabs that
+            // have new messages in bold", and it was not: this used to sit
+            // INSIDE the `lastHumanSendAt` gate above, so whether a finished
+            // turn bolded its row depended on how long the turn took. Send a
+            // message, switch tabs, turn lands in 90 seconds → no mark. The
+            // identical turn taking three minutes → mark. Same chat, same
+            // reader, opposite answers.
+            //
+            // The gate's stated reason — "a turn you're actively driving isn't
+            // unread (you're watching it)" — is a question about LOOKING, and
+            // `lastHumanSendAt` answers a question about TYPING. Those come
+            // apart the instant you send something and go elsewhere, which is
+            // the single commonest way to use this thing.
+            //
+            // The right test already exists and is exact: TabView clears the
+            // mark on the tab you actually have open, keyed on a signature that
+            // moves when a turn finishes (see `seenSignature`). So a reader who
+            // is watching never sees a bold row, a reader who is not always
+            // does, and neither answer depends on a clock.
+            //
+            // The PUSH keeps the gate. A vibration during a conversation you
+            // are driving is a real cost; a bold name is not — it is the quiet
+            // channel, and it is the channel a navigator is for.
+            //
+            // …unless that same turn just RETIRED the chat. `emitTurn('done')`
+            // above is a synchronous bus emit, so ChatRetirer has already run
+            // by the time control reaches here and has already cleared this
+            // pane's marks — re-setting one puts the row back into the exact
+            // state retirement exists to end (`done: true` wearing a READY
+            // dot), and nothing will ever clear it again, because nobody opens
+            // a tab that finished last week. The mark is not needed either way:
+            // a retired sub-chat delivered its result to the parent, which is
+            // what "reviewed" was asking about.
+            if (!chatHasLeftTheLiveList(paneId)) {
+              panes.setUnread(paneId, true);
+              emitPaneUpdated(paneId);
             }
             // Turn finished → feed the next queued message. This is the loop
             // that drains a batch with no browser open: turn-done → drain →

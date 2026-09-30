@@ -23,6 +23,7 @@ import { WebSocket } from 'ws';
 import { EventBus } from './events.js';
 import { PtydCache } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
+import { AgentQueueStore } from './store/AgentQueueStore.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
@@ -182,6 +183,80 @@ describe('a retired sub-chat does not come back wearing a READY dot', () => {
     await waitUntil(() => panes.getById(pane.id)?.unread === true);
     expect(panes.getById(pane.id)?.unread).toBe(true);
     expect(resolveTabClock(clockIndex(db), top.id, Date.now()).done).toBe(false);
+    runner.close();
+  });
+});
+
+/**
+ * WHETHER A ROW GOES BOLD MUST NOT DEPEND ON HOW LONG THE TURN TOOK.
+ *
+ * Reported as "the sidebar isn't consistent in marking tabs that have new
+ * messages in bold", and it was not. `panes.setUnread(…, true)` sat inside the
+ * PUSH gate — `Date.now() - conn.lastHumanSendAt > 2 min` — so a turn you kicked
+ * off and walked away from got a bold row only if it ran long enough. Send,
+ * switch tabs, turn lands in 90 seconds → nothing. The identical turn taking
+ * three minutes → bold. Same chat, same reader, opposite answers, and no way for
+ * the reader to tell which rule applied.
+ *
+ * The gate's reason was "a turn you're actively driving isn't unread (you're
+ * watching it)" — a claim about LOOKING, answered by a timer about TYPING. Those
+ * come apart the moment you send something and go elsewhere. The claim already
+ * has an exact answer elsewhere: TabView clears the mark on the tab you actually
+ * have open (`seenSignature`), on the same edge.
+ *
+ * The push KEEPS the gate. A vibration mid-conversation is a real cost; a bold
+ * name is the quiet channel and costs nothing.
+ *
+ * Real frames, real socket, real sequence — a `lastHumanSendAt` only moves when
+ * the server actually relays a human message to the runner, which is what the
+ * queue drain below does.
+ */
+describe('the bold mark does not depend on how recently you typed', () => {
+  it('marks a chat you sent to SECONDS ago and left', async () => {
+    const db = openDb(':memory:');
+    const tabs = new TabStore(db);
+    const panes = new PaneStore(db);
+    const w = new WorkspaceStore(db).create({ name: 'W' });
+    const top = tabs.create({ name: 'top', layout: 'p1', workspace_id: w.id });
+    const pane = panes.create({
+      tab_id: top.id,
+      shell: '/bin/cat',
+      cwd: '/tmp',
+      startup_cmd: 'muxpad agent',
+      face: 'chat',
+    });
+    const http = createServer();
+    const wsServer = attachWsServer({
+      http,
+      db,
+      ptyd: stubPtyd(),
+      cache: new PtydCache(),
+      events: new EventBus(),
+    });
+    await new Promise<void>((r) => http.listen(0, r));
+    const port = (http.address() as AddressInfo).port;
+    cleanup = async () => {
+      await wsServer.close();
+      await new Promise<void>((r) => http.close(() => r()));
+    };
+
+    const runner = await openSock(`ws://127.0.0.1:${port}/ws/agent-runner/${pane.id}`);
+    runner.send(hello);
+    // A message the USER typed, waiting for the agent. The turn-done below
+    // drains it, and THAT relay is what stamps `lastHumanSendAt` — so by the
+    // time the second turn ends we are a few milliseconds inside the two-minute
+    // window, which is where the old code went quiet.
+    new AgentQueueStore(db).enqueue(pane.id, 'have a look at this');
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true }));
+    // The drained message's own turn.
+    await waitUntil(() => new AgentQueueStore(db).count(pane.id) === 0);
+    runner.send(JSON.stringify({ t: 'turn-start' }));
+    runner.send(JSON.stringify({ t: 'turn-done', ok: true }));
+
+    // Bold. Before the fix this waited out its timeout and stayed false.
+    await waitUntil(() => panes.getById(pane.id)?.unread === true);
+    expect(panes.getById(pane.id)?.unread).toBe(true);
     runner.close();
   });
 });
