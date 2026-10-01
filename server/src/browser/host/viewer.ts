@@ -217,19 +217,7 @@ const connect = () => {
   ws = sock
   sock.onopen = () => {
     retryIn = 400
-    // WHO JUST CONNECTED. Every question about this page tonight — is it current,
-    // is it read-only, is it even attached — was answered by guessing from the
-    // outside, several times wrongly. The page knows all three and the host keeps
-    // logs, so it says so once per connection and the logs can be read instead.
-    try {
-      sock.send(JSON.stringify({
-        t: 'hello',
-        build: MY_BUILD,
-        mode: watching ? 'watch' : 'drive',
-        w: window.innerWidth,
-        h: window.innerHeight,
-      }))
-    } catch { /* a hello is never worth failing a connection over */ }
+    announceMode(sock)
     // Clears the DISCONNECTION notice, and puts back whatever the page's own
     // state has to say. A bare clear wiped the one line explaining that this
     // viewer is read-only — so on a watch-mode tab the explanation was removed
@@ -356,14 +344,31 @@ img.addEventListener('pointerdown', (e) => {
   // No boxes yet means UNKNOWN, not "no fields" — then guess, because a keyboard
   // that flashes is a blemish and a keyboard that never comes is the bug.
   if (watching) {
-    // A TAP THAT GOES NOWHERE HAS TO SAY SO. Watch mode drops input on purpose —
-    // looking over an agent's shoulder must not stall it — but nothing said that
-    // at the moment it mattered. Reported from a real attempt: "tapping either
-    // field does nothing, not even pop up the keyboard, maybe it's just not
-    // responsive." A standing line at the top of the bar is not an answer to a
-    // tap; this is, and it names the button that fixes it.
-    msg.textContent = 'watching only — press Take over to type'
-    takeover.classList.add('ready')
+    // TAPPING A TEXT FIELD IS NOT AMBIGUOUS. It is somebody trying to type, and
+    // making them find a button first produced the most repeated complaint of
+    // the whole feature: "tapping either field does nothing". Watch mode exists
+    // so that LOOKING does not stall the agent — not so that deciding to help
+    // costs an extra step and a hunt for the control that allows it.
+    //
+    // A human outranks an agent at the wheel by design (see the routes: /take is
+    // the human door and it never refuses), so this is not stealing anything it
+    // would not have been given for the asking.
+    //
+    // THE FOCUS HAPPENS NOW, inside the gesture, before the request is even sent.
+    // iOS raises a keyboard only for a focus that happens during a real user
+    // event, so waiting for the server's answer would cost the keyboard this tap
+    // was for. The tap itself is replayed once the wheel is actually ours.
+    const p0 = pt(e)
+    if (p0 && hitsField(p0) === true) {
+      kbFromTap = true
+      placeSink(e)
+      sink.focus({ preventScroll: true })
+      reportKeyboard(true)
+      takeTheWheel(p0)
+    } else {
+      msg.textContent = 'watching only — press Take over to type'
+      takeover.classList.add('ready')
+    }
   } else {
     const p0 = pt(e)
     const hit = p0 ? hitsField(p0) : null
@@ -598,6 +603,7 @@ takeover.addEventListener('click', async () => {
     if (!r.ok) { msg.textContent = 'could not take the wheel'; return }
     watching = false
     applyWatching()
+    announceMode()
   } catch { msg.textContent = 'could not reach muxpad' }
 })
 
@@ -640,6 +646,37 @@ handback.addEventListener('click', async () => {
 })
 
 /**
+ * TAKES THE WHEEL BECAUSE SOMEBODY TAPPED A TEXT FIELD.
+ *
+ * And then REPLAYS THE TAP. Input is dropped while watching, so the press that
+ * triggered this was thrown away on its way out — and without replaying it the
+ * page itself never learns which field was tapped, so the keyboard would be up
+ * on this side with nothing focused on the other.
+ *
+ * A refusal leaves the keyboard where it is rather than yanking it away: being
+ * told why, with the keyboard up, beats a keyboard that appears and vanishes,
+ * which is the exact failure this whole area has been fighting.
+ */
+async function takeTheWheel(at) {
+  const profile = profileFromPath()
+  if (!profile) return
+  try {
+    const r = await fetch('/api/browsers/' + profile + '/wheel/take', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ by: 'viewer-' + profile }),
+    })
+    if (!r.ok) { msg.textContent = 'could not take the wheel — press Take over'; return }
+    watching = false
+    applyWatching()
+    announceMode()
+    msg.textContent = 'you are driving now'
+    send({ t: 'mouse', type: 'mousePressed', ...at, buttons: 1, clickCount: 1, modifiers: 0 })
+    send({ t: 'mouse', type: 'mouseReleased', ...at, buttons: 0, clickCount: 1, modifiers: 0 })
+  } catch { msg.textContent = 'could not reach muxpad' }
+}
+
+/**
  * NOTICES THAT IT IS OUT OF DATE.
  *
  * Stamped into the page when it was served; compared against whatever the host
@@ -647,6 +684,33 @@ handback.addEventListener('click', async () => {
  * one: a forced refresh in the middle of a login would throw away a half-typed
  * password, which is worse than running an old script for another minute.
  */
+/**
+ * SAYS WHAT THIS PAGE IS, to whoever is listening.
+ *
+ * Every question about this page tonight — is it running the current script, can
+ * it type, is it even attached — was answered by guessing from the outside, and
+ * several of the guesses were wrong. All three facts are known HERE and were
+ * visible nowhere else, so each one cost a round trip to somebody holding a
+ * phone. Now it is one line in the host's log.
+ *
+ * Sent on every connection and again whenever the mode changes, because "it is
+ * watching" stops being true the moment somebody takes the wheel, and a log that
+ * only records the opening state would be quietly wrong from then on.
+ */
+function announceMode(sock) {
+  const target = sock || ws
+  if (!target || target.readyState !== 1) return
+  try {
+    target.send(JSON.stringify({
+      t: 'hello',
+      build: MY_BUILD,
+      mode: watching ? 'watch' : 'drive',
+      w: window.innerWidth,
+      h: window.innerHeight,
+    }))
+  } catch { /* never worth failing a connection over */ }
+}
+
 const MY_BUILD = '__MUXPAD_VIEWER_BUILD__'
 function noticeBuild(id) {
   if (!id || id === MY_BUILD) return

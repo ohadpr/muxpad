@@ -1161,7 +1161,9 @@ describe('a tap that goes nowhere says so', () => {
    * A line that was already there before you acted is not an answer to what you
    * just did.
    */
-  it('answers the tap, and names the button that fixes it', () => {
+  it('answers a tap on something that is not a field', () => {
+    // A link, an image, the background. Nothing to type into, so nothing to take
+    // the wheel for — but it still has to say why the tap went nowhere.
     const h = run({ search: '?mode=watch' });
     h.el('screen').fire('pointerdown', { clientX: 100, clientY: 300 });
     expect(h.el('msg').textContent).toContain('Take over');
@@ -1273,5 +1275,76 @@ describe('a viewer says what it is when it connects', () => {
     h.drop();
     h.open();
     expect(h.sent.filter((m) => m.t === 'hello').length).toBeGreaterThan(1);
+  });
+});
+
+describe('tapping a text field while watching just starts driving', () => {
+  /**
+   * The most repeated complaint of the whole feature was "tapping either field
+   * does nothing", three separate times, and every one of them was watch mode
+   * discarding the tap exactly as designed. Watch mode exists so that LOOKING
+   * does not stall the agent — not so that deciding to help costs an extra step
+   * and a hunt for the control that permits it.
+   *
+   * A human outranks an agent at the wheel by design: /wheel/take is the human
+   * door and it never refuses. So this takes nothing that would not have been
+   * handed over for the asking one tap later.
+   */
+  /** A watching viewer whose page has one big text field, boxes already in. */
+  const watchingAField = (opts: Record<string, unknown> = {}) => {
+    const h = ready(run({ search: '?mode=watch', ...opts }));
+    h.receive({ t: 'fields', rects: [[0, 0, 390, 844]] });
+    return h;
+  };
+
+  it('takes the wheel', async () => {
+    const h = watchingAField();
+    h.el('screen').fire('pointerdown', { clientX: 100, clientY: 300 });
+    await h.settle();
+    expect(h.fetches.some((f) => f.url.endsWith('/wheel/take'))).toBe(true);
+  });
+
+  it('focuses DURING the tap, before the request is even sent', () => {
+    // iOS raises a keyboard only for a focus inside a real user gesture. Waiting
+    // for the server's answer costs the keyboard the tap was for.
+    const h = watchingAField();
+    h.el('screen').fire('pointerdown', { clientX: 100, clientY: 300 });
+    expect(h.el('sink').focused).toBe(true);
+  });
+
+  it('replays the tap once the wheel is ours, so the page learns which field', async () => {
+    // The press that triggered this was dropped on its way out — input is
+    // discarded while watching. Without the replay the keyboard is up on this
+    // side with nothing focused on the other.
+    const h = watchingAField();
+    h.el('screen').fire('pointerdown', { clientX: 100, clientY: 300 });
+    await h.settle();
+    expect(h.sent.filter((m) => m.t === 'mouse' && m.type === 'mousePressed').length).toBe(1);
+  });
+
+  it('stops watching, so everything after the tap goes through too', async () => {
+    const h = watchingAField();
+    h.el('screen').fire('pointerdown', { clientX: 100, clientY: 300 });
+    await h.settle();
+    expect(h.el('handback').hidden).toBe(false);
+    expect(h.el('takeover').hidden).toBe(true);
+  });
+
+  it('keeps the keyboard when the wheel is refused, and says why', async () => {
+    // Being told, with the keyboard up, beats a keyboard that appears and
+    // vanishes — which is the failure this whole area has been fighting.
+    const h = watchingAField({ fetchOk: false });
+    h.el('screen').fire('pointerdown', { clientX: 100, clientY: 300 });
+    await h.settle();
+    expect(h.el('sink').focused).toBe(true);
+    expect(h.el('msg').textContent).toContain('Take over');
+  });
+
+  it('tells the host it is driving now, so the log stops saying watch', async () => {
+    const h = watchingAField();
+    h.el('screen').fire('pointerdown', { clientX: 100, clientY: 300 });
+    await h.settle();
+    const hellos = h.sent.filter((m) => m.t === 'hello');
+    expect(hellos[hellos.length - 1]?.mode).toBe('drive');
   });
 });
