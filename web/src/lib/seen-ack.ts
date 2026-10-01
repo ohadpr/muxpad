@@ -9,6 +9,33 @@
 // Keying this on `isMobile` bulk-cleared hidden siblings in desktop tabbed mode:
 // a hidden pane's turn finishing moved the seen-signature, and the bulk route
 // wiped the bold off a reply nobody had seen.
+//
+// And "looking at" needs the DOCUMENT to be visible, which route selection does
+// not say. A selected chat in a backgrounded browser tab keeps `isActive` true
+// and its sockets connected; the server marks a finished turn unread, and both
+// automatic acks (ChatPane's turn-done ack and TabView's seen-effect) used to
+// clear it at once — on every device — for a reply nobody had displayed. So
+// both gate on `documentVisible()`, and TabView re-runs on `useDocumentVisible`
+// flipping true, which is what acknowledges the marks once the reader returns.
+
+import { useEffect, useState } from 'react';
+
+/** Is the page actually on screen? (Not merely the routed/selected one.) */
+export function documentVisible(): boolean {
+  return typeof document === 'undefined' || document.visibilityState === 'visible';
+}
+
+/** `documentVisible()` as React state, updated on `visibilitychange`. */
+export function useDocumentVisible(): boolean {
+  const [visible, setVisible] = useState(documentVisible);
+  useEffect(() => {
+    const onChange = () => setVisible(documentVisible());
+    document.addEventListener('visibilitychange', onChange);
+    onChange();
+    return () => document.removeEventListener('visibilitychange', onChange);
+  }, []);
+  return visible;
+}
 
 export type SeenAck = { kind: 'pane'; id: string } | { kind: 'tab'; id: string } | null;
 

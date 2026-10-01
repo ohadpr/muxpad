@@ -119,6 +119,7 @@ import {
   pickSearchTarget,
   takeSearchJump,
 } from '../lib/search-jump';
+import { documentVisible } from '../lib/seen-ack';
 import { NO_ROUNDS, loadSpawnRounds } from '../lib/spawn-rounds';
 import { type SpawnWork, fetchSpawnWork } from '../lib/spawn-work';
 import type { AgentLink } from '../lib/voice/session';
@@ -2990,7 +2991,12 @@ export function ChatPane({
         // the nav never flickers unread for the pane you're actively watching.
         // (The server marks unread on every unobserved turn-done; being here IS
         // observing.) No-op when the pane already isn't unread.
-        if (activeRef.current) void api.markPaneSeen(paneId).catch(() => {});
+        //
+        // "Looking at" means the DOCUMENT is visible too: a selected chat in a
+        // backgrounded browser is still `active`, and acking there erased the
+        // mark on every device for a reply nobody saw. Hidden → leave it;
+        // TabView's seen-effect acks it when the page becomes visible again.
+        if (activeRef.current && documentVisible()) void api.markPaneSeen(paneId).catch(() => {});
       } else if (msg.t === 'question') {
         setQuestion({ qid: msg.qid, questions: msg.questions });
       } else if (msg.t === 'question-done') {

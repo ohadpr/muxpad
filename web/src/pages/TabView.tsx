@@ -44,7 +44,7 @@ import { pushUndo } from '../lib/move-undo-store';
 import { PANE_DRAG_MIME, paneDragOrigin } from '../lib/pane-drag';
 import { usePaneFace } from '../lib/pane-face';
 import { consumePushFocusPane } from '../lib/push-focus';
-import { seenAckTarget } from '../lib/seen-ack';
+import { documentVisible, seenAckTarget, useDocumentVisible } from '../lib/seen-ack';
 import { setTabViewMode, useTabViewMode } from '../lib/tab-view-mode';
 import { useDismissable } from '../lib/use-dismissable';
 import { freshTabs, refreshTabs, useTabs } from '../tabs';
@@ -536,14 +536,20 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   const seenSignature = (tab?.panes ?? [])
     .map((p) => `${p.id}:${p.attention === true ? 1 : 0}${p.unread === true ? 1 : 0}`)
     .join('|');
+  // Selected is not seen: a backgrounded browser keeps this tab `isActive`,
+  // and acking there cleared unread marks on every device for replies nobody
+  // displayed. Gated on visibility here and rechecked when the debounce fires;
+  // the flip back to visible re-runs the effect and acks what piled up.
+  const docVisible = useDocumentVisible();
   useEffect(() => {
-    if (!tab || !workspace || !isActive) return;
+    if (!tab || !workspace || !isActive || !docVisible) return;
     // Debounced. `attention` is the BEL bit, and a pane can ring it in a tight
     // loop (shell completion beeps, a chatty build) — each ring moves the
     // signature, and each run costs a POST plus two list refetches. Coalescing
     // a storm into one round trip is free; the delay is imperceptible for
     // something whose whole job is to clear a dot on the tab you're watching.
     const t = window.setTimeout(() => {
+      if (!documentVisible()) return;
       const refresh = () =>
         Promise.all([refreshTabs(workspace.id), refreshWorkspaces()]).catch(() => {});
       const ack = seenAckTarget({ singlePane, activePaneId: mobileActiveResolved, tabId: tab.id });
@@ -553,7 +559,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         .catch(() => {});
     }, 300);
     return () => window.clearTimeout(t);
-  }, [tab?.id, mobileActiveResolved, singlePane, workspace?.id, isActive, seenSignature]);
+  }, [tab?.id, mobileActiveResolved, singlePane, workspace?.id, isActive, docVisible, seenSignature]);
 
   // Title pulls the live name from the shared tabs list so renames in
   // the tab bar update the document title without a refetch here. The
