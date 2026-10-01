@@ -3,6 +3,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { Fragment, type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { type ArchiveSearchHit, api } from '../api';
 import { cachedAllTabs, loadAllTabs } from '../lib/all-tabs';
+import { type MentionSearchState, NO_MENTION_SEARCH, hitsFor } from '../lib/chat-mention';
 import { setLastPaneId } from '../lib/last-visited';
 import type { NavTreeVariantName } from '../lib/nav-row-affordances';
 import {
@@ -156,7 +157,15 @@ export function NavSearch({
   // when the archive exists, so its absence is a supported configuration and
   // must cost exactly one request to discover, not one per keystroke.
   const [messagesAvailable, setMessagesAvailable] = useState(true);
-  const [hits, setHits] = useState<ArchiveSearchHit[]>([]);
+  // The hits AND the query they answer. The ticket below stops a late response
+  // overwriting a newer one; it cannot stop hits already in state being shown —
+  // and taken by Enter — under a query they have nothing to do with. Search
+  // `alpha`, get a message-only hit, type `bravo`, press Enter before the new
+  // answer lands: the alpha message opened with "bravo" handed to the jump.
+  // Read through `hitsFor`, the rule the `@` picker already uses for the same
+  // race, so a result never outlives the query it answers.
+  const [found, setFound] = useState<MentionSearchState>(NO_MENTION_SEARCH);
+  const hits = hitsFor(found, query);
   // Only so the empty state can tell "nothing matched" from "not asked yet".
   // Without it a query that only exists in MESSAGES shows a flat "no matches"
   // for the debounce plus a round trip, and then contradicts itself.
@@ -173,7 +182,7 @@ export function NavSearch({
     const askable =
       messagesAvailable && q.length >= MIN_MESSAGE_CHARS && q.length <= MAX_MESSAGE_QUERY_CHARS;
     if (!askable) {
-      setHits([]);
+      setFound(NO_MENTION_SEARCH);
       setSearching(false);
       return;
     }
@@ -184,7 +193,7 @@ export function NavSearch({
         .searchMessages(q, MESSAGE_FETCH_LIMIT)
         .then((res) => {
           if (mine !== ticket.current) return;
-          setHits(res.hits);
+          setFound({ query: q, limit: MESSAGE_FETCH_LIMIT, hits: res.hits });
         })
         .catch((err: unknown) => {
           if (mine !== ticket.current) return;
@@ -192,7 +201,7 @@ export function NavSearch({
           // Everything else (a 400 from an FTS5 expression the server could
           // not even fall back on, a dropped connection) is silent: the
           // instant tier above is the answer the user is actually reading.
-          setHits([]);
+          setFound(NO_MENTION_SEARCH);
         })
         .finally(() => {
           if (mine === ticket.current) setSearching(false);
@@ -288,14 +297,14 @@ export function NavSearch({
     if (query) {
       setQuery('');
       setCursor(0);
-      setHits([]);
+      setFound(NO_MENTION_SEARCH);
     }
   }, [box]);
 
   const clear = () => {
     setQuery('');
     setCursor(0);
-    setHits([]);
+    setFound(NO_MENTION_SEARCH);
   };
 
   /**
