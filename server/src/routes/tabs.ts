@@ -313,6 +313,29 @@ export function tabsRoutes(deps: {
   // attention dot doesn't reappear if they leave without typing.
   app.post('/:id/seen', async (c) => {
     const id = c.req.param('id');
+    // ─── READING A CHAT IS ACTIVITY ─────────────────────────────────────────
+    // It was not, and that is the whole of "when I touch a chat it doesn't go
+    // to the top". `last_activity_at` — the column the sidebar sorts on — was
+    // moved by typing, by pty output and by a turn finishing, and by nothing
+    // else. OPENING a chat and reading it wrote nothing at all, so the row you
+    // were sitting in went on getting older underneath you. Measured against a
+    // two-hour-cold chat: opened it, waited past the poll, and its stamp had
+    // not moved a millisecond (6679s → 6689s of age, index 8 → index 8).
+    //
+    // The list was never stale. It was accurate about something the user had
+    // not done, which looks identical from outside and is harder to doubt.
+    //
+    // THIS is the right door. It is the one the client already knocks on when
+    // you arrive somewhere, it is gated on the tab actually being on screen
+    // (TabView's `isActive`), and it is the server's existing definition of
+    // "the user looked at this".
+    //
+    // Forced, and the fan-out is already bounded: this route also fires
+    // whenever the read-state signature moves (a turn finishing in the tab you
+    // are watching), but a tab you are LOOKING at is by definition the most
+    // recent one, and `canReorder` suppresses the emit for a row that is
+    // already maximal. So the repeats cost one UPDATE and wake nobody.
+    deps.tabActivity?.touchTab(id, { force: true });
     // Viewing the tab clears the read-state flags — seeing it is the read
     // action: the manual tab "unread" mark AND every pane's "done, unreviewed"
     // bold. Synchronous DB writes, independent of ptyd.

@@ -65,14 +65,30 @@ export function freezeActiveTab<T extends FreezableTab>(
 }
 
 /**
- * The index to freeze the active tab at: where it renders RIGHT NOW.
+ * The index to freeze the active tab at: the HIGHEST it has reached this visit.
  *
- * Measured against the currently DISPLAYED order rather than the raw server
- * order, so activating a tab never moves it — what you clicked stays exactly
- * where you clicked it, even when the tab you just left was itself frozen out
- * of server order. Null when the tab isn't in the list yet (first paint, before
- * the fetch lands) or is pinned; both mean "nothing to freeze", and the caller
- * simply tries again next render.
+ * ── IT USED TO PIN THE ROW WHERE YOU CLICKED IT ─────────────────────────────
+ * The index came from the DISPLAYED order, captured once on arrival, and held
+ * for the whole visit — "what you clicked stays exactly where you clicked it".
+ * That reads well and is half a rule. The missing half: opening a chat makes it
+ * the most recent thing you have touched, so the server immediately sorts it to
+ * the top — and this held it at row 8, where it had been two hours cold. The
+ * promotion the user asked for by clicking never arrived on screen, and the row
+ * that DID climb was the one they had just left (its freeze having been dropped
+ * on the way out). Reported as "when I touch a chat it doesn't go to the top".
+ *
+ * So the rule becomes directional, which is what it always should have been.
+ * What hurts is a row sliding DOWN the list under your cursor while you work in
+ * it — other chats getting busier and pushing it away, so closing the row below
+ * it or re-finding where you are becomes a moving-target problem. A row moving
+ * UP is the opposite: it is the consequence of the click you just made, it
+ * happens once, and it ends at the top where it then stays.
+ *
+ * Hence the minimum. The freeze holds the best index the active row has
+ * achieved, so it rises to its sorted position and never falls back. It also
+ * makes the capture self-correcting without any knowledge of when the server's
+ * stamp lands: the arrival index is simply the first candidate, and the
+ * promotion a moment later wins on its own.
  */
 export function activeTabFreezeIndex<T extends FreezableTab>(
   displayed: T[],
@@ -96,7 +112,9 @@ export function activeTabFreezeIndex<T extends FreezableTab>(
  *  - the active tab got pinned while active → drop the freeze, so unpinning
  *    later re-captures a current index instead of teleporting the row back to
  *    where it sat minutes ago;
- *  - otherwise → keep the captured index, however the server re-sorts.
+ *  - otherwise → keep the BEST index it has held, and let the server promote
+ *    it above that at any time. See `activeTabFreezeIndex` for why the rule is
+ *    directional: down is the moving target, up is the answer to your click.
  *
  * Capture is retried on every step until it succeeds (a null freeze with an
  * active id re-enters the capture branch), which covers the ordinary case of
@@ -115,6 +133,14 @@ export function advanceTabFreeze<T extends FreezableTab>(
     freeze = index === null ? null : { id: activeId, index };
   } else if (tabs.find((t) => t.id === activeId)?.pinned) {
     freeze = null;
+  } else {
+    // SAME tab, still active: let a promotion through and keep it. The server's
+    // index is where recency says this row belongs; a smaller one means it has
+    // climbed, which is exactly what arriving here caused and what must not be
+    // undone. Anything larger is the list closing over it and is what the
+    // freeze is for.
+    const now = tabs.findIndex((t) => t.id === activeId);
+    if (now >= 0 && now < freeze.index) freeze = { id: activeId, index: now };
   }
   return { freeze, order: freezeActiveTab(tabs, activeId, freeze?.index ?? null) };
 }
