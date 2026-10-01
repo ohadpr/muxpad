@@ -30,6 +30,7 @@ import { emulationParams } from '../MobileEmulation.js';
 import { isBrowsingUrl } from '../PageAttachment.js';
 import { clearStaleProfileLock } from '../ProfileLock.js';
 import { ScreencastSession } from '../ScreencastSession.js';
+import { stampViewer } from '../ViewerBuild.js';
 import { VIEWER_HTML } from './viewer.js';
 
 /**
@@ -90,6 +91,15 @@ export interface BrowserHost {
 }
 
 const CDP_READY_TIMEOUT_MS = 20_000;
+
+/**
+ * The page, stamped with its own build, once.
+ *
+ * Module scope because it cannot change while this process lives — and that is
+ * the whole point: a page carrying a DIFFERENT stamp was served by a different
+ * process, which is exactly what a viewer needs to be told.
+ */
+const VIEWER_PAGE = stampViewer(VIEWER_HTML);
 
 export async function startBrowserHost(opts: BrowserHostOptions): Promise<BrowserHost> {
   const log = opts.log ?? ((line: string) => console.log(line));
@@ -350,6 +360,9 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     // attached: pages grow forms, collapse them and scroll themselves without
     // anybody touching the mouse, and a stale box is a keyboard in the wrong
     // place — or, worse, none where there should be one.
+    // FIRST, before anything else it might act on: a page running yesterday's
+    // script should find out before it starts reporting bugs in it.
+    socket.send(JSON.stringify({ t: 'build', id: VIEWER_PAGE.build }));
     void sendFieldBoxes(socket);
     void sendLoginState(socket);
     startWatching();
@@ -567,7 +580,7 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     const path = `/${full.split('/').pop() ?? ''}`;
 
     if (path === '/' || path === '/index.html') {
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(VIEWER_HTML);
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(VIEWER_PAGE.html);
       return;
     }
     // The shared jar. Agents start warm from this file — see CookieJar.ts for

@@ -43,6 +43,8 @@ interface Harness {
   el(id: string): StubEl;
   /** Where the page navigated, if it did. */
   location: { href?: string };
+  /** Whether the page reloaded itself. */
+  readonly reloaded: boolean;
   /** Every socket the page has opened, oldest first. */
   sockets: Array<Record<string, unknown>>;
   /** Fire `open` on the newest socket. */
@@ -83,6 +85,17 @@ interface RunOpts {
   framed?: boolean;
 }
 
+/**
+ * Which elements the MARKUP declares hidden.
+ *
+ * Without this every stub element starts visible, so a test cannot tell "hidden
+ * until something shows it" from "shown all along" — and a control that was
+ * meant to stay out of the way until needed would pass either way.
+ */
+const HIDDEN_IN_MARKUP: ReadonlySet<string> = new Set(
+  [...VIEWER_HTML.matchAll(/<[^>]*\bid="([^"]+)"[^>]*\bhidden\b[^>]*>/g)].map((m) => m[1] ?? ''),
+);
+
 function run(opts: RunOpts | string = {}): Harness {
   const {
     search = '',
@@ -92,6 +105,7 @@ function run(opts: RunOpts | string = {}): Harness {
     width = 390,
     framed = false,
   } = typeof opts === 'string' ? { search: opts } : opts;
+  let reloaded = false;
   const els = new Map<string, StubEl>();
   const make = (id: string): StubEl => {
     const listeners = new Map<string, Array<(e: unknown) => void>>();
@@ -102,7 +116,7 @@ function run(opts: RunOpts | string = {}): Harness {
       attrs: {},
       value: '',
       style: {},
-      hidden: false,
+      hidden: HIDDEN_IN_MARKUP.has(id),
       textContent: '',
       // Anything the script reads off an element it never asserts on.
       naturalWidth: 0,
@@ -205,7 +219,15 @@ function run(opts: RunOpts | string = {}): Harness {
       createElement: () => make('made'),
       hidden: false,
     },
-    location: { pathname: '/browser/default/', host: 'h', protocol: 'https:', search },
+    location: {
+      pathname: '/browser/default/',
+      host: 'h',
+      protocol: 'https:',
+      search,
+      reload: () => {
+        reloaded = true;
+      },
+    },
     WebSocket: function WS() {
       return makeSocket();
     },
@@ -274,6 +296,9 @@ function run(opts: RunOpts | string = {}): Harness {
     sent,
     sockets,
     location: globals.location as { href?: string },
+    get reloaded() {
+      return reloaded;
+    },
     open,
     drop() {
       const sock = live();
@@ -1167,5 +1192,51 @@ describe('a tap that goes nowhere says so', () => {
     // stuck on this page needs is the name of the button.
     const h = run({ search: '?mode=watch' });
     expect(h.el('msg').textContent).toContain('Take over');
+  });
+});
+
+describe('a page that is out of date finds out', () => {
+  /**
+   * The expensive one. A browser host restarts when its code changes; the tab
+   * open on a phone does not. The socket reconnects, frames resume, and the page
+   * keeps running the script it was served before the restart — so a fix that
+   * definitely shipped definitely does not apply, and the bug report that comes
+   * back is accurate about code that is no longer there.
+   */
+  it('says so when the host reports a different build', () => {
+    const h = run();
+    h.receive({ t: 'build', id: 'something-else' });
+    expect(h.el('msg').textContent).toContain('reload');
+    expect(h.el('reloadPage').hidden).toBe(false);
+  });
+
+  it('says nothing when the build matches', () => {
+    // The ordinary case, on every reconnection. It must be silent or it is noise.
+    const h = run();
+    const mine = /const MY_BUILD = '([^']*)'/.exec(script())?.[1];
+    h.receive({ t: 'build', id: mine });
+    expect(h.el('reloadPage').hidden).toBe(true);
+  });
+
+  it('ignores a host that reports no build at all', () => {
+    // An older host that does not send one. Unknown is not a mismatch.
+    const h = run();
+    h.receive({ t: 'build', id: '' });
+    expect(h.el('reloadPage').hidden).toBe(true);
+  });
+
+  it('offers the reload rather than performing it', () => {
+    // A forced refresh mid-login throws away a half-typed password, which is
+    // worse than running an old script for another minute.
+    const h = run();
+    h.receive({ t: 'build', id: 'something-else' });
+    expect(h.reloaded).toBe(false);
+  });
+
+  it('reloads when the button is pressed', () => {
+    const h = run();
+    h.receive({ t: 'build', id: 'something-else' });
+    h.el('reloadPage').fire('click');
+    expect(h.reloaded).toBe(true);
   });
 });
