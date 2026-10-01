@@ -19,7 +19,11 @@ import type { VoiceStatus } from '../lib/voice/client';
 import type { VoiceControlState } from '../lib/voice/use-voice';
 import './VoiceControl.css';
 
-function SvgMic({ size = 15 }: { size?: number }) {
+/* 22, not 15. The mic and the paperclip share a 36px circle and sat 5px apart
+   in glyph size — the paperclip at 20, this at 15 — which is the whole of
+   "tiny and tiny and spaced in a somewhat weird way": a small glyph in a big
+   circle reads as badly centred even when it is centred exactly. */
+function SvgMic({ size = 22 }: { size?: number }) {
   return (
     <svg
       width={size}
@@ -174,8 +178,7 @@ export interface VoiceBarProps extends VoiceControlProps {
  * copy, not the main exit.
  */
 export function VoiceBar(props: VoiceBarProps) {
-  const { state, detail, minutesLeft, elapsedMs, onStop, onDismiss, muted, onEnableSound } =
-    props;
+  const { state, detail, minutesLeft, elapsedMs, onStop, onDismiss, muted, onEnableSound } = props;
   const live = isLive(state);
   if (!live && !detail) return null;
 

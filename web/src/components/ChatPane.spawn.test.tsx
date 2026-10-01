@@ -141,6 +141,17 @@ describe('the spawn cards and the roster read ONE list', () => {
     expect(end).toBeGreaterThan(start);
     return SRC.slice(start, end);
   })();
+  /**
+   * The same slice with runs of whitespace collapsed.
+   *
+   * For assertions about a JSX PROP, where the formatter owns the line breaks:
+   * an unrelated comment elsewhere in the file pushed one prop past the width
+   * limit, biome wrapped it over three lines, and a test about expander
+   * behaviour failed for a reason that had nothing to do with expanders. Use
+   * this where the shape could legally be reflowed; use BODY where the exact
+   * text is the point.
+   */
+  const BODY_FLAT = BODY.replace(/\s+/g, ' ');
   /** Everything AFTER it — the pane's own chrome, where the block used to be. */
   const AFTER_BODY = SRC.slice(SRC.indexOf('// The agent is working when'));
 
@@ -281,7 +292,7 @@ describe('the spawn cards and the roster read ONE list', () => {
     // Three report states in the wild — `ok`, `none`, and unset — and two of
     // them have nothing to show. An expander over those fell through to the
     // transcript, which is how the narration got on screen.
-    expect(BODY).toContain('onToggleExpanded={canExpand ?');
+    expect(BODY_FLAT).toContain('onToggleExpanded={ canExpand ?');
     // …and the click-through survives either way.
     expect(BODY).toContain('onOpen={() => openChat(kid)}');
   });
