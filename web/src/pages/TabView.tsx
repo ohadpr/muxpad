@@ -44,6 +44,7 @@ import { pushUndo } from '../lib/move-undo-store';
 import { PANE_DRAG_MIME, paneDragOrigin } from '../lib/pane-drag';
 import { usePaneFace } from '../lib/pane-face';
 import { consumePushFocusPane } from '../lib/push-focus';
+import { seenAckTarget } from '../lib/seen-ack';
 import { setTabViewMode, useTabViewMode } from '../lib/tab-view-mode';
 import { useDismissable } from '../lib/use-dismissable';
 import { freshTabs, refreshTabs, useTabs } from '../tabs';
@@ -498,20 +499,22 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     return () => window.removeEventListener('muxpad:pane-focused', onFocused);
   }, [tab?.id, tab?.panes]);
 
-  // Surgical mark-seen. Mobile: only the active pane (so other panes
-  // can keep flagging in the dropdown). Desktop: bulk-seen because the
-  // mosaic shows every pane at once — every pane is "seen" by virtue of
-  // the tab being open. Fires on tab mount and on any pane switch.
-  // Refreshes workspaces/tabs so the favicon + chrome dots update
-  // without waiting for the 5s poll.
+  // Surgical mark-seen. Single-pane views (mobile AND desktop 'tabbed'
+  // mode): only the active pane (so hidden panes can keep flagging in the
+  // dropdown / tab strip). Split mosaic: bulk-seen because it shows every
+  // pane at once — every pane is "seen" by virtue of the tab being open.
+  // The choice is `singlePane`, not `isMobile`: desktop tabbed mode hides
+  // its siblings exactly like mobile does (see seen-ack.ts). Fires on tab
+  // mount and on any pane switch. Refreshes workspaces/tabs so the favicon
+  // + chrome dots update without waiting for the 5s poll.
   //
-  // For mobile we resolve the active pane through the same fallback
-  // chain the render branch uses (state → last-visited storage → first
-  // pane). Without this, the implicit-active pane on a fresh tab mount
+  // For single-pane views we resolve the active pane through the same
+  // fallback chain the render branch uses (state → last-visited storage →
+  // first pane). Without this, the implicit-active pane on a fresh tab mount
   // (mobileActiveId still null) would never get mark-seen until the
   // user explicitly tapped it — leaving the attention dot stuck.
   const mobileActiveResolved = (() => {
-    if (!isMobile || !tab) return null;
+    if (!singlePane || !tab) return null;
     const ids = tab.panes.map((p) => p.id);
     if (mobileActiveId && ids.includes(mobileActiveId)) return mobileActiveId;
     const stored = getLastPaneId(tab.id);
@@ -543,21 +546,14 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
     const t = window.setTimeout(() => {
       const refresh = () =>
         Promise.all([refreshTabs(workspace.id), refreshWorkspaces()]).catch(() => {});
-      if (isMobile) {
-        if (!mobileActiveResolved) return;
-        api
-          .markPaneSeen(mobileActiveResolved)
-          .then(refresh)
-          .catch(() => {});
-      } else {
-        api
-          .markTabSeen(tab.id)
-          .then(refresh)
-          .catch(() => {});
-      }
+      const ack = seenAckTarget({ singlePane, activePaneId: mobileActiveResolved, tabId: tab.id });
+      if (!ack) return;
+      (ack.kind === 'pane' ? api.markPaneSeen(ack.id) : api.markTabSeen(ack.id))
+        .then(refresh)
+        .catch(() => {});
     }, 300);
     return () => window.clearTimeout(t);
-  }, [tab?.id, mobileActiveResolved, isMobile, workspace?.id, isActive, seenSignature]);
+  }, [tab?.id, mobileActiveResolved, singlePane, workspace?.id, isActive, seenSignature]);
 
   // Title pulls the live name from the shared tabs list so renames in
   // the tab bar update the document title without a refetch here. The
