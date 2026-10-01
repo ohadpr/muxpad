@@ -354,6 +354,31 @@ describe('CronScheduler', () => {
     expect(s2.store.runs(cron.id)[0]?.detail).toBe('overlap');
   });
 
+  it('overlap=skip still protects a QUEUED fire once the queue drains it into a turn', async () => {
+    // The fire arrives mid-turn, so submitSend queues it and nothing marks it
+    // in flight. When that turn ends, ws's drainQueue relays it — emitting the
+    // optimistic turn-start while the row is still the queue head, then
+    // removing it. From then on neither the queue scan nor `inflight` saw it,
+    // and the next slot stacked a second fire on top of a running one.
+    submitResult = { status: 'queued' };
+    const s = scheduler({ turnActive: () => true });
+    s.start();
+    const cron = makeCron(s, { overlap: 'skip' });
+    runAt(cron);
+    await s.tick();
+    db.prepare(
+      'INSERT INTO agent_queue (id, pane_id, seq, text, created_at) VALUES (?, ?, 1, ?, ?)',
+    ).run('q1', paneId, sent[0]?.text, now);
+    // drainQueue: optimistic start (row still at the head), then the remove.
+    events.emit({ type: 'agent_turn', pane_id: paneId, phase: 'start', sid: null, backend: 'claude' });
+    db.prepare('DELETE FROM agent_queue WHERE id = ?').run('q1');
+    now += 3_600_000;
+    await s.tick();
+    s.stop();
+    expect(sent).toHaveLength(1);
+    expect(s.store.runs(cron.id)[0]?.detail).toBe('overlap');
+  });
+
   it('overlap=queue stacks (that is the point of the setting)', async () => {
     const s = scheduler({ turnActive: () => true });
     runAt(makeCron(s, { overlap: 'queue' }));
