@@ -286,8 +286,18 @@ describe('Step 1 e2e — agent modes + the living sidebar', () => {
     const a = await mk('A');
     const b = await mk('B');
     const c = await mk('C');
+    // BOTH columns. The sidebar sorts on `userTouchAt` — `last_user_at`, with
+    // `last_activity_at` only as wire-compat for an older server — so setting
+    // the activity column alone no longer expresses "this tab is more recent".
+    // Every tab here is created in the same breath, so they shared one
+    // `last_user_at` and the order collapsed onto creation order.
+    // That column swap is the fix for a chat four days untouched and near
+    // archival outranking one used that morning, because an agent had printed a
+    // line in it.
     const setAt = (id: string, at: number) =>
-      db.prepare('UPDATE tabs SET last_activity_at = ? WHERE id = ?').run(at, id);
+      db
+        .prepare('UPDATE tabs SET last_activity_at = ?, last_user_at = ? WHERE id = ?')
+        .run(at, at, id);
     setAt(a.id, 100);
     setAt(b.id, 300);
     setAt(c.id, 200);
