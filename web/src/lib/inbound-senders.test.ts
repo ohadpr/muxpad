@@ -62,10 +62,10 @@ describe('matchInboundSenders', () => {
     expect(got.has('a1')).toBe(false);
   });
 
-  it('gives each repeat of the same text its own row, newest bubble first', () => {
+  it('gives each repeat of the same text its own row, oldest row first', () => {
     // A coordinator that sends "status?" twice gets two cards, and the second
-    // must not steal the first's row. Rows arrive newest-first; bubbles are
-    // oldest-first, so the LAST bubble takes the newest row.
+    // must not steal the first's row. Each row takes the earliest bubble at or
+    // after its own send, so the LAST bubble takes the newest row.
     const got = matchInboundSenders(
       [user('e1', 'status?', 100), user('e2', 'status?', 200)],
       [row('status?', 't-late', 200), row('status?', 't-early', 100)],
@@ -76,13 +76,47 @@ describe('matchInboundSenders', () => {
 
   it('still attributes the newest bubble when there are fewer rows than repeats', () => {
     // The cap dropped the older row, or it predates the feature. The message
-    // that still has a record keeps its card; the other renders as today.
+    // that still has a record keeps its card; the other — sent long before that
+    // record — renders as today.
     const got = matchInboundSenders(
-      [user('e1', 'status?', 100), user('e2', 'status?', 200)],
-      [row('status?', 't-boss', 200)],
+      [user('e1', 'status?', 10_000), user('e2', 'status?', 600_000)],
+      [row('status?', 't-boss', 600_000)],
     );
     expect(got.has('e1')).toBe(false);
     expect(got.get('e2')).toBe('t-boss');
+  });
+
+  it('does not hand a coordinator\'s row to a LATER human repeat of the same text', () => {
+    // A sends `status?` and it lands; later the human types `status?` too. Only
+    // A's send has a row. Walking backwards gave A's row to the human bubble and
+    // took the card off the message A actually sent.
+    const got = matchInboundSenders(
+      [user('e1', 'status?', 10_000), user('e2', 'status?', 900_000)],
+      [row('status?', 't-A', 10_000)],
+    );
+    expect(got.get('e1')).toBe('t-A');
+    expect(got.has('e2')).toBe(false);
+  });
+
+  it('does not let a send recorded AFTER a bubble claim it — a queued repeat is not delivered yet', () => {
+    // A's `status?` is already in the transcript. B sends the same text while
+    // the worker is busy; its row is recorded on queue acceptance, long before
+    // it reaches the transcript (or never, if it is cancelled). The newest row
+    // used to take the existing bubble, attributing A's message to B.
+    const got = matchInboundSenders(
+      [user('e1', 'status?', 10_000)],
+      [row('status?', 't-B', 600_000), row('status?', 't-A', 10_000)],
+    );
+    expect(got.get('e1')).toBe('t-A');
+  });
+
+  it('gives a queued send the bubble it eventually becomes', () => {
+    const got = matchInboundSenders(
+      [user('e1', 'status?', 10_000), user('e2', 'status?', 900_000)],
+      [row('status?', 't-B', 600_000), row('status?', 't-A', 10_000)],
+    );
+    expect(got.get('e1')).toBe('t-A');
+    expect(got.get('e2')).toBe('t-B');
   });
 
   it('is empty for a conversation with no recorded sends at all', () => {

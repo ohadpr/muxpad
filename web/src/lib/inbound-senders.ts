@@ -94,14 +94,31 @@ export async function loadInboundSenders(tabId: string, changed = false): Promis
  * transcript when that turn ends, which on a long turn is many minutes after the
  * send. The TEXT survives that trip unchanged.
  *
- * ─── One row, one bubble ─────────────────────────────────────────────────────
+ * ─── One row, one bubble — and never one that came BEFORE the send ─────────
  * A coordinator that asks "status?" twice produces two rows and two bubbles, and
- * the second must not claim the first's row. Rows arrive NEWEST first and events
- * are oldest first, so walking the events backwards hands each repeat the row it
- * belongs to. When there are fewer rows than repeats — the cap dropped one, or
- * the older message predates the feature — the NEWEST bubbles keep their cards
- * and the rest render as today, which is the right way round: the card that
- * matters is on the brief that just landed.
+ * the second must not claim the first's row. The time cannot JOIN them, but it
+ * does BOUND them: a message cannot reach the transcript before it was sent. So
+ * rows are taken OLDEST first, and each claims the earliest unclaimed bubble
+ * with its text at or after its own `at` (less `SEND_SKEW_MS`: the row is
+ * written just after the relay, so the harness can stamp the bubble a hair
+ * earlier).
+ *
+ * This replaced walking the events backwards and handing each repeat the newest
+ * row, which assumed every row was a bubble already in the transcript and every
+ * repeat had a row. Neither holds:
+ *   - a row is recorded when a send is ACCEPTED, and a queued one is not in the
+ *     transcript yet (or ever, if it is cancelled) — newest-first gave it the
+ *     bubble an EARLIER sender's message had produced;
+ *   - a human who later types the same text leaves no row — newest-first gave
+ *     the coordinator's row to the human's bubble and took the card off the
+ *     coordinator's own.
+ * The bound fixes both. What it cannot see is a human typing the identical text
+ * in the window between a QUEUED send and its delivery; that needs provenance
+ * bound to the delivery itself (server side), not a better guess here.
+ *
+ * When there are fewer rows than repeats — the cap dropped one, or the older
+ * message predates the feature — the bubbles with no row in range render as
+ * today.
  *
  * A row whose sender is null is deliberately NOT matched. muxpad recorded the
  * send and cannot name a chat behind it; a card with no name is worse than the
@@ -112,29 +129,38 @@ export function matchInboundSenders(
   senders: readonly InboundSender[],
 ): ReadonlyMap<string, string> {
   if (senders.length === 0 || events.length === 0) return NO_MATCHES;
-  // Rows by key, newest first within each key — `listByTab` already orders the
-  // whole list that way, so pushing in order preserves it per key.
-  const byKey = new Map<string, InboundSender[]>();
-  for (const s of senders) {
-    const list = byKey.get(s.key);
-    if (list) list.push(s);
-    else byKey.set(s.key, [s]);
+  // Bubbles by key, oldest first — the transcript's own order.
+  const byKey = new Map<string, ChatEvent[]>();
+  for (const e of events) {
+    if (e.kind !== 'user') continue;
+    const key = inboundTextKey(e.text);
+    const list = byKey.get(key);
+    if (list) list.push(e);
+    else byKey.set(key, [e]);
   }
   const out = new Map<string, string>();
-  // BACKWARDS, so the newest bubble takes the newest row. See above.
-  for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i] as ChatEvent;
-    if (e.kind !== 'user') continue;
-    const list = byKey.get(inboundTextKey(e.text));
+  // OLDEST row first. `listByTab` orders newest first, so walk it backwards.
+  for (let i = senders.length - 1; i >= 0; i--) {
+    const s = senders[i] as InboundSender;
+    const list = byKey.get(s.key);
     if (!list?.length) continue;
+    // A bubble with no timestamp cannot be ruled out, so it stays eligible.
+    const at = list.findIndex((e) => e.ts === null || e.ts >= s.at - SEND_SKEW_MS);
+    if (at < 0) continue;
     // Consumed whether or not it names a chat: an unattributable send still
     // accounts for one of the repeats, and letting it fall through would hand
     // this bubble a DIFFERENT send's sender.
-    const claimed = list.shift() as InboundSender;
-    if (claimed.from_tab_id) out.set(e.id, claimed.from_tab_id);
+    const [claimed] = list.splice(at, 1) as [ChatEvent];
+    if (s.from_tab_id) out.set(claimed.id, s.from_tab_id);
   }
   return out;
 }
+
+/** How far before a row's `at` its bubble may be stamped. The row is written
+ *  just after the relay and the harness stamps the bubble on its own read of
+ *  the clock — milliseconds apart in practice; this is a margin, not a
+ *  measurement. */
+const SEND_SKEW_MS = 5_000;
 
 /** Test seam — drops the module cache and the older-server latch. */
 export function resetInboundSendersCache(): void {
