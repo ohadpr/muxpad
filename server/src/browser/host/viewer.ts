@@ -23,11 +23,16 @@ export const VIEWER_HTML = String.raw`<!doctype html>
      the screen and the last control was unreachable. Wrapping is the only
      arrangement that cannot overflow at any width, and the address gets a line
      of its own rather than competing for the same one. */
-  #bar{flex:none;display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 8px;background:#15151c;border-bottom:1px solid #26262f}
+  /* ABOVE THE SINK. The sink is touchable now and starts parked at the top-left,
+     which is exactly where the way out lives — so a tap on "muxpad" landed on a
+     transparent input and was forwarded into the page instead. The toolbar gets
+     its own layer: over the stream the sink is harmless, because a tap there is
+     forwarded to the page anyway, but it must never cover a control. */
+  #bar{flex:none;display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 8px;background:#15151c;border-bottom:1px solid #26262f;position:relative;z-index:10}
   #bar b{color:#6ea8ff;font-variant-numeric:tabular-nums}
   /* Opened in a TAB on a phone there is no chrome around this page and no
      modal to dismiss — without this you are simply stranded. */
-  #home{color:#d8d8e2;text-decoration:none;font-size:15px;line-height:1;padding:4px 8px;border-radius:6px;border:1px solid #33333f;flex:none}
+  #home{color:#d8d8e2;text-decoration:none;font-size:12px;line-height:1;padding:5px 8px;border-radius:6px;border:1px solid #33333f;flex:none;white-space:nowrap}
   #home:hover{background:#23232e}
   /* Words, not glyphs alone. A row of symbols is a guessing game, and this is a
      surface people reach in the middle of a login they did not plan for. */
@@ -129,15 +134,25 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   #drop.on{display:grid}
 </style>
 <div id="bar">
-  <a id="home" href="/" title="back to muxpad">&#9776;</a>
-  <button id="navBack" title="back">&#8249; Back</button>
-  <button id="navReload" title="reload">&#8635; Reload</button>
+  <!-- WORDS, AND THE WAY OUT FIRST.
+       This was a bare hamburger glyph, which is the one control on here people
+       actually need to find — opened from a card in a tab there is no browser
+       chrome around this page and no modal to dismiss, so without it you are
+       stranded. A glyph that means "menu" everywhere else is a poor label for
+       "leave". It says where it goes.
+       The rest are grouped rather than listed: get around, then sign in, then
+       finish. Two reload arrows side by side (Reload the page, Update muxpad)
+       were the same symbol for unrelated things, so the second one is an arrow
+       that points somewhere else and names what it updates. -->
+  <a id="home" href="/" title="back to your conversation">&#8249; muxpad</a>
+  <button id="navBack" title="the page before this one">&#8249; Back</button>
+  <button id="navReload" title="reload the page">&#8635; Reload</button>
   <button id="mobile" title="show the phone version of the site" aria-pressed="false">&#128241; Phone</button>
-  <button id="signin" title="sign in with a password manager" hidden>&#128273; Sign in</button>
-  <button id="paste" title="paste from your clipboard">&#128203; Paste</button>
-  <button id="takeover" title="take the wheel" hidden>Take over</button>
+  <button id="signin" title="fill a sign-in form from your password manager" hidden>&#128273; Sign in</button>
+  <button id="paste" title="paste from your clipboard into the page">&#128203; Paste</button>
+  <button id="takeover" title="take the wheel so you can type" hidden>Take over</button>
   <button id="handback" title="give the browser back to the agent" hidden>Done</button>
-  <button id="reloadPage" title="this page is running an older version of muxpad" hidden>&#8635; Update</button>
+  <button id="reloadPage" title="this page is running an older version of muxpad" hidden>&#8679; Update muxpad</button>
   <span id="url" title="">–</span>
   <span id="msg"></span>
 </div>
@@ -271,7 +286,7 @@ function onSocketMessage(e) {
       // The tap already focused the sink; this is the page telling us whether
       // that was right. Keeping it is what makes the keyboard STAY up.
       if (m.editable) setKb(true)
-      else if (!kbSticky && !kbFromTap) setKb(false)
+      else if (!kbFromTap) setKb(false)
       return
     }
     if (m.t === 'fields') { if (Array.isArray(m.rects)) fields = m.rects; return }
@@ -480,10 +495,6 @@ const hitsField = (p) => fields === null
   : fields.some(([x, y, w, h]) => p.x >= x && p.x <= x + w && p.y >= y && p.y <= y + h)
 const reloadBtn = document.getElementById('reloadPage')
 reloadBtn.addEventListener('click', () => location.reload())
-const kbBtn = document.getElementById('kb') || { setAttribute() {}, getAttribute: () => null, addEventListener() {} }
-// Pressed by hand, the keyboard stays up regardless of what the page says is
-// focused — some pages take text without ever focusing an input.
-let kbSticky = false
 // Set when the tap landed inside a box the host told us is a text field.
 //
 // THE LOCAL EVIDENCE WINS. The page's own answer cannot see into a cross-origin
@@ -497,13 +508,8 @@ const setKb = (on) => {
   // Every blur so far has shown focus falling to the body, which looks identical
   // whether this line did it or iOS did. Now the log says which.
   note('setKb', { on })
-  kbBtn.setAttribute('aria-pressed', String(on))
   if (on) sink.focus({ preventScroll: true }); else sink.blur()
 }
-kbBtn.addEventListener('click', () => {
-  kbSticky = kbBtn.getAttribute('aria-pressed') !== 'true'
-  setKb(kbSticky)
-})
 
 /**
  * THE KEYBOARD LOG.
@@ -605,7 +611,6 @@ sink.addEventListener('keydown', (e) => {
     send({ t:'key', key:e.key, modifiers:mods(e) })
   }
 })
-sink.addEventListener('blur', () => kbBtn.setAttribute('aria-pressed','false'))
 
 // The way in, for when looking turns into doing. It asks muxpad for the wheel —
 // this page is served from muxpad's origin, so it can — and only then starts
