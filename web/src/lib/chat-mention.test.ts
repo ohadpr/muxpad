@@ -58,7 +58,12 @@ const CORPUS = [
   chat({ tabName: 'Investing', paneIds: ['p-inv'], lastActivityAt: 300 }),
   chat({ tabName: 'Main', paneIds: ['p-main'], lastActivityAt: 200 }),
   chat({ tabName: 'Main repo', paneIds: ['p-repo'], lastActivityAt: 100 }),
-  chat({ tabName: 'quarterly budget notes', paneIds: ['p-budget'], done: true, lastActivityAt: 400 }),
+  chat({
+    tabName: 'quarterly budget notes',
+    paneIds: ['p-budget'],
+    done: true,
+    lastActivityAt: 400,
+  }),
 ];
 
 describe('detectMentionRun — when the picker is open', () => {
@@ -517,13 +522,13 @@ describe('rankMentions', () => {
   });
 
   it('ranks names and reports the range to highlight', () => {
-    const rows = rankMentions(CORPUS, 'damage', {});
+    const rows = rankMentions(CORPUS, 'budget', {});
     expect(rows[0]?.chat.tabName).toBe('quarterly budget notes');
-    expect(rows[0]?.nameRange).toEqual([6, 12]);
+    expect(rows[0]?.nameRange).toEqual([10, 16]);
   });
 
   it('finds done chats by name — the picker covers live AND done', () => {
-    expect(rankMentions(CORPUS, 'fence', {}).map((r) => r.chat.tabName)).toEqual([
+    expect(rankMentions(CORPUS, 'quarterly', {}).map((r) => r.chat.tabName)).toEqual([
       'quarterly budget notes',
     ]);
   });
@@ -561,7 +566,7 @@ describe('withContentRows — the archive tier', () => {
   });
 
   it('never repeats a chat already matched by name', () => {
-    const nameRows = rankMentions(CORPUS, 'fence', {});
+    const nameRows = rankMentions(CORPUS, 'quarterly', {});
     const rows = withContentRows(nameRows, [hit('p-budget')] as never, CORPUS, {});
     expect(rows).toHaveLength(1);
     expect(rows[0]?.via).toBe('name');

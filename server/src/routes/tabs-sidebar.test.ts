@@ -60,8 +60,8 @@ describe('living sidebar — tab ordering + pinning', () => {
    * created in the same millisecond, so they all shared one `last_user_at` and
    * the order collapsed onto the id tiebreak.
    *
-   * That column swap is the fix for `a long-idle chat` — four days untouched and
-   * near archival — outranking `Health`, used that morning, because an agent
+   * That column swap is the fix for a chat four days untouched and
+   * near archival — outranking one used that morning, because an agent
    * had emitted a line in it nine minutes earlier.
    */
   const setActivity = (id: string, at: number | null) =>
