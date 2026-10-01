@@ -1,4 +1,4 @@
-import type { PaneSpec } from '@muxpad/shared';
+import type { PaneSpec, Tab } from '@muxpad/shared';
 
 // TabView's projections of the server's pushed rows onto the tab detail it
 // holds. They live here, not inline in TabView's event handler, because TabView
@@ -43,5 +43,35 @@ export function mergePaneUpdated(p: PaneSpec, incoming: PaneSpec): PaneSpec {
     // without runtime app_urls. Coalesce so a kind/url edit
     // doesn't transiently blank the web-switch dropdown.
     app_urls: incoming.app_urls ?? p.app_urls,
+  };
+}
+
+/**
+ * Fold a `tab.updated` row onto the tab detail TabView holds.
+ *
+ * `applyLayout` is false while a local layout write is in flight — that
+ * snapshot may predate it and would revert an optimistic split (TabView
+ * remembers the skip and refetches once the write settles).
+ */
+export function applyTabUpdated<T extends Tab>(prev: T, row: Tab, applyLayout: boolean): T {
+  return {
+    ...prev,
+    name: row.name,
+    slug: row.slug,
+    ...(applyLayout ? { layout: row.layout } : {}),
+    // tab.updated is emitted from PATCH /tabs and from pane
+    // append/remove paths; the server-side Tab row doesn't
+    // carry the runtime-only `attention` field, so row.attention
+    // is undefined here. Coalesce to prev so we don't clobber
+    // the locally-tracked dot.
+    attention: row.attention ?? prev.attention,
+    // The split/tabbed choice "follows the user across devices": another
+    // device's flip arrives HERE, and useTabViewMode reads it off this tab
+    // (its own reconciliation keeps a just-made local flip from being
+    // undone by a stale echo). Dropping it left every other open client on
+    // the old mode until a resync or remount. Optional in the schema, so an
+    // emitter that omits it keeps the held value.
+    view_mode: row.view_mode ?? prev.view_mode,
+    updated_at: row.updated_at,
   };
 }

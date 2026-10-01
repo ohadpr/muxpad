@@ -1,6 +1,6 @@
-import type { PaneSpec } from '@muxpad/shared';
+import type { PaneSpec, Tab } from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
-import { mergePaneUpdated } from './tab-detail-events';
+import { applyTabUpdated, mergePaneUpdated } from './tab-detail-events';
 
 const held = {
   id: 'p1',
@@ -33,5 +33,32 @@ describe('mergePaneUpdated', () => {
     const next = mergePaneUpdated(held, raw as PaneSpec);
     expect(next.title).toBe('vim notes.md');
     expect(next.foreground_cmd).toBe('vim');
+  });
+});
+
+describe('applyTabUpdated', () => {
+  const tab = {
+    id: 't1',
+    slug: 'notes',
+    name: 'notes',
+    layout: 'p1',
+    view_mode: 'split',
+    updated_at: 1,
+    panes: [],
+  } as unknown as Tab & { panes: PaneSpec[] };
+
+  // The flip is PATCHed to the server and pushed as tab.updated, and the shared
+  // schema says it "follows the user across devices". useTabViewMode reads it
+  // off the tab this function produces — so a projection that drops it leaves
+  // every OTHER open client on the old mode until a resync or remount.
+  it('adopts a view_mode flipped on another device', () => {
+    const next = applyTabUpdated(tab, { ...tab, view_mode: 'tabbed', updated_at: 2 }, true);
+    expect(next.view_mode).toBe('tabbed');
+  });
+
+  it('holds the layout back while a local write is in flight', () => {
+    const next = applyTabUpdated(tab, { ...tab, layout: 'p2', name: 'renamed' }, false);
+    expect(next.layout).toBe('p1');
+    expect(next.name).toBe('renamed');
   });
 });

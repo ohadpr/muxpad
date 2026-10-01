@@ -45,7 +45,7 @@ import { PANE_DRAG_MIME, paneDragOrigin } from '../lib/pane-drag';
 import { usePaneFace } from '../lib/pane-face';
 import { consumePushFocusPane } from '../lib/push-focus';
 import { documentVisible, seenAckTarget, useDocumentVisible } from '../lib/seen-ack';
-import { mergePaneUpdated } from '../lib/tab-detail-events';
+import { applyTabUpdated, mergePaneUpdated } from '../lib/tab-detail-events';
 import { setTabViewMode, useTabViewMode } from '../lib/tab-view-mode';
 import { useDismissable } from '../lib/use-dismissable';
 import { freshTabs, refreshTabs, useTabs } from '../tabs';
@@ -1056,23 +1056,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
         // write settles, persistLayout refetches the server truth.
         const applyLayout = pendingLayoutWrites.current === 0;
         if (!applyLayout) skippedTabUpdate.current = true;
-        setTab((prev) =>
-          prev
-            ? {
-                ...prev,
-                name: e.tab.name,
-                slug: e.tab.slug,
-                ...(applyLayout ? { layout: e.tab.layout } : {}),
-                // tab.updated is emitted from PATCH /tabs and from pane
-                // append/remove paths; the server-side Tab row doesn't
-                // carry the runtime-only `attention` field, so e.tab.attention
-                // is undefined here. Coalesce to prev so we don't clobber
-                // the locally-tracked dot.
-                attention: e.tab.attention ?? prev.attention,
-                updated_at: e.tab.updated_at,
-              }
-            : prev,
-        );
+        setTab((prev) => (prev ? applyTabUpdated(prev, e.tab, applyLayout) : prev));
         if (applyLayout) layoutRef.current = toMosaic(e.tab.layout);
       } else if (e.type === 'tab.removed' && e.tab_id === tabId) {
         setClosingTab(true);
