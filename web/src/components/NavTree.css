@@ -1331,6 +1331,21 @@
   border-top: 1px solid var(--border);
 }
 
+/* …AND THE MARK'S TRACK IS RESERVED ON A PINNED ROW, so the pin cannot move.
+   RowMark renders NO ELEMENT when a row is idle — deliberately, so the last
+   grid track takes no width and the name gets it instead, which is right for
+   the overwhelming majority of rows. The cost only appears once something to
+   the LEFT of that track is visible at rest: a spinner starting on a pinned row
+   gives the track 18px and shoves the pin sideways. Reported as "I don't like
+   that the pin icon moves when the spinner runs", and the pins stop lining up
+   down the column, which is the only thing making them read as a group.
+   So the reservation is scoped to exactly the rows that need it. A pinned row
+   holds the track open whether or not it has a mark; every other row keeps the
+   original bargain untouched, and pinned rows are few by construction. */
+.navtree-tab-row:has(.navtree-pin.is-pinned) {
+  grid-template-columns: var(--nt-col-icon) minmax(0, 1fr) auto auto calc(var(--nt-gutter) + 10px);
+}
+
 /* THE PIN ITSELF, VISIBLE AT REST ON A PINNED ROW.
    `.navtree-pin` is a `.navtree-close`, and those collapse to `width: 0;
    opacity: 0` until the row is hovered. So "a pinned tab keeps its pin lit —
