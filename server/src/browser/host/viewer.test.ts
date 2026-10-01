@@ -45,6 +45,8 @@ interface Harness {
   location: { href?: string };
   /** Whether the page reloaded itself. */
   readonly reloaded: boolean;
+  /** What the page asked its parent frame to do. */
+  posted: unknown[];
   /** Every socket the page has opened, oldest first. */
   sockets: Array<Record<string, unknown>>;
   /** Fire `open` on the newest socket. */
@@ -106,6 +108,7 @@ function run(opts: RunOpts | string = {}): Harness {
     framed = false,
   } = typeof opts === 'string' ? { search: opts } : opts;
   let reloaded = false;
+  const posted: unknown[] = [];
   const els = new Map<string, StubEl>();
   const make = (id: string): StubEl => {
     const listeners = new Map<string, Array<(e: unknown) => void>>();
@@ -277,6 +280,12 @@ function run(opts: RunOpts | string = {}): Harness {
   // `window.top === window` is how the page tells a tab from a frame. Undefined
   // would read as "framed" and quietly skip everything that depends on it.
   globals.top = framed ? ({} as Record<string, unknown>) : globals;
+  // The modal is the PARENT, and the only thing the page asks of it is to close.
+  globals.parent = {
+    postMessage: (data: unknown) => {
+      posted.push(data);
+    },
+  };
   globals.visualViewport = {
     height: 844,
     addEventListener() {},
@@ -299,6 +308,7 @@ function run(opts: RunOpts | string = {}): Harness {
     get reloaded() {
       return reloaded;
     },
+    posted,
     open,
     drop() {
       const sock = live();
@@ -1109,13 +1119,22 @@ describe('Done finishes the errand', () => {
     expect(h.fetches.some((f) => f.url.endsWith('/wheel') && f.method === 'DELETE')).toBe(true);
   });
 
-  it('stays put when it is framed in the desktop modal', async () => {
-    // Navigating inside the frame would load muxpad into its own dialog, and
-    // the modal already has a way to close.
+  it('stays put when it is framed, and asks the modal to close instead', async () => {
+    // Navigating inside the frame would load muxpad into its own dialog. But
+    // doing nothing was the bug: "I clicked done then had to close". The viewer's
+    // Done is the only one a phone gets, so it has to work on a desktop too.
     const h = run({ ...driving, framed: true });
     h.el('handback').fire('click');
     await h.settle();
     expect(h.location.href).toBeUndefined();
+    expect(h.posted).toEqual([{ muxpad: 'handback' }]);
+  });
+
+  it('does not ask anybody to close when it IS the page', async () => {
+    const h = run(driving);
+    h.el('handback').fire('click');
+    await h.settle();
+    expect(h.posted).toEqual([]);
   });
 });
 
@@ -1132,6 +1151,25 @@ describe('noticing that the sign-in went through', () => {
     h.receive({ t: 'login', present: false });
     expect(h.el('msg').textContent).toContain('signed in');
     expect(h.el('handback').classes).toContain('ready');
+  });
+
+  it('says it loudly, because an 11px note in a corner is not a prompt', () => {
+    // "Once I signed in it is just not clear what to do or expect" — said about a
+    // line that was already on screen, in the colour of a warning, at the size of
+    // a footnote.
+    const h = run();
+    h.receive({ t: 'login', present: true });
+    h.receive({ t: 'login', present: false });
+    expect(h.el('msg').classes).toContain('loud');
+  });
+
+  it('stops shouting once the moment has passed', () => {
+    const h = run();
+    h.receive({ t: 'login', present: true });
+    h.receive({ t: 'login', present: false });
+    h.drop();
+    h.open();
+    expect(h.el('msg').classes).not.toContain('loud');
   });
 
   it('says nothing about a page that never had a password field', () => {

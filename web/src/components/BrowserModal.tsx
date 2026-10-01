@@ -69,6 +69,26 @@ export function BrowserModal({
     return () => clearInterval(id);
   }, [data.wheel, onRenew, now, intervalMs, intent]);
 
+  /**
+   * DONE, PRESSED INSIDE THE VIEWER, CLOSES THIS.
+   *
+   * The viewer has its own Done — it is the only one a phone gets, where there is
+   * no dialog around it. On a desktop it released the wheel and could do nothing
+   * else, because it is in a frame: reported as "I clicked done then had to
+   * close". Two close buttons, one of which only half worked.
+   *
+   * Origin-checked, because a message handler on the window accepts messages from
+   * anywhere by default and this one closes things.
+   */
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return;
+      if ((e.data as { muxpad?: string } | null)?.muxpad === 'handback') closeRef.current();
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
   const countdown = wheelCountdown(data.wheel, now());
   const yours = data.wheel?.holder === 'human' && data.wheel.by === by;
 
