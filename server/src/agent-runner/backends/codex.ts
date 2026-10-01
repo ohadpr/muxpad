@@ -13,7 +13,7 @@ import { execFileSync, type spawn as nodeSpawn, spawn } from 'node:child_process
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join, resolve, sep } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { ChatEvent } from '@muxpad/shared';
 import { readAgentInstructions, wrapAgentInstructions } from '../../agent-instructions.js';
@@ -52,13 +52,34 @@ export function withSessionPreamble(
   return blocks.length ? `${blocks.join('\n\n')}\n\n${prompt}` : prompt;
 }
 
-// When the pane's cwd is a git WORKTREE, the real git metadata lives in the main
-// repo's `.git` (outside the worktree). Codex's `workspace-write` sandbox makes
-// only the cwd writable, so that external `.git` is read-only and `git add` /
-// `git commit` fail from the worktree. Grant write access to the git common dir
-// via `--add-dir`. A normal checkout keeps `.git` inside the cwd (already
-// writable), so nothing is added. Best-effort — any git failure yields nothing.
-function gitWorktreeExtraDirs(cwd: string): string[] {
+// CODEX CANNOT COMMIT UNLESS WE SAY SO, AND THAT IS NOT A WORKTREE PROBLEM.
+//
+// This used to add the git common dir only when it was OUTSIDE the cwd — i.e.
+// for worktrees — on the reasoning that "a normal checkout keeps `.git` inside
+// the cwd (already writable), so nothing is added". That reasoning is wrong.
+// Codex's `workspace-write` refuses writes to `.git` whether or not it sits
+// inside the writable root: it is a deliberate protection for history, not a
+// consequence of where the directory lives.
+//
+// So EVERY codex pane in an ordinary checkout silently could not commit.
+// Measured directly, in a scratch repo, with `.git` plainly inside the cwd:
+//
+//   workspace-write alone        fatal: Unable to create '.git/index.lock':
+//                                Operation not permitted
+//   + .git in writable_roots     [main dcccf8f] test2 — commit succeeds
+//
+// It cost three Astra review agents their entire output: they did the work,
+// hit this, and one of them reported commit hashes that had never existed
+// rather than the refusal. Their 37 files had to be recovered and committed by
+// hand. A sandbox that blocks the last step of the job, after the job is done,
+// is worse than one that blocks the first.
+//
+// Granted unconditionally now. The worktree case still works — it is just no
+// longer the only case — because the common dir is what we ask git for, and
+// that is the right answer in both layouts. Best-effort: any git failure yields
+// nothing, which returns the old (broken-but-safe) behaviour rather than a
+// crash at backend startup.
+export function gitWritableDirs(cwd: string): string[] {
   try {
     const out = execFileSync('git', ['-C', cwd, 'rev-parse', '--git-common-dir'], {
       encoding: 'utf8',
@@ -67,8 +88,8 @@ function gitWorktreeExtraDirs(cwd: string): string[] {
     }).trim();
     if (!out) return [];
     const abs = isAbsolute(out) ? out : resolve(cwd, out);
-    // Inside the cwd → already covered by workspace-write; only add when external.
-    if (abs === cwd || abs.startsWith(cwd + sep)) return [];
+    // Returned whether or not it sits inside the cwd — see the note above for
+    // why "inside" was never the same thing as "writable".
     return [abs];
   } catch {
     return []; // not a git repo, git missing, etc.
@@ -174,9 +195,9 @@ export function createCodexBackend(
     }
   }
 
-  // Extra writable roots for the sandbox (the worktree's external git dir, if
-  // any) — computed once; the cwd is fixed for a runner's lifetime.
-  const extraWritableDirs = gitWorktreeExtraDirs(process.cwd());
+  // The sandbox's extra writable roots — the git dir, so the agent can commit
+  // its own work. Computed once; the cwd is fixed for a runner's lifetime.
+  const extraWritableDirs = gitWritableDirs(process.cwd());
   if (extraWritableDirs.length) {
     log(dim(`codex: granting git write access → ${extraWritableDirs.join(', ')}`));
   }
