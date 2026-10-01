@@ -463,6 +463,18 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
         }
         // Scrolling moves every box on the page.
         if (message.type === 'mouseWheel') void sendFieldBoxes(socket);
+      } else if (message.t === 'hello') {
+        // A VIEWER SAYING WHAT IT IS. The one that matters is `build`: a page
+        // whose stamp is not the one this process serves is running a script that
+        // was replaced, and everything measured on it is measured on code that no
+        // longer exists. Said out loud here so the answer is in the logs rather
+        // than inferred from the outside.
+        const stale = message.build !== VIEWER_PAGE.build;
+        log(
+          `[host] viewer connected · build ${String(message.build)}` +
+            `${stale ? ` STALE (serving ${VIEWER_PAGE.build})` : ' current'}` +
+            ` · ${String(message.mode)} · ${String(message.w)}x${String(message.h)}`,
+        );
       } else if (message.t === 'diag') {
         // A phone reporting what its keyboard actually did. The browser runs
         // here and the keyboard is three hundred miles away on somebody's
