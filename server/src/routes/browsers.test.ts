@@ -30,6 +30,13 @@ const resumeAgent = (paneId: string, text: string) => {
 };
 
 beforeEach(() => {
+  const realFetch = globalThis.fetch;
+  vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+    const url = String(input);
+    if (url.endsWith('/agent-quiesce') || url.endsWith('/handoff'))
+      return Promise.resolve(new Response('{}'));
+    return realFetch(input, init);
+  });
   tempDataDir = mkdtempSync(join(tmpdir(), 'browsers-route-'));
   resumed = [];
   db = new Database(':memory:');
@@ -72,6 +79,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   rmSync(tempDataDir, { recursive: true, force: true });
 });
 
@@ -344,11 +352,10 @@ describe('a browser starts when something reaches for it, not before', () => {
     try {
       const res = await app.request('/api/browsers/shopping/cdp/json/version');
       expect(registry.start).toHaveBeenCalledTimes(1);
-      // And the reply is Chrome's own, so playwright talks to it directly from
-      // then on rather than through muxpad.
+      // Discovery must never hand out the unguarded Chrome socket.
       expect(res.status).toBe(200);
       expect((await res.json()) as { webSocketDebuggerUrl: string }).toMatchObject({
-        webSocketDebuggerUrl: expect.stringContaining('ws://'),
+        webSocketDebuggerUrl: expect.stringMatching(/^ws:\/\/127\.0\.0\.1:\d+\/agent-cdp$/),
       });
     } finally {
       await close();
@@ -779,4 +786,61 @@ it('refuses an agent claim even when the human took the wheel under the same pan
   const claim = await post('/api/browsers/shopping/wheel/claim', { by: 'pane-7' });
   expect(claim.status).toBe(409);
   expect((await claim.json()).wheel.holder).toBe('human');
+});
+
+describe('enforced browser handoffs', () => {
+  it('refuses CDP discovery during a human lease', async () => {
+    await ensure();
+    await post('/api/browsers/shopping/wheel/take', { by: 'person' });
+    vi.mocked(fetch).mockImplementation(
+      async () => new Response(JSON.stringify({ webSocketDebuggerUrl: 'ws://127.0.0.1:1/direct' })),
+    );
+    const response = await get('/api/browsers/shopping/cdp/json/version');
+    expect(response.status).toBe(409);
+  });
+
+  it('does not acknowledge takeover while a forwarded command is still running', async () => {
+    await ensure();
+    vi.mocked(fetch).mockResolvedValue(new Response('busy', { status: 503 }));
+    const response = await post('/api/browsers/shopping/wheel/take', { by: 'person' });
+    expect(response.status).toBe(503);
+    expect((await (await get('/api/browsers/shopping')).json()).wheel.holder).toBe('human');
+  });
+
+  it('binds the requested target before photographing and recording the summons', async () => {
+    await ensure();
+    const response = await post('/api/browsers/shopping/needs-you', {
+      reason: 'Login',
+      targetId: 'page-B',
+    });
+    expect(response.status).toBe(200);
+    const calls = vi.mocked(fetch).mock.calls;
+    const binding = calls.findIndex(([url]) => String(url).endsWith('/handoff'));
+    const shot = calls.findIndex(([url]) => String(url).endsWith('/shot'));
+    expect(binding).toBeGreaterThanOrEqual(0);
+    expect(JSON.parse(String(calls[binding]?.[1]?.body))).toEqual({ targetId: 'page-B' });
+    expect(shot).toBeGreaterThan(binding);
+  });
+
+  it('does not summon a person if the host cannot identify the handoff page', async () => {
+    await ensure();
+    vi.mocked(fetch).mockResolvedValue(new Response('ambiguous', { status: 409 }));
+    const response = await post('/api/browsers/shopping/needs-you', { reason: 'Login' });
+    expect(response.status).toBe(409);
+    const state = await (await get('/api/browsers/shopping')).json();
+    expect(state.needsYou).toBeNull();
+    expect(state.events).toEqual([]);
+  });
+});
+
+it('cannot retarget the human viewer through needs-you while a human is typing', async () => {
+  await ensure();
+  await post('/api/browsers/shopping/wheel/take', { by: 'person' });
+  vi.mocked(fetch).mockClear();
+  const response = await post('/api/browsers/shopping/needs-you', {
+    reason: 'Login elsewhere',
+    targetId: 'page-B',
+  });
+  expect(response.status).toBe(409);
+  expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith('/handoff'))).toBe(false);
 });

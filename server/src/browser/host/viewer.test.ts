@@ -78,6 +78,7 @@ interface RunOpts {
   nowMs?: number;
   /** Whether fetches succeed, so a refusal can be posed. */
   fetchOk?: boolean;
+  takeWait?: Promise<void>;
   /** How wide the viewer is. Under 700px it is treated as a phone. */
   width?: number;
   /**
@@ -246,6 +247,7 @@ function run(opts: RunOpts | string = {}): Harness {
     URLSearchParams,
     fetch: async (url: string, init?: { method?: string; body?: string }) => {
       fetches.push({ url: String(url), ...(init ?? {}) });
+      if (url.endsWith('/wheel/take') && typeof opts !== 'string') await opts.takeWait;
       return { ok: fetchOk, json: async () => fetchJson };
     },
     Date: nowMs === undefined ? Date : { ...Date, now: () => nowMs },
@@ -1550,4 +1552,22 @@ it('keeps a refused watch-mode login local', async () => {
   await h.settle();
   expect(h.sent.some((m) => m.t === 'fillLogin')).toBe(false);
   expect(h.el('loginPass').value).toBe('secret');
+});
+
+it('waits for an existing takeover before submitting the login form', async () => {
+  let grant!: () => void;
+  const takeWait = new Promise<void>((resolve) => {
+    grant = resolve;
+  });
+  const h = run({ search: '?mode=watch', takeWait });
+  h.el('takeover').fire('click');
+  h.el('loginUser').value = 'person';
+  h.el('loginPass').value = 'secret';
+  h.el('loginForm').fire('submit');
+  await h.settle();
+  expect(h.sent.some((m) => m.t === 'fillLogin')).toBe(false);
+  grant();
+  await h.settle();
+  expect(h.fetches.filter((f) => f.url.endsWith('/wheel/take'))).toHaveLength(1);
+  expect(h.sent).toContainEqual({ t: 'fillLogin', username: 'person', password: 'secret' });
 });

@@ -13,6 +13,7 @@ import {
 } from '../BrowserInput.js';
 import { browserLaunchSpec } from '../BrowserLaunch.js';
 import { browserViewerPort } from '../BrowserProfile.js';
+import { AgentCdpGate, bridgeAgentCdp } from '../AgentCdp.js';
 import { CdpConnection } from '../CdpConnection.js';
 import {
   type CdpCookie,
@@ -303,12 +304,39 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
   await applySessionState();
   await screencast.start();
 
+  let selectedAgentTarget: string | undefined;
+  const agentGate = new AgentCdpGate(async () => {
+    if (!opts.apiUrl) return false;
+    const response = await fetch(
+      `${opts.apiUrl}/api/browsers/${encodeURIComponent(opts.profile)}`,
+      {
+        signal: AbortSignal.timeout(2500),
+      },
+    );
+    if (!response.ok) return false;
+    const state = (await response.json()) as { wheel?: { holder: string } };
+    return state.wheel?.holder !== 'human';
+  });
+  const agentVersion = (await (await fetch(`${spec.url}/json/version`)).json()) as {
+    webSocketDebuggerUrl: string;
+  };
+  const agentWss = new WebSocketServer({ noServer: true });
+  agentWss.on('connection', (socket) => {
+    bridgeAgentCdp(socket, agentVersion.webSocketDebuggerUrl, agentGate, (target) => {
+      selectedAgentTarget = target;
+    });
+  });
+
   const http = createServer((req, res) => void handleHttp(req, res));
   // The path is NOT pinned to '/ws': muxpad proxies this viewer under
   // /browser/<profile>/, and the upgrade arrives with that prefix intact.
   // Anything ending in /ws is us — nothing else is listening on this port.
   const wss = new WebSocketServer({ noServer: true });
   http.on('upgrade', (req, socket, head) => {
+    if (new URL(req.url ?? '/', 'http://127.0.0.1').pathname === '/agent-cdp') {
+      agentWss.handleUpgrade(req, socket, head, (ws) => agentWss.emit('connection', ws, req));
+      return;
+    }
     if (!new URL(req.url ?? '/', 'http://127.0.0.1').pathname.endsWith('/ws')) {
       socket.destroy();
       return;
@@ -618,6 +646,53 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     const full = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
     const path = `/${full.split('/').pop() ?? ''}`;
 
+    if (path === '/agent-quiesce' && req.method === 'POST') {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          agentGate.quiesce(),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error('agent command still running')), 5000);
+          }),
+        ]);
+        res.writeHead(200).end('{}');
+      } catch {
+        res.writeHead(503).end('agent command still running');
+      } finally {
+        clearTimeout(timer);
+      }
+      return;
+    }
+    if (path === '/handoff' && req.method === 'POST') {
+      try {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(Buffer.from(chunk));
+        const body = JSON.parse(Buffer.concat(chunks).toString());
+        await agentGate.run(async () => {
+          const pages = (await cdp.listTargets()).filter(
+            (t) => t.type === 'page' && !t.url.startsWith('devtools://'),
+          );
+          const targetId =
+            body.targetId ??
+            selectedAgentTarget ??
+            (pages.length === 1 ? pages[0]?.targetId : undefined);
+          if (typeof targetId !== 'string' || !pages.some((t) => t.targetId === targetId)) {
+            res.writeHead(409).end('name targetId for the page needing a person');
+            return;
+          }
+          await screencast.stop();
+          const page = await cdp.attachToPage(targetId);
+          currentUrl = page.url;
+          await applySessionState();
+          await screencast.start();
+          announceUrl();
+          res.writeHead(200).end('{}');
+        });
+      } catch {
+        res.writeHead(503).end('could not bind handoff page');
+      }
+      return;
+    }
     if (path === '/' || path === '/index.html') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(VIEWER_PAGE.html);
       return;
@@ -771,6 +846,8 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
       }
       await screencast.stop().catch(() => {});
       cdp.close();
+      for (const socket of agentWss.clients) socket.terminate();
+      agentWss.close();
       wss.close();
       await new Promise<void>((resolve) => http.close(() => resolve()));
       chrome.kill();

@@ -697,31 +697,33 @@ handback.addEventListener('click', async () => {
  * which is the exact failure this whole area has been fighting.
  */
 // One grant in flight; HTTP completion order must never choose the field.
-let takingWheel = false
+let takingWheel = null
 let pendingTap = null
-async function takeTheWheel(at) {
+function takeTheWheel(at) {
   if (at) pendingTap = at
-  if (takingWheel) return
+  if (takingWheel) return takingWheel
   const profile = profileFromPath()
   if (!profile) return
-  takingWheel = true
-  try {
-    const r = await fetch('/api/browsers/' + profile + '/wheel/take', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ by: claimant() }),
-    })
-    if (!r.ok) { msg.textContent = 'could not take the wheel — press Take over'; return }
-    watching = false
-    applyWatching()
-    announceMode()
-    msg.textContent = 'you are driving now'
-    if (window.top !== window) window.parent.postMessage({ muxpad: 'takeover', by: claimant() }, location.origin)
-    if (pendingTap) {
-      send({ t: 'mouse', type: 'mousePressed', ...pendingTap, buttons: 1, clickCount: 1, modifiers: 0 })
-      send({ t: 'mouse', type: 'mouseReleased', ...pendingTap, buttons: 0, clickCount: 1, modifiers: 0 })
-    }
-  } catch { msg.textContent = 'could not reach muxpad' } finally { takingWheel = false; pendingTap = null }
+  takingWheel = (async () => {
+    try {
+      const r = await fetch('/api/browsers/' + profile + '/wheel/take', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ by: claimant() }),
+      })
+      if (!r.ok) { msg.textContent = 'could not take the wheel — press Take over'; return }
+      watching = false
+      applyWatching()
+      announceMode()
+      msg.textContent = 'you are driving now'
+      if (window.top !== window) window.parent.postMessage({ muxpad: 'takeover', by: claimant() }, location.origin)
+      if (pendingTap) {
+        send({ t: 'mouse', type: 'mousePressed', ...pendingTap, buttons: 1, clickCount: 1, modifiers: 0 })
+        send({ t: 'mouse', type: 'mouseReleased', ...pendingTap, buttons: 0, clickCount: 1, modifiers: 0 })
+      }
+    } catch { msg.textContent = 'could not reach muxpad' } finally { takingWheel = null; pendingTap = null }
+  })()
+  return takingWheel
 }
 
 /**
