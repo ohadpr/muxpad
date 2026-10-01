@@ -873,7 +873,45 @@ export function attachWsServer(deps: {
     if (sweepInFlight) return;
     sweepInFlight = true;
     try {
-      const agentPanes = panes.listAgentPanes();
+      // ─── WHAT THE SWEEP IS ALLOWED TO SEE ────────────────────────────────
+      // `listAgentPanes` answers "which panes need a process" from the DB
+      // alone: a turn in flight, or queued work. That is the right question for
+      // the lazy-start policy — it is what stopped the sweep resurrecting every
+      // chat ever created (103 live panes on this machine) — and it is BLIND to
+      // the one thing the DB cannot know: somebody has this chat OPEN.
+      //
+      // An idle chat with a dead runner and a reader watching it is precisely
+      // the case the sweep exists for. Nothing is in flight and nothing is
+      // queued, so the DB says "needs no process"; the reader types, and the
+      // only signal they get is silence. ws-respawn's control case asserts the
+      // opposite ("the sweep must act on it — otherwise the test below proves
+      // nothing") and it was failing.
+      //
+      // So the set is the UNION: panes the DB says need a process, plus panes a
+      // live chat client is attached to. The second half costs nothing — it is
+      // an in-memory map this module already maintains for broadcast — and it
+      // cannot reintroduce the resurrection bug, because an unattended chat has
+      // no client by definition.
+      const agentPanes = (() => {
+        const byDb = panes.listAgentPanes();
+        const have = new Set(byDb.map((p) => p.id));
+        const watched: typeof byDb = [];
+        for (const paneId of chatClients.keys()) {
+          if (have.has(paneId)) continue;
+          const p = panes.getById(paneId);
+          // Same two gates the query applies, re-asserted here rather than
+          // assumed: runner-owned, and not in a retired tab.
+          if (!p || !p.startup_cmd?.startsWith('muxpad agent')) continue;
+          // Read the column, not the shaped row: TabStore.getById returns the
+          // wire `Tab`, which does not carry `retired_at`.
+          const retired = deps.db
+            .prepare('SELECT retired_at FROM tabs WHERE id = ?')
+            .get(p.tab_id) as { retired_at: number | null } | undefined;
+          if (!retired || retired.retired_at != null) continue;
+          watched.push(p);
+        }
+        return [...byDb, ...watched];
+      })();
       // Prune records of panes that are gone or no longer runner-owned.
       const liveIds = new Set(agentPanes.map((p) => p.id));
       for (const id of respawns.keys()) if (!liveIds.has(id)) respawns.delete(id);

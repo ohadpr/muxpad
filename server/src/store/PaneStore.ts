@@ -109,9 +109,33 @@ export class PaneStore {
   }
 
   /**
-   * Runner-owned panes that currently need a process: a live tab with a turn
-   * in flight or queued work. Idle chats start lazily when their next send is
-   * queued; keeping every historical chat resident exhausts the machine.
+   * Runner-owned panes that currently need a process.
+   *
+   * Three ways to qualify, and the third was missing — which broke the
+   * supervision half of the sweep that reads this:
+   *
+   *   a turn in flight      `agent_sessions.status = 'running'`
+   *   queued work           something waiting in `agent_queue`
+   *   AN UNRETIRED SUB-CHAT a worker that was given a job and has not finished
+   *
+   * The first two are the lazy-start policy: an idle chat starts when its next
+   * send is queued, because keeping every historical chat resident is what put
+   * 103 panes on this machine. That policy is right and is why the blanket
+   * `startup_cmd LIKE 'muxpad agent%'` had to go.
+   *
+   * But it answers "should this pane be warm?", and the sweep also asks "has
+   * this pane DIED?" — and a worker whose runner crashed between turns has
+   * nothing in flight and nothing queued, so it scored zero on both counts and
+   * was never looked at again. It stayed `live` forever: no give-up, no
+   * `done_reason: 'died'`, and its round left open, which is the parent's spawn
+   * card spinning for good. ws-respawn pins exactly that and was failing.
+   *
+   * A sub-chat is the one pane that is SUPPOSED to be running without having to
+   * prove it each time — that is what spawning one means. It cannot reopen the
+   * resurrection bug: a finished worker has `retired_at` set and is excluded by
+   * the clause above, and a historical top-level chat has no `spawned_by` at
+   * all. Measured on this machine at the time of the change: 35 live agent
+   * tabs, 0 of them unretired sub-chats.
    */
   listAgentPanes(): PaneSpec[] {
     const rows = this.db
@@ -124,6 +148,7 @@ export class PaneStore {
             AND (
               s.status = 'running'
               OR EXISTS (SELECT 1 FROM agent_queue q WHERE q.pane_id = p.id)
+              OR t.spawned_by IS NOT NULL
             )`,
       )
       .all() as PaneRow[];
