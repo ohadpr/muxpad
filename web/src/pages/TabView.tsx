@@ -45,6 +45,7 @@ import { PANE_DRAG_MIME, paneDragOrigin } from '../lib/pane-drag';
 import { usePaneFace } from '../lib/pane-face';
 import { consumePushFocusPane } from '../lib/push-focus';
 import { documentVisible, seenAckTarget, useDocumentVisible } from '../lib/seen-ack';
+import { mergePaneUpdated } from '../lib/tab-detail-events';
 import { setTabViewMode, useTabViewMode } from '../lib/tab-view-mode';
 import { useDismissable } from '../lib/use-dismissable';
 import { freshTabs, refreshTabs, useTabs } from '../tabs';
@@ -1020,11 +1021,9 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
   // re-subscribes on tab change. We still filter on `e.tab_id ===
   // tab.id` defensively in case any in-flight events slip through.
   //
-  // pane.updated merges rather than overwrites: PATCH-route events
-  // carry the raw row without runtime decorations (title,
-  // foreground_cmd), so we preserve old values when the incoming
-  // payload omits them. PaneManager-emitted events do carry the
-  // decorations and overwrite cleanly.
+  // pane.updated merges rather than overwrites (mergePaneUpdated): a
+  // payload that OMITS a runtime decoration keeps the old value, while an
+  // explicit null — the server saying the runtime is gone — clears it.
   useEffect(() => {
     if (!tab) return;
     const tabId = tab.id;
@@ -1044,32 +1043,7 @@ export function TabView({ tabSlug, isActive }: TabViewProps) {
           prev
             ? {
                 ...prev,
-                panes: prev.panes.map((p) => {
-                  if (p.id !== e.pane.id) return p;
-                  return {
-                    ...e.pane,
-                    title: e.pane.title ?? p.title ?? null,
-                    foreground_cmd: e.pane.foreground_cmd ?? p.foreground_cmd ?? null,
-                    // Like title/fg above: PATCH-route events may omit the
-                    // runtime-only attention flag. Preserve prior so we
-                    // don't clobber a true value with undefined.
-                    attention: e.pane.attention ?? p.attention,
-                    // Same for the runtime-only status channel. The server now
-                    // decorates every pane.updated, but a version-skewed (or
-                    // future partial) emitter must not be able to blank the
-                    // status mark mid-turn — coalescing is the cheap invariant.
-                    // `status`/`agents` are the fields this file actually
-                    // RENDERS (the tabbed strip's StatusMark); `busy` is the
-                    // deprecated alias, coalesced for anything still reading it.
-                    status: e.pane.status ?? p.status,
-                    agents: e.pane.agents ?? p.agents,
-                    busy: e.pane.busy ?? p.busy,
-                    // Same: a PATCH-route pane.updated carries the raw row
-                    // without runtime app_urls. Coalesce so a kind/url edit
-                    // doesn't transiently blank the web-switch dropdown.
-                    app_urls: e.pane.app_urls ?? p.app_urls,
-                  };
-                }),
+                panes: prev.panes.map((p) => (p.id === e.pane.id ? mergePaneUpdated(p, e.pane) : p)),
               }
             : prev,
         );
