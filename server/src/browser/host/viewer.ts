@@ -44,6 +44,9 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   /* Once the password field has gone the errand is probably over, and this is
      the only thing left to press. Loud enough to be found without reading. */
   #handback.ready{background:#2f7d4a;border-color:#2f7d4a;color:#fff}
+  /* An out-of-date page is worth interrupting for: everything measured on one is
+     measured on code that is no longer there. */
+  #reloadPage{background:#8f3f3f;border-color:#8f3f3f;color:#fff;font-size:11px;white-space:nowrap}
   /* Watching: the stream is a picture. Say so rather than letting somebody
      press things that quietly go nowhere. */
   body.watching #screen{cursor:default}
@@ -124,6 +127,7 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   <button id="paste" title="paste from your clipboard">&#128203; Paste</button>
   <button id="takeover" title="take the wheel" hidden>Take over</button>
   <button id="handback" title="give the browser back to the agent" hidden>Done</button>
+  <button id="reloadPage" title="this page is running an older version of muxpad" hidden>&#8635; Update</button>
   <span id="url" title="">–</span>
   <span id="msg"></span>
 </div>
@@ -243,6 +247,13 @@ function onSocketMessage(e) {
   if (typeof e.data === 'string') {
     const m = JSON.parse(e.data)
     if (m.t === 'url') { showUrl(m.url); return }
+    // THE HOST HAS BEEN REPLACED UNDER THIS PAGE. Its socket reconnects, frames
+    // resume and nothing looks wrong, but the script running here is the one that
+    // was served before the restart. A whole evening of testing went into fixes
+    // that had already shipped, against a tab still running the version from
+    // before them — so the page finds out, and says so, instead of being tested
+    // in that state.
+    if (m.t === 'build') { noticeBuild(m.id); return }
     // The page says a text field is focused, so put a keyboard on the phone.
     // This is what makes tapping a login box behave like tapping a login box.
     if (m.t === 'focus') {
@@ -420,6 +431,8 @@ let fields = null
 const hitsField = (p) => fields === null
   ? null
   : fields.some(([x, y, w, h]) => p.x >= x && p.x <= x + w && p.y >= y && p.y <= y + h)
+const reloadBtn = document.getElementById('reloadPage')
+reloadBtn.addEventListener('click', () => location.reload())
 const kbBtn = document.getElementById('kb') || { setAttribute() {}, getAttribute: () => null, addEventListener() {} }
 // Pressed by hand, the keyboard stays up regardless of what the page says is
 // focused — some pages take text without ever focusing an input.
@@ -612,6 +625,21 @@ handback.addEventListener('click', async () => {
     if (window.top === window) location.href = '/'
   } catch { msg.textContent = 'could not reach muxpad' }
 })
+
+/**
+ * NOTICES THAT IT IS OUT OF DATE.
+ *
+ * Stamped into the page when it was served; compared against whatever the host
+ * is serving now, on every connection. Offers a reload rather than performing
+ * one: a forced refresh in the middle of a login would throw away a half-typed
+ * password, which is worse than running an old script for another minute.
+ */
+const MY_BUILD = '__MUXPAD_VIEWER_BUILD__'
+function noticeBuild(id) {
+  if (!id || id === MY_BUILD) return
+  msg.textContent = 'muxpad updated — reload this page'
+  reloadBtn.hidden = false
+}
 
 /**
  * NOTICES THAT THE SIGN-IN WENT THROUGH.
