@@ -232,7 +232,7 @@ describe('sweepImplausibleHeadlines — the one-time repair', () => {
   it('clears the malformed row and leaves the good ones alone', () => {
     // The three live rows from the report, as they actually were.
     const muxpad = mk('muxpad', 'agent-files migration deployment and verification');
-    const kipa = mk('3D printed מדף', 'Bambu Lab printer slicing and settings for test plate');
+    const rtlName = mk('3D printed מדף', 'Bambu Lab printer slicing and settings for test plate');
     const main = mk('Main', BUG);
 
     const { cleared } = sweepImplausibleHeadlines(db);
@@ -242,7 +242,7 @@ describe('sweepImplausibleHeadlines — the one-time repair', () => {
     expect(tabs.getById(muxpad)?.headline).toBe(
       'agent-files migration deployment and verification',
     );
-    expect(tabs.getById(kipa)?.headline).toBe(
+    expect(tabs.getById(rtlName)?.headline).toBe(
       'Bambu Lab printer slicing and settings for test plate',
     );
   });

@@ -131,7 +131,9 @@ const DRIFTED = '8a2c3628-cd9a-4248-81bc-e6f5606f0270'; // what the DB pointed a
 
 /** The incident, reconstructed: four sids, a transcript on exactly one. */
 function realIncident(): Fixture {
-  const f = fixture('muxpad agent --model gpt-6-astra --resume 8a2c3628-cd9a-4248-81bc-e6f5606f0270');
+  const f = fixture(
+    'muxpad agent --model gpt-6-astra --resume 8a2c3628-cd9a-4248-81bc-e6f5606f0270',
+  );
   f.history(CLAUDE_FIRST, 'claude', 1_789_668_387_562);
   f.history(CODEX_EARLY, 'codex', 1_789_668_416_399);
   f.history(CODEX_REAL, 'codex', 1_789_926_633_029);
@@ -287,7 +289,11 @@ describe('the write-back', () => {
 describe('rewriteResumeCmd', () => {
   it('re-points an existing --resume and preserves every other flag', () => {
     expect(
-      rewriteResumeCmd("muxpad agent --backend codex --mode chat --model 'gpt-6' --resume old", 'new', 'codex'),
+      rewriteResumeCmd(
+        "muxpad agent --backend codex --mode chat --model 'gpt-6' --resume old",
+        'new',
+        'codex',
+      ),
     ).toBe("muxpad agent --backend codex --mode chat --model 'gpt-6' --resume new");
   });
 
@@ -298,9 +304,9 @@ describe('rewriteResumeCmd', () => {
   });
 
   it('restores a --backend the drift dropped', () => {
-    expect(rewriteResumeCmd("muxpad agent --model 'gpt-6-astra' --resume old", 'new', 'codex')).toBe(
-      "muxpad agent --backend codex --model 'gpt-6-astra' --resume new",
-    );
+    expect(
+      rewriteResumeCmd("muxpad agent --model 'gpt-6-astra' --resume old", 'new', 'codex'),
+    ).toBe("muxpad agent --backend codex --model 'gpt-6-astra' --resume new");
   });
 
   it('drops --backend when the recovered session is a claude one', () => {

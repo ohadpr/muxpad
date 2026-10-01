@@ -85,8 +85,8 @@ export function compareUnpinnedTabs(
   // USER TOUCH, not machine activity — see `userTouchAt` for the measurement.
   // This read `last_activity_at` until a screenshot settled the argument the
   // docstring above had hedged on ("inside ONE workspace that is tolerable"):
-  // `a long-idle chat`, four days since the user last touched it and days from
-  // being archived for inactivity, sat ABOVE `Health`, used the same morning —
+  // a chat four days since the user last touched it and days from
+  // being archived for inactivity, sat ABOVE a chat used that morning, used the same morning —
   // because something had printed a line in it nine minutes earlier. Inside one
   // workspace the consequence turns out to be identical to the cross-workspace
   // one it was already rejected for.
