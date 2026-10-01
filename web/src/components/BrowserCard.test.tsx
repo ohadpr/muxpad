@@ -64,6 +64,7 @@ const moment = (browser: BrowserCardData, over: Partial<BrowserMoment> = {}): Br
   kind: 'opened',
   at: 100,
   shotUrl: null,
+  answered: false,
   profile: browser.profile,
   browser,
   ...over,

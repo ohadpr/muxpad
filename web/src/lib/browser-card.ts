@@ -190,6 +190,13 @@ export interface BrowserMoment {
   reason?: string;
   /** Where the still for this moment lives, or null when none was captured. */
   shotUrl: string | null;
+  /**
+   * Whether THIS summons has been dealt with.
+   *
+   * Per moment, not per browser: a conversation can hold a settled errand and a
+   * live one, and the settled one must not borrow the live one's urgency.
+   */
+  answered: boolean;
   profile: string;
   /** The browser as it is NOW, so the card can open it and read the wheel. */
   browser: BrowserCardData;
@@ -226,16 +233,31 @@ export function browserMoments(
   const out: BrowserMoment[] = [];
   for (const browser of browsers) {
     const events = browser.events ?? [];
-    // When each summons stopped asking. A `resolved` answers the most recent
-    // `needs-you` before it, so answering one does not silence a later one.
-    const resolvedAfter = events.filter((e) => e.kind === 'resolved').map((e) => e.at);
+    // WHEN EACH SUMMONS STOPPED ASKING, per moment. `browser.needsYou` is a fact
+    // about the BROWSER, so a conversation with two errands in it — one dealt
+    // with, one live — would light up both, and the settled one would demand
+    // attention for something finished an hour ago.
+    const resolvedAt = events.filter((e) => e.kind === 'resolved').map((e) => e.at);
     for (const event of events) {
       if (event.kind === 'resolved') continue;
-      // AN ANSWERED SUMMONS IS NOT A CARD. It used to become "Handled", which
-      // was a third kind of row explaining a state nobody had asked about. The
-      // asking is over; the record of it is the agent's reply, not a line in
-      // the log.
-      if (event.kind === 'needs-you' && resolvedAfter.some((at) => at > event.at)) continue;
+      // AN ANSWERED SUMMONS STOPS ASKING; IT DOES NOT VANISH.
+      //
+      // It used to be dropped here, on the reasoning that the asking was over
+      // and the record of it was the agent's reply. That reasoning was sound and
+      // the result was not, because of what it collides with: `opened` is itself
+      // suppressed once a summons exists, on the equally sound reasoning that a
+      // summons is a louder statement of the same fact. Two rules that each
+      // remove one card, and between them they removed the last one — leaving a
+      // conversation with a browser in it and no way to reach the browser.
+      //
+      // Reported from a real session, with the agent's own message still on
+      // screen saying "there's a card in this conversation, tap it and log in".
+      // There was not.
+      //
+      // Nothing is lost by keeping it. browserMomentView already renders an
+      // answered summons as the quiet session card that keeps its reason — its
+      // comment calls it "the card you come back to when you leave the viewer and
+      // return" — so the loudness was never what the drop was protecting against.
       // A moment belongs to ONE conversation: the one it happened in. An
       // untagged moment is not shown anywhere.
       if (event.tabId !== tabId) continue;
@@ -244,6 +266,7 @@ export function browserMoments(
         at: event.at,
         ...(event.reason !== undefined ? { reason: event.reason } : {}),
         shotUrl: event.shot ? browserShotUrl(browser.profile, event.at) : null,
+        answered: resolvedAt.some((at) => at > event.at),
         profile: browser.profile,
         browser,
       });
@@ -295,7 +318,8 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
   const yours = browser.wheel?.holder === 'human';
   // A summons while YOU are already driving is a card asking for something you
   // have already done. It reads as handled, because it is.
-  const stillAsking = moment.kind === 'needs-you' && Boolean(browser.needsYou) && !yours;
+  const stillAsking =
+    moment.kind === 'needs-you' && !moment.answered && Boolean(browser.needsYou) && !yours;
 
   if (stillAsking) {
     return {
