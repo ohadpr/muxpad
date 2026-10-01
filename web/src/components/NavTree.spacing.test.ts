@@ -315,24 +315,33 @@ describe('gap 1 — the state chip clears the row’s right edge', () => {
   // a column.
   const KINDS = ['.navtree-tab-row', '.navtree-ws-row', '.navtree-pane-row-wrap'];
 
-  it('every row kind insets its tail by one step of AIR, on the rail', () => {
+  it('every row kind insets its tail by one step of AIR — except the one that cannot', () => {
     for (const [name, t] of RAIL) {
       const air = resolve(t['--nt-air'] as string, t);
       for (const kind of KINDS) {
+        // The WORKSPACE row is the exception, and it is arithmetic rather than
+        // taste: it charges a 4px `column-gap` before its (usually empty) state
+        // track where a tab row charges none, so the SAME token puts the two
+        // tails on DIFFERENT x. Measured with air on both: the header's × ended
+        // at 240 against the chat rows' marks at 246 — two columns 6px apart
+        // pretending to be one, which is what "the + and × can be more to the
+        // right" was describing. 6px is what lands them together.
+        if (kind === '.navtree-ws-row') {
+          expect({ name, kind, gap: paddingRight(kind, t) }).toEqual({ name, kind, gap: 6 });
+          continue;
+        }
         expect({ name, kind, gap: paddingRight(kind, t) }).toEqual({ name, kind, gap: air });
         expect(paddingRight(kind, t)).toBeGreaterThanOrEqual(12);
       }
     }
   });
 
-  it('…and the sheet’s two surviving grid/flex rows still pay it too', () => {
+  it('…and the sheet’s pane row still pays it', () => {
     // The workspace-picker row and the pane row are still built from this
-    // scale; only the CHAT row left it.
+    // scale; only the CHAT row left it, and now the rail's workspace header.
     const air = resolve(SHEET['--nt-air'] as string, SHEET);
-    expect(paddingRight('.navtree-ws-row', SHEET)).toBe(air);
     expect(paddingRight('.navtree-pane-row-wrap', SHEET)).toBe(air);
   });
-
   it('the pane row’s inset is on the WRAP, which is the box that paints the block', () => {
     // On the list it was outside the accent block and bought the block nothing.
     expect(ruleBody(NAV_CSS, '.navtree-pane-row-wrap')).toContain('padding-right: var(--nt-air)');

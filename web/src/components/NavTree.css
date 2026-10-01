@@ -283,15 +283,24 @@
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   /* Tighter LEFT gutter than right: the left edge is dead margin, so trimming
-     it (8 → 4) hands real width back to the names. Right stays 8 for the
-     scrollbar + close-button breathing room. */
-  padding: 3px 8px 12px 4px;
+     it (8 → 4) hands real width back to the names.
+     RIGHT trimmed 8 → 2. Measured: the rail is 279px, rows ended at 256, and
+     the 23px between them was scrollbar allowance nothing ever used — the
+     scrollbar here is an overlay. With the workspace controls also pulled out
+     (see .navtree-ws-row), the reported "unnecessarily large space" to the
+     right of + and × is gone and every row is ~20px wider. */
+  padding: 0 2px 12px 4px;
 }
 /* Desktop has no section header (dropped as redundant under the brand),
    so the list sits directly below the brand hairline — give it a little
    breathing room there. */
+/* NO TOP PADDING ON THE RAIL. A sticky header pins to the top of the PADDING
+   box, so 8px of padding is 8px that rows scroll through ABOVE it — a sliver of
+   the row behind, visible over the header that is supposed to be covering it.
+   The first group's own margin supplies the breathing room instead, and it sits
+   inside the scroll area where the header can cover it. */
 .navtree[data-variant="sidebar"] .navtree-scroll {
-  padding-top: 8px;
+  padding-top: 0;
 }
 /* FULL BLEED. The 8px horizontal inset is gone, and with it the idea that the
    rows float off the rail's edges: the selected row is a band that runs edge to
@@ -313,8 +322,51 @@
    18px of air against the 19px it replaces (9 + the hairline + 9), so the seam
    keeps its size to within the hairline's own 1px and the groups stay where they
    were — only the line goes. */
+/* ─── A WORKSPACE IS A THING, AND ITS HEADER IS WHERE IT STARTS ─────────────
+   Workspaces were separated by 18px of nothing. No background, no rule, just a
+   gap — so the rail read as one long list with some bold words in it rather
+   than as several workspaces.
+   A HAIRLINE CANNOT DO THIS JOB HERE, and that is measured rather than assumed:
+   `--border` against the rail is 1.00:1 on alucard (#ddd8ee on #ddd8ef), 1.06
+   on acme, 1.14 on github-light. NavTree.selection.test pins the rule that
+   removed group hairlines for exactly that reason. A FILL derived from `--fg`
+   works on every theme, because the rail's own text has to be readable there.
+   The gap shrinks to 10, because the fill is now doing the separating. */
+.navtree-group {
+  margin-top: 10px;
+}
+
 .navtree-group + .navtree-group {
-  margin-top: 18px;
+  margin-top: 10px;
+}
+
+/* ─── STICKY, so you never lose which workspace you are reading ─────────────
+   Personal holds a hundred chats. Its header scrolls away within one screen and
+   everything below it is unlabelled — the longer the list, the less the
+   grouping is worth, which is backwards.
+   The band above is what makes this possible at all: a sticky row has to be
+   OPAQUE or the rows pass through it, and a transparent header would have
+   needed a background inventing for it anyway. So the fill is mixed INTO
+   `--bg-tabbar` rather than laid over it — sticky is the one state where the
+   colour has to hide what is underneath instead of tinting it. */
+.navtree[data-variant="sidebar"] .navtree-group > .navtree-ws-row {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  /* background-COLOR, never the shorthand: the shorthand resets every other
+     background property, including the state tint a row can carry.
+     StateChip.test pins that for exactly this reason. */
+  background-color: color-mix(in srgb, var(--fg) 6%, var(--bg-tabbar));
+}
+
+.navtree[data-variant="sidebar"] .navtree-group > .navtree-ws-row:hover {
+  background-color: color-mix(in srgb, var(--fg) 11%, var(--bg-tabbar));
+}
+
+/* The ACTIVE workspace reads warmer than the rest — the one thing a bold name
+   alone could never say at a glance in a rail of three. */
+.navtree[data-variant="sidebar"] .navtree-group > .navtree-ws-row[data-active="true"] {
+  background-color: color-mix(in srgb, var(--accent) 16%, var(--bg-tabbar));
 }
 
 /* ─── Workspace row (banded header) ──────────────────────────────────── */
@@ -342,8 +394,15 @@
      row's chip LEADS by air + 4 (16px, 18 on the sheet) where a tab row's leads
      by exactly air. Bigger than the floor, on the row kind with the shortest
      names, and it does not move the column — so it is left alone rather than
-     zeroed, which would also close the disclosure→name gap. */
-  padding: 0 var(--nt-air) 0 var(--nt-pad);
+     zeroed, which would also close the disclosure→name gap.
+     RIGHT inset is 6px, and it is a MEASURED number rather than a step of the
+     scale, for the reason the paragraph above already gives: this row charges a
+     4px column-gap before its (usually empty) state track where a tab row
+     charges none, so an identical token does NOT put the two tails on the same
+     x. 6px does — the × lands at 252, which is where every chat row's state
+     mark lands. It was --nt-air, which put the × at 240 against the rows' 246:
+     two columns 6px apart pretending to be one. */
+  padding: 0 6px 0 var(--nt-pad);
   border-radius: var(--nt-pill);
   font-weight: 600;
   color: var(--fg);
@@ -646,11 +705,26 @@
 
 /* ─── Tab rows ───────────────────────────────────────────────────────── */
 
+/* ─── THE GROUP'S BODY, AND ITS SPINE ───────────────────────────────────────
+   A faint line from under the header to the end of the list, so a workspace has
+   an END as well as a start and the done drawer terminates inside it instead of
+   floating between groups.
+   Derived from `--fg` for the same reason the header fill is.
+   TWO NUMBERS, both corrected after looking at it rather than reasoning about
+   it. At 8% it was invisible on this theme while still costing 13px of every
+   name — the worst possible trade, a tax with no benefit — so it is 14%. And
+   the body is nudged, not indented: the line sits INSIDE the row's existing
+   16px left padding, so the names give up 3px rather than 13. */
 .navtree-tab-list {
   position: relative;
   display: flex;
   flex-direction: column;
   padding-bottom: 2px;
+}
+
+.navtree[data-variant="sidebar"] .navtree-group > .navtree-tab-list {
+  margin-left: 6px;
+  border-left: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
 }
 
 /* THE grid (see --nt-col-* above for why). Column order is DOM order, and the
@@ -971,8 +1045,16 @@
   gap: 7px;
   width: 100%;
   /* Space ABOVE, not below: the gap is what separates this group from the live
-     list, and the header belongs to the rows under it. */
-  padding: 14px var(--nt-air) 4px calc(var(--nt-pad) + var(--nt-indent));
+     list, and the header belongs to the rows under it.
+     ITS CARET SITS IN THE CHAT ICON COLUMN and its LABEL IN THE CHAT NAME
+     COLUMN, because this is a row in that list — a disclosure for chats, not a
+     second kind of header. The caret was already right at x=20; the label
+     landed at 42 where every chat name starts at 56, which is the 14px that
+     read as "not aligned". The first attempt at this moved the CARET to the
+     workspace chevron's column instead, on the theory that one disclosure is
+     like another — and it looked, correctly, glued to the left edge. */
+  padding: 14px var(--nt-pad) 4px calc(var(--nt-pad) + var(--nt-indent));
+  gap: calc(56px - 35px);
   border: 0;
   background: none;
   font-family: inherit;
@@ -1387,7 +1469,7 @@
      that reported the seam missing. Deriving it from the foreground instead
      cannot be invisible on any theme, because the rail's text has to be
      readable there by definition. */
-  border-top: 1px solid color-mix(in srgb, var(--fg) 22%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--fg) 30%, transparent);
 }
 
 /* …AND THE MARK'S TRACK IS RESERVED ON A PINNED ROW, so the pin cannot move.

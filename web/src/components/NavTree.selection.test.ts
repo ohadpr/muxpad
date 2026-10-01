@@ -446,18 +446,30 @@ describe('the ARITHMETIC — six themes, and the defect the wash introduces', ()
 });
 
 describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
-  it('nothing rules off one workspace group from the next', () => {
-    // Measured reason, not taste: `--border` against `--bg-tabbar` is 1.00:1 on
-    // alucard (#ddd8ee on #ddd8ef), 1.06 on acme and 1.14 on github-light. The
-    // hairline is already invisible on half the themes, so it is not a signal
-    // being traded for whitespace — it is noise on the themes where it DOES
-    // show and nothing on the ones where it doesn't.
+  it('separates workspaces with a BANDED HEADER, not a rule and not only air', () => {
+    // This asserted "nothing rules off one group from the next", and the
+    // measurement behind it still stands: `--border` against the rail is
+    // 1.00:1 on alucard (#ddd8ee on #ddd8ef), 1.06 on acme, 1.14 on
+    // github-light. A hairline here is invisible on half the themes and noise
+    // on the rest, so there is still no border — that half is unchanged.
+    //
+    // What changed is the other half. 18px of pure air left the rail reading as
+    // one long list with some bold words in it, reported as workspaces not
+    // feeling like a 'thing'. The separation is now the HEADER's own band —
+    // derived from `--fg`, which cannot be invisible on a theme whose text has
+    // to be readable — so the air can shrink and the groups still part.
     const body = ruleBody(NAV_CSS, '.navtree-group + .navtree-group');
     expect(body).not.toMatch(/border-top:\s*1px/);
-    // The gap has to survive the rule's deletion, or the groups merge.
-    expect(Number.parseFloat(decl(body, 'margin-top'))).toBeGreaterThanOrEqual(14);
+    expect(Number.parseFloat(decl(body, 'margin-top'))).toBeGreaterThanOrEqual(8);
+    // The band is what does the work now, and it is a background-COLOR: the
+    // shorthand would reset the state tint a row can carry (see StateChip).
+    const band = ruleBody(
+      NAV_CSS,
+      '.navtree[data-variant="sidebar"] .navtree-group > .navtree-ws-row',
+    );
+    expect(decl(band, 'background-color')).toMatch(/color-mix/);
+    expect(decl(band, 'position')).toBe('sticky');
   });
-
   it('the pin seam IS a line, and one that can actually be seen', () => {
     // Reversed deliberately. The old rule was "paints nothing at all", on the
     // reasoning that pinning is already told by POSITION and per-row by "the
