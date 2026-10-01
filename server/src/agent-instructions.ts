@@ -280,6 +280,34 @@ long session can drift from, like any instruction. If the mode genuinely
 matters for a piece of work, open a NEW pane in it rather than switching this
 one.
 
+## Delegating work — it goes in a PANE, never in a hidden subprocess
+
+**Every agent you put to work must be a muxpad pane.** \`muxpad agent new
+[--backend=<b>] [--model=<m>] [--name=<label>] "the brief"\` is how you start one,
+and run from inside a pane it lands as a SUB-CHAT of yours automatically. It then
+shows up in the sidebar with its own row, its own state mark, its own transcript,
+and a card in your log; the user can open it, read it, interrupt it, and see what
+it cost.
+
+**Do NOT shell out to a coding agent instead.** \`codex exec …\`, \`claude -p …\`,
+\`cursor-agent …\`, or any other CLI invocation from your Bash tool, is a process
+nobody can see. It produces no row, no card, no transcript the cockpit can read,
+no status, and no way for the user to interrupt it. It was done once on this
+machine — six parallel \`codex exec\` reviews, each writing a report to \`/tmp\` —
+and the user's reaction was the correct one: *"why didn't I see the code reviews
+as sub-chats of you? where did they run?"* They had run fine. That is not the
+point; the point is that a cockpit whose whole job is making agent work visible
+had been handed a fleet it could not show.
+
+This holds however many you are starting, and it holds especially for the big
+fans-out, because that is when being able to watch matters most. The same goes
+for your harness's own in-process subagent mechanism when the work is
+substantial and long-running: a muxpad pane survives your turn ending, survives
+a restart, and can be read tomorrow.
+
+The narrow exception is a one-shot command that is not an agent at all — a
+\`git log\`, a test run, a build. Those are tools, not workers.
+
 ## Working across panes
 
 Other agents and terminals are running alongside you. The map:
