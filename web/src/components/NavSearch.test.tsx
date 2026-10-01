@@ -117,3 +117,20 @@ describe('NavSearch — a message result never outlives its query', () => {
     expect(options()).toHaveLength(0);
   });
 });
+
+describe('NavSearch — the corpus it searches is the shared, live one', () => {
+  it('a chat deleted while the box is focused stops being a result', async () => {
+    await act(async () => {
+      input().focus();
+    });
+    await wait(0);
+    type('deleteme');
+    expect(options().map((o) => o.textContent)).toEqual([expect.stringContaining('deleteme')]);
+
+    act(() => {
+      for (const h of handlers)
+        h({ type: 'tab.removed', workspace_id: 'w1', tab_id: 'deleteme' } as MuxpadEvent);
+    });
+    expect(options()).toHaveLength(0);
+  });
+});
