@@ -169,6 +169,8 @@ export type ScrollInput =
    * looking" reached nothing.
    */
   | { t: 'search-jump' }
+  /** A rendered row acquired its canonical identity; preserve the reading offset. */
+  | { t: 'anchor-renamed'; from: string; to: string }
   /** The highlight was dismissed; the reader owns the scroll again. */
   | { t: 'search-cleared'; here: Anchor | null; atEnd: boolean }
   /** A `load-older` request actually went out (see `pages`). */
@@ -215,6 +217,10 @@ export const SEEK_PAGE_BUDGET = 8;
  */
 export function next(state: ScrollState, input: ScrollInput): ScrollState {
   switch (input.t) {
+    case 'anchor-renamed':
+      return state.intent.at === 'row' && state.intent.id === input.from
+        ? { ...state, intent: { ...state.intent, id: input.to } } : state;
+
     case 'mounted':
       return IDLE_STATE;
 
@@ -236,8 +242,10 @@ export function next(state: ScrollState, input: ScrollInput): ScrollState {
       return { ...state, intent: intentFor(input.mem), placed: false };
     }
 
-    case 'reader-moved':
     case 'search-cleared':
+      if (state.intent.at !== 'hit') return state;
+      // fall through: dismissing an actual hit establishes a reading position.
+    case 'reader-moved':
       // The reader is the authority on where they belong, so this ends a seek
       // (the budget is not reset — that would let a flip-flopping reader re-spend
       // it) and supersedes a hit.

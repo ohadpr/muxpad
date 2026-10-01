@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { BrowserCardData } from '../lib/browser-card.js';
 import { browserViewerPath, shouldRenewWheel, wheelCountdown } from '../lib/browser-card.js';
 import './BrowserModal.css';
@@ -46,6 +46,9 @@ export function BrowserModal({
   now = () => Date.now(),
   intervalMs = 15_000,
 }: BrowserModalProps) {
+  const [taken, setTaken] = useState(false);
+  const driving = intent === 'drive' || taken;
+  const frameRef = useRef<HTMLIFrameElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
 
@@ -62,12 +65,12 @@ export function BrowserModal({
 
   // Only a lease you HOLD needs renewing. Watching holds nothing.
   useEffect(() => {
-    if (intent !== 'drive') return;
+    if (!driving) return;
     const id = setInterval(() => {
       if (shouldRenewWheel(data.wheel, now())) onRenew();
     }, intervalMs);
     return () => clearInterval(id);
-  }, [data.wheel, onRenew, now, intervalMs, intent]);
+  }, [data.wheel, onRenew, now, intervalMs, driving]);
 
   /**
    * DONE, PRESSED INSIDE THE VIEWER, CLOSES THIS.
@@ -83,11 +86,17 @@ export function BrowserModal({
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       if (e.origin !== window.location.origin) return;
+      if (
+        e.data?.muxpad === 'takeover' &&
+        e.source === frameRef.current?.contentWindow &&
+        e.data.by === by
+      )
+        setTaken(true);
       if ((e.data as { muxpad?: string } | null)?.muxpad === 'handback') closeRef.current();
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, []);
+  }, [by]);
 
   const countdown = wheelCountdown(data.wheel, now());
   const yours = data.wheel?.holder === 'human' && data.wheel.by === by;
@@ -100,7 +109,7 @@ export function BrowserModal({
         <div className="browser-modal__bar">
           <span className="browser-modal__title">browser · {data.profile}</span>
           <span className="browser-modal__wheel" data-yours={yours ? 'true' : 'false'}>
-            {intent === 'watch' ? 'watching — the agent keeps working' : 'you have the wheel'}
+            {!driving ? 'watching — the agent keeps working' : 'you have the wheel'}
           </span>
           {countdown ? <span className="browser-modal__countdown">{countdown}</span> : null}
           <button type="button" className="browser-modal__close" onClick={onClose}>
@@ -110,7 +119,15 @@ export function BrowserModal({
         <iframe
           className="browser-modal__frame"
           title={`browser ${data.profile}`}
-          src={browserViewerPath(data.profile, intent)}
+          ref={frameRef}
+          // Keep the initial mode in the URL: changing it after takeover would
+          // reload the iframe and discard the focus the person just chose.
+          src={
+            browserViewerPath(data.profile, intent) +
+            (intent === 'watch' ? '&' : '?') +
+            'by=' +
+            encodeURIComponent(by)
+          }
           // RELATIVE, so the frame is same-origin however you reached the
           // cockpit — loopback at the desk, tailnet from the sofa. Not
           // sandboxed: taking keyboard and pointer input is the entire point,

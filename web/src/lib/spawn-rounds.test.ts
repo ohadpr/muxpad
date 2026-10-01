@@ -46,6 +46,28 @@ describe('loadSpawnRounds', () => {
     expect(f).toHaveBeenCalledTimes(1);
   });
 
+  it('refreshes a lifecycle change inside the freshness window', async () => {
+    const f = vi.fn().mockResolvedValueOnce(ok({ kid: [{ id: 'r', ended_at: null }] }))
+      .mockResolvedValueOnce(ok({ kid: [{ id: 'r', ended_at: 200 }] }));
+    vi.stubGlobal('fetch', f);
+    await loadSpawnRounds('p');
+    const result = await loadSpawnRounds('p', true);
+    expect(result.get('kid')?.[0]?.ended_at).toBe(200);
+  });
+
+  it('refreshes after a lifecycle change during an in-flight read', async () => {
+    let finish!: (response: Response) => void;
+    const f = vi.fn().mockImplementationOnce(() => new Promise<Response>((r) => { finish = r; }))
+      .mockResolvedValueOnce(ok({ kid: [{ id: 'r', ended_at: 200 }] }));
+    vi.stubGlobal('fetch', f);
+    const first = loadSpawnRounds('p');
+    const changed = loadSpawnRounds('p', true);
+    finish(ok({ kid: [{ id: 'r', ended_at: null }] }));
+    await first;
+    expect((await changed).get('kid')?.[0]?.ended_at).toBe(200);
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
   it('NEVER REJECTS — a failed request must not blank the log', async () => {
     // `spawnCards` falls back to the tab-level pair when it gets nothing, which
     // is exactly what shipped before rounds existed.

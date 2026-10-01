@@ -86,10 +86,9 @@ export interface ScrollSurface {
 /**
  * The live scroll mechanism for one chat pane.
  *
- * Holds the state machine plus the two things the discriminator needs — what we
- * last wrote, and where the reader's row was last time we looked. Those two are
- * bookkeeping about OUR OWN actions, which is the only kind of state this design
- * keeps: there is deliberately no flag describing the reader.
+ * Holds the state machine and the discriminator's last write and observations.
+ * A commit can observe movement before the native event arrives; that verdict
+ * is retained for delivery to the caller that persists reading positions.
  */
 export class ChatScrollController {
   private state: ScrollState = IDLE_STATE;
@@ -106,6 +105,12 @@ export class ChatScrollController {
    * would be compared against.
    */
   private sawTop: number | null = null;
+  /** Previous anchor's document position, to distinguish motion from relayout. */
+  private wasDocumentTop: number | null = null;
+  /** A commit observed the gesture before its queued native scroll event. */
+  private pendingReader = false;
+  /** Hidden remains a gate even if the DOM is already measurable on resume. */
+  private hidden = false;
 
   constructor(private readonly surface: ScrollSurface) {}
 
@@ -172,12 +177,22 @@ export class ChatScrollController {
    * pre-restore position.
    */
   dispatch(input: ScrollInput): void {
-    this.state = next(this.state, input);
+    // Typing clears the highlight even when none exists. Only a live hit needs
+    // conversion to a reading position; a reader gesture already established it.
+    const updated = next(this.state, input);
+    if (input.t === 'search-cleared' && updated === this.state) return;
+    if (input.t === 'hidden') {
+      this.hidden = true;
+      this.pendingReader = false;
+    } else if (input.t === 'shown' || input.t === 'mounted') {
+      this.hidden = false;
+    }
+    this.state = updated;
     // A reader input is the one thing that can change where they belong, so it
     // is the one thing that can change what we store. Note what does NOT reach
     // here: a height change, a scroll event we attributed to layout, a tick of
     // any clock. See `recordFor`.
-    this.place();
+    this.place(false);
   }
 
   /**
@@ -188,10 +203,23 @@ export class ChatScrollController {
    * new events. Idempotent by construction: `targetFor` computes an absolute
    * position from live geometry, so calling this twice in a row writes once.
    */
-  place(): void {
+  place(reconcileReader = true): void {
     // Nothing to read — a hidden or mid-relayout pane. We have NOT looked, so
     // the gate stays shut.
-    if (!this.surface.measurable()) return;
+    if (this.hidden || !this.surface.measurable()) return;
+    const before = this.surface.geometry();
+    const oldBox = this.was ? this.surface.rowBox(this.was.id) : null;
+    // A streaming commit may beat the native scroll event. If scrollTop moved
+    // while the old row stayed at the same document coordinate, the movement
+    // was not compensation for a prepend. Reconcile it before overwriting it.
+    // A shrink clamped to the new maximum is layout, not evidence of a gesture.
+    if (reconcileReader && this.state.placed && this.sawTop !== null &&
+        before.scrollTop !== this.sawTop && oldBox && this.wasDocumentTop !== null &&
+        Math.abs(oldBox.top + before.scrollTop - this.wasDocumentTop) <= 1 &&
+        !(before.scrollTop < this.sawTop &&
+          before.scrollTop >= before.scrollHeight - before.clientHeight)) {
+      if (this.onScroll()) this.pendingReader = true;
+    }
     // We have looked. Everything below is about what we found; this is true
     // either way, including when the answer is "we do not know where the reader
     // belongs yet". See the `measured` input.
@@ -238,6 +266,7 @@ export class ChatScrollController {
   private settled(): void {
     this.was = this.surface.anchorHere();
     this.sawTop = this.surface.geometry().scrollTop;
+    this.wasDocumentTop = this.was ? this.was.offset + this.sawTop : null;
   }
 
   /**
@@ -249,7 +278,7 @@ export class ChatScrollController {
    * no opinion about where the reader belongs.
    */
   onScroll(): boolean {
-    if (!this.surface.measurable()) return false;
+    if (this.hidden || !this.surface.measurable()) return false;
     const geo = this.surface.geometry();
     // Captured BEFORE anything can refresh it, and refreshed for every event —
     // the reader's and the engine's alike. An engine adjustment that goes
@@ -273,7 +302,9 @@ export class ChatScrollController {
     // method used to mutate the state inline and so never reached a `place()` at
     // all. The fix is the rule, not a second assignment: one owner for the
     // scroll position, and one owner for the bookkeeping the discriminator reads.
-    if (!isReader) return false;
+    const pending = this.pendingReader;
+    this.pendingReader = false;
+    if (!isReader) return pending;
     // `wrote` is cleared BEFORE dispatching, so the reader's own position cannot
     // be excused as "our own write arriving" on the strength of a number they
     // have since scrolled away from.
@@ -289,6 +320,7 @@ export class ChatScrollController {
   /** The record to store for the current state, or null for "write nothing". */
   record(sid: string | null): ChatScrollMem | null {
     if (!this.surface.measurable()) return null;
+    if (this.hidden) return recordFor(this.state, { caughtUp: false, sid });
     return recordFor(this.state, { caughtUp: readerIsCaughtUp(this.surface.geometry()), sid });
   }
 

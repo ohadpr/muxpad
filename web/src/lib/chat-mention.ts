@@ -389,10 +389,12 @@ export interface SpawnCard {
    * So identity belongs with the thing that KNOWS whether this entry came from a
    * round or from the tab-level fallback, which is this function and not the
    * component. The fallback keeps the old unsuffixed id, because it is still the
-   * only entry of its kind for that child and reusing it keeps every position
-   * already parked on one readable.
+   * only entry of its kind for that child. `resolveSpawnAnchor` migrates live
+   * and remembered fallback positions when rounds arrive.
    */
   anchorId: string;
+  /** The closed interval this entry describes; absent only for legacy cards. */
+  round?: SpawnRound;
   /**
    * THIS ROUND's result, when the entry belongs to a round.
    *
@@ -413,13 +415,27 @@ export interface SpawnCard {
  * field rather than something the renderer rebuilds.
  *
  * `round` is the round's own id, or null for the tab-level fallback. A round id
- * is a server-stamped primary key, so the anchor is stable across reloads and
- * across the rounds arriving late — which is the one property a scroll memory
- * needs of it.
+ * is a server-stamped primary key, so the anchor is stable across reloads.
+ * Late rounds replace fallback ids; `resolveSpawnAnchor` bridges that change.
  */
 function cardAnchorId(chat: MentionChat, kind: SpawnCard['kind'], round: string | null): string {
   const head = kind === 'launch' ? 'spawn' : 'done';
   return round === null ? `${head}-${chat.tabId}` : `${head}-${chat.tabId}-${round}`;
+}
+
+/** Resolve legacy card anchors once the per-round identities arrive. */
+export function resolveSpawnAnchor(id: string, rounds: SpawnRoundsByChild): string {
+  for (const [tabId, history] of rounds) {
+    // The fallback launch was the child's creation; its completion was the
+    // latest retirement. Migrate once to canonical ids so later rounds cannot
+    // move a remembered completion forward again.
+    if (id === `spawn-${tabId}` && history[0]) return `${id}-${history[0].id}`;
+    if (id === `done-${tabId}`) {
+      const ended = history.filter((r) => r.ended_at !== null).at(-1);
+      if (ended) return `${id}-${ended.id}`;
+    }
+  }
+  return id;
 }
 
 /** One round's result, in the shape the card already reads. */
@@ -649,17 +665,25 @@ export function spawnCards(
       // ONE PAIR PER ROUND. Every handover left a launch where it happened, and
       // every finish left a result where the reader was looking.
       for (const r of mine) {
+        const rep = roundReport(r);
+        // Both entries of a finished round describe that job, even while a
+        // later job is running. Absence of a report is part of the snapshot.
+        const snapshot: MentionChat = r.ended_at === null ? chat : {
+          ...chat, report: rep, artifacts: r.artifacts, status: 'ready',
+          done: true, doneAt: r.ended_at, doneReason: 'delivered',
+        };
         out.push({
-          chat,
+          chat: snapshot,
           kind: 'launch',
+          round: r,
           at: r.started_at,
           anchorId: cardAnchorId(chat, 'launch', r.id),
         });
         if (r.ended_at === null) continue; // still running: nothing at the bottom yet
-        const rep = roundReport(r);
         out.push({
-          chat,
+          chat: snapshot,
           kind: 'completion',
+          round: r,
           at: r.ended_at,
           anchorId: cardAnchorId(chat, 'completion', r.id),
           ...(rep ? { report: rep } : {}),

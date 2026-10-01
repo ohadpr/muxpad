@@ -40,6 +40,7 @@ interface Entry {
 
 const cache = new Map<string, Entry>();
 const inFlight = new Map<string, Promise<SpawnRoundsByChild>>();
+const dirty = new Set<string>();
 /** False once the route has 404ed — an older server with no rounds table. */
 let unsupported = false;
 
@@ -53,25 +54,34 @@ export const NO_ROUNDS: SpawnRoundsByChild = new Map();
  * which is exactly what shipped before rounds existed. A conversation must never
  * lose its cards because one request did.
  */
-export async function loadSpawnRounds(parentTabId: string): Promise<SpawnRoundsByChild> {
+export async function loadSpawnRounds(parentTabId: string, changed = false): Promise<SpawnRoundsByChild> {
   if (unsupported) return NO_ROUNDS;
-  const hit = cache.get(parentTabId);
-  if (hit && Date.now() - hit.at < FRESH_MS) return hit.rounds;
   const running = inFlight.get(parentTabId);
+  if (changed) {
+    // A corpus update is evidence of staleness, regardless of the TTL. If it
+    // arrives during a read, all callers await a trailing read as well.
+    if (running) dirty.add(parentTabId);
+  }
   if (running) return running;
-  const p = req<RoundsResponse>(`/api/tabs/${encodeURIComponent(parentTabId)}/spawn-rounds`)
-    .then((res) => {
-      const rounds: SpawnRoundsByChild = new Map(Object.entries(res.rounds ?? {}));
-      cache.set(parentTabId, { at: Date.now(), rounds });
-      return rounds;
-    })
-    .catch((err: unknown) => {
-      if ((err as { status?: number } | null)?.status === 404) unsupported = true;
-      return cache.get(parentTabId)?.rounds ?? NO_ROUNDS;
-    })
-    .finally(() => {
-      inFlight.delete(parentTabId);
-    });
+  const hit = cache.get(parentTabId);
+  if (!changed && hit && Date.now() - hit.at < FRESH_MS) return hit.rounds;
+  const p = (async () => {
+    let rounds = hit?.rounds ?? NO_ROUNDS;
+    do {
+      dirty.delete(parentTabId);
+      try {
+        const res = await req<RoundsResponse>(`/api/tabs/${encodeURIComponent(parentTabId)}/spawn-rounds`);
+        rounds = new Map(Object.entries(res.rounds ?? {}));
+        cache.set(parentTabId, { at: Date.now(), rounds });
+      } catch (err: unknown) {
+        if ((err as { status?: number } | null)?.status === 404) unsupported = true;
+      }
+    } while (!unsupported && dirty.has(parentTabId));
+    return rounds;
+  })().finally(() => {
+    inFlight.delete(parentTabId);
+    dirty.delete(parentTabId);
+  });
   inFlight.set(parentTabId, p);
   return p;
 }
@@ -79,6 +89,7 @@ export async function loadSpawnRounds(parentTabId: string): Promise<SpawnRoundsB
 /** Test seam — drops the module cache and the older-server latch. */
 export function resetSpawnRoundsCache(): void {
   cache.clear();
+  dirty.clear();
   inFlight.clear();
   unsupported = false;
 }

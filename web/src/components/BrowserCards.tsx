@@ -20,8 +20,9 @@ import { BrowserModal } from './BrowserModal';
  * that was asleep; a subscription is correct only while it is connected, which
  * is exactly when you did not need it.
  *
- * WHY THE WHEEL IS TAKEN ON OPEN, NOT ON A SEPARATE BUTTON. Opening the stream
- * IS the act of taking over — a person looking at a live page will click on it,
+ * ANSWERING A SUMMONS TAKES THE WHEEL ON OPEN. Passive cards only watch.
+ * Opening the stream to answer a summons IS the act of taking over — a person
+ * looking at a live page will click on it,
  * and a viewer that renders input while the agent still holds the wheel is the
  * two-writers race the wheel exists to prevent. So: take, then show. Closing
  * hands it straight back rather than letting a ten-minute lease lapse with an
@@ -115,7 +116,11 @@ export function useBrowsers({
         });
       }
       if (mode === 'tab') {
-        const url = data.viewerUrl + (intent === 'watch' ? '?mode=watch' : '');
+        const url =
+          data.viewerUrl +
+          (intent === 'watch' ? '?mode=watch&' : '?') +
+          'by=' +
+          encodeURIComponent(by);
         (openTab ?? ((u: string) => window.open(u, '_blank')))(url);
       } else {
         setOpenProfile(data.profile);

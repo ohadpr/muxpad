@@ -310,10 +310,10 @@ describe('the spawn cards and the roster read ONE list', () => {
     // could not move while a worker had one completion entry; since
     // `spawn_rounds` it has one per round, and a set keyed by the tab opened
     // every one of them from a single tap — twenty-seven boxes on the measured
-    // child, most of them above the reader. The work CACHE is still per child:
-    // one child, one transcript.
+    // child, most of them above the reader. The work cache is also per card:
+    // each round in that transcript has a different final answer.
     expect(SRC).toContain('next.add(anchorId)');
-    expect(SRC).toContain('reportWork.get(kid.tabId)');
+    expect(SRC).toContain('reportWork.get(anchorId)');
   });
 
   it('cannot park the cards at the foot of the log again', () => {
