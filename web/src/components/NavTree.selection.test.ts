@@ -458,12 +458,20 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     expect(Number.parseFloat(decl(body, 'margin-top'))).toBeGreaterThanOrEqual(14);
   });
 
-  it('the pin seam paints nothing at all', () => {
-    // It was a gradient hairline. Pinning is already told by POSITION (the
-    // pinned block is at the top) and per-row by the pin button's aria-pressed;
-    // the seam only has to say "these arrange themselves from here down".
+  it('the pin seam IS a line, and one that can actually be seen', () => {
+    // Reversed deliberately. The old rule was "paints nothing at all", on the
+    // reasoning that pinning is already told by POSITION and per-row by "the
+    // pin button's aria-pressed" — and aria-pressed is not a visual signal, so
+    // that half was never on screen: `.navtree-pin` is a `.navtree-close`, and
+    // those have zero width until the row is hovered. The whole indicator was a
+    // gap. Reported as "no indicator no line just a bit of spacing. not good".
     const body = ruleBody(NAV_CSS, '.navtree-pin-divider');
-    expect(body).not.toMatch(/background|linear-gradient/);
-    expect(Number.parseFloat(decl(body, 'height'))).toBeGreaterThan(1);
+    expect(body).toMatch(/border-top:\s*1px/);
+    // And NOT in `--border`, which the sibling test above measures at 1.00:1
+    // against the rail on alucard — a hairline nobody can see is the state this
+    // is fixing, not a fix for it. Derived from the foreground instead, which
+    // has to be readable on every theme by construction.
+    expect(decl(body, 'border-top')).toMatch(/--fg/);
+    expect(decl(body, 'border-top')).not.toMatch(/var\(--border\)/);
   });
 });

@@ -1328,7 +1328,13 @@
 .navtree-pin-divider {
   height: 0;
   margin: 5px 8px 5px calc(var(--nt-pad) + var(--nt-indent));
-  border-top: 1px solid var(--border);
+  /* NOT `--border`: measured at 1.00:1 against the rail on alucard
+     (#ddd8ee on #ddd8ef), 1.06 on acme, 1.14 on github-light — i.e. the token
+     this sheet uses for hairlines is INVISIBLE on the theme in the screenshot
+     that reported the seam missing. Deriving it from the foreground instead
+     cannot be invisible on any theme, because the rail's text has to be
+     readable there by definition. */
+  border-top: 1px solid color-mix(in srgb, var(--fg) 22%, transparent);
 }
 
 /* …AND THE MARK'S TRACK IS RESERVED ON A PINNED ROW, so the pin cannot move.
