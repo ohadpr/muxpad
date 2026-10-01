@@ -124,9 +124,22 @@
   z-index: 1101;
   display: flex;
   flex-direction: column;
-  /* svh: stable across iOS URL-bar collapse, same reasoning as the app
-     shell. The bottom margin leaves a band of scrim so "tap outside to
-     dismiss" always has somewhere to land.
+  /* dvh, NOT svh. `svh` is the SMALLEST viewport — the height you get with the
+     browser chrome fully expanded — so the panel permanently sized itself for
+     the worst case and never used the space a collapsed URL bar hands back. On
+     an iPhone that is ~140px, which is why this read as "limited to half the
+     screen" while the same panel measures 89% of a chromeless 844px viewport.
+     The usual objection to `dvh` — that it resizes as the URL bar animates —
+     does not apply here: the page behind a modal dropdown does not scroll, so
+     nothing makes the bar collapse while the panel is open. And the real cap is
+     the visual-viewport one below, which is live and exact; this term is the
+     fallback for browsers without `visualViewport`.
+
+     The bottom margin leaves a band of scrim so "tap outside to dismiss" always
+     has somewhere to land — 24px, down from 48. The chrome bar ABOVE the panel
+     is deliberately left undimmed and closes it too (see .mns-scrim), so this
+     band is the second way out, not the only one, and it does not need to be a
+     comfortable target on its own.
 
      …and `min()` with --mns-avail-h, which MobileNavSwitcher.tsx sets from
      the VISUAL viewport while the sheet is open. svh is a LAYOUT unit and
@@ -137,8 +150,8 @@
      rather than merely off-screen. The fallback keeps the cap at the svh
      value on browsers with no visualViewport. */
   max-height: min(
-    calc(100svh - var(--mns-panel-top) - 48px),
-    var(--mns-avail-h, calc(100svh - var(--mns-panel-top) - 48px))
+    calc(100dvh - var(--mns-panel-top) - 24px),
+    var(--mns-avail-h, calc(100dvh - var(--mns-panel-top) - 24px))
   );
   /* Chrome surface — the panel is an extension of the bar it hangs
      from, and gives the bg-elev workspace cards the same figure/ground
