@@ -164,6 +164,13 @@
   --nt-pad: 4px;
   --nt-air: 12px;
 
+  /* The group's spine sits OUTSIDE that scale, because it does not separate
+     two things inside a row — it is the column's own left wall, and the step
+     is how far the whole group stands off it. 10px is the one number that
+     puts the header band, every row and the done drawer on a single x
+     (see .navtree-group), which is the only thing this token has to do. */
+  --nt-spine-pad: 10px;
+
   /* ─── The row grid ─────────────────────────────────────────────────────
      Four tracks, and NOTHING absolutely positioned:
 
@@ -347,8 +354,26 @@
    removed group hairlines for exactly that reason. A FILL derived from `--fg`
    works on every theme, because the rail's own text has to be readable there.
    The gap shrinks to 10, because the fill is now doing the separating. */
+/* ─── ONE LINE PER GROUP, AND EVERYTHING ALIGNS TO IT ───────────────────────
+   There were four different left edges: the header band at 4, the group spine
+   at 10, the rows at 11, the pin divider at 27 — plus a 3px accent edge inset
+   into a 6px radius, so it curved away at the corners and read as a notch
+   hanging off the band rather than an edge of it.
+   The spine moves from the LIST to the GROUP, so it runs the full height —
+   past the header, down through the rows, ending with the done drawer — and the
+   group's padding puts the header and every row on the same x as each other,
+   one step inside it. The active workspace colours that line instead of
+   carrying a separate marker: the edge and the spine were always trying to be
+   the same stroke. */
 .navtree-group {
   margin-top: 10px;
+  padding-left: var(--nt-spine-pad);
+  border-left: 1px solid color-mix(in srgb, var(--fg) 13%, transparent);
+}
+
+/* The one you are in. Same stroke, different ink — no second shape, no notch. */
+.navtree-group[data-active="true"] {
+  border-left-color: var(--accent);
 }
 
 .navtree-group + .navtree-group {
@@ -396,12 +421,11 @@
    and takes a 3px accent edge; the row keeps its fill. One accent, two
    meanings, told apart by form instead of by hue.
 
-   `box-shadow` rather than `border-left`: a border would move the row's content
-   3px and break the column every disclosure chevron in the rail shares. An
-   inset shadow paints inside the box and costs no layout. */
-.navtree-group > .navtree-ws-row[data-active="true"] {
-  box-shadow: inset 3px 0 0 var(--accent);
-}
+   WHERE THE ACCENT LIVES NOW: the group's spine (see .navtree-group). It was a
+   3px inset shadow on the header, which followed the band's 6px radius and so
+   curved away at both corners — a notch beside the band rather than an edge of
+   it, and a second vertical stroke 6px from the one the group already drew.
+   One line does both jobs. */
 
 /* …and the hover tint still has to win over the resting band on the active
    header, which it would not if the only rule for it sat above this one. */
@@ -762,10 +786,8 @@
   padding-bottom: 2px;
 }
 
-.navtree[data-variant="sidebar"] .navtree-group > .navtree-tab-list {
-  margin-left: 6px;
-  border-left: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
-}
+/* The list draws nothing: the GROUP owns the spine now, so the body no longer
+   needs an indent or a rule of its own. */
 
 /* THE grid (see --nt-col-* above for why). Column order is DOM order, and the
    trailing `auto` track between meta and state is the hover-revealed control
@@ -1502,7 +1524,13 @@
    this sheet's existing hairline and the one it should match. */
 .navtree-pin-divider {
   height: 0;
-  margin: 5px 8px 5px calc(var(--nt-pad) + var(--nt-indent));
+  /* Spans the ROWS, not its own private inset. It used to start 16px further in
+     than everything around it — a fourth left edge in a column that now has
+     one. Both ends are flush with the row BOX, which is what the eye reads as
+     the column's width — measured, the earlier 4px right inset matched nothing
+     at all (the rows' box ends at 262, their content at 250, the line at 258),
+     so it was an asymmetry pretending to be an alignment. */
+  margin: 5px 0;
   /* NOT `--border`: measured at 1.00:1 against the rail on alucard
      (#ddd8ee on #ddd8ef), 1.06 on acme, 1.14 on github-light — i.e. the token
      this sheet uses for hairlines is INVISIBLE on the theme in the screenshot
